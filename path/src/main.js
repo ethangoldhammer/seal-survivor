@@ -18,7 +18,7 @@ import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeS
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
-import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, commitElement, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
+import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
@@ -94,11 +94,12 @@ import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/s
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
-import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth } from './systems/music.js';
+import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid } from './systems/music.js';
+import { shotDue, resetShotGrid } from './systems/shotGrid.js';
 import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
-import { spawnSeagull, updateSeagulls, resetSeagulls } from './systems/seagull.js';
+import { spawnSeagull, updateSeagulls, resetSeagulls, kickGull } from './systems/seagull.js';
 import { spawnWhale, updateWhales, resetWhales, resetWhaleClock, updateWhaleClock, whaleDistance, nearestWhale, whaleAlive } from './systems/whale.js';
 import { updateBoats, resetBoats, boats, attractorOrbs, hitsBoat, damageBoat, jostleBoat, impactBoat } from './systems/boats.js';
 import { setWakeGrid } from './systems/boatWake.js';
@@ -109,6 +110,7 @@ import { updateEel, resetEel, resetEelBolts, currentEelStats, createEelCompanion
 import { createBelugaDrone, updateBeluga, resetBeluga, rebuildBelugaDrone } from './systems/beluga.js';
 import { updateSealTeam, resetSealTeam, rebuildSealTeam } from './systems/sealTeam.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, rebuildBakalarBoat } from './systems/bakalar.js';
+import { updateFlags } from './systems/flags.js';
 import { updateCalamari, resetCalamari } from './systems/calamari.js';
 import { createDumboOcto, updateDumbo, resetDumbo, rebuildDumboOcto } from './systems/dumbo.js';
 import { createHarpVisual, updateHarp, resetHarp, rebuildHarp } from './systems/harp.js';
@@ -151,6 +153,7 @@ import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
+import { starfishLevelStats } from './levelStats.js';
 import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
@@ -323,7 +326,9 @@ let bossesPaid = 0;
 // in over. See CONFIG.xp.spill and updateXpSpill.
 let xpSpill = 0;
 let xpSpillLeft = 0;
-let shootCooldown = 0;
+// The basic shot's clock lives in systems/shotGrid.js now — it is scheduled
+// against the music's bar grid rather than counted down, and the countdown it
+// falls back to when there is no transport is in there with it.
 let missileCooldown = 0;
 let scallopCooldown = 0;
 let oysterCooldown = 0;
@@ -1133,6 +1138,20 @@ function showMainMenu() {
   // rather than released, because the splash is still dissolving over the top
   // of it and there is nothing to glide back to.
   resetTitleSeal();
+  // THE SCORE STARTS HERE, not at Play. It comes up under a ~500Hz lid — see
+  // CONFIG.music.menuHz — so the menu has the groove and none of the top end,
+  // and pressing Play opens the filter rather than starting a track.
+  //
+  // Both calls are no-ops the second time round: the context is already awake
+  // by now on the normal route (the press that dismissed the name card unlocks
+  // it — see `onGesture` in ui.js), and this covers the reduced-motion route,
+  // where there was no gesture and unlockAudio arms its own first-input resume.
+  // preloadDefaultTracks latches, and startMusicAtRest parks the level in
+  // `pendingLevel` if the first loop has not decoded yet, so the music arrives
+  // on its own the moment it lands.
+  unlockAudio();
+  preloadDefaultTracks();
+  startMusicAtRest();
   mountMainMenu({
     world,
     seal: player,
@@ -1513,7 +1532,15 @@ function startGame() {
   // Must come AFTER level is reset to 1 — playMusic picks its opening loop
   // from the level it's handed, so running it first started every new run on
   // whatever loop the PREVIOUS run had climbed to.
-  playMusic(gameState.level);
+  //
+  // ...unless the score is AT REST, which it is on both screens a run can
+  // start from — the main menu before the first one, and the score card after
+  // every one. Then the run takes the transport over rather than starting it:
+  // the release lifts the resting lid and the resting half speed over the
+  // camera's opening move, and restarts the loop underneath only if what is
+  // playing is not what this run opens on (see releaseMusicIntoRun — dying to
+  // a boss leaves the fight's rotation up, where the menu never does).
+  if (!releaseMusicIntoRun(gameState.level)) playMusic(gameState.level);
   // Picks the rotation up where the last run's fade-out left it rather than
   // restarting on clip one, so back-to-back runs don't all open on the same
   // bed. See startAmbient.
@@ -1534,7 +1561,7 @@ function startGame() {
   // Held xp belongs to the run that earned it and to nothing else.
   xpSpill = 0;
   xpSpillLeft = 0;
-  shootCooldown = 0;
+  resetShotGrid();
   missileCooldown = 0;
   scallopCooldown = 0;
   oysterCooldown = 0;
@@ -2006,7 +2033,6 @@ function applyLevelChoice(choice) {
   // A rolled card locks its variant in on the pick, not on the draw — the
   // other two cards on screen may also have been offering Glow Up! rolls,
   // and only the one actually taken should decide the run's element.
-  if (choice.rolledElement) commitElement(choice.rolledElement);
   // The tier the card was DEALT at rides along with the pick — see
   // recomputeStats, which replays every held upgrade at the rarity it arrived
   // with rather than at whatever the ladder says today.
@@ -3495,7 +3521,16 @@ function homingShotOpts(level) {
   };
 }
 
-function fire() {
+// Seconds between basic shots, right now — every multiplier folded in and the
+// result put on the bar grid.
+//
+// Split out of fire() because the SCHEDULER needs it too: shotGrid.js is asked
+// every frame whether a shot is due, and the answer depends on the interval,
+// so a number computed inside fire() would only exist on the frames it already
+// fired. Every multiplier here is a power of two on purpose — see
+// CONFIG.weapon.beatLock — and snapToBarGrid is what catches the air ramp,
+// which is continuous and cannot be.
+function shotInterval() {
   const s = player.stats;
   const rapid = rapidFireTimer > 0;
   // `fireRate` is an INTERVAL, so both multipliers divide it — the same
@@ -3503,13 +3538,19 @@ function fire() {
   // rather than into the stat block because the ramp changes every frame and
   // the block is only rebuilt on level-up; see the note at the top of
   // systems/airborne.js. It is 1 for a seal in the water.
-  const fireRate = (rapid ? s.fireRate / CONFIG.rapidFirePickup.fireRateMul : s.fireRate)
+  const raw = (rapid ? s.fireRate / CONFIG.rapidFirePickup.fireRateMul : s.fireRate)
     / airFireRateMul();
+  return snapToBarGrid(raw, CONFIG.weapon.beatLock?.maxDivision ?? 64);
+}
+
+function fire() {
+  const s = player.stats;
+  const rapid = rapidFireTimer > 0;
+  const fireRate = shotInterval();
   // Clone Warz first, THEN the pickup's multiplier — so the temporary powerup
   // multiplies the gun you actually have rather than the one you started with.
   const pellets = projectileCount(s.multishot, s);
   const shotCount = rapid ? Math.round(pellets * CONFIG.rapidFirePickup.multishotMul) : pellets;
-  shootCooldown = fireRate;
 
   const dir = input.aim.clone().normalize();
   // The basic shot fires from EVERY emit point at once, not one at a time:
@@ -3768,22 +3809,11 @@ function launchClubThrow(power) {
 // the score and the noise.
 function onBoatDestroyed(boat, chum) {
   gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1));
-  // Its own event rather than `bigKill`: a hull going up throws the crew, the
-  // wreckage and the catch all at once, and it should land heavier than the
-  // biggest creature in the game dying.
-  feedback('boatExplosion', {
-    x: boat.mesh.position.x, y: boat.mesh.position.y,
-    scale: boat.isTrawler ? 2.4 : 1.7,
-    sfxOpts: { pitch: boat.isTrawler ? 0.7 : 0.85, decayMul: 1.6 },
-  });
-  // The hull's own death under the blast — the deepest voice in the bank, and
-  // the thing that makes a boat going up sound like a boat going up rather than
-  // like a large fish dying. Pitched down for a trawler on the same rule the
-  // blast above uses.
-  bossVoice('die', boat.assetKey ?? boat.mesh?.name, {
-    x: boat.mesh.position.x, y: boat.mesh.position.y,
-    sfxOpts: { pitch: boat.isTrawler ? 0.82 : 1, decayMul: boat.isTrawler ? 1.3 : 1 },
-  });
+  // The explosion and the hull's death voice are NOT here: they moved into
+  // damageBoat, so a boat sunk by an orca or by another boat goes up exactly as
+  // loudly as one the player shot. What is left is what only main knows — the
+  // score, and the grid.
+  //
   // A trawler going down is a bigger moment than a rowboat.
   if (boat.isTrawler) world.grid.ripple(boat.mesh.position.x, boat.mesh.position.y, 6, 20);
 }
@@ -3995,7 +4025,20 @@ function spawnShrapnel(atPos, strikeDamage) {
       pierce: c.pierce,
       asset: 'shrapnel',
       source: 'shrapnel',
-      spin: c.spin,
+      // NOSE-FIRST, WITH A ROLL — not the end-over-end spin this had before the
+      // fragment became a bone (assets.js `shrapnel`). A tumbling shot has no
+      // back, and the back is where its ribbon comes from: CONFIG.trails
+      // .shrapnel anchors at `tailOffset: 1`, which is a meaningless anchor on
+      // a body whose long axis points somewhere new every frame.
+      //
+      // 'axis' rather than plain `true`, and this is the one that would have
+      // been a bug. The leftward mirror in updateProjectile is a Ry(PI) applied
+      // AFTER the heading, so it lands correctly only when the heading is on an
+      // axis and is 90 degrees out at a leftward DIAGONAL — and a shrapnel
+      // burst is a full ring, which means it fires at every one of those
+      // headings every time. The razor blade opts out for the same reason: a
+      // bone is symmetric end to end and has no belly to keep downward.
+      orient: 'axis',
     });
   }
 }
@@ -4014,19 +4057,21 @@ function bounceComboFx(p) {
 }
 
 function currentStarfishStats(level) {
+  // THE CURVE MOVED OUT, to levelStats.js. It was the only ability on the
+  // roster whose level maths lived beside the frame loop rather than in a
+  // system, which meant nothing outside main.js could ask what a starfish pick
+  // was worth — including the hover tip, which is why it moved. The floor on
+  // the pierce and the `pierceMax` cap moved with it: a readout without them
+  // would promise a body the shuriken never cuts.
   const c = CONFIG.starfish;
-  const n = Math.max(1, level);
+  const st = starfishLevelStats(level, player.stats);
   return {
-    fireRate: c.baseFireRate * Math.pow(c.fireRatePerLevel, n - 1),
-    scale: (c.baseRadius + c.radiusPerLevel * (n - 1)) / c.baseRadius,
-    damage: c.damage + (c.damagePerLevel ?? 0) * (n - 1),
-    // FLOORED, for the reason laserEyeStats gives about its beam count: a
-    // pierce that crept up by a third would cut two bodies for three levels and
-    // then silently three, with nothing on the card able to say when.
-    pierce: Math.min(
-      c.pierceMax ?? 4,
-      Math.max(0, Math.floor((c.basePierce ?? 0) + (c.piercePerLevel ?? 0) * (n - 1))),
-    ),
+    fireRate: st.starfishGap,
+    // A MULTIPLE of the authored radius, which is what the spawner wants; the
+    // readout carries the radius itself, which is what a tip can print.
+    scale: st.starfishSize / c.baseRadius,
+    damage: st.starfishDamage,
+    pierce: st.starfishPierce,
   };
 }
 
@@ -4541,7 +4586,6 @@ function animate(now) {
     // What a dropped orb is worth right now — see CONFIG.xp.dropRamp.
     const _tworld = performance.now();
     setChumDifficulty(gameState.difficulty);
-    shootCooldown -= dt;
     missileCooldown -= dt;
     scallopCooldown -= dt;
     oysterCooldown -= dt;
@@ -4856,6 +4900,11 @@ function animate(now) {
         feedback('whaleShove', { x, y });
       },
     });
+    // The flags on the mastheads — Bakalar's and the boat boss's. One clock for
+    // every flag in the water, so this is one write rather than one per boat,
+    // and it is the water's dilated dt: a flag that kept flying at full speed
+    // through a hitstop would be the only thing on screen that did.
+    updateFlags(dt);
     updateBoats(dt, world.scene, gameState.difficulty, player.mesh.position, {
       onBoatDestroyed,
       // The clam being swallowed. It answers the coach's `attractorOrb` tip the
@@ -4871,7 +4920,10 @@ function animate(now) {
     // named flag rather than inlined because it still gates which weapons run,
     // and because turning it off in the tuner should silence all of them.
     const wantsToFire = CONFIG.weapon.autofire;
-    if (wantsToFire && shootCooldown <= 0 && input.aim.lengthSq() > 0.001) fire();
+    // Asked every frame, firing or not: the idle path is what holds the lock on
+    // the grid, so the shot after a recentred stick lands on a slot instead of
+    // wherever the aim came back. See systems/shotGrid.js.
+    if (shotDue(shotInterval(), wantsToFire && input.aim.lengthSq() > 0.001, dt)) fire();
     if (wantsToFire && player.stats.missileCount > 0 && missileCooldown <= 0 && input.aim.lengthSq() > 0.001) fireMissiles();
     // Neither of these needs `wantsToFire`. The scallop is spat and forgotten
     // and the pearl is slow and heavy — both are meant to be in the water
@@ -5242,6 +5294,49 @@ function animate(now) {
             scale: 0.7 + player.airJumps * 0.25,
             sfxOpts: { pitch: 1.15 + player.airJumps * 0.12 },
           });
+
+          // ...AND THE BIRD, if the relaunch went through one. The gull is the
+          // seal's own ability crossing the sky at exactly the altitude a
+          // breach reaches, and the two used to pass through each other with
+          // nothing happening at all. See CONFIG.seagullBomb.kick.
+          //
+          // Read at the player's position rather than at the launch vector's
+          // far end: the intercept already happened — this jump is the seal
+          // leaving a bird it is currently inside — and aiming the test down
+          // the new velocity would ask about a place it has not reached yet.
+          //
+          // AFTER the launch and after `airJump`'s burst, so the order on the
+          // frame is the order of events: the seal shoved off, and the thing it
+          // shoved off came apart. The jump is spent either way — the bird pays
+          // the meter, it does not pay the jump back.
+          const gull = kickGull(
+            player.mesh.position.x, player.mesh.position.y,
+            player.stats.hitRadius,
+          );
+          if (gull) {
+            const kick = CONFIG.seagullBomb.kick ?? {};
+            // Through addCharge like the bubble and the coral rather than
+            // feedChum: this is FUEL, not a mouthful, and booking it as food
+            // would let a bird open a chain the seal has not eaten anything to
+            // earn. The link below is its own claim, made on its own terms.
+            if (addCharge(kick.refill ?? 1, player.stats)) chargeCrossed();
+            // Unconditional, unlike the orbs above, which score only when they
+            // are the fill that TOPS the bar off. A gull that happened to be
+            // kicked on a full meter would otherwise be worth nothing at all —
+            // and "the meter was already full" is the state a player who is
+            // doing well is in, so the hole would open exactly where the
+            // mechanic is meant to pay.
+            chainFrom('gullKick');
+            // `vx`/`vy` rather than `dirX`/`dirY`: the burst's cone is 0, so it
+            // throws feathers in every direction and has no base angle to aim
+            // — a direction here would be read by nothing. What DOES read the
+            // pair is `inherit`, which drags the loose feathers a fraction of
+            // the way after the seal that knocked them off.
+            feedback('gullKick', {
+              x: gull.x, y: gull.y,
+              vx: jump.vx, vy: jump.vy,
+            });
+          }
         }
       }
     }
@@ -5258,7 +5353,28 @@ function animate(now) {
       // A pearl that times out in open water still cracks. Queued rather than
       // burst inline for the same array-mutation reason as everything else in
       // pendingBursts — this runs inside the projectile loop.
-      (p) => { if (p.burst) pendingBursts.push({ x: p.mesh.position.x, y: p.mesh.position.y, burst: p.burst }); },
+      //
+      // AND EVERY SHOT THAT RUNS OUT COMES APART, cracker or not. A projectile
+      // used to be deleted from the scene on the frame its life hit zero, which
+      // in the water reads as a rendering fault rather than as a thing running
+      // out of momentum — and it got worse with André 3000, whose whole promise
+      // is that shots stay out longer, i.e. that you watch more of them end.
+      //
+      // Scaled by the shot's own radius against the basic pebble's, so a razor
+      // blade comes apart bigger than a bullet does without thirteen call sites
+      // each picking a number. Off the LIVE stat rather than CONFIG.weapon so a
+      // run that upgraded its bullet size keeps the two in step.
+      //
+      // The burst above still fires as well where there is one: a pearl cracks
+      // AND leaves bubbles, which is one object ending, not two events.
+      (p) => {
+        if (p.burst) pendingBursts.push({ x: p.mesh.position.x, y: p.mesh.position.y, burst: p.burst });
+        feedback('projectileFizzle', {
+          x: p.mesh.position.x,
+          y: p.mesh.position.y,
+          scale: Math.min(3, Math.max(0.6, (p.radius ?? 0.18) / (player.stats?.radius || CONFIG.weapon.radius))),
+        });
+      },
     );
     // Nothing new arrives while the stage is open. Creatures already in the
     // water keep swimming and breathing — freezing them would take the scene's
@@ -5432,11 +5548,8 @@ function animate(now) {
         // or 'trawler'), which is what the colour is read from.
         // Hulls are long boxes, so their enclosing radius overstates them —
         // halved, or a mussel on a trawler blooms across half the screen.
-        // STEEL, under whichever impact plays. A hull is the one target in the
-        // game that rings when it is hit, and it is the only readout the player
-        // gets that a boat is a different KIND of thing from a tough fish —
-        // every boat, not only the boss, because they are all the same steel.
-        bossVoice('hit', boat.assetKey ?? boat.mesh?.name, { x, y, scale: 1.1 });
+        // The hull's own ring is NOT fired here any more — damageBoat owns it,
+        // so the ram and the orca get it too. This is the WEAPON's report only.
         if (missileImpactFeedback(boat.mesh?.name, x, y, dmg, projectile, boat.radius * 0.5)) return;
         feedback('bulletHit', { x, y, scale: 1.1 });
       },
@@ -5631,7 +5744,29 @@ function animate(now) {
     updateOyster(dt, world.scene, enemies, {
       onEnemyDamaged: damageFrom('oyster'),
       onEnemyKilled: onEnemyKilledFeedback,
-      onBlast: (x, y, r) => feedback('pearlBurst', { x, y, scale: Math.min(1.6, r / 2.4) }),
+      // Sized off the blast it actually made. The divisor is the world radius
+      // the emitter is authored at (CONFIG.oyster.blastFxUnit), not the base
+      // blast radius — those were the same number once, and hardcoding it meant
+      // that raising the radius grew the damage and left the flash behind.
+      //
+      // ALL THREE MULTIPLIERS, off the one ratio. `scale` buys more of the
+      // burst (emit() applies it to COUNT and nothing else), and sizeMul and
+      // speedMul are what make it BIGGER — which the cloud added under this
+      // event needs and `scale` alone cannot give it: a goo mass fuses on how
+      // far neighbouring lobes have separated RELATIVE TO THEIR OWN RADIUS, so
+      // bigger blobs alone weld into a featureless slab and faster ones alone
+      // tear into dots. Never one without the other. Same pair the Bakalar
+      // bomb passes a few hundred lines up, for the same reason.
+      //
+      // It reaches the FLASH as well as the cloud — feedback() hands one `at`
+      // to both bursts — and that is deliberate rather than tolerated. The
+      // spray was a fixed size at every radius, so a maxed stack under Splash
+      // Zone threw exactly the same specks as a first pick; the sparks off a
+      // bigger blast should be bigger.
+      onBlast: (x, y, r) => {
+        const boom = Math.min(CONFIG.oyster.blastFxMax ?? 3.2, r / (CONFIG.oyster.blastFxUnit ?? 2.4));
+        feedback('pearlBurst', { x, y, scale: boom, sizeMul: boom, speedMul: boom });
+      },
     });
     updateOrcaPod(dt, world.scene, player.mesh.position, player.stats.orcaLevel, enemies, {
       onEnemyDamaged: damageFrom('orca'),

@@ -35,11 +35,11 @@ import { enemies } from '../path/src/entities/enemies.js';
 import { boats } from '../path/src/systems/boats.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab } from '../path/src/systems/octoGrab.js';
 import { updateOrcaPod, resetOrcaPod } from '../path/src/systems/orca.js';
-import { burstPearl, updateOyster, resetOyster } from '../path/src/systems/oyster.js';
+import { burstPearl, updateOyster, resetOyster, currentOysterStats } from '../path/src/systems/oyster.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 import { eelCfg } from '../path/src/systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../path/src/systems/beluga.js';
-import { spawnSeagull, updateSeagulls, resetSeagulls, seagullCount } from '../path/src/systems/seagull.js';
+import { spawnSeagull, updateSeagulls, resetSeagulls, seagullCount, kickGull } from '../path/src/systems/seagull.js';
 import { updateShrimpRing, createShrimpRingVisual, resetShrimpRing } from '../path/src/systems/shrimpRing.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from '../path/src/systems/garlic.js';
 import { stoke, cool, glowLevel, damageGlowCfg, attachDamageGlow } from '../path/src/systems/damageGlow.js';
@@ -52,7 +52,7 @@ import {
   fireMusselBarrage, updateMusselVolley, resetMusselVolley,
   barrageCount, barrageDamage, barrageShells, chargePips, pendingShells,
 } from '../path/src/systems/musselVolley.js';
-import { strikeState, pipCount } from '../path/src/systems/strike.js';
+import { strikeState, pipCount, chainStrike, resetStrike } from '../path/src/systems/strike.js';
 import {
   isDazed, dazeReady, canControl, canHold, charmEnemy, holdEnemy, tickDaze, clearDaze, dazeSpeedMul,
 } from '../path/src/systems/control.js';
@@ -270,6 +270,56 @@ check('every bomblet detonates', blasts === 5, `${blasts} of 5`);
 // angles are random, so this must hold for EVERY roll, not most of them —
 // run it a few times if you change the speed, drag or life numbers.
 check('the burst reaches enemies at the impact point', burstDamage > 0, `${burstDamage} damage`);
+
+// ...and the same invariant stated as arithmetic rather than left to the dice.
+// Under exponential drag a bomblet covers (speed/drag)(1 - e^(-drag*life)), so
+// the worst case is the fastest bomblet on the longest fuse. If that ever
+// exceeds the blast radius the burst detonates in a RING with a hole where the
+// pearl actually landed — and the random-angle check above would still pass
+// most of the time, which is the worst way for this to fail.
+{
+  const o = CONFIG.oyster;
+  const travel = (o.bombletSpeed[1] / o.bombletDrag) * (1 - Math.exp(-o.bombletDrag * o.bombletLife[1]));
+  check('the blast still covers where the pearl landed', travel < o.bombletBlastRadius,
+    `${travel.toFixed(2)} of travel inside a ${o.bombletBlastRadius} blast`);
+}
+
+// THE WEAPON'S SHAPE: a bomb, not a shotgun. Long wait, huge payload — and the
+// two halves are tuned in different rows of weapons.csv, so nothing but this
+// reads them together.
+{
+  const o = CONFIG.oyster;
+  const cap = CONFIG.upgrades.find((u) => u.id === 'oysterBlaster')?.maxStacks ?? 8;
+  const at = (lv) => currentOysterStats(lv);
+  const burstOf = (v) => v.bomblets * v.bombletDamage;
+  const one = at(1);
+  const top = at(cap);
+  console.log(`     lvl 1: ${one.bomblets} x ${one.bombletDamage} over r${one.blastRadius.toFixed(1)}`
+    + ` every ${one.fireRate.toFixed(2)}s  ->  ${((burstOf(one) + one.damage) / one.fireRate).toFixed(0)} dmg/s at the impact point`);
+  console.log(`     lvl ${cap}: ${top.bomblets} x ${top.bombletDamage} over r${top.blastRadius.toFixed(1)}`
+    + ` every ${top.fireRate.toFixed(2)}s  ->  ${((burstOf(top) + top.damage) / top.fireRate).toFixed(0)} dmg/s at the impact point`);
+  check('the wait is long enough to be a wait', one.fireRate > 1.5, `${one.fireRate.toFixed(2)}s`);
+  // A bomb you can hold the trigger on is a shotgun with a bigger flash.
+  check('...and never becomes a stream', top.fireRate >= 1,
+    `${top.fireRate.toFixed(2)}s at the cap, floor ${o.fireRateFloor}`);
+  // The payload is the burst. If the pearl's own impact ever gets close to it,
+  // the card has quietly turned back into a slow bullet.
+  check('the burst is the payload, not the impact', burstOf(one) > one.damage * 5,
+    `${burstOf(one)} from the burst against ${one.damage} on impact`);
+  check('the blast is wide enough to be an explosion', one.blastRadius > 4,
+    `r ${one.blastRadius.toFixed(1)}`);
+  check('levelling grows the blast and what it hits for',
+    top.blastRadius > one.blastRadius * 1.3 && top.bombletDamage > one.bombletDamage * 1.5,
+    `r ${one.blastRadius.toFixed(1)} -> ${top.blastRadius.toFixed(1)}, ${one.bombletDamage} -> ${top.bombletDamage}`);
+  // THE PICTURE HAS TO FOLLOW THE REACH. main.js draws the flash at
+  // radius / blastFxUnit, capped — so a cap below the base ratio means even an
+  // unlevelled blast is drawn smaller than the water it damages, which is the
+  // exact bug a hardcoded divisor left behind when the radius moved.
+  check('the flash is sized off a named unit', o.blastFxUnit > 0, `${o.blastFxUnit}`);
+  check('...and its cap does not clip the base blast',
+    (o.blastFxMax ?? 0) >= one.blastRadius / o.blastFxUnit,
+    `cap ${o.blastFxMax} against ${(one.blastRadius / o.blastFxUnit).toFixed(2)} wanted at level 1`);
+}
 
 // --- scallop squirter ------------------------------------------------------
 section('SCALLOP SQUIRTER');
@@ -1634,6 +1684,77 @@ check('a crab run does not go off on a fish it falls through', earlyBlast === 0,
 resetSeagulls(scene);
 enemies.length = 0;
 check('empty water still launches nothing', spawnSeagull(scene, enemies) === null);
+resetSeagulls(scene);
+enemies.length = 0;
+
+// KICKING OFF THE BIRD — the mid-air relaunch that goes through a gull.
+// Everything here fails silently in the game: a reach measured without the
+// seal's own radius is a miss the player cannot tell from bad timing, and a
+// bird with no "already paid" flag hands out a bar of fuel and a chain link on
+// every single frame the seal spends inside it.
+resetSeagulls(scene);
+enemies.length = 0;
+enemies.push(crabAt(0, bounds.bottom + 2));
+const perch = spawnSeagull(scene, enemies);
+perch.container.position.set(0, bounds.surfaceY + CONFIG.seagullBomb.cruiseAltitude, 0);
+const gx = perch.container.position.x;
+const gy = perch.container.position.y;
+const sealR = 0.6;
+const kickR = CONFIG.seagullBomb.kick.radius;
+
+check('a jump nowhere near a gull kicks nothing',
+  kickGull(gx + kickR + sealR + 5, gy, sealR) === null);
+// Just outside the summed reach, so this is the check that the seal's OWN
+// radius is in the sum rather than the gull's alone.
+check('...nor one just outside the summed reach',
+  kickGull(gx + kickR + sealR + 0.2, gy, sealR) === null);
+
+const kicked = kickGull(gx + kickR + sealR - 0.2, gy, sealR);
+check('a jump through a gull kicks it', !!kicked,
+  kicked ? `at ${kicked.x.toFixed(1)}, ${kicked.y.toFixed(1)}` : 'nothing');
+check('...and reports where the BIRD was, not where the seal was',
+  !!kicked && Math.abs(kicked.x - gx) < 1e-6 && Math.abs(kicked.y - gy) < 1e-6);
+check('...and the same bird never pays twice',
+  kickGull(gx, gy, sealR) === null);
+
+// Two in the air at once are two opportunities. The flag is per-gull for
+// exactly this: a cooldown would eat the second bird.
+resetSeagulls(scene);
+const a = spawnSeagull(scene, enemies);
+const b = spawnSeagull(scene, enemies);
+a.container.position.set(30, 20, 0);
+b.container.position.set(30.4, 20, 0);
+const first = kickGull(30, 20, sealR);
+const second = kickGull(30.4, 20, sealR);
+check('two gulls in the air are two payouts', !!first && !!second);
+check('...and a third jump through both is nothing',
+  kickGull(30.2, 20, sealR) === null);
+
+// The master switch, which is a weapons.csv row.
+resetSeagulls(scene);
+const offBird = spawnSeagull(scene, enemies);
+offBird.container.position.set(30, 20, 0);
+const wasKickOn = CONFIG.seagullBomb.kick.enabled;
+CONFIG.seagullBomb.kick.enabled = false;
+check('the kick switches off whole', kickGull(30, 20, sealR) === null);
+CONFIG.seagullBomb.kick.enabled = wasKickOn;
+check('...and back on again', !!kickGull(30, 20, sealR));
+
+// The link itself. Routed through chainStrike like every other source, so it
+// is switchable and it cannot open a chain when the source is off.
+resetSeagulls(scene);
+enemies.length = 0;
+check('the kick is a food chain source', CONFIG.strike.chainOn.gullKick === true);
+check('...with no cooldown, because the bird is the rate limit',
+  (CONFIG.strike.chainOn.cooldowns.gullKick ?? 0) === 0);
+resetStrike();
+check('...that starts a chain from nothing', chainStrike('gullKick') === 1);
+check('...and extends the one it started', chainStrike('gullKick') === 2);
+const wasGullChain = CONFIG.strike.chainOn.gullKick;
+CONFIG.strike.chainOn.gullKick = false;
+check('...and scores nothing at all when switched off', chainStrike('gullKick') === 0);
+CONFIG.strike.chainOn.gullKick = wasGullChain;
+resetStrike();
 resetSeagulls(scene);
 enemies.length = 0;
 

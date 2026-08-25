@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif;
+      background: radial-gradient(120% 90% at 30% 8%, #1a5678, #04101a 70%); }
+    a { color: #9fe3ff; } a:hover { color: #cfeaff; }
+  </style>
+</helmet>
+<div style="width: 420px; height: 520px; box-sizing: border-box; padding: 26px 24px; color: #cfe6f5">
+
+  <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px">
+    <div style="font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #7ad7ff">A</div>
+    <div style="font-size: 17px; font-weight: 700; color: #eaf6ff">Ledger</div>
+  </div>
+  <div style="font-size: 11px; line-height: 1.5; color: rgba(207,230,245,0.5); margin-bottom: 22px">What ships today. A label column and a value column, so three rows read as one table.</div>
+
+  <div style="display: flex; flex-direction: column; gap: 20px">
+
+    <div style="width: max-content; max-width: 260px; padding: 7px 10px; border-radius: 8px; background: rgba(9,14,22,0.96); border: 1px solid rgba(122,215,255,0.35); box-shadow: 0 6px 20px rgba(0,0,0,0.55); font-size: 11px; line-height: 1.4">
+      <div style="display: flex; align-items: baseline; gap: 6px">
+        <span style="font-size: 12px; font-weight: 700; color: #eaf6ff">Shrimp Ring</span>
+        <span style="font-size: 10px; font-variant-numeric: tabular-nums; color: rgba(122,215,255,0.8)">&#215;4</span>
+      </div>
+      <div style="display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; row-gap: 4px; margin-top: 5px; align-items: baseline">
+        <span style="text-transform: uppercase; white-space: nowrap; font-size: 9px; letter-spacing: 0.07em; color: rgba(232,236,243,0.4)">[DRAFT] Next</span>
+        <span style="color: #9fe3ff; font-weight: 600">+1 orbiting shrimp &#183; 6 &#8594; 7</span>
+        <span style="text-transform: uppercase; white-space: nowrap; font-size: 9px; letter-spacing: 0.07em; color: rgba(232,236,243,0.4)">[DRAFT] This run</span>
+        <span style="color: rgba(232,236,243,0.78); font-variant-numeric: tabular-nums">Shrimp Ring: 261k dealt &#183; 92 kills</span>
+      </div>
+    </div>
+
+    <div style="width: max-content; max-width: 260px; padding: 7px 10px; border-radius: 8px; background: rgba(9,14,22,0.96); border: 1px solid rgba(122,215,255,0.35); box-shadow: 0 6px 20px rgba(0,0,0,0.55); font-size: 11px; line-height: 1.4">
+      <div style="display: flex; align-items: baseline; gap: 6px">
+        <span style="font-size: 12px; font-weight: 700; color: #eaf6ff">Yoga</span>
+        <span style="font-size: 10px; font-variant-numeric: tabular-nums; color: rgba(122,215,255,0.8)">&#215;5</span>
+      </div>
+      <div style="color: rgba(232,236,243,0.62); margin-top: 2px">Breathe deeper, Seal.</div>
+      <div style="display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; row-gap: 4px; margin-top: 5px; align-items: baseline">
+        <span style="text-transform: uppercase; white-space: nowrap; font-size: 9px; letter-spacing: 0.07em; color: rgba(232,236,243,0.4)">[DRAFT] Next</span>
+        <span style="color: #9fe3ff; font-weight: 600">[DRAFT] Maxed</span>
+        <span style="text-transform: uppercase; white-space: nowrap; font-size: 9px; letter-spacing: 0.07em; color: rgba(232,236,243,0.4)">[DRAFT] Now</span>
+        <span style="color: #cfeaff">+150 max oxygen</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

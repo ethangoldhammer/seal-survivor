@@ -7,6 +7,7 @@ import { projectileCount } from '../stats.js';
 import { emit } from '../entities/particles.js';
 import { bounds } from '../arena.js';
 import { aoe, abilityDamage } from './scaling.js';
+import { oysterLevelStats } from '../levelStats.js';
 
 // Oyster Blaster — a slow, heavy, bright pearl whose value is almost entirely
 // in what happens when it stops. On impact it cracks into glowing bomblets
@@ -30,12 +31,14 @@ const bomblets = []; // { mesh, vx, vy, life, damage, blastRadius }
 export function currentOysterStats(level) {
   const c = CONFIG.oyster;
   const lv = Math.max(1, level);
+  const O = oysterLevelStats(level, player.stats);
   return {
-    fireRate: Math.max(c.fireRateFloor, c.fireRate - c.fireRatePerLevel * (lv - 1)),
-    damage: c.damage + c.damagePerLevel * (lv - 1),
-    bomblets: Math.round(c.bomblets + c.bombletsPerLevel * (lv - 1)),
-    bombletDamage: c.bombletDamage + c.bombletDamagePerLevel * (lv - 1),
-    blastRadius: c.bombletBlastRadius + c.bombletBlastRadiusPerLevel * (lv - 1),
+    // levelStats.js owns the curve — shared with the tip.
+    fireRate: O.oysterGap,
+    damage: O.oysterDamage,
+    bomblets: O.oysterBomblets,
+    bombletDamage: O.oysterBombletDamage,
+    blastRadius: O.oysterBlast,
   };
 }
 

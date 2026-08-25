@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { CONFIG } from '../config.js';
 import { seabedTopY, bounds } from '../arena.js';
 import { createVisual } from '../assets.js';
+import { setGrassSwayHeight } from './grassSway.js';
 import { SEABED_PROPS } from '../seabedProps.js';
 
 // A bed of seabed plants, scattered rather than placed.
@@ -172,7 +173,7 @@ function bakeTemplate(id) {
   geometry.translate(0, -base, 0);
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
-  return { geometry, material };
+  return { geometry, material, height: geometry.boundingBox.max.y };
 }
 
 /**
@@ -287,6 +288,15 @@ export function scatterSeabed(scene) {
   for (const [variantId, list] of byVariant) {
     const baked = bakeTemplate(variantId);
     if (!baked) continue;
+    // The sway masks root-to-tip on height, and assets.js could only measure
+    // that off the RAW model — before fit, the orientation group and the size
+    // multiplier, all three of which the bake above just folded into these
+    // vertices. So the plant the shader is bending is a different size from the
+    // one it was told about, and correcting it is a uniform write on a material
+    // this variant does not share with anything else. Wrong here does not
+    // error: the mask saturates part-way up and the top of every plant bends as
+    // one rigid piece. No-ops for the shells, which carry no sway.
+    setGrassSwayHeight(baked.material, baked.height);
     const mesh = new THREE.InstancedMesh(baked.geometry, baked.material, list.length);
     // One InstancedMesh spans the whole bed, so three can only cull all of it
     // or none of it — and its bounding sphere comes from the geometry alone,

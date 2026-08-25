@@ -4,9 +4,11 @@ import { CONFIG } from '../config.js';
 import { createVisual, getAssetMaterials } from '../assets.js';
 import { bounds, seabedTopY } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
-import { aoe, companionDamage } from './scaling.js';
+import { player } from '../entities/player.js';
+import { bakalarLevelStats, bakalarSailWindow } from '../levelStats.js';
 import { advanceCycles } from './beatSync.js';
 import { canHold } from './control.js';
+import { attachFlag } from './flags.js';
 import { emit } from '../entities/particles.js';
 import {
   createBakalarNet, updateBakalarNet, setBakalarNetVisible, seatBakalarNet, kickBakalarNet,
@@ -271,6 +273,14 @@ function buildBoat() {
   _hullBox.setFromObject(visual);
   _hullBox.getSize(_hullSize);
   hullWidth = _hullSize.x;
+  // AFTER the measurement above, and that ordering is the whole of it: the net
+  // is the hull's own width, and a flag streaming aft of the mast is width the
+  // hull does not have. Hoisted first, every stack of this ability would tow a
+  // net a flag wider than the boat and nothing would say why.
+  //
+  // No cleanup path: the boat is a singleton that lives for the session, and
+  // rebuildBakalarBoat throws the whole visual away and calls this again.
+  attachFlag(visual, 'bakalarBoat');
   return root;
 }
 const _hullBox = new THREE.Box3();
@@ -345,9 +355,13 @@ export function resetBakalar(scene = null) {
  * the number should not be made to build the rest.
  */
 export function bombDamage(level) {
-  const c = CONFIG.bakalar.bomb;
-  const lv = Math.max(1, level);
-  return companionDamage(c.damage + c.damagePerLevel * (lv - 1));
+  // THE FORMULA LIVES IN levelStats.js NOW, and this reads it rather than
+  // keeping a second copy. The hover tips have to answer "what does one more
+  // level buy" in real numbers, and a readout that merely AGREED with this
+  // function would stop agreeing the first time either was retuned — silently,
+  // because nothing compares them. One implementation is the only version of
+  // that promise that survives.
+  return bakalarLevelStats(level, player.stats).bakalarBombDamage;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,8 +406,7 @@ export function bombDamage(level) {
 
 /** The net's power at this stack. */
 function netPower(level) {
-  const c = CONFIG.bakalar.catch;
-  return Math.max(0.01, c.power + c.powerPerLevel * Math.max(0, level - 1));
+  return bakalarLevelStats(level, player.stats).bakalarGrip;
 }
 
 /**
@@ -436,16 +449,16 @@ export function netAccepts(e) {
 }
 
 function bombStats(level) {
-  const c = CONFIG.bakalar.bomb;
-  const lv = Math.max(1, level);
+  // Splash Zone widens the BLAST and Big Rigz makes it hit harder — but neither
+  // touches the net (its mouth or its depth). The net is how the boat works;
+  // the bomb is the moment you watch. Widening the net as well would quietly
+  // turn one card into a second Bakalar upgrade. Both multipliers are applied
+  // inside levelStats.js, against the block passed to it.
+  const st = bakalarLevelStats(level, player.stats);
   return {
-    interval: Math.max(c.dropIntervalFloor, c.dropInterval - c.dropIntervalPerLevel * (lv - 1)),
-    // Splash Zone widens the BLAST and Big Rigz makes it hit harder — but
-    // neither touches the net (its mouth or its depth). The net is how the boat
-    // works; the bomb is the moment you watch. Widening the net as well
-    // would quietly turn one card into a second Bakalar upgrade.
-    radius: aoe(c.radius + c.radiusPerLevel * (lv - 1)),
-    damage: bombDamage(lv),
+    interval: st.bakalarBombGap,
+    radius: st.bakalarBlast,
+    damage: st.bakalarBombDamage,
   };
 }
 
@@ -856,8 +869,14 @@ export function netGeometry(level) {
   // height (SEABED_HEIGHT) and the net should stop on it, not in it.
   const room = Math.max(2, bounds.surfaceY - seabedTopY() - (c.netFloorGap ?? 0));
   return {
+    // NOT LEVELLED, and this is the line that made a hand-typed desc wrong: the
+    // net's mouth is a fraction of the HULL, so it is the same width at stack
+    // one and stack eight. Only the depth grows. The card said "+net size" for
+    // a long time on the strength of the half that does.
     halfWidth: Math.max(0.5, hullWidth * (c.netWidthFraction ?? 1)) * 0.5,
-    depth: Math.min(room, c.netDepth + c.netDepthPerLevel * (level - 1)),
+    // `room` is handed over so the clamp stays here, where the arena is
+    // knowable — levelStats.js is a leaf and cannot see the seabed.
+    depth: bakalarLevelStats(level, player.stats, room).bakalarNetDepth,
   };
 }
 
@@ -928,8 +947,8 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
     if (spawnTimer <= 0) {
       // More levels = the boat comes around more often. Clamped so a maxed
       // stack still leaves gaps you have to fight through on your own.
-      const interval = Math.max(c.spawnMinFloor, c.spawnMin - c.spawnFasterPerLevel * (level - 1));
-      spawnTimer = randomBetween(interval, Math.max(interval, c.spawnMax - c.spawnFasterPerLevel * (level - 1)));
+      const { min, max } = bakalarSailWindow(level);
+      spawnTimer = randomBetween(min, max);
       launch(level);
     }
     return;

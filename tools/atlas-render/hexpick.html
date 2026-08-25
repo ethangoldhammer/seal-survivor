@@ -1,0 +1,194 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hex picker</title>
+<!--
+  PICK WHICH HEXES GO IN THE GRID, AND WHERE.
+
+    npm run pick
+    open http://localhost:4601/hexpick.html
+
+  The cluster of hexagons on a design board is real card art out of
+  design/assets — the same hexes the level-up cards use. Choosing them by
+  editing a list of filenames and re-publishing to see what happened is the
+  loop this page removes: click a slot, click a picture, watch the cluster
+  build up at the size and packing it ships at.
+
+  THE HONEYCOMB IS THE REAL PACKING, not a guess at one. Flat-top hexagons
+  tile at 3/4 of their width horizontally and a full height vertically, with
+  every odd column dropped half a height — so what is on screen here is what
+  lands on the board.
+
+  Saving POSTs to hex-pick.json next to this file. Nothing here writes to the
+  game: design/assets is mounted read-only and the only file that changes is
+  that one list.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d1418; color: #d6e6ef;
+    font: 13px ui-monospace, SFMono-Regular, monospace; display: flex; height: 100vh; }
+  #gallery { width: 300px; flex: none; overflow-y: auto; border-right: 1px solid #1e3542;
+    padding: 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    align-content: start; }
+  #gallery figure { margin: 0; cursor: pointer; text-align: center; border-radius: 3px;
+    padding: 4px; border: 1px solid transparent; }
+  #gallery figure:hover { border-color: #2b6d8d; background: #142934; }
+  #gallery figure.used { opacity: 0.35; }
+  #gallery img { width: 100%; display: block; }
+  #gallery figcaption { font-size: 9px; color: #7fa3b6; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 14px; gap: 12px; }
+  #stageWrap { flex: 1; min-height: 0; display: grid; place-items: center;
+    background:
+      linear-gradient(135deg, #145e82 0%, #0a2b45 100%);
+    border: 1px solid #1e3542; overflow: auto; }
+  #stage { position: relative; }
+  .slot { position: absolute; display: grid; place-items: center; cursor: pointer; }
+  .slot .ph { width: 100%; height: 100%;
+    clip-path: polygon(25% 2%, 75% 2%, 100% 50%, 75% 98%, 25% 98%, 0 50%);
+    background: rgba(111,211,255,0.10); border: 0; }
+  .slot.sel .ph { background: rgba(255,176,32,0.35); }
+  .slot img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .slot .x { position: absolute; top: -2px; right: -2px; background: #5c1f1f; color: #ffd9d9;
+    border: 0; border-radius: 50%; width: 16px; height: 16px; font: 10px monospace;
+    cursor: pointer; display: none; }
+  .slot:hover .x { display: block; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button.act { background: #17455c; color: #dff0f8; border: 1px solid #2b6d8d;
+    padding: 7px 12px; border-radius: 3px; cursor: pointer; font: inherit; }
+  button.act:hover { background: #1e5a78; }
+  button.act.go { background: #1d5c34; border-color: #2f8a4e; }
+  label.num { display: flex; gap: 6px; align-items: center; color: #82a9bc; font-size: 11px; }
+  input[type=range] { width: 130px; }
+  #status { color: #7fbf95; font-size: 11px; min-height: 15px; }
+  #status.err { color: #e08a8a; }
+  #hint { color: #6f97aa; font-size: 11px; }
+</style>
+
+<div id="gallery"></div>
+<main>
+  <div class="bar">
+    <label class="num">columns <input type="range" id="cols" min="1" max="6" step="1"><output id="oCols"></output></label>
+    <label class="num">per column <input type="range" id="rows" min="1" max="5" step="1"><output id="oRows"></output></label>
+    <label class="num">hex size <input type="range" id="size" min="30" max="130" step="2"><output id="oSize"></output></label>
+    <button class="act" id="bClear">clear all</button>
+  </div>
+  <div id="hint">click a slot, then a picture. click the × on a filled slot to empty it.</div>
+  <div id="stageWrap"><div id="stage"></div></div>
+  <div class="bar">
+    <button class="act go" id="bSave">save hex-pick.json</button>
+    <span id="status"></span>
+  </div>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+// Flat-top hexagons pack at 3/4 width across and a full height down, with odd
+// columns dropped half a height. Same geometry the hive uses; see the note at
+// the top of this file.
+const XSTEP = 0.75, YSTEP = 1.0, YOFF = 0.5;
+
+let state = { cols: 3, rows: 3, size: 74, slots: {} }; // slots keyed "c,r" -> filename
+let art = [];
+let selected = null;
+
+function status(m, err) { $('status').textContent = m; $('status').className = err ? 'err' : ''; }
+
+function slotKey(c, r) { return `${c},${r}`; }
+
+function drawStage() {
+  const s = $('stage');
+  s.innerHTML = '';
+  const w = state.size, h = state.size * 0.88;
+  s.style.width = `${(state.cols - 1) * w * XSTEP + w}px`;
+  s.style.height = `${state.rows * h * YSTEP + h * YOFF}px`;
+  for (let c = 0; c < state.cols; c++) {
+    for (let r = 0; r < state.rows; r++) {
+      const key = slotKey(c, r);
+      const el = document.createElement('div');
+      el.className = 'slot' + (selected === key ? ' sel' : '');
+      el.style.cssText = `left:${c * w * XSTEP}px; top:${r * h * YSTEP + (c % 2 ? h * YOFF : 0)}px; width:${w}px; height:${h}px;`;
+      const file = state.slots[key];
+      if (file) {
+        const img = document.createElement('img');
+        img.src = '/hexart/' + file;
+        el.appendChild(img);
+        const x = document.createElement('button');
+        x.className = 'x'; x.textContent = '×';
+        x.addEventListener('click', (e) => { e.stopPropagation(); delete state.slots[key]; drawStage(); drawGallery(); });
+        el.appendChild(x);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'ph';
+        el.appendChild(ph);
+      }
+      el.addEventListener('click', () => { selected = key; drawStage(); });
+      s.appendChild(el);
+    }
+  }
+}
+
+function drawGallery() {
+  const g = $('gallery');
+  g.innerHTML = '';
+  const used = new Set(Object.values(state.slots));
+  for (const name of art) {
+    const f = document.createElement('figure');
+    if (used.has(name)) f.classList.add('used');
+    f.innerHTML = `<img src="/hexart/${name}" loading="lazy"><figcaption>${name.replace(/\.webp$/, '')}</figcaption>`;
+    f.addEventListener('click', () => {
+      if (!selected) { status('click a slot first', true); return; }
+      state.slots[selected] = name;
+      // Step to the next empty slot so filling a cluster is one click each
+      // rather than a click-a-slot, click-a-picture rhythm all the way down.
+      const keys = [];
+      for (let c = 0; c < state.cols; c++) for (let r = 0; r < state.rows; r++) keys.push(slotKey(c, r));
+      selected = keys.find((k) => !state.slots[k]) ?? selected;
+      drawStage(); drawGallery(); status('');
+    });
+    g.appendChild(f);
+  }
+}
+
+for (const [id, key, out] of [['cols', 'cols', 'oCols'], ['rows', 'rows', 'oRows'], ['size', 'size', 'oSize']]) {
+  $(id).addEventListener('input', (e) => {
+    state[key] = parseInt(e.target.value, 10);
+    $(out).textContent = state[key];
+    drawStage();
+  });
+}
+$('bClear').addEventListener('click', () => { state.slots = {}; selected = null; drawStage(); drawGallery(); });
+
+$('bSave').addEventListener('click', async () => {
+  // Saved as a LIST with explicit column/row on each entry rather than as a
+  // sparse grid object: whatever consumes this has to lay the cluster out, and
+  // a list it can iterate beats a map it has to walk twice.
+  const picks = Object.entries(state.slots)
+    .map(([k, file]) => { const [c, r] = k.split(',').map(Number); return { col: c, row: r, file }; })
+    .sort((a, b) => a.col - b.col || a.row - b.row);
+  const body = JSON.stringify({ cols: state.cols, rows: state.rows, size: state.size, picks }, null, 2);
+  try {
+    const res = await fetch('/spec/hex-pick.json', { method: 'POST', body });
+    if (!res.ok) throw new Error(await res.text());
+    status(`saved ${picks.length} hex${picks.length === 1 ? '' : 'es'} to hex-pick.json`);
+  } catch (err) { status('save failed: ' + err.message, true); }
+});
+
+// The gallery is whatever is on disk. No hand-written list: art gets added to
+// design/assets and it appears here, which is the only arrangement that cannot
+// go stale.
+const res = await fetch('/hexart.json');
+art = (await res.json()).filter((n) => /\.(webp|png|jpg|jpeg|avif)$/i.test(n)).sort();
+
+const saved = await fetch('/hex-pick.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+if (saved) {
+  state.cols = saved.cols ?? state.cols;
+  state.rows = saved.rows ?? state.rows;
+  state.size = saved.size ?? state.size;
+  for (const p of saved.picks ?? []) state.slots[slotKey(p.col, p.row)] = p.file;
+}
+$('cols').value = state.cols; $('oCols').textContent = state.cols;
+$('rows').value = state.rows; $('oRows').textContent = state.rows;
+$('size').value = state.size; $('oSize').textContent = state.size;
+selected = slotKey(0, 0);
+drawStage(); drawGallery();
+</script>

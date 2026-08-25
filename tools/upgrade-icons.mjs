@@ -51,6 +51,55 @@ const MODULE_OUT = join(HERE, '../path/src/ui/upgradeIcons.js');
 // drawn marks; see the hex prototype's notes. Starfish Shuriken is absent for
 // the opposite reason: it already ships five drawn .webp sea stars, which are
 // better icons than any render of them would be.
+// THE HIDE, for the assets that wear it.
+//
+// ASSETS.ship and ASSETS.sealTeam both set `noiseShader: true`, which is what
+// gives them a surface at all — furseal.glb has UVs and no image, so without
+// this the seal renders as one flat cream shape and the icon is a picture of an
+// animal the game does not have. Values come off CONFIG.sealShader so a retune
+// reaches the icons; only the mottling, because the glow and the charge flash
+// and the wet film are run-time state a still has none of.
+function mottleFromConfig() {
+  const c = CONFIG.sealShader ?? {};
+  if (c.enabled === false) return null;
+  return {
+    size: c.size ?? 0.4,
+    strength: c.strength ?? 0.35,
+    contrast: c.contrast ?? 1,
+    color: c.color ?? 0x0a2233,
+    baseColor: c.baseColor ?? 0xffffff,
+    paint: c.paint ?? 0,
+  };
+}
+
+// Which icons light their markings up, and how hard. An ICON is a still of an
+// ability at its most legible moment, so this is deliberately stronger than the
+// level-1 value the ability starts at — the card has to say "this one glows"
+// at 52 pixels.
+// COLOUR COMES OFF THE ELEMENT, never typed here. Four cards differing only in
+// which colour the seal glows is exactly the case where a hand-copied hex goes
+// stale silently: retune Venom and three icons would still be the old green.
+const ICON_GLOW = Object.fromEntries(
+  ['shock', 'venom', 'chill', 'infection'].map((el) => {
+    const colour = CONFIG.biolum?.elements?.[el]?.color;
+    if (colour == null) throw new Error(`no CONFIG.biolum.elements.${el}.color for the Glow Up icon`);
+    return [`biolum${el[0].toUpperCase()}${el.slice(1)}`, {
+      color: colour,
+      tip: 0xffffff,
+      // Stronger than the ability's level-1 value on purpose: an icon is the
+      // most legible moment of an effect, and this one has to say "it glows"
+      // at 52 pixels.
+      strength: 1.35,
+      edge: 0.62,
+      soft: 0.3,
+      white: 0.4,
+      // Above 1 gathers the same markings into bigger areas of light — at icon
+      // size the ability's own fine speckle reads as noise rather than as glow.
+      scale: 1.4,
+    }];
+  }),
+);
+
 const ICON_ASSETS = {
   shrimpRing: 'shrimp',
   seagullBomb: 'seagull',
@@ -63,6 +112,14 @@ const ICON_ASSETS = {
   bakalar: 'bakalarBoat',
   orcaFamily: 'orcaFriendBull',
   club: 'club',
+  // GLOW UP!! — all four element variants are the SEAL, not a projectile. The
+  // upgrade lights the animal's own mottling (CONFIG.biolum.skin makes the
+  // bright patches emit), so the icon is the player's model wearing the real
+  // glow layer, each in its element's colour. See ICON_GLOW below.
+  biolumShock: 'ship',
+  biolumVenom: 'ship',
+  biolumChill: 'ship',
+  biolumInfection: 'ship',
   scallopSquirter: 'scallopShell',
   maneater: 'enemyGreatWhite',   // stand-in: the taste you have developed
   ironLung: 'whale',             // stand-in: the lungs you want
@@ -378,6 +435,24 @@ const adopt = process.argv.includes('--adopt-scenes');
 //   kind: 'image'    a drawn file — `image` names it
 //   kind: 'none'     deliberately no picture; the hive shows its monogram
 //
+// THE ANGLES ON A ROW THAT HAD NO PICTURE DESCRIBE NO PICTURE.
+//
+// yaw/pitch/roll/zoom are authored and therefore carried forward, which is
+// right for a row someone framed. A row sitting at `none` was never framed:
+// whatever numbers it holds are leftovers from a different subject or from a
+// default that was never looked at. Adopting it into a render or a scene and
+// keeping them means the first thing you see is the new composition shot down
+// an angle chosen for something else — Bouncer came out end-on down the club
+// with the fish edge-on behind it, which reads as the scene being wrong rather
+// than as the camera being stale.
+//
+// Deleting them falls back to the shared default, which is the same place
+// every other new row starts from. Only ever runs under --adopt-scenes, and
+// only on a row that was blank, so it can never touch a chosen angle.
+function resetFraming(authored) {
+  for (const k of ['yaw', 'pitch', 'roll', 'zoom']) delete authored[k];
+}
+
 // An upgrade with a model defaults to 'render' and one without defaults to
 // 'none', which is the same behaviour as before for every existing row.
 for (const up of CONFIG.upgrades) {
@@ -444,10 +519,26 @@ for (const up of CONFIG.upgrades) {
     // restored. A row with a drawn file, or one already set to `scene`, is
     // untouched; so is anything with no scene written for it.
     const blank = authored.kind === 'none' || (authored.kind === 'image' && !authored.image);
-    if (adopt && scene && blank) {
+    // A ROW THAT HAS SINCE ACQUIRED A MODEL. `kind` is authored and therefore
+    // carried forward, which is right — but it means pointing an upgrade at an
+    // asset in ICON_ASSETS does nothing at all for a row whose stored kind is
+    // `none`: the generator writes the file, the fmt and the clip names, and
+    // then the merge puts `none` back over the top. The row looks configured
+    // and renders a monogram, and nothing says why.
+    //
+    // Same escape hatch as the scene adoption below it, and deliberately under
+    // the same flag: a row that is blank BECAUSE SOMEONE DECIDED IT SHOULD BE
+    // is still someone's decision, so this only moves on an explicit re-run.
+    if (adopt && renderable && blank) {
+      adopted.push(`${id} (was ${authored.kind}, now has a model)`);
+      authored.kind = 'render';
+      delete authored.image;
+      resetFraming(authored);
+    } else if (adopt && scene && blank) {
       adopted.push(`${id} (was ${authored.kind}${authored.kind === 'image' ? ', no file' : ''})`);
       authored.kind = 'scene';
       delete authored.image;
+      resetFraming(authored);
     }
   }
 
@@ -476,6 +567,11 @@ for (const up of CONFIG.upgrades) {
       ...(def.animations ? { wantClips: def.animations } : {}),
     } : {}),
     ...authored,
+    // DERIVED, after the authored spread, and not in the carried-forward list:
+    // this is what the animal IS rather than a choice about the shot.
+    ...(def?.noiseShader && mottleFromConfig()
+      ? { noise: { ...mottleFromConfig(), ...(ICON_GLOW[id] ? { glow: ICON_GLOW[id] } : {}) } }
+      : {}),
     ...(parts ? { sceneNote: scene.note, parts } : {}),
   });
 }
@@ -491,7 +587,7 @@ await writeFile(OUT, JSON.stringify(specs, null, 2) + '\n');
 const byKind = specs.reduce((a, s) => ((a[s.kind] = (a[s.kind] ?? 0) + 1), a), {});
 console.log(`wrote ${specs.length} icon specs to ${OUT}`);
 for (const s of skipped) console.log(`  ${s}`);
-for (const a of adopted) console.log(`  adopted as a scene: ${a}`);
+for (const a of adopted) console.log(`  adopted: ${a}`);
 for (const r of reframed) console.log(`  ${r}`);
 if (!adopt) {
   const waiting = specs.filter((s) => SCENES[s.key]

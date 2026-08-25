@@ -79,6 +79,7 @@ const { CONFIG } = await import('../path/src/config.js');
 const tip = await import('../path/src/ui/upgradeTip.js');
 const hive = await import('../path/src/ui/upgradeHive.js');
 const { SOURCE_UPGRADES } = await import('../path/src/systems/playtestAnalysis.js');
+const { player, recomputeStats, statsWithOneMore } = await import('../path/src/entities/player.js');
 const ui = await import('../path/src/ui/ui.js');
 ui.initUI({ onStart() {}, onRestart() {}, onLevelChoice() {}, onResume() {}, onPauseRestart() {} });
 
@@ -108,9 +109,35 @@ const TOTALS = { dealtBySource: {}, killsBySource: {}, controlEvents: {} };
 const byId = new Map(CONFIG.upgrades.map((u) => [u.id, u]));
 const enabled = CONFIG.upgrades.filter((u) => u.enabled);
 
+// A REAL RUN, briefly, so the span in the `next` row has something to measure.
+//
+// "And where does that put me" is the live stat block plus one more pick, and
+// there is no honest way to fake it — the figure folds in the base, the level
+// growth and every other card. So the page stands the player up holding `owned`
+// copies of the card, recomputes, and takes the two blocks. Cheap: it is a few
+// object spreads per sample and it touches nothing outside this process.
+function withRun(id, owned, fn) {
+  const was = player.upgrades.slice();
+  const wasLevel = player.level;
+  player.upgrades.length = 0;
+  for (let i = 0; i < owned; i++) player.upgrades.push({ id, rarity: 'common' });
+  // A level a build that deep would plausibly be at, so the baseline growth in
+  // the block is not a level-1 one under a fifteen-stack card.
+  player.level = Math.max(1, owned * 2);
+  recomputeStats();
+  const out = fn({ live: player.stats, after: statsWithOneMore(id, 'common') });
+  player.upgrades.length = 0;
+  for (const p of was) player.upgrades.push(p);
+  player.level = wasLevel;
+  recomputeStats();
+  return out;
+}
+
 // One tip, rendered into a detached box wearing the real class.
 function tipHtml(id, owned, verbosity) {
-  const content = tip.upgradeTipContent(id, { owned, verbosity, totals: TOTALS });
+  const content = withRun(id, owned, ({ live, after }) => tip.upgradeTipContent(id, {
+    owned, verbosity, totals: TOTALS, liveStats: live, afterStats: after,
+  }));
   if (!content) return '<div class="none">no tip</div>';
   const node = document.createElement('div');
   node.className = 'sv-uptip sv-uptip-on';

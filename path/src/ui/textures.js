@@ -1331,6 +1331,38 @@ function buildBusRow() {
   dbSlider(el, 'floor', () => rep().floor ?? 0.25, (v) => { rep().floor = v; });
   slider(el, 'gap jitter', 0, 0.9, 0.01, () => CONFIG.audio.sfxGapJitter ?? 0.35, (v) => { CONFIG.audio.sfxGapJitter = v; });
 
+  // --- distance -------------------------------------------------------------
+  // Two mechanisms, one geometry, and they are on one set of controls because
+  // that is the truth of it: the radii below decide BOTH which sounds win a
+  // voice when the bus is full and how loud everything is on its way out. Split
+  // across two panels they would drift apart, and a mix where the budget calls
+  // a crab close while the level calls it distant is unreasonable about in
+  // exactly the way that never gets diagnosed.
+  const prio = () => (CONFIG.audio.priority ??= {});
+  const fall = () => (CONFIG.audio.falloff ??= {});
+
+  const distHead = document.createElement('div');
+  distHead.className = 'sv-tex-divider sv-tex-upload-status';
+  distHead.textContent = 'Distance. Everything inside the near radius mixes at full level and never loses a voice; past it the level falls away to the far level, which is reached at the far radius and held from there out. UI, the level-up and the death have no position and are never touched by any of it.';
+  el.appendChild(distHead);
+
+  const fallRow = document.createElement('div');
+  fallRow.className = 'sv-sfx-field';
+  const fallLab = document.createElement('label');
+  fallLab.textContent = 'falloff';
+  const fallBox = document.createElement('input');
+  fallBox.type = 'checkbox';
+  fallBox.checked = fall().enabled !== false;
+  fallBox.addEventListener('change', () => { fall().enabled = fallBox.checked; repChanged(); });
+  fallRow.append(fallLab, fallBox);
+  el.appendChild(fallRow);
+
+  slider(el, 'near radius', 0, 60, 1, () => prio().nearRadius ?? 18, (v) => { prio().nearRadius = v; });
+  slider(el, 'far radius', 10, 220, 1, () => prio().farRadius ?? 70, (v) => { prio().farRadius = v; });
+  dbSlider(el, 'far level', () => fall().minGain ?? 0.125, (v) => { fall().minGain = v; });
+  slider(el, 'falloff curve', 0.2, 4, 0.05, () => fall().curve ?? 1.8, (v) => { fall().curve = v; });
+  slider(el, 'priority bands', 1, 8, 1, () => prio().bands ?? 4, (v) => { prio().bands = Math.round(v); });
+
   // --- dynamics -------------------------------------------------------------
   const comp = () => (bus().comp ??= {});
 

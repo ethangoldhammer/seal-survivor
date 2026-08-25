@@ -1617,6 +1617,19 @@ function renderGlobal() {
   slider(cr, 'recovery', { min: 0.05, max: 2, step: 0.05, get: () => rep.recovery ?? 0.5, set: (v) => { rep.recovery = v; } });
   slider(cr, 'strength', { max: 2, step: 0.05, get: () => rep.strength ?? 0.35, set: (v) => { rep.strength = v; } });
   slider(cr, 'gap jitter', { max: 0.9, get: () => CONFIG.audio.sfxGapJitter ?? 0.35, set: (v) => { CONFIG.audio.sfxGapJitter = v; } });
+
+  // The two radii are the PRIORITY block's, not the falloff's, and one card
+  // carries both jobs because they are one geometry — see the note on
+  // CONFIG.audio.falloff. Moving `near` here moves what wins a voice and what
+  // is mixed at full level together, which is the only way they can be right.
+  const prio = (CONFIG.audio.priority ??= {});
+  const fall = (CONFIG.audio.falloff ??= {});
+  const di = card(cols, 'sv-wb-snd', 'Distance',
+    'Sound inside the near radius is at full level and never loses its voice. Past it the level falls to the far level, reached at the far radius. UI, the level-up and the death have no position and are never attenuated.');
+  slider(di, 'near radius', { max: 60, step: 1, dp: 0, get: () => prio.nearRadius ?? 18, set: (v) => { prio.nearRadius = v; } });
+  slider(di, 'far radius', { min: 10, max: 220, step: 1, dp: 0, get: () => prio.farRadius ?? 70, set: (v) => { prio.farRadius = v; } });
+  slider(di, 'far level', { max: 1, step: 0.005, dp: 3, get: () => fall.minGain ?? 0.125, set: (v) => { fall.minGain = v; } });
+  slider(di, 'curve', { min: 0.2, max: 4, step: 0.05, get: () => fall.curve ?? 1.8, set: (v) => { fall.curve = v; } });
 }
 
 // ---------------------------------------------------------------------------

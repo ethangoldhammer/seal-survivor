@@ -11,6 +11,7 @@ import { player } from '../entities/player.js';
 import { companionDamage, companionScale, applyCompanionScale } from './scaling.js';
 import { markWeight } from './marks.js';
 import { celebrationState } from './celebrate.js';
+import { sealTeamLevelStats } from '../levelStats.js';
 
 // Seal Team — escort seals that swim the same tilted 3D ring the beluga drone
 // uses, spread evenly around it, ram anything that gets close, and break
@@ -182,8 +183,9 @@ export function sealTeamSize(level, extra = 0) {
 
 /** What ONE escort's ram hits for at this level, Big Rigz included. */
 export function sealTeamDamage(level) {
-  const cfg = CONFIG.sealTeam;
-  return companionDamage(cfg.contactDamage + cfg.damagePerLevel * Math.max(0, level - 1));
+  // levelStats.js owns the curve, Big Rigz folded in there — shared with the
+  // hover tip, so the card's promise and the ram are one number.
+  return sealTeamLevelStats(level, player.stats).sealTeamDamage;
 }
 
 function endLunge(t, cfg) {

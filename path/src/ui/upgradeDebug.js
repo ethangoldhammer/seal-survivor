@@ -1,7 +1,7 @@
 import { CONFIG } from '../config.js';
 import { player, addUpgrade, recomputeStats } from '../entities/player.js';
 import { rarities, baseRarity, rarityById } from '../systems/rarity.js';
-import { rollElementFor, commitElement, activeElement } from '../systems/elements.js';
+import { activeElement } from '../systems/elements.js';
 import { expandDesc } from '../upgradeText.js';
 import * as playtest from '../systems/playtest.js';
 import { isTypingTarget } from './typing.js';
@@ -73,7 +73,6 @@ let visible = false;
 // What the next grant will be. `rarity` starts at the floor tier so a plain
 // click gives you the card as it is most often dealt, not as it is best.
 let rarity = null;
-let element = ROLL;
 let family = ALL;
 let status = '';
 
@@ -486,9 +485,6 @@ function setVisible(on) {
 // GRANTING
 // ---------------------------------------------------------------------------
 
-function elementIds() {
-  return Object.keys(CONFIG.biolum?.elements ?? {});
-}
 
 function owned(id) {
   return player.upgrades.filter((p) => p.id === id).length;
@@ -509,7 +505,7 @@ function atCap(def) {
  * that step a level counter (`bounceLevel`, `garlicLevel`) read off tables
  * sized to the cap — walking past the end tells you nothing true.
  */
-export function grantUpgrade(id, { rarity: tier = null, element: elementId = null } = {}) {
+export function grantUpgrade(id, { rarity: tier = null } = {}) {
   const def = CONFIG.upgrades.find((u) => u.id === id);
   if (!def) {
     console.warn(`[upgrades] no upgrade called '${id}'`);
@@ -517,14 +513,12 @@ export function grantUpgrade(id, { rarity: tier = null, element: elementId = nul
   }
   if (atCap(def)) return null;
 
-  // The element is locked in BEFORE the stat block is rebuilt, exactly as
-  // applyLevelChoice does it: the first Glow Up! stack scales whatever element
-  // the run is carrying, and committing after the recompute would apply stack
-  // one to nothing.
-  if (def.roll === 'biolumElement') {
-    const pick = elementId && elementId !== ROLL ? elementId : rollElementFor();
-    commitElement(pick);
-  }
+  // THE ELEMENT NEEDS NO DOOR ANY MORE. It used to be rolled and committed
+  // here, before the stat block was rebuilt, because it lived in
+  // systems/elements.js and a recompute could not produce it. There are four
+  // cards now — one per element — and each writes `biolumElement` in its own
+  // apply(), so granting the card grants the element by the same route a real
+  // pick takes. Asking for a specific one means granting that card.
 
   const before = { ...player.stats };
   addUpgrade(def.id, tier ?? baseRarity());
@@ -603,24 +597,20 @@ function render() {
     );
   }
 
-  // GLOW. Hidden entirely once the run has committed an element — commitElement
-  // is a one-way door by design, and a picker that silently does nothing is
-  // worse than no picker.
+  // GLOW. A READOUT NOW, NOT A PICKER. It steered a roll, and there is no roll
+  // — the four elements are four upgrades in the list above, so asking for one
+  // means granting that card the same way you grant any other. What is left
+  // worth saying is which one the run is carrying, because the other three are
+  // out of the pool from that moment (see `exclusive` in config.js).
   elementRow.body.textContent = '';
-  const committed = activeElement();
-  if (committed) {
-    const locked = document.createElement('div');
-    locked.style.cssText = `color:${C.dim};font-size:10px;`;
-    locked.textContent = `${committed} — locked for this run`;
-    elementRow.body.appendChild(locked);
-  } else {
-    for (const id of [ROLL, ...elementIds()]) {
-      const hex = id === ROLL ? null
-        : `#${((CONFIG.biolum.elements[id].color ?? 0xffffff) >>> 0).toString(16).padStart(6, '0')}`;
-      elementRow.body.appendChild(
-        chip(id, () => element === id, () => { element = id; render(); }, hex),
-      );
-    }
+  {
+    const held = activeElement();
+    const line = document.createElement('div');
+    line.style.cssText = `color:${held ? '#eaf6ff' : C.dim};font-size:10px;`;
+    line.textContent = held
+      ? `${held} — the other three are out of the pool`
+      : 'none yet — grant one of the four cards above';
+    elementRow.body.appendChild(line);
   }
 
   familyRow.body.textContent = '';
@@ -723,7 +713,7 @@ function upgradeRow(def) {
   minus.style.padding = '2px 8px';
   minus.style.visibility = have ? 'visible' : 'hidden';
   const plus = button(capped ? 'max' : '+1', () => {
-    const result = grantUpgrade(def.id, { rarity, element });
+    const result = grantUpgrade(def.id, { rarity });
     if (!result) return;
     const moved = diff(result.before, result.after);
     status = `+1 ${def.name} [${rarityById(rarity)?.name ?? rarity}] — `
@@ -756,7 +746,10 @@ export function upgradeDebugState() {
   return {
     visible,
     rarity,
-    element,
+    // The element the RUN is carrying, read off the stat block rather than a
+    // picker's state — there is nothing to pick any more, and a panel reporting
+    // its own dead field would be reporting a choice nobody can make.
+    element: activeElement(),
     family,
     status,
     creature: creaturePick,
@@ -767,10 +760,9 @@ export function upgradeDebugState() {
 
 /** Panel state the keyboard also drives, so a test can set it without a click. */
 export function setUpgradeDebugChoice({
-  rarity: tier, element: elementId, family: fam, creature, count,
+  rarity: tier, family: fam, creature, count,
 } = {}) {
   if (tier !== undefined) rarity = tier;
-  if (elementId !== undefined) element = elementId;
   if (fam !== undefined) family = fam;
   if (creature !== undefined) creaturePick = creature;
   if (count !== undefined) creatureCount = count;

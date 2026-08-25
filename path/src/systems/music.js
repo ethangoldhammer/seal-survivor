@@ -1,6 +1,7 @@
-import { CONFIG } from '../config.js';
+import { CONFIG, barDivisions, barRungIndex } from '../config.js';
 import { musicScale } from './settings.js';
 import { bounds, depthFraction } from '../arena.js';
+import { ease } from '../ease.js';
 import { getAudioContext, makeImpulse } from './audio.js';
 import { fetchAudioBytes } from './fetchAudio.js';
 
@@ -86,6 +87,18 @@ let rateScale = 1;
 let rateNow = 1;
 let rateTarget = 1;
 let rateTau = 0;
+// ...and the OTHER shape a rate change can have: a named curve run over a
+// fixed duration, rather than an exponential approach that never quite lands.
+// { from, to, start, dur, name } on `rateScale`, or null.
+//
+// This exists because one rate move in the game is not a smoothing — it is a
+// MOVE, choreographed against something the player is watching. The tape comes
+// up to speed over the camera's opening gesture and has to be on the camera's
+// curve to do it; setTargetAtTime is the wrong shape at both ends (it leaves
+// at full speed and arrives asymptotically, where the move eases out of rest
+// and settles INTO its destination). Everything else that touches the rate is
+// still a smoothing and still goes through writeRate.
+let rateCurve = null;
 
 function targetRate() {
   return Math.max(0.05, (CONFIG.music.playbackRate ?? 1) * rateScale);
@@ -97,6 +110,12 @@ function targetRate() {
 // a sustained loop.
 function writeRate(glide) {
   advance();
+  // A smoothing arriving mid-move takes the rate over — a level-up dilation in
+  // the opening seconds of a run is rare but real, and two writers on one
+  // AudioParam is the whole reason this is a single channel. Cleared AFTER
+  // advance, so the curve's own contribution up to now is banked in
+  // `rateScale` rather than snapping back to where the move started.
+  rateCurve = null;
   rateTarget = targetRate();
   if (!source || !ctx) {
     rateNow = rateTarget;
@@ -124,7 +143,19 @@ function advance() {
   lastTick = now;
   if (dt === 0) return;
   const before = rateNow;
-  if (rateTau > 0) {
+  if (rateCurve) {
+    // Modelled analytically against the same clock the schedule was written on,
+    // for the reason the exponential model above is modelled: this is what the
+    // score clock integrates and what currentBpm reports, so a creature marching
+    // to the beat accelerates along the camera's curve rather than snapping to
+    // the tempo the tape is still on its way to.
+    const t = (now - rateCurve.start) / Math.max(1e-6, rateCurve.dur);
+    rateScale = rateCurve.from + (rateCurve.to - rateCurve.from) * ease(rateCurve.name, t);
+    if (t >= 1) { rateScale = rateCurve.to; rateCurve = null; }
+    rateTarget = targetRate();
+    rateNow = rateTarget;
+    rateTau = 0;
+  } else if (rateTau > 0) {
     rateNow += (rateTarget - rateNow) * (1 - Math.exp(-dt / rateTau));
     if (Math.abs(rateTarget - rateNow) < 1e-4) { rateNow = rateTarget; rateTau = 0; }
   } else {
@@ -133,7 +164,72 @@ function advance() {
   if (started) transportPos += dt * (before + rateNow) * 0.5;
 }
 
+// Run the rate from where it is to `to` over `dur` seconds on a named ease.js
+// curve, scheduled on the audio thread rather than chased frame by frame.
+//
+// AS LINEAR SEGMENTS, and that is the whole reason this can exist at all.
+// playbackRate is an AudioParam with no curve primitive that fits — there is
+// setValueCurveAtTime, but it locks the param for its whole duration and
+// throws if anything else touches it, which would make a level-up mid-move an
+// exception rather than a takeover. A chain of linearRampToValueAtTime is
+// interpolated on the audio thread at sample rate, so what a listener hears is
+// smooth; the segmentation is only in the SECOND derivative, and at `STEPS`
+// over a move this long each segment is a sixth of a second of a glide nobody
+// can hear the corners of. Re-issuing it (a track switch mid-move) is a plain
+// cancel-and-rewrite, which is what setValueCurveAtTime would not allow.
+const RATE_CURVE_STEPS = 24;
+
+function scheduleRateCurve(from, to, dur, name) {
+  advance();
+  // No node to schedule on, or no time to do it in: the model is the only
+  // thing that exists, so set it and let the next startSource pick it up.
+  if (!source || !ctx || !(dur > 0)) {
+    rateScale = Math.max(0.05, Math.min(4, to));
+    writeRate(0);
+    return;
+  }
+  rateCurve = { from, to, start: ctx.currentTime, dur, name };
+  // Stamped now rather than left for the first advance(): anything reading
+  // targetRate() before the next tick would otherwise get the scale the move
+  // is replacing, which after a run's resets is full speed.
+  rateScale = from;
+  writeRateCurve();
+}
+
+// Stamp the live curve onto whatever source node is playing NOW, from wherever
+// the move has got to. Called on scheduling and again from startSource, so a
+// track switch landing mid-move continues it on the new node instead of
+// dropping the schedule with the old one.
+function writeRateCurve() {
+  if (!rateCurve || !source || !ctx) return;
+  const now = ctx.currentTime;
+  const { from, to, start, dur, name } = rateCurve;
+  const t0 = Math.max(0, Math.min(1, (now - start) / Math.max(1e-6, dur)));
+  const configured = CONFIG.music.playbackRate ?? 1;
+  const at = (t) => Math.max(0.05, configured * (from + (to - from) * ease(name, t)));
+  const p = source.playbackRate;
+  p.cancelScheduledValues(now);
+  p.setValueAtTime(at(t0), now);
+  for (let i = 1; i <= RATE_CURVE_STEPS; i++) {
+    // Stepped through the REMAINDER of the move rather than through the whole
+    // of it: a curve re-stamped at the halfway point still gets its full
+    // resolution over the half that is left, and — more to the point — a
+    // segment scheduled at a time already in the past is applied instantly,
+    // which would land the rate on a value from earlier in the move.
+    const t = t0 + (1 - t0) * (i / RATE_CURVE_STEPS);
+    p.linearRampToValueAtTime(at(t), start + dur * t);
+  }
+  rateTau = 0;
+}
+
 export function setMusicRateScale(scale, glide = 0.2) {
+  // RETIRE ANY MOVE FIRST, and in this order. `advance` is what banks a live
+  // curve's progress into `rateScale` — so calling it after the assignment
+  // below overwrites the value the caller just asked for with wherever the
+  // move had got to, and a level-up dilation landing during the opening ramp
+  // is silently ignored. Bank, drop the curve, THEN set.
+  advance();
+  rateCurve = null;
   rateScale = Math.max(0.05, Math.min(4, scale || 1));
   writeRate(glide);
 }
@@ -305,6 +401,62 @@ export function beatPhase() {
   if (!started || !ctx) return 0;
   advance();
   return transportPos / (60 / Math.max(1, CONFIG.music.bpm));
+}
+
+// --- the shot grid ---------------------------------------------------------
+// The bar grid as something a WEAPON can schedule against, rather than as a
+// boundary a track switch waits for.
+//
+// `pos` is score seconds and monotonic — the same clock beatPhase() reads. That
+// is the whole reason this is exported instead of a wall-clock bar length: a
+// weapon scheduling against score time decelerates with the track through a
+// death dive and accelerates back out of it, so the cadence stays locked to
+// the music across every rate ramp instead of only at rate 1. A shot clock
+// ticked by the frame's dt agrees with the music only while nothing is moving.
+//
+// `phase` is where in the CURRENT bar we are, measured from `loopAnchor` — the
+// playing file's own downbeat — so it survives a loop wrap and a track switch,
+// both of which land on a bar line by construction. `pos` deliberately does
+// NOT reset at either, so a schedule held in `pos` is never stranded; it is
+// the phase that moves, and a caller re-deriving from `phase` after every
+// event picks the new lattice up on its own.
+//
+// `running` is false before the audio context has been unlocked and after
+// stop(). There is no grid to lock to then and the caller has to say what it
+// does instead — silently returning phase 0 would put every weapon in the game
+// on an imaginary downbeat during the menu.
+export function barGrid() {
+  const bar = barSeconds();
+  if (!started || !ctx) return { running: false, bar, pos: 0, phase: 0 };
+  advance();
+  return {
+    running: true,
+    bar,
+    pos: transportPos,
+    phase: ((transportPos - loopAnchor) % bar + bar) % bar,
+  };
+}
+
+// Snap an interval onto the bar ladder — see barDivisions in config.js for
+// which divisions are on it and why triplets are.
+//
+// This is a SAFETY NET, not the mechanism. The base interval and every discrete
+// multiplier are already rungs (see CONFIG.weapon.beatLock), so on a normal run
+// this returns its argument unchanged. What it exists for is the CONTINUOUS
+// ones — the air-time ramp is a smooth 1..2 and passes through every value
+// between — and for whatever gets added later without anyone remembering the
+// grid exists. A continuous input therefore arrives as a GEAR CHANGE rather
+// than a slide — the air ramp crosses two rungs on its way from bar/4 to bar/8
+// and steps at each — which is the price of the lock and is meant to be heard.
+export function snapToBarGrid(seconds, maxDivision = 64) {
+  const bar = barSeconds();
+  if (!(seconds > 0) || !(bar > 0)) return seconds;
+  const divs = barDivisions(maxDivision);
+  // Nearest by RATIO, not by distance: the midpoint between bar/4 and bar/8 is
+  // their geometric mean, because 0.7 of a bar is as far from a half as it is
+  // from a whole and that is what a listener hears. Rounded linearly, every
+  // interval below about a third of a bar would collapse onto the finest rung.
+  return bar / divs[barRungIndex(divs, bar / seconds)];
 }
 
 function ensureChain() {
@@ -523,6 +675,10 @@ function startSource(name, when) {
   rateTarget = targetRate();
   source.playbackRate.value = rateNow;
   if (rateTau > 0) source.playbackRate.setTargetAtTime(rateTarget, ctx.currentTime, rateTau);
+  // A move in flight follows the music onto the new node. Without this a loop
+  // boundary landing inside the opening ramp would strand the tape at whatever
+  // speed it had reached and leave it there for the rest of the run.
+  writeRateCurve();
   source.connect(filter);
   // Started AT the downbeat, not at sample zero — otherwise a switch quantised
   // to a bar line still puts the music a padding's width late, which across
@@ -588,7 +744,10 @@ export function play(level = 1) {
   // without this the new run would open on the run's first loop and then be
   // taken back over by the dead fight's next boss loop one bar later.
   resetBossMusic();
-  depthHeld = false;
+  // NOT unconditionally false: the menu starts the transport with the lid
+  // already on (see startMusicAtRest), and clearing the hold here would let the
+  // first updateDepth of the run sweep it open a frame after Play.
+  depthHeld = atRest;
   resumeUntil = 0;
   // A run started while the last one's boss-kill hush was still up would open
   // MUTED — the cut is an automation ramp on the music gain, and starting a
@@ -596,6 +755,8 @@ export function play(level = 1) {
   // Cleared with no fade: this is frame one of a run, not the end of a beat.
   releaseMusicHush(0);
   const when = ctx.currentTime + 0.02;
+  rateCurve = null;
+  opening = null;
   rateNow = rateTarget = targetRate();
   rateTau = 0;
   startSource(slot, when);
@@ -608,14 +769,24 @@ export function play(level = 1) {
   lastTick = when;
   started = true;
   // Open at the surface value; the first updateDepth call glides it to
-  // wherever the player actually is.
+  // wherever the player actually is. Under the menu it opens at `menuHz`
+  // instead — set here rather than by startMusicAtRest because a track that had
+  // not decoded yet comes back through play() from preloadDefaultTracks, and
+  // a pin applied once on the way in would be overwritten by that second pass.
+  const openHz = atRest ? (CONFIG.music.menuHz ?? 500) : CONFIG.music.surfaceHz;
   filter.frequency.cancelScheduledValues(ctx.currentTime);
-  filter.frequency.setValueAtTime(Math.max(60, CONFIG.music.surfaceHz), ctx.currentTime);
+  filter.frequency.setValueAtTime(Math.max(60, openHz), ctx.currentTime);
   if (!pollTimer) pollTimer = window.setInterval(pollQueue, 40);
 }
 
 export function stop() {
   stopSource();
+  // The menu's half-speed goes with its hold. stopSource has already dropped
+  // the node, so this only re-stamps the model — no ramp to leave hanging.
+  // ...and any move in flight, which a stopped transport must not keep.
+  rateCurve = null;
+  opening = null;
+  if (atRest) { atRest = false; setMusicRateScale(1, 0); }
   // Not left set behind a stopped transport: the next play() would find the
   // gain still ramped to zero and the send still primed.
   releaseMusicHush(0);
@@ -708,9 +879,29 @@ let currentLevel = 1;
 // While the upgrade screen has the filter ducked, depth updates stand down
 // so the two aren't fighting over the same AudioParam.
 let depthHeld = false;
+// ...and the same for THE SCORE AT REST — the state the music sits in whenever
+// there is no run: the main menu before the first one, and the score card
+// after every one. Half speed under the `menuHz` lid, on both screens, because
+// they are the same screen as far as the music is concerned. Tracked
+// separately from `depthHeld` because it has to survive a play() — see the
+// note there.
+let atRest = false;
 // ctx time until which depth tracking glides at `sweepTime` rather than the
 // quicker `depthSmoothing` — the climb back out of an upgrade-screen duck.
 let resumeUntil = 0;
+// THE OPENING MOVE'S HALF OF THE FILTER: { from, start, dur, name }, or null.
+// While it is set, updateDepth drives the cutoff along the camera's curve from
+// the menu's lid to wherever depth wants it, instead of easing toward the
+// depth target on its own exponential. Cleared the moment the move is over,
+// and depth tracking carries on from exactly where it was handed the filter.
+let opening = null;
+// How hard the per-frame write is smoothed while the move runs. Small on
+// purpose: the value being written is ALREADY the curve, so this is only here
+// to stop a per-frame `setValueAtTime` zippering — and a lazy time constant
+// here is a lag that shows up as the one thing this move must not do, which is
+// arrive after the camera. At 0.05 the filter is a twentieth of a second
+// behind a curve that takes seconds, and it lands with everything else.
+const OPENING_TAU = 0.05;
 
 function rampTo(hz, seconds) {
   if (!ensureChain()) return;
@@ -730,6 +921,26 @@ function rampTo(hz, seconds) {
 export function updateDepth(y) {
   if (!CONFIG.music.enabled || !started || depthHeld || !ensureChain()) return;
   const now = ctx.currentTime;
+  if (opening) {
+    const t = (now - opening.start) / Math.max(1e-6, opening.dur);
+    if (t >= 1) {
+      // Handed over rather than snapped: the plain path below picks the filter
+      // up on this same frame, at the value the move left it at.
+      opening = null;
+    } else {
+      // IN LOG SPACE, for the reason cutoffForDepth interpolates in log space:
+      // a linear ramp from 500Hz to 18kHz spends five sixths of its travel
+      // above 5kHz, where almost none of the opening can be heard. The target
+      // is read fresh every frame, so a player who dives during the move is
+      // still muffled by the water — the curve is the WEIGHT, not the
+      // destination.
+      const to = Math.max(60, cutoffForDepth(y));
+      const from = Math.max(60, opening.from);
+      const hz = from * Math.pow(to / from, ease(opening.name, t));
+      filter.frequency.setTargetAtTime(Math.max(60, hz), now, OPENING_TAU);
+      return;
+    }
+  }
   // Just came back from the upgrade screen: take `sweepTime` to climb out of
   // the duck, then settle into the quicker depth-tracking constant. A time
   // constant reaches ~95% in 3τ, hence the /3.
@@ -991,10 +1202,163 @@ export function slotForLevel(level) {
   return filled[Math.min(idx, filled.length - 1)];
 }
 
+// ---------------------------------------------------------------------------
+// THE MENU'S MUSIC — the same transport the run uses, started early with the
+// low-pass pinned nearly shut.
+//
+// Not a second track and not a second chain: the menu plays the run's own
+// opening loop through the run's own filter, held at `menuHz` (about 500) so
+// what carries through the menu is the bass and the shape of the groove with
+// the top end still underwater. Pressing Play does not start the music, it
+// takes the lid off — startGame hands over to updateDepth, which glides the
+// cutoff open over `sweepTime` while the seal is already swimming.
+//
+// The hold is what makes this safe to leave running: nothing calls updateDepth
+// until `gameState.running`, so while the menu is up this is the only writer.
+export function startMusicAtRest() {
+  if (!CONFIG.music.enabled || !ensureChain()) return;
+  atRest = true;
+  depthHeld = true;
+  // HALF SPEED, and BEFORE play() rather than after: play() stamps the model
+  // straight from targetRate() with no glide, so a scale set first is what the
+  // source node is born at. Set afterwards it would be a ramp DOWN that the
+  // player hears — the menu would open at full tempo and sag into itself.
+  //
+  // A buffer source has no time-stretch, so half speed is also an octave down.
+  // That is the effect, not a side effect: it is the same tape running slow,
+  // and it sits under the 500Hz lid as one idea rather than two.
+  setMusicRateScale(CONFIG.music.menuRate ?? 0.5, 0);
+  // Level 1, which is the loop the run itself would open on — so the handover
+  // at Play is a filter opening, not a track change.
+  play(1);
+}
+
+export function musicAtRest() {
+  return atRest;
+}
+
+// BRING A PLAYING TRANSPORT TO REST, which is what the end of a run does.
+//
+// The death dive drags the tape down as the body sinks and used to wind it
+// back to full speed the moment the score card went up — so the screen you
+// look at for as long as it takes to type a name played at run tempo, brightly,
+// with nothing running. It settles to the same half speed and the same lid the
+// main menu sits at instead, and stays there until Play.
+//
+// A SETTLING, not a move: an exponential glide, because there is nothing on
+// screen for it to be choreographed against. The opening move out of this is
+// the choreographed one.
+export function restMusic(seconds = 0.9) {
+  if (!CONFIG.music.enabled || !started || !ensureChain()) return;
+  atRest = true;
+  setMusicRateScale(CONFIG.music.menuRate ?? 0.5, Math.max(0.01, seconds / 3));
+  rampTo(CONFIG.music.menuHz ?? 500, seconds);
+  // AFTER the ramp above, which is the one write that is allowed to move the
+  // cutoff from here. Nothing calls updateDepth outside a run anyway; this is
+  // for the frame the next run starts on, before the release re-reads it.
+  depthHeld = true;
+}
+
+// The run taking the transport over. Releases the hold and lets updateDepth
+// glide out of it exactly the way it climbs out of an upgrade-screen duck —
+// no ramp scheduled here, because the next frame's depth update would truncate
+// it. A no-op if the menu never got as far as starting anything.
+export function releaseMusicIntoRun(level = 1) {
+  if (!atRest) return false;
+  // WHAT IS PLAYING MAY NOT BE WHAT THIS RUN OPENS ON, and only this file can
+  // tell. Out of the main menu it always is — the menu started the run's own
+  // first loop and nothing has happened since — and restarting there would cut
+  // the phrase off on the frame the button was pressed. Out of a SCORE CARD it
+  // usually is not: dying to a boss is the common way to end a run, so the
+  // rotation is up, there may be a loop queued behind it, and the kill's hush
+  // may still be ramped over the gain. play() clears all three, and it opens at
+  // the resting lid and the resting rate because `atRest` is still set — so the
+  // restart is silent and the move below still starts from the right place.
+  const want = slotForLevel(level);
+  if (!started || bossActive || hushed || queuedTrack || (want != null && want !== currentTrack)) {
+    play(level);
+  }
+  atRest = false;
+  depthHeld = false;
+  // BOTH HALVES ON THE CAMERA'S MOVE — its curve and its length, read from the
+  // rig rather than typed again here. See openingMove().
+  //
+  // The lid and the tape were on separate clocks (the filter on `sweepTime`,
+  // which is the upgrade screen's number and about a quarter as long), and a
+  // brightness that arrived a beat before the tempo did read as two effects
+  // rather than one move. They finish together now, with the camera.
+  //
+  // BOTH MOVES START FROM CONFIG, not from what the nodes currently hold, and
+  // that is the whole difference between this working and this being a no-op.
+  // By the time a run reaches here, startGame has already run resetDeathDive
+  // and resetLevelUpTime — and both of those end with setMusicRateScale(1, 0),
+  // which stamps full speed onto the very param this move is about to animate.
+  // Reading `rateScale` for the start of the ramp therefore read 1, and the
+  // tape "ramped" from full speed to full speed while the filter opened
+  // underneath it. Nothing is audible in the gap (it is all one synchronous
+  // call, and the cancel below removes the stamp before a sample is rendered)
+  // — the bug is entirely that the move loses its own starting point.
+  //
+  // CONFIG is the honest source for both: startMusicAtRest pins the lid and the
+  // rate from these two numbers, and applyMusicSettings re-stamps them from
+  // the same place when the tuner moves. So this is where the menu WAS,
+  // whatever has been scribbled on the params since.
+  const dur = openingMove();
+  const name = CONFIG.music.menuRampEase ?? 'smootherstep';
+  scheduleRateCurve(CONFIG.music.menuRate ?? 0.5, 1, dur, name);
+  if (ensureChain()) {
+    opening = { from: CONFIG.music.menuHz ?? 500, start: ctx.currentTime, dur, name };
+    // NOT ALSO `resumeUntil`. That is the exponential release the upgrade
+    // screen climbs out on, and setting it here would leave a second opinion
+    // about the cutoff sitting behind this one for the case where the move is
+    // ever cut short.
+    resumeUntil = 0;
+  }
+  // So the caller knows it does not also have to start the music itself.
+  return true;
+}
+
+// HOW LONG THE OPENING MOVE TAKES, in seconds — and it is the CAMERA's answer,
+// not the score's.
+//
+// Pressing Play drops the menu's framing and the rig blends menu -> roundStart
+// over that state's `blendIn`, holds it for `hold`, then settles to `base` over
+// `blendOut`. That whole arc is one gesture: the frame is still arriving at the
+// run until the last of it. The tape reaches full speed at the end of it, so
+// the score coming up to tempo and the camera finding the run are one move
+// finishing rather than two things that happen to overlap.
+//
+// DERIVED RATHER THAN COPIED, and with NO OVERRIDE. Three numbers typed here
+// would be right on the day and wrong the first time the opening shot is
+// retuned — and wrong silently, because a rate ramp a second out of step with
+// a camera move does not read as a bug, it reads as slightly dead.
+//
+// There WAS a `menuRampTime` that won when set above zero, and it is deleted
+// rather than defaulted, because a duration is exactly the kind of field that
+// must not have a second home. It had one for about an hour and that was
+// enough: the number was captured into imported-tuning.json while it still had
+// its old default, saved tuning beats config.js in the merge, and every later
+// change to the length was silently ignored on the one machine that mattered.
+// A key that is gone is pruned out of the snapshot on the next load; a key
+// with a default is a stale value with a good reason to still be there.
+function openingMove() {
+  const c = CONFIG.cinecam ?? {};
+  const rs = c.states?.roundStart ?? {};
+  const base = c.base ?? {};
+  return (rs.blendIn ?? base.blendIn ?? 0.4)
+    + (rs.hold ?? 0)
+    + (rs.blendOut ?? base.blendOut ?? 0.6);
+}
+
 // Upgrade screen: duck below wherever depth currently has the filter, and
 // freeze depth tracking so it can't sweep back up underneath the duck.
 export function duckForUpgrade() {
   if (!CONFIG.music.enabled || !started) return;
+  // The opening move is over if a card is up — it was choreographed against a
+  // camera that has stopped doing it. Left running, sweepOpen would hand the
+  // filter back to a curve still interpolating from the MENU's lid, and the
+  // cutoff would jump down to it on the first frame of the resumed run.
+  opening = null;
   depthHeld = true;
   rampTo(CONFIG.music.duckedHz, CONFIG.music.duckTime);
 }
@@ -1298,8 +1662,22 @@ export function applyMusicSettings() {
   // so a change made during the hush still arrives, one beat later.
   if (!hushed) musicGain.gain.value = baseMusicGain();
   filter.Q.value = CONFIG.music.resonance;
+  // The menu's lid is the one cutoff nothing else re-states every frame —
+  // updateDepth is the writer during a run and it does not run before one. So
+  // dragging `menuHz` in the tuner with the menu up would otherwise be silent
+  // until the next play().
   // Through writeRate rather than assigned: a plain `.value =` is ignored
   // outright while automation is scheduled, so dragging the rate slider during
   // a dilation used to do nothing at all.
   writeRate(0);
+  // THE MENU'S TWO VALUES, last and together. Neither is re-stated by anything
+  // that runs every frame — updateDepth writes the cutoff and the dilations
+  // write the rate, and none of them run before `gameState.running` — so
+  // dragging either slider with the menu up would otherwise do nothing at all
+  // until the next play(). After writeRate rather than before it: writeRate(0)
+  // cancels scheduled values on the same param, and would eat the ramp.
+  if (atRest) {
+    rampTo(CONFIG.music.menuHz ?? 500, 0.12);
+    setMusicRateScale(CONFIG.music.menuRate ?? 0.5, 0.12);
+  }
 }

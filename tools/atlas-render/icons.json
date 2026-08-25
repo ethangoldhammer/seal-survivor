@@ -10,12 +10,12 @@
     "toon": true,
     "bands": 3,
     "bandLow": 70,
-    "bandHigh": 255,
+    "bandHigh": 188,
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -58.032812500000716,
-    "pitch": 1.1542968749999942,
+    "yaw": -6.876562500000546,
+    "pitch": -4.0371093750000036,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "three stones already in the air, one behind the next",
@@ -211,8 +211,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -30.221874999999955,
+    "pitch": 46.735546875,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "three stones leaving in a fan",
@@ -366,7 +366,7 @@
           0,
           0
         ],
-        "scale": 0.8
+        "scale": 0
       },
       {
         "asset": "chumChunk",
@@ -525,8 +525,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.037,
-    "yaw": -62.1749999999995,
-    "pitch": -7.9640625000000185,
+    "yaw": -54.91093749999982,
+    "pitch": 23.920312499999973,
     "roll": 0,
     "clipAt": 0.33,
     "zoom": 0.6,
@@ -582,8 +582,8 @@
     "bandGamma": 1,
     "bandSoft": 0.56,
     "outline": 0.02,
-    "yaw": -9.006249999999,
-    "pitch": 89,
+    "yaw": -7.609374999999318,
+    "pitch": 83.73359375000003,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the ring you drag around with you",
@@ -791,8 +791,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": 91.02031250000016,
+    "pitch": -60.262109375,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "two beams, still leaving the head",
@@ -829,11 +829,11 @@
         "tube": 0.15,
         "color": 16734780,
         "opacity": 0.95,
-        "scale": 1.1,
+        "scale": 0.5,
         "at": [
-          1.35,
-          0.3,
-          -0.22
+          1,
+          0.2,
+          -0.02
         ]
       },
       {
@@ -842,11 +842,11 @@
         "tube": 0.15,
         "color": 16734780,
         "opacity": 0.95,
-        "scale": 1.1,
+        "scale": 0.5,
         "at": [
-          1.35,
-          0.3,
-          0.22
+          1,
+          0.2,
+          0.12
         ]
       }
     ]
@@ -920,12 +920,13 @@
     "bandLow": 70,
     "bandHigh": 255,
     "bandGamma": 1,
-    "bandSoft": 0,
+    "bandSoft": 0.72,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -118.34843750000033,
+    "pitch": 25.212500000000006,
     "roll": 0,
     "clipAt": 0.33,
+    "zoom": 0.6,
     "sceneNote": "the club end over end",
     "parts": [
       {
@@ -975,15 +976,15 @@
     "square": true,
     "outSize": 128,
     "toon": true,
-    "bands": 3,
+    "bands": 2,
     "bandLow": 70,
     "bandHigh": 255,
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
-    "roll": 0,
+    "yaw": -70.9124999999998,
+    "pitch": 83.5,
+    "roll": 8,
     "clipAt": 0.33,
     "sceneNote": "the club at the centre of its own blast",
     "parts": [
@@ -1020,14 +1021,17 @@
       },
       {
         "asset": "shrapnel",
-        "prim": "octahedron",
-        "color": 16774368,
+        "file": "bone.glb",
+        "fmt": "glb",
+        "forward": "+X",
+        "up": "+Y",
         "at": [
           1.2,
           0.9,
           -0.4
         ],
-        "scale": 0.28
+        "scale": 0.28,
+        "color": 16774368
       }
     ]
   },
@@ -1035,26 +1039,6 @@
     "key": "clubPower",
     "name": "Bouncer",
     "family": "projectile",
-    "enabled": true,
-    "kind": "none",
-    "square": true,
-    "outSize": 128,
-    "toon": true,
-    "bands": 3,
-    "bandLow": 70,
-    "bandHigh": 255,
-    "bandGamma": 1,
-    "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
-    "roll": 0,
-    "clipAt": 0.33
-  },
-  {
-    "key": "clubIce",
-    "name": "Iced Out in the Club",
-    "family": "aoe",
     "enabled": true,
     "kind": "scene",
     "square": true,
@@ -1066,8 +1050,82 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "clipAt": 0.33,
+    "sceneNote": "the club connecting, and the fish going the other way",
+    "parts": [
+      {
+        "asset": "club",
+        "file": "club.glb",
+        "fmt": "glb",
+        "forward": "-Z",
+        "up": "+Y",
+        "at": [
+          -0.55,
+          -0.15,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          34
+        ],
+        "scale": 1.2
+      },
+      {
+        "asset": "enemyFish",
+        "file": "fish.glb",
+        "fmt": "glb",
+        "forward": "-X",
+        "up": "+Y",
+        "clipAt": 0.4,
+        "at": [
+          1.2,
+          0.55,
+          -0.2
+        ],
+        "rot": [
+          0,
+          0,
+          -26
+        ],
+        "scale": 0.95
+      },
+      {
+        "prim": "streak",
+        "length": 1.5,
+        "tube": 0.12,
+        "color": 12577279,
+        "opacity": 0.8,
+        "at": [
+          0.35,
+          0.3,
+          0.1
+        ],
+        "rot": [
+          0,
+          0,
+          -24
+        ]
+      }
+    ]
+  },
+  {
+    "key": "clubIce",
+    "name": "Iced Out in the Club",
+    "family": "aoe",
+    "enabled": true,
+    "kind": "scene",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 2,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0.94,
+    "outline": 0.02,
+    "yaw": -54.639062500000136,
+    "pitch": 73.53515624999997,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the club frozen in, shards off it",
@@ -1093,25 +1151,31 @@
       },
       {
         "asset": "shrapnel",
-        "prim": "octahedron",
-        "color": 11069183,
+        "file": "bone.glb",
+        "fmt": "glb",
+        "forward": "+X",
+        "up": "+Y",
         "at": [
           1.15,
           0.75,
           -0.35
         ],
-        "scale": 0.38
+        "scale": 0.38,
+        "color": 11069183
       },
       {
         "asset": "shrapnel",
-        "prim": "octahedron",
-        "color": 11069183,
+        "file": "bone.glb",
+        "fmt": "glb",
+        "forward": "+X",
+        "up": "+Y",
         "at": [
           -1.1,
           -0.6,
           0.45
         ],
-        "scale": 0.3
+        "scale": 0.3,
+        "color": 11069183
       }
     ]
   },
@@ -1160,9 +1224,10 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": 42.56977539062575,
-    "pitch": 3.684169006347635,
-    "clipAt": 0.61
+    "yaw": 54.829150390625614,
+    "pitch": -79.46739349365237,
+    "clipAt": 0.61,
+    "flatColor": 15267064
   },
   {
     "key": "sealTeam",
@@ -1194,11 +1259,19 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0,
-    "yaw": -2.7016235351577507,
-    "pitch": -23.86184234619139,
+    "yaw": -40.248498535157864,
+    "pitch": 70.06159515380861,
     "clipAt": 0.49,
     "flatColor": 15267064,
-    "zoom": 0.81
+    "zoom": 0.81,
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0
+    }
   },
   {
     "key": "beluga",
@@ -1364,8 +1437,8 @@
     "bandGamma": 2.2,
     "bandSoft": 0.5,
     "outline": 0.02,
-    "yaw": -75.78750000000008,
-    "pitch": 11.592968749999997,
+    "yaw": -59.22031250000106,
+    "pitch": 61.714062500000004,
     "roll": 0,
     "clipAt": 0.33,
     "zoom": 0.71,
@@ -1391,25 +1464,31 @@
       },
       {
         "asset": "shrapnel",
-        "prim": "octahedron",
-        "color": 16774368,
+        "file": "bone.glb",
+        "fmt": "glb",
+        "forward": "+X",
+        "up": "+Y",
         "at": [
           1.25,
           0.7,
           -0.45
         ],
-        "scale": 0.34
+        "scale": 0,
+        "color": 16774368
       },
       {
         "asset": "shrapnel",
-        "prim": "octahedron",
-        "color": 16774368,
+        "file": "bone.glb",
+        "fmt": "glb",
+        "forward": "+X",
+        "up": "+Y",
         "at": [
           -1.1,
           -0.7,
           0.55
         ],
-        "scale": 0.27
+        "scale": 0,
+        "color": 16774368
       }
     ]
   },
@@ -1486,7 +1565,7 @@
     "name": "Big Willy Style",
     "family": "strike",
     "enabled": true,
-    "kind": "scene",
+    "kind": "image",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -1500,6 +1579,7 @@
     "pitch": -11.287500000000042,
     "roll": 0,
     "clipAt": 0.33,
+    "image": "custom/breachChain.png",
     "sceneNote": "clear of the water, going up",
     "parts": [
       {
@@ -1728,8 +1808,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -71.07031250000023,
+    "pitch": 83.59453125000002,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the ink ring, and what makes it",
@@ -1817,7 +1897,7 @@
     "roll": 62,
     "clipAt": 0.33,
     "zoom": 1.12,
-    "flatColor": 10275941
+    "flatColor": 15267064
   },
   {
     "key": "scallopSquirter",
@@ -1857,10 +1937,11 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": 26.932812500000182,
-    "pitch": 2.5933593750000083,
+    "yaw": 12.331249999999613,
+    "pitch": 0.5332031249999934,
     "roll": 0,
     "clipAt": 0.33,
+    "zoom": 0.886473266273438,
     "sceneNote": "the shell open, the pearl already gone",
     "parts": [
       {
@@ -1881,9 +1962,9 @@
         "prim": "sphere",
         "color": 16774102,
         "at": [
-          1.2,
-          0.3,
-          -0.15
+          0.5,
+          0.2,
+          0.05
         ],
         "scale": 0.4
       },
@@ -1893,10 +1974,10 @@
         "color": 16774102,
         "at": [
           1.85,
-          0.55,
+          0.5,
           0.3
         ],
-        "scale": 0.24
+        "scale": 0
       }
     ]
   },
@@ -1966,10 +2047,18 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.015,
-    "yaw": 33.12329101562477,
-    "pitch": -10.712535095214829,
+    "yaw": 40.35766601562477,
+    "pitch": -9.272300720214828,
     "clipAt": 0.33,
-    "flatColor": 12108492
+    "flatColor": 12108492,
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0
+    }
   },
   {
     "key": "dolphinPod",
@@ -2014,36 +2103,66 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -14.009375000000773,
+    "pitch": 52.99687500000004,
     "roll": 0,
     "clipAt": 0.33,
-    "sceneNote": "the stone has picked its fish",
+    "sceneNote": "two grey pebbles, each trailing the arc it turned through",
     "parts": [
       {
-        "asset": "enemyFish",
-        "file": "fish.glb",
-        "fmt": "glb",
-        "forward": "-X",
-        "up": "+Y",
-        "clipAt": 0.4,
+        "asset": "bullet",
+        "prim": "rock",
+        "color": 7041144,
         "at": [
-          0.75,
-          0.2,
-          -0.2
+          1.2,
+          0.42,
+          0
         ],
-        "scale": 1.25
+        "scale": 0.6
+      },
+      {
+        "prim": "ribbon",
+        "length": 3,
+        "curve": 1.15,
+        "width": 0.36,
+        "color": 12577279,
+        "opacity": 0.85,
+        "scale": 1.05,
+        "at": [
+          0.25,
+          0.57,
+          -0.1
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ]
       },
       {
         "asset": "bullet",
         "prim": "rock",
-        "color": 16769126,
+        "color": 7041144,
         "at": [
-          -1.1,
-          -0.45,
-          0.45
+          0.55,
+          -0.77,
+          0.35
         ],
-        "scale": 0.55
+        "scale": 0.46
+      },
+      {
+        "prim": "ribbon",
+        "length": 2.4,
+        "curve": -0.95,
+        "width": 0.3,
+        "color": 12577279,
+        "opacity": 0.65,
+        "scale": 0.85,
+        "at": [
+          -0.18,
+          -1.02,
+          0.35
+        ]
       }
     ]
   },
@@ -2075,7 +2194,15 @@
     "pitch": -10.846243286132815,
     "clipAt": 0.33,
     "zoom": 0.6,
-    "flatColor": 15267064
+    "flatColor": 15267064,
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0
+    }
   },
   {
     "key": "orbiterAmount",
@@ -2179,8 +2306,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -43.08124999999967,
-    "pitch": 35.25703125,
+    "yaw": -41.185937499999625,
+    "pitch": 44.12109375,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the same blast, twice as wide",
@@ -2225,11 +2352,11 @@
     "bands": 3,
     "bandLow": 70,
     "bandHigh": 255,
-    "bandGamma": 1,
+    "bandGamma": 1.2,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": 20.903124999999704,
+    "pitch": 18.24726562499998,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "the escort you had, next to the escort you have",
@@ -2263,11 +2390,26 @@
     ]
   },
   {
-    "key": "bioluminescence",
-    "name": "Glow Up!!",
+    "key": "biolumShock",
+    "name": "[DRAFT] Glow Up!! Shock",
     "family": "gun",
     "enabled": true,
-    "kind": "scene",
+    "file": "furseal.glb",
+    "fmt": "glb",
+    "forward": "+Z",
+    "up": "+Y",
+    "wantClips": {
+      "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+      "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+      "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+      "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+      "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+      "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+      "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+      "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+      "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+    },
+    "kind": "render",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -2279,38 +2421,180 @@
     "outline": 0.02,
     "yaw": -26,
     "pitch": 17.4,
-    "roll": 92,
+    "roll": 0,
     "clipAt": 0.33,
-    "sceneNote": "a shot lit from inside",
-    "parts": [
-      {
-        "asset": "bullet",
-        "prim": "rock",
-        "color": 8388592,
-        "at": [
-          0,
-          0,
-          0
-        ],
-        "scale": 0.95
-      },
-      {
-        "prim": "torus",
-        "tube": 0.1,
-        "color": 8388592,
-        "opacity": 0.75,
-        "scale": 1.6,
-        "at": [
-          0,
-          0,
-          0
-        ],
-        "rot": [
-          72,
-          0,
-          0
-        ]
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0,
+      "glow": {
+        "color": 10479871,
+        "tip": 16777215,
+        "strength": 1.35,
+        "edge": 0.62,
+        "soft": 0.3,
+        "white": 0.4,
+        "scale": 1.4
       }
-    ]
+    }
+  },
+  {
+    "key": "biolumVenom",
+    "name": "[DRAFT] Glow Up!! Venom",
+    "family": "gun",
+    "enabled": true,
+    "file": "furseal.glb",
+    "fmt": "glb",
+    "forward": "+Z",
+    "up": "+Y",
+    "wantClips": {
+      "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+      "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+      "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+      "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+      "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+      "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+      "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+      "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+      "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+    },
+    "kind": "render",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 3,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0,
+    "outline": 0.02,
+    "yaw": -26,
+    "pitch": 17.4,
+    "roll": 0,
+    "clipAt": 0.33,
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0,
+      "glow": {
+        "color": 8257341,
+        "tip": 16777215,
+        "strength": 1.35,
+        "edge": 0.62,
+        "soft": 0.3,
+        "white": 0.4,
+        "scale": 1.4
+      }
+    }
+  },
+  {
+    "key": "biolumChill",
+    "name": "[DRAFT] Glow Up!! Chill",
+    "family": "gun",
+    "enabled": true,
+    "file": "furseal.glb",
+    "fmt": "glb",
+    "forward": "+Z",
+    "up": "+Y",
+    "wantClips": {
+      "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+      "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+      "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+      "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+      "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+      "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+      "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+      "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+      "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+    },
+    "kind": "render",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 3,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0,
+    "outline": 0.02,
+    "yaw": -26,
+    "pitch": 17.4,
+    "roll": 0,
+    "clipAt": 0.33,
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0,
+      "glow": {
+        "color": 12449279,
+        "tip": 16777215,
+        "strength": 1.35,
+        "edge": 0.62,
+        "soft": 0.3,
+        "white": 0.4,
+        "scale": 1.4
+      }
+    }
+  },
+  {
+    "key": "biolumInfection",
+    "name": "[DRAFT] Glow Up!! Infection",
+    "family": "gun",
+    "enabled": true,
+    "file": "furseal.glb",
+    "fmt": "glb",
+    "forward": "+Z",
+    "up": "+Y",
+    "wantClips": {
+      "idle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|water_idle",
+      "swim": "Furseal_Rig|Furseal_Rig|Furseal_Rig|swim",
+      "boost": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sliding",
+      "surfaceIdle": "Furseal_Rig|Furseal_Rig|Furseal_Rig|idle",
+      "surfaceMove": "Furseal_Rig|Furseal_Rig|Furseal_Rig|walk",
+      "strike": "Furseal_Rig|Furseal_Rig|Furseal_Rig|roll",
+      "hit": "Furseal_Rig|Furseal_Rig|Furseal_Rig|ball",
+      "bark": "Furseal_Rig|Furseal_Rig|Furseal_Rig|bark",
+      "death": "Furseal_Rig|Furseal_Rig|Furseal_Rig|sleep_side"
+    },
+    "kind": "render",
+    "square": true,
+    "outSize": 128,
+    "toon": true,
+    "bands": 3,
+    "bandLow": 70,
+    "bandHigh": 255,
+    "bandGamma": 1,
+    "bandSoft": 0,
+    "outline": 0.02,
+    "yaw": -26,
+    "pitch": 17.4,
+    "roll": 0,
+    "clipAt": 0.33,
+    "noise": {
+      "size": 0.04,
+      "strength": 0.83,
+      "contrast": 3.55,
+      "color": 0,
+      "baseColor": 16777215,
+      "paint": 0,
+      "glow": {
+        "color": 6750110,
+        "tip": 16777215,
+        "strength": 1.35,
+        "edge": 0.62,
+        "soft": 0.3,
+        "white": 0.4,
+        "scale": 1.4
+      }
+    }
   }
 ]

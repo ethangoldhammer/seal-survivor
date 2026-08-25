@@ -8,6 +8,8 @@ import { aoe, targeting, abilityDamage, companionScale } from './scaling.js';
 import { canHold, canControl, charmEnemy } from './control.js';
 import { createNoteField, rollNoteColor } from './noteStorm.js';
 import { stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
+import { harpLevelStats } from '../levelStats.js';
+import { player } from '../entities/player.js';
 
 // ===========================================================================
 // HARP SEAL — the pun, and the ability that grew out of it.
@@ -145,18 +147,20 @@ export function harpNoteCount() {
 export function currentHarpStats(level) {
   const c = CONFIG.harp;
   const lv = Math.max(1, level) - 1;
+  const h = harpLevelStats(level, player.stats);
   return {
-    interval: Math.max(c.intervalFloor, c.interval - c.intervalPerLevel * lv),
+    // levelStats.js owns the curve — shared with the tip that quotes it.
+    interval: h.harpGap,
     // `targeting`, not `aoe` — this is how far the harp LOOKS for something to
     // play at, and Splash Zone has no business doubling an acquisition radius.
     // See the split in systems/scaling.js.
     range: targeting(c.range + c.rangePerLevel * lv),
-    damage: c.damage + c.damagePerLevel * lv,
-    charmDuration: c.charmDuration + c.charmDurationPerLevel * lv,
-    auraDuration: c.auraDuration + c.auraDurationPerLevel * lv,
+    damage: h.harpDamage,
+    charmDuration: h.harpCharm,
+    auraDuration: h.harpAuraLength,
     // The aura IS a blast radius, so this one does take Splash Zone.
-    auraRadius: aoe(c.auraRadius + c.auraRadiusPerLevel * lv),
-    auraDamage: c.auraDamage + c.auraDamagePerLevel * lv,
+    auraRadius: h.harpAuraRadius,
+    auraDamage: h.harpAuraDamage,
   };
 }
 

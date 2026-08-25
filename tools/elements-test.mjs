@@ -25,16 +25,16 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { baseStats, projectileCount, INTEGER_STATS } from '../path/src/stats.js';
-import { player } from '../path/src/entities/player.js';
+import { player, availableUpgrades } from '../path/src/entities/player.js';
 import { skyLight } from '../path/src/systems/daylight.js';
 import { aoe, targeting, companionDamage } from '../path/src/systems/scaling.js';
 import { currentGarlicRadius } from '../path/src/systems/garlic.js';
 import { currentCalamariStats } from '../path/src/systems/calamari.js';
 import { rarities, rollRarity, rarityMul, applyWithRarity, bestRarity } from '../path/src/systems/rarity.js';
 import {
-  rollElementFor, commitElement, resetElements, activeElement,
+  resetElements, activeElement,
   applyElementalHit, updateElements, onEnemyKilled, nightFactor,
-  elementCardName, elementCardDesc, clearStatuses, elementHitEvent, elementGlow, moteSnapshot,
+  clearStatuses, elementHitEvent, elementGlow, moteSnapshot,
   updateElementSkin,
 } from '../path/src/systems/elements.js';
 import { attachNoiseShader } from '../path/src/systems/noiseShader.js';
@@ -69,9 +69,20 @@ function fakeEnemy(x, y, radius = 0.5, hp = 400) {
 // `player.stats` is the live stat block every system reads, so the harness
 // writes it directly rather than replaying upgrades — this is a test of the
 // element, not of apply().
+// THE ELEMENT COMES FROM THE PICK LIST NOW. It used to be committed through a
+// one-way door in the module; there are four cards, and which one you hold IS
+// the element (see activeElement). So the harness holds the card — which is
+// also the only way to reach the memo that caches the answer.
+function hold(element) {
+  const def = (CONFIG.upgrades ?? []).find((u) => u.element === element);
+  if (!def) throw new Error(`no card grants ${element}`);
+  player.upgrades.length = 0;
+  player.upgrades.push({ id: def.id, rarity: 'common' });
+}
+
 function setup({ element, level = 1, night = 0 }) {
   resetElements(scene);
-  commitElement(element);
+  hold(element);
   player.stats = baseStats();
   player.stats.biolumLevel = level;
   skyLight.night = night;
@@ -91,35 +102,52 @@ const b = CONFIG.biolum;
 // below run at whatever hour they like and read the same figures either way.
 
 // ===========================================================================
-section('THE ROLL');
+section('FOUR CARDS, ONE ELEMENT');
 // ===========================================================================
 {
+  // This was THE ROLL: one card that picked an element with Math.random at
+  // draw time, showed it, and locked it in on the pick. It is four cards now —
+  // one per element — and the run carries whichever one you took. The roll's
+  // guarantee (exactly one element per run, and later stacks deepen it rather
+  // than re-rolling) is now the offer pool's job, and is checked here.
   resetElements(scene);
+  player.upgrades.length = 0;
   const ids = Object.keys(b.elements);
   check('four elements are configured', ids.length === 4, ids.join(', '));
 
-  // Injected random, so the distribution is checkable without running the game.
-  const first = rollElementFor(() => 0);
-  const last = rollElementFor(() => 0.999);
-  check('the roll spans the whole table', first === ids[0] && last === ids[ids.length - 1],
-    `${first} .. ${last}`);
+  const cards = (CONFIG.upgrades ?? []).filter((u) => u.element);
+  check('...and there is a card for each of them', cards.length === 4,
+    cards.map((c) => c.id).join(', '));
+  check('every card names an element that exists',
+    cards.every((c) => ids.includes(c.element)), cards.map((c) => c.element).join(', '));
+  // All four in one group, or "one per run" is not enforceable.
+  check('all four share one exclusive group',
+    new Set(cards.map((c) => c.exclusive)).size === 1 && cards[0].exclusive,
+    cards.map((c) => c.exclusive).join(', '));
 
-  // The card must be able to say what it is offering BEFORE the pick, which is
-  // the whole reason the roll happens at draw time.
-  const name = elementCardName('Glow Up!', 'venom', 1);
-  const desc = elementCardDesc('venom', 1);
-  check('the card names the element it is offering', name.includes('Venom'), name);
-  check('...and describes it', typeof desc === 'string' && desc.length > 10, desc);
-  check('a later stack reads as deepening, not re-rolling',
-    elementCardDesc('venom', 3).includes('+damage'), elementCardDesc('venom', 3));
+  check('with nothing held the run has no element', activeElement() === null,
+    String(activeElement()));
 
-  // Rolled ONCE per run: after the first commit every later draw must offer the
-  // element already carried, or stacking Glow Up! becomes a slot machine.
-  commitElement('chill');
-  const again = rollElementFor(() => 0.9);
-  check('the roll sticks for the rest of the run', again === 'chill', `rolled ${again}`);
-  commitElement('venom');
-  check('...and a second commit cannot overwrite it', activeElement() === 'chill', activeElement());
+  hold('chill');
+  check('holding a card IS carrying its element', activeElement() === 'chill',
+    String(activeElement()));
+
+  // THE POOL IS WHAT KEEPS IT TO ONE. Taking chill must put the other three
+  // beyond reach for the rest of the run — the roll's one-way door, moved
+  // somewhere a player can see it.
+  const offered = availableUpgrades().filter((u) => u.element).map((u) => u.element);
+  check('the other three leave the pool', offered.length === 1 && offered[0] === 'chill',
+    offered.join(', ') || 'none');
+
+  // ...and a second stack of the one you hold is still on offer, or the card
+  // could never deepen.
+  check('...while the one you hold can still be taken again',
+    availableUpgrades().some((u) => u.element === 'chill'));
+
+  player.upgrades.length = 0;
+  resetElements(scene);
+  check('a reset drops the element with the picks', activeElement() === null,
+    String(activeElement()));
 }
 
 // ===========================================================================
@@ -661,6 +689,10 @@ section('LIFECYCLE');
   applyElementalHit(scene, survivor, 60, [survivor], noHooks);
   check('a status is live before the reset', survivor.venomTimer > 0);
 
+  // A RESTART IS BOTH HALVES. resetPlayer empties the pick list (which is where
+  // the element lives now) and resetElements takes the light off the seal; the
+  // game does them in that order, at main.js:1403 and :1446.
+  player.upgrades.length = 0;
   resetElements(scene);
   clearStatuses([survivor]);
   check('a run restart drops the element', activeElement() === null);
@@ -714,6 +746,12 @@ section('THE SEAL PUTS THE GLOW DOWN AT RUN START');
     u.uNoiseStrength.value === skinBefore,
     `the skin under the glow is untouched (${skinBefore})`);
 
+  // The pick list is emptied FIRST, which is the order the game restarts in
+  // (main.js:1403 then :1446) and, since the element moved out of this module
+  // and into the picks, the half that decides whether the next run has one.
+  // resetElements still has to take the light off by itself — that is the bug
+  // this whole section exists for, and it is checked on the line below.
+  player.upgrades.length = 0;
   resetElements(scene);
   check('a run restart takes the glow back off the material',
     u.uNoiseGlowStrength.value === 0,

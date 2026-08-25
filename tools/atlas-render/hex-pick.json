@@ -1,0 +1,52 @@
+{
+  "cols": 5,
+  "rows": 4,
+  "size": 64,
+  "picks": [
+    {
+      "col": 0,
+      "row": 0,
+      "file": "AnglerFish.webp"
+    },
+    {
+      "col": 0,
+      "row": 1,
+      "file": "Crab.webp"
+    },
+    {
+      "col": 0,
+      "row": 2,
+      "file": "DumboOctopus.webp"
+    },
+    {
+      "col": 1,
+      "row": 0,
+      "file": "Beach_001.webp"
+    },
+    {
+      "col": 1,
+      "row": 1,
+      "file": "MoorishIdol.webp"
+    },
+    {
+      "col": 1,
+      "row": 2,
+      "file": "Seagull.webp"
+    },
+    {
+      "col": 2,
+      "row": 0,
+      "file": "VampireSquid.webp"
+    },
+    {
+      "col": 2,
+      "row": 1,
+      "file": "Humpback.webp"
+    },
+    {
+      "col": 2,
+      "row": 2,
+      "file": "GreatWhite.webp"
+    }
+  ]
+}

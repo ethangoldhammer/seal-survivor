@@ -125,10 +125,17 @@ section('THE ELEMENT TOKEN');
 const ids = Object.keys(CONFIG.biolum?.elements ?? {});
 check('the run has elements to be named after', ids.length >= 2, ids.join(', '));
 
+// THE ELEMENT IS THE CARD YOU HOLD. It used to be committed through a one-way
+// door in systems/elements.js; there are four cards now, one per element, and
+// weaponName is handed the pick list directly — so naming the pebbles is a
+// question about which card is in that list and nothing else.
+const cardFor = (id) => (CONFIG.upgrades ?? []).find((u) => u.element === id);
+check('every element has a card that grants it',
+  ids.every((id) => cardFor(id)), ids.filter((id) => !cardFor(id)).join(', ') || 'all present');
+
 for (const id of ids) {
   elements.resetElements(null);
-  elements.commitElement(id);
-  const got = weaponName('gun', [pick('bioluminescence')]);
+  const got = weaponName('gun', [pick(cardFor(id).id)]);
   const label = CONFIG.biolum.elements[id].label;
   check(`${id} names the pebbles after its own label`, got === `${label} Pebbles`, got);
 }
@@ -136,10 +143,9 @@ for (const id of ids) {
 // The token's source of truth is the element's label, so a rename in config.js
 // has to carry through rather than leaving two spellings in two files.
 elements.resetElements(null);
-elements.commitElement(ids[0]);
 check('the token reads the label rather than a second copy of it',
-  weaponName('gun', [pick('bioluminescence')]).startsWith(CONFIG.biolum.elements[ids[0]].label),
-  weaponName('gun', [pick('bioluminescence')]));
+  weaponName('gun', [pick(cardFor(ids[0]).id)]).startsWith(CONFIG.biolum.elements[ids[0]].label),
+  weaponName('gun', [pick(cardFor(ids[0]).id)]));
 
 // GLOW UP! HELD WITH NO ELEMENT cannot happen in a run — the card commits one
 // on the pick — but it is one bad merge away, and the failure it would produce

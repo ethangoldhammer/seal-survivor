@@ -26,7 +26,7 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { bossVoice } from '../path/src/systems/feedback.js';
+import { bossVoice, onFeedback } from '../path/src/systems/feedback.js';
 import { initParticles, resetParticles, updateParticles } from '../path/src/entities/particles.js';
 import { boats, updateBoats, damageBoat, resetBoats } from '../path/src/systems/boats.js';
 import { setWaveTime } from '../path/src/arena.js';
@@ -233,6 +233,55 @@ check('the smoke group is addressable', SMOKE_GROUP > 0, `index ${SMOKE_GROUP}`)
   const r = hullRun({ hits: many, hp: 0.2 });
   check(`only the last ${smoke.sites} hit sites are remembered`,
     r && r.boat.scars.length === smoke.sites, `${r?.boat.scars.length} scars`);
+}
+
+// ===========================================================================
+section('EVERY BLOW THAT HURTS A HULL RINGS IT, AND EVERY SUNK HULL GOES UP');
+// ===========================================================================
+// The regression this exists for: the hull's hit voice was wired to the BULLET
+// path and its explosion to a hook the caller had to remember to pass, so a
+// boat rammed by the seal, run down by the orca pod or shoved into by another
+// boat took damage in silence, and one sunk by any of them went up without the
+// blast. Both live in damageBoat now, which is the one door all four routes go
+// through — so this drives that door directly and passes NO hooks at all,
+// because "the caller forgot the hook" is exactly the failure.
+{
+  const heard = [];
+  const stop = onFeedback((event) => heard.push(event));
+
+  const hull = () => {
+    const r = hullRun({ hits: [], hp: 1 });
+    heard.length = 0;
+    return r?.boat;
+  };
+
+  // A DAMAGING BLOW. No `at`, no `dir`, no hooks — the shape of the call the
+  // physics solver and a splash make, and the one that used to be mute.
+  if (hull()) {
+    damageBoat(scene, 0, 5, {}, null, null, false);
+    check('a damaging hit rings the hull', heard.includes('bossHitHull'),
+      heard.length ? `heard ${heard.join(', ')}` : 'heard nothing');
+  }
+
+  // ...and a call that only remembers a scar is not a blow. damageBoat at zero
+  // is how a hit with no damage records where it landed (see hullRun above),
+  // and a ring on it would be a hull that pings when nothing hurt it.
+  if (hull()) {
+    damageBoat(scene, 0, 0, {}, null, { x: 0, y: 0 }, false);
+    check('  ...and a zero-damage scar stays quiet', !heard.includes('bossHitHull'),
+      `heard ${heard.join(', ') || 'nothing'}`);
+  }
+
+  // THE KILL, again with no hooks.
+  if (hull()) {
+    const gone = damageBoat(scene, 0, 1e6, {}, null, null, false);
+    check('a sunk hull explodes without being handed a hook',
+      gone && heard.includes('boatExplosion'), `heard ${heard.join(', ') || 'nothing'}`);
+    check('  ...and dies in its own voice', heard.includes('bossDieHull'),
+      `heard ${heard.join(', ') || 'nothing'}`);
+  }
+
+  stop();
 }
 
 resetBoats(scene);

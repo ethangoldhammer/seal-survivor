@@ -4,6 +4,8 @@ import { removeEnemy } from '../entities/enemies.js';
 import { aoe } from './scaling.js';
 import { playerOverlayZ } from '../entities/player.js';
 import { stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
+import { player } from '../entities/player.js';
+import { garlicLevelStats } from '../levelStats.js';
 
 // A constant low-damage aura around the ship. The cloudy look is two layers
 // of value noise scrolling at different rates — cheap, no texture needed.
@@ -89,7 +91,10 @@ export function createGarlicVisual() {
 // cloud is. The mesh is scaled by exactly this number, so the picture and the
 // hitbox are the same value by construction.
 export function currentGarlicRadius(garlicLevel) {
-  return aoe(CONFIG.garlic.baseRadius + garlicLevel * (CONFIG.garlic.radiusPerLevel ?? 1.2));
+  // Through levelStats.js, like the damage above it, so the reach the tip
+  // quotes and the reach the cloud actually has are one number. Splash Zone is
+  // folded in there, which is why aoe() is no longer applied here.
+  return garlicLevelStats(garlicLevel, player.stats).garlicRadius;
 }
 
 // hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e), onTick(x, y, count) }
@@ -133,6 +138,12 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
   tickTimer -= dt;
   if (tickTimer > 0) return;
   tickTimer = CONFIG.garlic.tickInterval;
+  // WHAT A TICK HITS FOR AT THIS STACK. A stack used to buy reach alone, so
+  // the aura got wider without ever getting stronger. Sourced from
+  // levelStats.js — the same function the hover tip quotes — so the number a
+  // card promises is the number a creature standing in the cloud takes.
+  const tickDamage = garlicLevelStats(garlicLevel, player.stats).garlicDps
+    * CONFIG.garlic.tickInterval;
 
   let caught = 0;
   for (let i = enemiesList.length - 1; i >= 0; i--) {
@@ -142,10 +153,10 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
     if (dx * dx + dy * dy > radius * radius) continue;
 
     caught += 1;
-    e.hp -= CONFIG.garlic.damagePerTick;
+    e.hp -= tickDamage;
     e.flash = CONFIG.fx.hitFlash;
     e.hitThisFrame = true;
-    hooks.onEnemyDamaged?.(e, CONFIG.garlic.damagePerTick);
+    hooks.onEnemyDamaged?.(e, tickDamage);
     if (e.hp <= 0) {
       hooks.onEnemyKilled?.(e);
       removeEnemy(scene, i);

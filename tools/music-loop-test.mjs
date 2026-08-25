@@ -24,7 +24,9 @@
 //               actually driving the source through a glide, or the score clock
 //               integrates a speed the loop is not playing at.
 //   DEATH       dying does not stop the track. It drags down with the dive and
-//               winds back up to pitch under the score card, still playing.
+//               comes back up to REST — the same half speed and lid the main
+//               menu holds — under the score card, still playing. Full tempo
+//               returns on Play, not on the score card.
 //   BOSS        a fight takes the transport on the next BAR — a boundary short
 //               enough to land inside the arrival ceremony and musical enough
 //               not to chop the run's loop mid-phrase. It gives it back under
@@ -209,6 +211,19 @@ function run(seconds, onStep = null) {
     onStep?.(now);
     poll?.();
   }
+}
+
+// Run the clock FORWARD to an absolute time, and refuse to be handed one that
+// has already passed. `run` takes a SPAN, so a seek written as
+// `run(target - now)` with the samples out of order is a silent no-op that
+// re-reads the previous frame's value — a check that passes because it
+// measured nothing. Cost one vacuous assertion to learn.
+function runTo(at, onStep = null) {
+  const span = at - now;
+  if (span < -1e-9) {
+    throw new Error(`runTo(${at.toFixed(3)}) is ${(-span).toFixed(3)}s in the past — samples are out of order`);
+  }
+  run(Math.max(0, span), onStep);
 }
 
 // A loop of an exact length, decoded straight in — no file, no mp3.
@@ -399,11 +414,19 @@ const draggedBpm = music.currentBpm();
 check('and it was dragged down by the dive', draggedBpm < CONFIG.music.bpm * 0.9,
   `${draggedBpm.toFixed(1)}bpm`);
 
-// Winding back up under the card, while the picture stays dilated.
+// Coming off the dive's floor under the card, while the picture stays dilated
+// — and stopping AT REST rather than at pitch. The score card is a screen with
+// no run on it, so it holds the same half speed the main menu does; the run's
+// tempo comes back on Play and not before.
 run(CONFIG.death.audio.restoreTime + 0.5);
-check('then winds back up to pitch under the score card',
-  near(music.currentBpm(), CONFIG.music.bpm, CONFIG.music.bpm * 0.06),
-  `${music.currentBpm().toFixed(1)} of ${CONFIG.music.bpm}bpm`);
+const restBpm = CONFIG.music.bpm * (CONFIG.music.menuRate ?? 0.5);
+check('then settles to REST under the score card, not back to pitch',
+  near(music.currentBpm(), restBpm, restBpm * 0.06),
+  `${music.currentBpm().toFixed(1)} of ${restBpm} at rest — full tempo is ${CONFIG.music.bpm}`);
+check('...up off the dive floor, not still on it', music.currentBpm() > draggedBpm * 1.05,
+  `${draggedBpm.toFixed(1)} -> ${music.currentBpm().toFixed(1)}bpm`);
+check('...and it says the score is at rest, so Play knows to lift it',
+  music.musicAtRest() === true);
 check('the loop is still running under it', music.beatPhase() > 0 && !lastLoop().stopped);
 
 // And the restart ramp must not grab it back and yank it down again.
@@ -1049,6 +1072,337 @@ const short = music.trackReport().find((r) => r.name === 'boss4');
 check('a file short of its bar count is still read as that many bars', short?.bars === 8, `${short?.bars} bars`);
 check('...and the shortfall is reported rather than hidden',
   near(short?.drift ?? 0, -0.192, 0.001), `${((short?.drift ?? 0) * 1000).toFixed(0)}ms short of eight bars`);
+music.stop();
+
+section('The menu plays the run\'s loop under a lid, and Play takes it off');
+// The score starts on the MAIN MENU now, with the depth low-pass pinned near
+// `menuHz` so what carries through is the groove and none of the top end.
+// Pressing Play is not a track start, it is the lid coming off — so the two
+// things worth asserting are that the pin actually lands on the filter, and
+// that the run inherits the SAME source node rather than restarting it.
+//
+// Read off the filter the live source is actually plugged into, for the reason
+// musicGainNode walks the graph: a value music.js reports about itself would
+// pass just as well with nothing connected.
+const lidFilter = () => (lastLoop()?.outputs ?? []).find((n) => n.kind === 'biquad');
+
+reset();
+CONFIG.music.enabled = true;
+CONFIG.music.menuHz = 500;
+CONFIG.music.menuRate = 0.5;
+CONFIG.music.menuRampEase = 'smootherstep';
+CONFIG.music.playbackRate = 1;
+// The opening move the ramp is supposed to be riding, summed the way music.js
+// sums it. Read off the real config rather than typed, so this test measures
+// "the tape agrees with the camera" and not "the tape agrees with 3.9".
+const rs = CONFIG.cinecam?.states?.roundStart ?? {};
+const OPENING = (rs.blendIn ?? 0.4) + (rs.hold ?? 0) + (rs.blendOut ?? 0.6);
+// Smootherstep, which is what both ends are supposed to be on.
+const quintic = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+music.startMusicAtRest();
+run(0.2);
+check('the menu starts the transport', !!lastLoop(), String(playing()));
+check('...on the run\'s own opening loop', playing() === '1', String(playing()));
+check('...and it says so', music.musicAtRest() === true);
+const menuSource = lastLoop();
+check('the lid is on the depth filter', near(lidFilter()?.frequency.value ?? 0, 500, 1),
+  `${Math.round(lidFilter()?.frequency.value ?? 0)}Hz`);
+
+// HALF SPEED FROM THE FIRST SAMPLE. Asserted on the source node's own param,
+// not on currentBpm, because the bug this catches is the scale being applied
+// AFTER play() stamped the model — which leaves currentBpm reporting 60 while
+// the tape everyone can hear is still running at 120 and sagging into it.
+check('the tape is at half speed', near(menuSource.playbackRate.value, 0.5, 1e-6),
+  String(menuSource.playbackRate.value));
+check('...and the beat grid follows it', near(music.currentBpm(), CONFIG.music.bpm / 2, 0.5),
+  `${music.currentBpm().toFixed(1)}bpm of ${CONFIG.music.bpm}`);
+// No ramp left hanging: it opens AT half speed rather than gliding down into it.
+run(0.4);
+check('...steadily, not sagging into it', near(menuSource.playbackRate.value, 0.5, 1e-6),
+  String(menuSource.playbackRate.value));
+
+// The hold is the half that would rot silently: without it the run's first
+// updateDepth opens the filter a frame after Play regardless of the menu, and
+// the pin above would still read 500 in this test.
+music.updateDepth(0); // a seal at the surface — wide open, if anything listened
+run(0.3);
+check('...and depth tracking cannot lift it while the menu is up',
+  near(lidFilter()?.frequency.value ?? 0, 500, 1), `${Math.round(lidFilter()?.frequency.value ?? 0)}Hz`);
+
+// Dragging the tuner's slider with the menu up is audible rather than stored
+// for the next play() — nothing else re-states this cutoff before a run.
+CONFIG.music.menuHz = 900;
+CONFIG.music.menuRate = 0.75;
+music.applyMusicSettings();
+run(0.5);
+check('the tuner moves the lid live', near(lidFilter()?.frequency.value ?? 0, 900, 1),
+  `${Math.round(lidFilter()?.frequency.value ?? 0)}Hz`);
+check('...and the tape speed with it', near(menuSource.playbackRate.value, 0.75, 0.01),
+  String(menuSource.playbackRate.value));
+CONFIG.music.menuHz = 500;
+CONFIG.music.menuRate = 0.5;
+music.applyMusicSettings();
+run(0.5);
+
+// PLAY. The run takes the transport over: same node, lid off.
+const beforePlay = loops().length;
+music.releaseMusicIntoRun(1);
+check('the run releases the hold', music.musicAtRest() === false);
+check('...without restarting the loop', loops().length === beforePlay && lastLoop() === menuSource);
+const lidAtPlay = lidFilter().frequency.value;
+const playAt = now;
+// updateDepth every frame, which is what main.js does — the move is driven by
+// it, so a test that steps the clock without it is testing nothing.
+const swim = () => music.updateDepth(0);
+run(OPENING * 0.25, swim);
+// A QUARTER IN AND BARELY MOVED, which is the curve rather than a bug: a
+// smootherstep is at 0.10 by t=0.25, and that is exactly the property the
+// exponential it replaced did not have. A cut would read `surfaceHz` here.
+const quarter = lidFilter().frequency.value;
+check('...and the lid comes off as a glide, not a cut',
+  quarter > lidAtPlay && quarter < CONFIG.music.surfaceHz * 0.1,
+  `${Math.round(lidAtPlay)}Hz -> ${Math.round(quarter)}Hz of ${CONFIG.music.surfaceHz}`);
+// ...and the tape is on its way up rather than snapped there. It must still be
+// SHORT of full speed at this point: a rate that arrived the moment Play was
+// pressed is the jump cut this whole handover exists to avoid.
+const rateMid = menuSource.playbackRate.value;
+check('...while the tape spools up underneath it', rateMid > 0.5 && rateMid < 0.98,
+  `${rateMid.toFixed(3)} of 1`);
+
+// NEITHER OF THEM IS DONE at the old sweepTime, which is the check that fails
+// if the filter is ever handed back its own clock: `sweepTime` is about a
+// quarter of the move, and the lid used to be wide open by here while the tape
+// was barely a third of the way up.
+runTo(playAt + CONFIG.music.sweepTime * 1.2, swim);
+check('...with neither of them finished on the old short clock',
+  lidFilter().frequency.value < CONFIG.music.surfaceHz * 0.9
+    && menuSource.playbackRate.value < 0.99,
+  `${Math.round(lidFilter().frequency.value)}Hz, rate ${menuSource.playbackRate.value.toFixed(3)}`);
+
+// Halfway is where the move is fastest and where it is unmistakably running.
+runTo(playAt + OPENING * 0.5, swim);
+const midway = lidFilter().frequency.value;
+check('...and is unmistakably climbing by halfway',
+  midway > quarter * 3 && midway < CONFIG.music.surfaceHz * 0.5,
+  `${Math.round(midway)}Hz of ${CONFIG.music.surfaceHz}`);
+
+// THE LANDING. Both of them, on the frame the camera settles.
+runTo(playAt + OPENING, swim);
+check('the lid lands with the camera',
+  lidFilter().frequency.value > CONFIG.music.surfaceHz * 0.97,
+  `${Math.round(lidFilter().frequency.value)}Hz of ${CONFIG.music.surfaceHz}`);
+check('...and the tape lands with it', near(menuSource.playbackRate.value, 1, 0.01),
+  String(menuSource.playbackRate.value.toFixed(4)));
+
+// A DIVE DURING THE MOVE is still muffled. The curve is the weight, not the
+// destination — a move that interpolated to a frozen target would open the
+// filter wide on a seal that had swum to the seabed.
+reset();
+music.startMusicAtRest();
+run(0.2);
+music.releaseMusicIntoRun(1);
+run(OPENING * 0.8, () => music.updateDepth(bounds.bottom));
+const deep = lidFilter().frequency.value;
+check('a dive during the move is still muffled by the water',
+  deep < CONFIG.music.surfaceHz * 0.5 && deep > 60,
+  `${Math.round(deep)}Hz, not the ${CONFIG.music.surfaceHz} the surface would give`);
+
+// THE CURVE ITSELF, sampled against the camera's own quintic across the whole
+// move. Tolerance is the linear-segment error, not slop: the schedule is a
+// chain of straight lines through the curve, so it is exact at the knots and
+// chords the bulges between them.
+reset();
+music.startMusicAtRest();
+run(0.2);
+const curveSource = lastLoop();
+const curveT0 = now;
+music.releaseMusicIntoRun(1);
+let worst = 0;
+let worstAt = 0;
+let halfway = 0;
+for (let i = 1; i <= 20; i++) {
+  const t = i / 20;
+  runTo(curveT0 + OPENING * t);
+  const want = 0.5 + 0.5 * quintic(t);
+  const err = Math.abs(curveSource.playbackRate.value - want);
+  if (err > worst) { worst = err; worstAt = t; }
+  // Sampled inside the sweep rather than by rewinding to it afterwards: `now`
+  // only ever moves forward here, so a second pass at t=0.5 would ask for a
+  // negative span, run() would do nothing, and the check would read the value
+  // at the END of the move and pass or fail for the wrong reason.
+  if (i === 10) halfway = curveSource.playbackRate.value;
+}
+check('the ramp is the camera\'s curve, not an exponential', worst < 0.01,
+  `worst ${worst.toFixed(4)} off at t=${worstAt.toFixed(2)} over ${OPENING.toFixed(2)}s`);
+// The distinguishing sample: a quintic is at 0.5 exactly halfway, where an
+// exponential approach is already past 0.9. Half of half-to-full is 0.75.
+check('...eased out of rest rather than leaving at speed',
+  near(halfway, 0.75, 0.01), String(halfway.toFixed(4)));
+runTo(curveT0 + OPENING);
+check('...and at full speed exactly when the camera settles',
+  near(curveSource.playbackRate.value, 1, 1e-6), String(curveSource.playbackRate.value.toFixed(4)));
+check('...with the beat grid back on the configured tempo',
+  near(music.currentBpm(), CONFIG.music.bpm, 1), `${music.currentBpm().toFixed(1)}bpm`);
+// The model and the audio thread agree the whole way down. currentBpm is what
+// beat-synced creatures march to, so a model that ran a different curve from
+// the schedule would have the whole ocean out of step with the score.
+reset();
+music.startMusicAtRest();
+run(0.2);
+const modelSource = lastLoop();
+const m0 = now;
+music.releaseMusicIntoRun(1);
+let modelWorst = 0;
+for (let i = 1; i <= 12; i++) {
+  runTo(m0 + OPENING * (i / 12));
+  const heard = modelSource.playbackRate.value * CONFIG.music.bpm;
+  modelWorst = Math.max(modelWorst, Math.abs(music.currentBpm() - heard));
+}
+check('the beat grid tracks the tape through the whole move', modelWorst < 1.5,
+  `${modelWorst.toFixed(2)}bpm apart at worst`);
+
+// THE ORDER startGame ACTUALLY CALLS THINGS IN, which is the one this shipped
+// broken in. Long before it hands the transport over, startGame runs
+// resetDeathDive and resetLevelUpTime — and each of those ends with
+// setMusicRateScale(1, 0), stamping full speed onto the very param the move is
+// about to animate. A move that took its starting point from `rateScale` read
+// 1 and ramped from full speed to full speed: silently, plausibly, and exactly
+// like the feature not being wired up at all.
+//
+// Nothing is audible in the gap — it is one synchronous call and the schedule
+// cancels the stamp before a sample is rendered — so there is no symptom to
+// find except that the thing sounds instant.
+reset();
+music.startMusicAtRest();
+run(0.2);
+const resetSource = lastLoop();
+check('the menu is at half speed before the run resets anything',
+  near(resetSource.playbackRate.value, 0.5, 1e-6), String(resetSource.playbackRate.value));
+music.setMusicRateScale(1, 0); // resetDeathDive
+music.setMusicRateScale(1, 0); // ...and resetLevelUpTime, as startGame does
+const resetAt = now;
+music.releaseMusicIntoRun(1);
+run(0.05, () => music.updateDepth(0));
+check('...and the move still starts from the menu, not from what they left',
+  resetSource.playbackRate.value < 0.55, String(resetSource.playbackRate.value.toFixed(4)));
+runTo(resetAt + OPENING * 0.5, () => music.updateDepth(0));
+check('...climbing through the middle of it',
+  near(resetSource.playbackRate.value, 0.75, 0.02), String(resetSource.playbackRate.value.toFixed(4)));
+runTo(resetAt + OPENING, () => music.updateDepth(0));
+check('...and landing with the camera', near(resetSource.playbackRate.value, 1, 0.01),
+  String(resetSource.playbackRate.value.toFixed(4)));
+
+// A LEVEL-UP LANDING MID-MOVE still takes the rate over. The move is a
+// schedule on the same AudioParam every dilation writes, so the one thing it
+// must not be is un-interruptible.
+reset();
+music.startMusicAtRest();
+run(0.2);
+const grabbed = lastLoop();
+music.releaseMusicIntoRun(1);
+run(OPENING * 0.3);
+music.setMusicRateScale(0.3, 0); // the level-up dilation, instantly
+run(0.5);
+check('a dilation landing mid-move takes the rate over',
+  near(grabbed.playbackRate.value, 0.3, 1e-6), String(grabbed.playbackRate.value));
+run(OPENING);
+check('...and the abandoned move does not come back for it',
+  near(grabbed.playbackRate.value, 0.3, 1e-6), String(grabbed.playbackRate.value));
+music.setMusicRateScale(1, 0);
+
+// A run started the ordinary way — a restart after a death — never sees the
+// lid at all. This is the branch that would break if `depthHeld = menuHeld`
+// ever leaked a stale true.
+reset();
+music.play(1);
+run(0.2);
+check('a run started with no menu opens at the surface',
+  near(lidFilter()?.frequency.value ?? 0, CONFIG.music.surfaceHz, 1),
+  `${Math.round(lidFilter()?.frequency.value ?? 0)}Hz`);
+check('...at the configured tempo', near(lastLoop().playbackRate.value, 1, 1e-6),
+  String(lastLoop().playbackRate.value));
+
+// A menu abandoned rather than played — the transport stopped without the run
+// ever taking it over. The half-speed must not survive into whatever starts
+// next, which is the one way this could leak into a run.
+reset();
+music.startMusicAtRest();
+run(0.2);
+music.stop();
+music.play(1);
+run(0.2);
+check('a menu stopped rather than played leaves nothing behind',
+  near(lastLoop().playbackRate.value, 1, 1e-6) && music.musicAtRest() === false,
+  String(lastLoop().playbackRate.value));
+music.stop();
+
+section('The score card rests, and Play lifts it the same way the menu does');
+// THE OTHER SCREEN A RUN STARTS FROM. Everything above is the main menu; this
+// is the score card, which the music treats identically — and the difference
+// that matters is what is PLAYING underneath. The menu started the run's own
+// first loop and nothing has happened since. A score card usually follows a
+// death to a boss, so the fight's rotation is still up with its successor
+// queued behind it, and a run that took that transport over would open on boss
+// music and be handed the dead fight's next loop a bar later.
+reset();
+CONFIG.music.enabled = true;
+music.play(1);
+run(0.3);
+music.startBossMusic();
+run(BAR * 2);
+check('the run ended during a boss fight', playing()?.startsWith('boss'), String(playing()));
+
+music.restMusic(0.4);
+run(0.6);
+const cardSource = lastLoop();
+check('the score card holds the score at rest',
+  near(cardSource.playbackRate.value, CONFIG.music.menuRate, 0.02),
+  String(cardSource.playbackRate.value.toFixed(3)));
+check('...and says so', music.musicAtRest() === true);
+// It does NOT restart the loop to get there — the fight's music keeps playing,
+// slowed. Stopping it would make the card a cut rather than a settling.
+check('...without restarting anything', lastLoop() === cardSource && playing()?.startsWith('boss'),
+  String(playing()));
+
+// PLAY AGAIN. The transport has to come back to the run's opening loop, and it
+// still has to arrive under the resting lid at the resting speed so the move
+// out of it has somewhere to start.
+const restarted = music.releaseMusicIntoRun(1);
+check('the restart takes the transport over', restarted === true);
+check('...onto the run\'s opening loop, not the dead fight\'s', playing() === '1',
+  String(playing()));
+const runSource = lastLoop();
+check('...at the resting speed, so the move has somewhere to start',
+  near(runSource.playbackRate.value, CONFIG.music.menuRate, 0.02),
+  String(runSource.playbackRate.value.toFixed(3)));
+check('...and under the resting lid', near(lidFilter()?.frequency.value ?? 0, CONFIG.music.menuHz, 1),
+  `${Math.round(lidFilter()?.frequency.value ?? 0)}Hz`);
+
+// ...and then the same opening move as the menu's, to the frame.
+const againAt = now;
+runTo(againAt + OPENING * 0.5, () => music.updateDepth(0));
+check('...climbing on the camera\'s curve like the menu does',
+  near(runSource.playbackRate.value, 0.75, 0.02), String(runSource.playbackRate.value.toFixed(4)));
+runTo(againAt + OPENING, () => music.updateDepth(0));
+check('...landing at full speed with the camera',
+  near(runSource.playbackRate.value, 1, 0.01), String(runSource.playbackRate.value.toFixed(4)));
+check('...with the lid off', lidFilter().frequency.value > CONFIG.music.surfaceHz * 0.97,
+  `${Math.round(lidFilter().frequency.value)}Hz`);
+check('...and the dead fight does not come back for it', music.bossMusicActive() === false);
+
+// A card that follows an ORDINARY death — no boss — keeps its loop through the
+// restart, the way the menu does. This is the half that would break if the
+// restart simply always called play().
+reset();
+music.play(1);
+run(BAR);
+const ordinary = lastLoop();
+music.restMusic(0.3);
+run(0.5);
+music.releaseMusicIntoRun(1);
+run(0.2, () => music.updateDepth(0));
+check('an ordinary death keeps its loop through the restart',
+  lastLoop() === ordinary, `${playing()}, ${loops().length} source(s)`);
 music.stop();
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);

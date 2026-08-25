@@ -3,6 +3,8 @@ import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe } from './scaling.js';
 import { playerOverlayZ } from '../entities/player.js';
+import { player } from '../entities/player.js';
+import { calamariLevelStats } from '../levelStats.js';
 
 // Calamari Ring — a glowing shockwave that sweeps outward from the seal on a
 // cadence, damaging and shoving everything the wavefront passes through.
@@ -116,13 +118,16 @@ export function resetCalamari(scene) {
 
 export function currentCalamariStats(level) {
   const c = CONFIG.calamari;
+  const lvs = calamariLevelStats(level, player.stats);
   return {
-    interval: Math.max(c.intervalFloor, c.interval - c.intervalPerLevel * (level - 1)),
+    // Through levelStats.js — one implementation of the level curve, shared
+    // with the tip that quotes it. Splash Zone is folded in there.
+    interval: lvs.calamariGap,
     // The wave's whole existence is its reach, so Splash Zone lands here. The
     // lit band is a FRACTION of this (ringWidth), which is what keeps a
     // widened wave in proportion instead of thinning to a hairline.
-    maxRadius: aoe(c.baseRadius + c.radiusPerLevel * (level - 1)),
-    damage: c.damage + c.damagePerLevel * (level - 1),
+    maxRadius: lvs.calamariRadius,
+    damage: lvs.calamariDamage,
     knockback: c.knockback,
   };
 }

@@ -322,11 +322,13 @@ section('The verbosity setting');
   // Off is off everywhere, and Short keeps the question at the moment of a pick
   // and drops the reading. See SCHEMA.hud.upgradeTips.
   //
-  // DRIVEN WITH octoGrab, which is one of only two cards in the roster whose
-  // desc does not carry {effect} — so its `next` row survives the dedupe at
-  // every stack, and the three levels can be told apart by which rows are
-  // there. On a {effect} card `next` is absent at Full and at Short alike, and
-  // the test would pass without the setting doing anything at all.
+  // DRIVEN WITH octoGrab, which has a LEVEL READOUT — so its tip is a table of
+  // named quantities rather than a single measured line, and the three
+  // verbosities are told apart by what that table carries:
+  //
+  //   off    nothing at all
+  //   short  the deltas, no spans, no run row
+  //   full   the deltas WITH spans, and the run row
   //
   // It is also a CONTROL ability (no damage, only events), which is the branch
   // of the run row nothing else here exercises.
@@ -339,18 +341,23 @@ section('The verbosity setting');
   pointerEnter(a);
   check('off shows nothing', shown() === null, shown() ?? '');
 
+  const lvRows = () => [...(fx()?.querySelectorAll('.sv-uptip-row[data-row^="lv:"]') ?? [])]
+    .map((r) => r.querySelector('.sv-uptip-text')?.textContent ?? '');
+
   setSetting('hud.upgradeTips', 'short');
   const [b] = deal('octoGrab');
   pointerEnter(b);
-  check('short keeps the next stack', !!tipRow('next'), tipRow('next') ?? 'no row');
-  check('...and drops the running total', tipRow('total') === null, tipRow('total') ?? '');
+  check('short shows what the level buys', lvRows().length > 0, lvRows().join(' | '));
+  check('...as deltas alone, with no span',
+    lvRows().every((t) => !t.includes('\u2192')), lvRows().join(' | '));
   check('...and drops the run', tipRow('run') === null, tipRow('run') ?? '');
 
   setSetting('hud.upgradeTips', 'full');
   const [c] = deal('octoGrab');
   pointerEnter(c);
-  check('full keeps the next stack too', !!tipRow('next'), tipRow('next') ?? 'no row');
-  check('...and brings the total back', !!tipRow('total'), tipRow('total') ?? 'no row');
+  check('full shows the same quantities', lvRows().length > 0, lvRows().join(' | '));
+  check('...and adds where each one lands',
+    lvRows().some((t) => t.includes('\u2192')), lvRows().join(' | '));
   // A damageless ability counts its output in EVENTS. A damage figure here
   // would be a zero, and a zero for a card that spent the run hauling fish off
   // reads as the card being useless rather than as the ledger measuring the

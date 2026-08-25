@@ -92,4 +92,5 @@ dist-club-look
 # publish — same rule as the look-page builds above.
 design/gameover-canvas/seal-survivor-game-over.html
 dist-bomb-look
+dist-flag-look
 dist-desktop

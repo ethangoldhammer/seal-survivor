@@ -519,5 +519,98 @@ check('and open again once it has run out', heardCount() === 1);
 
 audio.watchSfx(null);
 
+// ---------------------------------------------------------------------------
+// DISTANCE FALLOFF. The other half of the same geometry: the bands above spend
+// the voice budget on what is near, this spends the MIX on it.
+//
+// Asserted as arithmetic for the same reason the compressor curve is. A
+// falloff that is subtly wrong does not throw and does not warn — it just
+// quietly moves where the arena's sounds sit, and the two failure modes are
+// both silent AND opposite: too shallow and the mix is a single point again,
+// too deep and half the arena stops reporting at all.
+// ---------------------------------------------------------------------------
+
+section('Distance falloff');
+CONFIG.audio.priority = { enabled: true, nearRadius: 18, farRadius: 70, bands: 4 };
+CONFIG.audio.falloff = { enabled: true, minGain: 0.125, curve: 1.8 };
+audio.setSfxListener(0, 0);
+const FLOOR = CONFIG.audio.falloff.minGain;
+
+check('a sound on the player is at full level', audio.sfxDistanceGain(0, 0) === 1);
+// The seal and everything brawling with it mix as one thing. A level that
+// moved over the last two units of a shark's approach would wobble every pass.
+check('and so is anything inside the near radius', audio.sfxDistanceGain(17.9, 0) === 1);
+check('the far radius is the far level', Math.abs(audio.sfxDistanceGain(70, 0) - FLOOR) < 1e-9,
+  `x${audio.sfxDistanceGain(70, 0).toFixed(4)}`);
+// The floor is what keeps the outer arena as information rather than deleting
+// it — the far wall is where a boss surfaces.
+check('and nothing falls below it, however far', audio.sfxDistanceGain(100000, 0) === FLOOR);
+let monotonicGain = true;
+for (let d = 0; d < 140; d += 0.5) {
+  if (audio.sfxDistanceGain(d + 0.5, 0) > audio.sfxDistanceGain(d, 0) + 1e-12) monotonicGain = false;
+}
+check('level never rises with distance', monotonicGain);
+check('distance is radial, not horizontal',
+  Math.abs(audio.sfxDistanceGain(0, 44) - audio.sfxDistanceGain(44, 0)) < 1e-12);
+// A curve above 1 holds the level up near the player and drops it late. A
+// linear ramp would already be fading things that are still on screen, and
+// that is the whole difference between "distance" and "fog".
+const mid = audio.sfxDistanceGain(44, 0);
+const linear = FLOOR + (1 - FLOOR) * 0.5;
+check('the curve holds level up through the near half', mid < linear,
+  `x${mid.toFixed(3)} at halfway vs a linear x${linear.toFixed(3)}`);
+audio.setSfxListener(80, 0);
+check('it follows the listener',
+  audio.sfxDistanceGain(80, 0) === 1 && audio.sfxDistanceGain(0, 0) === FLOOR);
+audio.setSfxListener(0, 0);
+// UI, the level-up, the death. Never a place in the world, so never attenuated
+// — the same rule sfxBand gives them, and the reason this can only take from
+// the world and never from the interface.
+check('a sound with no position is never attenuated', audio.sfxDistanceGain(null, null) === 1);
+CONFIG.audio.falloff.enabled = false;
+check('switching it off restores every distance to full',
+  audio.sfxDistanceGain(0, 0) === 1 && audio.sfxDistanceGain(500, 0) === 1);
+CONFIG.audio.falloff.enabled = true;
+
+// It has to reach the GRAPH, not just be computable. Read off the debug tap,
+// which reports the gain that was actually applied — the same way the
+// repetition section above measures its ducking.
+section('...and it reaches the mix');
+CONFIG.audio.repetition.enabled = false;
+CONFIG.audio.maxConcurrent = 10000;
+CONFIG.sfx.distTest = { src: null, type: 'blip', wave: 'sine', freq: [400, 200], decay: 0.02, gain: 1 };
+const applied = [];
+audio.watchSfx((name, outcome, detail) => { if (detail?.gain != null) applied.push(detail); });
+audio.playSfx('distTest', 1, { x: 0, y: 0 });
+audio.playSfx('distTest', 1, { x: 90, y: 0 });
+audio.playSfx('distTest', 1); // positionless
+check('a near sound plays at its own gain', Math.abs(applied[0].gain - 1) < 1e-9,
+  `x${applied[0].gain.toFixed(3)}`);
+check('a far one is attenuated on the way out', Math.abs(applied[1].gain - FLOOR) < 1e-9,
+  `x${applied[1].gain.toFixed(3)}`);
+check('a positionless one is not', Math.abs(applied[2].gain - 1) < 1e-9,
+  `x${applied[2].gain.toFixed(3)}`);
+// The overlay tells the two quieteners apart by name, and it can only do that
+// if playSfx reports them separately.
+check('the debug tap names the falloff separately from the crowding',
+  applied[1].dist != null && Math.abs(applied[1].dist - FLOOR) < 1e-9 && applied[1].rep === 1,
+  `dist x${applied[1].dist?.toFixed(3)}  rep x${applied[1].rep}`);
+CONFIG.audio.repetition.enabled = true;
+audio.watchSfx(null);
+
+// ---------------------------------------------------------------------------
+// THE PICKUP OCTAVE. Eating chum is an audible progress bar — the note climbs
+// one octave across the level-up bar and drops back at the level. The ramp is
+// in main.js, but it is only AUDIBLE if this voice plays the same file every
+// time: a set of takes turns a scale into sixteen different instruments, and
+// the reading disappears without anything failing. It shipped that way.
+// ---------------------------------------------------------------------------
+
+section('The pickup octave');
+check('pickup has exactly one take', (CONFIG.sfx.pickup.srcs ?? []).length === 1,
+  `${(CONFIG.sfx.pickup.srcs ?? []).length} take(s): ${(CONFIG.sfx.pickup.srcs ?? []).join(', ')}`);
+check('and it is pickup1', (CONFIG.sfx.pickup.srcs ?? [])[0] === '/sfx/pickup1.mp3');
+check('with no random pitch to muddy the ramp', (CONFIG.sfx.pickup.pitchVary ?? 0) === 0);
+
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

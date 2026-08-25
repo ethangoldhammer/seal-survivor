@@ -5,7 +5,8 @@
 // A look page is a vite BUILD (see tools/looks/vite.*.config.mjs), not a dev
 // server, and this is what puts it on an http origin — file:// never executes a
 // module and the Browser pane will not load 127.0.0.1. It serves the build
-// read-only alongside public/models and public/textures, and it never imports
+// read-only alongside public/models, public/textures and public/flags, and it
+// never imports
 // config.js, so nothing it does can reach imported-tuning.json.
 //
 // The /shot endpoint is the important half. The Browser pane's own screenshot
@@ -56,6 +57,7 @@ const MOUNTS = [
   ['/models/', join(PROJECT, 'public/models')],
   ['/textures/', join(PROJECT, 'public/textures')],
   ['/sprites/', join(PROJECT, 'public/sprites')],
+  ['/flags/', join(PROJECT, 'public/flags')],
   ['/', ROOT],
 ];
 

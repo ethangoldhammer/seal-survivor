@@ -5,6 +5,7 @@ import { player } from '../entities/player.js';
 import { projectileCount } from '../stats.js';
 import { abilityDamage, aoe } from './scaling.js';
 import { strikeState, pipCount } from './strike.js';
+import { musselLevelStats } from '../levelStats.js';
 
 // MUSSEL BARRAGE — the flight of homing mussels a strike released at or above
 // CONFIG.musselVolley.chargeThreshold strews across its dash.
@@ -41,7 +42,7 @@ import { strikeState, pipCount } from './strike.js';
 /** How many shells the CARD is worth at this level, before the charge pays. */
 export function barrageCount(level) {
   const c = CONFIG.musselVolley;
-  return Math.max(1, Math.round(c.count + c.countPerLevel * (Math.max(1, level) - 1)));
+  return musselLevelStats(level, player.stats).musselCount;
 }
 
 /**
@@ -75,7 +76,7 @@ export function barrageShells(level, power, stats = null) {
 /** What one shell hits for at this level, on the body it lands on. */
 export function barrageDamage(level) {
   const c = CONFIG.musselVolley;
-  return c.damage + c.damagePerLevel * (Math.max(1, level) - 1);
+  return musselLevelStats(level, player.stats).musselDamage;
 }
 
 /**
@@ -94,7 +95,7 @@ export function barrageSplash(level) {
   const c = CONFIG.musselVolley;
   const lv = Math.max(1, level) - 1;
   return {
-    damage: abilityDamage((c.splashDamage ?? 0) + (c.splashDamagePerLevel ?? 0) * lv),
+    damage: musselLevelStats(level, player.stats).musselSplash,
     radius: aoe(c.splashRadius ?? 0),
   };
 }

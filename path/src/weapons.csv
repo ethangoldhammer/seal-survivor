@@ -1,5 +1,9 @@
 id,value,min,max,notes
 weapon.autofire,1,,,autofire
+weapon.fireRate,0.56625,0.1,1.2,"basic shot seconds between volleys. On the music grid: 0.56625 is 2.265/4, one quarter note of CONFIG.music.barSeconds. Trying the slowest of the three candidates (bar/4, bar/6 = 0.3775, bar/8 = 0.28315) — this is 36% slower than the 0.36 it replaces, so read it against damagePerLevel before keeping it"
+weapon.beatLock.enabled,1,,,"shot grid: fire the basic shot on the music's bar lines. Off = the pre-grid free-running cooldown at the same interval"
+weapon.beatLock.startOnBar,1,,,"shot grid: the run's FIRST shot waits for a downbeat (up to one bar of no gun). Off = it waits for the next slot instead, like every re-lock after it"
+weapon.beatLock.maxDivision,64,1,128,"shot grid: finest division of a bar the interval may reach — a backstop against stacked halvings, not a balance number. 64 is 28 shots/sec"
 missile.fireRate,1.15,0.2,3,missile fire rate
 missile.damage,52,1,80,missile damage
 missile.turnRate,9.5,0.5,12,missile turn rate
@@ -16,21 +20,21 @@ bounce.chainSpeedGain,1.05,0.8,1.3,bounce chain speed gain
 shrimpRing.baseCount,3,0,12,shrimp in the ring at level 1
 shrimpRing.contactDamage,12,0,30,shrimp contact damage
 shrimpRing.contactCooldown,0.4,0.05,2,shrimp per-shrimp re-hit delay
-scallop.fireRate,1.45,0.2,10,scallop seconds between flights
-scallop.damage,48,1,120,scallop damage
+scallop.fireRate,1,0.2,10,scallop seconds between flights
+scallop.damage,92,1,140,scallop damage
 scallop.life,9,0.5,20,scallop seconds before it sinks
 scallop.maxBounces,6,0,20,scallop wall bounces
-oyster.fireRate,1.05,0.2,8,oyster seconds between pearls
-oyster.fireRatePerLevel,0.08,0,0.5,oyster cadence gain per level
-oyster.fireRateFloor,0.6,0.1,4,oyster fastest allowed cadence
+oyster.fireRate,1.9,0.2,8,"oyster seconds between pearls. Long on purpose — the pearl is the game's one BOMB, and the wait is what the burst is paid for. Read against oyster.bombletDamage x oyster.bomblets, not on its own"
+oyster.fireRatePerLevel,0.1,0,0.5,oyster cadence gain per level
+oyster.fireRateFloor,1.1,0.1,4,"oyster fastest allowed cadence. Kept above a second at the cap: a stream of blasts this wide is a screen nobody can read, and the gap between them is where the weapon's danger lives"
 oyster.damage,30,1,120,oyster pearl impact damage
 oyster.damagePerLevel,7,0,40,oyster pearl damage per level
 oyster.bomblets,5,1,20,oyster bomblets per burst
 oyster.bombletsPerLevel,1,0,5,oyster bomblets per level
-oyster.bombletDamage,24,1,80,oyster bomblet damage
-oyster.bombletDamagePerLevel,6,0,35,oyster bomblet damage per level
-oyster.bombletBlastRadius,2.4,0.5,15,oyster bomblet blast radius — must stay ABOVE max bomblet travel (see CONFIG.oyster)
-oyster.bombletBlastRadiusPerLevel,0.18,0,2,oyster blast radius per level
+oyster.bombletDamage,62,1,200,"oyster bomblet damage. Every bomblet's blast reaches back over the impact point (see bombletBlastRadius), so a body standing where the pearl landed takes this once PER BOMBLET — multiply by oyster.bomblets before comparing it to anything"
+oyster.bombletDamagePerLevel,14,0,60,oyster bomblet damage per level
+oyster.bombletBlastRadius,4.6,0.5,15,oyster bomblet blast radius — must stay ABOVE max bomblet travel (2.44 at the shipped speed/drag/life; see CONFIG.oyster) or the burst leaves a hole where the pearl actually landed
+oyster.bombletBlastRadiusPerLevel,0.34,0,2,oyster blast radius per level
 razorClam.fireRate,1.6,0.2,8,razor clam seconds between volleys at level 1
 razorClam.fireRatePerLevel,0.95,0.5,1,razor clam cadence multiplier per level (compounds)
 razorClam.damage,24,1,120,razor clam damage per blade
@@ -52,9 +56,15 @@ seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
 seagullBomb.damage,87,1,150,seagull direct hit damage
 seagullBomb.splashDamage,96,0,200,seagull splash damage — the run IS the blast; the direct hit is only whichever crab happened to be under it
 seagullBomb.splashRadius,12,0.5,20,seagull splash radius — wide enough to clear the whole pile it dived on, not just its centre
+seagullBomb.damagePerLevel,29,0,60,"seagull direct hit damage added per level. A third of the level-1 hit, so a maxed stack roughly triples the bird that lands on the crab"
+seagullBomb.splashDamagePerLevel,32,0,80,"seagull splash damage added per level. Tracks damagePerLevel at the same third-of-base ratio — the blast IS the run, so if either half is to lead it is this one"
+seagullBomb.splashRadiusPerLevel,0.9,0,4,"seagull splash radius added per level. Deliberately gentler than the damage: reach compounds against a crowd in a way a damage number does not, and 12 was already wide enough to clear a whole pile"
+seagullBomb.kick.enabled,1,,,"seagull: a mid-air relaunch that passes through a gull refills the boost meter and scores a food chain link. Off, and the bird and the breach go back to passing through each other"
+seagullBomb.kick.radius,1.6,0.2,5,seagull kick: reach added to the seal's own hit radius for that intercept. Two bodies on crossing paths at 30 and 13 units/sec — tuned for a stationary target this is a coin flip rather than a read
+seagullBomb.kick.refill,1,0,1,"seagull kick: share of the boost meter a kicked gull hands back. 1 is the whole bar — it is the only pip in the game that comes from ABOVE the water, and it costs a jump and an interception to collect"
 eel.fireRate,2,0.2,4,eel seconds between zaps
-eel.baseDamage,32,1,80,eel damage per hop
-eel.damagePerLevel,7,0,30,eel damage per level
+eel.baseDamage,38,1,80,eel damage per hop
+eel.damagePerLevel,18,0,30,eel damage per level
 eel.baseChainRadius,12.5,1,20,eel chain radius
 eel.radiusPerLevel,1.2,0,5,eel chain radius per level
 eel.baseMaxChain,5,1,15,eel hops at level 1
@@ -144,7 +154,7 @@ club.shock.damagePerLevel,4,0,20,club shockwave damage per level
 club.shock.knock,0.9,0,2,club shockwave shove
 club.shock.cooldown,0.55,0.05,3,club shockwave minimum gap per club
 club.shock.armTime,0.3,0,2,club shockwave: settle time before a new club may fire one
-club.twirl.enabled,1,,,"club twirl: the basic club is never thrown (CONFIG.clubThrow.neverThrown) - this is what it does with a strike instead"
+club.twirl.enabled,1,,,club twirl: the basic club is never thrown (CONFIG.clubThrow.neverThrown) - this is what it does with a strike instead
 club.twirl.spin,24,0,34,"club twirl: rad/sec a kept fin club is driven to while a dash is live. THIS IS ITS DAMAGE - every club hit is scaled by the club's own measured spin - so it is set against three other numbers, not by eye: over powerReference x powerMax (14.4) so its hits are at the swing ceiling, over shock.fullSwing (22) so it cracks a full-grade shockwave, and under maxSwing (34) or that cap owns this value instead"
 club.twirl.spinUp,14,1,60,"club twirl: per-second approach rate toward that spin. At 14 it is two thirds of the way there in the first tenth of a second, which is what 'rapidly' has to mean on a dash that can be over in half of one"
 club.orbit.radius,3.6,1,10,club ring how far the spare clubs orbit
@@ -168,7 +178,7 @@ strike.damage,40,1,200,strike nominal damage — what Bone Shrapnel and Glow Up!
 strike.cardDamage,5,0,30,strike damage added per strike-family card
 strike.weakSpot.share,1,0,3,"strike: how much of the strike's full damage a RAM lands on a boss WEAK SPOT — the one place contactShare does not apply. 0 turns the mechanic off and gives the dash back to the shove; 1 means aiming a dash into the mark is worth a whole strike, before critMul"
 strike.companionStack.enabled,1,,,"perfect strike: the companions hit with you. Off, and a perfect charge is worth only the weak-spot multiplier below — which is what it was worth before this existed"
-strike.companionStack.share,0.25,0,1,"perfect strike: what share of its OWN hit each companion lends to the release burst. Summed over bodies not cards — three orcas and six escorts is nine contributions — so this is well under 1 on purpose"
+strike.companionStack.share,0.25,0,1,perfect strike: what share of its OWN hit each companion lends to the release burst. Summed over bodies not cards — three orcas and six escorts is nine contributions — so this is well under 1 on purpose
 strike.companionStack.maxMul,2,0,6,"perfect strike: the ceiling on that bonus, in strike-damages. 2 = the companions may at most triple a perfect strike. 0 removes the cap, which makes a late companion build unbounded relative to the strike it is scaling"
 strike.weakSpot.perfectMul,2,1,6,"strike: what a PERFECT CHARGE multiplies that weak-spot bite by — the first thing the perfect latch has ever bought. On the beat without a perfect charge still bites, at 1x. At 2 a perfect full-charge ram is ~390 after hotSpots.critMul, about one rupture pool on a first boss"
 strike.chainDamageMul,1.11,1,1.5,strike food-chain damage mult per link — COMPOUNDS over links AND over Killer Instinct stacks
@@ -176,13 +186,14 @@ strike.chainWindow,2.2,0.4,4,food chain: seconds without a mouthful before the c
 strike.charge.perfectAt,1,0.5,1,perfect charge: the fraction of a full bank that counts as perfectly loaded. The meter pops here and mechanics will be hung off it — below 1 the top of the bar becomes a window a player can hit early rather than a ceiling they hold against
 strike.charge.sweetFraction,0.04,0.01,0.5,"sweet spot: how much error a release is allowed either side of the STRIKE NOW! moment, as a fraction of the wind-up. Inside it the strike deals its damage; outside it the dash is a pure speed boost. It no longer gates the food chain - a completed charge arms that at any timing - which is why it can afford to be tight. 0.04 on a 1s bar is 40ms either side, five frames at 60fps. Careful below this: the window quantizes to FRAMES, and 0.03 is three frames at 60fps and a single frame at 30"
 strike.linkMinPips,1,1,12,"food chain: chum a sweet-spot strike must collect before it counts as a FOOD CHAIN. The strike arms it; the food scores it, and the number then ticks up one per pip eaten inside the window. 1 = hit the beat, eat one thing"
+strike.linkPipsPerLink,1,0,4,"food chain: how much the price of a link goes UP with each link already banked. 1 = link 1 costs linkMinPips mouthfuls, link 2 one more, link 3 two more — a x5 chain is 15 chum, not 5. Partial progress is banked and survives a release; it dies with the chain. 0 is the old flat rule, one mouthful one link"
 strike.charge.startPips,0,0,12,"boost meter: pips a run OPENS with. 0 = a dead meter until the first mouthful, so the food chain is the only thing that fuels a strike. Set at or above the pip count to start full (the old behaviour)"
 airborne.enabled,1,,,air time: master switch for everything a breach is worth
 airborne.rampTime,1.1,0.2,5,air time: seconds of hang for a full ramp
 airborne.jumpRamp,0.4,0,1.5,air time: ramp added per mid-air jump used
 airborne.maxRamp,1.6,0.2,4,air time: ceiling on the summed ramp — the one number that caps air play
 airborne.damageMul,0.55,0,3,air time: extra damage at full ramp (multiplier is 1 + ramp x this)
-airborne.fireRateMul,0.45,0,3,air time: extra fire rate at full ramp
+airborne.fireRateMul,1,0,3,"air time: extra fire rate at full ramp. 1 = the gun goes DOUBLE TIME at the top of the ramp, which is the only value that keeps it on the bar grid (see CONFIG.weapon.beatLock). The ramp is continuous, so snapToBarGrid steps it: the gear change lands where the ramp crosses sqrt(2), about 41% up"
 airborne.pickupMul,0.9,0,4,air time: extra chum pickup radius at full ramp
 airborne.jumps.max,1,0,4,air jumps: relaunches granted per breach — 1 is a double jump
 airborne.jumps.speed,30,5,60,air jumps: launch speed
@@ -240,3 +251,13 @@ bakalar.catch.powerPerLevel,0.55,0,3,bakalar net power gained per stack
 bakalar.catch.massExponent,2,0.5,4,"bakalar how fast resistance grows with radius - 2 is area, i.e. mass on a 2D field"
 bakalar.catch.gripReset,0.5,0,5,bakalar seconds out of the net before a part-gripped fish starts again
 bakalar.catch.maxPrey,3,0.5,12,bakalar biggest prey radius the net will hold at all - refuses whale-scale bodies outright
+garlic.damagePerTick,4.5,0.1,12,sea garlic damage per tick — with tickInterval 0.25 this is x4 for a DPS
+garlic.damagePerLevel,1.5,0,6,"sea garlic damage per tick added per stack. A third of base, so a maxed aura hits about three times as hard rather than only reaching further"
+musselVolley.count,10,1,30,mussel shells in a level-1 barrage
+musselVolley.countPerLevel,3,0,8,mussel shells added per stack
+musselVolley.pipShellsMax,8,0,20,"mussel ceiling on the bonus shells a charged release buys — one per whole pip spent, capped here so a long chain lays down a fan rather than a screen of its own projectiles"
+musselVolley.damage,34,1,120,mussel direct hit damage per shell
+musselVolley.damagePerLevel,12,0,40,mussel direct hit damage per shell per stack
+musselVolley.splashDamage,58,0,200,"mussel blast damage per shell. Worth more than the direct hit on purpose — a homing shell almost always finds a body, so the blast is what the barrage is actually for"
+musselVolley.splashDamagePerLevel,22,0,60,mussel blast damage per shell per stack
+musselVolley.splashRadius,4.6,0.5,12,mussel blast radius per shell

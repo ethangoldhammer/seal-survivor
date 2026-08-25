@@ -241,9 +241,19 @@ export function phrase(change, stack = 1) {
   if (change.how === 'mul') return `${pct(change.ratio, t.lower)} ${t.label}`;
 
   if (change.how === 'add') {
+    // SIGNED, NOT ALWAYS PLUS. A hardcoded "+" was fine while every additive
+    // stat in the game went up; the first one that goes DOWN as it improves
+    // rendered as "+-0.32s between bombs" — the boat's bomb interval, whose
+    // whole point is that it shrinks. `lower` on the row already tells the rest
+    // of this file which direction is good; the sign just has to be the number's
+    // own. A genuinely negative change on a normal stat reads correctly too.
+    const sign = (n) => (n < 0 ? '' : '+');
     // A per-unit fraction reads better as a percentage of the thing it fills.
-    if (t.percentOfOne) return `+${num(Math.round(change.amount * 1000) / 10)}% ${t.label}`;
-    return `+${num(change.amount)}${t.unit ?? ''} ${t.label}`;
+    if (t.percentOfOne) {
+      const p = Math.round(change.amount * 1000) / 10;
+      return `${sign(p)}${num(p)}% ${t.label}`;
+    }
+    return `${sign(change.amount)}${num(change.amount)}${t.unit ?? ''} ${t.label}`;
   }
 
   // Compounding, or anything else the two probes disagreed about. Reporting

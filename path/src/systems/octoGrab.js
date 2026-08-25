@@ -7,6 +7,8 @@ import { springFollow } from './orbit.js';
 import { attachBioluminescence } from './bioluminescence.js';
 import { createBoneSpring } from './boneSpring.js';
 import { canHold } from './control.js';
+import { player } from '../entities/player.js';
+import { octoGrabLevelStats } from '../levelStats.js';
 
 // Octopus Grabber — the only DEFENSIVE companion in the game, driven by the
 // real six-arm rig in /models/octopus_rig.glb.
@@ -316,7 +318,7 @@ export function rebuildOctoGrabber(scene) {
 // fish, and the grab lands anyway from a tip that is visibly nowhere near it.
 function armReach(chain, level) {
   const c = CONFIG.octoGrab;
-  const wanted = c.reach + c.reachPerLevel * (Math.max(1, level) - 1);
+  const wanted = octoGrabLevelStats(level, player.stats).octoReach;
   // Capped at what the arm can physically cover, times whatever strain is
   // allowed. Measured from the rig every frame rather than configured, so it
   // survives the `fit` scale and the per-asset size slider — a bigger
@@ -630,8 +632,10 @@ export function updateOctoGrab(dt, scene, playerPos, level, enemiesList, hooks =
   }
 
   // --- arms ----------------------------------------------------------------
-  const grabbers = Math.min(chains.length, c.arms + c.armsPerLevel * (Math.max(1, level) - 1));
-  const reelSpeed = c.reelSpeed + c.reelSpeedPerLevel * (Math.max(1, level) - 1);
+  // levelStats.js owns the curve — one implementation, shared with the tip.
+  const lvs = octoGrabLevelStats(level, player.stats);
+  const grabbers = Math.min(chains.length, lvs.octoArms);
+  const reelSpeed = lvs.octoReel;
   let grabbing = 0;
 
   // Every tip measured before any arm moves — see the note on computeSpread.

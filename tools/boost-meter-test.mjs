@@ -24,7 +24,7 @@ import {
 import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
-  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, cancelDash,
+  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, linkCost, cancelDash,
   updateCharge, perfectCrossed, strikeLoaded, inSweetSpot, sweetOffset, sweetHalfWidth,
   consumeChainLink,
   strikeBurst, riderDamage,
@@ -537,7 +537,7 @@ check('  ...but a fresh strike opens a fresh window',
 check('  ...and the next mouthful links again', (feedChum(stats()), consumeChainLink()) === 1);
 cancelDash();
 
-console.log('\nONE MOUTHFUL IS EXACTLY ONE LINK');
+console.log('\nONE MOUTHFUL IS EXACTLY ONE LINK — AT THE BOTTOM OF A CHAIN');
 // `chumFull` and `chumEaten` are the same food at two grains — every mouthful,
 // and the one that tops the bar off. A tuning snapshot can pin chumFull on, so
 // the rule that stops them double-scoring is structural rather than a config
@@ -549,9 +549,16 @@ strike(); cancelDash();
 strikeState.charge = 0;
 check('chumFull is suppressed while chumEaten is on',
   chainStrike('chumFull') === 0);
-for (let i = 0; i < pipCount(stats()); i++) feedChum(stats());
-check('  ...so a whole bar eaten is exactly its pip count in links',
-  liveChain() === pipCount(stats()), `x${liveChain()} off ${pipCount(stats())} chum`);
+// THE LADDER, WALKED IN FOOD. linkCost() charges one more mouthful per link
+// already held, so a bar of chum is NOT a bar of links — it is however many the
+// price allows, and the count is asked of the model rather than typed here so
+// retuning `linkPipsPerLink` retunes the expectation with it.
+const barful = pipCount(stats());
+let expect = 0;
+for (let bank = barful, chain = 0; bank >= linkCost(chain); chain++, expect++) bank -= linkCost(chain);
+for (let i = 0; i < barful; i++) feedChum(stats());
+check(`  ...so a bar of ${barful} chum is x${expect}, at ${linkCost(0)} for the first link and +${linkCost(1) - linkCost(0)} after`,
+  liveChain() === expect, `x${liveChain()} off ${barful} chum`);
 CONFIG.strike.chainOn.chumFull = wasChumFull;
 fuelled();
 
@@ -566,12 +573,28 @@ check('  ...and scores nothing on its own', consumeChainLink() === 0);
 check('  ...with no chain running yet', liveChain() === 0);
 check('ONE mouthful makes it a chain', (feedChum(stats()), consumeChainLink()) === 1);
 check('  ...and the chain is live at x1', liveChain() === 1);
-// ...and the number climbs per pip from there, which is the other half.
+// ...and the number climbs from there at a price that goes UP with it, which is
+// the other half. The second link costs linkCost(1) mouthfuls, so the mouthful
+// straight after the first one only scores when that price is 1.
+const secondCost = linkCost(1);
+for (let i = 0; i < secondCost - 1; i++) feedChum(stats());
+check(`  ...${secondCost - 1} more mouthful(s) is still x1 — the second link costs ${secondCost}`,
+  liveChain() === 1, `x${liveChain()}`);
 feedChum(stats());
-check('  ...the next mouthful ticks it to x2', consumeChainLink() === 2);
-feedChum(stats());
-feedChum(stats());
-check('  ...one per pip, so four mouthfuls is x4', liveChain() === 4, `x${liveChain()}`);
+check(`  ...and the ${secondCost}th ticks it to x2`, consumeChainLink() === 2, `x${liveChain()}`);
+// AND THE THIRD RUNS INTO THE OTHER RULE. linkCost(2) is three mouthfuls and
+// this cycle has already spent linkCost(0) + linkCost(1) of its barful, so the
+// budget runs out inside the price — the food goes into the bank and the link
+// waits for a strike. Two rules, one moment, and the test says which is which.
+const spent = linkCost(0) + linkCost(1);
+for (let i = 0; i < linkCost(2); i++) feedChum(stats());
+check(`  ...but the third link is ${linkCost(2)} and only ${pipCount(stats()) - spent} of the barful is left`,
+  liveChain() === 2, `x${liveChain()}`);
+strikeState.charge = 1;
+strike();
+for (let i = 0; i < linkCost(2); i++) feedChum(stats());
+check(`  ...so a fresh release re-funds it and ${linkCost(2)} more makes it x3`,
+  liveChain() === 3, `x${liveChain()}`);
 cancelDash();
 fuelled();
 

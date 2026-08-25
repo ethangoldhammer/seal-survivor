@@ -6,6 +6,8 @@ import { createAnimationController, stateForSpeed } from './animation.js';
 import { orbitTarget, springFollow } from './orbit.js';
 import { aoe, applyCompanionScale } from './scaling.js';
 import { canControl, charmEnemy } from './control.js';
+import { player } from '../entities/player.js';
+import { dumboLevelStats } from '../levelStats.js';
 
 // Dumbo Octopus — a companion that swims alongside the seal and charms
 // enemies. A charmed creature is PACIFIED and nothing more: it stops chasing,
@@ -75,16 +77,18 @@ export function resetDumbo(playerPos) {
 }
 
 export function currentDumboStats(level) {
+  // levelStats.js owns the curve — one implementation, shared with the tip.
+  const lvs = dumboLevelStats(level, player.stats);
   const c = CONFIG.dumbo;
   return {
-    interval: Math.max(c.intervalFloor, c.interval - c.intervalPerLevel * (level - 1)),
+    interval: lvs.dumboGap,
     // The charm pulse is an area effect centred on the octopus, so it takes
     // the full Splash Zone multiplier.
-    range: aoe(c.range + c.rangePerLevel * (level - 1)),
-    duration: c.duration + c.durationPerLevel * (level - 1),
+    range: lvs.dumboRange,
+    duration: lvs.dumboCharm,
     // How many it can charm in one pulse — the stack's real payoff, since a
     // single charm at high enemy counts stops mattering quickly.
-    targets: c.targets + Math.floor((level - 1) * c.targetsPerLevel),
+    targets: lvs.dumboTargets,
   };
 }
 

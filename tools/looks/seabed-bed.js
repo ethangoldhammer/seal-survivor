@@ -32,6 +32,7 @@ import { CONFIG } from '../../path/src/config.js';
 import { preloadAssets } from '../../path/src/assets.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { scatterSeabed, bedPlacements, clearSeabed } from '../../path/src/systems/seabedScatter.js';
+import { applyGrassSettings, updateGrassSway } from '../../path/src/systems/grassSway.js';
 import { seabedTopY, bounds } from '../../path/src/arena.js';
 
 const logEl = document.getElementById('log');
@@ -204,6 +205,55 @@ const close = new THREE.OrthographicCamera(
 );
 close.position.set(box.min.x + span * 0.5, floorY + CLOSE * 0.34, 40);
 shot('Close', 'Roughly the scale the seal is drawn at — a seal is 1.68 units long.', close);
+
+// --- the current ------------------------------------------------------------
+// THE SWAY, which is the one thing on this page that a single still cannot
+// show. The plants bend in a vertex shader (systems/grassSway.js) and the
+// shells do not, and both halves of that are invisible in one frame.
+//
+// FORCED ON HERE regardless of CONFIG. The saved tuning may well have
+// grass.sway.enabled false — it does at the time of writing — and a shot of a
+// disabled sway is a photograph of nothing that looks exactly like a shot of a
+// broken one. This page writes nothing and owns its own CONFIG copy for the
+// duration, so turning it on costs the tuning nothing. Free-running rather than
+// beat-synced for the same reason: nothing here ticks the beat transport, and a
+// synced sway would sit still while looking deliberate.
+const swayWas = { ...CONFIG.grass.sway };
+CONFIG.grass.sway.enabled = true;
+CONFIG.grass.sway.speedSync = 'free';
+applyGrassSettings();
+
+// Half a cycle apart at the configured rate: the two extremes of the lean,
+// which is the widest the bed ever gets and therefore the frame where blades
+// sliding through each other would show.
+const halfCycle = Math.PI / CONFIG.grass.sway.speed;
+shot('Current, one way', 'The sway forced on. Plants bend, shells do not — the bend is masked on each '
+  + "plant's own height, so the base stays planted.", close);
+updateGrassSway(halfCycle);
+shot('Current, the other', `Half a cycle later (${halfCycle.toFixed(2)}s at ${CONFIG.grass.sway.speed} rad/s). `
+  + 'Every plant leans the same way despite each one carrying a random yaw — that is the counter-rotation '
+  + 'through the instance basis. Any shell that moved between these two frames is a bug.', close);
+
+// A picture cannot assert. Diffing the two frames can: if nothing moved, the
+// sway compiled and did nothing, which is exactly how a broken injection reads.
+const frameA = document.createElement('canvas');
+const cells = [...sheetEl.querySelectorAll('canvas')];
+const [ca, cb] = cells.slice(-2);
+frameA.width = ca.width; frameA.height = ca.height;
+const pa = ca.getContext('2d').getImageData(0, 0, ca.width, ca.height).data;
+const pb = cb.getContext('2d').getImageData(0, 0, cb.width, cb.height).data;
+let moved = 0;
+for (let i = 0; i < pa.length; i += 4) {
+  if (Math.abs(pa[i] - pb[i]) + Math.abs(pa[i + 1] - pb[i + 1]) + Math.abs(pa[i + 2] - pb[i + 2]) > 24) moved++;
+}
+const movedPct = (moved / (pa.length / 4)) * 100;
+check('the bed actually moves between the two phases', movedPct > 0.15,
+  `${movedPct.toFixed(2)}% of pixels changed`);
+check('...and it is a bend, not the whole bed sliding', movedPct < 25,
+  `${movedPct.toFixed(2)}% — much more than this means the roots are moving too`);
+
+Object.assign(CONFIG.grass.sway, swayWas);
+applyGrassSettings();
 
 // The same bed with the shells and the small stuff turned off, so the tall
 // species can be judged on their own silhouettes. Different weights, same

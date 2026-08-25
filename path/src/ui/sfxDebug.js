@@ -143,11 +143,17 @@ function describe(row) {
   // anybody touching a slider, so seeing the number is the difference between
   // "the mix is broken" and "that is the crowding control working".
   const duck = d.rep != null && d.rep < 0.99 ? `  rep ${fmtDb(d.rep)}` : '';
+  // The distance falloff, shown on exactly the same terms and for exactly the
+  // same reason: it is the OTHER thing that quietens a sound with nobody
+  // touching a slider, and the two are told apart here or nowhere. A sound
+  // with no position never carries it, so an absent `far` reads as "this one
+  // is not in the world" rather than as "this one is close".
+  const away = d.dist != null && d.dist < 0.99 ? `  far ${fmtDb(d.dist)}` : '';
   if (row.outcome === 'sample') {
     const take = d.takes > 1 ? `take ${d.take}/${d.takes}` : 'sample';
-    return `${take}  ${fmtDb(d.gain)}${duck}`;
+    return `${take}  ${fmtDb(d.gain)}${duck}${away}`;
   }
-  if (row.outcome === 'synth') return `synth  ${fmtDb(d.gain)}${duck}`;
+  if (row.outcome === 'synth') return `synth  ${fmtDb(d.gain)}${duck}${away}`;
   if (row.outcome === 'note') return d.text ?? '';
   // A throttled sound reports the EVENT that was throttled, not the sound —
   // several events share one sound, and which of them is being swallowed is

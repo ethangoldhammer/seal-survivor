@@ -32,15 +32,22 @@
   #list button.on { background: #1d4e68; color: #fff; }
   #list button .dot { color: #ffb020; }
   main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
-  #top { display: flex; gap: 16px; padding: 14px; align-items: flex-start; min-height: 0; }
+  /* `flex: 1` and `min-height: 0` together are what let the panel below
+     scroll instead of overflowing: without the min-height a flex child
+     refuses to shrink below its content, so the row grew past `main`'s
+     overflow:hidden and the buttons at the bottom of the panel simply
+     could not be reached. That is what adding the ring's nine rows did. */
+  #top { display: flex; gap: 16px; padding: 14px; align-items: stretch;
+    flex: 1; min-height: 0; }
   #stage { position: relative; background:
       linear-gradient(45deg, #16242c 25%, transparent 25%, transparent 75%, #16242c 75%) 0 0/20px 20px,
       linear-gradient(45deg, #16242c 25%, transparent 25%, transparent 75%, #16242c 75%) 10px 10px/20px 20px,
       #101b21;
     border: 1px solid #1e3542; cursor: grab; flex: none; }
   #stage.drag { cursor: grabbing; }
+  #stage { align-self: flex-start; }
   #stage canvas { display: block; width: 380px; height: 380px; }
-  #previews { display: flex; flex-direction: column; gap: 14px; flex: none; }
+  #previews { display: flex; flex-direction: column; gap: 14px; flex: none; align-self: flex-start; }
   .pv { text-align: center; }
   .pv .lab { font-size: 10px; color: #6f97aa; margin-top: 4px; }
   /* The same hexagon the hive uses — the art's own vertices on a square box.
@@ -54,12 +61,18 @@
   .h96 { width: 96px; height: 96px; }
   .h56 { width: 56px; height: 56px; }
   .h38 { width: 38px; height: 38px; }
-  #panel { flex: 1; min-width: 240px; display: grid; gap: 9px; align-content: start; }
+  #panel { flex: 1; min-width: 240px; display: grid; gap: 9px; align-content: start;
+    overflow-y: auto; min-height: 0; padding-right: 6px; }
   .row { display: grid; grid-template-columns: 74px 1fr 54px; gap: 8px; align-items: center; }
   .row label { color: #82a9bc; font-size: 11px; }
   .row output { text-align: right; color: #cfe6f2; }
   input[type=range] { width: 100%; }
-  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  /* PINNED. These are the three things the page exists to do, and a
+     control set that grows (the ring added nine rows) must never be able
+     to push them out of reach again. */
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px;
+    position: sticky; bottom: 0; background: #0d1418;
+    padding: 8px 0 2px; border-top: 1px solid #1e3542; z-index: 2; }
   button.act { background: #17455c; color: #dff0f8; border: 1px solid #2b6d8d;
     padding: 7px 12px; border-radius: 3px; cursor: pointer; font: inherit; }
   button.act:hover { background: #1e5a78; }
@@ -137,6 +150,20 @@ let cur = null;      // the spec being edited (a live reference into `specs`)
 let built = null;    // { scene, radius, ... } from buildIcon
 const dirty = new Set();
 
+// A control's key may be a PATH — `ring.radius` — because the ring is one
+// object on the spec rather than eight loose fields. Two helpers rather than
+// flattening it: the spec is what gets saved and read back by the renderer, and
+// a flat `ringRadius` on the wire would mean the renderer had to know the
+// picker's storage shape.
+const getPath = (o, k) => k.split('.').reduce((v, part) => (v == null ? v : v[part]), o);
+function setPath(o, k, val) {
+  const parts = k.split('.');
+  const last = parts.pop();
+  let t = o;
+  for (const part of parts) { if (t[part] == null) t[part] = {}; t = t[part]; }
+  t[last] = val;
+}
+
 function status(msg, isErr) {
   $('status') && ($('status').textContent = msg, $('status').className = isErr ? 'err' : '');
 }
@@ -163,6 +190,28 @@ const CONTROLS = [
   { key: 'bandLow',  label: 'shadow',  min: 0,    max: 200, step: 1,    def: 70,  structural: true },
   { key: 'bandHigh', label: 'light',   min: 100,  max: 255, step: 1,    def: 255, structural: true },
   { key: 'bandSoft', label: 'softness',min: 0,    max: 1,   step: 0.02, def: 0,   structural: true },
+
+  // --- THE RING ------------------------------------------------------------
+  // A real 3D loop built around the subject (see buildRing in iconRender.js),
+  // so it is lit, occluded and foreshortened by the same camera the animal is
+  // — which is the whole reason it is here rather than drawn over the PNG
+  // afterwards. Every one of these is structural: the ring is geometry, and
+  // geometry is built before the frame is measured.
+  //
+  // `radius` and `tube` are MULTIPLES OF THE SUBJECT'S OWN SIZE, never world
+  // units, so the same numbers frame a shrimp and a whale.
+  { key: 'ring.radius',  label: 'ring size', min: 0.8, max: 3,   step: 0.01, def: 1.45, structural: true, ring: true },
+  { key: 'ring.tube',    label: 'thickness', min: 0.01, max: 0.15, step: 0.005, def: 0.045, structural: true, ring: true },
+  { key: 'ring.arrows',  label: 'arrows',    min: 1,   max: 8,   step: 1,    def: 4,    structural: true, ring: true },
+  { key: 'ring.gap',     label: 'gap',       min: 0,   max: 0.6, step: 0.01, def: 0.16, structural: true, ring: true },
+  // Tilt lays the ring back away from the eye, yaw swings it, spin rolls the
+  // arrowheads round to where you want them. Three because a loop drawn round
+  // a body that is itself at an angle has no orientation that is obviously
+  // right — it is a composition, and it wants to be posed like one.
+  { key: 'ring.tilt',    label: 'ring tilt', min: -90, max: 90,  step: 1,    def: 0,    structural: true, ring: true },
+  { key: 'ring.yaw',     label: 'ring yaw',  min: -90, max: 90,  step: 1,    def: 0,    structural: true, ring: true },
+  { key: 'ring.spin',    label: 'ring spin', min: -180, max: 180, step: 1,   def: 0,    structural: true, ring: true },
+  { key: 'ring.opacity', label: 'ring alpha',min: 0.2, max: 1,   step: 0.05, def: 1,    structural: true, ring: true },
 ];
 
 // Only meaningful when the icon is a render. An image or a `none` row has no
@@ -182,16 +231,34 @@ function buildPanel() {
   for (const c of CONTROLS) {
     const row = document.createElement('div');
     row.className = 'row';
-    row.innerHTML = `<label for="c_${c.key}">${c.label}</label>
-      <input id="c_${c.key}" type="range" min="${c.min}" max="${c.max}" step="${c.step}">
-      <output id="o_${c.key}"></output>`;
+    const id = c.key.replace(".", "_");
+    row.innerHTML = `<label for="c_${id}">${c.label}</label>
+      <input id="c_${id}" type="range" min="${c.min}" max="${c.max}" step="${c.step}">
+      <output id="o_${id}"></output>`;
     p.appendChild(row);
     row.querySelector('input').addEventListener('input', (e) => {
-      cur[c.key] = parseFloat(e.target.value);
+      setPath(cur, c.key, parseFloat(e.target.value));
       markDirty();
       if (c.structural) rebuild(); else draw();
     });
   }
+
+  // The ring's colour. Its own row rather than a slider because a hue is not a
+  // number you drag, and it is not the flat-colour swatch below either — that
+  // one replaces the ANIMAL's materials, and painting the loop the same colour
+  // as the seal it is drawn around defeats the drawing.
+  const ringRow = document.createElement('div');
+  ringRow.className = 'row';
+  ringRow.id = 'ringColorRow';
+  ringRow.style.gridTemplateColumns = '74px 1fr';
+  ringRow.innerHTML = '<label for="ringColor">ring colour</label><input type="color" id="ringColor">';
+  p.appendChild(ringRow);
+  ringRow.querySelector('input').addEventListener('input', (e) => {
+    if (!cur.ring) return;
+    cur.ring.color = cssToInt(e.target.value);
+    markDirty();
+    rebuild();
+  });
 
   // WHAT THIS ICON IS, before anything about how to render it.
   //
@@ -332,7 +399,7 @@ function buildPanel() {
   $('bShoot').addEventListener('click', shoot);
   $('bApply').addEventListener('click', () => apply());
   $('bReset').addEventListener('click', () => {
-    for (const c of CONTROLS) cur[c.key] = c.def;
+    for (const c of CONTROLS) { if (c.ring && !cur.ring) continue; setPath(cur, c.key, c.def); }
     delete cur.flatColor;
     // A scene's PLACEMENTS are not reset here, and that is deliberate: the seed
     // for them lives in tools/icon-scenes.mjs, not in this page, so the honest
@@ -448,11 +515,18 @@ function syncPanel() {
   // fish the same shade as the stone hitting it.
   const shoots = kind === 'render' || kind === 'scene';
   for (const c of CONTROLS) {
-    const val = cur[c.key] ?? c.def;
-    $('c_' + c.key).value = val;
-    $('o_' + c.key).textContent = c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
-    $('c_' + c.key).closest('.row').style.display = shoots ? '' : 'none';
+    const id = c.key.replace('.', '_');
+    const val = getPath(cur, c.key) ?? c.def;
+    $('c_' + id).value = val;
+    $('o_' + id).textContent = c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
+    // A ring row belongs to a spec that HAS a ring. Hidden rather than
+    // disabled: a slider that would silently create a ring on a spec that never
+    // asked for one is a worse answer than not offering it.
+    const applies = shoots && (!c.ring || !!cur.ring);
+    $('c_' + id).closest('.row').style.display = applies ? '' : 'none';
   }
+  $('ringColorRow').style.display = (shoots && cur.ring) ? '' : 'none';
+  if (cur.ring) $('ringColor').value = intToCss(cur.ring.color ?? 0x6fd3ff);
   $('fcOn').closest('.chk').style.display = kind === 'render' ? '' : 'none';
   $('fcVal').closest('.row').style.display = kind === 'render' ? '' : 'none';
   $('fcSwatches').style.display = kind === 'render' ? '' : 'none';
@@ -473,8 +547,9 @@ function markDirty() {
   dirty.add(cur.key);
   buildList();
   for (const c of CONTROLS) {
-    const val = cur[c.key] ?? c.def;
-    $('o_' + c.key).textContent = c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
+    const val = getPath(cur, c.key) ?? c.def;
+    $('o_' + c.key.replace('.', '_')).textContent =
+      c.step >= 1 ? val : (+val).toFixed(c.step < 0.01 ? 3 : 2);
   }
 }
 

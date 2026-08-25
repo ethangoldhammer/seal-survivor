@@ -251,7 +251,11 @@ check('...carrying the recap, the roll and the way out',
 // nobody had to make.
 check('...and the tables that used to be on the back',
   card.contains($('svPanelWeapons')) && card.contains($('svPanelThreats')));
-check('...and the build, which no face ever carried', card.contains($('svPanelBuild')));
+// WHAT THE RUN BUILT IS THE HIVE ON THE RAIL, and only that. The text list of
+// the picks that used to fill the readout's second column said again, less
+// well, what the hexagons show and what the weapons table ranks.
+check('...and the build, as the hive on the rail rather than a second list',
+  card.contains($('svTrophy')) && document.getElementById('svPanelBuild') === null);
 
 // THE BAR IS NOT IN THE SCROLL, which is the layout's whole claim. The readout
 // scrolls under it; if Try again is inside .sv-ldg-body it is below the fold on
@@ -468,10 +472,6 @@ check('...and a line saying so',
   $('svPanelWeapons').textContent.trim());
 check('...on the incoming side too', /Nothing laid a finger/.test($('svPanelThreats').textContent),
   $('svPanelThreats').textContent.trim());
-// THE BUILD SAYS SO AS WELL. A run with no picks is a run that ended before the
-// first level-up, and an empty column with a heading reads as a broken panel.
-check('...and the build says there was none',
-  /No upgrades/.test($('svPanelBuild').textContent), $('svPanelBuild').textContent.trim());
 check('...without a warning', warnings.length === before,
   warnings.slice(before).join(' | '));
 

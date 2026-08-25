@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif;
+      background: radial-gradient(120% 90% at 30% 8%, #1a5678, #04101a 70%); }
+    a { color: #9fe3ff; } a:hover { color: #cfeaff; }
+  </style>
+</helmet>
+<div style="width: 420px; height: 520px; box-sizing: border-box; padding: 26px 24px; color: #cfe6f5">
+
+  <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px">
+    <div style="font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #7ad7ff">D</div>
+    <div style="font-size: 17px; font-weight: 700; color: #eaf6ff">Bare</div>
+  </div>
+  <div style="font-size: 11px; line-height: 1.5; color: rgba(207,230,245,0.5); margin-bottom: 22px">No box, no headings, no prose. Three lines of type on the water, for someone who knows the roster.</div>
+
+  <div style="display: flex; flex-direction: column; gap: 30px">
+
+    <div style="width: max-content; max-width: 250px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.7; text-shadow: 0 1px 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.8)">
+      <div style="font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: #ffffff">Shrimp Ring &#215;4</div>
+      <div style="color: #9fe3ff; font-weight: 700">+1 &#8594; 7</div>
+      <div style="color: rgba(232,236,243,0.7)">261k &#183; 92</div>
+    </div>
+
+    <div style="width: max-content; max-width: 250px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.7; text-shadow: 0 1px 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.8)">
+      <div style="font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: #ffffff">Yoga &#215;5</div>
+      <div style="color: rgba(255,209,102,0.95); font-weight: 700">&#8212; &#8594; 150</div>
+    </div>
+
+    <div style="width: max-content; max-width: 250px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.7; text-shadow: 0 1px 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.8)">
+      <div style="font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: #ffffff">Seagull Bomb &#215;2</div>
+      <div style="color: #9fe3ff; font-weight: 700">+1 &#8594; 3</div>
+      <div style="color: rgba(232,236,243,0.35)">&#8212;</div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

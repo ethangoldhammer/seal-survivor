@@ -92,6 +92,40 @@ export function sfxBand(x, y) {
   return Math.round(t * top);
 }
 
+// How loud a sound is by WHERE IT IS, as a plain multiplier on its own gain.
+//
+// sfxBand above spends the VOICE BUDGET on what is near; this spends the MIX
+// on it. They are the same geometry deliberately — `nearRadius` and
+// `farRadius` are read straight off CONFIG.audio.priority rather than
+// duplicated under `falloff`, because "how far away is far" is one fact about
+// the arena and two copies of it would drift into the budget calling a crab
+// close while the mixer called it distant.
+//
+// Floors at `minGain` instead of reaching zero. A sound that fades to silence
+// takes the outer half of the arena away as information, and the far edge is
+// exactly where a boss surfaces; distant-and-present is the read, not gone.
+//
+// Full level inside `nearRadius` rather than starting to fall at zero
+// distance: everything brawling with the seal is at the same range as the seal
+// and should mix as one thing, and a level that moved with the last two units
+// of a shark's approach would wobble on every pass.
+//
+// A sound with NO position is not a place in the world — a UI click, the
+// level-up, the death — and comes back 1, so this can only ever take from the
+// world and never from the interface. Same rule as the band.
+export function sfxDistanceGain(x, y) {
+  const f = CONFIG.audio.falloff ?? {};
+  if (f.enabled === false || x == null || y == null) return 1;
+  const p = CONFIG.audio.priority ?? {};
+  const near = Math.max(0, p.nearRadius ?? 18);
+  const far = Math.max(near + 0.001, p.farRadius ?? 70);
+  const d = Math.hypot(x - listenerX, y - listenerY);
+  if (d <= near) return 1;
+  const floor = Math.min(1, Math.max(0, f.minGain ?? 0.125));
+  const t = Math.min(1, (d - near) / (far - near));
+  return floor + (1 - floor) * (1 - t) ** Math.max(0.05, f.curve ?? 1.8);
+}
+
 // Seconds to fade a stolen voice out over. A hard stop mid-waveform is a click
 // — an instantaneous edge is broadband — and a click is far more noticeable
 // than the sound it was meant to make room for. 30ms is under the ear's
@@ -533,7 +567,7 @@ export function watchSfx(cb) {
  * @param name    the CONFIG.sfx key
  * @param outcome 'sample' | 'synth' | 'gap' | 'far' | 'stolen' | 'voices' | 'muted'
  *                | 'unknown' | 'missing' | 'off' | 'note'
- * @param detail  optional { take, takes, gain, text }
+ * @param detail  optional { take, takes, gain, pitch, rep, dist, text }
  */
 export function noteSfx(name, outcome, detail) {
   if (sfxWatcher) sfxWatcher(name, outcome, detail);
@@ -1062,7 +1096,13 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
   // Measured on the audio clock rather than a counter, so the attenuation
   // follows real elapsed time and behaves the same at any frame rate.
   const rep = repetitionGain(name, now);
-  const gainValue = (def.gain ?? 0.2) * volumeScale * rep;
+  // ...and how far away it happened. Folded in here with the rest rather than
+  // applied on the bus, for the same reason `rep` is: it is a property of this
+  // one shot, and the debug tap has to be able to name it as the reason a
+  // sound was quiet. `opts.x/y` is the world point feedback.js already passes
+  // for the band, so no call site needs to know this exists.
+  const dist = sfxDistanceGain(opts.x, opts.y);
+  const gainValue = (def.gain ?? 0.2) * volumeScale * rep * dist;
 
   // A loaded sample replaces the synth entirely, but still gets the same
   // pitch treatment — playbackRate doubles as pitch for a buffer source. With
@@ -1128,6 +1168,7 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
       gain: gainValue,
       pitch: pitchMul,
       rep,
+      dist,
     });
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
@@ -1157,7 +1198,7 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
   // design, or every file it named failed to decode. The overlay does not try
   // to tell those apart; the boot warning already does, and what matters live
   // is that this sound is NOT the file you think it is.
-  noteSfx(name, 'synth', { gain: gainValue, pitch: pitchMul, rep });
+  noteSfx(name, 'synth', { gain: gainValue, pitch: pitchMul, rep, dist });
 
   if (wantsTone) {
     const osc = ctx.createOscillator();

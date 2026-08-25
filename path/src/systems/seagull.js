@@ -5,6 +5,8 @@ import { bounds } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { createAnimationController } from './animation.js';
 import { aoe, targeting } from './scaling.js';
+import { player } from '../entities/player.js';
+import { seagullLevelStats } from '../levelStats.js';
 
 // SEAGULL BOMB — an attack run, not a projectile.
 //
@@ -51,6 +53,53 @@ export function resetSeagulls(scene) {
 
 export function seagullCount() {
   return gulls.length;
+}
+
+// ---------------------------------------------------------------------------
+// THE BIRD AS A FOOTHOLD.
+//
+// A mid-air relaunch that passes through a gull refills the boost meter and
+// scores a food chain link. main.js owns what it is WORTH — this owns only
+// "was there a bird there", because the gull list lives here and nothing else
+// should be handed it.
+//
+// ONE PAYOUT PER BIRD, and the flag is on the gull rather than on a timer.
+// A cooldown would be the wrong shape twice over: two gulls in the air at once
+// are two separate opportunities and a timer would eat the second, while one
+// gull hovering inside the seal's radius across several jumps is the SAME
+// opportunity and a timer short enough to feel responsive would pay it twice.
+// The bird is the thing being spent, so the bird is what remembers.
+//
+// The gull's flight is deliberately untouched. It is on a run it committed to
+// — the whole approach is a promise about a pile of crabs — and shoving it off
+// that line would trade a payout the player chose for an ability firing where
+// they didn't aim it.
+//
+// @param {number} x       the seal's position
+// @param {number} y
+// @param {number} radius  the seal's own contact radius; the gull's reach is
+//                         added to it, exactly like the crab impact test
+// @returns {{x: number, y: number} | null} where the bird was, for the burst
+export function kickGull(x, y, radius) {
+  const k = CONFIG.seagullBomb.kick ?? {};
+  if (!k.enabled) return null;
+  const reach = radius + (k.radius ?? 0);
+  let best = null;
+  let bestD2 = reach * reach;
+  for (const g of gulls) {
+    if (g.kicked) continue;
+    const dx = g.container.position.x - x;
+    const dy = g.container.position.y - y;
+    const d2 = dx * dx + dy * dy;
+    // `>` not `>=`, so a gull exactly on the rim still counts and the nearest
+    // of several overlapping birds is the one that pays.
+    if (d2 > bestD2) continue;
+    bestD2 = d2;
+    best = g;
+  }
+  if (!best) return null;
+  best.kicked = true;
+  return { x: best.container.position.x, y: best.container.position.y };
 }
 
 // Which enemies a gull considers food: anything living on the seabed — the
@@ -184,6 +233,9 @@ export function spawnSeagull(scene, enemiesList) {
     // 0..1 through the rotation that cancels the stoop clip's baked pitch —
     // see the heading block in updateSeagulls.
     diveBlend: 0,
+    // Whether the seal has already kicked off this bird. One payout per gull —
+    // see kickGull.
+    kicked: false,
   };
   gulls.push(gull);
   return gull;
@@ -313,18 +365,25 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       if (hitIndex !== -1 || grounded) {
         const x = g.container.position.x;
         const y = g.container.position.y;
+        // WHAT THE BIRD IS CARRYING, at the level the run is holding. A level
+        // used to buy nothing but a faster gull; the hit, the blast and the
+        // blast's reach all climb with it now, and all three come from
+        // levelStats.js so the tip that quotes them and the bomb that delivers
+        // them cannot drift apart. Big Rigz and Splash Zone are folded in
+        // there, which is why neither is applied again here.
+        const lv = seagullLevelStats(player.stats?.seagullLevel ?? 1, player.stats);
         if (hitIndex !== -1) {
           const hit = enemiesList[hitIndex];
-          hit.hp -= c.damage;
+          hit.hp -= lv.seagullHit;
           hit.flash = CONFIG.fx.hitFlash;
           hit.hitThisFrame = true;
-          hooks.onEnemyDamaged?.(hit, c.damage, x, y);
+          hooks.onEnemyDamaged?.(hit, lv.seagullHit, x, y);
           if (hit.hp <= 0) {
             hooks.onEnemyKilled?.(hit);
             removeEnemy(scene, hitIndex);
           }
         }
-        hooks.onImpact?.(x, y, c.splashDamage, aoe(c.splashRadius));
+        hooks.onImpact?.(x, y, lv.seagullSplash, lv.seagullSplashRadius);
         scene.remove(g.container);
         gulls.splice(i, 1);
         continue;

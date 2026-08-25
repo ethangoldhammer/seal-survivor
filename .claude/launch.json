@@ -17,7 +17,13 @@
     "",
     "autoPort where the server honours PORT (vite.config.js and csv-editor.mjs",
     "both do) so two sessions never collide. Fixed 5178 for the workbench: a port",
-    "that never moves is the entire point of that one."
+    "that never moves is the entire point of that one.",
+    "",
+    "The two pickers are fixed-port on purpose and for the opposite reason to",
+    "the game: they are read-only render servers that write only their own shots",
+    "directory, they cannot touch tuning, and each one owns its port so both can",
+    "be up at once. They collide with nothing except a second copy of themselves,",
+    "which is what the EADDRINUSE message in atlas-render/server.mjs is for."
   ],
   "configurations": [
     {
@@ -38,6 +44,20 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "autoPort": true
+    },
+    {
+      "name": "design-picker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "pick"],
+      "port": 4601,
+      "autoPort": false
+    },
+    {
+      "name": "icon-picker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "icons:pick"],
+      "port": 4599,
+      "autoPort": false
     },
     {
       "name": "built-preview",

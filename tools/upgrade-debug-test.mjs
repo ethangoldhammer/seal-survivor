@@ -228,15 +228,21 @@ section('THE ELEMENT PICKER');
 // ---------------------------------------------------------------------------
 reset();
 resetElements(null);
-const glowUp = CONFIG.upgrades.find((u) => u.roll === 'biolumElement');
-check('there is a rolled upgrade to pick for', glowUp != null);
-setUpgradeDebugChoice({ element: 'venom' });
-grantUpgrade(glowUp.id, { rarity: 'common', element: 'venom' });
-check('the chosen element is committed, not rolled', activeElement() === 'venom', activeElement());
+// THE PICKER IS A READOUT NOW. It used to steer a roll — one card that chose an
+// element at draw time — and the panel needed a chip row to force which. There
+// are four cards, so asking for an element means granting that card, the same
+// door every other upgrade goes through.
+const venomCard = CONFIG.upgrades.find((u) => u.element === 'venom');
+check('there is a card for each element', venomCard != null);
+grantUpgrade(venomCard.id, { rarity: 'common' });
+check('granting the card carries its element', activeElement() === 'venom', activeElement());
 setUpgradeDebugVisible(true); // re-render now that the run has an element
-check('the picker locks once the run has one',
-  chipNamed('shock') == null && /locked/.test(findAll((n) => /locked/.test(n.textContent ?? ''))[0]?.textContent ?? ''),
-  'commitElement is one-way, so a live picker there would silently do nothing');
+check('the panel reports which element the run is carrying',
+  findAll((n) => /venom/.test(n.textContent ?? '')).length > 0,
+  'the row says what is held; the other three are out of the pool');
+check('...and offers no chips to change it',
+  chipNamed('shock') == null,
+  'a picker that silently did nothing is worse than no picker');
 resetElements(null);
 
 // ---------------------------------------------------------------------------

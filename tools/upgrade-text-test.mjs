@@ -44,8 +44,19 @@ console.log('\n1. measurement — multipliers, additions, and the first-pick bra
 const rapid = measure(by('rapidFire'), 1);
 ok(rapid.length === 1 && rapid[0].stat === 'fireRate' && rapid[0].how === 'mul',
   `rapidFire reads as a multiplier on fireRate (${rapid[0]?.how} on ${rapid[0]?.stat})`);
-ok(Math.abs(rapid[0].ratio - 0.75) < 1e-9, `and the ratio measures 0.75 (got ${rapid[0]?.ratio})`);
-ok(phraseAll(rapid) === '+25% fire rate', `phrased as "+25% fire rate" (got "${phraseAll(rapid)}")`);
+// ONE RUNG UP THE BAR LADDER — quarters to quarter-note triplets, so the
+// interval goes to 4/6 of itself (see barDivisions in config.js). The number
+// here is pinned to the card's apply(), which is the point of measuring it:
+// change the card and this fails rather than the printed text quietly lying.
+ok(Math.abs(rapid[0].ratio - 4 / 6) < 1e-9, `and the ratio measures 4/6 (got ${rapid[0]?.ratio})`);
+// PHRASED OFF THE INTERVAL, not off the rate. `lower: TRUE` in statText.csv
+// means a drop is an improvement, and the percentage reported is how much the
+// interval fell — so a rung that takes the gun from 4 shots a bar to 6 reads
+// "+33.3%" while the player gets +50% more shots. That convention predates the
+// shot grid and is the same on every cooldown card in the game; it is pinned
+// here so that changing it is a deliberate edit to statText.csv rather than a
+// surprise.
+ok(phraseAll(rapid) === '+33.3% fire rate', `phrased as "+33.3% fire rate" (got "${phraseAll(rapid)}")`);
 
 const vit = measure(by('vitality'), 1);
 ok(vit[0].how === 'add' && vit[0].amount === 30, `vitality reads as +30 additive (${vit[0]?.how} ${vit[0]?.amount})`);
@@ -67,8 +78,10 @@ ok(chain?.how === 'other', `strikePower's compounding chain multiplier reports a
 
 // {total} across stacks compounds rather than multiplying by the stack count.
 const total4 = measureTotal(by('rapidFire'), 4).find((c) => c.stat === 'fireRate');
-ok(Math.abs(total4.ratio - 0.75 ** 4) < 1e-9,
-  `four Rapid Fires compound to 0.75^4 (got ${total4.ratio.toFixed(6)})`);
+// Four rungs is bar/4 -> bar/16, so the whole climb is exactly 4/16 — the
+// ladder compounds onto itself rather than onto a repeated multiplier.
+ok(Math.abs(total4.ratio - 4 / 16) < 1e-9,
+  `four Rapid Fires compound to 4/16 (got ${total4.ratio.toFixed(6)})`);
 
 // An ability level also starts at 0, so naming the ability has to be reserved
 // for a single level rather than for any climb that began at zero — a maxed
@@ -114,12 +127,12 @@ console.log('\n3. tokens — each resolves, and a bad one stays on the card');
 // ===========================================================================
 
 // Expected values are sentence-cased, because expandDesc is the last thing a
-// card's text goes through and it opens the string with a capital. "+25% fire
+// card's text goes through and it opens the string with a capital. "+33.3% fire
 // rate" is untouched — the rule only reaches a letter, so a measured number
 // still leads with the number it measured.
 const r = by('rapidFire');
 const cases = [
-  ['{effect}', '+25% fire rate'],
+  ['{effect}', '+33.3% fire rate'],
   ['{name}', r.name],
   ['{level}', '1'],
   ['{owned}', '0'],
@@ -132,7 +145,9 @@ for (const [input, want] of cases) {
   ok(got === want, `${input} -> "${got}"${got === want ? '' : ` (expected "${want}")`}`);
 }
 
-ok(expandDesc('a {effect:3} b', r, { owned: 0 }) === 'A +25% fire rate b', '{effect:3} resolves a specific stack');
+// Stack 3 is bar/8 -> bar/12, another triplet step, so it reads the same as
+// stack 1 — the ladder alternates +33.3% and +25% as phrased.
+ok(expandDesc('a {effect:3} b', r, { owned: 0 }) === 'A +33.3% fire rate b', '{effect:3} resolves a specific stack');
 ok(expandDesc('{level}', r, { owned: 4 }) === '5', '{level} follows how many are already owned');
 
 const warned = [];

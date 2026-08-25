@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { fovScale } from './settings.js';
+import { ease as sharedEase } from '../ease.js';
 
 // The CINEMATIC CAMERA — an opt-in second camera brain, sitting alongside the
 // plain fixed frame that has always shipped. `CONFIG.cinecam.enabled` is the
@@ -254,9 +255,15 @@ function softLimit(v, lo, hi, ease) {
 // codebase, and deliberately so: a camera blend is the one curve the eye
 // tracks for its whole length, and smoothstep's non-zero second derivative at
 // the ends is visible as a faint tick on a slow push.
+//
+// FROM ease.js RATHER THAN WRITTEN OUT HERE. It is the same polynomial it
+// always was — ease.js's header says so, this is where that table's
+// smootherstep came from — but something else now has to move on THIS curve
+// and not merely on one that looks like it: the score comes up to speed over
+// the opening move (see startMusicAtRest in systems/music.js). Two copies of a
+// quintic is exactly the situation ease.js exists to end.
 function ease(t) {
-  const x = clamp(t, 0, 1);
-  return x * x * x * (x * (x * 6 - 15) + 10);
+  return sharedEase('smootherstep', t);
 }
 
 // ---------------------------------------------------------------------------

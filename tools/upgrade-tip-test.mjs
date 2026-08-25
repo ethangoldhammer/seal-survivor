@@ -127,7 +127,8 @@ const hive = await import('../path/src/ui/upgradeHive.js');
 const playtest = await import('../path/src/systems/playtest.js');
 const { SOURCE_UPGRADES, sourceForUpgrade } = await import('../path/src/systems/playtestAnalysis.js');
 const { setSetting, SCHEMA, settings } = await import('../path/src/systems/settings.js');
-const { player } = await import('../path/src/entities/player.js');
+const { player, recomputeStats, statsWithOneMore, computeStats } = await import('../path/src/entities/player.js');
+const { baseStats } = await import('../path/src/stats.js');
 initFeedback(null);
 
 const ui = await import('../path/src/ui/ui.js');
@@ -299,6 +300,348 @@ section('the tip content');
 
   check('an id that is not an upgrade gets nothing',
     tip.upgradeTipContent('notAnUpgrade', { owned: 1, verbosity: 'full', totals }) === null);
+}
+
+// ---------------------------------------------------------------------------
+section('and where that puts you');
+{
+  // THE SECOND HALF OF THE `next` ROW. "+25% fire rate" is what the card adds;
+  // the span is the number the FIGHT uses once it is taken, with the base, the
+  // level growth and every other card folded in — which is why it goes through
+  // entities/player.js and not through another measure().
+  //
+  // A run is stood up for real rather than faked: the whole claim is that the
+  // figure comes out of the same pipeline recomputeStats uses, and a hand-built
+  // block would be a test of the hand-building.
+  const stand = (id, owned, level = owned * 2) => {
+    player.upgrades.length = 0;
+    for (let i = 0; i < owned; i++) player.upgrades.push({ id, rarity: 'common' });
+    player.level = level;
+    recomputeStats();
+    return { live: player.stats, after: statsWithOneMore(id, 'common') };
+  };
+  const build = (id, owned, extra = {}) => {
+    const { live, after } = stand(id, owned);
+    return tip.upgradeTipContent(id, {
+      owned, verbosity: 'full', totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+      liveStats: live, afterStats: after, ...extra,
+    });
+  };
+  const rowOf = (c, key) => c.rows.find((r) => r.key === key)?.text ?? null;
+
+  // A COUNT reads as a count. Nothing else in the game grants orbiting shrimp,
+  // so the live figure and the card's own total are the same number — which is
+  // exactly the case the sole-source rule below is about.
+  const shrimp = build('shrimpRing', 4);
+  check('a count shows the real before and after', /\b6\b.*\b7\b/.test(rowOf(shrimp, 'next') ?? ''),
+    rowOf(shrimp, 'next') ?? 'no row');
+  check('...and it is on the next row, not a row of its own',
+    !shrimp.rows.some((r) => r.key === 'span'), shrimp.rows.map((r) => r.key).join(','));
+
+  // A `lower` STAT AS A MULTIPLE. fireRate's raw block value is a DELAY in
+  // seconds, so it falls as the stat improves — printed raw beside a phrase
+  // reading "+25% fire rate" it reads as a downgrade. Three stats in the game
+  // carry `lower` and this is the one anybody holds.
+  const gun = build('rapidFire', 3);
+  const gunRow = rowOf(gun, 'next') ?? '';
+  check('a lower-is-better stat is shown as a multiple', gunRow.includes('\u00d7'), gunRow);
+  check('...and the multiple goes UP as the stat improves', (() => {
+    const [a, b] = [...gunRow.matchAll(/\u00d7([\d.]+)/g)].map((m) => Number(m[1]));
+    return Number.isFinite(a) && Number.isFinite(b) && b > a;
+  })(), gunRow);
+  // The figure is the one recomputeStats produces, not one measure() invented.
+  {
+    const { live } = stand('rapidFire', 3);
+    const base = baseStats().fireRate;
+    const want = Math.round((base / live.fireRate) * 100) / 100;
+    check('...measured against the base the run actually started from',
+      gunRow.includes(`\u00d7${want}`), `${gunRow} — expected \u00d7${want}`);
+  }
+
+  // EVERY SOURCE, which is the whole reason it is not another measure().
+  //
+  // `strikeDamage` is the stat five cards move — the strike family plus Big
+  // Willy Style — so it is the one place in the roster where "what this card
+  // gave me" and "what I actually have" genuinely diverge. measure() replays
+  // ONE apply() against a synthetic seal and can never see the other four.
+  {
+    const held = [{ id: 'strikePower', rarity: 'common' }, { id: 'strikeDash', rarity: 'common' }];
+    player.upgrades.length = 0;
+    player.level = 6;
+    for (const p of held) player.upgrades.push(p);
+    recomputeStats();
+    const solo = computeStats([held[0]], 6, 0);
+    check('another card moving the same stat is in the figure',
+      player.stats.strikeDamage !== solo.strikeDamage,
+      `${solo.strikeDamage} from Strike Power alone vs ${player.stats.strikeDamage} live`);
+  }
+
+  // NOTHING TO SAY IS SAID BY SAYING NOTHING. With no run there is no live
+  // block, and the row falls back to the delta alone rather than to a span of
+  // undefineds.
+  //
+  // `player.stats` is EMPTIED rather than just passing null, because null falls
+  // back to the live block on purpose — that fallback is what lets three of the
+  // four surfaces call showUpgradeTip without threading a stat block through.
+  // An empty block is the state before any run has been started, which is what
+  // the main menu and a Node harness are actually in.
+  {
+    const wasStats = player.stats;
+    player.stats = {};
+    const noRun = tip.upgradeTipContent('shrimpRing', {
+      owned: 2, verbosity: 'full',
+      totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+    });
+    check('with no run the row is the delta alone',
+      !(rowOf(noRun, 'next') ?? '').includes('\u2192'), rowOf(noRun, 'next') ?? '');
+    check('...and the tip is still built rather than refused', !!noRun?.rows.length,
+      JSON.stringify(noRun?.rows?.map((r) => r.key)));
+    player.stats = wasStats;
+  }
+
+  // AND SHORT NEVER CARRIES IT. "Where does that put me" is the reading half,
+  // which is the whole reason the setting has a middle rung.
+  const short = build('shrimpRing', 4, { verbosity: 'short' });
+  check('short is the delta alone too',
+    !(rowOf(short, 'next') ?? '').includes('\u2192'), rowOf(short, 'next') ?? '');
+
+  // --- THE `now` ROW EARNS ITS PLACE ---------------------------------------
+  // Its question is "what has THIS card given me", which is only worth asking
+  // when something else gave you some of it too. Nothing else grants orbiting
+  // shrimp, so the card's total and the live figure in the span are the same
+  // number printed twice, four pixels apart.
+  check('a sole source drops the running total', rowOf(shrimp, 'total') === null,
+    rowOf(shrimp, 'total') ?? '');
+  {
+    player.upgrades.length = 0;
+    player.level = 8;
+    for (let i = 0; i < 2; i++) player.upgrades.push({ id: 'strikePower', rarity: 'common' });
+    player.upgrades.push({ id: 'strikeDash', rarity: 'common' });
+    recomputeStats();
+    const shared = tip.upgradeTipContent('strikePower', {
+      owned: 2, verbosity: 'full',
+      totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+      liveStats: player.stats, afterStats: statsWithOneMore('strikePower', 'common'),
+    });
+    check('...and brings it back when another card shares the stat',
+      shared.rows.some((r) => r.key === 'total'), shared.rows.map((r) => r.key).join(','));
+  }
+
+  // EXCEPT AN UNLOCK, which is prose and cannot be duplicated by a figure. The
+  // orca family is of course the only source of orca family levels, and its
+  // desc is pure flavour — so the sole-source rule would have eaten the one
+  // sentence in the game that says what the ability does.
+  // THE UNLOCK SENTENCE SURVIVES THE READOUT. Orca Family has a level table
+  // now, and the table replaces the desc — except on the FIRST stack, where the
+  // desc is not a figure at all but the ability's unlock sentence, the only
+  // prose in the game saying what the thing is. A card whose own desc is
+  // flavour ("Boaterhaters") has nothing else.
+  const orca0 = build('orcaFamily', 0);
+  check('a first pick keeps the unlock sentence', !!orca0.desc, orca0.desc || 'dropped');
+  check('...and it really is the sentence, not a figure',
+    /[a-z]{4}\s+[a-z]{4}/i.test(orca0.desc ?? ''), orca0.desc ?? '');
+  check('...beside the table of what it grants',
+    orca0.rows.some((r) => r.key.startsWith('lv:')),
+    orca0.rows.map((r) => r.key).join(','));
+  // From the second stack on it is a figure again — "+1 orca family level" —
+  // which is exactly the line the table exists to replace.
+  const orca2 = build('orcaFamily', 2);
+  check('a later stack drops it, the table having covered it',
+    orca2.desc === '', orca2.desc);
+
+  player.upgrades.length = 0;
+  player.level = 1;
+  recomputeStats();
+}
+
+// ---------------------------------------------------------------------------
+section('what a level actually buys');
+{
+  // measure() replays apply() and reports the stat block, which for half the
+  // roster is ONE number — `s.bakalarLevel += 1`. Everything the card is about
+  // lives in systems/bakalar.js, derived from that level, where no measurement
+  // could reach it. levelStats.js is the second source of truth, and the tip
+  // prefers it.
+  const { levelChanges, bakalarLevelStats } = await import('../path/src/levelStats.js');
+
+  const stand = (id, owned, extra = []) => {
+    player.upgrades.length = 0;
+    for (let i = 0; i < owned; i++) player.upgrades.push({ id, rarity: 'common' });
+    for (const e of extra) player.upgrades.push({ id: e, rarity: 'common' });
+    player.level = Math.max(1, owned * 2);
+    recomputeStats();
+    return { live: player.stats, after: statsWithOneMore(id, 'common') };
+  };
+  const tipFor = (id, owned, extra = []) => {
+    const { live, after } = stand(id, owned, extra);
+    return tip.upgradeTipContent(id, {
+      owned, verbosity: 'full',
+      totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+      liveStats: live, afterStats: after,
+    });
+  };
+  const labels = (c) => c.rows.map((r) => r.label.replace('[DRAFT] ', ''));
+
+  const boat = tipFor('bakalar', 1);
+  check('a levelled card lists the quantities its level moves',
+    labels(boat).length > 3, labels(boat).join(' | '));
+  check('...rather than the one number apply() writes',
+    !labels(boat).some((l) => /level/i.test(l)), labels(boat).join(' | '));
+  // The two the old hand-typed desc never mentioned, and which are the biggest
+  // things a stack buys.
+  const named = labels(boat).join(' ');
+  check('...including the bomb', /damage/.test(named), named);
+  check('...and the blast', /blast|radius/.test(named), named);
+
+  // EVERY ROW CARRIES ITS OWN SPAN. These quantities are not stat-block keys —
+  // `bakalarBombDamage` is derived from a level and exists nowhere in the block
+  // — so the span cannot come from effectiveSpan, which looks the stat up in
+  // the two blocks and quietly returns '' when it is not there.
+  const dmg = boat.rows.find((r) => /damage/.test(r.label));
+  check('a row shows the step and where it lands', /→/.test(dmg?.text ?? ''), dmg?.text ?? 'no row');
+  check('...matching the ability\'s own numbers', (() => {
+    const a = bakalarLevelStats(1, player.stats).bakalarBombDamage;
+    const b = bakalarLevelStats(2, player.stats).bakalarBombDamage;
+    return dmg.text.includes(String(a)) && dmg.text.includes(String(b));
+  })(), dmg?.text ?? '');
+
+  // A LOWER-IS-BETTER ADDITIVE STAT MUST NOT READ "+-0.32s". The hardcoded plus
+  // in phrase() was fine while every additive stat went up; the boat's bomb
+  // interval is the first that goes down.
+  const gap = boat.rows.find((r) => /bomb/.test(r.label) && /s ·|s$/.test(r.text));
+  check('a quantity that shrinks reads as a minus, not a plus-minus',
+    !boat.rows.some((r) => r.text.includes('+-')),
+    boat.rows.map((r) => r.text).join(' | '));
+
+  // ONLY WHAT MOVED. The sailing interval hits its floor a few stacks in, and a
+  // card still claiming faster sailings after that is the same class of lie the
+  // typed desc was telling.
+  const deep = tipFor('bakalar', 4);
+  // THE CAP CHANGED WHAT THIS CAN ASK. Sailings is sixth in the boat's declared
+  // order, so the four-row limit drops it from the tip either way — the
+  // question "is a floored quantity excluded" has to be put to levelChanges
+  // directly rather than to the rendered rows.
+  const { levelChanges: lc } = await import('../path/src/levelStats.js');
+  const stats = (owned) => {
+    const { live, after } = stand('bakalar', owned);
+    return (lc('bakalar', owned, owned + 1, live, after, 8) ?? []).map((c) => c.stat);
+  };
+  check('a quantity still moving is listed',
+    stats(1).includes('bakalarSailGap'), stats(1).join(', '));
+  check('...and one that has hit its floor is not',
+    !stats(4).includes('bakalarSailGap'), stats(4).join(', '));
+
+  // THE STAT BLOCKS GO WITH THEIR LEVELS. Big Rigz multiplies companion damage
+  // and Splash Zone widens blasts; measured against today's block on both sides
+  // the step would be under-reported for a player holding either.
+  const rigged = tipFor('bakalar', 4, ['companionSize', 'areaOfEffect']);
+  const step = (c) => {
+    const t = c.rows.find((r) => /damage/.test(r.label))?.text ?? '';
+    return Number(t.match(/^\+([\d.]+)/)?.[1] ?? 0);
+  };
+  check('the multipliers a build already has are folded in',
+    step(rigged) > step(deep), `${step(deep)} bare vs ${step(rigged)} with Big Rigz`);
+
+  // THE DESC IS THE LINE THIS REPLACES. 49 of the 51 descs are {effect}, which
+  // on a levelled card expands to "+1 Bakalar's boat level" — printed directly
+  // above the table saying what that means.
+  check('the stale one-liner is not printed above the table', boat.desc === '', boat.desc);
+
+  // AND EVERYTHING WITHOUT A READOUT IS UNTOUCHED. Most of the roster, for now.
+  // Homing Pebbles has a readout now too (one row — the reach, the only one of
+  // its three numbers with a meaning outside the code). `maneater` is the
+  // standing example of a level that needs none: it feeds a damage multiplier
+  // straight into the stat block, where measure() has always seen it.
+  check('an ability with no readout keeps the phrase it always had',
+    levelChanges('maneater', 1, 2) === null, String(levelChanges('maneater', 1, 2)));
+  const shrimp = tipFor('shrimpRing', 4);
+  check('...and a stat card is unaffected',
+    shrimp.rows.some((r) => r.key === 'next'), shrimp.rows.map((r) => r.key).join(','));
+
+  // ONE IMPLEMENTATION, which is the whole promise. A readout that merely
+  // AGREED with systems/bakalar.js today would stop agreeing the first time
+  // either was retuned, silently, because nothing compares them. Read off the
+  // source rather than driven: importing bakalar.js pulls in three.js, the
+  // arena and the entity layer, and what can regress here is the import being
+  // dropped, not the arithmetic.
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../path/src/systems/bakalar.js', import.meta.url), 'utf8');
+  check('the boat sources its numbers from the same file the tip does',
+    /import \{[^}]*bakalarLevelStats[^}]*\} from '\.\.\/levelStats\.js'/.test(src));
+  // COMMENTS STRIPPED FIRST. Several of them name a tuning key while explaining
+  // why a clamp exists, and a check that counted those would either fail on
+  // prose or be quietly loosened until it stopped catching a real second copy.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const copies = code.match(/\w+PerLevel/g) ?? [];
+  check('...and keeps no second copy of the formulas', copies.length === 0, copies.join(', '));
+
+  // --- A QUANTITY THAT IS NOT MOVING YET -----------------------------------
+  //
+  // Counts step on rounding: Laser Eyes gains a second beam at stack four and
+  // nothing on the three picks either side. Two kinds of standing still, and
+  // the tip must not treat them alike — one has stopped for good, the other is
+  // still coming. Driven through a synthetic readout because no shipped ability
+  // has both shapes at once yet.
+  {
+    const { LEVEL_STATS, levelChanges, RATIO_STATS } = await import('../path/src/levelStats.js');
+    LEVEL_STATS.__probe = (level) => ({
+      // climbs every level
+      bakalarBombDamage: 10 * Math.max(1, level),
+      // steps on a round: 1 at levels 1-3, 2 from 4
+      bakalarGrip: Math.round(1 + 0.34 * (Math.max(1, level) - 1)),
+      // hit its ceiling at level 2 and will never move again
+      bakalarNetDepth: Math.min(2, Math.max(1, level)),
+    });
+
+    const at = (from, to, cap) => levelChanges('__probe', from, to, {}, {}, cap);
+    const byStat = (rows, stat) => rows.find((r) => r.stat === stat);
+
+    const mid = at(1, 2, 8);
+    check('a quantity that moves is reported as a change',
+      byStat(mid, 'bakalarBombDamage')?.how === 'add', JSON.stringify(mid));
+    check('...one that is mid-step is kept, flat',
+      byStat(mid, 'bakalarGrip')?.how === 'none', JSON.stringify(byStat(mid, 'bakalarGrip')));
+    check('...and one at its ceiling is dropped',
+      byStat(at(3, 4, 8), 'bakalarNetDepth') == null,
+      JSON.stringify(at(3, 4, 8).map((r) => r.stat)));
+    // The step itself is a real change, not a flat row. round(1 + 0.34n) turns
+    // over between the second and third level, which is the pick to ask about.
+    check('the pick the step lands on reports it as a change',
+      byStat(at(2, 3, 8), 'bakalarGrip')?.how === 'add',
+      JSON.stringify(byStat(at(2, 3, 8), 'bakalarGrip')));
+    // With no cap to look ahead to, nothing can be known to be still coming.
+    check('with no cap given, a still quantity is simply absent',
+      byStat(at(1, 2, 0), 'bakalarGrip') == null, JSON.stringify(at(1, 2, 0)));
+
+    // RATIOS ARE DECLARED, never guessed — two points fit a sum and a product
+    // equally well, and an additive reading of a rate prints "-0.08s" for what
+    // is really "x0.88".
+    check('a quantity is additive unless the ability says otherwise',
+      byStat(at(1, 2, 8), 'bakalarBombDamage')?.how === 'add');
+    RATIO_STATS.__probe = new Set(['bakalarBombDamage']);
+    check('...and a declared one comes back as a ratio',
+      byStat(at(1, 2, 8), 'bakalarBombDamage')?.how === 'mul',
+      JSON.stringify(byStat(at(1, 2, 8), 'bakalarBombDamage')));
+    delete RATIO_STATS.__probe;
+    delete LEVEL_STATS.__probe;
+  }
+
+  // --- FOUR ROWS ------------------------------------------------------------
+  // Harp Seal moves seven things and the boat six; six is already a tall box on
+  // a phone, and it is held under a thumb.
+  {
+    const deep = tipFor('bakalar', 4);
+    const table = deep.rows.filter((r) => r.key.startsWith('lv:'));
+    check('a tip carries at most four measured rows', table.length <= 4,
+      table.map((r) => r.label.replace('[DRAFT] ', '')).join(' | '));
+    check('...in the order the readout declares, not sorted by size',
+      table[0].label.includes('bomb damage'),
+      table.map((r) => r.label.replace('[DRAFT] ', '')).join(' | '));
+  }
+
+  player.upgrades.length = 0;
+  player.level = 1;
+  recomputeStats();
 }
 
 // ---------------------------------------------------------------------------
@@ -507,22 +850,26 @@ section('the score screen shows the build even when no boss died');
 }
 
 // ---------------------------------------------------------------------------
-section('the build list beside it covers the WHOLE build');
+section('the hive is the WHOLE build, and the only copy of it');
 {
-  // It was built from SOURCE_UPGRADES, which is the ~30 abilities with a damage
-  // tag — so the panel whose own comment said the stat cards were invisible was
-  // itself missing every one of them. Yoga (`oxygenMax`) is the check: no
-  // damage tag, no kills, and a pick of it is still a third of a build.
-  const rows = [...document.querySelectorAll('#svPanelBuild .sv-brk-name')].map((n) => n.textContent);
-  check('the damage ability is listed', rows.includes(byId.get('shrimpRing').name), rows.join(' | '));
-  check('...and so is the stat card with no damage tag',
-    rows.includes(byId.get('oxygenMax').name), rows.join(' | '));
-  // The list and the hexagons are the same run side by side on one screen, so
-  // the one thing they may never do is disagree about the count.
-  const listed = rows.length;
-  const hexes = document.querySelectorAll('.sv-fan-hive .sv-hive-tile').length;
-  check('the list and the hive agree on how many abilities', listed === hexes,
-    `${listed} rows vs ${hexes} hexagons`);
+  // THE HEXAGONS ARE NOW THE ONLY ACCOUNT OF WHAT WAS PICKED — the text list
+  // that stood beside them in the readout's second column is gone. So the trap
+  // that list was written to close is this block's to hold: anything built from
+  // SOURCE_UPGRADES sees the ~30 abilities with a damage tag and nothing else.
+  // Yoga (`oxygenMax`) is the check: no damage tag, no kills, and a pick of it
+  // is still a third of a build.
+  const held = [...document.querySelectorAll('.sv-fan-hive .sv-hive-tile')]
+    .map((t) => t.dataset.upgrade);
+  check('the damage ability has a hexagon', held.includes('shrimpRing'), held.join(' | '));
+  check('...and so does the stat card with no damage tag',
+    held.includes('oxygenMax'), held.join(' | '));
+  // ONE TILE PER CARD, whatever the stack depth — two picks of shrimpRing are
+  // one hexagon standing two deep, which is what the count on its tip reads.
+  check('a stack is one hexagon, not one per pick', held.length === 2, held.join(' | '));
+  // AND NO SECOND COPY IN THE READOUT. A list that comes back is two answers to
+  // one question a scroll apart, free to disagree about the count.
+  check('there is no build list beside it',
+    document.getElementById('svPanelBuild') === null);
 }
 
 // ---------------------------------------------------------------------------

@@ -2525,7 +2525,33 @@ export const CONFIG = {
       // that fires on the trigger (shots, missiles, bounce) and leaves the passive
       // ones running; it is a tuning switch, not a control scheme.
       autofire: true,
-      fireRate: 0.36, // seconds between shots (lower = faster)
+      // seconds between shots (lower = faster). weapons.csv owns it — the
+      // gun's cadence is throughput, and it is now set against the music's
+      // bar grid (CONFIG.music.barSeconds) rather than by ear on its own. At
+      // 0.56625 it is bar/4, one shot per beat.
+      fireRate: 0.36,
+      // THE SHOT GRID. The basic shot fires on the music's bar lines — see
+      // systems/shotGrid.js for the scheduler and systems/music.js barGrid()
+      // for the clock it reads.
+      //
+      // This only holds because every multiplier that touches the interval is
+      // a power of two: the Rapid Fire card halves it, the pickup halves it,
+      // and air time doubles the rate at full ramp. Anything landing between
+      // those is snapped by snapToBarGrid, which keeps the lock but means a
+      // continuous ramp arrives as a GEAR CHANGE rather than a slide — that is
+      // the trade the lock costs, and it is audible as the point of it.
+      beatLock: {
+        enabled: true,
+        // The run's first shot waits for a downbeat. Only the first: a re-lock
+        // mid-fight waits for the next slot instead, because a bar of a gun
+        // that will not fire every time the aim recentres is not a feature.
+        startOnBar: true,
+        // Finest division of a bar the gun may reach, and the top of the
+        // ladder barDivisions() builds — so it sets how many rungs Rapid Fire
+        // has as well as stopping the interval walking below a frame. 64 is 28
+        // shots a second, eight rungs above the bar/4 the gun starts on.
+        maxDivision: 64,
+      },
       damage: 7.5,
       speed: 22,
       life: 1.6,
@@ -2795,6 +2821,17 @@ export const CONFIG = {
       baseRadius: 3.5,
       tickInterval: 0.25,
       damagePerTick: 1.5, // combined with tickInterval this gives a DPS
+      // ...AND IT BITES HARDER, not just wider. A stack used to buy reach and
+      // nothing else, which made the aura the one ability in the game that got
+      // BIGGER without getting stronger — six picks of it and every creature
+      // inside still took 6 damage a second. Reach alone also scales badly
+      // against the thing an aura is for: a wider cloud catches more of a
+      // school it was already failing to kill.
+      //
+      // A third of base per level, matching the gull's step, so a maxed Sea
+      // Garlic is roughly three times the aura rather than three times the
+      // circle. weapons.csv owns it — see the row there.
+      damagePerLevel: 0.5,
       opacity: 0.35,
       color: 0x8fffb0,
       swirl: 0.6, // how fast the cloud texture drifts
@@ -4188,6 +4225,28 @@ export const CONFIG = {
       //
       // weapons.csv owns it: it is the entry price of the game's central loop.
       linkMinPips: 1,
+      // AND EACH LINK AFTER THE FIRST COSTS ONE MOUTHFUL MORE THAN THE ONE
+      // BEFORE IT. Link 1 is `linkMinPips` chum, link 2 is that plus this,
+      // link 3 plus twice this — so a x5 chain is 1+2+3+4+5 = 15 mouthfuls
+      // rather than five, and going deep is a thing you have to feed.
+      //
+      // WHY THE PRICE MOVED HERE. There WAS an escalation and it was spent on
+      // the bar — a link lengthened the meter by a pip — which could not
+      // survive links being paid per pip: the bar would have grown while you
+      // were filling it, and a six-pip bar taking seven chum is exactly the
+      // unpredictability the pips were introduced to remove. Charging the
+      // MOUTHFULS instead keeps the bar a fixed length (pipCount is still only
+      // a function of the refill) and puts the cost where the player can count
+      // it, on the food.
+      //
+      // Progress carries: partial mouthfuls toward a link are banked and
+      // survive a release, so the cost is what it says and not a demand for a
+      // clean run of N. It dies with the chain, like every other chain counter.
+      //
+      // 0 restores the flat one-mouthful-one-link rule. weapons.csv owns it
+      // for the same reason `linkMinPips` is there — it is the price of the
+      // central loop, read against the chum rate and the window.
+      linkPipsPerLink: 1,
       // Start the combo window when the DASH ENDS rather than when it was
       // released. A dash runs up to 0.48s, so the old behaviour spent nearly
       // half a window on the stretch the player is committed and cannot act —
@@ -4341,6 +4400,11 @@ export const CONFIG = {
         // Left as a switch rather than deleted because it is one flag away
         // from the old behaviour and worth being able to try.
         strikeHit: false,
+        // KICKING OFF A SEAGULL in mid-air — see CONFIG.seagullBomb.kick. The
+        // one chain source that happens entirely ABOVE the water, which is
+        // exactly why it exists: everything else on this list is food, and food
+        // is all below the surface.
+        gullKick: true,
         // No cooldown on chumFull: the meter IS its rate limit. It takes
         // 1/chumRefill orbs to earn each link, which is a far better throttle
         // than a timer — it scales with how much food is actually there.
@@ -4352,7 +4416,13 @@ export const CONFIG = {
         // mechanic exists to celebrate. The pip TICK has a floor of its own
         // (charge.pipGap) so a sweep still comes out as a run rather than a
         // chord; that is presentation and belongs there, not here.
-        cooldowns: { chumEaten: 0, strikeRelease: 0, chumFull: 0, schoolWipe: 0, breach: 0.6, strikeHit: 0 },
+        // NO COOLDOWN ON gullKick, and it must not have one either. A bird pays
+        // once and then never again (the flag lives on the gull, not on a
+        // timer — see kickGull), so the rate limit is how many gulls are in the
+        // air, which is the ability's own cadence. A timer here would silently
+        // eat the second of two birds crossing together, i.e. the one moment
+        // the mechanic is worth setting up.
+        cooldowns: { chumEaten: 0, strikeRelease: 0, chumFull: 0, schoolWipe: 0, breach: 0.6, strikeHit: 0, gullKick: 0 },
     },
 
       // The FOOD CHAIN! announcement — the toast, the stop frame and the camera
@@ -4375,6 +4445,25 @@ export const CONFIG = {
         // drops the stale one on the next load. The same trick is the only
         // reliable one whenever a field's MEANING changes underneath its name.
         bannerFrom: 1,   // links before the banner shows at all
+        // HOW BIG THE PLATE IS, as a multiplier on the whole banner — type,
+        // count, strip and all. The box is pinned above the boost ring in the
+        // middle of the screen, on top of the water the player is reading, and
+        // at 1 it was a shout the size of a HUD panel for a thing that happens
+        // every few seconds.
+        //
+        // ONE SCALE RATHER THAN A SMALLER TYPE SIZE, and that is not laziness.
+        // Everything in the banner is em-derived off the Chain banner role
+        // (ui/typography.js) — the ×N, the strip's inset, the plate's
+        // min-width — so shrinking the role would shrink all of it correctly
+        // AND would be out-voted by any saved tuning snapshot, which is where
+        // that size actually lives for anyone who has ever opened the Text
+        // panel. A NEW key has nothing saved to out-vote it (see the note on
+        // bannerFrom above), and a transform scale leaves the role free to
+        // stay the size the Text panel says it is.
+        //
+        // It multiplies the toast's own arrival/departure scale rather than
+        // replacing it, so the pop still plays — at this size.
+        bannerScale: 0.78,
         // THE CEREMONY HAS A FLOOR; THE NUMBER DOES NOT. A link is one mouthful
         // and a magnet sweep swallows six in a frame, so the banner's COUNT and
         // COLOUR update on every one of them — the number on screen is never
@@ -5137,7 +5226,25 @@ export const CONFIG = {
         radius: 0.16,
         pierce: 0,
         spread: 0.35, // radians of jitter on each fragment's slot in the ring
-        spin: 12,
+        // HOW FAST THE BONE WHIPS ABOUT ITS OWN LENGTH, in radians a second.
+        //
+        // `roll`, not `spin`, and the rename is the whole point rather than
+        // tidying: they are different axes. `spin` turns a shot end over end
+        // in the screen plane, which is what this was and which throws away
+        // any heading the fragment had. A tumbling thing has no back, and a
+        // ribbon off the back of it is not a thing you can ask for — see the
+        // clubs in CONFIG.trails, which anchor at the head for exactly that
+        // reason. Rolling about the direction of travel instead leaves the
+        // bone flying nose-first with a tail the trail can come out of.
+        //
+        // 12 is what the spin was, kept: about one full turn over the
+        // fragment's 0.55s life, which is a body catching the light once on
+        // its way out rather than a drill.
+        //
+        // A snapshot saved before this still carries `strike.shrapnel.spin`,
+        // and pruneUnknownKeys drops it with a line on the next boot. That is
+        // the right outcome — it is a value for an axis nothing reads now.
+        roll: 12,
     },
     },
 
@@ -5267,6 +5374,23 @@ export const CONFIG = {
       // owns both — see the rows there.
       splashDamage: 96, // AoE to anything else nearby on impact
       splashRadius: 12,
+
+      // ...AND THE BOMB GROWS. A level used to buy exactly one thing — a
+      // faster gull — so a card called Seagull BOMB spent seven of its eight
+      // stacks making the bird punctual rather than making it hurt. The stack
+      // now buys what the name promises: the hit, the blast, and how far the
+      // blast reaches.
+      //
+      // THE REACH CLIMBS MORE GENTLY THAN THE DAMAGE, deliberately. A radius
+      // compounds against a crowd in a way a damage number does not — area
+      // goes as the square, and the gull already picks the densest knot on the
+      // board — so matching the damage's third-of-base step would have a maxed
+      // stack clearing most of a screen. weapons.csv owns all three; these are
+      // the defaults it overrides. See systems/seagull.js, which reads them
+      // through levelStats.js so the tip and the bomb cannot disagree.
+      damagePerLevel: 29,
+      splashDamagePerLevel: 32,
+      splashRadiusPerLevel: 0.9,
       life: 14, // seconds before an unresolved run gives up and leaves
 
       // --- target selection ---
@@ -5321,6 +5445,35 @@ export const CONFIG = {
       // vector instead of near it. Measured, and it moves with the dive range —
       // re-pick those frames and this needs re-solving.
       divePitch: 96,
+
+      // --- the bird as a foothold ---------------------------------------------
+      // A MID-AIR RELAUNCH THROUGH A GULL REFILLS THE BOOST METER AND SCORES A
+      // FOOD CHAIN LINK. The bird is already crossing the sky at the exact
+      // altitude a breach reaches, and until now the two mechanics passed
+      // through each other with nothing happening — the one place in the game
+      // where the seal and an ability of its own share the air.
+      //
+      // It is the only thing that pays the meter from ABOVE the water. Every
+      // other pip is food, which is all beneath the surface, so a run that
+      // spends its time in the air is a run that is not fuelling its own
+      // strike. This is the exception that makes air play self-sustaining, and
+      // it costs a jump and an intercept to collect.
+      //
+      // See kickGull in systems/seagull.js for why one bird pays once, and
+      // CONFIG.strike.chainOn.gullKick for the link's own switch.
+      kick: {
+        enabled: true,
+        // Added to the seal's own hitRadius, exactly like the crab impact test
+        // adds `hitRadius` to the crab's. Generous on purpose: this is an
+        // interception between two bodies moving at 30 and 13 units/sec on
+        // crossing paths, and a reach tuned for a stationary target would make
+        // it a coin flip rather than a read.
+        radius: 1.6,
+        // 0..1 of the meter. 1 is the whole bar — the gull is rare, it has to
+        // be intercepted, and the jump is already spent, so a partial fill
+        // would be a fiddly reward for the hardest thing in the air.
+        refill: 1,
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -6101,10 +6254,25 @@ export const CONFIG = {
     // upgrade with three cards feeding it.
     // ---------------------------------------------------------------------------
     oyster: {
-      fireRate: 1.05, // seconds between pearls
-      fireRatePerLevel: 0.08, // only a slight cadence gain — the burst is the upgrade
-      fireRateFloor: 0.6,
-      damage: 30, // the pearl's own impact
+      // THE ONE BOMB IN THE GAME, and the cadence is what makes it one.
+      //
+      // It used to fire about once a second for a burst worth roughly one
+      // other weapon's volley, which made it a slightly odd shotgun: you were
+      // never waiting for it, so its arrival was never an event, and the
+      // enormous white flash it makes was firing constantly enough that the
+      // screen stopped meaning anything by it. Now it is nearly twice the wait
+      // for several times the blast — you fire it AT something, and the gap is
+      // where the danger lives.
+      //
+      // weapons.csv owns all four of the numbers below and both burst numbers.
+      // They are one exchange rate and have to be read together: cadence
+      // against `bombletDamage` x `bomblets`, never on its own.
+      fireRate: 1.9, // seconds between pearls
+      fireRatePerLevel: 0.1, // only a slight cadence gain — the burst is the upgrade
+      // Above a second even at the cap. A stream of blasts this wide is a
+      // screen nobody can read — and a bomb you can hold down stops being one.
+      fireRateFloor: 1.1,
+      damage: 30, // the pearl's own impact — deliberately NOT where the payload is
       damagePerLevel: 7,
       speed: 13,
       life: 3.2,
@@ -6114,8 +6282,13 @@ export const CONFIG = {
       // --- the burst ---
       bomblets: 5,
       bombletsPerLevel: 1,
-      bombletDamage: 24,
-      bombletDamagePerLevel: 6,
+      // WHAT ONE BOMBLET HITS FOR, and the number to be careful with: every
+      // bomblet's blast reaches back over the impact point (see the travel
+      // note below), so a body standing where the pearl landed takes this once
+      // PER BOMBLET. Five at level 1, twelve at the cap. Compare it to another
+      // weapon's shot only after multiplying.
+      bombletDamage: 62,
+      bombletDamagePerLevel: 14,
       // Travel is deliberately held UNDER `bombletBlastRadius`. Under
       // exponential drag a bomblet covers (speed/drag)*(1-e^(-drag*life)), which
       // at the first pass of these numbers ([7,13] speed, 1.4 drag, up to 0.7s)
@@ -6130,8 +6303,19 @@ export const CONFIG = {
       bombletSpeed: [4, 8],
       bombletLife: [0.3, 0.55], // seconds of flight before it detonates
       bombletRadius: 0.2,
-      bombletBlastRadius: 2.4,
-      bombletBlastRadiusPerLevel: 0.18,
+      bombletBlastRadius: 4.6,
+      bombletBlastRadiusPerLevel: 0.34,
+      // THE WORLD RADIUS THE `pearlBurst` EMITTER DRAWS AT SCALE 1, which is
+      // the only thing that lets the picture follow the reach. main.js sizes
+      // the blast FX by radius / this, and it used to divide by a hardcoded
+      // 2.4 — the base radius at the time — so the moment the radius moved,
+      // the flash stopped describing the blast and nothing said so. A weapon
+      // whose explosion is drawn half the size of the area it damages is a
+      // weapon players learn to distrust.
+      blastFxUnit: 2.4,
+      // How far the flash is allowed to run past that. Uncapped, a maxed stack
+      // under Splash Zone paints most of the arena white on every pearl.
+      blastFxMax: 3.2,
       bombletSpread: 6.283, // full circle — the pearl shatters, it doesn't cone
       bombletColor: 0xfff0c0,
       bombletGlow: 3.2,
@@ -6663,8 +6847,8 @@ export const CONFIG = {
       // purpose — this is the reward for a FULL commitment, and at 0.85 a
       // panic-flick release cannot buy it.
       chargeThreshold: 0.85,
-      count: 8, // shells per barrage at level 1
-      countPerLevel: 2,
+      count: 8, // shells per barrage at level 1 (weapons.csv owns it)
+      countPerLevel: 2, // (weapons.csv owns it)
       // ...plus ONE SHELL PER WHOLE PIP the release spent. The bar is drawn in
       // pips and the player watched it fill, so this is the one size rule in
       // the game they can read off the HUD before they commit — and it is what
@@ -6672,7 +6856,7 @@ export const CONFIG = {
       // chained bar runs to CONFIG.strike.charge.maxPips, so it is capped:
       // past about a dozen extra the barrage stops being a fan and becomes a
       // screen of its own projectiles.
-      pipShellsMax: 8,
+      pipShellsMax: 8, // (weapons.csv owns it)
       // The stagger. A few frames between shells, so the flight is laid down
       // the LENGTH of the dash instead of dropped at the release point — the
       // launch site is re-asked per shell, so the seal strews them as it goes.
@@ -6691,8 +6875,8 @@ export const CONFIG = {
       // Its own numbers rather than CONFIG.missile's: this is a burst on a
       // long cooldown, where the missile is a sustained stream, so it hits
       // harder per shell and flies faster and shorter.
-      damage: 22,
-      damagePerLevel: 7,
+      damage: 22,        // (weapons.csv owns it)
+      damagePerLevel: 7, // (weapons.csv owns it)
       // AND THE SHELL GOES OFF. A mussel used to be a homing dart that poked
       // one fish and vanished, which made a full-charge barrage — the loudest,
       // most expensive thing the strike can buy — a rattle of small numbers
@@ -6709,9 +6893,9 @@ export const CONFIG = {
       // shell almost always finds a body, so the direct damage is the reliable
       // half and the blast is what the barrage is actually for: the shot that
       // hits one fish in a school should be felt by the school.
-      splashDamage: 34,
-      splashDamagePerLevel: 12,
-      splashRadius: 4.6,
+      splashDamage: 34,          // (weapons.csv owns it)
+      splashDamagePerLevel: 12,  // (weapons.csv owns it)
+      splashRadius: 4.6,         // (weapons.csv owns it)
       speed: 19,
       life: 2.6,
       radius: 0.24,
@@ -12746,6 +12930,16 @@ export const CONFIG = {
         colors: [0xffffff, 0xbfe4ff, 0x7ad7ff], cone: 0.8, drag: 2.4,
         gravity: [0, -9], inherit: 0.25, glow: 1.9,
     },
+      // KICKING OFF A GULL. Feathers, not spray — the seal has hit a bird in
+      // dry air, so there is no water in this burst at all. Slow, heavy drag
+      // and barely any gravity, because a feather knocked loose hangs where it
+      // was knocked loose while the seal keeps going; the airJump puff above
+      // fires on the same frame and is what carries the speed.
+      gullKick: {
+        count: 22, speed: [1.5, 6], size: [0.1, 0.3], life: [0.7, 1.6],
+        colors: [0xffffff, 0xffeecf, 0xd8dde6], cone: 0, drag: 4.5,
+        gravity: [0, -1.2], inherit: 0.15, glow: 1.4,
+    },
       bounce: {
         count: 10, speed: [3, 10], size: [0.08, 0.2], life: [0.2, 0.45],
         colors: [0x6fd3ff, 0xffffff], cone: 1.4, drag: 3, gravity: [0, 0], inherit: 0.2, glow: 1.2,
@@ -13296,6 +13490,30 @@ export const CONFIG = {
         colors: [0xbfefff, 0xffffff, 0x9fe8ff], cone: 0, drag: 3.0,
         gravity: [0, 3.4], inherit: 0.1, glow: 1.6, surfacePop: 'bubbleBurst',
     },
+      // A SHOT THAT RAN OUT OF ROAD. Every projectile the seal fires that
+      // reaches the end of its life without hitting anything comes apart here
+      // instead of blinking out of existence, which is what it used to do —
+      // and a thing vanishing mid-water is the one event in the game that
+      // reads as a rendering fault rather than as physics.
+      //
+      // trapPop's shape (cone 0, high drag, gentle rise: a ring that blooms
+      // where it stood rather than a spray that travels) at a QUARTER of its
+      // count, because of how often this fires. A stacked gun misses most of
+      // what it throws — twelve pebbles a second on a run with Multishot and
+      // Rapid Fire, nearly all of them expiring — so 20 particles a pop is
+      // four hundred a second from the basic shot alone, and the budget for
+      // this event is roughly one bubble.
+      //
+      // NO `surfacePop`. Five short-lived bubbles rising at 2.6 will not reach
+      // the water line from mid-arena, so the branch would almost never run —
+      // but it fires a whole `bubbleBurst` FEEDBACK EVENT from inside
+      // updateParticles when it does, and an event this frequent must not have
+      // a rare path that costs fifty times what the common one does.
+      projectileFizzle: {
+        count: 5, speed: [1.4, 3.6], size: [0.03, 0.08], life: [0.22, 0.5],
+        colors: [0xbfefff, 0xffffff, 0x9fe8ff], cone: 0, drag: 3.4,
+        gravity: [0, 2.6], inherit: 0.15, glow: 1.2,
+    },
       // Crumbs coming off an orb as it is being hoovered into a mouth. Fires
       // several times a second per feeding animal for as long as the meal lasts,
       // so it is deliberately tiny — the read is a steady trickle of bits being
@@ -13364,6 +13582,57 @@ export const CONFIG = {
         count: 30, speed: [6, 22], size: [0.08, 0.26], life: [0.2, 0.5],
         colors: [0xffffff], cone: 0, drag: 4.5,
         gravity: [0, -0.8], inherit: 0.1, glow: 4.5,
+    },
+      // THE CLOUD UNDER IT (goo group `smoke`). `pearlBurst` above is the
+      // FLASH — thirty specks at glow 4.5, gone in half a second — and it was
+      // the whole of a detonation until now. At fight distance that is a
+      // sparkle: the bomblet's blast reaches 4.6 units and nothing on screen
+      // was ever 4.6 units across, so the biggest bomb in the game read as the
+      // smallest thing it did.
+      //
+      // WHY THE `smoke` GROUP AND NOT `boom`. Every other explosion here
+      // (`clubBoomGoo`, `bossBoom`, the Bakalar bomb that borrows the first)
+      // is additive and hot — light being ADDED to the water, which is what
+      // fire does. Smoke is alpha: it can be lighter or darker than what is
+      // behind it, and it HIDES the water rather than lighting it. That is the
+      // difference between a flash and a body of something, and a body is what
+      // was missing. It also means the mass fuses with the burning-hull smoke
+      // that is the group's other user, which is correct — two clouds meeting
+      // should be one cloud.
+      //
+      // WHITE, and it is the same rule `pearlBurst` above is written to: no
+      // warm tint and no cool one. A pearl throws LIGHT, not ordnance, so the
+      // palette is white and the pearl's own nacre (CONFIG.oyster.pearlColor)
+      // and nothing else. `glow` is 1 rather than the flash's 4.5 because the
+      // goo composite writes its colour straight to the framebuffer with no
+      // sRGB conversion — 1.0 IS white on screen here, and anything above it
+      // would push a cloud this size through the bright pass and turn the
+      // whole burst back into the flash it is meant to sit under. See the note
+      // on `hullSmoke`, which lands its charcoal from the other direction.
+      //
+      // THE RECIPE IS EVERY OTHER GOO IN HERE: a narrow speed band, heavy
+      // drag, sizes that are DENSITY radii rather than drawn ones, and gravity
+      // UP because smoke rises even down here. What is different is that this
+      // one is fired PER BOMBLET — five at the first stack, twelve at the cap,
+      // all within a few frames and spread over the blast — so `count` is four
+      // rather than clubBoomGoo's ten. The giant mass is the union of those
+      // bursts fusing, not any one of them: four lobes is a knot with some
+      // thickness, and sixty separate ones would be a slab.
+      //
+      // SHORT-LIVED for the same reason clubBoomGoo is. This REPEATS: the
+      // oyster fires every 1.1 to 1.9 seconds, so a life anywhere near
+      // bossBoom's three seconds leaves the density pass running continuously
+      // and the water permanently smeared. Under a second means the cloud is
+      // gone before the next pearl lands, at every cadence the stack can buy.
+      pearlSmoke: {
+        count: 4, speed: [0.8, 3.2], size: [0.42, 0.8], life: [0.5, 1.0],
+        colors: [0xffffff, 0xfff3d6], cone: 0, drag: 3.2,
+        gravity: [0, 1.2], inherit: 0.1, glow: 1.0, goo: 'smoke',
+        // Held back like killGoo's and clubBoomGoo's: at full strength the
+        // current pulls the lobes apart faster than the isoline can hold them
+        // together, and a blast that comes apart reads as a scatter of dots
+        // rather than as one mass.
+        turbulence: 0.35,
     },
       // --- the yacht's money ---------------------------------------------------
       // Loose bills coming off a roll in flight, and the same bills blown out
@@ -13874,6 +14143,17 @@ export const CONFIG = {
       // a movement verb, and freezing the frame on a jump makes the jump feel
       // like it hit something. Whatever punch it has is in the sound.
       airJump:   { emit: 'airJump',     shake: 0.12, hitstop: 0,     glow: 0.45,                                         sfx: 'airJump',  haptic: [10] },
+      // ...AND THAT RELAUNCH GOING THROUGH A BIRD. Fires on the same frame as
+      // `airJump` above and is deliberately the smaller of the two in every
+      // channel but one: the jump is the verb, this is what the verb hit. The
+      // glow is the exception and it is doing a job — a full boost meter is
+      // the payout, and the bar lighting up needs a reason on screen.
+      //
+      // A real hitstop, unlike the jump's. `airJump` has none because freezing
+      // the frame on a movement verb makes it read as a collision — which is
+      // precisely what this one IS, so the argument inverts. Short enough that
+      // the seal is still visibly climbing out of it.
+      gullKick:  { emit: 'gullKick',    shake: 0.3,  hitstop: 0.035, glow: 1.0,  ripple: { strength: 2.2, radius: 12 },   sfx: 'gullKick', haptic: [16, 12, 22] },
       // GOING THROUGH THE SUN. The loudest thing in the table that isn't a
       // death, and it should be: it is the rarest thing a player can do on
       // purpose, it costs a whole jump, and CONFIG.dayNight.pass.cooldown means
@@ -13914,6 +14194,28 @@ export const CONFIG = {
       // caller shapes the instance.
       bubbleBurst: { emit: 'bubbleBurst', shake: 0.05, hitstop: 0, glow: 0, ripple: { strength: 0.8, radius: 5 },
                      sfx: 'bubblePop', haptic: null },
+      // A PROJECTILE REACHING THE END OF ITS LIFE, having hit nothing. Fires
+      // from the expiry branch in entities/projectiles.js for every shot that
+      // runs out inside the arena — one that leaves the world does not get
+      // this, for the same reason a pearl does not crack out there: nothing
+      // the player can see happened.
+      //
+      // THE CHEAPEST EVENT IN THE TABLE, and deliberately. It is not a beat,
+      // it is punctuation on a miss: five bubbles and nothing else. No shake
+      // (a miss must never move the camera — that is the language of a hit),
+      // no hitstop, no ripple, no haptic, and a glow low enough to be a shimmer
+      // rather than a flash. A stacked gun misses ten shots a second and every
+      // channel here would be running ten times a second with it.
+      //
+      // NO SOUND AT ALL, which is the one place this departs from every other
+      // burst in the file. `sfxMinGap` would be the usual answer, but the gap
+      // needed to keep a continuous stream of misses from becoming a drone is
+      // long enough that the sound stops corresponding to any particular shot
+      // — and a noise that fires on one miss in eight is worse than silence,
+      // because the player hunts for what was different about that one. The
+      // bubbles carry it.
+      projectileFizzle: { emit: 'projectileFizzle', shake: 0, hitstop: 0, glow: 0.08,
+                          ripple: null, sfx: null, haptic: null },
       // THE ATTRACTIVE CLAM ARRIVING — the drop, not the swallow. A trawler
       // dies in a great deal of noise, and the one thing in that wreckage
       // worth swimming for has to come out of it louder than the debris does.
@@ -14401,7 +14703,14 @@ export const CONFIG = {
       // A bomblet going off. Several land within a few frames of each other by
       // design, so this is throttled and light — the pearl's own impact already
       // played the big sound, and this is the sparkle after it.
-      pearlBurst:  { emit: 'pearlBurst', shake: 0.05, hitstop: 0, glow: 0.5, ripple: { strength: 1.0, radius: 5 },
+      //
+      // `emit` is the flash and `goo` is the cloud it goes off inside — the
+      // same pairing every other explosion in the game uses (see `killGoo`
+      // under `explosion`, `clubBoomGoo` under the club's). The sound, shake
+      // and ripple stay exactly as throttled as they were: what is new is a
+      // body of something at the size of the blast, which is the one thing
+      // thirty sprite specks could never draw.
+      pearlBurst:  { emit: 'pearlBurst', goo: 'pearlSmoke', shake: 0.05, hitstop: 0, glow: 0.5, ripple: { strength: 1.0, radius: 5 },
                      sfx: 'pearlBurst', haptic: [{ duration: 12, magnitude: 0.28 }], sfxMinGap: 0.06 },
 
       // --- octopus grabber ----------------------------------------------------
@@ -17257,6 +17566,38 @@ export const CONFIG = {
         bands: 4,
     },
 
+      // FALLOFF — how loud a sound is by WHERE IT IS.
+      //
+      // The bands above spend the VOICE BUDGET on what is near; this spends
+      // the MIX on it, and until it existed a crab dying at the far wall
+      // arrived at exactly the level of one dying on the seal's nose. Every
+      // sound in the game was mixed as if it happened in your ear, so an arena
+      // twice as wide as the frame sounded like a single point.
+      //
+      // It reads `priority.nearRadius` and `priority.farRadius` rather than
+      // carrying its own pair, on purpose: "how far away is far" is one fact
+      // about the arena, and two copies of it would let the budget call a crab
+      // close while the mixer called it distant. Move those two and both the
+      // ranking and the level follow together.
+      //
+      // A sound with NO position — UI, the level-up, the death — is not a
+      // place in the world and is never attenuated, for the same reason
+      // sfxBand gives it the top band.
+      falloff: {
+        enabled: true,
+        // The level at `farRadius` and beyond, as a fraction of the sound's
+        // own gain. NOT zero, and that is the point: the far edge is where a
+        // boss surfaces and where a wave arrives from, and a sound that fades
+        // to nothing turns the outer half of the arena into information the
+        // player cannot get. -18dB is distant and present.
+        minGain: 0.125,
+        // The shape between the two radii. Above 1 the level holds up near the
+        // player and drops late, which is what distance actually sounds like —
+        // a linear ramp starts fading things that are still on screen. Below 1
+        // it drops early and flattens out, which reads as fog.
+        curve: 1.8,
+    },
+
       // REPETITION — what stops a fast sound turning to static.
       //
       // Three separate things make a repeating sound read as noise, and this
@@ -17579,7 +17920,20 @@ export const CONFIG = {
       // next level, sweeping a full octave from 0% to 100%. Collecting chum
       // becomes an audible progress bar: the closer to levelling, the higher
       // the note. pitchVary stays 0 so that reading isn't muddied by noise.
-      pickup:    { src: null, type: 'blip',  wave: 'triangle', freq: [620, 1180], decay: 0.12, gain: 0.16, pitchVary: 0 },
+      //
+      // ONE TAKE, and that is the whole design of this voice rather than a
+      // to-do. Every other sound in the table wants variation so repeats read
+      // as texture; this one is a MEASUREMENT, and the player can only hear the
+      // octave if the thing climbing it is the same sound each time. A set of
+      // takes here is not richer, it is a scale played on sixteen different
+      // instruments — the pitch stops being information and becomes noise.
+      //
+      // Learned the hard way: this voice spent a while carrying pickup1 plus
+      // sixteen `EG_FlickPlop` takes, so the ramp was there in the code, was
+      // correct, and was completely inaudible — one chance in seventeen of two
+      // consecutive orbs being comparable. `srcs` is declared here rather than
+      // left to the workbench so a Reset comes back to the one file.
+      pickup:    { src: null, srcs: ['/sfx/pickup1.mp3'], type: 'blip',  wave: 'triangle', freq: [620, 1180], decay: 0.12, gain: 0.16, pitchVary: 0 },
       levelUp:   { src: null, type: 'blip',  wave: 'triangle', freq: [440, 1320], decay: 0.5,  gain: 0.26, pitchVary: 0.03 },
       // The seal's own noise over its victory lap. Synth fallback is a warmer,
       // slower relative of the level-up blip so a missing sample still reads
@@ -17655,6 +18009,12 @@ export const CONFIG = {
         '/sfx/Seal_Boost_03.mp3',
         '/sfx/Seal_Boost_04.mp3',
       ], gain: 0.9, filter: 5200, pitchVary: 0.16, filterVary: 0.15 },
+      // A BIRD BEING HIT. Synthesised, like `seagullDive` — nothing in the
+      // library is a gull and a squawk faked out of a sample of something else
+      // would be worse than an honest noise. A short bright sweep UPWARD, which
+      // is the one thing separating it from the dive's downward one: they are
+      // the same bird and they should sound related and opposite.
+      gullKick:  { src: null, type: 'blip',  wave: 'square',   freq: [620, 1750], decay: 0.22, gain: 0.2,  pitchVary: 0.14 },
       bounce:    { src: null, type: 'blip',  wave: 'sine',     freq: [300, 120],  decay: 0.12, gain: 0.14, pitchVary: 0.16 },
       // --- the sky ------------------------------------------------------------
       // THE CELESTIAL BANK. Both entries are arrays for the reason `shoot` and
@@ -21189,6 +21549,59 @@ export const CONFIG = {
     duckedHz: 420,
     duckTime: 0.35,
     sweepTime: 0.9,
+    // ...and where the MAIN MENU holds it, from before the run exists. The
+    // score is already playing behind the menu with the lid nearly shut: at
+    // 500Hz what gets through is the kick, the bass and the groove's shape,
+    // with the whole top end still underwater. Pressing Play is what takes the
+    // lid off — depth tracking glides it open over `sweepTime` — so the run
+    // opens by surfacing INTO music that was already there rather than by
+    // starting a track. Lower than `duckedHz` on purpose: an upgrade screen is
+    // a moment inside a run and should stay recognisably part of it, where the
+    // menu is not in the water yet.
+    //
+    // Pressing Play does not open it on `sweepTime`, which is the upgrade
+    // screen's number: it opens over the camera's opening move, on the camera's
+    // curve, in LOG SPACE (a linear ramp from here to `surfaceHz` spends five
+    // sixths of its travel above 5kHz where none of it can be heard), and it
+    // lands on the frame the frame does. The target it opens TOWARD is still
+    // read from the player's depth every frame, so a seal that dives during
+    // the move is muffled by the water on the way up — the curve is the
+    // weight, not the destination.
+    menuHz: 500,
+    // ...and how fast the tape runs under it. The menu plays at HALF SPEED,
+    // which on a buffer source is also an octave down — there is no
+    // time-stretch and none is wanted: it is the same music heard slow and
+    // deep, one gesture with the lid rather than two effects stacked.
+    //
+    // Pressing Play spools it back up to `playbackRate` ON THE CAMERA'S OWN
+    // MOVE — the same curve, over the same length of time. The rig blends the
+    // menu's bust to `roundStart` over its blendIn, holds it, then settles to
+    // the run's frame over its blendOut; the tape reaches full speed at the end
+    // of that arc, so the score finding its tempo and the camera finding the
+    // run are one gesture completing rather than two overlapping ones.
+    //
+    // The lid comes off on the SAME clock and the same curve — see `menuHz`.
+    // The two used to be separate (the filter on `sweepTime`, about a quarter
+    // as long) and a brightness that arrived a beat before the tempo did read
+    // as two effects rather than one move.
+    //
+    // 1 turns the whole thing off and leaves the menu playing at run tempo
+    // under the lid alone.
+    menuRate: 0.5,
+    // The curve. `smootherstep` is the CAMERA's blend curve, shared out of
+    // ease.js so there is one quintic rather than two that agree by luck (see
+    // ease() in systems/cineCamera.js) — change it here and the score stops
+    // moving with the frame, which is a decision rather than a mistake but
+    // should be made on purpose.
+    menuRampEase: 'smootherstep',
+    // THERE IS NO menuRampTime. How long the move takes is summed off
+    // cinecam.states.roundStart — blendIn + hold + blendOut — so retuning the
+    // opening shot moves the music with it, saved tuning included. It briefly
+    // had an override here and the override is what broke it: the number went
+    // into imported-tuning.json at its old default, and saved tuning beats
+    // config.js in the merge, so every later change to the length was ignored
+    // on the machine it was being tested on. See openingMove() in
+    // systems/music.js.
     resonance: 1.2,
   },
 
@@ -22582,6 +22995,70 @@ export const CONFIG = {
     // is now worth 26 xp: a real reward, not a shortcut through a third of
     // the level curve.
     chumXp: 1,
+  },
+
+  // ---------------------------------------------------------------------------
+  // FLAGS — what flies off a masthead (systems/flags.js).
+  //
+  // WHICH IMAGES exist and which hull may fly which is a LIST, and lists live
+  // in a file: path/src/flags.csv, edited in `npm run csv`, images in
+  // public/flags/. Nothing here names an image. What is here is how a flag is
+  // DRAWN — its size on the mast and how it moves — which is look, and look
+  // belongs on sliders.
+  //
+  // `hulls` is the roster of boats that fly anything at all. A hull absent from
+  // this block flies nothing however many rows name it, which is what keeps the
+  // ordinary chum boats bare: there are up to three of them on screen at once
+  // and a flag on every one turns a horizon into bunting.
+  // ---------------------------------------------------------------------------
+  flags: {
+    enabled: true,
+    // Flag height as a fraction of the hull's own measured height, so one
+    // number is right for a 9-unit trawler and a 13-unit yacht.
+    //
+    // 0.24, which is the 0.16 this shipped at taken up by half. At the smaller
+    // number the art on the cloth was a stamp you had to already know to read —
+    // a flag is seen for a second or two at fight scale, over a hull that is
+    // itself only a fraction of the screen.
+    heightFraction: 0.24,
+    // How far below the top of the mast the flag is tied on, as a fraction of
+    // the hull's height. The masthead itself is usually an aerial tip, and a
+    // flag hoisted to the very truck of it looks impaled rather than flown.
+    hoistDrop: 0.02,
+    // Toward the camera, clear of the mast it hangs beside — also a fraction of
+    // the hull's height. Side view, so this is depth only and never reads as
+    // the flag being in the wrong place.
+    standoff: 0.05,
+    // How much of the top of the model counts as "the mast" when the hoist
+    // point is measured — see measureMast. Bigger reaches further down the
+    // rigging and drags the flag toward the middle of the boat.
+    mastBand: 0.03,
+    // The flutter. `waves` is how many folds are in the cloth at once, `speed`
+    // how fast they travel out to the fly, `amplitude` and `droop` are both
+    // fractions of the flag's own height.
+    waves: 1.1,
+    speed: 3.4,
+    amplitude: 0.22,
+    droop: 0.12,
+    // How much darker the far side of a fold goes. This is the only shading a
+    // flag gets — the hulls are unlit silhouettes and the flag is unlit with
+    // them — so at 0 a flag is a flat sticker that changes shape.
+    shade: 0.35,
+    // Segments along the fly. The wave only runs that way, so this is the whole
+    // of the flag's resolution; below about 8 the folds go visibly polygonal.
+    segments: 12,
+    hulls: {
+      // Bakalar's trawler — yours, and the reason this system exists. His flag
+      // is the row in flags.csv that names this hull, and no other row can
+      // reach it.
+      bakalarBoat: { enabled: true, size: 1 },
+      // The boat boss, on the trawler hull. Draws from the general pool.
+      bossBoat: { enabled: true, size: 1 },
+      // The yacht. Bigger flag on a bigger boat, and a pale hull behind it
+      // rather than a near-black one — judge a flag against this one on screen
+      // before deciding the art is too light.
+      bossYacht: { enabled: true, size: 1.15 },
+    },
   },
 
   // ---------------------------------------------------------------------------
@@ -24725,6 +25202,60 @@ export const CONFIG = {
     razorBlade: { points: 14, width: 0.13, color: 0xdcecff, glow: 2.6, taper: 1.2, fade: 1.8,
                   tailOffset: 1.0, depthClearance: 3.4 },
 
+    // --- THE BONE ZONE ---------------------------------------------------------
+    // A white streak off every fragment the strike dash bursts out of a body.
+    //
+    // `tailOffset: 1` is what "off the back" MEANS here, and it only means
+    // anything because the fragment flies nose-first: spawnShrapnel sends it
+    // with `orient: 'axis'` and a roll about its own length rather than the
+    // end-over-end spin it used to have. Anchored at the centre instead, the
+    // fat bright end of the ribbon would sit halfway up the bone — the mussel's
+    // bug, and see the long note above for why both of these numbers are
+    // MULTIPLES of the measured body rather than world units.
+    //
+    // The clearance is 1.6 rather than the mussel's 1.4 because the bone ROLLS:
+    // what it occupies in z as it turns is its TALLER cross axis (1.01 against
+    // 0.88 in the file), and measureShell reads the unrolled body. Same
+    // reasoning as the blade's 3.4, at a body that is much closer to round.
+    //
+    // WHITE, and deliberately not the fragment's own colour — the one preset
+    // here that ignores the asset it is attached to. `shrapnel` carries a tint
+    // in the Look panel that is the player's to move; the ribbon is the read,
+    // and fifteen white streaks converging on a point say where the burst came
+    // from at any tint the bone happens to be wearing.
+    //
+    // THE WIDEST RIBBON IN THE GAME and the second brightest, deliberately.
+    // Measured against what actually runs rather than against the literals
+    // beside it — the other presets here are frozen echoes of an old snapshot
+    // (see 'trails.shrapnel' in the dead-key list) — the live field is the
+    // mussel at width 0.38 / glow 4.6, and this clears it on width and sits
+    // just under it on light. The card is fragments of a body coming apart at
+    // speed and the burst has 0.55 seconds to be seen before every piece of it
+    // expires, which is what buys the top of the range.
+    //
+    // WIDTH IS SET AGAINST THE BONE, not picked. The fragment renders 0.43
+    // units thick (see `fit` on the shrapnel asset), so a 0.5 ribbon is very
+    // slightly wider than the body throwing it — which is what reads as a
+    // plume coming off a thing rather than a wire trailing behind it. It moves
+    // if that fit moves.
+    //
+    // `taper` BELOW 1 AND `fade` ABOVE IT, and the pair is doing opposite jobs
+    // on purpose. Width falls off slower than linear, so the ribbon stays fat
+    // most of its length — that is the "big". Brightness falls off FASTER, so
+    // the light is concentrated in a hot head with a quick falloff behind it —
+    // that is the "bright", and it is what keeps fifteen of these from fusing
+    // into one white disc over the fight. A uniformly bright bar at this width
+    // would be the screen rather than an effect on it.
+    //
+    // NO `particles` BLOCK, and that is budget rather than taste. A sixth
+    // stack throws fifteen fragments off every enemy the dash connects with,
+    // and a dash through a school is several of those overlapping, each one
+    // already carrying its own ribbon mesh. `points: 14` is under a quarter of
+    // a second of history — about five units of streak at the fragment's speed
+    // of 22, or two and a bit bone-lengths.
+    shrapnel:   { points: 14, width: 0.5, color: 0xffffff, glow: 3.8, taper: 0.9, fade: 1.6,
+                  tailOffset: 1.0, depthClearance: 1.6 },
+
     // --- the yacht's ordnance ------------------------------------------------
     // Keyed on the ASSET KEY, which is what systems/projectileTrails.js looks
     // up (`CONFIG.trails[p.mesh.name]`, and createVisual names every mesh after
@@ -25399,7 +25930,34 @@ export const CONFIG = {
   },
 
   upgrades: [
-    { id: 'rapidFire', family: 'gun', name: 'Rapid Fire', desc: '+25% fire rate', apply: (s) => { s.fireRate *= 0.75; } },
+    // ONE RUNG UP THE BAR LADDER per stack — quarters to triplets to eighths
+    // and on down (see barDivisions). A halving was the first version and it
+    // reached the cap in four picks at +100% each; the ladder takes eight at
+    // about +40%, for the same ceiling.
+    //
+    // A MULTIPLIER WHOSE VALUE DEPENDS ONLY ON THE RUNG COUNTER, never on
+    // `s.fireRate` itself. upgradeText.js measures a card by replaying apply()
+    // against a probe block with every stat seeded at 100 — an absolute lookup
+    // would read 100 as an interval, land on whatever rung that is nearest, and
+    // report a number with no relationship to the card. Counting the picks
+    // instead measures correctly from any starting value and still compounds
+    // exactly onto the ladder.
+    //
+    // `desc` is `{effect}` in upgrades.csv, so the card reports each rung on
+    // its own; do not type the number here.
+    {
+      id: 'rapidFire', family: 'gun', name: 'Rapid Fire', desc: '{effect}',
+      apply: (s) => {
+        const divs = barDivisions(CONFIG.weapon.beatLock?.maxDivision ?? 64);
+        const bar = CONFIG.music.barSeconds ?? 2.265;
+        const start = barRungIndex(divs, bar / Math.max(1e-6, CONFIG.weapon.fireRate));
+        const held = rapidFireRungs.get(s) ?? 0;
+        const from = Math.min(divs.length - 1, start + held);
+        const to = Math.min(divs.length - 1, start + held + 1);
+        rapidFireRungs.set(s, held + 1);
+        s.fireRate *= divs[from] / divs[to];
+      },
+    },
     { id: 'heavyRounds', family: 'gun', name: 'Heavy Rounds', desc: '+40% bullet damage', apply: (s) => { s.damage *= 1.4; } },
     { id: 'overboost', family: 'gun', name: 'Overboost', desc: '+30% recoil boost', apply: (s) => { s.recoil *= 1.3; } },
     { id: 'maxSpeed', family: 'utility', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; } },
@@ -25757,10 +26315,45 @@ export const CONFIG = {
     // card — ui.js asks systems/elements.js for it, so which element you're
     // being offered is on the card before you commit. The roll happens once per
     // run: every later stack deepens the element already carried.
-    { id: 'bioluminescence', family: 'gun', name: 'Glow Up!', desc: 'Your shots and strike carry an element',
+    // --- THE ELEMENTS -------------------------------------------------------
+    // FOUR CARDS, ONE FAMILY, ONE PER RUN.
+    //
+    // This was a single card that ROLLED an element when it was first offered.
+    // The roll was shown before the pick, which made it a variant you accepted
+    // rather than a surprise — but it still meant the most run-defining choice
+    // in the game was made by Math.random and then presented as a choice. Four
+    // cards makes it one: the element you get is the card you take.
+    //
+    // `exclusive` is what keeps "one per run" true. Take any of these and the
+    // other three leave the pool forever (see availableUpgrades) — so a run
+    // still carries exactly one element and every later stack still deepens the
+    // one you have, which is what the whole system downstream assumes: one
+    // tint on the seal, one word in the weapon's name, one set of curves.
+    //
+    // `element` is a field on the CARD and never a stat. The block is numbers —
+    // upgrade-test.mjs fails any apply() that puts anything else in it, and it
+    // is right to: a non-number there is nearly always a bug. The element is a
+    // pure function of the pick list either way (see activeElement), so it does
+    // not need to be in the block to be replayable.
+    //
+    // The DESCS are the elements' own, out of CONFIG.biolum.elements.*.desc,
+    // rather than four new lines that would have to be kept in step with them.
+    // Same for the weapon name: `{element} Pebbles` already resolved per
+    // element and needs no change now that the element is held rather than
+    // rolled.
+    ...['shock', 'venom', 'chill', 'infection'].map((id) => ({
+      id: `biolum${id[0].toUpperCase()}${id.slice(1)}`,
+      family: 'gun',
+      // Staged — see design/COPY-TODO.md. The element LABELS are already
+      // yours, in CONFIG.biolum.elements; these are the card names above them.
+      name: `[DRAFT] Glow Up!! ${id}`,
+      desc: '{effect}',
       perLevelName: true,
-      roll: 'biolumElement',
-      apply: (s) => { s.biolumLevel += 1; }, maxStacks: 6 },
+      exclusive: 'biolumElement',
+      element: id,
+      apply: (s) => { s.biolumLevel += 1; },
+      maxStacks: 6,
+    })),
   ],
 
   upgradeChoices: 3,
@@ -28002,7 +28595,10 @@ export const TUNER_SCHEMA = [
     section: 'Auras & orbits',
     items: [
       { path: 'garlic.baseRadius', min: 0.5, max: 12, step: 0.1 },
-      { path: 'garlic.damagePerTick', min: 0, max: 10, step: 0.1 },
+      // `damagePerTick` and `damagePerLevel` are weapons.csv's now — what the
+      // aura hits for is throughput, read against the whole roster over a run,
+      // and a slider beside a spreadsheet is two instruments fighting over one
+      // number. The cloud's LOOK stays here, where it is judged by eye.
       { path: 'garlic.tickInterval', min: 0.05, max: 1, step: 0.05 },
       { path: 'garlic.opacity', min: 0, max: 1, step: 0.02 },
       { path: 'garlic.color', type: 'color' },
@@ -28236,8 +28832,10 @@ export const TUNER_SCHEMA = [
       { path: 'strike.chainOn.schoolWipe', type: 'bool', label: 'food chain: whole school in one strike' },
       { path: 'strike.chainOn.breach', type: 'bool', label: 'food chain: breach (Porpoising)' },
       { path: 'strike.chainOn.strikeHit', type: 'bool', label: 'food chain: a dash connecting (off — the ram is a shove)' },
+      { path: 'strike.chainOn.gullKick', type: 'bool', label: 'food chain: double-jumping through a seagull' },
       { path: 'strike.chainOn.cooldowns.breach', min: 0, max: 3, step: 0.05, label: 'food chain: min gap, breach' },
       { path: 'strike.foodChain.bannerFrom', min: 1, max: 10, step: 1, label: 'FOOD CHAIN!: links before banner' },
+      { path: 'strike.foodChain.bannerScale', min: 0.4, max: 1.4, step: 0.02, label: 'FOOD CHAIN!: banner size' },
       { path: 'strike.foodChain.punch', min: 0, max: 0.2, step: 0.005, label: 'FOOD CHAIN!: camera punch' },
       { path: 'strike.foodChain.punchPerChain', min: 0, max: 0.05, step: 0.002, label: 'FOOD CHAIN!: punch per link' },
       // The banner is pinned above the seal and holds for the whole chain
@@ -30143,6 +30741,25 @@ export const TUNER_SCHEMA = [
       { path: 'boats.chumXp', min: 0, max: 6, step: 0.5, label: 'xp per chum bit' },
       { path: 'boats.trawlerChumMul', min: 1, max: 5, step: 0.1, label: 'trawler chum mult' },
       { path: 'boats.chumSpread', min: 0.5, max: 12, step: 0.1, label: 'chum scatter' },
+
+      // --- FLAGS -------------------------------------------------------------
+      // Which flag flies where is flags.csv, not a slider — see CONFIG.flags.
+      // These are the two things about a flag that are worth dragging: how big
+      // it is on the mast and how hard it is blowing. Read per attach for the
+      // first group (a flag already flying keeps its size until the boat that
+      // is carrying it leaves) and per frame for the wave.
+      { path: 'flags.enabled', type: 'bool', label: 'flags' },
+      { path: 'flags.heightFraction', min: 0.04, max: 0.5, step: 0.01, label: 'flag size (fraction of the hull)' },
+      { path: 'flags.hoistDrop', min: 0, max: 0.2, step: 0.005, label: 'drop below the masthead' },
+      { path: 'flags.standoff', min: 0, max: 0.3, step: 0.005, label: 'stand-off from the mast (toward camera)' },
+      { path: 'flags.mastBand', min: 0.005, max: 0.3, step: 0.005, label: 'how much of the top counts as the mast' },
+      { path: 'flags.waves', min: 0.2, max: 4, step: 0.1, label: 'folds in the cloth' },
+      { path: 'flags.speed', min: 0, max: 12, step: 0.1, label: 'wave speed' },
+      { path: 'flags.amplitude', min: 0, max: 1, step: 0.01, label: 'wave depth' },
+      { path: 'flags.droop', min: 0, max: 0.6, step: 0.01, label: 'droop at the fly' },
+      { path: 'flags.shade', min: 0, max: 1, step: 0.01, label: 'shading in the folds' },
+      { path: 'flags.segments', min: 4, max: 40, step: 1, label: 'flag segments' },
+      { path: 'flags.hulls.bossYacht.size', min: 0.3, max: 3, step: 0.05, label: 'yacht: flag size mult' },
       { path: 'attractorOrb.lifetime', min: 1, max: 30, step: 0.5, label: 'attractor duration' },
       { path: 'attractorOrb.pullStrength', min: 1, max: 100, step: 1, label: 'attractor pull' },
       { path: 'attractorOrb.sinkSpeed', min: 0, max: 10, step: 0.1, label: 'attractor sink' },
@@ -31584,6 +32201,68 @@ const BUILT_IN_KEY_PATHS = collectKeyPaths(
 // one cost. Lives here beside the curve it reads so there is one definition of
 // it — main.js used to inline the arithmetic, which is how the curve could
 // only ever be a single multiplier.
+// ---------------------------------------------------------------------------
+// THE BAR LADDER — every division of the bar the shot grid may sit on.
+//
+// `2^k` and `3 x 2^k`: 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64. Duples and
+// triplets, which is the ladder western music has used for the whole of its
+// existence, and the two interleave into steps of about +50% and +33%
+// alternating rather than the +100% a doubling costs.
+//
+// WHY NOT POWERS OF TWO ALONE, which is what this was first built as. The
+// argument for them is that they NEST — every bar/8 slot is also a bar/4 slot,
+// so halving keeps the beats it already hit and adds between them, and a
+// change that moves the existing beats reads as slipping. That argument is
+// right about a CONTINUOUS change (the air ramp is still duple-only for
+// exactly this reason) and wrong about a discrete one: an upgrade pick is a
+// moment where the player is meant to feel something change, and quarters into
+// triplets is an accelerando rather than a slip.
+//
+// What every rung here does share is the thing that actually defines the lock:
+// an INTEGER number of shots per bar, so the pattern repeats exactly on every
+// bar line whichever rung the gun is on. bar/5 and bar/7 would satisfy that
+// too and are left out because nothing in this library is in 5 or 7 — this is
+// a ladder of what fits the music, not of what divides evenly.
+// How many rungs Rapid Fire has already climbed on a given stat block.
+//
+// OFF THE BLOCK, not a field on it, and both reasons are things that bit:
+//
+//   THE CARD WOULD RENDER IT. upgradeText.js measures a card by diffing every
+//   numeric key apply() touched, so a `fireRateRung` field turns up beside the
+//   real change and the card reads "+33.3% fire rate, fireRateRung NaN -> 1".
+//   Giving it a statText.csv row silences the missing-label error and still
+//   prints a second phrase nobody wants.
+//   RARITY WOULD SCALE IT. applyWithRarity multiplies the DELTA of every
+//   number a card moved, so a Legendary would advance the counter by 1.7 of a
+//   rung — a fractional index into a ladder, which is not a thing.
+//
+// Keyed on the block, so it is per-replay: computeStats builds a fresh block
+// and replays every pick in order, the two card-text probes each get their own,
+// and a WeakMap holds none of them alive.
+const rapidFireRungs = new WeakMap();
+
+export function barDivisions(maxDivision = 64) {
+  const max = Math.max(1, maxDivision);
+  const out = [];
+  for (let d = 1; d <= max; d *= 2) {
+    out.push(d);
+    if (d * 3 <= max) out.push(d * 3);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+// Which rung an interval is on, by ratio rather than by distance — see the note
+// on snapToBarGrid in systems/music.js.
+export function barRungIndex(divisions, division) {
+  let best = 0;
+  let bestErr = Infinity;
+  for (let i = 0; i < divisions.length; i++) {
+    const err = Math.abs(Math.log2(divisions[i] / Math.max(1e-9, division)));
+    if (err < bestErr - 1e-12) { bestErr = err; best = i; }
+  }
+  return best;
+}
+
 export function xpForNextLevel(level, previous) {
   const c = CONFIG.xp;
   const factor = level >= (c.endFrom ?? Infinity)
@@ -31888,10 +32567,40 @@ const PATH_TABLES = [
     // was its only real home. A number nobody can reach from either instrument
     // is not tuned, it is frozen.
     roots: ['weapon', 'missile', 'bounce', 'shrimpRing', 'scallop', 'oyster', 'razorClam', 'seagullBomb',
+      // `garlic` is here for its two THROUGHPUT rows only — what a tick hits
+      // for and what a stack adds to that. Its radius, opacity, colour, swirl
+      // and density stay on sliders: the cloud is judged by eye while it
+      // drifts, and strip() is per-row so those keep working.
+      'garlic',
+      // `musselVolley` is here for its DAMAGE ECONOMY only, and it arrived the
+      // same way `starfish` and `laserEyes` did: the ledger had the barrage at
+      // 0.37x its weight over 63 runs — a dead pick two builds running — while
+      // every one of its numbers sat in a saved snapshot, so no edit to the
+      // block below could ever have moved it. The fan, the stagger, the flight
+      // model and the launch flash stay on sliders; those are judged by eye in
+      // the second the shells leave, and strip() is per-row so they keep working.
+      'musselVolley',
       'eel', 'sealTeam', 'beluga', 'club', 'clubStacks', 'clubThrow', 'clubBoom', 'clubIce', 'strike',
       'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung', 'oxygen',
       'starfish', 'laserEyes', 'biolum', 'player', 'bakalar'],
     forbid: (id) => {
+      // FENCED TO THE DAMAGE ECONOMY. What a shell hits for, what its blast
+      // hits for, how wide that blast is and how many shells a barrage lays
+      // down — all read against the rest of the arsenal over a run, which is
+      // the comparison this file exists to make. Everything else about the
+      // volley is the moment it happens: the arc it fans into, the jitter, the
+      // stagger down the dash, the homing delay that keeps the fan from
+      // collapsing into a stream, the flash. Those are eye judgements and stay
+      // on sliders.
+      const MUSSEL_OWNED = new Set([
+        'musselVolley.damage', 'musselVolley.damagePerLevel',
+        'musselVolley.splashDamage', 'musselVolley.splashDamagePerLevel',
+        'musselVolley.splashRadius',
+        'musselVolley.count', 'musselVolley.countPerLevel', 'musselVolley.pipShellsMax',
+      ]);
+      if (id.startsWith('musselVolley.') && !MUSSEL_OWNED.has(id)) {
+        return 'weapons.csv owns the barrage\'s damage economy only — the fan, the stagger and the flight model are tuner sliders';
+      }
       // FENCED TO THE CATCH ECONOMY. `bakalar` is a big block and nearly all
       // of it is judged by eye — the beam's three falloffs, the twine's
       // physics, the bomb's blink and its cartoon flash. What is here is the
@@ -32385,6 +33094,28 @@ function withoutTableOwnedKeys(snapshot) {
     'orca.cruiseSpeed',
     'orca.formationOffset',
     'orca.turnRate',
+    // THE BONE ZONE'S RIBBON, and this one is a warning about every new key as
+    // much as it is about this one.
+    //
+    // The snapshot is derived from CONFIG wholesale — "a new section is
+    // persisted the moment it exists", as the note on UNSAVEABLE_KEYS puts it
+    // — so `trails.shrapnel` was written to disk by the first save after it
+    // was added, carrying whatever numbers it had that afternoon. Saved tuning
+    // beats config.js in the merge, so from that moment the literal below was
+    // dead text: widening the ribbon in source changed nothing on screen,
+    // silently, and the only symptom was "I'm not seeing it".
+    //
+    // Dropped rather than reconciled, on the test the rest of this list uses:
+    // NOTHING CAN REACH IT. Four TUNABLES rows touch `trails` — three are
+    // `trails.missile.*` and one is the global `trails.enabled` — so no
+    // slider, pill or panel has ever written this preset. A value nobody can
+    // change through the interface is not tuning, it is a copy.
+    //
+    // Note the same is true of every other preset in CONFIG.trails, which are
+    // all echoes for the same reason and are all winning over source. They are
+    // left alone here deliberately: unfreezing them would move several trails
+    // at once as a side effect of a change to this one.
+    'trails.shrapnel',
   ]) {
     const keys = dead.split('.');
     const field = keys.pop();

@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Courier New', monospace;
+      background: radial-gradient(120% 90% at 30% 8%, #1a5678, #04101a 70%); }
+    a { color: #b45309; } a:hover { color: #92400e; }
+  </style>
+</helmet>
+<div style="width: 900px; height: 640px; box-sizing: border-box; padding: 26px 28px; color: #cfe6f5; font-family: 'Courier New', monospace">
+
+  <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px">
+    <div style="font-family: 'Press Start 2P', monospace; font-size: 9px; letter-spacing: 0.26em; text-transform: uppercase; color: #7ad7ff">B</div>
+    <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 17px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #eaf6ff">Paper</div>
+  </div>
+  <div style="font-size: 12px; line-height: 1.6; color: rgba(207,230,245,0.55); max-width: 62ch; margin-bottom: 26px; text-transform: uppercase; letter-spacing: -0.025em">In the game's own type. Courier New for the text, SF Mono for the name, Press Start 2P for the counts — the same three faces the upgrade cards and the xp bar already wear.</div>
+
+  <div style="display: flex; gap: 34px; align-items: flex-start">
+
+    <!-- WITH THE NAME -->
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="font-family: 'Press Start 2P', monospace; font-size: 8px; letter-spacing: 0.26em; text-transform: uppercase; color: rgba(122,215,255,0.75)">With name</div>
+      <div style="width: 320px; background: #eef2f3; color: #232b33; padding: 9px 9px 7px; border-radius: 2px; box-shadow: 0 8px 22px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.55) inset; transform: rotate(-0.5deg)">
+        <div style="background: #e7ebec; padding: 10px 11px 11px">
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(35,43,51,0.2); padding-bottom: 7px">
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase">Shrimp Ring</span>
+            <span style="font-family: 'Press Start 2P', monospace; font-size: 9px; letter-spacing: 0.26em; color: rgba(35,43,51,0.55)">x4</span>
+          </div>
+          <div style="display: grid; grid-template-columns: max-content 1fr; column-gap: 10px; row-gap: 7px; margin-top: 9px; align-items: baseline; font-size: 12px; line-height: 1.45; letter-spacing: -0.025em; text-transform: uppercase">
+            <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; white-space: nowrap; color: rgba(35,43,51,0.5); position: relative; top: -1px">[DRAFT] Next</span>
+            <span style="font-weight: 700">+1 orbiting shrimp &#183; 6 &#8594; 7</span>
+            <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; white-space: nowrap; color: rgba(35,43,51,0.5); position: relative; top: -1px">[DRAFT] This run</span>
+            <span style="color: rgba(35,43,51,0.72)">Shrimp Ring: 261k dealt &#183; 92 kills</span>
+          </div>
+        </div>
+        <div style="height: 13px"></div>
+      </div>
+    </div>
+
+    <!-- WITHOUT -->
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="font-family: 'Press Start 2P', monospace; font-size: 8px; letter-spacing: 0.26em; text-transform: uppercase; color: rgba(122,215,255,0.75)">No name</div>
+      <div style="width: 320px; background: #eef2f3; color: #232b33; padding: 9px 9px 7px; border-radius: 2px; box-shadow: 0 8px 22px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.55) inset; transform: rotate(0.6deg)">
+        <div style="background: #e7ebec; padding: 10px 11px 11px">
+          <div style="display: grid; grid-template-columns: max-content 1fr; column-gap: 10px; row-gap: 7px; align-items: baseline; font-size: 12px; line-height: 1.45; letter-spacing: -0.025em; text-transform: uppercase">
+            <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; white-space: nowrap; color: rgba(35,43,51,0.5); position: relative; top: -1px">[DRAFT] Next</span>
+            <span style="font-weight: 700">+1 orbiting shrimp &#183; 6 &#8594; 7</span>
+            <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; white-space: nowrap; color: rgba(35,43,51,0.5); position: relative; top: -1px">[DRAFT] This run</span>
+            <span style="color: rgba(35,43,51,0.72)">Shrimp Ring: 261k dealt &#183; 92 kills</span>
+          </div>
+        </div>
+        <div style="height: 13px"></div>
+      </div>
+      <div style="width: 320px; font-size: 11px; line-height: 1.55; color: rgba(207,230,245,0.5); text-transform: uppercase; letter-spacing: -0.025em">On a level-up card the name is already on the face. On a hexagon it is not &mdash; and the run line here is the only thing naming it, by accident.</div>
+    </div>
+
+    <!-- THE HEXAGON CASE -->
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="font-family: 'Press Start 2P', monospace; font-size: 8px; letter-spacing: 0.26em; text-transform: uppercase; color: rgba(122,215,255,0.75)">No name, no ledger</div>
+      <div style="width: 320px; background: #eef2f3; color: #232b33; padding: 9px 9px 7px; border-radius: 2px; box-shadow: 0 8px 22px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.55) inset; transform: rotate(-0.8deg)">
+        <div style="background: #e7ebec; padding: 10px 11px 11px">
+          <div style="display: grid; grid-template-columns: max-content 1fr; column-gap: 10px; row-gap: 7px; align-items: baseline; font-size: 12px; line-height: 1.45; letter-spacing: -0.025em; text-transform: uppercase">
+            <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; white-space: nowrap; color: rgba(35,43,51,0.5); position: relative; top: -1px">[DRAFT] Next</span>
+            <span style="font-weight: 700">+1 orbiting shrimp &#183; 6 &#8594; 7</span>
+          </div>
+        </div>
+        <div style="height: 13px"></div>
+      </div>
+      <div style="width: 320px; font-size: 11px; line-height: 1.55; color: rgba(207,230,245,0.5); text-transform: uppercase; letter-spacing: -0.025em">Just the fx. Hovering a monogrammed hexagon &mdash; &ldquo;BW&rdquo;, &ldquo;IL&rdquo; &mdash; this tells you what one more does and never what it is.</div>
+    </div>
+
+  </div>
+
+  <!-- THE RAMP -->
+  <div style="margin-top: 34px; padding-top: 20px; border-top: 1px solid rgba(122,215,255,0.18)">
+    <div style="font-family: 'Press Start 2P', monospace; font-size: 8px; letter-spacing: 0.26em; text-transform: uppercase; color: rgba(122,215,255,0.75); margin-bottom: 14px">Every size in it</div>
+    <div style="display: grid; grid-template-columns: max-content max-content 1fr; column-gap: 22px; row-gap: 11px; align-items: baseline; color: rgba(207,230,245,0.85)">
+      <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; color: rgba(207,230,245,0.4)">7 / 0.14</span>
+      <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em">[DRAFT] THIS RUN</span>
+      <span style="font-size: 11px; color: rgba(207,230,245,0.45); text-transform: uppercase; letter-spacing: -0.025em">row labels &mdash; Press Start 2P, the xp bar's face</span>
+
+      <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; color: rgba(207,230,245,0.4)">9 / 0.26</span>
+      <span style="font-family: 'Press Start 2P', monospace; font-size: 9px; letter-spacing: 0.26em">x4</span>
+      <span style="font-size: 11px; color: rgba(207,230,245,0.45); text-transform: uppercase; letter-spacing: -0.025em">the stack count &mdash; the `level` role, verbatim</span>
+
+      <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; color: rgba(207,230,245,0.4)">12 / -0.025</span>
+      <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: -0.025em">+1 ORBITING SHRIMP &#183; 6 &#8594; 7</span>
+      <span style="font-size: 11px; color: rgba(207,230,245,0.45); text-transform: uppercase; letter-spacing: -0.025em">the measurement &mdash; Courier New, the card's own text</span>
+
+      <span style="font-family: 'Press Start 2P', monospace; font-size: 7px; letter-spacing: 0.14em; color: rgba(207,230,245,0.4)">14 / 0.04</span>
+      <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase">Shrimp Ring</span>
+      <span style="font-size: 11px; color: rgba(207,230,245,0.45); text-transform: uppercase; letter-spacing: -0.025em">the name, where it is kept &mdash; SF Mono, the card name's face</span>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

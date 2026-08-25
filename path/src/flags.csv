@@ -1,0 +1,2 @@
+id,src,hulls,weight,enabled,notes
+bakalar,/flags/bakalar.webp,bakalarBoat,1,,"Yours. The row names his hull, so it is the only flag that trawler can ever fly and nothing in the general pool can land on that mast. Drop the image into public/flags/ and point src at it — until that file exists the mast flies nothing, which is the same thing that happens to a flag whose image fails to load."

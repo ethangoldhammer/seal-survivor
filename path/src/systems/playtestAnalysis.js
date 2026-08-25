@@ -75,7 +75,12 @@ export const SOURCE_UPGRADES = {
   // over- or under-tuning could ever move. Same failure the SOURCE_ALIAS note
   // below describes for the boat's bomb — see that comment.
   musselVolley: { upgrades: ['musselVolley'], label: 'Mussel Barrage' },
-  bioluminescence: { upgrades: ['bioluminescence'], label: 'Glow Up!' },
+  // FOUR CARDS, ONE DAMAGE TAG. The element books its damage under
+  // `bioluminescence` whichever of the four is held, and only one can ever be
+  // held — so listing all four is not four sources sharing a tag, it is one
+  // source whose card has four possible names. Investment is still counted in
+  // picks, and the picks all went to the same line.
+  bioluminescence: { upgrades: ['biolumShock', 'biolumVenom', 'biolumChill', 'biolumInfection'], label: 'Glow Up!' },
   eel: { upgrades: ['electricEel'], label: 'Electric Eel' },
   sealTeam: { upgrades: ['sealTeam'], label: 'Seal Team' },
   calamari: { upgrades: ['calamari'], label: 'Calamari Ring' },

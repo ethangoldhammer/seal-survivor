@@ -412,8 +412,23 @@ check('and the icon comes back when it is there again',
 // The icon module is generated from whatever was rendered; the thing that must
 // hold is that every key in it is a real upgrade, or the tile is never found.
 const ids = new Set(CONFIG.upgrades.map((u) => u.id));
-const orphanIcons = Object.keys(UPGRADE_ICONS).filter((k) => !ids.has(k));
-check('every baked icon is keyed to a real upgrade', orphanIcons.length === 0, orphanIcons.join(' '));
+// ...or is ALIASED to one. upgradeIcons.js is generated, so a card that splits
+// into several — Glow Up! becoming four elements — leaves a key behind that no
+// upgrade answers to, and hand-editing a generated file only survives until the
+// next bake. ICON_ALIAS points the new ids at the old render; a key nothing
+// points at is still an orphan.
+const aliased = new Set(Object.values(hive.ICON_ALIAS ?? {}));
+const orphanIcons = Object.keys(UPGRADE_ICONS)
+  .filter((k) => !ids.has(k) && !aliased.has(k));
+check('every baked icon is keyed to a real upgrade, or aliased to one',
+  orphanIcons.length === 0, orphanIcons.join(' '));
+// And the other way: an alias pointing at a render that is not there would give
+// four tiles a monogram and no warning.
+const deadAliases = Object.entries(hive.ICON_ALIAS ?? {})
+  .filter(([id, key]) => !ids.has(id) || !UPGRADE_ICONS[key])
+  .map(([id, key]) => `${id}->${key}`);
+check('...and every alias points at a real upgrade and a real render',
+  deadAliases.length === 0, deadAliases.join(' '));
 
 // The tier colour must reach the DOM as CSS, not as the number rarityTable.js
 // parses it into. A number survives being written to a custom property without

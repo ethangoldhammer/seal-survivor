@@ -103,7 +103,8 @@ function scenario(title, body) {
 const half = sweetHalfWidth(stats);
 console.log(`\nsweet spot  +/-${Math.round(half * 1000)}ms around STRIKE NOW!`
   + `   (charge.time ${CONFIG.strike.charge.time}s x sweetFraction ${CONFIG.strike.charge.sweetFraction})`);
-console.log(`a link      ${CONFIG.strike.linkMinPips} mouthful, then one per pip`);
+console.log(`a link      ${CONFIG.strike.linkMinPips} mouthful for the first,`
+  + ` +${CONFIG.strike.linkPipsPerLink} per link already held`);
 console.log(`the window  ${CONFIG.strike.chainWindow}s without food`);
 console.log(`the banner  from x${CONFIG.strike.foodChain.bannerFrom}`);
 

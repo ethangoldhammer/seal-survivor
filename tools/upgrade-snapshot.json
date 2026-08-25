@@ -1,30 +1,30 @@
 {
   "rapidFire": {
-    "cap": null,
+    "cap": 8,
     "perStack": [
       {
-        "fireRate": 75
+        "fireRate": 66.666667
       },
       {
-        "fireRate": 56.25
+        "fireRate": 50
       },
       {
-        "fireRate": 42.1875
+        "fireRate": 33.333333
       },
       {
-        "fireRate": 31.640625
+        "fireRate": 25
       },
       {
-        "fireRate": 23.730469
+        "fireRate": 16.666667
       },
       {
-        "fireRate": 17.797852
+        "fireRate": 12.5
       },
       {
-        "fireRate": 13.348389
+        "fireRate": 8.333333
       },
       {
-        "fireRate": 10.011292
+        "fireRate": 6.25
       }
     ]
   },
@@ -1641,7 +1641,76 @@
       }
     ]
   },
-  "bioluminescence": {
+  "biolumShock": {
+    "cap": 6,
+    "perStack": [
+      {
+        "biolumLevel": 101
+      },
+      {
+        "biolumLevel": 102
+      },
+      {
+        "biolumLevel": 103
+      },
+      {
+        "biolumLevel": 104
+      },
+      {
+        "biolumLevel": 105
+      },
+      {
+        "biolumLevel": 106
+      }
+    ]
+  },
+  "biolumVenom": {
+    "cap": 6,
+    "perStack": [
+      {
+        "biolumLevel": 101
+      },
+      {
+        "biolumLevel": 102
+      },
+      {
+        "biolumLevel": 103
+      },
+      {
+        "biolumLevel": 104
+      },
+      {
+        "biolumLevel": 105
+      },
+      {
+        "biolumLevel": 106
+      }
+    ]
+  },
+  "biolumChill": {
+    "cap": 6,
+    "perStack": [
+      {
+        "biolumLevel": 101
+      },
+      {
+        "biolumLevel": 102
+      },
+      {
+        "biolumLevel": 103
+      },
+      {
+        "biolumLevel": 104
+      },
+      {
+        "biolumLevel": 105
+      },
+      {
+        "biolumLevel": 106
+      }
+    ]
+  },
+  "biolumInfection": {
     "cap": 6,
     "perStack": [
       {

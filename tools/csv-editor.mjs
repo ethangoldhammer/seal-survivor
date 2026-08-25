@@ -384,6 +384,14 @@ const DOCS = {
     weightLate: '\u2026and at full difficulty. The roll interpolates between the two, so the ramp from grey cards with the odd green to a real chance at the top tier is these two columns and nothing else.',
     sfx: 'The sting played when a card of this tier is OFFERED \u2014 one per level-up, for the best tier on the table. Blank means the tier arrives silently, which is right for the floor tier and wrong for every other one.',
   },
+  'flags.csv': {
+    id: 'What this flag is called. Joins to nothing in code \u2014 warnings and npm run test:flags name it, and that is all. New flags are just new rows.',
+    src: 'The image, as a path from the site root: a file at public/flags/foo.webp is /flags/foo.webp. Required \u2014 a row with no src is dropped rather than flying a blank rectangle. Needs an alpha channel if the flag is not a plain rectangle; the quad is cut with alphaTest, so a white background shows up as a white box.',
+    hulls: 'Which boats may fly it, comma-separated \u2014 bakalarBoat, bossBoat, bossYacht. BLANK IS THE GENERAL POOL. A row that names a hull is exclusive to it: that hull flies only the rows written for it, and those rows never appear on any other boat. Naming a hull that flies no flags drops that name with a warning.',
+    weight: 'How likely, relative to the other flags in the SAME pool. Blank means 1. Every flag in a pool at 0 means that hull flies nothing.',
+    enabled: 'FALSE takes it out of rotation without deleting the row or the file. Blank means enabled.',
+    notes: 'Working text. Nothing reads it.',
+  },
   'callouts.csv': {
     id: 'WHICH callout this is, and it joins to code — the condition that fires a warning, or the step that offers a tip. Renaming one takes it out of the game; rewording `text` does not. Adding a row does nothing on its own: something has to fire it.',
     kind: '`warn` for a state you must fix now (fires every run, forever) or `coach` for a first-run tip (fires ONCE EVER per device and then never again). Anything else is ignored, loudly.',
@@ -473,6 +481,7 @@ const BLANK_MEANS = {
   'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
   'tips.csv': { enabled: 'enabled', order: 'sorts last', desc: 'no line under the label', tag: 'no tag to type', notes: '\u2014' },
   'rarities.csv': { sfx: 'arrives silently', glow: '0 (no bloom)', statMul: '1 (no change)' },
+  'flags.csv': { enabled: 'enabled', weight: '1', hulls: 'the general pool', notes: '\u2014' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
@@ -588,6 +597,12 @@ export const TABLES = [
     label: 'Model sizes',
     blurb: 'How big each model spawns. This is not a look \u2014 the hitbox is derived from the visual scale, so it decides how big a creature is to HIT as well as to see. An asset with no row here spawns unscaled.',
     addRows: false,
+  },
+  {
+    file: 'path/src/flags.csv',
+    label: 'Flags',
+    blurb: 'What flies off a masthead. One row per image in public/flags/, and the `id` joins to nothing \u2014 so a new flag is a file in that folder and a row here. `hulls` is the only column that decides anything: blank puts a flag in the pool every flag-flying boat draws from, and naming a hull makes the flag EXCLUSIVE to it \u2014 which is what keeps Bakalar\u2019s off the bosses and the bosses\u2019 off his.',
+    addRows: true,
   },
   {
     file: 'path/src/callouts.csv',

@@ -52,10 +52,12 @@ import { sourceLabel } from './systems/playtestAnalysis.js';
 export const WEAPON_MODIFIERS = {
   gun: [
     'rapidFire', 'heavyRounds', 'multishot', 'projectileLife', 'velocity',
-    // Not a gun upgrade in the ledger — it books its own damage under
-    // 'bioluminescence' — but it is unarguably a thing that happens to the
-    // pebbles, and it is the rename a player would most want to see.
-    'bioluminescence',
+    // Not gun upgrades in the ledger — they book their damage under
+    // 'bioluminescence' — but they are unarguably a thing that happens to the
+    // pebbles, and the rename a player would most want to see. All four are
+    // listed and at most one can be held, so the {element} token in the row's
+    // weaponName always resolves to the one the run is carrying.
+    'biolumShock', 'biolumVenom', 'biolumChill', 'biolumInfection',
   ],
 };
 
@@ -90,11 +92,15 @@ function upgradeById(id, upgrades = CONFIG.upgrades ?? []) {
  * it cannot fill has nothing to say, and the caller moves on to the next
  * modifier.
  */
-function expandTokens(name) {
+function expandTokens(name, picks) {
   if (!name.includes('{')) return name;
   let missing = false;
   const out = name.replace(/\{element\}/g, () => {
-    const label = elementLabel(activeElement());
+    // FROM THE PICKS THIS CALL WAS GIVEN, not from the live run. The element is
+    // read off the pick list now (see activeElement), and this function's whole
+    // contract is that it answers for the list it was handed — the polaroid
+    // captions a boss with what the weapon was called at the moment it died.
+    const label = elementLabel(activeElement(picks));
     if (!label) missing = true;
     return label ?? '';
   }).trim();
@@ -128,7 +134,7 @@ export function weaponName(source, picks = player?.upgrades ?? []) {
     // rolled, which cannot happen in a run but can in a harness and is one bad
     // merge away — falls through to the next-most-recent modifier rather than
     // captioning the print with the leftovers. See expandTokens.
-    const named = expandTokens(written);
+    const named = expandTokens(written, picks);
     if (named) return named;
   }
   return base;

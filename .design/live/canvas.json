@@ -1,0 +1,64 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "A — Depth Column",
+      "x": 0,
+      "y": 0,
+      "w": 816,
+      "h": 1056,
+      "print": "fixed"
+    },
+    {
+      "file": "OptionB.dc.html",
+      "title": "B — Field Guide",
+      "x": 920,
+      "y": 0,
+      "w": 816,
+      "h": 1056,
+      "print": "fixed"
+    },
+    {
+      "file": "OptionC.dc.html",
+      "title": "C — Cabinet",
+      "x": 1840,
+      "y": 0,
+      "w": 816,
+      "h": 1056,
+      "print": "fixed"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "how-to-read",
+      "x": 0,
+      "y": -330,
+      "w": 460,
+      "text": "PICK A DIRECTION\n\nThree stances on the same skeleton: the core loop, influences, mechanics, scale, platforms.\n\nMechanics are read off the current build, not the README — autofire, the charge-and-release boost, the food chain that refuels it, air time, oxygen, the hive, nine bosses, permadeath. No recoil anywhere.\n\nEvery [BRACKET] is a copy slot and the brief inside it names what that line is for. All yours to write. Numbers, platforms and the URL are real."
+    },
+    {
+      "id": "note-a",
+      "x": 520,
+      "y": -330,
+      "w": 380,
+      "text": "A — DEPTH COLUMN\n\nThe page is the game's cross-section: sky, waterline, five sections sinking to a seabed footer. Inset diagram is the boost loop — hold, strike, eat, full. Eight mechanic cards. Game palette, Space Grotesk + Inter.\n\nFor: the layout argues the setting before a word is read, and it holds the most mechanics of the three.\n\nAgainst: dark and ink-hungry — web and social more than a printed handout."
+    },
+    {
+      "id": "note-b",
+      "x": 1440,
+      "y": -330,
+      "w": 380,
+      "text": "B — FIELD GUIDE\n\nA naturalist's plate on warm paper. Fig. 1 is the real playfield: air time above the line, oxygen below it, food and the boost meter labelled with leader lines. Eight mechanics, a platform table. Chakra Petch + Nunito.\n\nFor: densest and most precise; prints and photocopies clean.\n\nAgainst: quiet. Rewards someone already leaning in — it won't stop a scroll."
+    },
+    {
+      "id": "note-c",
+      "x": 2360,
+      "y": -330,
+      "w": 380,
+      "text": "C — CABINET\n\nArcade poster: 100px Bangers, flat cyan and amber slabs, hex hive motif, the loop as one big glyph. Four mechanics get blocks, four more get a pill row.\n\nFor: reads across a room, most personality, fewest words to write.\n\nAgainst: least complete — half the mechanics are reduced to a name, and influences are just four pills."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

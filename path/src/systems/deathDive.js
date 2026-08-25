@@ -5,7 +5,7 @@ import { player } from '../entities/player.js';
 import { stateForSpeed } from './animation.js';
 import { feedback } from './feedback.js';
 import { setSfxRateScale, openBusFilter } from './audio.js';
-import { setMusicRateScale } from './music.js';
+import { setMusicRateScale, restMusic } from './music.js';
 import { setAmbientRateScale } from './ambient.js';
 
 // The run doesn't end on the frame you die — it ends on the seabed.
@@ -278,20 +278,30 @@ function setAudioRate(scale) {
   setAmbientRateScale(rate, c.audio?.glide ?? 0.25);
 }
 
-// The tape winds back up to speed under the score card, over its own time
+// The tape comes off the dive's floor under the score card, over its own time
 // rather than the dive's — the drag-down was the last thing the run did, and
 // this is the first thing the screen after it does. Left as a plain glide with
 // no quantising: it's a pitch change, not a track change, and the loop
 // underneath it never stops.
+//
+// UP TO REST, NOT UP TO SPEED. It used to wind back to the run's full tempo,
+// which meant the score card — a screen you sit on for as long as it takes to
+// type a name, with nothing happening — played at run tempo and full
+// brightness. It lands on the same half speed and the same lid the main menu
+// holds instead, because as far as the music is concerned those are one screen:
+// the game is not being played. Play is what lifts it, on the camera's opening
+// move, from either of them. See restMusic and releaseMusicIntoRun.
+//
+// `restoreTime` still names the seconds you wait to hear it settle; it is
+// simply settling somewhere else. music.js owns WHERE — the resting rate and
+// lid are its numbers, and a copy of them here would be a second opinion about
+// what a screen with no run on it sounds like.
 function releaseMusic() {
   if (musicReleased) return;
   musicReleased = true;
   const c = cfg();
   if (c.audio?.enabled === false) return;
-  // /3 because the glide is an exponential-approach time constant and a
-  // constant is ~95% of the way there after three of them — `restoreTime` is
-  // the number of seconds you actually wait to hear it back at pitch.
-  setMusicRateScale(1, Math.max(0, (c.audio?.restoreTime ?? 2.6) / 3));
+  restMusic(Math.max(0, c.audio?.restoreTime ?? 2.6));
 }
 
 /**

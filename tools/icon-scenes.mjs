@@ -121,20 +121,37 @@ export const SCENES = {
       { prim: 'streak', length: 4.2, tube: 0.42, color: IC.motion, opacity: 0.9, scale: 1.2, at: [-0.5, 0, 0] },
     ],
   },
+  // TWO STONES AND THE ARCS THEY CAME IN ON. It was a stone and a fish, which
+  // is a picture of the stone ARRIVING and says nothing about how it got there
+  // — the fish did all the work of implying the homing, and at 52px the fish is
+  // the only thing you can see. What homing looks like is a path that BENT, so
+  // the trails are the subject and the pebbles are what is on the end of them.
+  //
+  // The stones are left at the `bullet` asset's own colour: 0x6b7078 is the
+  // grey the game actually throws, and an icon of the pebble should be the
+  // pebble. Opposite curve signs so the two read as a pair of paths rather than
+  // as one drawn twice.
   homingShot: {
-    note: 'the stone has picked its fish',
+    note: 'two grey pebbles, each trailing the arc it turned through',
     parts: [
-      { asset: 'enemyFish', scale: 1.25, at: [0.75, 0.2, -0.2], clipAt: 0.4 },
-      { asset: 'bullet', scale: 0.55, at: [-1.1, -0.45, 0.45] },
+      { asset: 'bullet', scale: 0.6, at: [1.25, 0.45, 0] },
+      // A ribbon's head sits about `scale` along +X of its `at` — see the prim.
+      { prim: 'ribbon', length: 3, curve: 1.15, width: 0.36, color: IC.motion, opacity: 0.85, scale: 1.05, at: [0.24, 0.12, -0.05] },
+      { asset: 'bullet', scale: 0.46, at: [0.5, -0.8, 0.35] },
+      { prim: 'ribbon', length: 2.4, curve: -0.95, width: 0.3, color: IC.motion, opacity: 0.7, scale: 0.85, at: [-0.3, -0.6, 0.3] },
     ],
   },
-  bioluminescence: {
-    note: 'a shot lit from inside',
-    parts: [
-      { asset: 'bullet', scale: 0.95, color: IC.glow, at: [0, 0, 0] },
-      { prim: 'torus', tube: 0.1, color: IC.glow, opacity: 0.75, scale: 1.6, at: [0, 0, 0], rot: [72, 0, 0] },
-    ],
-  },
+  // Glow Up!! is NOT here any more, and the entry that was here was DEAD: it
+  // was keyed `bioluminescence`, and no upgrade has had that id since the card
+  // split into biolumShock / Venom / Chill / Infection. It matched nothing, so
+  // it rendered nothing, and nothing said so.
+  //
+  // It was also the wrong picture — a lit stone in a ring, i.e. a glowing
+  // projectile. The upgrade does not light the projectile, it lights the SEAL:
+  // CONFIG.biolum.skin makes the bright patches of the animal's own mottling
+  // emit. So all four are renders of the seal wearing the real glow layer, each
+  // in its element's colour, and they live in ICON_ASSETS in
+  // tools/upgrade-icons.mjs with the other renders.
 
   // --- what leaves the gun ------------------------------------------------
   multishot: {
@@ -187,6 +204,18 @@ export const SCENES = {
       { asset: 'scallopShell', scale: 1.3, at: [-0.45, 0, 0] },
       { asset: 'pearl', scale: 0.4, at: [1.2, 0.3, -0.15] },
       { asset: 'pearl', scale: 0.24, at: [1.85, 0.55, 0.3] },
+    ],
+  },
+  // BOUNCER had no picture at all — `kind: 'image'` with nothing attached, so
+  // the hive fell back to a monogram. It is a club card, so it gets the club:
+  // what separates it from the other four is not the weapon but the RESULT, so
+  // the fish is mid-flight off the head rather than swimming past it.
+  clubPower: {
+    note: 'the club connecting, and the fish going the other way',
+    parts: [
+      { asset: 'club', scale: 1.2, at: [-0.55, -0.15, 0], rot: [0, 0, 34] },
+      { asset: 'enemyFish', scale: 0.95, at: [1.2, 0.55, -0.2], rot: [0, 0, -26], clipAt: 0.4 },
+      { prim: 'streak', length: 1.5, tube: 0.12, color: IC.motion, opacity: 0.8, at: [0.35, 0.3, 0.1], rot: [0, 0, -24] },
     ],
   },
   clubThrow: {

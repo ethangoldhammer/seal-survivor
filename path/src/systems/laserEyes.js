@@ -1,6 +1,8 @@
 import { CONFIG } from '../config.js';
 import { spawnBeam } from './beams.js';
 import { eyeSocket, flashEyeLightsLaser } from './eyeLights.js';
+import { player } from '../entities/player.js';
+import { laserEyesLevelStats } from '../levelStats.js';
 
 // LASER EYES — the seal's pair, and the boss's own trick pointed back at it.
 //
@@ -42,24 +44,17 @@ function cfg() {
 
 /** Everything level `n` is worth, in one place so the card and the water agree. */
 export function laserEyeStats(level = 0) {
-  const c = cfg();
-  const n = Math.max(0, level);
+  // levelStats.js owns every one of these curves AND both of their clamps —
+  // the `fireEveryMin` floor and the `beamsMax` ceiling moved in with them, so
+  // the hover tip cannot promise a fifth beam or a cadence the water will not
+  // deliver. See laserEyesLevelStats.
+  const L = laserEyesLevelStats(level, player.stats);
   return {
-    fireEvery: Math.max(
-      c.fireEveryMin ?? 1.2,
-      (c.fireEvery ?? 2.6) + (c.fireEveryPerLevel ?? -0.18) * (n - 1),
-    ),
-    burn: (c.burn ?? 0.85) + (c.burnPerLevel ?? 0.09) * (n - 1),
-    damage: (c.damage ?? 7) + (c.damagePerLevel ?? 2.4) * (n - 1),
-    reach: (c.reach ?? 26) + (c.reachPerLevel ?? 3.2) * (n - 1),
-    // FLOORED, so a new beam arrives on a specific stack rather than a fraction
-    // of one arriving every stack. A count that crept up by 0.34 would spawn
-    // two beams for three levels and then silently three, with nothing on the
-    // card able to say when.
-    beams: Math.min(
-      c.beamsMax ?? 4,
-      Math.max(1, Math.floor((c.beams ?? 2) + (c.beamsPerLevel ?? 0.34) * (n - 1))),
-    ),
+    fireEvery: L.laserGap,
+    burn: L.laserBurn,
+    damage: L.laserDamage,
+    reach: L.laserReach,
+    beams: L.laserBeams,
   };
 }
 

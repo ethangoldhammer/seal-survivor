@@ -38,7 +38,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../path/src/config.js';
-import { attachGrassSway, applyGrassSettings, updateGrassSway } from '../path/src/systems/grassSway.js';
+import { attachGrassSway, applyGrassSettings, updateGrassSway, setGrassSwayHeight } from '../path/src/systems/grassSway.js';
+import { ASSETS } from '../path/src/assets.js';
+import { SEABED_PROPS } from '../path/src/seabedProps.js';
 import { updateBeatSync, BEAT_DIVISIONS } from '../path/src/systems/beatSync.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -150,7 +152,7 @@ check('uniform block landed', shader.vertexShader.includes('uniform float uSwayA
 check('displacement landed', shader.vertexShader.includes('transformed.xz += push'));
 check('arc-length correction landed', shader.vertexShader.includes('transformed.y -='));
 for (const u of ['uSwayCycle', 'uSwayFlutterCycle', 'uSwayAmplitude', 'uSwayStiffness',
-  'uSwayWavelength', 'uSwayDir', 'uSwayFlutter', 'uSwayBend', 'uSwayHeight']) {
+  'uSwayWavelength', 'uSwayDir', 'uSwayFlutter', 'uSwayBend', 'uSwayHeight', 'uSwayUseUv']) {
   check(`uniform ${u} bound`, shader.uniforms[u] !== undefined);
 }
 // The rates are gone from the shader on purpose: it is handed POSITIONS, which
@@ -171,6 +173,28 @@ check('<uv_vertex> runs before <begin_vertex>',
 check('the guard matches the varying (USE_MAP, not USE_UV)',
   shader.vertexShader.includes('#ifdef USE_MAP')
   && shader.vertexShader.includes('vMapUv.y'));
+
+// The instancing branch. The seabed bed is nineteen InstancedMeshes, and
+// without this every plant of a variant reads the SAME world position (the
+// mesh's own matrix, which is the identity) and the whole bed pulses as one
+// object — while still swaying, so it looks tuned rather than broken.
+check('the instanced world position landed', shader.vertexShader.includes('instanceMatrix * swayLocal'));
+check('the direction is carried back through the instance basis',
+  shader.vertexShader.includes('instanceMatrix[0].xyz') && shader.vertexShader.includes('instanceMatrix[2].xyz'),
+  'or every plant leans its own way');
+// Three facts about three.js that the branch above is written against, each of
+// which an upgrade could change without anything erroring.
+check('three still declares instanceMatrix in the vertex prefix',
+  fs.readFileSync(path.join(HERE, '../node_modules/three/src/renderers/webgl/WebGLProgram.js'), 'utf8')
+    .includes('attribute mat4 instanceMatrix;'));
+check('three still applies instanceMatrix BEFORE modelMatrix',
+  THREE.ShaderChunk.worldpos_vertex.indexOf('instanceMatrix * worldPosition')
+    < THREE.ShaderChunk.worldpos_vertex.indexOf('modelMatrix * worldPosition'),
+  'the sway composes them in that order');
+check('three still keys the program on instancing itself',
+  fs.readFileSync(path.join(HERE, '../node_modules/three/src/renderers/webgl/WebGLPrograms.js'), 'utf8')
+    .includes('parameters.instancing'),
+  'which is what makes one customProgramCacheKey safe for both');
 
 // Chaining: an outline shell brings its own onBeforeCompile and it has to live.
 let priorRan = false;
@@ -354,6 +378,148 @@ check('disabling zeroes amplitude (blades settle straight)',
   && material.userData.__swayUniforms.uSwayFlutter.value === 0);
 CONFIG.grass.sway.enabled = true;
 applyGrassSettings();
+
+// ---------------------------------------------------------------------- seabed
+
+section('SEABED — plants sway, shells do not');
+
+// WHO. The bed is nineteen props and only the plants move. A shell that
+// breathes is the one thing in a seabed that reads as a bug rather than as
+// weather, so this is the check that matters most and it is a plain list.
+const SHOULD_NOT_SWAY = ['clamshell', 'conchshell', 'bubble', 'cloudcard'];
+const swayingSpecies = [];
+const stillSpecies = [];
+for (const [species, variants] of Object.entries(SEABED_PROPS)) {
+  const flags = variants.map((v) => ASSETS[v.id]?.sway === true);
+  check(`${species}: every variant agrees on swaying`,
+    flags.every((f) => f === flags[0]), `${flags.filter(Boolean).length}/${flags.length}`);
+  (flags[0] ? swayingSpecies : stillSpecies).push(species);
+}
+for (const shell of SHOULD_NOT_SWAY) {
+  check(`${shell} does NOT sway`, !swayingSpecies.includes(shell));
+}
+check('every other species does', stillSpecies.every((s) => SHOULD_NOT_SWAY.includes(s)),
+  stillSpecies.join(', ') || 'none left still');
+check('the bed is mostly plants', swayingSpecies.length >= 8, `${swayingSpecies.length} swaying`);
+// A species turned on in CONFIG.seabed.species but absent from the sway table
+// is a plant standing rigid in a field that moves — visible, and easy to leave
+// behind when a new prop is added.
+const weighted = Object.entries(CONFIG.seabed?.species ?? {}).filter(([, w]) => w > 0).map(([n]) => n);
+const rigidInBed = weighted.filter((n) => !swayingSpecies.includes(n) && !SHOULD_NOT_SWAY.includes(n));
+check('no scattered species was left out of the sway table', rigidInBed.length === 0, rigidInBed.join(', '));
+
+// HOW. These props share a cropped atlas whose v does not run root-to-tip, so
+// they must mask on height. Selecting the wrong one is the failure with no
+// symptom but a wrong-looking bend, which is exactly what a test is for.
+for (const species of swayingSpecies) {
+  for (const v of SEABED_PROPS[species]) {
+    check(`${v.id} masks on height, not uv.y`, ASSETS[v.id]?.swayMask === 'height');
+  }
+}
+// ...and the measurement that justifies it. If a re-export ever makes v honest
+// root-to-tip this still passes; what it catches is the reverse, someone
+// switching the bed to 'uv' because grass uses it.
+check('coral is softened relative to the fronds',
+  (ASSETS.coral?.swayScale ?? 1) < (ASSETS.kelp?.swayScale ?? 1),
+  `coral ${ASSETS.coral?.swayScale} vs kelp ${ASSETS.kelp?.swayScale}`);
+
+// THE SHARED PROGRAM. customProgramCacheKey is pinned to one constant, so every
+// sway material reuses the first one's compiled shader. That is only sound
+// while the injected SOURCE is byte-identical, which is the whole reason the
+// mask is a uniform and not a #define — and the reason this check exists.
+const uvMat = new THREE.MeshStandardMaterial({ map: new THREE.Texture() });
+const hMat = new THREE.MeshStandardMaterial({ map: new THREE.Texture() });
+attachGrassSway(uvMat, 1, { mask: 'uv' });
+attachGrassSway(hMat, 1, { mask: 'height', scale: 0.3 });
+const srcOf = (m) => {
+  const sh = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: '' };
+  m.onBeforeCompile(sh, {});
+  return sh;
+};
+const uvSh = srcOf(uvMat); const hSh = srcOf(hMat);
+check('both masks compile the SAME vertex source', uvSh.vertexShader === hSh.vertexShader,
+  'a #define here would hand the second material the first one\'s program');
+check('...and differ only in a uniform',
+  uvSh.uniforms.uSwayUseUv.value === 1 && hSh.uniforms.uSwayUseUv.value === 0);
+check('both keep the one cache key', uvMat.customProgramCacheKey() === hMat.customProgramCacheKey());
+
+applyGrassSettings();
+check('swayScale softens amplitude and flutter together',
+  Math.abs(hMat.userData.__swayUniforms.uSwayAmplitude.value - CONFIG.grass.sway.amplitude * 0.3) < 1e-9
+  && Math.abs(hMat.userData.__swayUniforms.uSwayFlutter.value - CONFIG.grass.sway.flutter * 0.3) < 1e-9);
+check('...and leaves an unscaled material alone',
+  uvMat.userData.__swayUniforms.uSwayAmplitude.value === CONFIG.grass.sway.amplitude);
+
+// THE HEIGHT. seabedScatter bakes fit, the orientation group and the size
+// multiplier into the geometry, so the height assets.js measured off the raw
+// model is in the wrong units and the mask would saturate part-way up.
+check('setGrassSwayHeight corrects it', (setGrassSwayHeight(hMat, 4.2),
+  hMat.userData.__swayUniforms.uSwayHeight.value === 4.2));
+check('...and refuses a degenerate one rather than dividing by it',
+  (setGrassSwayHeight(hMat, 0), setGrassSwayHeight(hMat, NaN),
+    hMat.userData.__swayUniforms.uSwayHeight.value === 4.2));
+
+// MOTION under the height mask, over a real prop's proportions. The seabed
+// props are one plant per file with the base at y=0, which is the fact that
+// makes height a valid root-to-tip parameter at all.
+const KELP_H = SEABED_PROPS.kelp[0].size[1];
+const heightSway = (py, t, c, worldOffset = [0, 0], yaw = 0) => {
+  // port of the shader with uSwayUseUv = 0 and the instancing branch live
+  const swayT = Math.min(1, Math.max(0, py / KELP_H));
+  const mask = Math.pow(swayT, c.stiffness);
+  const dir = [Math.cos(c.direction), Math.sin(c.direction)];
+  // the instance's basis columns for a pure yaw about +Y
+  const axisX = [Math.cos(yaw), 0, -Math.sin(yaw)];
+  const axisZ = [Math.sin(yaw), 0, Math.cos(yaw)];
+  const want = [dir[0], 0, dir[1]];
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const local = [dot3(want, axisX), dot3(want, axisZ)];
+  const phase = (worldOffset[0] * dir[0] + worldOffset[1] * dir[1]) * c.wavelength + t * c.speed;
+  const body = Math.sin(phase);
+  const flutter = Math.sin(phase * 2.7 + t * c.flutterSpeed) * c.flutter * swayT;
+  const amt = (body * c.amplitude + flutter) * mask * py;
+  // world push = the instance rotation applied to the local push
+  const px = local[0] * amt; const pz = local[1] * amt;
+  return [px * axisX[0] + pz * axisZ[0], px * axisX[2] + pz * axisZ[2]];
+};
+
+check('a plant\'s root does not move under the height mask',
+  Math.hypot(...heightSway(0, 1.3, cfg)) < 1e-12);
+let kelpTip = 0;
+for (let t = 0; t < 12; t += 0.05) kelpTip = Math.max(kelpTip, Math.hypot(...heightSway(KELP_H, t, cfg)));
+check('its tip travels the configured fraction of its own height',
+  kelpTip > cfg.amplitude * KELP_H * 0.9 && kelpTip < (cfg.amplitude + cfg.flutter) * KELP_H * 1.05,
+  `${kelpTip.toFixed(3)} on a ${KELP_H.toFixed(2)}-tall frond`);
+
+// THE ONE THE COUNTER-ROTATION IS FOR. Every plant in the bed gets a random
+// yaw, and an object-space push would send each one a different way in the
+// world — a field of plants each leaning on its own, rather than one current.
+let worstYawSpread = 0;
+for (let t = 0; t < 12; t += 0.1) {
+  const straight = heightSway(KELP_H, t, cfg, [0, 0], 0);
+  for (const yaw of [0.7, 1.9, -2.4, Math.PI]) {
+    const turned = heightSway(KELP_H, t, cfg, [0, 0], yaw);
+    worstYawSpread = Math.max(worstYawSpread, Math.hypot(straight[0] - turned[0], straight[1] - turned[1]));
+  }
+}
+check('a plant\'s yaw does not change which way it leans', worstYawSpread < 1e-9,
+  `worst ${worstYawSpread.toExponential(2)} world units apart`);
+// ...and the same measurement without the counter-rotation, so the check above
+// is proving the fix rather than an amplitude too small to show.
+const naiveSpread = (() => {
+  let worst = 0;
+  for (let t = 0; t < 12; t += 0.1) {
+    const a = heightSway(KELP_H, t, cfg, [0, 0], 0);
+    // object-space push, rotated by the instance: what it did before
+    const yaw = Math.PI / 2;
+    const amt = Math.hypot(...a);
+    const b = [amt * Math.cos(cfg.direction + yaw), amt * Math.sin(cfg.direction + yaw)];
+    worst = Math.max(worst, Math.hypot(a[0] - b[0], a[1] - b[1]));
+  }
+  return worst;
+})();
+check('...and the uncorrected push really would scatter them', naiveSpread > cfg.amplitude * KELP_H * 0.5,
+  `${naiveSpread.toFixed(3)} apart at 90 degrees`);
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

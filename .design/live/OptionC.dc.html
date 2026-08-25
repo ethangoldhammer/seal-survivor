@@ -1,0 +1,156 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bangers&amp;family=Nunito:wght@600;700;800&amp;display=swap">
+  <style>
+    body { margin: 0; background: #05060a; }
+    a { color: #ffb020; text-decoration: none; }
+    a:hover { color: #6fd3ff; }
+  </style>
+</helmet>
+
+<div style="position: relative; width: 816px; height: 1056px; overflow: hidden; background: #05060a; color: #ffffff; font-family: 'Nunito', system-ui, sans-serif;">
+
+  <div style="position: absolute; left: 0; top: 0; width: 816px; height: 320px; background: linear-gradient(135deg, #145e82 0%, #0a2b45 100%);"></div>
+  <div style="position: absolute; right: 0; top: 0; width: 340px; height: 320px; background: rgba(5,6,10,0.28); clip-path: polygon(46% 0, 100% 0, 100% 100%, 0 100%);"></div>
+  <div style="position: absolute; left: 0; top: 320px; width: 816px; height: 14px; background: #ffb020;"></div>
+  <div style="position: absolute; right: 0; top: 320px; width: 250px; height: 14px; background: #6fd3ff;"></div>
+
+  <!-- THE HEX CLUSTER — real card art out of design/assets, the same hexes
+       the level-up cards use, packed the way the game's hive packs them:
+       columns step three quarters of a hex width and every other column
+       drops half a height. Chosen and laid out in the hex picker
+       (npm run pick, then hexpick.html), so the arrangement here is the
+       one that was looked at rather than one typed in. -->
+  <div style="position: absolute; right: 34px; top: 40px; width: 160px; height: 197px; opacity: 0.92;">
+        <img src="AnglerFish.webp" alt="" style="position: absolute; left: 0px; top: 0.0px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="Crab.webp" alt="" style="position: absolute; left: 0px; top: 56.3px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="DumboOctopus.webp" alt="" style="position: absolute; left: 0px; top: 112.6px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="Beach_001.webp" alt="" style="position: absolute; left: 48px; top: 28.2px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="MoorishIdol.webp" alt="" style="position: absolute; left: 48px; top: 84.5px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="Seagull.webp" alt="" style="position: absolute; left: 48px; top: 140.8px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="VampireSquid.webp" alt="" style="position: absolute; left: 96px; top: 0.0px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="Humpback.webp" alt="" style="position: absolute; left: 96px; top: 56.3px; width: 64px; height: 56.3px; object-fit: contain;">
+        <img src="GreatWhite.webp" alt="" style="position: absolute; left: 96px; top: 112.6px; width: 64px; height: 56.3px; object-fit: contain;">
+  </div>
+
+  <div style="position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 42px 46px 32px 46px;">
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="font-size: 13px; font-weight: 800; letter-spacing: 0.28em; text-transform: uppercase; color: #ffb020;">[KICKER — genre + setting]</div>
+      <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 100px; line-height: 0.84; letter-spacing: 0.02em; color: #ffffff; text-shadow: 5px 5px 0 rgba(5,6,10,0.55);">Seal<br>Survivor</div>
+      <div style="font-size: 18px; font-weight: 700; line-height: 1.35; max-width: 470px; color: rgba(255,255,255,0.92); margin-top: 12px; text-wrap: pretty;">A twin-stick shooter in the seal cinematic universe.&nbsp;</div>
+    </div>
+
+    <div style="position: relative; overflow: hidden; display: flex; gap: 22px; align-items: center; flex-shrink: 0; background: #ffb020; color: #05060a; padding: 18px 22px;">
+      <svg width="100%" height="100%" style="position: absolute; left: 0; top: 0; z-index: 0;" aria-hidden="true">
+        <defs>
+          <!-- FLAT-TOP HONEYCOMB, the packing the game's own hive uses: columns
+               step three quarters of a hex width and every other column drops
+               half a height. The tile is 1.5 widths by one height and carries
+               the second hex four times, once per corner it crosses — an SVG
+               pattern clips to its tile, so a hex drawn over the edge would
+               come out sliced instead of continuing into the next tile. -->
+          <pattern id="hexgrid" width="54" height="31.2" patternUnits="userSpaceOnUse">
+            <g fill="none" stroke="#05060a" stroke-width="1.1" opacity="0.14">
+              <path d="M9 0 L27 0 L36 15.6 L27 31.2 L9 31.2 L0 15.6 Z"></path>
+              <path d="M36 15.6 L54 15.6 L63 31.2 L54 46.8 L36 46.8 L27 31.2 Z"></path>
+              <path d="M36 -15.6 L54 -15.6 L63 0 L54 15.6 L36 15.6 L27 0 Z"></path>
+              <path d="M-18 15.6 L0 15.6 L9 31.2 L0 46.8 L-18 46.8 L-27 31.2 Z"></path>
+              <path d="M-18 -15.6 L0 -15.6 L9 0 L0 15.6 L-18 15.6 L-27 0 Z"></path>
+            </g>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#hexgrid)"></rect>
+      </svg>
+      <div style="position: relative; z-index: 1; width: 150px; height: 120px; flex-shrink: 0;">
+        <img src="loopSeal.png" alt="" style="position: absolute; left: 75px; top: 60px; width: 120px; height: 120px; margin-left: -60px; margin-top: -60px; object-fit: contain;">
+      </div>
+      <div style="position: relative; z-index: 1; display: flex; flex-direction: column; gap: 5px;">
+        <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 38px; line-height: 1;">You're a hungry mammal</div>
+        <div style="font-size: 14px; font-weight: 700; line-height: 1.4; max-width: 520px;">A seal is a well-oiled machine that runs on chum and oxygen. Hunt fish and breach to keep your belly and lungs full, respectively.</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 13px;">
+      <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 30px; letter-spacing: 0.04em; color: #6fd3ff;">[SECTION — key mechanics]</div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;">
+        <div style="background: rgba(20,94,130,0.32); border-left: 5px solid #6fd3ff; padding: 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 28px; color: #ffb020; line-height: 1;">01</div>
+          <div style="font-size: 15px; font-weight: 800;">Shoot</div>
+          <div style="font-size: 12.5px; font-weight: 600; line-height: 1.45; color: rgba(255,255,255,0.72);">Swim and aim your pebbles at prey. Swim through chum to fill your xp and health.</div>
+        </div>
+        <div style="background: rgba(20,94,130,0.32); border-left: 5px solid #6fd3ff; padding: 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 28px; color: #ffb020; line-height: 1;">02</div>
+          <div style="font-size: 15px; font-weight: 800;">Chain</div>
+          <div style="font-size: 12.5px; font-weight: 600; line-height: 1.45; color: rgba(255,255,255,0.72);">Charge and strike through schools of fish and bits to multiply your strength and score.</div>
+        </div>
+        <div style="background: rgba(20,94,130,0.32); border-left: 5px solid #6fd3ff; padding: 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 28px; color: #ffb020; line-height: 1;">03</div>
+          <div style="font-size: 15px; font-weight: 800;">Breathe</div>
+          <div style="font-size: 12.5px; font-weight: 600; line-height: 1.45; color: rgba(255,255,255,0.72);">[~11 words. Two clocks: air time up top, oxygen below.]</div>
+        </div>
+        <div style="background: rgba(20,94,130,0.32); border-left: 5px solid #6fd3ff; padding: 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 28px; color: #ffb020; line-height: 1;">04</div>
+          <div style="font-size: 15px; font-weight: 800;">[NAME — the hive]</div>
+          <div style="font-size: 12.5px; font-weight: 600; line-height: 1.45; color: rgba(255,255,255,0.72);">[~11 words. Cards every level, stacked as hexes.]</div>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <span style="font-size: 11px; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(255,255,255,0.5);">[LABEL — and also]</span>
+        <span style="font-size: 13px; font-weight: 800; padding: 5px 12px; background: rgba(255,255,255,0.1);">[autofire]</span>
+        <span style="font-size: 13px; font-weight: 800; padding: 5px 12px; background: rgba(255,255,255,0.1);">[bosses]</span>
+        <span style="font-size: 13px; font-weight: 800; padding: 5px 12px; background: rgba(255,255,255,0.1);">[permadeath]</span>
+        <span style="font-size: 13px; font-weight: 800; padding: 5px 12px; background: rgba(255,255,255,0.1);">[day &amp; night]</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;">
+        <div style="display: flex; flex-direction: column;"><span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 42px; color: #6fd3ff; line-height: 1;">50</span><span style="font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6);">upgrades</span></div>
+        <div style="display: flex; flex-direction: column;"><span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 42px; color: #6fd3ff; line-height: 1;">43</span><span style="font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6);">creatures</span></div>
+        <div style="display: flex; flex-direction: column;"><span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 42px; color: #6fd3ff; line-height: 1;">9</span><span style="font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6);">bosses</span></div>
+        <div style="display: flex; flex-direction: column;"><span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 42px; color: #6fd3ff; line-height: 1;">5</span><span style="font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6);">rarities</span></div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px; border-top: 3px solid rgba(255,255,255,0.16); padding-top: 14px;">
+      <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 30px; letter-spacing: 0.04em; color: #6fd3ff;">[SECTION — influences]</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        <span style="font-size: 16px; font-weight: 800; padding: 9px 18px; border: 2px solid rgba(255,255,255,0.28); border-radius: 999px;">[INFLUENCE 1]</span>
+        <span style="font-size: 16px; font-weight: 800; padding: 9px 18px; border: 2px solid rgba(255,255,255,0.28); border-radius: 999px;">[INFLUENCE 2]</span>
+        <span style="font-size: 16px; font-weight: 800; padding: 9px 18px; border: 2px solid rgba(255,255,255,0.28); border-radius: 999px;">[INFLUENCE 3]</span>
+        <span style="font-size: 16px; font-weight: 800; padding: 9px 18px; border: 2px solid rgba(255,255,255,0.28); border-radius: 999px;">[INFLUENCE 4]</span>
+      </div>
+      <div style="font-size: 13.5px; font-weight: 600; line-height: 1.5; color: rgba(255,255,255,0.6); max-width: 620px;">[ONE LINE ON THE LINEAGE — ~18 words. What these gave the game.]</div>
+    </div>
+
+    <div style="background: #6fd3ff; color: #05060a; padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px;">
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.22em; text-transform: uppercase;">[LABEL — where to play]</div>
+        <div style="display: flex; gap: 10px;">
+          <span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 22px; background: #05060a; color: #6fd3ff; padding: 4px 14px;">Browser</span>
+          <span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 22px; background: #05060a; color: #6fd3ff; padding: 4px 14px;">iOS</span>
+          <span style="font-family: 'Bangers', system-ui, sans-serif; font-size: 22px; background: #05060a; color: #6fd3ff; padding: 4px 14px;">Desktop</span>
+        </div>
+        <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.08em;">Keyboard &amp; mouse · Touch · Controller</div>
+      </div>
+      <div style="text-align: right; display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-family: 'Bangers', system-ui, sans-serif; font-size: 26px; line-height: 1;">seal-survivor<br>.pages.dev</div>
+        <div style="font-size: 10px; font-weight: 800; opacity: 0.7;">[CREDIT LINE]</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":816,"height":1056}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

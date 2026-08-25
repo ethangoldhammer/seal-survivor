@@ -56,7 +56,7 @@ const WRITES = new Set([
 ]);
 
 // Long-running: the process does not exit on its own, and that is correct.
-const SERVES = new Set(['dev', 'csv', 'preview', 'hub', 'atlas', 'icons:pick']);
+const SERVES = new Set(['dev', 'csv', 'preview', 'hub', 'atlas', 'icons:pick', 'pick']);
 
 // ---------------------------------------------------------------------------
 // GROUPS — the drawers, in the order the hub shows them.
@@ -80,7 +80,7 @@ const GROUP_BY_PREFIX = [
 // than quietly appearing in a bucket called "Other".
 const GROUP_BY_NAME = {
   dev: 'Servers', csv: 'Servers', preview: 'Servers', hub: 'Servers', servers: 'Servers',
-  atlas: 'Servers', 'icons:pick': 'Servers',
+  atlas: 'Servers', 'icons:pick': 'Servers', pick: 'Servers',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   // Reports by default and only rewrites files with --write, so it reads as

@@ -13,6 +13,14 @@
 // Everything here was lifted out of render.html unchanged; the comments explain
 // why each part is the way it is and they came with it.
 import * as THREE from 'three';
+// THE SEAL'S OWN HIDE, from the game's own module. `/src/` is mounted by
+// tools/atlas-render/server.mjs; noiseGlsl.js is a leaf with no imports at all,
+// which is what lets a plain browser load it — config.js could never be.
+import {
+  MOTTLE_UNIFORMS_GLSL, NOISE_FIELD_GLSL, MOTTLE_FRAGMENT_GLSL,
+  MOTTLE_VARYING_GLSL, MOTTLE_DEFAULTS,
+  GLOW_UNIFORMS_GLSL, GLOW_LAYERS_GLSL, GLOW_DEFAULTS,
+} from '/src/systems/noiseGlsl.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
@@ -555,6 +563,51 @@ function makePrimitive(part) {
       geo = new THREE.CapsuleGeometry(part.tube ?? 0.16, part.length ?? 2.4, 4, 12);
       geo.rotateZ(-Math.PI / 2);
       break;
+    // A RIBBON — a flat trail that CURVES, tapering to nothing at the tail.
+    //
+    // Not a streak with a bend in it: a streak is a capsule, and a capsule says
+    // "fast in a straight line". What a homing shot needs to say is that the
+    // path bent, and the only thing that says that is a curve. Flat rather than
+    // a tube because a thin tube reads as wire at icon size, and double-sided
+    // so it does not vanish edge-on halfway round the arc.
+    //
+    // Swept along +X like every other oriented part, with `curve` as how far
+    // the tail lifts in Y — sign chooses the side, so two ribbons with opposite
+    // signs read as a pair rather than as one drawn twice.
+    //
+    // WHERE THE HEAD LANDS, which is the thing to know when attaching one to
+    // something. Every scene part is normalised to a bounding sphere of radius
+    // 1 and recentred, so `length` and `width` set the ribbon's SHAPE and
+    // `scale` sets its size — and the head ends up roughly one radius along +X
+    // from the part's `at`, not at it. To hang a ribbon off a pebble, place it
+    // about `scale` to the LEFT of the pebble rather than on top of it.
+    case 'ribbon': {
+      const len = part.length ?? 2.4;
+      const bend = part.curve ?? 0.9;
+      const w0 = part.width ?? 0.34;
+      const steps = 28;
+      const pos = [], idx = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        // Quadratic: flat at the head, all the bend gathered at the tail, which
+        // is the shape a thing that has just turned leaves behind it.
+        const x = -t * len;
+        const y = bend * t * t;
+        // Tapered on a curve rather than linearly — a linear taper still has
+        // visible width at the tail and reads as a cut-off strip.
+        const w = w0 * (1 - t) * (1 - t * 0.4);
+        pos.push(x, y - w / 2, 0, x, y + w / 2, 0);
+        if (i < steps) {
+          const a = i * 2;
+          idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      }
+      geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      break;
+    }
     default:
       throw new Error(`unknown prim "${part.prim}"`);
   }
@@ -642,6 +695,164 @@ async function prepareModel(spec) {
   return { root, posed, clipName, clipDuration, dropped };
 }
 
+// ---------------------------------------------------------------------------
+// THE MOTTLING
+//
+// furseal.glb has UVs and no image, so a seal rendered straight is one flat
+// cream shape — which is what every shot out of this renderer was until now,
+// and it is not what the animal looks like in the game. The pattern is
+// procedural, so the icon can have the real one rather than an impression of
+// it: the field, the paint pass and the uniform names all come from
+// /src/systems/noiseGlsl.js, the same strings systems/noiseShader.js paints
+// the live seal with.
+//
+// ONLY THE MOTTLING. The glow, the charge flash and the wet film are run-time
+// gameplay layers that ship at strength 0 and have no state to be driven by in
+// a still.
+//
+// AFTER toonify AND BEFORE addOutline, and both halves of that matter:
+// toonify builds new materials (a clone drops onBeforeCompile, so attaching
+// first would attach to a material that gets thrown away), and the outline
+// shells are flat black basic materials that must not be painted.
+// ---------------------------------------------------------------------------
+function attachMottle(root, noise) {
+  const n = { ...MOTTLE_DEFAULTS, ...(noise ?? {}) };
+  const seen = new Set();
+  root.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!m || seen.has(m) || !('color' in m)) continue;
+      seen.add(m);
+      const u = {
+        uNoiseSize: { value: n.size },
+        uNoiseStrength: { value: n.strength },
+        uNoiseContrast: { value: n.contrast },
+        uNoiseColor: { value: new THREE.Color(n.color) },
+        uNoiseBase: { value: new THREE.Color(n.baseColor) },
+        uNoisePaint: { value: n.paint },
+      };
+      // GLOW UP! — the upgrade that makes the seal's own markings emit. Same
+      // layer the game runs (GLOW_LAYERS_GLSL), riding the same `noiseLit` the
+      // mottle pass above leaves in scope, so the icon is lit the way the
+      // ability lights the animal rather than by a second effect that merely
+      // looks similar. The charge flash in that block stays at strength 0: it
+      // is the strike meter, and a still has no meter.
+      const g = n.glow ? { ...GLOW_DEFAULTS, ...n.glow } : null;
+      if (g) Object.assign(u, {
+        uNoiseGlowColor: { value: new THREE.Color(g.color) },
+        uNoiseGlowTip: { value: new THREE.Color(g.tip) },
+        uNoiseGlowStrength: { value: g.strength },
+        uNoiseGlowEdge: { value: g.edge },
+        uNoiseGlowSoft: { value: g.soft },
+        uNoiseGlowWhite: { value: g.white },
+        uNoiseGlowPulse: { value: 1 },
+        uNoiseGlowScale: { value: g.scale },
+        uChargeColor: { value: new THREE.Color(0x7ad7ff) },
+        uChargeTip: { value: new THREE.Color(0xffffff) },
+        uChargeStrength: { value: 0 },
+        uChargeEdge: { value: 0.7 },
+        uChargeSoft: { value: 0.23 },
+        uChargeWhite: { value: 0.35 },
+        uChargePulse: { value: 1 },
+        uChargeWave: { value: -1 },
+        uChargeAxis: { value: new THREE.Vector3(1, 0, 0) },
+        uChargeAxisMin: { value: -1 },
+        uChargeAxisRange: { value: 2 },
+      });
+      m.onBeforeCompile = (shader) => {
+        Object.assign(shader.uniforms, u);
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\n' + MOTTLE_VARYING_GLSL)
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvNoisePos = transformed;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\n'
+            + MOTTLE_UNIFORMS_GLSL + '\n' + (g ? GLOW_UNIFORMS_GLSL + '\n' : '')
+            + MOTTLE_VARYING_GLSL + '\n' + NOISE_FIELD_GLSL)
+          .replace('#include <map_fragment>', '#include <map_fragment>\n' + MOTTLE_FRAGMENT_GLSL);
+        if (g) {
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <dithering_fragment>', GLOW_LAYERS_GLSL + '\n#include <dithering_fragment>');
+        }
+      };
+      // Two materials with identical parameters share a compiled program, and
+      // the injection is not one of the parameters three.js keys on. Every
+      // material here gets the SAME injection, so sharing is correct — but the
+      // key still has to change, or a mottled material can be handed the
+      // program compiled for an unmottled one earlier in the same page.
+      m.customProgramCacheKey = () => (g ? 'mottle+glow' : 'mottle');
+      m.needsUpdate = true;
+    }
+  });
+  return seen.size;
+}
+
+// ---------------------------------------------------------------------------
+// THE RING — a real 3D loop around the subject, not a graphic laid over it.
+//
+// Drawn as N tube segments with a cone on the end of each, so it reads as a
+// cycle rather than as a torus. Built in WORLD space and added to the scene
+// rather than to the holder: the holder is recentred by frame(), and a ring
+// that moved with that recentring would drift off the body it is drawn around.
+//
+// RADIUS IS A MULTIPLE OF THE SUBJECT'S OWN, never world units. The renderer
+// takes anything from a 0.18-unit pebble to a 14-unit whale, so a typed radius
+// would mean a different picture for every model — and the way it fails is a
+// ring either lost inside the animal or off the edge of the frame.
+//
+// The camera distance is derived from the radius buildIcon returns, so the
+// ring's extent is folded into that number on the way out. Framing still
+// CENTRES on the model, which is right: the seal is the subject and the ring
+// is around it.
+// ---------------------------------------------------------------------------
+function buildRing(ring, modelRadius, toon) {
+  const g = new THREE.Group();
+  const arrows = Math.max(1, Math.round(ring.arrows ?? 4));
+  const R = modelRadius * (ring.radius ?? 1.45);
+  const tube = R * (ring.tube ?? 0.045);
+  // How much of each arc is left empty in front of the next segment. In turns,
+  // so it means the same thing at any arrow count.
+  const gap = Math.min(0.9, Math.max(0, ring.gap ?? 0.16)) * (2 * Math.PI / arrows);
+  const headLen = tube * 7;
+  // The head eats its own length off the end of the tube, or the cone sits on
+  // top of a segment that already reached the same point and the tip lands a
+  // head further round than the arc it belongs to.
+  const arc = Math.max(0.02, (2 * Math.PI / arrows) - gap - headLen / R);
+
+  const colour = new THREE.Color(ring.color ?? 0x6fd3ff);
+  const mat = toon
+    ? new THREE.MeshToonMaterial({ color: colour })
+    : new THREE.MeshStandardMaterial({ color: colour, roughness: 0.5, metalness: 0.1 });
+  mat.transparent = (ring.opacity ?? 1) < 1;
+  mat.opacity = ring.opacity ?? 1;
+
+  const spin = (ring.spin ?? 0) * Math.PI / 180;
+  for (let i = 0; i < arrows; i++) {
+    const start = spin + i * (2 * Math.PI / arrows);
+    const seg = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 10, 64, arc), mat);
+    seg.rotation.z = start;
+    g.add(seg);
+
+    // TorusGeometry sweeps counter-clockwise from +X, so the arc ends at
+    // `start + arc` and the tangent there is (-sin, cos, 0) — which is +Y
+    // rotated by that same angle, and a cone points down +Y. So one rotation
+    // about Z both places and aims the head.
+    const a = start + arc;
+    const head = new THREE.Mesh(new THREE.ConeGeometry(tube * 2.6, headLen, 14), mat);
+    head.position.set(R * Math.cos(a), R * Math.sin(a), 0);
+    head.rotation.z = a;
+    head.translateY(headLen / 2);
+    g.add(head);
+  }
+
+  g.rotation.x = (ring.tilt ?? 0) * Math.PI / 180;
+  g.rotation.y = (ring.yaw ?? 0) * Math.PI / 180;
+  // What the camera has to clear. The silhouette of a ring is never wider than
+  // its own radius however it is tilted, so this is that plus the tube and the
+  // head's half-width.
+  g.userData.extent = R + tube * 2.6;
+  return g;
+}
+
 export async function buildIcon(spec) {
   if ((spec.kind ?? 'render') === 'scene') return buildSceneIcon(spec);
 
@@ -650,6 +861,7 @@ export async function buildIcon(spec) {
   // Toon BEFORE the shells are built, or the pass would swap the rim's own
   // black MeshBasicMaterial for a lit toon one and the outline would light up.
   if (spec.toon) toonify(root, spec, spec.flatColor);
+  if (spec.noise) attachMottle(root, spec.noise);
 
   const scene = makeScene(!!spec.toon);
   const holder = new THREE.Group();
@@ -679,7 +891,16 @@ export async function buildIcon(spec) {
   // coin toss between a model and its own outline.
   if (spec.outline) addOutline(root, radius * spec.outline);
 
-  return { scene, radius, posed, strays, dropped, clipName, clipDuration };
+  // After framing, so the ring is sized off the radius the MODEL measured, and
+  // after the outline, so posedBox never sees a tube it might pick as anchor.
+  let framedRadius = radius;
+  if (spec.ring?.enabled) {
+    const ring = buildRing(spec.ring, radius, !!spec.toon);
+    scene.add(ring);
+    framedRadius = Math.max(radius, ring.userData.extent);
+  }
+
+  return { scene, radius: framedRadius, posed, strays, dropped, clipName, clipDuration };
 }
 
 // ---------------------------------------------------------------------------

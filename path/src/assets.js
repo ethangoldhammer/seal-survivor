@@ -12,7 +12,7 @@ import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, split
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
 import { makeOrganicRing } from './systems/organicRing.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
-import { SEABED_VARIANTS } from './seabedProps.js';
+import { SEABED_PROPS, SEABED_VARIANTS } from './seabedProps.js';
 
 // ============================================================================
 // ASSETS — one entry per visual thing in the game.
@@ -368,6 +368,33 @@ const CRAB_EYE_STALKS = [
   ['Eye1L_02', 'Eye2L_03', 'Eye3L_04', 'Eye3L_end_099'],
   ['Eye1R_05', 'Eye2R_06', 'Eye3R_07', 'Eye3R_end_0100'],
 ];
+
+// WHICH SEABED PROPS MOVE IN THE CURRENT, and by how much relative to the one
+// CONFIG.grass.sway block that drives all of them.
+//
+// A species listed here sways; one that is not, does not. The three absent on
+// purpose are `clamshell`, `conchshell` and `bubble` — a shell is a mineral
+// object lying on the floor and a shell that breathes is the single thing in a
+// bed that reads as a bug rather than as weather. `cloudcard` is absent because
+// it is a flat card with zero height, and the push scales by height, so it
+// could only ever move by nothing.
+//
+// The numbers are stiffness expressed the other way round: 1 is "as much as the
+// grass clump", and coral is a third of that because it is a calcified branching
+// head, not a frond. They are RELATIVE on purpose — the current itself has one
+// set of numbers for the whole bed, and a slider drag still moves everything
+// together while keeping the coral quieter than the kelp.
+const SEABED_SWAY = {
+  kelp: 1, ribbonweed: 1, bladegrass: 0.95, reed: 0.85,
+  fanweed: 0.8, fern: 0.7, broadleaf: 0.7, coral: 0.3,
+};
+
+// Variant id -> its species. SEABED_VARIANTS is flat (kelp_b does not carry
+// "kelp"), and deriving the species by chopping the id at an underscore would
+// work today and break on the first prop whose name has one.
+const SEABED_SPECIES_OF = new Map(
+  Object.entries(SEABED_PROPS).flatMap(([species, variants]) =>
+    variants.map((v) => [v.id, species])));
 
 export const ASSETS = {
   ship: {
@@ -1672,10 +1699,64 @@ export const ASSETS = {
     shape: 'oval', radius: CONFIG.club.length / 10, elongate: 5, color: 0x8a6b47, unlit: true,
   },
 
-  // Strike shrapnel: small, pale, and short-lived. Reads as bone rather than
-  // as another bullet, which matters when a dash through a school throws
-  // dozens of them at once.
-  shrapnel: { shape: 'octahedron', radius: 0.14, color: 0xfff4e0, unlit: true },
+  // Strike shrapnel: THE SAME BONE A MAN COMES APART INTO. Not a lookalike —
+  // this is /models/bone.glb, the file systems/gore.js takes its pieces out of
+  // when the seal takes a body off a boat. The card is called The Bone Zone;
+  // what the dash leaves in the water is now literally the bone.
+  //
+  // `fit` IS SIZED ON SILHOUETTE, NOT ON LENGTH, and that distinction is the
+  // whole reason this number is 0.85 and not 0.28.
+  //
+  // 0.28 is what it was first, and it was derived rather than chosen: the
+  // octahedron below is radius 0.14, so it spans 0.28 end to end, and matching
+  // that made the swap exactly size-neutral on the long axis. It was still
+  // wrong, because an octahedron is 0.28 thick in EVERY axis and a bone is
+  // 0.28 long and 0.056 thick. Measured: at fit 0.28 the fragment covered
+  // 0.059 square units of screen against the octahedron's 0.249 — A QUARTER OF
+  // THE SILHOUETTE — and then rolls about its own length, so half the time it
+  // presented the thin edge of that. The bones were invisible, and the swap
+  // that made them so read as neutral on the only number anybody checked.
+  //
+  // Equal LONG AXIS is the wrong invariant for a body with a different aspect
+  // ratio. Equal AREA is the one that means "as easy to see", and 0.85 clears
+  // it: 2.14 x 0.43 world units, a silhouette 2.2x the octahedron's. That
+  // lands it beside the razor clam's blade (2.64 long x 0.41) and the starfish
+  // (2.73), which is the family a long thrown thing belongs to here.
+  //
+  // The hit size never came from the visual and still does not: spawnShrapnel
+  // passes CONFIG.strike.shrapnel.radius, untouched through both of these. The
+  // visual is 13x the hitbox now, which is exactly where the razor blade
+  // already sits (2.64 against 0.24, 11x) — a long body is aimed by its line,
+  // not by its bounding circle.
+  //
+  // `forward: '+X'` because the file LIES ALONG X — 5.06 x 1.01 x 0.88,
+  // measured off the glb, and the same fact the note on normalise() in
+  // systems/gore.js records. Getting this wrong throws nothing: it would leave
+  // the bone flying broadside and anchor its ribbon on a flank.
+  //
+  // MODEL-UNLIT, unlike the gore pieces — which are lit deliberately, because
+  // a femur tumbling through a slow burst needs form or it is a white streak.
+  // A fragment here is 0.7 units long, in the air for 0.55s at 22 units a
+  // second, fifteen at a time off every body the dash touches: it is a spark,
+  // and it is read as one, alongside every other unlit thing the seal fires.
+  //
+  // It is also what keeps the saved Look on this asset meaning what it already
+  // means. An unlit material takes `glow` as colour overdrive past 1.0 (see
+  // applyColorAndGlow); a lit one puts it on emissiveIntensity, and this model
+  // ships a black emissive — so the 3.05 already saved against `shrapnel`
+  // would have quietly become nothing, and the burst would have dimmed on a
+  // model swap that never mentioned brightness.
+  //
+  // The primitive stays as the fallback, unchanged. A model that fails to
+  // parse or hasn't loaded yet lands back on exactly the shrapnel that shipped
+  // before this, rather than on nothing.
+  shrapnel: {
+    model: '/models/bone.glb',
+    fit: 0.85,
+    forward: '+X', up: '+Y',
+    modelUnlit: true,
+    shape: 'octahedron', radius: 0.14, color: 0xfff4e0, unlit: true,
+  },
   enemyBullet: { shape: 'sphere', radius: 0.15, color: 0xff7766, unlit: true },
 
   // --- what a boss shoots (see systems/bossPerks.js) ------------------------
@@ -3143,6 +3224,16 @@ export const ASSETS = {
     model: v.model,
     fit: v.fit,
     forward: '+Y', up: '-X',
+    // Current-driven bend, on the PLANTS only — the shells and the bubble are
+    // absent from SEABED_SWAY and a shell that breathes is the one thing in a
+    // seabed that reads as a bug rather than as weather. Masked on object-space
+    // height rather than uv.y, which is the seabed's difference from grass.glb
+    // and is explained in systems/grassSway.js's swayT note: these props share a
+    // cropped atlas whose v does not promise to run root-to-tip, and on three of
+    // them it measurably does not.
+    sway: SEABED_SWAY[SEABED_SPECIES_OF.get(v.id)] != null,
+    swayMask: 'height',
+    swayScale: SEABED_SWAY[SEABED_SPECIES_OF.get(v.id)] ?? 1,
     // Lit, like grass and for the same reason — a bed that stays noon-bright
     // while the water goes to dusk is the thing that gives decor away. The
     // props ship without KHR_materials_unlit precisely so this can happen.
@@ -4743,7 +4834,7 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       // the clump's height in MODEL units, before `fit` reaches the node's
       // scale — the shader wants it there, both as the amplitude scale and as
       // the mask denominator on a stand-in with no UVs.
-      if (def.sway) attachGrassSway(m2, size.y);
+      if (def.sway) attachGrassSway(m2, size.y, { mask: def.swayMask, scale: def.swayScale });
       m2.needsUpdate = true;
       return m2;
     };

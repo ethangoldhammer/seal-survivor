@@ -36,6 +36,7 @@ import { playSfx } from '../systems/audio.js';
 import { menuInput } from '../input.js';
 import { hiveParts, slamAndRipple } from './upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip } from './upgradeTip.js';
+import { pressableWithin } from './press.js';
 
 function cfg() {
   return CONFIG.upgradeHive?.reward ?? {};
@@ -60,6 +61,7 @@ const state = {
   onClick: null,
   onOver: null,
   onOut: null,
+  unpress: null,   // the tap/hold wiring on the host, see startHiveReward
   onResize: null,
   homing: null,      // the timer that tidies up once the flight home lands
 };
@@ -496,6 +498,16 @@ export function startHiveReward({ stacks, canStack, onStack, onDone }) {
   host.addEventListener('click', state.onClick);
   host.addEventListener('pointerover', state.onOver);
   host.addEventListener('pointerout', state.onOut);
+  // A THUMB GETS BOTH HALVES OF THE QUESTION. This menu asks which of the
+  // things you already hold should get another stack, and on a phone it asked
+  // it with no way to find out what any of them do — the only gesture was the
+  // one that spends the pick. A hold opens the tip and cancels the take; a
+  // pull-off cancels both. See ui/press.js.
+  state.unpress = pressableWithin(host, '.sv-hive-tile', {
+    onHold: (tile) => showRewardTip(tile),
+    onHoldEnd: hideUpgradeTip,
+    onSlip: hideUpgradeTip,
+  });
   state.onResize = () => recentre();
   window.addEventListener('resize', state.onResize);
 
@@ -549,6 +561,8 @@ function teardown() {
     host.removeEventListener('pointerout', state.onOut);
   }
   if (state.onResize) window.removeEventListener('resize', state.onResize);
+  state.unpress?.();
+  state.unpress = null;
   state.onClick = state.onOver = state.onOut = state.onResize = null;
   for (const halo of state.halos.values()) halo.remove();
   state.halos.clear();

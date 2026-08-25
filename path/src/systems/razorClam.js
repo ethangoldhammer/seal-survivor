@@ -1,6 +1,8 @@
 import { CONFIG } from '../config.js';
 import { projectileCount } from '../stats.js';
 import { getAssetSizeMultiplier } from '../assets.js';
+import { player } from '../entities/player.js';
+import { razorClamLevelStats } from '../levelStats.js';
 
 // RAZOR CLAMS — the fan.
 //
@@ -23,7 +25,7 @@ const TAU = Math.PI * 2;
 /** Seconds between volleys at this level. Compounds, like the starfish's. */
 export function razorClamFireRate(level) {
   const c = CONFIG.razorClam;
-  return c.fireRate * Math.pow(c.fireRatePerLevel, Math.max(1, level) - 1);
+  return razorClamLevelStats(level, player.stats).razorGap;
 }
 
 /**
@@ -35,7 +37,7 @@ export function razorClamFireRate(level) {
  */
 export function razorClamCount(level) {
   const c = CONFIG.razorClam;
-  return Math.max(1, Math.round(c.count + c.countPerLevel * (Math.max(1, level) - 1)));
+  return razorClamLevelStats(level, player.stats).razorCount;
 }
 
 /**
@@ -103,7 +105,7 @@ export function razorClamRoll(rand = Math.random) {
 /** What one blade hits for at this level, before abilityDamage. */
 export function razorClamDamage(level) {
   const c = CONFIG.razorClam;
-  return c.damage + c.damagePerLevel * (Math.max(1, level) - 1);
+  return razorClamLevelStats(level, player.stats).razorDamage;
 }
 
 /**
@@ -115,10 +117,8 @@ export function razorClamDamage(level) {
  */
 export function razorClamPierce(level) {
   const c = CONFIG.razorClam;
-  return Math.min(
-    c.pierceMax ?? 9,
-    Math.max(0, Math.floor((c.basePierce ?? 0) + (c.piercePerLevel ?? 0) * (Math.max(1, level) - 1))),
-  );
+  // levelStats.js owns the curve AND the cap — shared with the tip.
+  return razorClamLevelStats(level, player.stats).razorPierce;
 }
 
 /**

@@ -5,6 +5,8 @@ import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { weatherState } from './weather.js';
 import { aoe, targeting } from './scaling.js';
+import { player } from '../entities/player.js';
+import { eelLevelStats } from '../levelStats.js';
 
 let cooldown = 0;
 const activeBolts = []; // { mesh, life }
@@ -131,13 +133,23 @@ export function currentEelStats(level) {
   const k = st?.enabled ? Math.max(0, Math.min(1, weatherState.intensity ?? 0)) : 0;
   const damageMul = 1 + ((st?.damageInStorm ?? 1) - 1) * k;
 
+  // THE LEVEL CURVE COMES FROM levelStats.js, the same function the hover tip
+  // quotes, so the number a card promises is the number a bolt carries.
+  //
+  // THE STORM IS APPLIED HERE AND NOT THERE, deliberately. It is a situational
+  // multiplier on top of the curve — the sky, not the pick — and a tip that
+  // folded it in would quote a different figure depending on the weather at the
+  // moment you happened to hold your thumb down. The readout owns what the
+  // LEVEL buys; this owns what the storm does to it.
+  //
+  // How far a bolt HOPS is reach, not acquisition — the chain is already in the
+  // crowd by the time this is read, so it takes the full Splash Zone multiplier
+  // rather than the gentle targeting one. That is inside the readout.
+  const lv = eelLevelStats(level, player.stats);
   return {
-    damage: (CONFIG.eel.baseDamage + CONFIG.eel.damagePerLevel * (level - 1)) * damageMul,
-    // How far a bolt HOPS is reach, not acquisition — the chain is already
-    // in the crowd by the time this is read, so it takes the full Splash
-    // Zone multiplier rather than the gentle targeting one.
-    chainRadius: aoe(CONFIG.eel.baseChainRadius + CONFIG.eel.radiusPerLevel * (level - 1)),
-    maxChain: Math.round(CONFIG.eel.baseMaxChain + CONFIG.eel.chainPerLevel * (level - 1)),
+    damage: lv.eelDamage * damageMul,
+    chainRadius: lv.eelChainRadius,
+    maxChain: lv.eelChain,
   };
 }
 

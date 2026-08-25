@@ -7,6 +7,10 @@ import { skyLight } from './daylight.js';
 import { setNoiseGlow, setNoiseGlowPulse, clearNoiseGlow } from './noiseShader.js';
 import { advanceCycles } from './beatSync.js';
 import { holdEnemy, clearDaze } from './control.js';
+import {
+  biolumShockLevelStats, biolumVenomLevelStats,
+  biolumChillLevelStats, biolumInfectionLevelStats,
+} from '../levelStats.js';
 
 // ============================================================================
 // GLOW UP! — the seal's bioluminescence, and the only ELEMENT in the game.
@@ -45,11 +49,20 @@ import { holdEnemy, clearDaze } from './control.js';
 // way round and what it cost.
 // ============================================================================
 
-// The active element for this run, or null before the first Glow Up! is taken.
-// Module state rather than a stat, because it is an IDENTITY and not a number:
-// recomputeStats() rebuilds the stat block from scratch on every level-up and
-// every tuner nudge, which would re-roll the element several times a minute.
-let element = null;
+// THE ACTIVE ELEMENT IS A STAT NOW, and the module no longer holds one.
+//
+// It used to live here precisely because it was ROLLED: recomputeStats()
+// rebuilds the stat block from scratch on every level-up and every tuner nudge,
+// so an identity decided by Math.random could not survive in it — it would have
+// been re-rolled several times a minute.
+//
+// Nothing is rolled any more. There are four cards, one per element, and taking
+// one locks the other three out of the pool for the run (see `exclusive` in
+// config.js and availableUpgrades). The element is therefore a pure function of
+// which card you took, which is exactly what the stat block is: a replay of the
+// picks. Reading it from there rather than keeping a second copy means a reset
+// cannot leave the last run's element behind — the failure this file's own
+// resetElements had to be written to prevent.
 
 // Pending contagion bursts from hosts that died this frame. Drained by
 // updateElements, for the array-mutation reason in the header.
@@ -69,12 +82,48 @@ function cfg() {
   return CONFIG.biolum ?? {};
 }
 
-function elementCfg(id = element) {
+function elementCfg(id = activeElement()) {
   return cfg().elements?.[id] ?? null;
 }
 
-export function activeElement() {
-  return element;
+// WHICH CARD GRANTS WHICH ELEMENT, built once from the roster. Only so the
+// lookup below is a map hit rather than a find() over fifty upgrades per pick.
+let byId = null;
+
+function elementOfCard(id) {
+  if (!byId) {
+    byId = Object.create(null);
+    for (const u of CONFIG.upgrades ?? []) if (u.element) byId[u.id] = u.element;
+  }
+  return byId[id] ?? null;
+}
+
+/**
+ * The element a build is carrying, or null.
+ *
+ * `picks` defaults to the live run, which is what every caller in the game
+ * wants. It is a PARAMETER because weaponName is documented as answerable from
+ * a pick list handed to it — the polaroid captions a kill with what the weapon
+ * was called at that moment — and a token inside it that reached for the live
+ * player instead would quietly make that promise false.
+ *
+ * SCANNED, NOT CACHED, and that is a correction. The first version memoised on
+ * the LENGTH of the pick list — which is wrong for the obvious reason once you
+ * see it: two different builds can be the same length, so a harness that swaps
+ * one element card for another got the first answer forever, and so would a run
+ * restarted into a different pick. Length is not identity.
+ *
+ * The scan is a loop over the picks with a map hit each, breaking at the first
+ * element card. The hot caller is applyElementalHit — once per HIT, not per
+ * enemy per frame — and everything else here asks once a frame, so there is
+ * nothing to buy with a cache except the bug above.
+ */
+export function activeElement(picks = player.upgrades) {
+  for (const p of picks ?? []) {
+    const el = elementOfCard(p.id);
+    if (el) return el;
+  }
+  return null;
 }
 
 /**
@@ -85,11 +134,11 @@ export function activeElement() {
  * elementCardName. One label, read from CONFIG, so renaming an element renames
  * every place it is spoken about rather than leaving two spellings in two files.
  */
-export function elementLabel(id = element) {
+export function elementLabel(id = activeElement()) {
   return elementCfg(id)?.label ?? null;
 }
 
-export function elementColor(id = element) {
+export function elementColor(id = activeElement()) {
   return elementCfg(id)?.color ?? 0xffffff;
 }
 
@@ -188,7 +237,7 @@ export function surgeElement(seconds) {
   if (!(seconds > 0)) return false;
   // Nothing to wake up. Reported rather than silently held, so a caller can
   // skip the juice for a synergy the player hasn't got.
-  if (!element || !cfg().enabled) return false;
+  if (!activeElement() || !cfg().enabled) return false;
   surge = 1;
   surgeLeft = Math.max(surgeLeft, seconds);
   surgeFade = Math.max(surgeFade, seconds * 0.25);
@@ -226,7 +275,7 @@ function level() {
  * real one — so a new element with no juice fails the build rather than
  * shipping silent.
  */
-export function elementHitEvent(id = element) {
+export function elementHitEvent(id = activeElement()) {
   if (!id) return 'elementHitShock';
   return `elementHit${id[0].toUpperCase()}${id.slice(1)}`;
 }
@@ -242,41 +291,13 @@ export function elementHitEvent(id = element) {
 // `random` is injectable for the same reason drawUpgrades takes one: so the
 // distribution can be checked without running the game.
 // ---------------------------------------------------------------------------
-export function rollElementFor(random = Math.random) {
-  if (element) return element;
-  const ids = Object.keys(cfg().elements ?? {});
-  if (!ids.length) return null;
-  return ids[Math.min(ids.length - 1, Math.floor(random() * ids.length))];
-}
-
-/** Lock in the element a card was offering. Called when the card is picked. */
-export function commitElement(id) {
-  if (!element && id) element = id;
-}
-
-/** What the card is called for a given roll — "Glow Up! 2: Venom". */
-export function elementCardName(baseName, id, stack) {
-  const label = elementLabel(id);
-  if (!label) return `${baseName} ${stack}`;
-  return `${baseName} ${stack}: ${label}`;
-}
-
-/**
- * What the card says. First pick announces the element; later ones deepen it.
- *
- * IT NO LONGER SAYS "Stronger at night", because it isn't. That line was true
- * and it was also the only place the day ramp was ever explained — which meant
- * the card was quietly telling a player who picked it at 9am that they had
- * bought something for later, without saying how much later or how much less.
- * The sky moves the seal's brightness now and nothing else, so there is
- * nothing here to warn anybody about.
- */
-export function elementCardDesc(id, stack) {
-  const e = elementCfg(id);
-  if (!e) return null;
-  if (stack <= 1) return `${e.desc}.`;
-  return `${e.label}: +damage, +duration.`;
-}
+// THE ROLL IS GONE, and with it the two functions that dressed a card in the
+// element it had rolled. Four cards name themselves; see config.js.
+//
+// `rollElementFor` picked one at DRAW time and `commitElement` locked it in on
+// the pick; `elementCardName` and `elementCardDesc` then rewrote the card's own
+// name and text around the result. All four existed to make one card behave
+// like four, and are unnecessary now that there are four.
 
 // ===========================================================================
 // APPLYING A HIT
@@ -298,7 +319,7 @@ export function elementCardDesc(id, stack) {
  * Returns the bonus damage dealt, so the caller can attribute it.
  */
 export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks = {}, share = 1, carrier = null) {
-  if (!element || !cfg().enabled || !enemy) return 0;
+  if (!activeElement() || !cfg().enabled || !enemy) return 0;
   const lv = level();
   if (lv <= 0) return 0;
 
@@ -323,7 +344,7 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
   const x = enemy.mesh.position.x;
   const y = enemy.mesh.position.y;
 
-  switch (element) {
+  switch (activeElement()) {
     case 'shock': applyShock(scene, enemy, bonus, enemiesList, hooks, share); break;
     case 'venom': applyVenom(enemy, share); break;
     case 'chill': applyChill(enemy, share, hooks, x, y); break;
@@ -337,7 +358,7 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
     default: break;
   }
 
-  hooks.onElementHit?.(x, y, element, e?.color ?? 0xffffff);
+  hooks.onElementHit?.(x, y, activeElement(), e?.color ?? 0xffffff);
   return bonus;
 }
 
@@ -367,7 +388,8 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
   const e = elementCfg('shock');
   if (!e || !enemiesList) return;
   const lv = level();
-  const chance = Math.min(e.chanceMax ?? 1, (e.chance ?? 0) + (e.chancePerLevel ?? 0) * (lv - 1));
+  // levelStats.js owns the curve AND the cap — shared with the tip.
+  const chance = biolumShockLevelStats(lv).biolumShockChance;
   if (Math.random() > chance * share) return;
 
   const range2 = (e.arcRange ?? 6.5) ** 2;
@@ -381,7 +403,7 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
   // Hops REMAINING, decremented in two places — once per hop taken, and again
   // for a hop that killed. A plain `for` over a fixed count could not express
   // the second without a second counter that means the same thing.
-  let budget = Math.max(1, Math.floor((e.arcs ?? 1) + (e.arcsPerLevel ?? 0) * (lv - 1)));
+  let budget = biolumShockLevelStats(lv).biolumShockArcs;
 
   let sx = from.mesh.position.x;
   let sy = from.mesh.position.y;
@@ -528,8 +550,8 @@ function applyChill(enemy, share, hooks, x, y) {
   const e = elementCfg('chill');
   if (!e) return;
   const lv = level();
-  const per = ((e.slowPerHit ?? 0.16) + (e.slowPerHitPerLevel ?? 0) * (lv - 1)) * share;
-  const dur = (e.freezeDuration ?? 0.9) + (e.freezeDurationPerLevel ?? 0) * (lv - 1);
+  const per = biolumChillLevelStats(lv).biolumChillSlow * share;
+  const dur = biolumChillLevelStats(lv).biolumChillFreeze;
   chillEnemy(enemy, per, e.duration ?? 2.5, dur, hooks, x, y);
 }
 
@@ -560,7 +582,10 @@ function applyInfection(enemy, share, generation) {
   if (!e) return;
   const lv = level();
   const falloff = (e.hopFalloff ?? 0.8) ** Math.max(0, generation);
-  const dps = ((e.dps ?? 3.5) + (e.dpsPerLevel ?? 0) * (lv - 1)) * share * falloff;
+  // The level curve from levelStats.js; `share` (which source landed the hit)
+  // and `falloff` (how many hops from the first host) are situational and stay
+  // here — a tip quoting them would be answering about one particular fish.
+  const dps = biolumInfectionLevelStats(lv, player.stats).biolumInfectDps * share * falloff;
 
   // Re-infecting an already-sick fish takes the STRONGER of the two rather
   // than stacking. Without that, a contagion that loops back on itself
@@ -590,7 +615,7 @@ function infectedCount(enemiesList) {
  * the running loop. Same hazard, same answer, as `pendingSplashes`.
  */
 export function onEnemyKilled(enemy) {
-  if (element !== 'infection' || !enemy || enemy.infectTimer <= 0) return;
+  if (activeElement() !== 'infection' || !enemy || enemy.infectTimer <= 0) return;
   pendingBursts.push({
     x: enemy.mesh.position.x,
     y: enemy.mesh.position.y,
@@ -621,7 +646,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
   if (!cfg().enabled) return;
 
   updateMotes(dt, scene);
-  if (!element) return;
+  if (!activeElement()) return;
 
   // THE CONTAGION RIDES THE AMMUNITION. Seeded here rather than at spawn so a
   // shot already in the air picks the lights up the moment the card is taken,
@@ -630,7 +655,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
   // GUN PELLETS ONLY, matching the rule in combat.js: the element rides the
   // basic shot, and an un-gated version would put spores on mussels,
   // starfish, ricochets and shrapnel too.
-  if (element === 'infection') {
+  if (activeElement() === 'infection') {
     for (const p of projectiles) {
       if (p.source === 'gun' || (p.faction === 'player' && p.mesh?.name === 'bullet')) {
         ensureMotes(scene, p, true);
@@ -638,7 +663,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
     }
   }
 
-  if (element === 'infection') drainBursts(scene, enemiesList, hooks);
+  if (activeElement() === 'infection') drainBursts(scene, enemiesList, hooks);
 
   for (let i = enemiesList.length - 1; i >= 0; i--) {
     const e = enemiesList[i];
@@ -653,7 +678,10 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
       if (e.venomTick <= 0) {
         e.venomTick = c?.tick ?? 0.35;
         const lv = level();
-        const dps = ((c?.dps ?? 4) + (c?.dpsPerLevel ?? 0) * (lv - 1)) * (e.venomStacks ?? 1);
+        // The curve from levelStats.js; the stack count is this fish's, not
+        // the card's, so it stays here.
+        const dps = biolumVenomLevelStats(lv, player.stats).biolumVenomDps
+          * (e.venomStacks ?? 1);
         dead = damageOverTime(scene, enemiesList, i, e, dps * (c?.tick ?? 0.35), hooks);
       }
       if (!dead && e.venomTimer <= 0) { e.venomTimer = 0; e.venomStacks = 0; }
@@ -703,7 +731,7 @@ function creep(dt, host, enemiesList, hooks) {
   if (infectedCount(enemiesList) >= (c.maxHosts ?? 14)) return;
 
   const lv = level();
-  const range = (c.spreadRange ?? 3.4) + (c.spreadRangePerLevel ?? 0) * (lv - 1);
+  const range = biolumInfectionLevelStats(lv).biolumInfectSpread;
   const range2 = range * range;
 
   let taken = 0;
@@ -733,7 +761,7 @@ function drainBursts(scene, enemiesList, hooks) {
   const c = elementCfg('infection');
   const lv = level();
   const radius = (c?.burstRange ?? 4.5) + (c?.burstRangePerLevel ?? 0) * (lv - 1);
-  const damage = (c?.burstDamage ?? 9) + (c?.burstDamagePerLevel ?? 0) * (lv - 1);
+  const damage = biolumInfectionLevelStats(lv, player.stats).biolumInfectBurst;
   const r2 = radius * radius;
 
   for (const b of pendingBursts) {
@@ -1004,7 +1032,7 @@ let glowCycle = 0;
  */
 export function updateElementSkin(body, rawDt = 0) {
   const s = cfg().skin;
-  if (!body || !element || s?.enabled === false || !cfg().enabled) return;
+  if (!body || !activeElement() || s?.enabled === false || !cfg().enabled) return;
   const lv = level();
   if (lv <= 0) return;
 
@@ -1021,7 +1049,7 @@ export function updateElementSkin(body, rawDt = 0) {
   // and still costs nothing at noon or midnight where the value is pinned.
   const power = Math.round(elementGlow() * 32) / 32;
   const night = Math.round(nightFactor() * 8) / 8;
-  const key = `${element}:${lv}:${night}:${power}`;
+  const key = `${activeElement()}:${lv}:${night}:${power}`;
   // The body check is what survives a model swap from the tuner: same element,
   // same level, same sky, different materials underneath.
   if (key === skinKey && skinnedBody === body) return;
@@ -1083,7 +1111,7 @@ export function updateElementSkin(body, rawDt = 0) {
 // or midnight, where the value is pinned.
 function shotMix() {
   const s = cfg().shot;
-  if (!element || s?.enabled === false || !cfg().enabled || level() <= 0) return 0;
+  if (!activeElement() || s?.enabled === false || !cfg().enabled || level() <= 0) return 0;
   const amount = Math.max(0, Math.min(1, s?.amount ?? 1));
   return Math.round(elementGlow() * amount * 32) / 32;
 }
@@ -1105,7 +1133,7 @@ function shotMix() {
  * sparks are the same at every hour, which is also what the damage now does.
  */
 export function elementFlightParticles() {
-  if (!element || !cfg().enabled || level() <= 0) return null;
+  if (!activeElement() || !cfg().enabled || level() <= 0) return null;
   const f = elementCfg()?.flight;
   return f?.emitter && f.perSecond > 0 ? f : null;
 }
@@ -1141,7 +1169,11 @@ export function invalidateElementSkin() {
 // ===========================================================================
 
 export function resetElements(scene) {
-  element = null;
+  // NO ELEMENT TO NULL ANY MORE. It used to be module state here and had to be
+  // cleared; it is read off the pick list now (see activeElement), which
+  // resetPlayer empties — so a new run has no element without this function
+  // having to remember to say so, and there is no second copy left to go stale.
+  //
   // THE GLOW COMES OFF THE SEAL, not just out of this module's bookkeeping.
   // Nothing rebuilds the body between runs and nothing rebuilds the ship
   // asset's materials at all, so the uniforms written last run are still on
@@ -1153,9 +1185,15 @@ export function resetElements(scene) {
   clearNoiseGlow();
   // ...and off the SHOT, for exactly the same reason: nothing rebuilds the
   // bullet's material between runs either, so a run that ended venom-green
-  // would open firing green pellets with no element behind them. `element` is
-  // already null above, so this resolves to "hand the colour back".
-  updateShotTint();
+  // would open firing green pellets with no element behind them.
+  //
+  // FORCED, NOT READ. This used to work because `element` had just been nulled
+  // on the line above; with the element living in the pick list it would
+  // instead depend on resetPlayer having already run — which it does today, at
+  // main.js:1403 against this at 1446, and which is exactly the kind of
+  // ordering nobody would notice breaking. Told to hand the colour back rather
+  // than asked whether it should.
+  setAssetBlendTint('bullet', null, 0);
   skinnedBody = null;
   skinKey = '';
   glowCycle = 0;

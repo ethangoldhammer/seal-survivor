@@ -9,6 +9,7 @@ import { targeting, companionDamage, applyCompanionScale } from './scaling.js';
 import { markWeight } from './marks.js';
 import { inSpawnGroup } from '../enemyTable.js';
 import { player } from '../entities/player.js';
+import { orcaLevelStats } from '../levelStats.js';
 
 // Orca Family — a pod of three that swims with the seal and peels off, one at
 // a time, to hit the BIG things: surface boats first, then large fish.
@@ -86,13 +87,10 @@ const _to = new THREE.Vector3();
 const _vel = new THREE.Vector2();
 
 export function podStats(level) {
-  const c = CONFIG.orca;
-  const lv = Math.max(1, level);
-  return {
-    damage: companionDamage(c.damage + c.damagePerLevel * (lv - 1)),
-    interval: Math.max(c.attackIntervalFloor, c.attackInterval - c.attackIntervalPerLevel * (lv - 1)),
-    chargeSpeed: c.chargeSpeed + c.chargeSpeedPerLevel * (lv - 1),
-  };
+  // levelStats.js owns the curve — one implementation, shared with the hover
+  // tip that quotes it. Big Rigz is folded in there.
+  const s = orcaLevelStats(level, player.stats);
+  return { damage: s.orcaDamage, interval: s.orcaGap, chargeSpeed: s.orcaChargeSpeed };
 }
 
 // A FAMILY, WHICH IS WHAT THE CARD IS CALLED. The pod used to be three copies

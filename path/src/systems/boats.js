@@ -11,7 +11,7 @@ import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
 import { updateHullWake } from './boatWake.js';
 import { emit } from '../entities/particles.js';
 import { createAttractiveClam, updateAttractiveClam, disposeAttractiveClam } from './attractiveClam.js';
-import { feedback } from './feedback.js';
+import { feedback, bossVoice } from './feedback.js';
 
 // Boats sail along the water line. They don't chase or attack — they're
 // targets floating above the fight, and shooting one showers the water with
@@ -619,6 +619,28 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   b.hp -= amount;
   b.flash = CONFIG.fx.hitFlash;
 
+  // WHAT THE THING IS MADE OF, going in. Every damaging blow a hull takes rings
+  // it — a pellet, the seal's own ram, an orca's run, or another boat arriving
+  // at speed — because that ring is the only readout the player gets that a
+  // boat is a different KIND of target from a tough fish. It used to be wired
+  // to the bullet path alone, so body-slamming a trawler was silent. Fired from
+  // here rather than from the four call sites so a fifth way of hurting a hull
+  // cannot arrive mute.
+  //
+  // SOUND ONLY — the `boss*Hull` events carry `emit: null` — so whatever landed
+  // the hit still draws its own burst (a pellet's spark, a ram's splash, an
+  // orca's strike) and the two never fight over the moment. Throttled per class
+  // in CONFIG.feedback, or multishot turns it into a rattle.
+  if (amount > 0) bossVoice('hit', b.assetKey ?? b.mesh?.name, {
+    // Where it was actually struck when the caller knows — a splash or a
+    // solver-resolved ram doesn't, and then the hull itself is the source.
+    x: at ? at.x : b.mesh.position.x,
+    y: at ? at.y : b.mesh.position.y,
+    scale: 1.1,
+    // The bigger hull answers deeper, the same rule its death below uses.
+    sfxOpts: { pitch: b.isTrawler ? 0.85 : 1 },
+  });
+
   // WHERE IT WAS HIT, remembered in the HULL'S OWN FRAME. The smoke that comes
   // off a failing boat is fired from these, and a hit position stored in world
   // coordinates would be left behind by the boat within a second — this hull
@@ -684,6 +706,25 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   }
 
   if (b.isTrawler) spawnAttractorOrb(scene, b.mesh.position.clone());
+
+  // THE HULL GOING UP. Here rather than in the caller's hook for the same
+  // reason the hit above is: the hook is where the SCORE lives, and every
+  // system that can sink a boat had to remember to pass it — one that forgot
+  // would sink hulls in silence. Its own event rather than `bigKill`, because a
+  // hull going up throws the crew, the wreckage and the catch all at once and
+  // should land heavier than the biggest creature in the game dying.
+  feedback('boatExplosion', {
+    x: b.mesh.position.x, y: b.mesh.position.y,
+    scale: b.isTrawler ? 2.4 : 1.7,
+    sfxOpts: { pitch: b.isTrawler ? 0.7 : 0.85, decayMul: 1.6 },
+  });
+  // The hull's own death under the blast — the deepest voice in the bank, and
+  // the thing that makes a boat going up sound like a boat going up rather than
+  // like a large fish dying. Pitched down for a trawler on the same rule.
+  bossVoice('die', b.assetKey ?? b.mesh?.name, {
+    x: b.mesh.position.x, y: b.mesh.position.y,
+    sfxOpts: { pitch: b.isTrawler ? 0.82 : 1, decayMul: b.isTrawler ? 1.3 : 1 },
+  });
 
   hooks.onBoatDestroyed?.(b, count);
 

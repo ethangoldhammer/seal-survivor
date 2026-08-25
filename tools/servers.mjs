@@ -81,6 +81,12 @@ export const ROLES = {
     start: 'node tools/atlas-render/server.mjs',
     why: 'Renders model portraits in a real browser. Read-only; only writes into its own shots dir.',
   },
+  pick: {
+    need: 'none',
+    label: 'design picker — port 4601',
+    start: 'npm run pick',
+    why: 'Angles for model shots that go in documents: http://localhost:4601/picker.html?list=design-icons.json — writes the chosen angles and PNGs under design/, never the game.',
+  },
   scratch: {
     need: 'none',
     label: 'agent scratchpad',
@@ -159,6 +165,10 @@ function classify(proc) {
   if (/csv-editor\.mjs/.test(text)) return 'csv';
   if (/hub\.mjs/.test(text)) return 'hub';
   if (/looks[/\\]serve\.mjs/.test(text)) return 'looks';
+  // Before the atlas rule, and it has to be: the design picker IS an atlas
+  // server, started by design-pick.mjs, so the only thing telling the two
+  // apart is the parent's command line (or the port it was told to take).
+  if (/design-pick\.mjs/.test(text) || /--port\s+4601/.test(text)) return 'pick';
   if (/atlas-render[/\\]server\.mjs/.test(text)) return 'atlas';
   if (/vite\s+preview/.test(text)) return 'preview';
   if (/[/\s]vite($|\s)/.test(text)) return 'dev';
@@ -223,7 +233,7 @@ export function survey() {
     //
     // Past a few hours it is leftovers again, so it ages into `stale` and
     // becomes fair game. Nothing here can ever mark the newest one for death.
-    else if (p.role === 'looks' || p.role === 'atlas') {
+    else if (p.role === 'looks' || p.role === 'atlas' || p.role === 'pick') {
       const old = p.age > 4 * 3600;
       p.verdict = old ? 'stale' : 'idle';
       p.note = old
@@ -268,10 +278,19 @@ function panel() {
 
   // What SHOULD be up, including the ones that are not.
   console.log(`\n${C.bold}  WHAT YOU NEED${C.off}\n`);
-  for (const role of ['dev', 'csv', 'hub', 'preview']) {
-    const up = found.some((p) => p.role === role && p.verdict === 'keep');
+  for (const role of ['dev', 'csv', 'hub', 'pick', 'preview']) {
+    // `idle` counts as up. Only dev/csv/hub are ever marked `keep` (they are
+    // the roles that want exactly one), so a running picker would otherwise be
+    // reported as not running by the very panel that is listing it.
+    const up = found.some((p) => p.role === role && (p.verdict === 'keep' || p.verdict === 'idle'));
     const want = ROLES[role].need === 'one';
-    const state = up ? `${C.green}running${C.off}` : want ? `${C.red}NOT RUNNING${C.off}  →  ${ROLES[role].start}` : `${C.dim}not running (fine)${C.off}`;
+    // An optional role that is down still shows how to start it. Without this
+    // the line read "not running (fine)" and stopped — true, and useless: the
+    // one thing you want from a panel listing a tool you are not running is
+    // the command that runs it.
+    const state = up ? `${C.green}running${C.off}`
+      : want ? `${C.red}NOT RUNNING${C.off}  →  ${ROLES[role].start}`
+      : `${C.dim}not running (fine)${C.off}  →  ${ROLES[role].start}`;
     console.log(`  ${pad(ROLES[role].label, 30)}${state}`);
     console.log(`  ${C.dim}${ROLES[role].why}${C.off}\n`);
   }

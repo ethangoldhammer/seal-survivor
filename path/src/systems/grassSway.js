@@ -50,7 +50,8 @@ uniform float uSwayWavelength;
 uniform vec2  uSwayDir;
 uniform float uSwayFlutter;
 uniform float uSwayBend;
-uniform float uSwayHeight; // clump height, model units; only the UV fallback
+uniform float uSwayHeight;  // subject height, in the space transformed arrives in
+uniform float uSwayUseUv;   // 1 = mask on uv.y, 0 = on height (see attachGrassSway)
 `;
 
 // Injected after <begin_vertex>, where `transformed` is the raw object-space
@@ -64,14 +65,44 @@ uniform float uSwayHeight; // clump height, model units; only the UV fallback
 // file is otherwise written with. Comments inside the shader stay short and
 // ASCII; the "why" stays here.
 //
-//   swayT   root-to-tip parameter, 0 at the base and 1 at the tip. The guard is
-//           USE_MAP, not USE_UV: since r152 three gives each map its own
-//           varying, and vMapUv is declared under USE_MAP while USE_UV governs
-//           the unrelated vUv. Guarding on the wrong one still compiles and
-//           quietly takes the fallback, which is the worst of both outcomes.
-//           <uv_vertex> assigns it well before <begin_vertex>, so it is live
-//           here, and mapTransform is identity absent KHR_texture_transform —
-//           so this is the raw v, and the atlas only ever remaps u.
+//   swayT   root-to-tip parameter, 0 at the base and 1 at the tip. TWO sources,
+//           and which one is right is a fact about the model, not a preference
+//           — see attachGrassSway's `mask` option.
+//
+//           uv.y is the grass clump's, for the reason at the top of the file.
+//           The guard is USE_MAP, not USE_UV: since r152 three gives each map
+//           its own varying, and vMapUv is declared under USE_MAP while USE_UV
+//           governs the unrelated vUv. Guarding on the wrong one still compiles
+//           and quietly takes the other branch, which is the worst of both
+//           outcomes. <uv_vertex> assigns it well before <begin_vertex>, so it
+//           is live here, and mapTransform is identity absent
+//           KHR_texture_transform — so this is the raw v.
+//
+//           Object-space height is the SeaFlora bed's. Those props are one
+//           plant per file with the base already at y=0, so height IS the
+//           blade parameter and there is no mixed-height clump to get it
+//           wrong. Their UVs cannot be used: split-seabed.mjs crops each prop
+//           to its own patch of the shared watercolour sheet, and while that
+//           leaves v spanning roughly 0..1 it does not promise which end is
+//           the root — measured, broadleaf_b correlates -0.80 with its own
+//           height and the two corals only 0.77-0.80, so uv.y there would bend
+//           a leaf from the tip and no error would say so.
+//
+//           Selected by UNIFORM rather than by #define, because
+//           customProgramCacheKey below pins every sway material to one cached
+//           program and that is only sound while the injected source is
+//           byte-identical for all of them. A #define here would hand the
+//           second material the first one's compiled shader.
+//
+//   swayDir the current, in the space the push is applied in. Under
+//           USE_INSTANCING that is NOT the world: seabedScatter gives every
+//           plant a random yaw on its instance matrix, which would rotate an
+//           object-space push into a different world direction per plant and
+//           turn one current into a field of plants each leaning its own way.
+//           Carrying the world direction back through the instance's basis
+//           (its transpose, which for a rotation is its inverse) makes the
+//           whole bed lean together again. The PHASE stays world — a gust
+//           crossing the bed is a place, not an orientation.
 //
 //   mask    pow() concentrates the bend toward the tip. 1.0 hinges the whole
 //           blade at the root and reads like a wiper; higher values keep the
@@ -106,17 +137,35 @@ uniform float uSwayHeight; // clump height, model units; only the UV fallback
 //           own root.
 const GLSL_SWAY_BODY = `
 {
+  // height within the subject; also the fallback when there are no UVs at all
+  float swayH = clamp(transformed.y / max(uSwayHeight, 0.0001), 0.0, 1.0);
+  float swayT = swayH;
   #ifdef USE_MAP
-    float swayT = clamp(vMapUv.y, 0.0, 1.0);
-  #else
-    // no UVs: fall back to height within the clump
-    float swayT = clamp(transformed.y / max(uSwayHeight, 0.0001), 0.0, 1.0);
+    swayT = mix(swayH, clamp(vMapUv.y, 0.0, 1.0), uSwayUseUv);
   #endif
 
   float mask = pow(swayT, uSwayStiffness);
   float bladeY = transformed.y;
 
-  vec3 swayWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vec2 swayDir = uSwayDir;
+  vec4 swayLocal = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+    // world = modelMatrix * instanceMatrix * transformed, the order three uses
+    // in <worldpos_vertex> and <project_vertex>.
+    swayLocal = instanceMatrix * swayLocal;
+    // basis columns, normalised so a per-instance scale cannot bias the turn
+    vec3 axisX = instanceMatrix[0].xyz;
+    vec3 axisZ = instanceMatrix[2].xyz;
+    vec3 wantWorld = vec3(uSwayDir.x, 0.0, uSwayDir.y);
+    vec2 dirLocal = vec2(
+      dot(wantWorld, axisX / max(length(axisX), 0.0001)),
+      dot(wantWorld, axisZ / max(length(axisZ), 0.0001)));
+    float dirLen = length(dirLocal);
+    // degenerate basis (a zeroed instance matrix) falls back rather than NaNs
+    swayDir = mix(uSwayDir, dirLocal / max(dirLen, 0.0001), step(0.0001, dirLen));
+  #endif
+
+  vec3 swayWorld = (modelMatrix * swayLocal).xyz;
   // uSwayCycle and uSwayFlutterCycle arrive as POSITIONS (in cycles), not as
   // a clock and a rate, which is what lets the same shader run at 1.1 rad/s
   // or at one sway per two bars — see systems/beatSync.js. The spatial term
@@ -126,7 +175,7 @@ const GLSL_SWAY_BODY = `
   float body = sin(phase);
   float flutter = sin(phase * 2.7 + uSwayFlutterCycle * 6.2831853) * uSwayFlutter * swayT;
 
-  vec2 push = uSwayDir * (body * uSwayAmplitude + flutter) * mask * bladeY;
+  vec2 push = swayDir * (body * uSwayAmplitude + flutter) * mask * bladeY;
   transformed.xz += push;
 
   // hold arc length: drop the tip to pay for moving it sideways
@@ -144,12 +193,26 @@ const attached = new Set();
  * Inject the sway into one material. Idempotent — calling it twice on the same
  * material no-ops rather than stacking a second copy of the displacement.
  *
- * `heightFallback` is the model's object-space height, used only when the
- * material has no UVs (see the #else branch above).
+ * `height` is the subject's height IN THE SPACE `transformed` arrives in, which
+ * is the raw model space for anything drawn as a loaded model and is NOT that
+ * for the instanced bed — seabedScatter bakes fit, the orientation group and
+ * the size multiplier into its geometry, so it re-measures and calls
+ * setGrassSwayHeight afterwards. Passing the wrong one does not error; it
+ * scales the root-to-tip mask, so the plant bends from part-way up itself.
+ *
+ * @param {object} [opts]
+ * @param {'uv'|'height'} [opts.mask]  which root-to-tip parameter to bend on.
+ *   'uv' for a model whose v really does run root-to-tip (grass.glb); 'height'
+ *   for one plant per file with its base at y=0 (the SeaFlora bed). See the
+ *   swayT note above — the wrong one is a silent, plausible-looking bend.
+ * @param {number} [opts.scale]  per-subject multiplier on amplitude and
+ *   flutter, so one current can move kelp and coral by different amounts
+ *   without a second copy of CONFIG.grass.sway's nine numbers.
  */
-export function attachGrassSway(material, heightFallback = 1) {
+export function attachGrassSway(material, height = 1, opts = {}) {
   if (!material || material.userData.__swayAttached) return material;
   material.userData.__swayAttached = true;
+  material.userData.__swayScale = opts.scale ?? 1;
 
   const u = {
     uSwayCycle: { value: 0 },
@@ -160,7 +223,8 @@ export function attachGrassSway(material, heightFallback = 1) {
     uSwayDir: { value: new THREE.Vector2(1, 0) },
     uSwayFlutter: { value: 0.025 },
     uSwayBend: { value: 1 },
-    uSwayHeight: { value: heightFallback },
+    uSwayHeight: { value: height },
+    uSwayUseUv: { value: opts.mask === 'height' ? 0 : 1 },
   };
   material.userData.__swayUniforms = u;
 
@@ -226,18 +290,40 @@ export function applyGrassSettings() {
   for (const m of attached) {
     const u = m.userData.__swayUniforms;
     if (!u) continue;
+    // Per-subject softening. Applied here rather than in the shader so it stays
+    // a property of the PLANT — a coral head and a kelp frond in the same
+    // current move by different amounts — while everything about the current
+    // itself is still one config block that a slider moves for the whole bed.
+    const scale = m.userData.__swayScale ?? 1;
     // `enabled` folds into amplitude rather than branching in the shader — one
     // less thing for the vertex to test, and the toggle settles the grass
     // instead of snapping it straight.
-    u.uSwayAmplitude.value = cfg.enabled === false ? 0 : (cfg.amplitude ?? 0.09);
+    u.uSwayAmplitude.value = cfg.enabled === false ? 0 : (cfg.amplitude ?? 0.09) * scale;
     u.uSwayStiffness.value = cfg.stiffness ?? 1.8;
     u.uSwayWavelength.value = cfg.wavelength ?? 0.35;
     u.uSwayDir.value.set(Math.cos(dir), Math.sin(dir));
-    u.uSwayFlutter.value = cfg.enabled === false ? 0 : (cfg.flutter ?? 0.025);
+    u.uSwayFlutter.value = cfg.enabled === false ? 0 : (cfg.flutter ?? 0.025) * scale;
     u.uSwayBend.value = cfg.bend ?? 1;
     // `speed` and `flutterSpeed` are NOT written here any more: they are rates,
     // and the shader is handed positions. updateGrassSway owns both.
   }
+}
+
+/**
+ * Correct the height the root-to-tip mask normalises against, once the caller
+ * knows the space its geometry actually ended up in.
+ *
+ * systems/seabedScatter.js is the reason this exists: it collapses
+ * createVisual's whole assembly into one geometry and reseats the base at y=0,
+ * so the height assets.js measured off the raw model is in the wrong units by
+ * whatever fit and the size multiplier came to. Wrong here is not an error and
+ * not invisible either — the mask saturates part-way up the plant and the top
+ * third bends as one rigid piece.
+ */
+export function setGrassSwayHeight(material, height) {
+  const u = material?.userData?.__swayUniforms;
+  if (!u || !(height > 0)) return;
+  u.uSwayHeight.value = height;
 }
 
 export function grassSwayMaterialCount() {

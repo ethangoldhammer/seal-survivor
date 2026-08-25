@@ -1,0 +1,23 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",       "x": 0,    "y": 0, "w": 420, "h": 520, "title": "A · Ledger" },
+    { "file": "Paper.dc.html",      "x": 480,  "y": 0, "w": 420, "h": 520, "title": "B · Paper" },
+    { "file": "Instrument.dc.html", "x": 960,  "y": 0, "w": 420, "h": 520, "title": "C · Instrument" },
+    { "file": "Bare.dc.html",       "x": 1440, "y": 0, "w": 420, "h": 520, "title": "D · Bare" }
+  ],
+  "annotations": [
+    { "id": "brief", "x": 0, "y": -150, "w": 900,
+      "text": "The hover tip on an upgrade hexagon — four registers for the same three facts.\n\nEvery card shows the same two cases so they are comparable: a four-deep weapon (delta, span, run ledger) and a capped stat card. Words in [DRAFT] are the tip's own chrome and are still Ethan's to write — see design/COPY-TODO.md. Every number is real: measured from apply(), or off the run ledger." },
+    { "id": "note-a", "x": 0, "y": 560, "w": 420,
+      "text": "WHY — it is already there, already tested, and it is the only one of the four that survives a card moving four stats at once: the phrase can run to three lines and the table still holds.\n\nCOST — it is a dialog box. Nothing about it says this game rather than any settings panel, and at four rows it is the tallest of the four over a fight." },
+    { "id": "note-b", "x": 480, "y": 560, "w": 420,
+      "text": "WHY — the run already prints things. The kill shots come out of a camera onto paper, and a tip on the same stock says the game keeps records rather than that a UI framework does.\n\nCOST — a bright rectangle over a dark fight is loud, and it reads as an OBJECT in the world when the corner hive it points at is a readout. Also the one direction that cannot be dimmed without looking grubby." },
+    { "id": "note-c", "x": 960, "y": 560, "w": 420,
+      "text": "WHY — the span stops being two numbers and becomes a distance. It borrows the health and air gauges' own gradients, so it is legible at a glance and unmistakably from this HUD.\n\nCOST — a bar can only show ONE stat, so a card that moves four has to pick a lead and drop the rest, or grow four bars. It also needs a floor and a ceiling, and half the stats in the game have neither." },
+    { "id": "note-d", "x": 1440, "y": 560, "w": 420,
+      "text": "WHY — no chrome at all, so nothing covers the fight. Three lines of type that a player who knows the roster reads in under a second, and the only one of the four that could stay up mid-run.\n\nCOST — unlearnable. Nothing tells you what 261k · 92 is, so it is a reward for people who already know rather than an explanation for people who do not — which is the opposite of what the tip was built for." },
+    { "id": "mobile", "x": 0, "y": 900, "w": 900,
+      "text": "MOBILE — whichever wins, the tip now opens on a HOLD (280ms, matching the pause button) on the level-up cards, the corner hive, the boss dividend and the end-of-run build. A hold cancels the pick, so reading a card is no longer the same gesture as taking it, and pulling your thumb off cancels both. Direction D is the only one small enough to hold under a thumb without the thumb covering it — worth a look on a phone before deciding." }
+  ],
+  "launch": { "view": "canvas" }
+}

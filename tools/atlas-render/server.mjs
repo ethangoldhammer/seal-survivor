@@ -1,7 +1,14 @@
 // Static server for the atlas renderer, plus a drop box for the images it makes.
 //
-//   node tools/atlas-render/server.mjs [--out <dir>]
+//   node tools/atlas-render/server.mjs [--out <dir>] [--port <n>]
 //   then open http://localhost:4599/render.html in a real browser
+//
+// `--port` exists so a SECOND picker can be up beside this one on a port of
+// its own — see tools/design-pick.mjs, which serves the same pages against a
+// different spec list. Two servers rather than one with two lists because the
+// panel (tools/servers.mjs) identifies a tool by its process, and a single
+// process serving two jobs is one row that cannot say which of them you are
+// using.
 //
 // Renders every model in `list.json` (see the Model Atlas notes for how that is
 // generated from the atlas data) and POSTs each PNG back here. The browser is
@@ -20,7 +27,7 @@
 // the one `npm run icons -- --bake` produces.
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -35,6 +42,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT = resolve(HERE, '../..');
 const outArg = process.argv.indexOf('--out');
 const SHOTS = outArg > -1 ? resolve(process.argv[outArg + 1]) : join(HERE, 'shots');
+const portArg = process.argv.indexOf('--port');
+const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 4599;
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(`--port ${process.argv[portArg + 1]} is not a port`);
+  process.exit(1);
+}
+// The spec list this server is FOR, used only to print a URL you can click.
+// The pages take it as a query string, so nothing here has to understand it.
+const listArg = process.argv.indexOf('--list');
+const LIST = listArg > -1 ? process.argv[listArg + 1] : null;
 await mkdir(SHOTS, { recursive: true });
 
 const MIME = {
@@ -56,6 +73,15 @@ const MOUNTS = [
   // public/sprites already holds the five starfish, which are better icons than
   // any render of them — the ability throws a drawing, not a mesh.
   ['/sprites/', join(PROJECT, 'public/sprites')],
+  // THE GAME'S OWN SOURCE, read-only, so a render can wear the shader the
+  // player sees rather than an impression of it — path/src/systems/noiseGlsl.js
+  // is the seal's mottling and is a leaf module with no imports, which is what
+  // lets a plain browser load it. config.js could not be served this way: it
+  // pulls in the tuning JSON and the CSVs through Vite.
+  ['/src/', join(PROJECT, 'path/src')],
+  // The hex card art, for the design hex picker (hexpick.html). Read-only like
+  // every other mount here.
+  ['/hexart/', join(PROJECT, 'design/assets')],
   ['/', HERE],
 ];
 
@@ -98,6 +124,19 @@ const server = http.createServer(async (req, res) => {
   // wrong extension shows up immediately as a broken preview in the picker.
   // The picker reads its file input's `accept` from here rather than hardcoding
   // one, which is the fourth copy of the format list removed.
+  // WHAT HEX ART IS ON DISK. There is no directory listing anywhere else in
+  // this server and there should not be one — but the hex picker's gallery IS
+  // the contents of design/assets, and a hand-written list in the page would go
+  // stale the first time art is added. So: one directory, one route, names
+  // only.
+  if (req.method === 'GET' && url.pathname === '/hexart.json') {
+    const dir = join(PROJECT, 'design/assets');
+    const names = await readdir(dir).catch(() => []);
+    res.writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify(names.filter((n) => !n.startsWith('.'))));
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname === '/icon-formats.json') {
     res.writeHead(200, { 'content-type': 'application/json' })
       .end(JSON.stringify({ exts: ICON_EXTS }));
@@ -239,8 +278,27 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(4599, () => {
-  console.log('atlas renderer on http://localhost:4599/render.html');
+// A port already in use is the failure this whole file looks broken from: the
+// page loads (from the OTHER server), writes its shots somewhere you are not
+// looking, and nothing says why. So say it, and say what to do about it.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`port ${PORT} is already in use — something else is serving it.`);
+    console.error('  npm run servers        see what, and what is safe to stop');
+    console.error(`  npm run servers -- stop ${PORT}`);
+    process.exit(1);
+  }
+  throw err;
+});
+
+server.listen(PORT, () => {
+  const q = LIST ? `?list=${LIST}` : '';
+  console.log(`atlas renderer on http://localhost:${PORT}/render.html${q}`);
+  console.log(`  pick angles at  http://localhost:${PORT}/picker.html${q}`);
+  // The bake is the upgrade icons' round trip and nothing else's. Saying so on
+  // a server started for a different list would be an invitation to press a
+  // button that rewrites a module this list has no business in.
+  if (LIST) console.log('  (shots here are for documents — "apply to the game" bakes the UPGRADE icons, not these)');
   console.log(`writing shots to ${SHOTS}`);
-  console.log('  picker.html can bake straight into path/src/ui/upgradeIcons.js');
+  if (!LIST) console.log('  picker.html can bake straight into path/src/ui/upgradeIcons.js');
 });

@@ -248,10 +248,25 @@ export function rebuildShipBody() {
   player.breathe = createBreathDriver(body);
 }
 
-// Rebuild the stat block from CONFIG, then replay every upgrade on top. Called
-// on reset, on level-up, and whenever the tuner changes a value — which is why
-// sliders affect a run already in progress.
-export function recomputeStats() {
+/**
+ * THE WHOLE PIPELINE, AS A PURE FUNCTION — a stat block from a pick list.
+ *
+ * Pulled out of recomputeStats when the hover tips needed to answer "and where
+ * would that put me" (see ui/upgradeTip.js): the honest answer is this exact
+ * pipeline run again with one more pick on the end, and there is no other way
+ * to get it. Reimplementing the order — upgrades, then level growth, then the
+ * two damage-scaling cards — somewhere else would be a second copy of a
+ * sequence whose whole comment is about why the order matters, and the drift
+ * would show up as a tooltip promising a number the fight does not deliver.
+ *
+ * Nothing here touches `player`. recomputeStats below is the one caller that
+ * commits the result.
+ *
+ * @param picks  { id, rarity } entries, oldest first.
+ * @param level  player level, for the baseline growth.
+ * @param humansEaten  for Maneater and Iron Lung.
+ */
+export function computeStats(picks = [], level = 1, humansEaten = 0) {
   const s = baseStats();
 
   // `player.upgrades` holds { id, rarity } rather than bare ids, because the
@@ -259,21 +274,51 @@ export function recomputeStats() {
   // survive every recompute — the block is rebuilt from scratch on each
   // level-up and on every tuner nudge, so a rarity kept anywhere else would be
   // thrown away several times a minute.
-  for (const pick of player.upgrades) {
+  for (const pick of picks) {
     const u = CONFIG.upgrades.find((x) => x.id === pick.id);
     if (u) applyWithRarity(u, s, pick.rarity);
   }
 
   // Baseline growth applied AFTER upgrades — see stats.js for the why.
-  applyLevelGrowth(s, player.level);
+  applyLevelGrowth(s, level);
   // ...and the two damage-scaling cards after THAT, so Maneater and Iron Lung
   // multiply the finished numbers rather than a partial block. Both are
   // no-ops on a run that holds neither. See applyDamageScaling in stats.js.
-  applyDamageScaling(s, player.humansEaten);
+  applyDamageScaling(s, humansEaten);
+  return s;
+}
 
+// Rebuild the stat block from CONFIG, then replay every upgrade on top. Called
+// on reset, on level-up, and whenever the tuner changes a value — which is why
+// sliders affect a run already in progress.
+export function recomputeStats() {
+  const s = computeStats(player.upgrades, player.level, player.humansEaten);
   player.stats = s;
   player.hp = Math.min(player.hp, s.maxHp);
   return s;
+}
+
+/**
+ * The stat block this run WOULD have with one more of `id` in it.
+ *
+ * The tips' "and where does that put me" figure. Nothing is committed — the
+ * live block is untouched — and the answer includes everything the fight
+ * includes: the base, every other card, the level growth and the damage
+ * scaling, which is the whole point of routing it through computeStats rather
+ * than replaying one apply() in isolation.
+ *
+ * `rarity` is the tier the hypothetical pick would arrive at. The level-up
+ * screen knows it (the card has been dealt); a hexagon in the hive does not,
+ * and passing null lands on the base tier — the same default addUpgrade uses,
+ * which is the conservative read rather than a flattering one.
+ */
+export function statsWithOneMore(id, rarity = null) {
+  if (!id) return null;
+  return computeStats(
+    [...player.upgrades, { id, rarity: rarity ?? baseRarity() }],
+    player.level,
+    player.humansEaten,
+  );
 }
 
 export function addUpgrade(id, rarity = null) {
@@ -334,10 +379,31 @@ export function levelableUpgrades() {
 }
 
 export function availableUpgrades() {
+  // WHICH EXCLUSIVE GROUPS ARE ALREADY SPOKEN FOR. A card carrying
+  // `exclusive: 'group'` locks that group to itself the moment it is taken:
+  // every OTHER card in the same group leaves the pool for the rest of the run.
+  //
+  // The four elements are the only group so far, and they are the reason it
+  // exists — a run carries one element, and everything downstream assumes it
+  // (one tint on the seal, one word in the weapon's name, one set of curves).
+  // Before this the guarantee came from a Math.random roll on a single card;
+  // now it comes from the offer pool, where it can be read.
+  //
+  // BUILT PER CALL, not cached. This runs once per level-up, on a paused game,
+  // over fifty upgrades — and a cache would have to be invalidated on every
+  // pick, which is the one place it would ever be wrong.
+  const claimed = new Map();
+  for (const pick of player.upgrades) {
+    const u = CONFIG.upgrades.find((x) => x.id === pick.id);
+    if (u?.exclusive && !claimed.has(u.exclusive)) claimed.set(u.exclusive, u.id);
+  }
+
   return CONFIG.upgrades.filter((u) => {
     // `enabled: false` (set in the upgrade table) removes an upgrade from
     // the offer pool entirely, without deleting it from config.
     if (u.enabled === false) return false;
+    // Held the group already, and it was somebody else.
+    if (u.exclusive && claimed.has(u.exclusive) && claimed.get(u.exclusive) !== u.id) return false;
     if (u.maxStacks == null) return true;
     return player.upgrades.filter((p) => p.id === u.id).length < u.maxStacks;
   });

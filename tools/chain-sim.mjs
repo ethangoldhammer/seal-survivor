@@ -289,7 +289,8 @@ export function measure(rate, hold, seconds = 60, cadence = 0) {
 export function report() {
 console.log('\nFOOD CHAIN — simulated against the chum the seal actually SWALLOWS in real runs');
 console.log(`(real player, real strike, real magnet, real pickups; ${SEEDS.length} seeds x 60s each)\n`);
-console.log(`  a sweet release ARMS a chain; every pip eaten inside it is a link (first at ${linkPips(null)} of ${pipCount(null)} pips)`);
+console.log(`  a sweet release ARMS a chain; links are bought with the food inside it`
+  + ` (${linkPips(null)} of ${pipCount(null)} pips for the first, +${CONFIG.strike.linkPipsPerLink} a link after)`);
 console.log(`  chainWindow ${CONFIG.strike.chainWindow}s, windowFromDashEnd ${CONFIG.strike.windowFromDashEnd}`);
 console.log(`  magnet reach: idle ${(CONFIG.player.pickupRadius).toFixed(1)}  striking ${(CONFIG.player.pickupRadius * CONFIG.pickups.magnet.striking.radiusMul).toFixed(1)}\n`);
 

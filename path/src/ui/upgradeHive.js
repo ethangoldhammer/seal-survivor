@@ -28,6 +28,7 @@ import { UPGRADE_ICONS } from './upgradeIcons.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { onFeedback } from '../systems/feedback.js';
 import { cssEase } from '../ease.js';
+import { pressableWithin } from './press.js';
 
 // Which upgrade a feedback event belongs to.
 //
@@ -105,9 +106,18 @@ export const EVENT_UPGRADE = {
   strikeChain: 'strikePower',
   strikeRam: 'strikeDash',
   strikePip: 'strikeCharge',
-  elementArc: 'bioluminescence', elementFreeze: 'bioluminescence',
-  elementHitShock: 'bioluminescence', elementHitVenom: 'bioluminescence',
-  elementHitChill: 'bioluminescence', elementHitInfection: 'bioluminescence',
+  // ONE EVENT PER ELEMENT, AND ONE CARD PER ELEMENT — so each of these lights
+  // exactly the tile that bought it. It used to be four events pointing at one
+  // card; the split means `elementHitVenom` can only ever come from the venom
+  // card, because holding one locks the other three out of the run.
+  //
+  // `elementArc` and `elementFreeze` are shock's and chill's own moments and
+  // are listed with them. All four ids are here whatever the run holds:
+  // pulseHive is a no-op for a tile that isn't in the corner.
+  elementHitShock: 'biolumShock', elementArc: 'biolumShock',
+  elementHitVenom: 'biolumVenom',
+  elementHitChill: 'biolumChill', elementFreeze: 'biolumChill',
+  elementHitInfection: 'biolumInfection',
 
   // --- shared events, split by who fired them -------------------------------
   // `shoot` is fired by the main gun AND by Starfish Shuriken, which is why
@@ -511,8 +521,38 @@ function upgradeDef(id) {
 // (Sea Garlic is an aura), and those will always need a drawn mark. Showing
 // initials makes the gap visible during a run instead of leaving a blank tile
 // that reads as a loading failure.
+// THE FOUR ELEMENTS SHARE ONE MARK, for now.
+//
+// upgradeIcons.js is generated (see its header) and carries one entry under the
+// old single-card id. The card became four when the element stopped being
+// rolled, and rather than hand-editing a generated file — where the next bake
+// would drop it — the four ids point at the one render here.
+//
+// FOUR MARKS IS THE RIGHT ANSWER and this is not it: shock, venom, chill and
+// infection are four different abilities and a player reading the corner should
+// be able to tell which one they are carrying. One icon in four tiles is a
+// placeholder until they are drawn.
+// A NEW UPGRADE ID BORROWING AN OLDER ICON, until its own is baked.
+//
+// EMPTY, and that is the finished state rather than a stub. It was filled the
+// day Glow Up! split into four cards: the four new ids had no renders, so they
+// all pointed at the single `bioluminescence` icon to keep four monograms off
+// the corner until the bake caught up. The bake has caught up — every element
+// carries its own render now, and `bioluminescence` is not a key in
+// UPGRADE_ICONS any more — so every one of those four entries pointed at an
+// icon that no longer exists.
+//
+// Inert rather than broken, because the lookup below tries the real key first
+// and never reached the alias. tools/hive-test.mjs catches it anyway, which is
+// the point of auditing both directions: an alias aimed at nothing is a
+// monogram waiting for the next id that needs one.
+//
+// Kept as the mechanism, not deleted, because the next rename wants it and the
+// audit already guards both ends.
+export const ICON_ALIAS = {};
+
 function markFor(id, def) {
-  const src = UPGRADE_ICONS[id];
+  const src = UPGRADE_ICONS[id] ?? UPGRADE_ICONS[ICON_ALIAS[id]];
   if (src) {
     const img = document.createElement('img');
     img.className = 'sv-hive-icon';
@@ -1127,6 +1167,7 @@ export function setHiveTips(on, { onShow, onHide } = {}) {
   if (!want) {
     state.host?.removeEventListener('pointerover', tipHandlers.over);
     state.host?.removeEventListener('pointerout', tipHandlers.out);
+    tipHandlers.unpress?.();
     tipHandlers = null;
     state.root.removeAttribute('data-tips');
     onHide?.();
@@ -1150,7 +1191,16 @@ export function setHiveTips(on, { onShow, onHide } = {}) {
   };
   state.host.addEventListener('pointerover', over);
   state.host.addEventListener('pointerout', out);
-  tipHandlers = { over, out };
+  // AND FOR A THUMB, which has no pointerover at all — so without this the
+  // corner is a readout you can only interrogate with a mouse, on a game most
+  // people play on a phone. Hold a hexagon for its tip; pull off and it goes.
+  // Delegated the same way, and torn down with the rest of it.
+  const unpress = pressableWithin(state.host, '.sv-hive-tile', {
+    onHold: (tile) => onShow?.(tile.dataset.upgrade, tile),
+    onHoldEnd: () => onHide?.(),
+    onSlip: () => onHide?.(),
+  });
+  tipHandlers = { over, out, unpress };
   state.root.dataset.tips = 'on';
   return true;
 }

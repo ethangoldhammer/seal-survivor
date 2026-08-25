@@ -7,6 +7,8 @@ import { orbitTarget, springFollow } from './orbit.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { aoe, applyCompanionScale } from './scaling.js';
 import { canHold } from './control.js';
+import { belugaLevelStats } from '../levelStats.js';
+import { player } from '../entities/player.js';
 
 // A drone that orbits the ship and lobs a bubble CLUSTER BOMB at the nearest
 // enemy. Unlike every other weapon in the game, none of this deals damage — a
@@ -130,7 +132,7 @@ export function resetBeluga(scene, playerPos) {
 // happens to be drawn, so this is the rare case where "how big is the effect"
 // and "how big is the picture" are literally the same number.
 function clusterRadius(level) {
-  const base = CONFIG.beluga.baseBubbleRadius + CONFIG.beluga.radiusPerLevel * (level - 1);
+  const base = belugaLevelStats(level, player.stats).belugaBubble;
   return aoe(base) * getAssetSizeMultiplier('trapBubble');
 }
 
@@ -158,7 +160,7 @@ function jitter(base, vary) {
 // per level and this one only widened, so a second bubble at level 8 was worth
 // no more than the first — see beluga.durationPerLevel in weapons.csv.
 export function trapSeconds(level) {
-  return CONFIG.beluga.trapDuration + (CONFIG.beluga.durationPerLevel ?? 0) * Math.max(0, level - 1);
+  return belugaLevelStats(level, player.stats).belugaTrap;
 }
 
 // The world radius a shell wants, to sit around this creature with a little

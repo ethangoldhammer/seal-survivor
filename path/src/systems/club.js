@@ -13,6 +13,7 @@ import { canHold, isDazed } from './control.js';
 import { recordControl } from './playtest.js';
 import { hitCreatureSegment } from './hitShape.js';
 import { hotSpotDamage } from './bossHotSpots.js';
+import { clubLevelStats, clubBoomLevelStats, clubIceLevelStats } from '../levelStats.js';
 
 // Where the wood last met a body. Shared and read immediately — see the note
 // on combat.js's own `contact`.
@@ -719,20 +720,22 @@ function noteFlightFx(f, dirX, dirY) {
 
 /** What one connecting swing hits for. */
 export function clubDamage(level) {
-  const c = CONFIG.club;
-  return c.damage + c.damagePerLevel * Math.max(0, level - 1);
+  // levelStats.js owns the curve, and the Bouncer is folded in there — so this
+  // returns the club's damage WITH the multiplier already on it. Callers that
+  // used to apply clubPower() themselves must not do it twice; see the swing
+  // below, which no longer does.
+  return clubLevelStats(level, player.stats).clubDamage;
 }
 
 /** How far the head sits from the fin tip — the weapon's whole reach. */
 export function clubLength(level) {
-  const c = CONFIG.club;
-  return c.length + c.lengthPerLevel * Math.max(0, level - 1);
+  // With clubReach() already applied — see the note on clubDamage.
+  return clubLevelStats(level, player.stats).clubReach;
 }
 
 /** How many bodies a thrown body may carom off before it settles. */
 export function clubBounces(level) {
-  const c = CONFIG.club;
-  return Math.floor(c.maxBounces + c.bouncesPerLevel * Math.max(0, level - 1));
+  return clubLevelStats(level, player.stats).clubBounces;
 }
 
 /** How many clubs are actually in the FINS right now. */
@@ -976,8 +979,8 @@ export function clubBlast(level) {
     // The Bouncer reaches the blast too — see clubPower. The RADIUS is left to
     // aoe() alone: how far an explosion reaches is Splash Zone's stat, and a
     // club card quietly widening blasts would be one card doing another's job.
-    damage: abilityDamage((c.damage + c.damagePerLevel * (level - 1)) * clubPower()),
-    radius: aoe(c.radius + c.radiusPerLevel * (level - 1)),
+    damage: clubBoomLevelStats(level, player.stats).clubBoomDamage,
+    radius: clubBoomLevelStats(level, player.stats).clubBoomRadius,
   };
 }
 
@@ -986,9 +989,9 @@ export function clubIce(level) {
   const c = CONFIG.clubIce;
   if (!c?.enabled || !(level > 0)) return null;
   return {
-    slow: c.slowPerHit + c.slowPerHitPerLevel * (level - 1),
+    slow: clubIceLevelStats(level).clubIceSlow,
     duration: c.duration,
-    freezeFor: c.freezeFor + c.freezeForPerLevel * (level - 1),
+    freezeFor: clubIceLevelStats(level).clubIceFreeze,
   };
 }
 
@@ -1304,9 +1307,11 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // The Bouncer's three multipliers land here, once, on the numbers the whole
   // frame is built out of — rather than at each of the eight places a club
   // number is finally spent, which is eight chances to miss one.
-  const length = clubLength(level) * clubReach();
+  // clubLength() already carries clubReach().
+  const length = clubLength(level);
   const headRadius = c.headRadius * clubReach();
-  const damage = abilityDamage(clubDamage(level) * clubPower());
+  // clubDamage() already carries the Bouncer and the seal's own scaling.
+  const damage = clubDamage(level);
   const ring = c.orbit ?? {};
   const ringCount = clubsOrbiting();
 
@@ -1851,7 +1856,9 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
     // THE RICOCHET. Everything the flying body reaches this frame. Walked
     // backwards because a kill splices `enemiesList` at the index being looked
     // at, and only the entries ABOVE it move.
-    const ricochet = abilityDamage((c.ricochetDamage + c.ricochetDamagePerLevel * Math.max(0, level - 1)) * clubPower());
+    // `level` here is the DRIFTWOOD level (updateClub's lv.club), which is
+    // what buys a thrown club's carom — see the note in levelStats.js.
+    const ricochet = clubLevelStats(level, player.stats).clubCarom;
     for (let j = enemiesList.length - 1; j >= 0 && f.bounces >= 0; j--) {
       // THE LIST CAN SHRINK BY MORE THAN ONE PER PASS. Walking backwards is
       // enough when the only thing that removes an entry is the hit itself,
@@ -2046,7 +2053,10 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
   // the number is what was actually there, so Clone Warz does not double them
   // and a ring of two throws two.
   const count = projectileCount(clubThrowCount(power, level), player.stats) + fromRing;
-  const damage = abilityDamage(clubDamage(Math.max(1, clubLevel)) * c.damageMul * clubPower());
+  // clubDamage() already carries abilityDamage() and the Bouncer, so only the
+  // throw's own multiplier is applied here. Both used to be spelled out and
+  // both would now be counted twice.
+  const damage = clubDamage(Math.max(1, clubLevel)) * c.damageMul;
   // THE SAME TWO RIDERS THE FIN CLUBS CARRY. The blast rides as splashDamage,
   // which every explosive in the game already goes through (main.js queues it
   // rather than bursting inline); the ice rides as a payload combat.js hands

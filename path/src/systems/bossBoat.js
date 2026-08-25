@@ -10,6 +10,7 @@ import { fireBossShot, bossGun } from './bossPerks.js';
 import { spawnCrewFor, releaseCrew, throwCrewOff, jostleCrew } from './crew.js';
 import { updateHullWake, resetHullWake, hullTurnSplash } from './boatWake.js';
 import { faceSide } from './facing.js';
+import { attachFlag } from './flags.js';
 
 // THE BOAT — the boss that shells you from above the water.
 //
@@ -260,6 +261,19 @@ export function attachBossBoat(scene, e) {
     };
     spawnCrewFor(scene, boatState.deck);
   }
+
+  // THE FLAG, and it goes up LAST on purpose. Everything above measures the
+  // hull for something structural — the wake's half-length and keel above, the
+  // deck the guests stand on inside spawnCrewFor — and a flag streaming aft is
+  // several units of geometry that is not hull. Hoisted here, it cannot reach
+  // any of those numbers.
+  //
+  // Into `owned` like the telegraph ring, so the one place that clears this
+  // fight clears the flag with it; systems/flags.js then stops ticking a flag
+  // whose hull has gone. Nothing is pushed if this hull flies nothing, which is
+  // the ordinary case until there are images in public/flags/.
+  const flag = attachFlag(e.visual, e.def?.asset);
+  if (flag) owned.push(flag);
 }
 
 // WHERE THE HULL SITS. Pinned to the waterline every frame, because everything

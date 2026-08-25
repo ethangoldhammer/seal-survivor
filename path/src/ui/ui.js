@@ -5,7 +5,6 @@ import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { wornEdgeMask } from './wornEdge.js';
 import { drawUpgrades } from '../upgradeTable.js';
 import { expandDesc, measure, phraseAll, sentenceCase } from '../upgradeText.js';
-import { rollElementFor, elementCardName, elementCardDesc } from '../systems/elements.js';
 import { rollRarity, rarityById, rarityRank } from '../systems/rarity.js';
 import quipsCsv from '../quips.csv?raw';
 import tipsCsv from '../tips.csv?raw';
@@ -46,11 +45,12 @@ import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareR
 import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { TYPOGRAPHY_EVENT } from './typography.js';
-import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform, buildHiveSnapshot, foldUpgrades } from './upgradeHive.js';
+import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform, buildHiveSnapshot } from './upgradeHive.js';
 import {
-  upgradeTipContent, renderTipInto, showUpgradeTip, hideUpgradeTip, compactDamage, upgradeDef,
+  upgradeTipContent, renderTipInto, showUpgradeTip, hideUpgradeTip, compactDamage,
   tipVerbosity,
 } from './upgradeTip.js';
+import { pressable, pressableWithin, noClickThrough } from './press.js';
 import {
   BOARD_SIZE,
   fetchGlobalBoard,
@@ -116,6 +116,35 @@ function bindMenuSounds(node) {
   node.addEventListener('click', () => feedback('uiClick'));
   return node;
 }
+// EVERY MENU CONTROL IN THE GAME, for the slip guard installed in initUI.
+//
+// Press a button, change your mind, slide your thumb off, let go — and nothing
+// happens. That is the half of a press every native control on the device has
+// and this game did not: a menu that commits on touch-down-then-anywhere-up is
+// a menu you cannot back out of, and the pointer capture a hold needs makes the
+// browser's own version of this rule stop applying (see ui/press.js).
+//
+// ONE DELEGATED GUARD ON THE BODY rather than a call at each control's own
+// wiring. There are forty-odd of them across five screens, the pause menu
+// rebuilds its rows on every tab switch, and the score screen builds its
+// buttons per death — so per-control wiring means remembering it at each new
+// site forever, and the failure of forgetting is invisible until somebody
+// tries to back out of a press on a phone. On the body it also covers the
+// surfaces that are NOT inside the UI root: the tip sheet is a sibling on the
+// body, and so is anything built like it later.
+//
+// CARDS AND HEXAGONS ARE DELIBERATELY ABSENT. Both carry a press of their own
+// that also opens a tip on hold, and they wire it where they are built — see
+// the level-up cards, ui/upgradeHive.js and ui/hiveReward.js.
+const MENU_CONTROLS = [
+  'button',
+  '.sv-btn',
+  '.sv-pm-choice',
+  '.sv-pm-tab',
+  '.sv-lb-sw',
+  '[role="button"]',
+].join(', ');
+
 let root = null;
 let splashPlayed = false;
 // The live splash, while one is up. See showStartMenu and updateMenuNav.
@@ -1563,6 +1592,20 @@ const STYLES = `
     box-shadow: 0 6px 20px rgba(0,0,0,0.55);
     opacity: 0; transition: opacity 0.12s ease-out; }
   .sv-uptip.sv-uptip-on { opacity: 1; }
+  /* A HOLD MUST NOT BECOME A SELECTION. iOS answers a press held past about a
+     third of a second with its own callout — the copy/look-up bubble, or a
+     drag-out of the image under the finger — and it arrives on top of the tip
+     the player was asking for, having also stolen the gesture that would have
+     dismissed it. Every surface a hold can land on says no to all of it.
+     touch-action keeps the double-tap zoom off these as well, which on a card
+     you are meant to press twice in a run is its own small win. */
+  .sv-card, .sv-hive-tile, .sv-fan-slot, .sv-btn, .sv-pm-choice, .sv-pm-tab,
+  .sv-hive-slot-frame, .sv-uptip {
+    -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+    touch-action: manipulation; }
+  /* The tip itself never takes the pointer, so a hold that opens one and then
+     drifts onto it is still a hold on the hexagon underneath. */
+  .sv-uptip { -webkit-user-drag: none; }
   .sv-uptip-head { display: flex; align-items: baseline; gap: 6px; }
   .sv-uptip-name { font-size: 12px; font-weight: 700; color: #eaf6ff; }
   .sv-uptip-stacks { font-size: 10px; font-variant-numeric: tabular-nums;
@@ -1589,6 +1632,13 @@ const STYLES = `
   .sv-uptip-row[data-row="next"] .sv-uptip-text { color: #9fe3ff; font-weight: 600; }
   .sv-uptip-row[data-row="run"] .sv-uptip-text { color: rgba(232,236,243,0.78);
     font-variant-numeric: tabular-nums; }
+  /* A quantity that does not move on THIS pick but will on a later one — the
+     rounded steps, where a second laser beam lands on stack four and nothing
+     happens on the three picks either side. Held back so the rows that are
+     actually moving still read first, and present so the tip does not change
+     shape between picks with nothing saying why. */
+  .sv-uptip-row[data-flat] .sv-uptip-text,
+  .sv-uptip-row[data-flat] .sv-uptip-label { color: rgba(232,236,243,0.34); }
 
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
 
@@ -2273,6 +2323,11 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     for (const card of el.svCards?.querySelectorAll('.sv-card') ?? []) fitCardText(card);
   });
 
+  // Slip protection for every menu control in the document — see MENU_CONTROLS.
+  // Installed before anything is built, because it is delegated and therefore
+  // covers controls that do not exist yet, which is most of them.
+  pressableWithin(document.body, MENU_CONTROLS, {});
+
   root = document.createElement('div');
   root.className = 'sv-ui';
   markTouch(root);
@@ -2378,10 +2433,12 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     </div>
 
     <div class="sv-center sv-hidden" id="svGameOverMenu">
-      <!-- THE LEDGER. One face: what the run did, what did it to you, where it
-           stands and what you built, in two columns over a bar that does not
-           scroll. This was a card with a front and a back and a flip between
-           them — see the note on .sv-ledger for what that cost. -->
+      <!-- THE LEDGER. One face: what the run did, what did it to you and where
+           it stands, in two columns over a bar that does not scroll. What the
+           run BUILT is the hive on the rail above rather than a column here —
+           see THE HIVE ON THE RAIL. This was a card with a front and a back and
+           a flip between them — see the note on .sv-ledger for what that
+           cost. -->
       <div class="sv-ledger" id="svCard">
 
         <div class="sv-ldg-head">
@@ -2420,14 +2477,16 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
 
         <div class="sv-ldg-body">
           <!-- WHAT YOU DID, AND WHAT WAS DONE TO YOU. Both were on the back of
-               the card, filled per death by renderRunDetail. -->
+               the card, filled per death by renderRunDetail. A column each:
+               they were stacked in the left column when a build list held the
+               right one, and with that list gone (the hive on the rail is the
+               build now) a single stacked column would leave half the readout
+               empty. -->
           <div class="sv-ldg-col">
             <div id="svPanelWeapons"></div>
-            <div id="svPanelThreats"></div>
           </div>
-          <!-- WHAT YOU BUILT — which no version of this screen has shown. -->
           <div class="sv-ldg-col">
-            <div id="svPanelBuild"></div>
+            <div id="svPanelThreats"></div>
           </div>
           <!-- WHERE IT STANDS, ACROSS BOTH COLUMNS. A leaderboard is the one
                block here made of NAMES rather than figures, and half the card
@@ -2528,7 +2587,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svCorner',
     'svNameRow', 'svNameInput', 'svNameSubmit', 'svLbStatus', 'svTransition',
     'svFan', 'svSheetShare', 'svSheetSave',
-    'svCard', 'svGameOverFigs', 'svPanelBuild',
+    'svCard', 'svGameOverFigs',
     'svPanelWeapons', 'svPanelThreats',
     // Try again is the one control on the score card that has to work — it is
     // the way back into the game. It was reached only through its click
@@ -3508,12 +3567,9 @@ function nextStack(choice) {
 // name is still whatever the Upgrades tab has it set to — renaming Seal Team
 // there renames the numbered card too.
 function cardName(choice) {
-  // A rolled card names the variant it is offering — "Glow Up! 1: Venom" — so
-  // which element you are being handed is on the card BEFORE you commit to it.
-  // A blind pick on a run-defining upgrade is a slot machine, not a choice.
-  if (choice.rolledElement) {
-    return elementCardName(choice.name, choice.rolledElement, nextStack(choice));
-  }
+  // The elements used to be ONE card that rolled which of the four it was
+  // offering, and this named it after the roll. There are four cards now (see
+  // config.js), so a card's name is its own.
   return choice.perLevelName ? `${choice.name} ${nextStack(choice)}` : choice.name;
 }
 
@@ -3528,9 +3584,7 @@ function cardName(choice) {
 // third Coiled Spring quotes the third stack's numbers.
 function cardDesc(choice) {
   const owned = nextStack(choice) - 1;
-  const raw = choice.rolledElement
-    ? (elementCardDesc(choice.rolledElement, nextStack(choice)) ?? choice.desc)
-    : (choice.levelDescs?.[nextStack(choice)] ?? choice.desc);
+  const raw = choice.levelDescs?.[nextStack(choice)] ?? choice.desc;
   return expandDesc(raw, choice, { owned, warn: console.warn });
 }
 
@@ -3596,7 +3650,14 @@ function cardEffect(choice, desc) {
 // Returns null when nothing survives that, which is the same "no tooltip" the
 // empty string used to mean.
 function cardTipContent(choice, effectText) {
-  const content = upgradeTipContent(choice, { owned: nextStack(choice) - 1 });
+  // THE RARITY THE CARD WAS DEALT AT, which only this surface knows. It is what
+  // the pick would actually arrive as, so the span's "and where that puts you"
+  // is the real number rather than a base-tier estimate — a legendary Supa Dupa
+  // Seal lands somewhere a common one does not.
+  const content = upgradeTipContent(choice, {
+    owned: nextStack(choice) - 1,
+    rarity: choice.rarity ?? null,
+  });
   if (!content) return null;
   content.desc = '';
   if (!effectText) content.rows = content.rows.filter((r) => r.key !== 'next');
@@ -3916,9 +3977,7 @@ export function showLevelUp() {
     // it belongs to THIS DEAL of this card, not to the upgrade. The odds slide
     // from the early column to the late one across the run — see rollRarity.
     const rarity = rollRarity(rarityProgress());
-    const choice = def.roll === 'biolumElement'
-      ? { ...def, rolledElement: rollElementFor(), rarity }
-      : { ...def, rarity };
+    const choice = { ...def, rarity };
 
     // An unclipped wrapper the bloom can hang off — see the CSS.
     const slot = document.createElement('div');
@@ -3976,6 +4035,17 @@ export function showLevelUp() {
       showCardEffect(card, card.dataset.effect);
     });
     card.addEventListener('pointerleave', hideCardEffect);
+    // AND THE SAME THING WITH A THUMB. pointerenter never fires on a phone, so
+    // every card in the game was unreadable there: the only way to find out
+    // what one did was to take it. A hold opens the tip and CANCELS the pick,
+    // so reading a card is no longer the same gesture as choosing it, and
+    // pulling the thumb off cancels both. See ui/press.js for why a slipped
+    // press needs its click eaten rather than merely ignored.
+    pressable(card, {
+      onHold: () => { if (!menuLocked) showCardEffect(card, card.dataset.effect); },
+      onHoldEnd: hideCardEffect,
+      onSlip: hideCardEffect,
+    });
 
     const pick = () => {
       // Half-drawn cards aren't a menu yet — see setMenuLocked. The class
@@ -5543,6 +5613,24 @@ const chainPin = {
  * ui/callout.js for its copy would be an import cycle between two files that
  * already share a layer.
  */
+/**
+ * HOW BIG THE BANNER IS DRAWN, as a factor on its transform.
+ *
+ * Read per frame rather than stamped on the node, like everything else the
+ * banner takes from CONFIG, so a drag on the slider resizes the plate that is
+ * currently up instead of the next one.
+ *
+ * Both readers of it are below: the transform that draws the box, and the
+ * clearance that keeps it off the callout slot. offsetHeight is LAYOUT height
+ * and a transform does not touch it, so a scaled banner measured unscaled
+ * would float above its anchor by the difference — the one bug this being a
+ * function rather than two literals prevents.
+ */
+function chainBannerScale() {
+  const s = CONFIG.strike?.foodChain?.bannerScale;
+  return Number.isFinite(s) && s > 0 ? s : 1;
+}
+
 function pinChainBanner(camera, pin) {
   chainPin.live = false;
   chainPin.left = 0;
@@ -5561,7 +5649,7 @@ function pinChainBanner(camera, pin) {
   // layer's own transform) rather than hung off it, so half its height plus
   // the callout's full height is what clears the slot.
   const slot = calloutSlotHeight();
-  const half = (chainToast?.node?.offsetHeight ?? 0) * 0.5;
+  const half = (chainToast?.node?.offsetHeight ?? 0) * 0.5 * chainBannerScale();
   chainPin.x = screenPt.x;
   chainPin.y = screenPt.y - slot - half - (slot > 0 ? 6 : 2);
   chainPin.left = Math.max(0, Math.min(1, pin.left ?? 0));
@@ -5872,7 +5960,10 @@ export function updateToasts(dt, camera = null, pin = null) {
       t.node.style.setProperty('--sv-chain-now', chainPin.now.toFixed(3));
     }
 
-    t.node.style.transform = `translate(-50%,-50%) scale(${pose.scale})`;
+    // The banner's own size multiplies the pose's, so the arrival pop is a pop
+    // at whatever size the plate is set to rather than a pop back to full size.
+    const drawn = t === chainToast ? pose.scale * chainBannerScale() : pose.scale;
+    t.node.style.transform = `translate(-50%,-50%) scale(${drawn})`;
     t.node.style.left = `${t.x}px`;
     t.node.style.top = `${t.y + pose.lift}px`;
     t.node.style.opacity = `${pose.alpha}`;
@@ -6199,13 +6290,15 @@ function showTrophy() {
 // ---------------------------------------------------------------------------
 // The build, beside the kills, as the run's other object.
 //
-// WHY IT IS ON THE RAIL AND NOT IN THE LEDGER. There is a text list of the
-// build in the second column and it stays (see THE BUILD in renderRunDetail) —
-// they answer different questions. The list is scannable and sorted; this is
-// the SHAPE, the same corner the player has been reading for the whole run,
-// with the deep stacks standing taller than the shallow ones. A build is a
-// thing you recognise before you can read it, and that recognition is what the
-// rail carries.
+// WHY IT IS ON THE RAIL AND NOT IN THE LEDGER, AND WHY IT IS THE ONLY ONE. The
+// second column of the readout used to carry a text list of the same picks,
+// sorted by stacks. Two answers to one question, a scroll apart, and the list
+// was the weaker of them: it restated what the weapons table already ranks and
+// what these hexagons already show. This is the SHAPE — the same corner the
+// player has been reading for the whole run, with the deep stacks standing
+// taller than the shallow ones. A build is a thing you recognise before you can
+// read it, and that recognition is what the rail carries; the tiles are live,
+// so a name and a count are still one hover away.
 //
 // IT IS THE SAME LATTICE, not a drawing of one — buildHiveSnapshot shares the
 // packing with the live corner (see layoutHive), so a hive that interlocks
@@ -6244,6 +6337,18 @@ function buildHiveSlot() {
   slot.addEventListener('pointerout', (e) => {
     if (!slot.contains(e.relatedTarget)) hideUpgradeTip();
   });
+  // THE SAME TWO GESTURES A THUMB HAS. Hold a hexagon for its tip; tap the
+  // block to open it. Wired per tile rather than on the slot so the hold's
+  // subject is the hexagon under the finger, and so a hold does not also count
+  // as a tap on the slot behind it — which would open the sheet on top of the
+  // tip the player asked for.
+  pressableWithin(slot, '.sv-hive-tile', {
+    onHold: (tile) => showUpgradeTip(tile.dataset.upgrade, tile,
+      { owned: Number(tile.dataset.stacks) || 0 }),
+    onHoldEnd: hideUpgradeTip,
+    onSlip: hideUpgradeTip,
+  });
+  noClickThrough(slot);
   slot.addEventListener('click', () => openHiveView());
   return slot;
 }
@@ -6278,11 +6383,22 @@ function openHiveView() {
 
   el.svHiveViewStage.addEventListener('pointerover', hiveViewOver);
   el.svHiveViewStage.addEventListener('pointerout', hiveViewOut);
+  // The sheet is the surface built for pointing at one hexagon, so it is the
+  // one that most needs the thumb to be able to. Torn down with the stage's
+  // contents in closeHiveView.
+  hiveViewPress = pressableWithin(el.svHiveViewStage, '.sv-hive-tile', {
+    onHold: (tile) => showUpgradeTip(tile.dataset.upgrade, tile,
+      { owned: Number(tile.dataset.stacks) || 0 }),
+    onHoldEnd: hideUpgradeTip,
+    onSlip: hideUpgradeTip,
+  });
   el.svHiveView.classList.remove('sv-hidden');
   wireHiveView();
   wireHiveEscape();
   el.svHiveViewClose?.focus?.({ preventScroll: true });
 }
+
+let hiveViewPress = null;
 
 function hiveViewOver(e) {
   const tile = e.target?.closest?.('.sv-hive-tile');
@@ -6304,6 +6420,8 @@ function closeHiveView() {
   // sheet, unlike the hive inside it.
   el.svHiveViewStage?.removeEventListener('pointerover', hiveViewOver);
   el.svHiveViewStage?.removeEventListener('pointerout', hiveViewOut);
+  hiveViewPress?.();
+  hiveViewPress = null;
   // The tiles carry a card-art background each and an icon image each, which on
   // a deep build is a few hundred KB of decoded bitmap held for a sheet nobody
   // is looking at.
@@ -6644,11 +6762,9 @@ function brkEmpty(panel, message) {
 function renderRunDetail(gameState) {
   const weapons = el.svPanelWeapons;
   const threats = el.svPanelThreats;
-  const build = el.svPanelBuild;
   if (!weapons || !threats) return;
   weapons.replaceChildren();
   threats.replaceChildren();
-  build?.replaceChildren();
   let a = null;
   try {
     const run = lastFinishedRun();
@@ -6769,73 +6885,6 @@ function renderRunDetail(gameState) {
     if (killer) foot.push(['Killed by', killer.threat]);
     threats.appendChild(brkFoot(foot));
   }
-
-  // --- THE BUILD ----------------------------------------------------------
-  // WHAT THE PLAYER TOOK, which no version of this screen has ever shown. The
-  // weapons table above is sorted by damage and drops everything that deals
-  // none, so half a build — Yoga, Mammal Mode, the Grabber, every stat card —
-  // was invisible on the screen that exists to record the run. That was
-  // defensible on a card with two faces and no room; the ledger has a second
-  // column.
-  //
-  // SORTED BY STACKS AND THEN BY NAME, not by damage: this is the question
-  // "what did I build", and a list that reorders itself by how well it went
-  // answers a different one the table beside it already answers.
-  //
-  // ONE ROW PER CARD, OFF THE PICK LIST — and this is a correction. It was
-  // built from `a.abilities`, which is keyed on SOURCE_UPGRADES: about thirty
-  // damage and control abilities, and nothing else in the game. So the panel
-  // whose comment above says the stat cards were invisible was itself missing
-  // every one of them — Yoga, Iron Lung, Supa Dupa Seal, Mammal Mode, the whole
-  // half of the roster that has no damage tag because it makes OTHER things
-  // better. The rows it did show were also per SOURCE rather than per card, so
-  // three picks spread across Rapid Fire and Heavy Rounds arrived as one row
-  // reading "Fin Pebbles x3", naming a card the player may never have been
-  // offered.
-  //
-  // foldUpgrades AND NOT A SECOND FOLD, because the hive snapshot on the rail
-  // above is built from exactly that call (see buildHiveSnapshot). The list and
-  // the picture are the same run, side by side on one screen, and the one thing
-  // they may never do is disagree about how many of something you took.
-  if (build) {
-    const taken = foldUpgrades(player.upgrades ?? []);
-    if (!taken.length) {
-      build.appendChild(brkSection('The build', ''));
-      brkEmpty(build, 'No upgrades this run.');
-    } else {
-      const picks = taken.reduce((n, r) => n + r.count, 0);
-      build.appendChild(brkSection('The build', `${picks} ${picks === 1 ? 'pick' : 'picks'}`));
-      const list = document.createElement('div');
-      list.className = 'sv-brk';
-      const most = Math.max(...taken.map((r) => r.count));
-      // The name ON THE CARD, out of upgrades.csv. weaponName answers a
-      // different question — what a weapon is CALLED NOW, after the modifiers a
-      // build has hung on it — which is the right answer in the weapons table
-      // beside this and the wrong one here: this is a list of the cards that
-      // were taken, and every hexagon on the rail above is labelled the same
-      // way.
-      const label = (id) => upgradeDefName(id);
-      for (const r of [...taken].sort((x, y) => y.count - x.count
-        || label(x.id).localeCompare(label(y.id)))) {
-        list.appendChild(brkRow({
-          name: label(r.id),
-          a: `×${r.count}`,
-          b: '',
-          // The bar reads as "how much of this build is this card", which is
-          // what a stack count means and what damage does not.
-          share: most > 0 ? (r.count / most) * 100 : 0,
-        }));
-      }
-      build.appendChild(list);
-    }
-  }
-}
-
-// The display name for an upgrade id, falling back to the id. The fallback is
-// what makes a row for a card that has been removed from upgrades.csv since the
-// run was played still say something rather than render blank.
-function upgradeDefName(id) {
-  return upgradeDef(id)?.name ?? id;
 }
 
 /**

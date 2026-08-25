@@ -63,3 +63,80 @@ clubReachMul,the bouncer,percent,club reach,,,,TRUE,,,,,
 homingShotLevel,,level,sonar teeth,,"shots that seek, favouring the biggest body in reach",,TRUE,,,,,
 maneaterLevel,stack-counters,level,maneater,,a taste for swimmers — every one you eat raises all your damage,,TRUE,,,,,"Counts stacks and nothing else, deliberately: what a stack is WORTH depends on a running total, which is not visible from inside apply(). See applyDamageScaling in stats.js. That makes `level` the honest kind — {effect} would otherwise have to invent a number, which is the exact failure the measured descriptions exist to prevent."
 ironLungLevel,stack-counters,level,iron lung,,all damage scaling with your maximum oxygen,,TRUE,,,,,"Same as maneater: worth depends on a stat other cards move (max oxygen), so a measured number here would be a lie. Counts stacks only."
+bakalarBombDamage,bakalar's boat,flat,[DRAFT] bomb damage,,,,,,,,,"What one voicemail bomb hits for. Reads as '+22 ___' on a hover tip beside the boat's other level numbers, so it wants to be short and to name the BOMB rather than the boat. Big Rigz is already folded into the figure."
+bakalarBlast,bakalar's boat,flat,[DRAFT] blast radius,,,,,m,,,,"How wide the bomb goes off, in world units. Sits next to the damage on the same tip, so the two should not read as the same thing said twice. Splash Zone is folded in. Drop the unit if 'm' is wrong for this game's water."
+bakalarBombGap,bakalar's boat,flat,[DRAFT] between bombs,,,,,s,TRUE,,,"Seconds between bomb drops while the boat is sailing. LOWER IS BETTER — the lower column is set, so a level that cuts it renders as a gain rather than a loss. Phrase it so '-0.32s ___' reads right."
+bakalarNetDepth,bakalar's boat,flat,[DRAFT] net depth,,,,,,,,,How far the net hangs below the surface. This is the ONLY part of the net that grows with level — the mouth is a fraction of the hull and never changes — so the wording must not imply the whole net gets bigger. The card's old desc said '+net size' and was wrong about exactly this.
+bakalarGrip,bakalar's boat,flat,[DRAFT] net grip,,,,,,,,,"How hard the net holds. It divides a creature's resistance, so a bigger number drags bigger fish and drags everything faster; it is not a speed and not a size. Abstract quantity with no unit — name it so a bare number reads as a strength."
+bakalarSailGap,bakalar's boat,flat,[DRAFT] between sailings,,,,,s,TRUE,,,"Seconds before the boat comes round again. LOWER IS BETTER. Pairs with 'between bombs' on the same tip, so the two labels should be tellable apart at a glance — one is how often the boat arrives, the other how often it drops while it is here."
+seagullHit,seagull bomb,flat,[DRAFT] direct hit,,,,,,,,,"Damage to whatever the bird lands ON. Sits beside the splash on the same tip and the two must be tellable apart — this one only ever hits the single crab that happened to be under it, which is why it is the smaller half of the card."
+seagullSplash,seagull bomb,flat,[DRAFT] blast damage,,,,,,,,,"Damage from the explosion, which is what the card is actually for — the run IS the blast. Should read as the bigger, more important of the two damage rows."
+seagullSplashRadius,seagull bomb,flat,[DRAFT] blast radius,,,,,m,,,,"How wide the explosion reaches. Drop the 'm' if that unit is wrong for this game's water — it is used on Bakalar's blast too, so change both together."
+garlicDps,sea garlic,flat,[DRAFT] damage a second,,,,,,,,,"What a creature standing in the cloud takes per second. Deliberately a DPS and not a per-tick figure — the 0.25s tick is an implementation detail, and a player is comparing this against every other ability they could take instead."
+garlicRadius,sea garlic,flat,[DRAFT] cloud radius,,,,,m,,,,"How far the cloud reaches. Sits beside the damage row on the same tip; the point of showing both is that a stack now buys strength as well as size, so neither label should imply it is only one of the two. Same 'm' as the two blast radii — change all three together."
+eelDamage,electric eel,flat,[DRAFT] bolt damage,,,,,,,,,"What one bolt hits for. Note the tip's figure is the LEVEL curve only — a storm multiplies it on top (CONFIG.eel.storm), deliberately left out so the number does not change with the weather while a thumb is held down."
+eelChain,electric eel,count,[DRAFT] targets,[DRAFT] targets,,,,,,,,"How many bodies one bolt chains through. A count, so it pluralises — 'chains to 5 ___'. Sits beside the reach row and the two must be tellable apart: this is HOW MANY, that is HOW FAR between them."
+eelChainRadius,electric eel,flat,[DRAFT] chain reach,,,,,m,,,,How far a bolt will hop to find the next body. Same 'm' as the blast radii — change them together or not at all.
+calamariDamage,calamari ring,flat,[DRAFT] wave damage,,,,,,,,,What the shockwave hits for as it sweeps out.
+calamariRadius,calamari ring,flat,[DRAFT] wave reach,,,,,m,,,,"How far the wave travels before it dies. The card's whole existence is its reach, so this is the row that sells it."
+calamariGap,calamari ring,flat,[DRAFT] between waves,,,,,s,TRUE,,,"Seconds between pulses. LOWER IS BETTER — the column is set, so a level that cuts it reads as a gain. It hits a floor inside the cap and drops off the tip after that."
+orcaDamage,orca family,flat,[DRAFT] strike damage,,,,,,,,,What one orca's charge hits for. Big Rigz is folded in.
+orcaGap,orca family,flat,[DRAFT] between strikes,,,,,s,TRUE,,,Seconds before the pod attacks again. LOWER IS BETTER.
+orcaChargeSpeed,orca family,flat,[DRAFT] charge speed,,,,,,,,,"How fast an orca crosses to its target. Last in the readout's order on purpose — beside damage and cadence it reads as flavour, so the four-row cap drops it first."
+belugaBubble,baby beluga,flat,[DRAFT] bubble size,,,,,m,,,,"How big a trapped fish's bubble is — which is really how big a fish it can take. The card deals no damage at all, so this and the trap length are the whole of what a stack buys."
+belugaTrap,baby beluga,flat,[DRAFT] trap length,,,,,s,,,,"How long a fish stays held. Pairs with the bubble size on the same tip; one is what it can catch, the other is how long it keeps it."
+dumboTargets,dumbo octopus,count,[DRAFT] charmed at once,[DRAFT] charmed at once,,,,,,,,"How many fish the dumbo can hold charmed simultaneously. A ROUNDED STEP — 1 at stack 1, 2 by stack 4 — so on the picks in between it shows dimmed and unchanged rather than vanishing. Phrase it so it reads sensibly both as a change (+1 ___) and standing still (2 -> 2)."
+dumboCharm,dumbo octopus,flat,[DRAFT] charm length,,,,,s,,,,"How long a fish stays charmed. The card deals no damage at all, so this and the count are most of what a stack buys."
+dumboGap,dumbo octopus,flat,[DRAFT] between charms,,,,,s,TRUE,,,Seconds before it charms again. LOWER IS BETTER.
+dumboRange,dumbo octopus,flat,[DRAFT] reach,,,,,m,,,,"How far it will look for something to charm. Last in the readout's order, so the four-row cap drops it first."
+octoArms,octopus grabber,count,[DRAFT] arms,[DRAFT] arms,,,,,,,,How many fish it can drag at once. Another rounded step — dimmed and unchanged on the picks where it does not tick.
+octoReach,octopus grabber,flat,[DRAFT] arm reach,,,,,m,,,,How far an arm will stretch for a fish.
+octoReel,octopus grabber,flat,[DRAFT] reel speed,,,,,,,,,How fast it drags what it has caught. Last in the order — the cap drops it before the two above.
+musselCount,mussel barrage,count,[DRAFT] mussels,[DRAFT] mussels,,,,,,,,"How many go out in one barrage. With the damage row, the whole card."
+musselDamage,mussel barrage,flat,[DRAFT] mussel damage,,,,,,,,,What one mussel hits for on contact.
+musselSplash,mussel barrage,flat,[DRAFT] splash damage,,,,,,,,,"What the small burst around each hit does. A fraction of the direct hit and last in the order, so the four-row cap usually drops it — it is here so the number exists, not because it needs to be read every time."
+clubDamage,driftwood club,flat,[DRAFT] swing damage,,,,,,,,,"What one connecting swing hits for. The Bouncer's multiplier is already folded in, so this is what YOUR club does rather than a bare one."
+clubReach,driftwood club,flat,[DRAFT] club length,,,,,m,,,,"How far the head sits from the fin — the weapon's whole reach, and with it the arc the swing draws."
+clubCarom,driftwood club,flat,[DRAFT] carom damage,,,,,,,,,"What a THROWN club hits for as it bounces. It is on this card and not on Hurler because the Driftwood level is what buys it — Hurler's own level only buys how many go out. If that reads oddly on a player who holds Hurler and not Driftwood, that is the game being odd, not the label."
+clubBounces,driftwood club,count,[DRAFT] bounces,[DRAFT] bounces,,,,,,,,"How many bodies a thrown club caroms off before it settles. A rounded step, so it shows dimmed and unchanged on the picks where it does not tick."
+clubBoomDamage,boom boom club,flat,[DRAFT] blast damage,,,,,,,,,What the explosion on a club hit does. Independent of the Driftwood level — this card scales entirely on its own.
+clubBoomRadius,boom boom club,flat,[DRAFT] blast radius,,,,,m,,,,How wide it goes off. Splash Zone widens it; the Bouncer deliberately does not.
+clubIceFreeze,cold snap,flat,[DRAFT] freeze length,,,,,s,,,,"How long a body is frozen solid once enough hits have landed. The card deals no damage whatsoever, so this and the slow are the entire output."
+clubIceSlow,cold snap,flat,[DRAFT] slow per hit,,,,,,,,TRUE,"How much each hit slows a body, as a share of its speed — percentOfOne is set, so 0.06 renders as +6%. Enough of them stack into the freeze above."
+clubThrowCount,hurler,count,[DRAFT] clubs thrown,[DRAFT] clubs thrown,,,,,,,,"How many go out on a FULL charge — a half charge throws fewer, and the card can only honestly promise what a committed release does. This is the whole of what Hurler's own level buys; what the clubs DO belongs to Driftwood."
+harpDamage,harp seal,flat,[DRAFT] note damage,,,,,,,,,What one note hits for. Half of the card is the note that charms; the other half is the aura the charmed body drags around. This and 'charm length' are the note's two rows.
+harpCharm,harp seal,flat,[DRAFT] charm length,,,,,s,,,,How long the biggest nearby enemy fights for you.
+harpAuraDamage,harp seal,flat,[DRAFT] aura damage,,,,,,,,,"What the ring around a charmed body does. The ledger books this separately and it is roughly SEVEN EIGHTHS of the card's whole output, so it wants to read as the important half."
+harpAuraRadius,harp seal,flat,[DRAFT] aura radius,,,,,m,,,,How wide that ring is.
+harpGap,harp seal,flat,[DRAFT] between notes,,,,,s,TRUE,,,"Seconds between notes. LOWER IS BETTER. Fifth in the order, so the four-row cap normally drops it."
+harpAuraLength,harp seal,flat,[DRAFT] aura length,,,,,s,,,,How long the ring lasts on a body. Sixth in the order — usually dropped by the cap.
+laserDamage,laser eyes,flat,[DRAFT] beam damage,,,,,,,,,What one cut does.
+laserBeams,laser eyes,count,[DRAFT] beams,[DRAFT] beams,,,,,,,,How many beams fire at once. A ROUNDED STEP at 0.34 a level — the second arrives at stack four and a third never does inside the cap — so it shows dimmed and unchanged on the picks between. The single most important thing this card does.
+laserReach,laser eyes,flat,[DRAFT] beam reach,,,,,m,,,,How far a beam cuts.
+laserGap,laser eyes,flat,[DRAFT] between cuts,,,,,s,TRUE,,,Seconds between firings. LOWER IS BETTER.
+laserBurn,laser eyes,flat,[DRAFT] burn,,,,,,,,,"The lingering damage a cut leaves. Fifth in the order — the small rider, which is the row the four-row cap drops."
+oysterDamage,oyster blaster,flat,[DRAFT] pearl damage,,,,,,,,,What the pearl itself hits for before it bursts.
+oysterBomblets,oyster blaster,count,[DRAFT] bomblets,[DRAFT] bomblets,,,,,,,,"How many glowing bomblets a burst throws. A rounded step, so it shows dimmed on the picks where it does not tick."
+oysterBlast,oyster blaster,flat,[DRAFT] bomblet radius,,,,,m,,,,How wide each bomblet goes off.
+oysterGap,oyster blaster,flat,[DRAFT] between pearls,,,,,s,TRUE,,,Seconds between shots. LOWER IS BETTER.
+oysterBombletDamage,oyster blaster,flat,[DRAFT] bomblet damage,,,,,,,,,What one bomblet does. Fifth in the order — the small rider the cap drops.
+sealTeamCount,seal team,count,[DRAFT] escorts,[DRAFT] escorts,,,,,,,,"How many seals swim with you. THE COUNT IS THE LEVEL, capped at maxSeals — so a pick really does buy a seal each time until the cap, and only damage after that. The card is numbered per stack and this is why."
+sealTeamDamage,seal team,flat,[DRAFT] ram damage,,,,,,,,,What one escort's ram hits for. Big Rigz is folded in.
+razorDamage,razor clams,flat,[DRAFT] blade damage,,,,,,,,,What one blade hits for.
+razorCount,razor clams,count,[DRAFT] blades,[DRAFT] blades,,,,,,,,How many go out per volley.
+razorGap,razor clams,percent,[DRAFT] volley rate,,,,,s,TRUE,,,"Seconds between volleys — and it COMPOUNDS rather than stepping, so the tip renders it as a multiplier (x0.95 a level) rather than a subtraction. LOWER IS BETTER; the column is set. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
+razorPierce,razor clams,count,[DRAFT] bodies cut,[DRAFT] bodies cut,,,,,,,,"How many bodies one blade passes through. A rounded step, capped at pierceMax."
+starfishDamage,starfish shuriken,flat,[DRAFT] shuriken damage,,,,,,,,,What one shuriken hits for.
+starfishGap,starfish shuriken,percent,[DRAFT] throw rate,,,,,s,TRUE,,,"Seconds between throws, compounding — rendered as a multiplier like the razor clam's. LOWER IS BETTER. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
+starfishSize,starfish shuriken,flat,[DRAFT] shuriken size,,,,,m,,,,"How big each one is, which is also how easily it connects."
+starfishPierce,starfish shuriken,count,[DRAFT] bodies cut,[DRAFT] bodies cut,,,,,,,,"How many bodies one passes through. Rounded step, capped."
+homingReach,homing pebbles,flat,[DRAFT] seek range,,,,,m,,,,"How far a pebble will look for something to bend toward. The ONLY row this card gets: its level also moves a turn rate and a size bias, and both are facts about the simulation rather than about the pebbles."
+ironLungBonus,iron lung,percent,[DRAFT] damage bonus,,,,,,,,TRUE,"How much extra damage the held breath is worth, as a share — percentOfOne is set, so 0.4 renders as +40%. It scales with your MAX OXYGEN, so every Yoga makes this bigger; that is exactly what the card could not say before."
+biolumShockChance,glow up — voltaic,percent,[DRAFT] arc chance,,,,,,,,TRUE,"How often a shot arcs to a second fish. Capped at chanceMax, so it stops moving before the stack cap does."
+biolumShockArcs,glow up — voltaic,count,[DRAFT] arcs,[DRAFT] arcs,,,,,,,,How many bodies one arc reaches. A rounded step.
+biolumVenomDps,glow up — venom,flat,[DRAFT] poison a second,,,,,,,,,Damage per second while poisoned. THE ONLY THING a venom level buys — its duration and stack cap are flat — which is worth knowing and was invisible before.
+biolumChillSlow,glow up — chill,percent,[DRAFT] slow per hit,,,,,,,,TRUE,"How much each shot slows a body, as a share of its speed. Capped at maxSlow. Enough of them stack into the freeze."
+biolumChillFreeze,glow up — chill,flat,[DRAFT] freeze length,,,,,s,,,,How long a body stays frozen once the slow tops out.
+biolumInfectDps,glow up — infected,flat,[DRAFT] infection a second,,,,,,,,,Damage per second while infected.
+biolumInfectSpread,glow up — infected,flat,[DRAFT] spread range,,,,,m,,,,How far the infection jumps to the next fish — the thing that makes this element scale with a crowd.
+biolumInfectBurst,glow up — infected,flat,[DRAFT] burst damage,,,,,,,,,What a host's death does to everything near it.

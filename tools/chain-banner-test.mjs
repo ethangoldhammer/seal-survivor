@@ -209,6 +209,46 @@ section('It hangs above the seal, not where the food was');
 }
 
 // ---------------------------------------------------------------------------
+section('It is drawn at the size the plate is set to');
+{
+  // WHY THIS IS A TEST. The banner's size is a transform, not a font size —
+  // the Chain banner role owns the type and any saved tuning snapshot owns
+  // that, so the box is resized by CONFIG.strike.foodChain.bannerScale on top
+  // (see chainBannerScale in ui/ui.js). A transform is easy to write in one of
+  // the two places that need it: the other is the clearance above the boost
+  // ring, which is measured off offsetHeight and would leave a shrunken banner
+  // floating in the gap the old size cleared.
+  ui.clearToasts();
+  openWindow();
+  const was = CONFIG.strike.foodChain.bannerScale;
+
+  CONFIG.strike.foodChain.bannerScale = 1;
+  ui.spawnChainToast(2);
+  // Past the arrival, so `pose.scale` is at rest and the number read is the
+  // plate's own size rather than a frame of the pop.
+  for (let i = 0; i < 40; i++) frameLive(1 / 60);
+  const full = /scale\(([\d.]+)\)/.exec(banner()?.style.transform ?? '');
+  check('at 1 the banner draws at its layout size', full && Math.abs(+full[1] - 1) < 0.02,
+    `scale ${full?.[1]}`);
+  const fullTop = topPx();
+
+  CONFIG.strike.foodChain.bannerScale = 0.5;
+  frameLive(1 / 60);
+  const half = /scale\(([\d.]+)\)/.exec(banner()?.style.transform ?? '');
+  check('  ...and half the setting is half the box', half && Math.abs(+half[1] - 0.5) < 0.02,
+    `scale ${half?.[1]}`);
+  // The clearance follows it. jsdom lays nothing out, so offsetHeight is 0 and
+  // the two tops are equal — the check is that the size did not move the pin in
+  // the WRONG direction, which is what a scale applied to only one of the two
+  // readers looks like at any real height.
+  check('  ...and the pin is still above the ring, not pushed down by it',
+    topPx() <= fullTop + 1, `${topPx().toFixed(0)}px vs ${fullTop.toFixed(0)}px`);
+
+  CONFIG.strike.foodChain.bannerScale = was;
+  ui.clearToasts();
+}
+
+// ---------------------------------------------------------------------------
 section('It holds for as long as the chain does');
 {
   ui.clearToasts();

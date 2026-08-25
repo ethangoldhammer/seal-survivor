@@ -166,9 +166,10 @@ export const strikeState = {
   //   chainPips  every mouthful eaten inside the window. Drives the MULTIPLIER
   //              — speed, damage, score — so the reward climbs with each orb
   //              rather than jumping once a bar.
-  //   chainCount whole BARS filled inside the window. Drives the PRICE (a link
-  //              adds a pip) and the FOOD CHAIN! banner, so the ceremony and
-  //              the cost escalation stay rare and legible.
+  //   chainCount LINKS held inside the window. Drives the PRICE — the next
+  //              link costs one more mouthful per link already banked, see
+  //              linkCost() — and the FOOD CHAIN! banner, so the ceremony and
+  //              the cost escalation stay on the number the player is reading.
   //
   // Splitting them is what made the chain reachable at all. It used to be one
   // counter that only moved when the bar topped off, which meant sustaining a
@@ -180,6 +181,14 @@ export const strikeState = {
   chainPips: 0,
   chainCount: 0,
   chainTimer: 0,
+  // MOUTHFULS BANKED TOWARD THE NEXT LINK, and it exists because a link is not
+  // one mouthful any more — it is linkCost() of them, one more per link already
+  // held (CONFIG.strike.linkPipsPerLink). Spending the food the moment it
+  // arrives and keeping the remainder here is what makes that price a PRICE
+  // rather than a demand for a clean run of N: three chum, a release, two more,
+  // and the five-mouthful link lands on the fifth orb whatever happened in
+  // between. Dies with the chain, like chainPips.
+  linkCredit: 0,
   // HOW MANY MORE PIPS OF BAR MAY SCORE THIS CYCLE — the food chain's budget.
   //
   // A link is a PIP OF FUEL GOING IN, not a mouthful going down, and a bar only
@@ -504,6 +513,7 @@ export function resetStrike() {
   strikeState.chainPips = 0;
   strikeState.pipBudget = 0;
   strikeState.chainCount = 0;
+  strikeState.linkCredit = 0;
   strikeState.chainTimer = 0;
   strikeState.pipsSinceStrike = 0;
   lastRelease.depth = 0;
@@ -1129,17 +1139,45 @@ function noteChainMouthful(count = 1) {
   // climbing through the pause would have the number on screen and the damage
   // being dealt disagreeing for as long as the player kept eating.
   strikeState.chainPips += payable;
-  for (let i = 0; i < payable; i++) {
+
+  // ---- AND THE PRICE GOES UP WITH THE CHAIN -----------------------------
+  //
+  // The food goes into a bank and links are taken OUT of it at linkCost() a
+  // piece — `linkMinPips` for the first, one more per link already held. A
+  // mouthful that does not complete a link is not lost; it sits here until the
+  // one that does. That is the difference between a price and a combo string:
+  // the seal never has to eat N in a row, it has to eat N.
+  //
+  // Priced against `chainCount` INSIDE the loop rather than once outside it,
+  // because a gulp that pays two links pays the second at the second's price —
+  // a magnet sweep is not a discount.
+  strikeState.linkCredit += payable;
+  let scored = 0;
+  for (;;) {
+    const cost = linkCost(strikeState.chainCount);
+    if (strikeState.linkCredit < cost) break;
     const chain = chainStrike('chumEaten');
-    if (chain) {
-      lastMouthful.chain = chain;
-      noteChain('link', { chain });
-    } else {
+    if (!chain) {
       // The switch table said no. Only reachable with chainOn.chumEaten off,
       // which is a thing a stale tuning snapshot can do — and if it ever
-      // happens the log has to say so rather than showing a silent gap.
+      // happens the log has to say so rather than showing a silent gap. The
+      // bank is left alone: nothing was bought, so nothing is spent.
       noteChain('miss', { why: 'chainOn.chumEaten is off' });
+      break;
     }
+    strikeState.linkCredit -= cost;
+    scored++;
+    lastMouthful.chain = chain;
+    noteChain('link', { chain });
+  }
+  // WHY THE PART-PAYMENT IS LOGGED. Under the flat rule every mouthful inside
+  // an armed window was a link, so silence meant a bug; now it usually means
+  // "two of three, keep eating", and the trace is the only place the player's
+  // side of that is visible. See systems/chainTrace.js.
+  if (!scored && strikeState.linkCredit > 0) {
+    noteChain('miss', {
+      why: `${strikeState.linkCredit} of ${linkCost(strikeState.chainCount)} mouthfuls for link ${strikeState.chainCount + 1}`,
+    });
   }
 }
 
@@ -1184,6 +1222,25 @@ export function linkPips(stats = null) {
   return Math.max(1, Math.round(CONFIG.strike.linkMinPips ?? 1));
 }
 
+/**
+ * WHAT THE NEXT LINK COSTS, in mouthfuls, at a chain this deep.
+ *
+ * `linkPips()` is the first one's price and every link after it costs
+ * `linkPipsPerLink` more than the link before — so the ladder is 1, 2, 3, 4 at
+ * the defaults and a x5 chain has eaten fifteen orbs rather than five. It is
+ * the only escalation in the mechanic: the WINDOW does not shorten and the
+ * bar does not lengthen (see pipCount), because a price the player can count
+ * in food is one they can see coming.
+ *
+ * @param chain links already banked — 0 for the link that opens a chain.
+ * @returns whole mouthfuls, never below 1.
+ */
+export function linkCost(chain = 0, stats = null) {
+  const step = Math.max(0, CONFIG.strike.linkPipsPerLink ?? 0);
+  return Math.max(1, Math.round(linkPips(stats) + step * Math.max(0, chain)));
+}
+
+
 // WHAT A FULLER BAR BUYS IS NOT A BONUS ANY MORE, IT IS THE COUNTING.
 //
 // This is where a `releaseLinks()` ladder used to live — one link at the gate,
@@ -1208,14 +1265,14 @@ export function pendingPips() {
  * which is the "from 5 to 3" the card's own note promises.
  *
  * THE CHAIN USED TO LENGTHEN IT, one pip per link, as the cost escalation that
- * made each link dearer than the last. That job is gone: a link is one
- * mouthful now and is not bought with the bar at all. And the escalation could
- * not survive the change even if the job had remained, because links tick per
- * PIP — so the count would be a function of how much has been eaten, while
- * eating is the thing filling it. The bar would grow while you filled it, and
- * a six-pip bar would take seven chum for reasons nothing on screen could
- * explain. That is precisely the unpredictability the pips were introduced to
- * remove, arriving by a third route.
+ * made each link dearer than the last. THE ESCALATION IS STILL THERE AND THE
+ * BAR IS NOT WHERE IT IS CHARGED — see linkCost(), which raises the MOUTHFULS
+ * a link costs instead. It could not survive here, because links tick per PIP:
+ * the count would be a function of how much has been eaten, while eating is
+ * the thing filling it. The bar would grow while you filled it, and a six-pip
+ * bar would take seven chum for reasons nothing on screen could explain. That
+ * is precisely the unpredictability the pips were introduced to remove,
+ * arriving by a third route.
  *
  * So the bar is a fixed length for a given `strikeChumRefill`, which is the
  * strongest form of the invariant it has ever had. `maxPips` still binds it,
@@ -1559,6 +1616,9 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // standing would carry the last combo's multiplier into the next one.
       strikeState.chainCount = 0;
       strikeState.chainPips = 0;
+      // The part-paid link goes with them. Carrying it would let a chain that
+      // lapsed subsidise the next one, and the price is per chain.
+      strikeState.linkCredit = 0;
       // The arming dies with the chain it armed. Without this a single sweet
       // strike would license every mouthful for the rest of the run.
       strikeState.armed = false;
