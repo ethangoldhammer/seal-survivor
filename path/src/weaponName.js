@@ -51,7 +51,7 @@ import { sourceLabel } from './systems/playtestAnalysis.js';
  */
 export const WEAPON_MODIFIERS = {
   gun: [
-    'rapidFire', 'heavyRounds', 'multishot', 'pierce', 'velocity',
+    'rapidFire', 'heavyRounds', 'multishot', 'projectileLife', 'velocity',
     // Not a gun upgrade in the ledger — it books its own damage under
     // 'bioluminescence' — but it is unarguably a thing that happens to the
     // pebbles, and it is the rename a player would most want to see.

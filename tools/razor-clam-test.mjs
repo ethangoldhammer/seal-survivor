@@ -15,11 +15,16 @@
 //
 //   node --import ./tools/vite-loader.mjs tools/razor-clam-test.mjs
 
+import './dom-stub.mjs';
+import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import {
   razorClamCount, razorClamArc, razorClamDamage, razorClamPierce,
   razorClamFireRate, razorClamHeadings, razorClamVolley,
+  bladeSize, razorClamRadius, razorClamRoll,
 } from '../path/src/systems/razorClam.js';
+import { ASSETS, createVisual } from '../path/src/assets.js';
+import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 
 const TAU = Math.PI * 2;
 const c = CONFIG.razorClam;
@@ -153,6 +158,108 @@ console.log('\n6. the asset the blades are thrown as');
   ok(!!CONFIG.chromeBlade, 'the chrome film has a config block');
   ok(!!CONFIG.feedback?.razorClamLaunch?.sfx && !!CONFIG.sfx?.[CONFIG.feedback.razorClamLaunch.sfx],
     'the launch sound exists in the bank');
+}
+
+console.log('\n7. the shell, the whip and the wake');
+{
+  // HOW BIG IT ACTUALLY IS. assets.csv is the only place a spawn size lives
+  // (the Size slider is a readout), so a blade with no row — or a row somebody
+  // reset to 1 — is a shell drawn at a third of the length the reach, the
+  // ribbon and the roll were all tuned against.
+  const size = bladeSize();
+  const drawn = (ASSETS.razorBlade?.blade?.length ?? 0) * size;
+  console.log(`     ${size}x on a ${ASSETS.razorBlade?.blade?.length}-unit shell  ->  ${drawn.toFixed(2)} units long,`
+    + ` reach ${razorClamRadius().toFixed(2)}`);
+  ok(size > 1.5, 'the shell is drawn much bigger than it is authored', `size ${size}`);
+  // THE PAIR THAT MUST MEASURE ALIKE. The picture and the cut are one edit
+  // apart in two different files, and a shell three times the size with the
+  // old quarter-unit reach passes visibly through fish while every other check
+  // in this file still comes up green.
+  ok(Math.abs(razorClamRadius() - CONFIG.razorClam.radius * size) < 1e-9,
+    'the reach is derived from the size rather than typed beside it');
+  ok(razorClamRadius() > drawn * 0.15 && razorClamRadius() < drawn * 0.5,
+    'the reach is a believable fraction of the shell it draws',
+    `${razorClamRadius().toFixed(2)} against ${drawn.toFixed(2)} units of blade`);
+  // The volley carries both, so the launch cannot pick up one and not the other.
+  const v = razorClamVolley(3, 0, null, noJitter);
+  ok(v.size === size && v.radius === razorClamRadius(), 'a volley hands over both');
+}
+
+{
+  // THE WHIP, and the trap under it: `orient` and a roll are two Euler angles
+  // on one object, and in three's default XYZ order the roll is applied AFTER
+  // the heading — which swings the nose out of the screen plane. A blade fired
+  // on a diagonal then flies broadside while still travelling on its heading,
+  // which looks like a bad model rather than like a bad rotation order.
+  const scene = new THREE.Scene();
+  resetProjectiles(scene);
+  const heading = Math.PI / 3;
+  const dir = new THREE.Vector2(Math.cos(heading), Math.sin(heading));
+  spawnProjectile(scene, {
+    origin: new THREE.Vector3(0, 0, 0),
+    dir,
+    faction: 'player',
+    damage: 1,
+    speed: CONFIG.razorClam.speed,
+    life: 5,
+    radius: razorClamRadius(),
+    asset: 'razorBlade',
+    orient: 'axis',
+    roll: 9,
+    trailScale: bladeSize(),
+  });
+  const p = projectiles[0];
+  ok(!!p, 'a blade goes into the water');
+  ok(p.mesh.rotation.order === 'ZYX', 'a rolling shot is switched to the order that keeps its nose',
+    `order ${p.mesh.rotation.order}`);
+
+  const longAxis = new THREE.Vector3(0, 1, 0);
+  const face = new THREE.Vector3(1, 0, 0);
+  const noses = [];
+  const faces = [];
+  let worstNose = 0;
+  for (let i = 0; i < 20; i++) {
+    updateProjectiles(1 / 60, scene, [], [], {});
+    const nose = longAxis.clone().applyEuler(p.mesh.rotation);
+    // Against the shot's LIVE heading, not the one it launched on: a blade
+    // arcs under gravity like everything else in the water, so the launch
+    // direction stops being the answer within a few frames — and a test that
+    // asserted against it would be measuring the arc and calling it a rotation
+    // bug.
+    worstNose = Math.max(worstNose, nose.distanceTo(new THREE.Vector3(p.dir.x, p.dir.y, 0)));
+    noses.push(nose);
+    faces.push(face.clone().applyEuler(p.mesh.rotation));
+  }
+  ok(worstNose < 1e-6, 'the blade still flies nose-first while it whips',
+    `${worstNose.toFixed(6)} off its own heading at the worst frame`);
+  ok(noses.every((n) => Math.abs(n.z) < 1e-9), '...and never leaves the screen plane',
+    `worst z ${Math.max(...noses.map((n) => Math.abs(n.z))).toExponential(1)}`);
+  // ...and the faces DO turn, which is the whole point: CONFIG.chromeBlade is
+  // an environment the body has to sweep through before it shows a highlight.
+  const swept = Math.max(...faces.map((f) => f.distanceTo(faces[0])));
+  ok(swept > 0.5, 'the faces sweep through the light', `${swept.toFixed(2)} of travel on the face normal`);
+  ok(Math.abs(p.rollAngle) > 0.5, 'the roll accumulates', `${p.rollAngle.toFixed(2)} rad in 20 frames`);
+  // The ribbon is the other half of the size change — trailScale multiplies
+  // the width and the shed rate, so it is the only channel a bigger shell has
+  // on a preset it shares with nothing.
+  ok(p.trailScale === bladeSize(), 'the ribbon is scaled to the shell');
+  resetProjectiles(scene);
+}
+
+{
+  // A fan whose blades all roll the same way at the same rate is one rigid
+  // object being turned, and every chrome flash in the volley lands on the
+  // same frame.
+  let seed = 20260825;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const rolls = Array.from({ length: 12 }, () => razorClamRoll(rand));
+  ok(rolls.some((r) => r > 0) && rolls.some((r) => r < 0), 'blades whip both ways',
+    rolls.map((r) => r.toFixed(1)).join(', '));
+  ok(new Set(rolls.map((r) => Math.abs(r).toFixed(2))).size > 6, '...at their own rates');
+  const speeds = rolls.map(Math.abs);
+  ok(Math.min(...speeds) > 1 && Math.max(...speeds) < 25,
+    'every blade whips fast enough to read and slow enough to strobe',
+    `${Math.min(...speeds).toFixed(1)} - ${Math.max(...speeds).toFixed(1)} rad/s`);
 }
 
 console.log(failures ? `\n${failures} failure(s)\n` : '\nall good\n');

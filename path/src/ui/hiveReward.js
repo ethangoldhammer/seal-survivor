@@ -35,6 +35,7 @@ import { feedback } from '../systems/feedback.js';
 import { playSfx } from '../systems/audio.js';
 import { menuInput } from '../input.js';
 import { hiveParts, slamAndRipple } from './upgradeHive.js';
+import { showUpgradeTip, hideUpgradeTip } from './upgradeTip.js';
 
 function cfg() {
   return CONFIG.upgradeHive?.reward ?? {};
@@ -274,10 +275,33 @@ function setHot(id, voice = true) {
   if (voice) feedback('uiHover');
 }
 
+// THE TIP, AND WHY IT IS NOT setHot's JOB.
+//
+// setHot lights a tile that can still take a pick — a capped one is
+// deliberately never hot, because the halo is an OFFER and offering something
+// the player cannot have is the bug that rule exists to stop.
+//
+// The tip answers a different question: "what is this". A capped tile has an
+// answer to that, and on this screen it is a useful one — it is why the tile is
+// not on offer. So the two are wired separately, and the tip follows the
+// pointer over every hexagon rather than only over the ones still open.
+//
+// The stack count is left to the tip, which reads it off the live run.
+function showRewardTip(el) {
+  const id = el?.dataset?.upgrade;
+  if (id) showUpgradeTip(id, el, { owned: Number(el.dataset.stacks) || 0 });
+  else hideUpgradeTip();
+}
+
 function select(i) {
   if (!state.stops.length) return;
   state.sel = Math.max(0, Math.min(state.stops.length - 1, i));
   setHot(state.stops[state.sel]?.dataset.upgrade ?? null);
+  // The pad gets the tip too, for the same reason it gets the halo: on a
+  // controller the pointer never moves, and a readout only a mouse can reach is
+  // a readout half the run cannot see. Same rule as selectCard on the level-up
+  // row.
+  showRewardTip(state.stops[state.sel]);
 }
 
 // The pad's cursor, stepped by whichever tile actually lies that way. Same
@@ -462,11 +486,12 @@ export function startHiveReward({ stacks, canStack, onStack, onDone }) {
     const el = e.target?.closest?.('.sv-hive-tile');
     const id = el?.dataset.upgrade;
     setHot(id && state.halos.has(id) ? id : null);
+    showRewardTip(el);
   };
   state.onOut = (e) => {
     // Only when the pointer has actually left the hive, not when it crosses from
     // a tile to the halo behind it — those fire pointerout constantly.
-    if (!host.contains(e.relatedTarget)) setHot(null);
+    if (!host.contains(e.relatedTarget)) { setHot(null); hideUpgradeTip(); }
   };
   host.addEventListener('click', state.onClick);
   host.addEventListener('pointerover', state.onOver);
@@ -513,6 +538,10 @@ export function updateHiveRewardNav() {
 // The listeners, the halos and the per-tile state, without touching the flight.
 // Shared by the graceful close and the hard reset, so the two cannot drift.
 function teardown() {
+  // The box is on document.body and outlives this menu's own subtree — see the
+  // note at the head of upgradeTip.js. Left up, it is a tip about a ceremony
+  // that has finished, sitting over a fight that has restarted.
+  hideUpgradeTip();
   const { tiles, host } = hiveParts();
   if (host && state.onClick) {
     host.removeEventListener('click', state.onClick);

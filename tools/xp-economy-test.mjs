@@ -325,7 +325,9 @@ function ladderReport(runs, label) {
   console.log(`      ${label}`);
   let prevAt = 0;
   const gaps = [];
-  for (let lv = 2; lv <= 20; lv++) {
+  // Printed to the end of a fifteen-minute run, not to 20: the `endMul` band
+  // starts at 21 and the levels it charges for were the ones nobody could see.
+  for (let lv = 2; lv <= 26; lv++) {
     const at = timeToLevel(runs, lv);
     if (at == null) {
       console.log(`        ${String(lv).padStart(2)}   never reached in ${RUN_SECONDS / 60} minutes`);
@@ -356,6 +358,10 @@ const gaps = ladderReport(base, 'hunt 7s, clear 80%');
     console.log(`        a level in the 17-19 band costs ${(span(17, 19) / span(11, 13)).toFixed(1)}x `
       + `the wall-clock of one in the 11-13 band (${span(11, 13).toFixed(0)}s → ${span(17, 19).toFixed(0)}s)`);
   }
+  if (span(21, 24) && span(11, 13)) {
+    console.log(`        ...and one in the 21-24 band costs ${(span(21, 24) / span(11, 13)).toFixed(1)}x `
+      + `(${span(11, 13).toFixed(0)}s → ${span(21, 24).toFixed(0)}s)`);
+  }
   // Both ends matter. A run that reached level 30 would pass "levels still
   // arrive" while being a different game — every upgrade taken by minute six
   // and nothing left to want.
@@ -369,8 +375,25 @@ const gaps = ladderReport(base, 'hunt 7s, clear 80%');
   // Steepening `endMul` to hold the old number instead would have bought a
   // 90-second level at 24 to save a level at 26, which is the wall this file
   // exists to find, moved rather than removed.
-  check('a fifteen-minute run finishes somewhere in the high teens or mid twenties',
-    reached.every((l) => l >= 18 && l <= 26), `reached ${reached.join(', ')}`);
+  check('a fifteen-minute run finishes somewhere in the high teens or high twenties',
+    reached.every((l) => l >= 18 && l <= 29), `reached ${reached.join(', ')}`);
+  // The band nobody could see, and the reason the ceiling above moved 26 → 29.
+  // `endMul` re-steepens the cost curve at level 21 while income is already
+  // flattening (spawn.ramp.hp caps around minute eleven, and xp.toughness caps
+  // with it), so 21+ was cost compounding against income that wasn't: measured
+  // at endMul 1.6 the gaps ran 41s, 48s, 60s, 77s, 85s, 133s — a level in the
+  // 21-24 band costing 2.3x one in the 11-13 band, which is the wall this file
+  // exists to find, sitting one level past where the report stopped printing.
+  //
+  // The fix is on the COST side and only there. Buying it with income instead
+  // (a higher xp.toughness.exponent) works on this band but pays out from the
+  // first minute too, so it drags 11-20 in with it — and 11-20 is not the
+  // problem, it is the part of the run that paces correctly.
+  if (span(21, 24) && span(11, 13)) {
+    check('...and the band past 21 does not fall off a cliff',
+      span(21, 24) < span(11, 13) * 2.0,
+      `${span(11, 13).toFixed(0)}s in the 11-13 band → ${span(21, 24).toFixed(0)}s in the 21-24 band`);
+  }
   check('no single level past 10 takes more than three minutes',
     gaps.filter((x) => x.lv > 10).every((x) => x.gap <= 180),
     gaps.filter((x) => x.lv > 10).map((x) => `${x.lv}:${x.gap.toFixed(0)}s`).join(' ') || 'never got past 10');

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { faceSide } from './facing.js';
 import { CONFIG } from '../config.js';
+import { bounds } from '../arena.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { orbitTarget, springFollow } from './orbit.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
@@ -53,7 +54,7 @@ const droneVel = new THREE.Vector3();
 // Everything in the water that hasn't gone off yet — the lobbed cluster and
 // the bomblets it threw, in one list because they move identically and differ
 // only in what happens when their timer runs out.
-const bombs = []; // { mesh, vx, vy, radius, timer, age, phase, cluster }
+const bombs = []; // { mesh, vx, vy, radius, timer, age, phase, cluster, armed }
 // Landed: one per creature currently held, wrapped around it for as long as
 // the trap lasts. This is the ability — a fish in a bubble, visibly — and
 // everything above is only how it gets there.
@@ -131,6 +132,19 @@ export function resetBeluga(scene, playerPos) {
 function clusterRadius(level) {
   const base = CONFIG.beluga.baseBubbleRadius + CONFIG.beluga.radiusPerLevel * (level - 1);
   return aoe(base) * getAssetSizeMultiplier('trapBubble');
+}
+
+// What one bubble is worth as a BREATH, in oxygen points.
+//
+// Paid by size against the cluster this stack throws, so `airRefill` is the
+// whole shot's worth of air and a bomblet pays its share of it — one number
+// rather than two that can drift apart, and it stays honest when a level
+// widens every bubble in the chain at once. `aoe` and the Size slider are in
+// both terms and cancel, which is right: Splash Zone buys a wider trap, not a
+// bigger lungful.
+function breathValue(radius, level) {
+  const full = Math.max(0.0001, clusterRadius(Math.max(1, level)));
+  return (CONFIG.beluga.airRefill ?? 0) * Math.min(1, radius / full);
 }
 
 // Random in [a*(1-vary), a*(1+vary)]. Every clock in the cluster runs through
@@ -218,9 +232,13 @@ function updateShell(s, dt, scene, hooks) {
   return false;
 }
 
-// hooks: { onTrap(enemy), onPop(x, y) } — for feedback only, no damage/kill
-// involved. onTrap is the catch, onPop the shell bursting when the hold ends
-// (or when whatever it was wrapped around dies inside it).
+// hooks: { onTrap(enemy), onPop(x, y), onSplit(x, y), onBreath(x, y, air) } —
+// feedback only, no damage/kill involved. onTrap is the catch, onPop the shell
+// bursting when the hold ends (or when whatever it was wrapped around dies
+// inside it). onBreath is the one hook that pays the player something: the
+// seal swimming into a bubble and taking the air out of it, in oxygen points
+// — the caller owns the tank, this only says how much was in the bubble, and
+// a caller with no room for it returns false to leave the bubble where it is.
 export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, hooks) {
   if (!drone) return;
 
@@ -265,8 +283,20 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
     // heading or the mirror.
     if (CONFIG.animation.enabled && anim) anim.update(dt, stateForSpeed(spd), false);
 
+    // A BREACHED SEAL IS A DRONE WITH NOWHERE TO THROW. Everything this fires
+    // is buoyant and the water has a ceiling (see drift), so a cluster lobbed
+    // while the seal is in the air leaves from above the line and is pressed
+    // flat against the underside of the surface for its whole fuse — a shot
+    // that cannot travel, cannot catch, and looks like the ability jamming.
+    //
+    // The timer is HELD at zero rather than reset, so the shot you were owed
+    // lands on the frame you splash back in instead of starting its cadence
+    // over. Read off the position rather than off a flag — see the note on
+    // `aboveSurface` going stale.
+    const breached = playerPos.y > bounds.surfaceY;
     fireTimer -= dt;
-    if (fireTimer <= 0) {
+    if (breached) fireTimer = Math.max(fireTimer, 0);
+    else if (fireTimer <= 0) {
       fireTimer = CONFIG.beluga.fireRate;
       let target = null;
       let bestD = Infinity;
@@ -317,6 +347,42 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
     b.timer -= dt;
     b.age += dt;
 
+    // THE SEAL CAN TAKE A BREATH OFF ONE. Every bubble here is air, and this
+    // ability puts more air in the water than anything else in the game — so
+    // swimming into one pops it and pays, on the same reach the ambient oxygen
+    // bubble is collected at (entities/pickups.js) so the two read alike. It
+    // costs the trap that bubble was going to make, which is the trade, and it
+    // is the player's own doing either way.
+    //
+    // ARMED, not immediate. The drone orbits a couple of units off the seal
+    // and a cluster leaves from wherever the drone happens to be, so without
+    // this the shot would be swallowed on the frame it was fired more often
+    // than it ever reached a fish. A bubble has to get clear of the seal once
+    // before the seal can breathe it.
+    //
+    // Bombs only. A shell is wrapped around a held creature, and popping one
+    // by swimming past would hand the player a breath for letting a fish out.
+    if (playerPos) {
+      const reach = (CONFIG.pickups?.collectRadius ?? 0.6) + b.radius;
+      const gap = Math.hypot(playerPos.x - b.mesh.position.x, playerPos.y - b.mesh.position.y);
+      if (!b.armed && gap > reach) b.armed = true;
+      if (b.armed && gap <= reach) {
+        // The CALLER decides whether the seal actually took it, because the
+        // caller is the one holding the tank: returning false leaves the
+        // bubble in the water. That is what a full seal does — spending a
+        // trap on air it cannot hold would make the ability worse the better
+        // the run was going, and there is nothing to see either way.
+        const took = hooks.onBreath?.(
+          b.mesh.position.x, b.mesh.position.y, breathValue(b.radius, level),
+        );
+        if (took !== false) {
+          scene.remove(b.mesh);
+          bombs.splice(i, 1);
+          continue;
+        }
+      }
+    }
+
     // `life` is the ceiling on how long ANY bubble may drift, so a fuse tuned
     // absurdly long can't leave bubbles wandering the arena for a whole run.
     const spent = b.timer <= 0 || b.age >= (CONFIG.beluga.life ?? 4);
@@ -365,6 +431,11 @@ function spawnBomb(scene, at, radius, opts) {
   const mesh = createVisual('trapBubble');
   mesh.scale.setScalar(radius / ART_RADIUS);
   mesh.position.copy(at);
+  // Below the line on the frame it is born, not on the frame after. The drone
+  // rides an orbit that can top out above the water when the seal is shallow,
+  // and a bubble that appears in the air for one frame before the clamp in
+  // drift catches it is a pop-in nobody can explain.
+  mesh.position.y = Math.min(mesh.position.y, bounds.surfaceY - radius);
   mesh.position.z = 0;
   scene.add(mesh);
   const bomb = {
@@ -407,6 +478,21 @@ function drift(b, dt, clock) {
   }
   b.mesh.position.x += b.vx * dt;
   b.mesh.position.y += b.vy * dt;
+  // ...AND IT STOPS AT THE WATER LINE. `rise` is buoyancy with nothing above
+  // it to push back, so a bubble that outlives its fuse near the top of the
+  // arena climbs out of the sea and floats up the sky — where it catches
+  // nothing, can be breathed by nothing, and is visibly a bubble in the air.
+  //
+  // Clamped rather than popped: a bubble that reaches the surface rolls along
+  // the underside of it for the rest of its fuse, still catching and still
+  // breathable. The upward velocity is dropped with it, or buoyancy would keep
+  // pressing into a ceiling it can never pass and the bubble would sit there
+  // with a metre a second of rise banked against the next thing that moved it.
+  const ceiling = bounds.surfaceY - b.radius;
+  if (b.mesh.position.y > ceiling) {
+    b.mesh.position.y = ceiling;
+    if (b.vy > 0) b.vy = 0;
+  }
 }
 
 // The first creature actually overlapping this bubble, or null. Trapped ones

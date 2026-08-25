@@ -95,6 +95,36 @@ Claude does not clear these rows, and does not rewrite an existing line to
 "improve" it. The backlog is a reading list for Ethan, not a work queue for
 Claude.
 
+## Card effect wording
+
+`{effect}` on an upgrade card is half measurement, half English, and the two
+live in different files on purpose.
+
+The **number** is measured: `measure()` replays the upgrade's own `apply()` and
+reports what actually moved, so a card can never promise a multiplier config.js
+stopped delivering. Never type a number into a card description — write
+`{effect}` and let it be measured.
+
+Every **word** is `path/src/statText.csv` — one row per stat, with `label`,
+`plural`, `unlock` (what the first stack of an ability reads as), and a
+`template` column that rewrites a phrase outright when the four standard shapes
+are wrong:
+
+| template | renders |
+| --- | --- |
+| *(blank)* | `+25% fire rate` |
+| `{label} up {n%}` | `fire rate up +25%` |
+| `{+n} more {noun}` | `+2 more orbiting shrimp` |
+
+`{n} {n%} {+n} {label} {noun} {unit} {from} {to}` all fill from the same
+measurement, so an override can restate the number but never invent one. A
+blank template, or one that renders empty, falls back to the standard shape.
+
+It is "Effect wording" in the CSV editor. Three columns invert the usual
+convention — `lower`, `bare` and `percentOfOne` treat **blank as NO**, because
+`parseBool` reads a blank as TRUE and that would flip fireRate's sign on every
+card. `npm run test:text` covers the parser and the template tokens.
+
 ### What is not covered
 
 `notes` columns, `design/`, `tools/`, comments and commit messages are working

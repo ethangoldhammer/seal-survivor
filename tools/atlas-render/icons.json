@@ -253,7 +253,7 @@
     ]
   },
   {
-    "key": "pierce",
+    "key": "projectileLife",
     "name": "André 3000",
     "family": "gun",
     "enabled": false,

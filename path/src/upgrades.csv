@@ -4,7 +4,7 @@ heavyRounds,André the Giant,{effect},TRUE,,TRUE,1,Beach_002,,Giant Pebbles
 overboost,None,,TRUE,,FALSE,1,Beach_003,,
 maxSpeed,Speedy Seal,{effect},TRUE,,TRUE,1,OpeanOcean_001,,
 multishot,Pocket Full of Stones,{effect},TRUE,99,TRUE,1,Beach_003,,Cloned Pebbles
-pierce,André 3000,Shots pierce through {effect},TRUE,4,FALSE,1,OpeanOcean_003,,Piercing Pebbles
+projectileLife,André 3000,{effect},TRUE,4,FALSE,1,OpeanOcean_003,,[DRAFT] Piercing Pebbles
 vitality,Healthy Pup!,{effect},TRUE,,TRUE,1,Beach_001,,
 magnet,C.H.U.M.,{effect},TRUE,,TRUE,1,Beach_002,,
 regen,Seal all Wounds,{effect},TRUE,,TRUE,1,Beach_003,,

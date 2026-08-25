@@ -843,6 +843,51 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
+  // THE SPLINE NAME SCREEN — an audition, and the only thing it owns is a URL.
+  //
+  // `?splash=spline` puts ui/splineSplash.js up instead of the Rive card. That
+  // module needs one thing this side cannot guess: where the scene is. Spline
+  // hands out a `.splinecode` from its code export and a `my.spline.design/...`
+  // viewer link from its share sheet, and the module takes either — see its
+  // header for what each one costs.
+  //
+  // THIS COSTS NOTHING WHILE THE SWITCH IS OFF. A URL is not a fetch: nothing
+  // here is loaded until `?splash=spline` mounts the module that reads it, so a
+  // player who never asks for the audition never pays for it. That is what
+  // makes it safe to name the export here rather than leave it blank — and
+  // naming it is the difference between `?splash=spline` and a query string
+  // long enough that comparing the two becomes a copy-paste exercise.
+  //
+  // IT IS A SNAPSHOT, NOT A LIVE LINK. Spline rewrites this file on every code
+  // export, so the scene here is whatever was last exported — editing the file
+  // in Spline changes nothing until you export again. A screen that looks a
+  // week out of date is almost always that.
+  //
+  // A STRING AND NOT A SLIDER. The tuner builds rows out of numbers, so this
+  // never appears in it — which is right: it is an address, not a look, and the
+  // thing to nudge is inside Spline. `?splineSrc=<url>` overrides it for one
+  // tab, which is how a fresh export gets tried, or two compared, without
+  // editing this file.
+  splineSplash: {
+    src: 'https://prod.spline.design/IKrXKk6U4ZbOCyDf/scene.splinecode',
+    // THE 3D "SEAL NAME" CARD, by object id — the Text mesh inside `Rectangle`.
+    //
+    // AN ID AND NOT "Text". The export has 167 objects and nothing stops two of
+    // them sharing a name; a name that resolved to the wrong mesh would write
+    // the player's name onto some other surface, which reads as the card being
+    // broken rather than as a lookup being wrong.
+    //
+    // IT IS PER EXPORT ONLY IN THE SENSE THAT THE FILE IS. Re-exporting the
+    // same Spline file keeps the ids; a card rebuilt from scratch in Spline
+    // gets a new one, and then this is a name written to nothing. Find the
+    // replacement on the look page: `__splash.spline.getAllObjects()`.
+    //
+    // Blank disables the write, and the screen is then a DOM field over a scene
+    // with a blank card — which is what it was before this existed.
+    nameObject: 'd668b924-5bfb-46a9-b3d4-deb765d5c960',
+  },
+
+  // ---------------------------------------------------------------------------
   // CINEMATIC CAMERA — the opt-in second camera brain (systems/cineCamera.js).
   // `enabled: false` is the shipped default and it is a real off switch: the
   // rig never ticks, the lens uniforms stay at zero, the extra blur chain is
@@ -2767,6 +2812,12 @@ export const CONFIG = {
       scale: 0.4, // world-unit size of each cloned instance
       contactDamage: 12, // weapons.csv owns this
       contactCooldown: 0.4, // per-shrimp, so one doesn't melt an enemy alone
+      // THE PUNCH ON A BITE, x its size, at full heat. The glow is the main
+      // read (CONFIG.damageGlow.sources.shrimpRing) and this is the half that
+      // survives a screenshot: the same scale-pop channel a hit on a creature
+      // uses, and for the same reason — it is per instance, where a shared
+      // material's colour is not. 0 leaves the light doing all the work.
+      hitPop: 0.25,
     },
 
     // ---------------------------------------------------------------------------
@@ -4803,9 +4854,9 @@ export const CONFIG = {
 
         // --- THE TRACK: the ring that is left ---------------------------------
         //
-        // WHAT THIS IS. With the fuel moved to the HUD column (the shipped
-        // default, settings.hud.boostMeter 'bar'), the circle at r = 1 around
-        // the seal draws NOTHING. That left the lead-in's traveller closing on
+        // WHAT THIS IS. With the fuel moved to the HUD column
+        // (settings.hud.boostMeter 'bar'), the circle at r = 1 around the seal
+        // draws NOTHING. That left the lead-in's traveller closing on
         // an invisible finish line and the tolerance band floating in water —
         // an approach cue aimed at a target the player has to imagine.
         //
@@ -5224,6 +5275,13 @@ export const CONFIG = {
       clusterRadius: 7,
       minClusterSize: 1, // 1 = a lone crab is still worth a dive
       retargetInterval: 0.5, // re-scan while inbound; crabs move and die
+      // How many bodies may be scored as the CENTRE of a pile in one scan.
+      // The scan is quadratic and its candidate list is the whole population
+      // now that a gull will settle for a school (see pickTarget) — 220 bodies
+      // squared, twice a second per gull in the air. Striding the outer loop
+      // caps that at 48 x n while every body still counts as a neighbour, so
+      // the pile it finds is the same pile; only which member names it moves.
+      scanCap: 48,
 
       // --- cruise ---
       // Keep cruiseAltitude below arena.viewHeight * arena.surfaceFromTop (the
@@ -5546,6 +5604,16 @@ export const CONFIG = {
       // sealing one fish out of the three it visibly swallowed reads as the
       // ability misfiring.
       maxCatch: 3,
+
+      // WHAT A BUBBLE IS WORTH AS A BREATH. The seal can swim into its own
+      // drone's bubbles and take the air out of them (see the onBreath hook in
+      // systems/beluga.js) — this is a whole undivided cluster's worth, in the
+      // same oxygen points `oxygen.bubbleRefillAmount` is in, and a bomblet
+      // pays its share of it by size. Deliberately under a bubble orb's 30: an
+      // orb is a pickup you cross the arena for, this is one you are already
+      // standing in, and it costs you nothing but the trap it was about to
+      // make. weapons.csv owns it — it is an exchange rate against the dive.
+      airRefill: 18,
 
       // --- the cluster (weapons.csv owns all four) -----------------------------
       // The shot is one fat bubble on a fuse. It splits into `splitCount`
@@ -6126,7 +6194,34 @@ export const CONFIG = {
       speed: 25, // fast and flat; a thrown blade, not a lobbed shell
       speedJitter: 0.08,
       life: 1.15,
+      // THE REACH OF A BLADE DRAWN AT SIZE 1. What actually gets spent is this
+      // times the shell's size multiplier from assets.csv — see
+      // razorClamRadius in systems/razorClam.js. The two cannot be edited
+      // apart, which is the point: a shell three times the size with the same
+      // quarter-unit reach is a weapon that visibly passes through fish, and
+      // the only symptom is players saying it "feels off".
       radius: 0.24,
+      // THE WHIP, in radians a second about the blade's own long axis.
+      //
+      // It is not a tumble: `orient: 'axis'` still points the shell down its
+      // heading, so it flies and pierces nose-first and this only rolls the
+      // faces. That roll is what makes the metal — CONFIG.chromeBlade is a
+      // view-space horizon with one tight key lobe, an environment a body has
+      // to TURN THROUGH before it shows anything, and until now the blades
+      // never turned at all. Each face passing the key is one hard flash, and
+      // a shell is symmetric face to face, so the flashes arrive at twice this
+      // rate.
+      //
+      // Fast enough to read as a whip at a 1.15s life and 25 units a second,
+      // and no faster: past about 20 the flashes land closer together than the
+      // eye separates them and the blade reads as uniformly bright, which is
+      // the one outcome that loses the chrome entirely.
+      roll: 11,
+      // Spread on it, and the SIGN is rolled per blade too (see razorClamRoll)
+      // — a fan where every shell rolls the same way at the same rate reads as
+      // one rigid object being turned, and every flash in the volley lands on
+      // the same frame.
+      rollJitter: 0.45,
       // Bodies beyond the first that one blade cuts through. Floored the same
       // way the starfish's is, so an extra body arrives on a stack you can
       // name rather than a third of one arriving every level.
@@ -7498,9 +7593,9 @@ export const CONFIG = {
       // it is worth stating plainly because the numbers are not close. Every
       // creature's hp rides two ramps as a run goes on — its own linear
       // `hpPerDifficulty` and the compounding roster-wide CONFIG.spawn.ramp.hp,
-      // which alone pins at its 30x cap partway through. At the rates saved in
-      // spawning.csv a shark at minute fifteen carries around 190 TIMES the
-      // health it is authored with: 14,000-odd hp against 75.
+      // which alone pins at its 60x cap partway through. At the rates saved in
+      // spawning.csv a shark at minute fifteen carries around 270 TIMES the
+      // health it is authored with: 20,000-odd hp against 75.
       //
       // Its xp did not move at all — it paid the same 15 as the shark in the
       // first minute. The seal was doing two orders of magnitude more work for
@@ -8128,8 +8223,8 @@ export const CONFIG = {
         //
         // Paired with the cut to the boss rows in enemies.csv: those numbers
         // are what contact is worth for the first fight or two, and this is
-        // where it stops climbing. The roster damage ramp (spawning.csv, 3.2%
-        // per difficulty point to a 8x cap) still applies to a boss like it
+        // where it stops climbing. The roster damage ramp (spawning.csv, 4.8%
+        // per difficulty point to a 14x cap) still applies to a boss like it
         // applies to everything else, so the ceiling is where a boss's contact
         // spends most of a run. That is the intent, not a leak: this number is
         // the late-game figure and the CSV is the early one.
@@ -12371,6 +12466,51 @@ export const CONFIG = {
         colors: [0xffffff, 0xcfeeff, 0x8fd6ff], cone: 0.4, drag: 1.3,
         gravity: [0, -20], inherit: 0.12, glow: 1.9,
     },
+      // --- A BLAST IN THE WATER (goo group `foam`) ----------------------------
+      // What a shockwave underwater actually leaves behind. These two exist
+      // because the two biggest blasts in the game that are not a creature
+      // dying — the re-entry slam and a headstone hitting the seabed — were
+      // both firing `bigKill`, and `bigKill` carries `killGoo`: a cloud of
+      // BLOOD, thrown by a seal landing in clean water and by a rock. The
+      // event was borrowed for its weight and it brought a substance with it.
+      // See `waterBlast` in CONFIG.feedback, which is that weight without the
+      // gore.
+      //
+      // Full circle (`cone: 0` — see the angle roll in entities/particles.js)
+      // rather than a fan, because a blast has no direction: it is the water
+      // being pushed out of a hole in every direction at once, which is the
+      // one thing every other foam emitter here is NOT. The rest is
+      // `reentryFoam`'s recipe held a little tighter: a narrow speed band and
+      // heavy drag so the lobes travel as one mass and the density pass has
+      // something to fuse, and gravity UP because aerated water rises
+      // (positive is up here — see the note on `reentryCavity`).
+      //
+      // `killAtSurface: false` because the re-entry blast is centred exactly ON
+      // the water line, and the surface clip would delete half of it on the
+      // first frame.
+      blastFoam: {
+        count: 20, speed: [4, 16], size: [0.28, 0.55], life: [0.5, 1.1],
+        colors: [0xdff4ff, 0xffffff, 0xa9dcff], cone: 0, drag: 2.8,
+        gravity: [0, 3], inherit: 0.15, glow: 1.3, goo: 'foam',
+        killAtSurface: false, turbulence: 0.4,
+    },
+      // ...and the air the blast drove under the water, coming back up. SPRITES
+      // rather than goo, like `reentryJetSpray` and for the same reason: these
+      // are meant to read as separate bubbles, which is the one thing the
+      // density pass exists to prevent.
+      //
+      // NO `surfacePop`. Every other bubble in the game carries one, because
+      // every other bubble is emitted a couple at a time and the pop is what
+      // draws the foam line on the surface. Twenty-six of them born at the
+      // water line would fire twenty-six `bubbleBurst` events inside one frame
+      // — twenty-six shakes and twenty-six copies of one sound, which is the
+      // smear `sfxMinGap` exists to stop and this event has none.
+      blastBubbles: {
+        count: 26, speed: [2, 10], size: [0.06, 0.2], life: [0.7, 1.7],
+        colors: [0xbfefff, 0xffffff, 0x9fe8ff], cone: 0, drag: 2.2,
+        gravity: [0, 5], inherit: 0.15, glow: 1.2,
+        killAtSurface: false,
+    },
       // --- THE BLOB MENU (systems/gooMenu.js) ---------------------------------
       // What a title-screen button lets go of when you point at it and when you
       // press it. REAL PARTICLES, through the game's own goo pass and the same
@@ -13711,6 +13851,25 @@ export const CONFIG = {
       // is what survives being repeated. No `sfxMinGap` — you cannot re-enter
       // the water twice inside a window, so there is nothing to collapse.
       reentry:   { emit: 'reentry',                         shake: 0.55, hitstop: 0.05,  glow: 0.9,  ripple: { strength: 5.0, radius: 18 },  sfx: 'reentry',  haptic: [22, 14, 30] },
+      // THE BLAST UNDER IT — and under a headstone landing on the seabed, which
+      // is the other thing in the game that goes off in the water without
+      // anything having died. Both of them used to fire `bigKill`, borrowed for
+      // its weight, and `bigKill` is a KILL: fire-coloured sprites and a cloud
+      // of `killGoo` blood. A seal landing in clean water left a red mist in
+      // it, and so did a rock.
+      //
+      // So this is `bigKill` in every channel that carries the weight — the
+      // same shake, hitstop, glow, ripple, sound and rumble, deliberately, so
+      // nothing about how hard either event lands has changed — and whitewater
+      // in the two channels that carry the SUBSTANCE. See `blastFoam` and
+      // `blastBubbles`.
+      //
+      // Its own event rather than a `goo: null` override at the call site
+      // because the saved tuning carries a full copy of every feedback row (see
+      // the notes on deepMerge): editing `bigKill` here would lose to the
+      // snapshot, and a new key merges cleanly.
+      waterBlast: { emit: 'blastBubbles', goo: 'blastFoam', shake: 0.7, hitstop: 0.07, glow: 1.2,
+                    ripple: { strength: 4.5, radius: 18 }, sfx: 'bigKill', haptic: [30, 25, 45] },
       // The mid-air relaunch. No hitstop and almost no shake on purpose: it is
       // a movement verb, and freezing the frame on a jump makes the jump feel
       // like it hit something. Whatever punch it has is in the sound.
@@ -16909,6 +17068,12 @@ export const CONFIG = {
       // with a white surround, so this multiplies toward the paint over the
       // disc and by 1 in the corners.
       paint: 0.21,
+      // How much of the painted image the sphere's silhouette reaches. The
+      // bubble in that 64x64 does not fill its frame -- measured, its edge is
+      // at 0.90 of the radius and the rest is white -- so at 1.0 the paint
+      // stops 10% short of the real edge and draws a hard inner circle. That
+      // one number is what made the bubbles stop looking round.
+      paintFit: 0.9,
     },
 
     // ---------------------------------------------------------------------------
@@ -16963,6 +17128,12 @@ export const CONFIG = {
       inkPower: 6.0,
       inkColor: 0x03080d,
       paint: 0.21,
+      // How much of the painted image the sphere's silhouette reaches. The
+      // bubble in that 64x64 does not fill its frame -- measured, its edge is
+      // at 0.90 of the radius and the rest is white -- so at 1.0 the paint
+      // stops 10% short of the real edge and draws a hard inner circle. That
+      // one number is what made the bubbles stop looking round.
+      paintFit: 0.9,
     },
 
     // ---------------------------------------------------------------------------
@@ -24531,7 +24702,28 @@ export const CONFIG = {
     // short and cold: this is the slice a blade leaves in the water, not an
     // exhaust plume, and a full ring of ten fat trails would draw a solid disc
     // over the fight the player is trying to read.
-    razorBlade: { points: 7,  width: 0.11, color: 0xcfe6ff, glow: 2.4, taper: 1.4, fade: 2.2 },
+    // Widened and lengthened when the shell was: the blade is drawn at 2.4x in
+    // assets.csv now, and the launch passes `trailScale: volley.size` so the
+    // WIDTH tracks the art on its own (see fireRazorClams). What is here is
+    // the half that cannot scale itself — `points` is frames of history, so it
+    // is the ribbon's LENGTH in time, and a 0.12s streak behind a shell two and
+    // a half units long is a smear rather than a wake.
+    //
+    // Still no `particles` block, deliberately. A full ring is sixteen blades
+    // at the cap and each one already carries its own ribbon mesh; chips on
+    // top of that is the cheapest way to turn this card into the frame budget.
+    //
+    // `tailOffset` and `depthClearance` are the mussel's, and for the mussel's
+    // reason: both are MULTIPLES of the shell's MEASURED size, so they survive
+    // the size column moving. A shell this long anchored at its centre wears
+    // the fat end of its own ribbon halfway up its body.
+    //
+    // The clearance is deep for the depth it is a multiple of, and that is not
+    // a typo: the blade is 0.05 thick and rolls (CONFIG.razorClam.roll), so
+    // what it actually occupies in z as it turns is its WIDTH — three times its
+    // thickness — and measureShell reads the unrolled body.
+    razorBlade: { points: 14, width: 0.13, color: 0xdcecff, glow: 2.6, taper: 1.2, fade: 1.8,
+                  tailOffset: 1.0, depthClearance: 3.4 },
 
     // --- the yacht's ordnance ------------------------------------------------
     // Keyed on the ASSET KEY, which is what systems/projectileTrails.js looks
@@ -24633,6 +24825,57 @@ export const CONFIG = {
   // fraction off the beat is money flashing at random. `pulseRate` is the
   // free-running fallback in cycles per second, and only does anything at
   // 'free' — the same pairing every other synced effect in here uses.
+  // ---------------------------------------------------------------------------
+  // DAMAGE GLOW — an aura that is hurting something is brighter than one that
+  // is not. systems/damageGlow.js.
+  //
+  // The three persistent fields in this game (the shrimp ring, the garlic
+  // cloud, the note ring on a charmed body) are on screen for whole minutes at
+  // a time, and until this they were drawn at one brightness whether they were
+  // grinding a school or floating in empty water. The moment they earn their
+  // card looked exactly like every other moment.
+  //
+  // A hit stokes HEAT; heat decays over `fade`; heat is pushed into brightness.
+  // The bright pass thresholds on LUMINANCE at CONFIG.bloom.threshold (0.58),
+  // so a peak that clears it haloes as well as brightens — which is the half
+  // that carries across a busy screen.
+  //
+  // THE ENVELOPE IS SHARED ON PURPOSE. Three auras that each flare on their own
+  // timing is three things to learn; one rule is a language. A source row is
+  // for what genuinely differs — how bright the peak is and what colour it goes
+  // — and anything it leaves out falls back to the numbers here.
+  //
+  // `peak` is HOW MUCH BRIGHTNESS FULL HEAT ADDS, and it means the same thing
+  // on both kinds of surface: emissive intensity on a lit model, HDR overdrive
+  // on a flat unlit colour. `perHit` at 1 means a single hit goes straight to
+  // full; below that a field has to be biting steadily to reach its peak, which
+  // is what separates a grind from a graze.
+  // ---------------------------------------------------------------------------
+  damageGlow: {
+    enabled: true,
+    perHit: 0.5,
+    fade: 0.45,
+    peak: 2,
+    curve: 'outCubic',
+    color: 0xffe0b0,
+    sources: {
+      // The shrimp that just bit, not the ring. Straight to full on one
+      // contact — a shrimp touches a body for a single frame and then the
+      // cooldown holds it off for 0.4s, so anything less than 1 here would
+      // mean the flare never arrived at all.
+      shrimpRing: { perHit: 1, fade: 0.32, peak: 3.2, color: 0xffd2a0 },
+      // The cloud is a slow grinder and it ticks five times a second through a
+      // crowd, so it climbs rather than snapping — a garlic aura that strobed
+      // at its tick rate would be the brightest thing on screen for the whole
+      // run. Cools slowly for the same reason: this one is about "it is
+      // working right now", not about individual hits.
+      garlic: { perHit: 0.22, fade: 0.7, peak: 1.9, color: 0xd8ffc8 },
+      // The note ring on a charmed body. Per HOST, so two grinders in a fight
+      // are two separately hot rings.
+      harp: { perHit: 0.4, fade: 0.55, peak: 1.7, color: 0xffd0f0 },
+    },
+  },
+
   emissivePulse: {
     enabled: true,
     // THE YACHT'S MONEY. Both rolls on the same division and the same shape, so
@@ -24801,7 +25044,21 @@ export const CONFIG = {
   // lights and the grid lines start to crawl — those two go soft first, well
   // before the creatures do.
   render: {
-    pixelRatio: 2,
+    // 3, not 2, because of what a 2 costs on a PHONE specifically. A modern
+    // iPhone reports devicePixelRatio 3 — so a cap of 2 renders two-thirds of
+    // the panel's pixels and upscales, and the result reads as permanently
+    // soft no matter what the player picks in Options. Desktop is unaffected:
+    // a retina Mac reports 2, and min(2, 3) is still 2, so this only ever
+    // hands pixels to a display that was already asking for them.
+    //
+    // NOT FREE, and on a phone the cost is not frame time. Going 2 -> 3 is
+    // 2.25x the pixels in the drawing buffer AND in every post-processing
+    // target post.js allocates off it. On a device already close to the
+    // WebContent process's memory ceiling that is the wrong direction, and
+    // the adaptive controller below cannot save you from it — adaptive reacts
+    // to slow frames, and a memory kill is not a slow frame. If runs start
+    // dying sooner after this, this number is the first thing to put back.
+    pixelRatio: 3,
 
     // GIVING PIXELS BACK, on a machine that cannot afford them.
     //
@@ -25147,7 +25404,16 @@ export const CONFIG = {
     { id: 'overboost', family: 'gun', name: 'Overboost', desc: '+30% recoil boost', apply: (s) => { s.recoil *= 1.3; } },
     { id: 'maxSpeed', family: 'utility', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; } },
     { id: 'multishot', family: 'gun', name: 'Multishot', desc: '+1 projectile', apply: (s) => { s.multishot += 1; }, maxStacks: 6 },
-    { id: 'pierce', family: 'gun', name: 'Railgun', desc: 'Bullets pierce +1 enemy', apply: (s) => { s.pierce += 1; }, maxStacks: 4 },
+    // ANDRE 3000 — everything you fire stays in the water longer. Not a gun
+    // card despite the family: the multiplier is spent in spawnProjectile, so
+    // it reaches the missiles, the scallops, the ricochets, the razor blades and
+    // the thrown clubs as well as the pebbles. `family: 'gun'` is here because
+    // that is the shelf the player finds it on.
+    //
+    // Gentler than the 1.3-1.4 the other gun cards take, precisely because it
+    // reaches all of them at once: 1.25 four times over is a shade under 2.5x
+    // range on every projectile in the run.
+    { id: 'projectileLife', family: 'gun', name: 'André 3000', desc: '{effect}', apply: (s) => { s.projectileLifeMul *= 1.25; }, maxStacks: 4 },
     { id: 'vitality', family: 'utility', name: 'Vitality', desc: '+30 max HP', apply: (s) => { s.maxHp += 30; } },
     // Scales the gulp with the magnet deliberately: both are "how far the
     // seal's mouth reaches", and splitting them would mean an Attractor that
@@ -29480,6 +29746,7 @@ export const TUNER_SCHEMA = [
       { path: 'bubbleShell.ink', min: 0, max: 8, step: 0.05, label: 'trap bubble: outline strength' },
       { path: 'bubbleShell.inkPower', min: 1, max: 40, step: 0.5, label: 'trap bubble: outline thinness' },
       { path: 'bubbleShell.paint', min: 0, max: 1, step: 0.01, label: 'trap bubble: painted film' },
+      { path: 'bubbleShell.paintFit', min: 0.3, max: 1.4, step: 0.01, label: 'trap bubble: painted film size' },
       // The OXYGEN bubble's film — same shader, its own numbers. See the note
       // on CONFIG.oxygenBubbleShell for why these are not the five above.
       { path: 'oxygenBubbleShell.coreAlpha', min: 0, max: 1, step: 0.01, label: 'air bubble: see-through in the middle' },
@@ -29491,6 +29758,7 @@ export const TUNER_SCHEMA = [
       { path: 'oxygenBubbleShell.ink', min: 0, max: 8, step: 0.05, label: 'air bubble: outline strength' },
       { path: 'oxygenBubbleShell.inkPower', min: 1, max: 40, step: 0.5, label: 'air bubble: outline thinness' },
       { path: 'oxygenBubbleShell.paint', min: 0, max: 1, step: 0.01, label: 'air bubble: painted film' },
+      { path: 'oxygenBubbleShell.paintFit', min: 0.3, max: 1.4, step: 0.01, label: 'air bubble: painted film size' },
     ],
   },
   {
@@ -32359,8 +32627,21 @@ if (typeof window !== 'undefined') {
   });
 }
 
-export function saveTuningToStorage() {
+export function saveTuningToStorage({ seed = false } = {}) {
   const snapshot = tuningSnapshot();
+  // SEEDING IS NOT AN EDIT, and stamping it as one is what made the staleness
+  // above permanent rather than self-correcting.
+  //
+  // The seed write at boot copies the shipped file into the cache verbatim —
+  // the player has changed nothing. Stamping it `Date.now()` claimed the cache
+  // was newer than the very file it was copied from, so from that moment on no
+  // shipped tuning could ever win the comparison again, however many builds
+  // went by. Inheriting the file's own stamp makes the two equal, which is the
+  // truth, and lets the next build with a newer stamp take over cleanly.
+  if (seed) {
+    const diskAt = Number(importedTuning?.[SAVED_AT] ?? 0);
+    if (diskAt > 0) snapshot[SAVED_AT] = diskAt;
+  }
   // In dev the disk write drives everything and mirrors into the cache when
   // it resolves (see postTuning) — so the cache is a real fallback without
   // ever becoming a stale override. In production there's no dev server, so
@@ -32396,7 +32677,23 @@ export function loadTuningFromStorage() {
     //   file on the next save. Skip it.
     const cacheAt = Number(snapshot[SAVED_AT] ?? 0);
     const diskAt = Number(importedTuning?.[SAVED_AT] ?? 0);
-    if (import.meta.env?.DEV && cacheAt <= diskAt) return false;
+    // NOT gated to dev, though it used to be, and the bug that hid behind the
+    // gate is the reason this comment is long.
+    //
+    // In a production build there is no dev server, so the reasoning above was
+    // read as "the cache is the only store, therefore the cache always wins".
+    // That is true for edits the player's own browser made. It is false for the
+    // SHIPPED file, which is a newer authored snapshot arriving with a new
+    // build — and with the gate in place a browser (or an installed iOS app)
+    // that had ever booted once would shadow every tuning change shipped
+    // afterwards, for every key its cache happened to contain, silently and
+    // permanently. On iOS that presented as "my sfx tuning never reaches the
+    // phone", with the app dutifully carrying the new file in its bundle and
+    // ignoring it on every launch.
+    //
+    // The timestamp comparison already expresses the right rule for both
+    // cases, so it simply has to be allowed to run in both.
+    if (cacheAt <= diskAt) return false;
 
     for (const key of Object.keys(snapshot)) {
       if (key === SAVED_AT) continue;

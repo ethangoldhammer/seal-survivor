@@ -39,6 +39,10 @@ import { burstPearl, updateOyster, resetOyster } from '../path/src/systems/oyste
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 import { eelCfg } from '../path/src/systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../path/src/systems/beluga.js';
+import { spawnSeagull, updateSeagulls, resetSeagulls, seagullCount } from '../path/src/systems/seagull.js';
+import { updateShrimpRing, createShrimpRingVisual, resetShrimpRing } from '../path/src/systems/shrimpRing.js';
+import { createGarlicVisual, updateGarlic, resetGarlic } from '../path/src/systems/garlic.js';
+import { stoke, cool, glowLevel, damageGlowCfg, attachDamageGlow } from '../path/src/systems/damageGlow.js';
 import { weatherState } from '../path/src/systems/weather.js';
 import {
   createBakalarBoat, updateBakalar, resetBakalar, suctionAt, netGeometry,
@@ -634,7 +638,14 @@ section('BABY BELUGA');
 enemies.length = 0;
 const belugaDrone = createBelugaDrone();
 scene.add(belugaDrone);
-resetBeluga(scene, { x: 0, y: 0 });
+// UNDERWATER, and mutable. The surface is y=0 and bubbles are clamped under it
+// now, so a section run at the water line would be measuring a set of bubbles
+// pressed flat against the ceiling — the rise, the wander and the whole flight
+// model die there. Every fish below sits at this depth for the same reason.
+// It moves, too: the seal breathing a bubble is tested by walking this into
+// one, and the breach gate by lifting it out of the water.
+const belugaPlayer = { x: 0, y: -12 };
+resetBeluga(scene, belugaPlayer);
 
 // Split angles and both fuses are random, and half of what is asserted below is
 // about that randomness — so it runs on a fixed sequence rather than on however
@@ -662,7 +673,7 @@ let belugaClock = 0;
 const tickBeluga = (frames) => {
   for (let i = 0; i < frames; i++) {
     for (const e of enemies) if (e.trapTimer > 0) e.trapTimer = Math.max(0, e.trapTimer - dt);
-    updateBeluga(dt, scene, { x: 0, y: 0 }, 1, enemies, belugaClock, belugaHooks);
+    updateBeluga(dt, scene, belugaPlayer, 1, enemies, belugaClock, belugaHooks);
     belugaClock += dt;
   }
 };
@@ -671,7 +682,7 @@ const bubbleMeshes = () => scene.children.filter((o) => o.name === 'trapBubble')
 // --- the lob ---------------------------------------------------------------
 // A target far enough out that nothing is caught: this half is about how the
 // shot MOVES, and a catch would end the flight early.
-const decoy = fakeEnemy(40, 0, 0.5, 9999);
+const decoy = fakeEnemy(40, belugaPlayer.y, 0.5, 9999);
 enemies.push(decoy);
 const bg = CONFIG.beluga;
 const fireFrames = Math.ceil((bg.fireRate + 0.2) / dt);
@@ -708,7 +719,7 @@ const pathWith = [];
 for (let i = 0; i < 12; i++) { pathWith.push(cluster.position.y); tickBeluga(1); }
 const turbWas = bg.turbulence;
 bg.turbulence = 0;
-resetBeluga(scene, { x: 0, y: 0 });
+resetBeluga(scene, belugaPlayer);
 belugaClock = 0;
 for (let i = 0; i < fireFrames && bubbleMeshes().length === 0; i++) tickBeluga(1);
 const calmLob = bubbleMeshes()[0];
@@ -721,7 +732,7 @@ check('turbulence pushes it off the buoyant path', wanderDelta > 0.02,
   `${wanderDelta.toFixed(3)} units off the calm-water control`);
 
 // --- the split -------------------------------------------------------------
-resetBeluga(scene, { x: 0, y: 0 });
+resetBeluga(scene, belugaPlayer);
 splits = 0;
 pops = 0;
 belugaClock = 0;
@@ -769,13 +780,13 @@ check('...and a sound of its own', !!CONFIG.sfx[CONFIG.feedback.belugaSplit?.sfx
 
 // --- the catch -------------------------------------------------------------
 enemies.length = 0;
-resetBeluga(scene, { x: 0, y: 0 });
+resetBeluga(scene, belugaPlayer);
 traps = 0;
 pops = 0;
 belugaHooks.onPop = (x, y) => { pops++; popAt = { x, y }; };
 
 // Right on top of the drone's orbit, so a bomblet reaches it.
-const caught = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
+const caught = fakeEnemy(CONFIG.beluga.orbitRadius, belugaPlayer.y, 0.5, 9999);
 enemies.push(caught);
 
 // A whole cycle: fire, float, split, fuse.
@@ -869,10 +880,10 @@ check('...and whose sound exists', !!CONFIG.sfx[CONFIG.feedback.belugaPop?.sfx],
 // the next spawn — so a shell that doesn't notice would ride a different animal
 // around the arena for the rest of the hold.
 enemies.length = 0;
-resetBeluga(scene, { x: 0, y: 0 });
+resetBeluga(scene, belugaPlayer);
 traps = 0;
 pops = 0;
-const doomed = fakeEnemy(CONFIG.beluga.orbitRadius, 0, 0.5, 9999);
+const doomed = fakeEnemy(CONFIG.beluga.orbitRadius, belugaPlayer.y, 0.5, 9999);
 enemies.push(doomed);
 for (let i = 0; i < belugaFrames && traps === 0; i++) tickBeluga(1);
 check('a fish is caught to kill', traps === 1, `${traps} trap(s)`);
@@ -887,11 +898,11 @@ check('...and leaves nothing behind', bubbleMeshes().length === 0,
 // ONE POP, A SCHOOL. A bomblet is drawn far wider than a small fish, and
 // sealing only the first thing it touched read as a miss on everything else
 // inside it. Packed tight, so one bomblet covers the lot.
-resetBeluga(scene, { x: 0, y: 0 });
+resetBeluga(scene, belugaPlayer);
 traps = 0;
 pops = 0;
 const crowd = [];
-for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius, i * 0.2, 0.2, 9999));
+for (let i = 0; i < 6; i++) crowd.push(fakeEnemy(CONFIG.beluga.orbitRadius, belugaPlayer.y + i * 0.2, 0.2, 9999));
 enemies.push(...crowd);
 // Attributed PER DETONATION rather than per frame: detonate() calls onTrap once
 // per creature and then onPop once, so the count standing at each pop is what
@@ -911,8 +922,114 @@ check('...each in its own shell',
   bubbleMeshes().filter((m) => crowd.some((e) => m.position.distanceTo(e.mesh.position) < 0.001)).length === traps,
   `${bubbleMeshes().length} bubble(s) in the water`);
 
+// --- A BUBBLE IS AIR --------------------------------------------------------
+// The seal can swim into its own drone's bubbles and breathe them. Every part
+// of this fails silently: a bubble that arms too early is eaten on the frame it
+// is fired (the drone orbits two units off the seal, so that is most of them),
+// one that never arms is a pickup that cannot be picked up, and a breath paid
+// at the cluster's rate for a bomblet is a number nobody can see is wrong.
 enemies.length = 0;
-resetBeluga(scene, { x: 0, y: 0 });
+resetBeluga(scene, belugaPlayer);
+belugaPlayer.x = 0;
+belugaPlayer.y = -12;
+let breaths = 0;
+let lastAir = 0;
+let refuse = false;
+belugaHooks.onTrap = () => { traps++; };
+belugaHooks.onPop = () => { pops++; };
+belugaHooks.onBreath = (x, y, air) => { breaths++; lastAir = air; return !refuse; };
+// Far enough out that nothing is caught and the cluster is still in the air.
+enemies.push(fakeEnemy(40, belugaPlayer.y, 0.5, 9999));
+for (let i = 0; i < fireFrames && bubbleMeshes().length === 0; i++) tickBeluga(1);
+const lob = bubbleMeshes()[0];
+// ARMING. It leaves from the drone, which starts ON the seal after a reset and
+// orbits two units off it in play — so it must NOT be breathed on the way out,
+// and the check for that is that it is still in the water after the third of a
+// second it spends clearing the seal. Well inside its own split fuse.
+tickBeluga(20);
+check('a bubble is not swallowed on the frame it is fired', breaths === 0,
+  `${breaths} breath(s) before it was clear`);
+
+// ...and once it IS clear, swimming into it takes the air out of it.
+const lobRadius = 0.35 * lob.scale.x;
+refuse = true; // asked but not taken: a full tank leaves the bubble alone
+belugaPlayer.x = lob.position.x;
+belugaPlayer.y = lob.position.y;
+tickBeluga(1);
+check('a full seal is offered the breath', breaths === 1, `${breaths} offer(s)`);
+check('...and refusing leaves the bubble in the water', lob.parent !== null);
+refuse = false;
+tickBeluga(1);
+check('swimming into it takes the breath', breaths === 2, `${breaths} breath(s)`);
+check('...and the bubble is gone with it', lob.parent === null);
+check('a whole cluster pays a whole lungful',
+  Math.abs(lastAir - CONFIG.beluga.airRefill) < 0.01,
+  `${lastAir.toFixed(2)} of ${CONFIG.beluga.airRefill}`);
+
+// A BOMBLET PAYS ITS SHARE, by size. Paid flat instead, a cluster that split
+// into five would be five whole breaths in the water.
+enemies.length = 0;
+resetBeluga(scene, belugaPlayer);
+belugaPlayer.x = 0;
+belugaPlayer.y = -12;
+breaths = 0;
+splits = 0;
+enemies.push(fakeEnemy(40, belugaPlayer.y, 0.5, 9999));
+for (let i = 0; i < fireFrames && bubbleMeshes().length === 0; i++) tickBeluga(1);
+for (let i = 0; i < Math.ceil(bg.splitDelay * (1 + bg.splitVary) / dt) + 2 && splits === 0; i++) tickBeluga(1);
+const shard = bubbleMeshes()[0];
+tickBeluga(4); // let them clear the seal
+belugaPlayer.x = shard.position.x;
+belugaPlayer.y = shard.position.y;
+tickBeluga(1);
+check('a bomblet pays its share of one', breaths > 0
+  && Math.abs(lastAir - CONFIG.beluga.airRefill * bg.bombletScale) < CONFIG.beluga.airRefill * 0.05,
+  `${lastAir.toFixed(2)} of ${(CONFIG.beluga.airRefill * bg.bombletScale).toFixed(2)}`);
+
+// --- THE WATER LINE ---------------------------------------------------------
+// Bubbles are buoyant and the sea has a ceiling. Left alone they climb out of
+// it and drift up the sky, where nothing can be caught by them and nothing can
+// breathe them — and it is the one failure here that a screenshot would have
+// caught, if a screenshot of this were possible.
+enemies.length = 0;
+resetBeluga(scene, belugaPlayer);
+belugaPlayer.x = 0;
+belugaPlayer.y = bounds.surfaceY - 1;
+breaths = 0;
+belugaHooks.onBreath = () => false; // the seal is in the way; leave them in the water
+enemies.push(fakeEnemy(6, bounds.surfaceY - 1, 0.5, 9999));
+let highest = -Infinity;
+for (let i = 0; i < Math.ceil((bg.fireRate + bg.life + 1) / dt); i++) {
+  tickBeluga(1);
+  for (const m of bubbleMeshes()) highest = Math.max(highest, m.position.y);
+}
+check('no bubble ever leaves the water', highest <= bounds.surfaceY,
+  `highest ${highest.toFixed(2)} against a surface at ${bounds.surfaceY}`);
+
+// --- BREACHED ---------------------------------------------------------------
+// Firing while the seal is in the air throws a cluster that spawns above the
+// line and spends its whole fuse pressed flat against the underside of the
+// surface. So the drone holds the shot — and holds it at zero, so the one you
+// were owed lands the frame you splash back in rather than starting over.
+enemies.length = 0;
+resetBeluga(scene, belugaPlayer);
+belugaPlayer.x = 0;
+belugaPlayer.y = bounds.surfaceY + 3;
+enemies.push(fakeEnemy(6, bounds.surfaceY - 1, 0.5, 9999));
+tickBeluga(Math.ceil((bg.fireRate * 2 + 0.2) / dt));
+check('a breached seal fires nothing', bubbleMeshes().length === 0,
+  `${bubbleMeshes().length} bubble(s) thrown from the air`);
+belugaPlayer.y = bounds.surfaceY - 4;
+tickBeluga(2);
+check('...and the held shot lands on the way back in', bubbleMeshes().length === 1,
+  `${bubbleMeshes().length} bubble(s)`);
+check('...below the water line, on the frame it is born',
+  bubbleMeshes().every((m) => m.position.y <= bounds.surfaceY),
+  bubbleMeshes().map((m) => m.position.y.toFixed(2)).join(', '));
+belugaHooks.onBreath = null;
+
+enemies.length = 0;
+resetBeluga(scene, belugaPlayer);
 check('a reset takes every shell and bomblet with it', bubbleMeshes().length === 0,
   `${bubbleMeshes().length} orphan(s)`);
 scene.remove(belugaDrone);
@@ -1431,6 +1548,250 @@ check('the cadence floor holds at the cap', currentHarpStats(99).interval >= CON
 resetProjectiles(scene);
 enemies.length = 0;
 scene.remove(harpGroup);
+
+// --- SEAGULL BOMB ----------------------------------------------------------
+// A gull used to need crabs. `spawnSeagull` returned null when the seabed was
+// clear, so a card you had bought and levelled did nothing at all through an
+// open-water fight — and did it silently, because the cooldown quietly retried
+// forever and there was never an error or a bird to see.
+//
+// The three things that have to stay true together: crabs are still the FIRST
+// choice, anything else is better than nothing, and the prey rule travels with
+// the target — a crab run that detonated on the first fish drifting over the
+// pile would be a worse ability than the one this replaced.
+section('SEAGULL BOMB');
+enemies.length = 0;
+resetSeagulls(scene);
+
+const crabAt = (x, y) => {
+  const e = fakeEnemy(x, y, 0.5, 9999);
+  e.def.behavior = 'crawl';
+  e.type = 'crab';
+  return e;
+};
+
+// NOTHING ON THE SEABED. This is the whole bug: fish in open water, no crabs.
+for (let i = 0; i < 4; i++) enemies.push(fakeEnemy(6 + i * 0.8, bounds.surfaceY - 8, 0.5, 9999));
+const openWater = spawnSeagull(scene, enemies);
+check('a gull launches with no crabs in the water', !!openWater,
+  openWater ? 'launched' : 'no run');
+check('...aimed at the knot of fish',
+  !!openWater && Math.abs(openWater.target.x - 7.2) < 2,
+  openWater ? `x ${openWater.target.x.toFixed(1)} of ~7.2` : 'no run');
+check('...and allowed to hit what it was aimed at', openWater?.anyPrey === true);
+
+// ...and it actually connects. Dropped on top of the school rather than flown
+// in, so this is a check about the impact test and not about the approach.
+resetSeagulls(scene);
+enemies.length = 0;
+const school = [];
+for (let i = 0; i < 3; i++) school.push(fakeEnemy(i * 0.6, bounds.surfaceY - 8, 0.5, 40));
+enemies.push(...school);
+const diver = spawnSeagull(scene, enemies);
+diver.phase = 'dive';
+diver.container.position.set(school[0].mesh.position.x, school[0].mesh.position.y + 1.2, 0);
+diver.vx = 0;
+diver.vy = -CONFIG.seagullBomb.diveSpeedMax;
+let gullBlast = 0;
+for (let i = 0; i < 30 && seagullCount() > 0; i++) {
+  updateSeagulls(dt, scene, enemies, { onImpact: () => { gullBlast++; } });
+}
+check('a fallback run detonates on the fish it dived at', gullBlast === 1,
+  `${gullBlast} blast(s)`);
+
+// CRABS STILL WIN. One crab against a whole school: the seabed layer is what
+// this card is for and a wall of sardines must not outvote it.
+resetSeagulls(scene);
+enemies.length = 0;
+for (let i = 0; i < 12; i++) enemies.push(fakeEnemy(-20 + i * 0.4, bounds.surfaceY - 8, 0.5, 9999));
+const lonelyCrab = crabAt(18, bounds.bottom + 2);
+enemies.push(lonelyCrab);
+const crabRun = spawnSeagull(scene, enemies);
+check('one crab still outranks a whole school',
+  !!crabRun && Math.abs(crabRun.target.x - 18) < 1,
+  crabRun ? `x ${crabRun.target.x.toFixed(1)} of 18` : 'no run');
+check('...and that run ignores everything but the seabed', crabRun?.anyPrey === false);
+
+// A crab run passing over open water must not go off on it — the reason the
+// prey rule is decided with the target rather than looked up at impact.
+resetSeagulls(scene);
+enemies.length = 0;
+enemies.push(crabAt(0, bounds.bottom + 2));
+const overflight = spawnSeagull(scene, enemies);
+overflight.phase = 'dive';
+overflight.container.position.set(0, bounds.surfaceY - 8, 0);
+overflight.vx = 0;
+overflight.vy = -2;
+enemies.push(fakeEnemy(0, bounds.surfaceY - 8, 0.5, 9999));
+let earlyBlast = 0;
+updateSeagulls(dt, scene, enemies, { onImpact: () => { earlyBlast++; } });
+check('a crab run does not go off on a fish it falls through', earlyBlast === 0,
+  `${earlyBlast} blast(s)`);
+
+// Empty water is still no run, and that is deliberate: there is nothing to
+// bomb, and a cooldown spent on it would be the one case where the card is
+// worse for having fired.
+resetSeagulls(scene);
+enemies.length = 0;
+check('empty water still launches nothing', spawnSeagull(scene, enemies) === null);
+resetSeagulls(scene);
+enemies.length = 0;
+
+// --- DAMAGE GLOW -----------------------------------------------------------
+// An aura that is hurting something is brighter than one that is not. All of
+// this fails silently: heat that never decays leaves a field permanently lit,
+// a per-instance material that was never cloned flares the whole ring at once,
+// and a glow driven onto a property the material does not have does exactly
+// nothing while every other check still passes.
+section('DAMAGE GLOW');
+
+// The envelope, which is pure arithmetic — no scene, no model.
+check('a hit stokes heat', stoke(0, 'shrimpRing') > 0, `${stoke(0, 'shrimpRing').toFixed(2)}`);
+check('...and it saturates rather than running away',
+  stoke(stoke(stoke(0, 'garlic', 5), 'garlic', 5), 'garlic', 5) <= 1);
+check('a bigger catch runs hotter than a single body',
+  stoke(0, 'garlic', 6) > stoke(0, 'garlic', 1),
+  `${stoke(0, 'garlic', 1).toFixed(2)} vs ${stoke(0, 'garlic', 6).toFixed(2)} for six`);
+{
+  const g = damageGlowCfg('garlic');
+  // Linear over `fade`, so a field that stopped biting is COLD rather than
+  // faintly warm for the rest of the run — the one reading this exists to
+  // prevent.
+  let h = 1;
+  for (let i = 0; i < Math.ceil(g.fade / dt) + 2; i++) h = cool(h, 'garlic', dt);
+  check('heat goes all the way out', h === 0, `${h.toFixed(3)} after ${g.fade}s`);
+  check('a source row falls back to the shared envelope',
+    damageGlowCfg('nothing-by-this-name').fade === (CONFIG.damageGlow.fade),
+    `${damageGlowCfg('nothing-by-this-name').fade}`);
+}
+
+// The per-instance material. Built by hand, because no model loads in Node —
+// what is under test is the cloning, not the shrimp.
+{
+  const lit = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.3),
+    new THREE.MeshStandardMaterial({ color: 0xffb0a0, emissive: 0x000000, emissiveIntensity: 0 }),
+  );
+  const shared = lit.material;
+  const twin = new THREE.Mesh(lit.geometry, shared);
+  const handle = attachDamageGlow(lit);
+  check('a lit model gets a handle', !!handle);
+  handle.set(1, 'shrimpRing');
+  check('...and full heat lifts its emissive',
+    lit.material.emissiveIntensity > 0 && lit.material.emissive.getHex() !== 0x000000,
+    `intensity ${lit.material.emissiveIntensity.toFixed(2)}`);
+  check('...brightly enough to cross the bright pass',
+    lit.material.emissiveIntensity >= 1,
+    `${lit.material.emissiveIntensity.toFixed(2)} against a bloom threshold of ${CONFIG.bloom.threshold}`);
+  // THE WHOLE REASON THIS CLONES. A shared material would have taken the twin
+  // with it, which is the ring flaring as one object.
+  check('...without touching anything else wearing that material',
+    twin.material === shared && shared.emissiveIntensity === 0,
+    `neighbour at ${shared.emissiveIntensity}`);
+  handle.set(0, 'shrimpRing');
+  check('cold puts the material back where it was',
+    lit.material.emissiveIntensity === 0 && lit.material.emissive.getHex() === 0x000000);
+
+  // The unlit half: a primitive stand-in has no emissive channel at all, so
+  // the heat has to arrive as HDR overdrive on its colour or the fallback
+  // build simply never glows.
+  const flat = new THREE.Mesh(lit.geometry, new THREE.MeshBasicMaterial({ color: 0x808080 }));
+  // Read off the material rather than derived from the hex: three converts an
+  // sRGB hex into linear on the way in, so 0x808080 is 0.216 in here and a
+  // test that assumed 0.5 would be asserting against a colour space.
+  const flatCold = flat.material.color.r;
+  const flatHandle = attachDamageGlow(flat);
+  flatHandle.set(1, 'shrimpRing');
+  check('an unlit stand-in glows by colour overdrive',
+    flat.material.color.r > flatCold * 1.5,
+    `${flatCold.toFixed(2)} -> ${flat.material.color.r.toFixed(2)} on red`);
+  flatHandle.release();
+  check('...and comes back to its own colour',
+    Math.abs(flat.material.color.r - flatCold) < 0.001, `r ${flat.material.color.r.toFixed(3)}`);
+}
+
+// THE SHRIMP RING, end to end: the shrimp that bit is the one that is hot.
+{
+  enemies.length = 0;
+  const shrimpGroup = createShrimpRingVisual();
+  scene.add(shrimpGroup);
+  resetShrimpRing();
+  const ringPlayer = { x: 0, y: bounds.surfaceY - 10 };
+  // Right on the ring, so a shrimp sweeps into it.
+  const victim = fakeEnemy(ringPlayer.x + CONFIG.shrimpRing.radius, ringPlayer.y, 0.6, 1e6);
+  enemies.push(victim);
+  let ringHits = 0;
+  let hottest = 0;
+  let coldest = Infinity;
+  const ringFrames = Math.ceil((Math.PI * 2 / CONFIG.shrimpRing.orbitSpeed) / dt);
+  for (let i = 0; i < ringFrames; i++) {
+    updateShrimpRing(dt, scene, ringPlayer, 4, enemies, { onContact: () => { ringHits++; } });
+    if (ringHits > 0) {
+      const scales = shrimpGroup.children.map((m) => m.scale.x);
+      hottest = Math.max(hottest, Math.max(...scales));
+      coldest = Math.min(coldest, Math.min(...scales));
+    }
+  }
+  check('the ring lands contacts to be hot about', ringHits > 0, `${ringHits} contact(s)`);
+  // The punch is the per-instance channel a screenshot can see, and the glow
+  // rides the same heat — so a ring where every shrimp is the same size is a
+  // ring where the flare went to all of them or to none.
+  check('the shrimp that bit is not the same size as the ones that did not',
+    hottest > coldest * 1.02,
+    `${coldest.toFixed(3)} - ${hottest.toFixed(3)}`);
+  check('...and no shrimp is left inflated',
+    hottest <= CONFIG.shrimpRing.scale * (1 + CONFIG.shrimpRing.hitPop) + 1e-6,
+    `${hottest.toFixed(3)} against a cap of ${(CONFIG.shrimpRing.scale * (1 + CONFIG.shrimpRing.hitPop)).toFixed(3)}`);
+  resetShrimpRing();
+  scene.remove(shrimpGroup);
+  enemies.length = 0;
+}
+
+// THE GARLIC CLOUD. Additive, so brightness is the COLOUR — pushing the alpha
+// instead would only make the cloud thicker.
+{
+  enemies.length = 0;
+  const garlic = createGarlicVisual();
+  scene.add(garlic);
+  resetGarlic();
+  const garlicPlayer = { x: 0, y: bounds.surfaceY - 10 };
+  updateGarlic(dt, scene, garlicPlayer, 3, enemies, {});
+  const cold = garlic.material.uniforms.uColor.value.clone();
+  for (let i = 0; i < 6; i++) enemies.push(fakeEnemy(0, garlicPlayer.y, 0.4, 1e6));
+  let ticks = 0;
+  for (let i = 0; i < Math.ceil((CONFIG.garlic.tickInterval * 3 + 0.1) / dt) && ticks < 3; i++) {
+    updateGarlic(dt, scene, garlicPlayer, 3, enemies, { onTick: () => { ticks++; } });
+  }
+  const hot = garlic.material.uniforms.uColor.value.clone();
+  check('the garlic cloud ticks through a crowd', ticks > 0, `${ticks} tick(s)`);
+  check('...and grinding brightens it', hot.r > cold.r,
+    `${cold.r.toFixed(2)} -> ${hot.r.toFixed(2)} on red`);
+  // ...and goes back down. A cloud that stayed hot would be the brightest
+  // thing on screen for the rest of the run.
+  enemies.length = 0;
+  for (let i = 0; i < Math.ceil((damageGlowCfg('garlic').fade + 0.1) / dt); i++) {
+    updateGarlic(dt, scene, garlicPlayer, 3, enemies, {});
+  }
+  const cooled = garlic.material.uniforms.uColor.value.clone();
+  check('...and cools back to where it started',
+    Math.abs(cooled.r - cold.r) < 0.001, `${cooled.r.toFixed(3)} vs ${cold.r.toFixed(3)}`);
+  resetGarlic();
+  scene.remove(garlic);
+  enemies.length = 0;
+}
+
+// Every aura reads the same table, which is the point of there being a table.
+check('every aura is on the one envelope',
+  ['shrimpRing', 'garlic', 'harp'].every((k) => CONFIG.damageGlow.sources[k]),
+  Object.keys(CONFIG.damageGlow.sources).join(', '));
+check('...and heat is off entirely when the block is',
+  (() => {
+    const was = CONFIG.damageGlow.enabled;
+    CONFIG.damageGlow.enabled = false;
+    const off = stoke(1, 'garlic') === 0 && glowLevel(1, 'garlic') === 0;
+    CONFIG.damageGlow.enabled = was;
+    return off;
+  })());
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

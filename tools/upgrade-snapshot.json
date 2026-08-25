@@ -417,20 +417,20 @@
       }
     ]
   },
-  "pierce": {
+  "projectileLife": {
     "cap": 4,
     "perStack": [
       {
-        "pierce": 101
+        "projectileLifeMul": 125
       },
       {
-        "pierce": 102
+        "projectileLifeMul": 156.25
       },
       {
-        "pierce": 103
+        "projectileLifeMul": 195.3125
       },
       {
-        "pierce": 104
+        "projectileLifeMul": 244.140625
       }
     ]
   },

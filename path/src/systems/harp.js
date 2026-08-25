@@ -7,6 +7,7 @@ import { orbitTarget } from './orbit.js';
 import { aoe, targeting, abilityDamage, companionScale } from './scaling.js';
 import { canHold, canControl, charmEnemy } from './control.js';
 import { createNoteField, rollNoteColor } from './noteStorm.js';
+import { stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
 
 // ===========================================================================
 // HARP SEAL — the pun, and the ability that grew out of it.
@@ -477,6 +478,7 @@ function tickAuras(dt, scene, enemiesList, hooks) {
     // which looks like the second charm did nothing.
     e.harpNotesOn = false;
     e.harpColor = null;
+    e.harpAuraHeat = 0;
   }
 
   let caught = 0;
@@ -505,6 +507,14 @@ function tickAuras(dt, scene, enemiesList, hooks) {
       notes.scaleHost(host, CONFIG.harp.auraNoteScale * companionScale() * fade);
     }
 
+    // HOT WHILE IT IS GRINDING. Per host, so two charmed bodies in one fight
+    // are two separately hot rings rather than one shared brightness — the
+    // whole card is about WHICH body is carrying the ring, and a field that
+    // lit up everywhere would throw that away. Carried every frame; stoked
+    // below by a tick that caught something.
+    host.harpAuraHeat = cool(host.harpAuraHeat, 'harp', dt);
+    notes.heatHost(host, 1 + damageGlowCfg('harp').peak * glowLevel(host.harpAuraHeat, 'harp'));
+
     host.harpAuraTick = (host.harpAuraTick ?? 0) - dt;
     if (host.harpAuraTick > 0) continue;
     host.harpAuraTick = CONFIG.harp.auraTick;
@@ -532,6 +542,7 @@ function tickAuras(dt, scene, enemiesList, hooks) {
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
       caught += 1;
+      host.harpAuraHeat = stoke(host.harpAuraHeat, 'harp');
       lastX = e.mesh.position.x;
       lastY = e.mesh.position.y;
       hooks.onEnemyDamaged?.(e, dmg);

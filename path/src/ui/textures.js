@@ -146,7 +146,7 @@ const EMITTER_SECTIONS = [
 // order in upgrades.csv. Same section names as the Companions tab, so "which
 // card grants the eel" and "what does the eel do" are one word apart.
 const UPGRADE_SECTIONS = [
-  ['Your weapon', ['rapidFire', 'heavyRounds', 'multishot', 'pierce', 'velocity', 'homingMissile', 'bounceShot']],
+  ['Your weapon', ['rapidFire', 'heavyRounds', 'multishot', 'projectileLife', 'velocity', 'homingMissile', 'bounceShot']],
   ['Strike & movement', ['maxSpeed', 'overboost', 'strikePower', 'strikeDash', 'strikeShrapnel', 'strikeCharge', 'breachChain']],
   ['Survivability', ['vitality', 'regen', 'magnet', 'oxygenMax', 'oxygenRefill']],
   ['Escorts', ['sealTeam', 'electricEel', 'beluga', 'dumbo', 'octoGrab', 'orcaFamily']],

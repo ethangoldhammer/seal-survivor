@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe } from './scaling.js';
 import { playerOverlayZ } from '../entities/player.js';
+import { stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
 
 // A constant low-damage aura around the ship. The cloudy look is two layers
 // of value noise scrolling at different rates — cheap, no texture needed.
@@ -53,6 +54,10 @@ const fragmentShader = /* glsl */ `
 
 let mesh = null;
 let tickTimer = 0;
+// How hard the cloud is working, 0..1 — see systems/damageGlow.js. One number
+// for the whole field, unlike the shrimp ring's per-instance heat, because the
+// field IS one object: it ticks as a unit and it is drawn as a unit.
+let heat = 0;
 
 export function createGarlicVisual() {
   const geometry = new THREE.CircleGeometry(1, 32);
@@ -110,9 +115,17 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
   mesh.position.z = playerOverlayZ();
   mesh.scale.setScalar(radius);
 
+  // HOT WHILE IT IS GRINDING. Stoked below by a tick that caught something,
+  // carried to now here, and spent on the COLOUR rather than on the opacity:
+  // the layer is additive, so a colour driven past 1 is real brightness that
+  // survives into the bright pass and haloes, where more alpha would only make
+  // the cloud thicker. See CONFIG.damageGlow.sources.garlic.
+  heat = cool(heat, 'garlic', dt);
+  const glow = 1 + damageGlowCfg('garlic').peak * glowLevel(heat, 'garlic');
+
   const u = mesh.material.uniforms;
   u.uTime.value += dt;
-  u.uColor.value.set(CONFIG.garlic.color);
+  u.uColor.value.set(CONFIG.garlic.color).multiplyScalar(glow);
   u.uOpacity.value = CONFIG.garlic.opacity;
   u.uSwirl.value = CONFIG.garlic.swirl;
   u.uDensity.value = CONFIG.garlic.density;
@@ -142,9 +155,14 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
   // Only when the field actually caught something. A tick that hit nothing is
   // not an event — swimming around with garlic up would otherwise pulse in
   // your hands forever, at the tick rate, for the entire run.
+  // Scaled by how many the tick caught — a sweep through a school runs the
+  // cloud hotter than one that clipped a single crab, which is the same fact
+  // the event below carries a count for.
+  if (caught) heat = stoke(heat, 'garlic', caught);
   if (caught) hooks.onTick?.(playerPos.x, playerPos.y, caught);
 }
 
 export function resetGarlic() {
   tickTimer = 0;
+  heat = 0;
 }

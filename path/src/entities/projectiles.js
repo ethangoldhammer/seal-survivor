@@ -5,6 +5,7 @@ import { bounds } from '../arena.js';
 import { createAnimationController } from '../systems/animation.js';
 import { updateTumble } from '../systems/rocks.js';
 import { markWeight, markedTargets } from '../systems/marks.js';
+import { projectileLife } from '../systems/scaling.js';
 
 // One list for both sides — `faction` decides who a bullet can hurt. Two
 // optional behaviors layer on top of the base fly-in-a-straight-line bullet:
@@ -36,6 +37,23 @@ export function spawnProjectile(scene, {
   chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
+  // HOW FAST THE BODY WHIPS ABOUT ITS OWN LONG AXIS, in radians a second.
+  //
+  // Not `spin`, and the difference is the axis. `spin` turns a shot in the
+  // screen plane — a starfish tumbling end over end, which throws away any
+  // heading it had. This rolls the body about the direction it is TRAVELLING,
+  // so a razor clam's shell still flies nose-first and pierces along its own
+  // length while its faces sweep through the light. On a flat chrome body that
+  // roll is the entire metallic read (see CONFIG.chromeBlade).
+  //
+  // It composes with `orient` rather than fighting it, which plain Euler
+  // angles will not do: the default XYZ order applies the roll AFTER the
+  // heading, which swings the nose out of the plane — a blade fired at 60
+  // degrees comes out 0.73 units off its own heading on z. So a rolling shot
+  // is switched to 'ZYX', where the roll is applied in the body's own frame
+  // first and the heading then points the whole thing. `tilt` still lands on
+  // x; nothing uses both.
+  roll = 0,
   // WHICH BANG THIS SHOT'S SPLASH PLAYS, by feedback event name, or null for
   // the queue's default. A description, exactly like `burst` and `chill`
   // below: projectiles.js never fires it — main.js does, when it resolves the
@@ -75,6 +93,10 @@ export function spawnProjectile(scene, {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
   if (scale !== 1) mesh.scale.setScalar(scale);
+  // Set BEFORE any angle is written, and only on a shot that actually rolls —
+  // see the `roll` note above for why the order matters and why everything
+  // else keeps three's default.
+  if (roll) mesh.rotation.order = 'ZYX';
   if (tilt) mesh.rotation.x = tilt;
   scene.add(mesh);
 
@@ -98,7 +120,14 @@ export function spawnProjectile(scene, {
     source,
     damage,
     speed,
-    life,
+    // ANDRE 3000 IS APPLIED HERE AND NOWHERE ELSE. Every caller hands in the
+    // life its own weapon was tuned for; the run's multiplier is spent once, on
+    // the way into the list, so a weapon added later is covered by the card
+    // without anybody remembering to cover it.
+    //
+    // Player shots only — an enemy torpedo comes through this same function and
+    // has no business inheriting the seal's upgrades.
+    life: faction === 'player' ? projectileLife(life) : life,
     radius,
     pierce,
     hits: new Set(), // enemies already pierced, so each takes damage once
@@ -147,6 +176,8 @@ export function spawnProjectile(scene, {
     gravityScale,
 
     spin, // radians/sec, purely visual
+    roll, // radians/sec about its own long axis — see the argument note above
+    rollAngle: 0,
     trailScale, // ribbon size multiplier — see the argument note above
     orient, // face the direction of travel each frame
     splashDamage, // AoE dealt to OTHER nearby enemies on the first hit (see main.js)
@@ -428,7 +459,18 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
       // round enough that nobody has ever seen it; changing the shared branch
       // would silently re-pose every weapon in the game, which is not something
       // to do from inside a new card.
-      p.mesh.rotation.y = p.orient !== 'axis' && p.dir.x < 0 ? Math.PI : 0;
+      const mirror = p.orient !== 'axis' && p.dir.x < 0 ? Math.PI : 0;
+      // ...AND THE ROLL, on the same axis the mirror uses, because on a body
+      // already pointed down its heading that axis IS the long one. Added to
+      // the mirror rather than replacing it so a shot could have both; the
+      // rotation order set at spawn is what keeps this from dragging the nose
+      // off the heading.
+      if (p.roll) {
+        p.rollAngle += p.roll * dt;
+        p.mesh.rotation.y = mirror + p.rollAngle;
+      } else {
+        p.mesh.rotation.y = mirror;
+      }
     }
     if (p.spin) p.mesh.rotation.z += p.spin * dt;
     // Rock ammo tumbles about its own arbitrary axis. Only when nothing else

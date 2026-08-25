@@ -70,7 +70,7 @@ const PEBBLE_VOLLEY = [
   'velocity',       // how fast they crossed
   'homingShot',     // and whether they turned on the way
   'overboost',
-  'pierce',
+  'projectileLife',   // and how long they stayed out there
 ];
 
 export const EVENT_UPGRADE = {
@@ -536,6 +536,17 @@ function buildTile(entry) {
   const el = document.createElement('div');
   el.className = 'sv-hive-tile';
   el.dataset.upgrade = entry.id;
+  // HOW MANY OF IT, ON THE TILE. Every surface that hovers a hexagon needs the
+  // stack count to build its tip (ui/upgradeTip.js), and the tile is the only
+  // place all of them can read it from without a second source.
+  //
+  // NOT the playtest ledger, which is the obvious alternative and is wrong on
+  // the one screen that matters most: `finalStacks` is written by endRun, so on
+  // the score screen it is right, and on the DEMO score screen — and anywhere
+  // else a hive is shown for a build the recorder never saw — it is an empty
+  // object, which reads back as zero stacks and silently drops half the tip.
+  // The tile was built from the fold, so it already knows.
+  el.dataset.stacks = String(entry.count);
   el.dataset.family = def?.family ?? 'utility';
   el.dataset.pulse = PULSE[def?.family] ?? 'glow';
   el.style.setProperty('--sv-hive-rarity', rarityColor(entry.rarity));
@@ -621,31 +632,39 @@ function buildShade(place, i, box, hexW, hexH) {
   return el;
 }
 
-function rebuild(held) {
-  const host = state.host;
-  if (!host) return;
-
-  // WHERE EVERY TILE WAS, before the new packing throws it away.
-  //
-  // A cluster relayouts on almost every pick — one more hexagon changes the
-  // ring, and half the corner moves a few pixels. Rebuilt cold, that is a jump
-  // cut: the hive is simply arranged differently on the next frame, and the eye
-  // reads it as the whole readout flickering rather than as one tile joining.
-  // Captured here, replayed as a slide in flipTiles() below.
-  const before = new Map();
-  for (const [id, el] of state.tiles) {
-    before.set(id, { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
-  }
-
+// THE PACKING, WRITTEN ONCE AND POINTED AT A HOST.
+//
+// Pulled out of rebuild() when the score screen grew a hive of its own. The
+// alternative — a second implementation that lays hexagons out at snapshot size
+// — is the exact failure the note above hiveTileRect warns about, one level up:
+// two packings that have to agree forever, with the drift showing as a hive
+// that interlocks in the corner and overlaps on the card, or the other way
+// round, depending which one was retuned.
+//
+// So there is one lattice, and a snapshot is the corner at a different `size`
+// with the FLIP left off (there is nothing for a freshly built hive to slide
+// from) and the tile map handed back rather than stored.
+//
+// Returns { tiles, shims } — Maps of upgrade id to element, the same shape
+// state holds. `host` is emptied first, and is stamped with the size the tiles
+// need: they are absolutely positioned, so a host left at auto is a zero-height
+// box with the whole hive hanging outside it.
+function layoutHive(host, held, { size = null } = {}) {
+  const tiles = new Map();
+  const shims = new Map();
   host.textContent = '';
-  state.tiles.clear();
-  state.shims.clear();
 
   const c = cfg();
+  // THE STYLE HOOK, ON THE HOST. The three looks are CSS descendant rules and
+  // they have to attach to something that exists in both cases — the corner's
+  // host sits inside a .sv-hive root, and a snapshot's host sits inside nothing
+  // at all. Keyed on the root, a snapshot would render as tiles with no face,
+  // which reads as a loading failure rather than as a missing selector.
+  host.dataset.style = c.style ?? 'ink';
   // `size` is the size of the HEXAGON, which is the thing anyone looking at the
   // corner is judging. The square box that carries it is larger, by exactly the
   // margin the art is drawn with.
-  const hexW = c.size ?? 52;
+  const hexW = size ?? c.size ?? 52;
   const hexH = hexW * (ART.h / ART.w);
   const box = hexW / ART.w;
   const gap = c.gap ?? 2;
@@ -715,17 +734,78 @@ function rebuild(held) {
     // reads as the pile being made of dirtier material than the hexagon on top.
     const shade = buildShade(place, i, box, hexW, hexH);
     if (shade) host.appendChild(shade);
-    const shims = buildShims(p.entry, box, p.left, p.top);
-    for (const shim of shims) host.appendChild(shim);
+    const pile = buildShims(p.entry, box, p.left, p.top);
+    for (const shim of pile) host.appendChild(shim);
     host.appendChild(el);
-    state.tiles.set(p.entry.id, el);
-    if (shims.length) state.shims.set(p.entry.id, shims);
+    tiles.set(p.entry.id, el);
+    if (pile.length) shims.set(p.entry.id, pile);
   });
 
   host.style.width = `${maxX - minX + hexW + skewMax}px`;
   host.style.height = `${maxY - minY + hexH + maxDepth}px`;
 
+  return { tiles, shims };
+}
+
+function rebuild(held) {
+  const host = state.host;
+  if (!host) return;
+
+  // WHERE EVERY TILE WAS, before the new packing throws it away.
+  //
+  // A cluster relayouts on almost every pick — one more hexagon changes the
+  // ring, and half the corner moves a few pixels. Rebuilt cold, that is a jump
+  // cut: the hive is simply arranged differently on the next frame, and the eye
+  // reads it as the whole readout flickering rather than as one tile joining.
+  // Captured here, replayed as a slide in flipTiles() below.
+  const before = new Map();
+  for (const [id, el] of state.tiles) {
+    before.set(id, { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0 });
+  }
+
+  // FILLED, NOT REPLACED. hiveParts() hands hiveReward.js `state.tiles` itself
+  // and the ceremony rebuilds under its feet on every stack taken — the note
+  // there calls it a live view on purpose. Swapping the Map for a new one would
+  // keep every re-read correct and quietly break any reference held across a
+  // rebuild, which is the one thing that contract promises.
+  state.tiles.clear();
+  state.shims.clear();
+  const built = layoutHive(host, held);
+  for (const [id, tile] of built.tiles) state.tiles.set(id, tile);
+  for (const [id, pile] of built.shims) state.shims.set(id, pile);
+
   flipTiles(before);
+}
+
+/**
+ * A HIVE THAT IS NOT THE CORNER — one detached element holding the whole build,
+ * at whatever size the caller has room for.
+ *
+ * WHAT IT IS FOR: the score screen, where it sits to the right of the last kill
+ * shot as the run's other object, and the sheet that opens when it is tapped.
+ * Both want the same lattice the player has been reading all run, and neither
+ * may disturb the live corner — so this shares the packing (see layoutHive) and
+ * shares nothing else. No FLIP, no pulses, no entry in `state`, and the corner
+ * keeps its own tiles whether this is built once or five times.
+ *
+ * `picks` is the flat pick list, one entry per level-up, exactly as
+ * setHiveUpgrades takes it — folded here rather than by the caller so a
+ * snapshot cannot disagree with the corner about how stacks collapse or which
+ * tier a stack keeps.
+ *
+ * Returns null for an empty build. A caller must treat that as "there is
+ * nothing to show", never as a reason to render an empty frame: an empty box
+ * on the score screen reads as an image that failed to load.
+ */
+export function buildHiveSnapshot(picks, { size = 30 } = {}) {
+  const held = foldUpgrades(picks ?? []);
+  if (!held.length) return null;
+  const host = document.createElement('div');
+  host.className = 'sv-hive-host sv-hive-snap';
+  // layoutHive stamps data-style on it, which is what carries the run's own
+  // look onto a host with no .sv-hive root over it.
+  const { tiles } = layoutHive(host, held, { size });
+  return { host, tiles, held };
 }
 
 // Slide every tile that moved from where it used to be to where it now is.
@@ -998,7 +1078,81 @@ export function setHiveLayout(layout) {
 
 export function setHiveStyle(style) {
   CONFIG.upgradeHive.style = style;
+  // BOTH, and the host is the one the CSS reads. The root keeps the attribute
+  // because it is what anything asking "what does the hive look like" inspects
+  // from outside; the host carries it because that is where the style rules
+  // hang (see layoutHive). Written here as well as there so cycling the style
+  // from the tuner does not need a relayout to take effect.
   if (state.root) state.root.dataset.style = style;
+  if (state.host) state.host.dataset.style = style;
+}
+
+// --- TIPS ON THE CORNER, WHILE THE RUN IS STOPPED --------------------------
+//
+// Hovering a corner tile mid-fight is not a gesture anybody makes on purpose.
+// The mouse IS the aim in this game, and the hive sits in a bottom corner — so
+// on a desktop run the pointer crosses these hexagons every time the seal
+// shoots down and to the side, which with a tip bound to hover means a box
+// opening over the fight several times a minute. A dwell delay would fix the
+// flicker and not the underlying thing: the player never asked.
+//
+// So the corner answers questions only when the game is stopped and the player
+// is looking rather than playing. main.js calls this from setPaused, which is
+// the flag the whole frame loop is already written around.
+//
+// TWO THINGS HAVE TO CHANGE, AND MISSING EITHER IS A SILENT NO-OP:
+//
+//   POINTER EVENTS  .sv-hive is pointer-events: none at rest, so nothing in it
+//                   can be hovered at all.
+//   THE STACK       the pause menu lives in a .sv-center, which is a
+//                   full-screen box at z-index 8 with pointer-events: all. It
+//                   covers the corner completely. A hive that opted back into
+//                   the pointer without also clearing that would receive
+//                   nothing, and would look exactly like a wiring bug.
+//
+// Both live on one attribute — see .sv-hive[data-tips="on"] in ui.js, which is
+// the same trick the reward ceremony uses one line above it.
+//
+// THE LISTENERS ARE ADDED AND REMOVED rather than added once and gated by a
+// flag. The gated version costs a delegated pointerover on the HUD for every
+// frame of every fight, which is precisely the per-frame work the head of this
+// file says the hive does not do.
+let tipHandlers = null;
+
+export function setHiveTips(on, { onShow, onHide } = {}) {
+  if (!state.root) return false;
+  const want = !!on && !!CONFIG.upgradeHive?.enabled;
+  if (want === !!tipHandlers) return want;
+
+  if (!want) {
+    state.host?.removeEventListener('pointerover', tipHandlers.over);
+    state.host?.removeEventListener('pointerout', tipHandlers.out);
+    tipHandlers = null;
+    state.root.removeAttribute('data-tips');
+    onHide?.();
+    return false;
+  }
+
+  // Delegated on the host, so a rebuild mid-pause (the tuner cycling a layout
+  // while the game is stopped is a real thing somebody does) does not strand a
+  // listener on a tile that no longer exists.
+  const over = (e) => {
+    const tile = e.target.closest?.('.sv-hive-tile');
+    if (!tile) return;
+    onShow?.(tile.dataset.upgrade, tile);
+  };
+  const out = (e) => {
+    // relatedTarget inside the same tile is the pointer crossing from the face
+    // to the icon, which is not leaving anything.
+    const tile = e.target.closest?.('.sv-hive-tile');
+    if (tile && tile.contains(e.relatedTarget)) return;
+    onHide?.();
+  };
+  state.host.addEventListener('pointerover', over);
+  state.host.addEventListener('pointerout', out);
+  tipHandlers = { over, out };
+  state.root.dataset.tips = 'on';
+  return true;
 }
 
 export function toggleHive(on) {

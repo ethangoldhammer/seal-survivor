@@ -35,127 +35,25 @@
 
 import { CONFIG } from './config.js';
 import { baseStats } from './stats.js';
+import { STAT_TEXT } from './statTextTable.js';
 import { playerName } from './systems/playerName.js';
 
 // ---------------------------------------------------------------------------
-// WHAT EACH STAT IS CALLED, in the words a card would use.
+// WHAT EACH STAT IS CALLED — now a spreadsheet, path/src/statText.csv.
 //
-// `kind` decides the phrasing, not the arithmetic — the arithmetic is
-// measured. It says what the number MEANS once it's been measured:
+// This used to be a 60-entry object right here, which meant that renaming
+// "fire rate" on a card was a code edit. The measurement has to stay in code
+// (it replays apply(); that is the whole point). The WORDS do not, and every
+// one of them now lives in the CSV: label, plural, the unlock sentence, and a
+// `template` column that can rewrite a phrase's shape outright.
 //
-//   percent  a multiplier, shown as +N%. `lower: true` marks the stats where
-//            down is the improvement (fireRate is a cooldown), so a measured
-//            *= 0.75 reads "+25% fire rate" rather than "-25%".
-//   flat     an additive number shown as-is: "+30 max HP".
-//   count    an additive whole number of things, with a noun that pluralises:
-//            "+1 projectile", "+2 projectiles".
-//   level    an ability's level. The 0 -> 1 stack turns the ability on and
-//            names it ("chain lightning"); every stack after that is
-//            "+1 level", because what a level does lives in that ability's own
-//            config and is not measurable from the stat block.
+// Re-exported here because this module is where every consumer already looks
+// for it, and because the pairing of "what it is called" with "how it is
+// phrased" is the thing worth keeping in one place.
 //
-// A stat with no entry here still works — it falls back to its raw name — so a
-// new stat is a missing label, never a missing card.
+// See statTextTable.js for what each column does.
 // ---------------------------------------------------------------------------
-export const STAT_TEXT = {
-  // --- the seal ---
-  maxHp:              { label: 'max HP', kind: 'flat' },
-  maxSpeed:           { label: 'max speed', kind: 'percent' },
-  pickupRadius:       { label: 'pickup radius', kind: 'percent' },
-  chumGulpRadius:     { label: 'gulp radius', kind: 'percent' },
-  regenPerSec:        { label: 'HP/sec', kind: 'flat' },
-  maxOxygen:          { label: 'max oxygen', kind: 'flat' },
-  oxygenRefillRate:   { label: 'surface refill speed', kind: 'percent' },
-
-  // --- the gun ---
-  fireRate:           { label: 'fire rate', kind: 'percent', lower: true },
-  damage:             { label: 'projectile damage', kind: 'percent' },
-  speed:              { label: 'projectile speed', kind: 'percent' },
-  multishot:          { label: 'projectile', kind: 'count' },
-  // Reads as the tail of a sentence — "Bullets pierce {effect}" — because
-  // that is the shape the card has always had.
-  pierce:             { label: 'enemy', kind: 'count', plural: 'enemies' },
-  // Sits at 0 by default, so `recoil *= 1.3` measures as no change at all and
-  // {effect} correctly declines to claim one. The label is here for the day
-  // the base is raised off zero.
-  recoil:             { label: 'recoil boost', kind: 'percent' },
-  projectileBonus:    { label: 'of everything you fire', kind: 'count', bare: true },
-  orbiterBonus:       { label: 'of everything that circles you', kind: 'count', bare: true },
-
-  // --- the strike ---
-  strikeDamage:       { label: 'strike damage', kind: 'percent' },
-  strikeChainMul:     { label: 'chain damage', kind: 'percent' },
-  strikeDashSpeed:    { label: 'dash speed', kind: 'percent' },
-  strikeDashDuration: { label: 'dash length', kind: 'percent' },
-  strikeChargeTime:   { label: 'charge speed', kind: 'percent', lower: true },
-  strikeChumRefill:   { label: 'meter per chum', kind: 'flat', percentOfOne: true },
-  shrapnelCount:      { label: 'fragment', kind: 'count' },
-  breachChainLevel:   { label: 'link per breach', kind: 'count' },
-
-  // --- the cross-cutting four ---
-  aoeMul:             { label: 'blast, aura and wave size', kind: 'percent' },
-  targetingMul:       { label: 'targeting range', kind: 'percent' },
-  companionScale:     { label: 'companion size', kind: 'percent' },
-  companionDamageMul: { label: 'companion damage', kind: 'percent' },
-  biolumLevel:        { label: 'element', kind: 'level', unlock: 'an element on your shots and strike' },
-
-  // --- the ricochet shot, the one ability with real stats rather than a level ---
-  bounceLevel:        { label: 'ricochet', kind: 'level', unlock: 'a chaining ricochet shot' },
-  bounceFireRate:     { label: 'ricochet fire rate', kind: 'percent', lower: true },
-  bounceLife:         { label: 'ricochet lifespan', kind: 'flat', unit: 's' },
-  bounceMaxBounces:   { label: 'bounce', kind: 'count' },
-
-  // --- companions and thrown things, counted ---
-  missileCount:       { label: 'seeking mussel', kind: 'count' },
-  shrimpCount:        { label: 'orbiting shrimp', kind: 'count', plural: 'orbiting shrimp' },
-  scallopCount:       { label: 'wild scallop', kind: 'count' },
-
-  // --- companions and thrown things, levelled ---
-  garlicLevel:        { label: 'sea garlic', kind: 'level', unlock: 'a damaging aura' },
-  eelLevel:           { label: 'electric eel', kind: 'level', unlock: 'chain lightning' },
-  laserEyesLevel:     { label: 'laser eyes', kind: 'level', unlock: 'eye beams' },
-  starfishLevel:      { label: 'starfish', kind: 'level', unlock: 'rapid thrown starfish' },
-  seagullLevel:       { label: 'seagull', kind: 'level', unlock: 'homing dive-bombers' },
-  belugaLevel:        { label: 'beluga', kind: 'level', unlock: 'a bubble that traps enemies' },
-  sealTeamLevel:      { label: 'escort seal', kind: 'count' },
-  bakalarLevel:       { label: "Bakalar's boat", kind: 'level', unlock: 'a net full of bombs' },
-  calamariLevel:      { label: 'calamari ring', kind: 'level', unlock: 'rings of fried squid' },
-  dumboLevel:         { label: 'dumbo octopus', kind: 'level', unlock: 'a charm on nearby enemies' },
-  harpLevel:          { label: 'harp seal', kind: 'level', unlock: 'notes that charm the biggest enemy near you' },
-  oysterLevel:        { label: 'oyster blaster', kind: 'level', unlock: 'bursting pearls' },
-  razorClamLevel:     { label: 'razor clam', kind: 'level', unlock: 'a spray of piercing chrome blades' },
-  octoGrabLevel:      { label: 'octopus grabber', kind: 'level', unlock: 'tentacles that reel fish in' },
-  orcaLevel:          { label: 'orca family', kind: 'level', unlock: 'three orcas hunting the boats' },
-  // The card that raises this is a STUB — disabled in upgrades.csv, and no
-  // system reads the stat yet (see CONFIG.upgrades.dolphinPod). The label is
-  // here anyway because npm run test:text fails on a stat without one, which
-  // is the check working: the day the card is switched on, its `{effect}`
-  // has to render as English rather than as `dolphinPodLevel`.
-  dolphinPodLevel:    { label: 'dolphin pod', kind: 'level', unlock: 'a pod of dolphins working the surface' },
-  musselVolleyLevel:  { label: 'mussel barrage', kind: 'level', unlock: 'a barrage on a full-charge strike' },
-  clubLevel:          { label: 'club', kind: 'level', unlock: 'a club on each fin tip' },
-  clubThrowLevel:     { label: 'thrown club', kind: 'level', unlock: 'hurled homing clubs on a strike' },
-  clubBoomLevel:      { label: 'club blast', kind: 'level', unlock: 'every club hit detonates' },
-  clubIceLevel:       { label: 'club ice', kind: 'level', unlock: 'chill and freeze your opps' },
-  // The Bouncer's three. All percentages, because the card is a multiplier on
-  // a class rather than a level of anything — there is no "club power 3" to
-  // name, only the numbers it moved.
-  clubCount:          { label: 'club', kind: 'count' },
-  clubDamageMul:      { label: 'club damage', kind: 'percent' },
-  clubKnockMul:       { label: 'club knockback', kind: 'percent' },
-  clubReachMul:       { label: 'club reach', kind: 'percent' },
-  homingShotLevel:    { label: 'sonar teeth', kind: 'level', unlock: 'shots that seek, favouring the biggest body in reach' },
-
-  // --- the two cards whose worth is not in their apply() ---
-  // Both count stacks and nothing else, deliberately: what a stack is WORTH
-  // depends on a running total (Maneater) or on a stat other cards move (Iron
-  // Lung), and neither is visible from inside apply(). See applyDamageScaling
-  // in stats.js. That makes 'level' the honest kind here — {effect} on either
-  // card would otherwise have to invent a number, which is the exact failure
-  // the measured descriptions exist to prevent.
-  maneaterLevel:      { label: 'maneater', kind: 'level', unlock: 'a taste for swimmers — every one you eat raises all your damage' },
-  ironLungLevel:      { label: 'iron lung', kind: 'level', unlock: 'all damage scaling with your maximum oxygen' },
-};
+export { STAT_TEXT } from './statTextTable.js';
 
 // ---------------------------------------------------------------------------
 // MEASUREMENT
@@ -272,10 +170,52 @@ function plural(text, n) {
   return t.plural ?? `${t.label}s`;
 }
 
+// A row's `template` column, filled in with the measurement.
+//
+// This is the escape hatch for wording the four standard shapes cannot say —
+// "fire rate up +25%", "+2 more orbiting shrimp" — without giving up the
+// measured number, which is the one thing that must never be typed by hand.
+// Every token resolves from the SAME measurement the standard shape would
+// have used, so an override can restate the number but cannot invent one.
+//
+// Returns '' when the column is blank or renders to nothing, and the caller
+// falls back to the standard shape: a mistyped override should read as the
+// old wording, never as a card with a hole in it.
+function fillTemplate(t, change) {
+  if (!t.template) return '';
+
+  const step = change.how === 'add' ? change.amount : change.to - change.from;
+  const signed = (n) => `${n < 0 ? '' : '+'}${num(n)}`;
+
+  const out = t.template.replace(/\{(n%|\+n|n|label|noun|unit|from|to)\}/g, (whole, key) => {
+    switch (key) {
+      case 'n':     return num(Math.abs(step));
+      case '+n':    return signed(step);
+      // A percentage is only meaningful on a measured RATIO. On an additive
+      // stat there is no ratio to quote, so the token declines rather than
+      // dividing two numbers that were never a proportion of each other.
+      case 'n%':    return change.how === 'mul' ? pct(change.ratio, t.lower) : signed(step);
+      case 'label': return t.label ?? change.stat;
+      case 'noun':  return plural(change, step) ?? t.label ?? change.stat;
+      case 'unit':  return t.unit ?? '';
+      case 'from':  return num(change.from);
+      case 'to':    return num(change.to);
+      default:      return whole;
+    }
+  }).trim();
+
+  return out;
+}
+
 // One measured change as a phrase. Everything here is about WORDING; the
 // numbers arrived already measured.
 export function phrase(change, stack = 1) {
   const t = STAT_TEXT[change.stat] ?? { label: change.stat, kind: 'flat' };
+
+  // An override wins over every standard shape below — including the unlock
+  // sentence, so a card whose first stack should read differently can say so.
+  const custom = fillTemplate(t, change);
+  if (custom) return custom;
 
   if (t.kind === 'level') {
     // Exactly 0 -> 1 is the card that turns the ability on, and naming the

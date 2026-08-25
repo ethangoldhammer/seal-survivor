@@ -60,7 +60,7 @@ export const BALANCE = {
 // any pick, and dividing by zero investment would rank it infinitely efficient
 // forever.
 export const SOURCE_UPGRADES = {
-  gun: { upgrades: ['rapidFire', 'heavyRounds', 'multishot', 'pierce', 'velocity'], baseStacks: 1, label: 'Fin Pebbles' },
+  gun: { upgrades: ['rapidFire', 'heavyRounds', 'multishot', 'projectileLife', 'velocity'], baseStacks: 1, label: 'Fin Pebbles' },
   missile: { upgrades: ['homingMissile'], label: 'Homing Missile' },
   ricochet: { upgrades: ['bounceShot'], label: 'Ricochet Rounds' },
   starfish: { upgrades: ['starfish'], label: 'Starfish Shuriken' },
@@ -181,6 +181,53 @@ export function sourceFamily(source) {
 export function sourceLabel(source) {
   const s = resolveSource(source);
   return SOURCE_UPGRADES[s]?.label ?? ENVIRONMENT_LABELS[s] ?? s;
+}
+
+// WHICH DAMAGE TAG AN UPGRADE'S WORK IS BOOKED UNDER — the table above, read
+// backwards.
+//
+// Built once from SOURCE_UPGRADES rather than written out, because a hand-kept
+// inverse is a second list that has to agree with the first forever, and the
+// failure when it stops agreeing is the silent zero this file already has five
+// comments about: a card whose tip says it has done nothing all run.
+//
+// A SOURCE OWNS SEVERAL UPGRADES more often than not — `gun` is the whole
+// pebble volley, `strike` is three cards — so several ids map to one tag and
+// the number they each report is the LINE's, not the card's. That is the
+// honest reading and there is no other one available: the ledger books a
+// pellet's damage against the gun, not against whichever of Rapid Fire or Heavy
+// Rounds made it hurt. Callers name the line (see sourceLabel) rather than
+// letting five cards each imply the total is theirs alone.
+const UPGRADE_SOURCE = (() => {
+  const out = Object.create(null);
+  for (const source in SOURCE_UPGRADES) {
+    for (const id of SOURCE_UPGRADES[source].upgrades) {
+      // FIRST WINS, and nothing in the table currently collides. Left as a
+      // deliberate rule rather than an accident so that if two sources ever do
+      // claim one upgrade, the answer is stable across reloads instead of
+      // depending on key order.
+      if (!(id in out)) out[id] = source;
+    }
+  }
+  return out;
+})();
+
+/**
+ * The damage tag `id`'s work is booked under, or null for an upgrade that has
+ * no output the ledger can see.
+ *
+ * Null is the common case and is not a gap: every stat card in the game —
+ * Yoga, Iron Lung, Supa Dupa Seal — makes OTHER things better and has no tag
+ * of its own. A caller must show them something else (their running total)
+ * rather than a zero.
+ */
+export function sourceForUpgrade(id) {
+  return UPGRADE_SOURCE[id] ?? null;
+}
+
+/** Does this source count its output in events rather than in hp? */
+export function isControlSource(source) {
+  return SOURCE_UPGRADES[resolveSource(source)]?.control === true;
 }
 
 function sum(obj) {

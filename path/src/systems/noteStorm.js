@@ -295,6 +295,11 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
     pool.setColorRGB(mesh, color.r, color.g, color.b);
     const n = {
       mesh, t: 0, life: 1, scale: 1, baseScale: 1, spin: 0, rot: 0,
+      // The colour it was born with, kept so heatHost can brighten it and put
+      // it back. Copied rather than referenced: the caller's object is one
+      // shared roll handed to every note in the ring.
+      color: { r: color.r, g: color.g, b: color.b },
+      tint: 1,
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
       host: null, phase: 0, radius: 0, height: 0, rate: 1, preset: null, lane: 0,
     };
@@ -484,6 +489,30 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
     for (const n of notes) if (n.host === host) n.baseScale = scale;
   }
 
+  /**
+   * Brighten every note bound to this host — the ring going hot while it is
+   * actually grinding something (systems/damageGlow.js).
+   *
+   * Through the POOL's per-instance colour, which is why this is possible at
+   * all: every note shares one material, so anything written there would
+   * brighten the whole field including the notes still in flight from other
+   * hosts. instanceColor is the one per-note channel there is, and the
+   * multiplier rides on the note's own rolled colour so a hot ring is a
+   * brighter version of itself rather than a wash toward white.
+   *
+   * Written only when the multiplier actually moved: this runs per host per
+   * frame, and a ring that has been sitting cold for four seconds should not
+   * be paying for a buffer upload to say so.
+   */
+  function heatHost(host, mul) {
+    const m = Math.max(0, mul);
+    for (const n of notes) {
+      if (n.host !== host || n.tint === m) continue;
+      n.tint = m;
+      pool.setColorRGB(n.mesh, n.color.r * m, n.color.g * m, n.color.b * m);
+    }
+  }
+
   function reset() {
     for (let i = notes.length - 1; i >= 0; i--) drop(i);
   }
@@ -495,7 +524,7 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
   }
 
   return {
-    burst, attach, detach, update, reset, dispose, scaleHost,
+    burst, attach, detach, update, reset, dispose, scaleHost, heatHost,
     stats: pool.stats,
     get count() { return notes.length; },
     _notes: notes,

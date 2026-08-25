@@ -109,6 +109,7 @@ beluga.bombletScale,0.45,0.1,1,beluga bomblet size x the cluster
 beluga.fuse,0.8,0.1,4,beluga seconds a bomblet drifts before it pops
 beluga.baseBubbleRadius,0.5,0.1,2,beluga bubble size
 beluga.radiusPerLevel,0.24,0,0.5,beluga bubble size per level
+beluga.airRefill,18,0,60,"beluga oxygen the seal gets for swimming into a whole cluster and popping it. A bomblet pays its share by size (bombletScale of this). Against oxygen.bubbleRefillAmount's 30 for an orb: the bubbles are already where you are, and taking one costs you the trap it would have made"
 club.damage,6,0,40,club whack damage — a CHIP on purpose; the carom is the payload
 club.damagePerLevel,2.5,0,20,club whack damage per level
 club.length,2.4,0.5,6,club reach fin tip to head

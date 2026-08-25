@@ -81,6 +81,7 @@ import { touchPrimary } from '../devices.js';
 // design, so importing it here does not cost this module the standalone
 // property the header above is built on — see ui/tipJar.js.
 import { mountSplashTipJar } from './tipJar.js';
+import { mountBuildStamp } from './buildStamp.js';
 import { parseTipCsv } from '../tipTable.js';
 import tipsCsv from '../tips.csv?raw';
 
@@ -283,6 +284,11 @@ export function mountRiveSplash({
   // It takes its own pointer events and stops them dead (see mountSplashTipJar)
   // so a tap on the jar is not also a tap on the card underneath it.
   const tipJar = mountSplashTipJar(wrap, { tiers: TIP_TIERS });
+
+  // WHICH BUILD THIS IS. Last child of the wrap, so it paints over the
+  // artboard without a z-index fight, and it leaves with the splash because it
+  // is inside the thing that gets removed. See ui/buildStamp.js.
+  mountBuildStamp(wrap);
 
   parent.appendChild(wrap);
 

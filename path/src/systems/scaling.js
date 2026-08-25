@@ -66,6 +66,22 @@ export function abilityDamage(damage) {
   return damage * (player.stats?.abilityDamageMul ?? 1);
 }
 
+/**
+ * How long a projectile the SEAL fired stays in the water — André 3000.
+ *
+ * Every launcher in the game carries its own life: the gun's is a stat, the
+ * missile's and the scallop's and the razor blade's are CONFIG numbers, the
+ * ricochet's is a stat of its own. This is the one run-scoped multiplier over
+ * all of them, which is what lets a single card mean "everything you fire
+ * flies further" rather than "your pebbles do".
+ *
+ * Called from exactly one place — spawnProjectile — so a new weapon added
+ * later inherits the card for free instead of quietly not being covered by it.
+ */
+export function projectileLife(life) {
+  return life * (player.stats?.projectileLifeMul ?? 1);
+}
+
 /** Companion damage — the other half of Big Rigz. */
 export function companionDamage(damage) {
   return damage * (player.stats?.companionDamageMul ?? 1);

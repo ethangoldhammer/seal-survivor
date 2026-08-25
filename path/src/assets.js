@@ -6998,12 +6998,26 @@ const SHELL_FRAGMENT = `
   // as the bubble travels — the same trick as makeChromeMaterial below, which
   // invents its matcap rather than sampling one.
   //
-  // The normal is folded to the near wall first. Both walls are drawn
-  // (DoubleSide), and the far one's normal points away, so left alone it would
-  // sample the mirror image and paint a second highlight opposite the first.
-  // Folded, the two walls agree and the film simply reads twice as it should.
-  vec3 shellNF = vShellN * (dot(vShellN, vShellV) < 0.0 ? -1.0 : 1.0);
-  vec3 shellPaint = texture2D(uShellPaint, shellNF.xy * 0.5 + 0.5).rgb;
+  // NO FOLD TO THE NEAR WALL, and the fold that used to be here was a bug
+  // dressed up as a fix. Both walls are drawn (DoubleSide) and the far one's
+  // normal does point away — but for a sphere the two walls at one screen
+  // pixel have the SAME normal.xy and differ only in z, so the matcap already
+  // agrees between them. Flipping the sign of the whole vector moved the far
+  // wall to the ANTIPODE of the texture: a second highlight opposite the first,
+  // and a ring of speckle at the silhouette where dot(N,V) crosses zero and the
+  // two walls disagree pixel to pixel.
+  //
+  // uShellPaintFit is the second half of laying this image on straight. The
+  // unit disc of normal.xy maps to the texture's INSCRIBED circle, but the
+  // bubble in the image does not fill its frame: measured off the 64x64, its
+  // painted edge sits at 0.90 of that radius and everything outside is white.
+  // Sampled 1:1 the paint therefore stopped dead at 90% of the sphere's
+  // silhouette and drew a hard inner circle there, which read as a small flat
+  // disc floating inside a separate bright ring -- the bubble stopped looking
+  // round. Scaling the disc by the inset lands the painted edge on the real
+  // silhouette, where the contour already is.
+  vec2 shellPaintUv = vShellN.xy * (0.5 * uShellPaintFit) + 0.5;
+  vec3 shellPaint = texture2D(uShellPaint, shellPaintUv).rgb;
   // Toward WHITE at zero strength, which is what makes the amount a genuine
   // opacity: the image is opaque with a white surround, so the corners
   // multiply by 1 and only the painted disc tints anything.
@@ -7065,6 +7079,7 @@ function makeShellMaterial(mat, cfgKey = 'bubbleShell') {
     // the identity, whatever the driver does.
     uShellPaint: { value: whitePixel() },
     uShellPaintAmt: { value: 0 },
+    uShellPaintFit: { value: 0.9 },
   };
 
   mat.onBeforeCompile = (shader) => {
@@ -7082,7 +7097,7 @@ function makeShellMaterial(mat, cfgKey = 'bubbleShell') {
         '#include <common>\nuniform float uShellPower;\nuniform float uShellCore;\nuniform float uShellRim;'
         + '\nuniform float uShellBoost;\nuniform float uShellSheen;\nuniform float uShellBias;'
         + '\nuniform float uShellInk;\nuniform float uShellInkPower;\nuniform vec3 uShellInkColor;'
-        + '\nuniform sampler2D uShellPaint;\nuniform float uShellPaintAmt;'
+        + '\nuniform sampler2D uShellPaint;\nuniform float uShellPaintAmt;\nuniform float uShellPaintFit;'
         + '\nvarying vec3 vShellN;\nvarying vec3 vShellV;')
       // Replaces the line that DECLARES diffuseColor, so everything downstream
       // — the map, the tint, the alpha test — still runs on top of it exactly
@@ -7127,6 +7142,7 @@ export function applyBubbleShellSettings() {
     // than a white multiply that would be indistinguishable from it anyway —
     // and picks the paint up the moment preloadAssets calls back through here.
     u.uShellPaintAmt.value = paint ? Math.max(0, cfg.paint ?? 0) : 0;
+    u.uShellPaintFit.value = Math.max(0.05, cfg.paintFit ?? 0.9);
   }
 }
 

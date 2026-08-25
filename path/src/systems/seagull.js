@@ -14,6 +14,12 @@ import { aoe, targeting } from './scaling.js';
 // the way down. It is the crab layer's counter: crabs gather on your dropped
 // chum, and the gulls come for the crabs.
 //
+// ...AND IT DIVES ON WHATEVER IS THERE WHEN THEY ARE NOT. Crabs are the first
+// choice and stay the first choice, but a card that sat idle whenever the
+// seabed happened to be clear was a card that did nothing through most of an
+// open-water fight. With no pile to find the gull takes the densest knot of
+// anything and stoops on that instead — see pickTarget.
+//
 // It is deliberately NOT built on entities/projectiles.js. A projectile has
 // one velocity and one asset; this has flight phases, an animation state per
 // phase, and a target it chooses in the air. Fitting that into the projectile
@@ -54,22 +60,38 @@ function isCrabLike(e) {
   return e.def.behavior === 'crawl' || e.def.behavior === 'trap';
 }
 
-// The "pile": the crab with the most neighbours within clusterRadius. Returns
+// The "pile": the body with the most neighbours within clusterRadius. Returns
 // the centroid of that knot, so the gull aims at the middle of a group rather
 // than at whichever individual it happened to score first.
-function findCrabCluster(enemiesList) {
+//
+// `accept` is what counts as food for this scan — crabs for the run's first
+// choice, everything for the fallback. See pickTarget.
+//
+// SCORING IS QUADRATIC in the candidates, which was free while the only
+// candidates were crabs and is not free over a late-run population of 220. The
+// outer loop is strided so at most `scanCap` bodies are ever scored as pile
+// CENTRES, while every candidate still counts as a neighbour — the densest
+// knot is a wide, blunt thing and sampling which of its members gets to name
+// it moves the centroid by a body's width at worst.
+function findCluster(enemiesList, accept) {
   const c = CONFIG.seagullBomb;
-  // Acquisition: how wide a knot of crabs counts as one pile worth diving on.
+  // Acquisition: how wide a knot counts as one pile worth diving on.
   const r2 = targeting(c.clusterRadius) ** 2;
+  const candidates = [];
+  for (const e of enemiesList) if (accept(e)) candidates.push(e);
+  if (!candidates.length) return null;
+
+  const cap = Math.max(1, Math.round(c.scanCap ?? 48));
+  const stride = Math.max(1, Math.ceil(candidates.length / cap));
+
   let best = null;
   let bestCount = 0;
-  for (const e of enemiesList) {
-    if (!isCrabLike(e)) continue;
+  for (let i = 0; i < candidates.length; i += stride) {
+    const e = candidates[i];
     let count = 0;
     let sx = 0;
     let sy = 0;
-    for (const o of enemiesList) {
-      if (!isCrabLike(o)) continue;
+    for (const o of candidates) {
       const dx = o.mesh.position.x - e.mesh.position.x;
       const dy = o.mesh.position.y - e.mesh.position.y;
       if (dx * dx + dy * dy > r2) continue;
@@ -86,13 +108,36 @@ function findCrabCluster(enemiesList) {
   return null;
 }
 
+// WHAT THIS RUN IS FOR, and whether the gull will settle for it.
+//
+// Crabs first, because that is the card's job: they gather on your dropped
+// chum where nothing else you own reaches them, and the gulls are the answer
+// to that layer. But "no crabs on the seabed" used to mean no run at all — a
+// card you had bought and levelled did nothing whatsoever for whole stretches
+// of a fight that was going on in open water right under the bird. So the
+// fallback is the densest knot of ANYTHING, and the gull dives on the school.
+//
+// Returned with the run's PREY RULE attached, because the two cannot be
+// decided separately: a crab run must go on ignoring the fish swimming over
+// the pile on the way down (or it detonates early, on the wrong layer, every
+// time), and a fallback run has to be able to hit what it was aimed at.
+function pickTarget(enemiesList) {
+  const crabs = findCluster(enemiesList, isCrabLike);
+  if (crabs) return { target: crabs, anyPrey: false };
+  const anything = findCluster(enemiesList, () => true);
+  if (anything) return { target: anything, anyPrey: true };
+  return null;
+}
+
 export function spawnSeagull(scene, enemiesList) {
   const c = CONFIG.seagullBomb;
-  const target = findCrabCluster(enemiesList);
-  // Nothing on the seabed worth the trip. Skipping the spawn (rather than
-  // sending one out to wander) keeps the cooldown meaningful: the next tick
-  // tries again, so a gull arrives shortly after the crabs do.
-  if (!target) return null;
+  const pick = pickTarget(enemiesList);
+  // EMPTY WATER, which is now the only thing that holds a run back. Skipping
+  // the spawn (rather than sending one out to wander) keeps the cooldown
+  // meaningful: the next tick tries again, so a gull arrives shortly after
+  // anything does.
+  if (!pick) return null;
+  const { target, anyPrey } = pick;
 
   // Enter from the side the target is furthest from, so the run has room to
   // read as an approach instead of appearing already on top of it.
@@ -123,6 +168,10 @@ export function spawnSeagull(scene, enemiesList) {
     phase: 'soar',
     dir,
     target,
+    // Whether this run will detonate on anything it touches or only on the
+    // seabed layer — decided with the target and never re-decided against a
+    // different rule. See pickTarget.
+    anyPrey,
     vx: dir * c.cruiseSpeed,
     vy: 0,
     // Flap and glide alternate on a timer rather than tracking speed: a gull
@@ -179,8 +228,12 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       g.retargetTimer -= dt;
       if (g.retargetTimer <= 0) {
         g.retargetTimer = c.retargetInterval;
-        const fresh = findCrabCluster(enemiesList);
-        if (fresh) g.target = fresh;
+        const fresh = pickTarget(enemiesList);
+        // The prey rule travels with the target. A run that started at a crab
+        // pile and re-acquired onto a school has to be allowed to hit the
+        // school, and one that finds crabs on the way in goes back to
+        // ignoring everything else.
+        if (fresh) { g.target = fresh.target; g.anyPrey = fresh.anyPrey; }
       }
 
       // Overhead? Commit. `diveZone` is the horizontal half-width of the
@@ -249,7 +302,7 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       let hitIndex = -1;
       for (let k = enemiesList.length - 1; k >= 0; k--) {
         const e = enemiesList[k];
-        if (!isCrabLike(e)) continue;
+        if (!g.anyPrey && !isCrabLike(e)) continue;
         const dx = e.mesh.position.x - g.container.position.x;
         const dy = e.mesh.position.y - g.container.position.y;
         const reach = e.radius + c.hitRadius;

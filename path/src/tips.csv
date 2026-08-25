@@ -1,5 +1,5 @@
 id,price,label,desc,review,tag,enabled,order,notes
-sealname,1,Name a seal,1 full name + each word added to the name pool.,TRUE,SEAL,,1,"The entry tier. One name, one dollar — priced so it reads as a joke you can afford rather than a purchase."
-sealseven,5,Name seven seals,Seven names. A whole pod!,TRUE,SEAL,,2,"Five for seven rather than five for five: the discount is the point, and seven is funnier than five."
-bossname,5,Name a boss,"Prefix, root and epithet.",TRUE,BOSS,,3,"Same price as seven seals on purpose. A boss name is rarer and louder, and pricing the loud thing the same as the bulk thing lets the player pick by taste instead of by cost."
-realname,100,Your actual name,Your government name as a legendary seal.,TRUE,SEAL,,4,"The joke tier, and the only one that is really about the money. A hundred dollars to be legally a seal."
+sealname,1,Name a seal,1 full name + each word added to the name pool.,,SEAL,,1,"The entry tier. One name, one dollar — priced so it reads as a joke you can afford rather than a purchase."
+sealseven,5,Name seven seals,Seven names. A whole pod!,,SEAL,,2,"Five for seven rather than five for five: the discount is the point, and seven is funnier than five."
+bossname,5,Name a boss,"Prefix, root and epithet.",,BOSS,,3,"Same price as seven seals on purpose. A boss name is rarer and louder, and pricing the loud thing the same as the bulk thing lets the player pick by taste instead of by cost."
+realname,100,Your actual name,Your government name as a legendary seal.,,SEAL,,4,"The joke tier, and the only one that is really about the money. A hundred dollars to be legally a seal."

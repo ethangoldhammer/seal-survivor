@@ -113,7 +113,7 @@ import { updateCalamari, resetCalamari } from './systems/calamari.js';
 import { createDumboOcto, updateDumbo, resetDumbo, rebuildDumboOcto } from './systems/dumbo.js';
 import { createHarpVisual, updateHarp, resetHarp, rebuildHarp } from './systems/harp.js';
 import { firePearl, burstPearl, updateOyster, resetOyster } from './systems/oyster.js';
-import { razorClamVolley } from './systems/razorClam.js';
+import { razorClamVolley, razorClamRoll } from './systems/razorClam.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } from './systems/octoGrab.js';
 import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
 import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from './systems/outlines.js';
@@ -149,7 +149,8 @@ import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates,
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
-import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple } from './ui/upgradeHive.js';
+import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
+import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
 import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
@@ -188,6 +189,7 @@ import { buryName, isNameBuried } from './systems/nameLedger.js';
 // See its header — nothing in the game reads what it exports.
 import './systems/nameExport.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
+import { claimCrash, armCrash, disarmCrash, crashBeat } from './systems/crashWatch.js';
 
 // Restore any saved tuning BEFORE anything reads CONFIG — world/grid/camera
 // creation below all pull from it immediately, not just once gameplay starts.
@@ -197,7 +199,22 @@ import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js
 // saving here would rewrite the file (and bump its timestamp) on every
 // single page load — pure git churn, and it left the browser cache looking
 // permanently "newer" than disk.
-if (!loadTuningFromStorage() && !import.meta.env?.DEV) saveTuningToStorage();
+// `seed: true` because this write is a copy of the shipped file, not an edit
+// the player made — see saveTuningToStorage. Without it the cache claims to be
+// newer than the file it was copied from, and no later build's tuning can ever
+// win again.
+if (!loadTuningFromStorage() && !import.meta.env?.DEV) saveTuningToStorage({ seed: true });
+
+// A beacon left in localStorage means the LAST session did not end a run, it
+// was killed mid-run — on iOS that is WKWebView's content process being taken
+// for memory, which reloads the page and looks to the player like a reset. The
+// census it carries is the closest thing to a stack trace such a death leaves.
+// Claimed once here (and cleared), then handed to the next run's record so it
+// travels to the ledger through the pipeline that already exists.
+const priorCrash = claimCrash();
+if (priorCrash) {
+  console.warn('[crash] previous run did not end — the page was reloaded under it.', priorCrash);
+}
 
 // The authoring tools — the ` tuning panel, the T Look & Sound panel, the G
 // gamepad readout, the B playtest overlay and the P/X/N debug keys — are for
@@ -676,15 +693,37 @@ function canPause() {
   return gameState.running && !levelUpState.active && !deathState.active;
 }
 
+// THE CORNER ANSWERS QUESTIONS WHILE THE RUN IS STOPPED.
+//
+// The hive is a readout all fight and a thing you can interrogate the moment
+// the game is not moving — which is the only moment worth binding it to, since
+// the mouse is the aim and the hive sits in a corner the pointer crosses
+// constantly while shooting. See setHiveTips for the two things that have to
+// change for a hexagon to be hoverable at all.
+//
+// The stack count is left to the tip, which reads the run's own ledger — this
+// hands over the id and the element and nothing else.
+function bindHiveTips(on) {
+  setHiveTips(on, {
+    // The count comes off the TILE, which was built from the fold — see the
+    // note on dataset.stacks. Nothing here has to know the pick list.
+    onShow: (id, tile) => showUpgradeTip(id, tile, { owned: Number(tile.dataset.stacks) || 0 }),
+    onHide: hideUpgradeTip,
+  });
+  if (!on) hideUpgradeTip();
+}
+
 function setPaused(paused) {
   if (paused === isPauseOpen()) return;
   if (paused) {
     if (!canPause()) return;
     gameState.paused = true;
     showPauseMenu();
+    bindHiveTips(true);
     return;
   }
   hidePauseMenu();
+  bindHiveTips(false);
   gameState.paused = false;
   // The keypress or click that closed the menu is still physically down, and
   // every strike route reads a RELEASE as "launch". Without this, resuming
@@ -1244,6 +1283,7 @@ function startGame() {
   // before the new one clears the recorder, or the only runs ever recorded
   // are the ones that ended in death.
   if (playtest.isRecording()) playtest.endRun('restart');
+  disarmCrash();
   // Frame times are per RUN, and the recorder is cleared here rather than at
   // boot on purpose: boot is a loading screen and a shader warm-up, and the
   // multi-second frames those produce would sit at the top of the worst-frames
@@ -1259,6 +1299,7 @@ function startGame() {
     heapUsed(),
     world.renderer.info.programs,
   );
+  armCrash();
 
   unlockAudio(); // browsers need a gesture before any sound can play
   preloadDefaultTracks(); // fetches the built-in loops once; no-op after the first call
@@ -1451,6 +1492,13 @@ function startGame() {
 
   gameState.running = true;
   gameState.paused = false;
+  // The tip box lives on document.body, so nothing else tears it down — a menu
+  // closing takes its own subtree and leaves this floating. Dropped rather than
+  // hidden: it is describing the LAST run's stacks and the last run's ledger,
+  // and a box carrying those over the new run's first level-up is a screen
+  // stating things that are no longer true.
+  resetUpgradeTip();
+  bindHiveTips(false);
   gameState.time = 0;
   gameState.difficulty = 0;
   // Cleared with the rest of the run, or a seal that swims into a new run and
@@ -1543,6 +1591,12 @@ function startGame() {
     // a run's difficulty felt right, and a report that can't see the curve
     // can't tell "the ramp is too steep" from "you levelled too slowly".
     xp: { ...CONFIG.xp },
+    // The census from a run that was KILLED rather than lost, if the last
+    // session ended that way. Rides in on `config` because beginRun stores it
+    // wholesale on the record, so this reaches the collector through the
+    // pipeline that already exists rather than needing an endpoint of its own.
+    // Read it as "the run BEFORE this one died at these counters".
+    ...(priorCrash ? { priorCrash } : {}),
   });
 
   // Zero dt: this is the reset, not a frame. The seal's gauges are smoothed
@@ -1632,11 +1686,14 @@ function graveImpact(x, y) {
     applyKnockback(e, dx / d, dy / d, (c.power ?? 1) * Math.min(1, Math.max(0, falloff)));
   }
 
-  // One event for the whole thing, at the point of contact. `bigKill` is the
-  // shake-and-boom the splash system already uses, so a stone landing sounds
-  // like the other large things that happen in this water rather than
-  // introducing a vocabulary of its own.
-  if (c.feedback !== false) feedback('bigKill', { x, y, scale: c.shake ?? 1.6 });
+  // One event for the whole thing, at the point of contact. `waterBlast` is
+  // the shake-and-boom the splash system already uses, so a stone landing
+  // sounds like the other large things that happen in this water rather than
+  // introducing a vocabulary of its own — it is `bigKill` in every channel
+  // except the particles. This fired `bigKill` itself until it was noticed
+  // that the event carries `killGoo`: a rock hitting the seabed was throwing
+  // out a cloud of blood, from nothing.
+  if (c.feedback !== false) feedback('waterBlast', { x, y, scale: c.shake ?? 1.6 });
 }
 
 function killPlayer() {
@@ -1698,6 +1755,7 @@ function killPlayer() {
       enemies: enemies.length,
     },
   };
+  disarmCrash();
   if (DEV_UI) showPlaytestReport(playtest.endRun('death', perfRecord));
   else playtest.endRun('death', perfRecord);
   // Frame times for the run just ended, alongside it. Printed at DEATH rather
@@ -3824,7 +3882,11 @@ function fireRazorClams() {
       damage,
       speed: c.speed * (1 + (Math.random() * 2 - 1) * (c.speedJitter ?? 0)),
       life: c.life,
-      radius: c.radius,
+      // Sized off the shell that is actually drawn rather than off the config
+      // number alone — see razorClamRadius. The blades are a couple of world
+      // units long now and a quarter-unit reach on one would have fish
+      // swimming straight through the picture.
+      radius: volley.radius,
       pierce: volley.pierce,
       asset: 'razorBlade',
       // Its own source tag. The playtest ledger has to be able to say whether
@@ -3843,10 +3905,22 @@ function fireRazorClams() {
       // blades is four of them flying sideways. A blade has no belly, so it
       // simply declines the mirror. See updateProjectiles.
       orient: 'axis',
-      // No spin: `orient` and `spin` both write rotation.z every frame and the
-      // second one to run wins. The roll that makes the chrome sweep is baked
-      // into the geometry instead — each blade is one of seven twists. See
-      // getBladeGeometry.
+      // THE WHIP. Not `spin` — that writes rotation.z, the same angle `orient`
+      // owns, and the second one to run wins. This turns the shell about the
+      // axis it is FLYING along, so it still goes nose-first and pierces down
+      // its own length while its faces sweep through the chrome's fake sky.
+      // Signed per blade, so a fan is a handful of thrown shells rather than
+      // one rigid object being turned. See razorClamRoll.
+      //
+      // The seven baked twists are still doing their half of the work: they
+      // are why a rolling blade shows a moving highlight instead of one flat
+      // face flipping over. See getBladeGeometry.
+      roll: razorClamRoll(),
+      // The ribbon grows with the shell. `trailScale` multiplies the width and
+      // the shed rate (systems/projectileTrails.js), so a blade drawn two and
+      // a half times its authored size drags a wake to match instead of a
+      // hairline that reads as a scratch on the lens.
+      trailScale: volley.size,
     });
   }
 
@@ -3990,9 +4064,10 @@ function currentSeagullFireRate(level) {
 // Launch an attack run. The gull enters from off the side of the arena and
 // flies itself in (systems/seagull.js) — nothing is fired from the seal, so
 // this doesn't need an aim direction or a muzzle. spawnSeagull returns null
-// when there are no crabs worth the trip; the cooldown is only consumed on a
-// run that actually launched, so the next tick tries again immediately and a
-// gull shows up shortly after the crabs do.
+// only when the water is empty (crabs first, anything else second — see
+// pickTarget there); the cooldown is only consumed on a run that actually
+// launched, so the next tick tries again immediately and a gull shows up
+// shortly after anything does.
 function fireSeagull() {
   const launched = spawnSeagull(world.scene, enemies);
   seagullCooldown = launched
@@ -4247,6 +4322,26 @@ function animate(now) {
     heapUsed(),
     world.renderer.info.programs,
   );
+  // The same three counters, mirrored OUT of the process into localStorage.
+  //
+  // Everything perfFrame accumulates lives in memory, so a WebContent kill
+  // takes the whole record with it and the run that mattered most — the one
+  // that died — is the only one that reports nothing. This is the copy that
+  // survives, and it is deliberately the counters rather than the timings:
+  // textures, programs and geometries are what this game grows without bound,
+  // and heapUsed() reads 0 on iOS because Safari has no performance.memory.
+  // Throttled to once every couple of seconds inside crashBeat.
+  crashBeat({
+    elapsed: Math.round(gameState.time ?? 0),
+    level: gameState.level ?? 0,
+    textures: world.renderer.info.memory.textures,
+    geometries: world.renderer.info.memory.geometries,
+    programs: world.renderer.info.programs?.length ?? 0,
+    programsEver: programsEverBuilt(),
+    draws: drawsLastFrame,
+    pixelRatio: world.renderer.getPixelRatio(),
+    heapMB: Math.round((heapUsed() || 0) / 1048576),
+  });
   // WHAT THE GAME IS DOING, for the frame that just ended. Four runs in five
   // report most of their hitches as "none of those" — not a shader link, not a
   // texture upload, not a collection — which says the frame was busy and
@@ -4510,6 +4605,12 @@ function animate(now) {
           radius: slam.radius,
           exclude: null,
           source: 'reentry',
+          // NOT the default `bigKill`. A blast queued with no `feedback` fires
+          // that one (see processPendingSplashes), and it is the KILL event —
+          // it carries `killGoo`, so every landing left a cloud of blood in
+          // clean water. `waterBlast` is the same weight and the same sound
+          // with whitewater in place of the gore.
+          feedback: 'waterBlast',
         });
       }
 
@@ -5458,6 +5559,28 @@ function animate(now) {
       // `trapPop` is authored for one small bubble failing and this is the big
       // one that carried them all.
       onSplit: (x, y) => feedback('belugaSplit', { x, y, scale: 1.4 }),
+      // A BUBBLE THE SEAL SWIMS INTO IS A BREATH. Same currency, same read and
+      // the same pitch ramp as the ambient oxygen bubble above — a lungful
+      // taken while suffocating pops low and fat, one taken on a full tank is
+      // a thin little tick. `need` is read BEFORE the refill or every pop
+      // reports the tank it just topped up. No charge and no xp: the air IS
+      // the payment, and the bubble was the player's own to spend.
+      onBreath: (x, y, air) => {
+        const maxO2 = Math.max(1, player.stats.maxOxygen);
+        const need = 1 - Math.max(0, Math.min(1, player.oxygen / maxO2));
+        // A FULL SEAL SWIMS THROUGH IT. Refusing leaves the bubble in the
+        // water (see the hook), so a run that is going well never has its own
+        // crowd control deleted by the seal happening to be in the way.
+        if (need <= 0.001) return false;
+        player.oxygen = Math.min(maxO2, player.oxygen + air);
+        feedback('bubblePop', {
+          x, y,
+          scale: 0.7 + 0.5 * need,
+          color: assetBaseColor('trapBubble'),
+          sfxOpts: { pitch: 1.3 - 0.45 * need },
+        });
+        return true;
+      },
     });
     updateSealTeam(dt, world.scene, player.mesh.position, player.stats.sealTeamLevel, enemies, {
       onEnemyDamaged: damageFrom('sealTeam'),

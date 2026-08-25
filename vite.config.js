@@ -369,6 +369,25 @@ function buildId() {
   }
 }
 
+// The build NUMBER — the commit count, which is what the iPhone's
+// CFBundleVersion is set to by tools/ship-ios.mjs and therefore what Settings
+// shows for the installed app. ui/buildStamp.js draws it on the splash and the
+// main menu, and the two can only be compared if they are the same number: so
+// ship:phone passes the figure it used as SEAL_BUILD, and this prefers it over
+// re-deriving one. Re-deriving would agree on almost every build and disagree
+// on exactly the ones that matter — a --build override, or a commit landing
+// between the xcodebuild and the vite build.
+function buildNumber() {
+  if (process.env.SEAL_BUILD) return process.env.SEAL_BUILD;
+  try {
+    return execSync('git rev-list --count HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return 'nogit';
+  }
+}
+
 // The function form, only so `command` is available: NODE_ENV is not reliably
 // set while the config is being evaluated, and a build that mislabelled itself
 // `dev` would be worse than one with no label at all.
@@ -379,6 +398,10 @@ export default defineConfig(({ command }) => ({
     // substitutes the text verbatim, and an unquoted sha would be pasted in
     // as an identifier and fail to parse.
     __BUILD_ID__: JSON.stringify(command === 'build' ? buildId() : 'dev'),
+    // 'dev' from a dev server rather than a number: the config is evaluated
+    // once at startup, so a real count would freeze at whatever it was when
+    // the server booted and then quietly lie for the rest of the day.
+    __BUILD_NUMBER__: JSON.stringify(command === 'build' ? buildNumber() : 'dev'),
   },
   server: {
     // Vite has no built-in PORT support — without this it always takes 5173

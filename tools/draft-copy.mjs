@@ -31,7 +31,11 @@ export const isDraft = (value) => DRAFT_RE.test(String(value ?? ''));
 // BRIEF for a draft line is written, so it is allowed to say "lorem" all day
 // long without flagging the row it explains.
 export const COPY_COLUMNS = {
-  'upgrades.csv': ['name', 'desc'],
+  // `weaponName` is prose the same way `name` is — it renames the gun on the
+  // HUD and in the score screen's ledger for as long as the card is held, so a
+  // player reads it. It was missing here until André 3000 stopped piercing
+  // anything and its "Piercing Pebbles" went stale with nothing able to say so.
+  'upgrades.csv': ['name', 'desc', 'weaponName'],
   'tips.csv': ['label', 'desc'],
   'callouts.csv': ['text', 'textTouch', 'textPad'],
   'epitaphs.csv': ['text'],
@@ -41,6 +45,9 @@ export const COPY_COLUMNS = {
   'bossNames.csv': ['text'],
   'sealNames.csv': ['text'],
   'rarities.csv': ['name'],
+  // Every word {effect} can say. `template` is prose too — it is the shape of
+  // the phrase, not a format string the game depends on.
+  'statText.csv': ['label', 'plural', 'unlock', 'template'],
 };
 
 // Is this column one a player reads? Accepts a bare name or a repo path.

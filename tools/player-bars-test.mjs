@@ -649,16 +649,31 @@ const pipFills = () => [...document.querySelectorAll('#svBoostPips .sv-boost-fil
   .map((f) => Number(f.style.getPropertyValue('--sv-pip')));
 const litPips = () => pipFills().filter((v) => v > 0.9).length;
 
-// THE SHIPPED DEFAULT IS THE COLUMN, asserted on its own line for the same
-// reason the placement's is above: a flip of the default should fail here,
-// with the reason beside it, rather than as a scatter of geometry failures
-// below. It HAS flipped once — the wheel shipped first — so this line is
-// load-bearing rather than ceremonial.
-check('the shipped default is the column', S.boostMeter() === 'bar', S.boostMeter());
+// THE SHIPPED DEFAULT IS BOTH VIEWS AT ONCE, asserted on its own line for the
+// same reason the placement's is above: a flip of the default should fail
+// here, with the reason beside it, rather than as a scatter of geometry
+// failures below. It HAS flipped twice — the wheel shipped first, then the
+// column — so this line is load-bearing rather than ceremonial.
+check('the shipped default is both views', S.boostMeter() === 'both', S.boostMeter());
 
-// THE OPT-OUT FIRST, because the two claims that matter are a pair and the
-// wheel is the half that is easy to leave broken now that nobody sees it by
-// default: with the ring chosen, the wheel draws the fuel and the column is
+// And both really are DRAWN under it. This is the claim the whole arrangement
+// rests on: each side tests for the value it is not drawn in rather than for
+// its own name, so a reader that ever goes back to `=== 'bar'` would silence
+// one half here and nowhere else. The column is checked as FILLING and not
+// merely present, because the per-frame update sits behind the same gate as
+// the class and a half-opened gate leaves an empty column looking deliberate.
+strike.charge = 1;
+runFuel(0.6);
+check('...so the wheel carries the fuel', U.uFuel.value === 1, U.uFuel.value);
+check('...and the column stands beside it',
+  getComputedStyle($('#svBoostWrap')).display !== 'none',
+  getComputedStyle($('#svBoostWrap')).display);
+check('...and is filling, not just present', litPips() > 0, `${litPips()} lit`);
+
+// THE OPT-OUTS, which are the two claims that matter now that the default
+// draws everything: each single view has to SILENCE the other half, and a gate
+// that quietly stopped closing would never show up in the default arrangement.
+// The ring first — with it chosen, the wheel draws the fuel and the column is
 // not on screen at all.
 S.setSetting('hud.boostMeter', 'ring');
 strike.charge = 1;

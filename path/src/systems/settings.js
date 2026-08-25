@@ -187,26 +187,64 @@ export const SCHEMA = {
       },
       // WHAT SHAPE THE BOOST FUEL IS, and it is only the FUEL that moves.
       //
-      //   bar   THE DEFAULT. The pips as a vertical column beside the air
-      //         gauge, so every meter in the game stacks in one place and
-      //         nothing is drawn over the animal you are trying to aim. It
-      //         also inherits the corner placement's one good idea: the
-      //         column GROWS as a link cuts the bar into more pips, which
-      //         around the seal is a fixed circle with thinner segments.
+      //   bar   The pips as a vertical column beside the air gauge, so every
+      //         meter in the game stacks in one place and nothing is drawn
+      //         over the animal you are trying to aim. It also inherits the
+      //         corner placement's one good idea: the column GROWS as a link
+      //         cuts the bar into more pips, which around the seal is a fixed
+      //         circle with thinner segments.
       //   ring  The pip wheel around the seal (systems/strikeRing.js): the
       //         count is where your eyes already are, and the fuel, the banked
       //         power and the chain window are one instrument in one place.
+      //   both  THE DEFAULT. Both views at once. The wheel is the read you
+      //         take mid-fight without moving your eyes; the column is the one
+      //         that survives a crowded screen and shows the count GROWING.
+      //         The two are not a redundancy so much as two different reads of
+      //         the same number, and neither one alone covers both moments.
+      //         Nothing about either drawing assumes it is the only one — they
+      //         read the same springs out of systems/strikeRing.js — so the
+      //         cost is a second instrument on screen and no duplicated state,
+      //         and each single view stays available for a player who wants
+      //         the quieter screen.
       //
-      // THE GOO STAYS ON THE SEAL EITHER WAY. Banked power is the thing the
-      // seal is holding, not a quantity in a corner, and the bubble growing
+      // THE GOO STAYS ON THE SEAL WHICHEVER IS ON. Banked power is the thing
+      // the seal is holding, not a quantity in a corner, and the bubble growing
       // out of the animal is the only cue that a wind-up is worth anything —
       // see the note at the head of systems/strikeRing.js. This setting moves
       // the pips and nothing else.
       {
         key: 'boostMeter', label: 'Boost meter', type: 'choice',
-        options: ['bar', 'ring'], def: 'bar',
-        labels: { ring: 'Ring on the seal', bar: 'Beside the air' },
+        options: ['bar', 'ring', 'both'], def: 'both',
+        labels: { ring: 'Ring on the seal', bar: 'Beside the air', both: '[DRAFT] Both' },
         hint: 'How the strike fuel is drawn',
+      },
+      // HOW MUCH A HOVERED UPGRADE TELLS YOU — see ui/upgradeTip.js, which is
+      // the only reader.
+      //
+      //   off    no tip anywhere. The level-up cards go back to reading as
+      //          they did before any of this existed: name and desc on the
+      //          face, nothing under them.
+      //   short  the name, and what the stack you are being offered does.
+      //          The question at the moment of a pick, and nothing else.
+      //   full   THE DEFAULT. Adds where you already are (the running total
+      //          across the stacks you hold) and what the ability has actually
+      //          done this run.
+      //
+      // A SETTING RATHER THAN A DECISION, and the reason is that the two ends
+      // are wanted by the same person at different times. The full tip is how
+      // you learn a card you have never taken; it is also five lines of reading
+      // in the middle of a level-up on a run you are trying to win with a build
+      // you already know by heart. Neither is the advanced option.
+      //
+      // THE DEFAULT IS FULL because the tip's whole reason for existing is that
+      // half the roster's `desc` is flavour and says nothing about what the
+      // card does — a player who never opens this menu is exactly the one that
+      // was written for.
+      {
+        key: 'upgradeTips', label: '[DRAFT] Upgrade tips', type: 'choice',
+        options: ['off', 'short', 'full'], def: 'full',
+        labels: { off: '[DRAFT] Off', short: '[DRAFT] Short', full: '[DRAFT] Full' },
+        hint: '[DRAFT] How much a hovered upgrade tells you',
       },
     ],
   },
@@ -591,21 +629,28 @@ export function barPlacement() {
 
 /**
  * Which shape the STRIKE FUEL is drawn in: 'bar' (a pip column beside the air
- * gauge, which is what ships) or 'ring' (the pip wheel around the seal).
+ * gauge), 'ring' (the pip wheel around the seal) or 'both' (the two together,
+ * which is what ships).
  *
- * Same "anything that is not the opt-out is the default" reading as
+ * Same "anything that is not one of the opt-OUTS is the default" reading as
  * barPlacement above, for the same reason: a corrupted snapshot must land on
- * the shipped instrument rather than on whichever branch is written first.
- * Note that this flipped once — the wheel was the default first — which is
- * exactly why it is written this way round rather than as an equality against
- * the value that happens to ship today.
+ * the shipped arrangement rather than on whichever branch is written first.
+ * Note that this has now flipped twice — the wheel was the default, then the
+ * column — which is exactly why it is written as a test for the two quieter
+ * views rather than as an equality against the value that happens to ship
+ * today.
  *
  * Read live by BOTH views — ui/ui.js decides whether to draw the column and
- * systems/strikeRing.js decides whether to draw the wheel — off one function
- * so the two can never both be on, or both be off, for a frame.
+ * systems/strikeRing.js decides whether to draw the wheel — off one function,
+ * so within a frame the pair can never disagree about which of the three
+ * arrangements is on. Each side tests for the value it is NOT drawn in
+ * ('ring' silences the column, 'bar' silences the wheel) rather than for its
+ * own name, which is what makes 'both' fall out of the existing branches
+ * instead of needing a third one on either side.
  */
 export function boostMeter() {
-  return settings.hud.boostMeter === 'ring' ? 'ring' : 'bar';
+  const v = settings.hud.boostMeter;
+  return v === 'ring' || v === 'bar' ? v : 'both';
 }
 
 /**

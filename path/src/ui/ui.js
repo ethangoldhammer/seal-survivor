@@ -35,6 +35,10 @@ import { pipCount } from '../systems/strike.js';
 // two things advancing it would run the drift at double speed.
 import { advanceMeterNoise, meterNoiseFrame, resetMeterNoise } from '../systems/meterNoise.js';
 import { mountRiveSplash } from './riveSplash.js';
+// THE AUDITION — a second name screen behind a URL switch, and a pair that
+// deletes cleanly when one of them wins. See ui/splashChoice.js.
+import { mountSplineSplash } from './splineSplash.js';
+import { splashChoice, splineSrcOverride, splinePanelWanted } from './splashChoice.js';
 import { tipJarLink, tipSheetOpen, closeTipSheet } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
@@ -42,7 +46,11 @@ import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareR
 import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { TYPOGRAPHY_EVENT } from './typography.js';
-import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform } from './upgradeHive.js';
+import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform, buildHiveSnapshot, foldUpgrades } from './upgradeHive.js';
+import {
+  upgradeTipContent, renderTipInto, showUpgradeTip, hideUpgradeTip, compactDamage, upgradeDef,
+  tipVerbosity,
+} from './upgradeTip.js';
 import {
   BOARD_SIZE,
   fetchGlobalBoard,
@@ -323,10 +331,17 @@ const STYLES = `
       rgba(2,8,13,calc(var(--sv-shade-alpha, 0.4) * 0.55)) 62%,
       rgba(2,8,13,0) 78%); }
 
-  /* ink — a dark face with the rarity as a rim. The default: it is the only one
+  /* THE STYLE HOOK IS ON THE HOST, NOT ON .sv-hive. The corner's host is inside
+     a .sv-hive root and the score screen's snapshot host is inside nothing at
+     all (see buildHiveSnapshot) — keyed on the root, every one of the three
+     styles below would silently miss the snapshot and it would render as bare
+     tiles with no face. upgradeHive stamps the attribute on both, and
+     setHiveStyle writes it when the style is cycled live.
+
+     ink — a dark face with the rarity as a rim. The default: it is the only one
      of the three that leaves the icon as the brightest thing on the tile. */
-  .sv-hive[data-style="ink"] .sv-hive-tile { background: var(--sv-hive-rarity, #b8c2cc); }
-  .sv-hive[data-style="ink"] .sv-hive-face {
+  .sv-hive-host[data-style="ink"] .sv-hive-tile { background: var(--sv-hive-rarity, #b8c2cc); }
+  .sv-hive-host[data-style="ink"] .sv-hive-face {
     background: linear-gradient(160deg, rgba(28,74,99,0.92), rgba(9,26,36,0.94)); }
   /* rarity — the tier floods the face. Loudest, and the one that answers "what
      did this run actually roll" from across the room.
@@ -334,9 +349,9 @@ const STYLES = `
      end: the gradient lands on the same near-black the water is, so a Common
      tile stops having a silhouette and its icon reads as floating loose in the
      corner. */
-  .sv-hive[data-style="rarity"] .sv-hive-tile {
+  .sv-hive-host[data-style="rarity"] .sv-hive-tile {
     background: color-mix(in srgb, var(--sv-hive-rarity, #b8c2cc) 55%, #0b1a24); }
-  .sv-hive[data-style="rarity"] .sv-hive-face {
+  .sv-hive-host[data-style="rarity"] .sv-hive-face {
     background: linear-gradient(160deg, var(--sv-hive-rarity, #b8c2cc), rgba(9,26,36,0.96) 78%); }
   /* art — the biome hex the card was dealt on. It cannot identify an upgrade
      (a dozen cards share Beach_001), so it is texture, dimmed so the mark on
@@ -345,11 +360,11 @@ const STYLES = `
      outline is the whole reason the tiles read as tiles. Insetting the face to
      make room for a synthetic rim crops the drawn one — and then the tile has
      two borders, one of them sliced. The art gets the full hexagon. */
-  .sv-hive[data-style="art"] .sv-hive-face {
+  .sv-hive-host[data-style="art"] .sv-hive-face {
     inset: 0;
     background-image: var(--sv-hive-art, none);
     background-size: 100% 100%; background-position: center; }
-  .sv-hive[data-style="art"] .sv-hive-face::after {
+  .sv-hive-host[data-style="art"] .sv-hive-face::after {
     content: ''; position: absolute; inset: 0; background: rgba(6,18,26,0.45); }
 
   /* --- THE CHOSEN CARD, ON ITS WAY TO THE CORNER --------------------------
@@ -476,6 +491,18 @@ const STYLES = `
   /* Over the HUD and the toasts, under nothing — a level-up card cannot be open
      at the same time (see canPause: the ramp this rides on locks both out). */
   .sv-hive[data-reward="on"] { z-index: 8; pointer-events: auto; }
+  /* THE CORNER ANSWERING QUESTIONS, while the run is stopped — see setHiveTips.
+     9 and not 8: the pause menu is a .sv-center, a full-screen box at z-index 8
+     with pointer-events: all, and at 8 the hive would tie with it and lose on
+     document order. The corner and the panel do not overlap (one is a bottom
+     corner, the other is centred), so being above it costs nothing to look at
+     and is the only way the pointer reaches a hexagon at all. */
+  .sv-hive[data-tips="on"] { z-index: 9; pointer-events: auto; }
+  .sv-hive[data-tips="on"] .sv-hive-tile { cursor: help; }
+  /* The tile under the pointer, lifted out of the lattice. Transform only —
+     nothing here may cost a layout, and a tile that grew its box would push the
+     packing around under the cursor that is pointing at it. */
+  .sv-hive[data-tips="on"] .sv-hive-tile:hover { transform: scale(1.1); }
   /* Only the tiles answer, and only the ones that can still take a pick. The
      hexagon's own clip-path decides the hit area, so the gaps between tiles are
      dead space rather than a grid of invisible squares. */
@@ -819,10 +846,12 @@ const STYLES = `
     opacity: var(--sv-grain-depth, 0); }
 
   /* --- THE BOOST FUEL, AS A COLUMN --------------------------------------
-     settings.hud.boostMeter === 'bar'. The same pips the ring around the seal
-     draws (systems/strikeRing.js), stood on end beside the air gauge — one
-     model, one set of springs, one stagger queue, and only ever one of the two
-     pictures on screen at a time. See pipAnim().
+     settings.hud.boostMeter 'bar' or 'both' — and 'both' is what ships, so
+     this column normally stands beside the wheel rather than instead of it.
+     The same pips the ring around the seal draws (systems/strikeRing.js),
+     stood on end beside the air gauge — one model, one set of springs, one
+     stagger queue, however many of the two pictures are on screen. See
+     pipAnim().
 
      WHAT DOES NOT MOVE WITH THEM: the drop of goo. Banked power is the thing
      the seal is holding and it grows out of the animal in both styles, which
@@ -1052,6 +1081,38 @@ const STYLES = `
     transition: transform 0.18s cubic-bezier(0.2,0.9,0.3,1), filter 0.18s ease; }
   .sv-fan-slot:hover, .sv-fan-slot:focus-visible {
     transform: translateY(-4px) scale(1.03); outline: none; }
+  /* --- THE BUILD ON THE RAIL ----------------------------------------------
+     A hive where a print would be, to the right of the last kill shot. It is
+     not a photograph and it does not pretend to be one: no paper, no chin, no
+     tilt. The frame is a plate the hexagons sit on, so the block reads as an
+     object on the rail rather than as tiles floating between two polaroids. */
+  .sv-fan-hive { align-self: center; }
+  .sv-hive-slot-frame { position: relative; display: flex; align-items: center;
+    justify-content: center; padding: 10px 12px; border-radius: 10px;
+    background: rgba(8,18,26,0.55); border: 1px solid rgba(122,215,255,0.22); }
+  .sv-fan-hive:hover .sv-hive-slot-frame,
+  .sv-fan-hive:focus-visible .sv-hive-slot-frame { border-color: rgba(122,215,255,0.55);
+    background: rgba(10,24,34,0.7); }
+  /* THE HEXAGONS ANSWER THE POINTER, THE SLOT ANSWERS THE PRESS. .sv-fan-slot
+     is a button, so it already takes the pointer; the tiles inside it are
+     pointer-events: none nowhere, but the shims and shades ARE (see
+     .sv-hive-shim) — which is what stops a pile under a tall stack swallowing
+     the hover meant for the hexagon on top of it. */
+  .sv-hive-snap { pointer-events: auto; }
+  .sv-hive-snap .sv-hive-tile { transition: transform 0.1s ease-out; }
+  .sv-hive-snap .sv-hive-tile:hover { transform: scale(1.12); }
+
+  /* The sheet the build opens into. Reuses .sv-shot-view for the scrim, the
+     stacking and the close button — it is the same gesture on the same rail and
+     it should not arrive as a different kind of object. What differs is the
+     content box: a photograph has an intrinsic size to fit inside the screen,
+     and a hive is laid out at whatever hexagon size openHiveView measured the
+     window for, so this only has to centre it and let it overflow into a
+     scroll on a build too deep for a phone. */
+  .sv-hive-view-stage { display: flex; align-items: center; justify-content: center;
+    max-width: 100%; max-height: 100%; overflow: auto; overscroll-behavior: contain;
+    padding: 8px; }
+
   .sv-fan-sel, .sv-fan-sel:hover { transform: translateY(-5px) scale(1.05);
     filter: drop-shadow(0 10px 22px rgba(0,0,0,0.6)); }
   .sv-fan-sel .sv-print-paper { outline: 2px solid #7ad7ff; outline-offset: 0; }
@@ -1466,6 +1527,69 @@ const STYLES = `
     box-shadow: 0 4px 14px rgba(0,0,0,0.5);
     opacity: 0; transition: opacity 0.12s ease-out; }
   .sv-card-fx.sv-fx-on { opacity: 1; }
+  /* The card tooltip holding ROWS rather than the one sentence it started as
+     (see cardTipContent). A row is a label column and a value, so it reads left
+     to right; centred, the three labels would each start at a different x and
+     the table would stop being one. Wider for the same reason .sv-uptip is. */
+  .sv-card-fx.sv-card-fx-rows { text-align: left; max-width: min(240px, 76vw);
+    width: max-content; }
+
+  /* --- THE UPGRADE TIP ----------------------------------------------------
+     The floating half of ui/upgradeTip.js: the box the three HIVE surfaces
+     use. The level-up cards keep .sv-card-fx above — same rows inside, its own
+     anchoring — because that tooltip is positioned inside #svCards against a
+     row that WRAPS, and it is the one surface whose container is a known
+     coordinate space worth using.
+
+     ON document.body AND FIXED, so it is placed in viewport coordinates. The
+     three surfaces it serves are in three different containers — the corner
+     hive (position: fixed, z-index 1), a menu mid-reveal under a scale, and a
+     scrolling rail on the score card — and a box parented into any of them
+     would inherit that container's transform, its clip or its scroll. The
+     score rail is the one that fails loudest: .sv-fan scrolls sideways, so a
+     tip inside it would slide away from the tile it describes.
+
+     26 clears .sv-ui (10) and the typography overlay (25) and stays UNDER the
+     dev panels (30+), which should cover a gameplay tooltip rather than be
+     covered by one.
+
+     Wider than .sv-card-fx because it holds rows rather than a sentence, and
+     the widest of them is a run line with three facts in it. */
+  .sv-uptip { position: fixed; z-index: 26; pointer-events: none;
+    width: max-content; max-width: min(260px, 76vw);
+    padding: 7px 10px; border-radius: 8px; text-align: left;
+    background: rgba(9,14,22,0.96); border: 1px solid rgba(122,215,255,0.35);
+    color: #cfeaff; font-size: 11px; line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+    opacity: 0; transition: opacity 0.12s ease-out; }
+  .sv-uptip.sv-uptip-on { opacity: 1; }
+  .sv-uptip-head { display: flex; align-items: baseline; gap: 6px; }
+  .sv-uptip-name { font-size: 12px; font-weight: 700; color: #eaf6ff; }
+  .sv-uptip-stacks { font-size: 10px; font-variant-numeric: tabular-nums;
+    color: rgba(122,215,255,0.8); }
+  .sv-uptip-desc { color: rgba(232,236,243,0.62); margin-top: 2px; }
+  /* A ROW IS A LABEL AND A VALUE, and the label column is fixed so three rows
+     line up as a table rather than as three sentences of different lengths.
+     ch and not px: the label column holds typed words in the tuned face, and
+     a px width tuned against Inter is one font swap away from clipping them —
+     see the note on digit columns in the HUD. */
+  .sv-uptip-rows { display: grid; grid-template-columns: max-content 1fr;
+    column-gap: 8px; row-gap: 4px; margin-top: 5px; align-items: baseline; }
+  /* display: contents, so each row's two spans become cells of the grid above
+     and every label shares one self-measured column. A fixed width here is the
+     bug this replaced: the labels are typed words in the tuned face, so any
+     number is either short enough to wrap a heading onto two lines or wide
+     enough to leave a stripe of empty space in every tip. */
+  .sv-uptip-row { display: contents; }
+  .sv-uptip-label { text-transform: uppercase; white-space: nowrap;
+    font-size: 9px; letter-spacing: 0.07em; color: rgba(232,236,243,0.4); }
+  .sv-uptip-text { min-width: 0; color: #cfeaff; }
+  /* The measured next stack is the row the tip exists for, so it is the one
+     that is not grey. */
+  .sv-uptip-row[data-row="next"] .sv-uptip-text { color: #9fe3ff; font-weight: 600; }
+  .sv-uptip-row[data-row="run"] .sv-uptip-text { color: rgba(232,236,243,0.78);
+    font-variant-numeric: tabular-nums; }
+
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
 
   /* No backticks anywhere in this stylesheet: it is a template literal, and one
@@ -2196,8 +2320,9 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
           <div class="sv-pbar sv-pbar-o2" id="svO2Bar"></div>
           <i class="sv-meter-grain"></i>
         </div>
-        <!-- THE BOOST FUEL, when the player has asked for it as a column
-             (settings.hud.boostMeter === 'bar'). Outboard of the air, so the
+        <!-- THE BOOST FUEL, when the column is one of the views that is on
+             (settings.hud.boostMeter 'bar' or the shipped 'both'). Outboard of
+             the air, so the
              three gauges read health-air-fuel outward from whatever they are
              attached to. Empty in the markup: the pips are built from the
              count, which moves mid-run as links land. -->
@@ -2281,9 +2406,9 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
                OS has a share sheet of its own, so this is two controls on a
                phone and four on a desktop. -->
           <div class="sv-strip-head">
-            <span class="sv-strip-label">Kill shots</span>
+            <span class="sv-strip-label" id="svStripLabel">Kill shots</span>
             <div class="sv-status" id="svTrophyStatus"></div>
-            <div class="sv-trophy-row">
+            <div class="sv-trophy-row" id="svTrophyRow">
               <button class="sv-btn sv-btn-sm" id="svTrophyShare">Share</button>
               <button class="sv-btn sv-btn-sm" id="svTrophySave">Save</button>
               <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svSheetShare">Share all</button>
@@ -2369,6 +2494,16 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
            than anything inside the card: the faces clip their contents and turn
            over, and this must do neither. Empty until a photograph in the fan
            is tapped — see openShotView. -->
+      <!-- THE BUILD, HELD UP TO THE LIGHT. The same gesture the prints beside
+           it answer to, opening the same kind of sheet — see openHiveView. The
+           snapshot on the rail is 30px hexagons, which is enough to see the
+           SHAPE of a build and nowhere near enough to point at one tile and
+           ask what it did. -->
+      <div class="sv-shot-view sv-hive-view sv-hidden" id="svHiveView">
+        <div class="sv-hive-view-stage" id="svHiveViewStage"></div>
+        <button class="sv-shot-close" id="svHiveViewClose" aria-label="[DRAFT] Close the build">&#10005;</button>
+      </div>
+
       <div class="sv-shot-view sv-hidden" id="svShotView">
         <img class="sv-shot-img" id="svShotImg" alt="" />
         <div class="sv-shot-row">
@@ -2402,6 +2537,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     'svNextRow', 'svNextInput', 'svNextRoll', 'svNextWarn',
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
     'svShotView', 'svShotImg', 'svShotShare', 'svShotSave', 'svShotStatus', 'svShotClose',
+    'svHiveView', 'svHiveViewStage', 'svHiveViewClose', 'svStripLabel', 'svTrophyRow',
     'svTipRow',
     'svPauseBtn', 'svPauseRing',
   ]) {
@@ -2641,8 +2777,29 @@ export function showStartMenu() {
     // goes on top of it.
     callbacks.onSplash?.();
 
-    splash = mountRiveSplash({
+    // THE AUDITION SWITCH. `?splash=spline` swaps the artboard for a Spline
+    // scene — see ui/splashChoice.js for why it is a URL and not a setting.
+    //
+    // ONE OPTIONS OBJECT FOR BOTH, which is the point of the exercise: the two
+    // modules take the same options and hand back the same handle, so nothing
+    // below this line — leaveSplash, revealSplashOut, the gamepad dismiss in
+    // updateMenuNav — can tell which one came up. A treatment that only looks
+    // good because it quietly skipped one of these has not won anything.
+    const auditioning = splashChoice() === 'spline';
+    const mount = auditioning ? mountSplineSplash : mountRiveSplash;
+
+    splash = mount({
       parent: root,
+      // Ignored by the Rive card, which has none. The Spline screen needs to be
+      // told where its scene is; `?splineSrc=` beats the config default so a
+      // fresh export can be tried without editing a file.
+      src: splineSrcOverride() || (CONFIG.splineSplash?.src ?? ''),
+      // `?splinePanel` leaves the scene's own workbench up. It covers the
+      // screen and takes the pointer, so it is a look and not a playthrough —
+      // see splinePanelWanted.
+      keepPanel: splinePanelWanted(),
+      // The Text mesh the typed name is written into — see CONFIG.splineSplash.
+      nameObject: CONFIG.splineSplash?.nameObject ?? '',
       // How much of the ocean behind the card the player can see. Solid is what
       // this shipped with; anything with alpha reveals the seal being held up
       // to the lens underneath. See CONFIG.titleSeal.scrim.
@@ -2847,20 +3004,6 @@ function releasePauseHold() {
 function wirePauseButton() {
   const btn = el.svPauseBtn;
   if (!btn) return;
-  // TEMPORARY DIAGNOSTIC — remove. Prints which events actually reach the
-  // button on a real device, because there is no console to read on a phone.
-  const dbg = document.createElement('div');
-  dbg.style.cssText = 'position:fixed;left:8px;top:150px;z-index:99;color:#0f0;font:11px monospace;pointer-events:none;background:#000a;padding:2px 4px;max-width:200px;word-break:break-all';
-  dbg.textContent = 'dbg:';
-  document.body.appendChild(dbg);
-  for (const t of ['pointerdown','pointerup','pointercancel','click','touchstart','touchend']) {
-    btn.addEventListener(t, (e) => { dbg.textContent += ` ${t}${t==='click'?'/d'+e.detail:''}`; }, true);
-  }
-  // POINTER EVENTS, not touch: the same three handlers then cover a thumb, a
-  // stylus and the mouse, and `setPointerCapture` is what makes the release
-  // reliable — without it a finger that drifts a few pixels off the button
-  // sends pointerup to whatever is underneath and this would be left armed,
-  // firing a pause the player had already abandoned.
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     btn.setPointerCapture?.(e.pointerId);
@@ -2873,7 +3016,15 @@ function wirePauseButton() {
   // dead in exactly the way it was reported. Capture also makes it redundant:
   // every subsequent pointer event comes here whatever the finger is over, so
   // pointerup always arrives and pointercancel covers the real aborts.
-  for (const type of ['pointerup', 'pointercancel']) {
+  // touchend/touchcancel ALONGSIDE the pointer pair, as a belt to its braces.
+  // Not a fix for anything observed on a device — a real tap reports
+  // `pointerdown pointerup touchend click` in order, verified in Safari on an
+  // iPhone — but a held touch injected by the simulator produced
+  // `pointerdown touchstart touchend` with NO pointerup at all, and if iOS ever
+  // does that to a real finger the timer would fire after the player let go.
+  // That is the one failure this control must not have, and the extra listeners
+  // cost nothing: releasePauseHold is idempotent.
+  for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) {
     btn.addEventListener(type, () => releasePauseHold());
   }
   // A trusted click still opens it — a keyboard or a screen reader activating
@@ -2983,6 +3134,10 @@ export function hideAllMenus() {
   // would still be holding a decoded 1600x2000 bitmap and would still be the
   // thing the pad's cursor was routed to, into the next run.
   closeShotView();
+  // And the build held up beside it, for exactly the same two reasons: the
+  // sheet is over the menu rather than inside it, and its hexagons are holding
+  // a card-art bitmap each.
+  closeHiveView();
   unwatchCardSize();
   levelUpCards = [];
 }
@@ -3419,19 +3574,64 @@ function cardEffect(choice, desc) {
   return sentenceCase(text);
 }
 
+// WHAT THE TOOLTIP HOLDS NOW — the shared rows out of ui/upgradeTip.js rather
+// than the one measured line this used to be.
+//
+// The line is still there and is still the first row; what is added is where
+// the stacks you already hold have got you to, and what the ability has
+// actually done this run. Both come from the same builder the three hive
+// surfaces use, so "what does +1 do" cannot read differently on two screens.
+//
+// TWO THINGS ARE DROPPED FOR THIS SURFACE AND ONLY THIS ONE:
+//
+//   the desc     it is on the card's face, four pixels above the tooltip. The
+//                hive tiles have no face to put it on, which is why the row
+//                exists at all.
+//   the `next` row when cardEffect() deduped it — most stat cards spell their
+//                effect out verbatim in `desc`, and the whole argument in
+//                cardEffect's comment applies unchanged: a box repeating the
+//                line above it word for word trains the player to stop reading
+//                the box on the cards where it is the only information there is.
+//
+// Returns null when nothing survives that, which is the same "no tooltip" the
+// empty string used to mean.
+function cardTipContent(choice, effectText) {
+  const content = upgradeTipContent(choice, { owned: nextStack(choice) - 1 });
+  if (!content) return null;
+  content.desc = '';
+  if (!effectText) content.rows = content.rows.filter((r) => r.key !== 'next');
+  return content.rows.length ? content : null;
+}
+
 // The one tooltip node, moved between cards. Created on the first hover of the
 // first run rather than at boot, so a session that never levels up never makes
 // one.
 let cardFx = null;
 
 function showCardEffect(card, text) {
-  if (!text) { hideCardEffect(); return; }
+  // OFF IS OFF, and this is the gate rather than cardTipContent's null. The
+  // content builder already returns nothing at 'off' — but the string fallback
+  // below would then take over and put the old one-line box up, so the setting
+  // would appear to do nothing on the one screen a player is most likely to be
+  // looking at when they turn it off. Read live: the pause menu can change it
+  // between two hovers of the same card.
+  if (tipVerbosity() === 'off') { hideCardEffect(); return; }
+  // The rows were built at deal time and parked on the element (see the note
+  // where dataset.effect is set). `text` is still honoured as the fallback so
+  // the pad's call site and the harness can drive this with a string alone.
+  const content = card?._svTip ?? null;
+  if (!content && !text) { hideCardEffect(); return; }
   if (!cardFx) {
     cardFx = document.createElement('div');
     cardFx.className = 'sv-card-fx';
     el.svCards.appendChild(cardFx);
   }
-  cardFx.textContent = text;
+  // The row layout wants the left margin and the width its own box has; the
+  // single measured sentence this started as is centred in a narrow box, and
+  // still is on the fallback path.
+  cardFx.classList.toggle('sv-card-fx-rows', !!content);
+  if (content) renderTipInto(cardFx, content);
+  else cardFx.textContent = text;
 
   // Anchored to the hex's DRAWN edge, not the element's. The card is a
   // 210px box clipped to a hexagon whose bottom point sits at 89.6% of that
@@ -3767,6 +3967,10 @@ export function showLevelUp() {
     // On the element rather than in a closure so the pad's selection and the
     // harness can both read it without a second copy of cardEffect().
     card.dataset.effect = cardEffect(choice, desc);
+    // The rest of the rows, measured at the same moment and for the same
+    // reason. On the element rather than in a closure so selectCard() — which
+    // only ever has the element — shows the same box the mouse does.
+    card._svTip = cardTipContent(choice, card.dataset.effect);
     card.addEventListener('pointerenter', () => {
       if (menuLocked) return;
       showCardEffect(card, card.dataset.effect);
@@ -4590,7 +4794,9 @@ export function applyBoostMeter(mode = boostMeter()) {
   if (!bars) return;
   if (mode === boostMeterApplied) return;
   boostMeterApplied = mode;
-  const column = mode === 'bar';
+  // Tested against the value the column is NOT drawn in, so 'both' lands here
+  // without a branch of its own — see boostMeter() in systems/settings.js.
+  const column = mode !== 'ring';
   bars.classList.toggle('sv-playerbars-boost', column);
   // The HUD carries this one too: on a phone the score and clock step inboard
   // of the gauges, and there is a third column to clear now.
@@ -4764,7 +4970,7 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   // the column is the view that is on.
   const meter = boostMeter();
   applyBoostMeter(meter);
-  if (meter === 'bar') updateBoostBar(player, strikeState, step);
+  if (meter !== 'ring') updateBoostBar(player, strikeState, step);
 
   if (camera && el.svPlayerBars && placement !== 'corner') {
     // Offset in WORLD units, not pixels — a pixel gap would drift as the
@@ -5853,6 +6059,21 @@ export function clearToasts() {
 // own stats plus the board as it currently stands, so there's something to aim
 // at while typing rather than an empty panel.
 
+// TWO STRINGS THIS SCREEN NOW NEEDS AND DOES NOT HAVE.
+//
+// Staged, not written — see CLAUDE.md. The briefs are in design/COPY-TODO.md
+// and npm run test:copy lists them.
+//
+// The heading over the rail is Ethan's "Kill shots" and is left exactly as it
+// is on every run that HAS kill shots. What is new is a run that has none: the
+// rail is still there, holding the build, and "Kill shots" over a hive would be
+// the screen getting a fact wrong about the run.
+const STRIP_LABEL_BUILD_ONLY = '[DRAFT] Your build';
+// The screen reader's name for the hexagon block on the rail, and the button's
+// accessible name. Read aloud in place of a picture, so it has to say what the
+// thing is AND that pressing it opens it.
+const HIVE_SLOT_LABEL = '[DRAFT] Your build — open it';
+
 // --- the trophy ------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // THE ROLL — every kill shot from the run, on the score screen.
@@ -5880,14 +6101,44 @@ function showTrophy() {
   const shots = bossShots();
   // A print from the LAST run must not still be held up over this one's card.
   closeShotView();
+  closeHiveView();
   if (!el.svTrophy || !el.svFan) return;
   el.svFan.innerHTML = '';
-  if (!shots.length) {
-    // No boss died this run. Hidden, and the prints are dropped as well as the
-    // element — a stale image left in the rack is a picture of the previous
-    // run sitting one class away from being shown again.
+
+  // WHAT THE RUN BUILT, as the object it has been in the corner all along.
+  // Built before the early return below, because it is the reason that early
+  // return is no longer "no boss died, so there is nothing here": a run that
+  // ended at minute four never met a boss and is exactly the run most in need
+  // of being told what it was holding.
+  // WRAPPED, because showGameOver is the only route back into the game. Every
+  // other thing this screen reads from the run is behind a guard for the same
+  // reason (see renderRunDetail) — a recap that throws leaves the player with
+  // no Try again, and this one builds DOM from the pick list, which is the
+  // widest input on the screen.
+  let hiveSlot = null;
+  try {
+    hiveSlot = buildHiveSlot();
+  } catch (err) {
+    console.warn(`[ui] could not draw the run's hive — ${err}`);
+  }
+
+  if (!shots.length && !hiveSlot) {
+    // Nothing to show: no boss died AND nothing was ever picked. Hidden, and
+    // the prints are dropped as well as the element — a stale image left in the
+    // rack is a picture of the previous run sitting one class away from being
+    // shown again.
     el.svTrophy.classList.add('sv-hidden');
     return;
+  }
+
+  // THE VERBS BELONG TO THE PRINTS, so on a run with no prints they go. Share
+  // and Save act on `selectedShot`, and with an empty roll there is no shot to
+  // select — four buttons that report "Nothing to share" are worse than no
+  // buttons, because they read as a screen that is broken rather than as a run
+  // that never met a boss.
+  el.svTrophyRow?.classList.toggle('sv-hidden', !shots.length);
+  if (el.svStripLabel && !shots.length) {
+    el.svStripLabel.textContent = STRIP_LABEL_BUILD_ONLY;
   }
 
   selectedShot = shots.length - 1;
@@ -5920,7 +6171,11 @@ function showTrophy() {
     slot.addEventListener('click', () => openShotView(i));
     el.svFan.appendChild(slot);
   });
-  selectShot(selectedShot);
+  // TO THE RIGHT OF THE LAST PRINT. The rail reads left to right in the order
+  // the run happened, and the build is what the run ended AS — so it sits after
+  // the last thing that happened, not before the first.
+  if (hiveSlot) el.svFan.appendChild(hiveSlot);
+  if (shots.length) selectShot(selectedShot);
   // Render every polaroid NOW, while the screen is arriving. Left until a
   // button is pressed, the render would spend the click's transient activation
   // and navigator.share would refuse the sheet — see warmShareCards.
@@ -5930,10 +6185,143 @@ function showTrophy() {
   // only make it wait. It is the more expensive of the two and the one whose
   // share button was failing, because a compose that runs inside the click
   // handler outlives the click's activation. See warmRunSheet.
-  warmShareCards().then(() => warmRunSheet(recapRun ?? {}));
-  el.svTrophyStatus.textContent = '';
+  // Only when there is something to warm. warmShareCards renders every kill
+  // shot at share size; on a run with no kills it is a render of nothing, and
+  // warmRunSheet composes a sheet whose whole content is the scorecard.
+  if (shots.length) warmShareCards().then(() => warmRunSheet(recapRun ?? {}));
+  if (el.svTrophyStatus) el.svTrophyStatus.textContent = '';
   el.svTrophy.classList.remove('sv-hidden');
-  wireTrophy();
+  if (shots.length) wireTrophy();
+}
+
+// ---------------------------------------------------------------------------
+// THE HIVE ON THE RAIL
+// ---------------------------------------------------------------------------
+// The build, beside the kills, as the run's other object.
+//
+// WHY IT IS ON THE RAIL AND NOT IN THE LEDGER. There is a text list of the
+// build in the second column and it stays (see THE BUILD in renderRunDetail) —
+// they answer different questions. The list is scannable and sorted; this is
+// the SHAPE, the same corner the player has been reading for the whole run,
+// with the deep stacks standing taller than the shallow ones. A build is a
+// thing you recognise before you can read it, and that recognition is what the
+// rail carries.
+//
+// IT IS THE SAME LATTICE, not a drawing of one — buildHiveSnapshot shares the
+// packing with the live corner (see layoutHive), so a hive that interlocks
+// during a run cannot overlap on the score screen.
+//
+// The tiles are live: hovering one opens the same tip the corner and the boss
+// dividend open, and the run's ledger is still readable, so the numbers in it
+// are this run's.
+function buildHiveSlot() {
+  const snap = buildHiveSnapshot(player.upgrades ?? [], { size: 30 });
+  if (!snap) return null;
+
+  const slot = document.createElement('button');
+  slot.type = 'button';
+  slot.className = 'sv-fan-slot sv-fan-hive';
+  slot.setAttribute('aria-label', HIVE_SLOT_LABEL);
+  const frame = document.createElement('div');
+  frame.className = 'sv-hive-slot-frame';
+  frame.appendChild(snap.host);
+  slot.appendChild(frame);
+
+  // HOVER IS PER TILE, CLICK IS THE WHOLE THING, and the two do not fight
+  // because they answer at different scales: pointing at one hexagon asks about
+  // that upgrade, and pressing the slot asks for the build big enough to point
+  // at properly.
+  //
+  // Delegated on the slot rather than bound per tile: the snapshot is built
+  // once per death and thrown away with the screen, so there is nothing to
+  // re-bind, and one listener is one listener however deep the build went.
+  slot.addEventListener('pointerover', (e) => {
+    const tile = e.target?.closest?.('.sv-hive-tile');
+    if (tile?.dataset.upgrade) {
+      showUpgradeTip(tile.dataset.upgrade, tile, { owned: Number(tile.dataset.stacks) || 0 });
+    }
+  });
+  slot.addEventListener('pointerout', (e) => {
+    if (!slot.contains(e.relatedTarget)) hideUpgradeTip();
+  });
+  slot.addEventListener('click', () => openHiveView());
+  return slot;
+}
+
+function hiveViewOpen() {
+  return !!el.svHiveView && !el.svHiveView.classList.contains('sv-hidden');
+}
+
+// THE BUILD AT THE SIZE OF THE SCREEN.
+//
+// A SECOND SNAPSHOT, not the rail's one moved. Moving it would leave a hole in
+// the rail for as long as the sheet is open and put it back somewhere slightly
+// different on close; and the two want different sizes, which for a hive is not
+// a scale — every stack's pile, every tile's rim and the contact shadows are
+// laid out in pixels against the hexagon's size, so a hive at 30px zoomed to
+// 76px is a hive with 2px rims magnified to 5. Built again at the size it is
+// shown at, which is what layoutHive exists to make cheap.
+function openHiveView() {
+  if (!el.svHiveView || !el.svHiveViewStage) return;
+  hideUpgradeTip();
+  el.svHiveViewStage.replaceChildren();
+  // Sized off the window rather than fixed: the same build is nine tiles on a
+  // phone and nine tiles on a desktop, and the one number that decides whether
+  // it fits is how much room there is. Clamped at both ends — below about 40 a
+  // big hexagon is not worth opening a sheet for, and above 92 a four-pick run
+  // fills a monitor with four hexagons.
+  const room = Math.min(window.innerWidth, window.innerHeight);
+  const size = Math.max(40, Math.min(92, Math.round(room / 9)));
+  const big = buildHiveSnapshot(player.upgrades ?? [], { size });
+  if (!big) return;
+  el.svHiveViewStage.appendChild(big.host);
+
+  el.svHiveViewStage.addEventListener('pointerover', hiveViewOver);
+  el.svHiveViewStage.addEventListener('pointerout', hiveViewOut);
+  el.svHiveView.classList.remove('sv-hidden');
+  wireHiveView();
+  wireHiveEscape();
+  el.svHiveViewClose?.focus?.({ preventScroll: true });
+}
+
+function hiveViewOver(e) {
+  const tile = e.target?.closest?.('.sv-hive-tile');
+  if (tile?.dataset.upgrade) {
+    showUpgradeTip(tile.dataset.upgrade, tile, { owned: Number(tile.dataset.stacks) || 0 });
+  }
+}
+
+function hiveViewOut(e) {
+  if (!el.svHiveViewStage?.contains(e.relatedTarget)) hideUpgradeTip();
+}
+
+function closeHiveView() {
+  if (!el.svHiveView) return;
+  el.svHiveView.classList.add('sv-hidden');
+  hideUpgradeTip();
+  // The listeners go with the stage's contents. They are added on every open,
+  // so leaving them on would stack a pair per open — and the stage outlives the
+  // sheet, unlike the hive inside it.
+  el.svHiveViewStage?.removeEventListener('pointerover', hiveViewOver);
+  el.svHiveViewStage?.removeEventListener('pointerout', hiveViewOut);
+  // The tiles carry a card-art background each and an icon image each, which on
+  // a deep build is a few hundred KB of decoded bitmap held for a sheet nobody
+  // is looking at.
+  el.svHiveViewStage?.replaceChildren();
+}
+
+let hiveViewWired = false;
+
+function wireHiveView() {
+  if (hiveViewWired) return;
+  hiveViewWired = true;
+  el.svHiveViewClose?.addEventListener('click', closeHiveView);
+  // The scrim closes it too — the same gesture as tapping outside any sheet.
+  // Guarded on the target being the sheet itself so a click that lands on a
+  // hexagon does not close the thing that was opened to look at hexagons.
+  el.svHiveView?.addEventListener('click', (e) => {
+    if (e.target === el.svHiveView) closeHiveView();
+  });
 }
 
 function selectShot(i) {
@@ -6063,6 +6451,23 @@ function wireShotView() {
   }, true);
 }
 
+// The same key, for the build's sheet. Its own listener rather than a second
+// branch in the one above, because that one is installed by wireShotView —
+// which never runs on a run with no kill shots, and a run with no kill shots is
+// exactly the one where the build's sheet is the only sheet there is.
+let hiveEscWired = false;
+
+function wireHiveEscape() {
+  if (hiveEscWired) return;
+  hiveEscWired = true;
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !hiveViewOpen()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeHiveView();
+  }, true);
+}
+
 // The buttons are wired once, on first show, and they must be wired to a real
 // click — both the share sheet and, in some browsers, the download are gated
 // on a user gesture, so neither can be fired from the frame loop or a timer.
@@ -6154,13 +6559,10 @@ function wireTrophy() {
  * dressed as a measurement. What the player is reading is the ORDER and the
  * shares, both of which survive this intact.
  */
-function compactDamage(n) {
-  const v = Math.max(0, Math.round(n ?? 0));
-  if (v < 1000) return String(v);
-  if (v < 100000) return `${(v / 1000).toFixed(1)}k`;
-  if (v < 1e6) return `${Math.round(v / 1000)}k`;
-  return `${(v / 1e6).toFixed(1)}M`;
-}
+// compactDamage now lives in ui/upgradeTip.js and is imported at the top of
+// this file. The tip and the ledger quote the same run side by side on the
+// score screen, and two copies of the rounding would show up there as one of
+// them being wrong about the run rather than about the decimal place.
 
 // textContent, never innerHTML, for anything that came out of the ledger. The
 // labels are ours (upgrade names, cause names) but the FALLBACK is a raw source
@@ -6378,34 +6780,62 @@ function renderRunDetail(gameState) {
   //
   // SORTED BY STACKS AND THEN BY NAME, not by damage: this is the question
   // "what did I build", and a list that reorders itself by how well it went
-  // answers a different one the table beside it already answers. The name is
-  // the build-aware one for the same reason it is in the weapons table — it is
-  // what the player was offered on the card they took.
+  // answers a different one the table beside it already answers.
+  //
+  // ONE ROW PER CARD, OFF THE PICK LIST — and this is a correction. It was
+  // built from `a.abilities`, which is keyed on SOURCE_UPGRADES: about thirty
+  // damage and control abilities, and nothing else in the game. So the panel
+  // whose comment above says the stat cards were invisible was itself missing
+  // every one of them — Yoga, Iron Lung, Supa Dupa Seal, Mammal Mode, the whole
+  // half of the roster that has no damage tag because it makes OTHER things
+  // better. The rows it did show were also per SOURCE rather than per card, so
+  // three picks spread across Rapid Fire and Heavy Rounds arrived as one row
+  // reading "Fin Pebbles x3", naming a card the player may never have been
+  // offered.
+  //
+  // foldUpgrades AND NOT A SECOND FOLD, because the hive snapshot on the rail
+  // above is built from exactly that call (see buildHiveSnapshot). The list and
+  // the picture are the same run, side by side on one screen, and the one thing
+  // they may never do is disagree about how many of something you took.
   if (build) {
-    const taken = a.abilities.filter((r) => (r.stacks ?? 0) > 0);
+    const taken = foldUpgrades(player.upgrades ?? []);
     if (!taken.length) {
       build.appendChild(brkSection('The build', ''));
       brkEmpty(build, 'No upgrades this run.');
     } else {
-      const picks = taken.reduce((n, r) => n + r.stacks, 0);
+      const picks = taken.reduce((n, r) => n + r.count, 0);
       build.appendChild(brkSection('The build', `${picks} ${picks === 1 ? 'pick' : 'picks'}`));
       const list = document.createElement('div');
       list.className = 'sv-brk';
-      const most = Math.max(...taken.map((r) => r.stacks));
-      for (const r of [...taken].sort((x, y) => y.stacks - x.stacks
-        || weaponName(x.source).localeCompare(weaponName(y.source)))) {
+      const most = Math.max(...taken.map((r) => r.count));
+      // The name ON THE CARD, out of upgrades.csv. weaponName answers a
+      // different question — what a weapon is CALLED NOW, after the modifiers a
+      // build has hung on it — which is the right answer in the weapons table
+      // beside this and the wrong one here: this is a list of the cards that
+      // were taken, and every hexagon on the rail above is labelled the same
+      // way.
+      const label = (id) => upgradeDefName(id);
+      for (const r of [...taken].sort((x, y) => y.count - x.count
+        || label(x.id).localeCompare(label(y.id)))) {
         list.appendChild(brkRow({
-          name: weaponName(r.source),
-          a: `×${r.stacks}`,
+          name: label(r.id),
+          a: `×${r.count}`,
           b: '',
           // The bar reads as "how much of this build is this card", which is
           // what a stack count means and what damage does not.
-          share: most > 0 ? (r.stacks / most) * 100 : 0,
+          share: most > 0 ? (r.count / most) * 100 : 0,
         }));
       }
       build.appendChild(list);
     }
   }
+}
+
+// The display name for an upgrade id, falling back to the id. The fallback is
+// what makes a row for a card that has been removed from upgrades.csv since the
+// run was played still say something rather than render blank.
+function upgradeDefName(id) {
+  return upgradeDef(id)?.name ?? id;
 }
 
 /**

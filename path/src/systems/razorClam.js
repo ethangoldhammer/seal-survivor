@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { projectileCount } from '../stats.js';
+import { getAssetSizeMultiplier } from '../assets.js';
 
 // RAZOR CLAMS — the fan.
 //
@@ -50,6 +51,53 @@ export function razorClamArc(level) {
   const span = Math.max(1, (c.arcFullAt ?? 8) - 1);
   const t = Math.min(1, Math.max(0, (Math.max(1, level) - 1) / span));
   return c.arc + (TAU - c.arc) * t;
+}
+
+/**
+ * HOW BIG A BLADE ACTUALLY IS — the art multiplier from assets.csv, which is
+ * the only place a spawn size lives (the Size slider is a readout now).
+ *
+ * It is in this file rather than read at the launch site because three things
+ * have to agree about it and none of them can see each other: what is DRAWN,
+ * what it CUTS (below), and how fat a ribbon it drags. A shell rendered at two
+ * and a half units with a quarter-unit reach is a weapon that visibly passes
+ * through fish, and nothing reports it.
+ */
+export function bladeSize() {
+  return getAssetSizeMultiplier('razorBlade') || 1;
+}
+
+/**
+ * The blade's collision radius, in world units.
+ *
+ * `CONFIG.razorClam.radius` is the reach of a blade drawn at size 1, so this
+ * is the same PROPORTION of the shell it always was — a bigger picture is a
+ * bigger cut, in step, by construction rather than by two numbers being edited
+ * together and eventually not being.
+ */
+export function razorClamRadius() {
+  return CONFIG.razorClam.radius * bladeSize();
+}
+
+/**
+ * How fast one blade whips about its own long axis, in radians a second.
+ *
+ * SIGNED PER BLADE, and that is the whole trick: a fan where every shell rolls
+ * the same way reads as one rigid object being turned, and the chrome flashes
+ * arrive in unison. Opposite hands scattered through the volley is a handful
+ * of thrown shells.
+ *
+ * The roll is also what makes the metal work. CONFIG.chromeBlade is a
+ * view-space horizon with one hot key lobe in it — an environment the body has
+ * to TURN THROUGH to show anything — and until now the blades never rolled at
+ * all, so every shell flew with one static shade on it. See the chrome note in
+ * assets.js.
+ */
+export function razorClamRoll(rand = Math.random) {
+  const c = CONFIG.razorClam;
+  const base = c.roll ?? 0;
+  const vary = c.rollJitter ?? 0;
+  return base * (1 + (rand() * 2 - 1) * vary) * (rand() < 0.5 ? -1 : 1);
 }
 
 /** What one blade hits for at this level, before abilityDamage. */
@@ -127,5 +175,10 @@ export function razorClamVolley(level, heading, stats = null, rand = Math.random
     pierce: razorClamPierce(level),
     fireRate: razorClamFireRate(level),
     arc: razorClamArc(level),
+    // The art half, which does not move with the level but does move with
+    // assets.csv — handed over here so the launch spends one call and cannot
+    // pick up a reach that disagrees with the shell it is drawing.
+    size: bladeSize(),
+    radius: razorClamRadius(),
   };
 }

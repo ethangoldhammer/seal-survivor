@@ -183,8 +183,8 @@ export function beginRun(config = {}) {
  *
  * DROPPED RATHER THAN CLAMPED, which is the second version of this. A ceiling
  * cannot work here, and the arithmetic says so: it has to sit above the
- * biggest legitimate hit, and with spawning.csv at `ramp.hpMax` 30 a bossShark
- * is 82k at ten minutes and 212k at thirty — so any cap high enough to let
+ * biggest legitimate hit, and with spawning.csv at `ramp.hpMax` 60 a bossShark
+ * is 141k at ten minutes and 424k at thirty — so any cap high enough to let
  * that through still books more per turtle than a real ability manages in a
  * whole run. There is no honest number to record for killing a placeholder.
  * Zero is the honest one. The kill is still credited (see recordKill) and the
@@ -351,6 +351,64 @@ export function recordPlayerDamage(amount, source = 'unknown') {
 export function recordControl(source, n = 1) {
   if (!run) return;
   add(run.controlEvents, source, n);
+}
+
+/**
+ * WHAT EVERY SOURCE HAS DONE SO FAR, readable MID-RUN.
+ *
+ * analyzeRun() is the balance report: it wants stack-minutes, efficiency and a
+ * per-bucket curve, and it only exists once a run is over. The upgrade tips
+ * (ui/upgradeTip.js) want one much smaller thing while the run is still
+ * happening — "what has this ability actually done for me" — and asking for it
+ * through the analysis would mean either ending the run or reimplementing the
+ * summing somewhere that could disagree with this file about what a bucket is.
+ *
+ * THE OPEN BUCKET IS INCLUDED, and that is the whole reason this is not a
+ * two-line reduce at the call site. `run.buckets` only grows every
+ * BUCKET_SECONDS, so a reader that summed the array alone would show a weapon
+ * picked forty seconds ago as having done nothing at all — for up to a full
+ * bucket at a time, on a tooltip whose entire job is to be current. Worse, it
+ * would read as a BROKEN tooltip rather than a stale one, because the number it
+ * shows is a confident zero.
+ *
+ * Falls back to the last finished run once `run` is null, so the score screen
+ * and the end-of-run hive read the same function the corner hive does.
+ *
+ * Returns fresh plain objects every call — nothing here hands out a reference
+ * into the live bucket, which a caller could then add to.
+ */
+export function runTotals() {
+  const src = run ?? last;
+  const out = { dealtBySource: {}, killsBySource: {}, controlEvents: {} };
+  if (!src) return out;
+  for (const b of src.buckets ?? []) {
+    for (const k in b.dealtBySource) add(out.dealtBySource, k, b.dealtBySource[k]);
+    for (const k in b.killsBySource) add(out.killsBySource, k, b.killsBySource[k]);
+  }
+  // The bucket still filling. Only while THIS run is the live one — `last` has
+  // already had its final partial bucket pushed by endRun, and adding the open
+  // bucket to it would double-count the last twenty seconds of the run.
+  if (src === run && bucket) {
+    for (const k in bucket.dealtBySource) add(out.dealtBySource, k, bucket.dealtBySource[k]);
+    for (const k in bucket.killsBySource) add(out.killsBySource, k, bucket.killsBySource[k]);
+  }
+  // Control events are counted on the RUN rather than per bucket, so there is
+  // no open-bucket half to this one.
+  for (const k in src.controlEvents ?? {}) add(out.controlEvents, k, src.controlEvents[k]);
+  return out;
+}
+
+/**
+ * How many stacks of `id` are held right now, mid-run.
+ *
+ * `run.finalStacks` is only written by endRun, so it is the wrong thing to read
+ * while a run is happening — it is `{}` for the entire fight and then correct
+ * forever, which is exactly the shape of bug that passes every test written
+ * after the run is over.
+ */
+export function stacksHeld(id) {
+  if (run) return stacks[id] ?? 0;
+  return last?.finalStacks?.[id] ?? 0;
 }
 
 /**

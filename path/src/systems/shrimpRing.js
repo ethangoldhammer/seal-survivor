@@ -4,12 +4,19 @@ import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { abilityDamage } from './scaling.js';
 import { hitCreature } from './hitShape.js';
+import { attachDamageGlow, stoke, cool, glowLevel } from './damageGlow.js';
 
 // See the note on combat.js's `contact` — shared, and read before the next
 // test can overwrite it.
 const ringContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
-// One entry per orbiting instance: { mesh, angleOffset, cooldowns: Map<enemy, secondsLeft> }
+// One entry per orbiting instance:
+// { mesh, angleOffset, cooldowns: Map<enemy, secondsLeft>, heat, glow }
+//
+// `heat` and `glow` are this shrimp's own — see systems/damageGlow.js. Per
+// instance rather than per ring because the ring is a circle of individuals
+// and the one that connected is the only one with anything to say; a ring-wide
+// flare would be the least informative version of the same light.
 let instances = [];
 let group = null;
 let clock = 0;
@@ -22,13 +29,20 @@ export function createShrimpRingVisual() {
 function addInstance() {
   const mesh = createVisual('shrimp');
   group.add(mesh);
-  instances.push({ mesh, angleOffset: 0, cooldowns: new Map() });
+  // Its own materials, so this shrimp can light up without lighting the other
+  // seven. Null on a build where the model never loaded and the primitive
+  // stand-in has nothing to brighten — every call below is optional-chained
+  // for exactly that.
+  instances.push({ mesh, angleOffset: 0, cooldowns: new Map(), heat: 0, glow: attachDamageGlow(mesh) });
   redistributeAngles();
 }
 
 function removeInstance() {
   const inst = instances.pop();
-  if (inst) group.remove(inst.mesh);
+  if (inst) {
+    inst.glow?.release();
+    group.remove(inst.mesh);
+  }
   redistributeAngles();
 }
 
@@ -68,7 +82,15 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
     // plain multiplier on it — same arithmetic the procedural fallback needs,
     // hence no branch. (It used to be model-only-when-not-uploaded, which left
     // the slider doing nothing at all once a model was in.)
-    inst.mesh.scale.setScalar(scale);
+    // HOT WHILE IT IS BITING. The heat is stoked below, on contact; here it is
+    // only carried to now and spent — on the model's own glow (which the bloom
+    // pass then haloes) and on a scale punch, which is the same per-instance
+    // channel a hit on an enemy uses, for the same reason: it is the one that
+    // survives a shared material.
+    inst.heat = cool(inst.heat, 'shrimpRing', dt);
+    const heat = glowLevel(inst.heat, 'shrimpRing');
+    inst.glow?.set(heat, 'shrimpRing');
+    inst.mesh.scale.setScalar(scale * (1 + (CONFIG.shrimpRing.hitPop ?? 0.25) * heat));
 
     // Tick down this shrimp's per-enemy cooldowns.
     for (const [enemy, t] of inst.cooldowns) {
@@ -97,6 +119,10 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
       inst.cooldowns.set(e, CONFIG.shrimpRing.contactCooldown);
+      // Stoked on the frame it lands, and read on the NEXT frame's carry —
+      // which is the frame the flare is wanted on, since the contact and the
+      // damage number both happen on this one.
+      inst.heat = stoke(inst.heat, 'shrimpRing');
       hooks.onEnemyDamaged?.(e, dmg, ringContact.x, ringContact.y, null, null, ringContact);
       // At the shrimp, not the enemy — the ring is a fixed radius around the
       // player, so contacts happening out on that circle is the read.
@@ -110,7 +136,10 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
 }
 
 export function resetShrimpRing() {
-  for (const inst of instances) group?.remove(inst.mesh);
+  for (const inst of instances) {
+    inst.glow?.release();
+    group?.remove(inst.mesh);
+  }
   instances = [];
   clock = 0;
 }

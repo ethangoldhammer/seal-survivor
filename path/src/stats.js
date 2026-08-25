@@ -100,6 +100,22 @@ export function baseStats() {
     // whole-arena sniper.
     aoeMul: 1,
     targetingMul: 1,
+    // André 3000. How long EVERY projectile the seal fires stays in the water,
+    // as a multiplier on whatever life its own spawn site asked for — the gun's
+    // `life` above, CONFIG.missile.life, the scallop's, the ricochet's,
+    // shrapnel, razor blades, thrown clubs.
+    //
+    // A multiplier applied at the point of use rather than to `life` here,
+    // because `life` is the GUN'S number and every other projectile in the game
+    // carries its own. One card that reached only the gun would be a fifth of
+    // what it says on the tin, and thirteen apply() lines writing thirteen
+    // different fields would be thirteen chances to miss one. See
+    // projectileLife() in systems/scaling.js, which is the only way this should
+    // ever be read, and spawnProjectile, which is the only place that calls it.
+    //
+    // Player shots only. An enemy torpedo is spawned through the same function
+    // and must not inherit the seal's upgrades.
+    projectileLifeMul: 1,
     // Big Rigz. Companion body scale (visual AND hitbox, so the size is real)
     // and the damage they do with it.
     companionScale: 1,

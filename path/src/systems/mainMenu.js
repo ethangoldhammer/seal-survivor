@@ -84,6 +84,7 @@ import { setCausticsPunch } from './water.js';
 import { stateForSpeed } from './animation.js';
 import { menuInput, touchSlots } from '../input.js';
 import { feedback } from './feedback.js';
+import { mountBuildStamp } from '../ui/buildStamp.js';
 
 // The live menu, or null. One at a time by construction — it holds a pose on
 // the one seal there is.
@@ -491,6 +492,12 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   labelLayer.style.cssText = 'position:absolute; inset:0; pointer-events:none; z-index:3;';
   (root ?? document.body).appendChild(labelLayer);
 
+  // WHICH BUILD THIS IS, in the corner of the hub screen (ui/buildStamp.js).
+  // Inside the label layer rather than the root, so the same `remove()` that
+  // takes the buttons away takes this — a stamp that outlived the menu would
+  // sit in the corner of the whole run.
+  const stamp = mountBuildStamp(labelLayer);
+
   // ONE ELEMENT PER LINE, always — a single-line label is a block of one, so
   // there is no second path through any of this. The wrapper is a block that
   // centres its rows and each row is nowrap: the wrapper's scrollWidth is then
@@ -530,8 +537,15 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     return world.halfExtents(camera.zoom).h * 2;
   }
 
+  // Gone by the time the camera is a fifth of the way out — see the note at
+  // the point of use. Lifted out of the loop because the build stamp leaves on
+  // this same curve: it is the buttons' companion, not the run's, and two
+  // copies of the expression would drift the day one of them is retuned.
+  const labelFade = (w) => Math.max(0, Math.min(1, w * 2.5 - 1.2));
+
   function placeLabels(w) {
     const [vw, vh] = viewport();
+    stamp.el.style.opacity = String(labelFade(w));
     menu.items.forEach((item, i) => {
       _project.copy(item.world).project(camera);
       labels[i].style.left = `${((_project.x + 1) / 2) * vw}px`;
@@ -544,7 +558,7 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // the one part of this screen with no business in a run, and type
       // shrinking off into the distance reads as debris — so it leaves early,
       // on its own curve, while the shot is still mostly a portrait.
-      labels[i].style.opacity = String(Math.max(0, Math.min(1, w * 2.5 - 1.2)));
+      labels[i].style.opacity = String(labelFade(w));
 
       // THE WORD ANSWERS THE POINTER, and it answers with a HALO rather than
       // with a brightening. These labels are drawn in the ink colour, which is

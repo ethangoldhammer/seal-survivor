@@ -122,6 +122,11 @@ const orToday = (found, today) => (found.length ? found : today);
 const CALLOUT_KINDS = orToday(extractStringArray(calloutSrc, 'CALLOUT_KINDS'), ['warn', 'coach']);
 const ARROW_TARGETS = orToday(extractStringArray(calloutSrc, 'ARROW_TARGETS'), ['chum', 'surface']);
 const CALLOUT_ANCHORS = orToday(extractStringArray(calloutSrc, 'CALLOUT_ANCHORS'), ['band', 'player']);
+// The four phrasings the renderer implements, read out of the parser rather
+// than restated here — a kind this editor offers that phrase() cannot render
+// is a card that silently comes out as `flat`.
+const STAT_KINDS = orToday(extractStringArray(readSrc('statTextTable.js'), 'KINDS'),
+  ['percent', 'flat', 'count', 'level']);
 // Read out of the game rather than restated here, like every other list in this
 // file. NAME_SLOTS is the one the parser actually validates against — SLOTS is
 // the shorter list of the parts a name is BUILT from, and offering that one
@@ -329,6 +334,14 @@ const DOCS = {
     weight: 'Likelihood relative to the other rows. Blank = 1, 0 is never shown.',
     causes: 'What has to have killed you for this line to fire. BLANK MEANS ANY DEATH. A line written for a cause BEATS the general pool rather than competing with it — die to a crab and only the crab lines are drawn from, so tagging one makes it certain, not merely likelier. Tick several and the line covers all of them.',
   },
+  'epitaphs.csv': {
+    id: 'A short handle for the row. Never shown to the player \u2014 it exists so a reworded lead keeps its identity in a diff.',
+    text: 'The connector itself, lowercase, ENDING WHERE THE CAUSE BEGINS \u2014 "chomped by", "done in by", "who met". The cause is always the line underneath and on its own, so a lead that swallowed it mid-sentence would take away the wrapping the long boss names need.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows IT IS POOLED WITH \u2014 the leads for the same cause, or the general pool. Blank = 1, 0 is never used.',
+    cause: 'Which death this lead is for. BLANK MEANS ANY DEATH, which is the general pool every cause nobody wrote for falls back to. A lead written for a cause BEATS that pool rather than joining it \u2014 tag anything `shark` and a shark death draws from those alone. A boss death uses its ARCHETYPE\u2019s leads, so "chomped by / Grimjaw the Famish\u2019d" needs no second vocabulary.',
+    notes: 'Free text \u2014 nothing reads it.',
+  },
   'greetings.csv': {
     id: 'A short handle for the row. Never shown to the player \u2014 it exists so a reworded line keeps its identity in a diff.',
     text: 'The hello itself, one line on the band at the top of a run. `{player}` becomes whatever the player is called \u2014 the name they typed, or "Seal" if they never did. `{cause}` becomes what killed them LAST run, worded as "a shark", "a crab", "running out of air" \u2014 so write it mid-sentence and lowercase: "Last time it was {cause}." A line with `{cause}` in it is simply held back on a run that follows no death, so using it is the only guard you need.',
@@ -350,6 +363,26 @@ const DOCS = {
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     weight: 'Likelihood relative to the other rows IN THE SAME SLOT. Blank = 1, 0 is never used.',
     notes: 'Free text — nothing reads it.',
+  },
+  'tips.csv': {
+    id: 'A short handle for the row. Never shown to the player \u2014 it exists so a repriced or reworded tier keeps its identity in a diff.',
+    price: 'Whole dollars \u2014 the number the player is agreeing to. A row with no usable price is dropped rather than shown with a blank in it, and a $0 tier reads as a bug in the panel rather than as a gift, so the floor is 1.',
+    label: 'The name of the tier, written as a thing you BUY: \u201cName a boss\u201d. A row with no label is dropped.',
+    desc: 'One line on what actually happens. Write it as a promise the player can check later, because they will.',
+    tag: 'The word the player is asked to start their Ko-fi message with, so submissions arrive sorted. Upper-cased in code, so the file cannot disagree with the screen about its shape. SEAL and BOSS today; anything else is passed through, because a new kind of name should not need a code change to be askable for.',
+    enabled: 'FALSE takes the tier off the panel \u2014 the way to pull one for a month without deleting what it said. Blank means enabled.',
+    order: 'Where it sits in the list, low first. Blank sorts last and ties keep file order. NOT the price: the cheapest tier is not always the one to lead with, and sorting by price would take that decision away from whoever writes the row.',
+    notes: 'Free text \u2014 nothing reads it.',
+  },
+  'rarities.csv': {
+    id: 'The join key, and saved picks reference it \u2014 so renaming an id is NOT the same as renaming a tier. Edit `name` for that.',
+    name: 'What the card and the tuner call the tier. This is the column to edit to get away from Common/Uncommon/Rare/Epic/Legendary.',
+    color: 'The ring and glow colour, as `#rrggbb` or a bare hex. Anything unreadable falls back to the built-in rather than to black \u2014 a black ring would look deliberate.',
+    glow: 'How far the card blooms, 0..~2. 0 is a ring and no glow, which is what the floor tier should look like.',
+    statMul: 'How much this tier amplifies the upgrade. 1 is no change, and THE FLOOR TIER MUST BE 1 or every card in the game is secretly buffed. systems/rarity.js decides what gets amplified and what deliberately does not.',
+    weightEarly: 'How often this tier is rolled at the START of a run. Relative within its own column, like upgrade weights.',
+    weightLate: '\u2026and at full difficulty. The roll interpolates between the two, so the ramp from grey cards with the odd green to a real chance at the top tier is these two columns and nothing else.',
+    sfx: 'The sting played when a card of this tier is OFFERED \u2014 one per level-up, for the best tier on the table. Blank means the tier arrives silently, which is right for the floor tier and wrong for every other one.',
   },
   'callouts.csv': {
     id: 'WHICH callout this is, and it joins to code — the condition that fires a warning, or the step that offers a tip. Renaming one takes it out of the game; rewording `text` does not. Adding a row does nothing on its own: something has to fire it.',
@@ -404,6 +437,21 @@ const DOCS = {
   },
 };
 
+DOCS['statText.csv'] = {
+  id: 'The stat this row names, exactly as it is spelled in the stat block \u2014 `fireRate`, `missileCount`. Not shown to anyone; it is the join to what apply() actually moves.',
+  group: 'Which section of the sheet this belongs to. Cosmetic \u2014 it keeps the file readable.',
+  kind: 'What the measured number MEANS, which is what decides its phrasing. percent shows +N%; flat shows the number as-is; count pluralises a noun; level names the ability on its first stack.',
+  label: 'What this stat is CALLED on a card. The one column every row needs.',
+  plural: 'The plural of the label, where adding an \u201cs\u201d is wrong \u2014 \u201cenemies\u201d, \u201corbiting shrimp\u201d. Blank means label + \u201cs\u201d.',
+  unlock: 'For a `level` stat: what the FIRST stack reads as, instead of \u201c+1 level\u201d. \u201cchain lightning\u201d, \u201ca damaging aura\u201d. This is the line that tells a player what they just bought.',
+  template: 'The whole phrase, when the standard shape is wrong. Blank uses the shape for its kind. Tokens: {n} the measured amount, {n%} it as a signed percentage, {+n} with a sign, {label}, {noun} (label or plural, by amount), {unit}, {from}, {to}. \u201c{label} up {n%}\u201d \u2192 \u201cfire rate up +25%\u201d. A template that renders empty is ignored and the standard shape is used.',
+  unit: 'Appended straight after the number on a flat stat: \u201cs\u201d gives \u201c+0.5s ricochet lifespan\u201d.',
+  lower: 'TRUE where DOWN is the improvement. fireRate is a cooldown, so a measured \u00d70.75 has to read \u201c+25% fire rate\u201d rather than \u201c-25%\u201d.',
+  bare: 'TRUE where the label is already a whole phrase and no noun should be appended \u2014 \u201c+2 of everything you fire\u201d.',
+  percentOfOne: 'TRUE for a stat that is a fraction of a meter, so a measured +0.15 reads as \u201c+15%\u201d of the thing it fills.',
+  notes: 'Free text \u2014 nothing reads it.',
+};
+
 // What the game falls back to when the cell is empty, shown as placeholder
 // text so an empty cell reads as a value rather than as an oversight.
 const BLANK_MEANS = {
@@ -419,9 +467,12 @@ const BLANK_MEANS = {
   },
   'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up', weaponName: 'renames nothing' },
   'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
+  'epitaphs.csv': { enabled: 'enabled', weight: '1', cause: 'any death', notes: '\u2014' },
   'greetings.csv': { enabled: 'enabled', weight: '1', causes: 'any death', when: 'either run' },
   'kickers.csv': { enabled: 'enabled', weight: '1' },
   'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
+  'tips.csv': { enabled: 'enabled', order: 'sorts last', desc: 'no line under the label', tag: 'no tag to type', notes: '\u2014' },
+  'rarities.csv': { sfx: 'arrives silently', glow: '0 (no bloom)', statMul: '1 (no change)' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
@@ -455,6 +506,12 @@ export const TABLES = [
     addRows: true,
   },
   {
+    file: 'path/src/epitaphs.csv',
+    label: 'Epitaph leads',
+    blurb: 'The words between a seal\u2019s name and what killed it, cut into the stone in the graveyard \u2014 "FAT TONY / chomped by / a shark". A CONNECTOR, not a sentence: every line ends where the cause begins, because the cause is the line underneath and is wrapped on its own. The `id` joins to nothing, so new lines are just new rows. `cause` decides which death a lead is for \u2014 blank is the general pool every unwritten cause falls back to, and a lead written for a cause BEATS that pool rather than competing with it.',
+    addRows: true,
+  },
+  {
     file: 'path/src/greetings.csv',
     label: 'Greetings',
     blurb: 'The line a run OPENS with \u2014 one rolled sentence on the band with the player\u2019s name in it, every run. The `id` joins to nothing, so new lines are just new rows. `when` picks which run it is for: a first-timer is welcomed, everybody else is greeted as a return. A returning line may also comment on the last death \u2014 tag it with a cause, or drop `{cause}` into the words and let it name whatever it was.',
@@ -473,12 +530,32 @@ export const TABLES = [
     addRows: true,
   },
   {
+    file: 'path/src/tips.csv',
+    label: 'Tip jar',
+    blurb: 'What a tip buys \u2014 the tiers on the panel behind the tip jar, each one a name in the water in a different size. The `id` joins to nothing, so new tiers are just new rows. A row with no price or no label is DROPPED rather than shown with a blank in it: this is the one screen that quotes a number at somebody. Nothing here charges anything \u2014 there is one Ko-fi page and the player types the amount there.',
+    addRows: true,
+  },
+  {
     file: 'path/src/upgrades.csv',
     label: 'Upgrades',
     blurb: 'The editable half of every upgrade. What an upgrade DOES is code in config.js; everything here is content.',
     // A row here joins to CONFIG.upgrades by id, so a new row without matching
     // code does nothing and warns. Adding one is a job for /upgrades.
     addRows: false,
+  },
+  {
+    file: 'path/src/statText.csv',
+    label: 'Effect wording',
+    blurb: 'Every word `{effect}` can say. The NUMBER on a card is measured by replaying the upgrade\u2019s own apply(), so it can never disagree with the game \u2014 but the words around it are all here. `label` is what a stat is called (\u201cfire rate\u201d); `unlock` is what the FIRST stack of an ability reads as, in place of \u201c+1 level\u201d; `template` rewrites a phrase outright when the standard shape is wrong \u2014 `{label} up {n%}` gives \u201cfire rate up +25%\u201d. The tokens fill from the same measurement, so an override can restate the number but never invent one.',
+    // A row joins to a key in the stat block, so a new row without a stat
+    // behind it is dead weight — npm run test:text names it.
+    addRows: false,
+  },
+  {
+    file: 'path/src/rarities.csv',
+    label: 'Rarity tiers',
+    blurb: 'The whole of every rarity tier \u2014 unlike an upgrade, a tier has no code half, so this file IS the definition and config.js carries only the fallbacks. THE ORDER OF THE ROWS IS THE ORDER OF THE TIERS: row one is the floor, the last row is the top, and moving a row moves the tier. Keep the floor plain \u2014 no glow, statMul 1, no sting \u2014 or \u201cthis card is ordinary\u201d gets announced three times a level with the same emphasis as a top-tier drop.',
+    addRows: true,
   },
   {
     file: 'path/src/enemies.csv',
@@ -579,6 +656,28 @@ function columnSpec(file, name, rows) {
     };
   }
 
+  if (file === 'path/src/statText.csv') {
+    if (name === 'kind') {
+      return { ...base, type: 'enum', options: STAT_KINDS, labels: {
+        percent: 'percent  (a multiplier, shown as +N%)',
+        flat:    'flat  (the number as-is, \u201c+30 max HP\u201d)',
+        count:   'count  (a whole number of things, pluralised)',
+        level:   'level  (an ability; the first stack names it)',
+      } };
+    }
+    // Three yes/no columns where blank means NO, which is the opposite of the
+    // `enabled` convention everywhere else in this editor — so they get their
+    // own control with the blank spelled out rather than the shared one.
+    if (['lower', 'bare', 'percentOfOne'].includes(name)) {
+      return { ...base, type: 'enum', options: ['', 'TRUE'], labels: { '': '\u2014  (no)', TRUE: 'yes' } };
+    }
+    if (name === 'group') return { ...base, type: 'combo', options: [...new Set(rows.map((r) => r.group).filter(Boolean))] };
+    // Wide, and templated so the {n}/{label} insert menu and the live preview
+    // both work — this is the column where a phrase is actually written.
+    if (name === 'template') return { ...base, type: 'text', wide: true, templated: true };
+    if (['label', 'plural', 'unlock'].includes(name)) return { ...base, type: 'text', wide: true };
+  }
+
   if (file === 'path/src/assets.csv') {
     if (name === 'size') return { ...base, type: 'number', min: 0.001, required: true };
     return { ...base, type: 'text' };
@@ -654,7 +753,10 @@ function columnSpec(file, name, rows) {
   // leaves a line that reads perfectly in the file and can never fire.
   // The hello at the top of a run tags the same way, about the run BEFORE this
   // one — same closed list, same reason.
-  if ((file === 'path/src/quips.csv' || file === 'path/src/greetings.csv') && name === 'causes') {
+  // The stone's lead tags the same closed list, in a column named `cause`
+  // rather than `causes` \u2014 one row, one or more ids, same parser.
+  if (((file === 'path/src/quips.csv' || file === 'path/src/greetings.csv') && name === 'causes')
+      || (file === 'path/src/epitaphs.csv' && name === 'cause')) {
     return {
       ...base,
       type: 'multi',
@@ -726,6 +828,14 @@ function columnSpec(file, name, rows) {
   }
   if (name === 'enabled') return { ...base, type: 'enum', options: ['', 'TRUE', 'FALSE'], labels: { '': '—  (enabled)' } };
   if (name === 'weight') return { ...base, type: 'number', min: 0 };
+  // The two ends of a rarity's ramp are weights like any other, and the tip
+  // jar's price and order are the same kind of number \u2014 named here rather
+  // than per-file because none of them can sensibly be negative and a price
+  // in cents is not a thing this panel can quote.
+  if (name === 'weightEarly' || name === 'weightLate') return { ...base, type: 'number', min: 0 };
+  if (name === 'glow' || name === 'statMul') return { ...base, type: 'number', min: 0 };
+  if (file === 'path/src/tips.csv' && name === 'price') return { ...base, type: 'number', min: 1, integer: true };
+  if (file === 'path/src/tips.csv' && name === 'order') return { ...base, type: 'number', min: 0 };
   // The boss tables' own numbers. Listed by name rather than by file because
   // they mean the same thing in both, and every one of them is a quantity that
   // cannot sensibly be negative.

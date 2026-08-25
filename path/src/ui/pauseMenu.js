@@ -118,6 +118,17 @@ const STYLES = `
      otherwise "the cursor is here" and "this tab is showing" look identical. */
   .sv-pm-tabs.sv-pm-sel .sv-pm-on { box-shadow: 0 0 0 2px #7ad7ff; }
 
+  /* FIVE TABS ON A PHONE. Measured on a device rather than estimated: at 393px
+     the strip still folded CONTROLS onto a second row even after the Perf
+     rename, because the tuned pixel face is wider per glyph than it reads. The
+     letter-spacing is the cheapest thing to give back — it is 0.06em of pure
+     tracking on an all-caps label — followed by the side padding, which the
+     44px min-height rule does not depend on. */
+  @media (max-width: 430px) {
+    .sv-pm-tab { font-size: 11px; letter-spacing: 0.02em; padding: 8px 2px; min-width: 44px; }
+    .sv-pm-tabs { gap: 4px; }
+  }
+
   /* Fixed height so the panel never resizes between tabs. Overflow scrolls
      rather than clipping — a long Controls tab on a short window has to stay
      reachable, and the pad cursor scrolls it into view (see selectRow). */

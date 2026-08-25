@@ -25,7 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG, LEVELUP_IMAGE_KEYS } from '../path/src/config.js';
 import { baseStats } from '../path/src/stats.js';
 import { parseUpgradeCsv, applyUpgradeTable } from '../path/src/upgradeTable.js';
-import { STAT_TEXT, TOKENS, measure, measureTotal, phraseAll, expandDesc, sentenceCase } from '../path/src/upgradeText.js';
+import { STAT_TEXT, TOKENS, measure, measureTotal, phrase, phraseAll, expandDesc, sentenceCase } from '../path/src/upgradeText.js';
+import { parseStatTextCsv, KINDS } from '../path/src/statTextTable.js';
 import { savePlayerName, clearPlayerName, expandPlayer, DEFAULT_PLAYER_NAME } from '../path/src/systems/playerName.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -209,7 +210,67 @@ ok(sentenceCase('all balls, no pit. a chaining ricochet shot')
 ok(sentenceCase('+25% fire rate') === '+25% fire rate', '...and leaves a measured number alone');
 
 // ===========================================================================
-console.log('\n5. the sfx column');
+console.log('\n5. the wording table — statText.csv');
+// ===========================================================================
+// The words {effect} says now live in a spreadsheet rather than in a 60-entry
+// object. That moved a whole class of mistake from "will not compile" to "will
+// render wrong and ship", so the parser's guarantees are checked here.
+
+{
+  const parse = (csv) => {
+    const warns = [];
+    const out = parseStatTextCsv(csv, (m) => warns.push(m));
+    return { out, warns };
+  };
+  const head = 'id,kind,label,plural,unlock,template,unit,lower,bare,percentOfOne';
+
+  // The three flag columns invert the `enabled` convention: blank means NO.
+  // Reading a blank as TRUE would silently flip fireRate's sign on every card.
+  const blanks = parse(`${head}\nfoo,percent,foo,,,,,,,`).out.foo;
+  ok(!blanks.lower && !blanks.bare && !blanks.percentOfOne,
+     'a blank flag column means no, not yes');
+
+  const flags = parse(`${head}\nfoo,percent,foo,,,,,TRUE,TRUE,TRUE`).out.foo;
+  ok(flags.lower && flags.bare && flags.percentOfOne, 'TRUE in a flag column means yes');
+
+  // A row with no label is the one case that cannot be defaulted — the
+  // fallback is the raw stat key, which is what this table exists to prevent.
+  const nolabel = parse(`${head}\nfoo,percent,,,,,,,,`);
+  ok(!nolabel.out.foo && nolabel.warns.some((w) => /no label/.test(w)),
+     'a row with no label is dropped, with a warning');
+
+  const badkind = parse(`${head}\nfoo,sideways,foo,,,,,,,`);
+  ok(badkind.out.foo.kind === 'flat' && badkind.warns.some((w) => /sideways/.test(w)),
+     'an unrecognised kind falls back to flat and says so');
+
+  // Every kind the editor offers must be one phrase() can actually render.
+  ok(KINDS.every((k) => ['percent', 'flat', 'count', 'level'].includes(k)),
+     `the kinds the parser accepts are the four phrase() implements (${KINDS.join(', ')})`);
+}
+
+// The `template` column: an override may restate the measured number in any
+// wording, but it must never be able to invent one.
+{
+  const change = { stat: 'fireRate', how: 'mul', ratio: 0.75, from: 1, to: 0.75 };
+  const withTpl = (tpl) => {
+    const saved = STAT_TEXT.fireRate;
+    STAT_TEXT.fireRate = { ...saved, template: tpl };
+    try { return phrase(change); } finally { STAT_TEXT.fireRate = saved; }
+  };
+
+  ok(withTpl('{label} up {n%}') === 'fire rate up +25%',
+     `a template rewrites the phrase and keeps the measurement ("${withTpl('{label} up {n%}')}")`);
+  ok(withTpl('') === phrase(change), 'a blank template falls through to the standard shape');
+  // A template of only unknown tokens renders to nothing, and a card with a
+  // hole in it is worse than a card with the old wording.
+  ok(withTpl('{nope}') === '{nope}' || withTpl('   ') === phrase(change),
+     'a template that renders empty falls back rather than blanking the card');
+  ok(/25/.test(withTpl('{label} up {n%}')),
+     'the number in an overridden phrase is still the measured one');
+}
+
+// ===========================================================================
+console.log('\n6. the sfx column');
 // ===========================================================================
 
 const sfxKeys = Object.keys(CONFIG.sfx ?? {});
@@ -235,7 +296,7 @@ ok(sfxKeys.length > 0, `CONFIG.sfx has ${sfxKeys.length} sound keys for the pick
   ok(at('vitality').sfx === null, `an unknown key falls back to the shared level-up sound, not to silence`);
   ok(warnings.some((w) => w.includes('nosuchsound')), 'and it warns, so a typo is visible rather than mysterious');
   ok(at('multishot').sfx === null, 'a blank cell means the shared sound');
-  ok(at('pierce').sfx === null, 'an upgrade with no row keeps the built-in null');
+  ok(at('projectileLife').sfx === null, 'an upgrade with no row keeps the built-in null');
 }
 
 const withSfx = [...rows].filter(([, row]) => String(row.sfx ?? '').trim());

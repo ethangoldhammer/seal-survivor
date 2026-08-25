@@ -56,11 +56,15 @@ import { meterNoiseFrame } from './meterNoise.js';
 // ---------------------------------------------------------------------------
 // AND THEN THE FUEL MOVED OUT, which is what the rest of this instrument is.
 //
-// settings.hud.boostMeter ships as 'bar': the pips are a column beside the air
-// gauge (ui/ui.js) and the wheel here is silent. That left the circle at r = 1
-// EMPTY — so the lead-in's traveller was closing on an invisible finish line,
-// the tolerance band floated in open water, and after the button came up the
-// instrument said nothing at all about what had just happened.
+// settings.hud.boostMeter 'bar' hands the pips to a column beside the air
+// gauge (ui/ui.js) and the wheel here goes silent. That left the circle at
+// r = 1 EMPTY — so the lead-in's traveller was closing on an invisible finish
+// line, the tolerance band floated in open water, and after the button came up
+// the instrument said nothing at all about what had just happened. The shipped
+// default is 'both' now, which draws the fuel here AND in the column, but the
+// timing instrument below stands on its own either way: it has to survive the
+// setting that empties this circle, and that is what the rest of this file
+// is.
 //
 // So the ring that is left is the TIMING instrument, and it has three states:
 //
@@ -1472,7 +1476,9 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
   // frame. `false` keeps the CHARGE half — the drop of goo, its perfect pop,
   // the release tearing it apart, the lead-in and its tolerance band — and
   // silences the FUEL half, which ui/ui.js is drawing as a column beside the
-  // air gauge instead. See the note on boostMeter in systems/settings.js.
+  // air gauge instead. Tested against the value the wheel is NOT drawn in, so
+  // 'both' — the wheel AND the column — needs no branch of its own here. See
+  // the note on boostMeter in systems/settings.js.
   const fuelHere = boostMeter() !== 'bar';
 
   // SCALE and OFFSET are the two dials that move the instrument without

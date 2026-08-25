@@ -178,12 +178,16 @@ export function pickDevice(devices, wanted) {
 // xcodebuild prints thousands of lines and a clean build is minutes of
 // silence, so the output goes to a log and only the tail of a FAILING step is
 // shown. The dots are there to prove the thing is alive.
-async function step(label, cmd, args) {
+async function step(label, cmd, args, env = null) {
   process.stdout.write(`  ${label.padEnd(28)}`);
   const started = Date.now();
   const log = createWriteStream(LOG, { flags: 'a' });
   log.write(`\n$ ${cmd} ${args.join(' ')}\n`);
-  const child = spawn(cmd, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(cmd, args, {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+  });
   let tail = '';
   const keep = (buf) => { log.write(buf); tail = (tail + buf).slice(-20000); };
   child.stdout.on('data', keep);
@@ -272,8 +276,19 @@ export async function shipPhone(opts = {}) {
   // on the phone and every log line here would still say it worked.
   await rm(appPath(config), { recursive: true, force: true });
 
-  if (!skipBuild) await step('web build', 'npm', ['run', '--silent', 'build']);
-  else {
+  // SEAL_BUILD is what makes the number on the splash screen (ui/buildStamp.js)
+  // the same number as CFBundleVersion. Without it vite derives its own from
+  // the commit count, which agrees on almost every build and disagrees on
+  // exactly the ones worth telling apart.
+  //
+  // A --build override therefore forces a web rebuild even under --skip-build:
+  // the dist/ on disk was stamped with the commit count, and reusing it would
+  // put one number in Settings and a different one on the screen.
+  const reusable = skipBuild && !buildOverride;
+  if (!reusable) {
+    if (skipBuild) say(`  ${c.dim}--build was given, so the web build is redone to carry that number${c.off}`);
+    await step('web build', 'npm', ['run', '--silent', 'build'], { SEAL_BUILD: build });
+  } else {
     try { await access(join(ROOT, 'dist/index.html')); }
     catch { throw new ShipIosError('--skip-build, but dist/ has no index.html', 'Run npm run build first.'); }
     say(`  ${'web build'.padEnd(28)}${c.dim}reusing dist/${c.off}`);
