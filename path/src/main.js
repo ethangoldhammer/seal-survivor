@@ -153,7 +153,8 @@ import { initWorkbench, updateWorkbench } from './ui/workbench.js';
 import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
-import { starfishLevelStats } from './levelStats.js';
+import { starfishLevelStats, multishotLevelStats, missileLevelStats,
+         scallopLevelStats, bounceLevelStats } from './levelStats.js';
 import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
 import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
@@ -3585,6 +3586,12 @@ function fire() {
   // un-upgraded bullet is byte-for-byte the projectile it always was.
   const seek = homingShotOpts(s.homingShotLevel);
 
+  // WHAT A PELLET IS WORTH AT THIS MANY STACKS OF MULTISHOT. `multishotLevel`
+  // and not `multishot`: levelling hands out pellets on its own cadence, and
+  // the card's curve is only for the pellets the card bought. Read once per
+  // volley — every pellet in it is the same gun.
+  const pellet = multishotLevelStats(s.multishotLevel, s);
+
   for (let o = 0; o < origins; o++) {
     for (let i = 0; i < perOrigin; i++) {
       const offset = (i - (perOrigin - 1) / 2) * fan;
@@ -3597,10 +3604,10 @@ function fire() {
         // Air time rides the damage the same way it rides the cadence above.
         // A seal shooting on the way down is a gun platform, and this is what
         // makes that read as a decision rather than as a detour.
-        damage: s.damage * airDamageMul(),
+        damage: pellet.multishotDamage * airDamageMul(),
         speed: s.speed,
         life: s.life,
-        radius: s.radius,
+        radius: pellet.multishotSize,
         pierce: s.pierce,
         asset: 'bullet',
         source: 'gun',
@@ -3666,6 +3673,10 @@ function fireMissiles() {
   const rig = player.aimRig;
 
   const shells = projectileCount(s.missileCount, s);
+  // WHAT A MUSSEL IS WORTH AT THIS STACK. Read once for the volley — every
+  // shell in it is the same weapon, and `missileCount` is the stack number
+  // because nothing but this card's apply() writes to it.
+  const shell = missileLevelStats(s.missileCount, s);
   for (let i = 0; i < shells; i++) {
     // Fan them out at launch so a volley doesn't look like one fat missile,
     // PLUS per-missile random jitter on top so repeated volleys don't all
@@ -3703,10 +3714,12 @@ function fireMissiles() {
       origin,
       dir: launchDir,
       faction: 'player',
-      damage: abilityDamage(CONFIG.missile.damage),
+      // Both from levelStats, which already spends abilityDamageMul — so the
+      // shell the tip describes and the shell in the water are one number.
+      damage: shell.missileDamage,
       speed: CONFIG.missile.speed * speedJitter,
       life: CONFIG.missile.life,
-      radius: CONFIG.missile.radius,
+      radius: shell.missileSize,
       pierce: 0,
       asset: 'missile',
       source: 'missile',
@@ -3826,6 +3839,10 @@ function fireScallops() {
   const rig = player.aimRig;
 
   const shells = projectileCount(s.scallopCount, s);
+  // As with the mussel above: `scallopCount` is written only by this card's
+  // apply(), so it IS the stack number, and Clone Warz's extra shells ride the
+  // same per-stack damage as the ones the card bought.
+  const shot = scallopLevelStats(s.scallopCount, s);
   for (let i = 0; i < shells; i++) {
     const origin = emitPoint(rig, CONFIG.emitPoints.scallop, i, dir, player.mesh.position, muzzlePoint);
     // A full random heading rather than a cone around the aim. The card
@@ -3839,10 +3856,10 @@ function fireScallops() {
       origin,
       dir: launchDir,
       faction: 'player',
-      damage: abilityDamage(c.damage),
+      damage: shot.scallopDamage,
       speed: c.speed,
       life: c.life,
-      radius: c.radius,
+      radius: shot.scallopSize,
       asset: 'scallopShell',
       source: 'scallop',
       spin: c.spin,
@@ -3967,15 +3984,20 @@ function fireRazorClams() {
 function fireBounce() {
   const s = player.stats;
   bounceCooldown = s.bounceFireRate;
+  // The two numbers this card's apply() can't reach. The fire rate, lifespan
+  // and bounce budget are on the stat block already; damage and size are
+  // derived from the stack, so they come from levelStats like every other
+  // levelled ability. See bounceLevelStats for why they are not on the block.
+  const shot = bounceLevelStats(s.bounceLevel, s);
   const dir = input.aim.clone().normalize();
   spawnProjectile(world.scene, {
     origin: emitPoint(player.aimRig, CONFIG.emitPoints.bounce, 0, dir, player.mesh.position, muzzlePoint),
     dir,
     faction: 'player',
-    damage: abilityDamage(CONFIG.bounce.damage),
+    damage: shot.bounceDamage,
     speed: CONFIG.bounce.speed,
     life: s.bounceLife,
-    radius: CONFIG.bounce.radius,
+    radius: shot.bounceSize,
     pierce: 0,
     asset: 'bounceShot',
     source: 'ricochet',
@@ -5637,7 +5659,8 @@ function animate(now) {
     // circles you, so Clone Warz and Entourage both have a claim on it. The
     // gate inside each is what keeps a run that took neither at its own count.
     updateShrimpRing(dt, world.scene, player.mesh.position,
-      orbiterCount(projectileCount(player.stats.shrimpCount, player.stats), player.stats), enemies, {
+      orbiterCount(projectileCount(player.stats.shrimpCount, player.stats), player.stats),
+      player.stats.shrimpLevel, player.stats, enemies, {
       onEnemyDamaged: damageFrom('shrimp'),
       onEnemyKilled: onEnemyKilledFeedback,
       onContact: (x, y) => feedback('shrimpHit', { x, y }),

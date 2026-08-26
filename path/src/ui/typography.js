@@ -120,17 +120,19 @@ const loadedFonts = new Set();
 export function ensureFontLoaded(stack) {
   if (!stack || stack === FONT_GLOBAL || loadedFonts.has(stack)) return;
   loadedFonts.add(stack);
-  const font = fontForStack(stack);
-  if (!font?.google) return; // a system stack, or something hand-typed
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = `https://fonts.googleapis.com/css2?family=${font.google}&display=swap`;
-  // A font that can't be fetched (offline, blocked) falls back through the rest
-  // of its own stack, which is why every entry in fonts.js ends in a real one.
-  link.addEventListener('error', () => {
-    console.warn(`[typography] couldn't load ${font.label} — falling back through its stack`);
-  });
-  document.head.appendChild(link);
+  // NOTHING TO FETCH ANY MORE — and the function is kept anyway.
+  //
+  // Every family on the shelf is vendored into public/fonts and declared in
+  // fonts.css, which index.html links. The browser already does the lazy part
+  // this function used to do by hand: an @font-face is only downloaded when
+  // something on the page is actually laid out in it, so picking one family off
+  // a shelf of thirteen still costs one file.
+  //
+  // KEPT RATHER THAN DELETED because it is not only the tuner that calls it —
+  // systems/epitaph.js asks for a family per grave. Leaving the call sites
+  // alone means the shelf can go back to being fetched (a family too big to
+  // vendor, say) without hunting for where the loading used to happen. The
+  // `loadedFonts` set above still does its job of making this idempotent.
 }
 
 // --- colour ----------------------------------------------------------------

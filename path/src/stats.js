@@ -33,6 +33,11 @@ export function baseStats() {
     life: CONFIG.weapon.life,
     radius: CONFIG.weapon.radius,
     multishot: CONFIG.weapon.multishot,
+    // HOW MANY STACKS OF MULTISHOT, which is NOT `multishot`. Levelling adds
+    // pellets on its own cadence (see applyLevelGrowth), so the pellet count is
+    // the card's stacks plus the ladder's — and the card's per-stack curve must
+    // not be paid out for pellets the card did not buy.
+    multishotLevel: 0,
     spread: CONFIG.weapon.spread,
     pierce: CONFIG.weapon.pierce,
     recoil: CONFIG.weapon.recoil,
@@ -153,6 +158,13 @@ export function baseStats() {
     breachChainLevel: 0,
     garlicLevel: 0,
     shrimpCount: 0,
+    // HOW MANY STACKS OF SHRIMP RING, which is NOT `shrimpCount`. The first
+    // pick jumps the count straight to `baseCount` and later ones add one, so
+    // the count is 3, 4, 5... for stacks 1, 2, 3 — and Clone Warz and Entourage
+    // both add to it besides. A per-stack curve needs the stack number, so it
+    // is counted here rather than reconstructed from a count that three other
+    // things write to.
+    shrimpLevel: 0,
     bounceLevel: 0,
     bounceFireRate: CONFIG.bounce.fireRate,
     bounceLife: CONFIG.bounce.life,
@@ -223,7 +235,7 @@ export function baseStats() {
 // exactly one of them may take a fraction.
 // ============================================================================
 export const INTEGER_STATS = new Set([
-  'multishot', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount',
+  'multishot', 'multishotLevel', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount', 'shrimpLevel',
   'scallopCount', 'bounceMaxBounces', 'projectileBonus', 'orbiterBonus',
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
   'maneaterLevel', 'ironLungLevel', 'homingShotLevel',

@@ -42,6 +42,7 @@ import { tipJarLink, tipSheetOpen, closeTipSheet } from './tipJar.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
+import { desktopSaveAvailable } from '../systems/desktopSave.js';
 import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { TYPOGRAPHY_EVENT } from './typography.js';
@@ -159,7 +160,15 @@ let pendingRun = null;
 let gameOverToken = 0;
 
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  /* INTER IS NOT IMPORTED HERE ANY MORE. It used to be an @import of the Google
+     Fonts CSS on this line, which meant the UI's default family arrived over
+     the network on every boot — and offline it simply did not, falling through
+     to system-ui with every px size in this file still tuned to Inter's
+     metrics. The whole shelf is vendored into public/fonts now (npm run fonts)
+     and linked from index.html, so the family is on disk and the desktop build
+     works with no network at all.
+     NOTE no backticks in this comment: STYLES is a template literal, so one
+     would end the string here and the parse error would point at a comment. */
   /* THE FONT IS NOT SET HERE. It used to be — 'Inter' on this very selector —
      and because a rule that matches an element directly beats anything it
      would have inherited, that one declaration overrode the family the tuner
@@ -284,14 +293,22 @@ const STYLES = `
     /* Every render is lit by the same neutral studio, so the only separation
        between a white beluga and the water behind it is this. */
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.75)); }
-  .sv-hive-mono { position: relative; font: 700 15px/1 system-ui, sans-serif;
+  /* THE TWO TYPED PARTS OF A TILE FOLLOW ITS SIZE. Everything else in a
+     hexagon is drawn and scales with the box; a font does not, so a corner
+     scaled down for a phone (see hiveScale) would keep 15px glyphs on a 31px
+     hexagon — the fallback face becomes the whole tile and the pip stops being
+     a badge and starts being a label. --sv-hive-scale is stamped on the host by
+     layoutHive; the fallback of 1 is what every snapshot and every full-size
+     corner resolves to, so nothing moves where the hive was already at size. */
+  .sv-hive-mono { position: relative;
+    font: 700 calc(15px * var(--sv-hive-scale, 1))/1 system-ui, sans-serif;
     color: rgba(255,255,255,0.92); letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
   /* Inside the hexagon, not the box. The box's bottom-right corner is empty
      space the clip throws away, so a badge placed there is simply not drawn —
      this sits above the flat bottom edge, where the shape is solid. */
   .sv-hive-pip { position: absolute; right: 26%; bottom: 14%;
-    font: 700 11px/1 ui-monospace, monospace; color: #fff;
+    font: 700 calc(11px * var(--sv-hive-scale, 1))/1 ui-monospace, monospace; color: #fff;
     text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 4px rgba(0,0,0,0.8); }
 
   /* --- THE PILE UNDER A STACKED TILE --------------------------------------
@@ -6524,6 +6541,10 @@ function wireShotView() {
   const told = (how) => say({
     shared: 'Shared',
     saved: 'Saved to your downloads',
+    // The desktop shell saves through a real dialog, so the file went
+    // exactly where the player put it — "your downloads" would be a
+    // guess, and usually a wrong one. See handOver in systems/bossShot.js.
+    savedAs: '[DRAFT] Saved',
     opened: 'Opened — press and hold the picture to save it',
     cancelled: '',
     unavailable: 'Nothing to share',
@@ -6602,6 +6623,10 @@ function wireTrophy() {
   const told = (how) => say({
     shared: 'Shared',
     saved: 'Saved to your downloads',
+    // The desktop shell saves through a real dialog, so the file went
+    // exactly where the player put it — "your downloads" would be a
+    // guess, and usually a wrong one. See handOver in systems/bossShot.js.
+    savedAs: '[DRAFT] Saved',
     // On a phone this is the picture opening full screen, where saving it is a
     // long press. Worth saying, because it is a different gesture from the one
     // the button implied.
@@ -6620,6 +6645,25 @@ function wireTrophy() {
   // Removed rather than hidden with a class, so nothing — the pad's menu
   // navigation especially, which walks this row by name — can land on a control
   // that isn't there. Desktop is untouched and keeps all four.
+  // AND WHERE THE OS HAS NO SHARE SHEET AT ALL, the share buttons go instead —
+  // the mirror image of the branch below, and for the same reason.
+  //
+  // Electron has no Web Share API: navigator.share and navigator.canShare are
+  // both undefined there, measured by npm run desktop:test:shell rather than
+  // assumed. So a Share button on the desktop build falls all the way through
+  // handOver to download() and quietly writes a file, under a label that
+  // promised a sheet. Removing it leaves the two Save buttons, which on desktop
+  // open a real save dialog (systems/desktopSave.js).
+  //
+  // Removed rather than hidden, same as below: the pad's menu navigation walks
+  // this row by name and must not land on a control that isn't there.
+  if (!canShareImages() && desktopSaveAvailable()) {
+    el.svTrophyShare?.remove();
+    el.svSheetShare?.remove();
+    el.svTrophyShare = null;
+    el.svSheetShare = null;
+  }
+
   if (canShareImages()) {
     el.svTrophySave?.remove();
     el.svSheetSave?.remove();

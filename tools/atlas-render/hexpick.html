@@ -47,7 +47,11 @@
     clip-path: polygon(25% 2%, 75% 2%, 100% 50%, 75% 98%, 25% 98%, 0 50%);
     background: rgba(111,211,255,0.10); border: 0; }
   .slot.sel .ph { background: rgba(255,176,32,0.35); }
-  .slot img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  /* The box IS the file, scaled — so the image fills it exactly and
+     object-fit has nothing to correct. `contain` here would letterbox
+     a square inside a square, i.e. do nothing, but saying `fill` makes
+     the intent plain: the placement already did the fitting. */
+  .slot img { width: 100%; height: 100%; display: block; object-fit: fill; }
   .slot .x { position: absolute; top: -2px; right: -2px; background: #5c1f1f; color: #ffd9d9;
     border: 0; border-radius: 50%; width: 16px; height: 16px; font: 10px monospace;
     cursor: pointer; display: none; }
@@ -85,7 +89,72 @@ const $ = (id) => document.getElementById(id);
 // Flat-top hexagons pack at 3/4 width across and a full height down, with odd
 // columns dropped half a height. Same geometry the hive uses; see the note at
 // the top of this file.
-const XSTEP = 0.75, YSTEP = 1.0, YOFF = 0.5;
+//
+// THE LATTICE IS THE VISIBLE HEXAGON, NEVER THE IMAGE BOX — this is the whole
+// reason the cluster had gaps in it. Every one of these files is a 512-square
+// with a hexagon somewhere inside it, and they are NOT framed alike: most sit
+// at 5.66%-94.14% across, and AnglerFish.webp is a full-bleed crop at
+// 0%-100%. Step by the box and you are stepping by a margin that differs per
+// picture, so the hexes cannot meet however carefully the maths is done.
+//
+// So each image is MEASURED — the bounding box of its opaque pixels, which for
+// this art is exactly the hexagon — and then scaled and offset so that its
+// hexagon, not its file, lands on the lattice.
+const XSTEP = 0.75;      // of the visible hexagon's WIDTH
+const RATIO = 0.866;     // a regular flat-top hexagon's height / width
+// A hair under the true step, so neighbours overlap by a fraction of a pixel
+// rather than meeting exactly. Meeting exactly is a hairline of background at
+// most zoom levels; the corners are transparent, so the overlap costs nothing.
+const SNUG = 0.997;
+
+// filename -> {l, t, w, h} as fractions of the square, measured once.
+const bounds = new Map();
+
+async function measure(name) {
+  if (bounds.has(name)) return bounds.get(name);
+  const img = new Image();
+  img.src = '/hexart/' + name;
+  await img.decode();
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(img, 0, 0);
+  const d = cx.getImageData(0, 0, c.width, c.height).data;
+  let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+  for (let py = 0; py < c.height; py++) {
+    for (let px = 0; px < c.width; px++) {
+      // 16 rather than 0: these are drawn edges with a little antialiasing on
+      // them, and counting a 1-alpha pixel as hexagon puts the bound a pixel
+      // or two wide on every side.
+      if (d[(py * c.width + px) * 4 + 3] < 16) continue;
+      if (px < x0) x0 = px; if (px > x1) x1 = px;
+      if (py < y0) y0 = py; if (py > y1) y1 = py;
+    }
+  }
+  const b = x1 < 0
+    ? { l: 0, t: 0, w: 1, h: 1 }
+    : { l: x0 / c.width, t: y0 / c.height, w: (x1 + 1 - x0) / c.width, h: (y1 + 1 - y0) / c.height };
+  bounds.set(name, b);
+  return b;
+}
+
+/**
+ * Where an image goes so its HEXAGON sits centred on the lattice cell.
+ *
+ * `size` is the visible hexagon's width, so the same number means the same
+ * picture size whatever margin the file happens to carry.
+ */
+function placement(b, col, row, size) {
+  const H = size * RATIO;
+  const cx = col * XSTEP * size * SNUG + size / 2;
+  const cy = row * H * SNUG + (col % 2 ? H / 2 : 0) + H / 2;
+  const box = size / b.w;                       // scale the file so its hex is `size` wide
+  return {
+    left: cx - box * (b.l + b.w / 2),
+    top: cy - box * (b.t + b.h / 2),
+    box,
+  };
+}
 
 let state = { cols: 3, rows: 3, size: 74, slots: {} }; // slots keyed "c,r" -> filename
 let art = [];
@@ -95,20 +164,29 @@ function status(m, err) { $('status').textContent = m; $('status').className = e
 
 function slotKey(c, r) { return `${c},${r}`; }
 
-function drawStage() {
+async function drawStage() {
   const s = $('stage');
   s.innerHTML = '';
-  const w = state.size, h = state.size * 0.88;
-  s.style.width = `${(state.cols - 1) * w * XSTEP + w}px`;
-  s.style.height = `${state.rows * h * YSTEP + h * YOFF}px`;
+  const size = state.size, H = size * RATIO;
+  s.style.width = `${(state.cols - 1) * XSTEP * size * SNUG + size}px`;
+  s.style.height = `${state.rows * H * SNUG + H / 2}px`;
+
+  // Every picture in play, measured before anything is drawn — a slot placed
+  // from a bounds entry that has not arrived yet would land at the file's
+  // margin and jump when it did.
+  await Promise.all([...new Set(Object.values(state.slots))].map(measure));
+
   for (let c = 0; c < state.cols; c++) {
     for (let r = 0; r < state.rows; r++) {
       const key = slotKey(c, r);
+      const file = state.slots[key];
       const el = document.createElement('div');
       el.className = 'slot' + (selected === key ? ' sel' : '');
-      el.style.cssText = `left:${c * w * XSTEP}px; top:${r * h * YSTEP + (c % 2 ? h * YOFF : 0)}px; width:${w}px; height:${h}px;`;
-      const file = state.slots[key];
+
       if (file) {
+        // A filled slot is the PICTURE, placed off its own measured hexagon.
+        const p = placement(bounds.get(file), c, r, size);
+        el.style.cssText = `left:${p.left}px; top:${p.top}px; width:${p.box}px; height:${p.box}px;`;
         const img = document.createElement('img');
         img.src = '/hexart/' + file;
         el.appendChild(img);
@@ -117,6 +195,10 @@ function drawStage() {
         x.addEventListener('click', (e) => { e.stopPropagation(); delete state.slots[key]; drawStage(); drawGallery(); });
         el.appendChild(x);
       } else {
+        // An empty slot has no picture to measure, so it draws the lattice
+        // cell itself — the hexagon a picture dropped here would fill.
+        const cx = c * XSTEP * size * SNUG, cy = r * H * SNUG + (c % 2 ? H / 2 : 0);
+        el.style.cssText = `left:${cx}px; top:${cy}px; width:${size}px; height:${H}px;`;
         const ph = document.createElement('div');
         ph.className = 'ph';
         el.appendChild(ph);
@@ -163,9 +245,23 @@ $('bSave').addEventListener('click', async () => {
   // sparse grid object: whatever consumes this has to lay the cluster out, and
   // a list it can iterate beats a map it has to walk twice.
   const picks = Object.entries(state.slots)
-    .map(([k, file]) => { const [c, r] = k.split(',').map(Number); return { col: c, row: r, file }; })
+    .map(([k, file]) => {
+      const [c, r] = k.split(',').map(Number);
+      // THE MEASUREMENT TRAVELS WITH THE PICK. Whatever lays this cluster out
+      // downstream needs the hexagon's box, and it may have no way to measure
+      // one — an image decoder and a canvas is a lot to ask of a build step
+      // when the answer is four numbers that were worked out here.
+      const b = bounds.get(file) ?? { l: 0, t: 0, w: 1, h: 1 };
+      return { col: c, row: r, file, hex: { l: +b.l.toFixed(5), t: +b.t.toFixed(5), w: +b.w.toFixed(5), h: +b.h.toFixed(5) } };
+    })
     .sort((a, b) => a.col - b.col || a.row - b.row);
-  const body = JSON.stringify({ cols: state.cols, rows: state.rows, size: state.size, picks }, null, 2);
+  const body = JSON.stringify({
+    cols: state.cols, rows: state.rows, size: state.size,
+    // The lattice constants, so the consumer is not re-deriving them from a
+    // comment in a different file.
+    lattice: { xstep: XSTEP, ratio: RATIO, snug: SNUG },
+    picks,
+  }, null, 2);
   try {
     const res = await fetch('/spec/hex-pick.json', { method: 'POST', body });
     if (!res.ok) throw new Error(await res.text());

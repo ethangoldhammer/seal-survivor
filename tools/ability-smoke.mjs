@@ -41,6 +41,7 @@ import { eelCfg } from '../path/src/systems/eel.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, trapSeconds } from '../path/src/systems/beluga.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls, seagullCount, kickGull } from '../path/src/systems/seagull.js';
 import { updateShrimpRing, createShrimpRingVisual, resetShrimpRing } from '../path/src/systems/shrimpRing.js';
+import { shrimpRingLevelStats } from '../path/src/levelStats.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from '../path/src/systems/garlic.js';
 import { stoke, cool, glowLevel, damageGlowCfg, attachDamageGlow } from '../path/src/systems/damageGlow.js';
 import { weatherState } from '../path/src/systems/weather.js';
@@ -1846,7 +1847,10 @@ check('a bigger catch runs hotter than a single body',
   let coldest = Infinity;
   const ringFrames = Math.ceil((Math.PI * 2 / CONFIG.shrimpRing.orbitSpeed) / dt);
   for (let i = 0; i < ringFrames; i++) {
-    updateShrimpRing(dt, scene, ringPlayer, 4, enemies, { onContact: () => { ringHits++; } });
+    // 4 shrimp is the SECOND stack — the first pick opens a ring of 3. The
+    // level is its own argument now because the count is written by Clone
+    // Warz and Entourage too; see shrimpRingLevelStats.
+    updateShrimpRing(dt, scene, ringPlayer, 4, 2, {}, enemies, { onContact: () => { ringHits++; } });
     if (ringHits > 0) {
       const scales = shrimpGroup.children.map((m) => m.scale.x);
       hottest = Math.max(hottest, Math.max(...scales));
@@ -1860,9 +1864,16 @@ check('a bigger catch runs hotter than a single body',
   check('the shrimp that bit is not the same size as the ones that did not',
     hottest > coldest * 1.02,
     `${coldest.toFixed(3)} - ${hottest.toFixed(3)}`);
+  // THE RESTING SIZE IS THE LEVEL'S, not CONFIG's. A stack buys a slightly
+  // bigger shrimp (shrimpRingLevelStats), so a cap measured off the base scale
+  // is a cap on stack one — and this ring is at stack two. Read from the same
+  // function the system scales the mesh with, or this assertion drifts the next
+  // time sizePerLevel is touched and blames the hit-pop for it.
+  const restScale = shrimpRingLevelStats(2, {}).shrimpSize;
+  const popCap = restScale * (1 + CONFIG.shrimpRing.hitPop);
   check('...and no shrimp is left inflated',
-    hottest <= CONFIG.shrimpRing.scale * (1 + CONFIG.shrimpRing.hitPop) + 1e-6,
-    `${hottest.toFixed(3)} against a cap of ${(CONFIG.shrimpRing.scale * (1 + CONFIG.shrimpRing.hitPop)).toFixed(3)}`);
+    hottest <= popCap + 1e-6,
+    `${hottest.toFixed(3)} against a cap of ${popCap.toFixed(3)}`);
   resetShrimpRing();
   scene.remove(shrimpGroup);
   enemies.length = 0;

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
-import { abilityDamage } from './scaling.js';
+import { shrimpRingLevelStats } from '../levelStats.js';
 import { hitCreature } from './hitShape.js';
 import { attachDamageGlow, stoke, cool, glowLevel } from './damageGlow.js';
 
@@ -62,13 +62,21 @@ function syncCount(desired) {
 // onContact is per shrimp per enemy, gated by that shrimp's own contact
 // cooldown — a full ring sweeping a school can fire several on one frame,
 // which is what the event's `sfxMinGap` is sized for.
-export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList, hooks) {
+export function updateShrimpRing(dt, scene, playerPos, shrimpCount, shrimpLevel, stats, enemiesList, hooks) {
   if (!group) return;
   syncCount(Math.max(0, Math.floor(shrimpCount)));
   clock += dt;
 
   const radius = CONFIG.shrimpRing.radius;
-  const scale = CONFIG.shrimpRing.scale;
+  // WHAT A SHRIMP IS AT THIS STACK — through levelStats.js, like the garlic
+  // cloud above it, so the size the tip quotes is the size the ring is drawn
+  // at AND the reach it bites with. `reach` below is derived from this exact
+  // number, which is what stops the picture and the hitbox disagreeing.
+  //
+  // The COUNT is a separate argument on purpose: Clone Warz and Entourage both
+  // add shrimp, and neither of them is a stack of this card.
+  const per = shrimpRingLevelStats(shrimpLevel, stats);
+  const scale = per.shrimpSize;
   const speed = CONFIG.shrimpRing.orbitSpeed;
 
   group.position.x = playerPos.x;
@@ -114,7 +122,7 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, enemiesList,
 
       // Read once, so the hit and the number reported to the feedback layer
       // cannot disagree about how hard the shrimp hit.
-      const dmg = abilityDamage(CONFIG.shrimpRing.contactDamage);
+      const dmg = per.shrimpDamage;
       e.hp -= dmg;
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;

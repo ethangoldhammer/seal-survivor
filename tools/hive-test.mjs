@@ -927,6 +927,117 @@ check('a 22-pick cluster stays inside a quarter of a 1280x800 screen',
   w <= 640 && h <= 400, `${w}x${h}`);
 
 // ---------------------------------------------------------------------------
+section('the corner fits the screen it is on');
+// TWO CLAIMS, AND THEY ARE DIFFERENT ONES. `size` in CONFIG is a desktop
+// measurement, so a phone starts at a fraction of it — that is flat, and it is
+// the answer to "these hexagons are too big on a phone". The hive then GROWS
+// all run, so past a fraction of the viewport the whole thing is scaled down to
+// fit — which is the answer to "and it keeps getting bigger".
+//
+// Both are solved in hiveScale from CONFIG and two window properties, so this
+// section drives them by moving the window rather than by reaching into the
+// module: what is being tested is that the corner asks the question at all.
+const asScreen = (w, h) => {
+  Object.defineProperty(dom.window, 'innerWidth', { value: w, configurable: true });
+  Object.defineProperty(dom.window, 'innerHeight', { value: h, configurable: true });
+  // Enough of a media-query engine for the two queries devices.js asks. jsdom's
+  // own matchMedia answers `false` to everything, which would make every screen
+  // below a desktop and quietly pass half of this section for the wrong reason.
+  dom.window.matchMedia = (q) => {
+    const mw = /max-width:\s*(\d+)/.exec(q);
+    const mh = /max-height:\s*(\d+)/.exec(q);
+    let matches = !!(mw || mh);
+    if (mw) matches = matches && w <= Number(mw[1]);
+    if (mh) matches = matches && h <= Number(mh[1]);
+    return { matches, addEventListener() {}, removeEventListener() {} };
+  };
+};
+// The signature guard skips a rebuild when the held set has not moved, and the
+// held set is exactly what does not move between these cases.
+const relayout = (picks) => { hive.setHiveUpgrades([]); hive.setHiveUpgrades(picks); };
+const tileBox = () => px(tiles()[0]?.style.width);
+const hostBox = () => ({ w: px(host().style.width), h: px(host().style.height) });
+const few = many.slice(0, 6);
+
+hive.setHiveLayout('cluster');
+asScreen(1280, 800);
+relayout(few);
+const deskFew = tileBox();
+relayout(many);
+const deskMany = tileBox();
+check('a desktop is left alone — the ceiling is a ceiling, not a target',
+  Math.abs(deskMany - deskFew) < 0.01, `${deskFew} then ${deskMany}`);
+
+asScreen(393, 852);
+relayout(few);
+const phoneFew = tileBox();
+check('a phone starts at 60% of the desktop hexagon',
+  Math.abs(phoneFew / deskFew - 0.6) < 0.02, `${(phoneFew / deskFew).toFixed(3)}x`);
+
+relayout(many);
+const phoneMany = tileBox();
+check('and shrinks further as the run fills the corner', phoneMany < phoneFew - 0.5,
+  `6 picks ${phoneFew.toFixed(1)}px, 22 picks ${phoneMany.toFixed(1)}px`);
+{
+  const b = hostBox();
+  check('a 22-pick build stays inside its allotted corner of a phone',
+    b.w <= 393 * 0.42 && b.h <= 852 * 0.32,
+    `${b.w.toFixed(0)}x${b.h.toFixed(0)} of 393x852`);
+}
+
+// THE PILE SHRINKS WITH THE TILE. Every number in `stack` is px, so a hexagon
+// scaled to 0.6 with a full-height tower under it gives back barely half of the
+// shrink — and the corner reads as a bar chart, which is the exact failure the
+// falloff exists to prevent. This is the one part of the tile that scales in JS
+// rather than as a fraction of the box.
+{
+  const stacked = [...Array(6).fill({ id: 'shrimpRing', rarity: 'epic' }), ...few];
+  // MEASURED AS THE DROP TO THE DEEPEST LAYER, which is the pile's height in
+  // every mode. A `riser` carries it as the body's own height and a `slab`
+  // carries it as an offset, so reading either field alone measures one mode
+  // and quietly returns zero for the other.
+  const pileDepth = () => {
+    const tops = [...document.querySelectorAll('.sv-hive-shim[data-upgrade="shrimpRing"]')]
+      .map((l) => px(l.style.top));
+    return tops.length ? Math.max(...tops) - px(tileFor('shrimpRing')?.style.top) : 0;
+  };
+  asScreen(1280, 800);
+  relayout(stacked);
+  const deskPile = pileDepth();
+  asScreen(393, 852);
+  relayout(stacked);
+  const phonePile = pileDepth();
+  check('a stack\'s tower scales with its hexagon', deskPile > 1
+    && Math.abs(phonePile / deskPile - phoneFew / deskFew) < 0.03,
+    `${deskPile.toFixed(1)}px becomes ${phonePile.toFixed(1)}px`);
+}
+
+// A PHONE ON ITS SIDE IS 852px WIDE, so a rule keyed on width alone calls it a
+// desktop — the live bug this pair of breakpoints exists for. The corner used
+// to shrink when the phone was upright and jump back to full size the moment it
+// was turned over.
+asScreen(852, 393);
+relayout(few);
+check('a phone on its side is still a phone', tileBox() < deskFew * 0.75,
+  `${(tileBox() / deskFew).toFixed(2)}x the desktop hexagon`);
+
+// THE FLOOR. Past a point the honest answer is that the corner is full: a
+// hexagon that always fits whatever you hold is a hexagon nobody can read, so
+// the hive is allowed over its ceiling rather than ground down to grit.
+{
+  const ids = [...many, ...many, ...many].map((p, i) => ({ id: `${p.id}${i}`, rarity: 'common' }));
+  asScreen(320, 480);
+  relayout(ids);
+  const hex = tileBox() * hive.HEX_GEOMETRY.w;
+  check('never smaller than minSize, however long the run',
+    hex >= (CONFIG.upgradeHive.fit?.minSize ?? 18) - 0.01,
+    `${hex.toFixed(1)}px hexagon`);
+}
+
+asScreen(1024, 768);
+hive.setHiveUpgrades([]);
+
+// ---------------------------------------------------------------------------
 section('clears between runs');
 hive.setHiveUpgrades([]);
 check('an empty pick list leaves no tiles', tiles().length === 0);

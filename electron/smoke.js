@@ -57,6 +57,15 @@ app.whenReady().then(() => {
     // '/basis/' — the one asset whose URL is built inside a three.js loader
     // rather than written in our own code.
     { path: pick('basis', '.wasm'), expect: 200, type: 'application/wasm' },
+    // The vendored font shelf. index.html links fonts.css and the browser pulls
+    // the woff2 from it, so both have to serve — and the CONTENT TYPE on the
+    // css matters more than it looks: a stylesheet served as anything but
+    // text/css is dropped on the floor by the parser, which would put the UI
+    // back on system-ui with every px size still tuned to Inter's metrics.
+    // That is the silent-wrong-screen failure this whole vendoring exists for,
+    // reintroduced one MIME type later.
+    { path: '/fonts/fonts.css', expect: 200, type: 'text/css' },
+    { path: pick('fonts', '.woff2'), expect: 200, type: 'font/woff2' },
     // Rive's runtime, vendored by ui/riveRuntime.js. If this is not
     // application/wasm the runtime silently falls back to unpkg, which is the
     // whole thing that module exists to prevent.
@@ -125,6 +134,22 @@ app.whenReady().then(() => {
 
   win.webContents.once('did-finish-load', async () => {
     try {
+      // WHAT THIS SHELL CAN ACTUALLY DO, asked of the page rather than assumed.
+      // The score screen changes SHAPE on the answer to the first two — see
+      // canShareImages() in systems/bossShot.js — so being wrong about them
+      // does not merely break a button, it removes the one that worked.
+      const caps = await win.webContents.executeJavaScript(`({
+        share: typeof navigator.share === 'function',
+        canShare: typeof navigator.canShare === 'function',
+        canShareFiles: (() => {
+          try {
+            const f = new File([new Blob([''], { type: 'image/png' })], 'p.png', { type: 'image/png' });
+            return !!navigator.canShare?.({ files: [f] });
+          } catch { return false; }
+        })(),
+        saveImage: typeof window.sealDesktop?.saveImage === 'function',
+      })`);
+
       const probed = await win.webContents.executeJavaScript(`(async () => {
         const out = [];
         for (const p of ${JSON.stringify(probes)}) {
@@ -152,7 +177,7 @@ app.whenReady().then(() => {
       })()`);
 
       clearTimeout(deadline);
-      process.stdout.write(`\nSEAL_SMOKE ${JSON.stringify({ ...probed, guard, consoleErrors })}\n`);
+      process.stdout.write(`\nSEAL_SMOKE ${JSON.stringify({ ...probed, caps, guard, consoleErrors })}\n`);
       app.exit(0);
     } catch (err) {
       clearTimeout(deadline);

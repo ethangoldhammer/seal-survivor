@@ -161,6 +161,122 @@ export function garlicLevelStats(level, s = {}) {
 }
 
 /**
+ * THE FIVE COUNT-ONLY WEAPONS, per level.
+ *
+ * Multishot, Homing Mussels, Shrimp Ring, Scallop Squirter and Ricochet Rounds
+ * all used to buy BODIES and nothing else — a fifteenth mussel doing exactly
+ * what the first one did. That is the shape the note on CONFIG.garlic calls
+ * out: an ability that gets bigger without getting stronger, which scales
+ * worst against precisely the thing more bodies are for, since a crowd you are
+ * failing to kill just gets more shells bouncing off it.
+ *
+ * So each stack now also buys a little damage and a little size. Small on
+ * purpose — the count IS still the card, and these curves are the floor under
+ * it, not a second ability bolted on.
+ *
+ * THESE FIVE ARE NOT IN LEVEL_STATS, and that is deliberate. Registering an
+ * ability there replaces its tip's measured rows outright — see the note on
+ * `derived` in ui/upgradeTip.js, "NO `next` ROW AND NO `total` ROW alongside
+ * it" — which is right for an ability whose apply() moves one level counter
+ * and wrong for these. Their apply() already measures the thing the card is
+ * about: "+1 orbiting shrimp", and for Ricochet Rounds the fire rate, lifespan
+ * and bounce budget as well. A table built from the two functions below would
+ * report the damage and the size and DROP all of that.
+ *
+ * Reporting both needs the tip to merge a measured set with a derived one,
+ * which it cannot do today. Until it can, these curves are real in the water
+ * and unquoted on the card — which is the honest half-step, since the
+ * alternative is a tip that says less than it did before.
+ *
+ * WHY THE TWO TERMS HAVE DIFFERENT SHAPES. Damage is absolute, because the
+ * base is a weapons.csv number that means the same thing all run. Size is a
+ * FRACTION of the base, because every one of these radii is a live tuner
+ * slider — a flat `+0.06 a stack` is a seventh of the shipped shrimp and a
+ * twenty-eighth of a tuned one, and a per-stack curve that means two different
+ * things in two sessions is not a curve. See CONFIG.shrimpRing.sizePerLevel.
+ */
+
+/**
+ * MULTISHOT. The odd one of the five, and both its terms are fractions.
+ *
+ * The other four read a damage straight off CONFIG, so an absolute step means
+ * the same thing at level 3 and level 30. The basic shot's damage is `s.damage`
+ * — it grows with every level and every gun card — so a flat bonus there would
+ * be decisive early and rounding error late. A percentage keeps the share it
+ * bought, which is the same argument applyLevelGrowth makes for maxHp.
+ *
+ * AND IT STOPS CLIMBING. `maxStacks` is 99, meaning "as many as you find",
+ * which is a fine promise about pellets and a terrible one about a compounding
+ * multiplier. `multishotScalingStacks` spends the curve by the tenth stack;
+ * everything past it is pellets, which is what the card always sold.
+ */
+export function multishotLevelStats(level, s = {}) {
+  const c = CONFIG.weapon ?? {};
+  const n = Math.min(lv(level), c.multishotScalingStacks ?? Infinity);
+  return {
+    multishotDamage: (s.damage ?? c.damage ?? 0)
+      * (1 + (c.damagePerMultishot ?? 0) * (n - 1)),
+    multishotSize: (s.radius ?? c.radius ?? 0)
+      * (1 + (c.radiusPerMultishot ?? 0) * (n - 1)),
+  };
+}
+
+/** HOMING MUSSELS, per level. */
+export function missileLevelStats(level, s = {}) {
+  const c = CONFIG.missile ?? {};
+  const n = lv(level);
+  return {
+    missileDamage: abilityDamageOf((c.damage ?? 0) + (c.damagePerLevel ?? 0) * (n - 1), s),
+    missileSize: (c.radius ?? 0) * (1 + (c.sizePerLevel ?? 0) * (n - 1)),
+  };
+}
+
+/**
+ * SHRIMP RING, per level.
+ *
+ * `size` is not decoration here: the contact reach in systems/shrimpRing.js is
+ * derived from the drawn scale, so a bigger shrimp is a shrimp that connects
+ * from further out. That is the whole reason the size term is worth having on
+ * this one — the picture and the hitbox are the same number, the way the
+ * garlic cloud's are.
+ */
+export function shrimpRingLevelStats(level, s = {}) {
+  const c = CONFIG.shrimpRing ?? {};
+  const n = lv(level);
+  return {
+    shrimpDamage: abilityDamageOf((c.contactDamage ?? 0) + (c.damagePerLevel ?? 0) * (n - 1), s),
+    shrimpSize: (c.scale ?? 0) * (1 + (c.sizePerLevel ?? 0) * (n - 1)),
+  };
+}
+
+/** SCALLOP SQUIRTER, per level. */
+export function scallopLevelStats(level, s = {}) {
+  const c = CONFIG.scallop ?? {};
+  const n = lv(level);
+  return {
+    scallopDamage: abilityDamageOf((c.damage ?? 0) + (c.damagePerLevel ?? 0) * (n - 1), s),
+    scallopSize: (c.radius ?? 0) * (1 + (c.sizePerLevel ?? 0) * (n - 1)),
+  };
+}
+
+/**
+ * RICOCHET ROUNDS, per level.
+ *
+ * ONLY THE TWO NEW NUMBERS. The fire rate, lifespan and bounce budget this card
+ * also buys are mutated straight onto the stat block by its apply(), so
+ * measure() already reports them exactly — listing them here as well would put
+ * every one of them on the tip twice, from two sources that can disagree.
+ */
+export function bounceLevelStats(level, s = {}) {
+  const c = CONFIG.bounce ?? {};
+  const n = lv(level);
+  return {
+    bounceDamage: abilityDamageOf((c.damage ?? 0) + (c.damagePerLevel ?? 0) * (n - 1), s),
+    bounceSize: (c.radius ?? 0) * (1 + (c.sizePerLevel ?? 0) * (n - 1)),
+  };
+}
+
+/**
  * ELECTRIC EEL, per level. Three numbers, all additive, all things a player
  * weighs against another card — the cleanest shape on the whole roster.
  */

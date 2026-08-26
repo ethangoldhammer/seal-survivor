@@ -121,3 +121,20 @@ export function narrowScreen() {
   if (typeof window === 'undefined') return false;
   return window.matchMedia?.('(max-width: 700px)').matches ?? false;
 }
+
+/**
+ * Is this viewport phone-shaped in the OTHER direction — a phone held sideways?
+ *
+ * The JS half of the `max-height: 560px` block in ui/ui.js, which exists for
+ * exactly one machine: an iPhone on its side is 852x393, so it is 852px WIDE
+ * and `narrowScreen` above says no. Anything sized off width alone treats that
+ * screen as a desktop and gives it desktop room it does not have — which was
+ * the live bug in the hive: the corner shrank when the phone was upright and
+ * went back to full size the moment it was turned over.
+ *
+ * The two together are "phone-shaped", and neither is enough on its own.
+ */
+export function shortScreen() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(max-height: 560px)').matches ?? false;
+}

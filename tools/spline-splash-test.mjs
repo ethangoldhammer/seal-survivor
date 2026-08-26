@@ -70,7 +70,7 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 await import('./vite-loader.mjs');
 
 const { mountSplineSplash } = await import('../path/src/ui/splineSplash.js');
-const { splashChoice, splineSrcOverride } = await import('../path/src/ui/splashChoice.js');
+const { splashChoice, splineSrcOverride, SPLINE_ENABLED } = await import('../path/src/ui/splashChoice.js');
 const { loadPlayerName, savePlayerName } = await import('../path/src/systems/playerName.js');
 const { buryName, clearNameLedger } = await import('../path/src/systems/nameLedger.js');
 
@@ -95,6 +95,37 @@ section('the switch');
 {
   check('defaults to the Rive card', splashChoice() === 'rive', splashChoice());
   check('no scene override by default', splineSrcOverride() === '');
+
+  // THE OFF SWITCH — SPLINE_ENABLED in ui/splashChoice.js, false since
+  // 2026-08-25. These two are the cases an off switch is most likely to miss,
+  // and both leave the Spline screen coming up for the people most likely to
+  // see it: a link with ?splash=spline in it is still in somebody's history,
+  // and anyone who actually auditioned the scene has 'spline' latched in
+  // localStorage on that origin.
+  //
+  // Written to be true either way rather than asserting "off": when the switch
+  // goes back on, these should keep passing by exercising the audition instead
+  // of failing because the constant moved. What is NOT allowed is the switch
+  // being off and one of these still answering 'spline'.
+  const wantsSpline = SPLINE_ENABLED;
+
+  dom.reconfigure({ url: 'http://localhost/?splash=spline' });
+  check(
+    `a ?splash=spline URL ${wantsSpline ? 'is honoured' : 'is ignored'}`,
+    splashChoice() === (wantsSpline ? 'spline' : 'rive'),
+    splashChoice(),
+  );
+
+  // Latched deliberately, because the query above would have set it when the
+  // switch is on — this asserts the stored value on its own terms.
+  dom.reconfigure({ url: 'http://localhost/' });
+  localStorage.setItem('sv.splash.audition', 'spline');
+  check(
+    `a latched audition ${wantsSpline ? 'comes back' : 'does not come back'}`,
+    splashChoice() === (wantsSpline ? 'spline' : 'rive'),
+    splashChoice(),
+  );
+  localStorage.removeItem('sv.splash.audition');
 }
 
 // ---------------------------------------------------------------------------

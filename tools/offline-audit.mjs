@@ -211,6 +211,41 @@ const wantDist = process.argv.includes('--dist');
 
 console.log('\nOFFLINE AUDIT — hosts reachable from the shipped game\n');
 
+// ---------------------------------------------------------------------------
+// IS THE SPLINE SPLASH SWITCHED ON? Read out of the code, not stored here.
+//
+// ui/splashChoice.js has a SPLINE_ENABLED constant, and while it is false
+// nothing can mount ui/splineSplash.js — so its unpkg fetch and the scene URL
+// in CONFIG.splineSplash are unreachable rather than merely unused. Reporting
+// them as failures then would train the habit of ignoring this gate.
+//
+// DERIVED, so it cannot go stale: flip the constant back to true and the two
+// hosts start failing again on the next run, with no list here to remember to
+// update. Same reasoning as the lorem flag in CLAUDE.md — the flag IS the code.
+//
+// AND IT FAILS TOWARDS NOISE. If this regex ever stops matching (the constant
+// is renamed, moved, computed), `enabled` stays true and the hosts are reported
+// as live. A detector that breaks into a louder gate is one you find out about;
+// one that breaks into a quieter gate is one that silently stops working.
+// ---------------------------------------------------------------------------
+async function splineEnabled() {
+  try {
+    const text = await readFile(join(SRC, 'ui/splashChoice.js'), 'utf8');
+    return !/\bSPLINE_ENABLED\s*=\s*false\b/.test(text);
+  } catch {
+    return true;
+  }
+}
+
+const SPLINE_ON = await splineEnabled();
+
+// Hosts that are only reachable through the Spline splash. Live when the switch
+// is on, inert when it is off.
+const SPLINE_HOSTS = {
+  'unpkg.com': 'ui/splineSplash.js fetches the Spline runtime from it at mount time',
+  'prod.spline.design': 'CONFIG.splineSplash.src — the scene the splash loads',
+};
+
 const detectorFaults = selfTest();
 console.log('detector');
 if (detectorFaults.length) {
@@ -245,6 +280,13 @@ for (const { dir, label, gates } of targets) {
   for (const [host, list] of sorted) {
     const where = list.slice(0, 3).map((h) => `${h.file}:${h.line}`).join(', ');
     const more = list.length > 3 ? ` +${list.length - 3} more` : '';
+
+    // Unreachable while the Spline switch is off — see splineEnabled above.
+    if (!SPLINE_ON && SPLINE_HOSTS[host]) {
+      console.log(`  ok   ${host} — ${SPLINE_HOSTS[host]}, and the Spline splash is switched off`);
+      console.log('       ui/splashChoice.js: SPLINE_ENABLED = false — flip it and this fails again');
+      continue;
+    }
 
     const allowed = ALLOWED.find((a) => a.host === host);
     if (allowed) {

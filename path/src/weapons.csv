@@ -261,3 +261,14 @@ musselVolley.damagePerLevel,12,0,40,mussel direct hit damage per shell per stack
 musselVolley.splashDamage,58,0,200,"mussel blast damage per shell. Worth more than the direct hit on purpose — a homing shell almost always finds a body, so the blast is what the barrage is actually for"
 musselVolley.splashDamagePerLevel,22,0,60,mussel blast damage per shell per stack
 musselVolley.splashRadius,4.6,0.5,12,mussel blast radius per shell
+weapon.damagePerMultishot,0.04,0,0.2,"basic shot damage added per stack of Multishot, as a FRACTION of the gun's current damage — the gun's damage is a live stat that grows all run, so a flat step would be decisive early and nothing late"
+weapon.radiusPerMultishot,0.03,0,0.2,"basic shot size added per stack of Multishot, as a fraction of the pellet's radius"
+weapon.multishotScalingStacks,10,1,99,"how many stacks of Multishot the two rows above are paid out for. maxStacks is 99 for the pellet count; a compounding bonus over 99 stacks is a gun nobody tuned, so the curve stops here and everything past it is pellets"
+missile.damagePerLevel,4,0,15,"homing mussel damage added per stack. Small on purpose — the count is still what the card sells, this is the floor under it so fifteen stacks is not fifteen of the same shell"
+missile.sizePerLevel,0.035,0,0.15,"homing mussel size added per stack, as a fraction of its radius. Fractional because the radius is a tuner slider and a flat step would mean something different in every session"
+shrimpRing.damagePerLevel,1,0,5,"shrimp contact damage added per stack. A ring that is failing to kill something otherwise just gets more shrimp bouncing off it"
+shrimpRing.sizePerLevel,0.035,0,0.15,"shrimp size added per stack, as a fraction of scale. The contact reach is derived from the drawn size, so this buys reach as well as picture"
+scallop.damagePerLevel,7,0,25,scallop damage added per stack
+scallop.sizePerLevel,0.04,0,0.15,"scallop size added per stack, as a fraction of its radius — a bigger shell finds more on its way around, which is what the bounces are for"
+bounce.damagePerLevel,1.5,0,6,"ricochet damage added per stack. This card already bought fire rate, lifespan and bounces; a longer combo made of chips is still chips"
+bounce.sizePerLevel,0.05,0,0.2,"ricochet size added per stack, as a fraction of its radius — a fatter shot finds its next body sooner, so the bounce budget is worth more rather than longer"

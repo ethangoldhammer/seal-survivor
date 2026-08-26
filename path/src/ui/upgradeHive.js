@@ -27,6 +27,7 @@ import { CONFIG } from '../config.js';
 import { UPGRADE_ICONS } from './upgradeIcons.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { onFeedback } from '../systems/feedback.js';
+import { narrowScreen, shortScreen } from '../devices.js';
 import { cssEase } from '../ease.js';
 import { pressableWithin } from './press.js';
 
@@ -215,6 +216,7 @@ const PULSE = {
 const state = {
   root: null,
   host: null,
+  scale: 1,           // what hiveScale gave the last build — see onResize
   tiles: new Map(),   // upgrade id -> tile element
   shims: new Map(),   // upgrade id -> the layers of its pile, shallowest first
   held: '',           // signature of the last built set, so rebuilds are rare
@@ -282,6 +284,31 @@ function stackCfg() {
   return cfg().stack ?? {};
 }
 
+// THE PILE IS PART OF THE TILE, SO IT SHRINKS WITH IT.
+//
+// Every number in `stack` is px — a 7px first layer, a 2.5px sideways drift —
+// and px do not follow a hexagon that has been scaled down to fit a phone. Left
+// alone, a corner at 0.6 keeps its full-height piles: a five-deep stack is 26px
+// of tower under a 31px hexagon, which is the bar chart the falloff exists to
+// prevent, and the shrink gives back barely half of what it promised.
+//
+// Handed the scaled copy instead, everything the packing measures is linear in
+// `scale` — which is the property hiveScale below relies on to solve the fit in
+// one division rather than by laying the hive out repeatedly.
+//
+// Returns the config untouched at 1, so the corner at full size and every
+// snapshot are the exact objects they were before this existed.
+function stackAt(scale, s = stackCfg()) {
+  if (!(scale > 0) || scale === 1) return s;
+  const shadow = s.shadow ?? {};
+  return {
+    ...s,
+    step: (s.step ?? 7) * scale,
+    skew: (s.skew ?? 2.5) * scale,
+    shadow: { ...shadow, lift: (shadow.lift ?? 3) * scale },
+  };
+}
+
 /** Distance below the top face of each drawn layer, shallowest first. */
 export function stackOffsets(count, s = stackCfg()) {
   const mode = s.mode ?? 'slab';
@@ -339,8 +366,7 @@ function shimFace(clip) {
 
 // The layers under one tile. Positioned in the host's coordinates, like the
 // tiles themselves, so the FLIP can slide them with the tile they belong to.
-function buildShims(entry, box, tileLeft, tileTop) {
-  const s = stackCfg();
+function buildShims(entry, box, tileLeft, tileTop, s = stackCfg()) {
   const mode = s.mode ?? 'slab';
   const offsets = stackOffsets(entry.count, s);
   if (!offsets.length) return [];
@@ -638,8 +664,7 @@ function buildTile(entry) {
 // is also clipped comes back with a hard hexagonal edge — a soft shadow with a
 // cut-out shape in it. The softness is a radial gradient instead, which needs
 // no clip and no filter and costs nothing to composite.
-function buildShade(place, i, box, hexW, hexH) {
-  const s = stackCfg();
+function buildShade(place, i, box, hexW, hexH, s = stackCfg()) {
   const cfgShade = s.shadow ?? {};
   const me = place[i];
   if (cfgShade.enabled === false || !me.depth) return null;
@@ -672,43 +697,23 @@ function buildShade(place, i, box, hexW, hexH) {
   return el;
 }
 
-// THE PACKING, WRITTEN ONCE AND POINTED AT A HOST.
+// THE LATTICE AS NUMBERS, WITH NOTHING BUILT.
 //
-// Pulled out of rebuild() when the score screen grew a hive of its own. The
-// alternative — a second implementation that lays hexagons out at snapshot size
-// — is the exact failure the note above hiveTileRect warns about, one level up:
-// two packings that have to agree forever, with the drift showing as a hive
-// that interlocks in the corner and overlaps on the card, or the other way
-// round, depending which one was retuned.
+// Pulled out of layoutHive so hiveScale below can ask how big a set WOULD come
+// out at a given size without touching the DOM. The alternative is building the
+// hive, measuring it and shrinking it afterwards, which is a second layout pass
+// on every pick and, worse, a visible pop: the corner would appear at full size
+// for one frame and then collapse.
 //
-// So there is one lattice, and a snapshot is the corner at a different `size`
-// with the FLIP left off (there is nothing for a freshly built hive to slide
-// from) and the tile map handed back rather than stored.
-//
-// Returns { tiles, shims } — Maps of upgrade id to element, the same shape
-// state holds. `host` is emptied first, and is stamped with the size the tiles
-// need: they are absolutely positioned, so a host left at auto is a zero-height
-// box with the whole hive hanging outside it.
-function layoutHive(host, held, { size = null } = {}) {
-  const tiles = new Map();
-  const shims = new Map();
-  host.textContent = '';
-
-  const c = cfg();
-  // THE STYLE HOOK, ON THE HOST. The three looks are CSS descendant rules and
-  // they have to attach to something that exists in both cases — the corner's
-  // host sits inside a .sv-hive root, and a snapshot's host sits inside nothing
-  // at all. Keyed on the root, a snapshot would render as tiles with no face,
-  // which reads as a loading failure rather than as a missing selector.
-  host.dataset.style = c.style ?? 'ink';
-  // `size` is the size of the HEXAGON, which is the thing anyone looking at the
-  // corner is judging. The square box that carries it is larger, by exactly the
-  // margin the art is drawn with.
-  const hexW = size ?? c.size ?? 52;
+// EVERYTHING HERE IS LINEAR IN `hexW`. `gap` and `stack` arrive already scaled
+// (see stackAt), so doubling the hexagon doubles the box exactly — which is why
+// the fit can be solved with one division instead of a search. A px constant
+// sneaking in here — a fixed gap, an unscaled step — is what would quietly
+// break that, and the way it breaks is a hive that stops just short of fitting.
+function packMetrics(held, hexW, gap, stack) {
   const hexH = hexW * (ART.h / ART.w);
   const box = hexW / ART.w;
-  const gap = c.gap ?? 2;
-  const pos = hexPositions(held.length, c.layout ?? 'cluster', hexW, hexH, gap);
+  const pos = hexPositions(held.length, cfg().layout ?? 'cluster', hexW, hexH, gap);
 
   // The tiles are placed absolutely, so the host has no size of its own — it is
   // measured here and stamped, or the corner block it lives in collapses and the
@@ -730,7 +735,6 @@ function layoutHive(host, held, { size = null } = {}) {
   // a host measured on the hexagons alone would leave the raised tile hanging
   // outside the box the HUD lays out against, which on a bottom corner walks it
   // under the score panel.
-  const stack = stackCfg();
   const rise = stack.rise !== false && (stack.mode ?? 'slab') !== 'pip';
   const depths = held.map((e) => stackDepth(e.count, stack));
   const maxDepth = depths.length ? Math.max(...depths) : 0;
@@ -738,6 +742,115 @@ function layoutHive(host, held, { size = null } = {}) {
   const skewMax = (stack.mode === 'deck')
     ? (stack.skew ?? 2.5) * Math.max(0, ...held.map((e) => stackOffsets(e.count, stack).length))
     : 0;
+
+  // An empty hive is 0x0 and not NaN: with no tiles the bounds above are still
+  // Infinity, and `NaNpx` on the host is a declaration the browser drops — so
+  // the box keeps whatever size the last build gave it, which is a corner full
+  // of nothing between two runs.
+  const width = held.length ? maxX - minX + hexW + skewMax : 0;
+  const height = held.length ? maxY - minY + hexH + maxDepth : 0;
+  return { pos, hexW, hexH, box, minX, minY, rise, depths, maxDepth, pad, skewMax, width, height };
+}
+
+// The corner's own inset from the edge of the screen, in px — the `14px` in
+// .sv-hive[data-corner] (see ui.js). Counted once for the margin the hive sits
+// on and once for a margin of the same size on the far side, so "half the
+// screen" means half the screen with the hive breathing on both sides of it
+// rather than half the screen plus 14px.
+const EDGE = 14;
+
+// HOW BIG THE CORNER IS ALLOWED TO BE, as a multiplier on CONFIG's `size`.
+//
+// TWO QUESTIONS, ONE NUMBER. `size` is a desktop measurement, so a narrow
+// screen starts from `mobile.scale` of it — that part is flat, and it is the
+// answer to "these hexagons are too big on a phone". The rest is the answer to
+// "and the hive keeps growing": the lattice stays roughly square as it fills,
+// so every ring costs the corner about a tile in each direction, and past the
+// `maxW`/`maxH` fractions of the viewport the whole thing is scaled to fit.
+//
+// IT ONLY EVER SHRINKS. The fractions are a ceiling and never a target, so a
+// build of four tiles is exactly the size CONFIG says on any screen — the
+// clamp is `min(1, …)` for that reason, and a scale above the start would
+// otherwise make the hive GROW into a big screen, which is not what anybody
+// asked for and would move the corner every time the window changed.
+//
+// `minSize` is the floor. A hexagon that always fits is a hexagon nobody can
+// read, and past a point the honest answer is that the corner is full — the
+// hive is allowed to sit slightly over its ceiling rather than turn to grit.
+//
+// Cheap: arithmetic and two window properties, on rebuild only (a pick, or a
+// resize that actually moves the number). Nothing here reads a layout property
+// off an element, which is the promise at the head of this file.
+function hiveScale(held) {
+  const c = cfg();
+  const f = c.fit ?? {};
+  const narrow = narrowScreen() || shortScreen();
+  const mob = f.mobile ?? {};
+  const start = narrow ? (mob.scale ?? 0.6) : 1;
+  if (f.enabled === false || !held.length || typeof window === 'undefined') return start;
+
+  const base = c.size ?? 52;
+  const roomW = (window.innerWidth || 0) * ((narrow ? mob.maxW : f.maxW) ?? 0.5) - EDGE * 2;
+  const roomH = (window.innerHeight || 0) * ((narrow ? mob.maxH : f.maxH) ?? 0.5) - EDGE * 2;
+  if (!(roomW > 0) || !(roomH > 0)) return start;
+
+  const nat = packMetrics(held, base * start, (c.gap ?? 2) * start, stackAt(start));
+  const k = Math.min(1,
+    nat.width > 0 ? roomW / nat.width : 1,
+    nat.height > 0 ? roomH / nat.height : 1);
+  // The floor cannot RAISE the scale past where the screen started it: on a
+  // phone `minSize / base` is larger than `mobile.scale`, so a bare
+  // Math.max(scale, floor) would undo the whole shrink at the first pick.
+  return Math.max(start * k, Math.min(start, (f.minSize ?? 18) / base));
+}
+
+// THE PACKING, WRITTEN ONCE AND POINTED AT A HOST.
+//
+// Pulled out of rebuild() when the score screen grew a hive of its own. The
+// alternative — a second implementation that lays hexagons out at snapshot size
+// — is the exact failure the note above hiveTileRect warns about, one level up:
+// two packings that have to agree forever, with the drift showing as a hive
+// that interlocks in the corner and overlaps on the card, or the other way
+// round, depending which one was retuned.
+//
+// So there is one lattice, and a snapshot is the corner at a different `size`
+// with the FLIP left off (there is nothing for a freshly built hive to slide
+// from) and the tile map handed back rather than stored.
+//
+// TWO WAYS TO ASK FOR A SMALLER HIVE, and they are not the same question.
+// `size` names the hexagon outright, which is what a snapshot does — it knows
+// the box it has to fill. `scale` is the corner's answer to the screen it woke
+// up on (see hiveScale) and multiplies the hexagon, the gap and the pile
+// together, so the hive that comes out is the same drawing at another size
+// rather than a differently-proportioned one.
+//
+// Returns { tiles, shims } — Maps of upgrade id to element, the same shape
+// state holds. `host` is emptied first, and is stamped with the size the tiles
+// need: they are absolutely positioned, so a host left at auto is a zero-height
+// box with the whole hive hanging outside it.
+function layoutHive(host, held, { size = null, scale = 1 } = {}) {
+  const tiles = new Map();
+  const shims = new Map();
+  host.textContent = '';
+
+  const c = cfg();
+  // THE STYLE HOOK, ON THE HOST. The three looks are CSS descendant rules and
+  // they have to attach to something that exists in both cases — the corner's
+  // host sits inside a .sv-hive root, and a snapshot's host sits inside nothing
+  // at all. Keyed on the root, a snapshot would render as tiles with no face,
+  // which reads as a loading failure rather than as a missing selector.
+  host.dataset.style = c.style ?? 'ink';
+  // `size` is the size of the HEXAGON, which is the thing anyone looking at the
+  // corner is judging. The square box that carries it is larger, by exactly the
+  // margin the art is drawn with.
+  const stack = stackAt(scale);
+  const m = packMetrics(held, (size ?? c.size ?? 52) * scale, (c.gap ?? 2) * scale, stack);
+  const { pos, hexW, hexH, box, minX, minY, rise, depths, pad } = m;
+  // AND ON THE HOST TOO, because two things inside a tile are typed rather than
+  // drawn — the pip and the `mono` fallback face — and type is the one part of
+  // a hexagon that does not follow a width. Left at 15px on a hexagon scaled to
+  // fit a phone, the fallback glyph is most of the tile. See .sv-hive-mono.
+  host.style.setProperty('--sv-hive-scale', scale.toFixed(3));
 
   // EVERY BOX IS PLACED BEFORE ANY IS BUILT, because a tower has to know what
   // it is standing in front of — see the shade below, which is a question about
@@ -772,17 +885,17 @@ function layoutHive(host, held, { size = null } = {}) {
     // The shade goes FIRST so it lands only on the cells already painted behind
     // it; between the pile and the tile it would shade its own stack, which
     // reads as the pile being made of dirtier material than the hexagon on top.
-    const shade = buildShade(place, i, box, hexW, hexH);
+    const shade = buildShade(place, i, box, hexW, hexH, stack);
     if (shade) host.appendChild(shade);
-    const pile = buildShims(p.entry, box, p.left, p.top);
+    const pile = buildShims(p.entry, box, p.left, p.top, stack);
     for (const shim of pile) host.appendChild(shim);
     host.appendChild(el);
     tiles.set(p.entry.id, el);
     if (pile.length) shims.set(p.entry.id, pile);
   });
 
-  host.style.width = `${maxX - minX + hexW + skewMax}px`;
-  host.style.height = `${maxY - minY + hexH + maxDepth}px`;
+  host.style.width = `${m.width}px`;
+  host.style.height = `${m.height}px`;
 
   return { tiles, shims };
 }
@@ -810,7 +923,12 @@ function rebuild(held) {
   // rebuild, which is the one thing that contract promises.
   state.tiles.clear();
   state.shims.clear();
-  const built = layoutHive(host, held);
+  // THE SIZE IS DECIDED HERE, ON EVERY REBUILD, and not once at boot: the hive
+  // grows all run and the screen can turn over halfway through one. Stashed
+  // because the resize hook below has to know whether the number actually moved
+  // before it throws the corner away and lays it out again.
+  state.scale = hiveScale(held);
+  const built = layoutHive(host, held, { scale: state.scale });
   for (const [id, tile] of built.tiles) state.tiles.set(id, tile);
   for (const [id, pile] of built.shims) state.shims.set(id, pile);
 
@@ -1225,6 +1343,30 @@ export function initUpgradeHive(mount) {
   mount.appendChild(root);
   state.root = root;
   state.host = host;
+
+  // A SCREEN THAT CHANGES SIZE CHANGES THE CORNER'S CEILING — a phone turned on
+  // its side, a desktop window dragged narrow, the address bar sliding away.
+  // The held set has not moved, so setHiveUpgrades' signature guard would never
+  // rebuild; without this the hive keeps whatever scale it was born at and a
+  // rotation is exactly the case where that is wrong.
+  //
+  // TWO GUARDS, and both matter. The rAF latch collapses the burst of events a
+  // window drag fires into one rebuild per frame, and the comparison means a
+  // resize that does not move the number costs the arithmetic and nothing else
+  // — no relayout, no FLIP, on a listener that is live for the whole run.
+  let pending = false;
+  state.onResize = () => {
+    if (pending || !state.lastPicks) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      if (!state.host || !state.lastPicks) return;
+      const held = foldUpgrades(state.lastPicks);
+      if (Math.abs(hiveScale(held) - (state.scale ?? 1)) < 0.001) return;
+      rebuild(held);
+    });
+  };
+  window.addEventListener('resize', state.onResize);
 
   // One listener for every ability in the game — see onFeedback. An event with
   // no upgrade behind it is the common case and costs a map miss.

@@ -28,3 +28,21 @@ file is for the ones that don't (and for strings in `.js`).
 | `systems/settings.js` SCHEMA.hud.upgradeTips | The pause-menu row: a label, a hint under it, and three option names for off / short / full. Short is the name and what the next stack does; Full adds the running total and what the ability has done this run. Label fits one line at 375px. |
 | `systems/settings.js` SCHEMA.hud.boostMeter option `both` | Third option name on the Boost meter row, beside "Ring on the seal" and "Beside the air". Means both drawings at once — the wheel around the seal AND the column beside the air gauge. Sits in the same option pill as the other two, so one or two words. |
 | `upgrades.csv` projectileLife.weaponName | The gun's rename while André 3000 is held, in place of "Fin Pebbles". The card no longer pierces anything — it makes every projectile stay in the water longer — so "Piercing Pebbles" is now false and is staged as `[DRAFT] Piercing Pebbles`. Same shape as the others in that column ("Rapid Pebbles", "Swift Pebbles"): one adjective plus "Pebbles". |
+
+## `savedAs` — the desktop save confirmation
+
+`path/src/ui/ui.js`, both `told()` maps in the trophy/sheet rows (search
+`savedAs`). Staged as `[DRAFT] Saved`.
+
+The status line after the desktop build's save dialog closes and a file has been
+written. It sits beside the existing outcomes for that row:
+
+- `shared` — "Shared"
+- `saved` — "Saved to your downloads" (the browser download path)
+- `opened` — "Opened — press and hold the picture to save it"
+
+What it has to convey: the picture is on disk, at the place the player just
+chose. Distinct from `saved` above, which has to name the downloads folder
+because nobody picked it. Roughly one to four words — it replaces a short status
+line under a button row on the score card, not a sentence. Seen right after the
+save dialog closes.

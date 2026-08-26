@@ -2560,6 +2560,26 @@ export const CONFIG = {
       // fires one from each flipper, so 1 here means two bullets. Each extra
       // point adds one more to BOTH fins.
       multishot: 1,
+      // A STACK OF MULTISHOT BUYS A LITTLE MORE THAN A PELLET. Bare count is
+      // the one shape that gets bigger without getting stronger — the same
+      // thing Sea Garlic's damagePerLevel was added to fix — so each stack
+      // also thickens the pellet and hits a shade harder.
+      //
+      // FRACTIONS, not absolute amounts, and that is the difference between
+      // this card and the four abilities below it. Those read a damage off
+      // CONFIG, so a flat `+4 per stack` means the same thing all run. The
+      // basic shot's damage is `s.damage`, which grows with every level and
+      // every gun card — a flat bonus there is decisive at level 3 and
+      // rounding error at level 30. A percentage keeps the share it bought.
+      damagePerMultishot: 0.04,
+      radiusPerMultishot: 0.03,
+      // ...AND IT STOPS. `maxStacks` for Multishot is 99, i.e. deliberately
+      // "as many as you can find", which is fine for a pellet count and not
+      // fine for a compounding bonus: ninety-nine stacks of the two fractions
+      // above is a four-times gun nobody tuned. The curve is spent by the
+      // tenth stack and every stack after it is pellets again, which is what
+      // the card was always selling.
+      multishotScalingStacks: 10,
       finSpread: 0.05, // radians between pellets leaving the SAME fin — deliberately tiny
       spread: 0.09, // radians between pellets when there's no fin rig to split across
       pierce: 0,
@@ -2700,6 +2720,13 @@ export const CONFIG = {
       turnRate: 4.5, // radians/sec — how sharply it can curve toward a target
       life: 4,
       radius: 0.22,
+      // A STACK IS NOT ONLY A SIXTEENTH MUSSEL. Fifteen stacks of pure count is
+      // fifteen shells doing exactly what one did, which is the shape Sea
+      // Garlic's damagePerLevel was added to fix — see the note there. Absolute
+      // damage (weapons.csv owns the base), fractional size (so the curve means
+      // the same thing whatever `radius` is tuned to).
+      damagePerLevel: 4,
+      sizePerLevel: 0.035,
       acquireRadius: 26, // won't lock onto anything farther than this
       // Random spread on the LAUNCH direction only — homing pulls them back
       // onto the target, but each missile takes its own path getting there
@@ -2848,6 +2875,19 @@ export const CONFIG = {
       orbitSpeed: 1.4, // radians/sec
       scale: 0.4, // world-unit size of each cloned instance
       contactDamage: 12, // weapons.csv owns this
+      // A STACK BITES HARDER AND SITS BIGGER, not only one shrimp wider. See
+      // the note on CONFIG.garlic.damagePerLevel for the argument; a ring is
+      // the same case, and worse — the extra bodies share one orbit, so a ring
+      // that is failing to kill something gets more shrimp bouncing off it.
+      //
+      // The damage is absolute (it is measured against `contactDamage`, which
+      // weapons.csv owns and the tuner cannot reach). The SIZE is a fraction
+      // because `scale` IS a tuner slider — a flat `+0.06 per stack` is half a
+      // shrimp against the shipped 0.4 and a tenth of one against a tuned 1.7,
+      // and a per-stack curve that means something different in two sessions
+      // is not a curve. weapons.csv owns both.
+      damagePerLevel: 1,
+      sizePerLevel: 0.035,
       contactCooldown: 0.4, // per-shrimp, so one doesn't melt an enemy alone
       // THE PUNCH ON A BITE, x its size, at full heat. The glow is the main
       // read (CONFIG.damageGlow.sources.shrimpRing) and this is the half that
@@ -3464,6 +3504,13 @@ export const CONFIG = {
       speed: 20,
       life: 3,
       radius: 0.2,
+      // The one of the five that was already scaling — fire rate, lifespan and
+      // the bounce budget all climb — and still firing the same 14-point pellet
+      // at stack six as at stack one. A longer combo made of chips is still
+      // chips. Fractional size because a fatter ricochet finds its next body
+      // sooner, which is the bounce budget being worth more rather than longer.
+      damagePerLevel: 1.5,
+      sizePerLevel: 0.05,
       maxBounces: 2,
       maxBouncesPerLevel: 2, // added to the budget by each Ricochet Rounds stack
       restitution: 1, // 1 = perfect reflection off the wall
@@ -6229,6 +6276,12 @@ export const CONFIG = {
       speed: 15, // jet burst speed
       life: 9, // seconds before it gives up and sinks
       radius: 0.42,
+      // Same argument as the mussel above and the garlic before it: twelve
+      // stacks used to buy twelve shells and not one point of damage. A bigger
+      // shell also bounces into more on its way around, which is the half of
+      // this the size term is really for.
+      damagePerLevel: 7,
+      sizePerLevel: 0.04,
       // The jet: a hard shove in a new direction, then coasting drag until the
       // next pulse. That stop-start is what makes it read as a scallop clapping
       // rather than a bullet flying.
@@ -25961,7 +26014,12 @@ export const CONFIG = {
     { id: 'heavyRounds', family: 'gun', name: 'Heavy Rounds', desc: '+40% bullet damage', apply: (s) => { s.damage *= 1.4; } },
     { id: 'overboost', family: 'gun', name: 'Overboost', desc: '+30% recoil boost', apply: (s) => { s.recoil *= 1.3; } },
     { id: 'maxSpeed', family: 'utility', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; } },
-    { id: 'multishot', family: 'gun', name: 'Multishot', desc: '+1 projectile', apply: (s) => { s.multishot += 1; }, maxStacks: 6 },
+    // `multishotLevel` counts the STACKS; `multishot` is stacks plus whatever
+    // levelling handed out (applyLevelGrowth). The per-stack damage and size
+    // curve reads the former — see multishotLevelStats — or a run that never
+    // took the card would collect its bonus for free.
+    { id: 'multishot', family: 'gun', name: 'Multishot', desc: '+1 projectile',
+      apply: (s) => { s.multishot += 1; s.multishotLevel = (s.multishotLevel ?? 0) + 1; }, maxStacks: 6 },
     // ANDRE 3000 — everything you fire stays in the water longer. Not a gun
     // card despite the family: the multiplier is spent in spawnProjectile, so
     // it reaches the missiles, the scallops, the ricochets, the razor blades and
@@ -25985,7 +26043,14 @@ export const CONFIG = {
     // First pick opens the ring at `baseCount` — one lone shrimp circling reads
     // as a bug rather than an orbital weapon. Every stack after that is +1.
     { id: 'shrimpRing', family: 'projectile', name: 'Shrimp Ring', desc: '+1 orbiting shrimp',
-      apply: (s) => { s.shrimpCount = s.shrimpCount ? s.shrimpCount + 1 : CONFIG.shrimpRing.baseCount; },
+      // Two fields, because the count and the stack number are different
+      // questions here: the first pick opens a whole ring, and Clone Warz and
+      // Entourage both add to the count besides. `shrimpLevel` is the one the
+      // per-stack curve reads — see shrimpRingLevelStats.
+      apply: (s) => {
+        s.shrimpCount = s.shrimpCount ? s.shrimpCount + 1 : CONFIG.shrimpRing.baseCount;
+        s.shrimpLevel = (s.shrimpLevel ?? 0) + 1;
+      },
       // Not interpolated from `baseCount`: this literal is built before CONFIG
       // is assigned, so the number can't be read here.
       levelDescs: { 1: 'Opens a full ring of orbiting shrimp' }, maxStacks: 8 },
@@ -26770,6 +26835,35 @@ export const CONFIG = {
     gap: 2,
     perRow: 5,           // `rows` only
     bow: 0.55,           // `arc` only — how far the middle of the run bulges
+
+    // THE CORNER HAS A CEILING, AND ON A PHONE IT IS A LOW ONE.
+    //
+    // `size` above is a DESKTOP number. 52px hexagons packed for a 1280px
+    // screen are the same 52px hexagons on a 393px one, where a mid-run build
+    // is a slab of the play area rather than a readout in the corner of it —
+    // so a narrow screen starts at `mobile.scale` of that and the tuner's own
+    // slider keeps meaning what it always meant.
+    //
+    // AND THE HIVE GROWS ALL RUN. A flat shrink is right for the first ten
+    // picks and wrong for the last ten: the lattice is roughly square, so
+    // every ring costs the corner about a tile's width in each direction. Past
+    // `maxW`/`maxH` — fractions of the viewport — the whole hive is scaled
+    // down to fit rather than allowed over the line, which means a long run
+    // reads as tiles getting smaller instead of as tiles going off-screen.
+    //
+    // The clamp only ever SHRINKS (see hiveScale): the fractions are a
+    // ceiling, never a target, so a build with four tiles in it is the size
+    // `size` says whatever the screen. `minSize` is the floor in px, because
+    // a hexagon small enough to always fit is a hexagon nobody can read.
+    fit: {
+      enabled: true,
+      maxW: 0.5,          // fraction of the viewport the hive may occupy
+      maxH: 0.5,
+      minSize: 18,        // px; never shrink the hexagon past this
+      // A phone gets both a smaller start AND a tighter ceiling: half of a
+      // 393px screen is most of the width the fight is happening in.
+      mobile: { scale: 0.6, maxW: 0.42, maxH: 0.32 },
+    },
 
     // THE PICK FLYING TO ITS TILE. A chosen card shrinks into the corner and is
     // swapped for its hex on arrival — see flyCardToHive in ui/ui.js.

@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { encodeQr } from '../qr.js';
 import { nativeShareAvailable, nativeShareImage } from './nativeShare.js';
+import { desktopSaveAvailable, desktopSaveImage } from './desktopSave.js';
 import kickersCsv from '../kickers.csv?raw';
 import { parseKickerCsv, pickKicker } from '../kickerTable.js';
 // The polaroid. Safe to import from a Node harness — snapshotCard.js pulls the
@@ -1007,6 +1008,22 @@ async function handOver(blob, url, name, title, text) {
   // case that should reach the navigator path below.
   const native = await nativeShareImage(blob, name, title, text);
   if (native) return native;
+
+  // THE DESKTOP SAVE DIALOG, second — before navigator, for the same reason the
+  // native sheet is before it: inside a shell the web API is the unreliable
+  // route, not the other way round. Electron has no Web Share API at all (the
+  // smoke test measures this), so without it every desktop press falls to
+  // download() and puts a file somewhere the player was never asked about.
+  //
+  // A null means this is not a desktop shell, or the bridge is missing, which
+  // is the only case that should reach the navigator path below.
+  //
+  // Reported as 'savedAs' rather than 'saved', because in this file 'saved'
+  // means download() put a file in the browser's downloads folder — a place the
+  // player did not pick and has to be TOLD about. A dialog save went exactly
+  // where they said, so the two cannot share a status line.
+  const desktop = await desktopSaveImage(blob, name);
+  if (desktop) return desktop === 'saved' ? 'savedAs' : desktop;
 
   const file = blob ? new File([blob], name, { type: 'image/png' }) : null;
   if (file && navigator.canShare?.({ files: [file] })) {

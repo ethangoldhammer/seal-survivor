@@ -25,19 +25,28 @@
   <!-- THE HEX CLUSTER — real card art out of design/assets, the same hexes
        the level-up cards use, packed the way the game's hive packs them:
        columns step three quarters of a hex width and every other column
-       drops half a height. Chosen and laid out in the hex picker
-       (npm run pick, then hexpick.html), so the arrangement here is the
-       one that was looked at rather than one typed in. -->
-  <div style="position: absolute; right: 34px; top: 40px; width: 160px; height: 197px; opacity: 0.92;">
-        <img src="AnglerFish.webp" alt="" style="position: absolute; left: 0px; top: 0.0px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="Crab.webp" alt="" style="position: absolute; left: 0px; top: 56.3px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="DumboOctopus.webp" alt="" style="position: absolute; left: 0px; top: 112.6px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="Beach_001.webp" alt="" style="position: absolute; left: 48px; top: 28.2px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="MoorishIdol.webp" alt="" style="position: absolute; left: 48px; top: 84.5px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="Seagull.webp" alt="" style="position: absolute; left: 48px; top: 140.8px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="VampireSquid.webp" alt="" style="position: absolute; left: 96px; top: 0.0px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="Humpback.webp" alt="" style="position: absolute; left: 96px; top: 56.3px; width: 64px; height: 56.3px; object-fit: contain;">
-        <img src="GreatWhite.webp" alt="" style="position: absolute; left: 96px; top: 112.6px; width: 64px; height: 56.3px; object-fit: contain;">
+       drops half a height.
+
+       EACH PICTURE IS PLACED OFF ITS OWN MEASURED HEXAGON, not off its file.
+       These are 512-squares with a hexagon somewhere inside, and they are
+       not framed alike — four different margins across these nine, from a
+       full-bleed AnglerFish to the usual 5.66% inset. Stepping by the file
+       steps by a margin that changes per picture, which is what left gaps
+       between them. The numbers come from the hex picker, which measures
+       the opaque bounds of each one and saves them alongside the pick.
+
+       Sizes are therefore per-image and deliberately not round: each file
+       is scaled so its HEXAGON is the same width, so the boxes differ. -->
+  <div style="position: absolute; right: 34px; top: 40px; width: 160px; height: 194px; opacity: 0.92;">
+        <img src="AnglerFish.webp" alt="" style="position: absolute; left: 0.0px; top: -4.3px; width: 64.0px; height: 64.0px;">
+        <img src="Crab.webp" alt="" style="position: absolute; left: -4.1px; top: 45.9px; width: 72.3px; height: 72.3px;">
+        <img src="DumboOctopus.webp" alt="" style="position: absolute; left: -4.1px; top: 101.1px; width: 72.3px; height: 72.3px;">
+        <img src="Beach_001.webp" alt="" style="position: absolute; left: 43.9px; top: 18.4px; width: 72.2px; height: 72.2px;">
+        <img src="MoorishIdol.webp" alt="" style="position: absolute; left: 43.8px; top: 73.6px; width: 72.3px; height: 72.3px;">
+        <img src="Seagull.webp" alt="" style="position: absolute; left: 47.9px; top: 130.8px; width: 68.0px; height: 68.0px;">
+        <img src="VampireSquid.webp" alt="" style="position: absolute; left: 95.7px; top: -4.3px; width: 64.0px; height: 64.0px;">
+        <img src="Humpback.webp" alt="" style="position: absolute; left: 91.6px; top: 45.9px; width: 72.3px; height: 72.3px;">
+        <img src="GreatWhite.webp" alt="" style="position: absolute; left: 91.6px; top: 101.1px; width: 72.3px; height: 72.3px;">
   </div>
 
   <div style="position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 42px 46px 32px 46px;">

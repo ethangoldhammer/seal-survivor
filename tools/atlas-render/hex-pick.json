@@ -2,51 +2,110 @@
   "cols": 5,
   "rows": 4,
   "size": 64,
+  "lattice": {
+    "xstep": 0.75,
+    "ratio": 0.866,
+    "snug": 0.997
+  },
   "picks": [
     {
       "col": 0,
       "row": 0,
-      "file": "AnglerFish.webp"
+      "file": "AnglerFish.webp",
+      "hex": {
+        "l": 0,
+        "t": 0.06445,
+        "w": 1,
+        "h": 0.87109
+      }
     },
     {
       "col": 0,
       "row": 1,
-      "file": "Crab.webp"
+      "file": "Crab.webp",
+      "hex": {
+        "l": 0.05664,
+        "t": 0.12695,
+        "w": 0.88477,
+        "h": 0.77148
+      }
     },
     {
       "col": 0,
       "row": 2,
-      "file": "DumboOctopus.webp"
+      "file": "DumboOctopus.webp",
+      "hex": {
+        "l": 0.05664,
+        "t": 0.12695,
+        "w": 0.88477,
+        "h": 0.77148
+      }
     },
     {
       "col": 1,
       "row": 0,
-      "file": "Beach_001.webp"
+      "file": "Beach_001.webp",
+      "hex": {
+        "l": 0.05469,
+        "t": 0.12695,
+        "w": 0.88672,
+        "h": 0.77148
+      }
     },
     {
       "col": 1,
       "row": 1,
-      "file": "MoorishIdol.webp"
+      "file": "MoorishIdol.webp",
+      "hex": {
+        "l": 0.05664,
+        "t": 0.12695,
+        "w": 0.88477,
+        "h": 0.77148
+      }
     },
     {
       "col": 1,
       "row": 2,
-      "file": "Seagull.webp"
+      "file": "Seagull.webp",
+      "hex": {
+        "l": 0,
+        "t": 0.12695,
+        "w": 0.94141,
+        "h": 0.7793
+      }
     },
     {
       "col": 2,
       "row": 0,
-      "file": "VampireSquid.webp"
+      "file": "VampireSquid.webp",
+      "hex": {
+        "l": 0,
+        "t": 0.06445,
+        "w": 1,
+        "h": 0.87109
+      }
     },
     {
       "col": 2,
       "row": 1,
-      "file": "Humpback.webp"
+      "file": "Humpback.webp",
+      "hex": {
+        "l": 0.05664,
+        "t": 0.12695,
+        "w": 0.88477,
+        "h": 0.77148
+      }
     },
     {
       "col": 2,
       "row": 2,
-      "file": "GreatWhite.webp"
+      "file": "GreatWhite.webp",
+      "hex": {
+        "l": 0.05664,
+        "t": 0.12695,
+        "w": 0.88477,
+        "h": 0.77148
+      }
     }
   ]
 }

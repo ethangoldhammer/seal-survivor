@@ -10,6 +10,8 @@ import { app, BrowserWindow, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { ORIGIN, registerScheme, serve } from './serve.js';
+import { registerSaveIpc, flush } from './save.js';
+import { registerSaveImageIpc } from './saveImage.js';
 
 // Before whenReady, necessarily — see registerScheme's note.
 registerScheme();
@@ -76,6 +78,12 @@ function isWeb(url) {
 
 app.whenReady().then(() => {
   serve();
+  // Registered before the window, because the preload hydrates localStorage
+  // through this the moment the page starts loading — a handler installed
+  // after createWindow() is a race that would resolve differently on a fast
+  // machine than on a slow one.
+  registerSaveIpc();
+  registerSaveImageIpc();
   createWindow();
 
   // macOS keeps the process alive with no windows; clicking the dock icon is
@@ -86,5 +94,11 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  // Flushed HERE as well as on before-quit. On macOS closing the last window
+  // does not quit, so before-quit may not fire for a long time — or at all, if
+  // the process is later killed — and the last thing the player did before
+  // closing the window is exactly the thing they would expect to have been
+  // saved.
+  flush();
   if (process.platform !== 'darwin') app.quit();
 });

@@ -31,6 +31,36 @@
 
 const KEY = 'sv.splash.audition';
 
+// ---------------------------------------------------------------------------
+// THE AUDITION IS OFF — every build, until further notice (2026-08-25).
+//
+// Flip this to true and everything below wakes up exactly as it was: the URL
+// param, the stickiness, `?splineSrc=`, the panel. Nothing has been deleted, so
+// turning it back on is this line and nothing else.
+//
+// WHY IT IS A CONSTANT HERE RATHER THAN A DELETION. The Spline screen is a bet
+// that has not been called yet — ui/splineSplash.js is 400 lines of scene
+// wrangling that would be expensive to write again, and the note at the top of
+// this file already says one of the two loses and gets deleted along with this
+// switch. That day is not today. Off is not the same as gone.
+//
+// WHY IT IS HERE RATHER THAN IN A BUILD CONFIG. The dev server has to agree
+// with the shipped build. A switch that lived only in vite.desktop.config.js
+// would leave `?splash=spline` still working in dev, so the one place it is
+// easiest to forget the decision is the one place it would not apply.
+//
+// THE DESKTOP BUILD DOES NOT RELY ON THIS. vite.desktop.config.js aliases this
+// whole module out and drops ui/splineSplash.js from the import graph, so the
+// Steam build cannot ship the Spline runtime even if this constant goes back to
+// true. That is deliberate: "off for now" and "never in the downloaded build"
+// are two different decisions and they should not share one switch.
+//
+// tools/offline-audit.mjs READS THIS CONSTANT rather than being told about it,
+// so the unpkg fetch in ui/splineSplash.js is reported as unreachable while
+// this is false and starts failing the gate again the moment it is true.
+// ---------------------------------------------------------------------------
+export const SPLINE_ENABLED = false;
+
 /**
  * 'spline' or 'rive'. Reads the URL first, then what was last asked for.
  *
@@ -40,6 +70,14 @@ const KEY = 'sv.splash.audition';
  * lose this bet.
  */
 export function splashChoice() {
+  // The switch wins over the URL AND over what was last asked for. Both matter:
+  // a link with `?splash=spline` in it is still in somebody's history, and
+  // anyone who auditioned the scene has 'spline' latched in localStorage on
+  // that origin — so an off switch that only ignored the query string would
+  // leave the Spline screen coming up for exactly the people who had looked at
+  // it most.
+  if (!SPLINE_ENABLED) return 'rive';
+
   let asked = null;
   try {
     asked = new URLSearchParams(window.location.search).get('splash');

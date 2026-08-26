@@ -264,9 +264,12 @@
     "audit:offline": "node tools/offline-audit.mjs",
     "desktop": "npm run build:desktop && electron electron/main.js",
     "look:tips": "node tools/tip-look.mjs",
-    "desktop:test": "node tools/desktop-shell-test.mjs",
+    "desktop:test": "npm run build:desktop && npm run desktop:test:shell && npm run desktop:test:save",
     "build:desktop": "vite build --config vite.desktop.config.js",
-    "test:press": "node tools/press-test.mjs"
+    "test:press": "node tools/press-test.mjs",
+    "fonts": "node tools/vendor-fonts.mjs",
+    "desktop:test:shell": "node tools/desktop-shell-test.mjs",
+    "desktop:test:save": "node tools/desktop-save-test.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",

@@ -119,301 +119,400 @@
     "cap": 99,
     "perStack": [
       {
-        "multishot": 101
+        "multishot": 101,
+        "multishotLevel": 101
       },
       {
-        "multishot": 102
+        "multishot": 102,
+        "multishotLevel": 102
       },
       {
-        "multishot": 103
+        "multishot": 103,
+        "multishotLevel": 103
       },
       {
-        "multishot": 104
+        "multishot": 104,
+        "multishotLevel": 104
       },
       {
-        "multishot": 105
+        "multishot": 105,
+        "multishotLevel": 105
       },
       {
-        "multishot": 106
+        "multishot": 106,
+        "multishotLevel": 106
       },
       {
-        "multishot": 107
+        "multishot": 107,
+        "multishotLevel": 107
       },
       {
-        "multishot": 108
+        "multishot": 108,
+        "multishotLevel": 108
       },
       {
-        "multishot": 109
+        "multishot": 109,
+        "multishotLevel": 109
       },
       {
-        "multishot": 110
+        "multishot": 110,
+        "multishotLevel": 110
       },
       {
-        "multishot": 111
+        "multishot": 111,
+        "multishotLevel": 111
       },
       {
-        "multishot": 112
+        "multishot": 112,
+        "multishotLevel": 112
       },
       {
-        "multishot": 113
+        "multishot": 113,
+        "multishotLevel": 113
       },
       {
-        "multishot": 114
+        "multishot": 114,
+        "multishotLevel": 114
       },
       {
-        "multishot": 115
+        "multishot": 115,
+        "multishotLevel": 115
       },
       {
-        "multishot": 116
+        "multishot": 116,
+        "multishotLevel": 116
       },
       {
-        "multishot": 117
+        "multishot": 117,
+        "multishotLevel": 117
       },
       {
-        "multishot": 118
+        "multishot": 118,
+        "multishotLevel": 118
       },
       {
-        "multishot": 119
+        "multishot": 119,
+        "multishotLevel": 119
       },
       {
-        "multishot": 120
+        "multishot": 120,
+        "multishotLevel": 120
       },
       {
-        "multishot": 121
+        "multishot": 121,
+        "multishotLevel": 121
       },
       {
-        "multishot": 122
+        "multishot": 122,
+        "multishotLevel": 122
       },
       {
-        "multishot": 123
+        "multishot": 123,
+        "multishotLevel": 123
       },
       {
-        "multishot": 124
+        "multishot": 124,
+        "multishotLevel": 124
       },
       {
-        "multishot": 125
+        "multishot": 125,
+        "multishotLevel": 125
       },
       {
-        "multishot": 126
+        "multishot": 126,
+        "multishotLevel": 126
       },
       {
-        "multishot": 127
+        "multishot": 127,
+        "multishotLevel": 127
       },
       {
-        "multishot": 128
+        "multishot": 128,
+        "multishotLevel": 128
       },
       {
-        "multishot": 129
+        "multishot": 129,
+        "multishotLevel": 129
       },
       {
-        "multishot": 130
+        "multishot": 130,
+        "multishotLevel": 130
       },
       {
-        "multishot": 131
+        "multishot": 131,
+        "multishotLevel": 131
       },
       {
-        "multishot": 132
+        "multishot": 132,
+        "multishotLevel": 132
       },
       {
-        "multishot": 133
+        "multishot": 133,
+        "multishotLevel": 133
       },
       {
-        "multishot": 134
+        "multishot": 134,
+        "multishotLevel": 134
       },
       {
-        "multishot": 135
+        "multishot": 135,
+        "multishotLevel": 135
       },
       {
-        "multishot": 136
+        "multishot": 136,
+        "multishotLevel": 136
       },
       {
-        "multishot": 137
+        "multishot": 137,
+        "multishotLevel": 137
       },
       {
-        "multishot": 138
+        "multishot": 138,
+        "multishotLevel": 138
       },
       {
-        "multishot": 139
+        "multishot": 139,
+        "multishotLevel": 139
       },
       {
-        "multishot": 140
+        "multishot": 140,
+        "multishotLevel": 140
       },
       {
-        "multishot": 141
+        "multishot": 141,
+        "multishotLevel": 141
       },
       {
-        "multishot": 142
+        "multishot": 142,
+        "multishotLevel": 142
       },
       {
-        "multishot": 143
+        "multishot": 143,
+        "multishotLevel": 143
       },
       {
-        "multishot": 144
+        "multishot": 144,
+        "multishotLevel": 144
       },
       {
-        "multishot": 145
+        "multishot": 145,
+        "multishotLevel": 145
       },
       {
-        "multishot": 146
+        "multishot": 146,
+        "multishotLevel": 146
       },
       {
-        "multishot": 147
+        "multishot": 147,
+        "multishotLevel": 147
       },
       {
-        "multishot": 148
+        "multishot": 148,
+        "multishotLevel": 148
       },
       {
-        "multishot": 149
+        "multishot": 149,
+        "multishotLevel": 149
       },
       {
-        "multishot": 150
+        "multishot": 150,
+        "multishotLevel": 150
       },
       {
-        "multishot": 151
+        "multishot": 151,
+        "multishotLevel": 151
       },
       {
-        "multishot": 152
+        "multishot": 152,
+        "multishotLevel": 152
       },
       {
-        "multishot": 153
+        "multishot": 153,
+        "multishotLevel": 153
       },
       {
-        "multishot": 154
+        "multishot": 154,
+        "multishotLevel": 154
       },
       {
-        "multishot": 155
+        "multishot": 155,
+        "multishotLevel": 155
       },
       {
-        "multishot": 156
+        "multishot": 156,
+        "multishotLevel": 156
       },
       {
-        "multishot": 157
+        "multishot": 157,
+        "multishotLevel": 157
       },
       {
-        "multishot": 158
+        "multishot": 158,
+        "multishotLevel": 158
       },
       {
-        "multishot": 159
+        "multishot": 159,
+        "multishotLevel": 159
       },
       {
-        "multishot": 160
+        "multishot": 160,
+        "multishotLevel": 160
       },
       {
-        "multishot": 161
+        "multishot": 161,
+        "multishotLevel": 161
       },
       {
-        "multishot": 162
+        "multishot": 162,
+        "multishotLevel": 162
       },
       {
-        "multishot": 163
+        "multishot": 163,
+        "multishotLevel": 163
       },
       {
-        "multishot": 164
+        "multishot": 164,
+        "multishotLevel": 164
       },
       {
-        "multishot": 165
+        "multishot": 165,
+        "multishotLevel": 165
       },
       {
-        "multishot": 166
+        "multishot": 166,
+        "multishotLevel": 166
       },
       {
-        "multishot": 167
+        "multishot": 167,
+        "multishotLevel": 167
       },
       {
-        "multishot": 168
+        "multishot": 168,
+        "multishotLevel": 168
       },
       {
-        "multishot": 169
+        "multishot": 169,
+        "multishotLevel": 169
       },
       {
-        "multishot": 170
+        "multishot": 170,
+        "multishotLevel": 170
       },
       {
-        "multishot": 171
+        "multishot": 171,
+        "multishotLevel": 171
       },
       {
-        "multishot": 172
+        "multishot": 172,
+        "multishotLevel": 172
       },
       {
-        "multishot": 173
+        "multishot": 173,
+        "multishotLevel": 173
       },
       {
-        "multishot": 174
+        "multishot": 174,
+        "multishotLevel": 174
       },
       {
-        "multishot": 175
+        "multishot": 175,
+        "multishotLevel": 175
       },
       {
-        "multishot": 176
+        "multishot": 176,
+        "multishotLevel": 176
       },
       {
-        "multishot": 177
+        "multishot": 177,
+        "multishotLevel": 177
       },
       {
-        "multishot": 178
+        "multishot": 178,
+        "multishotLevel": 178
       },
       {
-        "multishot": 179
+        "multishot": 179,
+        "multishotLevel": 179
       },
       {
-        "multishot": 180
+        "multishot": 180,
+        "multishotLevel": 180
       },
       {
-        "multishot": 181
+        "multishot": 181,
+        "multishotLevel": 181
       },
       {
-        "multishot": 182
+        "multishot": 182,
+        "multishotLevel": 182
       },
       {
-        "multishot": 183
+        "multishot": 183,
+        "multishotLevel": 183
       },
       {
-        "multishot": 184
+        "multishot": 184,
+        "multishotLevel": 184
       },
       {
-        "multishot": 185
+        "multishot": 185,
+        "multishotLevel": 185
       },
       {
-        "multishot": 186
+        "multishot": 186,
+        "multishotLevel": 186
       },
       {
-        "multishot": 187
+        "multishot": 187,
+        "multishotLevel": 187
       },
       {
-        "multishot": 188
+        "multishot": 188,
+        "multishotLevel": 188
       },
       {
-        "multishot": 189
+        "multishot": 189,
+        "multishotLevel": 189
       },
       {
-        "multishot": 190
+        "multishot": 190,
+        "multishotLevel": 190
       },
       {
-        "multishot": 191
+        "multishot": 191,
+        "multishotLevel": 191
       },
       {
-        "multishot": 192
+        "multishot": 192,
+        "multishotLevel": 192
       },
       {
-        "multishot": 193
+        "multishot": 193,
+        "multishotLevel": 193
       },
       {
-        "multishot": 194
+        "multishot": 194,
+        "multishotLevel": 194
       },
       {
-        "multishot": 195
+        "multishot": 195,
+        "multishotLevel": 195
       },
       {
-        "multishot": 196
+        "multishot": 196,
+        "multishotLevel": 196
       },
       {
-        "multishot": 197
+        "multishot": 197,
+        "multishotLevel": 197
       },
       {
-        "multishot": 198
+        "multishot": 198,
+        "multishotLevel": 198
       },
       {
-        "multishot": 199
+        "multishot": 199,
+        "multishotLevel": 199
       }
     ]
   },
@@ -644,49 +743,64 @@
     "cap": 15,
     "perStack": [
       {
-        "shrimpCount": 101
+        "shrimpCount": 101,
+        "shrimpLevel": 101
       },
       {
-        "shrimpCount": 102
+        "shrimpCount": 102,
+        "shrimpLevel": 102
       },
       {
-        "shrimpCount": 103
+        "shrimpCount": 103,
+        "shrimpLevel": 103
       },
       {
-        "shrimpCount": 104
+        "shrimpCount": 104,
+        "shrimpLevel": 104
       },
       {
-        "shrimpCount": 105
+        "shrimpCount": 105,
+        "shrimpLevel": 105
       },
       {
-        "shrimpCount": 106
+        "shrimpCount": 106,
+        "shrimpLevel": 106
       },
       {
-        "shrimpCount": 107
+        "shrimpCount": 107,
+        "shrimpLevel": 107
       },
       {
-        "shrimpCount": 108
+        "shrimpCount": 108,
+        "shrimpLevel": 108
       },
       {
-        "shrimpCount": 109
+        "shrimpCount": 109,
+        "shrimpLevel": 109
       },
       {
-        "shrimpCount": 110
+        "shrimpCount": 110,
+        "shrimpLevel": 110
       },
       {
-        "shrimpCount": 111
+        "shrimpCount": 111,
+        "shrimpLevel": 111
       },
       {
-        "shrimpCount": 112
+        "shrimpCount": 112,
+        "shrimpLevel": 112
       },
       {
-        "shrimpCount": 113
+        "shrimpCount": 113,
+        "shrimpLevel": 113
       },
       {
-        "shrimpCount": 114
+        "shrimpCount": 114,
+        "shrimpLevel": 114
       },
       {
-        "shrimpCount": 115
+        "shrimpCount": 115,
+        "shrimpLevel": 115
       }
     ]
   },
