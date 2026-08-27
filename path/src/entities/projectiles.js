@@ -35,7 +35,21 @@ export function spawnProjectile(scene, {
   // the creature list for whichever mackerel happens to be nearest.
   chase = null,
   bounce = false, maxBounces = 0, restitution = 1,
-  chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1,
+  chain = false, chainRange = 0, chainLock = 0, chainSpeedGain = 1, chainSpeedMax = Infinity,
+  // HOW MUCH HARDER EACH RICOCHET HITS. A fraction of this shot's own launch
+  // damage, added per bounce spent (wall or body alike — see spendBounce), and
+  // capped at comboDamageMax times what it left the fin with. 0 is every
+  // bouncing thing in the game that isn't Ricochet Rounds: a scallop and a
+  // thrown club carom at the damage they were thrown with.
+  comboDamageStep = 0, comboDamageMax = 1,
+  // AND HOW MUCH FATTER. Same shape as the damage ramp and spent at the same
+  // moment, but this one moves the DRAWN shot and its HITBOX together — a
+  // ricochet that looks twice the pellet it launched as has to hit like it, or
+  // the picture is lying about the reach. `comboSpring` is what makes it
+  // readable: each bounce kicks the size spring so it overshoots the new target
+  // and settles back, rather than creeping up by an amount nobody can see at
+  // ricochet speed. Null (everything but Ricochet Rounds) skips the whole thing.
+  comboSizeStep = 0, comboSizeMax = 1, comboSpring = null,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
   // HOW FAST THE BODY WHIPS ABOUT ITS OWN LONG AXIS, in radians a second.
@@ -174,6 +188,36 @@ export function spawnProjectile(scene, {
     chainRange,
     chainLock,
     chainSpeedGain,
+    chainSpeedMax,
+    comboDamageStep,
+    comboDamageMax,
+    comboSizeStep,
+    comboSizeMax,
+    comboSpring,
+    // THE SIZE SPRING. `sizeMul` is what both the picture and the hitbox are
+    // multiplied by, `sizeTarget` is where the caroms so far say it belongs,
+    // and `sizeVel` is what carries it past that and back — see spendBounce and
+    // updateComboSize.
+    sizeMul: 1,
+    sizeTarget: 1,
+    sizeVel: 0,
+    // WHAT IT LAUNCHED AS, for the same reason launchDamage exists: the swell
+    // rewrites `radius` and the mesh scale in place, so the value it multiplies
+    // has to be kept or each frame would compound on the last.
+    //
+    // The SCALE is read off the mesh rather than from the `scale` argument, and
+    // that is the whole of the difference between a shot that swells and one
+    // that also silently loses its art size: createVisual has already written
+    // the asset's own size multiplier (assets.csv) onto the root, and
+    // setScalar(scale) above overwrites it. Reading it back means the swell
+    // multiplies whatever the asset actually is.
+    launchRadius: radius,
+    launchScale: mesh.scale.x,
+    // WHAT IT LEFT THE FIN WITH. The combo ramp rewrites `damage` in place —
+    // every hit test in the game reads that one field — so the launch value has
+    // to be kept beside it or the ramp would compound on itself and a long
+    // chain would go exponential.
+    launchDamage: damage,
     hitLock: 0, // brief post-ricochet immunity so one chain isn't spent in a frame
     bounceCombo: 0, // consecutive ricochets, drives the rising pitch and spray
 
@@ -497,6 +541,55 @@ function steerToward(p, dt) {
   p.dir.set(Math.cos(angle), Math.sin(angle));
 }
 
+// ONE BOUNCE OFF THE BUDGET, wherever it was spent.
+//
+// A bouncing shot has two ways to spend a bounce and they live in two files —
+// the wall is updateBounce below, a body is tryChain in systems/combat.js — so
+// anything that must be true of BOTH belongs here or it will be true of one of
+// them. The combo count already was that: it drives the rising pitch and spray,
+// and both sites incremented it separately. The damage ramp is the same fact
+// again, and a ramp that only climbed off walls would be a weapon nobody could
+// explain.
+//
+// Off the LAUNCH damage rather than the current one, so the growth is linear in
+// the number of caroms instead of exponential — see launchDamage.
+export function spendBounce(p) {
+  p.bouncesLeft -= 1;
+  p.bounceCombo += 1;
+  if (p.comboDamageStep > 0) {
+    const mul = Math.min(p.comboDamageMax, 1 + p.comboDamageStep * p.bounceCombo);
+    p.damage = p.launchDamage * mul;
+  }
+  if (p.comboSizeStep > 0 && p.comboSpring) {
+    p.sizeTarget = Math.min(p.comboSizeMax, 1 + p.comboSizeStep * p.bounceCombo);
+    // The kick, not a jump to the new size: the spring below carries it there
+    // and past it. Added to whatever velocity is left over, so a shot caroming
+    // faster than the spring can settle keeps building rather than resetting to
+    // one pop's worth of pep every time.
+    p.sizeVel += p.comboSpring.pop;
+  }
+}
+
+// The swell, per frame. A plain damped spring toward `sizeTarget`: the pop
+// spendBounce added is the velocity, the stiffness pulls it back, and the
+// damping is low enough that it goes past and returns.
+//
+// It writes `radius` as well as the mesh, so what the shot can hit is what the
+// player is looking at — including the overshoot, which briefly carries both a
+// little past comboSizeMax. That is the point of the pop and not a leak: the
+// TARGET is capped, so a shot that has stopped bouncing settles onto the
+// ceiling rather than sitting above it.
+function updateComboSize(p, dt) {
+  const s = p.comboSpring;
+  p.sizeVel += (p.sizeTarget - p.sizeMul) * s.stiffness * dt;
+  // Damping as a RATE rather than a per-frame factor, so the settle looks the
+  // same at 30fps as at 144.
+  p.sizeVel *= Math.exp(-s.damping * dt);
+  p.sizeMul += p.sizeVel * dt;
+  p.radius = p.launchRadius * p.sizeMul;
+  p.mesh.scale.setScalar(p.launchScale * p.sizeMul);
+}
+
 // Returns true if the projectile hit a wall and had no bounces left (caller
 // should despawn it) — otherwise reflects it in place and consumes a bounce.
 function updateBounce(p, onBounce) {
@@ -513,8 +606,7 @@ function updateBounce(p, onBounce) {
   if (!hit) return false;
   if (p.bouncesLeft <= 0) return true; // out of bounces — caller despawns
 
-  p.bouncesLeft -= 1;
-  p.bounceCombo += 1;
+  spendBounce(p);
   p.speed *= p.restitution;
   // Coming off a wall is a fresh run at the crowd — a chaining shot gets to
   // hit the same bodies again on the way back in.
@@ -661,6 +753,11 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
       const exhausted = updateBounce(p, onBounce);
       if (exhausted) { despawn(scene, i); continue; }
     }
+    // AFTER the bounce, so the carom that just happened pops on the frame it
+    // happened rather than the next one. Guarded on the spring rather than on
+    // `bounce`, because the mesh write is the one thing in this loop that costs
+    // something on every shot in the air and only one weapon asks for it.
+    if (p.comboSpring && p.comboSizeStep > 0) updateComboSize(p, dt);
 
     const pos = p.mesh.position;
     const outside =

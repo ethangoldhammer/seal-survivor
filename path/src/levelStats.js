@@ -643,10 +643,16 @@ export function homingShotLevelStats(level, s = {}) {
  *
  * This one lands in the stat block already, so measure() has always seen it and
  * the tip has always said something true. What it could not say is the SIZE of
- * it: the bonus is `damagePerOxygen * level * maxOxygen`, so it scales with the
+ * it: the bonus is `damagePerOxygen * level * oxygen`, so it scales with the
  * tank — every Yoga makes Iron Lung stronger — and measure() replays against a
  * synthetic seal whose oxygen is the base value. On a real build carrying Yoga
  * the card was quietly under-reporting itself.
+ *
+ * MEASURED AT A FULL BREATH, deliberately, even though the live bonus follows
+ * the bar down (see ironLungMul in stats.js). A tip whose number fell while
+ * you read it would be unreadable, and the question a card answers is what it
+ * is worth to own, which is the top of its range — the same reading a weapon's
+ * damage gives you without promising every shot lands.
  *
  * Read off the passed block, so the figure is the one the run has.
  */

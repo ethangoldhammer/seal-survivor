@@ -79,8 +79,8 @@ lazer,prefix,Lazer,,,,,eyebeam,
 glarin,prefix,Glarin',,,,,eyebeam,
 deathstare,epithet,the Death Stare,,,,,eyebeam,
 doublebeam,epithet,the Longbeamer,,,,bossBoat bossYacht,eyebeam,
-kegger,prefix,Powder,,,,bossBoat bossYacht,barrels,
-boomboom,prefix,Boomin,,,,bossBoat bossYacht,barrels,
+kegger,prefix,Powder,,,,,barrels,"opened to every archetype: bossPerks.csv lets ANY boss roll `barrels`, and while these two were tagged to the boats a shark with barrels had no word to say so — 600 of 600 unnamed in tools/boss-test.mjs. A fish-flavoured barrels word would be better than a powder keg on a shark; this is the stopgap that keeps the telegraph honest."
+boomboom,prefix,Boomin,,,,,barrels,"opened to every archetype for the same reason as `kegger`."
 barrelroller,epithet,the Keg Party,,,,bossYacht,barrels,
 strong,prefix,Fishy,,,,,spitfish,
 chummy,prefix,Chummy,,,,bossShark bossOrca bossHammerhead,spitfish,

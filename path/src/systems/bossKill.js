@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { setSfxRateScale } from './audio.js';
 import { setMusicRateScale, hushMusic, releaseMusicHush, endBossMusic } from './music.js';
+import { mark as crumb } from './crashLog.js';
 
 // THE KILL SHOT — the two seconds after a boss dies.
 //
@@ -340,6 +341,7 @@ function apply(scale) {
  */
 export function startBossKill() {
   if (cfg().enabled === false) return false;
+  crumb('kill:shot');
   bossKillState.active = true;
   bossKillState.phase = 'punch';
   // Unframed until the next frame works it out — see bossKillState.framed.

@@ -6,6 +6,7 @@ import { stateForSpeed } from './animation.js';
 import { snapshotMoment } from './bossKill.js';
 import { startBossRagdoll, updateBossRagdoll, ragdollDelta, endBossRagdoll } from './bossRagdoll.js';
 import { fireBossBoom, bossBoomLead } from './bossBoom.js';
+import { mark as crumb } from './crashLog.js';
 
 // ---------------------------------------------------------------------------
 // THE BODY, BRIEFLY
@@ -104,6 +105,7 @@ function framingRadius(e) {
  *          whole of the fallback: the caller bursts it itself.
  */
 export function holdBossCorpse(e, scene) {
+  crumb('corpse:hold');
   if (cfg().enabled === false || !e?.mesh || !scene) return false;
   e.corpseHeld = true;
   held.push({

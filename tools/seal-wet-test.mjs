@@ -151,13 +151,24 @@ check('the base seal is wet', shader.uniforms.uWetAmount.value === CONFIG.sealSh
 
 // THE SHARKS. enemyGreatWhite and enemyMightyMeg take a `noise:` surface in
 // assets.csv, so a base `wet` above 0 shipped them a gloss nobody asked for.
-// Their presets opt out, and the opt-out has to survive the tuning merge — a
-// saved snapshot carries these preset names and deepMerges into them.
+// What the preset says about `wet` is what the animal must wear — and that has
+// to survive the tuning merge, since a saved snapshot carries these preset
+// names and deepMerges into them.
+//
+// THE PRESET, NOT A HARD ZERO. This asked for exactly 0 on both sharks, which
+// was true of both when it was written; the great white has since been given a
+// film of its own (wet 1.2, with wetSteps/wetTight/wetRim/wetCaustics/wetGlow
+// tuned around it) and the check read that as the opt-out having broken. A
+// number typed in here is a second opinion about art that lives in config.js —
+// so this reads the preset and asserts the animal is wearing THAT, which
+// catches the leak it was written for either way round: the base `wet` landing
+// on a shark that opted out, and a merge flattening a preset that opted in.
 for (const name of ['greatWhite', 'mightyMeg']) {
   const shark = injected(sealMaterial(name));
   applyNoiseSettings();
-  check(`the ${name} preset stays dry`, shark.uniforms.uWetAmount.value === 0,
-    `${shark.uniforms.uWetAmount.value}`);
+  const want = CONFIG.sealShader.presets?.[name]?.wet ?? CONFIG.sealShader.wet;
+  check(`the ${name} preset wears its own film`, shark.uniforms.uWetAmount.value === want,
+    `${shark.uniforms.uWetAmount.value} against the preset's ${want}`);
 }
 
 // `enabled` folds into the amount rather than branching in the shader, so the

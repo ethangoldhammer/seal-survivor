@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling } from '../stats.js';
+import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, applyIronLung } from '../stats.js';
 import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
 import { flipperSideForStack, finElementsIn, otherSide } from '../flipperSide.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
@@ -275,10 +275,13 @@ export function rebuildShipBody() {
  *
  * @param picks  { id, rarity } entries, oldest first.
  * @param level  player level, for the baseline growth.
- * @param humansEaten  for Maneater and Iron Lung.
+ * @param humansEaten  for Maneater.
  * @param bossesDefeated  for the per-boss pellet.
+ * @param oxygen  the air the seal is holding, for Iron Lung. Left out on a
+ *   hypothetical block (the hover tips, a Node harness) so the card measures
+ *   at a full breath — see ironLungMul in stats.js.
  */
-export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefeated = 0) {
+export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefeated = 0, oxygen) {
   const s = baseStats();
 
   // `player.upgrades` holds { id, rarity } rather than bare ids, because the
@@ -299,7 +302,7 @@ export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefea
   // ...and the two damage-scaling cards after THAT, so Maneater and Iron Lung
   // multiply the finished numbers rather than a partial block. Both are
   // no-ops on a run that holds neither. See applyDamageScaling in stats.js.
-  applyDamageScaling(s, humansEaten);
+  applyDamageScaling(s, humansEaten, oxygen);
   return s;
 }
 
@@ -307,7 +310,9 @@ export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefea
 // on reset, on level-up, and whenever the tuner changes a value — which is why
 // sliders affect a run already in progress.
 export function recomputeStats() {
-  const s = computeStats(player.upgrades, player.level, player.humansEaten, player.bossesDefeated);
+  const s = computeStats(
+    player.upgrades, player.level, player.humansEaten, player.bossesDefeated, player.oxygen,
+  );
   player.stats = s;
   player.hp = Math.min(player.hp, s.maxHp);
   return s;
@@ -395,6 +400,12 @@ export function addUpgrade(id, rarity = null, random = Math.random) {
     player.stats.maxOxygen,
     player.oxygen + Math.max(0, player.stats.maxOxygen - beforeO2),
   );
+  // ...and the lung is worth what the topped-up bar says, not what it said one
+  // line ago. recomputeStats above ran before the grant, so without this a
+  // Deep Lungs pick would leave Iron Lung reading the old tank until the next
+  // frame — a frame in which the card that was just taken looks like it did
+  // nothing.
+  applyIronLung(player.stats, player.oxygen);
 }
 
 /**
@@ -539,6 +550,9 @@ export function resetPlayer() {
   // After recomputeStats, not before: upgrades were just cleared above, so the
   // cap is back to base and this fills the real tank rather than last run's.
   player.oxygen = player.stats.maxOxygen;
+  // Same order problem as addUpgrade, for the same one-line fix: the block was
+  // rebuilt while `player.oxygen` still held whatever the last run drowned on.
+  applyIronLung(player.stats, player.oxygen);
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +830,14 @@ export function updatePlayer(dt, input) {
       player.oxygen = Math.max(0, player.oxygen - CONFIG.oxygen.depleteRate * dt);
     }
   }
+
+  // IRON LUNG, RE-SPENT AGAINST THE BAR THAT JUST MOVED. Here rather than in a
+  // recomputeStats(), which is the other way a stat block changes mid-run: a
+  // full recompute replays every upgrade the run holds and is affordable once
+  // a level-up, not once a frame. applyIronLung re-derives four numbers from
+  // the stash applyDamageScaling left, so a run without the card pays one
+  // property lookup for it. See stats.js.
+  applyIronLung(s, player.oxygen);
 
   // --- facing, mirror, roll, crane and the body transform -------------------
   // The whole block moved into poseBody below, so the title screen can pose the

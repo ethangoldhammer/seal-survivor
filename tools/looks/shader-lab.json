@@ -285,16 +285,16 @@
         "biolumSkin": {
           "abyssHunter": {
             "pigment": 1,
-            "scale": 0.15,
+            "scale": 0.05,
             "contrast": 3,
             "coverage": 0.48,
             "strength": 1.96,
             "flow": 1.06,
-            "pattern": "stripes",
+            "pattern": "pulse",
             "colorA": 13421772,
             "colorB": 8553090,
             "colorC": 7434607,
-            "shellColor": 4210752
+            "shellColor": 5723991
           }
         }
       }
@@ -312,7 +312,7 @@
             "scale": 0.07,
             "contrast": 3.35,
             "coverage": 0.45,
-            "strength": 1.8,
+            "strength": 2.2,
             "flow": 0.94,
             "pattern": "blotches",
             "colorA": 0,
@@ -846,7 +846,14 @@
     },
     "enemySquid": {
       "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "squidGlow"
+      },
       "assets": {
+        "noiseShader": null,
+        "toonShade": null,
         "biolumSkin": "squidGlow",
         "csvSkinColumn": "squidGlow"
       },
@@ -854,16 +861,17 @@
         "biolumSkin": {
           "squidGlow": {
             "pigment": 1,
-            "scale": 0.13,
+            "pigmentGlow": 0,
+            "scale": 0.79,
             "contrast": 3.4,
-            "coverage": 0.63,
+            "coverage": 0.66,
             "strength": 0.46,
-            "flow": 0,
-            "pattern": "speckle",
-            "colorA": 3866592,
+            "flow": 1.58,
+            "pattern": "lattice",
+            "colorA": 16449791,
             "colorB": 16734056,
-            "colorC": 14221302,
-            "shellColor": 16711680
+            "colorC": 4534341,
+            "shellColor": 16736609
           }
         }
       }
@@ -886,14 +894,14 @@
           "puffer": {
             "pigment": 0,
             "pigmentGlow": 0,
-            "scale": 0.53,
+            "scale": 0.05,
             "contrast": 3.1,
-            "coverage": 0.45,
-            "strength": 1.8,
+            "coverage": 0.42,
+            "strength": 2.04,
             "flow": 1.98,
             "pattern": "blotches",
-            "colorA": 5182704,
-            "colorB": 8072703,
+            "colorA": 13172480,
+            "colorB": 5373742,
             "colorC": 16765286,
             "shellColor": 16777215
           }
@@ -1023,7 +1031,7 @@
             "strength": 0.83,
             "size": 0.04,
             "contrast": 3.55,
-            "wet": 0.75,
+            "wet": 0.9,
             "wetGloss": 0.6,
             "wetSteps": 2,
             "wetSoft": 0.5,
@@ -1299,7 +1307,7 @@
             "flow": 0.94,
             "pattern": "marble",
             "colorA": 49722,
-            "colorB": 5197392,
+            "colorB": 2765355,
             "colorC": 3596883,
             "shellColor": 1456951
           }
@@ -1589,6 +1597,258 @@
           }
         }
       }
+    },
+    "club": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "club",
+        "biolum": "club"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "club",
+        "biolumSkin": "club",
+        "csvSkinColumn": "club"
+      },
+      "presets": {
+        "toonShade": {
+          "club": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "club": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.42,
+            "pattern": "veins",
+            "colorA": 15857913,
+            "colorB": 4868682,
+            "colorC": 11906199,
+            "shellColor": 4072217
+          }
+        }
+      }
+    },
+    "enemyReeffish": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "reeffish"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "reeffish",
+        "csvSkinColumn": "reeffish"
+      },
+      "presets": {
+        "biolumSkin": {
+          "reeffish": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.28,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.98,
+            "pattern": "blotches",
+            "colorA": 16121599,
+            "colorB": 0,
+            "colorC": 16777215,
+            "shellColor": 7111125
+          }
+        }
+      }
+    },
+    "enemySailfish": {
+      "surface": "toon",
+      "layers": {
+        "noise": null,
+        "toon": "sailfish",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "sailfish",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "toonShade": {
+          "sailfish": {
+            "strength": 1,
+            "steps": 2,
+            "gamma": 0.5,
+            "low": 0.86,
+            "high": 1.55,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
+    },
+    "enemyStingray": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "stingray"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "stingray",
+        "csvSkinColumn": "stingray"
+      },
+      "presets": {
+        "biolumSkin": {
+          "stingray": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.43,
+            "contrast": 1.25,
+            "coverage": 0.24,
+            "strength": 1.8,
+            "flow": 1.5,
+            "pattern": "billow",
+            "colorA": 13948116,
+            "colorB": 12763842,
+            "colorC": 0,
+            "shellColor": 4868682
+          }
+        }
+      }
+    },
+    "enemySurgeonFish": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "surgeonFish",
+        "biolum": "surgeonFish"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "surgeonFish",
+        "biolumSkin": "surgeonFish",
+        "csvSkinColumn": "surgeonFish"
+      },
+      "presets": {
+        "toonShade": {
+          "surgeonFish": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "surgeonFish": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 0.92,
+            "flow": 0.3,
+            "pattern": "blotches",
+            "colorA": 58879,
+            "colorB": 15132390,
+            "colorC": 3788,
+            "shellColor": 1443327
+          }
+        }
+      }
+    },
+    "enemyTang": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "tang"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "tang",
+        "csvSkinColumn": "tang"
+      },
+      "presets": {
+        "biolumSkin": {
+          "tang": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.08,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 2.22,
+            "flow": 0.62,
+            "pattern": "blotches",
+            "colorA": 14408667,
+            "colorB": 0,
+            "colorC": 0,
+            "shellColor": 16777215
+          }
+        }
+      }
+    },
+    "headstone": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "headstone",
+        "biolum": "headstone"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "headstone",
+        "biolumSkin": "headstone",
+        "csvSkinColumn": "headstone"
+      },
+      "presets": {
+        "toonShade": {
+          "headstone": {
+            "strength": 1,
+            "steps": 6,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0.06,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "headstone": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.74,
+            "contrast": 1.6,
+            "coverage": 0.52,
+            "strength": 1.8,
+            "flow": 1.42,
+            "pattern": "blotches",
+            "colorA": 0,
+            "colorB": 9868950,
+            "colorC": 6052956,
+            "shellColor": 2697513
+          }
+        }
+      }
     }
   },
   "config": {
@@ -1609,6 +1869,16 @@
         "steps": 2,
         "low": 0.16,
         "soft": 0.34
+      },
+      "sailfish": {
+        "high": 1.55,
+        "low": 0.86,
+        "gamma": 0.5,
+        "steps": 2
+      },
+      "headstone": {
+        "steps": 6,
+        "soft": 0.06
       }
     },
     "sealShader": {
@@ -1626,6 +1896,9 @@
       },
       "bossAnglerfish": {
         "wet": 0.6
+      },
+      "walkingCrab": {
+        "wet": 0.9
       }
     },
     "biolumSkin": {
@@ -1635,7 +1908,7 @@
         "shellColor": 1456951,
         "colorA": 49722,
         "flow": 0.94,
-        "colorB": 5197392,
+        "colorB": 2765355,
         "colorC": 3596883
       },
       "abyssHunter": {
@@ -1749,11 +2022,85 @@
         "colorC": 16228769,
         "scale": 0.11,
         "flow": 2
+      },
+      "club": {
+        "pattern": "veins",
+        "colorA": 15857913,
+        "colorB": 4868682,
+        "shellColor": 4072217,
+        "colorC": 11906199,
+        "flow": 1.42
+      },
+      "puffer": {
+        "colorA": 13172480,
+        "colorB": 5373742,
+        "scale": 0.05,
+        "coverage": 0.42,
+        "strength": 2.04
+      },
+      "reeffish": {
+        "pigment": 1,
+        "scale": 0.28,
+        "colorA": 16121599,
+        "colorB": 0,
+        "colorC": 16777215,
+        "shellColor": 7111125,
+        "flow": 0.98
+      },
+      "squidGlow": {
+        "pigmentGlow": 0,
+        "scale": 0.79,
+        "coverage": 0.66,
+        "pattern": "lattice",
+        "flow": 1.58,
+        "colorA": 16449791,
+        "shellColor": 16736609,
+        "pigment": 1,
+        "colorC": 4534341
+      },
+      "stingray": {
+        "pigment": 1,
+        "colorA": 13948116,
+        "colorB": 12763842,
+        "pattern": "billow",
+        "colorC": 0,
+        "shellColor": 4868682,
+        "flow": 1.5,
+        "coverage": 0.24,
+        "contrast": 1.25,
+        "scale": 0.43,
+        "pigmentGlow": 0
+      },
+      "surgeonFish": {
+        "pigment": 1,
+        "colorB": 15132390,
+        "colorC": 3788,
+        "shellColor": 1443327,
+        "strength": 0.92
+      },
+      "tang": {
+        "pigment": 1,
+        "colorA": 14408667,
+        "colorB": 0,
+        "colorC": 0,
+        "shellColor": 16777215,
+        "scale": 0.08,
+        "strength": 2.22,
+        "flow": 0.62
+      },
+      "headstone": {
+        "colorA": 0,
+        "colorB": 9868950,
+        "colorC": 6052956,
+        "shellColor": 2697513,
+        "flow": 1.42,
+        "coverage": 0.52,
+        "scale": 0.74
       }
     },
     "creatureOutline": {
       "__flat": {
-        "thickness": 0.05,
+        "thickness": 0.07,
         "glow": 1.5,
         "color": 0
       },
@@ -1773,6 +2120,5 @@
         "color": 0
       }
     }
-  },
-  "recorded": "enemyFishPackC"
+  }
 }

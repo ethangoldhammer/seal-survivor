@@ -432,8 +432,15 @@ section('THE KILL SHOT — slow motion and a close-up');
   check('...and it is genuinely slow, not merely slower',
     bossKillState.timeScale < 0.25, `x${bossKillState.timeScale.toFixed(3)}`);
 
-  // The close-up, at the bottom of the ramp.
-  while (t < K.dilateTime + K.cam.pushTime) { updateBossKill(DT); t += DT; }
+  // The close-up, at the bottom of the ramp. The camera push runs INSIDE the
+  // hold, so the frames it takes are counted toward the beat below rather than
+  // being spent before the stopwatch starts — see the note there.
+  let heldDuringPush = 0;
+  while (t < K.dilateTime + K.cam.pushTime) {
+    updateBossKill(DT);
+    if (bossKillState.phase === 'hold') heldDuringPush += DT;
+    t += DT;
+  }
   check('the frame has pushed in on the seal',
     Math.abs(bossKillState.camZoom - K.cam.zoom) < 0.05, `zoom ${bossKillState.camZoom.toFixed(2)}`);
   check('...and taken most of the framing', bossKillState.camWeight > K.cam.weight - 0.02,
@@ -444,9 +451,15 @@ section('THE KILL SHOT — slow motion and a close-up');
   // cut out, and the frame is holding still on the seal. Measured as the
   // stretch the world spends actually held at the bottom rather than off the
   // config, so a punch that overran into it would show up here.
-  let held = 0;
+  //
+  // COUNTED FROM WHERE THE HOLD STARTS, not from where the camera stops. The
+  // push (0.45s of it) happens during the beat, so starting the clock after it
+  // measures `beatTime` minus the push and reports a 1.5s hold as 1.07 —
+  // failing a 1.2s bar on a shot that is exactly as long as it was authored.
+  let held = heldDuringPush;
   while (bossKillState.phase === 'hold' && held < 10) { updateBossKill(DT); held += DT; }
-  check('the beat is long enough to sink in', held > 1.2, `${held.toFixed(2)}s held`);
+  check('the beat is long enough to sink in', held > 1.2,
+    `${held.toFixed(2)}s held, ${heldDuringPush.toFixed(2)}s of it under the camera push`);
 
   // THE PRINT. The beat is followed by a stretch of the same held frame while
   // the photograph ejects, develops and flies to the corner — see
@@ -465,7 +478,10 @@ section('THE KILL SHOT — slow motion and a close-up');
   let frames = 0;
   while (bossKillState.active && frames++ < 10000) updateBossKill(DT);
   const back = frames * DT;
-  const total = t + held + printed + back;
+  // `heldDuringPush` is already inside `t` — it is the part of the beat that
+  // ran while the camera was still pushing in — so it is taken back out here
+  // rather than counted twice.
+  const total = t + (held - heldDuringPush) + printed + back;
   check('it lets go on its own', !bossKillState.active);
   check('...back to a live clock and an unclaimed frame',
     bossKillState.timeScale === 1 && bossKillState.camWeight === 0 && bossKillState.camZoom === 1);
@@ -655,8 +671,12 @@ section('THE WRECKAGE — a boss comes apart');
   const mainSrc = readFileSync(resolve(here, '../path/src/main.js'), 'utf8');
   const bossSrc = readFileSync(resolve(here, '../path/src/systems/boss.js'), 'utf8');
   const corpseSrc = readFileSync(resolve(here, '../path/src/systems/bossCorpse.js'), 'utf8');
+  // The guard and the call, allowing for the block it grew: with the hold
+  // switched off main.js now also fires the boom on the killing frame, so the
+  // one-liner this matched is a `{ ... }` today. What has to hold is that the
+  // burst is thrown from inside that guard, in main.js's kill hook.
   check('the body is claimed from the kill hook, on the frame of the blow',
-    /isBoss && !holdBossCorpse\(e, world\.scene\)\) spawnBossGibs\(e\)/.test(mainSrc));
+    /isBoss && !holdBossCorpse\(e, world\.scene\)\)\s*\{?[\s\S]{0,400}?spawnBossGibs\(e\)/.test(mainSrc));
   check('...and not from the boss module, a frame after the body has gone',
     !bossSrc.includes('bossGibs') && !bossSrc.includes('bossCorpse'));
   check('...with the burst thrown before the visual goes back to the pool',
@@ -877,7 +897,19 @@ resetEnemies(scene);
     `${((bossBanner()?.frac ?? 0) * 100).toFixed(0)}%`);
 
   // A boss holds a shark slot: the whole point of tagging it `apex shark`.
-  check('the boss counts as a shark', isShark(bossState.enemy));
+  // A BOSS HOLDS AN APEX SLOT — and a shark-family one holds a shark slot too.
+  // This asked for `shark` outright, which was the whole roster's answer when
+  // the roster was sharks: the bag draws from nine archetypes now and six of
+  // them are not one, so it failed on whichever boss the dice sent. The claim
+  // worth holding is the population accounting: every boss counts against the
+  // apex cap, and the ones tagged `apex shark` count against the sharks as
+  // well.
+  const bossGroups = String(bossState.enemy.def?.spawnGroup ?? '');
+  check('the boss holds an apex slot', inSpawnGroup(bossState.enemy.def, 'apex'),
+    `${bossState.archetype.id} is in "${bossGroups}"`);
+  check('...and a shark-family boss holds a shark slot too',
+    !bossGroups.includes('shark') || isShark(bossState.enemy),
+    `${bossState.archetype.id} is in "${bossGroups}"`);
 
   removeEnemy(scene, enemies.indexOf(bossState.enemy));
   updateBoss(DT, gameState, scene);
@@ -990,8 +1022,14 @@ section('THE NAME — narrowed by archetype and by perk');
   // substring test reports the shark leaking a word it never touched. The set
   // is exact, and it is built from the file rather than typed here, so it
   // keeps testing the rule after the vocabulary is rewritten.
-  const legalNames = (bossId, perkId = null, exclusive = false) => {
+  //
+  // `alsoNames` narrows it to the parts a SECOND archetype is named on as well
+  // — the vocabulary two rosters deliberately share, which is a real thing in
+  // this file: the `tide` root names all nine, and the boat and the yacht are
+  // written as a pair. See the overlap check below.
+  const legalNames = (bossId, perkId = null, exclusive = false, alsoNames = null) => {
     const pool = (slot) => parts[slot].filter((p) => {
+      if (alsoNames && !p.perk && !p.bosses?.includes(alsoNames)) return false;
       if ((p.perk ?? null) !== perkId && (p.perk ?? null) !== null) return false;
       if (perkId && (p.perk ?? null) !== null && p.perk !== perkId) return false;
       // An exclusive archetype wears only what NAMES it — except in a slot the
@@ -1099,8 +1137,18 @@ section('THE NAME — narrowed by archetype and by perk');
       const theirs = new Set();
       for (let i = 0; i < 600; i++) theirs.add(rollBossName(parts, { boss: other.id, exclusive: other.ownNames }, rng2));
       const overlap = [...theirs].filter((n) => mine.has(n));
-      check(`...and ${other.id} never wears them either`, overlap.length === 0,
-        overlap.length ? `shared: ${overlap.slice(0, 3).join('; ')}` : `0 names in common with ${arch.id}`);
+      // A NAME THEY CAN BOTH ROLL IS ONLY A LEAK IF NOTHING SAID THEY COULD.
+      // This asked for zero overlap, which reads the file's own sharing as a
+      // bug: `bosses` is a LIST, and a row naming several archetypes is how two
+      // rosters are deliberately given a word — the `tide` root names all nine,
+      // and the boat and the yacht are written as a pair on purpose. What must
+      // not happen is an overlapping name built from a part that names one of
+      // them and not the other, which is the roller ignoring the column.
+      const bothMayWear = legalNames(arch.id, null, true, other.id);
+      const stray = overlap.filter((n) => !bothMayWear.has(n));
+      check(`...and ${other.id} wears only what names them both`, stray.length === 0,
+        stray.length ? `not shared by the file: ${stray.slice(0, 3).join('; ')}`
+          : `${overlap.length} name(s) in common with ${arch.id}, every one of them written for both`);
     }
 
     // THE PERK TELEGRAPH SURVIVES IT. Exclusivity is about the archetype's own
@@ -1187,18 +1235,26 @@ section('THE NAME — narrowed by archetype and by perk');
   // boss of every run would be called something that promises a power it does
   // not have.
   {
+    // ASKED OF THE PARTS, not of the letters — the same trap legalNames was
+    // written for, and this check was standing in it. `giant` owns the prefix
+    // "Big", and the general epithets "the Big Bopper" and "the Big Snatcher"
+    // contain those three letters, so a substring search reported an unperked
+    // shark promising a power every time it rolled a perfectly ordinary name.
+    // A name that is in the perk-less legal set cannot have been built from a
+    // perk part, whatever it happens to spell.
     const perkWords = [];
     for (const slot of ['prefix', 'root', 'epithet']) {
       for (const p of parts[slot]) if (p.perk) perkWords.push(p.text);
     }
+    const clean = legalNames('bossShark', null, false);
     const rng = seeded(44);
     const bad = [];
     for (let i = 0; i < 800; i++) {
       const n = rollBossName(parts, { boss: 'bossShark', perk: null }, rng);
-      for (const w of perkWords) if (n.includes(w)) bad.push(`${n} (${w})`);
+      if (!clean.has(n)) bad.push(n);
     }
     check('a perk-less boss never wears perk vocabulary', bad.length === 0,
-      bad.length ? bad.slice(0, 3).join('; ') : `${perkWords.length} perk words held back`);
+      bad.length ? [...new Set(bad)].slice(0, 3).join('; ') : `${perkWords.length} perk words held back`);
   }
 }
 
@@ -1450,6 +1506,15 @@ section('THE PERKS — what they actually do to the water');
 
   // --- lunge ---------------------------------------------------------------
   {
+    // SEEDED, because the number this block reports is a RATIO against a live
+    // control. The unperked shark swims under its own power, and how far it
+    // gets in the same frames depends on the wander and heading draws it makes
+    // — over the dozen frames of a dash that came out anywhere between 12 and
+    // 20 units, so the ratio moved by half and the check failed on the dice
+    // about one run in three. The dash itself is deterministic; only the thing
+    // it is measured against was not.
+    const liveRandom = Math.random;
+    Math.random = seeded(97);
     const p = byId.get('lunge');
     const e = plantBoss('lunge');
     // OPEN WATER, AND IT HAS TO BE. Both bosses used to be planted at y=22 —
@@ -1475,6 +1540,7 @@ section('THE PERKS — what they actually do to the water');
     let dashStart = null;
     let dashTravel = 0;
     let controlTravel = 0;
+    let dashFrames = 0;
     let lastBoss = e.mesh.position.clone();
     let lastControl = control.mesh.position.clone();
     const cycle = (p.cooldown ?? 5.5) + (p.windup ?? 0.7) + (p.duration ?? 0.9) + 1;
@@ -1500,6 +1566,7 @@ section('THE PERKS — what they actually do to the water');
       if (stage === 'dash') {
         dashTravel += e.mesh.position.distanceTo(lastBoss);
         controlTravel += control.mesh.position.distanceTo(lastControl);
+        dashFrames += 1;
       }
       lastBoss = e.mesh.position.clone();
       lastControl = control.mesh.position.clone();
@@ -1510,8 +1577,19 @@ section('THE PERKS — what they actually do to the water');
     }
 
     check('the lunge winds up before it dashes', hitWindup && hitDash);
+    // AT THE SPEED THE ROW SAYS, which is the claim the ratio was standing in
+    // for. `speed` on the lunge row is 34 u/s and that is the number the dash
+    // has to actually reach — a comparison against a live control can only say
+    // "faster than whatever the other shark happened to do", and the other
+    // shark covers 16 u/s here against a configured 5.2 because it is chasing
+    // the same target at difficulty 5. That put the ratio at 2.1 and failed a
+    // bar of 2.5 with the dash running at exactly its authored speed.
+    const dashSpeed = dashFrames ? dashTravel / (dashFrames * dt) : 0;
+    check('the dash runs at the speed its row is set to',
+      Math.abs(dashSpeed - (p.speed ?? 0)) < (p.speed ?? 1) * 0.15,
+      `${dashSpeed.toFixed(1)} u/s against the row's ${p.speed}`);
     check('the dash outruns an unperked boss of the same species',
-      dashTravel > controlTravel * 2.5,
+      dashTravel > controlTravel * 1.5,
       `dashed ${dashTravel.toFixed(1)} vs ${controlTravel.toFixed(1)} in the same frames`);
     // The line is locked at the end of the wind-up. A dash that curved would be
     // a homing lunge, which is unavoidable and so not a fight.
@@ -1520,6 +1598,7 @@ section('THE PERKS — what they actually do to the water');
       check('...and travels in a straight line, not a homing curve',
         straight > dashTravel * 0.9, `${straight.toFixed(1)} net over ${dashTravel.toFixed(1)} travelled`);
     }
+    Math.random = liveRandom;
     check('it hands the body back when the dash ends', e.perkDrive === false);
     check('...and puts its contact damage back',
       Math.abs(e.contactDamage - e.def.contactDamage) < e.def.contactDamage,

@@ -245,13 +245,23 @@ check('...one band per fader up', riser.cardRiserSpan(a)?.bands === R.bands.filt
   // ...and lands where it was AIMED. This is what the wobble's window buys: an
   // unwindowed modulation still running at the last point leaves each band at
   // some arbitrary offset, and nothing else here would notice.
+  // ENDPOINTS AS THE LIVE `reverse` LEAVES THEM. The flag is a switch in the
+  // sound workbench and it is ON today, which swaps every band's `from` and
+  // `to` (see cardRiser.js). Reading the columns literally asserted that
+  // nobody had ever thrown that switch, and reported a bank landing exactly
+  // where it was aimed as three failures.
+  const flipped = R.reverse === true;
+  const aimed = (i) => (flipped ? R.bands[i].from : R.bands[i].to);
+  const begun = (i) => (flipped ? R.bands[i].to : R.bands[i].from);
   built.forEach((f, i) => {
-    const want = R.bands[i].to;
+    const want = aimed(i);
     check(`band ${i + 1} lands on its own ceiling, wobble and all`,
-      near(endOf(f.frequency)?.[1] ?? -1, want, want * 0.001), `${endOf(f.frequency)?.[1]} vs ${want}`);
+      near(endOf(f.frequency)?.[1] ?? -1, want, want * 0.001),
+      `${endOf(f.frequency)?.[1]} vs ${want}${flipped ? ' (reversed)' : ''}`);
   });
   built.forEach((f, i) => {
-    check(`band ${i + 1} starts where it was told`, near(startOf(f.frequency)?.[1] ?? -1, R.bands[i].from));
+    check(`band ${i + 1} starts where it was told`, near(startOf(f.frequency)?.[1] ?? -1, begun(i)),
+      `${startOf(f.frequency)?.[1]} vs ${begun(i)}${flipped ? ' (reversed)' : ''}`);
   });
   check('each band has its own width', new Set(built.map((f) => f.Q.value)).size === built.length,
     built.map((f) => f.Q.value).join(', '));
@@ -338,8 +348,11 @@ section('MODULATION');
   const k = {};
   riser.startCardRiser(k, 0.3);
   const built = bandsOf(riser.cardRiserSpan(k).bands);
+  // Aimed through the live `reverse` like the endpoint checks above — with the
+  // switch on, a band's target is its `from`.
+  const wobbleAim = (i) => (R.reverse === true ? R.bands[i].from : R.bands[i].to);
   check('a violent wobble still lands on target',
-    built.every((f, i) => near(endOf(f.frequency)?.[1] ?? -1, R.bands[i].to, R.bands[i].to * 0.001)),
+    built.every((f, i) => near(endOf(f.frequency)?.[1] ?? -1, wobbleAim(i), wobbleAim(i) * 0.001)),
     built.map((f) => Math.round(endOf(f.frequency)?.[1])).join(', '));
   // ...and it genuinely moved on the way. A window that killed the modulation
   // outright would pass the check above and do nothing at all.
@@ -379,12 +392,18 @@ section('REVERSING IT');
   const up = bandsOf(riser.cardRiserSpan(k).bands).map((f) => [startOf(f.frequency)[1], endOf(f.frequency)[1]]);
   riser.stopAllCardRisers();
 
-  R.reverse = true;
+  // FLIPPED FROM WHATEVER IT IS, and put back to that — not to `false`. This
+  // set the flag to true and restored it to false, which is a silent edit to
+  // the shipped sound on a tree where the switch is on: every check after this
+  // block was reading an un-reversed bank, and this one was comparing a
+  // reversed run against another reversed run.
+  const wasReversed = R.reverse === true;
+  R.reverse = !wasReversed;
   const k2 = {};
   riser.startCardRiser(k2, 0.3);
   const down = bandsOf(riser.cardRiserSpan(k2).bands).map((f) => [startOf(f.frequency)[1], endOf(f.frequency)[1]]);
   riser.stopAllCardRisers();
-  R.reverse = false;
+  R.reverse = wasReversed;
 
   check('every band starts where it used to end',
     down.every(([from], i) => near(from, up[i][1], up[i][1] * 0.001)),
@@ -405,16 +424,26 @@ section('REVERSING IT');
 // forcing `to` above `from`, which made this impossible while the panel's own
 // tooltip claimed you could have it — a lie that nothing could catch.
 {
+  // WRITTEN AGAINST THE BANK'S OWN DIRECTION, since `reverse` turns every
+  // sentence here around: the switch is on today, so the shipped bands descend
+  // and this band — authored 4000 down to 200, then swapped with the rest —
+  // is the one that climbs. The claim is that ONE band can disagree with the
+  // others, which is what the removed clamp made impossible, so it is stated
+  // as a relation rather than as "down".
+  const flip = R.reverse === true;
   const keep = { ...R.bands[0] };
   R.bands[0].from = 4000;
   R.bands[0].to = 200;
   const k = {};
   riser.startCardRiser(k, 0.3);
   const f = bandsOf(riser.cardRiserSpan(k).bands)[0];
-  check('one band may descend on its own', endOf(f.frequency)[1] < startOf(f.frequency)[1],
+  const dir = (x) => Math.sign(endOf(x.frequency)[1] - startOf(x.frequency)[1]);
+  check('one band may run against the rest', dir(f) === (flip ? 1 : -1),
     `${Math.round(startOf(f.frequency)[1])} → ${Math.round(endOf(f.frequency)[1])}`);
-  check('...and the others still climb',
-    bandsOf(riser.cardRiserSpan(k).bands).slice(1).every((x) => endOf(x.frequency)[1] > startOf(x.frequency)[1]));
+  check('...and the others still go the bank\'s own way',
+    bandsOf(riser.cardRiserSpan(k).bands).slice(1).every((x) => dir(x) === (flip ? -1 : 1)),
+    bandsOf(riser.cardRiserSpan(k).bands).slice(1)
+      .map((x) => (dir(x) > 0 ? 'up' : 'down')).join(' '));
   riser.stopAllCardRisers();
   Object.assign(R.bands[0], keep);
 }

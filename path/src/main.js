@@ -101,7 +101,7 @@ import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin 
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
 import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid } from './systems/music.js';
-import { shotDue, resetShotGrid, tickInterval, finSplit } from './systems/shotGrid.js';
+import { shotDue, resetShotGrid, tickInterval, finSplit, dealTick } from './systems/shotGrid.js';
 import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
@@ -131,6 +131,7 @@ import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossK
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
 import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
+import { initCrashLog, mark as crumb } from './systems/crashLog.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
@@ -379,6 +380,9 @@ const faceDir = { x: 0, y: 1 }; // scratch — the seal's facing, read by the bu
 // frame it's written, so one object is enough.
 const dashPrediction = { x: 0, y: 0 };
 
+// When the crash trail last got a heartbeat — see the pulse in animate().
+let lastCrumbAt = -1e9;
+
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
 }
@@ -408,6 +412,11 @@ function programsEverBuilt() {
 function heapUsed() {
   return performance.memory?.usedJSHeapSize ?? 0;
 }
+
+// FIRST, and before boot() is even called: a throw from the boot itself is the
+// one crash with nothing else to report it. See systems/crashLog.js — this
+// costs a localStorage read and tells the next launch what killed this one.
+initCrashLog();
 
 boot();
 
@@ -1344,6 +1353,7 @@ function restartRun() {
 }
 
 function startGame() {
+  crumb('run:start');
   // Back to the resolution the player asked for. A run that ended on a machine
   // mid-struggle must not hand the next one a cut it never earned — and the
   // next run may be a different window size, a different scene, or simply the
@@ -1815,6 +1825,7 @@ function graveImpact(x, y) {
 }
 
 function killPlayer() {
+  crumb('run:death');
   player.anim?.trigger('death'); // clamps on its last frame, never hands back
   gameState.running = false;
   // Resolved here rather than inside showGameOver, which can be minutes away
@@ -2205,6 +2216,7 @@ function updateBossShot() {
   if (player.bossesDefeated === bossState.defeated) return;
   const gained = bossState.defeated > player.bossesDefeated;
   player.bossesDefeated = bossState.defeated;
+  if (gained) crumb('boss:defeated', bossState.defeated);
   recomputeStats();
   // ONLY ON THE WAY UP. The comparison above is a mirror and so is true in
   // both directions — a restart puts `defeated` back to 0 and comes through
@@ -2248,6 +2260,7 @@ function updateBossDividend() {
 }
 
 function openBossDividend(stacks) {
+  crumb('dividend', stacks);
   // THE SAME RAMP THE LEVEL-UP SCREEN RIDES, and for the same three reasons: it
   // is what drops the ocean into slow motion behind the menu, it is what
   // `canPause` reads to keep a second menu off the top of this one, and it is
@@ -3775,22 +3788,35 @@ function finKey(projectile) {
   return projectile.finElement ? `${side}:${projectile.finElement}` : side;
 }
 
+// HOW MANY STONES ONE VOLLEY IS, across every flipper. The whole volley and
+// not one fin's share — see CONFIG.weapon.multishot.
+//
+// Split out of fire() because the SCHEDULER needs the same number: the volley
+// is dealt one stone per tick, so the pellet count is what sets how many ticks
+// an interval holds, and shotDue is asked every frame whether or not fire()
+// runs. Two copies of this arithmetic drifting apart would be a gun ticking on
+// a cycle length its own volley disagreed with.
+//
+// Clone Warz first, THEN the pickup's multiplier — so the temporary powerup
+// multiplies the gun you actually have rather than the one you started with.
+function volleyShots() {
+  const s = player.stats;
+  const pellets = projectileCount(s.multishot, s);
+  return rapidFireTimer > 0
+    ? Math.round(pellets * CONFIG.rapidFirePickup.multishotMul)
+    : pellets;
+}
+
 function fire() {
   const s = player.stats;
-  const rapid = rapidFireTimer > 0;
   const fireRate = shotInterval();
-  // Clone Warz first, THEN the pickup's multiplier — so the temporary powerup
-  // multiplies the gun you actually have rather than the one you started with.
-  const pellets = projectileCount(s.multishot, s);
-  const shotCount = rapid ? Math.round(pellets * CONFIG.rapidFirePickup.multishotMul) : pellets;
+  const shotCount = volleyShots();
 
   const dir = input.aim.clone().normalize();
-  // The basic shot fires from EVERY emit point at once, not one at a time:
-  // with the default 'fins' routing that's one bullet out of each flipper, so
-  // the seal shoots with both hands. `multishot` is therefore pellets PER
-  // POINT — each extra point adds one more bullet to each fin, fanned by the
-  // deliberately tiny `finSpread` so they read as a burst from one flipper
-  // rather than a shotgun.
+  // `shotCount` is the volley's WHOLE pellet count, across every flipper — not
+  // a per-fin one. See CONFIG.weapon.multishot: the change is what Pocket Full
+  // of Stones buys, and it is why a stone bought there is a rhythm rather than
+  // a wider fan.
   //
   // A model with no rig (or the emit points switched off) fires the same
   // TOTAL number of bullets from the body, fanned by the old `spread`, so
@@ -3799,15 +3825,9 @@ function fire() {
   const source = CONFIG.emitPoints.bullet;
   const points = emitPointCount(rig, source);
   const origins = Math.max(1, points);
-  // How many limbs this model would naturally split a volley across. Read
-  // from the rig's geometry rather than from the routing, so switching the
-  // emit points off (or routing the shot to the mouth) changes where the
-  // bullets come from without changing how many there are.
-  const total = shotCount * (rig?.muzzles.length || 1);
-  const perOrigin = Math.max(1, Math.round(total / origins));
-  // Pellets sharing one limb get the tiny per-fin offset; pellets that are
-  // already separated by coming out of different limbs don't need it, and a
-  // single-point volley falls back to the normal spread so it still fans.
+  // Pellets sharing one tick get the tiny per-fin offset; pellets on ticks of
+  // their own are already separated in TIME and need none, and a volley with
+  // no limbs to walk falls back to the normal spread so it still fans.
   const fan = origins > 1 ? CONFIG.weapon.finSpread : s.spread;
 
   // FLIPPERS UP! — how big the pebble out of origin `o` is. The fin defs in
@@ -3853,25 +3873,32 @@ function fire() {
   const finSideFor = (o) => (source === 'fins' && origins >= 2 ? FLIPPER_SIDES[o % FLIPPER_SIDES.length] : null);
   const finElementFor = (o) => { const side = finSideFor(o); return side ? fins[side] : null; };
 
-  // ALTERNATING FINS — one flipper per tick, trading sides, instead of every
-  // flipper on the same frame. The scheduler is already running at
-  // interval / origins (see the shotDue call in the update loop), so a full
-  // cycle of ticks puts exactly the pellets in the water that one simultaneous
+  // ONE STONE PER TICK, trading flippers, instead of the whole volley on one
+  // frame. The scheduler is already running at interval / ticks (see the
+  // shotDue call in the update loop, which asks shotGrid for the same number),
+  // so a full cycle puts exactly the pellets in the water that one simultaneous
   // volley did: the volley is split in TIME, not thinned.
+  const ticks = finSplit(origins, fireRate, shotCount);
+  // WHICH LIMB THIS TICK LEAVES FROM AND HOW MANY STONES ARE ON IT — dealt in
+  // systems/shotGrid.js, where the property that matters (a cycle of ticks is
+  // one whole volley, split evenly across both flippers, at every pellet count
+  // the run can reach) is asserted rather than assumed.
   //
-  // `perOrigin` is deliberately untouched by this. It is what ONE limb fires,
-  // and one limb still fires it — the only thing that changes is that the
-  // other limbs are doing it half an interval later.
-  const split = finSplit(origins, fireRate);
-  const alternating = split > 1;
-  const firstOrigin = alternating ? finCursor % origins : 0;
-  const originsThisShot = alternating ? 1 : origins;
-  // The fraction of a volley this tick is. 1 when both fins fire together, and
-  // it is what keeps the recoil impulse and the exhaust plume per SECOND the
-  // same in either mode — a half volley that shoved like a whole one would
-  // double the gun's push on the seal the moment the toggle went on.
-  const share = originsThisShot / origins;
-  if (alternating) finCursor = (finCursor + 1) % origins;
+  // The cursor is free-running and deliberately not reset per volley: a cycle
+  // whose tick count is not a multiple of the limb count walks the fins around
+  // it, so three ticks on two flippers is L R L / R L R — a 3-against-2 that
+  // swaps which side carries the odd stone every volley, rather than a limp
+  // with the same fin doubled forever.
+  const dealt = dealTick(shotCount, ticks, origins, finCursor);
+  const salvo = dealt.salvo;
+  finCursor = dealt.cursor;
+  const firedThisShot = salvo.reduce((n, f) => n + f.n, 0);
+  // The fraction of a volley this tick is. 1 when the whole volley fires at
+  // once, and it is what keeps the recoil impulse and the exhaust plume per
+  // SECOND the same however the volley is dealt — a third of a volley that
+  // shoved like a whole one would triple the gun's push on the seal the moment
+  // a card was taken.
+  const share = shotCount > 0 ? firedThisShot / shotCount : 1;
 
   // Sonar Teeth. Resolved once per volley rather than per pellet — every
   // pellet in a volley is the same gun, and the object is spread into each
@@ -3891,10 +3918,15 @@ function fire() {
   // the LAST fin only — which was fine while there was one flash for the whole
   // volley, and is not once each fin's flash is a different size and colour.
   const flashes = [];
-  for (let n = 0; n < originsThisShot; n++) {
-    const o = (firstOrigin + n) % origins;
-    for (let i = 0; i < perOrigin; i++) {
-      const offset = (i - (perOrigin - 1) / 2) * fan;
+  for (const shot of salvo) {
+    // A limb with nothing to throw gets no flash either. Only reachable on the
+    // undealt fallback with fewer stones than limbs — a one-pebble gun routed
+    // to a two-flipper rig — and a puff off an empty flipper reads as a shot
+    // that failed to spawn.
+    if (shot.n <= 0) continue;
+    const o = shot.o;
+    for (let i = 0; i < shot.n; i++) {
+      const offset = (i - (shot.n - 1) / 2) * fan;
       const cos = Math.cos(offset);
       const sin = Math.sin(offset);
       spawnProjectile(world.scene, {
@@ -4369,6 +4401,18 @@ function fireBounce() {
     chainRange: CONFIG.bounce.chainRange,
     chainLock: CONFIG.bounce.chainLock,
     chainSpeedGain: CONFIG.bounce.chainSpeedGain,
+    chainSpeedMax: CONFIG.bounce.chainSpeedMax,
+    // The ramp the whole card is built around: every carom this shot spends
+    // makes the next hit harder. Only this weapon asks for it — a scallop and a
+    // thrown club bounce at the damage they were thrown with.
+    comboDamageStep: CONFIG.bounce.comboDamageStep,
+    comboDamageMax: CONFIG.bounce.comboDamageMax,
+    // ...and the swell that draws it. The pellet pops a little fatter on every
+    // carom — hitbox with it — so the climbing damage is something the player
+    // can see rather than something the tooltip claims.
+    comboSizeStep: CONFIG.bounce.comboSizeStep,
+    comboSizeMax: CONFIG.bounce.comboSizeMax,
+    comboSpring: CONFIG.bounce.comboSpring,
   });
 }
 
@@ -4702,6 +4746,18 @@ let lastTime = performance.now();
 
 function animate(now) {
   const stamp = now ?? performance.now();
+  // A PULSE IN THE CRASH TRAIL — see systems/crashLog.js. A WebContent process
+  // that is killed mid-run leaves nothing but the breadcrumbs already written,
+  // and 'run:start, ninety seconds ago' says nothing about what the frame was
+  // carrying when it went. Five seconds apart, one short string, so a cut
+  // reads as a load curve rather than as a single word.
+  if (stamp - lastCrumbAt > 5000) {
+    lastCrumbAt = stamp;
+    const mem = world.renderer.info.memory;
+    crumb('tick', `L${gameState.level} ${enemies.length}e ${particleCount()}p`
+      + ` g${mem.geometries} t${mem.textures} pr${programsEverBuilt()}`
+      + ` c${document.getElementsByTagName('canvas').length}${bossState.enemy ? ' BOSS' : ''}`);
+  }
   // LAST frame's totals, read before anything resets them. renderer.info has
   // autoReset off (see world.js), so these have accumulated across every pass
   // post.js made — the scene, the bright pass, the blur ping-pong and the
@@ -5325,12 +5381,17 @@ function animate(now) {
     // Asked every frame, firing or not: the idle path is what holds the lock on
     // the grid, so the shot after a recentred stick lands on a slot instead of
     // wherever the aim came back. See systems/shotGrid.js.
-    // The scheduler ticks per SHOT, not per volley: with alternating fins on,
-    // a bar/4 gun ticks eighth notes and each tick is one flipper's half.
-    // Derived here rather than inside fire() for the reason shotInterval() is
-    // split out at all — shotDue is asked every frame, firing or not.
-    if (shotDue(tickInterval(shotInterval(), emitPointCount(player.aimRig, CONFIG.emitPoints.bullet)),
-      wantsToFire && input.aim.lengthSq() > 0.001, dt)) fire();
+    // The scheduler ticks per PELLET, not per volley: with the stagger on, a
+    // bar/4 gun with the starting pair ticks eighth notes and each tick is one
+    // stone off one flipper. Derived here rather than inside fire() for the
+    // reason shotInterval() is split out at all — shotDue is asked every frame,
+    // firing or not.
+    //
+    // THE PELLET COUNT HAS TO BE THE ONE fire() WILL USE, or the two disagree
+    // about how long a cycle is and the gun drifts off its own grid: same
+    // projectileCount, same Rapid Fire multiplier, in the same order.
+    if (shotDue(tickInterval(shotInterval(), emitPointCount(player.aimRig, CONFIG.emitPoints.bullet),
+      volleyShots()), wantsToFire && input.aim.lengthSq() > 0.001, dt)) fire();
     if (wantsToFire && player.stats.missileCount > 0 && missileCooldown <= 0 && input.aim.lengthSq() > 0.001) fireMissiles();
     // Neither of these needs `wantsToFire`. The scallop is spat and forgotten
     // and the pearl is slow and heavy — both are meant to be in the water
@@ -7738,6 +7799,7 @@ function animate(now) {
   // back blank. One frame per boss killed, and only while the kill shot is
   // holding — see systems/bossShot.js.
   if (bossKillShotDue()) {
+    crumb('shot:capture');
     const meta = {
       name: bossState.name,
       // What finished it, already resolved to a weapon's own name — see
@@ -7790,7 +7852,9 @@ function animate(now) {
       // player sees: with it, the Rive artboard draws the print; without it,
       // the coded paper does. Everything else on it is the same run.
       const kept = bossShot();
+      crumb('shot:kept');
       showSnapshotPrint(kept?.url, kept ?? meta);
+      crumb('print:shown');
     }
   }
   perfFrameJs(performance.now() - _tframe);

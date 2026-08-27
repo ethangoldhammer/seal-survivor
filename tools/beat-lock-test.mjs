@@ -107,7 +107,7 @@ console.warn = () => {};
 const { CONFIG, barDivisions } = await import('../path/src/config.js');
 const audio = await import('../path/src/systems/audio.js');
 const music = await import('../path/src/systems/music.js');
-const { shotDue, resetShotGrid, shotGridState, tickInterval, finSplit } = await import('../path/src/systems/shotGrid.js');
+const { shotDue, resetShotGrid, shotGridState, tickInterval, finSplit, dealTick } = await import('../path/src/systems/shotGrid.js');
 
 audio.unlockAudio();
 
@@ -401,6 +401,107 @@ check('each fin keeps the gun\'s own interval', finSpans.every((d) => near(d, IV
 const tickSpans = traded.slice(1).map((s, i) => s.pos - traded[i].pos);
 check('...and consecutive ticks are half an interval apart', tickSpans.every((d) => near(d, IV / 2, STEP + 1e-6)),
   'left-right-left, evenly, rather than a pair of shots and a gap');
+
+// ---------------------------------------------------------------------------
+section('Every stone is a subdivision');
+// POCKET FULL OF STONES BUYS A NOTE, not a thicker one. `multishot` counts the
+// whole volley now (see CONFIG.weapon.multishot), each pellet leaves on its own
+// tick, and so the card's real payout is a finer division of the same bar: the
+// pair of eighths the gun ships with becomes a triplet, then sixteenths. This
+// is the property the whole change rests on, asserted as rungs rather than as
+// milliseconds because "3 ticks in a bar/4 volley" is only a rhythm if the tick
+// is bar/12 exactly.
+const rung = (shots, volley = IV) => BAR / tickInterval(volley, 2, shots);
+check('the starting pair is a pair of eighths', near(rung(2), 8, 1e-9), `bar/${rung(2).toFixed(0)}`);
+check('the first stone makes it a triplet', near(rung(3), 12, 1e-9),
+  `bar/${rung(3).toFixed(0)} — 3 against the music's 2`);
+check('the second makes it sixteenths', near(rung(4), 16, 1e-9), `bar/${rung(4).toFixed(0)}`);
+check('and the sixth is sextuplets', near(rung(6), 24, 1e-9), `bar/${rung(6).toFixed(0)}`);
+// A count with no rung of its own does NOT collapse the gun back onto one
+// frame: it keeps the finest cycle that does divide and the odd stone rides
+// along on the tick it lands on. Five pellets have no bar/20 to sit on, so they
+// are dealt 2,1,1,1 over the sixteenths four of them would have had.
+check('a count the ladder cannot hold keeps the cycle below it',
+  finSplit(2, IV, 5) === 4 && finSplit(2, IV, 7) === 6,
+  '5 -> 4 ticks, 7 -> 6 ticks; nothing is dropped, the surplus thickens a tick');
+// The cap is a musical limit, not a technical one — the ladder would happily go
+// on halving. Past it the gun stops buying notes and pellets thicken the ticks
+// it has, which is what every pellet used to do.
+check('the stagger stops subdividing at staggerTicks',
+  [6, 8, 12, 20].every((n) => finSplit(2, IV, n) === CONFIG.weapon.staggerTicks),
+  `cap ${CONFIG.weapon.staggerTicks}`);
+check('...and 1 turns it off outright', (() => {
+  const held = CONFIG.weapon.staggerTicks;
+  CONFIG.weapon.staggerTicks = 1;
+  const off = finSplit(2, IV, 4);
+  CONFIG.weapon.staggerTicks = held;
+  return off === 1;
+})(), 'the whole volley on one frame, fanned, as it was before any of this');
+// THE INVARIANT THE CARD IS NOT ALLOWED TO BREAK. However many ticks a volley
+// is dealt across, a full cycle of them takes exactly one volley interval — so
+// the same stones are in the water in the same second and the stagger is a
+// rhythm rather than a rate change. Checked across every rung the gun can
+// reach, not just the shipped one, because Rapid Fire moves it under the card.
+check('a cycle is one volley interval at every count and every rung',
+  [4, 6, 8, 12, 16, 24, 32, 48, 64].every((d) => {
+    const volley = BAR / d;
+    return [2, 3, 4, 5, 6, 8, 12].every((shots) => {
+      const n = finSplit(2, volley, shots);
+      return near(tickInterval(volley, 2, shots) * n, volley, 1e-9);
+    });
+  }), 'more notes, never more gun');
+// The cadence a bar/8 gun (one Rapid Fire stack) reaches with a stone or two on
+// top — the busiest thing a normal run puts on the grid, and still a rung.
+check('a faster gun subdivides from where IT is', near(rung(3, BAR / 8), 24, 1e-9)
+  && near(rung(4, BAR / 8), 32, 1e-9), 'bar/8 volleys -> bar/24 triplets, bar/32 sixteenths');
+
+// WHAT EACH TICK ACTUALLY THROWS. The grid above says how often the gun fires;
+// this says what leaves when it does, and the two have to agree or the cadence
+// is right while the gun is quietly stronger or weaker than the card claims.
+//
+// Walked over a full wrap of the cursor rather than a volley or two, because
+// every failure this can have is a slow one: a surplus stone pinned to one
+// flipper, or a pattern that only comes out even if you stop counting at the
+// right moment.
+const walk = (shots, origins = 2, volley = IV) => {
+  const ticks = finSplit(origins, volley, shots);
+  const wrap = ticks < 2 ? 1 : ticks * ticks * origins;
+  const perFin = new Array(origins).fill(0);
+  const perCycle = [];
+  let cursor = 0;
+  let cycle = 0;
+  for (let i = 0; i < wrap; i++) {
+    const { salvo, cursor: next } = dealTick(shots, ticks, origins, cursor);
+    cursor = next;
+    for (const f of salvo) perFin[f.o] += f.n;
+    cycle += salvo.reduce((n, f) => n + f.n, 0);
+    if (ticks < 2 || (i + 1) % ticks === 0) { perCycle.push(cycle); cycle = 0; }
+  }
+  return { ticks, wrap, perFin, perCycle };
+};
+const counts = [1, 2, 3, 4, 5, 6, 7, 8, 12];
+check('every cycle of ticks throws the whole volley and no more',
+  counts.every((n) => walk(n).perCycle.every((c) => c === n)),
+  counts.map((n) => `${n}:${walk(n).ticks}t`).join(' '));
+// A one-stone gun is excluded and cannot be otherwise: there is one pebble and
+// two flippers, so somebody throws it. Every count the stagger actually deals
+// out has to come out level.
+check('...and both flippers carry the same number of stones',
+  counts.filter((n) => walk(n).ticks > 1).every((n) => { const f = walk(n).perFin; return f[0] === f[1]; }),
+  counts.map((n) => `${n}:${walk(n).perFin.join('/')}`).join(' '));
+// The case that made this rotate at all: five stones over four ticks is 2,1,1,1,
+// and a window nailed to slot 0 would have thrown every surplus stone off the
+// left flipper for the rest of the run.
+const five = walk(5);
+check('a surplus stone does not live on one fin', five.perFin[0] === five.perFin[1],
+  `4 ticks, 5 stones, ${five.wrap} ticks walked -> ${five.perFin.join(' / ')}`);
+// A model with no rig, or a cadence too fine to divide, still fires everything
+// it owns — the fallback is the old simultaneous volley, not a smaller one.
+check('an undealt volley still throws every stone',
+  [1, 3, 5, 8].every((n) => dealTick(n, 1, 2, 0).salvo.reduce((a, f) => a + f.n, 0) === n),
+  'the fallback splits across the limbs rather than dropping the remainder');
+check('...and a one-limb model fires it from the body',
+  dealTick(5, 1, 1, 0).salvo.length === 1 && dealTick(5, 1, 1, 0).salvo[0].n === 5);
 
 // ---------------------------------------------------------------------------
 section('With no transport the gun still works');

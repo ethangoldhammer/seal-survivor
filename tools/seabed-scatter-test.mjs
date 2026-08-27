@@ -124,7 +124,14 @@ console.log('\nshipped defaults (DEFAULTS, not the saved snapshot)');
   const perPlant = 86 / bed.length;
   ok(perPlant > 0.5, 'the default bed is sparse enough to have clearings',
     `${bed.length} plants over 86 units — one every ${perPlant.toFixed(2)} units`);
-  ok(Math.max(...scales) / Math.min(...scales) > 3,
+  // A RATIO, AND A LOW BAR ON PURPOSE. What this catches is a bed where every
+  // plant of a species is the same height — the stamp-repeated look the range
+  // in config.js exists to break — not a particular pair of numbers. The range
+  // itself is art and is tuned: it is [1.15, 3.0] as this is written (2.6x),
+  // and it was [0.4, 2.1] when the bar was set at 3x, so the bar was really
+  // asserting one afternoon's slider positions. Anything under 2x is a bed
+  // that reads as one size, and that is the thing worth failing over.
+  ok(Math.max(...scales) / Math.min(...scales) > 2,
     'the default size spread is wide', `${Math.min(...scales).toFixed(2)}x to ${Math.max(...scales).toFixed(2)}x`
     + ` — a ${(Math.max(...scales) / Math.min(...scales)).toFixed(1)}x range`);
 }

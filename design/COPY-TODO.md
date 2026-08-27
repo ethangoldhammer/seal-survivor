@@ -70,3 +70,53 @@ hurt you". Only shown on runs that took the card.
 
 The two side words themselves are `sideNames` above; the summary reads them
 from there, so writing those once covers the card and the summary both.
+
+## Two returning hellos that do not name the dead seal
+
+`returncause` and `returnplain` in `path/src/greetings.csv`, staged as lorem.
+
+Every other `again` line in that file spends `{departed}`, which is exactly the
+state greetingTable.js's step 4 warns about: a death filed with no name on
+record — an old save, a browser that stored nothing — leaves the returning pool
+empty, and the pool falls all the way back to the first-run lines. A player on
+their fiftieth run gets "First time, {player}?".
+
+So these two are the ones kept back for that case, and they must NOT name the
+seal:
+
+- `returncause` spends `{cause}` and `{player}` only. It is what a player who
+  died to something the file has no written line for sees, so it has to work
+  for every label in deathCauses.js — "a shark", "the small fry", "running out
+  of air", "a lightning strike" all have to read in the same sentence. One
+  line, under 115 characters once both chips are spent.
+- `returnplain` spends `{player}` alone: no death to refer to at all. This is
+  the hello for somebody who restarted mid-run rather than dying, which is
+  also the case where "Hello {player}!" is currently being said to a returning
+  player. Same length budget.
+
+Both are `when=again`, untagged, and are seen at the top of a run on the coach
+band.
+
+## Iron Lung now reads the bar, not the tank
+
+The mechanic changed: the bonus scales with the oxygen the seal is CURRENTLY
+holding, so it peaks on a fresh breath and bleeds to nothing by the time you
+have to surface. Widening the tank raises that ceiling and buys more seconds
+near it, so Deep Lungs is still the pairing.
+
+Two lines that described the old behaviour:
+
+- `ironLungLevel`'s `unlock` in `path/src/statText.csv`, staged as lorem. It
+  read "damage with your maximum oxygen", which is now the wrong word. First
+  pick of the card reads this, so it has to carry the whole idea in one short
+  phrase — 4-7 words, same length as the line it replaces.
+- The built-in `desc` on the `ironLung` entry in `path/src/config.js` reads
+  "All damage scales with the size of your lungs". NOT staged, because
+  `upgrades.csv` overrides it with `{effect}` and nothing renders it today —
+  it is the fallback if that row is ever cleared. Left as-is rather than
+  half-rewritten; worth a pass when you do the statText line, since the two
+  should agree.
+
+`ironLungBonus`'s label ("damage bonus") is unchanged and still reads fine, but
+the number behind it is now measured AT A FULL BREATH rather than being a
+constant. If the tip should say so, that row's `label` is where.

@@ -1390,46 +1390,6 @@
       "thicknessAdd": 0.185
     }
   },
-  "creatureOutline": {
-    "color": 16742973,
-    "thickness": 0.12,
-    "glow": 2.4,
-    "opacity": 1,
-    "bosses": false,
-    "on": {
-      "enemyShark": false,
-      "enemyGreatWhite": false,
-      "enemyMegalodon": false,
-      "enemyMightyMeg": false,
-      "enemyOrca": false,
-      "enemyDolphin": false,
-      "enemyOrcaBull": false,
-      "enemyOrcaCow": false,
-      "enemyAbyssShark": false,
-      "enemyOtter": false,
-      "enemyStingray": false,
-      "enemyWalkingCrab": false,
-      "enemySeaTurtle": false,
-      "enemySharkLowpoly": false,
-      "enemyCrabClaw": false,
-      "enemySchoolPod": false
-    }
-  },
-  "companionOutline": {
-    "color": 16765562,
-    "thickness": 0.1,
-    "glow": 2,
-    "opacity": 1,
-    "on": {
-      "sealTeam": true,
-      "orcaFriendBull": true,
-      "orcaFriendCow": true,
-      "orcaFriendCalf": true,
-      "dumboOcto": true,
-      "belugaDrone": true,
-      "eelCompanion": true
-    }
-  },
   "weapon": {
     "damagePerLevel": 1.6,
     "speedPerLevel": 0.35,
@@ -9618,7 +9578,7 @@
     "tolerance": 0.01,
     "releaseOnOneShot": true,
     "tipLengthMul": 1,
-    "muzzleLengthMul": 0.05,
+    "muzzleLengthMul": 1,
     "muzzleNudge": 0,
     "flattenZ": true,
     "alternate": true
@@ -11474,7 +11434,10 @@
     },
     "uiHover": {
       "srcs": [
-        "/sfx/HG_UI_Blip_Menu_Blicky-converted.mp3"
+        "/sfx/HG_UI_Blip_Menu_Blockhead.mp3",
+        "/sfx/HG_UI_Blip_Menu_Blicky-converted.mp3",
+        "/sfx/HG_UI_Blip_Menu_Terminal-converted.mp3",
+        "/sfx/HG_UI_Blip_Menu_Spat-converted.mp3"
       ],
       "gain": 0.7079457843841379,
       "pitchVary": 0.5,
@@ -11938,10 +11901,6 @@
     "wetGlow": 1,
     "wetTint": 0.5,
     "presets": {
-      "greatWhite": {
-        "strength": 1.3,
-        "wet": 0
-      },
       "mightyMeg": {
         "strength": 0,
         "size": 0.04,
@@ -11997,49 +11956,7 @@
         "color": 0,
         "wetColor": 14676735
       },
-      "shark": {
-        "strength": 0.83,
-        "size": 0.04,
-        "contrast": 3.55,
-        "wet": 1.15,
-        "wetGloss": 0.7,
-        "wetSteps": 2,
-        "wetSoft": 0.76,
-        "wetTight": 81,
-        "wetEdge": 0.15,
-        "wetRim": 0.46,
-        "wetRimPower": 2.7,
-        "wetPatch": 0.35,
-        "wetCaustics": 1.2,
-        "wetCausticScale": 4,
-        "wetCausticUp": 0.75,
-        "wetGlow": 1,
-        "wetTint": 0.5,
-        "color": 0,
-        "wetColor": 14676735
-      },
       "megalodon": {
-        "strength": 0.83,
-        "size": 0.04,
-        "contrast": 3.55,
-        "wet": 0.55,
-        "wetGloss": 0.7,
-        "wetSteps": 2,
-        "wetSoft": 0.5,
-        "wetTight": 24,
-        "wetEdge": 0.15,
-        "wetRim": 0.9,
-        "wetRimPower": 3.4,
-        "wetPatch": 0.35,
-        "wetCaustics": 1.2,
-        "wetCausticScale": 4,
-        "wetCausticUp": 0.75,
-        "wetGlow": 1,
-        "wetTint": 0.5,
-        "color": 0,
-        "wetColor": 14676735
-      },
-      "bossHammerhead": {
         "strength": 0.83,
         "size": 0.04,
         "contrast": 3.55,
@@ -12080,27 +11997,6 @@
         "wetTint": 0.5,
         "color": 0,
         "wetColor": 14676735
-      },
-      "bossAnglerfish": {
-        "strength": 1,
-        "size": 0.04,
-        "contrast": 3.55,
-        "wet": 1.6,
-        "wetGloss": 0.7,
-        "wetSteps": 2,
-        "wetSoft": 0.5,
-        "wetTight": 24,
-        "wetEdge": 0.15,
-        "wetRim": 0.9,
-        "wetRimPower": 3.4,
-        "wetPatch": 0.35,
-        "wetCaustics": 1.2,
-        "wetCausticScale": 4,
-        "wetCausticUp": 0.75,
-        "wetGlow": 2,
-        "wetTint": 0.55,
-        "color": 0,
-        "wetColor": 8047359
       },
       "orcaFriendBull": {
         "strength": 1.08,
@@ -12143,30 +12039,6 @@
         "wetTint": 0.7,
         "color": 0,
         "wetColor": 14676735
-      },
-      "walkingCrab": {
-        "paint": 0,
-        "paintGlow": 0,
-        "strength": 0.83,
-        "size": 0.04,
-        "contrast": 3.55,
-        "wet": 0.75,
-        "wetGloss": 0.6,
-        "wetSteps": 2,
-        "wetSoft": 0.5,
-        "wetTight": 22,
-        "wetEdge": 0.15,
-        "wetRim": 0.9,
-        "wetRimPower": 3.4,
-        "wetPatch": 0.35,
-        "wetCaustics": 1.2,
-        "wetCausticScale": 4,
-        "wetCausticUp": 0.75,
-        "wetGlow": 1,
-        "wetTint": 0.5,
-        "color": 0,
-        "wetColor": 14676735,
-        "baseColor": 16777215
       },
       "tuna": {
         "paint": 0,
@@ -12374,25 +12246,6 @@
         "flowSync": "1 bar",
         "shellColor": 13534719
       },
-      "abyssHunter": {
-        "pattern": "stripes",
-        "scale": 0.15,
-        "coverage": 0.48,
-        "contrast": 3,
-        "strength": 1.96,
-        "tailBias": -0.35,
-        "hueSpread": 0.55,
-        "pulseAmp": 0.45,
-        "pulseSpeed": 0.55,
-        "pulseSync": "4 bars",
-        "phaseSteps": 0,
-        "colorA": 13421772,
-        "colorB": 8553090,
-        "colorC": 7434607,
-        "pigment": 1,
-        "flow": 1.06,
-        "shellColor": 4210752
-      },
       "carapace": {
         "schoolAmp": 0,
         "eyeStrength": 0.45,
@@ -12416,42 +12269,6 @@
         "phaseSteps": 0,
         "pigment": 0.48,
         "shellColor": 11358254
-      },
-      "emberClaw": {
-        "shellGlow": 0.53,
-        "shellColor": 12432819,
-        "pattern": "lattice",
-        "scale": 0.69,
-        "coverage": 0.22,
-        "contrast": 2.6,
-        "strength": 1.65,
-        "flowSync": "8 bars",
-        "flowSteps": 16,
-        "flowSpan": 7.4,
-        "flow": 0.44,
-        "tailBias": 0.55,
-        "hueBias": 0.45,
-        "hueSpread": 0.8,
-        "colorA": 14790071,
-        "colorB": 12724764,
-        "colorC": 16756810,
-        "bodyDarken": 0.6,
-        "eyeStrength": 6,
-        "eyeColor": 16773360,
-        "eyeFalloff": 1.1,
-        "eyePulse": 0.22,
-        "pulseAmp": 0.76,
-        "pulseSpeed": 2.749,
-        "pulseSync": "1 bar",
-        "flickerAmp": 0.76,
-        "flickerSync": "2 bars",
-        "flickerRate": 1.75,
-        "phaseSteps": 8,
-        "floor": 0.18,
-        "warp": 1.5,
-        "hueScale": 2.5,
-        "schoolAmp": 0.5,
-        "schoolScale": 20
       },
       "kingCrab": {
         "luminous": false,
@@ -12498,52 +12315,6 @@
         "drift": 0,
         "tailBias": 0
       },
-      "squidGlow": {
-        "pattern": "spots",
-        "scale": 0.13,
-        "coverage": 0.22,
-        "contrast": 3.4,
-        "strength": 0.46,
-        "tailBias": -0.25,
-        "flow": 0,
-        "pulseAmp": 0.55,
-        "pulseSpeed": 1.2,
-        "flickerAmp": 0.12,
-        "flickerSync": "1/4",
-        "flickerRate": 2,
-        "phaseSteps": 0,
-        "schoolAmp": 0,
-        "colorA": 3866592,
-        "colorB": 16734056,
-        "colorC": 14221302,
-        "hueSpread": 0.55,
-        "shellColor": 16711680,
-        "shellGlow": 0.16,
-        "bodyDarken": 0.42
-      },
-      "hide": {
-        "luminous": false,
-        "pigment": 1,
-        "strength": 0,
-        "pattern": "wireframe",
-        "scale": 0.62,
-        "coverage": 0.42,
-        "contrast": 0.9,
-        "warp": 1.1,
-        "tailBias": 0,
-        "hueBias": 0.45,
-        "colorA": 12175058,
-        "colorB": 9413040,
-        "colorC": 14674158,
-        "hueSpread": 0.85,
-        "hueScale": 1.6,
-        "shellColor": 10135990,
-        "pulseAmp": 0,
-        "flow": 0,
-        "schoolAmp": 0,
-        "phaseSpread": 0,
-        "phaseSteps": 0
-      },
       "scales": {
         "luminous": false,
         "pigment": 1,
@@ -12586,32 +12357,6 @@
         "schoolAmp": 0,
         "phaseSpread": 0,
         "phaseSteps": 0
-      },
-      "clubIce": {
-        "shellColor": 0,
-        "colorC": 0,
-        "colorB": 11396837,
-        "flow": 1.16,
-        "pattern": "flow",
-        "scale": 0.07
-      },
-      "octoGrabber": {
-        "flow": 1.2,
-        "pattern": "marble",
-        "scale": 0.13,
-        "shellColor": 16735780,
-        "colorA": 16749824,
-        "colorC": 61512
-      },
-      "hammerhead": {
-        "pigment": 1,
-        "scale": 0.07,
-        "contrast": 3.35,
-        "flow": 0.94,
-        "colorA": 0,
-        "colorB": 3807096,
-        "colorC": 15132390,
-        "shellColor": 1710361
       },
       "bossYacht": {
         "pigment": 1,
@@ -12686,13 +12431,6 @@
         "colorB": 0,
         "colorC": 9737364,
         "shellColor": 1330796
-      },
-      "puffer": {
-        "pigmentGlow": 0,
-        "contrast": 3.1,
-        "flow": 1.98,
-        "colorA": 5182704,
-        "shellColor": 16777215
       },
       "eelCompanion": {
         "pigmentGlow": 0,
@@ -15155,14 +14893,6 @@
         "high": 1,
         "soft": 0.06
       },
-      "voicemailBomb": {
-        "steps": 2,
-        "low": 0.55,
-        "high": 1.6,
-        "gamma": 1.1,
-        "soft": 0.04,
-        "range": 0.8
-      },
       "mussel": {
         "steps": 2,
         "low": 0.46,
@@ -15204,15 +14934,6 @@
         "range": 1.5
       },
       "megalodon": {
-        "strength": 1,
-        "steps": 3,
-        "gamma": 1,
-        "low": 0.28,
-        "high": 1,
-        "soft": 0,
-        "range": 1
-      },
-      "bossHammerhead": {
         "strength": 1,
         "steps": 3,
         "gamma": 1,

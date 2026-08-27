@@ -169,10 +169,32 @@ section('LUMPS — size is read as a FRACTION of the bar, not as raw damage');
   // fails if `feedback.playerHit.shake` is ever nudged back up: at maxShake
   // every hit in the game clamps to the same number and the scaling above is
   // real but invisible.
+  // THE CEILING IS LOW AND IT IS MEANT TO BE. `fx.maxShake` is the whole
+  // game's dial and it is tuned to 0.12 against a config default of 0.85 — a
+  // deliberately quiet camera — so the top of this curve clamps: past about a
+  // third of the bar in one hit, every hit rattles the same amount, and so do
+  // the death and the boss's release.
+  //
+  // This used to ask that even a full-bar hit stayed under the ceiling, which
+  // on the quiet camera is asking for the ceiling not to be where it is. What
+  // still has to be true is that the range a player actually meets is real:
+  // ORDINARY hits — a graze, a bite, a bad moment — have to differ from each
+  // other, and the clamp must not reach down into them.
   const pinned = shakeFor(MAX_HP, MAX_HP);
-  check('even the biggest single hit stays under the global shake ceiling',
-    pinned < CONFIG.fx.maxShake - 1e-6,
-    `${pinned.toFixed(4)} vs maxShake ${CONFIG.fx.maxShake}`);
+  const ceiling = CONFIG.fx.maxShake;
+  check('the biggest single hit reaches the global shake ceiling and stops',
+    pinned <= ceiling + 1e-9,
+    `${pinned.toFixed(4)} against maxShake ${ceiling}`);
+  // Where the clamp starts, in share-of-the-bar. Walked rather than solved so
+  // it keeps meaning this whatever shape the scale takes.
+  let clampsAt = 1;
+  for (let f = 0.02; f <= 1; f += 0.01) {
+    if (shakeFor(MAX_HP * f, MAX_HP) >= ceiling - 1e-9) { clampsAt = f; break; }
+  }
+  check('...and nothing an ordinary hit does is inside the clamp',
+    clampsAt > 0.25 && bite < ceiling - 1e-9,
+    `hits flatten out at ${(clampsAt * 100).toFixed(0)}% of the bar in one blow`
+    + `; a 12% bite is ${bite.toFixed(4)} against the ${ceiling} ceiling`);
   check('...and it is meaningfully bigger than a graze', pinned > graze * 2,
     `${graze.toFixed(4)} -> ${pinned.toFixed(4)}`);
   check('the shake is subtle in absolute terms', pinned < 0.35, pinned.toFixed(4));

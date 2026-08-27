@@ -32,18 +32,28 @@ const KEY = 'seal-survivor-buried';
 // How many of the dead are remembered.
 //
 // A BACKSTOP AGAINST STORAGE, NOT A POLICY, and the number is chosen to make
-// sure it never becomes one. sealNames.csv builds 68 adjectives x 84 nicknames
-// plus 28 written-out names — 5,824 seals, and that is the whole space the game
-// can produce. Anything at or below that would mean a player's earliest names
-// quietly coming back into circulation while the table still had unused ones
-// left, which is the permadeath rule silently not applying rather than the
-// player being told anything. 8,000 sits clear of the ceiling, so eviction is
-// unreachable by playing: a player who has died 5,824 times has met every seal
-// there is, and randomPlayerName's lineage is what answers that, not this.
+// sure it never becomes one. It has to sit clear of the whole space
+// sealNames.csv can produce: anything at or below that ceiling would mean a
+// player's earliest names quietly coming back into circulation while the table
+// still had unused ones left — the permadeath rule silently not applying,
+// rather than the player being told anything. A player who has met every seal
+// there is gets randomPlayerName's lineage ("Fat Tony II"), not eviction.
 //
-// The cost is about 130KB against a 5MB budget. The write path below survives a
+// THE CEILING MOVES WHEN THE TABLE DOES, and this number does not follow it on
+// its own. sealNames.csv was 68 adjectives x 84 nicknames when 8,000 was
+// chosen; it is 87 x 115 today, which is 10,146 possible seals — so 8,000 had
+// become a policy without anyone deciding it was one. 25,000 is roughly 2.5x
+// the table as it stands, which is the room the next few hundred rows need.
+//
+// It is not derived from the table here on purpose: this module is storage and
+// nothing else, and importing the CSV would pull a parse into every harness
+// that only wanted localStorage. next-seal-test.mjs drains the real table and
+// buries all of it, so the day this number stops clearing the ceiling is the
+// day `test:nextseal` says so — which is exactly how this was found.
+//
+// The cost is about 400KB against a 5MB budget. The write path below survives a
 // quota failure anyway rather than depending on this to prevent one.
-const MAX_REMEMBERED = 8000;
+const MAX_REMEMBERED = 25000;
 
 let cached = null;
 // The same names as `cached`, flattened to comparison keys, for the lookup.

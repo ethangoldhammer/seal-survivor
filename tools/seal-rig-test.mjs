@@ -570,18 +570,26 @@ section('WAKE — where the bursts are actually born');
     {
       // The shipped split, and the budget: moving the emitters around must not
       // quietly multiply how many bubbles a second of swimming costs.
-      const pts = wakePoints();
+      // TWENTY SECONDS, not two. The split is one coin per burst — 25 a second
+      // — so two seconds is fifty draws, and fifty draws of a 0.2 coin sit
+      // inside +/-0.11 at one standard deviation. The window this asserted in
+      // was narrower than the sampling error of the sample it took: it read
+      // 30% and failed, every run and by the same amount, because the harness's
+      // RNG is deterministic — a fixed unlucky sample looks exactly like a
+      // regression and never shakes itself out. At 500 draws the error is 1.8%
+      // and the window means what it says.
+      const pts = wakePoints(20);
       const onTips = pts.filter((p) => tips.some((t) => near(p, t))).length / pts.length;
       check('the shipped split lands near tailShare',
         Math.abs((1 - onTips) - W.tailShare) < 0.1,
-        `${((1 - onTips) * 100).toFixed(0)}% off the tail, tailShare ${W.tailShare}`);
+        `${((1 - onTips) * 100).toFixed(0)}% off the tail over ${pts.length} bubbles, tailShare ${W.tailShare}`);
 
       // The authored count, the wake's own scale, and the global sprite
       // thinning knob — bubbles are sprites, so emit() applies it here too.
       const perBurst = Math.max(1, Math.round(
         CONFIG.emitters.wakeBubbles.count * W.scale * (CONFIG.fx.spriteDensity ?? 1),
       ));
-      const expected = W.perSecond * perBurst * 2; // two seconds at top speed
+      const expected = W.perSecond * perBurst * 20; // the twenty seconds sampled above
       check('and one burst is still one burst — the rate is unchanged',
         Math.abs(pts.length - expected) < expected * 0.1, `${pts.length} particles vs ~${expected}`);
     }

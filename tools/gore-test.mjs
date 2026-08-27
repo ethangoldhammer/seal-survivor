@@ -272,7 +272,16 @@ section('The red is the effect; the solids are the garnish');
   };
 
   const full = redFrom();
-  check('a meal throws a lot of red', full > 100, `${full} particles`);
+  // A LOT OF RED, SCALED BY THE THINNING KNOB. `fx.spriteDensity` is a global
+  // dial over every sprite emitter in the game — 0.35 as this is written — and
+  // it scales two of the three layers below, so a flat `> 100` was really
+  // asserting that nobody had ever turned it down. The claim worth holding is
+  // that a meal is a burst and not a handful, so the bar moves with the knob:
+  // a hundred at full density, thirty-five at a third of it. The exact
+  // arithmetic is the check under this one, which reads the knob already.
+  const density = Math.min(1, CONFIG.fx.spriteDensity ?? 1);
+  check('a meal throws a lot of red', full > 100 * density,
+    `${full} particles, against 100 x spriteDensity ${density}`);
   // The three layers are separately tunable and separately switchable, which is
   // the only reason they are three emitters rather than one.
   // What one layer is worth: its authored count, the gore system's own scale

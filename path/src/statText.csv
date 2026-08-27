@@ -1,22 +1,22 @@
 id,group,kind,label,plural,unlock,template,review,unit,lower,bare,percentOfOne,notes
-maxHp,the seal,flat,max HP,,,,TRUE,,,,,
-maxSpeed,the seal,percent,max speed,,,,TRUE,,,,,
-pickupRadius,the seal,percent,pickup radius,,,,TRUE,,,,,
-chumGulpRadius,the seal,percent,gulp radius,,,,TRUE,,,,,
-regenPerSec,the seal,flat,HP/sec,,,,TRUE,,,,,
-maxOxygen,the seal,flat,max oxygen,,,,TRUE,,,,,
-oxygenRefillRate,the seal,percent,surface refill speed,,,,TRUE,,,,,
-fireRate,the gun,percent,fire rate,,,,TRUE,,TRUE,,,
-damage,the gun,percent,projectile damage,,,,TRUE,,,,,
-speed,the gun,percent,projectile speed,,,,TRUE,,,,,
-leftFinRadiusMul,the gun,percent,lorem ipsum,,,,,,,,,"Flippers Up! — how much bigger the pebbles out of the LEFT flipper are. Renders as '+35% <label>'. Two or three words; it has to name the pebble AND say which side, because the right-hand row sits next to it on the same card once the second stack is taken. Seen on the level-up card and in the Upgrades tab."
-rightFinRadiusMul,the gun,percent,lorem ipsum,,,,,,,,,"The right-hand half of the pair above. Same shape, same length; the two read side by side as '+35% X, +35% Y' on a card that stacked twice, so they should differ only in the word for the side."
+maxHp,the seal,flat,max HP,,,,,,,,,
+maxSpeed,the seal,percent,max speed,,,,,,,,,
+pickupRadius,the seal,percent,pickup radius,,,,,,,,,
+chumGulpRadius,the seal,percent,gulp radius,,,,,,,,,
+regenPerSec,the seal,flat,HP/sec,,,,,,,,,
+maxOxygen,the seal,flat,max oxygen,,,,,,,,,
+oxygenRefillRate,the seal,percent,surface refill speed,,,,,,,,,
+fireRate,the gun,percent,fire rate,,,,,,TRUE,,,
+damage,the gun,percent,projectile damage,,,,,,,,,
+speed,the gun,percent,projectile speed,,,,,,,,,
+leftFinRadiusMul,the gun,percent,left fin projectile size,,,,,,,,,"Flippers Up! — how much bigger the pebbles out of the LEFT flipper are. Renders as '+35% <label>'. Two or three words; it has to name the pebble AND say which side, because the right-hand row sits next to it on the same card once the second stack is taken. Seen on the level-up card and in the Upgrades tab."
+rightFinRadiusMul,the gun,percent,right fin projectile size,,,,,,,,,"The right-hand half of the pair above. Same shape, same length; the two read side by side as '+35% X, +35% Y' on a card that stacked twice, so they should differ only in the word for the side."
 flippersUpStacks,the gun,level,Flippers Up!,,,,,,,,,"NOT NEW COPY — this is the card's own name out of upgrades.csv, repeated here only so a card can never render the raw variable name. phraseAll drops a level stat that arrives beside real ones, and this one always does (the size multiplier moves on every stack), so it is not expected to appear on any card. It exists because 'not expected to' is not the same as 'cannot'."
-leftFinElementLevel,the gun,level,lorem ipsum,,dolor sit amet,,,,,,,"Flippers Up! stack 3 and up: how deep the LEFT flipper's own element is. Two lines needed. `label` is what a deepening stack reads as ('+1 <label> levels'), two or three words naming the fin and its element. `unlock` is the whole clause the card that first lights that fin shows instead — the shape Sea Garlic and the Glow Up! cards use, a bare noun phrase with no verb in front of it, naming what the player just bought. The element itself is rolled per run, so neither line can name a specific one."
-rightFinElementLevel,the gun,level,lorem ipsum,,dolor sit amet,,,,,,,"The right-hand half of the pair above. Same two lines, same lengths; they differ only in the word for the side."
-multishot,the gun,count,projectile,,,,TRUE,,,,,
+leftFinElementLevel,the gun,level,Fix FX,,Fin FX,,,,,,,"Flippers Up! stack 3 and up: how deep the LEFT flipper's own element is. Two lines needed. `label` is what a deepening stack reads as ('+1 <label> levels'), two or three words naming the fin and its element. `unlock` is the whole clause the card that first lights that fin shows instead — the shape Sea Garlic and the Glow Up! cards use, a bare noun phrase with no verb in front of it, naming what the player just bought. The element itself is rolled per run, so neither line can name a specific one."
+rightFinElementLevel,the gun,level,Finx FX,,Fin FX,,,,,,,"The right-hand half of the pair above. Same two lines, same lengths; they differ only in the word for the side."
+multishot,the gun,count,projectile,,,,,,,,,
 multishotLevel,the gun,level,projectile,,,,,,,,,"Bookkeeping, not a card line. `multishot` beside it is the pellet count a player reads; this row exists because every stat an upgrade moves needs an entry, and it is deliberately given no `unlock` text so phraseAll drops it every time — the count row is always moving alongside it. Same word as that row on purpose; there is nothing new to write here."
-pierce,the gun,count,enemy,enemies,,,TRUE,,,,,"Reads as the tail of a sentence — ""Bullets pierce {effect}"" — because that is the shape the card has always had."
+pierce,the gun,count,enemy,enemies,,,,,,,,"Reads as the tail of a sentence — ""Bullets pierce {effect}"" — because that is the shape the card has always had."
 projectileLifeMul,cross-cutting,percent,projectile lifetime,,,,,,,,,"André 3000's stat. Names how long everything the seal fires stays in the water — the card reads as a bare {effect}, so this label IS the card (""+25% <label>""). Two or three words, and it has to cover missiles and thrown shells as well as the gun, not just the pebbles."
 recoil,the gun,percent,recoil boost,,,,TRUE,,,,,"Sits at 0 by default, so recoil *= 1.3 measures as no change at all and {effect} correctly declines to claim one. The label is here for the day the base is raised off zero."
 projectileBonus,the gun,count,of everything you fire,,,,TRUE,,,TRUE,,"bare: the label is already a whole phrase (""of everything you fire""), so no noun is appended."
@@ -26,7 +26,7 @@ strikeChainMul,the strike,percent,chain damage,,,,TRUE,,,,,
 strikeDashSpeed,the strike,percent,dash speed,,,,TRUE,,,,,
 strikeDashDuration,the strike,percent,dash length,,,,TRUE,,,,,
 strikeChargeTime,the strike,percent,charge speed,,,,TRUE,,TRUE,,,
-strikeChumRefill,the strike,flat,meter per chum,,,,TRUE,,,,TRUE,"percentOfOne: the stat is a fraction of a meter, so it reads better as a percentage of the thing it fills than as ""+0.15""."
+strikeChumRefill,the strike,flat,refill per chum,,,,TRUE,,,,TRUE,"percentOfOne: the stat is a fraction of a meter, so it reads better as a percentage of the thing it fills than as ""+0.15""."
 shrapnelCount,the strike,count,fragment,,,,TRUE,,,,,
 breachChainLevel,the strike,count,link per breach,,,,TRUE,,,,,
 aoeMul,cross-cutting,percent,"blast, aura and wave size",,,,TRUE,,,,,
@@ -45,7 +45,7 @@ scallopCount,counted,count,wild scallop,,,,TRUE,,,,,
 garlicLevel,,level,sea garlic,,a garlicky aura,,TRUE,,,,,
 eelLevel,,level,electric eel,,chain lightning,,TRUE,,,,,
 laserEyesLevel,,level,laser eyes,,eye beams,,TRUE,,,,,
-starfishLevel,,level,starfish,,rapid thrown starfish,,TRUE,,,,,
+starfishLevel,,level,starfish,,starfish projectiles,,TRUE,,,,,
 seagullLevel,,level,seagull,,homing dive-bombers,,TRUE,,,,,
 belugaLevel,,level,beluga,,an oxygen filled bubble that also traps baddies.,,TRUE,,,,,
 sealTeamLevel,,count,escort seal,,,,TRUE,,,,,
@@ -54,7 +54,7 @@ calamariLevel,,level,calamari ring,,rings of fried squid,,TRUE,,,,,
 dumboLevel,,level,dumbo octopus,,a charm on nearby enemies,,TRUE,,,,,
 harpLevel,,level,harp seal,,notes that charm the biggest enemy near you,,TRUE,,,,,
 oysterLevel,,level,oyster blaster,,bursting pearls,,TRUE,,,,,
-razorClamLevel,,level,razor clam,,a spray of razor sharp razor clam blades,,TRUE,,,,,
+razorClamLevel,,level,razor clam,,x-tra sharp razor clam blades,,TRUE,,,,,
 octoGrabLevel,,level,octopus grabber,,"an octopus buddy that reels in fish, and pops them into chum for you, {player}",,TRUE,,,,,
 orcaLevel,,level,orca family,,3 orca buddies who will attack yachts and other orca opps.,,TRUE,,,,,
 dolphinPodLevel,,level,dolphin pod,,a pod of dolphins working the surface,,TRUE,,,,,"The card that raises this is a STUB — disabled in upgrades.csv, and no system reads the stat yet (see CONFIG.upgrades.dolphinPod). The label is here anyway because npm run test:text fails on a stat without one: the day the card is switched on, its {effect} has to render as English rather than as dolphinPodLevel."
@@ -62,14 +62,14 @@ musselVolleyLevel,,level,mussel barrage,,"on perfect strike, launches a bearded 
 clubLevel,,level,club,,a club in your fin slot.,,TRUE,,,,,
 clubThrowLevel,,level,thrown club,,hurled homing clubs on a strike,,TRUE,,,,,
 clubBoomLevel,,level,club blast,,every club hit detonates,,TRUE,,,,,
-clubIceLevel,,level,club ice,,chill and freeze your opps,,TRUE,,,,,
+clubIceLevel,,level,club ice,,chill and freeze enemies,,TRUE,,,,,
 clubCount,the bouncer,count,club,,,,TRUE,,,,,"The Bouncer's four. Percentages rather than a level, because the card is a multiplier on a class rather than a level of anything — there is no ""club power 3"" to name, only the numbers it moved."
 clubDamageMul,the bouncer,percent,club damage,,,,TRUE,,,,,
 clubKnockMul,the bouncer,percent,club knockback,,,,TRUE,,,,,
 clubReachMul,the bouncer,percent,club reach,,,,TRUE,,,,,
 homingShotLevel,,level,sonar teeth,,"shots that seek, favouring the biggest body in reach",,TRUE,,,,,
-maneaterLevel,stack-counters,level,maneater,,a taste for swimmers — every one you eat raises all your damage,,TRUE,,,,,"Counts stacks and nothing else, deliberately: what a stack is WORTH depends on a running total, which is not visible from inside apply(). See applyDamageScaling in stats.js. That makes `level` the honest kind — {effect} would otherwise have to invent a number, which is the exact failure the measured descriptions exist to prevent."
-ironLungLevel,stack-counters,level,iron lung,,all damage scaling with your maximum oxygen,,TRUE,,,,,"Same as maneater: worth depends on a stat other cards move (max oxygen), so a measured number here would be a lie. Counts stacks only."
+maneaterLevel,stack-counters,level,maneater,,every human eaten buffs your seal's damage.,,TRUE,,,,,"Counts stacks and nothing else, deliberately: what a stack is WORTH depends on a running total, which is not visible from inside apply(). See applyDamageScaling in stats.js. That makes `level` the honest kind — {effect} would otherwise have to invent a number, which is the exact failure the measured descriptions exist to prevent."
+ironLungLevel,stack-counters,level,iron lung,,oxygen fueled damage,,TRUE,,,,,"NEEDS YOUR WORDS. The old line was 'damage with your maximum oxygen' and the mechanic changed underneath it: the bonus now follows the CURRENT oxygen bar, so it is at its top on a fresh breath and bleeds to nothing by the time you have to surface. Widening the tank raises that ceiling and buys more seconds near it. This is the first-pick unlock line on the card — one short phrase, roughly 4-7 words, the length of the line it replaces. Counts stacks only; a measured number here would be a lie, same as maneater."
 bakalarBombDamage,bakalar's boat,flat,bomb damage,,,,,,,,,"What one voicemail bomb hits for. Reads as '+22 ___' on a hover tip beside the boat's other level numbers, so it wants to be short and to name the BOMB rather than the boat. Big Rigz is already folded into the figure."
 bakalarBlast,bakalar's boat,flat,blast radius,,,,,m,,,,"How wide the bomb goes off, in world units. Sits next to the damage on the same tip, so the two should not read as the same thing said twice. Splash Zone is folded in. Drop the unit if 'm' is wrong for this game's water."
 bakalarBombGap,bakalar's boat,flat,between bombs,,,,,s,TRUE,,,"Seconds between bomb drops while the boat is sailing. LOWER IS BETTER — the lower column is set, so a level that cuts it renders as a gain rather than a loss. Phrase it so '-0.32s ___' reads right."
@@ -138,7 +138,7 @@ starfishGap,starfish shuriken,percent,rate,,,,,s,TRUE,,,"Seconds between throws,
 starfishSize,starfish shuriken,flat,size,,,,,m,,,,"How big each one is, which is also how easily it connects."
 starfishPierce,starfish shuriken,count,bodies cut,bodies cut,,,,,,,,"How many bodies one passes through. Rounded step, capped."
 homingReach,homing pebbles,flat,seek range,,,,,m,,,,"How far a pebble will look for something to bend toward. The ONLY row this card gets: its level also moves a turn rate and a size bias, and both are facts about the simulation rather than about the pebbles."
-ironLungBonus,iron lung,percent,damage bonus,,,,,,,,TRUE,"How much extra damage the held breath is worth, as a share — percentOfOne is set, so 0.4 renders as +40%. It scales with your MAX OXYGEN, so every Yoga makes this bigger; that is exactly what the card could not say before."
+ironLungBonus,iron lung,percent,damage bonus,,,,,,,,TRUE,"How much extra damage the held breath is worth, as a share — percentOfOne is set, so 0.4 renders as +40%. Measured AT A FULL BREATH: the live bonus follows the oxygen bar down (see ironLungMul in stats.js), and a tip whose number fell while you read it would be unreadable. It still scales with max oxygen, so every Yoga raises this. If the label should say the number is a peak rather than a constant, this is the row to change."
 biolumShockChance,glow up — voltaic,percent,arc chance,,,,,,,,TRUE,"How often a shot arcs to a second fish. Capped at chanceMax, so it stops moving before the stack cap does."
 biolumShockArcs,glow up — voltaic,count,arc,arcs,,,,,,,,How many bodies one arc reaches. A rounded step.
 biolumVenomDps,glow up — venom,flat,poison per second,,,,,,,,,Damage per second while poisoned. THE ONLY THING a venom level buys — its duration and stack cap are flat — which is worth knowing and was invisible before.

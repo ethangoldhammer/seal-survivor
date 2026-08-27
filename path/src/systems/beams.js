@@ -213,40 +213,90 @@ export function glowSprite() {
   return tex;
 }
 
+// ---------------------------------------------------------------------------
+// THE QUAD AND THE MATERIALS OUTLIVE THE BEAM.
+//
+// A MATERIAL PER BEAM is still right, and for the reason the old comment here
+// gave: sharing one is what the primitive asset pool does, and it is exactly
+// why fading one bubble faded every bubble. These fade on their own clocks and
+// must not share an opacity.
+//
+// What was wrong was DISPOSING them. three.js refcounts a linked program by
+// its materials, so the last dispose deletes the program and the next volley
+// links the identical shader again from source. `npm run test:beamchurn`
+// measures the gap that makes it happen: at six stacks, fifty volleys a minute
+// each start from an EMPTY beam list, so nothing at all is holding the program
+// between them — 600 materials built and thrown away per minute, and fifty
+// compiles. On the phone that is 160ms inside `render`, six of the eight worst
+// frames of a 4½-minute run.
+//
+// So retired materials go on a free list instead. They are never disposed
+// during a run, which is the whole point: an idle pooled material keeps the
+// program's refcount above zero, and a volley arriving after ten quiet seconds
+// finds the shader already linked. The pool is bounded by the most beams ever
+// alive at once, which is single digits.
+//
+// The GEOMETRY can go further and be shared outright, because nothing writes to
+// it — a beam's length and width are `mesh.scale` (see updateBeams), never
+// vertices, so one unit quad serves every beam that will ever burn.
+let QUAD = null;
+function quad() {
+  QUAD ??= new THREE.PlaneGeometry(1, 1);
+  return QUAD;
+}
+
+const matPool = { glow: [], core: [], spill: [] };
+
+/**
+ * A material for this role, reused if one is going spare.
+ *
+ * `reset` is not optional bookkeeping: a pooled material still carries the last
+ * beam's colour and opacity, and a boss beam handed a player beam's red would
+ * be a bug that only shows up on the second volley.
+ */
+function takeMat(role, make, reset) {
+  const m = matPool[role].pop();
+  if (!m) return make();
+  reset(m);
+  return m;
+}
+
+function giveMat(role, m) {
+  if (m) matPool[role].push(m);
+}
+
 function buildMesh(scene, b) {
   const group = new THREE.Group();
-  // Unit quads, scaled per frame — a beam's length changes as it sweeps past
-  // the arena wall, and rebuilding geometry for that would allocate every frame.
-  const glowMat = new THREE.MeshBasicMaterial({
-    color: hdr(b.color, b.overdrive * (cfg().glowOverdriveMul ?? 0.55)),
+  const glowColor = hdr(b.color, b.overdrive * (cfg().glowOverdriveMul ?? 0.55));
+  const coreColor = hdr(b.coreColor ?? 0xffffff, b.overdrive);
+  const glowMat = takeMat('glow', () => new THREE.MeshBasicMaterial({
+    color: glowColor,
     map: beamProfile(),
     transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false,
-  });
-  const coreMat = new THREE.MeshBasicMaterial({
-    color: hdr(b.coreColor ?? 0xffffff, b.overdrive),
+  }), (m) => { m.color.copy(glowColor); m.opacity = 0.55; });
+  const coreMat = takeMat('core', () => new THREE.MeshBasicMaterial({
+    color: coreColor,
     map: beamProfile(),
     transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false,
-  });
-  // A MATERIAL PER BEAM, not a shared one. Sharing is what the primitive asset
-  // pool does, and it is exactly why fading one bubble fades every bubble —
-  // these fade in and out on their own clocks and must not share an opacity.
-  const glow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glowMat);
-  const core = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), coreMat);
+  }), (m) => { m.color.copy(coreColor); m.opacity = 0.95; });
+  const glow = new THREE.Mesh(quad(), glowMat);
+  const core = new THREE.Mesh(quad(), coreMat);
   core.position.z = 0.01;
   // THE SPILL. Sits at the muzzle, in the beam's own colour, and is the whole
   // of "it illuminates its surroundings" — see glowSprite. Parented to the
   // group but positioned in world space each frame, because the group is
   // rotated to the beam's angle and a child at the muzzle would otherwise have
   // to be un-rotated to stay circular.
-  const spillMat = new THREE.MeshBasicMaterial({
-    color: hdr(b.color, b.overdrive * (cfg().spillOverdriveMul ?? 0.4)),
+  const spillColor = hdr(b.color, b.overdrive * (cfg().spillOverdriveMul ?? 0.4));
+  const spillMat = takeMat('spill', () => new THREE.MeshBasicMaterial({
+    color: spillColor,
     map: glowSprite(),
     transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false,
-  });
-  const spill = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), spillMat);
+  }), (m) => { m.color.copy(spillColor); m.opacity = 0; });
+  const spill = new THREE.Mesh(quad(), spillMat);
   spill.position.z = -0.01;
   group.add(glow, core, spill);
   b.spill = spill;
@@ -505,15 +555,13 @@ function removeBeam(scene, i) {
   const b = beams[i];
   if (b.mesh) {
     scene.remove(b.mesh);
-    // Built here, disposed here. These are per-beam materials and geometries
-    // (see buildMesh) so nothing else can be holding them, and a run with forty
-    // boss beams in it would otherwise leak forty of each.
-    b.core.geometry.dispose();
-    b.glow.geometry.dispose();
-    b.core.material.dispose();
-    b.glow.material.dispose();
-    b.spill?.geometry.dispose();
-    b.spill?.material.dispose();
+    // RETIRED, NOT DISPOSED — see the pool note above buildMesh. The geometry
+    // is the shared unit quad and is never anyone's to dispose; the three
+    // materials go back on the free list, which is what keeps their program
+    // linked through a quiet stretch with no beam alive.
+    giveMat('core', b.core.material);
+    giveMat('glow', b.glow.material);
+    giveMat('spill', b.spill?.material);
   }
   b.cooldowns.clear();
   beams.splice(i, 1);

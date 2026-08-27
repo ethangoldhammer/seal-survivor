@@ -116,7 +116,11 @@ playtest.tick(1, { time: 1, level: 1, score: 0, hp: 100, maxHp: 100, alive: 1 })
 // An ability swings at scenery. It is entitled to think it dealt damage — the
 // hp write is absorbed downstream of it — so it calls in the figure it tried
 // to deal. Booking that would rank whichever weapon swings near turtles most.
-playtest.recordDamage('lightning', 1_000_000, { invincible: true });
+// NOT `lightning` — that one is unbooked at the door now (UNBOOKED_SOURCES in
+// playtest.js), so it would pass this check without the scenery guard ever
+// running, which is the exact green-light-that-means-nothing this file exists
+// to avoid.
+playtest.recordDamage('strike', 1_000_000, { invincible: true });
 playtest.recordDamage('garlic', 40, { invincible: true });
 
 // ...and a normal creature in the same breath, so this can tell "the guard
@@ -126,8 +130,8 @@ playtest.recordDamage('gun', 30, { invincible: false });
 const bucket = playtest.endRun('death').buckets[0];
 const dealt = bucket.dealtBySource;
 
-check('nothing credited for hitting scenery', !dealt.lightning && !dealt.garlic,
-  `lightning=${dealt.lightning ?? 0} garlic=${dealt.garlic ?? 0}`);
+check('nothing credited for hitting scenery', !dealt.strike && !dealt.garlic,
+  `strike=${dealt.strike ?? 0} garlic=${dealt.garlic ?? 0}`);
 check('a real hit still records', dealt.gun === 30, `gun=${dealt.gun ?? 0}`);
 
 // ---------------------------------------------------------------------------

@@ -3685,7 +3685,14 @@ export const ASSETS = {
     lookRig: {
       head: { bones: ['Head_Bone_00'], tipAxis: '+X', tipLength: 26.29 },
     },
-    shape: 'icosahedron', radius: 0.55, color: 0x2b3a44, unlit: true,
+    // The fallback primitive — the playtest build, and any frame drawn before
+    // the model resolves. 2.0 and not the 0.55 this was copied from
+    // enemyAnglerfish: the boss spawns at 2.5x its row's radius of 2.1, so a
+    // stand-in built at the small fish's size drew the arena's biggest animal
+    // as a blob a fifth of its own hitbox — measured, in tools/boss-test.mjs,
+    // where every other archetype's stand-in comes out within a factor of two
+    // of what you can shoot. Nothing about the loaded model reads this.
+    shape: 'icosahedron', radius: 2.0, color: 0x2b3a44, unlit: true,
   },
 
   enemyBarracuda: {
@@ -5967,6 +5974,34 @@ export function glowIsProcedural(key) {
 export function assetGlowPreset(key) {
   return ASSETS[key]?.biolumSkin ?? null;
 }
+
+// ...AND TAKEN OUT OF THE SNAPSHOT, once, at module load.
+//
+// Skipping the two fields when they are applied is what protects the render;
+// this is what stops the dead value living on. An inert number in
+// imported-tuning.json is still a number somebody reads later and "fixes" by
+// wiring it back up — and it is written out again on every save, so it
+// outlives the asset that earned it. Eight assets were carrying one, including
+// the seagull at glow 2.05 and the sea turtle at 1.8.
+//
+// HERE AND NOT IN config.js, for the reason the note above gives: whether an
+// asset's glow is procedural is a fact about the ASSET, and config.js cannot
+// import this file. Here and not inside applySavedAssetLooks() so it is true
+// for anything that merely imports this module — a harness reading
+// CONFIG.assetLooks, the Look panel painting its controls — rather than only
+// after whatever boot path happens to call the hook.
+//
+// `glow: 1` is left alone: it is the no-op the panel writes for "unset", not a
+// value, and stripping it would make the entry look edited.
+function dropProceduralGlowLooks() {
+  for (const [key, look] of Object.entries(CONFIG.assetLooks ?? {})) {
+    if (!look || !glowIsProcedural(key)) continue;
+    if (look.emissive != null) delete look.emissive;
+    if (look.glow != null && look.glow !== 1) delete look.glow;
+    if (look.emissiveMask != null) delete look.emissiveMask;
+  }
+}
+dropProceduralGlowLooks();
 
 export function applySavedAssetLooks() {
   const looks = CONFIG.assetLooks ?? {};

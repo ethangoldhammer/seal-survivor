@@ -102,7 +102,7 @@ export const DEATH_CAUSES = [
   // `boss:` covers the attacks that come off a boss rather than out of its
   // body — the trawler's salvo, every perk — which carry no creature key at
   // all and would otherwise land in no cause.
-  { id: 'boss', label: 'a boss', threat: 'Boss attacks', prefix: 'boss:', sources: ['bossShark', 'bossOrca', 'bossSquid', 'bossCrab', 'bossMosasaur', 'bossHammerhead', 'bossBoat', 'bossYacht'] },
+  { id: 'boss', label: 'a boss', threat: 'Boss attacks', prefix: 'boss:', sources: ['bossShark', 'bossOrca', 'bossSquid', 'bossCrab', 'bossMosasaur', 'bossHammerhead', 'bossBoat', 'bossYacht', 'bossAnglerfish'] },
   { id: 'drowning', label: 'running out of air', threat: 'Drowning', sources: ['drowning'] },
   { id: 'lightning', label: 'a lightning strike', threat: 'Lightning', sources: ['lightning'] },
   { id: 'shot', label: 'something that shoots', threat: 'Enemy fire', sources: ['enemy shot'] },

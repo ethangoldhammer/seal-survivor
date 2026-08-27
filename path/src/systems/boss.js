@@ -78,6 +78,7 @@ import { damageCreditFor } from './playtest.js';
 // and by the time a boss goes down the pebbles are usually something else. See
 // weaponName.js.
 import { weaponName } from '../weaponName.js';
+import { mark as crumb } from './crashLog.js';
 
 // Parsed once — the files can't change without a page reload, since it's the
 // dev server that notices the write. Same deal as the quip table.
@@ -792,6 +793,7 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // on the score screen would rename a weapon that beat this boss after the
     // fact — "Cloned Pebbles" on a photograph taken before the pebbles were
     // ever cloned.
+    crumb('boss:died');
     const credit = damageCreditFor(bossState.enemy);
     bossState.killedBy = credit ? weaponName(credit) : '';
     // And the key behind it, unresolved — see causeSource in systems/bossShot.js.
@@ -1050,6 +1052,7 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   attachHotSpots(scene, e);
 
   bossState.enemy = e;
+  crumb('boss:spawn');
   bossState.archetype = archetype;
   bossState.perk = perk;
   // The name is rolled from BOTH, and one of the perk's own words is

@@ -37,6 +37,7 @@
 import { SNAPSHOT_ARTBOARD, SNAPSHOT_BINDINGS, SNAPSHOT_KICKER } from './riveContract.js';
 import { playerName } from '../systems/playerName.js';
 import { CONFIG } from '../config.js';
+import { mark as crumb } from '../systems/crashLog.js';
 
 // The artboard's own shape. Anything that sizes a card derives its height from
 // its width through this, so a card is one proportion at every size it is
@@ -257,6 +258,7 @@ function warnNoStrings(missing) {
  */
 export function buildSnapshotCard({ photo, meta, width = 340, pixelRatio } = {}) {
   if (!snapshotCardsLive()) return null;
+  crumb('card:rive', Math.round(width));
 
   const w = Math.max(48, Math.round(width));
   const canvas = document.createElement('canvas');

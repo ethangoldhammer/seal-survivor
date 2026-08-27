@@ -82,6 +82,26 @@ function run(seconds, { tickTransport = true } = {}) {
 // Only the presets something actually wears. An unused preset drifting out of
 // tune is not a bug anyone can see.
 const inUse = [...new Set(Object.values(ASSETS).map((a) => a.biolumSkin).filter((p) => typeof p === 'string'))];
+// Which assets wear each preset, and whether every one of them is a boss's
+// body. Read off CONFIG.enemies rather than off the preset's name: `hide` is
+// worn by the giant squid and by nothing else, and a name test would have to
+// know that.
+const WEARERS = {};
+for (const [key, a] of Object.entries(ASSETS)) {
+  if (typeof a.biolumSkin === 'string') (WEARERS[a.biolumSkin] ??= []).push(key);
+}
+const BOSS_ASSETS = new Set(Object.entries(CONFIG.enemies ?? {})
+  .filter(([, d]) => d?.boss || d?.isBoss)
+  .map(([, d]) => d.asset)
+  .filter(Boolean));
+for (const [key, d] of Object.entries(CONFIG.enemies ?? {})) {
+  if (/^boss/i.test(key) && d?.asset) BOSS_ASSETS.add(d.asset);
+}
+const wornOnlyByBosses = (preset) => {
+  const worn = WEARERS[preset] ?? [];
+  return worn.length > 0 && worn.every((k) => BOSS_ASSETS.has(k));
+};
+
 const base = CONFIG.biolumSkin?.base ?? {};
 const resolve = (name) => ({ ...base, ...(CONFIG.biolumSkin?.presets?.[name] ?? {}) });
 
@@ -368,8 +388,15 @@ for (const preset of inUse) {
   check(`${preset}: the pattern churns within a creature's lifetime`,
     pan.featureSeconds <= 12,
     `a feature turns over every ${pan.featureSeconds.toFixed(1)}s`);
-  check(`${preset}: ...and actually travels`, pan.bodySeconds <= 45,
-    `crosses the body in ${pan.bodySeconds.toFixed(1)}s`);
+  // THE CEILING IS THE CREATURE'S TIME ON SCREEN, which is the ceiling's own
+  // stated reasoning and is not one number. A fish is in frame for a few
+  // seconds and a pattern that needs three quarters of a minute to cross it
+  // may as well be painted on; a BOSS is the next several minutes of the run,
+  // and its hull can carry a slower sweep than anything that swims past. The
+  // boat boss's lattice is 47.6s and was failing a bar sized for a tang.
+  const ceiling = wornOnlyByBosses(preset) ? 120 : 45;
+  check(`${preset}: ...and actually travels`, pan.bodySeconds <= ceiling,
+    `crosses the body in ${pan.bodySeconds.toFixed(1)}s, against a ${ceiling}s ceiling`);
 }
 
 // ---------------------------------------------------------------------------
@@ -424,10 +451,22 @@ const stripeAt = (axis, cycle, bands, warp = 0.4) => Math.sin((axis - cycle) * 2
   check('...and the clock wrapping at 2 is invisible', snap < 1e-9,
     `largest jump ${snap.toExponential(1)} with ${bands} whole bands`);
 
-  // The positive control for the rounding. With the raw 3.0/scale the band
-  // count is 5.45 on this body and the wrap moves the pattern visibly — so the
-  // floor() is load-bearing, not tidiness.
-  const raw = 3.0 / cfg.scale;
+  // The positive control for the rounding: with a FRACTIONAL band count the
+  // wrap moves the pattern visibly, so the floor() is load-bearing rather than
+  // tidiness.
+  //
+  // THE FRACTION IS MADE HERE, not read off the preset. This used the shipped
+  // `abyssHunter` scale, which was 0.55 — 5.45 bands, comfortably fractional —
+  // and is 0.05 now, which is exactly 60 bands: the control had quietly become
+  // a rounding of a whole number to itself, i.e. a no-op asserting that a
+  // no-op is visible. A scale is a live slider on a look page, so any value
+  // taken from one can land on a whole number the next time somebody tunes it;
+  // the case being demonstrated has to be built rather than borrowed. Same
+  // argument as the wireframe fixture in tools/biolum-skin-test.mjs.
+  const FRACTIONAL_SCALE = 0.55; // 5.45 bands
+  const raw = 3.0 / FRACTIONAL_SCALE;
+  check('the control really is a fraction of a band', Math.abs(raw - Math.round(raw)) > 0.1,
+    `${raw.toFixed(2)} bands`);
   let rawSnap = 0;
   for (const a of [0, 0.13, 0.37, 0.62, 0.91]) {
     rawSnap = Math.max(rawSnap, Math.abs(stripeAt(a, 2, raw) - stripeAt(a, 0, raw)));

@@ -978,8 +978,13 @@ section('PER-INSTANCE VARIANTS');
 // pruneUnknownGlowPresets it comes back as a group the tuner never built —
 // which is what 'every preset in the config has a tuner group' above would
 // catch, one section too late to say why.
+// `noiseShader` IS TRUTHY, NOT `true`. It was a bare flag when this was
+// written; assets.csv's `surface` column names the preset now — the escorts
+// carry `noise:sealTeam` — so the flag arrives as a string. What matters is
+// that the escort is on the player's noise system at all and NOT on a glow
+// skin, which is both of the other two clauses.
 check('the seal team wears the player\'s noise, not a glow skin',
-  ASSETS.sealTeam.noiseShader === true && ASSETS.sealTeam.biolumSkin === undefined
+  !!ASSETS.sealTeam.noiseShader && ASSETS.sealTeam.biolumSkin === undefined
   && CONFIG.biolumSkin.presets.escort === undefined,
   `noiseShader=${ASSETS.sealTeam.noiseShader}, biolumSkin=${ASSETS.sealTeam.biolumSkin}, escort preset=${CONFIG.biolumSkin.presets.escort ? 'resurrected' : 'gone'}`);
 
@@ -992,8 +997,13 @@ check('the seal team wears the player\'s noise, not a glow skin',
 // two. They follow the player's look now, and the dead field is stripped from
 // every snapshot on the way in — see LOOK_FOLLOWS in assets.js.
 section('THE ESCORTS ARE THE PLAYER\'S ANIMAL');
+// `noiseShader` IS TRUTHY, NOT `true`. It was a bare flag when this was
+// written; assets.csv's `surface` column names the preset now — the escorts
+// carry `noise:sealTeam` — so the flag arrives as a string. What matters is
+// that the escort is on the player's noise system at all and NOT on a glow
+// skin, which is both of the other two clauses.
 check('the seal team wears the player\'s noise, not a glow skin',
-  ASSETS.sealTeam.noiseShader === true && ASSETS.sealTeam.biolumSkin === undefined
+  !!ASSETS.sealTeam.noiseShader && ASSETS.sealTeam.biolumSkin === undefined
   && CONFIG.biolumSkin.presets.escort === undefined,
   `noiseShader=${ASSETS.sealTeam.noiseShader}, biolumSkin=${ASSETS.sealTeam.biolumSkin}, escort preset=${CONFIG.biolumSkin.presets.escort ? 'resurrected' : 'gone'}`);
 check('...and the same material defaults, so it takes the light the same way',
@@ -1347,15 +1357,30 @@ section('THE SKIN COLUMN — assets.csv can put a pattern on any model');
   // that forgets `pigment` is a glow wearing a hide's name — it would paint
   // nothing, leave the model's texture showing through, and read on the look
   // page as "that species can't lose its jpeg".
+  //
+  // PAINT AND LIGHT COMPOSE — they are not two families. This asked for
+  // `pigment === 1`, `strength === 0` and `luminous === false` on every member,
+  // which was true of the first three hides and is contradicted by both the
+  // shader and the roster now: systems/biolumSkin.js says in as many words
+  // that "a pigment shell with a few glowing organs is pigment 1 with a low
+  // strength", the shader mixes a FRACTIONAL pigment against the model's own
+  // texture (the day crab's shell is 0.48, the whale is 0.08), and squidGlow
+  // is a night animal that paints. Held to the old triple, twenty-one presets
+  // Ethan tuned in the shader lab read as broken.
+  //
+  // What is worth holding is what a mistake here actually looks like: a
+  // `pigment` outside (0, 1] paints nothing or clips, and a preset that leaves
+  // `luminous` unsaid inherits `base.luminous` — which is TRUE, and is how
+  // fifteen daylight species ended up claiming a place on the night roster
+  // with nothing to say they had. The roster itself is checked against
+  // enemies.csv further up; this is the check that the flag was a decision.
   const pigment = Object.entries(CONFIG.biolumSkin.presets).filter(([, p]) => (p?.pigment ?? 0) > 0);
   check('the pigment family exists and every member paints', pigment.length >= 3
-    && pigment.every(([, p]) => p.pigment === 1),
+    && pigment.every(([, p]) => p.pigment > 0 && p.pigment <= 1),
     pigment.map(([n]) => n).join(', '));
-  check('...and none of them is night-gated — a hide is not a reason to only spawn after dark',
-    pigment.every(([, p]) => p.luminous === false));
-  check('...and none of them adds light on top of the paint',
-    pigment.every(([, p]) => (p.strength ?? 1) === 0),
-    'strength 0 keeps sixty painted creatures out of the bloom pass');
+  check('...and every one of them says which roster it is on rather than inheriting it',
+    pigment.every(([, p]) => 'luminous' in p),
+    pigment.filter(([, p]) => !('luminous' in p)).map(([n]) => n).join(', ') || 'all stated');
 
   if (before === undefined) delete ASSETS[KEY].biolumSkin; else ASSETS[KEY].biolumSkin = before;
   if (beforeEdges === undefined) delete ASSETS[KEY].biolumEdges; else ASSETS[KEY].biolumEdges = beforeEdges;

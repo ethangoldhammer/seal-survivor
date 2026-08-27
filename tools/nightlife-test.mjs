@@ -369,7 +369,25 @@ const TARGET_ALIVE = 70; // roughly what a player who is keeping up holds
 // and whether that asset carries a `biolumSkin`. A fish that spawned in
 // daylight and lived into the night still counts as dark, which is correct:
 // it really is still wearing its day body.
-const isGlowBody = (e) => !!ASSETS[e?.assetKey]?.biolumSkin;
+//
+// ...AND WHETHER THAT SKIN IS A LAMP OR A COAT OF PAINT. Carrying a
+// `biolumSkin` at all stopped meaning "glows" once the same generator became
+// the game's texture replacer: the reef fish, the tuna, the hammerhead and the
+// two boats all wear one as PIGMENT and all spawn at noon, so a bare
+// `!!biolumSkin` counted 766 daylight arrivals as glowing and reported the
+// night gate as broken. The preset's own `luminous` flag is the roster half of
+// that split — the same question tools/biolum-skin-test.mjs asks, resolved
+// through `base` the same way, so the two files cannot drift apart.
+const isLuminousPreset = (name) => {
+  const root = CONFIG.biolumSkin ?? {};
+  const preset = root.presets?.[name];
+  if (!preset) return false;
+  return (preset.luminous ?? root.base?.luminous ?? true) !== false;
+};
+const isGlowBody = (e) => {
+  const skin = ASSETS[e?.assetKey]?.biolumSkin;
+  return !!skin && isLuminousPreset(skin);
+};
 
 function playRun(startHour, minutes) {
   CONFIG.dayNight.paused = false;

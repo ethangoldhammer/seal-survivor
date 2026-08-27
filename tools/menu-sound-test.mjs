@@ -576,7 +576,26 @@ check('typing sits below the hover', CONFIG.sfx.uiType.gain < CONFIG.sfx.uiHover
 check('typing varies its pitch', CONFIG.sfx.uiType.pitchVary > 0.1,
   `${CONFIG.sfx.uiType.pitchVary} — a repeated identical take is a machine gun`);
 check('typing is short', CONFIG.sfx.uiType.decay <= 0.06, `${CONFIG.sfx.uiType.decay}s`);
-check('typing does not buzz the phone', !CONFIG.feedback.uiType.haptic);
+// TYPING DOES BUZZ, and lightly. config.js shipped this as null on the
+// argument that a pulse per character under an on-screen keyboard is noise; it
+// is one 20ms pulse in the tuner now, which is Ethan's call and the reason this
+// asks about the SHAPE rather than about the existence. What would actually be
+// noise is a long or heavy pulse at typing speed — the gap below is 0.03s, so
+// anything approaching that length is a continuous rumble rather than a tick.
+{
+  const h = CONFIG.feedback.uiType.haptic;
+  const pulses = Array.isArray(h) ? h : (h ? [h] : []);
+  const ms = (x) => (typeof x === 'number' ? x : x?.duration ?? 0);
+  const mag = (x) => (typeof x === 'number' ? 1 : x?.magnitude ?? 1);
+  check('typing taps the phone rather than buzzing it',
+    pulses.length <= 1 && pulses.every((x) => ms(x) <= 30 && mag(x) <= 0.6),
+    pulses.length ? pulses.map((x) => `${ms(x)}ms @ ${mag(x)}`).join(', ') : 'no haptic');
+  // ...and it must not outlast the gap between two keystrokes, or a held key
+  // is one unbroken rumble instead of a row of ticks.
+  const gap = (CONFIG.feedback.uiType.sfxMinGap ?? 0.03) * 1000;
+  check('...and a held key still reads as separate taps',
+    pulses.every((x) => ms(x) <= gap * 1.2), `${gap.toFixed(0)}ms between ticks`);
+}
 check('neither throws particles into the world', !CONFIG.feedback.uiHover.emit && !CONFIG.feedback.uiClick.emit);
 check('nor does typing', !CONFIG.feedback.uiType.emit);
 check('nor shakes the camera for a menu', !CONFIG.feedback.uiHover.shake && !CONFIG.feedback.uiClick.shake);

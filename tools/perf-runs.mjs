@@ -16,9 +16,20 @@
 //   a few, at repeatable moments  one event is expensive (a hull breaking up,
 //                                 a boss arriving) — go and look at that system
 //
+// TWO LOGS, AND THEY ARE NOT THE SAME MACHINE. `playtest/runs.jsonl` is what
+// this machine played; `playtest/remote.jsonl` is what a deployed build filed
+// from somebody's phone. Reading only the first was the whole reason a phone
+// run with 808 hitches never once appeared here: the numbers that matter come
+// from four cores and a 3x display, and the numbers on disk came from ten
+// cores and a desktop GPU. Both are read now and every run says which it is,
+// because a median frame time averaged across the two describes no device that
+// exists.
+//
 // Usage:
-//   npm run perf          the last 5 runs
-//   npm run perf -- 20    the last 20
+//   npm run perf              the last 5 runs, either log
+//   npm run perf -- 20        the last 20
+//   npm run perf -- remote    only the runs phones filed
+//   npm run perf -- local     only this machine's
 // ---------------------------------------------------------------------------
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -26,21 +37,37 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const FILE = resolve(HERE, '../playtest/runs.jsonl');
-const want = Number(process.argv[2]) || 5;
+const SOURCES = [
+  { tag: 'local',  file: resolve(HERE, '../playtest/runs.jsonl') },
+  { tag: 'remote', file: resolve(HERE, '../playtest/remote.jsonl') },
+];
 
-if (!existsSync(FILE)) {
-  console.error(`\nno runs on disk yet — ${FILE}\nPlay a run with the dev server up; it files itself on death.\n`);
+const args = process.argv.slice(2);
+const only = args.find((a) => a === 'local' || a === 'remote') ?? null;
+const want = Number(args.find((a) => Number(a) > 0)) || 5;
+const wanted = SOURCES.filter((s) => !only || s.tag === only);
+
+const present = wanted.filter((s) => existsSync(s.file));
+if (!present.length) {
+  console.error(`\nno runs on disk yet — ${wanted.map((s) => s.file).join('\n                       ')}`
+    + `\nPlay a run with the dev server up; it files itself on death.`
+    + `\nPhone runs arrive with \`npm run playtest:pull\`.\n`);
   process.exit(1);
 }
 
-const runs = readFileSync(FILE, 'utf8')
-  .split('\n')
-  .filter(Boolean)
-  .map((line, i) => {
-    try { return JSON.parse(line); } catch { console.warn(`  (skipped a malformed line ${i + 1})`); return null; }
-  })
-  .filter(Boolean);
+const runs = present.flatMap(({ tag, file }) =>
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line, i) => {
+      try { return { ...JSON.parse(line), __src: tag }; }
+      catch { console.warn(`  (skipped a malformed line ${i + 1} of ${tag})`); return null; }
+    })
+    .filter(Boolean));
+
+// Chronological across both logs, so `the last 5` means the last five runs
+// played rather than the last five lines of whichever file was read second.
+runs.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
 
 const withPerf = runs.filter((r) => r.perf?.frames);
 if (!withPerf.length) {
@@ -52,13 +79,29 @@ if (!withPerf.length) {
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : 'unknown');
 
-console.log(`\n${withPerf.length} run(s) with frame times, of ${runs.length} on disk. Showing the last ${Math.min(want, withPerf.length)}.`);
+const srcCount = (t) => withPerf.filter((r) => r.__src === t).length;
+console.log(`\n${withPerf.length} run(s) with frame times, of ${runs.length} on disk`
+  + ` — ${srcCount('local')} local, ${srcCount('remote')} from phones.`
+  + ` Showing the last ${Math.min(want, withPerf.length)}.`);
 
 for (const r of withPerf.slice(-want)) {
   const p = r.perf;
   const g = r.render ?? {};
   const fps = p.meanMs ? 1000 / p.meanMs : 0;
+  const d = r.meta?.device ?? {};
+  // WHICH MACHINE. Without this the report reads as one device's history and
+  // a 4-core phone's p99 sits in the same column as a desktop's, inviting a
+  // comparison that is not a comparison.
+  // The SOURCE and the DEVICE are different facts and conflating them was a
+  // bug in the first cut of this: a run can be filed to the remote log from a
+  // desktop, and calling every remote run a phone put a 10-core Mac under a
+  // heading that said otherwise.
+  const rig = d.w
+    ? `${r.__src} · ${d.w}×${d.h}@${d.dpr ?? 1}x · ${d.cores ?? '?'} cores`
+      + `${d.touch ? ' · touch' : ''}${d.native ? ' · native shell' : ''}`
+    : r.__src;
   console.log(`\n─── ${when(r.startedAt)} · level ${r.level ?? '?'} · ${r.endReason ?? '?'} ─────────────────`);
+  console.log(`  ${rig}`);
   console.log(`  ${clock(p.seconds)}, ${p.frames.toLocaleString()} frames, ${fps.toFixed(1)} fps mean`
     + (g.draws ? `  ·  ${g.draws} draws · ${g.mpix} Mpix · scale ${g.scale} · ${g.enemies} enemies` : ''));
   console.log(`  median ${p.medianMs}ms · p95 ${p.p95Ms}ms · p99 ${p.p99Ms}ms · worst ${p.worstMs.toFixed(0)}ms`);

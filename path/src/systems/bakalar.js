@@ -807,7 +807,16 @@ function updateBombs(dt, scene, enemiesList, hooks) {
     for (let n = 0; n < payout; n++) {
       const a = Math.random() * Math.PI * 2;
       const d = Math.random() * c.chumSpread;
-      hooks.onChum?.(x + Math.cos(a) * d, y + Math.sin(a) * d);
+      // KEPT INSIDE THE WATER. The circle is centred on the bomb, and a bomb
+      // dropped near a wall or close under the surface throws part of its own
+      // spray somewhere the seal cannot go — chum that is paid out and then
+      // cannot be eaten. Clamped rather than re-rolled so the spray keeps its
+      // shape and simply stacks against the edge it was thrown at, which is
+      // what a net's worth of guts hitting a wall would do anyway.
+      hooks.onChum?.(
+        Math.max(bounds.left, Math.min(bounds.right, x + Math.cos(a) * d)),
+        Math.max(bounds.bottom, Math.min(bounds.surfaceY, y + Math.sin(a) * d)),
+      );
     }
 
     // AND THE REST OF THE CATCH GOES EVERYWHERE. The spray above is the

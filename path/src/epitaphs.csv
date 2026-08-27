@@ -49,3 +49,5 @@ boltstruck,caught by,TRUE,lightning,TRUE,3,
 boltsky,lit up by,TRUE,lightning,TRUE,2,
 shotholed,holed by,TRUE,shot,FALSE,3,
 shotpeppered,peppered by,TRUE,shot,FALSE,2,
+shotlorem1,lorem ipsum dolor sit,,shot,TRUE,3,"NEEDS YOUR WORDS: a lead for the `shot` cause — enemy fire, the shooters' projectiles and the trawler's shells. It has to run into the label on the line below (`something that shoots`), so it ends where that begins: two to four words, lowercase, no end punctuation, the shape of `shot down by` or `picked off by`. Seen on the death card whenever a projectile lands the killing blow."
+shotlorem2,consectetur adipiscing elit,,shot,TRUE,2,"NEEDS YOUR WORDS: a second `shot` lead so the card is not the same line every death. Same shape and constraints as shotlorem1."

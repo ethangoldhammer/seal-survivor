@@ -233,12 +233,36 @@ export function beginRun(config = {}) {
  */
 export const SENTINEL_HP = 5e6;
 
+/**
+ * SOURCES THE LEDGER DOES NOT BOOK DAMAGE FOR — the sky's work, not the seal's.
+ *
+ * A weather bolt kills what it touches outright (`lethal`, see
+ * resolveLightningStrike), so it books whatever health the creature had left.
+ * That is a free event on a weather timer that no pick pays for and no build
+ * owns, and it lands on the biggest thing in the radius: across seven runs
+ * `lightning` came out as 100% of all damage dealt, which put every real
+ * ability in that block at a 0% share and a 0.00x return. The same shape as
+ * the sentinel hp above, arriving from a different direction — and unlike the
+ * turtle there is no honest smaller number to record instead, because the
+ * damage is real. It just isn't the player's.
+ *
+ * DAMAGE ONLY. The kill still counts (recordKill), the death still has a cause
+ * (deathCauses.js), and a boss finished off by a bolt still captions the
+ * polaroid "Lightning" — damageCreditFor falls back to the last damager, which
+ * is credited above this guard on purpose. What goes unbooked is the hp
+ * column, which is the only place a hazard competes with a weapon.
+ */
+const UNBOOKED_SOURCES = new Set(['lightning']);
+
 /** Damage dealt BY the player's kit. `source` is a key of SOURCE_UPGRADES. */
 export function recordDamage(source, amount, target, fin = null) {
   if (!run || !(amount > 0)) return;
   // Credit still moves even when the figure doesn't — whatever last touched a
   // creature owns its kill, and a placeholder's death is still a death.
   if (target && typeof target === 'object') lastDamager.set(target, source);
+  // ...and then the sky sits out. See UNBOOKED_SOURCES: everything below this
+  // line is a damage-dealer table, and weather is not a damage dealer.
+  if (UNBOOKED_SOURCES.has(source)) return;
   // DAMAGE TO SCENERY IS NOT DAMAGE. An invincible creature absorbs the write
   // to its hp (entities/enemies.js, makeInvincible), so an ability that swings
   // at a turtle accomplishes nothing — but the ability still calls in the

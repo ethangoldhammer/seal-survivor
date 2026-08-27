@@ -202,10 +202,17 @@ section('MODEL SIZES');
   check('every row names a real asset', unknown.length === 0,
     unknown.length ? unknown.join(', ') : 'all keys resolve against ASSETS');
 
+  // A BLANK `size` IS A VALUE, not a missing one: applyAssetTable reads it as
+  // "leave it at 1", which is exactly what an asset with no row at all gets.
+  // Rows added by the shader lab to carry a `surface` are all like this, and
+  // `Number('')` is 0 — so comparing the raw cell scored three correctly
+  // untouched creatures as resized to nothing.
   const wrong = [];
   for (const [key, row] of ASSET_ROWS) {
     const live = getAssetSizeMultiplier(key);
-    if (Math.abs(Number(row.size) - live) > 1e-9) wrong.push(`${key}: file ${row.size} vs live ${live}`);
+    const raw = String(row.size ?? '').trim();
+    const want = raw === '' ? 1 : Number(raw);
+    if (Math.abs(want - live) > 1e-9) wrong.push(`${key}: file ${raw || '(blank = 1)'} vs live ${live}`);
   }
   check('the live multipliers match the file', wrong.length === 0,
     wrong.length ? wrong.slice(0, 3).join(' | ') : `${ASSET_ROWS.size} sizes agree`);

@@ -864,39 +864,39 @@
     "perStack": [
       {
         "bounceLevel": 101,
-        "bounceFireRate": 88,
-        "bounceLife": 100.6,
-        "bounceMaxBounces": 102
+        "bounceFireRate": 84,
+        "bounceLife": 100.9,
+        "bounceMaxBounces": 103
       },
       {
         "bounceLevel": 102,
-        "bounceFireRate": 77.44,
-        "bounceLife": 101.2,
-        "bounceMaxBounces": 104
-      },
-      {
-        "bounceLevel": 103,
-        "bounceFireRate": 68.1472,
+        "bounceFireRate": 70.56,
         "bounceLife": 101.8,
         "bounceMaxBounces": 106
       },
       {
+        "bounceLevel": 103,
+        "bounceFireRate": 59.2704,
+        "bounceLife": 102.7,
+        "bounceMaxBounces": 109
+      },
+      {
         "bounceLevel": 104,
-        "bounceFireRate": 59.969536,
-        "bounceLife": 102.4,
-        "bounceMaxBounces": 108
+        "bounceFireRate": 49.787136,
+        "bounceLife": 103.6,
+        "bounceMaxBounces": 112
       },
       {
         "bounceLevel": 105,
-        "bounceFireRate": 52.773192,
-        "bounceLife": 103,
-        "bounceMaxBounces": 110
+        "bounceFireRate": 41.821194,
+        "bounceLife": 104.5,
+        "bounceMaxBounces": 115
       },
       {
         "bounceLevel": 106,
-        "bounceFireRate": 46.440409,
-        "bounceLife": 103.6,
-        "bounceMaxBounces": 112
+        "bounceFireRate": 35.129803,
+        "bounceLife": 105.4,
+        "bounceMaxBounces": 118
       }
     ]
   },

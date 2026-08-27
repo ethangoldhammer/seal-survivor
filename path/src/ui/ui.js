@@ -6399,10 +6399,17 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
 // first fight pins that fight at zero width — the bar would start every run
 // looking broken.
 const BOSS_BAR_MIN_HP = 6000;    // under the first boss of a run — the short bar
-const BOSS_BAR_MAX_HP = 190000;  // deep into a long run — the full-width bar
+const BOSS_BAR_MAX_HP = 152000;  // deep into a long run — the full-width bar
 /** The two endpoints, so a test can drive the ends of the curve without
  *  hardcoding hp numbers that go stale the next time boss health moves —
- *  which is exactly how this pair got four times out of date. */
+ *  which is exactly how this pair got four times out of date.
+ *
+ *  RE-CALIBRATED (again) against the shipped curve: the megalodon's health at
+ *  eighteen minutes — the deepest fight a run realistically reaches — is about
+ *  152,000 after enemies.csv's per-difficulty term and CONFIG.spawn.ramp. At
+ *  190,000 that fight drew an 87% bar and the last stretch of the track was
+ *  reachable only by a run nobody plays. tools/rive-boss-test.mjs re-derives
+ *  the whole curve from the CSV, so the day the ramp moves it says so. */
 export const BOSS_BAR_HP_RANGE = [BOSS_BAR_MIN_HP, BOSS_BAR_MAX_HP];
 // HOW BIG THIS FIGHT IS, 0..1. Split out from the width string because there
 // are now two bars reading it — this one and the Rive artboard, which wants the

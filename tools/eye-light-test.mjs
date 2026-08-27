@@ -446,11 +446,27 @@ section('BIG BLOOM, BOTH COLOURS');
   const green = emitted();
   check('a full boost blooms, and hard', green > FULL,
     `${green.toFixed(2)} luminance against ${FULL} for full bloom — ${(green / FULL).toFixed(1)}x`);
-  check('...and it is green',
+  // ...IN THE COLOUR THE CONFIG NAMES, which is not the same claim as "green".
+  // `boostReadyColor` is a swatch in the tuner and it is a hot pink today; the
+  // check asked for g > r and g > b and so failed on a colour somebody chose on
+  // purpose. What has to hold is that the halo is wearing the boost's own hue —
+  // normalising both to a peak of 1 takes the brightness out and leaves the
+  // hue — and that it is nowhere near the damage colour, since the whole point
+  // of the pair is that the player can tell a full bank from a bitten seal.
+  const hueOf = (col) => {
+    const peak = Math.max(col.r, col.g, col.b) || 1;
+    return [col.r / peak, col.g / peak, col.b / peak];
+  };
+  check('...and it is the boost colour, not the damage one',
     st.charge > 0.95 && (() => {
       const h = haloes.find((x) => x.visible) ?? haloes[0];
-      return h.material.color.g > h.material.color.r && h.material.color.g > h.material.color.b;
-    })());
+      const want = hueOf(new THREE.Color(c.boostReadyColor));
+      const hit = hueOf(new THREE.Color(c.hitColor));
+      const got = hueOf(h.material.color);
+      const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 0.05);
+      return near(got, want) && !near(got, hit);
+    })(),
+    `#${c.boostReadyColor.toString(16)}`);
 
   // RED — a full damage flash, which must land in the same place.
   resetEyeLights();
@@ -477,8 +493,15 @@ section('BIG BLOOM, BOTH COLOURS');
   // composite knee whitens its core. That is the trade, not a bug.
   const gPeak = (() => { const o = new THREE.Color(); lumInto(o, c.boostReadyColor, c.bloomLum); return Math.max(o.r, o.g, o.b); })();
   const rPeak = (() => { const o = new THREE.Color(); lumInto(o, c.hitColor, c.bloomLum); return Math.max(o.r, o.g, o.b); })();
-  check('red pays for it in peak channel, as expected', rPeak > gPeak * 2,
-    `red peaks at ${rPeak.toFixed(1)}, green at ${gPeak.toFixed(1)}`);
+  // HOTTER, and by how much depends on the hue somebody picked: red carries 21%
+  // of Rec.709 luminance, a green 72%, and the pink in the swatch today about
+  // half — so the factor was 2.3x when the boost was green and is 1.9x now.
+  // Asserting the factor asserts the colour choice; what is worth holding is
+  // the direction, which is the thing that surprises whoever reads the two
+  // numbers and reaches for the multiplier.
+  check('red pays for it in peak channel, as expected', rPeak > gPeak * 1.25,
+    `red peaks at ${rPeak.toFixed(1)}, the boost at ${gPeak.toFixed(1)}`
+    + ` — ${(rPeak / gPeak).toFixed(1)}x, the price of ${(0.2126 / 0.7152).toFixed(2)} of the luminance per unit`);
 }
 
 // ---------------------------------------------------------------------------

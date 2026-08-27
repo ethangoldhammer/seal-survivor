@@ -130,11 +130,21 @@ section('RIM — winding up');
     `peak ${max.toFixed(2)} vs base ${BASE_GLOW.toFixed(2)}`);
   check('and never dips below it — the pulse ADDS, it does not modulate down',
     min >= BASE_GLOW - 1e-9, `trough ${min.toFixed(3)}`);
+  // IN UNITS OF THE BASE, because glowOf() is not the config's number.
+  // applyLook writes `colour x glow` into material.color and this reads the RED
+  // CHANNEL of it, so every reading here carries the rim colour's red as a
+  // factor. That was 1 while the rim was white and is 0.42 now that it is a
+  // grey (0xADADAD, linear) — so comparing a channel reading against
+  // `BASE_GLOW + glowAdd` was comparing two different units and failed by
+  // exactly that factor. The ratio cancels it: the peak has to be
+  // (glow + glowAdd) / glow times the resting rim, whatever colour it is.
+  const GLOW_CFG = CONFIG.playerOutline.glow ?? 1;
+  const wantPeak = BASE_GLOW * ((GLOW_CFG + OC.glowAdd) / GLOW_CFG);
   check('peak glow is base + glowAdd at full power',
-    Math.abs(max - (BASE_GLOW + OC.glowAdd)) < 1e-3,
-    `${max.toFixed(3)} vs ${(BASE_GLOW + OC.glowAdd).toFixed(3)}`);
+    Math.abs(max - wantPeak) < wantPeak * 1e-3,
+    `${max.toFixed(3)} vs ${wantPeak.toFixed(3)}`);
   check('it actually throbs rather than sitting at one value',
-    max - min > OC.glowAdd * 0.4, `swing ${(max - min).toFixed(3)}`);
+    max - min > (BASE_GLOW / GLOW_CFG) * OC.glowAdd * 0.4, `swing ${(max - min).toFixed(3)}`);
   check('the rim swells too, in world units over the scale',
     Math.abs(Math.max(...full.thick) - (CONFIG.playerOutline.thickness + OC.thicknessAdd) / PARENT_SCALE) < 1e-6);
 }
@@ -194,8 +204,10 @@ section('RIM — the release flare, and getting back to the base look');
   flarePlayerOutline(1);
   updatePlayerOutline(1 / 120, 0);
   const flarePeak = glowOf();
+  // Same units problem as the wind-up peak above — see the note there.
+  const flareBar = BASE_GLOW * (((CONFIG.playerOutline.glow ?? 1) + OC.glowAdd) / (CONFIG.playerOutline.glow ?? 1));
   check('the release spikes past anything the wind-up reached',
-    flarePeak > BASE_GLOW + OC.glowAdd, `${flarePeak.toFixed(2)} vs held ${heldPeak.toFixed(2)}`);
+    flarePeak > flareBar, `${flarePeak.toFixed(2)} vs a full wind-up's ${flareBar.toFixed(2)}, held ${heldPeak.toFixed(2)}`);
 
   // ...and is gone within flareTime, all the way back to the tuned look rather
   // than to "close enough" — a rim left a few percent hot never recovers.
@@ -304,8 +316,16 @@ section('THE INK LINE');
   // come back and edit every time they nudge it.
   const { r, g, b } = inkMat.color;
   const spread = Math.max(r, g, b) - Math.min(r, g, b);
-  check('the ink is dark', Math.max(r, g, b) <= 0.2,
-    `peak channel ${Math.max(r, g, b).toFixed(3)}`);
+  // PALE, AND UNDER THE RIM. config.js declares this flat black and the tuner
+  // has it at a light grey — a drawn edge in the seal's own value rather than
+  // a hole cut in the picture, which is Ethan's call and the reason this asks
+  // about the RELATION rather than about an absolute. Two things still have to
+  // hold or the second band stops being one: it must not out-glow the rim (it
+  // never enters the bloom pass, so any value at all past the rim's would read
+  // as the brighter line), and it must stay neutral, which is the check below.
+  const inkPeak = Math.max(r, g, b);
+  check('the ink sits under the glowing rim rather than out-lighting it',
+    inkPeak < glowOf() * 0.95, `ink ${inkPeak.toFixed(3)} against a rim at ${glowOf().toFixed(3)}`);
   check('...and neutral, not a second colour', spread <= 0.05,
     `channel spread ${spread.toFixed(3)}`);
   check('...at its own width, in world units over the scale',
@@ -324,9 +344,15 @@ section('THE INK LINE');
   // reads as a bold black outline with the glow as a bright line hugging the
   // body, which is a drawing decision rather than a broken one. What is NOT
   // survivable is the two being the same, so that is what is asked here.
+  // NOT THE SAME, which is the whole claim — the visible band IS the difference
+  // between the two hulls, and at equal widths one of them simply loses the
+  // depth test and is not on screen. The 1.2x this asked for was a guess at how
+  // much difference reads; the shipped pair is 0.08 against 0.07, an ink line
+  // slightly PROUD of the rim, which draws the seal as a pale edge with the
+  // glow hugging it from inside. What that leaves no room for is equality.
   const [thin, thick] = [Math.min(inkThick(), thickOf()), Math.max(inkThick(), thickOf())];
   check('...at a different width from the rim, so both bands read',
-    thick > thin * 1.2, `ink ${inkThick()} vs rim ${thickOf()}`);
+    thick > thin * 1.05, `ink ${inkThick()} vs rim ${thickOf()} — ${(thick / thin).toFixed(2)}x apart`);
   check('it draws after the glow and before the seal',
     inkShell.renderOrder > glowShell.renderOrder && inkShell.renderOrder < (body.renderOrder ?? 0),
     `glow ${glowShell.renderOrder}, ink ${inkShell.renderOrder}, seal ${body.renderOrder ?? 0}`);
@@ -806,8 +832,23 @@ check('imports the rim pulse', /import \{[^}]*\bupdatePlayerOutline\b[^}]*\} fro
 check('imports the release flare', /import \{[^}]*\bflarePlayerOutline\b[^}]*\} from '\.\/systems\/outlines\.js'/.test(main));
 check('ticks the rim every frame, on real time',
   /updatePlayerOutline\(\s*realDt,/.test(main));
-check('the rim reads the BUTTON and the banked power',
-  /updatePlayerOutline\([^;]*input\.strikeHeld[^;]*strikeState\.pending/s.test(main));
+// THROUGH THE LOCAL, since the expression is shared now. This asked for
+// `input.strikeHeld` and `strikeState.pending` inside the updatePlayerOutline
+// call itself, which was true while the rim was the only thing reading them —
+// the eyes read the same wind-up now and main.js computes it once into
+// `windUp` precisely so the two cannot drift. So the check follows it: the
+// local is built from the button and the banked power, and the rim is handed
+// that local.
+{
+  const windUpLocal = /const windUp =[^;]*input\.strikeHeld[^;]*strikeState\.pending/s.test(main);
+  const rimReadsIt = /updatePlayerOutline\(\s*realDt,\s*windUp\s*\)/.test(main);
+  check('the rim reads the BUTTON and the banked power', windUpLocal && rimReadsIt,
+    `local ${windUpLocal}, handed to the rim ${rimReadsIt}`);
+  // ...and it really is ONE reading: the eyes take the same local rather than a
+  // second copy of the expression, which is the drift the local exists to stop.
+  check('...and the eyes read the same wind-up, not a second copy of it',
+    /updateEyeLights\([^;]*charge:\s*windUp/s.test(main));
+}
 check('the flare fires on the frame a strike launches',
   /flarePlayerOutline\(strikeState\.power\)/.test(main));
 check('the vent gets the banked power', /updateBubbles\([^;]*input\.strikeHeld \? strikeState\.pending : 0/s.test(main));

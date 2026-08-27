@@ -996,7 +996,12 @@ section('5c. The throb is on the musical grid, and the reach is not');
   // other than a whole number of the shader's periods shows up as a visible
   // jump every time it comes round, which is what the `wrap` argument to
   // advanceCycles is for.
-  const steps = Math.round(seconds / DT);
+  // ROUNDED UP, PLUS A FRAME. A cycle is rarely a whole number of frames — '2
+  // bars' at 105bpm is 274.3 of them — and rounding DOWN walks 0.999 of a
+  // cycle, which never crosses the wrap and reads as a counter that has
+  // stopped. One frame past the cycle is still far short of two, so the wrap
+  // count below is exactly one whatever phase the transport happens to be at.
+  const steps = Math.ceil(seconds / DT) + 1;
   const seen = [];
   for (let i = 0; i < steps; i++) {
     updateBeatSync(DT);
@@ -1046,12 +1051,22 @@ section('5d. The colour and the brightness are exposed, per boss');
   const base = u.uHotLit.value.getHex();
   check('a boss with no override wears the configured base colour',
     base === (l.litColor ?? 0xffffff), `#${base.toString(16)}`);
-  // WHITE, and the check is on the DEFAULT rather than on the literal: what
-  // matters is that the base is a neutral anything can tint, not that it is
-  // this exact value forever.
+  // BRIGHT, and the check is on the DEFAULT rather than on the literal: what
+  // matters is that the base is something a player can see on a dark hide, not
+  // that it is one particular colour forever.
+  //
+  // IT USED TO ASK FOR A NEUTRAL, on the reasoning that a per-boss tint would
+  // multiply into it and drag the hue somewhere nobody chose. That stopped
+  // being true when the override became a REPLACEMENT — `owner.tint ?? litColor`
+  // in systems/bossHotSpots.js — so a coloured base cannot contaminate
+  // anything downstream of it, and the swatch in the tuner is on a hot orange
+  // today. What a bad value here looks like now is a DARK one: the spot is the
+  // one part of a boss the player is meant to aim at, and a base with no value
+  // in it is a weak point nobody can find.
   const c = new THREE.Color(l.litColor);
-  check('...and that base is neutral', c.r === c.g && c.g === c.b,
-    `#${l.litColor.toString(16)}`);
+  check('...and that base is bright enough to read on a hide',
+    Math.max(c.r, c.g, c.b) >= 0.7,
+    `#${l.litColor.toString(16)} — peak channel ${Math.max(c.r, c.g, c.b).toFixed(2)}`);
 
   check('an unknown creature cannot be given a look', setHotSpotLook({}, { color: 0xff0000 }) === false);
 
@@ -1280,10 +1295,31 @@ section('6b. Working a spot kicks big chum loose');
     // ever have — so a check that compared the two directly would pass with the
     // blobs a hundredth of their needed size and the trail rendering as dots.
     const splat = (em?.size?.[0] ?? 0) * (goo?.radius ?? 0) * 0.5;
-    const gap = (M.tossSpeed ?? 0) * (tr.every ?? 0);
+    // ...AND THE PIECE IS SLOWING THE WHOLE TIME IT DRAWS THE TRAIL, which is
+    // the half this used to leave out. Multiplying the LAUNCH speed by the
+    // cadence measures the one gap at the muzzle and calls the whole trail
+    // beads: against drag 4.5 the piece is at a quarter of that speed a third
+    // of a second later, and the blobs are stacked on top of each other by
+    // then. What matters is where the beading is, not that the first pair is
+    // apart — and the first pair is thrown from INSIDE the boss.
+    //
+    // So the gap is walked forward with the piece and the answer is a
+    // distance: how far it has travelled by the time consecutive blobs overlap.
+    // Under the body's own reach, the whole visible trail is a line.
+    const every = tr.every ?? 0;
+    let v = M.tossSpeed ?? 0;
+    let travelled = 0;
+    let beadedUntil = 0;
+    for (let i = 0; i < 400 && v > (M.settleSpeed ?? 0); i++) {
+      const step = (v / drag) * (1 - Math.exp(-drag * every)); // distance to the next blob
+      if (step >= splat) beadedUntil = travelled + step;
+      travelled += step;
+      v *= Math.exp(-drag * every);
+    }
     check('...and its blobs land close enough together to fuse into a line',
-      splat > 0 && gap < splat,
-      `${gap.toFixed(2)} apart vs the smallest splat's ${splat.toFixed(2)} radius`);
+      splat > 0 && every > 0 && beadedUntil < e.radius,
+      `blobs overlap after ${beadedUntil.toFixed(1)} units, inside the body's own ${e.radius.toFixed(1)}`
+      + ` — splat radius ${splat.toFixed(2)}, ${(1 / every).toFixed(0)} blobs/s`);
     // ONE THRESHOLD FOR BOTH JOBS. `settleSpeed` is what stops the trail AND
     // what keeps the food magnet off the piece while it is travelling — see
     // the flight check in tools/chum-chunk-test.mjs, which is where the magnet

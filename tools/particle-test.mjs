@@ -240,8 +240,17 @@ check('the clam announces itself in its own tuned colour',
   /feedback\('clamDrop'[\s\S]{0,300}?color:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(BOATS));
 check('...and so does the grab',
   /feedback\('clamGrab'[\s\S]{0,300}?color:\s*CONFIG\.attractorOrb\.look\?\.waveColorNear/.test(BOATS));
-check('...and every swallow resolves its colour off the asset',
-  (MAIN.match(/feedback\('(?:bubblePop|strikeOrbTaken|coralTaken)'[\s\S]{0,300}?color:\s*assetBaseColor\(/g) || []).length === 3);
+// COUNTED AGAINST THE CALLS THAT EXIST, not against a number. There were three
+// swallows when this was written and there are four now — the trap bubble pays
+// air the same way the loose bubble does — so a hardcoded 3 failed on a fourth
+// one that was doing exactly the right thing. What has to hold is that every
+// call naming one of these events resolves its colour off the asset.
+{
+  const swallows = (MAIN.match(/feedback\('(?:bubblePop|strikeOrbTaken|coralTaken)'/g) || []).length;
+  const resolved = (MAIN.match(/feedback\('(?:bubblePop|strikeOrbTaken|coralTaken)'[\s\S]{0,300}?color:\s*assetBaseColor\(/g) || []).length;
+  check('...and every swallow resolves its colour off the asset',
+    swallows >= 3 && resolved === swallows, `${resolved} of ${swallows} swallows`);
+}
 check('...and the blob reports the colour it is actually wearing',
   /feedback\('levelOrbTaken'[\s\S]{0,400}?color:\s*levelOrbColor\(/.test(MAIN));
 //   THE WEAK SPOT'S MEAT is the third odd one out, and it is the blob's reason
@@ -325,6 +334,16 @@ for (const file of srcFiles) {
     // still a failure, and so is a tint on any other burst in either file.
     if (/^\s*'shoot'/.test(args) && /\bcolor:\s*lead \? flashColor\(/.test(args)) continue;
     if (/^\s*'muzzle'/.test(args) && /\bcolor:\s*flashColor\(/.test(args)) continue;
+    // THE BOSS GOING UP, which is the fifth odd one out and the muzzle's
+    // argument again. The cloud is the BOSS'S OWN colour (b.color, off the
+    // corpse) lerped toward white for the hot core, so the burst is saying
+    // which animal just came apart — a stock tint would be the one thing on
+    // screen at that moment that disagreed with the body it came out of. The
+    // white-hot mix has to be in the colour rather than the glow because emit()
+    // lifts a dark tint clear of the water before it uses it; see the note at
+    // firePuff. Held to the EVENT and the SOURCE, so bossBoom.js is not a
+    // blanket exemption and a hand-typed hex there is still a failure.
+    if (/^\s*'bossBoom'/.test(args) && /\bcolor:\s*_col\.getHex\(\)/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }

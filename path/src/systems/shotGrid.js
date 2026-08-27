@@ -31,13 +31,21 @@
 import { CONFIG } from '../config.js';
 import { barGrid, snapToBarGrid } from './music.js';
 
-// --- alternating flippers ---------------------------------------------------
+// --- dealing a volley out in time -------------------------------------------
 // How many TICKS one volley is spread across. 1 is the old behaviour — every
 // emit point fires on the same frame. With CONFIG.weapon.alternateFins on it
-// is the number of emit points, so the volley is dealt out one limb at a time
-// and the scheduler below runs that many times faster. Nothing about the
-// pellet count or the damage changes: each limb still fires its own share once
-// per volley interval, they are just offset from each other.
+// is ONE TICK PER PELLET, so the volley is dealt out a stone at a time and the
+// scheduler below runs that many times faster. Nothing about the pellet count
+// or the damage changes: the same stones leave in the same second, they are
+// just spread across the interval instead of landing on top of each other.
+//
+// SO A PELLET IS A SUBDIVISION. Two flippers on a bar/4 gun is the pair of
+// eighth notes this shipped with; the first Pocket Full of Stones makes it
+// three, which is bar/12 — a triplet, 3 against the music's 2 — and the second
+// makes it four, which is sixteenths. That is the card's whole read: every
+// stone you own is a note in the bar rather than a thicker version of the same
+// note. `CONFIG.weapon.staggerTicks` is where it stops subdividing; pellets
+// past that thicken the ticks the way they always did.
 //
 // THE INTERVAL IS AN ARGUMENT BECAUSE THE SPLIT CAN FAIL. Dealing a volley out
 // over n ticks only preserves the gun's output if the grid can actually hold a
@@ -57,11 +65,82 @@ function splitFits(volleyInterval, n, maxDivision) {
   return cycle > volleyInterval * 0.999 && cycle < volleyInterval * 1.001;
 }
 
-export function finSplit(origins, volleyInterval) {
+// `shots` is the volley's TOTAL pellet count, across every limb — see the note
+// on CONFIG.weapon.multishot. It defaults to `origins` so that a caller with
+// nothing to say about pellets (and every existing assertion) still describes
+// the plain one-per-flipper volley this started as.
+//
+// COUNTING DOWN, not one attempt. A cycle that does not divide cleanly is not
+// a reason to collapse the whole thing back onto one frame: five pellets on a
+// bar/4 gun have no rung (bar/20 is not on the ladder), but four do, so the
+// gun keeps its sixteenths and the fifth stone rides along on the tick it
+// lands on. Only a volley that cannot be split at all goes back to firing
+// everything at once.
+export function finSplit(origins, volleyInterval, shots = origins) {
   if (CONFIG.weapon.alternateFins === false) return 1;
-  const n = Math.floor(origins);
-  if (!(n > 1)) return 1;
-  return splitFits(volleyInterval, n, CONFIG.weapon.beatLock?.maxDivision ?? 64) ? n : 1;
+  if (!(Math.floor(origins) > 1)) return 1;
+  const maxDivision = CONFIG.weapon.beatLock?.maxDivision ?? 64;
+  // Floored at 1 rather than 2, so `staggerTicks: 1` is a real off switch —
+  // the loop below never runs and the volley goes out on one frame.
+  const cap = Math.max(1, Math.floor(CONFIG.weapon.staggerTicks ?? 6));
+  for (let n = Math.min(cap, Math.max(1, Math.floor(shots))); n >= 2; n--) {
+    if (splitFits(volleyInterval, n, maxDivision)) return n;
+  }
+  return 1;
+}
+
+// WHAT LEAVES ON THIS TICK — which limb, and how many stones off it.
+//
+// Pure, and here rather than in fire() because the interesting part is not the
+// spawning: it is that a cycle of these adds up to exactly one volley, spread
+// evenly across both flippers, for every pellet count the run can reach. That
+// is a property worth asserting, and it is not assertable from main.js.
+//
+// `cursor` is a free-running tick counter; the returned one is what to hold
+// for the next tick. Returns one entry per limb when the volley is not being
+// dealt out at all (no rig, the stagger off, or a cadence too fine to divide),
+// which is the old simultaneous volley with its pellets split as evenly as
+// they go.
+export function dealTick(shotCount, ticks, origins, cursor) {
+  const shots = Math.max(0, Math.floor(shotCount));
+  const limbs = Math.max(1, Math.floor(origins));
+  const n = Math.max(1, Math.floor(ticks));
+  if (n < 2) {
+    const per = Math.floor(shots / limbs);
+    const rem = shots - per * limbs;
+    const salvo = [];
+    for (let o = 0; o < limbs; o++) salvo.push({ o, n: per + (o < rem ? 1 : 0) });
+    return { salvo, cursor };
+  }
+  const c = ((cursor % (n * n * limbs)) + n * n * limbs) % (n * n * limbs);
+  const slot = c % n;
+  // `base` for every slot and one more for a few of them when the count does
+  // not divide — five stones over four ticks is 2,1,1,1, and nothing is dropped
+  // or invented in either direction.
+  const base = Math.floor(shots / n);
+  const surplus = shots - base * n;
+  // ...AND WHICH SLOTS THOSE ARE MOVES EVERY CYCLE. Nailed to the first slots,
+  // the surplus is nailed to a FLIPPER as well whenever the tick count is even:
+  // slot 0 is always the left fin, so a five-stone gun would throw three left
+  // and two right for the rest of the run — a 60/40 split that Flippers Up!
+  // then makes visible, and that the playtest ledger's fin section reports as
+  // the alternation failing. Rotating the window by one slot per cycle hands
+  // every slot the extra stone in turn, which is what makes both flippers carry
+  // the same number of them over a full wrap.
+  //
+  // Zero for the whole early game — a volley with no more stones than it has
+  // ticks has no surplus at all, and this is the count's tail rather than its
+  // shape.
+  const rotation = Math.floor(c / n) % n;
+  const spot = ((slot - rotation) % n + n) % n;
+  return {
+    salvo: [{ o: c % limbs, n: base + (spot < surplus ? 1 : 0) }],
+    // Wrapped on a COMMON MULTIPLE of all three moduli above — the slot, the
+    // rotation and the limb — so none of them jumps when the cursor comes
+    // round, and the whole pattern repeats rather than stuttering once every
+    // few seconds.
+    cursor: (c + 1) % (n * n * limbs),
+  };
 }
 
 // The interval to hand shotDue, given the volley interval the stats produced.
@@ -71,8 +150,8 @@ export function finSplit(origins, volleyInterval) {
 // sitting on the finest division the ladder allows all divide into something
 // that is NOT a rung — and a tick off the lattice is exactly the "in time but
 // not with it" the grid exists to prevent.
-export function tickInterval(volleyInterval, origins) {
-  const split = finSplit(origins, volleyInterval);
+export function tickInterval(volleyInterval, origins, shots = origins) {
+  const split = finSplit(origins, volleyInterval, shots);
   if (split < 2) return volleyInterval;
   return snapToBarGrid(volleyInterval / split, CONFIG.weapon.beatLock?.maxDivision ?? 64);
 }

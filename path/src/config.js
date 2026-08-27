@@ -2446,8 +2446,10 @@ export const CONFIG = {
       // hot-orange halo doing the "something big is here" work by area; drawn
       // in ink it does it by edge, and a black band that wide reads as a hole
       // cut in the water rather than as a creature's outline. Still under the
-      // player's, so the seal wins the read where they overlap.
-      thickness: 0.05,
+      // player's, so the seal wins the read where they overlap. The companion
+      // rim below is a fifth of this, which is the whole friend/threat read now
+      // that both are the same colour.
+      thickness: 0.07,
       glow: 1.5,
       opacity: 1,
       // A BOSS NEVER WEARS THIS RIM. Not a per-species switch, because it
@@ -2563,10 +2565,10 @@ export const CONFIG = {
     // body. It was never visible.
     companionOutline: {
       color: 0x000000,
-      // A QUARTER of the creature rim (0.04), not "just under" it, which is
-      // what this said while both were fat glowing bands a hair apart. With
-      // both drawn in ink the gap has to be big enough to see as a difference
-      // in weight, because weight is now the only thing telling them apart.
+      // A FIFTH of the creature rim (0.05), not "just under" it, which is what
+      // this said while both were fat glowing bands a hair apart. With both
+      // drawn in ink the gap has to be big enough to see as a difference in
+      // weight, because weight is now the only thing telling them apart.
       thickness: 0.01,
       glow: 2.0,
       opacity: 1,
@@ -2599,14 +2601,20 @@ export const CONFIG = {
       // fixed level cadence on top of that.
       damagePerLevel: 1.6,
       speedPerLevel: 0.35,
-      levelsPerExtraShot: 8,
+      // HALVED WHEN A PELLET STOPPED MEANING TWO. `multishot` is the volley's
+      // whole pellet count now rather than a per-flipper one (see the note on
+      // it below), so a pellet every eight levels would be half the baseline
+      // growth this has always paid. Every four levels is the same stones per
+      // level as before and finer-grained about when they arrive — which is
+      // the better shape anyway now that each one is its own note in the bar.
+      levelsPerExtraShot: 4,
       // ...and the same growth on the run's OTHER escalation axis: every boss
       // the run puts down is worth this many pellets, permanently. Paid
       // automatically, on top of the hive ceremony the kill also opens — see
       // applyBossGrowth in stats.js for why the two payouts are different in
       // kind, and weapons.csv for the number (this is the fallback its type is
       // read off). 0 turns it off.
-      shotsPerBoss: 1,
+      shotsPerBoss: 2,
       // The only thing that decides whether the guns are live — there is no fire
       // button any more, on any device. Turning this off silences every weapon
       // that fires on the trigger (shots, missiles, bounce) and leaves the passive
@@ -2640,15 +2648,16 @@ export const CONFIG = {
         maxDivision: 64,
       },
       // ALTERNATING FLIPPERS. Off, a volley leaves every emit point on the
-      // same frame — both fins fire together and the seal shoots with both
-      // hands. On, the volley is split in TIME instead: one flipper per tick,
-      // trading sides, with the scheduler running at fireRate / fin count.
+      // same frame — every stone the gun owns goes out at once, fanned. On,
+      // the volley is split in TIME instead: one pellet per tick, trading
+      // flippers, with the scheduler running at fireRate / pellet count.
       //
-      // DPS AND PELLET COUNT ARE UNCHANGED either way. Each fin still fires
-      // its own share at the gun's own interval; the two are simply half an
-      // interval apart, so at the shipped bar/4 cadence the pair lands on
-      // EIGHTH notes. That is the whole point — the gun keeps its rate and
-      // gains a swing, and the muzzle flash reads as left-right-left instead
+      // DPS AND PELLET COUNT ARE UNCHANGED either way. The same stones leave
+      // in the same second; they are spread across the interval rather than
+      // stacked on its first frame, so at the shipped bar/4 cadence the two
+      // starting pellets land on EIGHTH notes and each one bought after that
+      // subdivides again. That is the whole point — the gun keeps its rate and
+      // gains a rhythm, and the muzzle flash reads as left-right-left instead
       // of as one double-wide puff.
       //
       // The interval is re-snapped after the division (systems/shotGrid.js),
@@ -2662,10 +2671,30 @@ export const CONFIG = {
       // this file is only the fallback the CSV's type is read off.
       life: 1.6,
       radius: 0.18,
-      // `multishot` is now pellets PER FIN, not per volley — the basic shot
-      // fires one from each flipper, so 1 here means two bullets. Each extra
-      // point adds one more to BOTH fins.
-      multishot: 1,
+      // PELLETS PER VOLLEY, across every flipper — and each one leaves on its
+      // OWN TICK. 2 is the gun this ships with: one stone out of each flipper,
+      // trading sides, which on the bar/4 cadence is a pair of eighth notes.
+      //
+      // It used to be pellets per FIN, and the change is the point of Pocket
+      // Full of Stones rather than bookkeeping. A stack now buys one stone,
+      // not two, and that stone becomes a new SUBDIVISION of the volley: two
+      // becomes three, which is a triplet against the music's duple, and three
+      // becomes four, which is sixteenths. The card that said "+1 projectile"
+      // and quietly handed over two is also, finally, telling the truth.
+      //
+      // Everything that hands out a pellet without being that card — the level
+      // cadence above, the boss dividend, Clone Warz — is worth half what it
+      // was per unit, so the two rows above are doubled to keep their real
+      // payout exactly where it was tuned.
+      multishot: 2,
+      // WHERE THE SUBDIVIDING STOPS. Past this many ticks a volley stops
+      // buying new notes and goes back to thickening the ones it has, which is
+      // what every pellet used to do. 6 is four distinct rhythms on the
+      // shipped cadence — eighths, triplets, sixteenths, sextuplets — and it
+      // is a musical limit rather than a technical one: the ladder would go on
+      // subdividing to bar/64 and a gun rattling thirty-second notes for a
+      // whole run is not a rhythm any more, it is a texture.
+      staggerTicks: 6,
       // A STACK OF MULTISHOT BUYS A LITTLE MORE THAN A PELLET. Bare count is
       // the one shape that gets bigger without getting stronger — the same
       // thing Sea Garlic's damagePerLevel was added to fix — so each stack
@@ -2811,16 +2840,22 @@ export const CONFIG = {
       maxBonus: 1.5,
     },
 
-    // IRON LUNG — damage as a function of how much air the seal can hold.
-    // Reads `maxOxygen` off the stat block, so every other card that widens
-    // the tank (Deep Lungs today, anything later) is a damage upgrade while
-    // this is held. That synergy IS the card; the flat bonus a bare Iron Lung
-    // gives on the starting tank is only the floor under it.
+    // IRON LUNG — damage as a function of how much air the seal is HOLDING.
+    // Read off the live oxygen bar rather than the size of the tank, so the
+    // bonus is at its top on a fresh breath and bleeds away over the dive: the
+    // seal hits hardest going down and softest just before it has to surface,
+    // and a run built on this has a reason to keep touching the surface that
+    // isn't only "or else you drown".
+    //
+    // Every other card that widens the tank (Deep Lungs today, anything later)
+    // is still a damage upgrade while this is held — a bigger tank raises the
+    // ceiling AND buys more seconds spent near it. That synergy IS the card.
     ironLung: {
       enabled: true,
-      // Fraction of all damage per POINT of max oxygen, per stack. At the
-      // starting tank of 100 that is +20% a stack; with Deep Lungs maxed (250)
-      // the same stack is worth +50%.
+      // Fraction of all damage per POINT of oxygen in the bar, per stack. On a
+      // full starting tank of 132 that is +26.4% a stack, falling to nothing as
+      // the bar empties; with the tank widened to 250 the same stack peaks at
+      // +50%.
       damagePerOxygen: 0.002,
       // Ceiling, so a tank widened by something unforeseen later cannot turn
       // this into the whole game. +300% is deliberately far above what the
@@ -3628,15 +3663,49 @@ export const CONFIG = {
       // at stack six as at stack one. A longer combo made of chips is still
       // chips. Fractional size because a fatter ricochet finds its next body
       // sooner, which is the bounce budget being worth more rather than longer.
-      damagePerLevel: 1.5,
+      damagePerLevel: 4,
       sizePerLevel: 0.05,
-      maxBounces: 2,
-      maxBouncesPerLevel: 2, // added to the budget by each Ricochet Rounds stack
+      maxBounces: 3,
+      maxBouncesPerLevel: 3, // added to the budget by each Ricochet Rounds stack
       restitution: 1, // 1 = perfect reflection off the wall
-      chainRange: 14, // how far it looks for its next victim after a hit
+      chainRange: 18, // how far it looks for its next victim after a hit
       chainLock: 0.06, // seconds of hit-immunity after a ricochet, so one body
                        // it's still overlapping can't eat the whole combo
       chainSpeedGain: 1.05, // each body it kicks off gives it a little more zip
+      // A CEILING ON THAT ZIP, because the budget is now long enough for the
+      // gain to compound past the point where the shot is a shot: twenty-odd
+      // caroms of 1.05 is 55 units a second, and at 1/60s that is 0.9 units a
+      // frame against a pellet 0.2 across — it starts stepping straight over
+      // the bodies it is supposed to be caroming off.
+      chainSpeedMax: 34,
+      // THE CHAIN IS THE DAMAGE NOW. Each ricochet (wall or body) adds this
+      // fraction of the pellet's own damage to the next hit, so a shot that
+      // finds a crowd finishes it far harder than it started — the combo the
+      // pitch and the spray were already climbing for, finally paid out in
+      // numbers. Capped at comboDamageMax x the base, or a shot that never
+      // runs out of bodies never runs out of damage either.
+      comboDamageStep: 0.22,
+      comboDamageMax: 3,
+      // AND THE PELLET SWELLS TO SHOW IT. A damage number nobody can see is a
+      // buff nobody believes; the shot getting visibly fatter every time it
+      // caroms is the ramp, drawn. Both halves at once and deliberately — the
+      // HITBOX grows with the picture (comboSizeStep is a weapons.csv row for
+      // exactly that reason), so a swollen ricochet finds its next body more
+      // easily, which is the same thing the size the player is looking at is
+      // promising.
+      comboSizeStep: 0.06, // multiplier added to the shot's size per carom
+      comboSizeMax: 1.5, // where that growth stops — a pellet, not a boulder
+      // The POP. Growth on its own is a smooth creep nobody reads at ricochet
+      // speed, so each bounce also kicks the size spring and it overshoots its
+      // new target before settling back onto it. `pop` is the kick, in size
+      // multiplier per second; stiffness and damping are the spring it lands
+      // in. Underdamped ON PURPOSE (a damping ratio near 0.4) — critical
+      // damping is a swell, and what this wants is a bounce.
+      //
+      // Feel, so it stays on sliders while the two numbers above sit in the
+      // CSV: this is judged by eye in the tenth of a second it happens, and the
+      // size it settles at is judged against the hitbox over a run.
+      comboSpring: { pop: 1.4, stiffness: 220, damping: 11 },
       // Combo escalation: every consecutive ricochet (wall or body) raises the
       // pitch of the bink and throws a bit more spray, so a long chain audibly
       // and visibly climbs instead of being ten identical clicks.
@@ -14587,8 +14656,13 @@ export const CONFIG = {
       // hover < click was already deliberate; typing goes under all of it,
       // because a keystroke is the least significant thing a menu can report.
       //
-      // No haptic: a phone buzzing per character while the on-screen keyboard
-      // is up is the one place rumble stops being feedback and becomes noise.
+      // No haptic HERE, and one in the tuner: a phone buzzing per character
+      // while the on-screen keyboard is up is the one place rumble stops being
+      // feedback and becomes noise — which is the argument this line was
+      // written on and lost. The saved tuning carries a single 20ms pulse at
+      // half strength, deliberately, and tools/menu-sound-test.mjs holds it to
+      // that shape: one pulse, short enough that a held key still reads as
+      // separate taps rather than as a continuous rumble.
       //
       // The gap is set just under a held key's repeat rate (~30/s), so normal
       // typing is never swallowed but leaning on a key ticks at a rate that
@@ -20402,8 +20476,18 @@ export const CONFIG = {
       // one preset in ember rather than a cold palette, because it is the only
       // one that is supposed to read as a threat rather than as scenery.
       abyssHunter: {
-        pattern: 'stripes',
-        scale: 0.15, // few, wide bands — a shark is long, and 20 stripes is a fish
+        // ON THE NIGHT ROSTER, and said out loud rather than inherited from
+        // `base`. The abyss shark is `bioluminescent` in enemies.csv and this
+        // is the look that goes with it — see the family note by the day
+        // roster's paint below, where the same flag is false fifteen times.
+        luminous: true,
+        // `pulse`, not `stripes`: travelling waves down the body rather than
+        // fixed bands across it. The old note below argued the count question a
+        // band pattern raises — how many stripes before a shark reads as a fish
+        // — which `pulse` does not have, so `scale` is now wave length rather
+        // than band width and is free to be much finer.
+        pattern: 'pulse',
+        scale: 0.05,
         coverage: 0.48,
         contrast: 3,
         // The brightest of the family, and still the brightest after the
@@ -20427,9 +20511,9 @@ export const CONFIG = {
         // is what it will use the moment anyone turns the flicker up.
         phaseSteps: 0,
         colorA: 0xcccccc, colorB: 0x828282, colorC: 0x71716f, // ember
-              pigment: 1,
+        pigment: 1,
         flow: 1.06,
-        shellColor: 0x404040,
+        shellColor: 0x575757,
       },
 
       // --- the two crabs -------------------------------------------------------
@@ -20905,7 +20989,7 @@ export const CONFIG = {
         flow: 0.94,
         pattern: 'marble',
         colorA: 0x00c23a,
-        colorB: 0x4f4e50,
+        colorB: 0x2a322b,
         colorC: 0x36e253,
         shellColor: 0x163b37,
       },
@@ -20979,18 +21063,18 @@ export const CONFIG = {
       // 4-slot phase spread is built for a nine-strong shoal, while squid spawn
       // in ones and twos, where a slot grid is just four animals in lockstep.
       squidGlow: {
-        pattern: 'spots',
+        pattern: 'lattice',
         // Coarse on purpose, and now coarse enough to mean it. Photophores are
         // organs — a dozen down the mantle, not a dust of them — and higher
         // numbers here mean MORE and SMALLER, so 0.13 is the coarsest `spots`
         // in the roster (orcaHide 0.16, dartGlow 0.19). It sat at 0.34 for a
         // long time, a hair off lantern's 0.4 speckle, which is to say the
         // number disagreed with this sentence. First one to move per species.
-        scale: 0.13,
+        scale: 0.79,
         // Low: the LIT fraction is the organs themselves, and most of a squid
         // is not an organ. Everything the pattern does not cover is `shellGlow`
         // below, which is where the mantle's own colour comes from.
-        coverage: 0.22,
+        coverage: 0.66,
         // Hard edges. A photophore has a rim; a glow that fades out at its
         // border is a bruise.
         contrast: 3.4,
@@ -21013,7 +21097,7 @@ export const CONFIG = {
         // Organs stay put. `flow` drifts the field THROUGH the body, and a
         // photophore that wandered down the mantle would be the exact failure
         // the bind-pose note in biolumSkin.js is about.
-        flow: 0,
+        flow: 1.58,
         // Slow, deep breath — the whole animal lighting and dimming together.
         // Deeper than lantern's 0.2 because there are a dozen organs here
         // rather than a hundred specks: with few emitters, the modulation has
@@ -21049,7 +21133,7 @@ export const CONFIG = {
         // some of them lit from inside the animal instead of all of them pasted
         // onto it. This read "cold organs on a warm body" when B was 0x00b4ff;
         // that is only half true of the palette now.
-        colorA: 0x3affe0, colorB: 0xff5768, colorC: 0xd8fff6,
+        colorA: 0xfb00ff, colorB: 0xff5768, colorC: 0x453045,
         hueSpread: 0.55,
         // THE MANTLE ITSELF. Not zero, which would leave the negative space
         // black and the squid a silhouette with dots on it — and the negative
@@ -21064,13 +21148,15 @@ export const CONFIG = {
         // the note at the top of biolumSkin.js asks for saturated AND mid-dark:
         // if the mantle ever reads as plastic rather than as flesh, this is the
         // number to bring down, not shellGlow.
-        shellColor: 0xff0000,
+        shellColor: 0xff6161,
         shellGlow: 0.16,
         // Light touch: squid.glb ships a real texture and this preset is meant
         // to light it, not replace it. To replace it, set `pigment: 1` and take
         // this to 0.05 — see the pigment family below.
         bodyDarken: 0.42,
         luminous: true,
+        pigment: 1,
+        pigmentGlow: 0,
       },
 
       // =====================================================================
@@ -21201,6 +21287,58 @@ export const CONFIG = {
         phaseSpread: 0, phaseSteps: 0,
         eyeStrength: 0,
       },
+
+      // ------------------------------------------------------------------
+      // THE DAY ROSTER'S PAINT — recorded in the shader lab, moved up here
+      // for the one field the lab has no slider for.
+      //
+      // `luminous` IS ROSTER GATING, NOT EMISSION — the same reading kingCrab
+      // spells out above. It pairs with `bioluminescent` in enemies.csv to say
+      // "this species is held back until dusk", and every creature below
+      // spawns in daylight: the reef fish, the tuna, the hammerhead, the two
+      // boats, the anglerfish boss. Left unsaid it inherits `base.luminous`,
+      // which is true — so fifteen day species were claiming a place on the
+      // night roster, and tools/biolum-skin-test.mjs failed for exactly that.
+      // It says nothing about how much light the pattern adds: several of
+      // these carry a real `strength` and are meant to.
+      //
+      // The numbers are the lab's own, unchanged.
+      // ------------------------------------------------------------------
+      tang: { luminous: false, pigment: 1, pigmentGlow: 0, scale: 0.08, contrast: 1.6, coverage: 0.45, strength: 2.22, flow: 0.62, pattern: 'blotches', colorA: 0xdbdbdb, colorB: 0x000000, colorC: 0x000000, shellColor: 0xffffff },
+      reeffish: { luminous: false, pigment: 1, pigmentGlow: 0, scale: 0.28, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.98, pattern: 'blotches', colorA: 0xf5feff, colorB: 0x000000, colorC: 0xffffff, shellColor: 0x6c81d5 },
+      fishPackB: { luminous: false, pigment: 0.48, pigmentGlow: 0, scale: 0.53, contrast: 3.55, coverage: 0.45, strength: 1.8, flow: 0.76, pattern: 'blotches', colorA: 0x050505, colorB: 0x878787, colorC: 0xb745bf, shellColor: 0x000000 },
+      fishPackC: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.11, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 2, pattern: 'blotches', colorA: 0x00e5ff, colorB: 0xff772e, colorC: 0xf7a1a1, shellColor: 0xff5a1e },
+      brownFish: { luminous: false, pigment: 1, pigmentGlow: 0.06, scale: 0.53, contrast: 0.9, coverage: 0.45, strength: 1.82, flow: 0.3, pattern: 'blotches', colorA: 0xabb9ba, colorB: 0x7b2dff, colorC: 0xffb300, shellColor: 0xadadad },
+      clownFish: { luminous: false, pigment: 1, scale: 0.23, contrast: 3.45, coverage: 0.42, strength: 1.8, flow: 1.08, pattern: 'speckle', colorA: 0x000000, colorB: 0xffffff, colorC: 0xeb5322, shellColor: 0xffffff },
+      surgeonFish: { luminous: false, pigment: 1, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 0.92, flow: 0.3, pattern: 'blotches', colorA: 0x00e5ff, colorB: 0xe6e6e6, colorC: 0x000ecc, shellColor: 0x1605ff },
+      tuna: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.05, contrast: 0.75, coverage: 0.45, strength: 1.8, flow: 1.18, pattern: 'pulse', colorA: 0xffffff, colorB: 0x4d4d4d, colorC: 0x6e6e6e, shellColor: 0x111212 },
+      hammerhead: { luminous: false, pigment: 1, scale: 0.07, contrast: 3.35, coverage: 0.45, strength: 2.2, flow: 0.94, pattern: 'blotches', colorA: 0x000000, colorB: 0x3a1778, colorC: 0xe6e6e6, shellColor: 0x1a1919 },
+      bossBoat: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.07, contrast: 1.6, coverage: 0.45, strength: 2.88, flow: 0.3, pattern: 'lattice', colorA: 0xffffff, colorB: 0x545454, colorC: 0x9e9e9e, shellColor: 0x000000 },
+      bossYacht: { luminous: false, pigment: 1, scale: 0.34, contrast: 1.5, coverage: 0.08, strength: 1.8, flow: 0.48, pattern: 'veins', colorA: 0x00e5ff, colorB: 0x000000, colorC: 0x2f2e2d, shellColor: 0xffffff },
+      bossAnglerfish: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.11, contrast: 1.6, coverage: 0.26, strength: 1.8, flow: 0.3, pattern: 'blotches', colorA: 0x000000, colorB: 0x878688, colorC: 0x292929, shellColor: 0xb0b0b0 },
+      stingray: { luminous: false, pigment: 1, pigmentGlow: 0, scale: 0.43, contrast: 1.25, coverage: 0.24, strength: 1.8, flow: 1.5, pattern: 'billow', colorA: 0xd4d4d4, colorB: 0xc2c2c2, colorC: 0x000000, shellColor: 0x4a4a4a },
+      puffer: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.05, contrast: 3.1, coverage: 0.42, strength: 2.04, flow: 1.98, pattern: 'blotches', colorA: 0xc8ff00, colorB: 0x51ff2e, colorC: 0xffd166, shellColor: 0xffffff },
+      barracuda: { luminous: false, pigment: 0.88, pigmentGlow: 0, scale: 0.04, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.28, pattern: 'flow', colorA: 0xffffff, colorB: 0x000000, colorC: 0x949494, shellColor: 0x144e6c },
+
+      // ------------------------------------------------------------------
+      // THE PROPS AND THE COMPANIONS — paint recorded in the shader lab, moved
+      // up for the same missing field as the day roster above.
+      //
+      // `luminous: true` here is NOT "these glow at night". None of them is on
+      // a spawn roster at all — two orca escorts, two boats, the whale that
+      // crosses, the note that comes off the music — so the flag reaches
+      // nothing but skins.csv's day/night gate, and true is what they have
+      // always inherited from `base`. It is written down so the pigment family
+      // states which side it is on rather than leaving the next paint preset
+      // to inherit an answer nobody chose.
+      // ------------------------------------------------------------------
+      orcaFriendCow: { luminous: true, pigment: 1, scale: 0.13, contrast: 1.6, coverage: 0.2, strength: 0.72, flow: 1.22, pattern: 'marble', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x000000 },
+      orcaFriendCalf: { luminous: true, pigment: 1, pigmentGlow: 0, scale: 0.04, contrast: 2.9, coverage: 0.45, strength: 1.9, flow: 1.54, pattern: 'net', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x3d3d3d },
+      bakalarBoat: { luminous: true, pigment: 1, scale: 0.1, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'lattice', colorA: 0xff0026, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xff5a1e },
+      boat: { luminous: true, pigment: 1, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.24, pattern: 'veins', colorA: 0x000000, colorB: 0x8f8f8f, colorC: 0x000000, shellColor: 0xababab },
+      whale: { luminous: true, pigment: 0.08, pigmentGlow: 0.22, scale: 0.05, contrast: 1.6, coverage: 0.45, strength: 2.78, flow: 0.88, pattern: 'veins', colorA: 0x000000, colorB: 0x3d3d3d, colorC: 0x949494, shellColor: 0xff5a1e },
+      musicNote: { luminous: true, pigment: 0.96, pigmentGlow: 0, scale: 0.06, contrast: 1.6, coverage: 0.45, strength: 2.12, flow: 1.88, pattern: 'blotches', colorA: 0xffffff, colorB: 0x969696, colorC: 0x030b7c, shellColor: 0x000000 },
+
 
     },
   },
@@ -27875,6 +28013,20 @@ export const CONFIG = {
     // levelling handed out (applyLevelGrowth). The per-stack damage and size
     // curve reads the former — see multishotLevelStats — or a run that never
     // took the card would collect its bonus for free.
+    // ONE STONE, ON ONE FLIPPER, ON A TICK OF ITS OWN. `multishot` is the
+    // volley's whole pellet count now (see the note on it in the weapon block),
+    // so this `+= 1` is exactly the one projectile the card has always claimed
+    // — it used to hand over two, one to each fin, fanned so tightly they read
+    // as one fatter shot.
+    //
+    // The reason it is one is the rhythm. Every pellet leaves on its own tick,
+    // so the stone this buys is a new SUBDIVISION of the volley rather than
+    // more of the same note: the pair of eighths the gun starts on becomes a
+    // triplet, the triplet becomes sixteenths, and the flipper carrying the odd
+    // stone walks between the two sides as the cycle phases against the bar.
+    // A stack is worth half the pellets it used to be and the whole of a new
+    // rhythm, which is the trade — and the damage and size curve below is
+    // untouched, so a stack still thickens what it does buy.
     { id: 'multishot', family: 'gun', name: 'Multishot', desc: '+1 projectile',
       apply: (s) => { s.multishot += 1; s.multishotLevel = (s.multishotLevel ?? 0) + 1; }, maxStacks: 6 },
     // ANDRE 3000 — everything you fire stays in the water longer. Not a gun
@@ -27921,8 +28073,8 @@ export const CONFIG = {
       levelDescs: { 1: 'Full-charge strike fires 8 homing mussels at once' } },
     { id: 'bounceShot', family: 'projectile', name: 'Ricochet Rounds', desc: 'Chaining shot: +fire rate, +lifespan, +bounces', apply: (s) => {
         s.bounceLevel = (s.bounceLevel ?? 0) + 1;
-        s.bounceFireRate = (s.bounceFireRate ?? CONFIG.bounce.fireRate) * 0.88;
-        s.bounceLife = (s.bounceLife ?? CONFIG.bounce.life) + 0.6;
+        s.bounceFireRate = (s.bounceFireRate ?? CONFIG.bounce.fireRate) * 0.84;
+        s.bounceLife = (s.bounceLife ?? CONFIG.bounce.life) + 0.9;
         s.bounceMaxBounces = (s.bounceMaxBounces ?? CONFIG.bounce.maxBounces) + CONFIG.bounce.maxBouncesPerLevel;
       }, maxStacks: 6 },
     { id: 'laserEyes', family: 'aoe', name: 'Laser Eyes', desc: 'Burn a line through the water: {effect}', apply: (s) => { s.laserEyesLevel = (s.laserEyesLevel ?? 0) + 1; }, maxStacks: 6 },
@@ -29077,7 +29229,7 @@ export const CONFIG = {
       // "fully lit" side of a cartoon bomb comes out darker than the water it
       // is falling through. mightyMeg's preset does the same thing for the
       // same reason.
-      voicemailBomb: { steps: 2, low: 0.55, high: 1.6, gamma: 1.1, soft: 0.04, range: 0.8 },
+      voicemailBomb: { strength: 0.3, steps: 2, low: 0.55, high: 1.6, gamma: 1.1, soft: 0.04, range: 0.8 },
 
       // THE HOMING MUSSEL, closed and open both. Two bands and a razor edge
       // between them: this is the smallest thing in the game wearing this
@@ -29643,6 +29795,33 @@ const SYNCED_FX = [
   ['eel companion', () => resolveBiolumCfg('biolumSkin.presets.eelCompanion'), ['pulseSync', 'flickerSync']],
   ['whale', () => resolveBiolumCfg('biolumSkin.presets.whale'), ['pulseSync', 'flickerSync']],
   ['harp note', () => resolveBiolumCfg('biolumSkin.presets.musicNote'), ['pulseSync', 'flickerSync']],
+
+  // ...AND THE REST OF THE ROSTER, which had grown to seventeen presets with
+  // pickers and no line here. Every one of them arrived through the shader
+  // lab's record button — a preset it writes is a preset the tuner builds a
+  // group for, and a group with a division picker is an effect on the grid
+  // whether or not anyone meant to put it there. They inherit base's divisions
+  // and base's `pulseAmp` of 0.25 exactly as the block above does, so this is
+  // the same argument continued rather than a different kind of row: most of
+  // the small fry in the water are on this line, and moving one number on
+  // `biolumSkin.base` moves all of them at once.
+  ['sea turtle — shell', () => resolveBiolumCfg('biolumSkin.presets.seaTurtle'), ['pulseSync', 'flickerSync']],
+  ['seagull', () => resolveBiolumCfg('biolumSkin.presets.seagull'), ['pulseSync', 'flickerSync']],
+  ['beluga drone', () => resolveBiolumCfg('biolumSkin.presets.beluga'), ['pulseSync', 'flickerSync']],
+  ['small fry', () => resolveBiolumCfg('biolumSkin.presets.fish'), ['pulseSync', 'flickerSync']],
+  ['fish pack A', () => resolveBiolumCfg('biolumSkin.presets.fishPackA'), ['pulseSync', 'flickerSync']],
+  ['tang', () => resolveBiolumCfg('biolumSkin.presets.tang'), ['pulseSync', 'flickerSync']],
+  ['reef fish', () => resolveBiolumCfg('biolumSkin.presets.reeffish'), ['pulseSync', 'flickerSync']],
+  ['fish pack B', () => resolveBiolumCfg('biolumSkin.presets.fishPackB'), ['pulseSync', 'flickerSync']],
+  ['fish pack C', () => resolveBiolumCfg('biolumSkin.presets.fishPackC'), ['pulseSync', 'flickerSync']],
+  ['brown fish', () => resolveBiolumCfg('biolumSkin.presets.brownFish'), ['pulseSync', 'flickerSync']],
+  ['surgeonfish', () => resolveBiolumCfg('biolumSkin.presets.surgeonFish'), ['pulseSync', 'flickerSync']],
+  ['boss anglerfish — hide', () => resolveBiolumCfg('biolumSkin.presets.bossAnglerfish'), ['pulseSync', 'flickerSync']],
+  ['stingray', () => resolveBiolumCfg('biolumSkin.presets.stingray'), ['pulseSync', 'flickerSync']],
+  ['anglerfish', () => resolveBiolumCfg('biolumSkin.presets.anglerfish'), ['pulseSync', 'flickerSync']],
+  ['club', () => resolveBiolumCfg('biolumSkin.presets.club'), ['pulseSync', 'flickerSync']],
+  ['club — boom', () => resolveBiolumCfg('biolumSkin.presets.clubBoom'), ['pulseSync', 'flickerSync']],
+  ['headstone', () => resolveBiolumCfg('biolumSkin.presets.headstone'), ['pulseSync', 'flickerSync']],
 ];
 
 // The generic version of the bioluminescence timing rows, for the effects that
@@ -30332,44 +30511,32 @@ for (const [root, presets] of Object.entries({
     "brownFish": { strength: 1, steps: 2, gamma: 1.4, low: 0.28, high: 0.96, soft: 0, range: 1 },
     "fishPackB": { strength: 1, steps: 2, gamma: 1, low: 0.16, high: 1, soft: 0.34, range: 1 },
     "fishPackC": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "club": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "sailfish": { strength: 1, steps: 2, gamma: 0.5, low: 0.86, high: 1.55, soft: 0, range: 1 },
+    "surgeonFish": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
+    "headstone": { strength: 1, steps: 6, gamma: 1, low: 0.28, high: 1, soft: 0.06, range: 1 },
   },
   sealShader: {
-    "mightyMeg": { strength: 0, size: 0.04, contrast: 3.55 },
     "sealTeam": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.6, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.6, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1.3, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "ship": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 3, wetSoft: 0.5, wetTight: 21, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 4.4, wetPatch: 0.35, wetCaustics: 0.95, wetCausticScale: 4.9, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
-    "shark": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 1.15, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.76, wetTight: 81, wetEdge: 0.15, wetRim: 0.46, wetRimPower: 2.7, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
+    "shark": { paint: 0, paintGlow: 0, strength: 0.83, size: 0.04, contrast: 3.55, wet: 1.15, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.76, wetTight: 81, wetEdge: 0.15, wetRim: 0.46, wetRimPower: 2.7, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff, baseColor: 0xffffff },
     "megalodon": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "bossHammerhead": { paint: 1, paintGlow: 0, strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff, baseColor: 0x9e9e9e },
     "mosasaur": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 1.35, wetGloss: 0.5, wetSteps: 4, wetSoft: 0.62, wetTight: 24, wetEdge: 0.59, wetRim: 0.7, wetRimPower: 2.2, wetPatch: 0.7, wetCaustics: 0.5, wetCausticScale: 1.2, wetCausticUp: 0.75, wetGlow: 0.9, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "bossAnglerfish": { paint: 0, paintGlow: 0, strength: 1, size: 0.04, contrast: 3.55, wet: 0.6, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 2, wetTint: 0.55, color: 0x000000, wetColor: 0x7acaff, baseColor: 0xffffff },
     "orcaFriendBull": { strength: 1.08, size: 1.41, contrast: 4, wet: 1.9, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
     "barracuda": { strength: 1.22, size: 1.13, contrast: 3.55, wet: 1.15, wetGloss: 1.4, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.6, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.7, color: 0x000000, wetColor: 0xdff2ff },
-    "walkingCrab": { paint: 0, paintGlow: 0, strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.75, wetGloss: 0.6, wetSteps: 2, wetSoft: 0.5, wetTight: 22, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff, baseColor: 0xffffff },
+    "walkingCrab": { paint: 0, paintGlow: 0, strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.9, wetGloss: 0.6, wetSteps: 2, wetSoft: 0.5, wetTight: 22, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff, baseColor: 0xffffff },
     "tuna": { paint: 0, paintGlow: 0, strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.55, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.35, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff, baseColor: 0xffffff },
   },
   biolumSkin: {
-    "clubIce": { shellColor: 0x000000, colorC: 0x000000, colorB: 0xade6e5, flow: 1.16, pattern: "flow", scale: 0.07 },
-    "octoGrabber": { flow: 1.2, pattern: "marble", scale: 0.13, shellColor: 0xff5e24, colorA: 0xff9500, colorC: 0x00f048 },
-    "hammerhead": { pigment: 1, scale: 0.07, contrast: 3.35, coverage: 0.45, strength: 1.8, flow: 0.94, pattern: 'blotches', colorA: 0x000000, colorB: 0x3a1778, colorC: 0xe6e6e6, shellColor: 0x1a1919 },
-    "bossYacht": { pigment: 1, scale: 0.34, contrast: 1.5, coverage: 0.08, strength: 1.8, flow: 0.48, pattern: 'veins', colorA: 0x00e5ff, colorB: 0x000000, colorC: 0x2f2e2d, shellColor: 0xffffff },
-    "orcaFriendCow": { pigment: 1, scale: 0.13, contrast: 1.6, coverage: 0.2, strength: 0.72, flow: 1.22, pattern: 'marble', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x000000 },
-    "orcaFriendCalf": { pigment: 1, pigmentGlow: 0, scale: 0.04, contrast: 2.9, coverage: 0.45, strength: 1.9, flow: 1.54, pattern: 'net', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x3d3d3d },
-    "bakalarBoat": { pigment: 1, scale: 0.1, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'lattice', colorA: 0xff0026, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xff5a1e },
-    "boat": { pigment: 1, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.24, pattern: 'veins', colorA: 0x000000, colorB: 0x8f8f8f, colorC: 0x000000, shellColor: 0xababab },
-    "clownFish": { pigment: 1, scale: 0.23, contrast: 3.45, coverage: 0.42, strength: 1.8, flow: 1.08, pattern: 'speckle', colorA: 0x000000, colorB: 0xffffff, colorC: 0xeb5322, shellColor: 0xffffff },
-    "barracuda": { pigment: 0.88, pigmentGlow: 0, scale: 0.04, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.28, pattern: 'flow', colorA: 0xffffff, colorB: 0x000000, colorC: 0x949494, shellColor: 0x144e6c },
-    "puffer": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 3.1, coverage: 0.45, strength: 1.8, flow: 1.98, pattern: 'blotches', colorA: 0x4f14f0, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xffffff },
+    "clubIce": { shellColor: 0x000000, colorC: 0x000000, colorB: 0xade6e5, flow: 1.16, pattern: 'flow', scale: 0.07 },
+    "octoGrabber": { flow: 1.2, pattern: 'marble', scale: 0.13, shellColor: 0xff5e24, colorA: 0xff9500, colorC: 0x00f048 },
     "eelCompanion": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'blotches', colorA: 0x00e5ff, colorB: 0x11df6a, colorC: 0xffd166, shellColor: 0x1ba300 },
-    "whale": { pigment: 0.08, pigmentGlow: 0.22, scale: 0.05, contrast: 1.6, coverage: 0.45, strength: 2.78, flow: 0.88, pattern: 'veins', colorA: 0x000000, colorB: 0x3d3d3d, colorC: 0x949494, shellColor: 0xff5a1e },
-    "tuna": { pigment: 0, pigmentGlow: 0, scale: 0.05, contrast: 0.75, coverage: 0.45, strength: 1.8, flow: 1.18, pattern: 'pulse', colorA: 0xffffff, colorB: 0x4d4d4d, colorC: 0x6e6e6e, shellColor: 0x111212 },
-    "bossBoat": { pigment: 0, pigmentGlow: 0, scale: 0.07, contrast: 1.6, coverage: 0.45, strength: 2.88, flow: 0.3, pattern: 'lattice', colorA: 0xffffff, colorB: 0x545454, colorC: 0x9e9e9e, shellColor: 0x000000 },
-    "musicNote": { pigment: 0.96, pigmentGlow: 0, scale: 0.06, contrast: 1.6, coverage: 0.45, strength: 2.12, flow: 1.88, pattern: 'blotches', colorA: 0xffffff, colorB: 0x969696, colorC: 0x030b7c, shellColor: 0x000000 },
     "clubBoom": { pigment: 0, pigmentGlow: 0, scale: 0.13, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.32, pattern: 'blotches', colorA: 0x000000, colorB: 0xff0040, colorC: 0xfffdfa, shellColor: 0x000000 },
     "anglerfish": { pigment: 0, pigmentGlow: 0.8, scale: 0.57, contrast: 1.6, coverage: 0.28, strength: 0.64, flow: 1.62, pattern: 'blotches', colorA: 0x000000, colorB: 0xebebeb, colorC: 0x000000, shellColor: 0x7a7a7a },
-    "bossAnglerfish": { pigment: 0, pigmentGlow: 0, scale: 0.11, contrast: 1.6, coverage: 0.26, strength: 1.8, flow: 0.3, pattern: 'blotches', colorA: 0x000000, colorB: 0x878688, colorC: 0x292929, shellColor: 0xb0b0b0 },
-    "brownFish": { pigment: 1, pigmentGlow: 0.06, scale: 0.53, contrast: 0.9, coverage: 0.45, strength: 1.82, flow: 0.3, pattern: 'blotches', colorA: 0xabb9ba, colorB: 0x7b2dff, colorC: 0xffb300, shellColor: 0xadadad },
-    "fishPackB": { pigment: 0.48, pigmentGlow: 0, scale: 0.53, contrast: 3.55, coverage: 0.45, strength: 1.8, flow: 0.76, pattern: 'blotches', colorA: 0x050505, colorB: 0x878787, colorC: 0xb745bf, shellColor: 0x000000 },
-    "fishPackC": { pigment: 0, pigmentGlow: 0, scale: 0.11, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 2, pattern: 'blotches', colorA: 0x00e5ff, colorB: 0xff772e, colorC: 0xf7a1a1, shellColor: 0xff5a1e },
+    "club": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.42, pattern: 'veins', colorA: 0xf1f8f9, colorB: 0x4a4a4a, colorC: 0xb5ac97, shellColor: 0x3e2319 },
+    "headstone": { pigment: 0, pigmentGlow: 0, scale: 0.74, contrast: 1.6, coverage: 0.52, strength: 1.8, flow: 1.42, pattern: 'blotches', colorA: 0x000000, colorB: 0x969696, colorC: 0x5c5c5c, shellColor: 0x292929 },
   },
 })) {
   const bag = ((CONFIG[root] ??= {}).presets ??= {});
@@ -30903,6 +31070,12 @@ export const TUNER_SCHEMA = [
       { path: 'bounce.comboPitchMax', min: 0, max: 36, step: 1, label: 'bounce combo pitch cap (semitones)' },
       { path: 'bounce.comboScaleStep', min: 0, max: 0.6, step: 0.01, label: 'bounce combo fx growth' },
       { path: 'bounce.comboScaleMax', min: 1, max: 5, step: 0.1, label: 'bounce combo fx cap' },
+      // The pellet's own swell. Size AND hitbox, so the two below move what the
+      // shot can reach as well as how big it looks — the step and the ceiling
+      // are weapons.csv rows for that reason and are not on a slider.
+      { path: 'bounce.comboSpring.pop', min: 0, max: 4, step: 0.05, label: 'bounce swell: pop' },
+      { path: 'bounce.comboSpring.stiffness', min: 20, max: 600, step: 10, label: 'bounce swell: springiness' },
+      { path: 'bounce.comboSpring.damping', min: 1, max: 40, step: 0.5, label: 'bounce swell: settle' },
     ],
   },
   // Glow Up!. Split into the shared curve and one group per element, because

@@ -378,16 +378,26 @@ export function applyBossGrowth(s, bossesDefeated) {
 //   synthetic stat block, and an apply() that read live run state would report
 //   whatever the last run happened to be doing.
 //
-//   IRON LUNG is paid per point of MAX OXYGEN, which is a stat OTHER cards
-//   move. apply() runs in PICK ORDER — the same reason Clone Warz is spent at
-//   the point of use (see projectileBonus above) — so an Iron Lung taken
-//   before Deep Lungs would be measured against a tank that had not grown yet,
-//   and taking the same two cards in the other order would be a different run.
+//   IRON LUNG is paid per point of the air the seal is CURRENTLY holding,
+//   which moves every frame of a dive. apply() runs in PICK ORDER as well —
+//   the same reason Clone Warz is spent at the point of use (see
+//   projectileBonus above) — so an Iron Lung taken before Deep Lungs would be
+//   measured against a tank that had not grown yet, and taking the same two
+//   cards in the other order would be a different run.
 //
 // So apply() only COUNTS the stacks and this spends them, once, after every
 // upgrade has been replayed and after applyLevelGrowth. Both are pure
 // functions of the block plus one number the caller supplies, which keeps the
 // whole thing replayable in Node.
+//
+// IRON LUNG IS THEN RE-SPENT EVERY FRAME, because its number is a live one.
+// applyDamageScaling stashes the four stats as they stood BEFORE the lung
+// multiplier (`ironLungBase`) and applyIronLung below re-derives them from
+// that stash against the current oxygen — four multiplies, once a frame, as
+// against replaying every upgrade in the run. Re-deriving from the stash
+// rather than multiplying the live value is what keeps it from compounding:
+// a multiplier applied to an already-multiplied stat sixty times a second
+// reaches the cap in under a second and never comes back down.
 //
 // WHAT "ALL DAMAGE" REACHES. The multiplier lands on the four stats every
 // damage number in the game is eventually derived from: the gun (`damage`,
@@ -434,24 +444,61 @@ export function maneaterReadout(s, humansEaten = 0) {
 /**
  * The Iron Lung bonus as a multiplier — 1 for a run without it.
  *
- * Read off `s.maxOxygen`, which is the whole point of the card: every stack of
- * Deep Lungs, and anything else that ever widens the tank, is a damage upgrade
- * for as long as this is held.
+ * Read off the air the seal is HOLDING, not the size of the tank it came out
+ * of. That is the whole shape of the card: a full breath is the top of the
+ * bonus and it bleeds away with the bar, so the seal hits hardest on the way
+ * down and softest just before it has to surface. Widening the tank — Deep
+ * Lungs, or anything later — raises the ceiling this can climb to AND buys
+ * more seconds near it, which is why the two cards still belong together.
+ *
+ * `oxygen` defaults to the full tank, so a caller with no run in hand (the
+ * card prober, the hover tips, a Node harness) measures the card at its
+ * headline value rather than at whatever the last frame happened to hold.
+ * Clamped to the tank at both ends: a refill overshoot must not be worth more
+ * than a full breath, and a drowned seal gets nothing rather than a negative.
  */
-export function ironLungMul(s) {
+export function ironLungMul(s, oxygen) {
   const c = CONFIG.ironLung ?? {};
   const level = s.ironLungLevel ?? 0;
   if (!c.enabled || level <= 0) return 1;
-  const bonus = (c.damagePerOxygen ?? 0) * level * Math.max(0, s.maxOxygen ?? 0);
+  const cap = Math.max(0, s.maxOxygen ?? 0);
+  const held = Math.max(0, Math.min(oxygen ?? cap, cap));
+  const bonus = (c.damagePerOxygen ?? 0) * level * held;
   return 1 + Math.min(bonus, c.maxBonus ?? Infinity);
 }
 
-export function applyDamageScaling(s, humansEaten = 0) {
-  const mul = maneaterMul(s, humansEaten) * ironLungMul(s);
-  if (mul === 1) return s;
-  s.damage *= mul;
-  s.strikeDamage *= mul;
-  s.abilityDamageMul *= mul;
-  s.companionDamageMul *= mul;
+// The four stats "all damage" reaches. Listed once so applyDamageScaling and
+// applyIronLung can never fall out of step about which ones the lung moves —
+// a stat scaled by one and restored by the other would drift a little further
+// from the truth on every frame of every dive.
+const DAMAGE_STATS = ['damage', 'strikeDamage', 'abilityDamageMul', 'companionDamageMul'];
+
+/**
+ * WHAT THE BREATH IS WORTH RIGHT NOW — re-derived from the stash, every frame.
+ *
+ * Safe to call on a block that never went through applyDamageScaling (there is
+ * no stash, so there is nothing to restore) and safe to call twice with the
+ * same oxygen, which is the property that lets updatePlayer call it
+ * unconditionally rather than tracking whether the bar moved.
+ */
+export function applyIronLung(s, oxygen) {
+  const base = s?.ironLungBase;
+  if (!base) return s;
+  const mul = ironLungMul(s, oxygen);
+  for (const k of DAMAGE_STATS) s[k] = base[k] * mul;
+  return s;
+}
+
+export function applyDamageScaling(s, humansEaten = 0, oxygen) {
+  const mul = maneaterMul(s, humansEaten);
+  if (mul !== 1) for (const k of DAMAGE_STATS) s[k] *= mul;
+  // Everything except the lung is now spent, so this is the block the lung
+  // multiplies — kept as an object rather than four numeric fields because a
+  // number on the stat block is something the rarity system, the card prober
+  // and the playtest ledger all take an interest in, and these four are
+  // bookkeeping rather than stats.
+  s.ironLungBase = {};
+  for (const k of DAMAGE_STATS) s.ironLungBase[k] = s[k];
+  applyIronLung(s, oxygen);
   return s;
 }

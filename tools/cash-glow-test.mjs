@@ -185,15 +185,23 @@ const step = (dt) => { updateBeatSync(dt); updateEmissivePulse(dt); return mat.e
 // lands mid-flare rather than at the trough — where every phase, right or
 // wrong, is briefly worth the same thing.
 {
-  // Each call spends exactly five beats: four in whatever frames it was given,
-  // one more split around the reading. The two runs are sequential on a
-  // transport that only goes forwards, so leaving the clock on a beat line is
-  // what lets the second run be compared to the first at all.
+  // IN THE PULSE'S OWN CYCLES, not in beats. Each call spends exactly five
+  // cycles: four in whatever frames it was given, one more split around the
+  // reading. The two runs are sequential on a transport that only goes
+  // forwards, so what lets the second be compared to the first at all is that
+  // the first leaves the clock a whole number of CYCLES along — the phase is
+  // `transport / cycle`, and five beats of a 1-bar pulse is a beat and a
+  // quarter of one, which lands the second run a quarter-cycle out and looks
+  // exactly like the drift this is here to catch. `pulseSync` is a picker in
+  // the tuner and this row is on '1 bar' today, so the unit has to be read
+  // from the row rather than assumed to be the beat it was when this was
+  // written.
+  const cycle = divisionSeconds(cfg.pulseSync);
   const ragged = (frames) => {
     const total = frames.reduce((s, x) => s + x, 0);
-    for (const f of frames) step(beat * 4 * (f / total));
-    const v = step(beat * 0.137);
-    step(beat * 0.863);
+    for (const f of frames) step(cycle * 4 * (f / total));
+    const v = step(cycle * 0.137);
+    step(cycle * 0.863);
     return v;
   };
   const a = ragged(Array(40).fill(0.1));

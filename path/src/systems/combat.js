@@ -4,7 +4,7 @@ import { boats, damageBoat, hitsBoat } from './boats.js';
 import { damageDebris } from './boatDebris.js';
 import { damageCrew } from './crew.js';
 import { enemies, removeEnemy, applyKnockback } from '../entities/enemies.js';
-import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
+import { projectiles, despawn, chainToEnemy, deflectProjectile, spendBounce } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy, activeElement } from './elements.js';
 import { applyHarpCharm } from './harp.js';
@@ -24,10 +24,11 @@ const contact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 // it the way an ordinary bullet would.
 function tryChain(b, enemyList, justHit, hooks) {
   if (!b.chain || b.bouncesLeft <= 0) return false;
-  b.bouncesLeft -= 1;
-  b.bounceCombo += 1;
+  // The budget, the combo and the damage ramp are all one event — projectiles.js
+  // owns it so the wall can't disagree with the body about what a bounce is.
+  spendBounce(b);
   b.hitLock = b.chainLock;
-  b.speed *= b.chainSpeedGain;
+  b.speed = Math.min(b.chainSpeedMax, b.speed * b.chainSpeedGain);
   if (!chainToEnemy(b, enemyList, justHit)) deflectProjectile(b);
   hooks.onProjectileChained?.(b, b.mesh.position.x, b.mesh.position.y);
   return true;

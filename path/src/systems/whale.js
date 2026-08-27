@@ -594,10 +594,22 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
         const pull = (c.intakePull ?? 0) * Math.pow(t, c.intakeFalloff ?? 1) * suction;
         const eat = dt / Math.max(0.02, c.intakeEatTime ?? 0.4);
         const suck = { x: _mouth.x, y: _mouth.y, z: w.container.position.z, rate: pull, dt };
-        // Only counts as eaten once bitePickup says the orb is finished — it
-        // takes `intakeEatTime` of being held at the lips to go down, which is
-        // what makes a swallow a visible event rather than a disappearance.
-        if (bitePickup(scene, p, eat, suck)) orbs++;
+        // CHEWED AT THE LIPS, PULLED EVERYWHERE ELSE — the same two-part shape
+        // the prey loop above has, and for the same reason. `eat` used to be
+        // spent anywhere inside the field, so an orb sitting at the rim of a
+        // twenty-unit bubble went down in `intakeEatTime` without ever being
+        // drawn in: the whale swallowed a pile from most of a screen away, the
+        // hoover hook never fired once across a whole pass, and the effect
+        // this exists to give — an orb visibly dragged to the mouth and
+        // shrinking as it goes — was reachable only by accident. Outside
+        // `reach` the amount is 0, which leaves bitePickup doing the suction
+        // and nothing else.
+        //
+        // Nothing is lost by the whale: the orbs it sweeps are on its own
+        // line, so the mouth arrives at them whether or not the suction got
+        // there first.
+        const atLips = d2 <= reach * reach;
+        if (bitePickup(scene, p, atLips ? eat : 0, suck)) orbs++;
         else if (t > 0.15) hooks.onOrbHoover?.(p.mesh.position.x, p.mesh.position.y);
       }
     }

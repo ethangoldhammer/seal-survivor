@@ -10,9 +10,11 @@
 //
 //   MANEATER    is paid per human eaten, a running total the stat block is
 //               rebuilt against (systems: main.js counts, player.js reseeds).
-//   IRON LUNG   is paid per point of max oxygen, a stat OTHER cards move, so
-//               its value depends on the rest of the build and NOT on the
-//               order the cards were picked in.
+//   IRON LUNG   is paid per point of the oxygen the seal is HOLDING, which
+//               moves every frame of a dive, and whose ceiling OTHER cards
+//               move — so its value depends on the rest of the build, on where
+//               in the breath you are, and NOT on the order the cards were
+//               picked in.
 //   SONAR TEETH is paid in target selection, inside the projectile loop.
 //
 // Sections 1-4 exercise stats.js directly. Section 5 drives the real
@@ -29,7 +31,9 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { baseStats, applyLevelGrowth, applyDamageScaling, maneaterMul, ironLungMul } from '../path/src/stats.js';
+import {
+  baseStats, applyLevelGrowth, applyDamageScaling, applyIronLung, maneaterMul, ironLungMul,
+} from '../path/src/stats.js';
 import { spawnProjectile, updateProjectiles, projectiles } from '../path/src/entities/projectiles.js';
 import { markTarget, resetMarks } from '../path/src/systems/marks.js';
 
@@ -42,11 +46,11 @@ const r3 = (n) => Math.round(n * 1000) / 1000;
 // Kept in step with that function by hand, deliberately: importing player.js
 // would drag in three.js, the animation controller and the aim rig, which is
 // the same reason stats.js exists as its own module at all.
-function run({ picks = [], level = 1, humansEaten = 0 } = {}) {
+function run({ picks = [], level = 1, humansEaten = 0, oxygen } = {}) {
   const s = baseStats();
   for (const id of picks) U(id).apply(s);
   applyLevelGrowth(s, level);
-  applyDamageScaling(s, humansEaten);
+  applyDamageScaling(s, humansEaten, oxygen);
   return s;
 }
 
@@ -110,6 +114,56 @@ console.log('\n3. IRON LUNG — scales with the tank, and Deep Lungs feeds it');
   // run for reasons no player could see.
   ok(run({ picks: ['ironLung', 'oxygenMax'] }).damage === run({ picks: ['oxygenMax', 'ironLung'] }).damage,
     'and pick ORDER cannot change what the pair is worth');
+}
+
+console.log('\n3b. IRON LUNG — and it drains with the bar');
+{
+  const c = CONFIG.ironLung;
+  const base = run();
+  const full = run({ picks: ['ironLung'] });
+  const half = run({ picks: ['ironLung'], oxygen: CONFIG.oxygen.max / 2 });
+  const empty = run({ picks: ['ironLung'], oxygen: 0 });
+
+  ok(r3(half.damage / base.damage) === r3(1 + c.damagePerOxygen * CONFIG.oxygen.max / 2),
+    'half a breath is worth half the bonus');
+  ok(empty.damage === base.damage,
+    'and a drowning seal is worth exactly what one without the card is');
+  ok(full.damage > half.damage && half.damage > empty.damage,
+    'so the bonus falls monotonically over a dive');
+  ok(empty.strikeDamage === base.strikeDamage && empty.abilityDamageMul === base.abilityDamageMul
+    && empty.companionDamageMul === base.companionDamageMul,
+    'the dash, everything thrown and every escort all drain with it');
+
+  // A NEGATIVE BAR AND AN OVERFILLED ONE. Neither should be reachable, and the
+  // clamp is here because "should not be reachable" has never once held: the
+  // surface refill adds before it clamps, and the drowning tick subtracts.
+  ok(run({ picks: ['ironLung'], oxygen: -50 }).damage === base.damage,
+    'a negative bar cannot make the card a PENALTY');
+  ok(run({ picks: ['ironLung'], oxygen: CONFIG.oxygen.max * 10 }).damage === full.damage,
+    'and an overfilled one is worth no more than a full breath');
+
+  // THE BUG THIS WHOLE ARRANGEMENT EXISTS TO PREVENT. applyIronLung runs once
+  // a frame, so if it multiplied the LIVE stat instead of re-deriving from the
+  // stash it would compound sixty times a second — a seal that idled at the
+  // surface for one second would be at the cap and would never come down.
+  const live = run({ picks: ['ironLung'] });
+  for (let i = 0; i < 300; i++) applyIronLung(live, CONFIG.oxygen.max);
+  ok(live.damage === full.damage, '300 frames at a full tank is worth one frame — no compounding');
+  applyIronLung(live, 0);
+  ok(live.damage === base.damage, '...and it comes all the way back down when the air runs out');
+  applyIronLung(live, CONFIG.oxygen.max);
+  ok(live.damage === full.damage, '...and back up on the next breath, to the same number');
+
+  // The tank is still the ceiling, so Deep Lungs is still the pairing — but on
+  // a HALF-EMPTY bar, not just a notionally bigger one.
+  const O = ['oxygenMax', 'oxygenMax', 'oxygenMax', 'oxygenMax', 'oxygenMax'];
+  const deepHalf = run({ picks: ['ironLung', ...O], oxygen: CONFIG.oxygen.max / 2 });
+  const deepHalfBase = run({ picks: O, oxygen: CONFIG.oxygen.max / 2 });
+  ok(r3(deepHalf.damage / deepHalfBase.damage) === r3(half.damage / base.damage),
+    'the same points of air are worth the same whatever the tank holds them');
+  ok(run({ picks: ['ironLung', ...O], oxygen: run({ picks: O }).maxOxygen }).damage
+     / run({ picks: O }).damage > full.damage / base.damage,
+    'and a FULL bigger tank still beats a full small one — the synergy is the seconds it buys');
 }
 
 console.log('\n4. the two multiply, and touch nothing but damage');

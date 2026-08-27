@@ -109,6 +109,19 @@ const GROUP_BY_NAME = {
   // that leave this machine rather than with the web build.
   ios: 'Publish', 'ios:run': 'Publish', 'ios:sync': 'Publish',
   'ship:all': 'Publish', 'ship:ios': 'Publish',
+  'ship:phone': 'Publish',
+  // The desktop build is the Steam/Electron half of shipping: a vite build
+  // with its own config, the shell that runs it, and the packer that wraps
+  // the two into something installable.
+  'build:desktop': 'Publish', 'pack:desktop': 'Publish',
+  // ...and `desktop` puts the game on screen in that shell, which is a server
+  // in every way that matters here.
+  desktop: 'Servers',
+  'desktop:test': 'Checks', 'desktop:test:save': 'Checks', 'desktop:test:shell': 'Checks',
+  'audit:offline': 'Audits', 'steam:status': 'Audits', 'bait:shader': 'Audits',
+  // Reads what the phone's last sessions ended as. A report, not an asset job.
+  crash: 'Audits',
+  fonts: 'Assets',
 };
 
 // ---------------------------------------------------------------------------
@@ -126,6 +139,12 @@ const BLURBS = {
   test: 'Every check in the repo, chained. The first failure hides the rest — see npm-test-is-and-chained.',
   'playtest:sync': 'Pulls remote runs and rebuilds the playtest atlas from them in one step.',
   ios: 'Builds, syncs the Capacitor iOS project, and opens it in Xcode.',
+  // The four desktop scripts run vite/electron/electron-builder directly, so
+  // there is no tool file with a banner to read a description off.
+  'build:desktop': 'Production build for the Electron shell, using vite.desktop.config.js.',
+  desktop: 'Builds for the desktop shell and opens the game in an Electron window.',
+  'desktop:test': 'Builds, then runs both desktop checks: the shell serves, and the save round-trips.',
+  'pack:desktop': 'Builds and packs the Electron app into an unpacked directory — no installer.',
   'ios:run': 'Builds, syncs, and runs the iOS app on a simulator or attached device.',
   'ios:sync': 'Builds and syncs the web bundle into the Capacitor iOS project. No Xcode.',
   // No banner on tools/head-socket-measure.mjs yet — its sibling

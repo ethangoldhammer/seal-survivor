@@ -2,18 +2,28 @@
 // ---------------------------------------------------------------------------
 // Beam churn: what one minute of laser eyes builds and throws away.
 //
-// systems/beams.js builds three MeshBasicMaterials and three PlaneGeometries
-// per beam (buildMesh) and disposes all six in removeBeam. That is deliberate —
-// the comment there is right that beams must not share an opacity — but the
-// materials are rebuilt from scratch every volley rather than pooled.
+// THE NUMBER THAT MATTERS IS NOT HOW MANY ARE BUILT. The beam list reaching
+// EMPTY between volleys is fine and always will — a beam that has finished
+// burning is gone. What mattered was what happened at that moment: three.js
+// refcounts a compiled program by the materials using it, so when the last one
+// was DISPOSED the program was deleted, and the next volley linked the
+// identical shader again from source.
 //
-// The number that matters is not how many are built, it is whether the beam
-// list ever reaches EMPTY between volleys. three.js refcounts a compiled
-// program by the materials using it; when the last one is disposed the program
-// is deleted, and the next volley has to link it again. A gap of even one
-// frame with zero beams turns every volley into a shader link.
+// systems/beams.js pools them now. A retired beam's three materials go on a
+// free list instead of being disposed, so the refcount never reaches zero and
+// a volley arriving after ten quiet seconds finds its shader already linked.
+// The geometry is one shared unit quad, because a beam's length and width are
+// mesh.scale and nothing ever writes a vertex.
 //
-//   node --import ./tools/vite-loader.mjs tools/beam-churn-test.mjs
+// So this asserts the pool, not the absence of gaps:
+//
+//   1. materials built stops scaling with volleys — it settles at the most
+//      beams alive at once, times three, and stops.
+//   2. NOTHING is disposed during a run. One dispose is the whole bug back.
+//   3. a second minute builds nothing at all, which is the refcount question
+//      stated directly: the pool from minute one still holds the program.
+//
+//   npm run test:beamchurn
 // ---------------------------------------------------------------------------
 
 import './dom-stub.mjs';
@@ -49,6 +59,15 @@ function check(name, cond, detail = '') {
 let matsDisposed = 0; let geosDisposed = 0;
 const seenMats = new Set();
 const seenGeos = new Set();
+// SEEN IS NOT BUILT, and conflating them made the second-minute check read its
+// own bookkeeping instead of the code: `seenMats` is cleared per run, so a
+// POOLED material reused in minute two lands in it again and looks new. These
+// two are never cleared, so "how many did this run construct" is the count of
+// UUIDs that had never appeared before — which is the only number the pool
+// changes.
+const everMats = new Set();
+const everGeos = new Set();
+let freshMats = 0; let freshGeos = 0;
 const realMatDispose = THREE.Material.prototype.dispose;
 THREE.Material.prototype.dispose = function () { matsDisposed++; return realMatDispose.call(this); };
 const realGeoDispose = THREE.BufferGeometry.prototype.dispose;
@@ -58,8 +77,14 @@ function sampleBeams() {
   for (const b of beams) {
     if (!b.mesh) continue;
     b.mesh.traverse((o) => {
-      if (o.material) seenMats.add(o.material.uuid);
-      if (o.geometry) seenGeos.add(o.geometry.uuid);
+      if (o.material) {
+        seenMats.add(o.material.uuid);
+        if (!everMats.has(o.material.uuid)) { everMats.add(o.material.uuid); freshMats++; }
+      }
+      if (o.geometry) {
+        seenGeos.add(o.geometry.uuid);
+        if (!everGeos.has(o.geometry.uuid)) { everGeos.add(o.geometry.uuid); freshGeos++; }
+      }
     });
   }
 }
@@ -74,6 +99,7 @@ function run(level, seconds) {
   resetLaserEyes?.();
   matsDisposed = geosDisposed = 0;
   seenMats.clear(); seenGeos.clear();
+  freshMats = 0; freshGeos = 0;
   let emptyFrames = 0; let volleys = 0; let wasEmpty = true; let peak = 0;
   const frames = Math.round(seconds / dt);
   for (let i = 0; i < frames; i++) {
@@ -89,7 +115,9 @@ function run(level, seconds) {
   }
   return {
     emptyFrames, frames, volleys, peak,
-    matsBuilt: seenMats.size, geosBuilt: seenGeos.size, matsDisposed, geosDisposed,
+    matsBuilt: freshMats, geosBuilt: freshGeos,
+    matsLive: seenMats.size, geosLive: seenGeos.size,
+    matsDisposed, geosDisposed,
   };
 }
 
@@ -110,21 +138,55 @@ for (const lvl of [1, 3, 6]) {
 }
 
 console.log('\nThe program-refcount question');
+
+// 1. BUILT IS BOUNDED BY WHAT IS ALIVE AT ONCE, not by how often beams fire.
+// Three materials per beam, so the ceiling is peak*3 — plus a little slack,
+// because a volley whose beams retire in different frames can hand the pool
+// back one at a time. What this rules out is the shape that was wrong:
+// materials rising with the volley count.
 for (const r of rows) {
+  const ceiling = r.peak * 3 + 3;
   check(
-    `level ${r.lvl}: the beam list empties between volleys`,
-    r.emptyFrames > 0,
-    `${r.emptyFrames} of ${r.frames} frames have no beam alive at all`,
+    `level ${r.lvl}: materials built stay near the peak beam count, not the volley count`,
+    r.matsBuilt <= ceiling,
+    `${r.matsBuilt} built for ${r.volleys} volleys, peak ${r.peak} beams (ceiling ${ceiling})`,
   );
 }
-const worst = rows[rows.length - 1];
+
+// 2. NOTHING IS DISPOSED. This is the assertion that actually guards the fix:
+// a single dispose in removeBeam puts the whole bug back, and it would still
+// pass every check above.
+for (const r of rows) {
+  check(
+    `level ${r.lvl}: nothing is disposed mid-run`,
+    r.matsDisposed === 0 && r.geosDisposed === 0,
+    `${r.matsDisposed} material(s), ${r.geosDisposed} geometr(y/ies)`,
+  );
+}
+
+// 3. THE REFCOUNT QUESTION, ASKED DIRECTLY. Run a second minute WITHOUT
+// resetting the pool. If the program was released in the quiet frames of
+// minute one, minute two has to build again; if the pool held it, minute two
+// builds nothing. `run()` calls resetBeams, which retires every live beam into
+// the pool rather than disposing it — that is the state a real run is in
+// between two bursts of fighting.
+const second = run(6, 60);
 check(
-  'every material built is also disposed (no leak — this is churn, not a leak)',
-  worst.matsBuilt === worst.matsDisposed && worst.geosBuilt === worst.geosDisposed,
-  `${worst.matsBuilt} built / ${worst.matsDisposed} disposed`,
+  'a second minute builds nothing — the pool from the first still holds the program',
+  second.matsBuilt === 0,
+  `${second.matsBuilt} material(s) built across ${second.volleys} volleys`,
 );
-console.log(`\n  At level ${worst.lvl} that is ${worst.matsBuilt} materials and ${worst.geosBuilt} geometries`);
-console.log(`  built and destroyed per minute, across ${worst.volleys} volleys that each start from an empty list.`);
-console.log(`  Every one of those volleys is a fresh shader link, because nothing held the program.\n`);
+
+// The geometry is shared outright, so every beam that ever burns sees one.
+check(
+  'every beam that ever burns shares one quad',
+  everGeos.size === 1,
+  `${everGeos.size} geometr(y/ies) across every run`,
+);
+
+const worst = rows[rows.length - 1];
+console.log(`\n  At level ${worst.lvl}: ${worst.volleys} volleys built ${worst.matsBuilt} materials`);
+console.log(`  and disposed ${worst.matsDisposed}. A second minute on the same pool built ${second.matsBuilt}.`);
+console.log(`  Nothing relinks, because nothing was ever released.\n`);
 
 process.exit(failures ? 1 : 0);

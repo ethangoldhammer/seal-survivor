@@ -122,6 +122,17 @@ const PER_FRAME = [
 
 const params = new URLSearchParams(location.search);
 
+// WHICH RUN THIS PAGE BELONGS TO. The terminal puts it in the URL and drops any
+// post that does not carry it back, so a tab left open from an earlier run
+// cannot report into a later one — see the note beside RUN in
+// tools/layout-audit.mjs. A page opened by hand with no `run` sends nothing and
+// is refused, which is the honest outcome: the terminal it would be reporting
+// to is not listening for it.
+function runQuery() {
+  const run = params.get('run');
+  return run ? `?run=${encodeURIComponent(run)}` : '';
+}
+
 // ---------------------------------------------------------------------------
 // THE PARENT — one iframe per (viewport x surface), and the report.
 // ---------------------------------------------------------------------------
@@ -194,18 +205,60 @@ function runParent() {
   }
 
   (async () => {
-    for (let i = 0; i < jobs.length; i++) {
-      const job = jobs[i];
-      summary.innerHTML = `measuring ${i + 1} / ${jobs.length} — ${job.v.name} ${job.surface}`;
-      job.list.textContent = 'measuring…';
-      const findings = await measureOne(job);
-      results.push({ viewport: job.v.name, w: job.v.w, h: job.v.h, surface: job.surface, findings });
-      job.list.innerHTML = findings.length
-        ? findings.map((f) => `<div class="${f.type === 'tap' ? 'tap' : ''}">${escapeHtml(describe(f))}</div>`).join('')
-        : '<div class="ok">clean</div>';
+    try {
+      for (let i = 0; i < jobs.length; i++) {
+        const job = jobs[i];
+        summary.innerHTML = `measuring ${i + 1} / ${jobs.length} — ${job.v.name} ${job.surface}`;
+        job.list.textContent = 'measuring…';
+        // BEFORE the tile, not after: this is what the terminal's stall
+        // watchdog reads, and a tile that never comes back has to be named by
+        // the ping that went out before it started.
+        progress(i, jobs.length, `${job.v.name} ${job.surface}`);
+        const findings = await measureOne(job);
+        results.push({ viewport: job.v.name, w: job.v.w, h: job.v.h, surface: job.surface, findings });
+        job.list.innerHTML = findings.length
+          ? findings.map((f) => `<div class="${f.type === 'tap' ? 'tap' : ''}">${escapeHtml(describe(f))}</div>`).join('')
+          : '<div class="ok">clean</div>';
+      }
+      finish(results, summary);
+    } catch (err) {
+      // A THROW IN THE SWEEP MUST STILL REPORT. Every per-tile failure already
+      // becomes a finding, but the loop itself is not covered by that — and an
+      // exception here rejects an async IIFE nobody awaits, so it lands in the
+      // console and the terminal waits forever with no report and no reason.
+      // That is the exact silence this whole repair is about, so it gets an
+      // answer of its own: post what was measured, and say what stopped it.
+      console.error(err);
+      results.push({
+        viewport: '—', w: 0, h: 0, surface: 'the sweep itself',
+        findings: [{ type: 'threw', what: String(err?.message ?? err) }],
+      });
+      finish(results, summary);
     }
-    finish(results, summary);
   })();
+}
+
+// A LINE TO THE TERMINAL WHILE THE SWEEP IS STILL RUNNING.
+//
+// The report only exists at the end, and the end is two minutes away — so
+// without this the tool is silent for its whole run and indistinguishable from
+// one that has hung. It is also what the terminal's stall watchdog counts
+// against: no ping for long enough and the run is abandoned with the tile it
+// was on named, rather than blocking until somebody kills it.
+//
+// keepalive, because a ping issued from a page that is about to unload a frame
+// is exactly the ping most worth not losing. Failures are swallowed: this is
+// telemetry for a human watching, and a page that cannot reach the server must
+// still finish measuring.
+function progress(i, total, label) {
+  try {
+    fetch(`/report/progress${runQuery()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ i, total, label }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* a page that cannot report progress still measures */ }
 }
 
 // One tile: mount it, wait for its report, and treat silence as a finding of its
@@ -257,7 +310,7 @@ function finish(results, summary, silent = 0) {
 
   // Back to the terminal. `npm run layout` prints this and exits non-zero on a
   // finding, so it can be run the way the other checks in this repo are.
-  fetch('/report/layout.json', {
+  fetch(`/report/layout.json${runQuery()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ results, total, silent }),
@@ -286,6 +339,30 @@ async function runFrame(surface) {
   document.body.innerHTML = '';
   document.body.style.cssText = 'margin:0; background:#05060a; overflow:hidden;';
   const findings = [];
+
+  // PIN THE DICE BEFORE ANYTHING IS BUILT.
+  //
+  // The `cards` surface deals a REAL hand — previewScreen says so, and that is
+  // the right design, because a mocked-up card is a card that passes after the
+  // real one has broken. But a real hand is three upgrades drawn at random out
+  // of about a hundred, and their descriptions are not the same length, so the
+  // width of `.sv-card-content` is different on every run. Five consecutive
+  // sweeps gave PASS, PASS, PASS, `content 101px in a 91px box`, and `content
+  // 115px in a 113px box`, and the temptation on seeing that is to go looking
+  // for a timing bug, because those are the numbers a race produces.
+  //
+  // A tool that answers differently to the same question cannot be used to
+  // decide anything, so the randomness is removed rather than tolerated.
+  //
+  // SEEDED PER TILE, NOT GLOBALLY FIXED. One seed for the whole sweep would
+  // make the tool deterministic and nearly blind: the same three upgrades, at
+  // all eight viewports, forever, with the other ninety-seven never once
+  // rendered. Seeding from the surface AND the viewport gives a different hand
+  // per device and the same hand every run — reproducible, and still sampling.
+  //
+  // It is a SAMPLE and should be read as one. This does not prove every upgrade
+  // fits; it proves these do, and it does so the same way twice.
+  seedRandom(`${surface}|${params.get('touch')}|${window.innerWidth}x${window.innerHeight}`);
 
   try {
     const ui = await import('../../path/src/ui/ui.js');
@@ -328,6 +405,7 @@ async function runFrame(surface) {
     // care whether anything is being painted, and neither does layout —
     // getBoundingClientRect forces it regardless.
     await document.fonts?.ready;
+    await settleAnimations();
     await settle(120);
 
     findings.push(...measure());
@@ -484,6 +562,87 @@ async function buildSurface(surface, ui, callout, callouts) {
 
 function settle(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Replace Math.random for the life of this frame with a deterministic stream.
+ *
+ * Global, and that is deliberate: the point is that everything this tile builds
+ * is reproducible, and a generator passed politely to the one caller we know
+ * about would leave every other roll — a rarity, a variant, a name — free to
+ * move the numbers. mulberry32 off an FNV-1a of the tile's identity; no quality
+ * is being asked of it beyond "the same every time and not obviously patterned".
+ */
+function seedRandom(key) {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  let a = h >>> 0;
+  Math.random = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * WAIT FOR THE ANIMATIONS, NOT FOR A NUMBER OF MILLISECONDS.
+ *
+ * `settle(120)` was a guess at how long the entrance transitions take, and a
+ * guess is fine right up until the sweep gets faster. Driving the page through
+ * Electron instead of a person's browser cut a two-minute run to fifty seconds,
+ * which moved every measurement earlier into the reveal — and a card caught
+ * mid-transition is measured at the size the transition is passing THROUGH.
+ * `getBoundingClientRect` returns the transformed box, so a panel two thirds of
+ * the way through a scale-in reports every button inside it a fraction small,
+ * and the score card's action bar came out at 43-point-something against a
+ * 44px floor it was in fact honouring exactly.
+ *
+ * That produced the worst kind of finding: `tap target 86x44, under 44`, a
+ * sentence that contradicts itself, on a run that passed clean the time before.
+ * Nobody can act on an audit that answers differently to the same question, and
+ * the first four such findings teach whoever reads it to skip that section.
+ *
+ * FINITE ONES ONLY, and this is the part that has to be right. The interface is
+ * full of animations that never end — the boost core's pulse, the shimmer on a
+ * legendary card — and `animation.finished` on an infinite animation is a
+ * promise that never settles. Awaiting them all would hang every tile forever,
+ * which is the failure this whole repair exists to remove, reintroduced one
+ * layer down.
+ *
+ * SEVERAL PASSES, because a reveal is staggered: the rows of a menu are one
+ * animation each, started as the one before it ends, so a single wait returns
+ * while the later half has not begun. And a cap over the whole thing, because
+ * "wait until the page stops moving" is not something a page is obliged to
+ * agree to.
+ */
+async function settleAnimations(capMs = 1200) {
+  if (!document.getAnimations) return;
+  const deadline = Date.now() + capMs;
+  for (let pass = 0; pass < 8; pass++) {
+    const left = deadline - Date.now();
+    if (left <= 0) return;
+    const running = document.getAnimations().filter((a) => {
+      if (a.playState !== 'running') return false;
+      const t = a.effect?.getComputedTiming?.();
+      // An iteration count of Infinity is the loop; a non-finite endTime is the
+      // same thing said another way, and both have to be excluded by hand
+      // because neither one is visible from `playState`.
+      return t && t.iterations !== Infinity && Number.isFinite(Number(t.endTime));
+    });
+    if (!running.length) return;
+    // allSettled rather than all: an animation cancelled while we wait — which
+    // is what a reveal does to the one it replaces — rejects its `finished`,
+    // and that is a normal thing to have happened rather than an error.
+    await Promise.race([
+      Promise.allSettled(running.map((a) => a.finished)),
+      settle(left),
+    ]);
+  }
 }
 
 // --- the measurement --------------------------------------------------------

@@ -244,6 +244,33 @@ b = runWith(() => {
 check('non-positive damage is still refused', b.dealtBySource.gun === 12,
   `got ${b.dealtBySource.gun}`);
 
+// -------------------------------------------------------------------- weather
+
+section('WEATHER — the sky is not a damage dealer');
+
+// The sentinel guard above only catches a placeholder-sized figure. A bolt
+// that kills a REAL creature books a real number, and the number is whatever
+// health that creature had left — 141k for a bossShark at ten minutes, which
+// is more than most builds deal all run. Seven runs read as 100% lightning.
+b = runWith(() => {
+  playtest.recordDamage('lightning', 141000, { id: 'bossShark' });
+  playtest.recordDamage('missile', 268617, { id: 'shark' });
+});
+check('a real-sized bolt books nothing either', b.dealtBySource.lightning === undefined,
+  `raw would have been 141000`);
+check('the build owns the whole table', b.dealtBySource.missile === 268617);
+
+// The caption still works, because the last-damager credit is taken BEFORE the
+// guard. A boss that only ever took a bolt has to be able to say so.
+playtest.beginRun({ playerMaxHp: 100 });
+playtest.tick(1, { time: 1, level: 1, score: 0, hp: 100, maxHp: 100, alive: 1 });
+const struck = { id: 'bossShark' };
+playtest.recordDamage('lightning', 141000, struck);
+check('a body killed only by weather still names its killer',
+  playtest.damageCreditFor(struck) === 'lightning',
+  `got ${playtest.damageCreditFor(struck)}`);
+playtest.endRun('death');
+
 // ===========================================================================
 // THE CAPTION'S OWN QUESTION — what actually killed this body?
 //
@@ -252,6 +279,8 @@ check('non-positive damage is still refused', b.dealtBySource.gun === 12,
 // and what the balance report wants), while damageCreditFor answers what the
 // polaroid asks, which is what the fight was actually WON with.
 // ===========================================================================
+
+section('CAPTION — what the fight was won with');
 
 {
   const { sourceFamily } = await import('../path/src/systems/playtestAnalysis.js');

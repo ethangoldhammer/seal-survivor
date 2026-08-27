@@ -611,7 +611,17 @@ function markLift() {
 // to hundreds of characters of parameter soup, and the part that identifies the
 // shader — the material type and whatever customProgramCacheKey pinned — is at
 // the front of it. The whole string in a run record would dwarf the run.
-const KEY_CHARS = 90;
+// A TRUNCATED KEY THAT HIDES THE DIFFERENCE IS WORSE THAN NO KEY. At 90 chars
+// the four MeshBasicMaterial variants in a phone run all rendered as the same
+// string — `basic,highp,srgb-linear,false,,false,false,…` — and reading that
+// report produced a confident diagnosis of ONE program relinking eight times
+// when it was four distinct programs relinking nineteen times between them.
+// three concatenates the cheap flags first and the distinguishing ones later,
+// so the prefix is exactly the part that does not identify anything.
+//
+// `programRebuilds` was right throughout: it counts on the FULL key, before
+// this slice. Only the human-readable list was lying.
+const KEY_CHARS = 220;
 const TOP_KEPT = 6;
 
 function topPrograms() {
