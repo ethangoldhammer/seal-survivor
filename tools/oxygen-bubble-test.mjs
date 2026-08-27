@@ -48,6 +48,7 @@ import { CONFIG } from '../path/src/config.js';
 import { bounds, seabedTopY } from '../path/src/arena.js';
 import {
   initBubble, updateBubblePhysics, bubbleRadius, bubbleBirthPoint, growthOf,
+  stepBubbleSpawner, rollBubbleSpawnDelay,
 } from '../path/src/systems/oxygenBubble.js';
 
 let failures = 0;
@@ -348,6 +349,114 @@ section('The walls — it cannot leave the arena or sink into the sand');
   }
   check('it never sinks through the seabed', above,
     `held at y=${sunk.mesh.position.y.toFixed(2)}, floor at ${seabedTopY().toFixed(2)}`);
+}
+
+// ===========================================================================
+// THE HEADCOUNT. The spawner's job is that the arena is never empty and never
+// crowded, over a whole run and through the bubbles being taken. Simulated at
+// the frame rate against a life of `bubbleLifetime`, with the seal drinking
+// one whenever there is one to drink — because the failure this replaces was
+// never visible in the average, only in the stretches: 7-13 seconds against a
+// 14-second life averages a bubble and a half and delivers it as a pair, then
+// nothing at all for half a minute.
+section('The headcount — one or two in the water, always');
+{
+  const min = CONFIG.oxygen.bubbleMinAlive;
+  const max = CONFIG.oxygen.bubbleMaxAlive;
+  const life = CONFIG.oxygen.bubbleLifetime;
+
+  // One run: `collectEvery` seconds apart, the player takes the oldest bubble
+  // in the water. 0 means nobody is collecting anything and the only thing
+  // retiring a bubble is its own lifetime.
+  const run = (seed, seconds, collectEvery) => {
+    const rand = mulberry32(seed);
+    let timer = rollBubbleSpawnDelay(rand);
+    let ages = [];
+    let sinceCollect = 0;
+    let worstEmpty = 0;
+    let empty = 0;
+    let peak = 0;
+    let born = 0;
+    // The first seconds of a run start from nothing, and a floor that fills an
+    // empty arena on its own clock cannot fill it faster than the refill beat.
+    // Measured after that, so the opening does not count as a gap.
+    const settle = (CONFIG.oxygen.bubbleRefillDelay + 1 / 60) * (min + 1);
+    for (let t = 0; t < seconds; t += DT) {
+      ages = ages.map((a) => a + DT).filter((a) => a < life);
+      if (collectEvery > 0) {
+        sinceCollect += DT;
+        if (sinceCollect >= collectEvery && ages.length) {
+          sinceCollect = 0;
+          ages.sort((a, b) => b - a);
+          ages.shift();
+        }
+      }
+      const step = stepBubbleSpawner(DT, timer, ages.length, rand);
+      timer = step.timer;
+      if (step.spawn) { ages.push(0); born++; }
+      if (t < settle) continue;
+      peak = Math.max(peak, ages.length);
+      if (ages.length < min) { empty += DT; worstEmpty = Math.max(worstEmpty, empty); }
+      else empty = 0;
+    }
+    return { worstEmpty, peak, born };
+  };
+
+  const idle = [1, 2, 3, 4, 5].map((s) => run(s, 300, 0));
+  const busy = [6, 7, 8, 9, 10].map((s) => run(s, 300, 6));
+  const greedy = [11, 12, 13].map((s) => run(s, 300, 1.5));
+
+  // The floor may be under-strength only for the refill beat it takes to send
+  // another up, plus the swell it is born mid-way through. A whole second past
+  // the beat is the spawner having stopped noticing.
+  const gap = CONFIG.oxygen.bubbleRefillDelay + 1;
+  const worst = (rs) => Math.max(...rs.map((r) => r.worstEmpty));
+  check('an undisturbed arena is never short of the floor for long',
+    worst(idle) <= gap, `worst gap ${worst(idle).toFixed(2)}s, allowed ${gap.toFixed(2)}s`);
+  check('...nor is one the player is drinking from every few seconds',
+    worst(busy) <= gap, `worst gap ${worst(busy).toFixed(2)}s`);
+  check('...nor one being emptied as fast as it fills',
+    worst(greedy) <= gap, `worst gap ${worst(greedy).toFixed(2)}s`);
+
+  const peak = (rs) => Math.max(...rs.map((r) => r.peak));
+  check('and it never holds more than the cap',
+    peak(idle) <= max && peak(busy) <= max && peak(greedy) <= max,
+    `peaks ${peak(idle)} / ${peak(busy)} / ${peak(greedy)}, cap ${max}`);
+
+  // The cap must HOLD the clock rather than bank spawns against it: a banked
+  // interval arrives as two bubbles out of the sand in the same second the
+  // moment the player takes one.
+  const burst = (() => {
+    const rand = mulberry32(21);
+    let timer = 0.01;
+    let alive = max;
+    let sameSecond = 0;
+    let last = -99;
+    for (let t = 0; t < 60; t += DT) {
+      // Held at the cap for ten seconds — long enough to bank two intervals —
+      // then drained to nothing in one frame.
+      if (t > 10 && alive === max) alive = 0;
+      const step = stepBubbleSpawner(DT, timer, alive, rand);
+      timer = step.timer;
+      if (step.spawn) {
+        if (t - last < 0.5) sameSecond++;
+        last = t;
+        alive = Math.min(max, alive + 1);
+      }
+    }
+    return sameSecond;
+  })();
+  check('a spawn is never banked while the arena is full', burst === 0,
+    `${burst} pair(s) arrived within half a second of each other`);
+
+  // The interval still has to be doing something between the floor and the
+  // cap, or the cap is the only rule and every bubble taken is replaced on the
+  // refill beat.
+  const topUps = run(31, 600, 0).born;
+  const floorOnly = 600 / life;
+  check('the interval still paces the trip from the floor to the cap',
+    topUps > floorOnly * 1.2,
+    `${topUps} spawns in 10 minutes, ${floorOnly.toFixed(0)} would be the floor alone`);
 }
 
 // ===========================================================================

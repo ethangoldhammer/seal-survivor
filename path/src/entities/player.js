@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { baseStats, applyLevelGrowth, applyDamageScaling } from '../stats.js';
+import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling } from '../stats.js';
 import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
+import { flipperSideForStack, finElementsIn, otherSide } from '../flipperSide.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
@@ -164,6 +165,16 @@ export const player = {
   // orca's, which take bodies the player never got (see eatCrew in
   // systems/crew.js for the four mouths).
   humansEaten: 0,
+  // HOW MANY BOSSES THIS RUN HAS PUT DOWN, here for exactly the reason
+  // `humansEaten` above is: the stat block is built against it and the block is
+  // thrown away and rebuilt several times a minute, so it cannot live there.
+  //
+  // A MIRROR of `bossState.defeated` in systems/boss.js, which stays the one
+  // place a kill is counted — main.js copies it across on the frame it moves
+  // and recomputes. Kept as a mirror rather than a second tally so the two can
+  // never disagree about how many bosses a run has beaten; see updateBossShot
+  // in main.js.
+  bossesDefeated: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -265,8 +276,9 @@ export function rebuildShipBody() {
  * @param picks  { id, rarity } entries, oldest first.
  * @param level  player level, for the baseline growth.
  * @param humansEaten  for Maneater and Iron Lung.
+ * @param bossesDefeated  for the per-boss pellet.
  */
-export function computeStats(picks = [], level = 1, humansEaten = 0) {
+export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefeated = 0) {
   const s = baseStats();
 
   // `player.upgrades` holds { id, rarity } rather than bare ids, because the
@@ -281,6 +293,9 @@ export function computeStats(picks = [], level = 1, humansEaten = 0) {
 
   // Baseline growth applied AFTER upgrades — see stats.js for the why.
   applyLevelGrowth(s, level);
+  // The run's other baseline growth, on the same terms and for the same
+  // reason — a flat pellet per boss beaten. See applyBossGrowth in stats.js.
+  applyBossGrowth(s, bossesDefeated);
   // ...and the two damage-scaling cards after THAT, so Maneater and Iron Lung
   // multiply the finished numbers rather than a partial block. Both are
   // no-ops on a run that holds neither. See applyDamageScaling in stats.js.
@@ -292,7 +307,7 @@ export function computeStats(picks = [], level = 1, humansEaten = 0) {
 // on reset, on level-up, and whenever the tuner changes a value — which is why
 // sliders affect a run already in progress.
 export function recomputeStats() {
-  const s = computeStats(player.upgrades, player.level, player.humansEaten);
+  const s = computeStats(player.upgrades, player.level, player.humansEaten, player.bossesDefeated);
   player.stats = s;
   player.hp = Math.min(player.hp, s.maxHp);
   return s;
@@ -318,11 +333,57 @@ export function statsWithOneMore(id, rarity = null) {
     [...player.upgrades, { id, rarity: rarity ?? baseRarity() }],
     player.level,
     player.humansEaten,
+    player.bossesDefeated,
   );
 }
 
-export function addUpgrade(id, rarity = null) {
-  player.upgrades.push({ id, rarity: rarity ?? baseRarity() });
+/**
+ * THE FLIPPER ROLL — which element the stack being taken puts on its fin.
+ *
+ * Here, on the PICK, and not at draw time: a Flippers Up! stack can arrive
+ * without a card ever being dealt (applyLevelOrb in main.js hands a stack to a
+ * random held upgrade), so a roll living on the level-up screen would leave
+ * those stacks elementless and nothing would say why.
+ *
+ * Nor in apply(): recomputeStats() rebuilds the block from scratch on every
+ * level-up and every tuner nudge, so a Math.random in there is re-rolled
+ * several times a minute. Stamped on the pick, it is decided once and read back
+ * by finElements() — a pure function of the pick list, which is the same
+ * arrangement the run's element has.
+ *
+ * IT AVOIDS THE OTHER FIN'S ELEMENT. Two flippers throwing the same element is
+ * the one outcome that makes the whole thing invisible — same colour of flash,
+ * same status, no reason to look at which fin fired. With four elements and two
+ * fins there is always something left to roll, so this can never fail to find
+ * one.
+ *
+ * `random` is injectable for the same reason drawUpgrades takes one: so the
+ * distribution can be checked without running the game.
+ */
+function rollFinElement(picks, random = Math.random) {
+  const stack = picks.filter((p) => p.id === 'flippersUp').length + 1;
+  if (stack < (CONFIG.weapon?.flipperElementStack ?? Infinity)) return null;
+
+  const side = flipperSideForStack(stack);
+  const held = finElementsIn(picks);
+  // Already lit: a later stack DEEPENS the fin it lit rather than re-rolling it,
+  // which is the rule Glow Up!'s own stacks follow. The level is apply()'s job;
+  // this only has to not change the identity.
+  if (held[side]) return held[side];
+
+  const other = held[otherSide(side)];
+  const pool = Object.keys(CONFIG.biolum?.elements ?? {}).filter((id) => id !== other);
+  if (!pool.length) return null;
+  return pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
+}
+
+export function addUpgrade(id, rarity = null, random = Math.random) {
+  const pick = { id, rarity: rarity ?? baseRarity() };
+  if (id === 'flippersUp') {
+    const el = rollFinElement(player.upgrades, random);
+    if (el) pick.finElement = el;
+  }
+  player.upgrades.push(pick);
   const beforeHp = player.stats.maxHp;
   const beforeO2 = player.stats.maxOxygen;
   recomputeStats();
@@ -447,6 +508,9 @@ export function resetPlayer() {
   // Before recomputeStats() below, not after — the block is built against this
   // and a new run must not open carrying the last one's Maneater bonus.
   player.humansEaten = 0;
+  // Before recomputeStats() below for the same reason, and it is the same
+  // mistake: a new run must not open firing the last one's boss pellets.
+  player.bossesDefeated = 0;
   player.invuln = 0;
   player.dashTimer = 0;
   player.comboSpeedMul = 1;
@@ -1071,10 +1135,14 @@ export function applyPlayerKnockback(dirX, dirY, speed) {
   return push;
 }
 
-export function applyRecoil(dir) {
+// `share` is the fraction of a volley this shot is — 1 for a volley that left
+// every fin at once, and 1/n when alternating fins deal the same volley out
+// one limb at a time. The push per second is the property being held constant:
+// n shoves of 1/n each is the one shove the gun always gave.
+export function applyRecoil(dir, share = 1) {
   if (!CONFIG.weapon.recoilEnabled) return;
-  player.velocity.x -= dir.x * player.stats.recoil;
-  player.velocity.y -= dir.y * player.stats.recoil;
+  player.velocity.x -= dir.x * player.stats.recoil * share;
+  player.velocity.y -= dir.y * player.stats.recoil * share;
 }
 
 // Shared by the game loop and by the menus: the rig must keep ticking even

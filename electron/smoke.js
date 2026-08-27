@@ -17,6 +17,8 @@ import { readdirSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ORIGIN, DIST, registerScheme, serve, resolveInDist } from './serve.js';
+import { registerSaveIpc } from './save.js';
+import { registerSaveImageIpc } from './saveImage.js';
 
 registerScheme();
 
@@ -42,6 +44,13 @@ app.whenReady().then(() => {
   }
 
   serve();
+  // THE SAME WIRING THE REAL SHELL HAS. Not optional decoration: the preload
+  // hydrates the save with ipcRenderer.sendSync, and a sendSync with NO
+  // listener registered throws "An object could not be cloned" — an error that
+  // names neither the channel nor the cause, surfacing here as a probe failure
+  // several steps away from what actually went wrong.
+  registerSaveIpc();
+  registerSaveImageIpc();
 
   // One representative of each kind of asset the game loads over the scheme.
   // Chosen from what is actually on disk rather than hardcoded, so the test
@@ -168,7 +177,17 @@ app.whenReady().then(() => {
           }
         }
         return {
-          bridge: globalThis.sealDesktop ?? null,
+          // A DESCRIPTION of the bridge, never the bridge itself. It carries
+          // functions now (saveImage), and a function is not
+          // structured-cloneable — returning the object outright throws "An
+          // object could not be cloned" from deep inside executeJavaScript's
+          // own IPC, naming neither the key nor this line.
+          bridge: globalThis.sealDesktop ? {
+            isDesktop: !!globalThis.sealDesktop.isDesktop,
+            os: globalThis.sealDesktop.os ?? null,
+            electron: globalThis.sealDesktop.electron ?? null,
+            saveImage: typeof globalThis.sealDesktop.saveImage === 'function',
+          } : null,
           title: document.title,
           origin: location.origin,
           secureContext: isSecureContext,
@@ -181,7 +200,7 @@ app.whenReady().then(() => {
       app.exit(0);
     } catch (err) {
       clearTimeout(deadline);
-      bail(`probe threw — ${err?.message ?? err}`);
+      bail(`probe threw — ${err?.stack ?? err?.message ?? err}`);
     }
   });
 

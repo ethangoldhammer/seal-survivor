@@ -164,10 +164,16 @@ section('the bridge');
 check('the preload reached the page', !!result.bridge, result.bridge ? '' : 'window.sealDesktop is undefined');
 check('claims to be desktop', result.bridge?.isDesktop === true);
 check('reports an OS for the playtest ledger', typeof result.bridge?.os === 'string', result.bridge?.os ?? '');
+// The save dialog IS implemented now, so the bridge should advertise it — and
+// the assertion flips rather than being deleted. What it is really guarding is
+// that the capability flag and the implementation agree in whichever direction
+// they happen to point: a bridge that claims saveImage without a handler behind
+// it would hide the browser download path that still works, which is the iOS
+// canShareImages() failure exactly. systems/desktopSave.js reads this same key.
 check(
-  'does NOT claim a save capability it has not implemented',
-  result.bridge?.saveImage === undefined,
-  'a claimed-but-absent capability hides the fallback that works',
+  'advertises the save dialog it actually implements',
+  result.bridge?.saveImage === true,
+  'platform.js reads this key to answer canSaveThroughOS()',
 );
 
 // ---------------------------------------------------------------------------

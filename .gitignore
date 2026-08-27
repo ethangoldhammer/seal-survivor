@@ -11,6 +11,7 @@ dist-note-look
 dist-goo-look
 dist-hotspot-look
 dist-ring-look
+dist-bands-look
 dist-core-look
 dist-crab-look
 dist-angler-look
@@ -24,6 +25,7 @@ dist-bust-look
 dist-menu-look
 dist-dividend-look
 dist-score-look
+dist-hurt-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
 # look pages: the page and the runner are tracked, what they generate is not.
@@ -94,3 +96,5 @@ design/gameover-canvas/seal-survivor-game-over.html
 dist-bomb-look
 dist-flag-look
 dist-desktop
+release
+dist-levelup-look

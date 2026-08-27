@@ -1559,8 +1559,23 @@ function updateOrdnance(dt, scene) {
 }
 
 // The blast. Damage is dealt through the same hook a bite goes through, so it
-// respects i-frames, shakes the screen and is filed in the playtest log like
-// every other hit — see updateBossPerks.
+// shakes the screen, is trimmed by CONFIG.boss.damageCap and is filed in the
+// playtest log like every other hit — see updateBossPerks.
+//
+// DELIBERATELY NOT ON THE I-FRAME WINDOW. It goes through onPlayerHit on the
+// default channel rather than 'strike' (see CONFIG.player.hitIFrames), and this
+// comment used to claim the opposite, from back when i-frames were a thing only
+// enemy projectiles had.
+//
+// The window refuses every burst inside it, which is exactly right for nine
+// crabs shutting their claws together and exactly wrong here: a fan of barrels
+// is ONE attack whose whole shape is a spread of overlapping circles, and being
+// caught by two of them is what standing under the boat is supposed to cost.
+// Measured on the shipped numbers, that is the worst it gets — the `spread` fan
+// detonates 17.6 units down with its rays 4.58 apart against a 2.8 blast
+// radius, so at most two reach the seal and occasionally three. Roughly 28
+// damage of a 115 bar, already under the boss's own per-second ceiling. A
+// pile-on is many attacks arriving together; this is one attack with a width.
 function boom(scene, x, y, radius, fx, damage = 20, source = 'boss:barrels', shot = null) {
   // A pattern row may name its own blast colour (CONFIG.bossBoat.patterns), and
   // that wins over the palette — it is a deliberate per-shot choice rather than

@@ -83,6 +83,25 @@ const CALLOUT_CHROME = [
 // ...and the callouts themselves, which is what must stay off it.
 const CALLOUT_LINES = ['.sv-callout', '.sv-callout-boost'];
 
+// A BACKDROP IS ALLOWED TO RUN OFF THE SCREEN.
+//
+// The level-up comb (ui/upgradeComb.js) tiles a ring of cells past every edge
+// on purpose — CONFIG.upgradeComb.over — so the lattice is never seen to end,
+// and its layer clips them. Every check below fires on it, at every viewport,
+// and every one of those findings is the design working. Left in, they are
+// eight noisy tiles that train whoever runs this to scroll past the `cards`
+// surface, which is the surface most likely to break.
+//
+// NAMED, NOT DETECTED. "Is this element meant to overhang" is not a question a
+// rectangle can answer, and a rule that guessed — anything full-bleed, anything
+// behind a menu — would eventually excuse a real one. Adding a name here is a
+// decision, and it should stay one.
+//
+// The cards themselves are NOT in this list, deliberately: a card off the
+// bottom of an iPhone SE is a choice the player cannot see, and that is exactly
+// what this tool is for.
+const FULL_BLEED = ['.sv-comb'];
+
 // Apple's Human Interface Guidelines minimum, and the reason a button can look
 // fine and still be missed by a thumb.
 const TAP_MIN = 44;
@@ -477,6 +496,7 @@ function measure() {
 
   for (const node of document.querySelectorAll('.sv-ui, .sv-ui *, .sv-callout-layer, .sv-callout-layer *')) {
     if (PER_FRAME.some((sel) => node.closest(sel))) continue;
+    if (FULL_BLEED.some((sel) => node.closest(sel))) continue;
     // Full-bleed layers (.sv-ui, .sv-center, .sv-toast-layer) are inset:0 by
     // definition and would report themselves as exactly filling the screen,
     // which is not a finding — it is the point of them.

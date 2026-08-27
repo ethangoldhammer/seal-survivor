@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { enemies, removeEnemy, triggerBite } from '../entities/enemies.js';
 import { crewPosition, crewRadius, eatCrew } from './crew.js';
+import { baitMealHeal, noteBaitLoss } from './baitBall.js';
 
 // Sharks feed on fish on their own, with no involvement from the player. This
 // is the one place enemies interact with each other, so the whole food chain
@@ -86,15 +87,66 @@ export function resolvePredation(dt, scene, hooks) {
       if (dx * dx + dy * dy > reach * reach) continue;
 
       // Eat it.
-      hooks?.onFishEaten?.(target, pred);
-      removeEnemy(scene, i);
+      const bait = target.baitBall === true;
+      // ONE FOR THEIR SIDE. Booked here rather than inferred from the ball's
+      // headcount dropping, because a headcount cannot say WHO took the fish —
+      // and who took it is the entire mechanic. See baitBallLedger.
+      if (bait) noteBaitLoss(target.schoolId, 'predator');
 
       pred.meals += 1;
       pred.biteTimer = h.biteCooldown ?? 0.8;
 
-      const ceiling = pred.spawnHp * (h.maxOverheal ?? 2);
-      pred.hp = Math.min(ceiling, pred.hp + (h.healPerMeal ?? 0));
+      // A MOUTHFUL OF BAIT BALL IS WORTH MORE, and it has to be, because
+      // `healPerMeal` is a flat number authored against the wildlife: 18 on a
+      // 75-health shark is a quarter of its bar and 18 on a 2,400-health boss
+      // is a rounding error. A bait ball is the one food in the game a BOSS is
+      // meant to be fighting the player over, so the heal is a fraction of the
+      // eater's own size, floored at whatever it would have got anyway.
+      // See systems/baitBall.js — the arithmetic lives there because the whole
+      // exchange is tuned in one block and the harness has to be able to read
+      // it without a scene.
+      //
+      // Measured rather than assumed: `gained` is the health that actually
+      // moved, AFTER the overheal ceiling clipped it. That distinction is the
+      // whole difference between a feedback burst that means "the boss just
+      // got some of that back" and one that fires every time a full-health
+      // shark swims through a school.
+      // AND A BAIT MEAL MAY NOT OVERHEAL. `maxOverheal` lets a wildlife shark
+      // eat its way to 1.3-2x the health it spawned with, which is fine for a
+      // creature with no health bar — you find out by how long it takes to
+      // kill. A boss HAS a bar, drawn at the health it arrived with, and a
+      // fraction-of-max heal is easily big enough to push it past full: the bar
+      // would sit pinned at 100% while the fight quietly got longer, which is
+      // the bar lying about the one number it exists to report.
+      //
+      // So the ball tops a predator UP and never past. The consequence is the
+      // right one for the fight, too — contesting the ball matters most when
+      // the boss is hurt, which is the half of the fight the player is already
+      // paying attention in.
+      const base = h.healPerMeal ?? 0;
+      const heal = bait ? baitMealHeal(pred.spawnHp, base) : base;
+      //
+      // `max(hp, spawnHp)` rather than a flat spawnHp: a wildlife shark that
+      // has already eaten its way past full off ordinary fish must not be cut
+      // back DOWN to its spawn health by swimming through a bait ball. A
+      // ceiling below the current value is a heal that heals negatively, and
+      // it would have looked like the ball damaging sharks.
+      const ceiling = bait
+        ? Math.max(pred.hp, pred.spawnHp)
+        : pred.spawnHp * (h.maxOverheal ?? 2);
+      const before = pred.hp;
+      pred.hp = Math.min(ceiling, pred.hp + heal);
       pred.maxHp = Math.max(pred.maxHp, pred.hp);
+      const gained = pred.hp - before;
+
+      // AFTER the heal so the hook can report what the meal was actually
+      // worth, and BEFORE removeEnemy because the hook reads the fish's
+      // position — removeEnemy hands the body back to the recycler, and a
+      // position read off a released visual is wherever the next spawn put it.
+      // That ordering is the reason the heal is computed up here rather than
+      // where it used to live, below the removal.
+      hooks?.onFishEaten?.(target, pred, { bait, healed: gained });
+      removeEnemy(scene, i);
 
       const grow = h.growPerMeal ?? 0;
       if (grow > 0) {

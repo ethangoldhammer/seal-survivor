@@ -74,6 +74,22 @@ const BOSSES = Object.entries(CONFIG.enemies)
   .filter(([id]) => id.startsWith('boss'))
   .map(([id, def]) => ({ id, def }));
 
+// A CRAB CHARGES NOTHING FOR BEING TOUCHED. `CONFIG.crabClaw.contactMul` is 0,
+// and systems/combat.js applies it to every creature carrying a claw driver —
+// which is the two swarm crabs and the king crab, and nothing else in the
+// roster. Their `contactDamage` cell is still the animal's damage; it is spent
+// entirely through the pinch (see the CONTACT IS THE CRAB'S WHOLE BILL section
+// below), so every claim in this file about overlap being chip is vacuous for
+// them and the crossover check further down was measuring a channel that no
+// longer exists.
+//
+// Identified by BEHAVIOUR rather than by name, because that is the fact that
+// makes it true: `crawl` is what a clawed body does, and a boss added tomorrow
+// that walks the seabed inherits this without anyone remembering to add it.
+const chargesForContact = (def) =>
+  !(def.behavior === 'crawl' && !((CONFIG.crabClaw?.contactMul ?? 0) > 0));
+const CONTACT_BOSSES = BOSSES.filter(({ def }) => chargesForContact(def));
+
 // One second of overlap at a given point in the run, resolved through the funnel
 // exactly as combat.js resolves it: a slice per frame, tagged 'contact'.
 function contactInOneSecond(def, difficulty, maxHp = HP, t0 = 0) {
@@ -129,7 +145,7 @@ section('OVERLAP IS CHIP');
   const rate = CONFIG.spawn.ramp.damage;
   const perSec = CONFIG.spawn.difficultyPerSecond;
   const FLOOR = 40;
-  for (const { id, def } of BOSSES) {
+  for (const { id, def } of CONTACT_BOSSES) {
     const base = def.contactDamage;
     const at = base >= ceiling ? 0 : Math.log(ceiling / base) / Math.log(1 + rate) / perSec;
     check(`${id}'s authored contact is the number for a while`,
@@ -283,10 +299,100 @@ section('ORDINARY WILDLIFE IS UNTOUCHED');
   for (let f = 0; f < FPS; f++) took += capBossDamage(60 * DT, 'barracuda', HP, f * DT, 'contact');
   check('a school can still chew through the bar', Math.abs(took - 60) < 1e-6,
     `${took.toFixed(1)} of 60 offered — the answer to a school is to move`);
+  // WILDLIFE BITES NOW, AND THE CLAIM CHANGED SHAPE RATHER THAN GOING AWAY.
+  //
+  // This used to assert that no wildlife row carried a `biteDamage` at all,
+  // and for as long as the sharks were cruise hunters that was right: a bite
+  // is a moment, and an animal with no moment in it should not have one. The
+  // six apex sharks commit to a readable pass now (a wind-up, a locked line,
+  // and a peel-off — see `shark.lunge`), so the pass arriving is worth
+  // something and the pass missing costs them their turn.
+  //
+  // What the file still has to hold is that it stayed in the family. The thing
+  // that would genuinely break the game is a bite on a SCHOOL: thirty fish,
+  // each landing a discrete number, is a wall of damage nothing in the roster
+  // was balanced against — and a `biteDamage` cell is one keystroke away from
+  // any row in the file.
   const wild = Object.entries(CONFIG.enemies)
     .filter(([id, def]) => !id.startsWith('boss') && (def.biteDamage ?? 0) > 0);
-  check('no wildlife row grew a bite by accident', wild.length === 0,
-    wild.length ? wild.map(([id]) => id).join(', ') : 'every biteDamage is on a boss');
+  const stray = wild.filter(([, def]) => !(def.spawnGroup ?? '').split(' ').includes('shark'));
+  check('a wildlife bite is an apex shark and nothing else', stray.length === 0,
+    stray.length ? stray.map(([id]) => id).join(', ')
+      : `${wild.length} biting sharks, every one in the apex family`);
+  // ...and it is a bite rather than a second contact drain. A snap that is
+  // worth less than the second of chewing it lands amongst is a number nobody
+  // will ever notice, which is what `biteDamage` was invented to stop being —
+  // and one worth more than a boss's per-hit ceiling is a minnow hitting harder
+  // than the fight the run stops for.
+  for (const [id, def] of wild) {
+    const cd = def.hunt?.biteCooldown ?? CONFIG.bite.cooldown ?? 1;
+    const chew = def.contactDamage * cd;
+    check(`${id}'s bite is worth more than the chewing it replaces`,
+      def.biteDamage > chew * 0.5 && def.biteDamage <= HP * cap.perHit,
+      `${def.biteDamage} a snap against ${chew.toFixed(0)} of contact over ${cd}s, ceiling ${(HP * cap.perHit).toFixed(0)}`);
+  }
+}
+
+// --- THE CRAB LAYER --------------------------------------------------------
+section('CONTACT IS THE CRAB\'S WHOLE BILL, SPENT THROUGH THE CLAW');
+{
+  // The inversion this section exists to hold. A crab used to be a walking
+  // contact hitbox with a telegraphed gesture painted on top, and the gesture
+  // was the smaller of the two — so the 0.42s rear-up was a warning about the
+  // less important thing the animal was doing. Now intersecting one is free and
+  // the pinch is everything.
+  //
+  // Both halves are asserted, because either one alone is a bug that looks like
+  // a balance decision: `contactMul` at 0 with a small `damageMul` is a crab
+  // layer that was quietly switched off, and a big pinch with contact still on
+  // is the layer charging twice.
+  check('a crab charges nothing for being touched',
+    (CONFIG.crabClaw?.contactMul ?? 0) === 0,
+    `contactMul ${CONFIG.crabClaw?.contactMul}`);
+
+  const crabs = Object.entries(CONFIG.enemies)
+    .filter(([, def]) => def.behavior === 'crawl' && (def.contactDamage ?? 0) > 0);
+  check('there are crabs to check', crabs.length > 0, `${crabs.length} found`);
+  for (const [id, def] of crabs) {
+    // The pinch, as combat.js bills it: the row's contact figure times whatever
+    // claw block applies to this creature.
+    const mul = def.claw?.damageMul ?? CONFIG.crabClaw.damageMul;
+    const pinch = def.contactDamage * mul;
+    // HOW OFTEN IT CAN ACTUALLY BE PAID, which is the only rate worth checking
+    // and is the smaller of two things:
+    //
+    //   the claw's own cooldown at its EAGEREST — the crab's authored gap
+    //   times `eager.nearCooldownMul`, which is what it drops to once the seal
+    //   is in among the legs (CONFIG.crabClaw.eager);
+    //
+    //   and the I-FRAME WINDOW, which is what actually bounds a SWARM: however
+    //   many claws shut on the same frame, exactly one of them is paid. Nine
+    //   crabs on a chum pile therefore cannot bill nine times, and the boss —
+    //   which is mid-gesture on 94% of the frames you are in reach — cannot
+    //   bill faster than the window either.
+    const eager = (CONFIG.crabClaw?.eager?.nearCooldownMul ?? 1);
+    const gap = Math.max(
+      (def.claw?.cooldown ?? CONFIG.crabClaw.cooldown) * eager,
+      CONFIG.player.hitIFrames ?? 0,
+      1 / FPS,
+    );
+    const dps = pinch / gap;
+    // THE LAYER WAS NOT QUIETLY SWITCHED OFF. `contactMul` is 0, so if the
+    // pinch does not out-earn the drain it replaced then the whole crab layer
+    // is now decoration with a wind-up — which is a balance change nobody
+    // asked for, arriving as a side effect of a design decision about where
+    // damage lives. The row's `contactDamage` is what that drain was worth per
+    // second, so it is the number to beat.
+    check(`${id}: the claw out-earns the drain it replaced`,
+      dps >= def.contactDamage,
+      `${dps.toFixed(0)} dps up close against the ${def.contactDamage} of contact it replaces`);
+    // ...and it did not become a wipe on the way. Read against the whole bar,
+    // because this is the worst case a player can be in: pressed against a
+    // crab, taking a pinch every window it is allowed one.
+    check(`${id}: the whole layer at once is still survivable`,
+      dps <= HP * 1.4,
+      `${dps.toFixed(0)} dps against a ${HP}hp bar`);
+  }
 }
 
 console.log(failures ? `\n${failures} failure(s)\n` : '\nall good\n');

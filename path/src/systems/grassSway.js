@@ -52,6 +52,13 @@ uniform float uSwayFlutter;
 uniform float uSwayBend;
 uniform float uSwayHeight;  // subject height, in the space transformed arrives in
 uniform float uSwayUseUv;   // 1 = mask on uv.y, 0 = on height (see attachGrassSway)
+uniform float uShoveStiffness;
+#ifdef USE_INSTANCING
+  // Per-plant push from a body swimming past, as a signed fraction of the
+  // plant's own height along world +X. Written once a frame by updateShove;
+  // see the note there for why one axis is the whole of it.
+  attribute float aShove;
+#endif
 `;
 
 // Injected after <begin_vertex>, where `transformed` is the raw object-space
@@ -154,12 +161,10 @@ const GLSL_SWAY_BODY = `
     // in <worldpos_vertex> and <project_vertex>.
     swayLocal = instanceMatrix * swayLocal;
     // basis columns, normalised so a per-instance scale cannot bias the turn
-    vec3 axisX = instanceMatrix[0].xyz;
-    vec3 axisZ = instanceMatrix[2].xyz;
+    vec3 axisX = normalize(instanceMatrix[0].xyz + vec3(0.0001, 0.0, 0.0));
+    vec3 axisZ = normalize(instanceMatrix[2].xyz + vec3(0.0, 0.0, 0.0001));
     vec3 wantWorld = vec3(uSwayDir.x, 0.0, uSwayDir.y);
-    vec2 dirLocal = vec2(
-      dot(wantWorld, axisX / max(length(axisX), 0.0001)),
-      dot(wantWorld, axisZ / max(length(axisZ), 0.0001)));
+    vec2 dirLocal = vec2(dot(wantWorld, axisX), dot(wantWorld, axisZ));
     float dirLen = length(dirLocal);
     // degenerate basis (a zeroed instance matrix) falls back rather than NaNs
     swayDir = mix(uSwayDir, dirLocal / max(dirLen, 0.0001), step(0.0001, dirLen));
@@ -176,6 +181,23 @@ const GLSL_SWAY_BODY = `
   float flutter = sin(phase * 2.7 + uSwayFlutterCycle * 6.2831853) * uSwayFlutter * swayT;
 
   vec2 push = swayDir * (body * uSwayAmplitude + flutter) * mask * bladeY;
+
+  // THE SHOVE — a body swimming past, on its own mask so it can bend lower
+  // down the stem than the current does. Same two scalings as the sway and for
+  // the same reasons: masked root-to-tip so the base stays planted, and scaled
+  // by bladeY so it means a fraction of each plant's own height rather than a
+  // number of world units that would flatten a seedling and barely move a
+  // frond. Folded into the same push vector as the sway, before the
+  // arc-length correction, so a shoved plant keeps its length exactly as a
+  // swaying one does.
+  #ifdef USE_INSTANCING
+    // world +X carried into this instance's space — the same transpose the
+    // sway direction takes, and here it is just the x components of the two
+    // normalised basis columns.
+    vec2 shoveDir = vec2(axisX.x, axisZ.x);
+    push += shoveDir * (aShove * pow(swayT, uShoveStiffness) * bladeY);
+  #endif
+
   transformed.xz += push;
 
   // hold arc length: drop the tip to pay for moving it sideways
@@ -225,6 +247,7 @@ export function attachGrassSway(material, height = 1, opts = {}) {
     uSwayBend: { value: 1 },
     uSwayHeight: { value: height },
     uSwayUseUv: { value: opts.mask === 'height' ? 0 : 1 },
+    uShoveStiffness: { value: 1.2 },
   };
   material.userData.__swayUniforms = u;
 
@@ -254,7 +277,13 @@ export function attachGrassSway(material, height = 1, opts = {}) {
  * freezes behind the upgrade screen or crawls through a hit-stop reads as a
  * bug rather than as drama.
  */
-export function updateGrassSway(rawDt) {
+export function updateGrassSway(rawDt, shoveAt = null) {
+  // ABOVE the early return, and that is the whole reason it is here rather
+  // than after it. The shove is a different force with its own switch, and
+  // hanging it off the current's `enabled` would mean a saved tuning that
+  // turned the ambient sway off — as one does at the time of writing —
+  // silently took the player's wake with it.
+  updateShove(rawDt, shoveAt);
   if (CONFIG.grass?.sway?.enabled === false) return;
   const cfg = CONFIG.grass?.sway ?? {};
   // Advanced ONCE, then broadcast. Every clump answers to the same config, so
@@ -280,6 +309,203 @@ const TWO_PI = Math.PI * 2;
 let swayCycle = 0;
 let flutterCycle = 0;
 
+// ---------------------------------------------------------------------------
+// THE SHOVE — plants pushed aside by a body swimming through them
+// ---------------------------------------------------------------------------
+//
+// WHY THIS HALF IS ON THE CPU while the current is entirely in the shader.
+//
+// The current is a FIELD: every plant's bend is a function of where it stands
+// and what time it is, so the shader can work it out from scratch every frame
+// and there is nothing to remember. A shove is not. "Settle back" means the
+// plant's bend depends on where it was a moment ago, and a vertex shader has no
+// yesterday — it would have to be handed one, which is what this is.
+//
+// So each plant carries one number, `aShove`, and one hidden one, its velocity.
+// A spring pulls the number toward whatever the seal's proximity currently
+// asks for; when the seal leaves, the ask drops to zero and the spring is what
+// makes the plant swing back and overshoot rather than snap upright. That
+// asymmetry — shoved as fast as the seal moves, recovering at its own pace — is
+// the whole read, and no stateless falloff can produce it.
+//
+// The cost is one float per plant per frame. At the shipped count that is 82
+// multiply-adds and fifteen buffer uploads of under 400 bytes between them,
+// which is why the "no per-plant CPU work" rule the bed was built on can bend
+// here: the rule exists to keep DRAW CALLS down, and this adds none.
+//
+// ONE AXIS, and that is a decision rather than a shortcut. The plants push in
+// the horizontal plane, and this game is a side view: a push along world Z
+// moves a plant directly toward or away from the camera, where it reads as
+// nothing at all. So the shove is a signed amount along world +X, and the
+// shader carries that one direction back through each plant's random yaw the
+// same way the current's direction is carried.
+
+/** Every InstancedMesh being shoved, with the per-plant state behind it. */
+const shoved = new Set();
+
+/**
+ * Register one instanced draw for the shove.
+ *
+ * `plants` is one entry per instance, in the SAME ORDER as setMatrixAt was
+ * called — the attribute is indexed by instance id and nothing checks that for
+ * you, so a mismatch here shoves the wrong plants and looks like a tuning
+ * problem rather than an off-by-one.
+ *
+ * @param {THREE.InstancedMesh} mesh
+ * @param {{x: number, y0: number, y1: number}[]} plants  each plant's world x,
+ *   and the bottom and top of its stem — a SEGMENT rather than a point,
+ *   because a bed scaled 0.4x to 2.1x has plants five units tall standing next
+ *   to plants one unit tall, and measuring both from their roots means a seal
+ *   swimming past the top of a kelp frond touching nothing.
+ */
+export function registerShovedInstances(mesh, plants) {
+  if (!mesh?.isInstancedMesh || !plants?.length) return;
+  const n = Math.min(mesh.count, plants.length);
+  const shove = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
+  // Written every frame it moves, so three should not try to be clever about
+  // re-uploading it.
+  shove.setUsage(THREE.DynamicDrawUsage);
+  mesh.geometry.setAttribute('aShove', shove);
+
+  const state = {
+    mesh,
+    shove,
+    x: new Float32Array(n),
+    y0: new Float32Array(n),
+    y1: new Float32Array(n),
+    vel: new Float32Array(n),
+    // Starts awake so the first frame writes a real value rather than leaving
+    // whatever the buffer was allocated with.
+    resting: false,
+  };
+  for (let i = 0; i < n; i++) {
+    state.x[i] = plants[i].x;
+    state.y0[i] = plants[i].y0;
+    state.y1[i] = plants[i].y1;
+  }
+  shoved.add(state);
+}
+
+/** Drop every registered draw. The bed is rebuilt on resize and on a tuner move. */
+export function clearShovedInstances() {
+  shoved.clear();
+}
+
+/** How many draws are being shoved. For tests and the tuner readout. */
+export function shovedInstanceCount() {
+  return shoved.size;
+}
+
+/**
+ * Advance every plant's shove by one frame.
+ *
+ * @param {number} dt      seconds. Clamped below, because a spring integrated
+ *   over a tab-switch's worth of dt does not lag, it explodes.
+ * @param {{x: number, y: number}|null} at  where the body is, in world units.
+ *   Null settles the whole bed, which is what a missing player should do rather
+ *   than freezing it mid-bend.
+ */
+function updateShove(dt, at) {
+  if (!shoved.size) return;
+  const cfg = CONFIG.grass?.shove ?? {};
+  const off = cfg.enabled === false || !at;
+  const radius = Math.max(0.001, cfg.radius ?? 4);
+  const feather = Math.max(0.01, cfg.feather ?? 1);
+  // `enabled` folds into strength rather than skipping the loop, for the same
+  // reason the sway folds it into amplitude: switching it off should let the
+  // bed stand up, not freeze it in whatever shape the seal last left.
+  const strength = off ? 0 : (cfg.strength ?? 0.35);
+  const rate = Math.max(0, cfg.springRate ?? 90);
+  // Under 1 the plant overshoots on its way back, which is the flick that makes
+  // it read as a plant rather than as a slider being dragged.
+  const damping = 2 * Math.sqrt(rate) * (cfg.springDamping ?? 0.55);
+  // The direction goes smoothly through zero as the seal crosses a plant
+  // instead of flipping sign in one frame — softened over a fraction of the
+  // radius, so a plant the seal passes directly over is handed off from one
+  // side to the other rather than snapping across.
+  const softening = radius * (cfg.crossoverSoftening ?? 0.15);
+
+  // A spring is only stable while the step is small against its own period, and
+  // dt here is the WALL clock: an alt-tab, a long GC or the first frame after a
+  // model load all hand it a step that would throw every plant off the map.
+  //
+  // BOTH GUARDS, because each one alone fails. Clamping without substepping
+  // runs a slow frame in slow motion. Substepping under a cap on the step COUNT
+  // is worse than either — it looks like it is doing the right thing while
+  // quietly making each step enormous, which is how a 2.5s stall put a plant
+  // 2.1e8 units sideways in the harness before this line said so.
+  //
+  // So: clamp the total first (a 2.5s gap is not a slow frame, it is a stall,
+  // and the bed would have settled during it anyway), then size the step off
+  // the spring's OWN period rather than a fixed 1/60, so a stiff tuning value
+  // cannot outrun the integrator either. At the shipped rate this is exactly
+  // one step per frame and costs nothing.
+  const dtClamped = Math.min(dt, 0.25);
+  const omega = Math.sqrt(rate) || 1;
+  const maxStep = Math.min(1 / 60, 1 / (4 * omega));
+  const steps = Math.max(1, Math.min(32, Math.ceil(dtClamped / maxStep)));
+  const h = dtClamped / steps;
+
+  const sx = at ? at.x : 0;
+  const sy = at ? at.y : 0;
+
+  for (const st of shoved) {
+    // A bed that is already upright with nothing pushing it has nothing to
+    // integrate. Tracked per DRAW rather than per plant because waking is
+    // all-or-nothing per buffer — there is no such thing as a partial upload.
+    // No distance rejection above this: every draw is one variant scattered
+    // wall to wall, so a bounds test would reject nothing and cost a branch.
+    if (st.resting && strength === 0) continue;
+
+    const arr = st.shove.array;
+    let awake = false;
+    for (let i = 0; i < arr.length; i++) {
+      let target = 0;
+      if (strength !== 0) {
+        // Closest point on this plant's stem to the source. Clamping the
+        // source's height into the stem's span is what makes a tall frond
+        // respond to a seal swimming past its middle.
+        const py = Math.min(Math.max(sy, st.y0[i]), st.y1[i]);
+        const dx = st.x[i] - sx;
+        const dy = py - sy;
+        const d = Math.hypot(dx, dy);
+        if (d < radius) {
+          // Feathered edge: smoothstep in, so the plant at the rim eases into
+          // the push instead of stepping into it, and `feather` biases where
+          // that ramp does its work.
+          const u = 1 - d / radius;
+          const f = Math.pow(u * u * (3 - 2 * u), feather);
+          // Away from the source, horizontally. A plant the seal is directly
+          // above has dx ~ 0 and is barely pushed sideways at all, which is
+          // right: it is being passed over, not shouldered.
+          const dirX = Math.max(-1, Math.min(1, dx / Math.max(d, softening)));
+          target = dirX * f * strength;
+        }
+      }
+
+      let cur = arr[i];
+      let v = st.vel[i];
+      for (let s = 0; s < steps; s++) {
+        // Semi-implicit Euler: velocity first, then position with the NEW
+        // velocity. Explicit Euler here adds energy every step and a bed left
+        // alone slowly shakes itself apart.
+        v += ((target - cur) * rate - v * damping) * h;
+        cur += v * h;
+      }
+      arr[i] = cur;
+      st.vel[i] = v;
+      // At rest means BOTH: a plant crossing zero at speed is not finished, and
+      // testing position alone parks it mid-swing the moment it passes upright.
+      if (Math.abs(cur) > 1e-4 || Math.abs(v) > 1e-4 || target !== 0) awake = true;
+    }
+
+    st.shove.needsUpdate = true;
+    st.resting = !awake;
+    // The frame it settles still uploads — that is the one that writes the
+    // zeroes. Stopping a frame earlier leaves every plant a hair off upright.
+  }
+}
+
 /**
  * Push CONFIG.grass.sway onto every attached material. Pure uniform writes, no
  * recompile, so this is safe to call from a slider's input event.
@@ -304,6 +530,11 @@ export function applyGrassSettings() {
     u.uSwayDir.value.set(Math.cos(dir), Math.sin(dir));
     u.uSwayFlutter.value = cfg.enabled === false ? 0 : (cfg.flutter ?? 0.025) * scale;
     u.uSwayBend.value = cfg.bend ?? 1;
+    // The shove's own mask exponent. NOT scaled by `scale` and NOT zeroed by
+    // the sway's `enabled`: this is the shape of a different force, and the
+    // shove's own strength and switch live on the CPU side (see updateShove),
+    // where zeroing them lets a bent plant settle instead of snapping straight.
+    u.uShoveStiffness.value = CONFIG.grass?.shove?.stiffness ?? 1.2;
     // `speed` and `flutterSpeed` are NOT written here any more: they are rates,
     // and the shader is handed positions. updateGrassSway owns both.
   }

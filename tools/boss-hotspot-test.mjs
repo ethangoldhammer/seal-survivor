@@ -70,6 +70,7 @@ import {
   hotSpotShells, spotAt, setHotSpotLook, drainHotSpotChum,
 } from '../path/src/systems/bossHotSpots.js';
 import { pipCount, strikeState, updateStrike, resetStrike } from '../path/src/systems/strike.js';
+import { spawnProjectile, updateProjectiles, projectiles } from '../path/src/entities/projectiles.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DT = 1 / 60;
@@ -696,6 +697,154 @@ section('4c. A strike aimed into a spot is the one bite a ram has');
 }
 
 // ---------------------------------------------------------------------------
+section('4d. A guided shot aims for the light');
+// ---------------------------------------------------------------------------
+// The seeker's aim point (aimAt in entities/projectiles.js). Every guided shot
+// in this game steered at `mesh.position`, which on ordinary creatures is the
+// animal and on a thirteen-metre shark is a point buried deep inside it — so
+// the crit these lights exist for was available only to a player aiming by
+// hand, and a mussel landed on one by accident or not at all.
+//
+// TWO CLAIMS, and the second is the one that matters. That the crit rate goes
+// up is the feature; that the HIT rate does not go down is what makes it safe.
+// A shot that commits to a spot it cannot reach spirals past a boss it would
+// otherwise have struck, trading a certain body hit for a crit it was never
+// geometrically able to land — which is a net loss even when the crit rate
+// looks better. Both are measured against a control run of the same shots with
+// the aim switched off, on the same boss with the same spots in the same
+// places, so nothing but the aim differs.
+{
+  // PARKED WELL UNDER THE SURFACE, and the ring of firing positions sized to
+  // stay under it with room to spare. The arena's ceiling is y = 10: a ring
+  // wide enough to clear a boss at the origin puts a third of its shots in the
+  // air, where they fall out of the world and are scored as misses that have
+  // nothing to do with the aim under test.
+  const e = spawnBoss(0, [0, -18]);
+  const owner = lightUp(e);
+  const lit = owner.spots.filter((s) => s.alive && !s.dead).length;
+  check('the boss is wearing spots to aim at', lit > 0, `${lit} lit`);
+
+  // Fired from a ring around the animal, straight at the middle of it — which
+  // is where a shot with no weak-spot aim was always going to end up, and is
+  // also the honest version of "the player pointed at the boss".
+  const RANGE = 16;
+  const SHOTS = 24;
+  const c = CONFIG.missile ?? {};
+
+  // One shot, flown until it enters the collision hull or runs out of life.
+  //
+  // The verdict is read the way systems/combat.js reads it — spotAt() against
+  // the BULLET's own position, which is what hotSpotDamage is handed. Asking
+  // any other way would grade the aim against a rule the game does not use.
+  function fly(angle) {
+    projectiles.length = 0;
+    const ox = e.mesh.position.x + Math.cos(angle) * RANGE;
+    const oy = e.mesh.position.y + Math.sin(angle) * RANGE;
+    spawnProjectile(scene, {
+      origin: new THREE.Vector3(ox, oy, 0),
+      dir: new THREE.Vector2(-Math.cos(angle), -Math.sin(angle)),
+      faction: 'player', damage: 1, speed: c.speed ?? 18, life: 6,
+      radius: 0.2, asset: 'bullet',
+      homing: true, turnRate: c.turnRate ?? 9.5, acquireRadius: 999,
+      homingDelay: 0,
+    });
+    const p = projectiles[0];
+    for (let i = 0; i < 240 && projectiles.length; i++) {
+      updateProjectiles(DT, scene, [e], null, null);
+      updateBossHotSpots(DT, DT);
+      if (hitCreature(e, p.mesh.position.x, p.mesh.position.y, p.radius, contact)) {
+        return spotAt(owner, p.mesh.position.x, p.mesh.position.y) ? 'crit' : 'body';
+      }
+    }
+    return 'miss';
+  }
+
+  function sweep() {
+    const tally = { crit: 0, body: 0, miss: 0 };
+    for (let i = 0; i < SHOTS; i++) tally[fly((i / SHOTS) * Math.PI * 2)] += 1;
+    return tally;
+  }
+
+  const on = CONFIG.homing.hotSpots.enabled;
+  CONFIG.homing.hotSpots.enabled = false;
+  const control = sweep();
+  CONFIG.homing.hotSpots.enabled = true;
+  const aimed = sweep();
+  CONFIG.homing.hotSpots.enabled = on;
+
+  const fmt = (t) => `${t.crit} crit / ${t.body} body / ${t.miss} miss`;
+  check('aiming at the light lands more crits than aiming at the middle',
+    aimed.crit > control.crit, `${fmt(aimed)} against ${fmt(control)}`);
+  check('and it does not cost hits — the shots that gave up a crit still land',
+    aimed.miss <= control.miss,
+    `${aimed.miss} missed with the aim on, ${control.miss} with it off`);
+
+  // A spot on the far flank is behind two metres of boss: steering at it lands
+  // an ordinary hit on the near side, which is strictly worse than the body
+  // shot it gave up. So whatever a shot commits to must be pointing back at
+  // it — the check is on the spot's own outward normal, which is the number
+  // facingHotSpots filters on.
+  {
+    let worst = 1;
+    let checked = 0;
+    for (let i = 0; i < SHOTS; i++) {
+      const angle = (i / SHOTS) * Math.PI * 2;
+      projectiles.length = 0;
+      spawnProjectile(scene, {
+        origin: new THREE.Vector3(
+        e.mesh.position.x + Math.cos(angle) * RANGE,
+        e.mesh.position.y + Math.sin(angle) * RANGE, 0,
+      ),
+        dir: new THREE.Vector2(-Math.cos(angle), -Math.sin(angle)),
+        faction: 'player', damage: 1, speed: c.speed ?? 18, life: 6,
+        radius: 0.2, asset: 'bullet',
+        homing: true, turnRate: c.turnRate ?? 9.5, acquireRadius: 999, homingDelay: 0,
+      });
+      const p = projectiles[0];
+      for (let k = 0; k < 40 && projectiles.length; k++) {
+        updateProjectiles(DT, scene, [e], null, null);
+        updateBossHotSpots(DT, DT);
+        const s = p.aimSpot;
+        if (!s) continue;
+        const dx = p.mesh.position.x - (s.cwx ?? s.wx);
+        const dy = p.mesh.position.y - (s.cwy ?? s.wy);
+        const d = Math.hypot(dx, dy) || 1;
+        worst = Math.min(worst, (dx * s.wnx + dy * s.wny) / d);
+        checked += 1;
+      }
+    }
+    check('every spot a shot commits to is facing that shot', checked > 0
+      && worst >= (CONFIG.homing.hotSpots.facing ?? 0.15) - 1e-6,
+      `${checked} frames, worst cos ${worst.toFixed(3)} against a floor of ${CONFIG.homing.hotSpots.facing}`);
+  }
+
+  // AND NOTHING CHANGES FOR ANYTHING THAT IS NOT A BOSS. The aim reaches into
+  // a per-creature record that only a boss has, and an ordinary fish is the
+  // whole rest of the roster — a shot that started consulting it for them
+  // would be a change to every seeker in the game rather than to this one
+  // fight.
+  {
+    const mesh = new THREE.Mesh();
+    mesh.position.set(6, -18, 0);
+    scene.add(mesh);
+    const fish = { type: 'fish', mesh, radius: 0.4, hp: 99 };
+    projectiles.length = 0;
+    spawnProjectile(scene, {
+      origin: new THREE.Vector3(0, -18, 0),
+      dir: new THREE.Vector2(1, 0),
+      faction: 'player', damage: 1, speed: 18, life: 3, radius: 0.2, asset: 'bullet',
+      homing: true, turnRate: 9.5, acquireRadius: 999, homingDelay: 0,
+    });
+    const p = projectiles[0];
+    for (let i = 0; i < 10; i++) updateProjectiles(DT, scene, [fish], null, null);
+    check('an ordinary creature is still aimed at in the middle, as always',
+      p.target === fish && p.aimSpot === null);
+    scene.remove(mesh);
+  }
+  projectiles.length = 0;
+}
+
+// ---------------------------------------------------------------------------
 section('5. One bursts, and another opens somewhere else');
 // ---------------------------------------------------------------------------
 {
@@ -993,7 +1142,16 @@ section('6b. Working a spot kicks big chum loose');
   // by critMul because the pool takes the CRIT damage, the same arithmetic the
   // rupture threshold uses.
   const share = s.pool * (M.damageShare ?? 0.34);
-  const bite = share / (CONFIG.hotSpots.critMul * 10);
+  // A HAIR OVER A TENTH, and the epsilon is the whole reason this line has a
+  // comment. `share / (critMul * 10)`, added up ten times and multiplied back
+  // by critMul, is share in exact arithmetic and share minus a ULP in floats —
+  // ejectChum's `taken - paid >= share` then pays nothing and the check below
+  // reads as a broken payout. Which side of the line the sum lands on depends
+  // on the boss's hp, so every edit to the bossShark row in enemies.csv was a
+  // coin toss on this test. The epsilon is far below anything a fight could
+  // notice and far above a ULP, so the intent — exactly one share of damage,
+  // delivered in ten pieces — is unchanged and no longer knife-edged.
+  const bite = share * (1 + 1e-9) / (CONFIG.hotSpots.critMul * 10);
   // SEEDED, because the throw is scattered inside `chum.spread` and the checks
   // below are about the geometry rather than about which way one roll went.
   seeded(9001, () => {

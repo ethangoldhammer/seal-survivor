@@ -82,37 +82,78 @@ export function initFeedback(gridSystem) {
  *                       colour. See CONFIG.emitters for why that split exists.
  */
 /**
- * WHAT THIS THING IS MADE OF, as a feedback event.
+ * A BOSS TAKING A HIT, OR GOING, IN THREE LAYERS.
  *
  * A boss used to sound exactly like a minnow: `hit` going in, `bigKill` going
- * out, whether it was a shark, a crab or forty tonnes of steel. These are one
- * pair of voices per MATERIAL — flesh, shell, steel — resolved from the asset
- * because the asset is what the thing actually is (CONFIG.boss.voiceClass).
+ * out, whether it was a shark, a crab or forty tonnes of steel. What fires now
+ * is up to three events for the one blow, and they answer three questions that
+ * genuinely are separate:
  *
- * Fired ALONGSIDE the event that already owns the moment rather than instead of
- * it: the events these name carry a sound and nothing else, so the shake, the
- * burst and the hit-stop stay authored in one place. Routing through feedback()
- * rather than playSfx is what gets the class voice the same distance banding,
- * throttle and mixer ranking as every other sound in the game.
+ *   1. THE MOMENT — `bossHit` / `bossDeath`. Every boss, always. The one place
+ *      a change that should apply to all of them can land, and the only layer
+ *      that carries anything but sound.
+ *   2. THE MATERIAL — `bossHit<Class>`, from CONFIG.boss.voiceClass. Flesh,
+ *      shell or steel: what the body answering the hit is made of.
+ *   3. THE CRY — `bossHit<Type>`, from CONFIG.boss.voiceType. What THIS animal
+ *      says about it, over the top of its own body's answer. Sparse on purpose:
+ *      a boss with no row is silent here, and no fallback, because a new
+ *      archetype crying in some other creature's voice is worse than one that
+ *      does not cry at all.
+ *
+ * ORDER IS THE MIX. The moment first, the material next and the cry last, so
+ * when the voice cap has to take something (see worstVoiceIndex in audio.js)
+ * the layer it takes is the accent rather than the answer.
+ *
+ * Both voice layers are fired ALONGSIDE the event that already owns the moment
+ * rather than instead of it: the events they name carry a sound and nothing
+ * else, so the shake, the burst and the hit-stop stay authored in one place.
+ * Routing through feedback() rather than playSfx is what gets them the same
+ * distance banding, throttle and mixer ranking as every other sound.
  *
  * @param kind 'hit' or 'die'
  * @param key  the asset the thing is wearing — `e.assetKey`, or the hull's own
  * @param at   the usual { x, y, scale } feedback payload
+ * @param opts `general: false` for a hull that is not a boss. Every ordinary
+ *             trawler and rowboat comes through here for its material voice
+ *             (see damageBoat), and those are not boss fights — but the default
+ *             is true, so a boss added tomorrow gets the shared layer without
+ *             anyone remembering to ask for it.
  */
-export function bossVoice(kind, key, at = {}) {
+export function bossVoice(kind, key, at = {}, opts = {}) {
   const b = CONFIG.boss ?? {};
-  const cls = b.voiceClass?.[key] ?? b.voiceDefault ?? 'flesh';
   // Built into variables rather than inline. The event audit in
   // tools/upgrade-test.mjs reads the string literals inside every
   // `feedback(...)` call to catch a typo'd event name — which is worth far more
   // than it costs here — and a ternary spelling the name inside those brackets
   // reads to it as three events called 'Hit', 'Die' and 'die'.
-  const verb = kind === 'die' ? 'Die' : 'Hit';
+  const die = kind === 'die';
+  const verb = die ? 'Die' : 'Hit';
+
+  // 1. THE MOMENT. Named in full rather than built, so both spellings appear as
+  // literals somewhere in the source — the same audit reports an event whose
+  // name is nowhere as one nothing can fire.
+  if (opts.general !== false) feedback(die ? 'bossDeath' : 'bossHit', at);
+
+  // 2. THE MATERIAL.
+  const cls = b.voiceClass?.[key] ?? b.voiceDefault ?? 'flesh';
   const event = `boss${verb}${cls[0].toUpperCase()}${cls.slice(1)}`;
   // An unknown class would be a silently missing sound — playSfx returns for a
   // name it does not have — so it falls back rather than going quiet.
   const fallback = `boss${verb}Flesh`;
   feedback(CONFIG.feedback[event] ? event : fallback, at);
+
+  // 3. THE CRY. No row, no sound, and no fallback — see the note on voiceType.
+  const type = b.voiceType?.[key];
+  if (!type) return;
+  const cry = `boss${verb}${type}`;
+  // A row naming a type with no event behind it is the one failure this layer
+  // can have, and it is silent: the cry simply never plays. Said out loud here
+  // rather than left to be noticed months later in a fight.
+  if (!CONFIG.feedback[cry]) {
+    console.warn(`[bossVoice] ${key} is voiceType "${type}" but there is no ${cry} event`);
+    return;
+  }
+  feedback(cry, at);
 }
 
 // Anyone who wants to know that an event fired, without being wired into the
@@ -287,6 +328,14 @@ export function feedback(event, at = {}) {
       x,
       y,
       minGap: def.toastMinGap ?? 0,
+      // TWO THINGS THE LINE DOES RATHER THAN TWO THINGS IT SAYS, which is why
+      // they are booleans on the def and not part of the payload: whether a
+      // receipt follows the seal and whether it ripples are facts about the
+      // EVENT, the same for every firing of it, while `value` and
+      // `toastUpgrade` above are what this particular one was worth. See
+      // spawnProcToast in ui/ui.js for both.
+      pin: !!def.toastPin,
+      wave: !!def.toastWave,
     });
   }
   if (def.haptic) {

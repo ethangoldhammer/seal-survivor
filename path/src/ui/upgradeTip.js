@@ -40,7 +40,7 @@ import {
 } from '../upgradeText.js';
 import { baseStats } from '../stats.js';
 import { player, statsWithOneMore } from '../entities/player.js';
-import { levelChanges } from '../levelStats.js';
+import { levelChanges, levelValues } from '../levelStats.js';
 import { runTotals, stacksHeld } from '../systems/playtest.js';
 import { sourceForUpgrade, sourceLabel } from '../systems/playtestAnalysis.js';
 import { settings } from '../systems/settings.js';
@@ -275,6 +275,9 @@ export function upgradeTipContent(upgrade, {
   rarity = null,
   liveStats = null,
   afterStats = null,
+  // THE RUN IS OVER. Set by the score screen's two hive surfaces, where there
+  // is no next pick to describe — see the branch below.
+  final = false,
 } = {}) {
   if (verbosity === 'off') return null;
   const def = typeof upgrade === 'string' ? upgradeDef(upgrade) : upgrade;
@@ -335,8 +338,22 @@ export function upgradeTipContent(upgrade, {
   //
   // FALLS BACK, ALWAYS. An ability with no readout — most of them, for now —
   // gets the bare level phrase it has always had. See LEVEL_STATS.
-  const derived = atCap ? null
-    : levelChanges(def.id, held, next, live ?? {}, after ?? live ?? {}, cap);
+  // ON THE SCORE SCREEN, NOTHING IS COMING NEXT.
+  //
+  // Every other surface that shows a hexagon is asking "should I take another
+  // one of these" — the corner hive mid-run, the boss dividend, the level-up
+  // cards. The score screen is asking the opposite question: the run is over
+  // and the build is finished, so "+22 bomb damage if you take a ninth" is an
+  // offer nobody can accept, printed over the one screen that exists to say
+  // what the run WAS.
+  //
+  // So the table becomes a readout of where each quantity finished, and the
+  // rows below that would price a next pick — the cap notice, the lead span —
+  // are skipped with it.
+  const derived = final
+    ? levelValues(def.id, held, live ?? {})
+    : (atCap ? null
+      : levelChanges(def.id, held, next, live ?? {}, after ?? live ?? {}, cap));
 
   // ONE ROW PER QUANTITY, not one comma-run of six.
   //
@@ -389,7 +406,9 @@ export function upgradeTipContent(upgrade, {
       // twice; what it means is "this one is not moving on this pick", and the
       // span beside it already says where it stands.
       let delta = '';
-      if (c.how !== 'none') {
+      // `none` has nothing to say and `unlock` has no before to subtract from;
+      // both are span-only rows.
+      if (c.how !== 'none' && c.how !== 'unlock' && c.how !== 'held') {
         const said = phrase(c, next);
         const lbl = t.label ?? c.stat;
         delta = said.endsWith(lbl) ? said.slice(0, -lbl.length).trim() : said;
@@ -416,7 +435,15 @@ export function upgradeTipContent(upgrade, {
       const at = (v) => (asPct
         ? `${fmt(v * 100)}%`
         : `${fmt(v)}${t.unit ?? ''}`);
-      const span = verbosity === 'short' ? '' : `${at(c.from)} ${ARROW} ${at(c.to)}`;
+      // AN UNLOCK PRINTS THE VALUE ALONE, at both verbosities. A card you do
+      // not already hold is offering the whole ability, so there is no before
+      // to arrow from and nothing to subtract — what it does IS the answer.
+      // Short keeps it for the same reason it drops the others' spans: without
+      // it a first-pick card would have no rows at all, which is the state this
+      // whole branch was added to fix.
+      const span = (c.how === 'unlock' || c.how === 'held')
+        ? at(c.to)
+        : (verbosity === 'short' ? '' : `${at(c.from)} ${ARROW} ${at(c.to)}`);
       if (!delta && !span) continue;
       rows.push({
         key: `lv:${c.stat}`,
@@ -425,7 +452,11 @@ export function upgradeTipContent(upgrade, {
         text: delta && span ? `${delta} ${SPAN_SEP} ${span}` : (delta || span),
       });
     }
-  } else {
+  } else if (!final) {
+    // A card with no readout, mid-run: the measured next stack, as always. On a
+    // FINISHED run this whole branch is skipped — the running total below is
+    // what that card is worth now, and a "next stack" line beside it would be
+    // pricing a pick the run can no longer make.
     const changes = measure(def, next);
     const step = phraseAll(changes, next);
     nextRow = atCap
@@ -707,8 +738,9 @@ export function showUpgradeTip(id, anchor, {
   verbosity = tipVerbosity(),
   hex = true,
   totals = null,
+  final = false,
 } = {}) {
-  const content = upgradeTipContent(id, { owned, verbosity, totals });
+  const content = upgradeTipContent(id, { owned, verbosity, totals, final });
   if (!content) { hideUpgradeTip(); return null; }
 
   const node = ensureTip();

@@ -29,7 +29,53 @@
 // ---------------------------------------------------------------------------
 
 import { CONFIG } from '../config.js';
-import { barGrid } from './music.js';
+import { barGrid, snapToBarGrid } from './music.js';
+
+// --- alternating flippers ---------------------------------------------------
+// How many TICKS one volley is spread across. 1 is the old behaviour — every
+// emit point fires on the same frame. With CONFIG.weapon.alternateFins on it
+// is the number of emit points, so the volley is dealt out one limb at a time
+// and the scheduler below runs that many times faster. Nothing about the
+// pellet count or the damage changes: each limb still fires its own share once
+// per volley interval, they are just offset from each other.
+//
+// THE INTERVAL IS AN ARGUMENT BECAUSE THE SPLIT CAN FAIL. Dealing a volley out
+// over n ticks only preserves the gun's output if the grid can actually hold a
+// tick n times finer, and at the top of the ladder it cannot: a Rapid Fire
+// stack sitting on bar/64 divides to bar/128, snapToBarGrid clamps that back to
+// bar/64, and one fin firing per bar/64 is HALF the gun. Alternation is a look
+// and a rhythm; it is not allowed to cost damage, so when the division does not
+// land the volley goes back to leaving every fin at once.
+function splitFits(volleyInterval, n, maxDivision) {
+  if (!(volleyInterval > 0)) return false;
+  const tick = snapToBarGrid(volleyInterval / n, maxDivision);
+  const cycle = tick * n;
+  // Both directions: too long is the clamp above and costs damage, too short
+  // would hand the gun free rate. A rung divided by 2 or 3 is another rung
+  // wherever the ladder still has room, so on every reachable cadence this is
+  // exact and the window is only guarding the arithmetic.
+  return cycle > volleyInterval * 0.999 && cycle < volleyInterval * 1.001;
+}
+
+export function finSplit(origins, volleyInterval) {
+  if (CONFIG.weapon.alternateFins === false) return 1;
+  const n = Math.floor(origins);
+  if (!(n > 1)) return 1;
+  return splitFits(volleyInterval, n, CONFIG.weapon.beatLock?.maxDivision ?? 64) ? n : 1;
+}
+
+// The interval to hand shotDue, given the volley interval the stats produced.
+//
+// Re-snapped after the division rather than trusted: bar/4 halved is bar/8 and
+// needs no help, but a three-fin model, a triplet rung, or an interval already
+// sitting on the finest division the ladder allows all divide into something
+// that is NOT a rung — and a tick off the lattice is exactly the "in time but
+// not with it" the grid exists to prevent.
+export function tickInterval(volleyInterval, origins) {
+  const split = finSplit(origins, volleyInterval);
+  if (split < 2) return volleyInterval;
+  return snapToBarGrid(volleyInterval / split, CONFIG.weapon.beatLock?.maxDivision ?? 64);
+}
 
 // Score position of the next shot. Null means unlocked — nothing has been
 // scheduled yet, or the transport went away underneath us.

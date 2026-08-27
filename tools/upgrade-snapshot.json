@@ -57,6 +57,41 @@
       }
     ]
   },
+  "flippersUp": {
+    "cap": 6,
+    "perStack": [
+      {
+        "leftFinRadiusMul": 122,
+        "flippersUpStacks": 101,
+        "leftFinElementLevel": 101
+      },
+      {
+        "rightFinRadiusMul": 122,
+        "flippersUpStacks": 102,
+        "rightFinElementLevel": 101
+      },
+      {
+        "leftFinRadiusMul": 148.84,
+        "flippersUpStacks": 103,
+        "leftFinElementLevel": 102
+      },
+      {
+        "rightFinRadiusMul": 148.84,
+        "flippersUpStacks": 104,
+        "rightFinElementLevel": 102
+      },
+      {
+        "leftFinRadiusMul": 181.5848,
+        "flippersUpStacks": 105,
+        "leftFinElementLevel": 103
+      },
+      {
+        "rightFinRadiusMul": 181.5848,
+        "flippersUpStacks": 106,
+        "rightFinElementLevel": 103
+      }
+    ]
+  },
   "overboost": {
     "cap": null,
     "perStack": [

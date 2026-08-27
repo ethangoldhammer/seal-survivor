@@ -59,6 +59,12 @@ const LABEL = {
   // these is the arena being loud a long way off, not the cap being too small.
   far: 'too far',
   stolen: 'cut short',
+  // NOT 'stolen'. Both end a sound early and they mean opposite things: a
+  // stolen voice lost an argument with the budget and is a problem, a choked
+  // one was cut ON PURPOSE by the thing it was building to (see chokeSfx). One
+  // word for both would hide every riser doing its job inside the list you scan
+  // for trouble.
+  choked: 'choked',
   voices: 'no voice',
   muted: 'muted',
   off: 'audio off',

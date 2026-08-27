@@ -6,7 +6,7 @@ import { damageCrew } from './crew.js';
 import { enemies, removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
-import { applyElementalHit, chillEnemy } from './elements.js';
+import { applyElementalHit, chillEnemy, activeElement } from './elements.js';
 import { applyHarpCharm } from './harp.js';
 import { hitCreature } from './hitShape.js';
 import { hotSpotDamage } from './bossHotSpots.js';
@@ -100,6 +100,20 @@ export function resolveCombat(dt, scene, hooks) {
         // `b` rides along so the element can tell WHICH pellet landed — the
         // contagion's motes orbit the shot and are handed to the fish here.
         applyElementalHit(scene, e, b.damage, enemies, hooks, 1, b);
+
+        // ...AND THE FLIPPER'S OWN ELEMENT, if the fin this pellet left is
+        // carrying one. A SECOND packet beside the run's rather than a
+        // replacement for it — Flippers Up! puts an element on a fin, and a card
+        // must not be able to overwrite the element the player is already
+        // playing (the same rule `b.chill` below is written under).
+        //
+        // Skipped when the fin rolled the run's own element, and that is not an
+        // optimisation: levelOf() already folded the fin's depth into the single
+        // application above, so landing it twice would pay one element two
+        // packets for having come from two places.
+        if (b.finElement && b.finElement !== activeElement()) {
+          applyElementalHit(scene, e, b.damage, enemies, hooks, 1, b, { element: b.finElement });
+        }
       }
 
       // A shot that carries ice (the ice club's thrown variant). Its own
@@ -158,11 +172,18 @@ export function resolveCombat(dt, scene, hooks) {
     const dy = b.mesh.position.y - pPos.y;
     if (dx * dx + dy * dy > reach * reach) continue;
 
-    if (player.invuln <= 0) {
-      // Third argument is who did it, for the playtest recorder: the shot
-      // carries its firer's type (see spawnProjectile's `source`).
-      if (!isInvulnerable()) hooks.onPlayerHit(b.damage, b.dir, b.source ?? 'enemy shot');
-      player.invuln = player.stats.invulnAfterHit;
+    // Third argument is who did it, for the playtest recorder: the shot
+    // carries its firer's type (see spawnProjectile's `source`).
+    //
+    // 'strike' is the I-FRAME CHANNEL — a discrete blow, refused outright if
+    // another one landed inside CONFIG.player.hitIFrames, and arming that
+    // window itself when it lands. It used to be spelled out here as a
+    // player.invuln test and a write, which is why it covered shots and nothing
+    // else: a crab's pinch, a shark's bite and a trap's snap are all the same
+    // kind of event and none of them had it. onPlayerHit owns the whole rule
+    // now, in one place, and every burst asks for it by naming the channel.
+    if (!isInvulnerable()) {
+      hooks.onPlayerHit(b.damage, b.dir, b.source ?? 'enemy shot', 'strike');
     }
     despawn(scene, i);
   }
@@ -243,7 +264,14 @@ export function resolveCombat(dt, scene, hooks) {
     // A boss arriving is harmless for exactly as long as it is untouchable —
     // see CONFIG.boss.arrival. One without the other turns the entrance into a
     // punishment for watching it.
-    if (e.trapTimer > 0 || e.charmTimer > 0 || e.invuln > 0) continue;
+    // ...AND AN ANIMAL THAT ALREADY HAS YOU IN ITS MOUTH does not also charge
+    // you for touching it. A grab bills its own chewing on its own clock (see
+    // systems/bossGrab.js), and the seal is pinned INSIDE the body for the whole
+    // two seconds — so without this the one attack that holds you still would
+    // collect the full contact drain the entire time it held you, which is the
+    // same attack paid twice and the exact shape the damage ceilings exist to
+    // refuse.
+    if (e.trapTimer > 0 || e.charmTimer > 0 || e.invuln > 0 || e.grabbing) continue;
 
     // Trap enemies deal damage as a burst timed with their attack animation,
     // not continuous per-second contact — they're usually not even touching
@@ -256,7 +284,12 @@ export function resolveCombat(dt, scene, hooks) {
         // Contact has no projectile to take a direction from, so the shove
         // comes from wherever the attacker is standing.
         if (dx * dx + dy * dy <= reach * reach && !isInvulnerable()) {
-          hooks.onPlayerHit(e.contactDamage ?? e.def.contactDamage, { x: -dx, y: -dy }, e.type);
+          // 'strike': a burst timed to an attack animation is exactly the kind
+          // of hit the i-frame window exists for — see the note on the shot
+          // above.
+          hooks.onPlayerHit(
+            e.contactDamage ?? e.def.contactDamage, { x: -dx, y: -dy }, e.type, 'strike',
+          );
         }
       }
       continue;
@@ -299,6 +332,15 @@ export function resolveCombat(dt, scene, hooks) {
           // Shoved harder than an ordinary contact, and away from the crab.
           { x: -px * knock, y: -py * knock },
           e.type,
+          // 'strike', AND THIS IS THE ONE THAT MADE THE CHANNEL NECESSARY. Nine
+          // crabs on a chum pile shut their claws inside a few frames of each
+          // other, and every one of them billed. The pinch is a much bigger
+          // number than it used to be (contact is 0 now — see below), so a
+          // swarm landing together was half the bar between two frames with one
+          // flash to show for it. One pinch per window is paid; the rest of the
+          // swarm still swings, still connects visually, and still gets its
+          // turn as soon as the window is up.
+          'strike',
         );
       }
     }
@@ -329,8 +371,25 @@ export function resolveCombat(dt, scene, hooks) {
       // anglerfish's strike and the lunge perk. Those three multiply this same
       // number for a committed run, so for as long as one is live the body is
       // the attack and is billed as one.
+      // ...AND A CRAB CHARGES NOTHING FOR IT. `contactMul` is 0 for anything
+      // carrying a claw driver (which is the two crabs and the king crab, and
+      // nothing else in the roster — createClawDriver returns null for every
+      // model with no clawRig, so this cannot quietly defang anything).
+      //
+      // A crab is a thing that PINCHES you. It spent years as a walking contact
+      // hitbox with a telegraphed gesture painted on top, and the gesture was
+      // the smaller of the two — which made the 0.42s rear-up a warning about
+      // the less important thing the animal was doing. Its whole damage budget
+      // goes through the claw now (see the pinch branch above and
+      // CONFIG.crabClaw.contactMul), so the tell is the attack and swimming
+      // through a crab that has not swung is genuinely free.
+      //
+      // Asked through clawSetting so a creature with its own claw block gets
+      // its own answer, exactly like both halves of the pinch.
+      const contactMul = e.claw ? (clawSetting(e.def, 'contactMul') ?? 0) : 1;
+      if (!(contactMul > 0)) continue;
       hooks.onPlayerHit(
-        (e.contactDamage ?? e.def.contactDamage) * dt, // damage-per-second on contact
+        (e.contactDamage ?? e.def.contactDamage) * contactMul * dt, // per second on contact
         { x: -dx, y: -dy },
         e.type,
         e.ramming ? 'attack' : 'contact',

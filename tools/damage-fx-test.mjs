@@ -465,8 +465,15 @@ check('a fresh run clears the accumulator', /resetPlayerDamageFx\(\)/.test(main)
 check('nothing fires the playerHit event behind the system\'s back',
   !/feedback\('playerHit'/.test(main));
 check('the old framerate-dependent gate is gone', !/if \(dmg > 1\)/.test(main));
+// The claim, not the expression. Contact damage is a RATE and has to arrive as
+// `something * dt` — that is what makes playerDamageFx's banking the right
+// shape for it, and a burst arriving here instead would be a hit the flinch and
+// the grunt never see. It used to be pinned to the literal `contactDamage) * dt`
+// and broke the day a `contactMul` was multiplied in between the two halves (a
+// crab charges nothing for being touched — see systems/combat.js), which is a
+// test failing on the shape of an expression rather than on what it does.
 check('combat.js still hands over contact damage as a per-frame rate',
-  /contactDamage\) \* dt/.test(combat));
+  /contactDamage\)[^;\n]*\* dt/.test(combat));
 
 console.log(failures === 0 ? '\nAll damage-FX checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

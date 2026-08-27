@@ -31,6 +31,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { baseStats, applyLevelGrowth, applyDamageScaling, maneaterMul, ironLungMul } from '../path/src/stats.js';
 import { spawnProjectile, updateProjectiles, projectiles } from '../path/src/entities/projectiles.js';
+import { markTarget, resetMarks } from '../path/src/systems/marks.js';
 
 const U = (id) => CONFIG.upgrades.find((u) => u.id === id);
 let fails = 0;
@@ -201,6 +202,75 @@ console.log('\n5. SONAR TEETH — acquisition, through the real projectile loop'
   const maxTurn = c.turnRate + c.turnRatePerLevel * (U('homingShot').maxStacks - 1);
   ok(maxTurn < CONFIG.missile.turnRate,
     `a fully stacked pellet still turns slower than a guided mussel (${r3(maxTurn)} < ${CONFIG.missile.turnRate})`);
+
+  // -------------------------------------------------------------------------
+  // THE RULE: NEVER A TURTLE AND NEVER A WHALE.
+  //
+  // Asserted against a body sitting where a seeker would otherwise be certain
+  // to take it — directly in front of the muzzle, nearer than anything else on
+  // the board — because "it did not pick the turtle" is worthless if nothing
+  // in the arrangement ever offered it one.
+  //
+  // A sea turtle is a WALL: an hp of a billion in enemies.csv, and the boss's
+  // `turtles` perk parks a screen of them between the player and the fight. A
+  // seeker with no rule empties every volley into it for as long as the screen
+  // is up. The def's `invincible` flag and the named list are both live rules
+  // and both are checked, because they cover each other: an unnamed invincible
+  // creature added later, and a named one that is merely worthless.
+  // -------------------------------------------------------------------------
+  {
+    const turtle = enemy('seaTurtle', 2, 0, 1);
+    const fish = enemy('fish', 8, 0, 0.4);
+    ok(acquire([turtle, fish], seek(1)) === 'fish',
+      'a sea turtle four times nearer than the fish is not chased — the fish is');
+    ok(acquire([turtle], seek(1)) === null,
+      'and a turtle alone leaves the shot flying straight rather than curving into a wall');
+
+    // The named rule and the general one, separately. `invincible` is set on
+    // the live body by makeInvincible(); the list is matched on `type`.
+    const scenery = { ...enemy('lorem', 2, 0, 1), invincible: true };
+    ok(acquire([scenery, fish], seek(1)) === 'fish',
+      'anything invincible is refused by the general rule, named or not');
+    const whale = enemy('whale', 2, 0, 3);
+    ok(acquire([whale, fish], seek(1)) === 'fish',
+      'and a whale is refused by name, however big and however near');
+  }
+
+  // -------------------------------------------------------------------------
+  // A PAINTED TARGET IS A TIER, NOT A LEAN.
+  //
+  // The distinction is the whole change, and only an arrangement the old
+  // weighting would have LOST can tell them apart: the mark's own pull is
+  // 0.45, so a marked body more than ~2.2x further out than an unmarked one
+  // used to lose. That is the case below.
+  // -------------------------------------------------------------------------
+  {
+    const near = enemy('fish', 1.5, 0, 0.4);
+    const far = enemy('shark', 9, 0, 1.2);
+    ok(acquire([near, far], { ...seek(1), sizeBias: 0 }) === 'fish',
+      'unmarked, the near fish wins — the control for the pair below');
+    markTarget(far);
+    ok(acquire([near, far], { ...seek(1), sizeBias: 0 }) === 'shark',
+      'painted, the shark six times further out wins outright');
+    // ...and the reticle still does not extend the gun. A mark is which target
+    // in reach, never how far a shot can see.
+    //
+    // The board is cleared FIRST. `markedTargets()` is walked whatever is in
+    // the enemy list handed to the loop — that is how a marked hull is reached
+    // — so a mark left over from the pair above would be picked up here and
+    // the case would pass for the wrong reason.
+    resetMarks();
+    // The distance is DERIVED, not typed. A mark counts as `homingPull` of its
+    // real distance, which is a tuned number — pinning 60 units here would
+    // make this case pass or fail on a slider nobody touched for its sake.
+    // sizeBias 0 so the size curve is out of the arithmetic as well.
+    const pull = CONFIG.strike.mark.homingPull;
+    const out = enemy('distant', (seek(1).acquireRadius / pull) * 1.5, 0, 1.2);
+    markTarget(out);
+    ok(acquire([out], { ...seek(1), sizeBias: 0 }) === null,
+      'but a marked body outside the acquire radius is still out of reach');
+    resetMarks();
+  }
 }
 
 console.log('\n6. all three are dealable');

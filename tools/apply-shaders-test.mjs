@@ -117,6 +117,45 @@ console.log('\nCHANGING A FIELD THAT IS ALREADY THERE');
     `low = ${parsed?.toonShade?.presets?.shark?.low}`);
 }
 
+console.log('\nCHANGING THE LAST FIELD *AND* ADDING AFTER IT');
+{
+  // THE COMBINATION NOTHING ABOVE COVERS, and it broke config.js in the wild:
+  // the two sections above test replacing a value and appending fields
+  // SEPARATELY, and every shape passes both. Do them in one record — which is
+  // what moving a slider on the last field of a preset and then moving one on a
+  // field it does not declare produces — and the two edits land on top of each
+  // other.
+  //
+  //   greatWhite: { strength: 1.3, wet: 1.2 wetSteps: 3, ... }
+  //
+  // The insert anchors after the last non-whitespace character; the value span
+  // for a one-line block's LAST field used to run to the closing brace, so it
+  // swallowed the space and the anchor sat inside it. Right-to-left application
+  // then put the addition in first and the value replacement chewed back over
+  // its leading comma. The game did not boot.
+  const want = { toonShade: { shark: { soft: 0.9, range: 1.5, gamma: 2.2 } } };
+  for (const [label, block] of Object.entries(SHAPES)) {
+    // `soft` is deliberately the LAST declared field in the one-line shapes.
+    const last = /soft/.test(block) ? 'soft' : 'low';
+    const edit = { toonShade: { shark: { [last]: 0.9, range: 1.5, gamma: 2.2 } } };
+    const rec = { toonShade: { shark: { [last]: 0.9, range: 1.5, gamma: 2.2 } } };
+    let out = null; let parsed = null; let err = '';
+    try {
+      out = spliceHandPresets(wrap(block), rec, edit);
+      parsed = new Function(`return {${out.text.replace(/,\s*$/, '')}}`)();
+    } catch (e) { err = e.message; }
+    check(`${label}: replace-last + append still parses`, !!parsed,
+      err || (out?.text.split('\n').find((l) => l.includes('shark:')) ?? '').trim());
+    if (!parsed) continue;
+    const shark = parsed.toonShade?.presets?.shark ?? {};
+    check(`${label}: the replaced value landed`, shark[last] === 0.9, `${last} = ${shark[last]}`);
+    check(`${label}: and both additions did`, shark.range === 1.5 && shark.gamma === 2.2,
+      `range ${shark.range}, gamma ${shark.gamma}`);
+    check(`${label}: nothing else was eaten`, shark.steps === 3, `steps = ${shark.steps}`);
+  }
+  void want;
+}
+
 console.log('\nRENDERING A CONTROL IS NOT AN EDIT');
 {
   // The other half of the same lesson, and it has its own scar: the lab records

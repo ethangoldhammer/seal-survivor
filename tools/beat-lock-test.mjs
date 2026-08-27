@@ -107,7 +107,7 @@ console.warn = () => {};
 const { CONFIG, barDivisions } = await import('../path/src/config.js');
 const audio = await import('../path/src/systems/audio.js');
 const music = await import('../path/src/systems/music.js');
-const { shotDue, resetShotGrid, shotGridState } = await import('../path/src/systems/shotGrid.js');
+const { shotDue, resetShotGrid, shotGridState, tickInterval, finSplit } = await import('../path/src/systems/shotGrid.js');
 
 audio.unlockAudio();
 
@@ -338,6 +338,69 @@ check('the non-nesting rung is locked like every other', onSix.length > 5 && onS
 // nesting property is gone.
 check('every rung repeats on the bar line', rungWalk.every((d) => Number.isInteger(BAR / (BAR / d))),
   rungWalk.map((d) => `${d}/bar`).join(' '));
+
+// ---------------------------------------------------------------------------
+section('Alternating fins trade shots on the eighths');
+// The fins fire one at a time instead of together, so the SCHEDULER runs at
+// half the volley interval — the property being asserted is that the halved
+// tick is still a rung and still lands on slot boundaries, because a stagger
+// that merely offset the second fin by "half of something" would put every
+// other shot between two of the music's slots.
+resetShotGrid();
+CONFIG.weapon.alternateFins = true;
+check('two fins halve the tick', near(tickInterval(IV, 2), BAR / 8, 1e-9),
+  `bar/4 volleys -> bar/${(BAR / tickInterval(IV, 2)).toFixed(0)} ticks`);
+check('...and the toggle puts them back together', (() => {
+  CONFIG.weapon.alternateFins = false;
+  const off = tickInterval(IV, 2);
+  CONFIG.weapon.alternateFins = true;
+  return near(off, IV, 1e-12);
+})(), 'off = the old simultaneous volley at the volley interval');
+// A model with no rig, or with the emit points switched off, reports zero
+// points. finSplit has to read that as ONE limb rather than as zero ticks, or
+// the gun would be handed an interval of Infinity and never fire again.
+check('a model with no emit points is unaffected', finSplit(0, IV) === 1 && finSplit(1, IV) === 1
+  && near(tickInterval(IV, 0), IV, 1e-12));
+// The division is not always a halving, and this is why it is re-snapped: three
+// fins put the gun on the triplet lattice rather than a third of the way
+// between two duple slots.
+check('an odd fin count lands on the triplet rung', near(tickInterval(BAR / 4, 3), BAR / 12, 1e-9),
+  `bar/4 over 3 fins -> bar/${(BAR / tickInterval(BAR / 4, 3)).toFixed(0)}`);
+// THE ONE CASE WHERE ALTERNATING HAS TO GIVE UP. A gun at the finest division
+// the ladder allows cannot be dealt out any finer, and one fin per tick at the
+// SAME tick rate is half the gun. The look is worth a lot; it is not worth a
+// silent 50% damage cut on the build that stacked Rapid Fire to the cap.
+check('a gun at the ladder cap goes back to firing both fins together',
+  finSplit(2, BAR / 64) === 1 && near(tickInterval(BAR / 64, 2), BAR / 64, 1e-9),
+  'the tick cannot halve, so the volley must not be halved either');
+check('...and every rung below the cap still trades',
+  [4, 6, 8, 12, 16, 24, 32].every((d) => finSplit(2, BAR / d) === 2),
+  'bar/4..bar/32 all divide into a rung; bar/48 and bar/64 do not');
+// The property behind the fallback, stated as output rather than as rungs: a
+// full cycle of ticks has to take exactly one volley interval, or the gun's
+// damage per second moved when the toggle went on.
+check('a cycle of ticks is always one volley interval',
+  [4, 6, 8, 12, 16, 24, 32, 48, 64].every((d) => {
+    const volley = BAR / d;
+    return near(tickInterval(volley, 2) * finSplit(2, volley), volley, 1e-9);
+  }), 'alternating is a rhythm, not a rate change');
+
+const eighth = tickInterval(IV, 2);
+const traded = fireFor(20, eighth);
+check('every tick is on a slot boundary', traded.every((s) => slotError(s) < STEP + 1e-6),
+  `${traded.length} ticks, worst ${(Math.max(...traded.map(slotError)) * 1000).toFixed(1)}ms`);
+check('there are twice as many of them as there were volleys', traded.length > 60,
+  `${traded.length} ticks in 20s at bar/8`);
+// THE HALF THAT MATTERS TO THE GUN: fire() walks one fin per tick, so each fin
+// still fires exactly once per VOLLEY interval. The stagger is timing, not rate
+// — a fin firing every tick would be a silent doubling of the whole gun.
+const perFin = [0, 1].map((side) => traded.filter((_, i) => i % 2 === side));
+const finSpans = perFin.flatMap((shots) => shots.slice(1).map((s, i) => s.pos - shots[i].pos));
+check('each fin keeps the gun\'s own interval', finSpans.every((d) => near(d, IV, STEP + 1e-6)),
+  `${finSpans.length} gaps, ${Math.min(...finSpans).toFixed(4)}..${Math.max(...finSpans).toFixed(4)} vs ${IV.toFixed(4)}`);
+const tickSpans = traded.slice(1).map((s, i) => s.pos - traded[i].pos);
+check('...and consecutive ticks are half an interval apart', tickSpans.every((d) => near(d, IV / 2, STEP + 1e-6)),
+  'left-right-left, evenly, rather than a pair of shots and a gap');
 
 // ---------------------------------------------------------------------------
 section('With no transport the gun still works');

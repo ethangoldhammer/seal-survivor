@@ -120,6 +120,20 @@ const realWarn = console.warn;
 console.warn = (...a) => warnings.push(a.map(String).join(' '));
 
 const { CONFIG } = await import('../path/src/config.js');
+// THE ARRIVAL IS OFF IN HERE. The level-up hand is thrown into its cells now
+// and the menu stays locked until the last card lands — which is right on
+// screen and wrong in a harness that deals a hand and acts on it in the same
+// tick: every hover and every pick would be refused by the lock, and read as
+// this file's subject being broken. The screen has a test of its own, npm run
+// test:comb, and it is the only place that should be driving it.
+CONFIG.upgradeSlam.enabled = false;
+// ...AND THE COMB WITH IT. The chosen card no longer leaves on a timer of its
+// own: it waits for the exit WAVE to finish, and that wave's length depends on
+// how many rings of hexagons the comb turned out to have — a measurement, not
+// a number this file could derive. With the backdrop off there is no wave to
+// wait for and the flight is back to being the only thing on the clock, which
+// is what this file is about.
+CONFIG.upgradeComb.enabled = false;
 const { feedback, onFeedback } = await import('../path/src/systems/feedback.js');
 const hive = await import('../path/src/ui/upgradeHive.js');
 const { UPGRADE_ICONS } = await import('../path/src/ui/upgradeIcons.js');
@@ -677,6 +691,10 @@ const flierRule = css.slice(css.indexOf('.sv-hive-flier {'), css.indexOf('}', cs
 check('the flier is position: fixed', /position:\s*fixed/.test(flierRule));
 check('and scales from its top-left corner', /transform-origin:\s*0 0/.test(flierRule),
   'a centred origin makes the landing miss by half the size difference');
+// The clip lives on .sv-card and the flier drops that class — so it has to be
+// restated here, or the card flies as a square and lands on a hexagon.
+check('the flier keeps the hexagon it was cut to', /clip-path:\s*polygon\(/.test(flierRule),
+  'without the class the clip goes with it and a square flies to the corner');
 check('the flight is above the menus it leaves',
   Number((flierRule.match(/z-index:\s*(\d+)/) || [])[1]) > zCenter,
   'it starts life as a card sitting on the menu');
@@ -766,16 +784,73 @@ section('the flight actually runs');
     check('and it is not a live card any more',
       !flier.classList.contains('sv-card') && flier.classList.contains('sv-hive-flier'));
   }
+
+  // WHERE THE EXIT RINGS OUT FROM. The comb comes apart outward from the cell
+  // that was taken, and the delay each slot carries is its distance in rings
+  // from that cell — so the chosen card's own slot leaves FIRST, at zero. The
+  // failure it guards is silent and one line long: pick() empties levelUpCards
+  // before finding the card in it, indexOf returns -1, and the exit rings out
+  // from the middle of the row instead. Everything still animates.
+  {
+    const at = [...document.querySelectorAll('.sv-card-slot')]
+      .map((slot) => parseFloat(slot.style.getPropertyValue('--sv-out-at')) || 0);
+    if (at.length > 1 && at.some((v) => v > 0)) {
+      const chosenAt = at[cards.indexOf(chosen)];
+      check('the comb comes apart from the card that was taken',
+        chosenAt === Math.min(...at) && chosenAt === 0,
+        `chosen leaves at ${chosenAt}s, the row at ${at.map((v) => v.toFixed(3)).join(' ')}`);
+    }
+  }
   const id = picks[0]?.id;
   const tileNow = id ? tileFor(id) : null;
   check('the destination tile is hidden for the trip',
     !!tileNow && tileNow.style.visibility === 'hidden',
     tileNow ? `visibility "${tileNow.style.visibility}"` : 'no tile');
 
+  // THE HELD LOOK, before it goes anywhere. The flight is three beats now —
+  // bigger where it stands, a look at it, then down to the corner — and the
+  // first two are the ones a still cannot check. The card must not travel on
+  // this beat: with transform-origin at 0 0 a bare scale pushes it down and
+  // right by the whole of the growth, and a rise aimed at the middle of the
+  // screen sends it sideways before the flight that was the point.
+  await new Promise((r) => setTimeout(r, Math.round((flyCfg.riseSeconds ?? 0.26) * 1000) + 60));
+  if (flier) {
+    const m = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)\s*scale\(([\d.]+)\)/.exec(flier.style.transform);
+    check('the card rises and grows', !!m && Number(m[3]) > 1, flier.style.transform);
+    if (m) {
+      const grow = Number(m[3]);
+      const cx = CARD.left + Number(m[1]) + (CARD.width * grow) / 2;
+      const cy = CARD.top + Number(m[2]) + (CARD.height * grow) / 2;
+      check('and it grows around its own centre — no jump to the side',
+        Math.abs(cx - (CARD.left + CARD.width / 2)) < 1
+          && Math.abs(cy - (CARD.top + CARD.height / 2)) < 1,
+        `centre (${cx.toFixed(1)}, ${cy.toFixed(1)}) vs the card's own `
+          + `(${CARD.left + CARD.width / 2}, ${CARD.top + CARD.height / 2})`);
+    }
+    // The words are the whole point of the held beat: a card with its name
+    // blanked is a picture of an upgrade rather than the upgrade. They go on
+    // the last leg, where the tile has no room for them.
+    check('the name is still on it while it is being looked at',
+      flier.dataset.leg !== 'down', `data-leg "${flier.dataset.leg ?? ''}"`);
+  }
+
   // jsdom runs no CSS transitions, so transitionend never fires — which is
   // exactly the case the timeout backstop exists for. If it did not land, an
   // upgrade you hold would stay invisible for the rest of the run.
-  await new Promise((r) => setTimeout(r, 700));
+  //
+  // DERIVED FROM THE CONFIG, never a round number typed here: the flight grew
+  // a rise and a hold and this wait did not, so it expired mid-flight and the
+  // two assertions below failed against a flier that was working perfectly.
+  //
+  // It has since grown a third gate — the card leaves when the exit wave has
+  // finished, not after the hold — so the rise is followed by however long the
+  // screen takes to go. With the comb switched off above that is one tick, but
+  // the hold still stands in for it here rather than being dropped: this number
+  // has now been wrong twice for the same reason, and erring long costs a few
+  // hundred ms while erring short fails against a flier that works.
+  const flightMs = Math.round(((flyCfg.riseSeconds ?? 0.26) + (flyCfg.holdSeconds ?? 0.42)
+    + (flyCfg.seconds ?? 0.34)) * 1000) + 400;
+  await new Promise((r) => setTimeout(r, flightMs));
   check('the flier is gone after the flight', !document.querySelector('.sv-hive-flier'));
   check('and the tile is visible again — the backstop landed it',
     !!tileNow && !tileNow.style.visibility,

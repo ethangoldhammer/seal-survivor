@@ -75,12 +75,29 @@ const HIGH = -6;   // near the surface, but under it
 // re-run — it is that a real regression in this file now has to argue with a
 // reputation for crying wolf. `seed` is per scenario so two scenarios are still
 // independent draws; it just stops them being different ones each invocation.
-function run(type, { playerAt, seconds = 12, from = { x: 0, y: 0 }, warmup = 0, chase = false, seed = 1 }) {
+//
+// `lunge` is the second scenario switch, and it exists for exactly the reason
+// `chase` does. The apex sharks commit to a burst inside their own `lunge.range`
+// now (see the overlay in BEHAVIORS.hunt), and a burst writes velocity straight
+// from the heading — no eased climb gain, no slope budget, no turn limit. That
+// is the whole point of it and it is also, by construction, NOT the cruise. So
+// the sections that measure the cruise shaping — the smoothness of the climb
+// and the order of flat-then-rise — turn it off for the run, and the lunge gets
+// its own section at the bottom on its own terms.
+//
+// Which sharks it changed: all six, and only the megalodon crossed a threshold.
+// That is the shape of a real interaction rather than a flake — the slowest
+// body with the longest committed run, measured over an approach that ends
+// exactly where the burst begins.
+function run(type, {
+  playerAt, seconds = 12, from = { x: 0, y: 0 }, warmup = 0,
+  chase = false, lunge = true, seed = 1,
+}) {
   const rand = seeded(seed);
   const orig = Math.random;
   Math.random = rand;
   try {
-    return runInner(type, { playerAt, seconds, from, warmup, chase });
+    return runInner(type, { playerAt, seconds, from, warmup, chase, lunge });
   } finally { Math.random = orig; }
 }
 
@@ -94,7 +111,7 @@ function seeded(seed) {
   };
 }
 
-function runInner(type, { playerAt, seconds, from, warmup, chase }) {
+function runInner(type, { playerAt, seconds, from, warmup, chase, lunge = true }) {
   resetEnemies(scene);
   const e = spawnNamed(scene, type, 0, { x: from.x, y: from.y }, { ignoreCaps: true });
   if (!e) throw new Error(`could not spawn ${type}`);
@@ -106,6 +123,11 @@ function runInner(type, { playerAt, seconds, from, warmup, chase }) {
   const skip = Math.round(warmup / dt);
   const wasCruise = CONFIG.cruiseHunt.enabled;
   if (chase) CONFIG.cruiseHunt.enabled = false;
+  // Lifted off the shared def for the length of the run and put back in the
+  // `finally` alongside the cruise flag, so a throw mid-run cannot leave the
+  // roster de-fanged for every section after it.
+  const wasLunge = CONFIG.enemies[type].lunge;
+  if (!lunge) delete CONFIG.enemies[type].lunge;
   try {
     for (let i = 0; i < steps + skip; i++) {
       updateEnemies(dt, scene, player.position, () => {}, () => {});
@@ -114,7 +136,10 @@ function runInner(type, { playerAt, seconds, from, warmup, chase }) {
       gains.push(e.climbGain ?? 0);
       if (e.lookTarget) looks.push({ x: e.lookTarget.x, y: e.lookTarget.y });
     }
-  } finally { CONFIG.cruiseHunt.enabled = wasCruise; }
+  } finally {
+    CONFIG.cruiseHunt.enabled = wasCruise;
+    if (wasLunge) CONFIG.enemies[type].lunge = wasLunge;
+  }
   return { e, path, gains, looks };
 }
 
@@ -168,7 +193,7 @@ for (const type of SHARKS) {
 console.log('\nTHE CLIMB IS NOT ABRUPT');
 for (const type of SHARKS) {
   const cfg = CONFIG.enemies[type].hunt.lateral;
-  const { gains } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true });
+  const { gains } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true, lunge: false });
   let worst = 0;
   for (let i = 1; i < gains.length; i++) worst = Math.max(worst, Math.abs(gains[i] - gains[i - 1]));
   // At 60fps an exponential ease of rate k moves at most k*dt per frame.
@@ -177,7 +202,7 @@ for (const type of SHARKS) {
     `worst frame step ${worst.toFixed(5)} against a bound of ${bound.toFixed(5)}`);
 
   // And the same for the path itself: no sudden vertical velocity changes.
-  const { path } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true });
+  const { path } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true, lunge: false });
   let worstAccel = 0;
   for (let i = 2; i < path.length; i++) {
     const v1 = (path[i].y - path[i - 1].y) / dt;
@@ -274,7 +299,8 @@ for (const type of SHARKS) {
   const gap = 68;   // most of the arena, so the flat run-in is the bulk of the trip
   const seconds = (gap / CONFIG.enemies[type].speed) * 1.8 + 3;
   const { path } = run(type, {
-    playerAt: { x: gap / 2, y: -5 }, seconds, from: { x: -gap / 2, y: -34 }, warmup: 0.6, chase: true,
+    playerAt: { x: gap / 2, y: -5 }, seconds, from: { x: -gap / 2, y: -34 },
+    warmup: 0.6, chase: true, lunge: false,
   });
   const half = Math.floor(path.length / 2);
   const early = travel(path.slice(0, half));
@@ -389,6 +415,74 @@ console.log('\nA SHARK DOES NOT CHASE');
     check(`${key}: declares itself out of the cruise hunt`,
       lat != null && lat.cruise === false,
       lat == null ? 'no lateral block at all' : `cruise: ${lat.cruise}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A SHARK COMMITS — the lunge overlay on `hunt`.
+//
+// The cruise sections above measure this creature with the burst switched off,
+// which is right for them and would be a hole on its own: a `lunge` block that
+// silently stopped firing would leave every one of them passing while the
+// sharks went back to being bodies that drift at you. So the overlay gets its
+// own section, and it asserts the three things that make it an attack rather
+// than a faster chase.
+//
+// Measured on the PATH, not on the state machine, for the same reason
+// everything else in this file is: "it commits" is a claim about a trajectory.
+// ---------------------------------------------------------------------------
+console.log('\nA SHARK COMMITS');
+for (const type of SHARKS) {
+  const c = CONFIG.enemies[type].lunge;
+  check(`${type}: carries a lunge at all`, c != null,
+    c ? `range ${c.range}, ${c.windup}s tell` : 'no lunge block — the pass is gone');
+  if (!c) continue;
+
+  // THE RUN CROSSES THE GAP. A burst that stops short is a chase with a speed
+  // change in it; one that carries past is a pass, and a pass is the thing the
+  // player can sidestep. This is the arithmetic the config comments quote —
+  // speed x speedMul x strikeTime against `range` — checked against the numbers
+  // rather than the prose, because prose does not fail.
+  const run_ = CONFIG.enemies[type].speed * c.speedMul * c.strikeTime;
+  check(`${type}: the burst carries past where you were`, run_ >= c.range,
+    `${run_.toFixed(1)} units of run against a ${c.range}-unit gap`);
+
+  // IT CANNOT FOLLOW YOU. The turning circle mid-strike, speed over turn rate,
+  // has to be wider than the reach the bite lands at — otherwise a sidestep is
+  // answered by an arc and the commitment means nothing.
+  const circle = (CONFIG.enemies[type].speed * c.speedMul) / c.strikeTurnRate;
+  const reach = CONFIG.enemies[type].radius * (CONFIG.bite.mouthReach ?? 0.55)
+    + (CONFIG.player.hitRadius ?? 0.5);
+  check(`${type}: it leans, it does not home`, circle > reach * 4,
+    `${circle.toFixed(0)}-unit turning circle against a ${reach.toFixed(1)}-unit bite`);
+
+  // AND THE TELL IS LONG ENOUGH TO USE. The seal's own thrust over the wind-up
+  // has to move it further than its own body, or the warning is decoration.
+  const room = (CONFIG.player.maxSpeed ?? 34) * 0.26 * c.windup;
+  check(`${type}: the tell is long enough to leave the line`,
+    room > (CONFIG.player.hitRadius ?? 0.5) * 2,
+    `${room.toFixed(1)} units of travel in a ${c.windup}s tell`);
+}
+{
+  // ...AND IT ACTUALLY FIRES, driven rather than computed. A shark held at the
+  // far edge of its own range should spend part of a long window visibly moving
+  // faster than it cruises — which is the one thing none of the arithmetic
+  // above can tell you, because every number in it could be perfect while the
+  // overlay was never reached.
+  for (const type of SHARKS) {
+    const c = CONFIG.enemies[type].lunge;
+    if (!c) continue;
+    const { path } = run(type, {
+      playerAt: { x: 0, y: MID }, seconds: 20, from: { x: c.range * 0.8, y: MID },
+      warmup: 0.5, chase: true,
+    });
+    let fastest = 0;
+    for (let i = 1; i < path.length; i++) {
+      fastest = Math.max(fastest, Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y) / dt);
+    }
+    const cruise = CONFIG.enemies[type].speed;
+    check(`${type}: the burst reaches the water`, fastest > cruise * 1.6,
+      `topped ${fastest.toFixed(1)} u/s against a ${cruise} u/s cruise`);
   }
 }
 

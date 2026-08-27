@@ -4,7 +4,8 @@ import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { createAnimationController } from '../systems/animation.js';
 import { updateTumble } from '../systems/rocks.js';
-import { markWeight, markedTargets } from '../systems/marks.js';
+import { isMarked, markWeight, markedTargets } from '../systems/marks.js';
+import { facingHotSpots, hotSpotPoint } from '../systems/bossHotSpots.js';
 import { projectileLife } from '../systems/scaling.js';
 
 // One list for both sides — `faction` decides who a bullet can hurt. Two
@@ -79,6 +80,21 @@ export function spawnProjectile(scene, {
   // beside `orient`, which rewrites the whole orientation every frame.
   tilt = 0,
   gravityScale = 1, chill = null, charm = null, knockback = 0,
+  // WHICH FLIPPER'S ELEMENT THIS PELLET IS CARRYING, or null for every shot in
+  // the game that carries none. A pure label — this file never reads it. It is
+  // set in fire() from the fin the pellet left and spent in combat.js, the same
+  // arrangement `chill` and `charm` above already have: the projectile is where
+  // a payload rides, and the system that owns the payload is what resolves it.
+  //
+  // NOT the run's element, which is a property of the BUILD and is looked up
+  // (activeElement) rather than carried. A pellet needs to carry this one
+  // because two pellets in the same volley can disagree about it.
+  finElement = null,
+  // WHICH flipper it left, 'left' or 'right', or null for anything that did not
+  // leave one. Carried beside the element rather than derived from it, because
+  // an UNLIT fin still has a side — and the run summary's whole question is how
+  // the two split, which a null on every plain pellet could not answer.
+  finSide = null,
   // HOW BIG THIS SHOT'S RIBBON IS, against whatever CONFIG.trails says for its
   // asset. Purely a look — read only by systems/projectileTrails.js, which
   // multiplies the width and the rate the trail sheds particles at.
@@ -130,6 +146,8 @@ export function spawnProjectile(scene, {
     life: faction === 'player' ? projectileLife(life) : life,
     radius,
     pierce,
+    finElement,
+    finSide,
     hits: new Set(), // enemies already pierced, so each takes damage once
     homing,
     // Seconds of straight flight before the seeker engages. Lets a launch be
@@ -144,6 +162,11 @@ export function spawnProjectile(scene, {
     sizeRefRadius,
     targetType, // e.g. 'walkingCrab' — restricts homing to only that enemy type
     target: null,
+    // WHICH WEAK SPOT ON THE TARGET this shot is bending toward, once the
+    // target is a boss wearing one. Null for everything else in the game,
+    // which steers at the middle of the body the way it always did. Held
+    // across frames on purpose — see aimAt.
+    aimSpot: null,
     bounce,
     bouncesLeft: maxBounces,
     restitution,
@@ -254,6 +277,42 @@ function sizePull(p, radius) {
   return Math.pow(radius / ref, p.sizeBias);
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A SEEKER WILL NOT CHASE
+//
+// The rule, in full: NEVER A TURTLE AND NEVER A WHALE. It is a rule rather
+// than a weight because there is no distance at which either becomes the right
+// answer — see CONFIG.homing.ignoreTypes for why each is on the list, and note
+// that the turtle is also the boss's `turtles` screen, which is a wall made of
+// exactly this creature. A seeker that treats a wall as a target empties every
+// volley into it for as long as the screen is up.
+//
+// The set is rebuilt only when the config array itself is replaced, so the
+// tuner can edit the list live without this costing an allocation a frame.
+// ---------------------------------------------------------------------------
+let _ignoreSrc = null;
+let _ignore = new Set();
+function ignoredType(type) {
+  const list = CONFIG.homing?.ignoreTypes;
+  if (list !== _ignoreSrc) {
+    _ignoreSrc = list;
+    _ignore = new Set(list ?? []);
+  }
+  return _ignore.has(type);
+}
+
+// Is this body worth a guided shot at all?
+//
+// `invincible` is the same rule generalised — a shot that cannot hurt what it
+// hits has no business steering at it — and is checked on the live flag AND on
+// the def, matching systems/whale.js, because the flag is installed at spawn
+// and the def is the truth about the species.
+function seekable(e) {
+  const c = CONFIG.homing ?? {};
+  if (c.ignoreInvincible !== false && (e.invincible || e.def?.invincible)) return false;
+  return !ignoredType(e.type);
+}
+
 function updateHoming(p, dt, enemiesList) {
   // A SHOT WITH SOMETHING TO CHASE NEVER SHOPS AROUND. The re-acquire below
   // walks the enemy list, which for an enemy-faction missile is a list of its
@@ -276,13 +335,33 @@ function updateHoming(p, dt, enemiesList) {
   // the ordnance follows. `markWeight` returns 1 for everything unmarked, so
   // an un-upgraded run behaves exactly as it always did.
   if (!p.target || p.target.hp <= 0 || !p.target.mesh?.parent) {
+    // A PAINTED TARGET IS ITS OWN TIER, not a lean. `markFirst` is the whole
+    // difference: `homingPull` counts a marked body as a FRACTION of its
+    // distance, which a close fish or a big shark still beats — so the reticle
+    // the player deliberately put on something could be, and often was,
+    // ignored by the ordnance it was drawn for. Now anything marked outranks
+    // everything unmarked and the pull only orders the marked ones among
+    // themselves.
+    //
+    // The REACH is untouched by this: `acquireRadius` still gates every
+    // candidate, so a mark decides which target in reach and never how far a
+    // shot can see.
+    const tiered = CONFIG.homing?.markFirst !== false;
     let best = null;
-    let bestD = p.acquireRadius;
+    let bestD = Infinity;
+    let bestMarked = false;
     for (const e of enemiesList) {
       if (p.targetType && e.type !== p.targetType) continue;
+      if (!seekable(e)) continue;
+      const marked = tiered && isMarked(e);
+      // Already holding a painted one — an unpainted body cannot beat it at
+      // any distance, so it is not even measured.
+      if (bestMarked && !marked) continue;
       const dx = e.mesh.position.x - p.mesh.position.x;
       const dy = e.mesh.position.y - p.mesh.position.y;
       const d = Math.hypot(dx, dy) * markWeight(e) / sizePull(p, e.radius);
+      if (d >= p.acquireRadius) continue;
+      if (marked && !bestMarked) { bestD = d; best = e; bestMarked = true; continue; }
       if (d < bestD) { bestD = d; best = e; }
     }
     // Hulls are not in the enemy list and are not normally something a homing
@@ -292,16 +371,111 @@ function updateHoming(p, dt, enemiesList) {
     if (!p.targetType) {
       for (const t of markedTargets()) {
         if (!t.mesh?.parent || (t.hp != null && t.hp <= 0)) continue;
+        // Everything in this list is painted by definition, so it enters the
+        // top tier — but the rule about what a seeker refuses to chase still
+        // applies. A turtle cannot be marked today (a strike scopes itself by
+        // size, systems/strike.js) and the rule does not depend on that.
+        if (!seekable(t)) continue;
         const dx = t.mesh.position.x - p.mesh.position.x;
         const dy = t.mesh.position.y - p.mesh.position.y;
         const d = Math.hypot(dx, dy) * markWeight(t);
+        if (d >= p.acquireRadius) continue;
+        if (tiered && !bestMarked) { bestD = d; best = t; bestMarked = true; continue; }
         if (d < bestD) { bestD = d; best = t; }
       }
     }
+    // A new body means the old weak spot is somebody else's. Cleared here
+    // rather than trusted to aimAt's identity check, so nothing downstream can
+    // ever read a spot belonging to a target this shot is no longer chasing.
+    if (best !== p.target) p.aimSpot = null;
     p.target = best;
   }
   if (!p.target) return;
   steerToward(p, dt);
+}
+
+// Reused across every guided shot in the air, one after another, and never
+// held past the call that filled it.
+const _aim = { x: 0, y: 0, r: 0 };
+const _spots = [];
+
+// CAN THIS SHOT STILL BEND ONTO THAT POINT?
+//
+// A shot that turns at a fixed rate while flying at a fixed speed carves a
+// circle of radius speed/turnRate, and there are two of them — one for each
+// way it could turn. Anything INSIDE one of those circles is behind the shot's
+// own turn: no sequence of hard turns reaches it without first flying away
+// from it and coming back, which for a shot with a few seconds of life means
+// not reaching it at all.
+//
+// That is the exact test, and having it is what makes aiming at a weak spot
+// safe: a spot the shot cannot make is refused and the shot aims at the body
+// instead, which is what every seeker did before weak spots existed. Without
+// it, a pellet that committed to an unreachable spot would spiral past a boss
+// it would otherwise have hit — trading a certain body hit for a crit it was
+// never geometrically able to land.
+//
+// `clearance` widens both circles, because a spot reachable only by a perfect
+// arc is a spot the animal moves out from under while the shot is arcing.
+function reachable(p, x, y, clearance) {
+  if (!(p.turnRate > 0)) return false;
+  const r = p.speed / p.turnRate;
+  if (!(r > 0)) return true; // a shot that turns on the spot can reach anything
+  const px = p.mesh.position.x;
+  const py = p.mesh.position.y;
+  const lim = r * (1 + clearance);
+  // The two turn circles are one radius off each beam, i.e. along ±perp(dir).
+  const ax = px - p.dir.y * r;
+  const ay = py + p.dir.x * r;
+  if (Math.hypot(x - ax, y - ay) < lim) return false;
+  const bx = px + p.dir.y * r;
+  const by = py - p.dir.x * r;
+  return Math.hypot(x - bx, y - by) >= lim;
+}
+
+// WHERE ON THE TARGET THIS SHOT IS STEERING — the middle of the body, or a
+// weak spot if the target is a boss wearing one the shot can see and make.
+//
+// The middle of the body is where every seeker in this game has always aimed,
+// and on ordinary creatures it is right: they are round and small enough that
+// the centre and the animal are the same place. On a boss it is a point buried
+// several metres inside a thirteen-metre shark, which meant the crit the weak
+// spots exist for was available only to a player aiming by hand — a guided
+// shot could land on one, but only by accident.
+//
+// THE CHOICE IS HELD ACROSS FRAMES. Two spots at nearly equal range swap the
+// nearest-wins answer every few frames, and a shot re-picking each time weaves
+// between them and arrives at neither. So the held spot wins its own re-pick
+// whenever it is still an answer at all, and only a spot going dark, turning
+// away with the animal, or passing out of the shot's turn drops it.
+function aimAt(p) {
+  const pos = p.target.mesh.position;
+  const c = CONFIG.homing?.hotSpots ?? {};
+  if (c.enabled === false || !p.target.isBoss) {
+    p.aimSpot = null;
+    _aim.x = pos.x;
+    _aim.y = pos.y;
+    return _aim;
+  }
+  const clearance = c.clearance ?? 0.25;
+  const px = p.mesh.position.x;
+  const py = p.mesh.position.y;
+  const spots = facingHotSpots(p.target, px, py, c.facing ?? 0.15, _spots);
+  let best = null;
+  let bestD = Infinity;
+  for (const s of spots) {
+    hotSpotPoint(s, _aim);
+    if (!reachable(p, _aim.x, _aim.y, clearance)) continue;
+    // The one it is already on, still good — keep it and stop looking.
+    if (s === p.aimSpot) { best = s; break; }
+    const d = Math.hypot(_aim.x - px, _aim.y - py);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  p.aimSpot = best;
+  if (best) return hotSpotPoint(best, _aim);
+  _aim.x = pos.x;
+  _aim.y = pos.y;
+  return _aim;
 }
 
 // Turn toward `p.target`, no faster than the shot's own turn rate. Split out so
@@ -309,8 +483,9 @@ function updateHoming(p, dt, enemiesList) {
 // limit IS the counterplay for a homing shot (out-turn it and it overshoots),
 // and two copies of it is two places for that to stop being true.
 function steerToward(p, dt) {
-  const dx = p.target.mesh.position.x - p.mesh.position.x;
-  const dy = p.target.mesh.position.y - p.mesh.position.y;
+  const aim = aimAt(p);
+  const dx = aim.x - p.mesh.position.x;
+  const dy = aim.y - p.mesh.position.y;
   const desired = Math.atan2(dy, dx);
   const current = Math.atan2(p.dir.y, p.dir.x);
   let diff = desired - current;

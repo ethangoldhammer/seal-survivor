@@ -9,7 +9,7 @@ import {
 import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from '../systems/modelStorage.js';
 import { CONFIG, TUNER_SCHEMA, SKIN_SECTION, saveTuningToStorage } from '../config.js';
 import { expandDesc } from '../upgradeText.js';
-import { buildSection, buildSectionedTunerGroups, buildExpandAllToggle } from './tunerControls.js';
+import { buildSection, buildSectionedTunerGroups, buildExpandAllToggle, buildTunerSearch, setRowSearchText } from './tunerControls.js';
 import { isTypingTarget } from './typing.js';
 import { playSfx, unlockAudio, applyAudioBusSettings, busReduction, gainToDb, dbToGain, DB_FLOOR } from '../systems/audio.js';
 import { uploadAsset } from '../systems/assetUpload.js';
@@ -180,6 +180,17 @@ const STYLES = `
     background: rgba(255,255,255,0.03); color: rgba(232,236,243,0.55);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sv-tex-tab.sv-tex-tab-active { background: rgba(122,215,255,0.12); color: #7ad7ff; border-color: rgba(122,215,255,0.4); }
+  /* HOW MANY HITS ARE ON EACH TAB, while a search is running. The panel hides
+     five of its six tabs at any moment, so a search that only filtered the tab
+     you happen to be looking at would answer "no results" for a control that is
+     one click away. The count is on the tab because that is where the decision
+     to click is made. */
+  .sv-tex-tabcount { font-variant-numeric: tabular-nums; opacity: 0.75; }
+  .sv-tex-tabcount:not(:empty)::before { content: ' '; }
+  /* A tab with nothing in it is dimmed rather than removed — six tabs in a 3x2
+     grid, and taking one out reflows the other five under your cursor. */
+  .sv-tex-tab.sv-tex-tab-empty { opacity: 0.35; }
+  .sv-tex-search { padding: 0 0 10px; }
   .sv-tex-body { flex: 1; overflow-y: auto; padding: 12px 18px 32px; }
   .sv-tex-panel { display: none; }
   .sv-tex-panel.sv-tex-panel-active { display: block; }
@@ -264,6 +275,9 @@ const STYLES = `
 
 let panel = null;
 let upgradesPanelEl = null;
+// The search box, kept so a rebuilt tab can be re-filtered — new rows arrive
+// unfiltered and would otherwise sit visible inside a live query.
+let texSearch = null;
 const rows = new Map();
 const resetExtras = new Map();
 
@@ -290,6 +304,10 @@ export function refreshTexturePanelRows() {
 export function refreshUpgradeTable() {
   if (!upgradesPanelEl) return;
   upgradesPanelEl.replaceChildren(buildUpgradeTable());
+  // The rows that just replaced the old ones have never seen the query that
+  // may still be in the search box, so they arrive visible inside a filtered
+  // panel. Re-running it is a no-op when the box is empty.
+  texSearch?.refilter();
 }
 
 // `onTuningChanged` is the same handler the ` tuner uses — the Companions and
@@ -344,12 +362,12 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
       <h2>Look &amp; Sound</h2>
       <div class="sv-tex-note">Everything that lives in the ocean: models and textures, companion abilities, enemy behaviour and spawns, upgrade cards, sound and particles. Press T to toggle, \` for the rest of the tuning.</div>
       <div class="sv-tex-tabs">
-        <div class="sv-tex-tab sv-tex-tab-active" data-tab="creatures">Models</div>
-        <div class="sv-tex-tab" data-tab="companions">Companions</div>
-        <div class="sv-tex-tab" data-tab="enemies">Enemies</div>
-        <div class="sv-tex-tab" data-tab="upgrades">Upgrades</div>
-        <div class="sv-tex-tab" data-tab="sound">Mix</div>
-        <div class="sv-tex-tab" data-tab="particles">Particles</div>
+        <div class="sv-tex-tab sv-tex-tab-active" data-tab="creatures">Models<span class="sv-tex-tabcount"></span></div>
+        <div class="sv-tex-tab" data-tab="companions">Companions<span class="sv-tex-tabcount"></span></div>
+        <div class="sv-tex-tab" data-tab="enemies">Enemies<span class="sv-tex-tabcount"></span></div>
+        <div class="sv-tex-tab" data-tab="upgrades">Upgrades<span class="sv-tex-tabcount"></span></div>
+        <div class="sv-tex-tab" data-tab="sound">Mix<span class="sv-tex-tabcount"></span></div>
+        <div class="sv-tex-tab" data-tab="particles">Particles<span class="sv-tex-tabcount"></span></div>
       </div>
     </div>
     <div class="sv-tex-body">
@@ -456,6 +474,26 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
       panel.querySelector(`#${tabPanelIds[tab.dataset.tab]}`).classList.add('sv-tex-panel-active');
     });
   }
+
+  // ONE BOX, ALL SIX TABS. Searching only the visible tab would be the wrong
+  // half of the problem: five of the six are hidden at any moment, so "which
+  // tab is the shrimp orbit on" is exactly the question you came here with, and
+  // a filter that answers "nothing found" while the answer sits one click away
+  // is worse than no filter. Each tab reports its own hit count instead, and a
+  // tab with none goes dim.
+  const tabs = [...panel.querySelectorAll('.sv-tex-tab')];
+  const searchRoots = tabs.map((t) => panel.querySelector(`#${tabPanelIds[t.dataset.tab]}`));
+  texSearch = buildTunerSearch(searchRoots, {
+    placeholder: 'Search models, abilities, sounds…',
+    onFilter: (hits, q) => {
+      for (const [i, tab] of tabs.entries()) {
+        tab.querySelector('.sv-tex-tabcount').textContent = q ? String(hits[i]) : '';
+        tab.classList.toggle('sv-tex-tab-empty', !!q && hits[i] === 0);
+      }
+    },
+  });
+  texSearch.className += ' sv-tex-search';
+  panel.querySelector('.sv-tex-head').appendChild(texSearch);
 
   window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 't' && !isTypingTarget(e.target)) {
@@ -653,6 +691,10 @@ function buildCreatureRow(key, label, onAssetChanged) {
   // several of them start with the same word, so it is not an identifier —
   // tools/surface-panel-test.mjs needs to find one specific row's controls.
   el.dataset.key = key;
+  // Findable by either name. Stamped rather than left to the row's own text,
+  // which is the same dozen slider labels on all 48 of them — searching "glow"
+  // would otherwise match every model in the game.
+  setRowSearchText(el, `${key} ${label}`);
 
   const nameRow = document.createElement('div');
   nameRow.className = 'sv-tex-name';
@@ -1161,6 +1203,9 @@ function buildUpgradeRow(u) {
   const row = document.createElement('div');
   row.className = 'sv-sfx-row';
   row.style.opacity = u.enabled === false ? '0.45' : '1';
+  // Id and card name, so a card is reachable by either the string in
+  // upgrades.csv or the one on the card.
+  setRowSearchText(row, `${u.id} ${u.name ?? ''}`);
 
   const head = document.createElement('div');
   head.className = 'sv-sfx-name';
@@ -1778,6 +1823,8 @@ function buildEmitterRow(name) {
   const def = CONFIG.emitters[name];
   const el = document.createElement('div');
   el.className = 'sv-sfx-row';
+  // The emitter's name only — every row underneath it is size/life/speed/count.
+  setRowSearchText(el, name);
 
   const head = document.createElement('div');
   head.className = 'sv-sfx-name';

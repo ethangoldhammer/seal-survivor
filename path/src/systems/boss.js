@@ -72,7 +72,7 @@ import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
 import { bounds } from '../arena.js';
 import { cineReveal, cineRevealDone } from './cineCamera.js';
-import { playSfx } from './audio.js';
+import { feedback } from './feedback.js';
 import { damageCreditFor } from './playtest.js';
 // Not sourceLabel directly: the ledger's name for a weapon is its BASE name,
 // and by the time a boss goes down the pebbles are usually something else. See
@@ -627,7 +627,7 @@ function tickArrival(dt, e) {
   bossState.hpFrac = 1;
   e.invuln = 0;
   stopBossRiser();
-  playSfx('bossArrive');
+  feedback('bossArrive');
   // ...and the score changes hands. HERE rather than at the spawn or at the
   // held breath: the riser has spent the whole ceremony climbing toward this
   // frame, and the boss music arriving with its resolution makes the two one

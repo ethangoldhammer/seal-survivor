@@ -38,7 +38,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CONFIG } from '../path/src/config.js';
-import { attachGrassSway, applyGrassSettings, updateGrassSway, setGrassSwayHeight } from '../path/src/systems/grassSway.js';
+import { attachGrassSway, applyGrassSettings, updateGrassSway, setGrassSwayHeight,
+  registerShovedInstances, clearShovedInstances, shovedInstanceCount } from '../path/src/systems/grassSway.js';
 import { ASSETS } from '../path/src/assets.js';
 import { SEABED_PROPS } from '../path/src/seabedProps.js';
 import { updateBeatSync, BEAT_DIVISIONS } from '../path/src/systems/beatSync.js';
@@ -191,6 +192,12 @@ check('three still applies instanceMatrix BEFORE modelMatrix',
   THREE.ShaderChunk.worldpos_vertex.indexOf('instanceMatrix * worldPosition')
     < THREE.ShaderChunk.worldpos_vertex.indexOf('modelMatrix * worldPosition'),
   'the sway composes them in that order');
+check('the shove attribute is declared', shader.vertexShader.includes('attribute float aShove'));
+check('the shove landed in the push', shader.vertexShader.includes('push += shoveDir'));
+check('...on its own mask exponent, not the current\'s',
+  shader.vertexShader.includes('pow(swayT, uShoveStiffness)'),
+  'a body pushing past bends lower down the stem than a current does');
+check('uniform uShoveStiffness bound', shader.uniforms.uShoveStiffness !== undefined);
 check('three still keys the program on instancing itself',
   fs.readFileSync(path.join(HERE, '../node_modules/three/src/renderers/webgl/WebGLPrograms.js'), 'utf8')
     .includes('parameters.instancing'),
@@ -520,6 +527,203 @@ const naiveSpread = (() => {
 })();
 check('...and the uncorrected push really would scatter them', naiveSpread > cfg.amplitude * KELP_H * 0.5,
   `${naiveSpread.toFixed(3)} apart at 90 degrees`);
+
+// ----------------------------------------------------------------- the shove
+
+section('SHOVE — plants pushed aside, and springing back');
+
+// A stand-in bed: three plants in a row, each 2 units tall, standing on y=0.
+// Real geometry is not needed — what is under test is the per-plant spring and
+// the field that drives it, both of which are plain arithmetic over these
+// numbers. The DISPLACEMENT those numbers cause is the shader's half and is
+// modelled separately below.
+const SHOVE_MAT = new THREE.MeshStandardMaterial({ map: new THREE.Texture() });
+attachGrassSway(SHOVE_MAT, 2, { mask: 'height' });
+const stems = [
+  { x: -2, y0: 0, y1: 2 },  // to the left of the source
+  { x: 0, y0: 0, y1: 2 },   // directly under it
+  { x: 20, y0: 0, y1: 2 },  // far outside the radius
+];
+const bedMesh = new THREE.InstancedMesh(new THREE.BufferGeometry(), SHOVE_MAT, stems.length);
+clearShovedInstances();
+registerShovedInstances(bedMesh, stems);
+check('the draw registered', shovedInstanceCount() === 1);
+
+const aShove = bedMesh.geometry.getAttribute('aShove');
+check('an aShove attribute was created', !!aShove);
+check('it is per-INSTANCE, not per-vertex', aShove?.isInstancedBufferAttribute === true,
+  'a plain BufferAttribute here indexes by vertex and shoves nothing');
+check('one float per plant', aShove?.itemSize === 1 && aShove?.count === stems.length);
+
+const shoveOf = (i) => bedMesh.geometry.getAttribute('aShove').array[i];
+const settle = (seconds, at) => {
+  for (let t = 0; t < seconds; t += 1 / 60) updateGrassSway(1 / 60, at);
+};
+
+// THE ONE THAT WOULD SHIP BROKEN AND SILENT. The shove runs above the sway's
+// own `enabled` check, so a saved tuning with the current switched off must
+// still part the weeds. Tested FIRST, with the sway off, so every check below
+// is also proving that wiring.
+const swayWas = CONFIG.grass.sway.enabled;
+CONFIG.grass.sway.enabled = false;
+applyGrassSettings();
+
+const AT = { x: 0, y: 1 };
+settle(2, AT);
+check('a plant beside the source is pushed', Math.abs(shoveOf(0)) > 0.01, shoveOf(0).toFixed(4));
+check('...even with the ambient current switched off', CONFIG.grass.sway.enabled === false,
+  'the two forces have separate switches on purpose');
+check('it is pushed AWAY from the source', shoveOf(0) < 0,
+  `plant at x=-2, source at x=0, shove ${shoveOf(0).toFixed(4)}`);
+check('a plant far outside the radius is untouched', Math.abs(shoveOf(2)) < 1e-6, shoveOf(2).toExponential(2));
+check('a plant the source is directly over is barely pushed sideways',
+  Math.abs(shoveOf(1)) < Math.abs(shoveOf(0)) * 0.2,
+  `${shoveOf(1).toFixed(4)} vs ${shoveOf(0).toFixed(4)} beside it — it is passed over, not shouldered`);
+
+// The push is bounded by what the config asked for. A spring under 1 damping
+// overshoots on the way IN as well, so the allowance is the overshoot, not a
+// free multiplier — see the note in memory about asserting the multiplier.
+const peak = Math.abs(shoveOf(0));
+check('the settled push is at most the configured strength',
+  peak <= CONFIG.grass.shove.strength * 1.001,
+  `${peak.toFixed(4)} vs strength ${CONFIG.grass.shove.strength}`);
+
+// FEATHERED. Two plants at different distances inside the radius must differ,
+// or the "radius" is a hard disc with a step at its edge.
+clearShovedInstances();
+const ramp = [{ x: 1, y0: 0, y1: 2 }, { x: 2.5, y0: 0, y1: 2 }, { x: 3.8, y0: 0, y1: 2 }];
+const rampMesh = new THREE.InstancedMesh(new THREE.BufferGeometry(), SHOVE_MAT, ramp.length);
+registerShovedInstances(rampMesh, ramp);
+settle(2, { x: 0, y: 1 });
+const r = [0, 1, 2].map((i) => rampMesh.geometry.getAttribute('aShove').array[i]);
+check('the push falls off with distance', r[0] > r[1] && r[1] > r[2],
+  r.map((v) => v.toFixed(4)).join(' > '));
+check('...and reaches nearly nothing at the rim', r[2] < r[0] * 0.2,
+  `rim ${r[2].toFixed(4)} vs near ${r[0].toFixed(4)}`);
+
+// A TALL PLANT IS A STEM, NOT A POINT. The bed runs 0.4x to 2.1x, so a frond's
+// tip can be five units above its root. A seal swimming past that tip has to
+// reach it, and measuring every plant from its base is how it would not.
+clearShovedInstances();
+const tallMesh = new THREE.InstancedMesh(new THREE.BufferGeometry(), SHOVE_MAT, 2);
+registerShovedInstances(tallMesh, [
+  { x: 1, y0: 0, y1: 5 },   // tall frond, tip up at y=5
+  { x: 1, y0: 0, y1: 0.5 }, // seedling beside it
+]);
+settle(2, { x: 0, y: 4.5 }); // level with the frond's tip, far above the seedling
+const tall = tallMesh.geometry.getAttribute('aShove').array;
+check('a seal at the tip of a tall frond still moves it', Math.abs(tall[0]) > 0.05, tall[0].toFixed(4));
+check('...while the seedling under it is out of reach', Math.abs(tall[1]) < Math.abs(tall[0]) * 0.2,
+  `${tall[1].toFixed(4)} vs ${tall[0].toFixed(4)}`);
+
+// SETTLING BACK — the whole point of holding state at all. Three separate
+// claims, and the middle one is what separates a spring from a fade.
+clearShovedInstances();
+const oneMesh = new THREE.InstancedMesh(new THREE.BufferGeometry(), SHOVE_MAT, 1);
+registerShovedInstances(oneMesh, [{ x: -2, y0: 0, y1: 2 }]);
+const one = () => oneMesh.geometry.getAttribute('aShove').array[0];
+settle(2, AT);
+const held = one();
+check('it holds its bend while the source stays', Math.abs(held) > 0.01, held.toFixed(4));
+
+// Sampled every frame after the source leaves, because "it overshoots" is a
+// claim about the PATH and the endpoint alone cannot tell you.
+const trace = [];
+for (let t = 0; t < 3; t += 1 / 60) { updateGrassSway(1 / 60, null); trace.push(one()); }
+check('it comes back to upright', Math.abs(trace[trace.length - 1]) < 1e-3,
+  `${trace[trace.length - 1].toExponential(2)} after 3s`);
+const crossed = trace.some((v) => Math.sign(v) === -Math.sign(held) && Math.abs(v) > 1e-4);
+check('it overshoots on the way, rather than sliding to a stop', crossed,
+  `springDamping ${CONFIG.grass.shove.springDamping} is under 1 — a fade would never cross zero`);
+// ...and it is a settle, not a snap: still visibly bent a couple of frames later.
+check('the recovery takes time', Math.abs(trace[3]) > Math.abs(held) * 0.5,
+  `${trace[3].toFixed(4)} four frames after the source left, from ${held.toFixed(4)}`);
+// THE UPLOAD, and its other half. A moving plant has to reach the GPU every
+// frame; a bed that is upright with nothing near it must stop paying for one.
+// Read off `version`, not `needsUpdate` — three's needsUpdate is a write-only
+// setter that bumps version, and reading it back gives undefined, so an
+// `=== true` assertion on it fails no matter what the code does.
+const versionOf = () => oneMesh.geometry.getAttribute('aShove').version;
+settle(0.4, AT);
+const movingFrom = versionOf();
+updateGrassSway(1 / 60, AT);
+check('a moving plant uploads every frame', versionOf() > movingFrom);
+settle(3, null);
+const restingFrom = versionOf();
+settle(0.5, null);
+check('a bed at rest with nothing near it stops uploading', versionOf() === restingFrom,
+  'the sleep is the only reason a per-plant buffer is affordable here');
+// ...and wakes again the moment something arrives, or the first plant the seal
+// swims into never moves.
+updateGrassSway(1 / 60, AT);
+check('...and wakes the moment the seal comes back', versionOf() > restingFrom);
+settle(2, null);
+
+// SWITCHING IT OFF SETTLES THE BED rather than freezing it mid-bend — the same
+// contract the sway's `enabled` has, and the reason strength folds into the
+// target instead of skipping the loop.
+settle(2, AT);
+check('bent again', Math.abs(one()) > 0.01);
+CONFIG.grass.shove.enabled = false;
+settle(3, AT); // source still there, but the force is off
+check('disabling settles the plants rather than freezing them', Math.abs(one()) < 1e-3,
+  one().toExponential(2));
+CONFIG.grass.shove.enabled = true;
+
+// STABILITY. dt here is the WALL clock, so an alt-tab, a GC pause or the first
+// frame after a model load all hand this a step far bigger than a frame. A
+// spring integrated over that in one go does not lag — it diverges, and a bed
+// of NaN vertices renders as nothing.
+updateGrassSway(2.5, AT);
+updateGrassSway(0.9, null);
+check('a huge dt does not blow the spring up', Number.isFinite(one()) && Math.abs(one()) < 1,
+  `${one().toFixed(4)} after a 2.5s step`);
+settle(3, null);
+check('...and it still comes back afterwards', Math.abs(one()) < 1e-3, one().toExponential(2));
+
+// A REBUILD DROPS THE OLD BED. scatterSeabed runs again on every resize and
+// every tuner move of the floor; a registry that kept the old meshes would
+// integrate springs against geometry nobody is drawing any more, forever.
+clearShovedInstances();
+check('clearing drops every registered draw', shovedInstanceCount() === 0);
+updateGrassSway(1 / 60, AT); // must not throw with nothing registered
+
+CONFIG.grass.sway.enabled = swayWas;
+applyGrassSettings();
+
+// THE DISPLACEMENT the attribute causes, as a port of the shader's shove term.
+// Kept literal for the same reason the sway's port is: a change to the GLSL
+// that is not mirrored here fails a stated expectation instead of quietly
+// modelling a different shader.
+section('SHOVE — the displacement it causes');
+const shoveVertex = (py, height, shove, yaw = 0) => {
+  const swayT = Math.min(1, Math.max(0, py / height));
+  const m = Math.pow(swayT, CONFIG.grass.shove.stiffness);
+  // world +X carried into the instance's space, then back out again
+  const axisX = [Math.cos(yaw), -Math.sin(yaw)]; // (x, z) of the normalised column
+  const axisZ = [Math.sin(yaw), Math.cos(yaw)];
+  const local = [axisX[0], axisZ[0]];
+  const amt = shove * m * py;
+  const px = local[0] * amt; const pz = local[1] * amt;
+  // world x, world z
+  return [px * axisX[0] + pz * axisZ[0], px * axisX[1] + pz * axisZ[1]];
+};
+check('the root does not move under a shove', Math.hypot(...shoveVertex(0, 2, 0.35)) < 1e-12);
+const tip = shoveVertex(2, 2, 0.35);
+check('the tip moves by the configured fraction of its height', Math.abs(tip[0] - 0.35 * 2) < 1e-9,
+  `${tip[0].toFixed(4)} on a 2-unit plant`);
+check('...and stays in the plane of the screen', Math.abs(tip[1]) < 1e-9,
+  'a shove along world Z is invisible in a side view, so there is none');
+let yawSpread = 0;
+for (const yaw of [0.6, 2.2, -1.4, Math.PI]) {
+  const t2 = shoveVertex(2, 2, 0.35, yaw);
+  yawSpread = Math.max(yawSpread, Math.hypot(t2[0] - tip[0], t2[1] - tip[1]));
+}
+check('a plant\'s random yaw does not change which way it is shoved', yawSpread < 1e-9,
+  `worst ${yawSpread.toExponential(2)} apart`);
+check('the shove bends lower down the stem than the current does',
+  CONFIG.grass.shove.stiffness < CONFIG.grass.sway.stiffness,
+  `shove ${CONFIG.grass.shove.stiffness} vs sway ${CONFIG.grass.sway.stiffness}`);
 
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

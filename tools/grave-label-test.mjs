@@ -138,6 +138,7 @@ const settle = async () => {
 const THREE = await import('three');
 const { CONFIG } = await import('../path/src/config.js');
 const { installModel } = await import('../path/src/assets.js');
+const { bounds } = await import('../path/src/arena.js');
 const gy = await import('../path/src/systems/gravesite.js');
 const gl = await import('../path/src/ui/graveLabel.js');
 
@@ -145,7 +146,10 @@ ui.initUI({ onStart() {}, onRestart() {}, onLevelChoice() {}, onNameSubmit() {} 
 gl.initGraveLabel(ui.uiRoot());
 
 // An orthographic camera matching the game's: unrotated, so worldToScreen is
-// exact and the projection is not what any of this is testing.
+// exact and the projection is not what any of this is testing. It FOLLOWS THE
+// SEAL, like the real one — parked at y=0 it framed open water while every
+// stone sat forty units below, which is a camera no player ever has and the
+// state the old clamp was quietly papering over.
 const camera = new THREE.OrthographicCamera(-40, 40, 22, -22, 0.1, 1000);
 camera.position.set(0, 0, 100);
 camera.updateMatrixWorld(true);
@@ -159,10 +163,20 @@ for (const key of CONFIG.gravesite.stones) {
 
 const scene = new THREE.Scene();
 const settleYard = () => { for (let i = 0; i < 900; i += 1) gy.updateGravesites(1 / 60); };
-/** Hold the seal at x for `seconds` and hand back what the label says. */
-const swimTo = (x, seconds = 1) => {
+/** Where the stones ended up. The bed is wherever bounds put it in this
+ *  harness, so nothing here may hardcode a depth — a swim-over is measured
+ *  against the yard's own height. */
+const bedY = () => (gy.nearestGrave(0, 1e4)?.topY ?? bounds.bottom);
+/**
+ * Hold the seal at (x, y) for `seconds` and hand back what the label says.
+ * `y` defaults to just over the stones, because that is where a seal reading a
+ * grave IS — and the camera goes with it, as it does in the game.
+ */
+const swimTo = (x, seconds = 1, y = bedY() + 1) => {
+  camera.position.set(0, y, 100);
+  camera.updateMatrixWorld(true);
   for (let i = 0; i < Math.round(seconds * 60); i += 1) {
-    gl.updateGraveLabel(1 / 60, { camera, x, y: 0, live: true });
+    gl.updateGraveLabel(1 / 60, { camera, x, y, live: true });
   }
   return gl.graveLabelState();
 };
@@ -183,18 +197,91 @@ section('a grave you swim over names itself');
   check('and how they died, in the stone\'s own words',
     over?.cause === `${CONFIG.gravesite.etch.lead} a shark`, over?.cause);
   check('fully faded in', over?.alpha === 1, String(over?.alpha));
-  // The graveyard is ON THE FLOOR, which is the edge of the frame the camera
-  // most often leaves behind — so the interesting question is not "is it placed
-  // over the stone" but "is it inside the window at all". Unclamped it lands
-  // below the bottom edge and the whole feature is invisible with nothing to
-  // show for it.
+  // WHERE IT SITS IS THE STONE'S BUSINESS, not the window's. Measured against
+  // the projection of the grave itself rather than against the frame: the
+  // caption has to be centred on the stone and above it, and a check that only
+  // asked "is it somewhere in the window" passed happily while the label was
+  // parked on the bottom edge with its stone off-screen below.
   const node = document.querySelector('.sv-grave');
   const top = Number.parseFloat(node.style.top);
   const left = Number.parseFloat(node.style.left);
-  check('the caption is inside the frame', top >= 0 && top <= window.innerHeight,
-    `top ${top} in a ${window.innerHeight}px window`);
-  check('...horizontally too', left >= 0 && left <= window.innerWidth,
-    `left ${left} in a ${window.innerWidth}px window`);
+  const grave = gy.nearestGrave(0, 1e4);
+  const stone = ui.worldToScreen(camera, grave.x, grave.topY, { x: 0, y: 0 });
+  check('the caption is centred on the stone', Math.abs(left + node.offsetWidth / 2 - stone.x) < 1,
+    `left ${left} vs stone x ${stone.x.toFixed(1)}`);
+  check('...and stands above it', top + node.offsetHeight <= stone.y,
+    `bottom ${(top + node.offsetHeight).toFixed(1)} vs stone top ${stone.y.toFixed(1)}`);
+}
+
+section('and it is pinned to the stone, not to the frame');
+{
+  // THE BUG: a seal at the surface is forty units over the yard, and the
+  // graveyard is nowhere near the frame — but the horizontal test alone said
+  // "you are over a grave" and the clamp then drew the caption along the edge
+  // of the screen, the only piece of the grave still in shot.
+  const c = CONFIG.gravesite.label;
+  const high = swimTo(0, 1, bedY() + c.reach + 8);
+  check('no caption from the surface', high === null, JSON.stringify(high));
+  check('...nor just outside the reach', swimTo(0, 1, bedY() + c.reach + 0.5) === null);
+  check('but a swim over still names it', swimTo(0, 1, bedY() + c.reach - 0.5)?.name === 'FAT TONY');
+
+  // And with the stone out of frame, the caption leaves with it rather than
+  // sliding to an edge. Driven directly so the camera can be somewhere the
+  // seal is not — a level-up card holds the frame still while the seal moves.
+  const node = document.querySelector('.sv-grave');
+  const before = Number.parseFloat(node.style.top);
+  camera.position.set(0, bedY() + 60, 100);
+  camera.updateMatrixWorld(true);
+  gl.updateGraveLabel(1 / 60, { camera, x: 0, y: bedY() + 1, live: true });
+  const after = Number.parseFloat(node.style.top);
+  check('a stone that leaves the frame takes its caption with it',
+    after > window.innerHeight, `top ${after} in a ${window.innerHeight}px window`);
+  check('...it moved with the stone rather than parking on an edge',
+    after > before + 100, `${before} -> ${after}`);
+}
+
+section('a stone under the bottom edge says nothing');
+{
+  // THE ONE THAT SHIPPED. The field-of-view setting can frame in past the
+  // seabed, and then the yard is below the picture with the seal down there in
+  // it: every proximity test passes honestly, the stone's top projects a little
+  // way under the frame, and the caption — drawn its own height ABOVE that
+  // point — lands back inside the window naming a grave nobody can see.
+  //
+  // Framed so the top of the head sits JUST under the bottom edge, because that
+  // is the only band where this happens. Push the yard further down and the
+  // caption goes off the bottom with it, which always looked fine.
+  const grave = gy.nearestGrave(0, 1e4);
+  const halfH = (camera.top - camera.bottom) / 2;
+  gl.clearGraveLabel();
+  camera.position.set(0, grave.topY + halfH + 1, 100);
+  camera.updateMatrixWorld(true);
+
+  // The trap is only a trap if the caption WOULD have landed on screen — a
+  // stone parked so far under the frame that the words go with it proves
+  // nothing. Measured before the check, so this cannot quietly stop testing
+  // anything the day the gap or the type size moves.
+  const node = document.querySelector('.sv-grave');
+  const stone = ui.worldToScreen(camera, grave.x, grave.topY, { x: 0, y: 0 });
+  const wouldBe = stone.y - CONFIG.gravesite.label.gap - node.offsetHeight;
+  check('the setup is the trap: the stone is under the frame',
+    stone.y > window.innerHeight, `stone top at ${stone.y.toFixed(0)}px`);
+  check('...while its caption would land inside it',
+    wouldBe > 0 && wouldBe < window.innerHeight, `caption would sit at ${wouldBe.toFixed(0)}px`);
+
+  // The seal is right there at the grave — alongside the stone, so both the
+  // horizontal radius and the vertical reach are satisfied. Nothing about the
+  // swim is wrong here; only the camera is.
+  for (let i = 0; i < 120; i += 1) {
+    gl.updateGraveLabel(1 / 60, { camera, x: grave.x, y: grave.topY - 1, live: true });
+  }
+  check('no caption for a grave that is out of shot', gl.graveLabelState() === null,
+    JSON.stringify(gl.graveLabelState()));
+
+  // And it comes straight back when the frame drops to include the yard —
+  // the stone is what was missing, not the seal.
+  check('...and it returns when the stone is back in the picture',
+    swimTo(grave.x, 1, grave.topY - 1)?.name === 'FAT TONY');
 }
 
 section('and lets go when you leave');

@@ -620,9 +620,18 @@ const FRAG_SURFACE = `
       //
       // coverage is the line width and contrast is how hard it falls off — the
       // same two knobs every other pattern uses, pointed at the only two things
-      // a line has. Scaled small because the unit here is the whole body: at
-      // 0.38 the line is about a thousandth of the animal's length.
-      float width = max(0.0004, uBioCoverage * 0.0025);
+      // a line has. The unit here is the whole body, so the scale decides what
+      // fraction of the slider's 0..1 range draws a line a person can see.
+      //
+      // 0.05, not the 0.0025 it was, and the old figure could not draw at all.
+      // At that scale the slider's own MAXIMUM was 1/400th of the animal's
+      // length: on a creature 200 pixels tall that is half a pixel, so every
+      // reachable setting rendered a line thinner than the framebuffer. Swept
+      // in tools/looks/shader-preflight.js, the band where a wireframe reads as
+      // a wireframe is 0.01..0.05 of body length across the whole roster — 4 to
+      // 20 on the old scale, i.e. entirely outside the panel. This puts that
+      // band at coverage 0.2..1.0, which is the range the control has.
+      float width = max(0.0004, uBioCoverage * 0.05);
       bioMaskV = 1.0 - smoothstep(width, width * (1.0 + uBioContrast), dist);
 
       // The breath travels ALONG the body rather than pulsing the whole lattice
@@ -647,7 +656,30 @@ const FRAG_SURFACE = `
       // distance 0, which is "on an edge" everywhere. Drawn as nothing instead:
       // an animal that fails to light is a visible, findable mistake, and a
       // solid one looks like a deliberate art choice.
-      bioMaskV *= step(0.5, declared);
+      //
+      // THE THRESHOLD IS AN EPSILON, NOT A HALF, and the half is why this
+      // pattern had never drawn a line on anything. declared reads like a flag
+      // but it is a MEASUREMENT: bakeEdges stores each corner's distance to the
+      // opposite edge as a fraction of the body's longest side, so its size is
+      // set by how finely the animal is tessellated, not by whether the bake
+      // happened. Measured over the roster, the largest value anywhere on the
+      // sea turtle is 0.21 and on the orca — the animal this pattern was
+      // written for — it is 0.046, so step(0.5, ...) zeroed the mask on every
+      // fragment of every mesh and the wireframe was a dropdown entry that
+      // deleted the creature. Only two bodies in public/models have any corner
+      // at all above 0.5.
+      //
+      // (No backticks in this comment, and that is not a style rule: this whole
+      // string is a JS template literal, so one would end it early and the
+      // error would point at a shader comment. See the file header.)
+      //
+      // All the guard ever has to separate is "baked" from "attribute absent",
+      // and an absent vertex attribute reads EXACTLY 0.0 — WebGL supplies a
+      // constant, not a small number. So any positive value means baked. The
+      // smallest real one measured is 5.3e-5, which this clears by four orders
+      // of magnitude, and a degenerate triangle still bakes 0 and still draws
+      // nothing, which is correct.
+      bioMaskV *= step(1e-8, declared);
     }
 
     // Head-to-tail bias. Positive concentrates light toward the tail,
@@ -1148,10 +1180,19 @@ function bakeEdges(geom, mesh, longest) {
  */
 export function splitForEdges(root) {
   root.traverse((o) => {
-    if (!o.isMesh || !o.geometry?.index) return;
-    const split = o.geometry.toNonIndexed();
-    o.geometry.dispose();
-    o.geometry = split;
+    if (!o.isMesh || !o.geometry) return;
+    // ALREADY NON-INDEXED IS THE GOAL, NOT A REASON TO SKIP. This used to bail
+    // on any geometry with no index, which reads as "nothing to split" and is
+    // true — but the flags below are what bakeEdges actually tests, and bailing
+    // left them unset. So a body that arrived one-vertex-per-corner got no
+    // wireframe, silently, with the split it did not need cited as the reason.
+    // three's FBXLoader produces exactly that, which is every FBX creature in
+    // the roster: the beluga, the seagull, the moray eel and the trout.
+    if (o.geometry.index) {
+      const split = o.geometry.toNonIndexed();
+      o.geometry.dispose();
+      o.geometry = split;
+    }
     o.geometry.userData.__bioEdges = true;
     o.userData.__bioEdges = true;
   });

@@ -1234,9 +1234,59 @@ export function liveHotSpots(e) {
   return owner.spots.filter((s) => s.alive && !s.dead);
 }
 
-/** Is that exact spot still lit? The tip's cue that its subject is gone. */
+/**
+ * Is that exact spot still lit? The tip's cue that its subject is gone, and the
+ * per-frame check a seeker holding one makes (entities/projectiles.js).
+ *
+ * Written out rather than as `liveHotSpots(e).indexOf(spot) !== -1`, which is
+ * what it used to be and is the same answer: that version allocates a filtered
+ * array, and the seeker asks this once per guided shot in the air per frame.
+ */
 export function hotSpotLit(e, spot) {
-  return !!spot && liveHotSpots(e).indexOf(spot) !== -1;
+  if (!spot || !spot.alive || spot.dead) return false;
+  const owner = owners.get(e);
+  return !!owner && owner.placed && owner.spots.indexOf(spot) !== -1;
+}
+
+/**
+ * The lit spots on one creature that a shot at (x, y) can actually SEE, filled
+ * into a caller-supplied array and returned.
+ *
+ * "Can see" is the spot's own outward normal against the direction back to the
+ * shot, and it is the whole difference between this being useful and being a
+ * trap. A weak spot is on the perimeter by construction, so half of them at any
+ * moment are on the far flank — behind the animal. Steering at one of those
+ * throws the shot at the near side of the collision hull, where it lands an
+ * ordinary hit, which is strictly worse than the body shot it gave up. `minCos`
+ * is how squarely it has to be pointing back: 0 is edge-on (the shot arrives
+ * along the skin and grazes), so callers pass a small positive number.
+ *
+ * OUT-PARAM, and the reason is the caller: this is asked once per guided shot
+ * in the air per frame while a boss is up. `liveHotSpots` allocates and is the
+ * right shape for the tip and the harness, which ask once.
+ *
+ * Empty for every creature in the game that is not a boss wearing a lit one.
+ */
+export function facingHotSpots(e, x, y, minCos = 0, out = []) {
+  out.length = 0;
+  const owner = owners.get(e);
+  if (!owner || !owner.placed) return out;
+  for (const s of owner.spots) {
+    if (!s.alive || s.dead) continue;
+    // AGAINST THE HULL ANCHOR, the same surface spotAt() asks on and the same
+    // one the shot will be resolved against — see the note there. Aiming at
+    // the painted centre would aim at a point on the flesh the bullet never
+    // reaches, which is the four-wrong-versions bug seen from the other end.
+    const sx = s.cwx ?? s.wx;
+    const sy = s.cwy ?? s.wy;
+    const dx = x - sx;
+    const dy = y - sy;
+    const d = Math.hypot(dx, dy);
+    if (d < 1e-4) { out.push(s); continue; }
+    if ((dx * s.wnx + dy * s.wny) / d < minCos) continue;
+    out.push(s);
+  }
+  return out;
 }
 
 /**
@@ -1249,9 +1299,15 @@ export function hotSpotLit(e, spot) {
  * versions of spotAt() are all the story anybody needs about picking the other
  * one — see the note there.
  */
-export function hotSpotPoint(spot) {
+export function hotSpotPoint(spot, out = null) {
   if (!spot) return null;
-  return { x: spot.cwx ?? spot.wx, y: spot.cwy ?? spot.wy, r: spot.r };
+  // The out-param exists for the seeker, which reads the point it is steering
+  // at every frame for every guided shot in the air — see facingHotSpots.
+  const o = out ?? { x: 0, y: 0, r: 0 };
+  o.x = spot.cwx ?? spot.wx;
+  o.y = spot.cwy ?? spot.wy;
+  o.r = spot.r;
+  return o;
 }
 
 /**

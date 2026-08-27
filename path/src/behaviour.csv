@@ -62,7 +62,7 @@ bite.jaw.closeTime,0.08,0.02,0.6,jaw snap-shut time (s)
 bite.lunge.enabled,1,,,lunge into the bite
 bite.lunge.speedMul,1.85,1,4,lunge speed (x)
 bite.lunge.duration,0.4,0.05,1.5,lunge length (s)
-hunterRamp.enabled,1,,,hunters get more aggressive over time
+hunterRamp.enabled,1,,,"hunters get more aggressive over time. Everything in this block is keyed to the RUN CLOCK (per 20s). There is a second, steeper ramp on top of all of it keyed to the PLAYER LEVEL - spawn.lateGame.seek in spawning.csv - which multiplies all three axes below at once past level 20. The caps here still apply first, so a ceiling raised there cannot be reached if these are what is actually binding. npm run test:ramp prints both."
 hunterRamp.preyFocus,0.04,0,0.2,fish distraction shed per 20s
 hunterRamp.preyFocusMin,0.3,0,1,min fish distraction left (x)
 hunterRamp.turnRate,0.02,0,0.08,hunter turn growth per 20s

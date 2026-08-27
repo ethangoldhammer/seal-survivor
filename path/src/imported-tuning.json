@@ -1397,20 +1397,20 @@
     "opacity": 1,
     "bosses": false,
     "on": {
-      "enemyShark": true,
-      "enemyGreatWhite": true,
-      "enemyMegalodon": true,
-      "enemyMightyMeg": true,
-      "enemyOrca": true,
-      "enemyDolphin": true,
-      "enemyOrcaBull": true,
-      "enemyOrcaCow": true,
-      "enemyAbyssShark": true,
+      "enemyShark": false,
+      "enemyGreatWhite": false,
+      "enemyMegalodon": false,
+      "enemyMightyMeg": false,
+      "enemyOrca": false,
+      "enemyDolphin": false,
+      "enemyOrcaBull": false,
+      "enemyOrcaCow": false,
+      "enemyAbyssShark": false,
       "enemyOtter": false,
       "enemyStingray": false,
       "enemyWalkingCrab": false,
       "enemySeaTurtle": false,
-      "enemySharkLowpoly": true,
+      "enemySharkLowpoly": false,
       "enemyCrabClaw": false,
       "enemySchoolPod": false
     }
@@ -1436,7 +1436,6 @@
     "levelsPerExtraShot": 8,
     "damage": 7.5,
     "speed": 22,
-    "life": 1.6,
     "radius": 0.18,
     "multishot": 1,
     "finSpread": 0.05,
@@ -2332,19 +2331,11 @@
   "musselVolley": {
     "enabled": true,
     "chargeThreshold": 0.85,
-    "count": 8,
-    "countPerLevel": 2,
-    "pipShellsMax": 8,
     "shotGap": 0.05,
     "shotGapFloor": 0.016,
     "arc": 2.1,
     "spread": 0.16,
     "speedJitter": 0.22,
-    "damage": 22,
-    "damagePerLevel": 7,
-    "splashDamage": 34,
-    "splashDamagePerLevel": 12,
-    "splashRadius": 4.6,
     "speed": 19,
     "life": 2.6,
     "radius": 0.24,
@@ -2773,6 +2764,20 @@
         "wordmark": "SEAL SURVIVOR",
         "captionHeight": 0.22,
         "url": "https://seal-survivor.pages.dev",
+        "stores": [
+          {
+            "name": "Steam",
+            "url": null
+          },
+          {
+            "name": "itch.io",
+            "url": null
+          },
+          {
+            "name": "App Store",
+            "url": null
+          }
+        ],
         "qr": {
           "enabled": true,
           "link": null,
@@ -2797,6 +2802,7 @@
           "gap": 18,
           "pad": 34,
           "headerHeight": 250,
+          "footerHeight": 132,
           "backdrop": "#05070d",
           "frame": "rgba(255,255,255,0.14)",
           "title": "SEAL SURVIVOR"
@@ -3004,12 +3010,25 @@
       }
     },
     "voiceClass": {
-      "bossCrab": "shell",
+      "enemyBossCrab": "shell",
       "boat": "hull",
       "trawler": "hull",
-      "bossBoat": "hull"
+      "bossBoat": "hull",
+      "bossYacht": "hull"
     },
     "voiceDefault": "flesh",
+    "voiceType": {
+      "enemyMegalodon": "Shark",
+      "enemyBossHammerhead": "Hammerhead",
+      "enemyOrcaBull": "Orca",
+      "enemyOrcaCow": "Orca",
+      "enemyMosasaur": "Mosasaur",
+      "enemyGiantSquid": "Squid",
+      "enemyBossAnglerfish": "Angler",
+      "enemyBossCrab": "Crab",
+      "bossBoat": "Boat",
+      "bossYacht": "Yacht"
+    },
     "eyes": {
       "enabled": true,
       "boostColor": 16769146,
@@ -5356,6 +5375,34 @@
       "inherit": 0.1,
       "glow": 2.4
     },
+    "baitFed": {
+      "count": 10,
+      "speed": [
+        1.6,
+        5
+      ],
+      "size": [
+        0.1,
+        0.26
+      ],
+      "life": [
+        0.3,
+        0.6
+      ],
+      "colors": [
+        16738890,
+        16756858,
+        16771496
+      ],
+      "cone": 0,
+      "drag": 4,
+      "gravity": [
+        0,
+        -1.4
+      ],
+      "inherit": 0.25,
+      "glow": 2.2
+    },
     "chumChunkSpawn": {
       "count": 34,
       "speed": [
@@ -5526,7 +5573,7 @@
       "goo": "pickup"
     },
     "wakeBubbles": {
-      "count": 7,
+      "count": 8,
       "speed": [
         0.8,
         3
@@ -5544,14 +5591,14 @@
         14677759,
         16777215
       ],
-      "cone": 0.6,
+      "cone": 0.42,
       "drag": 1.6,
       "gravity": [
         0,
         3.2
       ],
       "inherit": 0.3,
-      "glow": 0.9,
+      "glow": 4.6,
       "surfacePop": "bubbleBurst"
     },
     "hullWake": {
@@ -6495,7 +6542,7 @@
       "sfx": "shoot",
       "haptic": [
         {
-          "duration": 9,
+          "duration": 19,
           "magnitude": 0.69,
           "delay": 0
         },
@@ -6770,6 +6817,19 @@
       "sfx": null,
       "haptic": null
     },
+    "baitFed": {
+      "emit": "baitFed",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.5,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 9
+      },
+      "sfx": "bite",
+      "haptic": null,
+      "sfxMinGap": 0.18
+    },
     "pickup": {
       "emit": "pickup",
       "shake": 0.02,
@@ -6834,6 +6894,186 @@
           "magnitude": 0.5067677321163546,
           "delay": 40
         }
+      ]
+    },
+    "combIgnite": {
+      "emit": null,
+      "shake": 0.06,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 1.2,
+        "radius": 9
+      },
+      "sfx": "combIgnite",
+      "haptic": [
+        {
+          "duration": 40,
+          "magnitude": 0.6
+        }
+      ]
+    },
+    "cardLand": {
+      "emit": null,
+      "shake": 0.05,
+      "hitstop": 0,
+      "glow": 0.22,
+      "ripple": {
+        "strength": 0.8,
+        "radius": 6
+      },
+      "sfx": null,
+      "haptic": [
+        {
+          "duration": 28,
+          "magnitude": 0.5,
+          "delay": 0
+        }
+      ]
+    },
+    "cardPop": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "cardPop",
+      "haptic": null
+    },
+    "rarityCommon": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "rarityCommon",
+      "haptic": [
+        {
+          "duration": 115,
+          "magnitude": 0.59,
+          "delay": 0
+        },
+        {
+          "duration": 67,
+          "magnitude": 0.18,
+          "delay": 0
+        }
+      ]
+    },
+    "rarityUncommon": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "rarityUncommon",
+      "haptic": [
+        {
+          "duration": 153,
+          "magnitude": 0.8,
+          "delay": 0
+        },
+        {
+          "duration": 114,
+          "magnitude": 0.47,
+          "delay": 0
+        }
+      ]
+    },
+    "rarityRare": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "rarityRare",
+      "haptic": [
+        {
+          "duration": 124,
+          "magnitude": 0.85,
+          "delay": 0
+        },
+        {
+          "duration": 114,
+          "magnitude": 0.62,
+          "delay": 0
+        }
+      ]
+    },
+    "rarityEpic": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "rarityEpic",
+      "haptic": [
+        {
+          "duration": 131,
+          "magnitude": 0.95,
+          "delay": 0
+        },
+        {
+          "duration": 139,
+          "magnitude": 0.69,
+          "delay": 0
+        }
+      ]
+    },
+    "rarityLegendary": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "rarityLegendary",
+      "haptic": [
+        {
+          "duration": 176,
+          "magnitude": 1,
+          "delay": 0
+        },
+        {
+          "duration": 173,
+          "magnitude": 0.3,
+          "delay": 0
+        }
+      ]
+    },
+    "combFlood": {
+      "emit": null,
+      "shake": 0.16,
+      "hitstop": 0,
+      "glow": 0.9,
+      "ripple": {
+        "strength": 2.6,
+        "radius": 16
+      },
+      "sfx": "combFlood",
+      "haptic": [
+        {
+          "duration": 55,
+          "magnitude": 1
+        },
+        {
+          "duration": 90,
+          "magnitude": 0.35,
+          "delay": 0
+        }
+      ]
+    },
+    "combDrain": {
+      "emit": null,
+      "shake": 0.02,
+      "hitstop": 0,
+      "glow": 0.12,
+      "ripple": {
+        "strength": 0.5,
+        "radius": 5
+      },
+      "sfx": "combDrain",
+      "haptic": [
+        10
       ]
     },
     "celebrate": {
@@ -6989,6 +7229,25 @@
       "toast": "All hands!",
       "toastMinGap": 0.8
     },
+    "bossPellet": {
+      "emit": "procGain",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.7,
+      "ripple": null,
+      "sfx": "procGain",
+      "haptic": [
+        {
+          "duration": 22,
+          "magnitude": 0.4
+        }
+      ],
+      "sfxMinGap": 0.12,
+      "toast": "pebbles up ++",
+      "toastMinGap": 1,
+      "toastPin": true,
+      "toastWave": true
+    },
     "crewHit": {
       "emit": "splash",
       "shake": 0.06,
@@ -7050,6 +7309,32 @@
         60
       ]
     },
+    "bossArrive": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "sfx": "bossArrive",
+      "haptic": null
+    },
+    "bossHit": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.12,
+      "sfx": null,
+      "haptic": null,
+      "sfxMinGap": 0.11
+    },
+    "bossDeath": {
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.35,
+      "sfx": null,
+      "haptic": null
+    },
     "bossHitFlesh": {
       "emit": null,
       "sfx": "bossHitFlesh",
@@ -7076,6 +7361,87 @@
     "bossDieHull": {
       "emit": null,
       "sfx": "bossDieHull"
+    },
+    "bossHitShark": {
+      "emit": null,
+      "sfx": "bossHitShark",
+      "sfxMinGap": 1.2
+    },
+    "bossDieShark": {
+      "emit": null,
+      "sfx": "bossDieShark"
+    },
+    "bossHitHammerhead": {
+      "emit": null,
+      "sfx": "bossHitHammerhead",
+      "sfxMinGap": 1.2
+    },
+    "bossDieHammerhead": {
+      "emit": null,
+      "sfx": "bossDieHammerhead"
+    },
+    "bossHitOrca": {
+      "emit": null,
+      "sfx": "bossHitOrca",
+      "sfxMinGap": 1.2
+    },
+    "bossDieOrca": {
+      "emit": null,
+      "sfx": "bossDieOrca"
+    },
+    "bossHitMosasaur": {
+      "emit": null,
+      "sfx": "bossHitMosasaur",
+      "sfxMinGap": 1.2
+    },
+    "bossDieMosasaur": {
+      "emit": null,
+      "sfx": "bossDieMosasaur"
+    },
+    "bossHitSquid": {
+      "emit": null,
+      "sfx": "bossHitSquid",
+      "sfxMinGap": 1.2
+    },
+    "bossDieSquid": {
+      "emit": null,
+      "sfx": "bossDieSquid"
+    },
+    "bossHitAngler": {
+      "emit": null,
+      "sfx": "bossHitAngler",
+      "sfxMinGap": 1.2
+    },
+    "bossDieAngler": {
+      "emit": null,
+      "sfx": "bossDieAngler"
+    },
+    "bossHitCrab": {
+      "emit": null,
+      "sfx": "bossHitCrab",
+      "sfxMinGap": 1.2
+    },
+    "bossDieCrab": {
+      "emit": null,
+      "sfx": "bossDieCrab"
+    },
+    "bossHitBoat": {
+      "emit": null,
+      "sfx": "bossHitBoat",
+      "sfxMinGap": 1.2
+    },
+    "bossDieBoat": {
+      "emit": null,
+      "sfx": "bossDieBoat"
+    },
+    "bossHitYacht": {
+      "emit": null,
+      "sfx": "bossHitYacht",
+      "sfxMinGap": 1.2
+    },
+    "bossDieYacht": {
+      "emit": null,
+      "sfx": "bossDieYacht"
     },
     "bossDaze": {
       "emit": "trapPop",
@@ -7337,7 +7703,7 @@
         "strength": 2.2,
         "radius": 12
       },
-      "sfx": "levelUp",
+      "sfx": "clamGrab",
       "haptic": [
         18
       ],
@@ -7589,8 +7955,13 @@
       "sfx": null,
       "haptic": [
         {
-          "duration": 55,
-          "magnitude": 0.45,
+          "duration": 173,
+          "magnitude": 0.95,
+          "delay": 0
+        },
+        {
+          "duration": 115,
+          "magnitude": 0.18,
           "delay": 0
         }
       ]
@@ -8753,6 +9124,24 @@
       "max": 2,
       "flashFraction": 0.3,
       "minFlash": 0.3
+    },
+    "lowHealth": {
+      "enabled": true,
+      "threshold": 0.15,
+      "attack": 0.35,
+      "release": 0.9,
+      "rampCurve": 0.7,
+      "strength": 0.9,
+      "color": 9309972,
+      "glow": 0.62,
+      "keep": 0.55,
+      "drain": 0.75,
+      "inner": 0.45,
+      "outer": 1.25,
+      "beatFar": 1.05,
+      "beatNear": 0.42,
+      "pulse": 0.22,
+      "close": 0.16
     }
   },
   "death": {
@@ -8874,6 +9263,11 @@
     ],
     "scale": 3,
     "z": -3.2,
+    "dropClear": 0.5,
+    "restZ": [
+      -3.8,
+      -1.2
+    ],
     "lean": 0.05,
     "bedDepth": 0.22,
     "faceWidth": 0.72,
@@ -8911,8 +9305,8 @@
     "label": {
       "enabled": true,
       "radius": 7,
+      "reach": 6,
       "gap": 26,
-      "pad": 10,
       "rise": 10,
       "fadeIn": 0.22,
       "fadeOut": 0.35,
@@ -9100,8 +9494,8 @@
     "spring": {
       "enabled": true,
       "weight": 1,
-      "stiffness": 70,
-      "damping": 11,
+      "stiffness": 85,
+      "damping": 10,
       "tipLooseness": 0.76,
       "maxLag": 0.84,
       "softness": 0.5,
@@ -9224,7 +9618,7 @@
     "tolerance": 0.01,
     "releaseOnOneShot": true,
     "tipLengthMul": 1,
-    "muzzleLengthMul": 1,
+    "muzzleLengthMul": 0.05,
     "muzzleNudge": 0,
     "flattenZ": true,
     "alternate": true
@@ -9317,16 +9711,16 @@
     },
     "wake": {
       "enabled": true,
-      "minSpeed": 2.5,
-      "perSecond": 23,
-      "scale": 0.55,
-      "tailShare": 0.45,
+      "minSpeed": 0.5,
+      "perSecond": 25,
+      "scale": 0.65,
+      "tailShare": 0.2,
       "tipBias": 3
     },
     "charge": {
       "enabled": true,
-      "perSecondMin": 10,
-      "perSecondMax": 70,
+      "perSecondMin": 6,
+      "perSecondMax": 73,
       "scaleMin": 0.6,
       "scaleMax": 1.9,
       "maxPerFrame": 6,
@@ -9346,20 +9740,20 @@
     "inkPower": 4.5,
     "inkColor": 198669,
     "paint": 0.21,
-    "paintFit": 0.9
+    "paintFit": 0.41
   },
   "oxygenBubbleShell": {
-    "coreAlpha": 0.06,
+    "coreAlpha": 0.84,
     "rimAlpha": 0.85,
-    "rimBoost": 2.4,
-    "sheen": 0.06,
-    "power": 1.6,
-    "bias": 0.22,
-    "ink": 5,
-    "inkPower": 6,
+    "rimBoost": 3.2,
+    "sheen": 0.3,
+    "power": 0.2,
+    "bias": 0.64,
+    "ink": 3.3,
+    "inkPower": 15.5,
     "inkColor": 198669,
-    "paint": 0.21,
-    "paintFit": 0.9
+    "paint": 0.13,
+    "paintFit": 0.73
   },
   "chromeBlade": {
     "dark": 727596,
@@ -9439,8 +9833,8 @@
       "srcs": [
         "/sfx/Seal_Shoot_05.mp3"
       ],
-      "gain": 1,
-      "pitchVary": 0.26,
+      "gain": 1.8836490894898006,
+      "pitchVary": 0.34,
       "type": "blip",
       "wave": "sine",
       "freq": [
@@ -9580,13 +9974,12 @@
         24
       ],
       "decay": 1.15,
-      "gain": 7.079457843841379,
+      "gain": 2.371373705661655,
       "noise": 0.72,
       "filter": 620,
       "pitchVary": 0.1,
       "filterVary": 0.16,
       "srcs": [
-        "/sfx/EG_FlickPlop_15.mp3",
         "/sfx/Mosasaurus_01.mp3"
       ]
     },
@@ -9645,6 +10038,262 @@
       "filter": 520,
       "pitchVary": 0.08,
       "filterVary": 0.14
+    },
+    "bossHitShark": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        190,
+        82
+      ],
+      "decay": 0.52,
+      "gain": 0.4216965034285822,
+      "noise": 0.45,
+      "filter": 1100,
+      "pitchVary": 0.4,
+      "filterVary": 0.18,
+      "srcs": [
+        "/sfx/EliDadSeal_49.mp3",
+        "/sfx/EliDadSeal_48.mp3"
+      ]
+    },
+    "bossDieShark": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        150,
+        38
+      ],
+      "decay": 1.7,
+      "gain": 0.34,
+      "noise": 0.55,
+      "filter": 760,
+      "pitchVary": 0.07,
+      "filterVary": 0.14
+    },
+    "bossHitHammerhead": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        300,
+        160
+      ],
+      "decay": 0.3,
+      "gain": 0.18,
+      "noise": 0.4,
+      "filter": 1500,
+      "pitchVary": 0.12,
+      "filterVary": 0.2
+    },
+    "bossDieHammerhead": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        240,
+        62
+      ],
+      "decay": 1.25,
+      "gain": 0.3,
+      "noise": 0.5,
+      "filter": 1000,
+      "pitchVary": 0.09,
+      "filterVary": 0.16
+    },
+    "bossHitOrca": {
+      "src": null,
+      "type": "blip",
+      "wave": "sine",
+      "freq": [
+        1450,
+        880
+      ],
+      "decay": 0.2,
+      "gain": 0.15,
+      "pitchVary": 0.12
+    },
+    "bossDieOrca": {
+      "src": null,
+      "type": "boom",
+      "wave": "sine",
+      "freq": [
+        1150,
+        240
+      ],
+      "decay": 1.5,
+      "gain": 0.3,
+      "noise": 0.3,
+      "filter": 1800,
+      "pitchVary": 0.08,
+      "filterVary": 0.16
+    },
+    "bossHitMosasaur": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        210,
+        96
+      ],
+      "decay": 0.62,
+      "gain": 0.19,
+      "noise": 0.85,
+      "filter": 1900,
+      "pitchVary": 0.1,
+      "filterVary": 0.22
+    },
+    "bossDieMosasaur": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        170,
+        44
+      ],
+      "decay": 1.9,
+      "gain": 0.33,
+      "noise": 0.9,
+      "filter": 1300,
+      "pitchVary": 0.08,
+      "filterVary": 0.18
+    },
+    "bossHitSquid": {
+      "src": null,
+      "type": "noise",
+      "decay": 0.34,
+      "gain": 0.22,
+      "filter": 640,
+      "pitchVary": 0.2,
+      "filterVary": 0.25
+    },
+    "bossDieSquid": {
+      "src": null,
+      "type": "boom",
+      "wave": "sine",
+      "freq": [
+        96,
+        30
+      ],
+      "decay": 1.35,
+      "gain": 0.32,
+      "noise": 0.95,
+      "filter": 560,
+      "pitchVary": 0.1,
+      "filterVary": 0.18
+    },
+    "bossHitAngler": {
+      "src": null,
+      "type": "boom",
+      "wave": "sine",
+      "freq": [
+        88,
+        250
+      ],
+      "decay": 0.42,
+      "gain": 0.2,
+      "noise": 0.72,
+      "filter": 700,
+      "pitchVary": 0.12,
+      "filterVary": 0.2
+    },
+    "bossDieAngler": {
+      "src": null,
+      "type": "boom",
+      "wave": "sine",
+      "freq": [
+        330,
+        58
+      ],
+      "decay": 1.45,
+      "gain": 0.31,
+      "noise": 0.68,
+      "filter": 900,
+      "pitchVary": 0.09,
+      "filterVary": 0.16
+    },
+    "bossHitCrab": {
+      "src": null,
+      "type": "blip",
+      "wave": "square",
+      "freq": [
+        880,
+        1420
+      ],
+      "decay": 0.07,
+      "gain": 0.16,
+      "pitchVary": 0.22
+    },
+    "bossDieCrab": {
+      "src": null,
+      "type": "boom",
+      "wave": "square",
+      "freq": [
+        620,
+        118
+      ],
+      "decay": 0.95,
+      "gain": 0.3,
+      "noise": 0.75,
+      "filter": 2400,
+      "pitchVary": 0.12,
+      "filterVary": 0.2
+    },
+    "bossHitBoat": {
+      "src": null,
+      "type": "blip",
+      "wave": "sawtooth",
+      "freq": [
+        520,
+        470
+      ],
+      "decay": 0.34,
+      "gain": 0.17,
+      "pitchVary": 0.04
+    },
+    "bossDieBoat": {
+      "src": null,
+      "type": "boom",
+      "wave": "sawtooth",
+      "freq": [
+        400,
+        88
+      ],
+      "decay": 2.1,
+      "gain": 0.33,
+      "noise": 0.42,
+      "filter": 1200,
+      "pitchVary": 0.05,
+      "filterVary": 0.12
+    },
+    "bossHitYacht": {
+      "src": null,
+      "type": "blip",
+      "wave": "square",
+      "freq": [
+        910,
+        860
+      ],
+      "decay": 0.26,
+      "gain": 0.15,
+      "pitchVary": 0.04
+    },
+    "bossDieYacht": {
+      "src": null,
+      "type": "boom",
+      "wave": "square",
+      "freq": [
+        740,
+        130
+      ],
+      "decay": 1.65,
+      "gain": 0.3,
+      "noise": 0.38,
+      "filter": 1600,
+      "pitchVary": 0.05,
+      "filterVary": 0.12
     },
     "hotSpotHit": {
       "src": null,
@@ -9813,10 +10462,10 @@
         1580
       ],
       "decay": 1.26,
-      "gain": 0.35481338923357547,
+      "gain": 2.113489039836647,
       "pitchVary": 0.35,
       "srcs": [
-        "/sfx/ESM_PG_cinematic_fx_magic_item_award_hit_chime_ding_positive_shimmer_04.mp3"
+        "/sfx/ESM_Power_On_or_Success_Sync_Radar_Ping_Tonal_LFE_Electronic_Synth.mp3"
       ]
     },
     "celebrate": {
@@ -9911,11 +10560,17 @@
     },
     "bossArrive": {
       "srcs": [
-        "/sfx/HG_SF_FX_Arp2600_SpringShot_3.mp3"
+        "/sfx/HG_SF_FX_Arp2600_SpringShot_3.mp3",
+        "/sfx/ESM_HG_Cinematic_FX_creature_werewolf_eerie_howl_01.mp3",
+        "/sfx/ESM_PG_cinematic_fx_creature_sea_monsters_shark_predator_attack_thump_03.mp3",
+        "/sfx/OLIVER_DWILLY_FX_cinematic_braam_high_C.mp3",
+        "/sfx/OLIVER_DWILLY_FX_white_noise_impact_basic.mp3",
+        "/sfx/OLIVER_DWILLY_FX_planet_killer_sub_impact.mp3"
       ],
       "gain": 0.85,
-      "pitchVary": 0,
-      "filterVary": 0
+      "pitchVary": 0.21,
+      "filterVary": 0,
+      "src": null
     },
     "splash": {
       "src": null,
@@ -9956,11 +10611,14 @@
         42
       ],
       "decay": 0.7,
-      "gain": 0.46,
+      "gain": 0.6309573444801932,
       "noise": 0.9,
       "filter": 1500,
       "pitchVary": 0.08,
-      "filterVary": 0.2
+      "filterVary": 0.2,
+      "srcs": [
+        "/sfx/FF_AS_fish_splash_tone.mp3"
+      ]
     },
     "airJump": {
       "srcs": [
@@ -10263,13 +10921,13 @@
         70
       ],
       "decay": 0.22,
-      "gain": 0.47315125896148047,
+      "gain": 5.956621435290105,
       "noise": 0.85,
       "filter": 2800,
       "pitchVary": 0.41,
       "filterVary": 0.31,
       "srcs": [
-        "/sfx/ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02.mp3"
+        "/sfx/EliArf_Explode_01.mp3"
       ]
     },
     "eelBolt": {
@@ -10400,8 +11058,8 @@
         70
       ],
       "decay": 0.14,
-      "gain": 0.26,
-      "noise": 0.6,
+      "gain": 0.12589254117941673,
+      "noise": 0.86,
       "filter": 1200,
       "pitchVary": 0.14,
       "filterVary": 0.22
@@ -10853,6 +11511,53 @@
       "pitchVary": 0.05,
       "filterVary": 0.12
     },
+    "combIgnite": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        70,
+        190
+      ],
+      "decay": 0.5,
+      "gain": 0.7498942093324559,
+      "noise": 0.45,
+      "filter": 1100,
+      "pitchVary": 0.06,
+      "filterVary": 0.15,
+      "srcs": [
+        "/sfx/EG_FlickPlop_09.mp3",
+        "/sfx/EG_FlickPlop_10.mp3"
+      ]
+    },
+    "combFlood": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        190,
+        38
+      ],
+      "decay": 0.95,
+      "gain": 0.5,
+      "noise": 0.62,
+      "filter": 1300,
+      "pitchVary": 0.05,
+      "filterVary": 0.12,
+      "srcs": [
+        "/sfx/ESM_PG_cinematic_fx_magic_item_award_hit_chime_ding_positive_shimmer_04.mp3"
+      ]
+    },
+    "combDrain": {
+      "src": null,
+      "type": "noise",
+      "filter": 1500,
+      "decay": 0.34,
+      "gain": 0.251188643150958,
+      "pitchVary": 0.08,
+      "filterVary": 0.2,
+      "srcs": [
+        "/sfx/EG_FlickPlop_14.mp3"
+      ]
+    },
     "rarityCommon": {
       "src": null,
       "type": "blip",
@@ -10862,8 +11567,11 @@
         560
       ],
       "decay": 0.1,
-      "gain": 0.06,
-      "pitchVary": 0.04
+      "gain": 2.2387211385683394,
+      "pitchVary": 0.25,
+      "srcs": [
+        "/sfx/HG_UI_Blip_Menu_Plankton.mp3"
+      ]
     },
     "rarityUncommon": {
       "src": null,
@@ -10874,8 +11582,11 @@
         780
       ],
       "decay": 0.16,
-      "gain": 0.11,
-      "pitchVary": 0.03
+      "gain": 1.6788040181225603,
+      "pitchVary": 0.19,
+      "srcs": [
+        "/sfx/ESM_Fantasy_Game_Material_Water_Bubble_Potion_3_Magic_RPG_Apothecary_Ancient_Medieval_Element_Accent_Impact.mp3"
+      ]
     },
     "rarityRare": {
       "src": null,
@@ -10886,8 +11597,11 @@
         1080
       ],
       "decay": 0.26,
-      "gain": 0.15,
-      "pitchVary": 0.02
+      "gain": 3.1622776601683795,
+      "pitchVary": 0.11,
+      "srcs": [
+        "/sfx/ESM_Ambient_Game_Magic_Bubble_Shimmer_Item_Pick_Up_1_Deep_LowFrequency_Burst_Pop_Water.mp3"
+      ]
     },
     "rarityEpic": {
       "src": null,
@@ -10898,8 +11612,11 @@
         1560
       ],
       "decay": 0.4,
-      "gain": 0.19,
-      "pitchVary": 0.02
+      "gain": 3.3496543915782766,
+      "pitchVary": 0.18,
+      "srcs": [
+        "/sfx/ESM_PG_cinematic_fx_magic_award_collect_achievement_positive_treasure_chime_01.mp3"
+      ]
     },
     "rarityLegendary": {
       "src": null,
@@ -10910,8 +11627,11 @@
         2340
       ],
       "decay": 0.62,
-      "gain": 0.24,
-      "pitchVary": 0.01
+      "gain": 3.548133892335755,
+      "pitchVary": 0.1,
+      "srcs": [
+        "/sfx/ESM_PG_cinematic_fx_magic_collect_kick_thump_shimmer_glisten_05.mp3"
+      ]
     },
     "uiType": {
       "src": null,
@@ -10951,7 +11671,8 @@
       "pitchVary": 0.05,
       "filterVary": 0.2,
       "srcs": [
-        "/sfx/ESM_PG_cinematic_fx_weapons_warefare_cannon_ship_impact_explosion_wood_03.mp3"
+        "/sfx/EliArf_Explode1.mp3",
+        "/sfx/EliArf_Explode_01.mp3"
       ]
     },
     "seagullBlast": {
@@ -11026,6 +11747,67 @@
       "pitchVary": 0.42,
       "srcs": [
         "/sfx/EliDadSeal_51.mp3"
+      ]
+    },
+    "cardLand": {
+      "src": null,
+      "type": "blip",
+      "wave": "sawtooth",
+      "freq": [
+        1590,
+        1580
+      ],
+      "decay": 1.26,
+      "gain": 5.956621435290105,
+      "pitchVary": 0.35,
+      "srcs": [
+        "/sfx/EG_FlickPlop_01.mp3",
+        "/sfx/EG_FlickPlop_02.mp3"
+      ]
+    },
+    "cardLand2": {
+      "src": null,
+      "type": "blip",
+      "wave": "sawtooth",
+      "freq": [
+        1590,
+        1580
+      ],
+      "decay": 1.26,
+      "gain": 5.956621435290105,
+      "pitchVary": 0.35,
+      "srcs": [
+        "/sfx/EG_FlickPlop_01.mp3",
+        "/sfx/EG_FlickPlop_02.mp3"
+      ]
+    },
+    "cardLand22": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        90,
+        1400
+      ],
+      "decay": 1.1,
+      "gain": 0.22,
+      "noise": 0.35,
+      "filter": 2600,
+      "pitchVary": 0.02,
+      "filterVary": 0.1
+    },
+    "clamGrab": {
+      "src": null,
+      "type": "blip",
+      "wave": "sawtooth",
+      "freq": [
+        1590,
+        1580
+      ],
+      "decay": 1.26,
+      "gain": 2.113489039836647,
+      "pitchVary": 0.35,
+      "srcs": [
+        "/sfx/EG_FlickPlop_07.mp3"
       ]
     }
   },
@@ -11689,12 +12471,14 @@
         "bodyDarken": 0.7,
         "eyeStrength": 0.75,
         "eyeColor": 16761963,
+        "eyeFalloff": 2.1,
         "eyePulse": 0.3,
         "pulseSpeed": 1.375,
         "flickerSync": "1/4",
         "flickerRate": 1.75,
         "phaseSpread": 0,
-        "phaseSteps": 0
+        "phaseSteps": 0,
+        "flowSync": "1 bar"
       },
       "orcaHide": {
         "pattern": "spots",
@@ -11965,16 +12749,20 @@
     "seed": 2618,
     "count": 150,
     "attempts": 30,
-    "spacing": 1.8,
+    "spacing": 1.7,
     "overhang": 3,
     "depth": [
       -5.5,
       -1.5
     ],
+    "front": {
+      "share": 0.12,
+      "gap": 1.2
+    },
     "bedScale": 1.8,
     "scale": [
       1.15,
-      2.75
+      3
     ],
     "yawRange": 6.283,
     "species": {
@@ -11993,16 +12781,26 @@
   "grass": {
     "sway": {
       "enabled": true,
-      "amplitude": 0.09,
+      "amplitude": 0.19,
       "stiffness": 1.8,
       "speedSync": "2 bars",
       "speed": 1.1,
-      "wavelength": 0.35,
+      "wavelength": 0.12,
       "direction": 0,
       "flutter": 0.025,
       "flutterSync": "1 bar",
       "flutterSpeed": 3.7,
       "bend": 1
+    },
+    "shove": {
+      "enabled": true,
+      "radius": 4,
+      "strength": 0.35,
+      "feather": 1,
+      "stiffness": 1.2,
+      "springRate": 90,
+      "springDamping": 0.55,
+      "crossoverSoftening": 0.15
     }
   },
   "points": {
@@ -12106,6 +12904,19 @@
       "openSeconds": 0.45,
       "closeSeconds": 0.22,
       "flashSeconds": 0.2
+    }
+  },
+  "homing": {
+    "ignoreTypes": [
+      "seaTurtle",
+      "whale"
+    ],
+    "ignoreInvincible": true,
+    "markFirst": true,
+    "hotSpots": {
+      "enabled": true,
+      "facing": 0.15,
+      "clearance": 0.25
     }
   },
   "apexCrowd": {
@@ -12746,6 +13557,11 @@
         "scale": 1,
         "fade": 0,
         "lift": -14
+      },
+      "wave": {
+        "amp": 0.34,
+        "size": 0.28,
+        "crest": 2.6
       }
     },
     "warn": {
@@ -12945,7 +13761,7 @@
     "roughness": 0.12,
     "metalness": 0.1,
     "radius": 0.08,
-    "haloRadius": 0.52,
+    "haloRadius": 0.64,
     "haloFullAt": 3,
     "bloomLum": 3.6,
     "flareSwell": 0.9,
@@ -13303,8 +14119,6 @@
     "depleteRate": 5,
     "bubbleRefillAmount": 50,
     "drainDamagePerSec": 20,
-    "bubbleSpawnMin": 7,
-    "bubbleSpawnMax": 13,
     "bubbleLifetime": 14,
     "bubbleRiseSpeed": 1.6,
     "bubble": {
@@ -13441,6 +14255,11 @@
     "glow": 1.5,
     "pulseHz": 0.8,
     "pulseDepth": 0.22
+  },
+  "baitBall": {
+    "shimmer": {
+      "color": 10479871
+    }
   },
   "reentrySplash": {
     "enabled": true,
@@ -14123,6 +14942,104 @@
       "popPitch": 1.06
     }
   },
+  "upgradeArrival": "slam",
+  "upgradeSlam": {
+    "enabled": true,
+    "first": 0.14,
+    "stagger": 0.78,
+    "time": 0.44,
+    "from": 2.2,
+    "riser": {
+      "enabled": true,
+      "bands": [
+        {
+          "level": 0.76,
+          "q": 0.6,
+          "from": 170,
+          "to": 1400,
+          "at": 0.43
+        },
+        {
+          "level": 0.84,
+          "q": 3.3,
+          "from": 30,
+          "to": 2100,
+          "at": 0.46
+        },
+        {
+          "level": 1.18,
+          "q": 2.4,
+          "from": 110,
+          "to": 11000,
+          "at": 0.43
+        }
+      ],
+      "curve": 2.6,
+      "reverse": true,
+      "wobbleDepth": 4.1,
+      "wobbleFrom": 5,
+      "wobbleTo": 29.5,
+      "steps": 48,
+      "vary": {
+        "pitch": 4.25,
+        "spread": 0.065,
+        "level": 0.3,
+        "wobble": 0.25
+      },
+      "gain": 0.7498942093324559,
+      "swell": 2.9,
+      "fadeIn": 0.24,
+      "fadeOut": 0.035
+    }
+  },
+  "upgradeReel": {
+    "enabled": true,
+    "speed": 22,
+    "first": 0.62,
+    "stagger": 0.3,
+    "knee": 0.66,
+    "bounce": 0.9,
+    "blur": 2,
+    "minFaces": 6,
+    "maxFaces": 26
+  },
+  "upgradeComb": {
+    "enabled": true,
+    "gap": 0,
+    "spread": 2,
+    "over": 1,
+    "restColor": 593430,
+    "restAlpha": 0.98,
+    "edgeColor": 8050687,
+    "edgeAlpha": 0.28,
+    "ringStep": 0.095,
+    "ringFade": 0.02,
+    "flashTime": 0.35,
+    "pop": 0.8,
+    "springColor": true,
+    "springScale": true,
+    "restOpacity": 0.75,
+    "breatheBy": 0.06,
+    "breatheSeconds": 3.4,
+    "settleSeconds": 0.5,
+    "hoverEnabled": true,
+    "hoverStep": 0.142,
+    "hoverTime": 1.07,
+    "hoverFade": 0.04,
+    "hoverGap": 0.18,
+    "floodStep": 0.09,
+    "floodTime": 1.35,
+    "flashLift": 0.26,
+    "drainTime": 0.31,
+    "drainStep": 0.04,
+    "neon": [
+      "#7ad7ff",
+      "#ff5ec4",
+      "#b6ff3c",
+      "#ffcc33"
+    ],
+    "maxCells": 220
+  },
   "levelUp": {
     "enabled": true,
     "hold": 0.5,
@@ -14164,17 +15081,6 @@
       "drift": 26,
       "over": 18
     },
-    "upgrades": {
-      "style": "hex",
-      "algo": "billow",
-      "inTime": 0.5,
-      "outTime": 0.22,
-      "steps": 14,
-      "hexSize": 24,
-      "bias": 0.35,
-      "softness": 0,
-      "curve": 1
-    },
     "splash": {
       "style": "smooth",
       "algo": "worley",
@@ -14200,6 +15106,25 @@
       "softness": 0.4,
       "curve": 1.5
     }
+  },
+  "finLights": {
+    "enabled": true,
+    "size": 0.26,
+    "sizePerLevel": 0.22,
+    "opacity": 0.85,
+    "mixSpeed": 0.55,
+    "mixContrast": 2.6
+  },
+  "elementBands": {
+    "enabled": true,
+    "amount": 0.72,
+    "amountPerExtra": 0.09,
+    "scale": 0.5,
+    "speed": 2.2,
+    "sharpness": 2.4,
+    "stretch": 0.18,
+    "gain": 0.5,
+    "angle": 0
   },
   "levelUpCards": {
     "overlayOpacity": 0.32,
@@ -14397,8 +15322,23 @@
     "gap": 2,
     "perRow": 5,
     "bow": 0.55,
+    "fit": {
+      "enabled": true,
+      "maxW": 0.5,
+      "maxH": 0.5,
+      "minSize": 18,
+      "mobile": {
+        "scale": 0.6,
+        "maxW": 0.42,
+        "maxH": 0.32
+      }
+    },
     "fly": {
       "enabled": true,
+      "riseSeconds": 0.26,
+      "riseEase": "outCubic",
+      "riseScale": 1.35,
+      "holdSeconds": 0.42,
       "seconds": 0.34,
       "ease": "outCubic",
       "landOpacity": 0.85
@@ -14447,5 +15387,5 @@
       "msPerPx": 0.9
     }
   },
-  "_savedAt": 1787684915880
+  "_savedAt": 1787794229910
 }

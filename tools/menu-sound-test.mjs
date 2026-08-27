@@ -99,6 +99,12 @@ await import('./vite-loader.mjs');
 
 const audio = await import('../path/src/systems/audio.js');
 const { CONFIG } = await import('../path/src/config.js');
+// THE ARRIVAL, ON A HARNESS CLOCK. The deal is the slam's now: each card's pop
+// and sting fire as that card lands in its cell, so this file cannot hear the
+// sequence at all without letting the slam run. Shortened rather than switched
+// off — turning it off would test a path the game no longer takes, and the
+// order and the count of what is heard are the same at any speed.
+Object.assign(CONFIG.upgradeSlam, { first: 0.08, stagger: 0.1, time: 0.02 });
 const { initFeedback, updateFeedback } = await import('../path/src/systems/feedback.js');
 
 // Only what REACHED the speakers. The tap reports every outcome including the
@@ -112,7 +118,10 @@ audio.watchSfx((name, outcome) => {
 });
 // playSfx bails before the tap unless audio is live, so the graph is faked to
 // the minimum that lets a sound reach its outcome.
-const fakeParam = () => ({ value: 0, setValueAtTime() { return this; }, setTargetAtTime() { return this; }, exponentialRampToValueAtTime() { return this; }, cancelScheduledValues() { return this; } });
+// `linearRampToValueAtTime` is here because the card riser fades and swells on
+// one — a param missing a method the game calls does not read as a stub gap, it
+// throws from inside a setTimeout and takes the whole deal down with it.
+const fakeParam = () => ({ value: 0, setValueAtTime() { return this; }, setTargetAtTime() { return this; }, linearRampToValueAtTime() { return this; }, exponentialRampToValueAtTime() { return this; }, cancelScheduledValues() { return this; } });
 const fakeNode = (extra = {}) => ({ connect(d) { return d; }, disconnect() {}, ...extra });
 dom.window.AudioContext = class {
   constructor() { this.sampleRate = 48000; this.state = 'running'; this.currentTime = 0; this.destination = fakeNode(); }
@@ -171,31 +180,37 @@ ui.initUI({
 });
 drain(); // initUI itself must not have made any noise
 
-// The deal (CONFIG.rarityCard.ignite) lights and voices one card at a time on
-// real timers, so anything that opens the menu has to let it finish before it
-// can trust what it hears next. Everything below the first section does that
-// through `finishDeal`.
+// The deal lights and voices one card at a time on real timers, so anything
+// that opens the menu has to let it finish before it can trust what it hears
+// next. Everything below the first section does that through `finishDeal`.
+//
+// The clock is the SLAM's: a card's moment is the frame it lands, so the hand
+// is done one stagger after the last one hits rather than one ignite step.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const DEAL_MS = (CONFIG.upgradeChoices ?? 3) * (CONFIG.rarityCard.ignite.step * 1000) + 80;
+const SLAM = CONFIG.upgradeSlam;
+const FIRST_MS = (SLAM.first + SLAM.time) * 1000;
+const DEAL_MS = FIRST_MS + ((CONFIG.upgradeChoices ?? 3) - 1) * SLAM.stagger * 1000 + 140;
 const finishDeal = async () => { await sleep(DEAL_MS); drain(); drainDropped(); };
 
 section('Opening the level-up menu');
 ui.showLevelUp();
 let sounds = drain();
-// The menu opens with the FIRST STEP of the deal and nothing else: one pop,
-// plus the sting of the lowest tier on the table. The rest arrive one step
-// apart — see the next section.
+// THE MENU OPENS SILENT. It used to open with the first step of the deal on it,
+// and that moved when the arrival took the sequence over: a card's pop and its
+// tier's sting are that card LANDING, and on the opening frame nothing has
+// landed — the comb is still coming on around three empty cells. Announcing the
+// lowest tier before anything has hit would be telling the player the answer
+// before the screen has given it.
 //
 // The rule this has always really been testing is underneath: selectCard(0)
 // must not voice a selection the player did not make. A stray uiHover here
 // would land under the deal and be inaudible, which is exactly why it needs a
 // test rather than an ear.
-const opening = sounds.filter((n) => n === 'cardPop' || n.startsWith('rarity'));
-check('opening plays one pop', only(sounds, 'cardPop') === 1, `x${only(sounds, 'cardPop')}`);
-check('...and at most one sting with it', sounds.filter((n) => n.startsWith('rarity')).length <= 1,
+check('opening plays no pop yet', only(sounds, 'cardPop') === 0, `x${only(sounds, 'cardPop')}`);
+check('...and no sting', sounds.filter((n) => n.startsWith('rarity')).length === 0,
   sounds.filter((n) => n.startsWith('rarity')).join(', '));
-check('...and the menu says nothing else', sounds.length === opening.length,
-  sounds.length > opening.length ? `also heard ${sounds.filter((n) => !opening.includes(n)).join(', ')} — selectCard(0) is talking to itself` : '');
+check('...and the menu says nothing at all', sounds.length === 0,
+  sounds.length ? `heard ${sounds.join(', ')} — something is talking to itself` : '');
 
 section('The deal');
 {
@@ -205,15 +220,22 @@ section('The deal');
   // what.
   const litNow = () => [...document.getElementById('svCards').querySelectorAll('.sv-card-slot')]
     .map((s) => s.classList.contains('sv-lit'));
+  check('nothing is lit while the cards are still in the air',
+    litNow().every((b) => !b), litNow().map((b) => (b ? 'lit' : '-')).join(' '));
+
+  const ranks = [...document.getElementById('svCards').querySelectorAll('.sv-card')]
+    .map((c) => Number(c.dataset.rarityRank));
+
+  // One card has landed. Exactly one is lit — three blooming together says
+  // something was dealt and nothing about what.
+  await sleep(FIRST_MS + (SLAM.stagger * 1000) / 2);
   const openLit = litNow();
-  check('only one card is lit as the menu opens', openLit.filter(Boolean).length === 1,
+  check('one card is lit when the first one lands', openLit.filter(Boolean).length === 1,
     openLit.map((b) => (b ? 'lit' : '-')).join(' '));
 
   // ...and it is the WORST one. Lowest tier first is the whole shape of the
-  // sequence — read floor-upwards the hand is a build, and the best card on
-  // the table is the last thing that happens.
-  const ranks = [...document.getElementById('svCards').querySelectorAll('.sv-card')]
-    .map((c) => Number(c.dataset.rarityRank));
+  // sequence — read floor-upwards the hand is a build, and the best card on the
+  // table is the last thing that lands.
   const firstLit = openLit.indexOf(true);
   check('and it is the lowest tier dealt', ranks[firstLit] === Math.min(...ranks),
     `lit rank ${ranks[firstLit]} of [${ranks.join(', ')}]`);
@@ -223,8 +245,8 @@ section('The deal');
   drainDropped();
   check('every card ends up lit', litNow().every(Boolean), litNow().join(' '));
   // One pop per card across the whole deal — the opening one plus the rest.
-  check('one pop per card', 1 + only(rest, 'cardPop') === ranks.length,
-    `${1 + only(rest, 'cardPop')} pops for ${ranks.length} cards`);
+  check('one pop per card', only(rest, 'cardPop') === ranks.length,
+    `${only(rest, 'cardPop')} pops for ${ranks.length} cards`);
   // The stings climb, because the cards do. A tier with no `sfx` column entry
   // is skipped rather than pushing the order around, so this compares the
   // ranks of what was heard rather than counting.
@@ -233,6 +255,7 @@ section('The deal');
     .map((n) => CONFIG.rarities.find((r) => rarityById(r.id)?.sfx === n))
     .filter(Boolean).map((r) => rarityRank(r.id));
   const climbing = heardRanks.every((r, i) => i === 0 || r >= heardRanks[i - 1]);
+  if (!climbing) console.log('    DEBUG heard:', JSON.stringify([...sounds, ...rest]));
   check('the stings climb, lowest tier first', climbing, heardRanks.join(' -> '));
 }
 

@@ -32,6 +32,34 @@ export function baseStats() {
     speed: CONFIG.weapon.speed,
     life: CONFIG.weapon.life,
     radius: CONFIG.weapon.radius,
+    // PER-FLIPPER PEBBLE SIZE. Multipliers on `radius` above, spent in fire()
+    // against the emit point a pellet actually leaves from, so the seal can be
+    // throwing a boulder out of one fin and a pebble out of the other. Two
+    // scalars rather than a two-element array because upgradeText.js measures
+    // NUMBERS — an array moves without anything being able to say what moved,
+    // and the card would render blank. Both seed at 1, which is the un-upgraded
+    // gun: every pellet is exactly `radius`, and Flippers Up! is the only thing
+    // that ever moves either one.
+    leftFinRadiusMul: 1,
+    rightFinRadiusMul: 1,
+    // HOW MANY STACKS OF FLIPPERS UP! HAVE BEEN SPENT. The card feeds one
+    // flipper at a time and the SIDE is this counter's parity — stack 1 is the
+    // left, 2 the right, and so on — so the alternation is stated once, as
+    // arithmetic, rather than inferred twice from the two multipliers above.
+    // See flipperSideForStack in levelStats.js, which is that one statement.
+    flippersUpStacks: 0,
+    // ...AND WHAT THAT FLIPPER IS CARRYING. Past `flipperElementStack` a stack
+    // stops being only size and starts putting an ELEMENT on the fin it feeds:
+    // this is how deep that fin's element is, on the same curve Glow Up! uses.
+    //
+    // The LEVEL is here because it is a number and the stat block is numbers.
+    // WHICH element it is, is not: it is rolled once when the stack is taken
+    // and stamped on the pick, so it survives the block being rebuilt from
+    // scratch several times a minute. See finElements() in systems/elements.js,
+    // which reads it back off the pick list the same way activeElement() reads
+    // the run's element off the pick list.
+    leftFinElementLevel: 0,
+    rightFinElementLevel: 0,
     multishot: CONFIG.weapon.multishot,
     // HOW MANY STACKS OF MULTISHOT, which is NOT `multishot`. Levelling adds
     // pellets on its own cadence (see applyLevelGrowth), so the pellet count is
@@ -243,6 +271,11 @@ export const INTEGER_STATS = new Set([
   'dumboLevel', 'harpLevel', 'oysterLevel', 'razorClamLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
   'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
+  // Flippers Up!. `flippersUpStacks` is a count whose PARITY decides which fin
+  // a stack feeds, so a Rare pick scaling it to 1.25 would not merely be a
+  // fractional level — it would put the next stack on the wrong flipper, and the
+  // element rolled for that pick would land on the other one.
+  'flippersUpStacks', 'leftFinElementLevel', 'rightFinElementLevel',
 ]);
 
 // THE ONE WAY TO READ `projectileBonus`. Every site that spawns a countable
@@ -304,6 +337,31 @@ export function applyLevelGrowth(s, level) {
   s.speed += CONFIG.weapon.speedPerLevel * (lvl - 1);
   s.multishot += Math.floor((lvl - 1) / CONFIG.weapon.levelsPerExtraShot);
   s.maxHp *= Math.pow(1 + (CONFIG.player.hpPerLevel ?? 0), lvl - 1);
+  return s;
+}
+
+// THE BOSS DIVIDEND'S OTHER HALF — a pellet per boss, forever.
+//
+// A boss already pays in stacks (the hive ceremony, see updateBossDividend in
+// main.js), and that payout is a CHOICE: it deepens decisions the player has
+// already made. This one is not a choice and is not meant to be. It is the
+// same statement applyLevelGrowth above makes about levelling — the gun keeps
+// pace with the water on its own — said about the other axis the run escalates
+// on. Five levels is a boss, and a run that beat four of them is firing four
+// more pellets whether or not it ever saw a Multishot card.
+//
+// `multishot` and NOT `multishotLevel`, exactly as the level cadence above
+// does, and for the reason the note on those two fields gives: the second one
+// counts STACKS OF THE CARD and is what multishotLevelStats spends the damage
+// and size curve against. Paying a boss into it would hand out a compounding
+// bonus for a fight rather than for a pick, and would quietly spend a curve
+// that is deliberately exhausted by the tenth stack.
+//
+// Mutates `s` and returns it. A run that has killed no boss is untouched.
+export function applyBossGrowth(s, bossesDefeated) {
+  const kills = Math.max(0, Math.floor(bossesDefeated ?? 0));
+  if (!kills) return s;
+  s.multishot += (CONFIG.weapon.shotsPerBoss ?? 0) * kills;
   return s;
 }
 

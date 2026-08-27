@@ -151,6 +151,24 @@ export function beginRun(config = {}) {
     buckets: [],
     upgradePicks: [], // [{t, id}] — the build order, for reading a run back
     controlEvents: {}, // source -> count, for the damageless abilities
+    // --- WHICH FLIPPER, AND WHAT IT WAS THROWING ---------------------------
+    // '<side>' or '<side>:<element>' -> damage. The gun's total is already in
+    // dealtBySource under 'gun' and stays there untouched: this is a SECOND
+    // dimension over the same damage, not a replacement for it, because every
+    // other consumer — weaponName, the hive, the upgrade tips, sourceFamily —
+    // asks "which weapon" and would break the day 'gun' became 'gun:left'.
+    //
+    // ON THE RUN rather than per bucket, like controlEvents above and for the
+    // same reason: "how did the two fins split" is a question about the whole
+    // run, not a rate. A per-bucket version would answer a question nobody has
+    // asked and cost a second object per twenty seconds of play.
+    //
+    // The KEY carries both halves because they are one fact. A run that took
+    // Flippers Up! four times has a left fin throwing voltaic and a right fin
+    // throwing venom; two separate maps could say which fin dealt more and
+    // which element dealt more, and could not say that the venom was the right
+    // one — which is the whole thing the card is about.
+    finDamage: {},
     finalStacks: {},
   };
   bucket = newBucket(0);
@@ -216,7 +234,7 @@ export function beginRun(config = {}) {
 export const SENTINEL_HP = 5e6;
 
 /** Damage dealt BY the player's kit. `source` is a key of SOURCE_UPGRADES. */
-export function recordDamage(source, amount, target) {
+export function recordDamage(source, amount, target, fin = null) {
   if (!run || !(amount > 0)) return;
   // Credit still moves even when the figure doesn't — whatever last touched a
   // creature owns its kill, and a placeholder's death is still a death.
@@ -231,6 +249,10 @@ export function recordDamage(source, amount, target) {
   if (target && typeof target === 'object' && target.invincible) return;
   if (amount >= SENTINEL_HP) return;
   add(bucket.dealtBySource, source, amount);
+  // ...and the fin split, when the caller knew which flipper threw it. BEHIND
+  // the same two guards, so scenery and the turtle's sentinel hp cannot poison
+  // this the way they once poisoned the ledger above — see SENTINEL_HP.
+  if (fin) add(run.finDamage, fin, amount);
   // The per-body tally the polaroid reads. Behind the same two guards as the
   // ledger above and deliberately so: a caption must not credit a weapon for
   // swinging at scenery, and the turtle's sentinel hp would out-total every

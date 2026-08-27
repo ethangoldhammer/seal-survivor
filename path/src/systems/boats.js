@@ -639,7 +639,12 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
     scale: 1.1,
     // The bigger hull answers deeper, the same rule its death below uses.
     sfxOpts: { pitch: b.isTrawler ? 0.85 : 1 },
-  });
+  // NOT a boss. These are the trawlers and rowboats that sail past, and they
+  // come through bossVoice only for the steel in their hull — the shared
+  // `bossHit` layer is about a BOSS FIGHT being what you are looking at, and
+  // shooting the scenery is not one. The boat boss is an enemy and never
+  // reaches this file.
+  }, { general: false });
 
   // WHERE IT WAS HIT, remembered in the HULL'S OWN FRAME. The smoke that comes
   // off a failing boat is fired from these, and a hit position stored in world
@@ -724,7 +729,9 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   bossVoice('die', b.assetKey ?? b.mesh?.name, {
     x: b.mesh.position.x, y: b.mesh.position.y,
     sfxOpts: { pitch: b.isTrawler ? 0.82 : 1, decayMul: b.isTrawler ? 1.3 : 1 },
-  });
+    // Same reason as the hit above: `boatExplosion` already owns this moment,
+    // and `bossDeath` would be a second one saying a boss just died.
+  }, { general: false });
 
   hooks.onBoatDestroyed?.(b, count);
 

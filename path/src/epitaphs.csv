@@ -1,8 +1,8 @@
 id,text,review,cause,enabled,weight,notes
-general1,lost to,TRUE,,TRUE,3,the plain one — every cause nobody wrote for gets this pool
-general2,taken by,TRUE,,FALSE,2,
-general3,done in by,TRUE,,TRUE,2,
-general4,died by way of,TRUE,,TRUE,1,
+general1,lost to,,,TRUE,3,the plain one — every cause nobody wrote for gets this pool
+general2,taken by,,,FALSE,2,
+general3,done in by,,,TRUE,2,
+general4,died by way of,,,TRUE,1,
 general5,who perished by way of,TRUE,,TRUE,1,reads as an encounter rather than an attack
 sharkchomp,chomped by,TRUE,shark,TRUE,3,
 sharkbit,bitten clean through by,TRUE,shark,TRUE,2,

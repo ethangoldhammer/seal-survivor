@@ -554,6 +554,44 @@ function abilityFlags(rows) {
  * Analyse one recorded run.
  * @param {object} run as produced by playtest.js
  */
+
+// ---------------------------------------------------------------------------
+// THE FIN SPLIT — how the two flippers divided the gun's work, and on what.
+//
+// Reads run.finDamage, whose keys are '<side>' or '<side>:<element>' (see
+// recordDamage in playtest.js). Returned as one row per SIDE with the types
+// nested under it, because that is the order the question is asked in: which
+// flipper is carrying this run, and then what is it throwing.
+//
+// A run with no Flippers Up! has an empty map and gets an empty list — the
+// basic shot leaves both fins from the first second, but nothing tells them
+// apart until the card starts feeding one, and two identical rows saying 50/50
+// is a breakdown of nothing.
+//
+// IMPORT-FREE, like the rest of this file: the element's printed name is the
+// caller's job (elementLabel lives in systems/elements.js, which pulls in
+// three.js), so a row carries the element ID and the UI resolves it. Same
+// arrangement weaponName already has with `source`.
+// ---------------------------------------------------------------------------
+export function finTable(run) {
+  const raw = run?.finDamage ?? {};
+  const bySide = new Map();
+  for (const key in raw) {
+    const [side, element = null] = key.split(':');
+    if (!bySide.has(side)) bySide.set(side, { side, damage: 0, types: [] });
+    const row = bySide.get(side);
+    row.damage += raw[key];
+    row.types.push({ element, damage: raw[key] });
+  }
+  const rows = [...bySide.values()];
+  for (const r of rows) r.types.sort((a, b) => b.damage - a.damage);
+  rows.sort((a, b) => b.damage - a.damage);
+  const total = rows.reduce((n, r) => n + r.damage, 0);
+  for (const r of rows) r.share = safeDiv(r.damage, total);
+  return { rows, total };
+}
+
+
 export function analyzeRun(run) {
   const buckets = deriveBuckets(run);
   const curve = growthCurve(buckets);
@@ -582,6 +620,7 @@ export function analyzeRun(run) {
     abilities: rows,
     totalDamage,
     threats,
+    fins: finTable(run),
     flags,
     chain: chainSummary(run),
     verdict: verdictLine(flags),
@@ -846,6 +885,31 @@ export function formatRunReport(a) {
         String(Math.round(r.events)).padStart(6),
         String(r.stacks).padStart(7),
         safeDiv(r.events, r.stackMinutes).toFixed(1).padStart(15),
+      ].join(''));
+    }
+  }
+  // THE FIN SPLIT. Only once the two flippers are actually distinguishable —
+  // the gun leaves both from the first second, and until Flippers Up! starts
+  // feeding one they are the same weapon printed twice.
+  //
+  // Worth a section rather than a line because the two halves are read against
+  // each other: a run where one fin did 80% of the gun's work is a run where
+  // the alternation is not landing (see CONFIG.weapon.alternateFins) or where
+  // one element is carrying it, and neither is visible from the gun's total.
+  const fins = a.fins ?? { rows: [], total: 0 };
+  if (fins.rows.length > 1) {
+    L.push('');
+    L.push('  flipper   throwing              damage   share');
+    for (const r of fins.rows) {
+      // The element IDs and not their printed labels: those live in
+      // systems/elements.js, which pulls in three.js, and this file is
+      // import-free so the CLI can read a run back with no renderer at all.
+      const types = r.types.map((t) => t.element ?? 'plain').join('+');
+      L.push([
+        `  ${r.side.padEnd(10)}`,
+        types.padEnd(22),
+        String(Math.round(r.damage)).padStart(6),
+        `${Math.round((r.share ?? 0) * 100)}%`.padStart(8),
       ].join(''));
     }
   }

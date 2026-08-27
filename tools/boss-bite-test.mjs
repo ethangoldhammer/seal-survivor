@@ -4,6 +4,15 @@
 //
 // WHERE A BOSS'S BITE ACTUALLY LANDS, measured on the bodies the game loads.
 //
+// NOT ONLY THE BOSSES ANY MORE. The six apex sharks carry a `biteDamage` too
+// now that they commit to a readable pass (see `shark.lunge` in config.js), so
+// this file measures ten bodies rather than five — and it always would have,
+// because BITERS is built off the CSV rather than off a list here. The wildlife
+// bodies are half the length of a boss's and the seal's hitRadius is the same
+// 1.0 in every reach, which is exactly the kind of thing that quietly makes a
+// gate mean something different; the measurement note further down is what came
+// out of running them through it.
+//
 // The bite is the only attack the four chasing bosses have (see `biteDamage`
 // in enemies.csv and onPlayerBite in main.js), and the thing that decides
 // whether it is an attack or just a second contact drain is WHERE it is
@@ -133,7 +142,26 @@ for (const [key, def] of BITERS) {
 
     // ...and the zone is a HEAD rather than most of the animal. The number to
     // watch: what fraction of the body's length can bite you.
-    const frac = (reach * 2) / length;
+    //
+    // MEASURED ALONG THE BODY, NOT AS A DIAMETER. This used to be `reach * 2`,
+    // which is the sphere's full width — and most of the front half of that
+    // sphere is open water, because the sphere is centred on the ORIGIN and the
+    // origin sits near the snout (that is the whole fact this file exists to
+    // hold). So it counted several units of nothing as though they were body.
+    //
+    // On a boss the error is small and it passed anyway. It stopped being small
+    // the moment the six wildlife sharks grew a `biteDamage` and arrived here:
+    // the seal's own hitRadius is a CONSTANT 1.0 in every reach, so on a 10-unit
+    // shark it is a fifth of the body all by itself, and doubling it read as
+    // 55% of the animal biting when the real covered span is 43%. The tail
+    // check above — which is the one that actually rots — passed on every one
+    // of them with room to spare, which is the tell that this measurement, not
+    // the gate, was what had gone wrong.
+    //
+    // The covered span is the snout (the front of the body) back to `-reach`
+    // (the rear of the sphere), because the check above has already established
+    // that the reach clears the snout.
+    const frac = (snout + reach) / length;
     check(`${label}: the bite is the front of the animal, not the animal`,
       frac <= 0.5,
       `${(frac * 100).toFixed(0)}% of a ${length.toFixed(1)}u body`);

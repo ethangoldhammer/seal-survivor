@@ -311,6 +311,20 @@ for (const file of srcFiles) {
     // EVENT and the SOURCE, so main.js is not widened and a hand-typed hex
     // here would still fail.
     if (/^\s*'hotSpotChumTaken'/.test(args) && /\bcolor:\s*chunk\.base\b/.test(args)) continue;
+    // THE MUZZLE FLASH, which is the fourth odd one out and the first that is
+    // not a pickup. The palette rule this check enforces — a burst's colour says
+    // what KIND of event it was — is not being broken here so much as taken
+    // literally: Flippers Up! can put a different element on each flipper, so
+    // two flashes in the same volley genuinely ARE different kinds of event, and
+    // one stock blue for both would be the burst lying about which fin threw
+    // what. It is also the only way the muzzle can agree with the pellet and the
+    // ribbon leaving it, which elementFlightParticles has always tinted.
+    //
+    // Held to the EVENT and the SOURCE like the four above, so main.js and the
+    // muzzle emitter are not widened by it: a hand-typed hex on either call is
+    // still a failure, and so is a tint on any other burst in either file.
+    if (/^\s*'shoot'/.test(args) && /\bcolor:\s*lead \? flashColor\(/.test(args)) continue;
+    if (/^\s*'muzzle'/.test(args) && /\bcolor:\s*flashColor\(/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }

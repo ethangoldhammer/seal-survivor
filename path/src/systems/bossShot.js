@@ -359,11 +359,24 @@ function drawQrPlan(g, plan, x, y) {
     const family = CONFIG.typography?.family ?? 'system-ui, sans-serif';
     g.save?.();
     g.fillStyle = c.dark ?? '#05070d';
-    g.font = `700 ${plan.capSize}px ${family}`;
     g.textAlign = 'center';
     g.textBaseline = 'alphabetic';
     g.letterSpacing = '0.12em';
-    g.fillText(plan.caption, x + plan.w / 2, y + side + plan.capSize);
+    // MEASURED AGAINST THE PANEL, not against the size the plan wanted.
+    // qrPlan has no canvas to measure with, so its capSize is a fraction of
+    // the code's side and nothing more — in the game's own face (a pixel font,
+    // one em per glyph) "SCAN TO PLAY" came out wider than the code it sits
+    // under and ran off both ends of the white as "CAN TO PLA". The panel is
+    // the only thing this line may be as wide as, less a module of air at each
+    // end so it does not touch the paper's edge.
+    const room = Math.max(1, plan.w - plan.unit * 2);
+    let px = plan.capSize;
+    g.font = `700 ${px}px ${family}`;
+    while (g.measureText(plan.caption).width > room && px > 8) {
+      px -= 1;
+      g.font = `700 ${px}px ${family}`;
+    }
+    g.fillText(plan.caption, x + plan.w / 2, y + side + px);
     g.letterSpacing = '0em';
     g.textAlign = 'left';
     g.restore?.();
@@ -589,8 +602,15 @@ export async function composeRunSheet(run = {}) {
   const tilt = asCards ? num(c.tilt, 2.4) : 0;
   const swing = tilt ? Math.ceil(cellW * Math.abs(Math.sin(tilt * Math.PI / 180)) * 0.6) : 0;
 
+  // THE FOOTER only exists when there is a store to point at — see storeRow.
+  // With none, `foot` is 0 and every measurement below is the one it always
+  // was, which is what makes this a stub rather than a hole in the sheet.
+  const stores = storeRow();
+  const foot = stores.length ? Math.max(48, Math.round(num(c.footerHeight, 132))) : 0;
+
   const w = pad * 2 + cols * cellW + (cols - 1) * gap + swing * 2;
-  const h = pad + head + rows * cellH + (rows - 1) * gap + pad + swing;
+  const h = pad + head + rows * cellH + (rows - 1) * gap + swing
+    + (foot ? gap + foot : 0) + pad;
   const out = document.createElement('canvas');
   out.width = w;
   out.height = h;
@@ -638,6 +658,8 @@ export async function composeRunSheet(run = {}) {
     g.lineWidth = 2;
     g.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
   }
+
+  if (foot) drawStores(g, stores, pad, h - pad - foot, w - pad * 2, foot);
   return out;
 }
 
@@ -666,56 +688,179 @@ function drawScorecard(g, run, x, y, w, h) {
   const claimed = plan ? plan.w + gap * 2 : 0;
   if (plan) drawQrPlan(g, plan, x + w - plan.w, y + Math.max(0, (h - plan.h) / 2));
 
+  // EVERY LINE BELOW IS MEASURED, and that is the whole of the fix that got
+  // written here. The bands above were only ever a promise that two lines
+  // would not collide VERTICALLY; horizontally each one was drawn at a size
+  // derived from the band height and trusted to fit. It does not fit in the
+  // game's own face — a 13-character wordmark set at 60px ran under a
+  // right-aligned URL, a six-figure score ran into the TIME column beside it,
+  // and neither is visible until somebody looks at a shared PNG. Nothing here
+  // may be drawn with fillText at a size that was not checked against the room
+  // it has; fitText is that check.
+  const inner = Math.max(1, w - claimed);
+
   g.textAlign = 'left';
   g.textBaseline = 'alphabetic';
   g.fillStyle = '#ffffff';
-  g.font = `700 ${title}px ${family}`;
-  g.fillText(c.title ?? 'SEAL SURVIVOR', x, y + title);
-
-  // Right-aligned on the title's own line, where there is nothing to run into.
-  // It stays even with the code beside it: the address in type is what a
-  // person reads out loud to somebody in the same room, and it is the only
-  // route left if the picture is looked at on the device it was shared from.
-  g.textAlign = 'right';
-  g.fillStyle = 'rgba(232,236,243,0.5)';
-  g.font = `600 ${label}px ${family}`;
-  g.fillText(cfg().url ?? 'seal-survivor.pages.dev', x + w - claimed, y + title);
-  g.textAlign = 'left';
+  fitText(g, c.title ?? 'SEAL SURVIVOR', x, y + title, inner, title, family);
 
   const bosses = run.bosses ?? shots.length;
+  const bossLine = `${bosses} BOSS${bosses === 1 ? '' : 'ES'} DEFEATED`;
+  const subY = y + title + label * 2;
   g.fillStyle = 'rgba(255,120,120,0.95)';
   g.font = `700 ${label}px ${family}`;
-  g.fillText(`${bosses} BOSS${bosses === 1 ? '' : 'ES'} DEFEATED`, x, y + title + label * 2);
+  g.fillText(bossLine, x, subY);
 
-  // The figures along the bottom of the band, in four even columns across the
-  // full width — the numbers are what a stranger reads after the pictures.
+  // THE ADDRESS, right-aligned on the boss count's line rather than the
+  // title's. It used to sit beside the wordmark, which is the one line on this
+  // card that is set large and whose width is a name nobody chose for its
+  // length. Beside the boss count it has most of the band to itself, and what
+  // it does have is measured against what that count actually took.
+  const url = cfg().url ?? 'seal-survivor.pages.dev';
+  g.textAlign = 'right';
+  g.fillStyle = 'rgba(232,236,243,0.5)';
+  fitText(g, url, x + inner, subY,
+    Math.max(1, inner - g.measureText(bossLine).width - gap * 2), label, family, 600, 9);
+  g.textAlign = 'left';
+
+  // THE FIGURES along the bottom of the band. Four columns, and the widths are
+  // ALLOCATED rather than assumed: 129,448 is three times the width of 5:15 in
+  // the same type, so four equal quarters is a layout that only works while
+  // nobody plays well. An even split is what put the score through the clock
+  // in the first shared sheet.
+  //
+  // TWO RULES, and between them a collision is not a thing that can happen:
+  //
+  //   ONE SIZE FOR ALL FOUR. The row is read across, and a score set smaller
+  //   than the kill count beside it reads as a mistake — so the type shrinks
+  //   for the whole row or not at all, and it shrinks until the four of them
+  //   TOGETHER fit, not until each one fits a quarter.
+  //
+  //   EACH COLUMN IS AS WIDE AS WHAT IS IN IT. Every column takes the wider of
+  //   its label and its figure, then an equal share of whatever is left over,
+  //   so a long score takes room from a short level rather than from the
+  //   column beside it. The last column ends inside the band by construction:
+  //   the widths were summed before anything was drawn.
   const stats = [
     ['SCORE', Math.floor(run.score ?? 0).toLocaleString()],
     ['TIME', formatTime(run.time)],
     ['LEVEL', String(run.level ?? 0)],
     ['KILLS', String(run.kills ?? 0)],
   ];
-  const colW = (w - claimed) / stats.length;
+  const gutter = Math.round(gap * 0.8);
+  const spare = inner - gutter * (stats.length - 1);
+
+  // The size the whole row can be set at. Down from the size the band asked
+  // for, together, until the four columns and their gutters fit what the code
+  // left. The floor is 8: below that this is not type any more, and a sheet
+  // that narrow has bigger problems than this row.
+  let vpx = value;
+  let lpx = label;
+  let widths = [];
+  for (;;) {
+    widths = stats.map(([lbl, val]) => {
+      g.font = `600 ${lpx}px ${family}`;
+      const a = g.measureText(lbl).width;
+      g.font = `700 ${vpx}px ${family}`;
+      return Math.max(a, g.measureText(val).width);
+    });
+    const total = widths.reduce((a, b) => a + b, 0);
+    if (total <= spare || vpx <= 8) break;
+    vpx -= 1;
+    lpx = Math.max(8, Math.round(label * (vpx / value)));
+  }
+
+  // Whatever the row did not need is shared out, so the columns still reach
+  // across the band instead of huddling at the left.
+  const slack = Math.max(0, spare - widths.reduce((a, b) => a + b, 0)) / stats.length;
+  let cx = x;
   for (let i = 0; i < stats.length; i++) {
-    const cx = x + i * colW;
+    const colW = widths[i] + slack;
     g.fillStyle = 'rgba(232,236,243,0.55)';
-    g.font = `600 ${label}px ${family}`;
-    g.fillText(stats[i][0], cx, y + h - value * 1.25);
+    fitText(g, stats[i][0], cx, y + h - value * 1.25, colW, lpx, family, 600, 8);
     g.fillStyle = '#ffffff';
-    g.font = `700 ${value}px ${family}`;
-    g.fillText(stats[i][1], cx, y + h);
+    fitText(g, stats[i][1], cx, y + h, colW, vpx, family, 700, 8);
+    cx += colW + gutter;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// WHERE ELSE THE GAME IS — the footer strip.
+//
+// The sheet already tells a stranger what the game is called and points a
+// phone at one address. A game that ships on a storefront has more than one
+// address, and the picture is the only thing that travels — so the row of
+// them lives on the image rather than in the share text, which most targets
+// drop.
+//
+// A STUB UNTIL IT IS FILLED IN. Every entry in CONFIG…snapshot.stores with no
+// `url` is skipped, and with nothing left to draw the band has no height at
+// all: the sheet composes exactly as it did before any of this existed. It
+// costs a run nothing until there is somewhere to send it.
+// ---------------------------------------------------------------------------
+
+/** The store entries that actually have somewhere to point. */
+function storeRow() {
+  const list = cfg().stores;
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((s) => s && typeof s.url === 'string' && s.url.trim())
+    .map((s) => ({ name: String(s.name ?? '').trim(), url: s.url.trim() }));
+}
+
+// The address as a reader needs it: no scheme (nobody types one), no trailing
+// slash. It is being READ off a photograph, not clicked.
+function storeAddress(url) {
+  return url.replace(/^[a-z]+:\/\//i, '').replace(/\/+$/, '');
+}
+
+function drawStores(g, list, x, y, w, h) {
+  if (!list.length) return;
+  const family = CONFIG.typography?.family ?? 'system-ui, sans-serif';
+  const c = sheetCfg();
+  const gap = Math.round(c.gap ?? 18);
+
+  // A hairline over the strip, so it reads as the bottom of the sheet rather
+  // than as a caption belonging to the last photograph above it.
+  g.fillStyle = c.frame ?? 'rgba(255,255,255,0.14)';
+  g.fillRect(x, y, w, 2);
+
+  // ONE STORE PER ROW, not one per column, and that is a measurement rather
+  // than a preference. A store address is thirty to fifty characters — three
+  // of them side by side leaves about 440px a line, which in a face that is
+  // one em per glyph is nine-pixel type: present in the file, unreadable in a
+  // timeline. Down the page each line has the whole width and lands around
+  // twenty, which is the size the figures above it are read at.
+  const rowH = h / list.length;
+  const label = Math.max(9, Math.round(rowH * 0.4));
+  const nameW = Math.round(w * 0.26);
+  const addrX = x + nameW + gap;
+  const addrW = Math.max(1, w - nameW - gap);
+
+  g.textAlign = 'left';
+  g.textBaseline = 'alphabetic';
+  for (let i = 0; i < list.length; i++) {
+    const base = y + rowH * (i + 0.74);
+    g.fillStyle = 'rgba(232,236,243,0.55)';
+    fitText(g, list[i].name.toUpperCase(), x, base, nameW - gap, label, family, 600, 8);
+    g.fillStyle = '#ffffff';
+    fitText(g, storeAddress(list[i].url), addrX, base, addrW, Math.round(rowH * 0.46), family, 700, 8);
   }
 }
 
 // Boss names run to forty characters ("Wicked Grimgullet the Chumbucket
 // Rumbler"), and a name that runs off the edge of the image is worse than a
 // small one. Shrinks until it fits, down to a floor.
-function fitText(g, text, x, y, maxWidth, size, family) {
+//
+// EVERY LINE ON THE SCORECARD GOES THROUGH HERE now, not just the boss name —
+// see the note in drawScorecard. `weight` and `min` are what let it stand in
+// for a plain fillText on a dim 600-weight label as well as on a heading.
+function fitText(g, text, x, y, maxWidth, size, family, weight = 700, min = 12) {
   let px = size;
-  g.font = `700 ${px}px ${family}`;
-  while (g.measureText(text).width > maxWidth && px > 12) {
+  g.font = `${weight} ${px}px ${family}`;
+  while (g.measureText(text).width > maxWidth && px > min) {
     px -= 1;
-    g.font = `700 ${px}px ${family}`;
+    g.font = `${weight} ${px}px ${family}`;
   }
   g.fillText(text, x, y);
 }

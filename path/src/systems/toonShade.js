@@ -121,7 +121,23 @@ export function attachToonShade(material, preset = null) {
   // lighting chunks declare. The unlit fallbacks (MeshBasicMaterial shapes, the
   // sprite path, and the outline shells) have no such thing, and injecting there
   // would be a compile error — which renders NOTHING and reports nothing.
-  if (!material.isMeshStandardMaterial && !material.isMeshPhysicalMaterial) return;
+  //
+  // PHONG AND LAMBERT COUNT, and leaving them out was not a decision — it was
+  // the standard/physical pair being the only lit materials anyone had pointed
+  // this at. three's FBXLoader builds MeshPhongMaterial and nothing in
+  // assets.js converts it, so every FBX creature in the roster — the beluga,
+  // the seagull, the moray eel and the trout — was silently refused. They are
+  // lit animals under a key light; they were just not the two classes named
+  // here. Both chunks this injects into (`common` and `lights_fragment_end`)
+  // are in meshphong_frag and meshlambert_frag as well, with `reflectedLight`
+  // and `diffuseColor` in scope at exactly the same point, so the injection is
+  // the same injection. tools/looks/shader-preflight.js compiles it on all four
+  // in a real GL context, which is the only place a failure here would show —
+  // every biolum creature shares one program, so a compile error would not be a
+  // wrong-looking beluga, it would be every glowing animal in the ocean gone.
+  const lit = material.isMeshStandardMaterial || material.isMeshPhysicalMaterial
+    || material.isMeshPhongMaterial || material.isMeshLambertMaterial;
+  if (!lit) return;
   material.userData.__toonAttached = true;
   material.userData.__toonPreset = preset;
 

@@ -46,3 +46,27 @@ chose. Distinct from `saved` above, which has to name the downloads folder
 because nobody picked it. Roughly one to four words — it replaces a short status
 line under a button row on the score card, not a sentence. Seen right after the
 save dialog closes.
+
+## Flippers Up! — the two side words
+
+`CONFIG.upgrades.flippersUp.sideNames` in `path/src/config.js`, staged as
+`[DRAFT] Left` / `[DRAFT] Right`.
+
+The card feeds one flipper per pick and its title says which: "Flippers Up!
+<word>". One word each, sitting immediately after an exclamation mark, on a
+card the player is scanning against two others — so it has to read as an
+answer to "which one" at a glance rather than as part of the name. Seen on
+the level-up card and in the hive tip.
+
+## Flippers Up! — the run summary's section heading
+
+`FIN_PANEL_TITLE` in `path/src/ui/ui.js`, staged as `[DRAFT] Flippers`.
+
+Heads the left/right split under the Weapons table on the end-of-run card,
+beside a "12.4k dealt" figure. It sits under a heading already reading
+"Weapons", so it has to say that this is that same damage sliced by which
+flipper threw it — one or two words, same register as "Weapons" and "What
+hurt you". Only shown on runs that took the card.
+
+The two side words themselves are `sideNames` above; the summary reads them
+from there, so writing those once covers the card and the summary both.

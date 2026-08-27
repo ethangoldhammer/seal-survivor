@@ -626,6 +626,92 @@ section('what a level actually buys');
     delete LEVEL_STATS.__probe;
   }
 
+  // --- THE FIRST PICK IS AN UNLOCK ------------------------------------------
+  //
+  // The bug that made the whole feature look broken on the screen it matters
+  // most. A card you do not already hold is measured from level 0, and there is
+  // no level 0 of an ability — so both sides of the subtraction were level 1,
+  // every quantity came out unmoved, and the flat rule KEPT them all (they do
+  // all move on a later pick). Every card in the deal you had not taken yet
+  // read "bomb damage 61 -> 61, blast 11 -> 11, net depth 14.5 -> 14.5", which
+  // early in a run is nearly the whole screen.
+  {
+    const { levelChanges: lc } = await import('../path/src/levelStats.js');
+    const first = lc('bakalar', 0, 1, {}, {}, 8) ?? [];
+    check('a card never taken reports an unlock, not a delta',
+      first.length > 0 && first.every((c) => c.how === 'unlock'),
+      first.map((c) => `${c.stat}:${c.how}`).join(' '));
+    check('...with no before to arrow from',
+      first.every((c) => c.from === null), JSON.stringify(first[0]));
+    check('...and a real value in it',
+      first.every((c) => Number.isFinite(c.to) && c.to !== 0),
+      first.map((c) => c.to).join(', '));
+
+    const fresh = tipFor('bakalar', 0);
+    const table = fresh.rows.filter((r) => r.key.startsWith('lv:'));
+    check('so the card shows what the ability DOES', table.length > 0,
+      table.map((r) => r.text).join(' | '));
+    check('...as bare values, with no arrow and nothing dimmed',
+      table.every((r) => !r.text.includes('\u2192') && !r.flat),
+      table.map((r) => r.text).join(' | '));
+    // Dropped at Short, a first-pick card would have no rows at all — which is
+    // the state this branch exists to fix, arriving by a different road.
+    const short = tip.upgradeTipContent('bakalar', { owned: 0, verbosity: 'short' });
+    check('...and Short keeps them, or the card says nothing at all',
+      short.rows.filter((r) => r.key.startsWith('lv:')).length > 0,
+      short.rows.map((r) => r.key).join(','));
+
+    // The delta path is untouched by any of it.
+    const second = lc('bakalar', 2, 3, {}, {}, 8) ?? [];
+    check('a stack you already hold is still a delta',
+      second.some((c) => c.how === 'add'), second.map((c) => c.how).join(' '));
+  }
+
+  // --- A RUN THAT IS OVER ---------------------------------------------------
+  //
+  // Every other surface showing a hexagon asks "should I take another one" —
+  // the corner hive, the boss dividend, the level-up cards. The score screen
+  // asks the opposite: the build is finished, so "+22 bomb damage if you take a
+  // ninth" is an offer nobody can accept, printed over the one screen that
+  // exists to say what the run WAS.
+  {
+    const fin = (id, owned) => tip.upgradeTipContent(id, {
+      owned, verbosity: 'full', final: true,
+      totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+    });
+
+    const over = fin('bakalar', 4);
+    const table = over.rows.filter((r) => r.key.startsWith('lv:'));
+    check('a finished run prints where each quantity landed', table.length > 0,
+      table.map((r) => r.text).join(' | '));
+    check('...as values, with nothing to arrow toward',
+      table.every((r) => !r.text.includes('\u2192')), table.map((r) => r.text).join(' | '));
+    check('...and never a next stack', over.rows.every((r) => r.key !== 'next'),
+      over.rows.map((r) => r.key).join(','));
+
+    // A card with NO readout takes the other branch, and it has the same
+    // problem: its measured "next stack" line prices a pick the run cannot make.
+    const plain = fin('shrimpRing', 4);
+    check('a card with no readout drops its next stack too',
+      plain.rows.every((r) => r.key !== 'next'), plain.rows.map((r) => r.key).join(','));
+    check('...and still says what it was worth',
+      plain.rows.some((r) => r.key === 'total'), plain.rows.map((r) => r.key).join(','));
+
+    // The run row is the whole reason to hover a hexagon on that screen.
+    check('the run row survives on both kinds of card',
+      fin('bakalar', 4).rows.some((r) => r.key === 'run')
+      && plain.rows.some((r) => r.key === 'run'));
+
+    // And mid-run is untouched — the same card, one flag apart.
+    const live = tip.upgradeTipContent('bakalar', {
+      owned: 4, verbosity: 'full',
+      totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+    });
+    check('mid-run still prices the next pick',
+      live.rows.filter((r) => r.key.startsWith('lv:')).some((r) => r.text.includes('\u2192')),
+      live.rows.filter((r) => r.key.startsWith('lv:')).map((r) => r.text).join(' | '));
+  }
+
   // --- FOUR ROWS ------------------------------------------------------------
   // Harp Seal moves seven things and the boat six; six is already a tall box on
   // a phone, and it is held under a thumb.

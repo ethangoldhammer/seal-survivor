@@ -60,18 +60,48 @@ globalThis.Blob = dom.window.Blob;
 
 // A canvas that records what was drawn on it, so the caption can be asserted
 // rather than eyeballed. jsdom has no 2D context of its own worth the name.
-const drawn = { texts: [], images: 0, fills: 0, strokes: 0 };
+const drawn = { texts: [], images: 0, fills: 0, strokes: 0, boxes: [] };
+// THE MEASUREMENT HAS TO BE THE REAL ONE, or the stub certifies the bug.
+//
+// This used to answer `text.length * 10` whatever the font said, which made
+// every fitText in bossShot.js a no-op and every collision on the scorecard
+// invisible: a shipped run sheet had the wordmark running under the URL and a
+// six-figure score running into the TIME column beside it, with this file
+// green. The game's tuned face is a pixel font — one em per glyph, plus
+// whatever letterSpacing is set — so the width of a line is a fact this
+// harness can know exactly rather than approximate.
+//
+// Every fillText is recorded with the box it actually covered (respecting
+// textAlign), which is what THE SCORECARD FITS section below asserts on.
+const fontPx = (font) => parseFloat(/(\d+(?:\.\d+)?)px/.exec(font ?? '')?.[1] ?? 10);
+const spacingPx = (ls, px) => {
+  const m = /([\d.]+)em/.exec(ls ?? '');
+  return m ? parseFloat(m[1]) * px : 0;
+};
 dom.window.HTMLCanvasElement.prototype.getContext = function getContext() {
   return {
     canvas: this,
+    _measure(t) {
+      const px = fontPx(this._font);
+      return String(t).length * (px + spacingPx(this._ls, px));
+    },
     createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
     getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
     putImageData() {}, clearRect() {}, save() {}, restore() {},
+    translate() {}, rotate() {},
+    set shadowColor(v) { this._sc = v; }, get shadowColor() { return this._sc; },
+    set shadowBlur(v) { this._sb = v; }, get shadowBlur() { return this._sb; },
+    set shadowOffsetY(v) { this._so = v; }, get shadowOffsetY() { return this._so; },
     fillRect() { drawn.fills++; },
     strokeRect() { drawn.strokes++; },
     drawImage() { drawn.images++; },
-    fillText(t) { drawn.texts.push(String(t)); },
-    measureText: (t) => ({ width: String(t).length * 10 }),
+    fillText(t, x, y) {
+      drawn.texts.push(String(t));
+      const w = this._measure(t);
+      const x0 = this._ta === 'right' ? x - w : this._ta === 'center' ? x - w / 2 : x;
+      drawn.boxes.push({ text: String(t), x0, x1: x0 + w, y, px: fontPx(this._font) });
+    },
+    measureText(t) { return { width: this._measure(t) }; },
     createLinearGradient: () => ({ addColorStop() {} }),
     set fillStyle(v) { this._f = v; }, get fillStyle() { return this._f; },
     set font(v) { this._font = v; }, get font() { return this._font; },
@@ -648,6 +678,120 @@ const S = CONFIG.boss.kill.snapshot.sheet;
 check('...laid out in the grid the config asks for',
   sheetCanvas.width === S.pad * 2 + S.columns * S.cellWidth + (S.columns - 1) * S.gap,
   `${sheetCanvas.width}x${sheetCanvas.height}`);
+
+// ---------------------------------------------------------------------------
+section('THE SCORECARD FITS — nothing off the edge, nothing on top of anything');
+// ---------------------------------------------------------------------------
+// The bug this exists to stop is not a crash and never shows up on the score
+// screen: it is a shared PNG with "SEAL SURVIVOR" printed through the URL and
+// a score running into the clock beside it. Nobody sees it until the picture
+// is already in somebody else's timeline.
+//
+// IN THE GAME'S OWN FACE. The tuned font is a pixel one, wider per character
+// than the system stack these sizes were first eyeballed in, so the check is
+// run against that rather than against whatever the harness inherited —
+// the widest thing the card is ever asked to draw is the honest test.
+{
+  const wasFamily = CONFIG.typography.family;
+  CONFIG.typography.family = "'Press Start 2P', monospace";
+  // Three storefronts, so the footer strip is drawn at its worst case too. It is
+  // empty by default (every url null), which is the whole point of the stub —
+  // but an empty band is not a band anybody can measure.
+  const wasStores = CONFIG.boss.kill.snapshot.stores;
+  CONFIG.boss.kill.snapshot.stores = [
+    { name: 'Steam', url: 'https://store.steampowered.com/app/1234560/Seal_Survivor/' },
+    { name: 'itch.io', url: 'https://ethang.itch.io/seal-survivor' },
+    { name: 'App Store', url: 'https://apps.apple.com/app/id1234567890' },
+  ];
+  drawn.boxes.length = 0;
+  // A six-figure score and a four-figure kill count: the longest run a player
+  // can actually hand this thing.
+  const withStores = await SHOT.composeRunSheet({ score: 1298440, kills: 9671, level: 15, time: 3155, bosses: 3 });
+  const clipped = drawn.boxes.filter((b) => b.x0 < -0.5 || b.x1 > withStores.width + 0.5);
+  check('every line stays inside the image',
+    clipped.length === 0, clipped.map((b) => `"${b.text}" ${Math.round(b.x0)}..${Math.round(b.x1)}`).join(', '));
+
+  // Two lines share a row when their baselines are within a few pixels; on the
+  // same row their boxes may not touch.
+  const rows = new Map();
+  for (const b of drawn.boxes) {
+    const key = Math.round(b.y / 6);
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push(b);
+  }
+  const collisions = [];
+  for (const row of rows.values()) {
+    row.sort((a, b) => a.x0 - b.x0);
+    for (let i = 1; i < row.length; i++) {
+      if (row[i].x0 < row[i - 1].x1 - 0.5) collisions.push(`"${row[i - 1].text}" into "${row[i].text}"`);
+    }
+  }
+  check('...and off the line beside it', collisions.length === 0, collisions.join(', '));
+
+  // The stub, in the state it actually ships in: no store has a link yet, so
+  // there is no strip and the sheet is exactly the image it was before any of
+  // this was written.
+  CONFIG.boss.kill.snapshot.stores = wasStores;
+  const bare = await SHOT.composeRunSheet({ score: 1298440, kills: 9671, level: 15, time: 3155, bosses: 3 });
+  check('an unfilled store list costs the sheet no height',
+    bare.height < withStores.height, `${bare.height} vs ${withStores.height}`);
+
+  // THE FIGURE ROW, swept rather than sampled. One good run proves nothing
+  // here: the row only collides when a number gets long, and the numbers that
+  // get long are the ones a harness never types. So every shape the sheet can
+  // take is composed against every run worth worrying about — a fresh player
+  // with 0, the run in the shared image that started this, and a maxed-out
+  // ledger with a nine-figure score and a clock past an hour.
+  const wasShape = { columns: S.columns, cellWidth: S.cellWidth, headerHeight: S.headerHeight };
+  const isFigure = (t) => /^[\d,]+$/.test(t) || /^\d+:\d\d(:\d\d)?$/.test(t);
+  const isLabel = (t) => ['SCORE', 'TIME', 'LEVEL', 'KILLS'].includes(t);
+  const hits = [];
+  const ragged = [];
+  for (const shape of [
+    { columns: 1, cellWidth: 400, headerHeight: 250 },   // the narrowest band the row can get
+    { columns: 2, cellWidth: 660, headerHeight: 250 },   // what ships
+    { columns: 2, cellWidth: 660, headerHeight: 140 },   // a short header, so the type starts small
+    { columns: 3, cellWidth: 400, headerHeight: 320 },
+  ]) {
+    Object.assign(S, shape);
+    for (const run of [
+      { score: 0, kills: 0, level: 1, time: 0, bosses: 1 },
+      { score: 129448, kills: 967, level: 15, time: 315, bosses: 2 },
+      { score: 999999999, kills: 99999, level: 100, time: 359999, bosses: 8 },
+    ]) {
+      drawn.boxes.length = 0;
+      const sheetOut = await SHOT.composeRunSheet(run);
+      const row = drawn.boxes.filter((b) => isFigure(b.text) || isLabel(b.text));
+      const lines = new Map();
+      for (const b of row) {
+        const key = Math.round(b.y / 4);
+        if (!lines.has(key)) lines.set(key, []);
+        lines.get(key).push(b);
+      }
+      for (const line of lines.values()) {
+        line.sort((a, b) => a.x0 - b.x0);
+        for (let i = 1; i < line.length; i++) {
+          if (line[i].x0 < line[i - 1].x1 - 0.5) {
+            hits.push(`${shape.columns}col/${run.score}: "${line[i - 1].text}" into "${line[i].text}"`);
+          }
+        }
+        const end = line[line.length - 1];
+        if (end.x1 > sheetOut.width + 0.5) hits.push(`${shape.columns}col/${run.score}: "${end.text}" off the edge`);
+      }
+      // ...and set as one row. A score at 36px beside a kill count at 44px is
+      // not a collision, but it is the fix for one done per column, and it
+      // reads as a mistake.
+      const sizes = new Set(row.filter((b) => isFigure(b.text)).map((b) => b.px));
+      if (sizes.size > 1) ragged.push(`${shape.columns}col/${run.score}: ${[...sizes].join('/')}px`);
+    }
+  }
+  Object.assign(S, wasShape);
+  check('the score never runs into the clock beside it, at any width or any score',
+    hits.length === 0, hits.slice(0, 4).join(' · '));
+  check('...and the four figures are set at one size', ragged.length === 0, ragged.join(' · '));
+
+  CONFIG.typography.family = wasFamily;
+}
 
 downloads = 0;
 // AWAITED, because the sheet is a spread of Rive cards now: the click handler

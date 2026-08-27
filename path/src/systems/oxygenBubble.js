@@ -337,3 +337,69 @@ function applyBubbleShape(orb, r) {
   mesh.scale.x *= 1 - lead * 0.6;
   void r;
 }
+
+// ---------------------------------------------------------------------------
+// HOW OFTEN AIR ARRIVES — a POPULATION, not a cadence.
+//
+// The spawner used to be one interval timer: every 7-13 seconds a bubble seeps
+// out, and whatever the arena happened to be holding at the time was whatever
+// it was holding. Against a 14-second life that averages a bubble and a half,
+// which sounds fine and is not what it feels like — the average is made of
+// stretches with two of them up and stretches with none, and the empty ones
+// land wherever the rolls happen to cluster. A pickup you cannot see is a
+// pickup that does not exist, so on a bad run of rolls the one answer to a
+// half-empty tank is a swim to the surface, and the whole floor stops being a
+// place air comes from.
+//
+// So the arena carries a headcount instead. `bubbleMinAlive` is a FLOOR the
+// spawner refills toward on a short clock, `bubbleMaxAlive` is the cap it will
+// not top up past, and the 7-13 interval is only what paces the trip between
+// them. The interval still exists because the gap between one and two is the
+// part that should feel like weather; the floor exists because the gap between
+// one and none should not happen at all.
+//
+// Two details, both of which read as bugs if they are got wrong:
+//
+//   THE REFILL IS NOT INSTANT. A bubble taken (or burst in a crowd) would
+//   otherwise be replaced on the same frame, and a headcount that repairs
+//   itself inside a frame is a spawner the player can see working.
+//   `bubbleRefillDelay` is the beat before the floor sends up another.
+//   AT THE CAP THE CLOCK HOLDS. Counting down while the arena is already full
+//   banks spawns, and the moment one is collected the banked ones all arrive
+//   together — two bubbles out of the floor in the same second, which is the
+//   one thing a cap is supposed to prevent.
+//
+// Pure, and takes the count rather than the array, so tools/oxygen-bubble-
+// test.mjs can run an hour of arena through it with no scene at all.
+// ---------------------------------------------------------------------------
+
+/** One roll of the ambient interval — the trip from the floor up to the cap. */
+export function rollBubbleSpawnDelay(rand = Math.random) {
+  const lo = CONFIG.oxygen?.bubbleSpawnMin ?? 4;
+  const hi = CONFIG.oxygen?.bubbleSpawnMax ?? 8;
+  return lo + rand() * Math.max(0, hi - lo);
+}
+
+/**
+ * One frame of the spawner. `timer` is the caller's countdown, `alive` is how
+ * many bubbles the arena is holding right now (every one of them — a bubble
+ * shaken out of a boat's hull is air in the water exactly as much as one that
+ * seeped out of the sand, and it should hold the floor off).
+ *
+ * Returns the new timer and whether a bubble should be born this frame.
+ */
+export function stepBubbleSpawner(dt, timer, alive, rand = Math.random) {
+  const o = CONFIG.oxygen ?? {};
+  const min = o.bubbleMinAlive ?? 1;
+  const max = Math.max(min, o.bubbleMaxAlive ?? 2);
+  // At the cap the clock holds where it is. See the header.
+  if (alive >= max) return { timer, spawn: false };
+  // Below the floor the wait is cut to the refill beat — Math.min rather than
+  // an assignment, so a timer already shorter than the beat is left alone
+  // instead of being pushed back out every frame the arena is short.
+  let t = timer;
+  if (alive < min) t = Math.min(t, o.bubbleRefillDelay ?? 0.9);
+  t -= dt;
+  if (t > 0) return { timer: t, spawn: false };
+  return { timer: rollBubbleSpawnDelay(rand), spawn: true };
+}

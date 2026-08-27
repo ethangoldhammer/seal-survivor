@@ -446,6 +446,80 @@ console.log('\nCRAB CLAW\n');
   check('...which is real daylight outside touching distance',
     firedAt - (walker.radius + pR) >= 0.5,
     `${(firedAt - (walker.radius + pR)).toFixed(2)} units before it touches you`);
+
+  // ---------------------------------------------------------------------------
+  // IT WANTS IT MORE THE CLOSER YOU ARE — CONFIG.crabClaw.eager.
+  //
+  // The cooldown is a RANGE now, not a number: the crab's authored gap at the
+  // very edge of its reach, and a fraction of it once the seal is in among the
+  // legs. That is the whole answer to a crab layer that was, per second, no
+  // worse to stand on top of than to stand beside — on the one animal in the
+  // game whose entire threat is how far its arms get.
+  //
+  // Measured as PINCHES IN A FIXED WINDOW at two distances, which is the only
+  // reading that can tell you the mechanism is connected. Reading the timer
+  // after a strike would pass on a crab whose gate never opened, and reading
+  // the config would pass on one where nothing ever multiplied by it.
+  //
+  // Held at the distance rather than walked in: the crab is parked, so the only
+  // variable between the two runs is where the seal is standing.
+  function pinchesAt(frac, seconds = 14) {
+    resetEnemies(scene);
+    const c = spawnNamed(scene, 'walkingCrab', 0, { x: px + 3, y: py }, { ignoreCaps: true });
+    if (!c) return { n: 0, gate: 0, at: 0 };
+    c.entering = false;
+    c.pinchTimer = 0;
+    // The gate is measured off THIS individual's arm (scaleVariance rolls a
+    // size per crab), so the standing distance has to be too or the two runs
+    // are at different fractions of two different gates.
+    updateEnemies(dt, scene, seal);
+    const gate = pinchReach(c.claw?.reach() ?? 0, pR, pc.commitRange);
+    const at = gate * frac;
+    let n = 0;
+    let was = false;
+    for (let i = 0; i < 60 * seconds; i++) {
+      // Pinned each frame: a crawler walks, and a crab that closed the gap
+      // would be measuring both distances in one run.
+      c.mesh.position.x = px + at;
+      c.mesh.position.y = py;
+      c.vx = 0; c.vy = 0;
+      updateEnemies(dt, scene, seal);
+      const striking = !!c.claw?.isStriking();
+      if (striking && !was) n++;   // count EDGES, not frames
+      was = striking;
+    }
+    return { n, gate, at };
+  }
+
+  // THE GESTURE IS A FLOOR ON THE PERIOD, and it is why this is checked against
+  // a predicted count rather than against a ratio. `pinchTimer` starts when the
+  // gesture does, and the gesture is windup + strike + recover plus the trailing
+  // arm's lag — 0.98s as tuned — so once the eager multiplier takes the cooldown
+  // under that, the next pinch simply begins as the last one finishes and the
+  // multiplier stops buying anything. A ratio test would therefore fail on a
+  // perfectly working mechanism the moment somebody tuned the multiplier lower,
+  // which is the opposite of what this should do.
+  const SECONDS = 14;
+  const gesture = pc.windup + pc.strike + pc.recover + (pc.armLag ?? 0);
+  const predict = (mul) => Math.floor(SECONDS / Math.max(gesture, pc.cooldown * mul)) + 1;
+
+  const lazy = pinchesAt(0.92, SECONDS);
+  const eager = pinchesAt(0.15, SECONDS);
+  const wantLazy = predict(1);
+  const wantEager = predict(pc.eager?.nearCooldownMul ?? 1);
+
+  check('a crab at arm\'s length pinches on its own lazy clock',
+    Math.abs(lazy.n - wantLazy) <= 1,
+    `${lazy.n} pinches in ${SECONDS}s from ${lazy.at.toFixed(2)}u (gate ${lazy.gate.toFixed(2)}), predicted ${wantLazy}`);
+  check('...and reaches for you far more often once you are in among the legs',
+    Math.abs(eager.n - wantEager) <= 1 && eager.n > lazy.n,
+    `${eager.n} from ${eager.at.toFixed(2)}u against ${lazy.n} from ${lazy.at.toFixed(2)}u (predicted ${wantEager})`);
+  // ...and it did NOT become a blender. The gesture floor is what guarantees
+  // every one of those pinches still opens with the full 0.42s rear-up, which
+  // is the promise the whole mechanic rests on.
+  check('...every one of them still carrying its rear-up',
+    eager.n * gesture <= SECONDS + gesture,
+    `${eager.n} gestures of ${gesture.toFixed(2)}s in ${SECONDS}s — no pinch starts before the last one ends`);
 }
 
 // ---------------------------------------------------------------------------

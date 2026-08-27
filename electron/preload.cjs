@@ -30,7 +30,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // hooking setItem. But localStorage is not JavaScript state, it is a per-ORIGIN
 // storage area belonging to the frame, and both worlds read and write the same
 // one. So a setItem here is a value the page's own localStorage.getItem finds.
-// (`npm run test:desktopsave` asserts exactly this, because it is the kind of
+// (`npm run desktop:test:save` asserts exactly this, because it is the kind of
 // assumption that is either completely true or silently false.)
 //
 // TIMING IS THE WHOLE REASON IT IS HERE rather than in a module in path/src.
@@ -120,9 +120,11 @@ window.addEventListener('pagehide', snapshot);
 // that claims a capability it does not have does not merely fail to do the
 // thing — it removes the fallback that would have worked.
 //
-// So `saveImage` is deliberately ABSENT until the main process actually
-// implements a save dialog. canSaveThroughOS() is false until then, and the
-// score screen keeps its browser-side save path.
+// So every capability below is its OWN key, and each is present only while the
+// main process really implements it. `saveImage` is here because
+// electron/saveImage.js registers a handler for it; delete that handler and this
+// key should go too, which is how canSaveThroughOS() would correctly go back to
+// false and the score screen would keep its browser-side save path.
 // ---------------------------------------------------------------------------
 contextBridge.exposeInMainWorld('sealDesktop', {
   isDesktop: true,
@@ -141,6 +143,20 @@ contextBridge.exposeInMainWorld('sealDesktop', {
    * that do not exist.
    */
   saveImage: (bytes, name) => ipcRenderer.invoke('seal-save:image', bytes, name),
+
+  /**
+   * Steamworks, when there is any. `status()` resolves to
+   * { available, status } and NEVER rejects — see electron/steam.js for why
+   * "not available" is the normal case rather than an error state.
+   *
+   * `achieve(name)` unlocks by Steamworks API name and resolves false for
+   * every kind of no. There is no achievement roster in this codebase yet:
+   * the names and their conditions are Ethan's to write.
+   */
+  steam: {
+    status: () => ipcRenderer.invoke('seal-steam:status'),
+    achieve: (name) => ipcRenderer.invoke('seal-steam:achieve', name),
+  },
 
   // The OS, for the playtest ledger's device profile. A Steam build's runs
   // come from three quite different machines (Windows, macOS, and the Deck

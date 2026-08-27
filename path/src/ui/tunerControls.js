@@ -97,6 +97,24 @@ const STYLES = `
     font-variant-numeric: tabular-nums; }
   .sv-t-chip:hover { border-color: #7ad7ff; color: #7ad7ff; }
   .sv-t-chip.sv-t-on { background: rgba(122,215,255,0.18); border-color: #7ad7ff; color: #cdefff; }
+  /* SEARCH. One box per tuning panel, filtering the accordion in place rather
+     than opening a separate results list: the tree IS the map of the panel, and
+     a flat list of hits throws away the one thing that tells you what a stray
+     slider belongs to. Matching rows stay where they are and everything else
+     folds away. */
+  .sv-t-searchrow { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+  .sv-t-search { flex: 1; min-width: 0; background: rgba(255,255,255,0.06); color: #e8ecf3;
+    font-family: inherit; font-size: 11px; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 6px; padding: 6px 8px; }
+  .sv-t-search::placeholder { color: rgba(232,236,243,0.35); }
+  .sv-t-search:focus { outline: none; border-color: #7ad7ff; }
+  /* Says how many controls survived the query. "none" rather than "0" because a
+     zero in a panel full of numbers reads as a value, not as a result count. */
+  .sv-t-searchcount { flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    color: rgba(232,236,243,0.4); font-variant-numeric: tabular-nums; }
+  /* Filtered out. !important because a hidden row's own display comes from
+     half a dozen rules across three panels, and this has to beat all of them. */
+  .sv-t-miss { display: none !important; }
   /* A READOUT is derived text, never an input — what the numbers above it add
      up to. Monospace and tabular so columns of figures line up down the panel
      rather than jittering as values change. */
@@ -337,6 +355,237 @@ export function setGroupsExpanded(root, expanded) {
   persistOpenGroups();
 }
 
+// ---------------------------------------------------------------------------
+// SEARCH
+//
+// Every tuning panel is an accordion of collapsed headers, which is a good way
+// to read a panel and a bad way to find one control in it: the ` tuner alone
+// carries 46 groups across seven sections, and "where is the bloom knee" costs
+// you a guess about which family it was filed under before you can even look.
+//
+// So the query filters the tree IN PLACE rather than building a list of hits.
+// A hit stays exactly where it lives, its section and group open around it, and
+// everything that missed folds away — which means the answer to "what does this
+// slider belong to" is still on screen next to it. A flat results list would
+// throw that away, and the thing you most need when a stray control surfaces is
+// the context it came from.
+//
+// A HEADER THAT MATCHES IS ONE HIT, NOT EVERYTHING UNDER IT. Typing "camera" is
+// a request for the camera group, so the group survives whole and FOLDED, one
+// click from open, rather than spilling its forty sliders over every other hit.
+//
+// NOTHING HERE WRITES. Not to CONFIG (it only toggles classes) and not to the
+// open-groups store: a search expands headers by class alone, and clearing the
+// box re-syncs every header from openSet() — the persisted truth — rather than
+// from a snapshot. Collapsing a header is already a view preference kept out of
+// the tuning file; a search is not even that much of an edit.
+
+const MISS = 'sv-t-miss';
+
+// What a schema row is searchable by: its label, its config path, and the
+// option names of a dropdown or a pill row. The path matters as much as the
+// label — half of what you know when you go hunting is `bloom.intensity`, and
+// none of that string is rendered anywhere on the row.
+function rowSearchText(item) {
+  const bits = [item.label, item.path];
+  if (item.options) bits.push(...item.options);
+  if (item.labels) bits.push(...item.labels);
+  return bits.filter(Boolean).join(' ').toLowerCase();
+}
+
+// Stamp a hand-built row (a creature, an emitter, an upgrade — anything not
+// built from TUNER_SCHEMA) with what it should be findable by. Without it those
+// rows fall back to their own rendered text, which is every slider label they
+// contain: searching "tint" would then match all 48 model rows at once.
+export function setRowSearchText(el, text) {
+  el.dataset.search = String(text ?? '').toLowerCase();
+  return el;
+}
+
+const isContainer = (el) =>
+  el.classList?.contains('sv-t-section') || el.classList?.contains('sv-t-groupwrap');
+
+const childByClass = (el, cls) => {
+  for (const c of el.children) if (c.classList.contains(cls)) return c;
+  return null;
+};
+
+function headerOf(wrap) {
+  return childByClass(wrap, 'sv-t-sectionhead') ?? childByClass(wrap, 'sv-t-group');
+}
+
+function bodyOf(wrap) {
+  return childByClass(wrap, 'sv-t-sectionbody') ?? childByClass(wrap, 'sv-t-groupbody');
+}
+
+function setMiss(el, miss) {
+  el.classList.toggle(MISS, miss);
+}
+
+// Open or shut a header WITHOUT touching the persisted open set — see the note
+// above. aria-expanded moves with it so the panel stays honest to a screen
+// reader while it is filtered.
+function setOpenVisual(wrap, open) {
+  wrap.classList.toggle('sv-t-open', open);
+  headerOf(wrap)?.setAttribute('aria-expanded', String(open));
+}
+
+// While a query is live a header counts its HITS rather than its contents —
+// "3" under a section that holds 40 is the useful number when you are reading a
+// filtered panel. The real count is parked on the element and put back when the
+// box is cleared.
+function setCount(wrap, n) {
+  const el = headerOf(wrap)?.querySelector('.sv-t-section-count, .sv-t-group-count');
+  if (!el) return;
+  if (n === null) {
+    if (el.dataset.fullCount !== undefined) {
+      el.textContent = el.dataset.fullCount;
+      delete el.dataset.fullCount;
+    }
+    return;
+  }
+  if (el.dataset.fullCount === undefined) el.dataset.fullCount = el.textContent;
+  el.textContent = String(n);
+}
+
+// A leaf's searchable text: its stamp if it has one, otherwise whatever it
+// renders. Never cached — a readout's text is regenerated on every refresh.
+function leafText(el) {
+  const stamped = el.dataset?.search;
+  return stamped !== undefined ? stamped : (el.textContent ?? '').toLowerCase();
+}
+
+// Returns how many hits are showing under `el`.
+function filterNode(el, q) {
+  if (isContainer(el)) return filterContainer(el, q);
+
+  // A plain wrapper that happens to hold sections — the Upgrades tab wraps its
+  // table in one. Transparent to the walk: it shows if anything inside it does.
+  if (el.querySelector?.('.sv-t-section, .sv-t-groupwrap')) {
+    let shown = 0;
+    for (const child of [...el.children]) shown += filterNode(child, q);
+    setMiss(el, shown === 0);
+    return shown;
+  }
+
+  const hit = leafText(el).includes(q);
+  setMiss(el, !hit);
+  return hit ? 1 : 0;
+}
+
+function filterContainer(wrap, q) {
+  const nameEl = headerOf(wrap)?.querySelector('.sv-t-section-name, .sv-t-group-name');
+  const body = bodyOf(wrap);
+
+  // A HEADER THAT MATCHES IS ONE HIT, NOT EVERYTHING UNDER IT. The group is the
+  // thing you were looking for, so it survives whole and folded exactly as the
+  // panel had it — real count, nothing inside hidden, one click from open.
+  //
+  // Unfolding it instead is what this used to do, and it is worse the moment
+  // the panel is real: "shark" matches two skin-preset groups whose names say
+  // so, and expanding them put 78 sliders on screen above the one model row
+  // that was actually being looked for. A destination and a hit are different
+  // things, and only one of them should cost you a screen.
+  if ((nameEl?.textContent ?? '').toLowerCase().includes(q)) {
+    setMiss(wrap, false);
+    if (body) restoreSubtree(body);
+    setOpenVisual(wrap, openSet().has(wrap.dataset.openKey));
+    setCount(wrap, null);
+    return 1;
+  }
+
+  let shown = 0;
+  if (body) for (const child of [...body.children]) shown += filterNode(child, q);
+
+  setMiss(wrap, shown === 0);
+  setOpenVisual(wrap, shown > 0);
+  setCount(wrap, shown > 0 ? shown : null);
+  return shown;
+}
+
+// Put a subtree back the way it was: nothing hidden, every header at whatever
+// the persisted open set says, real counts restored. Used both to clear a query
+// and to hand back an untouched group that matched on its own name.
+function restoreSubtree(root) {
+  const open = openSet();
+  for (const el of root.querySelectorAll(`.${MISS}`)) el.classList.remove(MISS);
+  for (const wrap of root.querySelectorAll('[data-open-key]')) {
+    setOpenVisual(wrap, open.has(wrap.dataset.openKey));
+    setCount(wrap, null);
+  }
+}
+
+// Filter one root, or several at once (the Look & Sound panel searches all six
+// of its tabs so the hit counts can say which tab to open). Returns the number
+// of surviving rows per root, in the order given.
+export function applyTunerFilter(roots, query) {
+  const list = Array.isArray(roots) ? roots : [roots];
+  const q = (query ?? '').trim().toLowerCase();
+  return list.map((root) => {
+    if (!root) return 0;
+    if (!q) { restoreSubtree(root); return 0; }
+    let shown = 0;
+    // The roots themselves are never hidden — a panel that filters itself out
+    // of existence has no box left to clear the query from.
+    for (const child of [...root.children]) shown += filterNode(child, q);
+    return shown;
+  });
+}
+
+// The box itself. `onFilter(hits, query)` fires after every keystroke for a
+// panel that wants to say more than the count beside the input — the tabbed
+// panel puts a per-tab number on its tabs.
+//
+// The returned element carries `.refilter()` for a panel that rebuilds rows
+// underneath a live query (Reset rebuilds the Upgrades tab), because those new
+// rows arrive unfiltered.
+export function buildTunerSearch(roots, { placeholder = 'Search…', onFilter } = {}) {
+  injectStyles();
+  const list = Array.isArray(roots) ? roots : [roots];
+
+  const wrap = document.createElement('div');
+  wrap.className = 'sv-t-searchrow';
+
+  const input = document.createElement('input');
+  // type=search for the browser's own clear affordance; isTypingTarget already
+  // treats any INPUT as typing, so the panel hotkeys stay off while it has
+  // focus and the ` key can be typed into it.
+  input.type = 'search';
+  input.className = 'sv-t-search';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = placeholder;
+
+  const count = document.createElement('span');
+  count.className = 'sv-t-searchcount';
+
+  const run = () => {
+    const q = input.value.trim().toLowerCase();
+    const hits = applyTunerFilter(list, q);
+    const total = hits.reduce((a, b) => a + b, 0);
+    count.textContent = q ? (total ? String(total) : 'none') : '';
+    onFilter?.(hits, q);
+  };
+
+  input.addEventListener('input', run);
+  input.addEventListener('keydown', (e) => {
+    // Escape empties the box rather than reaching whatever else is listening
+    // for it — a filtered panel is a state you need a way out of, and the key
+    // you reach for is this one.
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      if (input.value) e.preventDefault();
+      input.value = '';
+      run();
+    }
+  });
+
+  wrap.append(input, count);
+  wrap.refilter = run;
+  wrap.input = input;
+  return wrap;
+}
+
 // What a collapsed header claims is hiding under it. Readouts are excluded:
 // they are derived text, and counting them makes a group of six sliders
 // announce itself as eight things to tune.
@@ -348,6 +597,12 @@ export function buildRow(item, onChange) {
   injectStyles();
   const row = document.createElement('div');
   row.className = 'sv-t-row';
+  // What search matches this row on. Stamped here rather than read off the
+  // rendered text so the CONFIG PATH is searchable too: half of what you know
+  // when you go looking for a control is `bloom.intensity`, and none of that
+  // string is on screen. A row with no stamp falls back to its own text, which
+  // is what keeps the hand-built rows in the Look & Sound panel findable.
+  row.dataset.search = rowSearchText(item);
 
   // Derived text — no path, no input, nothing to persist. `lines()` is called
   // fresh on every refresh, so a readout can report on values that live

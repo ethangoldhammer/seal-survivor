@@ -40,6 +40,9 @@ import { makeEpitaph, revealEpitaph } from '../../path/src/systems/epitaph.js';
 import { epitaphLead } from '../../path/src/systems/epitaphLead.js';
 import { initGraveBeam, sweepGrave, updateGraveBeam, graveBeamState } from '../../path/src/systems/graveBeam.js';
 import { createWaterMaterial, updateWaterMaterial } from '../../path/src/systems/water.js';
+// The SHIPPING bed, because the question this page adds is how far a real
+// plant reaches in front of where it is planted — see the depth section below.
+import { scatterSeabed, clearSeabed } from '../../path/src/systems/seabedScatter.js';
 
 const logEl = document.getElementById('log');
 const log = (m, cls) => {
@@ -629,6 +632,130 @@ section('a yard of six, as a run would leave it', 1);
     `leads rolled per cause · beam over ${names[2][0]} · ${total.toFixed(0)} units of seabed · `
     + spans.map((w, i) => `${STONES[i % STONES.length]} ${w.toFixed(1)}`).slice(0, 3).join(', '));
   for (const o of objects) scene.remove(o);
+}
+
+// --- in front of the plants -------------------------------------------------
+//
+// THE ONE THING ONLY THIS PAGE CAN ANSWER ABOUT DEPTH.
+//
+// The yard used to stand at a single typed z in the MIDDLE of the plant bed, so
+// a kelp could stand across the inscription at the one moment it is meant to be
+// read — the run has ended, the water has stopped, and the whole beat exists to
+// be looked at. systems/gravesite.js now drops the newest stone in front of the
+// bed and leaves older ones scattered through it (see the depth block there).
+//
+// The harness can check the arithmetic and nothing else: the clearance is over
+// the bed's ROOTS, and how far a plant's leaves reach in front of the point it
+// is planted at is a fact about the models. No GLB loads in Node, so this is
+// the only place the number can be measured rather than guessed — and it is
+// measured off the SHIPPING scatter, at the shipping seed, so it is the bed the
+// player gets and not a bed of stand-ins.
+section('the newest stone clears the bed', 3);
+{
+  const bed = scatterSeabed(scene);
+  const roots = CONFIG.seabed.depth[1];
+  const lane = Math.min(roots + CONFIG.gravesite.dropClear, -0.2);
+
+  // WHERE THE BED REALLY ENDS, PLANT BY PLANT. A box round the whole bed only
+  // finds the single furthest-forward leaf out of a hundred and fifty, and
+  // clearing that one is a different question from clearing the bed — the
+  // outlier is a full unit past the roots, so a lane set to beat it is a lane
+  // in the play plane with the seal swimming through the stone.
+  //
+  // Measured per INSTANCE, off the instance matrices: an InstancedMesh is one
+  // geometry and a hundred transforms, so its own bounding box says nothing
+  // about where any particular plant got to.
+  const plants = [];
+  {
+    const m = new THREE.Matrix4();
+    const b = new THREE.Box3();
+    for (const child of bed.children) {
+      if (!child.isInstancedMesh) continue;
+      if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
+      for (let i = 0; i < child.count; i += 1) {
+        child.getMatrixAt(i, m);
+        b.copy(child.geometry.boundingBox).applyMatrix4(m);
+        plants.push({ front: b.max.z, x: (b.min.x + b.max.x) / 2, wide: b.max.x - b.min.x });
+      }
+    }
+    plants.sort((a, b2) => a.front - b2.front);
+  }
+  const fronts = plants.map((p) => p.front);
+  const pct = (q) => fronts[Math.min(fronts.length - 1, Math.floor(q * fronts.length))] ?? 0;
+  const pastLane = fronts.filter((z) => z > lane).length;
+  const pastOld = fronts.filter((z) => z > CONFIG.gravesite.z).length;
+  const worst = plants[plants.length - 1];
+  log(`bed reach: ${plants.length} plants · median ${pct(0.5).toFixed(2)} · p90 ${pct(0.9).toFixed(2)} `
+    + `· furthest ${worst.front.toFixed(2)} · ${pastLane} in front of the lane at ${lane.toFixed(2)}, `
+    + `${pastOld} in front of the old ${CONFIG.gravesite.z}`);
+
+  // STOOD AT THE WORST PLANT IN THE BED, not at the origin. A stone dropped
+  // into a clearing proves nothing, and a page that photographs the easy case
+  // is the same failure as one that stands its subject at y = 0.
+  const stone = buildStone(STONES[0], { name: 'FAT TONY', cause: 'a shark', lead: epitaphLead('shark') });
+  stone.object.position.x = worst.x;
+  stone.object.position.z = lane;
+  scene.add(stone.object);
+  const cam = frame(stone.size.x * 3.4,
+    new THREE.Vector3(worst.x, seabedTopY() + stone.size.y / 2, 0));
+  gl.render(scene, cam);
+  present('the stone that just fell',
+    `lane z ${lane.toFixed(2)}, at the x of the bed's furthest-forward plant (${worst.front.toFixed(2)})`);
+
+  // ...and the same stone, same bed, where the yard used to stand. This is the
+  // pair the decision was made on.
+  stone.object.position.z = CONFIG.gravesite.z;
+  gl.render(scene, cam);
+  present('...and where it used to stand',
+    `z ${CONFIG.gravesite.z} — ${pastOld} of ${plants.length} plants in front of the name`);
+
+  // WHAT THE LANE IS ACTUALLY WORTH. Not "no plant is in front of it": the last
+  // couple of percent of the bed costs the play plane, and a stone the seal
+  // swims through to read is a worse trade than a frond on somebody's shoulder.
+  // The line is drawn at a twentieth of the bed, and the count is printed
+  // either way so the number is a judgement being recorded rather than a
+  // threshold nobody looked at.
+  check('the drop lane puts the bed behind the stone',
+    pastLane <= plants.length * 0.05,
+    `${pastLane} of ${plants.length} plants still reach past z ${lane.toFixed(2)}`);
+  // The one that is structural rather than a judgement: whatever the clearance
+  // is set to, the stone stands in front of every plant's ROOTS. Fail this and
+  // the lane is inside the bed again.
+  check('...and in front of every plant\'s roots', lane > roots,
+    `lane ${lane.toFixed(2)} vs front root ${roots.toFixed(2)}`);
+  // And the comparison the change was made for: the old depth had more of the
+  // bed in front of the inscription than behind it.
+  check('the old depth really was inside the bed', pastOld > pastLane,
+    `${pastOld} in front at ${CONFIG.gravesite.z} vs ${pastLane} at ${lane.toFixed(2)}`);
+
+  scene.remove(stone.object);
+
+  // THE OTHER HALF OF THE RULE, which is a picture and not a number: a stone is
+  // only read on the day it is carved, and from the next session on it takes a
+  // rolled depth anywhere in the slab. Three of them at the ends and middle of
+  // CONFIG.gravesite.restZ, in one frame, because the thing being judged is
+  // whether a yard with plants in front of some of its stones reads as a floor
+  // that has grown over them or as markers that have sunk into the scenery.
+  const [back, front] = CONFIG.gravesite.restZ;
+  const later = [back, (back + front) / 2, front].map((z, i) => {
+    const st = buildStone(STONES[0], {
+      name: ['BRINE', 'SIR FLOPS-A-LOT', 'AL WHITEFISH'][i],
+      cause: ['running out of air', 'a crab', 'a lightning strike'][i],
+      lead: epitaphLead(['drowning', 'crab', 'lightning'][i]),
+    });
+    st.object.position.set(worst.x + (i - 1) * 9, st.object.position.y, z);
+    st.object.rotation.z = (i % 2 ? 1 : -1) * CONFIG.gravesite.lean;
+    scene.add(st.object);
+    return st.object;
+  });
+  const wide = frame(30, new THREE.Vector3(worst.x, seabedTopY() + stone.size.y / 2, 0));
+  gl.render(scene, wide);
+  present('a yard on a later run',
+    `resting depths ${back} · ${((back + front) / 2).toFixed(2)} · ${front} — one behind the bed, `
+    + 'one among it, one in front');
+  for (const o of later) scene.remove(o);
+
+  clearSeabed();
 }
 
 // --- verdict ----------------------------------------------------------------

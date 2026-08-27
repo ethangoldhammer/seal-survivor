@@ -68,6 +68,7 @@ import { pressableWithin } from './press.js';
 const PEBBLE_VOLLEY = [
   'rapidFire',      // the cadence you are hearing
   'heavyRounds',    // what each pellet carries
+  'flippersUp',     // and how big it is coming off each fin
   'multishot',      // how many left the fins
   'velocity',       // how fast they crossed
   'homingShot',     // and whether they turned on the way

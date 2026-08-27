@@ -320,10 +320,17 @@ function lerp(a, b, t) {
 // Creatures
 // ---------------------------------------------------------------------------
 
-// asset key -> the one material every shell of that species shares. Sharing is
+// MATERIAL KEY -> the material every shell wearing that look shares. Sharing is
 // what makes the tuner controls work on creatures already swimming: there is
 // exactly one place to write a colour, a width or a `visible` flag, and every
 // instance is looking at it.
+//
+// The key is the ASSET KEY for a species' ordinary rim, and `asset#skinId` for
+// a rim a skins.csv row overrode — see setOutlineVariant. Per ROW, never per
+// individual: a per-instance clone would keep the sharing property for nobody
+// and would grow with the population, while a row is a fixed, small list. The
+// asset a material belongs to is on the material itself, because the map's key
+// is no longer that asset.
 const creatureMaterials = new Map();
 // asset key -> the object-space scale its instances are built at, measured off
 // the first one attached. Needed to keep `thickness` in world units; all
@@ -367,12 +374,7 @@ function attachCreatureOutline(visual, key) {
   const on = CONFIG.creatureOutline?.on;
   if (!on || !(key in on)) return;
 
-  let material = creatureMaterials.get(key);
-  if (!material) {
-    material = makeOutlineMaterial({ color: CONFIG.creatureOutline?.color ?? 0xffffff });
-    creatureMaterials.set(key, material);
-  }
-
+  const material = outlineMaterialFor(creatureMaterials, key, null, CONFIG.creatureOutline);
   const shells = addOutlineShells(visual, { material });
   if (!shells.length) return;
   // No size-multiplier term here: createVisual applies it to the instance
@@ -387,7 +389,9 @@ function attachCreatureOutline(visual, key) {
 // slider's every input event — it's a handful of colour writes and one uniform
 // per species, no rebuild and no traversal of anything in the scene.
 export function applyCreatureOutlines() {
-  for (const key of creatureMaterials.keys()) applyCreatureOutline(key);
+  for (const material of creatureMaterials.values()) {
+    applyOutlineMaterial(material, CONFIG.creatureOutline ?? {}, creatureScales);
+  }
 }
 
 /**
@@ -418,12 +422,10 @@ export function hideOutlineOn(visual) {
 
 function applyCreatureOutline(key) {
   const cfg = CONFIG.creatureOutline ?? {};
-  const material = creatureMaterials.get(key);
-  if (!material) return;
-  // `visible` on the MATERIAL, not on the shells: the shells are per-instance
-  // clones, so there is no single one to flip, but they all point at this.
-  material.visible = cfg.on?.[key] === true;
-  applyLook(material, cfg, creatureScales.get(key) ?? 1);
+  for (const material of creatureMaterials.values()) {
+    if (material.userData.__outlineAsset !== key) continue;
+    applyOutlineMaterial(material, cfg, creatureScales);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -444,12 +446,7 @@ function attachCompanionOutline(visual, key) {
   const on = CONFIG.companionOutline?.on;
   if (!on || !(key in on)) return;
 
-  let material = companionMaterials.get(key);
-  if (!material) {
-    material = makeOutlineMaterial({ color: CONFIG.companionOutline?.color ?? 0xffffff });
-    companionMaterials.set(key, material);
-  }
-
+  const material = outlineMaterialFor(companionMaterials, key, null, CONFIG.companionOutline);
   const shells = addOutlineShells(visual, { material });
   if (!shells.length) return;
   companionScales.set(key, accumulatedScale(shells[0]));
@@ -457,20 +454,92 @@ function attachCompanionOutline(visual, key) {
 }
 
 export function applyCompanionOutlines() {
-  for (const key of companionMaterials.keys()) applyCompanionOutline(key);
+  for (const material of companionMaterials.values()) {
+    applyOutlineMaterial(material, CONFIG.companionOutline ?? {}, companionScales);
+  }
 }
 
 function applyCompanionOutline(key) {
   const cfg = CONFIG.companionOutline ?? {};
-  const material = companionMaterials.get(key);
-  if (!material) return;
-  material.visible = cfg.on?.[key] === true;
-  applyLook(material, cfg, companionScales.get(key) ?? 1);
+  for (const material of companionMaterials.values()) {
+    if (material.userData.__outlineAsset !== key) continue;
+    applyOutlineMaterial(material, cfg, companionScales);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Shared
 // ---------------------------------------------------------------------------
+
+// Get (or build) the material for one asset's rim, optionally overridden by a
+// skins.csv row. `rim` null is the species' ordinary rim and keys on the asset
+// alone, so every creature with no skin shares one material exactly as before.
+function outlineMaterialFor(store, key, rim, cfg) {
+  const matKey = rim?.id ? `${key}#${rim.id}` : key;
+  let material = store.get(matKey);
+  if (!material) {
+    material = makeOutlineMaterial({ color: cfg?.color ?? 0xffffff });
+    // The map's key is no longer the asset, so the asset has to live somewhere
+    // the apply pass can read it back off.
+    material.userData.__outlineAsset = key;
+    material.userData.__outlineRim = rim ?? null;
+    store.set(matKey, material);
+  }
+  return material;
+}
+
+// Push CONFIG at one rim material, with its skin row's overrides on top.
+//
+// THE SPECIES SWITCH STILL WINS. A row may recolour a rim or take it off, but
+// it cannot turn one ON for a species whose switch is false — the switch is the
+// roster decision ("does this creature wear a rim") and the row is the look
+// ("what does this one's rim look like"), and letting a CSV row overrule the
+// first is how a creature ends up rimmed that nobody chose to rim.
+function applyOutlineMaterial(material, cfg, scales) {
+  const key = material.userData.__outlineAsset;
+  const rim = material.userData.__outlineRim;
+  // `visible` on the MATERIAL, not on the shells: the shells are per-instance
+  // clones, so there is no single one to flip, but they all point at this.
+  material.visible = cfg.on?.[key] === true && rim?.off !== true;
+  // Spread rather than mutated: `cfg` is CONFIG itself, and a row writing into
+  // it would retune the whole family from a spawn.
+  applyLook(material, rim ? { ...cfg, ...rim } : cfg, scales.get(key) ?? 1);
+}
+
+/**
+ * Point one individual's shells at the rim its skins.csv row asked for.
+ *
+ * Called at spawn, right after the palette roll, with the `__rim` the roll
+ * carried — see skinTable.js rollSkin. Null puts the body back on its species'
+ * shared material, which is not a no-op: bodies are POOLED, so a turtle
+ * arriving from the pool is still wearing whatever it rolled last time, and the
+ * roll that returns nothing has to be able to undo the roll that returned
+ * something. Same argument as re-rolling the palette on every spawn.
+ *
+ * A body whose asset is in neither switch list has no shells and this does
+ * nothing, which is every creature that has never worn a rim.
+ */
+export function setOutlineVariant(root, key, rim = null) {
+  if (!root || !key) return 0;
+  const creature = !!(CONFIG.creatureOutline?.on && key in CONFIG.creatureOutline.on);
+  const companion = !!(CONFIG.companionOutline?.on && key in CONFIG.companionOutline.on);
+  if (!creature && !companion) return 0;
+  // The same precedence attachOutline uses: a thing that can hurt you never
+  // wears the friendly rim because of a typo in two lists.
+  const cfg = (creature ? CONFIG.creatureOutline : CONFIG.companionOutline) ?? {};
+  const store = creature ? creatureMaterials : companionMaterials;
+  const scales = creature ? creatureScales : companionScales;
+
+  const material = outlineMaterialFor(store, key, rim, cfg);
+  applyOutlineMaterial(material, cfg, scales);
+  let n = 0;
+  root.traverse((o) => {
+    if (!o.userData?.__isOutline) return;
+    o.material = material;
+    n++;
+  });
+  return n;
+}
 
 // Colour x glow, opacity, and the world -> object thickness conversion. One
 // function so the player's rim and a shark's cannot drift apart in how they

@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { CONFIG } from '../config.js';
 import { seabedTopY, bounds } from '../arena.js';
 import { createVisual } from '../assets.js';
-import { setGrassSwayHeight } from './grassSway.js';
+import { setGrassSwayHeight, registerShovedInstances, clearShovedInstances } from './grassSway.js';
 import { SEABED_PROPS } from '../seabedProps.js';
 
 // A bed of seabed plants, scattered rather than placed.
@@ -198,6 +198,28 @@ export function bedSpan(cfg = CONFIG.seabed ?? {}) {
   return { width: right - left, centre: (left + right) / 2 };
 }
 
+/**
+ * World z for one planned plant.
+ *
+ * EXPORTED, and used by scatterSeabed rather than duplicated inside it, because
+ * this is the one number the Node harness cannot get at any other way: no model
+ * loads there, so the harness can never call scatterSeabed and would otherwise
+ * have to re-derive the shift from the config — which is exactly the copy that
+ * goes stale the first time the anchoring changes.
+ *
+ * The shift is anchored on the band's BACK edge (`depth[0]`), so the whole
+ * foreground layer clears the play plane whatever thickness the band is retuned
+ * to. Anchoring on its centre would let the near half of a thick band slide
+ * back behind the seal, silently, and half the foreground layer would simply
+ * stop being in front of anything.
+ */
+export function plantWorldZ(p, cfg = CONFIG.seabed ?? {}) {
+  const depth = Array.isArray(cfg.depth) ? cfg.depth : [-5.5, -1.5];
+  const midZ = (depth[0] + depth[1]) / 2;
+  const shift = p.front ? (cfg.front?.gap ?? 1.2) - depth[0] : 0;
+  return midZ + p.z + shift;
+}
+
 const group = new THREE.Group();
 group.name = 'seabedBed';
 let built = false;
@@ -230,6 +252,17 @@ export function planBed(cfg = CONFIG.seabed ?? {}, span = bedSpan(cfg)) {
   const [sMin, sMax] = Array.isArray(cfg.scale) ? cfg.scale : [0.75, 1.35];
   const yawRange = cfg.yawRange ?? Math.PI * 2;
 
+  // A FEW PLANTS IN FRONT OF THE PLAY PLANE, so the seal swims THROUGH the bed
+  // rather than always in front of it. Rolled on a SEPARATE stream seeded off
+  // the same number, and that is the whole reason it is not just another
+  // rand() call in the loop below: every draw in that loop happens in a fixed
+  // order, so slipping a new one in shifts every subsequent plant's species and
+  // size. The bed would reshuffle the moment this feature was added, and again
+  // the moment anyone turned it off. On its own stream, a plant either steps
+  // forward or does not and nothing else about the bed changes.
+  const frontShare = Math.max(0, Math.min(1, cfg.front?.share ?? 0.12));
+  const frontRand = mulberry32(((cfg.seed ?? 1337) ^ 0x9e3779b9) >>> 0);
+
   // Every draw from `rand` happens in a fixed order per plant, so the same
   // seed gives the same bed — and adding a species to the weights changes
   // which species each plant is without moving any of them.
@@ -242,6 +275,12 @@ export function planBed(cfg = CONFIG.seabed ?? {}, span = bedSpan(cfg)) {
       variant: variant.id,
       species,
       x, z,
+      // Which SIDE of the seal this plant stands on. A flag rather than a
+      // second z, because the shift that applies it belongs with the rest of
+      // the world placement in scatterSeabed — planBed deals in the sampled
+      // band and nothing else, which is what lets the Node harness check the
+      // layout without knowing where the play plane is.
+      front: frontShare > 0 && frontRand() < frontShare,
       yaw: (rand() - 0.5) * yawRange,
       scale: sMin + rand() * (sMax - sMin),
     });
@@ -276,9 +315,14 @@ export function scatterSeabed(scene) {
   }
 
   const bedScale = cfg.bedScale ?? 1.8;
-  const depth = Array.isArray(cfg.depth) ? cfg.depth : [-5.5, -1.5];
   const span = bedSpan(cfg);
-  const midZ = (depth[0] + depth[1]) / 2;
+
+  // Depth comes from plantWorldZ below. The exact figure
+  // barely matters beyond its sign: the camera is ORTHOGRAPHIC (world.js), so a
+  // plant at z=1 and a plant at z=5 are drawn at identical size and all z
+  // decides is what occludes what. That is also why there is no scale bump to
+  // sell the foreground — in a flat side view the occlusion IS the depth cue,
+  // and a multiplier would be lost inside the bed's own 0.4x-2.1x spread.
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const up = new THREE.Vector3(0, 1, 0);
@@ -306,17 +350,31 @@ export function scatterSeabed(scene) {
     mesh.matrixAutoUpdate = false;
     mesh.name = `seabed:${variantId}`;
 
+    // Where each plant's stem runs, for the shove. Collected in the SAME LOOP
+    // that writes the matrices rather than derived afterwards, because the
+    // attribute is indexed by instance id and the two orders drifting apart is
+    // an off-by-one that shoves the wrong plants and reads as bad tuning.
+    const stems = [];
     list.forEach((p, i) => {
       // The band is sampled centred on (0,0) in world units, so placing it is
       // an offset and nothing else — no remap, which is the point of sampling
       // the floor's real shape instead of a disc.
-      pos.set(span.centre + p.x, seabedTopY(), midZ + p.z);
+      pos.set(span.centre + p.x, seabedTopY(), plantWorldZ(p, cfg));
       q.setFromAxisAngle(up, p.yaw);
       scl.setScalar(p.scale * bedScale);
       m.compose(pos, q, scl);
       mesh.setMatrixAt(i, m);
+      // The instance's own scale, not the bed's: this bed runs 0.4x to 2.1x on
+      // top of bedScale, so a seedling and a full-grown frond of one species
+      // are five units apart at the tip and a shared height would have the seal
+      // brushing thin air over half of them.
+      stems.push({ x: pos.x, y0: pos.y, y1: pos.y + baked.height * scl.y });
     });
     mesh.instanceMatrix.needsUpdate = true;
+    // Only the plants. A shell carries no sway material and therefore no
+    // aShove attribute for this to write into — registering one would be a
+    // buffer uploaded every frame to be read by nothing.
+    if (baked.material?.userData?.__swayAttached) registerShovedInstances(mesh, stems);
     group.add(mesh);
   }
 
@@ -338,6 +396,11 @@ export function reseatSeabed(scene) {
 
 /** Drop the bed and everything it owns. */
 export function clearSeabed() {
+  // Before the meshes go: the shove holds a reference to each one and its own
+  // copy of where every plant stands, and the bed is rebuilt on every resize
+  // and every tuner move of the floor. Left behind, each rebuild would leave a
+  // dead set of springs integrating against geometry nobody is drawing.
+  clearShovedInstances();
   for (const child of [...group.children]) {
     group.remove(child);
     child.geometry?.dispose();

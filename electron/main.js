@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { ORIGIN, registerScheme, serve } from './serve.js';
 import { registerSaveIpc, flush } from './save.js';
 import { registerSaveImageIpc } from './saveImage.js';
+import { initSteam, registerSteamIpc, steamStatus } from './steam.js';
 
 // Before whenReady, necessarily — see registerScheme's note.
 registerScheme();
@@ -84,7 +85,15 @@ app.whenReady().then(() => {
   // machine than on a slow one.
   registerSaveIpc();
   registerSaveImageIpc();
+  registerSteamIpc();
   createWindow();
+
+  // NOT AWAITED. Steamworks comes up in its own time and the game must not wait
+  // for it — a player with no Steam client running would otherwise pay that
+  // timeout on every launch, staring at nothing. Everything downstream already
+  // treats "not available" as the normal case, so a late yes costs nothing and
+  // a never costs nothing either.
+  initSteam().then((ok) => console.log(`[steam] ${ok ? 'ready' : steamStatus()}`));
 
   // macOS keeps the process alive with no windows; clicking the dock icon is
   // expected to bring one back.

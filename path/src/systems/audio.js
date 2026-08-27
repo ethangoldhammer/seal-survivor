@@ -1020,6 +1020,42 @@ function releaseVoice(v, now) {
   }
 }
 
+/**
+ * CUT A SOUND OFF WHERE IT IS.
+ *
+ * Not "stop it" — stopping a buffer dead is a click, because the waveform is
+ * almost never at zero when you get there. This is the same release the voice
+ * stealer uses: pin the gain wherever the envelope has actually reached and
+ * ramp it to nothing over a few milliseconds, which is fast enough to read as
+ * an instant cut and slow enough to have no edge in it.
+ *
+ * WHAT IT IS FOR. A riser is a sound whose whole job is to be interrupted: it
+ * climbs under the thing you are waiting for and the arrival has to take the
+ * room off it. Left to finish it fights the moment it was building to, and
+ * fading it politely is worse than either — the tail then sits under the sting
+ * saying the buildup has not noticed it landed.
+ *
+ * Every live voice of that name, because a hand of three cards can have three
+ * risers in the air and the one being choked is not always the newest.
+ *
+ * @returns how many it cut, so a caller can tell "nothing was playing" from
+ *          "it did not work" — the two look identical from the outside.
+ */
+export function chokeSfx(name) {
+  const ctx = getAudioContext();
+  if (!ctx) return 0;
+  const now = ctx.currentTime;
+  let cut = 0;
+  for (let i = voices.length - 1; i >= 0; i--) {
+    if (voices[i].name !== name) continue;
+    releaseVoice(voices[i], now);
+    voices.splice(i, 1);
+    cut++;
+  }
+  if (cut) noteSfx(name, 'choked', { cut });
+  return cut;
+}
+
 // How loaded the voice budget is right now. Exported for the sound overlay,
 // which is where this whole mechanism is visible at all — and for the tests.
 export function sfxVoiceLoad() {
@@ -1172,17 +1208,59 @@ export function playSfx(name, volumeScale = 1, opts = {}) {
     });
     const src = ctx.createBufferSource();
     const gain = ctx.createGain();
-    gain.gain.value = gainValue;
     src.buffer = sample;
     src.playbackRate.value = rate;
     let node = src;
     if (def.filter) {
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.value = Math.max(80, def.filter * filterMul);
+      const cut = Math.max(80, def.filter * filterMul);
+      filter.frequency.setValueAtTime(cut, now);
+      // A SWEEP, IF THE VOICE ASKS FOR ONE. A sample used to get a fixed
+      // cutoff and nothing else — the whole timed half of the synth path was
+      // unreachable the moment a file was dropped on a voice, which is exactly
+      // backwards for the sounds most worth shaping: a riser is a filter
+      // opening, and a recording of one is still a recording that has to open.
+      //
+      // Absent by default, so every voice that already names files is untouched
+      // — this only exists where somebody has asked for it.
+      if (def.filterTo) {
+        const to = Math.max(80, def.filterTo * filterMul);
+        // Over the sound's own audible length unless told otherwise, because
+        // that is nearly always what "sweep it" means and it costs a field to
+        // say so every time.
+        const over = Math.max(0.01, def.sweepSeconds ?? length);
+        filter.frequency.exponentialRampToValueAtTime(to, now + over);
+      }
       src.connect(filter);
       node = filter;
     }
+
+    // THE ENVELOPE, ALSO OPT-IN. A sampled sound normally carries its own — the
+    // file was recorded with an attack and a tail, and re-shaping it by default
+    // would quietly change every one of the seventy voices already pointing at
+    // files. So a flat gain stays the default and these two only bite when a
+    // voice names them.
+    //
+    // `release` is measured back from the END of the sound rather than forward
+    // from the start: what it means is "fade the last part out", and a fade
+    // that started at a fixed offset would run off the end of a short take and
+    // never be heard on a long one.
+    const attack = Math.max(0, def.attack ?? 0);
+    const release = Math.max(0, def.release ?? 0);
+    if (attack > 0 || release > 0) {
+      const g = gain.gain;
+      g.setValueAtTime(attack > 0 ? 0.0001 : gainValue, now);
+      if (attack > 0) g.exponentialRampToValueAtTime(gainValue, now + Math.min(attack, length));
+      if (release > 0) {
+        const from = Math.max(now + attack, now + length - release);
+        g.setValueAtTime(gainValue, from);
+        g.exponentialRampToValueAtTime(0.0001, now + length);
+      }
+    } else {
+      gain.gain.value = gainValue;
+    }
+
     node.connect(gain).connect(master);
     src.start(now);
     // Stopped where the sound ends rather than where the file does. Everything

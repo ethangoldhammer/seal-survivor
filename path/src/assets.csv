@@ -1,6 +1,6 @@
 id,size,skin,surface,notes
 attractorOrb,2.06,,,
-belugaDrone,3.1,,,
+belugaDrone,3.1,,biolum:beluga,"Surface added, look NOT designed. The emissive mask is deleted and the 92 material colours are tinted white (assets.js), so a pigment finally reaches this body — it was at 24% of a white-diffused body's reach. The `beluga` preset is an empty slot: structural fields only, no palette, so it renders ORANGE until it is designed in the shader lab."
 bossBarrel,1,,toon:bossBarrel,"the exploding barrel every boss but the yacht throws (the yacht overrides it with moneyRoll1). Size is 1 on purpose: the sizing that matters is `fit` in assets.js, set to the length of the oval primitive this replaces, so the model swap is a look change and not a balance one."
 bossYacht,1,,biolum:bossYacht,"The boss yacht. SIZE 1 IS NOT A CHOICE - it is what this asset already had. An id with no row resolves to 1 (sizeMultiplierFor returns ?? 1, and setting 1 deletes the entry), so the row exists to carry the surface cell and leaves the scale exactly where it was. The hull is sized by fit: 13 in assets.js, measured against the trawler, and that is the number to move."
 bounceShot,1.58,,,
@@ -8,19 +8,19 @@ bubbleOrb,2.84,,,
 bullet,1.2,,,
 chumChunk,2.2,,,the big health chunk - xpOrb has no row so it renders at 1; this is the multiple of an ordinary orb before CONFIG.chumChunk.scaleMin/Max scales it by the heal it rolled
 club,1,,,size is CONFIG.club.length at 1 - the hitbox is the config value
-clubBoom,1,,,Boom Boom Club - same model as club - keep equal
+clubBoom,1,,biolum:clubBoom,Boom Boom Club - same model as club - keep equal
 clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,,,
 eelCompanion,1.5,,biolum:eelCompanion,
 enemyAbyssShark,2.62,,biolum:abyssHunter,night variant of enemyGreatWhite - keep these two equal
-enemyAnglerfish,2.5,,,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
+enemyAnglerfish,2.5,,biolum:anglerfish,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
 enemyBarracuda,1.78,,biolum:barracuda,
-enemyBossAnglerfish,2.5,,noise:bossAnglerfish+toon:bossAnglerfish,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
+enemyBossAnglerfish,2.5,,noise:bossAnglerfish+toon:bossAnglerfish+biolum:bossAnglerfish,"The boss body. Equal to enemyAnglerfish on purpose - same model file, same size; what separates them is the clip mapping (see assets.js). bosses.csv sizeMul is where the boss step goes, as it does for every other archetype."
 enemyBossCrab,2.3,,biolum:kingCrab,the king crab boss - same animal as enemyWalkingCrab so it takes the same size; the boss step is bosses.csv sizeMul on top
 enemyBossHammerhead,3.6,,noise:bossHammerhead+toon:bossHammerhead,"The hammerhead boss. 4.0 fit x this = 14.4 here, and bossHammerhead's 1.6 takes it to 23.0 - the smallest boss body in the game, which is the point of it. Out of family with the other numbers in this column for exactly that reason; measured by tools/boss-scale-check.mjs. A DIFFERENT ASSET from enemyHammerhead below, which is why this one is 3.6 against that one's 2.62 - the boss carries its whole step here, the wave animal is in family with the other sharks."
 enemyDolphin,2.4,,,"3 fit x this = 7.2 on screen, between the otter's 4.8 and the shark's 10.1 - which is where its authored radius (0.85, against the shark's 1.2) always said it belonged. It had NO ROW until now, so it spawned at 1: a 3.0-unit dolphin, smaller on screen than a barracuda (4.27) while carrying four times its hp. The hitbox follows the visual, so its collision radius goes 0.85 -> 2.04 - still just inside the octopus's grab (CONFIG.octoGrab.maxTargetRadius 2.2) and now above the orca pod's fallbackMinRadius, which is where an animal this size belongs on both counts."
-enemyEmberCrab,2.3,,,same animal as enemyWalkingCrab - keep these two equal
+enemyEmberCrab,2.3,,biolum:emberClaw,same animal as enemyWalkingCrab - keep these two equal
 enemyGiantSquid,2,,biolum:hide,The kraken. 7.4 fit x this = 14.8 long - the family the other apex bodies are in. Measured by tools/boss-scale-check.mjs
 enemyGlowSailfish,2,,,"The night form of enemySailfish - keep these two equal, or the species changes size at dusk. Size only: its abyssHunter skin is declared in assets.js and a blank surface cell leaves it exactly where it is."
 enemyGreatWhite,2.62,,noise:greatWhite+toon:greatWhite,
@@ -33,7 +33,7 @@ enemyOrcaBull,2.8,,biolum:orcaHide,The boss orca bull. Cut from the family file 
 enemyOrcaCow,2.8,,biolum:orcaHide,The boss orca cow. bossOrca rolls between this and the bull per arrival.
 enemyOyster,2.9,,,
 enemySailfish,2,,,"3.0 fit x this = 6.0 on screen: the biggest fish in the wave roster, above the barracuda (4.27) and just under the dolphin (7.2), which is the order the three are in in life. It had NO ROW until now, so it spawned at 1 - a 3.0-unit sailfish swimming beside a 4.27-unit barracuda it is supposed to be a tier ABOVE. The hitbox follows the visual, so its collision radius goes 0.5 -> 1.0, and enemies.csv gives it scaleVariance 0.22 on top so a pass of them is a spread of body sizes rather than one fish drawn twice."
-enemySeaTurtle,3.08,,,
+enemySeaTurtle,3.08,,biolum:seaTurtle,"Surface added, look NOT designed. Its whole brown hide was a COLOR_0 vertex attribute multiplying into every pigment; dropVertexColors + a white tint in assets.js clear the way. Carries the first per-variant RIMS — see the three seaTurtle rows in skins.csv. Renders ORANGE until the `seaTurtle` preset is designed."
 enemyShark,2.66,,noise:shark+toon:shark,
 enemySquid,1,squidGlow,biolum:squidGlow,"Added for the SKIN, not the size. size=1 is what this asset already had - it has never carried a row, and an asset with no row spawns at 1 - so this changes nothing about how big the squid is or how big it is to hit. Left deliberately: the hitbox is derived from the visual scale, so retuning it here would be a balance edit smuggled in with a look. Its 2.8 fit against enemyShark's 2.66x2.5 is a separate question, worth asking on its own."
 enemyStingray,3.1,,,
@@ -56,7 +56,7 @@ orcaFriendCow,1,,biolum:orcaFriendCow,"Orca Family, slot 1."
 plaque,1,,,the small slanted run marker. See headstone.
 rapidFireOrb,2.4,,,
 razorBlade,2.4,,,
-seagull,9.54,,,
+seagull,9.54,,biolum:seagull,"Surface added, look NOT designed. Flat 0x969696 with no map that resolves, tinted white in assets.js. Newly listed in companionOutline.on — it had no key at all, so no rim was reachable. Three variants in skins.csv; the roll happens in systems/seagull.js, not spawnOne. Renders ORANGE until the `seagull` preset is designed."
 sealTeam,2.72,,noise:sealTeam+toon:sealTeam,
 ship,2.36,,noise:ship+toon:ship,
 shrapnel,2.52,,,
@@ -68,3 +68,7 @@ voicemailBomb,1,,toon:voicemailBomb,"Toon-banded and outlined. Size 1 is the mod
 trapBubble,5.02,,,
 trawler,0.84,,,
 whale,2.6,,toon:whale+biolum:whale,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."
+gorebone,,,toon:gorebone,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."
+enemyBrownFish,,,toon:brownFish+biolum:brownFish,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."
+enemyFishPackB,,,toon:fishPackB+biolum:fishPackB,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."
+enemyFishPackC,,,toon:fishPackC+biolum:fishPackC,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."

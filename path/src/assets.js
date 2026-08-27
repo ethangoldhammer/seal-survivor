@@ -623,7 +623,7 @@ export const ASSETS = {
   // any hue picked here at that glow does the same thing. If the glow slider
   // ever moves, this needs re-picking with it: they are one setting wearing
   // two names. `npm run glow` is the audit.
-  bullet: { shape: 'rock', radius: 0.18, color: 0x6b7078, unlit: true, rock: { tumble: 7 } },
+  bullet: { shape: 'rock', radius: 0.18, color: 0x6b7078, unlit: true, rock: { tumble: 7 }, bands: true },
   // THE HOMING MUSSEL — a real shell, cut out of the Spline scene in SeaBed by
   // tools/mussel-split.mjs (npm run mussels). See that file for what the source
   // is and what the export does not carry.
@@ -870,6 +870,10 @@ export const ASSETS = {
   },
   seagull: {
     model: '/models/seagull.fbx',
+    // White so the pattern is the colour. This file's maps never resolve, so
+    // the bird was one flat 0x969696 — a 0.59 multiply sitting between every
+    // pigment and the screen, measured at 46% of a white body's reach.
+    tint: 0xffffff,
     fit: 1.3,
     forward: '+Z', up: '+Y',
     // NO emissive mask, deliberately — a rim instead. This file's own maps
@@ -1066,16 +1070,28 @@ export const ASSETS = {
 
   belugaDrone: {
     model: '/models/beluga.fbx',
-    // Built from the source diffuse (beluga_whale_diff.png) in the C4D
-    // library — the file names it as an absolute D:\ path that cannot
-    // resolve, so nothing textured reaches the renderer. That atlas has a
-    // GREY background rather than black, which the tool's pivot heuristic
-    // does not discount, so it needs a threshold high enough to drop the
-    // background and a steep ramp to take the body to white:
-    //   --pure --lit 0.5 --blur 3 --slope 20
-    // The payoff is the eye, blowhole and open mouth staying dark while
-    // the body glows, instead of the whole silhouette flooding evenly.
-    texture: { emissive: '/textures/emissive/beluga.png' },
+    // NO MAPS AT ALL, and that is the point of this body now.
+    //
+    // It used to carry an emissive mask built from the source diffuse — the
+    // .fbx names its textures as absolute D:\ paths that cannot resolve, so
+    // the mask was the only image that ever reached the renderer. Between that
+    // mask and the Look panel's glow, the shipped beluga rendered as a
+    // blown-out white silhouette: measured in tools/looks/shader-preflight.js,
+    // its banding response was 1.1 against 25-70 for every other lit body,
+    // because an emissive-dominated surface has no lighting gradient left to
+    // band. The mask is deleted, not disabled.
+    //
+    // `tint: 0xffffff` is the other half. FBXLoader hands this file NINETY-TWO
+    // materials, several of them pure black and one pure blue, and a biolum
+    // pigment is MULTIPLIED by the material's own colour — so the pattern
+    // could only ever reach 24% of what a white-diffused body gets. One tint
+    // writes all 92, and `__originalColor` is captured after it, so this is
+    // the baseline the Look panel's reset returns to rather than the file's
+    // colours coming back.
+    //
+    // What paints it instead is `biolum:beluga` in assets.csv, designed in the
+    // shader lab. See [[preflight-measures-whether-a-slider-is-connected]].
+    tint: 0xffffff,
     fit: 1.4,
     pivot: 0.15, // turn about the head, not the belly
     forward: '+Z', up: '+Y',
@@ -3471,6 +3487,16 @@ export const ASSETS = {
 
   enemySeaTurtle: {
     model: '/models/seaturtle.glb',
+    // THE SHELL IS VERTEX COLOURS, and that is why this body has never taken a
+    // designed surface. seaturtle.glb ships no image at all — its entire brown
+    // hide is a COLOR_0 attribute, which three multiplies into `diffuseColor`
+    // after the pigment has written it. Dropped here so `biolum:seaTurtle` is
+    // painting a blank body rather than tinting a photograph of a turtle, and
+    // the material's own 0.78 grey goes white for the same reason.
+    // Measured before: 51% of what a white-diffused body gets. See
+    // tools/looks/shader-preflight.js.
+    dropVertexColors: true,
+    tint: 0xffffff,
     fit: 2.2,
     pivot: 0.2,
     forward: '+Z', up: '+Y',
@@ -4741,6 +4767,20 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       m2.userData.__originalMap = m2.map ?? null;
 
       if (tint && m2.color) m2.color.copy(tint);
+      // DROP THE BAKED VERTEX COLOURS, for a body whose surface is going to be
+      // painted. three's <color_fragment> runs AFTER <map_fragment>, and it
+      // does `diffuseColor *= vColor` — so on a model whose whole hide is
+      // COLOR_0 rather than a texture, a biolum pigment is not replacing the
+      // animal's colour, it is being filtered through it. The sea turtle is
+      // the case: 1,246 vertices carrying a full brown-and-olive palette, and
+      // a white pigment on it comes out turtle-brown with no slider able to
+      // move it. Ten models in public/models carry a COLOR_0.
+      //
+      // The material flag, not the geometry attribute. The attribute is a few
+      // KB, it is shared with every other instance of the asset, and leaving
+      // it means the texture panel's "reset" can put the shipped hide back —
+      // deleting it would make this a one-way door for the sake of nothing.
+      if (def.dropVertexColors && 'vertexColors' in m2) m2.vertexColors = false;
       // Captured AFTER the asset's own tint, so `def.tint` is the baseline
       // that glow multiplies and that "reset" returns to. Capturing it first
       // meant applyColorAndGlow restored the raw file colour and silently
@@ -6935,6 +6975,9 @@ function getMaterial(key, def) {
   // because the second polished thing in the game will not want the first
   // one's horizon. See makeChromeMaterial.
   if (def.chrome) makeChromeMaterial(mat, typeof def.chrome === 'string' ? def.chrome : 'chromeBlade');
+  // `bands: true` takes CONFIG.elementBands; a string names its own block, the
+  // same rule `shell` and `chrome` follow. See makeBandMaterial.
+  if (def.bands) makeBandMaterial(mat, typeof def.bands === 'string' ? def.bands : 'elementBands');
   materialCache.set(key, mat);
   return mat;
 }
@@ -7234,6 +7277,172 @@ export function applyBubbleShellSettings() {
     // and picks the paint up the moment preloadAssets calls back through here.
     u.uShellPaintAmt.value = paint ? Math.max(0, cfg.paint ?? 0) : 0;
     u.uShellPaintFit.value = Math.max(0.05, cfg.paintFit ?? 0.9);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ELEMENT BANDS. `bands: '<configKey>'` on an asset paints it out of a NOISE
+// FIELD that scrolls through the world, rather than out of one colour.
+//
+// WHY A FIELD AND NOT A COLOUR PER OBJECT. The pellet is a primitive, and every
+// primitive asset shares one material (see getMaterial) — so a per-shot colour
+// means a material clone per shot, which elements.js already looked at and
+// rejected for a projectile that lives 1.6 seconds. That reasoning is still
+// right, and it is also not the effect wanted: the ask is bands travelling
+// THROUGH a stream of pebbles, which is a property of the water they are
+// crossing rather than of any one stone.
+//
+// So there is still exactly one material, with one set of uniforms, and each
+// pellet samples the shared field at its own world position. Nothing is per
+// object; the coherence is free, and it gets better the more pellets are on
+// screen — with two in the air it reads as two tinted stones, and with forty it
+// reads as coloured weather blowing through the volley, which is what a maxed
+// gun should look like.
+//
+// THE PALETTE IS UP TO THREE ELEMENTS: the left flipper's, the right flipper's,
+// and the run's own Glow Up!. See elementPalette() in systems/elements.js, which
+// is what decides which of those are live. One colour is a plain wash, two
+// alternate, three run in sequence through the noise — deliberately a mix and
+// not a hard split, because a hard split between two elements looks like a
+// rendering fault and an organic one looks like the two are actually mingling.
+//
+// ANISOTROPIC ON PURPOSE. `stretch` squashes the field hard across `dir` and
+// barely at all along it, which is the whole difference between bands and
+// blobs — an isotropic fbm over a stream of pellets reads as each stone having
+// picked a random colour.
+// ---------------------------------------------------------------------------
+
+const bandMaterials = new Map();
+
+// GLSL ES 1.00: no derivatives, no textureLod, and a loop needs constant
+// bounds. Value noise off a hash is the cheapest thing that still has an
+// organic edge, and three octaves is where the band stops looking like a sine.
+//
+// NOTE the deliberate absence of a backtick anywhere in here, comments
+// included — this string is a template literal and one would end it, with the
+// error reported against a line of prose.
+const BAND_FRAGMENT = `
+  vec2 bq = vec2(dot(vBandW.xy, uBandDir), dot(vBandW.xy, vec2(-uBandDir.y, uBandDir.x)) * uBandStretch);
+  bq = bq * uBandScale + uBandDir * (uBandTime * uBandSpeed);
+  float bn = bandFbm(bq);
+  // Contrast about the middle, so uBandSharp 0 is a soft wash and high values
+  // are ribbons with clean edges. Clamped, since the curve overshoots both ends.
+  float bt = clamp((bn - 0.5) * uBandSharp + 0.5, 0.0, 1.0);
+  vec3 bandCol = uBandCol0;
+  if (uBandCount > 2.5) {
+    float bs = bt * 2.0;
+    bandCol = bs < 1.0 ? mix(uBandCol0, uBandCol1, bs) : mix(uBandCol1, uBandCol2, bs - 1.0);
+  } else if (uBandCount > 1.5) {
+    bandCol = mix(uBandCol0, uBandCol1, bt);
+  }
+  // The band's own brightness rides the noise too — a flat wash of one hue over
+  // the whole volley is exactly the thing that stops reading as bands.
+  bandCol *= 1.0 + uBandGain * (bt - 0.5);
+  vec4 diffuseColor = vec4( mix( diffuse, bandCol, uBandAmt ), opacity );
+`;
+
+const BAND_NOISE = `
+float bandHash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+float bandNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(bandHash(i), bandHash(i + vec2(1.0, 0.0)), u.x),
+             mix(bandHash(i + vec2(0.0, 1.0)), bandHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float bandFbm(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 3; i++) {
+    v += a * bandNoise(p);
+    p *= 2.03;
+    a *= 0.5;
+  }
+  return v;
+}
+`;
+
+function makeBandMaterial(mat, cfgKey = 'elementBands') {
+  // Owned here rather than read off `shader.uniforms` later, for the reason the
+  // shell's are: onBeforeCompile does not run until the material is first
+  // rendered, so every value written before the first pellet reaches the screen
+  // would be dropped.
+  mat.userData.__bands = {
+    uBandTime: { value: 0 },
+    // 0 is the identity: the pellet is exactly the stone it always was, and
+    // the whole branch collapses to `diffuse`. Every run without an element
+    // sits here forever.
+    uBandAmt: { value: 0 },
+    uBandCount: { value: 0 },
+    uBandCol0: { value: new THREE.Color(0xffffff) },
+    uBandCol1: { value: new THREE.Color(0xffffff) },
+    uBandCol2: { value: new THREE.Color(0xffffff) },
+    uBandScale: { value: 0.5 },
+    uBandSpeed: { value: 2.2 },
+    uBandSharp: { value: 2.4 },
+    uBandStretch: { value: 0.18 },
+    uBandGain: { value: 0.5 },
+    uBandDir: { value: new THREE.Vector2(1, 0) },
+  };
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, mat.userData.__bands);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBandW;')
+      // AFTER project_vertex, where `transformed` is final — reading `position`
+      // instead would miss anything a preceding chunk did to the vertex, and
+      // the world matrix is what turns it into the field's own space.
+      .replace('#include <project_vertex>',
+        '#include <project_vertex>\n\tvBandW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>',
+        '#include <common>\nuniform float uBandTime;\nuniform float uBandAmt;\nuniform float uBandCount;'
+        + '\nuniform vec3 uBandCol0;\nuniform vec3 uBandCol1;\nuniform vec3 uBandCol2;'
+        + '\nuniform float uBandScale;\nuniform float uBandSpeed;\nuniform float uBandSharp;'
+        + '\nuniform float uBandStretch;\nuniform float uBandGain;\nuniform vec2 uBandDir;'
+        + '\nvarying vec3 vBandW;\n' + BAND_NOISE)
+      // Replaces the line that DECLARES diffuseColor, so the rock's vertex
+      // colours still multiply in downstream (<color_fragment>) and carve the
+      // facets back out of whatever hue the band landed on. Injecting after
+      // that chunk instead would flatten the stone into a coloured pill.
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', BAND_FRAGMENT);
+  };
+
+  bandMaterials.set(mat, cfgKey);
+  return mat;
+}
+
+/**
+ * Point one banded asset's field at a palette. `colors` is 0-3 hex values, in
+ * the order they should run through the noise; `amount` is how far the stone
+ * travels from its own grey toward them.
+ *
+ * A no-op that costs three compares when nothing has moved, because this is
+ * called every frame from updateElements and a uniform write per frame per
+ * material is exactly the cost this is trying to avoid being.
+ */
+export function setAssetBands(key, { colors = [], amount = 0, dt = 0 } = {}) {
+  for (const mat of getAssetMaterials(key)) {
+    const u = mat.userData.__bands;
+    if (!u) continue;
+    const cfg = CONFIG[bandMaterials.get(mat) ?? 'elementBands'] ?? {};
+    // The clock advances whether or not anything is showing: a field that only
+    // ticked while an element was live would jump the moment one was taken.
+    u.uBandTime.value += dt;
+    u.uBandAmt.value = cfg.enabled === false ? 0 : Math.max(0, Math.min(1, amount));
+    u.uBandCount.value = Math.min(3, colors.length);
+    if (colors[0] != null) u.uBandCol0.value.set(colors[0]);
+    if (colors[1] != null) u.uBandCol1.value.set(colors[1]);
+    if (colors[2] != null) u.uBandCol2.value.set(colors[2]);
+    u.uBandScale.value = Math.max(0.01, cfg.scale ?? 0.5);
+    u.uBandSpeed.value = cfg.speed ?? 2.2;
+    u.uBandSharp.value = Math.max(0, cfg.sharpness ?? 2.4);
+    u.uBandStretch.value = Math.max(0.01, cfg.stretch ?? 0.18);
+    u.uBandGain.value = Math.max(0, cfg.gain ?? 0.5);
+    const a = (cfg.angle ?? 0) * Math.PI / 180;
+    u.uBandDir.value.set(Math.cos(a), Math.sin(a));
   }
 }
 

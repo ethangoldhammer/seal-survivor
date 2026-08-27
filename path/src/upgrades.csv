@@ -1,6 +1,7 @@
 id,name,desc,review,maxStacks,enabled,weight,cardArt,sfx,weaponName
 rapidFire,Supa Dupa Seal,{effect},TRUE,8,TRUE,1,Beach_001,,Rapid Pebbles
 heavyRounds,André the Giant,{effect},TRUE,,TRUE,1,Beach_002,,Giant Pebbles
+flippersUp,Flippers Up!,{effect},,6,TRUE,1,SeaLion,,
 overboost,None,,TRUE,,FALSE,1,Beach_003,,
 maxSpeed,Speedy Seal,{effect},TRUE,,TRUE,1,OpeanOcean_001,,
 multishot,Pocket Full of Stones,{effect},TRUE,99,TRUE,1,Beach_003,,Cloned Pebbles

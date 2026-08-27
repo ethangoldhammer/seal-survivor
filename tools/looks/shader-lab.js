@@ -57,7 +57,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
 import { preloadAssets, createVisual, ASSETS } from '../../path/src/assets.js';
-import { attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, BIOLUM_PATTERNS } from '../../path/src/systems/biolumSkin.js';
+import { attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, splitForEdges, BIOLUM_PATTERNS } from '../../path/src/systems/biolumSkin.js';
 import { attachNoiseShader, applyNoiseSettings, setNoiseWetEnv } from '../../path/src/systems/noiseShader.js';
 import { attachToonShade, applyToonSettings } from '../../path/src/systems/toonShade.js';
 import { initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from '../../path/src/systems/outlines.js';
@@ -714,6 +714,43 @@ function build(assetKey) {
   frameSubject();
   axis = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
 
+  // SPLIT THE GEOMETRY, ALWAYS, so the pattern dropdown is not lying.
+  //
+  // `wireframe` and `lattice` are in that list like any other pattern, but
+  // wireframe reads `aBioEdge` — a per-vertex distance that bakeEdges can only
+  // compute on non-indexed geometry, because a shared vertex belongs to several
+  // triangles at once and cannot hold one distance for all of them. On an
+  // indexed body the attribute is never written, the shader reads 0 at every
+  // fragment, and its guard draws NOTHING: picking wireframe made the creature
+  // VANISH, with one console warning and no explanation on the page. Every
+  // subject in this roster is indexed, so that was every subject.
+  //
+  // The game pays this split at load, once per asset, for anything declaring
+  // `biolumEdges` — and `setAssetSkin` sets that flag automatically from the
+  // chosen preset's pattern, so a wireframe look recorded here does reach the
+  // build. Here it is unconditional: one creature is on screen at a time, so
+  // the vertex count this costs is irrelevant next to a dropdown entry that
+  // silently deletes the animal.
+  //
+  // BEFORE the attaches below, never after: attachBiolumSkin bakes its
+  // per-vertex attributes off whatever geometry it finds, and a split
+  // afterwards would throw them away.
+  splitForEdges(visual);
+  // AND CLEAR THE BAKE, or the split buys nothing on exactly the creatures this
+  // tool is for. attachBiolumSkin does its whole bake — aBioPos, aBioAxis and
+  // the edge distances together — inside one `if (!geom.attributes.aBioPos)`.
+  // Any asset that ships a skin was attached at load, on INDEXED geometry, so
+  // it already carries aBioPos and no edges; `toNonIndexed` copies that
+  // attribute onto the split geometry, the guard sees it and skips the bake,
+  // and the wireframe stays dead with the split paid for. Dropping the two
+  // attributes hands the attach a geometry that looks untouched, which after a
+  // split is exactly what it is.
+  visual.traverse((o) => {
+    if (!o.geometry?.attributes?.aBioPos) return;
+    o.geometry.deleteAttribute('aBioPos');
+    o.geometry.deleteAttribute('aBioAxis');
+  });
+
   // CLONE FIRST, ATTACH SECOND, ALWAYS. createVisual hands back instances that
   // SHARE the asset's materials, so attaching in place would paint every other
   // creature made from the same asset — and three's Material.clone() drops
@@ -1096,9 +1133,12 @@ function buildPanels() {
     if (toonable === 0) {
       const warn = document.createElement('div');
       warn.className = 'row warnrow';
-      warn.innerHTML = '<label>unlit</label><output>'
-        + 'this model renders unlit (modelUnlit) — it has no lighting to band, '
-        + 'so the sliders below do nothing. Noise and pattern still apply.'
+      warn.innerHTML = '<label>no bands</label><output>'
+        + 'attachToonShade refused every material on this body, so the sliders '
+        + 'below do nothing. Noise and pattern still apply. It is either an '
+        + 'unlit model (modelUnlit, or KHR_materials_unlit inside the .glb, '
+        + 'which nothing in ASSETS mentions) or a material class the banding '
+        + 'does not inject into.'
         + '</output>';
       toonSect.querySelector('.body').prepend(warn);
     }

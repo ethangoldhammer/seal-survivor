@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel } from './config.js';
-import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool } from './assets.js';
+import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel, chumHealRamp } from './config.js';
+import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -18,16 +18,21 @@ import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeS
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
-import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor } from './systems/elements.js';
+import { updateElements, onEnemyKilled as onElementalHostKilled, resetElements, clearStatuses, updateElementSkin, invalidateElementSkin, elementHitEvent, surgeElement, activeElement, elementColor, finElements } from './systems/elements.js';
+import { FLIPPER_SIDES } from './flipperSide.js';
+import { updateFinLights, resetFinLights, finLightColor } from './systems/finLights.js';
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
-import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel } from './entities/enemies.js';
+import { noteBaitLoss } from './systems/baitBall.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
+import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks, bubbleOrbs } from './entities/pickups.js';
+import { stepBubbleSpawner, rollBubbleSpawnDelay } from './systems/oxygenBubble.js';
 import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
-import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount } from './entities/particles.js';
+import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, emit } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -55,6 +60,7 @@ import { updateDayCycle, resetDayCycle, advanceClock, dayState, setNightLock, ni
 import { updateWeather, resetWeather } from './systems/weather.js';
 import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
+import { updateLowHealthFx, resetLowHealthFx } from './systems/lowHealthFx.js';
 import { playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx } from './systems/playerDamageFx.js';
 import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
 import { updateAirborne, resetAirborne, airRamp, airDamageMul, airFireRateMul, canAirJump, spendAirJump, slamFor } from './systems/airborne.js';
@@ -95,7 +101,7 @@ import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin 
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
 import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid } from './systems/music.js';
-import { shotDue, resetShotGrid } from './systems/shotGrid.js';
+import { shotDue, resetShotGrid, tickInterval, finSplit } from './systems/shotGrid.js';
 import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
@@ -359,6 +365,12 @@ let seagullCooldown = 0;
 let whaleCrumbTimer = 0;
 let simClock = 0; // free-running clock for the beluga drone's orbit
 let muzzleCursor = 0; // which flipper the next ALTERNATING volley starts from (missiles)
+// Which flipper the next BASIC shot leaves from, when CONFIG.weapon.alternateFins
+// is on. Separate from muzzleCursor because the two weapons walk the fins on
+// their own cadences — a missile volley that reset the pebbles' side would put
+// two pebbles out of the same fin in a row and break the alternation the whole
+// thing exists for.
+let finCursor = 0;
 const muzzlePoint = new THREE.Vector3(); // scratch — spawnProjectile copies it immediately
 const impulseDir = new THREE.Vector3(); // scratch — hit direction handed to the bone spring
 const faceDir = { x: 0, y: 1 }; // scratch — the seal's facing, read by the bubble vent
@@ -910,6 +922,28 @@ function bindGlobalKeys() {
         && !isTypingTarget(e.target) && !e.repeat) {
       showLevelUp();
     }
+    // Shift+B: put a bait ball in the water right now, and Alt+Shift+B put a
+    // shark on it as well.
+    //
+    // The real thing needs a level, a boss, and an arena that happens to be
+    // near-empty — three conditions that line up minutes apart, which is not a
+    // loop anybody can tune a swirl in. Every gate is bypassed on purpose (that
+    // IS the feature) and the ball arrives ON STATION rather than swimming in
+    // from past the wall, because the five-second entrance is right in a run
+    // and pure dead time when you are pressing the key for the ninth time.
+    //
+    // Alt adds the other half of the tug of war. A ball with nothing eating it
+    // is only half the mechanic, and waiting for a shark to wander into one is
+    // the same waiting this key exists to remove — so it drops a hunter beside
+    // the ball, already inside its own `preyRadius`, and it starts feeding.
+    //
+    // Dev only, like the glow lineup below it. The ledger line prints when the
+    // ball ends (CONFIG.baitBall.log), which is where the exchange is legible.
+    if (DEV_UI && e.shiftKey && e.key.toLowerCase() === 'b'
+        && !isTypingTarget(e.target) && !e.repeat) {
+      e.preventDefault();
+      spawnBaitBallNow(e.altKey);
+    }
     // N: line up one of every bioluminescent creature beside the seal, so the
     // glow presets can be compared against each other instead of waiting for
     // the spawner to offer them one at a time — the rarest is two per arena
@@ -955,6 +989,55 @@ function bindGlobalKeys() {
       }
     }
   });
+}
+
+// Shift+B's ball. See the key handler for why it bypasses everything.
+function spawnBaitBallNow(withPredator = false) {
+  const spec = devBaitBallSpec();
+  const ball = spawnBaitBall(world.scene, gameState.difficulty, gameState.level ?? 1, spec);
+  if (!ball) {
+    console.warn('[bait] nothing spawned — either the arena is at spawn.maxAlive, or nothing in '
+      + 'enemies.csv currently qualifies as small fry at this difficulty and level '
+      + '(prey, under spawn.waves.lull.maxRadius).');
+    return;
+  }
+  // Already there. openBaitBall opens every ball `arriving`, which is right for
+  // one that spawned past the wall and wrong for one placed on its station —
+  // left set, the anchor would spend its first frames swimming to a point it is
+  // already standing on.
+  ball.arriving = false;
+  // The fish were placed around the anchor INSIDE the arena, so none of them is
+  // coming in through a wall. `entering` suppresses the side clamp for a body
+  // still outside the picture; on these it would let the whole ball drift out
+  // through the edge it was never behind. Same fix the glow lineup needs.
+  for (const en of enemies) if (en.schoolId === ball.id) en.entering = false;
+
+  let hunter = null;
+  if (withPredator) {
+    // Whichever hunter the table currently offers, biggest preyRadius first —
+    // the one most likely to actually commit to the ball rather than wander
+    // past it. Named off the table rather than hardcoded to 'shark' so a roster
+    // change cannot leave this key pointing at a creature that no longer exists.
+    // `weight > 0` is what excludes the bosses: every boss row ships weight 0
+    // and spawnRateMul 0 because the pool must never draw one, and that is a
+    // more honest test than a name prefix — a boss dropped here would arrive
+    // with no health bar, no entrance and no fight around it.
+    const [key] = Object.entries(CONFIG.enemies)
+      .filter(([, d]) => d.hunt && (d.weight ?? 0) > 0 && (d.hunt.preyRadius ?? 0) > 0)
+      .sort((a, b) => (b[1].hunt.preyRadius ?? 0) - (a[1].hunt.preyRadius ?? 0))[0] ?? [];
+    if (key) {
+      hunter = spawnNamed(world.scene, key, gameState.difficulty,
+        { x: ball.x + 6, y: ball.y }, { ignoreCaps: true });
+      if (hunter) hunter.entering = false;
+    }
+  }
+
+  console.log(`[bait] ${ball.opened} ${enemies.find((en) => en.schoolId === ball.id)?.type ?? '?'} `
+    + `at ${ball.x.toFixed(0)},${ball.y.toFixed(0)} — shell ${ball.shell.toFixed(1)}, `
+    + `spin ${ball.spin > 0 ? 'CCW' : 'CW'}, ${ball.life.toFixed(0)}s to live`
+    + (hunter ? `, with a ${hunter.type} on it` : '')
+    + '.\n  Alt+Shift+B drops a hunter on the next one. Tune every number with `npm run csv` '
+    + '→ spawning.csv → the baitBall.* rows.');
 }
 
 // The lineup itself. Spread along a row in front of the seal at its own depth,
@@ -1334,6 +1417,10 @@ function startGame() {
   // of the water: this only drops the reference to it and rolls the level the
   // next one arrives at.
   resetBoss(world.scene);
+  // The grab holds a reference to a creature resetEnemies has just deleted, and
+  // a run that ended in a boss's mouth must not start in one. Torn up rather
+  // than released — there is nothing left to be thrown by.
+  resetBossGrab();
   updateBossBar(null);
   resetProjectiles(world.scene);
   clearProjectileTrails(world.scene);
@@ -1449,6 +1536,7 @@ function startGame() {
   // applied them, so a re-roll without this leaves fish poisoned by the
   // last run's numbers.
   resetElements(world.scene);
+  resetFinLights(world.scene);
   clearStatuses(enemies);
   // ...and the boss-side half of the same thing: an announcement queued on the
   // frame the run ended would otherwise go off over the new one.
@@ -1486,6 +1574,7 @@ function startGame() {
   // into the new one and kill whatever had just spawned.
   world.lightning.reset();
   resetOxygenFx();
+  resetLowHealthFx();
   resetCrabSpawner();
   resetSeagulls(world.scene);
   resetWhales(world.scene);
@@ -1563,13 +1652,14 @@ function startGame() {
   xpSpill = 0;
   xpSpillLeft = 0;
   resetShotGrid();
+  finCursor = 0;
   missileCooldown = 0;
   scallopCooldown = 0;
   oysterCooldown = 0;
   razorClamCooldown = 0;
   bounceCooldown = 0;
   rapidFireTimer = 0;
-  bubbleSpawnTimer = randomBetween(CONFIG.oxygen.bubbleSpawnMin, CONFIG.oxygen.bubbleSpawnMax);
+  bubbleSpawnTimer = rollBubbleSpawnDelay();
   rapidFireSpawnTimer = randomBetween(CONFIG.rapidFirePickup.spawnMin, CONFIG.rapidFirePickup.spawnMax);
   levelOrbSpawnTimer = randomBetween(CONFIG.levelPickup.spawnMin, CONFIG.levelPickup.spawnMax);
   sinceUpgrade = Infinity;
@@ -1843,7 +1933,11 @@ function killPlayer() {
     buryName(playerName());
     markDeathSite(world.scene, {
       x: player.mesh.position.x,
-      z: CONFIG.gravesite?.z ?? -3.2,
+      // NO z. The body's x is the death site; its depth is not a fact about the
+      // death, it is a decision about what stands in front of the name — so
+      // gravesite.js makes it. The stone that is about to be read drops clear
+      // of the plant bed and settles among it in later sessions; see the depth
+      // block there. Passing one here would pin every stone at one depth again.
       // playerName() and not loadPlayerName(): a headstone is a sentence about
       // somebody, so it wants the trimmed, never-blank reading. See its note.
       name: playerName(),
@@ -2086,6 +2180,45 @@ function applyLevelChoice(choice) {
 // the run is clear — which on a normal kill is about three seconds later, with
 // the cards already taken.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// THE AUTOMATIC HALF OF THE BOSS PAYOUT — a pellet, every time, no menu.
+//
+// The dividend below is a ceremony: it stops the water, flies the hive in and
+// asks the player which card to deepen. This is deliberately the opposite kind
+// of reward — nothing opens, nothing is chosen, the gun is simply wider on the
+// next volley. See applyBossGrowth in stats.js for why the run wants both.
+//
+// A MIRROR, NOT A TALLY. `bossState.defeated` stays the only place a boss kill
+// is counted; this copies it onto the player and re-derives. Comparing the two
+// numbers is the edge detector — there is no second "paid" counter to fall out
+// of step, and a reset that puts `defeated` back to 0 is picked up by the same
+// branch rather than needing its own line.
+//
+// OUTSIDE updateBossDividend on purpose, though both are billed by the same
+// kill: that function returns early when the ceremony is switched off, and the
+// pellet is not the ceremony's to withhold. It also does not wait for the kill
+// shot or the cards the way the stacks do — there is no screen to queue for,
+// and a payout with no ceremony has nothing to be interrupted by.
+// ---------------------------------------------------------------------------
+function updateBossShot() {
+  if (player.bossesDefeated === bossState.defeated) return;
+  const gained = bossState.defeated > player.bossesDefeated;
+  player.bossesDefeated = bossState.defeated;
+  recomputeStats();
+  // ONLY ON THE WAY UP. The comparison above is a mirror and so is true in
+  // both directions — a restart puts `defeated` back to 0 and comes through
+  // here to re-derive the block, which is correct and is emphatically not a
+  // payout to announce.
+  //
+  // The line follows the seal and ripples in and out; both are on the event
+  // (CONFIG.feedback.bossPellet), not asked for here. Positioned off the mesh
+  // rather than off a cached x/y for the reason enemies have none: the
+  // position IS the mesh.
+  if (gained && player.mesh) {
+    feedback('bossPellet', { x: player.mesh.position.x, y: player.mesh.position.y });
+  }
+}
 
 function updateBossDividend() {
   if (CONFIG.boss?.dividend?.enabled === false) return;
@@ -2600,6 +2733,37 @@ function processPendingSplashes() {
  * death check. Anything that hurts the seal should come through here.
  */
 function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
+  // ---------------------------------------------------------------------------
+  // THE I-FRAME WINDOW, and the one place it is spent. See
+  // CONFIG.player.hitIFrames for the argument; the short version is that this
+  // game has two kinds of damage and only one of them can pile up.
+  //
+  // A per-second DRAIN — a body you are overlapping, an electric aura, a beam
+  // burning through you — is already bounded by being a rate, and refusing it
+  // in bursts would read as the damage flickering rather than as the player
+  // being safe. Those keep the channels they have always had.
+  //
+  // A 'strike' is a whole number arriving on one frame: a crab's pinch, a
+  // trap's snap, a shell landing. Nothing stopped six of those landing
+  // together, and after the crab layer moved its entire damage budget into the
+  // pinch (see CONFIG.crabClaw.contactMul) a swarm shutting its claws inside a
+  // few frames of each other could take half the bar with one flash to show
+  // for it. One is paid; the rest of the swarm still swings and still gets its
+  // turn as soon as the window is up.
+  //
+  // BEFORE capBossDamage, deliberately. A refused blow must not spend from the
+  // boss's rolling per-second budget on the player's behalf — that would let a
+  // crab's pinch quietly eat the ceiling the boss's own attacks are measured
+  // against.
+  //
+  // Callers opt IN by naming the channel, so a damage source added tomorrow
+  // gets the old behaviour rather than a silent i-frame it did not ask for.
+  if (channel === 'strike') {
+    if (player.invuln > 0) return;
+    player.invuln = Math.max(
+      CONFIG.player.hitIFrames ?? 0, player.stats?.invulnAfterHit ?? 0,
+    );
+  }
   // THE ONE PLACE EVERY POINT OF DAMAGE ARRIVES — contact, shots, perks,
   // blasts — which is why the boss's ceilings are applied here rather than at
   // the sources. See capBossDamage: it trims a boss down to what it is allowed
@@ -2695,9 +2859,16 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
  * megalodon's authored 1.30s bite and the mosasaur's 62 degrees of gape were
  * theatre played over a number that did not care where the animal's head was.
  *
- * `biteDamage` is blank for every wildlife row and stays that way. A shark
- * eating you is still a contact drain, which is the fight those creatures have
- * always been in; this is for the one animal the run stops for.
+ * IT IS NO LONGER ONLY THE BOSSES. `biteDamage` used to be blank for every
+ * wildlife row, and the note here used to say it would stay that way — a shark
+ * eating you was a contact drain and the chomp over the top was theatre. That
+ * was the honest description of an animal with nothing to dodge: a cruise
+ * hunter drifting at you at seven units a second, costing health for being in
+ * the same place as you, with no moment in it that could miss. The six apex
+ * sharks now commit to a readable pass (see `shark.lunge`) and fill this cell
+ * in, so the pass ARRIVING is worth something and the pass MISSING costs the
+ * shark its turn. Contact damage stayed exactly where it was; this is a second
+ * channel, gated on the head, not a replacement for the first.
  *
  * AND IT LANDS AT THE FRONT OF THE ANIMAL, which is a second gate and not the
  * one that fired the snap. `playerBiteReach` is deliberately enormous — it is
@@ -2735,14 +2906,38 @@ function onPlayerBite(e) {
   const my = e.mesh.position.y - player.mesh.position.y;
   if (mx * mx + my * my > reach * reach) return;
 
+  // A CLEAN BITE FROM A BOSS THAT HOLDS. Inside this gate and nowhere else,
+  // which is the whole contract of systems/bossGrab.js: the grab is earned by
+  // the same test the damage is, so a boss cannot take hold of you with its
+  // flank and cannot take hold of you at the end of a pass you sidestepped.
+  // Everything else about it — which archetypes may, how often, for how long —
+  // lives in that file and in CONFIG.bossGrab.
+  //
+  // Fired BEFORE the damage, so the grab's own hitstop and its snare land on
+  // the frame the jaws shut rather than a frame behind the number.
+  tryBossGrab(e);
+
   // Shoved away from the head rather than from wherever the body's mass is,
   // which is the one place in the game that distinction is worth making: the
   // whole point of a bite is that it happened at a particular end of an animal.
-  onPlayerHit(dmg, { x: -mx, y: -my }, e.type, 'attack');
+  //
+  // 'strike' rather than 'attack': a set of jaws closing is the definitive
+  // discrete blow, and it belongs in the same window as the pinch and the trap
+  // — see the i-frame block at the top of onPlayerHit. It is also what keeps a
+  // shiver of six sharks from billing six clean bites inside one frame now
+  // that every one of them carries a `biteDamage`.
+  onPlayerHit(dmg, { x: -mx, y: -my }, e.type, 'strike');
 }
 
 function onEnemyKilledFeedback(e, killEvent = null) {
   gameState.kills += 1;
+  // ONE FOR YOUR SIDE, if it came off a bait ball. This funnel is every way a
+  // creature dies to the player — shot, strike, element, companion, net — so
+  // it is the one place the player's half of the exchange can be counted
+  // without threading a flag through six ability systems. The predator's half
+  // is booked in systems/predation.js; see baitBallLedger for what the two
+  // become. A no-op on anything that was not in a ball.
+  if (e.baitBall) noteBaitLoss(e.schoolId, 'player');
   // An infected host bursting. Queued inside elements.js rather than acted
   // on here, because this runs from inside combat.js's own loop over
   // `enemies` — the same reason `pendingSplashes` exists a few lines below.
@@ -3409,7 +3604,13 @@ function collectChum(value, x, y, healMul = 1, fromFloor = false) {
   // exactly like swum-over ones, which is the whole reason this function
   // exists.
   advanceClock(CONFIG.dayNight?.chumSeconds ?? 0);
-  const heal = player.stats.maxHp * CONFIG.pickups.healFraction * healMul;
+  // Thinner the fuller the water is — see CONFIG.pickups.healRamp. Read off
+  // the run clock HERE, at the mouth, rather than off the orb: what a mouthful
+  // is worth as health is a fact about how much food is around when you eat it,
+  // not about the creature it fell out of. A chunk (spawnChumChunk) takes a
+  // different path and is deliberately untouched.
+  const heal = player.stats.maxHp * CONFIG.pickups.healFraction * healMul
+    * chumHealRamp(gameState.difficulty);
   player.hp = Math.min(player.stats.maxHp, player.hp + heal);
   // Pitch rises a full octave across the level-up bar: 0% progress =
   // base pitch, 100% = double (one octave up). Read AFTER gainXP so a
@@ -3481,7 +3682,14 @@ function resolveLightningStrike(strike) {
   }
 }
 
-function shotSfxOpts(interval) {
+// `gap` is the seconds until the NEXT shot sound, which is the volley interval
+// only while both fins fire together — with alternating fins the sounds are
+// twice as close as the volleys are, and a decay fitted to the volley would
+// have each flipper's shot still ringing when the other one fires. The pitch
+// still rides `interval`, because that is the gun's rate and it has not
+// changed: pitching the base gun up to the Rapid Fire voice for a cadence
+// nobody bought would spend the whole rise before the first card.
+function shotSfxOpts(interval, gap = interval) {
   const cfg = CONFIG.weapon.shotSfx ?? {};
   if (cfg.enabled === false) return undefined;
   const base = Math.max(0.001, CONFIG.weapon.fireRate);
@@ -3494,7 +3702,7 @@ function shotSfxOpts(interval) {
   const opts = { pitch: 1 + t * (cfg.pitchRise ?? 0.3) };
   if (cfg.fitDecay !== false) {
     const decay = CONFIG.sfx.shoot?.decay ?? 0.2;
-    opts.decayMul = Math.min(1, (interval * (cfg.decayHeadroom ?? 0.85)) / decay);
+    opts.decayMul = Math.min(1, (gap * (cfg.decayHeadroom ?? 0.85)) / decay);
   }
   return opts;
 }
@@ -3544,6 +3752,29 @@ function shotInterval() {
   return snapToBarGrid(raw, CONFIG.weapon.beatLock?.maxDivision ?? 64);
 }
 
+// WHICH FLIPPER A PELLET CAME OFF, as the run summary's ledger key.
+//
+// '<side>' for a plain stone and '<side>:<element>' for a lit one, so one key
+// answers both halves of the same question — a run with Flippers Up! four times
+// has a left fin throwing one element and a right fin throwing another, and two
+// separate tallies could say which fin dealt more and which element dealt more
+// without ever saying that the venom was the right one.
+//
+// Null for everything that did not leave a flipper: the mussels, the scallops,
+// the escorts' fire, the strike, and the basic shot itself on a model with no
+// fin rig. `recordDamage` skips the split entirely on a null, so nothing that
+// has no side is filed under one.
+//
+// The ELEMENT is read off the pellet rather than looked up now, deliberately.
+// It is what that fin was carrying when the shot was FIRED — a stone thrown
+// before the card was taken should not be credited to the element it arrived
+// too early for, and a pellet is in the water long enough for that to happen.
+function finKey(projectile) {
+  const side = projectile?.finSide;
+  if (!side) return null;
+  return projectile.finElement ? `${side}:${projectile.finElement}` : side;
+}
+
 function fire() {
   const s = player.stats;
   const rapid = rapidFireTimer > 0;
@@ -3579,6 +3810,69 @@ function fire() {
   // single-point volley falls back to the normal spread so it still fans.
   const fan = origins > 1 ? CONFIG.weapon.finSpread : s.spread;
 
+  // FLIPPERS UP! — how big the pebble out of origin `o` is. The fin defs in
+  // assets.js are ordered ['left', 'right'] and `rig.muzzles` is built by
+  // mapping over them, so origin 0 IS the left flipper; that ordering is the
+  // only thing tying the stat's name to the side the player sees, which is why
+  // it is stated here rather than assumed.
+  //
+  // A model with no fin rig fires everything from the body centre, and there is
+  // no side to be on — so it gets the MEAN of the two, and the card is worth the
+  // same per second as it would be on the seal. Splitting the difference is the
+  // one answer that neither pays the card twice nor quietly voids it.
+  const meanFinMul = ((s.leftFinRadiusMul ?? 1) + (s.rightFinRadiusMul ?? 1)) / 2;
+  const finRadiusMul = (o) => {
+    if (source !== 'fins' || origins < 2) return meanFinMul;
+    return o === 0 ? (s.leftFinRadiusMul ?? 1) : (s.rightFinRadiusMul ?? 1);
+  };
+  // ...AND THE PEBBLE HAS TO LOOK BIGGER, WHICH IS A SECOND NUMBER. `radius`
+  // on a projectile is its HIT circle and nothing else — spawnProjectile puts
+  // it straight into the collision test and never near the mesh, whose size is
+  // the separate `scale`. A card that moved only the radius would widen the
+  // hitbox invisibly, which is the worst of both: it plays stronger and reads
+  // as nothing.
+  //
+  // `scale` REPLACES the root scale rather than multiplying it (the
+  // `if (scale !== 1)` in spawnProjectile is a setScalar), and that root is
+  // where the asset's own size multiplier lives — 1.2 for the pebble, out of
+  // assets.csv. So the multiplier is folded in here, read from the asset rather
+  // than typed, and an un-upgraded pellet passes exactly the 1.2 createVisual
+  // already gave it.
+  const bulletSizeMul = getAssetSizeMultiplier('bullet');
+
+  // WHICH FLIPPER ORIGIN `o` IS, and what it is carrying. The fin defs in
+  // assets.js are ordered ['left', 'right'] and FLIPPER_SIDES is that same
+  // order, so the index IS the side — stated in one place rather than compared
+  // by eye in three.
+  //
+  // A body-centre volley (no rig) has no side to be on, so it carries nothing:
+  // the mean multiplier above already pays the SIZE half of the card there, and
+  // an element is an identity rather than an amount — there is no average of
+  // voltaic and venom, and picking one of them would be inventing a fact.
+  const fins = finElements();
+  const finSideFor = (o) => (source === 'fins' && origins >= 2 ? FLIPPER_SIDES[o % FLIPPER_SIDES.length] : null);
+  const finElementFor = (o) => { const side = finSideFor(o); return side ? fins[side] : null; };
+
+  // ALTERNATING FINS — one flipper per tick, trading sides, instead of every
+  // flipper on the same frame. The scheduler is already running at
+  // interval / origins (see the shotDue call in the update loop), so a full
+  // cycle of ticks puts exactly the pellets in the water that one simultaneous
+  // volley did: the volley is split in TIME, not thinned.
+  //
+  // `perOrigin` is deliberately untouched by this. It is what ONE limb fires,
+  // and one limb still fires it — the only thing that changes is that the
+  // other limbs are doing it half an interval later.
+  const split = finSplit(origins, fireRate);
+  const alternating = split > 1;
+  const firstOrigin = alternating ? finCursor % origins : 0;
+  const originsThisShot = alternating ? 1 : origins;
+  // The fraction of a volley this tick is. 1 when both fins fire together, and
+  // it is what keeps the recoil impulse and the exhaust plume per SECOND the
+  // same in either mode — a half volley that shoved like a whole one would
+  // double the gun's push on the seal the moment the toggle went on.
+  const share = originsThisShot / origins;
+  if (alternating) finCursor = (finCursor + 1) % origins;
+
   // Sonar Teeth. Resolved once per volley rather than per pellet — every
   // pellet in a volley is the same gun, and the object is spread into each
   // spawn below. `null` for a run without the card, which is the only reason
@@ -3592,7 +3886,13 @@ function fire() {
   // volley — every pellet in it is the same gun.
   const pellet = multishotLevelStats(s.multishotLevel, s);
 
-  for (let o = 0; o < origins; o++) {
+  // WHERE EACH FLIPPER FIRED FROM. `muzzlePoint` is one shared vector that the
+  // loop below overwrites per origin, so by the time the flash is fired it holds
+  // the LAST fin only — which was fine while there was one flash for the whole
+  // volley, and is not once each fin's flash is a different size and colour.
+  const flashes = [];
+  for (let n = 0; n < originsThisShot; n++) {
+    const o = (firstOrigin + n) % origins;
     for (let i = 0; i < perOrigin; i++) {
       const offset = (i - (perOrigin - 1) / 2) * fan;
       const cos = Math.cos(offset);
@@ -3607,16 +3907,28 @@ function fire() {
         damage: pellet.multishotDamage * airDamageMul(),
         speed: s.speed,
         life: s.life,
-        radius: pellet.multishotSize,
+        radius: pellet.multishotSize * finRadiusMul(o),
+        // The drawn stone, kept in step with the hit circle above. Both terms
+        // are ratios against the base pebble, so a run with neither card is
+        // byte-for-byte the shot it always was.
+        scale: bulletSizeMul * (pellet.multishotSize / (s.radius || 1)) * finRadiusMul(o),
         pierce: s.pierce,
         asset: 'bullet',
         source: 'gun',
+        // What THIS fin is carrying, which is why it rides the pellet rather
+        // than being looked up where it lands: two pellets in the same volley
+        // can disagree about it. Null on every un-upgraded shot. See combat.js.
+        finElement: finElementFor(o),
+        // The fin itself, for the run summary's left/right split. Set even when
+        // that fin is carrying nothing: an unlit flipper still threw the stone.
+        finSide: finSideFor(o),
         // Points the shot at things instead of along the aim. `orient` comes
         // with it so a curving bullet visibly faces where it is going — a
         // seeker drawn on its launch heading reads as a rendering bug.
         ...seek,
       });
     }
+    if (points > 0) flashes.push({ o, x: muzzlePoint.x, y: muzzlePoint.y });
   }
 
   const px = player.mesh.position.x;
@@ -3626,11 +3938,59 @@ function fire() {
   // emit point; without one it's the original one-unit nudge off the body.
   // ONE shot sound per volley, not one per pellet — `shotCount` is used above
   // to spawn bullets and is deliberately absent from everything below.
+  // HOW BIG AND WHAT COLOUR ONE FIN'S FLASH IS.
+  //
+  // Size is the fin's own pebble multiplier — the flash grows exactly as the
+  // stone does, because it is the stone leaving. `sizeMul` and not `scale`:
+  // `scale` multiplies the particle COUNT and, in feedback(), the shake, the
+  // glow and the ripple as well, so a maxed gun firing on the beat would pin the
+  // camera at full rattle for a reason that is meant to be a look.
+  //
+  // Colour is the fin's element if it rolled one, and otherwise the run's — the
+  // pellet and its ribbon are already tinted by the run's element in flight
+  // (elementFlightParticles), and a muzzle that stayed the stock blue while the
+  // shot leaving it was green was the one point in the chain that disagreed.
+  // Undefined, not white, when there is no element anywhere: `emit` reads a
+  // missing `color` as "keep the emitter's own palette", and 0xffffff is a
+  // colour rather than the absence of one.
+  const flashSize = (o) => finRadiusMul(o);
+  const flashColor = (o) => {
+    // The LAMP's colour first, so the burst leaving a flipper matches the light
+    // sitting on it — including the noise wander between a fin's element and the
+    // run's, which is what makes consecutive flashes off one fin drift between
+    // the two rather than all landing on their average.
+    const side = finSideFor(o);
+    const lamp = side ? finLightColor(side) : null;
+    if (lamp != null) return lamp;
+    const id = finElementFor(o) ?? activeElement();
+    return id ? elementColor(id) : undefined;
+  };
+
+  // The volley's ONE gunshot — sound, shake, glow, ripple — fired at the fin
+  // that shot last, which is what this has always done. In the shipped
+  // alternating mode that is the only fin firing this tick, so its flash is
+  // already per-flipper; the loop below is what covers the simultaneous mode,
+  // where the other fins need a flash of their own and emphatically do not need
+  // a second gunshot on the same frame.
+  const lead = flashes.length ? flashes[flashes.length - 1] : null;
+  for (const f of flashes) {
+    if (f === lead) continue;
+    emit('muzzle', f.x, f.y, {
+      dirX: dir.x, dirY: dir.y,
+      vx: player.velocity?.x ?? 0, vy: player.velocity?.y ?? 0,
+      sizeMul: flashSize(f.o), color: flashColor(f.o),
+    });
+  }
+
   feedback('shoot', {
     x: points > 0 ? muzzlePoint.x : px + dir.x,
     y: points > 0 ? muzzlePoint.y : py + dir.y,
     dirX: dir.x,
     dirY: dir.y,
+    // Read off the fin that fired, or — with no rig to have fins — off the mean
+    // the size half of the card already uses for a body-centre volley.
+    sizeMul: lead ? flashSize(lead.o) : meanFinMul,
+    color: lead ? flashColor(lead.o) : (activeElement() ? elementColor(activeElement()) : undefined),
     // WHICH WEAPON FIRED. `shoot` is shared with the starfish below, and
     // nothing in the payload used to tell the two apart — so an observer had to
     // treat every shot as the main gun's. The hive routes the whole pebble
@@ -3646,10 +4006,10 @@ function fire() {
     // left behind, which is what says the shot was fired ON THE MOVE.
     vx: player.velocity?.x ?? 0,
     vy: player.velocity?.y ?? 0,
-    sfxOpts: shotSfxOpts(fireRate),
+    sfxOpts: shotSfxOpts(fireRate, fireRate * share),
   });
 
-  applyRecoil(dir);
+  applyRecoil(dir, share);
   if (CONFIG.weapon.recoilEnabled && s.recoil > 0) {
     // Exhaust plume out the back, which is also what moves the ship.
     feedback('boost', {
@@ -3661,7 +4021,7 @@ function fire() {
       // carried along with the animal that let it go.
       vx: player.velocity?.x ?? 0,
       vy: player.velocity?.y ?? 0,
-      scale: Math.min(2, s.recoil / 9),
+      scale: Math.min(2, s.recoil / 9) * share,
     });
   }
 }
@@ -4608,6 +4968,12 @@ function animate(now) {
     // What a dropped orb is worth right now — see CONFIG.xp.dropRamp.
     const _tworld = performance.now();
     setChumDifficulty(gameState.difficulty);
+    // ...and how strong the seal has got, for CONFIG.spawn.lateGame. Next to
+    // the line above because it is the same kind of statement — a run fact the
+    // spawner needs and cannot reach — and it has to be pushed here rather than
+    // inside updateSpawning: the boss escorts, the death pile and every direct
+    // spawnNamed bypass that function entirely.
+    setSpawnLevel(gameState.level ?? 1);
     missileCooldown -= dt;
     scallopCooldown -= dt;
     oysterCooldown -= dt;
@@ -4629,6 +4995,15 @@ function animate(now) {
     player.comboSpeedMul = comboSpeedMul();
 
     updatePlayer(dt, input);
+
+    // A BOSS WITH THE SEAL IN ITS MOUTH — see systems/bossGrab.js, and the note
+    // at the top of that file for why it is here rather than inside
+    // updatePlayer. It is the LAST word on the seal's position: everything
+    // above has already integrated the frame, and this places the body in the
+    // jaws over the top of the result. Before updateAirborne on purpose, so a
+    // player carried up through the surface in a boss's mouth banks the arc
+    // from where they actually are rather than from where they swam to.
+    updateBossGrab(dt, { onPlayerHit });
 
     // AIR TIME. updatePlayer has just integrated the arc and set breachDir, so
     // this is the first moment the ramp can be current — and it must be current
@@ -4821,14 +5196,19 @@ function animate(now) {
       if (player.hp <= 0 && !deathState.active) killPlayer();
     }
 
-    // Ambient bubble and rapid-fire orb spawns, each on their own timer.
-    bubbleSpawnTimer -= dt;
-    if (bubbleSpawnTimer <= 0) {
-      bubbleSpawnTimer = randomBetween(CONFIG.oxygen.bubbleSpawnMin, CONFIG.oxygen.bubbleSpawnMax);
+    // AMBIENT BUBBLES ARE A HEADCOUNT, not a timer — the arena holds one or
+    // two of them and the spawner's job is to keep it that way. The rule and
+    // the reason are stepBubbleSpawner in systems/oxygenBubble.js; all that
+    // is here is the count it reads (every bubble in the water, including the
+    // ones a boat's hull shook loose) and the seabed it comes out of.
+    {
+      const step = stepBubbleSpawner(dt, bubbleSpawnTimer, bubbleOrbs.length);
+      bubbleSpawnTimer = step.timer;
       // OUT OF THE SEABED, not out of mid-water. Air comes from somewhere.
       // See bubbleBirthPoint in systems/oxygenBubble.js.
-      spawnBubbleOrb(world.scene, bubbleBirthPoint());
+      if (step.spawn) spawnBubbleOrb(world.scene, bubbleBirthPoint());
     }
+    // The rapid-fire orb keeps its own plain interval.
     rapidFireSpawnTimer -= dt;
     if (rapidFireSpawnTimer <= 0 && CONFIG.rapidFirePickup.enabled) {
       rapidFireSpawnTimer = randomBetween(CONFIG.rapidFirePickup.spawnMin, CONFIG.rapidFirePickup.spawnMax);
@@ -4945,7 +5325,12 @@ function animate(now) {
     // Asked every frame, firing or not: the idle path is what holds the lock on
     // the grid, so the shot after a recentred stick lands on a slot instead of
     // wherever the aim came back. See systems/shotGrid.js.
-    if (shotDue(shotInterval(), wantsToFire && input.aim.lengthSq() > 0.001, dt)) fire();
+    // The scheduler ticks per SHOT, not per volley: with alternating fins on,
+    // a bar/4 gun ticks eighth notes and each tick is one flipper's half.
+    // Derived here rather than inside fire() for the reason shotInterval() is
+    // split out at all — shotDue is asked every frame, firing or not.
+    if (shotDue(tickInterval(shotInterval(), emitPointCount(player.aimRig, CONFIG.emitPoints.bullet)),
+      wantsToFire && input.aim.lengthSq() > 0.001, dt)) fire();
     if (wantsToFire && player.stats.missileCount > 0 && missileCooldown <= 0 && input.aim.lengthSq() > 0.001) fireMissiles();
     // Neither of these needs `wantsToFire`. The scallop is spat and forgotten
     // and the pearl is slow and heavy — both are meant to be in the water
@@ -5407,9 +5792,11 @@ function animate(now) {
     // trigger, it only fires while the run is actually running, and it stops
     // with everything else when the level-up cards are up.
     updateBoss(dt, gameState, world.scene);
-    // What that kill PAYS, once the shot is over. Immediately after updateBoss
-    // because that is the call that files a death — anywhere else in the frame
-    // and the payout is a frame behind the fact it is reading.
+    // WHAT THAT KILL PAYS — the pellet now, the stacks once the shot is over.
+    // Both immediately after updateBoss because that is the call that files a
+    // death, and anywhere else in the frame is a payout one frame behind the
+    // fact it is reading.
+    updateBossShot();
     updateBossDividend();
     // ...and then whatever that boss's perk does. Must sit between updateBoss
     // and updateEnemies: a perk writes the velocity the integrator inside
@@ -5554,7 +5941,7 @@ function animate(now) {
       // projectile behind it and was landing on `gun` by default. See the note
       // in elements.js's applyShock.
       onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => {
-        playtest.recordDamage(source ?? projectile?.source ?? 'gun', dmg, e);
+        playtest.recordDamage(source ?? projectile?.source ?? 'gun', dmg, e, finKey(projectile));
         onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at);
       },
       // The elemental half of a pellet. RECORDING ONLY — the pellet's own
@@ -5564,7 +5951,7 @@ function animate(now) {
       onPlayerHit,
       onEnemyKilled: onEnemyKilledFeedback,
       onBoatHit: (boat, dmg, x, y, projectile) => {
-        playtest.recordDamage(projectile?.source ?? 'gun', dmg, boat);
+        playtest.recordDamage(projectile?.source ?? 'gun', dmg, boat, finKey(projectile));
         // Hulls aren't in the `enemies` array, so they need the same mussel
         // branch spelled out here — `boat.mesh.name` is the asset key ('boat'
         // or 'trawler'), which is what the colour is read from.
@@ -5629,6 +6016,11 @@ function animate(now) {
     // time of day has moved. Raw dt, like every other glow: the seal's own
     // light doesn't hold its breath because a hit froze the game for 60ms.
     updateElementSkin(player.body, rawDt);
+    // ...and each FLIPPER wears whatever Flippers Up! lit it with, which the
+    // body-wide wash above cannot say: the two fins can be holding different
+    // elements, and which one is about to throw what is the whole read of that
+    // card. See systems/finLights.js.
+    updateFinLights(world.scene, player.aimRig, rawDt);
     // ...and the meter, on the same markings through a second, independent
     // glow layer. Two layers rather than one because the element's early-outs
     // at level 0, and the charge read has to exist on every run — see the note
@@ -6201,8 +6593,29 @@ function animate(now) {
     resolvePredation(dt, world.scene, {
       // Silent — see CONFIG.feedback.preyEaten. A shark eating a fish is
       // something to look at, not something to hear over your own fight.
-      onFishEaten: (fish, pred) => {
+      onFishEaten: (fish, pred, meal) => {
         feedback('preyEaten', { x: fish.mesh.position.x, y: fish.mesh.position.y, vx: pred.vx, vy: pred.vy });
+        // A MOUTHFUL OF BAIT BALL, and the health it actually put back. This
+        // is the only feeding in the game that is addressed to the player: the
+        // ball is chum they were on their way to collect, and every fish the
+        // boss gets is a slice of bar they have to chew through again. Fired
+        // on the EATER rather than on the fish so the burst lands on the thing
+        // that got stronger — see CONFIG.feedback.baitFed.
+        //
+        // Gated on `healed` rather than on `bait`: a predator already at full
+        // health gained nothing, and a burst there would be announcing an
+        // exchange that did not happen.
+        if (meal?.bait && meal.healed > 0) {
+          feedback('baitFed', {
+            x: pred.mesh.position.x,
+            y: pred.mesh.position.y,
+            vx: pred.vx,
+            vy: pred.vy,
+            // A boss's is bigger because a boss's body is bigger — a burst
+            // sized for a shark is lost inside a megalodon.
+            scale: pred.isBoss ? 1.35 : 0.85,
+          });
+        }
       },
       // A hunter taking a body out of the water. The player gets nothing for
       // it — that was their meal and something else had it.
@@ -6810,6 +7223,19 @@ function animate(now) {
   // warning beep.
   updateOxygenFx(realDt, player, gameState.running && !gameState.paused);
 
+  // Near death — the frame closing in and going bloody under 15% of the bar.
+  // See systems/lowHealthFx.js for why this is a second channel rather than
+  // more of what playerDamageFx already does.
+  //
+  // Same three properties as the line above, for the same three reasons.
+  // OUTSIDE THE PAUSE GATE so it can ease back OUT on the score card instead
+  // of freezing the last frame of the fight red behind it. TOLD whether the
+  // run is live rather than gated on it, so death and the upgrade screen walk
+  // the effect down rather than stopping the clock that would. REAL time,
+  // because the hit that put the seal here fires a hit-stop, and an ease
+  // measured in game seconds would be stretched by the freeze it caused.
+  updateLowHealthFx(realDt, player, gameState.running && !gameState.paused);
+
   // Animation runs EVERY frame, not just during an active run. updatePlayer
   // (which drives the player's controller) only runs while the game is
   // running and unpaused, so on the start menu, the level-up screen and the
@@ -7078,7 +7504,13 @@ function animate(now) {
   // Same wall clock, same reasoning: the current is a property of the ocean,
   // not of the run. One uniform write per material — the bend itself is all
   // vertex shader, so this does not scale with how much grass is on screen.
-  updateGrassSway(rawDt);
+  //
+  // The seal's position rides along for the second force in that shader: plants
+  // shoved aside as it swims through them, springing back once it has gone.
+  // The mesh's position rather than any cached pair, because that is where a
+  // body in this game actually is — and unconditionally, so the corpse still
+  // parts the weeds it sinks through.
+  updateGrassSway(rawDt, player.mesh?.position ?? null);
   // And the same again for the creatures that light themselves. Raw dt on
   // purpose: a lanternfish's own glow has no business stopping because the
   // game froze for 60ms on a hit.

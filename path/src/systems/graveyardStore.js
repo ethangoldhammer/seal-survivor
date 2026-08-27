@@ -29,7 +29,13 @@ import { bounds } from '../arena.js';
 //          platform-specific: the yard simply is not there on a phone, and
 //          "my graveyard is gone" is not a bug anybody reports usefully.
 //
-//   z, name, cause, lead, stone
+//   z      the stone's RESTING depth — where it stands in every session after
+//          the one that carved it, rolled once at death. The session that made
+//          it stands it in front of the plant bed instead, because that is the
+//          one moment its name is being read; this is the depth it takes when
+//          it becomes scenery. Read the depth block in gravesite.js.
+//
+//   name, cause, lead, stone
 //          the rest of the inscription, as it was carved. `lead` in particular
 //          is stored rather than re-rolled: a stone is carved and then it is
 //          carved, and a headstone that reworded itself between sessions would
@@ -122,7 +128,14 @@ export function saveGraveyard(graves) {
     .slice(-MAX_STORED)
     .map((g) => ({
       fx: toFraction(g.x),
-      z: g.z,
+      // THE RESTING DEPTH, WHICH IS NOT WHERE THE STONE IS STANDING. The newest
+      // grave stands in front of the plant bed for the session that made it —
+      // its inscription is being read at that moment — and takes a rolled depth
+      // among the plants from the next session on. `restZ` is that rolled one,
+      // decided at death and stored so it never changes again. See the depth
+      // block in gravesite.js. `z` is the fallback for a record that has no
+      // opinion, which is what a harness planting a stone by hand hands over.
+      z: Number.isFinite(g.restZ) ? g.restZ : g.z,
       name: g.name,
       cause: g.cause ?? '',
       lead: g.lead ?? '',

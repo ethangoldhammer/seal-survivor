@@ -42,7 +42,7 @@ import {
   markDeathSite, recordGrave, plantGraves, updateGravesites,
   graveList, clearGraves, reseatGraves, restoreGraves, setGraveImpact,
 } from '../path/src/systems/gravesite.js';
-import { updateBounds, bounds } from '../path/src/arena.js';
+import { updateBounds, bounds, SEABED_Z } from '../path/src/arena.js';
 import { initGraveBeam, updateGraveBeam, graveBeamState } from '../path/src/systems/graveBeam.js';
 
 let failures = 0;
@@ -210,6 +210,81 @@ console.log('\nplacement');
     Math.abs(rec.object.position.y - rest) < 1e-6, `${rest} -> ${rec.object.position.y}`);
 }
 
+// --- depth ------------------------------------------------------------------
+// WHICH SIDE OF THE PLANTS THE NAME IS ON.
+//
+// The bed (systems/seabedScatter.js) is scattered through CONFIG.seabed.depth
+// and the yard used to stand at one typed number in the MIDDLE of it, so a
+// plant could stand across the inscription at the one moment it is meant to be
+// read. What a harness can see is the arithmetic; whether a leaf actually
+// reaches past the lane is a measurement off the real models, and it lives in
+// the bed panel of tools/looks/graves.js because no GLB loads here.
+console.log('\ndepth');
+{
+  clearGraves();
+  const bedFront = CONFIG.seabed.depth[1];
+  const clear = CONFIG.gravesite.dropClear;
+  const rec = markDeathSite(scene, { x: 0, name: 'DEPTH', cause: 'a shark' }, () => {});
+  settleYard();
+  check('the stone that just fell stands in front of the whole plant bed',
+    rec.object.position.z > bedFront,
+    `stone z ${rec.object.position.z.toFixed(2)}, bed front ${bedFront}`);
+  check('...by the clearance it was given',
+    Math.abs(rec.object.position.z - (bedFront + clear)) < 1e-6,
+    `z = ${rec.object.position.z}`);
+  check('...and still behind the play plane', rec.object.position.z < 0,
+    `z = ${rec.object.position.z}`);
+
+  // THE LANE FOLLOWS THE BED. This is the whole reason dropZ() reads
+  // CONFIG.seabed.depth instead of carrying a second number of its own: a typed
+  // lane passes every check above and then silently stops clearing anything the
+  // first time somebody drags the bed forward in the tuner.
+  const savedBed = CONFIG.seabed.depth;
+  CONFIG.seabed.depth = [-5.5, -2.6];
+  clearGraves();
+  const moved = markDeathSite(scene, { x: 0, name: 'MOVED', cause: 'a crab' }, () => {});
+  settleYard();
+  check('the lane moves with the bed rather than staying where it was typed',
+    Math.abs(moved.object.position.z - (-2.6 + clear)) < 1e-6,
+    `z = ${moved.object.position.z}`);
+  CONFIG.seabed.depth = savedBed;
+
+  // THE RESTING DEPTH, which is a different number from the one it is standing
+  // at. Math.random is stubbed rather than sampled: the roll is a mapping onto
+  // the slab and a handful of real rolls would only ever be evidence about the
+  // RNG. The ends and the middle prove the mapping.
+  const [back, front] = CONFIG.gravesite.restZ;
+  const realRandom = Math.random;
+  const rolled = [];
+  for (const r of [0, 0.5, 1]) {
+    Math.random = () => r;
+    clearGraves();
+    rolled.push(markDeathSite(scene, { x: 0, name: 'REST', cause: 'a shark' }, () => {}).restZ);
+  }
+  Math.random = realRandom;
+  check('an old stone can end up back among the plants',
+    Math.abs(rolled[0] - back) < 1e-6 && rolled[0] < bedFront, `deepest roll ${rolled[0]}`);
+  check('...or in front of them, which is the point of a range',
+    Math.abs(rolled[2] - front) < 1e-6 && rolled[2] > bedFront, `nearest roll ${rolled[2]}`);
+  check('...and the middle of the range is the middle of the slab',
+    Math.abs(rolled[1] - (back + front) / 2) < 1e-6, `mid roll ${rolled[1]}`);
+
+  // THE ONE THAT WOULD BE INVISIBLE. A stone rolled behind the seabed strip is
+  // not a stone in the distance, it is a stone nobody can find — the floor is
+  // drawn at SEABED_Z and hides it completely.
+  const savedRest = CONFIG.gravesite.restZ;
+  CONFIG.gravesite.restZ = [-40, -30];
+  Math.random = () => 0;
+  clearGraves();
+  const sunk = markDeathSite(scene, { x: 0, name: 'SUNK', cause: 'a crab' }, () => {});
+  Math.random = realRandom;
+  CONFIG.gravesite.restZ = savedRest;
+  check('a range dragged behind the floor is clamped, not obeyed', sunk.restZ > SEABED_Z,
+    `restZ ${sunk.restZ}, floor ${SEABED_Z}`);
+
+  clearGraves();
+}
+
 // --- across sessions --------------------------------------------------------
 // A stone that outlives the tab. The store's own portability is tested in
 // tools/graveyard-store-test.mjs; this is the half that only gravesite.js can
@@ -268,6 +343,28 @@ console.log('\nstones from a previous session');
   check('...and it is standing in the world',
     !!graveList().length && graveList().every((g) => g.phase === 'done'));
   void spy;
+
+  // THE STONE MOVES BACK AMONG THE PLANTS. The session that carved it stands it
+  // in front of the bed, because that is the session whose name is being read;
+  // what goes to disk is the resting depth it rolled at death. The failure this
+  // guards is the easy one to write: store the position the stone is standing
+  // at, and the yard is a row of markers at one depth forever.
+  {
+    clearGraves();
+    const fresh = markDeathSite(scene, { x: 5, name: 'LATER', cause: 'a shark' }, () => {});
+    settleYard();
+    const lane = fresh.object.position.z;
+    const rest = fresh.restZ;
+    const stored = mem.get('seal-survivor-graveyard');
+    clearGraves();
+    mem.set('seal-survivor-graveyard', stored);
+    restoreGraves();
+    plantGraves(scene);
+    const later = graveList().find((g) => g.name === 'LATER');
+    check('a stone from an earlier session comes back at its resting depth, not the drop lane',
+      !!later && Math.abs(later.z - rest) < 1e-6 && Math.abs(rest - lane) > 1e-6,
+      `lane ${lane.toFixed(2)} -> ${later?.z?.toFixed(2)}, rolled ${rest.toFixed(2)}`);
+  }
 
   clearGraves();
 }

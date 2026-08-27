@@ -6,12 +6,20 @@
 // harness at all — neither one throws, and both look exactly like a tuning
 // decision from the outside.
 //
-//   1. A MATERIAL VOICE THAT NAMES A SOUND THAT ISN'T THERE. playSfx returns
-//      quietly for a name it doesn't know (see the note on it), so a class
-//      whose event, or whose voice, was never written is not an error — it is
-//      a boss that hits in silence. Every route from an asset to a sound is
-//      walked here: asset -> class -> event -> CONFIG.sfx entry -> something
-//      that can actually make a noise.
+//   1. A VOICE THAT NAMES A SOUND THAT ISN'T THERE. playSfx returns quietly
+//      for a name it doesn't know (see the note on it), so a class whose
+//      event, or whose voice, was never written is not an error — it is a boss
+//      that hits in silence. Every route from an asset to a sound is walked
+//      here: asset -> class -> event -> CONFIG.sfx entry -> something that can
+//      actually make a noise.
+//
+//      WALKED FROM THE ROSTER, not from a list of keys typed into this file.
+//      The list is how `voiceClass.bossCrab` survived: it was keyed by the
+//      ARCHETYPE while the game looks the map up by the ASSET, so the king crab
+//      never once made a shell sound — and the harness agreed with the map,
+//      because the harness was asking it the same wrong question. Every subject
+//      below now comes out of bosses.csv through CONFIG.enemies, which is the
+//      exact path a live boss takes.
 //
 //   2. A HULL THAT SMOKES WHERE IT WASN'T HIT. The puffs are placed from scars
 //      remembered in the BOAT'S OWN FRAME, so the sums that convert them back
@@ -26,6 +34,8 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
+import { parseBossCsv } from '../path/src/bossTable.js';
+import bossesCsv from '../path/src/bosses.csv?raw';
 import { bossVoice, onFeedback } from '../path/src/systems/feedback.js';
 import { initParticles, resetParticles, updateParticles } from '../path/src/entities/particles.js';
 import { boats, updateBoats, damageBoat, resetBoats } from '../path/src/systems/boats.js';
@@ -56,60 +66,114 @@ const played = [];
 const realFeedback = CONFIG.feedback;
 // A proxy over the event table records which event was asked for, without
 // running any of the effects it names.
-CONFIG.feedback = new Proxy(realFeedback, {
+const spy = new Proxy(realFeedback, {
   get(target, prop) {
     if (typeof prop === 'string' && prop.startsWith('boss')) played.push(prop);
     return target[prop];
   },
 });
 
-// Every asset a boss can wear, plus the hulls that are not bosses at all, plus
-// one that is deliberately unknown.
+// SWAPPED IN FOR THE CALL AND OUT AGAIN, rather than left installed for the
+// file. Everything below reads CONFIG.feedback to assert what an event holds,
+// and a spy that is still in place counts those reads as events that fired —
+// which would make a check of "did this stay silent" pass or fail on whether a
+// nearby line happened to look the table up.
+function fire(kind, key, opts) {
+  played.length = 0;
+  CONFIG.feedback = spy;
+  try { bossVoice(kind, key, { x: 0, y: 0 }, opts); } finally { CONFIG.feedback = realFeedback; }
+  return played;
+}
+
+// EVERY ASSET A BOSS CAN ACTUALLY WEAR, derived the way the game derives it:
+// bosses.csv -> CONFIG.enemies[enemy] -> `assets` list, `asset`, or the id as
+// the fallback (see spawnOne in entities/enemies.js). A boss that rolls between
+// two bodies contributes both, which is how the orca gets caught.
+const ROSTER = parseBossCsv(bossesCsv, CONFIG.enemies);
+const bossAssets = new Map(); // asset -> archetype ids that can wear it
+for (const boss of ROSTER) {
+  const def = CONFIG.enemies[boss.enemy] ?? {};
+  const worn = Array.isArray(def.assets) && def.assets.length
+    ? [...def.assets]
+    : [def.asset ?? boss.enemy];
+  if (def.nightAsset) worn.push(def.nightAsset);
+  for (const a of worn) {
+    if (!bossAssets.has(a)) bossAssets.set(a, []);
+    bossAssets.get(a).push(boss.id);
+  }
+}
+check('the roster resolves to bodies', bossAssets.size >= ROSTER.length,
+  `${ROSTER.length} archetypes wearing ${bossAssets.size} assets`);
+
+// The hulls that are NOT bosses come through bossVoice too (damageBoat), and a
+// deliberately unknown key stands in for the boss added tomorrow.
 const SUBJECTS = [
-  ['bossShark', 'flesh'],
-  ['bossOrca', 'flesh'],
-  ['bossSquid', 'flesh'],
-  ['bossCrab', 'shell'],
-  ['bossBoat', 'hull'],
-  ['boat', 'hull'],
-  ['trawler', 'hull'],
-  // Not in the table on purpose: a boss added tomorrow must still make a noise.
-  ['bossSomethingNew', 'flesh'],
+  ...[...bossAssets.keys()].map((a) => [a, true]),
+  ['boat', false],
+  ['trawler', false],
+  ['bossSomethingNew', false],
 ];
 
-for (const [key, want] of SUBJECTS) {
+for (const [key] of SUBJECTS) {
   for (const kind of ['hit', 'die']) {
-    played.length = 0;
-    bossVoice(kind, key, { x: 0, y: 0 });
-    const wanted = `boss${kind === 'die' ? 'Die' : 'Hit'}${want[0].toUpperCase()}${want.slice(1)}`;
+    const cls = CONFIG.boss.voiceClass?.[key] ?? CONFIG.boss.voiceDefault;
+    fire(kind, key);
+    const wanted = `boss${kind === 'die' ? 'Die' : 'Hit'}${cls[0].toUpperCase()}${cls.slice(1)}`;
     check(`${key} ${kind} -> ${wanted}`, played.includes(wanted),
       played.length ? `asked for ${played.join(', ')}` : 'asked for nothing at all');
   }
 }
-CONFIG.feedback = realFeedback;
+
+// A KEY THAT MATCHES NOTHING. Both maps are keyed by asset, and a key that is
+// not an asset anything wears is not a typo the reader can see — it is a row
+// that reads exactly right and never fires. `boat` and `trawler` are the two
+// legitimate non-boss keys; everything else has to be a body in the roster.
+{
+  const AMBIENT = new Set(['boat', 'trawler']);
+  for (const [map, name] of [[CONFIG.boss.voiceClass, 'voiceClass'], [CONFIG.boss.voiceType, 'voiceType']]) {
+    const dead = Object.keys(map ?? {}).filter((k) => !bossAssets.has(k) && !AMBIENT.has(k));
+    check(`every ${name} key is a body something wears`, dead.length === 0,
+      dead.length ? `${dead.join(', ')} — no boss wears ${dead.length > 1 ? 'these' : 'this'}` : `${Object.keys(map ?? {}).length} keys`);
+  }
+}
+
+// ...and the two rows that are the whole reason the map exists. Asserted
+// through the ROSTER rather than by naming the key, so this fails if the crab
+// changes body and the row is left behind.
+{
+  const classOf = (archetype) => {
+    const asset = [...bossAssets].find(([, ids]) => ids.includes(archetype))?.[0];
+    return CONFIG.boss.voiceClass?.[asset] ?? CONFIG.boss.voiceDefault;
+  };
+  check('the king crab is shell', classOf('bossCrab') === 'shell', classOf('bossCrab'));
+  check('both boat bosses are steel',
+    classOf('bossBoat') === 'hull' && classOf('bossYacht') === 'hull',
+    `boat ${classOf('bossBoat')}, yacht ${classOf('bossYacht')}`);
+}
 
 // ...and the sounds those events name have to EXIST and be able to make a
 // noise. A synth voice with neither a tone nor a noise bed and no sample is
 // silence that reports itself as working — see the `missing` branch in playSfx.
+const canSound = (voice) => !!voice
+  && (voice.src || voice.srcs || voice.type === 'blip' || voice.type === 'boom' || voice.type === 'noise');
+
 for (const cls of ['Flesh', 'Shell', 'Hull']) {
   for (const kind of ['Hit', 'Die']) {
     const event = CONFIG.feedback[`boss${kind}${cls}`];
     check(`boss${kind}${cls} is an event with a sound`, !!event?.sfx, JSON.stringify(event ?? null));
-    const voice = CONFIG.sfx[event?.sfx];
-    check(`  ...and ${event?.sfx} is a voice that can sound`,
-      !!voice && (voice.src || voice.srcs || voice.type === 'blip' || voice.type === 'boom' || voice.type === 'noise'),
-      voice ? `type ${voice.type}` : 'no entry in CONFIG.sfx');
+    check(`  ...and ${event?.sfx} is a voice that can sound`, canSound(CONFIG.sfx[event?.sfx]),
+      CONFIG.sfx[event?.sfx] ? `type ${CONFIG.sfx[event?.sfx].type}` : 'no entry in CONFIG.sfx');
   }
 }
 
 // The three classes have to be TOLD APART. Six voices that are all the same
 // numbers is the same failure as one voice, and it would pass every check
 // above.
+const fp = (name) => {
+  const v = CONFIG.sfx[name] ?? {};
+  return [v.type, v.decay, v.gain, v.filter, ...(v.freq ?? [])].join('/');
+};
 {
-  const fp = (name) => {
-    const v = CONFIG.sfx[name] ?? {};
-    return [v.type, v.decay, v.gain, v.filter, ...(v.freq ?? [])].join('/');
-  };
   const names = ['bossHitFlesh', 'bossHitShell', 'bossHitHull', 'bossDieFlesh', 'bossDieShell', 'bossDieHull'];
   const seen = new Set(names.map(fp));
   check('all six voices are actually different sounds', seen.size === names.length,
@@ -120,6 +184,101 @@ for (const cls of ['Flesh', 'Shell', 'Hull']) {
   check('...and only steel rings', CONFIG.sfx.bossHitHull.type === 'boom'
     && CONFIG.sfx.bossHitFlesh.type === 'noise',
     `hull ${CONFIG.sfx.bossHitHull.type}, flesh ${CONFIG.sfx.bossHitFlesh.type}`);
+}
+
+// ===========================================================================
+section('THE SHARED LAYER, AND WHAT IS NOT A BOSS');
+// ===========================================================================
+// `bossHit`/`bossDeath` fire for every boss and for nothing else. The failure
+// this catches is a rowboat announcing a boss fight — damageBoat runs the
+// ambient hulls through bossVoice for their steel, and they are scenery.
+for (const kind of ['hit', 'die']) {
+  const general = kind === 'die' ? 'bossDeath' : 'bossHit';
+  check(`a boss ${kind} fires ${general}`,
+    fire(kind, [...bossAssets.keys()][0]).includes(general), played.join(', '));
+  check(`  ...and a trawler ${kind} does not`,
+    !fire(kind, 'trawler', { general: false }).includes(general), played.join(', '));
+}
+
+// The shared layer is allowed the channels nothing else on the frame carries,
+// and no others. A second shake here lands on a frame that already has
+// bulletHit's going in and bigKill's plus the explosion going out.
+for (const name of ['bossHit', 'bossDeath']) {
+  const def = CONFIG.feedback[name];
+  check(`${name} exists`, !!def, def ? '' : 'missing from CONFIG.feedback');
+  check(`  ...and carries no second impact`, !def?.shake && !def?.hitstop && !def?.emit && !def?.ripple,
+    JSON.stringify(def));
+  // The audit in tools/upgrade-test.mjs fails an event with no live channel at
+  // all, and an inert row is a slider that looks connected and is not.
+  check(`  ...and is not inert`, !!(def?.glow || def?.sfx || def?.haptic), JSON.stringify(def));
+}
+
+// ===========================================================================
+section('EVERY BOSS THAT CRIES OUT, CRIES IN ITS OWN VOICE');
+// ===========================================================================
+// The third layer — CONFIG.boss.voiceType, the animal rather than the material.
+// Sparse by design: no row means no cry, so what is checked is that every row
+// that IS there reaches a sound, and that no two of them reach the same one.
+const cries = [];
+for (const [asset, type] of Object.entries(CONFIG.boss.voiceType ?? {})) {
+  for (const kind of ['hit', 'die']) {
+    const verb = kind === 'die' ? 'Die' : 'Hit';
+    const event = `boss${verb}${type}`;
+    cries.push(event);
+    const def = CONFIG.feedback[event];
+    check(`${asset} ${kind} -> ${event}`, !!def, def ? '' : 'no such event — the cry never plays');
+    check(`  ...and ${def?.sfx} can sound`, canSound(CONFIG.sfx[def?.sfx]),
+      CONFIG.sfx[def?.sfx] ? `type ${CONFIG.sfx[def?.sfx].type}` : `no CONFIG.sfx.${def?.sfx}`);
+    // SOUND ONLY, like the material voices it rides on. A cry that shook the
+    // camera would be the third thing shaking it on one blow.
+    check('  ...and adds nothing but sound', !def?.shake && !def?.hitstop && !def?.emit && !def?.ripple && !def?.glow,
+      JSON.stringify(def));
+  }
+}
+
+// ...and fired through bossVoice, which is where the spelling can go wrong.
+for (const [asset, type] of Object.entries(CONFIG.boss.voiceType ?? {})) {
+  check(`${asset} cries as ${type} when it is hit`,
+    fire('hit', asset).includes(`bossHit${type}`), played.join(', '));
+}
+
+// A boss with no row is SILENT, not falling back into some other animal's
+// voice. That is the design (see the note on voiceType) and it is one `??`
+// away from being untrue.
+{
+  const cried = fire('hit', 'bossSomethingNew').filter((e) => cries.includes(e));
+  check('a boss with no cry row stays silent', cried.length === 0, cried.join(', '));
+}
+
+// EIGHTEEN CRIES, EIGHTEEN SOUNDS. The one that matters most in this file: the
+// whole point of the layer is that the hammerhead is not the megalodon, and a
+// copied row passes every check above.
+{
+  const unique = new Set(cries);
+  const seen = new Set([...unique].map(fp));
+  check('every cry is a different sound', seen.size === unique.size,
+    `${seen.size} distinct of ${unique.size}`);
+}
+
+// AND QUIETER THAN THE BODY THEY SIT ON. The layer that says what was struck
+// has to stay the loudest thing in the moment — see the note in CONFIG.sfx.
+for (const [asset, type] of Object.entries(CONFIG.boss.voiceType ?? {})) {
+  const cls = CONFIG.boss.voiceClass?.[asset] ?? CONFIG.boss.voiceDefault;
+  const under = CONFIG.sfx[`bossHit${cls[0].toUpperCase()}${cls.slice(1)}`];
+  const over = CONFIG.sfx[`bossHit${type}`];
+  check(`the ${type} cry sits under its own ${cls}`, (over?.gain ?? 1) < (under?.gain ?? 0),
+    `${over?.gain} vs ${under?.gain}`);
+}
+
+// AND SLOWER. A cry on every pellet is a loop, not an animal — the material
+// voice answers each hit, this one answers the fight.
+for (const [, type] of Object.entries(CONFIG.boss.voiceType ?? {})) {
+  const cry = CONFIG.feedback[`bossHit${type}`];
+  check(`the ${type} cry is throttled well past the material voice`,
+    (cry?.sfxMinGap ?? 0) >= (CONFIG.feedback.bossHitFlesh.sfxMinGap ?? 0) * 5,
+    `${cry?.sfxMinGap}s vs ${CONFIG.feedback.bossHitFlesh.sfxMinGap}s`);
+  check(`  ...and the ${type} death is not throttled at all`,
+    !CONFIG.feedback[`bossDie${type}`]?.sfxMinGap, `${CONFIG.feedback[`bossDie${type}`]?.sfxMinGap}`);
 }
 
 // ===========================================================================

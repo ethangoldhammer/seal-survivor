@@ -58,6 +58,24 @@
 //             1..3, so a heap of them springs by visibly different amounts);
 //             give only warpMin for a fixed value; give neither to inherit.
 //
+// ...and the RIM, because a look is the body and its edge together. These
+// three follow the same blank-inherits rule as everything above, over
+// CONFIG.creatureOutline / CONFIG.companionOutline rather than over the glow
+// preset — whichever of the two the creature's asset is listed in.
+//   rim       blank inherits the species' rim, `none` takes it OFF this
+//             individual, and a hex sets its colour. The same three-way shape
+//             assets.csv's `skin` column uses (blank / `none` / a value), for
+//             the same reason: "inherit" and "off" are different answers and a
+//             colour column alone cannot say the second one.
+//   rimGlow   how far past 1.0 the colour is pushed, i.e. how hard it blooms.
+//   rimThickness  world units, converted per model like the shared number.
+//
+// The rim is NOT per individual in the way the palette is: one material is
+// built per skin ROW, shared by every creature wearing that row. That keeps
+// the tuner's switches and sliders reaching creatures already swimming — the
+// whole reason outlines.js shares a material per species — and bounds the
+// material count at the length of this table rather than at the population.
+//
 // A NOTE ON PALE PALETTES. `bone` is near-white, and the bloom's bright pass
 // thresholds Rec.709 luminance — so at the same `strength` as the ember shell
 // it blooms several times harder, while a deep blue at the same strength may
@@ -178,12 +196,36 @@ export function buildSkins(rows, { patterns = [], presetIsNight = () => null } =
       [warpMin, warpMax] = [warpMax, warpMin];
     }
 
+    // THE RIM. Kept in its own object rather than merged into `look`, because
+    // `look` is spread straight onto the biolum uniforms — a rim colour in
+    // there would be an inert key that reads like a setting, which is the kind
+    // of thing that gets "fixed" into a real one later.
+    //
+    // `none` is a state, not a colour: a row that wants this individual bare
+    // has to be able to say so, and blank already means inherit.
+    const rimRaw = String(row.rim ?? '').trim().toLowerCase();
+    const rim = {};
+    if (rimRaw === 'none') rim.off = true;
+    else if (rimRaw) {
+      const c = parseColor(row.rim, id, 'rim', warn);
+      if (c != null) rim.color = c;
+    }
+    const rimGlow = numberOrNull(row, id, 'rimGlow', warn, { min: 0 });
+    if (rimGlow != null) rim.glow = rimGlow;
+    const rimThickness = numberOrNull(row, id, 'rimThickness', warn, { min: 0 });
+    if (rimThickness != null) rim.thickness = rimThickness;
+
     (out[preset] ??= []).push({
       id,
       preset,
       gate: want,
       weight,
       look,
+      // Null when the row says nothing about the rim at all, which is every
+      // shipped crab row — and null is what tells outlines.js to leave the
+      // species' own shared material in place rather than building a second
+      // one identical to it.
+      rim: Object.keys(rim).length ? rim : null,
       // Null when the row states no range; a fixed warp is min == max, which
       // rolls to itself and needs no second code path.
       warp: warpMin == null ? null : [warpMin, warpMax ?? warpMin],
@@ -227,6 +269,12 @@ export function rollSkin(table, preset, rng = Math.random) {
     const [lo, hi] = picked.warp;
     variant.warp = lo + (hi - lo) * rng();
   }
+  // The rim rides along under a namespaced key. applyBiolumSkinSettings
+  // spreads this object over the preset and writes only the uniforms it knows
+  // about, so an extra key is inert there; the caller that rolled the skin
+  // pulls it out and hands it to outlines.js. Carried rather than returned
+  // separately so a caller cannot roll a body and its edge apart.
+  if (picked.rim) variant.__rim = { id: picked.id, ...picked.rim };
   return variant;
 }
 

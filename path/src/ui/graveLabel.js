@@ -37,6 +37,41 @@ import { sweepGrave } from '../systems/graveBeam.js';
 // mean a gravestone could talk over "Oxygen low!", which is the exact trade
 // that file's header spends a paragraph refusing to make.
 //
+// NO STONE IN SHOT, NO CAPTION. This is the rule the other two are in service
+// of, and it is the one that was missing: a label is a label ON something, so
+// the moment its subject is out of the picture the label is not a label any
+// more, it is a sentence in open water. It is not enough that the seal is near
+// the grave — the grave has to be VISIBLE, which is a question about the
+// camera and not about the swim, so it is asked of the projection every frame
+// rather than once on arrival.
+//
+// The case that found it: the field-of-view setting can frame in past the
+// seabed, so the whole yard sits below the bottom edge with the seal down there
+// with it. The stone's top then projects a few dozen pixels under the frame,
+// the caption is drawn its own height ABOVE that point — and lands just inside
+// the picture, naming a grave that is nowhere on screen. Unclamping did not
+// touch it, because nothing was being clamped: that position was the honest
+// projection of a stone you cannot see.
+//
+// IT IS PINNED TO THE STONE, not to the frame. The caption is projected from
+// the grave's own x and the top of its head and written there unclamped, so it
+// travels with the stone as the camera moves and runs off the edge with it. It
+// used to be clamped into the window at both ends, which is the ordinary thing
+// to do with a label and was wrong here twice over: a caption whose subject has
+// left the frame is a sentence floating in open water with nothing to point at,
+// and the bottom clamp in particular parked it along the lower edge of the
+// screen while the graveyard was somewhere below, which is what "appearing
+// offscreen" looked like from the outside — the label was the only part of the
+// grave still in shot. Nothing draws it into frame now; the layer clips it and
+// the reach test below is what keeps it from being asked for at all.
+//
+// IT ONLY COMES UP ON A DIRECT SWIM OVER. The proximity test is horizontal AND
+// vertical, and the vertical half is the one that was missing: the yard is on
+// the floor, the arena is fifty units deep, and an x-only test named a grave
+// for a seal cruising the surface forty units above it. Both halves have to
+// agree before a word is said — which is also what makes the beam below fire on
+// an arrival rather than on a fly-past.
+//
 // IT NEVER BLOCKS THE FIGHT. The layer takes no pointer events and sits under
 // the menus — a caption about a seal that died four runs ago has no business
 // finishing on top of the upgrade cards. That used to be a DOM-order accident:
@@ -77,12 +112,21 @@ let shown = null;
 let alpha = 0;
 let fading = false;
 const anchor = { x: 0, y: 0 };
+// Scratch for the in-shot test, which runs before the anchor is adopted and so
+// cannot borrow the anchor's own.
+const SHOT_PT = { x: 0, y: 0 };
 
 function cfg() {
   return CONFIG.gravesite?.label ?? {};
 }
 
-const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+/** Does this world point land inside the window? The caption's whole claim to
+ *  a place on screen is that its stone is somewhere under it. */
+function onScreen(camera, x, y) {
+  worldToScreen(camera, x, y, SHOT_PT);
+  return SHOT_PT.x >= 0 && SHOT_PT.x <= window.innerWidth
+    && SHOT_PT.y >= 0 && SHOT_PT.y <= window.innerHeight;
+}
 
 function hexCss(hex, a = 1) {
   const n = (hex ?? 0xffffff) >>> 0;
@@ -143,9 +187,26 @@ export function updateGraveLabel(dt, ctx = {}) {
   if (c.enabled === false) { clearGraveLabel(); return; }
 
   const step = Math.min(Math.max(dt ?? 0, 0), 0.1);
-  const near = ctx.live === false || !ctx.camera
+  // BOTH AXES, and the vertical one is measured against the stone rather than
+  // against its centre: `reach` is clearance ABOVE the top of the head, and a
+  // seal swimming alongside the stone's own height is at zero. nearestGrave is
+  // horizontal by design (it is shared with the crabs, who live on the floor
+  // and have no vertical half to the question), so the height test is this
+  // caller's — which is fine because every stone stands on the same bed, so it
+  // rejects or accepts them all alike and cannot pick the wrong one.
+  const found = ctx.live === false || !ctx.camera
     ? null
     : nearestGrave(ctx.x ?? 0, c.radius ?? 6);
+  const above = found ? Math.max(0, (ctx.y ?? 0) - found.topY) : 0;
+  // ...and the third test, which is the camera's rather than the seal's: the
+  // stone has to be in the picture. Asked EVERY frame and not just on arrival,
+  // because the frame can move out from under a caption that was fair when it
+  // came up. The top of the head is the right point to ask about — it is the
+  // stone's highest, so a top below the bottom edge means the whole marker is
+  // under the frame, and it is also the point the caption hangs off, which
+  // makes this exactly "is there anything to hang it on".
+  const inShot = found ? onScreen(ctx.camera, found.x, found.topY) : false;
+  const near = found && above <= (c.reach ?? 6) && inShot ? found : null;
 
   // --- who the label is about ----------------------------------------------
   // A DIFFERENT grave takes the old one down first rather than swapping the
@@ -189,24 +250,23 @@ export function updateGraveLabel(dt, ctx = {}) {
 
   // --- where it sits --------------------------------------------------------
   // Projected at the stone's own x and the top of its head. The camera is
-  // orthographic and unrotated, so a grave at z = -3.2 projects to the same
-  // screen point as the z = 0 plane worldToScreen assumes — see its note. That
-  // is true today and is the reason this can use the cheap call; a camera that
-  // ever gains a tilt makes it wrong by the depth of the graveyard.
+  // orthographic and unrotated, so a grave projects to the same screen point as
+  // the z = 0 plane worldToScreen assumes WHATEVER DEPTH IT STANDS AT — which
+  // is why the yard is free to move its stones around in z at all (see the
+  // depth block in systems/gravesite.js). That is true today and is the reason
+  // this can use the cheap call; a camera that ever gains a tilt makes it wrong
+  // by the depth of whichever stone is being named.
   worldToScreen(ctx.camera, anchor.x, anchor.y, anchor.pt ?? (anchor.pt = { x: 0, y: 0 }));
   const gap = c.gap ?? 26;
-  const pad = c.pad ?? 10;
   const w = box.offsetWidth;
   const h = box.offsetHeight;
 
-  const left = Math.min(Math.max(anchor.pt.x - w / 2, pad), Math.max(pad, window.innerWidth - w - pad));
-  // Above the stone, and never flipped below it: a caption that swapped sides
-  // when the camera rode low would be sitting in the seabed. Clamped to the
-  // frame at BOTH ends instead — the same trade drawWorld takes, and for the
-  // same reason: half a sentence against an edge is readable where none of it
-  // is not. The bottom clamp is the one that matters, because the graveyard is
-  // on the floor and the floor is the edge the camera leaves the frame at.
-  const top = clamp(anchor.pt.y - gap - h, pad, Math.max(pad, window.innerHeight - h - pad));
+  // Centred over the stone and sitting a fixed gap above the top of its head,
+  // in world space and nowhere else. NOT clamped into the window — see the
+  // header. It is never flipped below the stone either: a caption that swapped
+  // sides when the camera rode low would be sitting in the seabed.
+  const left = anchor.pt.x - w / 2;
+  const top = anchor.pt.y - gap - h;
 
   // The last of the arrival is a small rise, so it reads as coming up out of
   // the stone rather than switching on. Squared, so most of the travel is over

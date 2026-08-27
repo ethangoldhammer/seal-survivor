@@ -63,6 +63,9 @@ export const menuInput = {
   // splash. The keyboard's version of this is a bare keydown listener; the pad
   // has no events at all, so this is that listener's other half.
   anyPress: false,
+  // Like `anyPress` but with the D-pad excluded — a press that is a DECISION
+  // rather than any contact at all. See anyActionButtonDown.
+  actionPress: false,
 };
 
 const keys = { up: false, down: false, left: false, right: false };
@@ -852,12 +855,25 @@ let backHeld = false;
 let tabPrevHeld = false;
 let tabNextHeld = false;
 let anyHeld = false;
+let actionHeld = false;
 
 // Is ANY button on the pad down right now? Deliberately every button rather
 // than a list: this is what "press anything" means, and a list would be a
 // promise the next controller layout could break.
 function anyButtonDown(pad) {
   return !!pad?.buttons?.some((b) => b?.pressed);
+}
+
+// ...and the same question with the D-PAD LEFT OUT.
+//
+// The four dpad indices are buttons like any other to the Gamepad API, so
+// "any button" includes pushing a direction — which is right for a press-
+// anything-to-start screen and wrong for anything that treats a press as a
+// DECISION. Nudging the stick or the dpad to look at a card is not the player
+// asking to cut an animation short.
+function anyActionButtonDown(pad) {
+  return !!pad?.buttons?.some((b, i) => b?.pressed
+    && i !== DPAD_UP && i !== DPAD_DOWN && i !== DPAD_LEFT && i !== DPAD_RIGHT);
 }
 
 // One axis of the pad reduced to -1 / 0 / +1, from either the D-pad or the
@@ -928,6 +944,13 @@ function updateMenuInput(pad) {
   const anyDown = anyButtonDown(pad);
   menuInput.anyPress = anyDown && !anyHeld;
   anyHeld = anyDown;
+
+  // The same edge, buttons only. `anyPress` drives "press anything to start",
+  // where a dpad nudge counting is fine; this drives things that read a press
+  // as a decision, where it is not.
+  const actionDown = anyActionButtonDown(pad);
+  menuInput.actionPress = actionDown && !actionHeld;
+  actionHeld = actionDown;
 }
 
 // Call when a menu opens. A is also the fire button, so the player is usually
@@ -954,10 +977,12 @@ export function resetMenuInput() {
   tabPrevHeld = !!pad?.buttons[TAB_PREV_BUTTON]?.pressed;
   tabNextHeld = !!pad?.buttons[TAB_NEXT_BUTTON]?.pressed;
   anyHeld = anyButtonDown(pad);
+  actionHeld = anyActionButtonDown(pad);
   menuInput.back = false;
   menuInput.tabPrev = false;
   menuInput.tabNext = false;
   menuInput.anyPress = false;
+  menuInput.actionPress = false;
   // NOT re-baselined here. This is called on the frame the pause menu opens,
   // and Start is what opened it — adopting "Start is down" as the baseline
   // would be right, but the edge has ALREADY been consumed by the toggle this

@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
+import { rollReels, cancelReel, reelRolling } from './cardReel.js';
+import {
+  buildComb, cardCells, fitCards, rippleComb, floodComb, drainComb,
+  clearComb, neonAt, hexCentreOf, hexRings, hoverComb,
+} from './upgradeComb.js';
 import { wornEdgeMask } from './wornEdge.js';
 import { drawUpgrades } from '../upgradeTable.js';
 import { expandDesc, measure, phraseAll, sentenceCase } from '../upgradeText.js';
@@ -70,6 +75,10 @@ import { randomPlayerName } from '../systems/randomName.js';
 // header in systems/nameLedger.js.
 import { isNameBuried } from '../systems/nameLedger.js';
 import { feedback } from '../systems/feedback.js';
+// The element's own printed word — 'Voltaic', 'Venom' — for the fin split in
+// the run summary. playtestAnalysis is import-free on purpose and hands back the
+// element ID, so the name is resolved here, at the one place a person reads it.
+import { elementLabel } from '../systems/elements.js';
 // THE RECAP'S NUMBERS. The recorder runs on every run, not only on a dev
 // build, so the Weapons and Threats tabs are reading the same ledger the
 // balance report does rather than a second set of counters kept for the
@@ -84,6 +93,7 @@ import { analyzeRun, sourceLabel } from '../systems/playtestAnalysis.js';
 import { primaryCause, threatLabel } from '../deathCauses.js';
 import { weaponName } from '../weaponName.js';
 import { playSfx, unlockAudio } from '../systems/audio.js';
+import { startCardRiser, stopCardRiser, stopAllCardRisers } from '../systems/cardRiser.js';
 // The popups' arrival and departure curves, by name — the same shared table the
 // boss bar's fill and the camera moves read from (path/src/ease.js).
 import { ease, cssEase } from '../ease.js';
@@ -426,7 +436,8 @@ const STYLES = `
      transform-origin is the top-left because the flight is written as "put this
      corner there and shrink by this much" — with a centred origin the scale
      pulls the card away from the point being translated to and the landing
-     misses by half the difference in size. */
+     misses by half the difference in size.
+
      ABOVE THE MENU IT CAME OUT OF. The flight starts on the frame the card is
      picked and the other two cards are still dithering OUT underneath it, so
      this has to clear .sv-center (8) — at 7 the chosen card flew away BEHIND
@@ -434,11 +445,37 @@ const STYLES = `
      something the run is narrating, which is why it goes over the menu rather
      than under it with the toasts. */
   .sv-hive-flier { position: fixed; pointer-events: none; z-index: 9;
-    transform-origin: 0 0; will-change: transform, opacity; }
-  /* The words do not survive the trip: the tile has no room for them, and text
-     scaled to 28% is a grey smear. Gone well before the landing so what arrives
-     is already just the picture. */
-  .sv-hive-flier .sv-card-content { opacity: 0; }
+    transform-origin: 0 0; will-change: transform, opacity;
+    /* THE TEXT HAS TO COME WITH IT TOO, for the same reason the shape does.
+       Dropping .sv-card sheds the menu's hover and focus rules and everything
+       ELSE that rule happened to carry — and it carried text-align: center.
+       The name and the description snapped to the left edge of the hexagon on
+       the frame the card was clicked, which reads as the text breaking rather
+       than as a class being removed.
+       The colour is here for a different reason: the flier is appended to the
+       UI root, not to the menu, so it leaves behind the colour
+       .sv-comb-stage was giving it and would inherit whatever the root happens
+       to say. Both
+       restated rather than kept by holding on to .sv-card, because holding on
+       to it brings the hover scale and the pointer back with it. */
+    text-align: center; color: #e8ecf3;
+    background-color: rgba(255,255,255,0.04);
+    /* THE SHAPE HAS TO COME WITH IT. The hexagon is clipped on .sv-card, and
+       the flier drops that class to shed the menu's hover and focus rules —
+       which sheds the clip with them. The chosen card then flew as a full
+       square and landed on a hexagonal tile, and the whole "one object moving"
+       read went with it. The same polygon as .sv-card, restated here, because
+       the silhouette in the air has to be the silhouette at both ends. */
+    overflow: hidden;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%); }
+  /* THE WORDS SURVIVE THE HELD LOOK AND NOTHING AFTER IT. The beat in the
+     middle exists to show WHAT was chosen, and a card with its name blanked is
+     a picture of an upgrade rather than the upgrade — but the tile has no room
+     for text and a name scaled to 28% is a grey smear, so it goes on the last
+     leg. data-leg is set by flyCardToHive when the card starts down. */
+  .sv-hive-flier .sv-card-content { transition: opacity 0.18s ease; }
+  .sv-hive-flier[data-leg="down"] .sv-card-content { opacity: 0; }
   /* The tooltip that follows a hovered card is not part of the flight. */
   .sv-hive-flier .sv-card-fx { display: none; }
 
@@ -1296,7 +1333,7 @@ const STYLES = `
      saying something else. Driving an orange past 1 walks it toward white,
      which is what heat looks like. */
   /* ONE GLYPH OF THE PROMPT, when the wave is running. Only ever built while
-     the strike prompt is up — see setBannerWord.
+     the strike prompt is up — see splitWord.
      inline-block because a transform does nothing at all on an inline box, and
      that failure is silent: the spans are there, the styles are written, and
      the line simply does not move.
@@ -1400,6 +1437,17 @@ const STYLES = `
     text-shadow: 0 2px 5px rgba(0,0,0,0.95), 0 0 10px currentColor;
     pointer-events: none; transform: translate(-50%, -50%);
     will-change: transform, opacity; }
+  /* ONE GLYPH OF A WAVED PROC LINE. Built only for a receipt that asked for
+     the wave (the 'wave' option on spawnProcToast), so an ordinary proc is
+     still one text node. Its own class rather than the chain prompt's
+     sv-chain-ch because
+     the two are different roles at different sizes — see splitWord.
+     inline-block and white-space:pre for the same two reasons the chain's
+     glyphs need them, and both failures are silent: a transform does nothing
+     at all on an inline box, and a plain space inside an inline-block
+     collapses to nothing so the words run together. */
+  .sv-proc-ch { display: inline-block; white-space: pre;
+    will-change: transform; }
   /* em, like the chain's count, and for the same reason — the value is part of
      the line rather than a thing with a size of its own. */
   .sv-proc-val { font-size: 1.08em; margin-left: 6px; font-weight: 800;
@@ -1543,6 +1591,256 @@ const STYLES = `
      selectors in both blocks above, so the pad, the keyboard and the mouse all
      produce the identical white ring and white bloom. */
   .sv-card-overlay { position: absolute; inset: 0; pointer-events: none; }
+  /* THE REEL — the column of other upgrades a card rolls past on its way to
+     being dealt, when CONFIG.upgradeArrival is 'reel'. Built and driven by
+     ui/cardReel.js, which is also where the reasons are.
+     inset:0 RATHER THAN A HEIGHT, and it is not a style preference: each face
+     is positioned at top: i * 100%, and a percentage top resolves against the
+     containing block. This box is that block. Let it size to its content
+     instead and every face resolves against auto height, lands on top of face
+     zero, and the column spins for its full duration showing one motionless
+     picture — with nothing in the console to say so.
+     These two rules were deleted with the reel when the slam replaced it, and
+     restored with it. The module survived; its stylesheet did not, and a reel
+     with no stylesheet still runs, still reports the right number of faces, and
+     still looks nothing like a slot machine. */
+  .sv-reel { position: absolute; inset: 0; will-change: transform; }
+  /* One card-height apart, and the same box as the card so the art lines up
+     with the clip exactly the way .sv-card's own does.
+     pointer-events off: the strip is gone by the time the menu unlocks, but a
+     decoy that could take the click in between is a card you were never offered
+     answering to the mouse. */
+  .sv-reel-face { position: absolute; left: 0; right: 0; height: 100%;
+    background-color: rgba(255,255,255,0.04); pointer-events: none; }
+
+  /* --- THE COMB ------------------------------------------------------------
+     The level-up screen's backdrop, and its transition, and its particle
+     system. ui/upgradeComb.js tiles it; everything here is what a cell looks
+     like and the three ways one can move.
+     No panel, no border, no radius: what used to be a rounded black box with
+     three hexagons on it is now one lattice edge to edge with the cards sitting
+     IN it. */
+  .sv-comb { position: absolute; inset: 0; overflow: hidden; z-index: 0; pointer-events: none; }
+  /* THE COMB STAYS UP once the hand has landed, and settles back rather than
+     leaving. The lattice the pulses built is the level-up screen — it is what
+     the cards are sitting in — so taking it away the moment it finished
+     arriving would throw away the thing that was just assembled and leave the
+     hand floating over the fight.
+     ON THE LAYER, NOT THE CELLS. One animated element instead of four hundred,
+     and it cannot fight the per-cell waves: a cell's own animation owns its
+     opacity for the reveal, and this multiplies the whole layer underneath.
+     THE BREATHE IS SMALL ON PURPOSE. It exists so the grid reads as live rather
+     than as a still image pasted over the game; anything you can actually
+     watch pulsing becomes the thing you are looking at instead of the cards. */
+  .sv-comb.sv-comb-idle { animation: sv-comb-breathe var(--sv-comb-breath, 3.4s) ease-in-out infinite; }
+  @keyframes sv-comb-breathe {
+    0%, 100% { opacity: var(--sv-comb-rest-op, 0.75); }
+    50%      { opacity: calc(var(--sv-comb-rest-op, 0.75) + var(--sv-comb-breath-by, 0.06)); }
+  }
+  /* An <i>, because there are up to four hundred of them and every byte of
+     markup is paid four hundred times.
+     The fill is the scrim — the gaps between hexagons are left open on purpose,
+     so the water carries on moving in the slivers between cells. */
+  .sv-comb-cell { position: absolute; display: block;
+    -webkit-clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    clip-path: polygon(5.7% 51%, 27.1% 12.7%, 72.3% 12.7%, 93.9% 51%, 72.3% 89.6%, 27.1% 89.6%);
+    background: var(--sv-comb-rest, rgba(9,14,22,0.9));
+    box-shadow: inset 0 0 0 1px var(--sv-comb-edge, transparent);
+    /* INVISIBLE UNTIL A PULSE REACHES IT. The comb has no entrance of its own:
+       it is revealed by the shockwaves the cards make as they land, ring by
+       ring, and every cell holds the last frame of that pulse afterwards — so
+       the honeycomb builds itself out of the hits and then stays until an
+       upgrade is taken.
+       This is what a resting opacity of zero buys: a fill-mode of forwards
+       shows a cell its OWN style before its turn and the animation's last
+       frame after, which is exactly hidden-then-shown with no state to track
+       and nothing per-cell to remember. */
+    opacity: 0;
+    /* The name is set per wave, and it is the NAME that restarts it. Changing
+       the delay or the duration of a running animation updates it in place —
+       the spec is explicit — so a second landing writing the same name over
+       the first one does not re-fire: it hands a wave that is already half
+       finished a new delay and carries on. The screen shows the first ripple of
+       a hand and nothing after it, which reads as the later cards being
+       undramatic rather than as an animation that never started.
+       Hence the -2 twins below. Alternating the name is what forces a restart,
+       and the alternative — clearing the animation and reading offsetWidth — is
+       a forced layout per cell per ripple. */
+    animation-duration: var(--sv-comb-len, 0.5s);
+    animation-delay: var(--sv-comb-at, 0s);
+    /* Buttery rather than linear: fast out of the gate and a long settle. The
+       BOUNCE is in the keyframes above — this only decides how it gets between
+       their stops. */
+    animation-timing-function: cubic-bezier(.22,.85,.28,1);
+    animation-fill-mode: forwards; }
+
+  /* THE FLASH ENDS ON THE RESTING FILL, it does not begin on it. With the first
+     keyframe held through the delay — which is what fill-mode: both would do —
+     every cell sits tinted until its turn comes, and the ripple is a screen
+     that is already fully lit crossed by a wave of it going out. */
+  /* A PULSE, NOT A FLASH — and its two halves are independent.
+     THE COLOUR starts at the peak and decays: background is named at 0% and
+     100% and nowhere else, so it falls off across the whole animation.
+     Staggered by ring, that puts a bright shell at the wave front with a trail
+     of half-faded ones behind it. Ramping UP to the tint instead — a rest stop
+     at 0% and the peak a moment later — puts a DARK band ahead of the bright
+     one and the gradient stops reading.
+     THE SCALE springs, from each cell's OWN CENTRE and by the same amount
+     everywhere. It used to be a px shove along the line out from the card,
+     which sent every cell a different way and sheared the grid as the wave
+     passed; scaling uniformly reads as the whole lattice coming straight out at
+     the camera. A ring further out is lit less but popped the same, because a
+     wave does not get smaller for having travelled.
+     ONE AMPLITUDE FOR THE WHOLE RING-DOWN. Every swing is a fixed fraction of
+     --sv-comb-pop, so one number sets how hard it is hit and how far it rings,
+     and 0 turns the movement off entirely without a second code path. The
+     colour has the same switch in --sv-comb-hit.
+     Six swings rather than two: two read as a lurch and a stop, and what makes
+     it a SPRING is that it keeps going and gives up gradually. */
+  @keyframes sv-comb-flash {
+    0%   { opacity: 1;
+           background: color-mix(in srgb, var(--sv-comb-tint, #7ad7ff) calc(var(--sv-comb-hit, 1) * 100%), var(--sv-comb-rest, rgba(9,14,22,0.9)));
+           transform: scale(calc(1 + var(--sv-comb-pop, 0.24) * 1)); }
+    28%  { transform: scale(calc(1 - var(--sv-comb-pop, 0.24) * 0.36)); }
+    48%  { transform: scale(calc(1 + var(--sv-comb-pop, 0.24) * 0.31)); }
+    66%  { transform: scale(calc(1 - var(--sv-comb-pop, 0.24) * 0.16)); }
+    80%  { transform: scale(calc(1 + var(--sv-comb-pop, 0.24) * 0.09)); }
+    91%  { transform: scale(calc(1 - var(--sv-comb-pop, 0.24) * 0.04)); }
+    100% { opacity: 1; background: var(--sv-comb-rest, rgba(9,14,22,0.9)); transform: none; }
+  }
+  /* THE COMB LEAVING: a flash, then the cell shrinks to nothing where it
+     stands. Staggered by RING from the cell the player took, so the lattice
+     comes apart outward from the choice — the same shells a landing makes,
+     run backwards.
+     IT DOES NOT TRAVEL. The cells used to be thrown off screen along an axis,
+     which is a second idea competing with the first: a wave says "outward from
+     here" and a throw says "that way", and together they say neither. Scaling
+     down in place leaves the ring the only thing moving. */
+  @keyframes sv-comb-out {
+    0%   { opacity: 1; transform: none;
+           background: var(--sv-comb-rest, rgba(9,14,22,0.9)); }
+    16%  { opacity: 1; transform: scale(1.08);
+           background: color-mix(in srgb, var(--sv-comb-tint, #7ad7ff) calc(var(--sv-comb-hit, 1) * 100%), var(--sv-comb-rest, rgba(9,14,22,0.9))); }
+    100% { opacity: 0; transform: scale(0.08);
+           background: var(--sv-comb-rest, rgba(9,14,22,0.9)); }
+  }
+  /* POINTING AT A CARD — COLOUR AND NOTHING ELSE.
+     Its own keyframe rather than the landing's with the movement turned down,
+     and the difference is that this one has no transform in it AT ALL. A
+     keyframe that mentions transform takes ownership of it for the whole
+     animation, so even a scale of exactly 1 resets the lattice — the grid stops
+     wherever the last wave left it and snaps back, on every mouse move. Colour
+     is the only thing a hover is allowed to disturb.
+     It also composites cheaper: a background-only animation on four hundred
+     cells is a paint, where a transform is a layer per cell.
+     IT STILL HAS TO PIN opacity, though, and leaving that out cleared the whole
+     grid on the first mouse move. A cell is REVEALED by holding the last frame
+     of the wave that reached it, and starting a new animation on that cell
+     releases whatever the old one's fill was holding — so an animation that
+     does not mention opacity hands the cell back its resting style, which is
+     invisible. Pinned at 1 at both ends: constant, so it animates nothing, and
+     present, so it keeps what the reveal won. */
+  @keyframes sv-comb-tint {
+    0%   { opacity: 1; background: color-mix(in srgb, var(--sv-comb-tint, #7ad7ff) calc(var(--sv-comb-hit, 1) * 100%), var(--sv-comb-rest, rgba(9,14,22,0.9))); }
+    100% { opacity: 1; background: var(--sv-comb-rest, rgba(9,14,22,0.9)); }
+  }
+  @keyframes sv-comb-tint-2 {
+    0%   { opacity: 1; background: color-mix(in srgb, var(--sv-comb-tint, #7ad7ff) calc(var(--sv-comb-hit, 1) * 100%), var(--sv-comb-rest, rgba(9,14,22,0.9))); }
+    100% { opacity: 1; background: var(--sv-comb-rest, rgba(9,14,22,0.9)); }
+  }
+
+  /* THE TWINS. Identical to the three above, and they exist only so a wave can
+     follow a wave of the same kind: the animation restarts when the NAME
+     changes and at no other time. upgradeComb.js alternates between each pair.
+     Kept beside their originals rather than generated, because a keyframe that
+     drifts from its twin is a comb where every other ripple looks different. */
+  @keyframes sv-comb-flash-2 {
+    0%   { opacity: 1;
+           background: color-mix(in srgb, var(--sv-comb-tint, #7ad7ff) calc(var(--sv-comb-hit, 1) * 100%), var(--sv-comb-rest, rgba(9,14,22,0.9)));
+           transform: scale(calc(1 + var(--sv-comb-pop, 0.24) * 1)); }
+    28%  { transform: scale(calc(1 - var(--sv-comb-pop, 0.24) * 0.36)); }
+    48%  { transform: scale(calc(1 + var(--sv-comb-pop, 0.24) * 0.31)); }
+    66%  { transform: scale(calc(1 - var(--sv-comb-pop, 0.24) * 0.16)); }
+    80%  { transform: scale(calc(1 + var(--sv-comb-pop, 0.24) * 0.09)); }
+    91%  { transform: scale(calc(1 - var(--sv-comb-pop, 0.24) * 0.04)); }
+    100% { opacity: 1; background: var(--sv-comb-rest, rgba(9,14,22,0.9)); transform: none; }
+  }
+  @keyframes sv-comb-out-2 {
+    0%   { opacity: 1; transform: none;
+           background: var(--sv-comb-rest, rgba(9,14,22,0.9)); }
+    16%  { opacity: 1; transform: scale(1.08);
+           background: color-mix(in srgb, var(--sv-comb-tint, #7ad7ff) calc(var(--sv-comb-hit, 1) * 100%), var(--sv-comb-rest, rgba(9,14,22,0.9))); }
+    100% { opacity: 0; transform: scale(0.08);
+           background: var(--sv-comb-rest, rgba(9,14,22,0.9)); }
+  }
+  /* A CARD BEING THROWN INTO ITS CELL. Its own keyframe rather than the comb's,
+     because that one animates the background — and a card's background is its
+     art. Opacity and scale only, on the slot, so the tier bloom the slot draws
+     is carried along rather than fought with.
+     IN BIG AND DOWN, which is the whole difference between this and the cells
+     around it: they punch up out of nothing and read as arriving, this falls
+     onto the lattice and reads as landing. The WEIGHT is in the acceleration —
+     see the curve below.
+     A fill-mode of both means the card is INVISIBLE through its delay, holding
+     first keyframe — three cards sitting in their cells waiting to be slammed
+     into them is not a slam, it is a fade with extra steps. */
+  @keyframes sv-card-slam {
+    0%   { opacity: 0; transform: scale(var(--sv-slam-from, 4)); }
+    40%  { opacity: 1; }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  /* NO SPRING, AND THAT IS THE POINT. A hard ease-IN — slow off the mark, then
+     accelerating all the way into the floor — so the card gains speed as it
+     falls and stops dead on arrival. It used to squash under 1 and rebound,
+     which is a bounce however briefly it lasts, and a bounce is the opposite of
+     an impact: it says the thing that landed was light.
+     THE LANDING IS NOW THE LAST FRAME, which is what puts the cue on it. With
+     the rebound in, the card was visibly down at 70% and spent the rest of the
+     animation settling — so the pop, the tier's sting and the comb's pulse all
+     fired a third of the way AFTER the thing they were reacting to. Nothing was
+     wrong with the timer; the animation simply landed before it ended. */
+  .sv-card-slot.sv-slam { animation: sv-card-slam var(--sv-slam-len, 0.26s) cubic-bezier(.62,0,.92,.32) var(--sv-slam-at, 0s) both; }
+  /* A CARD LEAVING, on the same beat as the cell it was sitting in. Its own
+     keyframe and NOT the comb's: sv-comb-out paints a background, and a card is
+     not a cell — put that on the stage and the whole title-and-cards block
+     flashes as a tinted RECTANGLE across the screen on every pick, which is the
+     one shape this entire surface exists to avoid.
+     Springy on the way out like everything else: a shove back against the
+     direction of travel, a squash, then gone. */
+  @keyframes sv-card-out {
+    0%   { opacity: 1; transform: none; }
+    18%  { opacity: 1; transform: scale(1.05); }
+    100% { opacity: 0; transform: scale(0.1); }
+  }
+  .sv-card-slot.sv-card-going { animation: sv-card-out var(--sv-out-len, 0.42s) cubic-bezier(.3,0,.2,1) var(--sv-out-at, 0s) both; }
+  /* The headline only. Opacity, nothing else — see above for what happens when
+     this borrows a keyframe that has a background in it. */
+  @keyframes sv-stage-out { to { opacity: 0; } }
+  .sv-comb-stage.sv-stage-going .sv-title,
+  .sv-comb-stage.sv-stage-going .sv-sub { animation: sv-stage-out var(--sv-out-len, 0.42s) ease-in both; }
+  /* The cards and the headline, over the comb. A stacking context of its own so
+     the slots' bloom filters compose against the lattice rather than against
+     whatever the comb's last cell happened to be. */
+  .sv-comb-stage { position: relative; z-index: 1; text-align: center; color: #e8ecf3; max-width: 96vw; }
+  /* THE CARDS ARE PLACED ON THE LATTICE, not laid out in a row. The flex rules
+     below are still the fallback for a comb that is switched off; this class is
+     added by the placement pass and the slots get left/top of their own. */
+  .sv-cards.sv-comb-laid { display: block; flex-wrap: nowrap; max-width: none; margin: 0 auto; }
+  .sv-cards.sv-comb-laid .sv-card-slot { position: absolute; }
+  /* THE ONE BEING POINTED AT COMES FORWARD.
+     The slots are absolutely positioned siblings, so paint order is DOM order —
+     the last card always covers the one before it. That was invisible while the
+     hand was a wide row with air between the hexagons, and is not on a phone,
+     where the cards stack into a column tight enough to touch: the hover's
+     scale and its bloom both grew straight underneath the next card down.
+     On the slot rather than the card, because the bloom is drawn out here (see
+     .sv-card-slot's filter) and lifting only the card would leave its own halo
+     behind it. The same three selectors as everywhere else, so the pad and the
+     keyboard raise a card exactly as the mouse does. */
+  .sv-cards.sv-comb-laid .sv-card-slot:has(.sv-card:hover),
+  .sv-cards.sv-comb-laid .sv-card-slot:has(.sv-card:focus-visible),
+  .sv-cards.sv-comb-laid .sv-card-slot:has(.sv-card-sel) { z-index: 2; }
+
   /* Text is confined to the hex's inscribed box and centred both ways, so a
      long upgrade name can't spill past the angled edges. The inset matches
      the widest rectangle that fits inside the clip above (at 24%/76% height
@@ -2442,7 +2740,12 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     </div>
 
     <div class="sv-center sv-hidden" id="svLevelUpMenu">
-      <div class="sv-menu" id="svLevelUpBox">
+      <!-- THE HONEYCOMB, and it is not decoration behind a panel: there is no
+           panel. The cells are the scrim over the fight, the three cards are
+           three cells of this same lattice, and the comb lighting up is the
+           whole of this screen's arrival. See ui/upgradeComb.js. -->
+      <div class="sv-comb" id="svComb"></div>
+      <div class="sv-comb-stage" id="svLevelUpBox">
         <div class="sv-title">Level up</div>
         <div class="sv-sub">Pick one</div>
         <div class="sv-cards" id="svCards"></div>
@@ -2598,7 +2901,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   for (const id of [
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
     'svHpGhost', 'svO2Ghost', 'svHpWrap', 'svO2Wrap', 'svBoostWrap', 'svBoostPips', 'svBoostSpend',
-    'svLevelUpMenu', 'svLevelUpBox', 'svGameOverMenu', 'svCards', 'svGameOverStats',
+    'svLevelUpMenu', 'svLevelUpBox', 'svComb', 'svGameOverMenu', 'svCards', 'svGameOverStats',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svBossBar', 'svBossName', 'svBossFill',
     'svCorner',
@@ -2660,6 +2963,12 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   // directions and the answer on the far side is a different number (or none).
   syncBossBarDrop();
   window.addEventListener('resize', syncBossBarDrop);
+  // The level-up comb is tiled for ONE viewport and its cards are placed at
+  // absolute offsets in it, so a window that changes size while the hand is up
+  // needs both done again. Registered once here rather than bound and unbound
+  // with the menu: relayoutComb is a no-op on a hidden menu, and a listener
+  // that has to be torn down is one that can be left behind.
+  window.addEventListener('resize', queueRelayout);
   // And the polaroid's artboard, parsed once here rather than on the frame a
   // boss dies — see initSnapshotCards. It draws nothing until a kill.
   initSnapshotPrints();
@@ -3196,8 +3505,18 @@ export function hideAllMenus() {
   // is a 3D button on the canvas, and this panel is a DOM overlay), so a run
   // can begin with the table still up.
   hideLeaderboard();
-  cancelReveal('upgrades');
-  clearMask(el.svLevelUpMenu, el.svLevelUpBox);
+  // Anything still rolling or still counting out the hand. A restart from a
+  // menu opened over a live level-up would otherwise leave timers landing cards
+  // that are about to be deleted.
+  cancelIgnition();
+  clearTimeout(combTimer);
+  combTimer = 0;
+  combPlacement = null;
+  combSig = '';
+  combShown = false;
+  pickedCell = null;
+  pickedTint = null;
+  clearComb();
   setMenuLocked(false);
   el.svLevelUpMenu.classList.add('sv-hidden');
   el.svGameOverMenu.classList.add('sv-hidden');
@@ -3458,7 +3777,9 @@ function runReveal(name, { target, inner, from, to, seconds, onDone }) {
 // The splash is first because it's the first one needed, and by some margin.
 export function warmReveals() {
   if (!supportsMask() || prefersReducedMotion()) return;
-  const queue = ['splash', 'upgrades', 'scoreCard', 'pause'];
+  // NOT 'upgrades'. That surface left the dither behind — it is a honeycomb
+  // that snaps on now (ui/upgradeComb.js), and it has no masks to bake.
+  const queue = ['splash', 'scoreCard', 'pause'];
   const build = () => {
     const name = queue.shift();
     if (!name) return;
@@ -3496,48 +3817,590 @@ function revealSeconds(name, direction) {
 
 // --- the surfaces -----------------------------------------------------------
 
-// Upgrade cards in. Called once the menu's contents are built and laid out.
-function revealUpgradesIn() {
-  setMenuLocked(true);
-  const landed = runReveal('upgrades', {
-    target: el.svLevelUpMenu,
-    inner: el.svLevelUpBox,
-    from: 0,
-    to: 1,
-    seconds: revealCfg('upgrades').inTime,
-    onDone: () => { setMenuLocked(false); igniteCards(); },
-  });
-  // Nothing animated, so nothing is half-drawn and nothing needs locking.
-  // igniteCards is deliberately NOT repeated here: every path that returns
-  // false has already run onDone on its way out, and calling it twice would
-  // pop the first card twice on any machine that can't mask.
-  if (!landed) setMenuLocked(false);
+// --- the comb ----------------------------------------------------------------
+// This screen no longer dissolves. It is a honeycomb that snaps on around three
+// columns already rolling, and the empty cells are what the moments are spent
+// on — see ui/upgradeComb.js for the lattice and CONFIG.upgradeComb for the
+// numbers.
+
+// Where the cards ended up on the lattice, kept from the placement pass so the
+// ripples know which cell each landing came from without measuring again.
+let combPlacement = null;
+// The timer that hides the menu once the comb has drained. Held so a level-up
+// landing on top of the last one cannot hide the menu it has just re-dealt.
+let combTimer = 0;
+// Which arcade colour this hand arrives in. Stepped per level-up so two in a
+// row are not the same screen twice.
+let combTurn = 0;
+
+/**
+ * PUT THE CARDS ON THE LATTICE.
+ *
+ * The row of hexagons was a flex row before, which is a row of hexagons and not
+ * a comb — the spacing had nothing to do with the shape. Here the three slots
+ * are placed at real lattice cells and the tiling is stepped off one of them,
+ * so the cards ARE cells rather than things lying on top of a pattern.
+ *
+ * Falls back to one column when three across will not fit, which is a portrait
+ * phone. Measured rather than read off a media query: the card's own size is
+ * clamped by the stylesheet on exactly those screens, so asking what fits is
+ * the same question with one fewer place to disagree.
+ */
+// True while layOutCards is writing. The size observer must not answer its own
+// writes — see watchSlotSize.
+let laying = false;
+
+function layOutCards() {
+  laying = true;
+  try { return layOutCardsNow(); } finally { laying = false; }
 }
 
-// Upgrade cards out, on a pick. Deliberately does not block anything: the run
-// is re-engaged on the same frame the card is clicked, and this dissolves over
-// the top of a game that is already moving again.
+function layOutCardsNow() {
+  const slots = [...el.svCards.querySelectorAll('.sv-card-slot')];
+  // ITS OWN PREVIOUS ANSWER, CLEARED FIRST. This runs again whenever the page
+  // settles or the window changes, and it measures the card to find the size
+  // the stylesheet wants — so reading a card that is still wearing the inline
+  // width the LAST pass wrote measures that instead, and every relayout
+  // ratchets the hand a little smaller than the one before.
+  for (const slot of slots) {
+    const card = slot.querySelector('.sv-card');
+    if (card) card.style.width = card.style.height = '';
+  }
+  const box = slots[0]?.querySelector('.sv-card')?.offsetWidth ?? 0;
+  // Switched off in the tuner: the stylesheet's own flex row is still under
+  // this, so putting the class and the three inline offsets back gives the row
+  // the layout it had before any of this existed.
+  if (CONFIG.upgradeComb?.enabled === false) {
+    el.svCards.classList.remove('sv-comb-laid');
+    el.svCards.style.width = el.svCards.style.height = el.svCards.style.position = '';
+    for (const slot of slots) {
+      slot.style.left = slot.style.top = '';
+      const card = slot.querySelector('.sv-card');
+      if (card) card.style.width = card.style.height = '';
+    }
+    return null;
+  }
+  if (!slots.length || !box) return null;
+
+  // WHAT ELSE IS ON THE SCREEN — the headline and its line under it, whose
+  // height varies with the type the player is running.
+  //
+  // SUMMED FROM THE ELEMENTS, not taken as the difference between the stage and
+  // the card row. That subtraction reads whatever height .sv-cards happens to
+  // have at this instant, which on the first deal is still the stylesheet's
+  // flex row — and if that row wrapped, the difference goes NEGATIVE and clamps
+  // to zero, so the fit below is solved against the full height of the screen
+  // and the last card ends up past the bottom of it. Four pixels on an iPhone
+  // SE, found by npm run layout, and four pixels of a hexagon is not something
+  // anyone would catch by looking.
+  const chrome = [...el.svLevelUpBox.children]
+    .filter((n) => n !== el.svCards)
+    .reduce((h, n) => h + n.offsetHeight, 0);
+  // ...plus a little air. The stage is centred, so anything that does not fit
+  // hangs off BOTH ends, and a solve that lands exactly on the boundary is one
+  // sub-pixel rounding away from being reported as broken.
+  const fit = fitCards(slots.length, box, window.innerWidth, window.innerHeight, chrome + 16);
+  // The stylesheet's size is a ceiling, not an instruction. On a window that is
+  // too narrow for a row and too short for a column the cards get smaller — a
+  // lattice has no way to wrap, which is what the flex row used to do here.
+  if (fit.box < box) {
+    for (const slot of slots) {
+      const card = slot.querySelector('.sv-card');
+      if (card) { card.style.width = `${fit.box}px`; card.style.height = `${fit.box}px`; }
+    }
+  }
+  const laid = cardCells(slots.length, fit.box, fit.stacked);
+
+  lastBox = fit.box;
+  watchSlotSize(slots[0]?.querySelector('.sv-card'));
+  // HIDDEN UNTIL THEY ARE THROWN. The comb is built a frame after this, so
+  // without it the hand is on screen for that frame sitting in a lattice that
+  // does not exist yet. A CSS animation outranks an inline style, so the slam
+  // below overrides this without having to clear it — and the paths that do not
+  // slam clear it themselves (see showSlots).
+  for (const slot of slots) slot.style.opacity = '0';
+
+  el.svCards.classList.add('sv-comb-laid');
+  el.svCards.style.position = 'relative';
+  el.svCards.style.width = `${laid.width}px`;
+  el.svCards.style.height = `${laid.height}px`;
+  slots.forEach((slot, i) => {
+    slot.style.left = `${laid.spots[i].x}px`;
+    slot.style.top = `${laid.spots[i].y}px`;
+  });
+  return { slots, box: fit.box, laid };
+}
+
+// The middle of the hand, in viewport coordinates — where the comb comes on
+// from, and where it drains back to when nothing else says otherwise.
+// The hand, visible, with no arrival — reduced motion, the slam switched off,
+// or a sequence cut short.
+function showSlots() {
+  for (const card of levelUpCards) {
+    if (card.parentElement) card.parentElement.style.opacity = '';
+  }
+}
+
+// The cards in, the comb around them. Called once the menu's contents are built
+// and the browser has laid them out.
+function revealUpgradesIn() {
+  setMenuLocked(true);
+  clearTimeout(combTimer);
+  combTimer = 0;
+  // THE EXIT LEAVES ITS ANIMATIONS BEHIND, and an element still holding a
+  // finished fade-to-nothing is invisible however carefully the next hand is
+  // dealt into it. The slots are rebuilt each deal so they clear themselves;
+  // the stage is not, and neither is the headline inside it. Two level-ups in
+  // one wave is the case that finds this, and it finds it as a blank screen.
+  el.svLevelUpBox.style.animation = '';
+  el.svLevelUpBox.classList.remove('sv-stage-going');
+  // The resting breathe belongs to a hand that has landed. A new one starts
+  // with an empty comb and builds it again, and a layer still holding the last
+  // hand's dimmed opacity would build it at three quarters strength.
+  el.svComb?.classList.remove('sv-comb-idle');
+  if (el.svComb) el.svComb.style.opacity = '';
+
+  // Placed once now so the stage has its real size, and the slots are hidden
+  // while it happens.
+  combPlacement = layOutCards();
+
+  // ...AND MEASURED AGAIN A FRAME LATER, WHICH IS THE WHOLE POINT.
+  //
+  // Everything the comb is stepped off comes from asking a card where it is,
+  // and the answer on the frame the menu opens is not always the answer. The
+  // stage was display:none a moment ago; its height has just changed under the
+  // cards; the headline above them is text that has only now been laid out.
+  // Tiling against that measurement puts a lattice on screen that the cards do
+  // not sit in — and it stays wrong, because nothing measures again until
+  // something else forces a layout. Dragging the window edge was the fix, which
+  // is exactly the shape of the bug: the second measurement is the right one.
+  //
+  // A frame is imperceptible, and it costs nothing, because the cards are
+  // invisible until they are thrown and the comb has not been built yet. There
+  // is nothing on screen to be late.
+  combSig = '';
+  combShown = false;
+  requestAnimationFrame(() => {
+    if (el.svLevelUpMenu.classList.contains('sv-hidden')) return;
+
+    const placed = layOutCards();
+    combPlacement = placed;
+    if (placed) openComb(placed);
+
+    // The slam owns the rest: the menu unlocks as the last card lands, and
+    // every card's flare, sting and comb ripple fire as it hits.
+    const slamming = arriveCards();
+    // Nothing to throw means nothing is half-arrived and nothing needs locking.
+    // The read-out still has to happen, and it is this path's job because the
+    // slam is not there to do it.
+    if (!slamming) {
+      showSlots();
+      setMenuLocked(false);
+      igniteCards();
+    }
+  });
+}
+
+/**
+ * LAY IT OUT AGAIN, QUIETLY.
+ *
+ * Two things make a placement go stale, and both leave a screen that is wrong
+ * in a way nothing throws about:
+ *
+ *   THE WINDOW CHANGED SIZE. The comb is tiled once, for one viewport, and the
+ *   cards are placed at absolute offsets — so a window dragged wider mid-menu
+ *   keeps a lattice that stops short of the new edge and a hand still centred
+ *   on the old one.
+ *
+ *   THE PAGE SETTLED AFTER THE FIRST MEASUREMENT. Everything here is stepped
+ *   off asking a card where it is, and that answer changes as the stage stops
+ *   being display:none, as its height changes under the cards, as the headline
+ *   above them is laid out. revealUpgradesIn waits a frame before it measures
+ *   for exactly that reason; this is the same correction, later.
+ *
+ * No wave and no cues — the comb is rebuilt at rest. This is a correction, not
+ * an arrival, and re-igniting would replay the whole opening in the middle of a
+ * menu the player is already reading.
+ */
+function relayoutComb() {
+  if (el.svLevelUpMenu.classList.contains('sv-hidden')) return;
+  const placed = layOutCards();
+  combPlacement = placed;
+  if (!placed || !el.svComb) return;
+  const anchor = combAnchor(placed);
+
+  // NOTHING MOVED, SO NOTHING IS REBUILT — and this is the important half.
+  //
+  // Rebuilding replaces every cell, and a cell that has just been replaced is
+  // not running the arrival any more. This is called from the moment the page
+  // settles, which on a machine that already has the font is the frame after
+  // the comb starts coming on: the honeycomb would assemble for one frame and
+  // then simply be there, with the whole entrance thrown away and nothing to
+  // say it had happened. It looked like the stagger had never been written.
+  //
+  // So the correction only runs when there is something to correct. When there
+  // genuinely is, losing a wave mid-flight is the right trade: a lattice the
+  // cards do not sit in is wrong for as long as the menu is up, and the wave is
+  // over in half a second.
+  const sig = combSigOf(anchor);
+  if (sig === combSig) {
+    showSlots();
+    return;
+  }
+  combSig = sig;
+
+  // The hand is already on screen by the time a real relayout happens, so it
+  // must not be hidden again by the placement pass — only the arrival hides it.
+  showSlots();
+  // REBUILT AS IT WAS, not as it starts. Cells are invisible until a pulse
+  // reaches them, and a rebuild after the hand has landed would hand the player
+  // an empty screen that nothing is ever going to light again — the pulses that
+  // would have revealed these cells already happened, to the cells they
+  // replaced.
+  buildComb(el.svComb, anchor, placed.laid.spots, { revealed: combShown });
+}
+
+// What the comb was last built for. See relayoutComb.
+let combSig = '';
+// Whether the comb has been lit at all this hand. A rebuild before the first
+// card lands should come up empty and wait for the pulses; one after should
+// come up as it was.
+let combShown = false;
+
+/**
+ * WHERE THE FIRST CARD'S CELL IS — the one measurement the whole lattice is
+ * stepped off.
+ *
+ * NOT getBoundingClientRect ON THE SLOT. That rectangle includes the slot's
+ * transform, and while the hand is arriving the slot is at
+ * CONFIG.upgradeSlam.from — 1.8x, growing out of its own centre. A comb tiled
+ * against that is anchored to a card almost twice its real size, and worse, the
+ * number CHANGES every frame of the arrival: anything comparing it against the
+ * last one sees the lattice move, rebuilds, and throws away the entrance it was
+ * in the middle of. The honeycomb assembled for one frame and was then simply
+ * there, which looked exactly like the stagger never having been written.
+ *
+ * The container has no transform of its own, and the offsets inside it are the
+ * ones this file wrote — so this is the placement rather than a picture of it.
+ */
+function combAnchor(placed) {
+  const box = el.svCards.getBoundingClientRect();
+  return {
+    box: placed.box,
+    left: box.left + placed.laid.spots[0].x,
+    top: box.top + placed.laid.spots[0].y,
+    col: placed.laid.spots[0].col,
+    row: placed.laid.spots[0].row,
+  };
+}
+
+function combSigOf(a) {
+  return `${window.innerWidth}x${window.innerHeight}|${a.box}|`
+    + `${Math.round(a.left)},${Math.round(a.top)}|${a.col},${a.row}`;
+}
+
+// Coalesced to one a frame: a drag of a window edge fires resize continuously,
+// and rebuilding a hundred cells per event would make the drag itself the
+// slowest thing on the screen.
+let relayoutRaf = 0;
+function queueRelayout() {
+  if (relayoutRaf) return;
+  relayoutRaf = requestAnimationFrame(() => {
+    relayoutRaf = 0;
+    relayoutComb();
+  });
+}
+
+// WHAT THE CARD ACTUALLY ENDED UP AS, watched rather than assumed.
+//
+// Everything the comb is stepped off comes from measuring one card, and that
+// measurement can be taken before whatever decides the size has landed — a
+// stylesheet, a webfont, a container not yet given its own width. Chasing which
+// of those it is fixes one case and leaves the next; an observer answers all of
+// them.
+//
+// `lastBox` is what stops it chasing its own tail: the relayout can write an
+// inline size, which is itself a resize.
+let slotWatch = null;
+let lastBox = 0;
+function watchSlotSize(card) {
+  slotWatch?.disconnect();
+  slotWatch = null;
+  if (typeof ResizeObserver !== 'function' || !card) return;
+  slotWatch = new ResizeObserver(() => {
+    // NOT WHILE WE ARE THE ONES WRITING. layOutCards clears its own inline size
+    // to re-measure what the stylesheet wants, and that clear is a real size
+    // change — so the observer answered it, queued a relayout, which cleared
+    // again, and the comb was rebuilt on a loop. Every rebuild replaces every
+    // cell, and a replaced cell is not running the wave that revealed it: the
+    // grid emptied itself a second after it had finished arriving, with nothing
+    // in the console and nothing obviously to blame but the last thing touched.
+    if (laying) return;
+    const now = card.offsetWidth;
+    if (!now || Math.abs(now - lastBox) < 1) return;
+    queueRelayout();
+  });
+  slotWatch.observe(card);
+}
+
+// Build the comb around a laid-out hand and bring it on.
+function openComb(placed) {
+  if (!el.svComb) return false;
+  const anchor = combAnchor(placed);
+  // Stamped with what it was built for, so the settle a moment later can tell
+  // that nothing has moved and leave the arrival alone — see relayoutComb.
+  combSig = combSigOf(anchor);
+  const built = buildComb(el.svComb, anchor, placed.laid.spots, { revealed: combShown });
+  if (!built) return false;
+
+  // NO ENTRANCE OF ITS OWN. The comb is built and left invisible; every cell is
+  // revealed by the first pulse that reaches it and holds after (see the
+  // .sv-comb-cell rule), so the honeycomb assembles out of the hits the cards
+  // make and stays until one is taken.
+  //
+  // It used to sweep in column by column before the cards arrived, which meant
+  // the screen spent its first half-second on a backdrop introducing itself.
+  // The cards are the event; the comb is what they happen to.
+  combTurn++;
+
+  // THE CARDS ARE NOT PART OF THIS WAVE. The comb comes on around three EMPTY
+  // cells and they stay empty for a beat — that gap is the anticipation, and it
+  // is what makes the first card hitting one of them an event. See slamCards,
+  // which owns when each one arrives.
+  // The screen arriving still has a voice — the cards are already falling. What
+  // it no longer has is a wave of its own under it.
+  feedback('combIgnite');
+  return true;
+}
+
+/**
+ * A COLUMN STOPPING — the payoff beat.
+ *
+ * The ring goes out in that card's OWN TIER COLOUR, which is the whole reason
+ * the buildup is arcade neon and this is not: the loud half of the screen
+ * carries no information, so the quiet half can. A legendary landing turns the
+ * room gold and a common does not, without a word of text.
+ *
+ * The last one is the best card in the hand (they land lowest tier first), and
+ * it gets the flood and the big cue instead of a ring and a knock.
+ */
+function combLanding(card, step) {
+  const tier = rarityById(card.dataset.rarity);
+  const tint = tier
+    ? `#${(tier.color >>> 0).toString(16).padStart(6, '0')}`
+    : neonAt(combTurn);
+  // THE ORIGIN IS THE CARD'S OWN CELL, not a point near it.
+  //
+  // The pulse counts RINGS out from a lattice cell, so it needs to be told
+  // which cell rather than where on the screen — a pixel nearest-cell guess is
+  // one hexagon out along one axis often enough to make the first ring look
+  // lopsided, and it cannot be told from the real thing in a still.
+  // combPlacement holds the col/row each card was placed at; the pixel centre
+  // rides along because the shove still needs a direction.
+  const idx = levelUpCards.indexOf(card);
+  const spot = combPlacement?.laid?.spots?.[idx];
+  const box = hexCentreOf(card.getBoundingClientRect());
+  const from = { x: box.x, y: box.y, q: spot?.col ?? 0, r: spot?.row ?? 0 };
+  // THE COMB COUNTS AS LIT FROM THE FIRST PULSE, not the last.
+  //
+  // A rebuild replaces every cell, and a replaced cell is not running the wave
+  // that revealed it — so a relayout part way through the hand (the page
+  // settling, a webfont landing, the window moving) hands back a comb of cells
+  // that nothing is ever going to light again, because the pulses that would
+  // have lit them already happened to the cells they replaced. Marking it shown
+  // only when the LAST card landed left exactly that window open, and it is the
+  // window the first deal of a run always falls in.
+  //
+  // One pulse reaches every cell — the rings run to the edge of the screen — so
+  // after the first landing "revealed" is true of the whole lattice.
+  combShown = true;
+
+  const last = step >= levelUpCards.length - 1;
+  if (last) {
+    floodComb(from, tint);
+    feedback('combFlood');
+    // THE HAND IS DOWN AND THE COMB STAYS. Settling into its resting opacity
+    // here rather than when the menu opened, because until the last card lands
+    // the lattice is still being built by the pulses and dimming it mid-build
+    // would take the arrival's brightness with it.
+    settleComb();
+  } else {
+    rippleComb(from, tint);
+    feedback('cardLand');
+  }
+}
+
+// Which cell the player took, and what tier it was — filed by pick() so the
+// exit can ring out from it. Cleared with the rest of the placement.
+let pickedCell = null;
+let pickedTint = null;
+
+// The middle of a lattice cell, in viewport coordinates, from its offset inside
+// the card container. Measured off the container rather than the slot, for the
+// reason combAnchor gives: a slot mid-animation carries a transform.
+function cellPoint(spot) {
+  const box = el.svCards.getBoundingClientRect();
+  const size = combPlacement?.box ?? 0;
+  return {
+    x: box.left + spot.x + size * 0.5,
+    y: box.top + spot.y + size * 0.5,
+  };
+}
+
+/**
+ * POINTING AT A CARD — the comb answers from that card's own cell.
+ *
+ * Small: a fraction of a landing's pop, dying out within a few rings. The wave
+ * a hand makes arriving is the event on this screen, and a hover that matched
+ * it would spend that on moving the mouse.
+ *
+ * The mouse, the pad and the keyboard all come through here, because they are
+ * the same signal — the pad's selection IS its hover, and a comb that only
+ * answered a pointer would go quiet for anyone on a controller.
+ */
+function hoverPulse(card) {
+  // Not while the hand is still arriving. Every wave rewrites every cell, so a
+  // hover landing mid-sequence does not sit under the arrival — it REPLACES it,
+  // and the card that was mid-pulse loses its moment to the mouse.
+  if (menuLocked || !card) return;
+  const idx = levelUpCards.indexOf(card);
+  const spot = combPlacement?.laid?.spots?.[idx];
+  if (!spot) return;
+  const tier = rarityById(card.dataset.rarity);
+  hoverComb(
+    card.dataset.upgrade || String(idx),
+    { ...spot, q: spot.col, r: spot.row, ...cellPoint(spot) },
+    tier ? `#${(tier.color >>> 0).toString(16).padStart(6, '0')}` : neonAt(combTurn),
+  );
+}
+
+/**
+ * THE COMB AT REST — dimmer, and breathing.
+ *
+ * Everything the pulses revealed stays exactly where it is; the LAYER drops to
+ * its resting opacity so the fight reads through it, and oscillates by a few
+ * per cent so the grid is live rather than a still pasted over the game.
+ *
+ * The transition is what stops it being a step: the flood is still ringing out
+ * when this is called, and snapping the layer to 0.75 on that frame would read
+ * as the payoff being cut off.
+ */
+function settleComb() {
+  const c = CONFIG.upgradeComb ?? {};
+  if (!el.svComb || c.restOpacity == null) return;
+  el.svComb.style.setProperty('--sv-comb-rest-op', String(c.restOpacity));
+  el.svComb.style.setProperty('--sv-comb-breath-by', String(c.breatheBy ?? 0.06));
+  el.svComb.style.setProperty('--sv-comb-breath', `${c.breatheSeconds ?? 3.4}s`);
+  el.svComb.style.transition = `opacity ${(c.settleSeconds ?? 0.5)}s ease-out`;
+  el.svComb.classList.add('sv-comb-idle');
+}
+
+// The comb off, on a pick. Deliberately does not block anything: the run is
+// re-engaged on the same frame the card is clicked, and this drains over the
+// top of a game that is already moving again.
+// WHAT THE FLIER DOES ONCE THE SCREEN HAS LEFT. Set by flyCardToHive, called
+// by the exit wave when it finishes — see below for why the two halves of this
+// moment share one clock rather than each running its own timer.
+let exitFollow = null;
+
 function revealUpgradesOut() {
   const finish = () => {
+    combTimer = 0;
     el.svLevelUpMenu.classList.add('sv-hidden');
+    clearComb();
+    slotWatch?.disconnect();
+    slotWatch = null;
     setMenuLocked(false);
   };
-  // Stays locked for the dissolve, so the cards on their way out can't take a
+  // Stays locked for the exit, so the cards on their way out can't take a
   // second click. If another level is pending, showLevelUp cancels this and
-  // starts a fresh reveal — which is why `finish` hides the menu rather than
+  // starts a fresh one — which is why `finish` hides the menu rather than
   // anything on the way in doing it.
   setMenuLocked(true);
   // Also covers the ways out that aren't a pick — the menu being closed from
   // under the deal shouldn't leave it counting to an empty screen.
   cancelIgnition();
-  runReveal('upgrades', {
-    target: el.svLevelUpMenu,
-    inner: el.svLevelUpBox,
-    from: 1,
-    to: 0,
-    seconds: revealCfg('upgrades').outTime,
-    onDone: finish,
+  clearTimeout(combTimer);
+
+  // WHERE THE EXIT RINGS OUT FROM — the cell of the card that was just taken,
+  // so the comb comes apart outward from the choice rather than being wiped
+  // off. `pickedCell` is filed by pick(); without one (the menu closed some
+  // other way) the middle of the hand stands in.
+  const spots = combPlacement?.laid?.spots ?? [];
+  const from = pickedCell ?? spots[Math.floor(spots.length / 2)];
+
+  // THREE BEATS, IN ORDER, AND THIS IS THE WHOLE FIX.
+  //
+  // The chosen hexagon grows FIRST and alone; then the rest of the screen
+  // leaves; then the hexagon follows it down to the corner.
+  //
+  // All three used to start on the frame of the click. The card grew while the
+  // comb was already scaling away underneath it and the corner was already
+  // reaching for it — so there was nothing to read in any order, and every part
+  // of it looked wrong when the parts were fine and only their timing was.
+  // Three things at once is not a sequence.
+  const rise = Math.max(0, CONFIG.upgradeHive?.fly?.riseSeconds ?? 0.26);
+  combTimer = setTimeout(() => runExitWave(from, spots, finish), rise * 1000);
+}
+
+/**
+ * THE SCREEN LEAVING — the comb and the two cards nobody took, scaling down in
+ * a ring wave out from the cell that was chosen.
+ *
+ * ONE CLOCK, NOT TWO. When it is done it CALLS the flier rather than both of
+ * them setting timers off the same config: the wave's length depends on how
+ * many rings the comb turned out to have, which is a measurement rather than a
+ * number in a file, and two timers reading the same numbers drift the moment
+ * either side is retuned.
+ */
+function runExitWave(from, spots, finish) {
+  const c = CONFIG.upgradeComb ?? {};
+  const outLen = c.drainTime ?? 0.42;
+  const seconds = drainComb(
+    from ? { ...from, q: from.col, r: from.row, ...cellPoint(from) } : null,
+    pickedTint,
+  );
+
+  // THE TWO CARDS NOBODY TOOK GO WITH THE COMB, each on the beat of the cell it
+  // was sitting in — the hand comes apart with the lattice rather than the
+  // lattice moving and the cards fading through it.
+  //
+  // The one that WAS taken is already hidden and growing on its own (see pick
+  // and flyCardToHive), so what it does here is nothing.
+  el.svLevelUpBox.style.setProperty('--sv-out-len', `${outLen}s`);
+  el.svLevelUpBox.classList.add('sv-stage-going');
+  // READ OFF THE DOM, NOT levelUpCards. pick() empties that array before any of
+  // this runs — the hand stops being a hand the moment one is taken — so a loop
+  // over it walks nothing and the cards silently never get the class.
+  [...el.svCards.querySelectorAll('.sv-card')].forEach((card, i) => {
+    const slot = card.parentElement;
+    if (!slot) return;
+    const spot = spots[i];
+    const rings = spot && from ? hexRings({ q: spot.col, r: spot.row }, { q: from.col, r: from.row }) : 0;
+    slot.style.setProperty('--sv-out-len', `${outLen}s`);
+    slot.style.setProperty('--sv-out-at', `${(rings * (c.drainStep ?? 0.09)).toFixed(3)}s`);
+    slot.classList.add('sv-card-going');
   });
+  if (seconds > 0) feedback('combDrain');
+  combPlacement = null;
+
+  // THE HOLD IS A FLOOR, NOT A THING THE WAVE REPLACES.
+  //
+  // The chosen card is being looked at while the screen leaves, and how long
+  // the screen takes is not the same question as how long the look should be.
+  // With the backdrop switched off there is no wave at all — `seconds` is zero
+  // — and taking that literally cut the card's moment to nothing and sent it
+  // straight to the corner, which is the one thing the whole three-beat
+  // sequence exists to prevent.
+  const hold = Math.max(0, CONFIG.upgradeHive?.fly?.holdSeconds ?? 0.42);
+  const wave = Math.max(seconds, hold);
+  // ...AND THE CHOSEN HEXAGON FOLLOWS IT DOWN, once the screen has actually
+  // gone rather than when a number said it would have.
+  setTimeout(() => { const go = exitFollow; exitFollow = null; go?.(); }, Math.round(wave * 1000));
+  // The menu itself goes a beat after that. It has to go on a timer rather than
+  // instantly: the clone on its way to the hive was measured off a card that is
+  // still on screen.
+  combTimer = setTimeout(finish, Math.round(wave * 1000) + 40);
 }
 
 /**
@@ -3587,6 +4450,17 @@ function cardName(choice) {
   // The elements used to be ONE card that rolled which of the four it was
   // offering, and this named it after the roll. There are four cards now (see
   // config.js), so a card's name is its own.
+  //
+  // `levelLabel` is the same idea as `perLevelName` with something other than a
+  // number to say. Flippers Up! feeds ONE flipper per pick, and which one is the
+  // single thing about that card {effect} can never measure — the stat block
+  // records that a multiplier moved, not that the left fin is the one about to
+  // be holding the bigger stone. So the card says it in its own title, where a
+  // player is already looking to tell two offers apart.
+  if (typeof choice.levelLabel === 'function') {
+    const suffix = choice.levelLabel(nextStack(choice));
+    if (suffix) return `${choice.name} ${suffix}`;
+  }
   return choice.perLevelName ? `${choice.name} ${nextStack(choice)}` : choice.name;
 }
 
@@ -3816,6 +4690,22 @@ let igniteTimers = [];
 function cancelIgnition() {
   for (const id of igniteTimers) clearTimeout(id);
   igniteTimers = [];
+  // The slam runs on those same timers, so clearing them has already stopped
+  // it — but a hand that has been taken must also stop listening for the press
+  // that would have skipped it, or the next click in the game world is
+  // swallowed in capture by a menu that is no longer there.
+  slamPending = [];
+  unbindSlamSkip();
+  // ...and any riser still climbing. Its only ending is the impact that cuts
+  // it, so a hand cancelled mid-fall — a skip, a second level-up, a restart —
+  // leaves it running over a game that has moved on, for a second of build
+  // toward nothing. ALL of them: cancelIgnition is the one path that does not
+  // know which card it is stopping.
+  stopAllCardRisers();
+  // ...and any columns still spinning. cancelReel leaves every card whole,
+  // whatever it was mid-roll.
+  cancelReel();
+  reelHandle = null;
 }
 
 /**
@@ -3837,31 +4727,307 @@ function cancelIgnition() {
  * here needs a frame.
  */
 function igniteCards() {
-  cancelIgnition();
-  const cfg = CONFIG.rarityCard?.ignite ?? {};
-  const step = Math.max(0, cfg.step ?? 0.13) * 1000;
-  const pitchStep = cfg.popPitch ?? 1.06;
+  igniteLadder(igniteOrder().map(({ card }, n) => ({ card, step: n })));
+}
 
-  // Ties keep their dealt order, so two cards of the same tier still read left
-  // to right rather than swapping around between level-ups.
-  const order = levelUpCards
+// The sequence itself: lowest tier first, ties in dealt order. One list, read
+// by the ladder below and by the slam — the cards are thrown in exactly this
+// order, so the two can never disagree about which card is the payoff.
+function igniteOrder() {
+  return levelUpCards
     .map((card, i) => ({ card, i, rank: Number(card.dataset.rarityRank) || 0 }))
     .sort((a, b) => (a.rank - b.rank) || (a.i - b.i));
+}
 
-  order.forEach(({ card }, n) => {
-    const fire = () => {
-      card.parentElement?.classList.add('sv-lit');
-      // Pitched by POSITION IN THE SEQUENCE, not by tier: the climb has to be
-      // even whatever hand was dealt, so three commons still count upwards.
-      playSfx('cardPop', 1, { pitch: pitchStep ** n });
-      const tier = rarityById(card.dataset.rarity);
-      if (tier?.sfx) playSfx(tier.sfx);
-    };
-    // The first card lights on the frame the dither lands rather than a step
-    // after it, so the sequence starts WITH the menu arriving.
+// One card's moment: the flare, the pop and the tier's sting.
+//
+// `step` is its POSITION IN THE SEQUENCE, not its index on screen and not its
+// tier — the pop climbs by position, so a hand of three commons still counts
+// upwards. Called by the slam as each card lands, and by the ladder below when
+// there is no slam to land.
+function igniteStep(card, step) {
+  // THE BUILDUP DIES ON THE FRAME THE CARD LANDS, and it is the first thing
+  // that happens here — before the pop, before the sting. A riser that is still
+  // climbing under the sound it was building to is fighting it; choked first,
+  // the tier's sting lands in the hole the riser leaves.
+  //
+  // THIS card's riser, not every riser. With `stagger` shorter than `time` two
+  // cards are genuinely in the air together, and a landing that silenced the
+  // lot would cut the buildup out from under the card behind it. The reel
+  // arrival starts no riser at all, so this is a no-op there.
+  stopCardRiser(card);
+
+  const pitchStep = CONFIG.rarityCard?.ignite?.popPitch ?? 1.06;
+  card.parentElement?.classList.add('sv-lit');
+  // Through feedback() rather than straight to playSfx, so both of these have a
+  // row in the F panel — see the note on `cardPop` in CONFIG.feedback. The
+  // events carry sound and nothing else; `cardLand` and `combFlood` below own
+  // everything a landing does to the screen and the hands.
+  feedback('cardPop', { sfxOpts: { pitch: pitchStep ** step } });
+  const tier = rarityById(card.dataset.rarity);
+  // rarities.csv names a VOICE. If there is an event of the same name it is
+  // routed through — that is the case for all five shipped tiers, and it is
+  // what puts the stings on the panel. A row pointed at some other voice
+  // entirely still plays, it just has no event to be tuned through.
+  if (tier?.sfx) {
+    if (CONFIG.feedback[tier.sfx]) feedback(tier.sfx);
+    else playSfx(tier.sfx);
+  }
+  // ...and what the comb does about it. HERE rather than in slamCards, so the
+  // ripple is part of what a card LIGHTING means rather than part of what a
+  // card arriving means: the ladder fires this too, which is the path a skipped
+  // slam and a switched-off slam both take, and neither of those should cost
+  // the player the payoff.
+  combLanding(card, step);
+}
+
+// The read-out on a clock of its own — what happens when the slam is off
+// (reduced motion, or switched off in the tuner) and what picks the sequence
+// back up when a roll is skipped part way through.
+//
+// `step` rides on each entry rather than being the loop counter, so the cards
+// a skip left un-lit carry on climbing from where the slam got to instead of
+// starting the pitch again from the bottom.
+function igniteLadder(pending) {
+  cancelIgnition();
+  const gap = Math.max(0, CONFIG.rarityCard?.ignite?.step ?? 0.13) * 1000;
+  pending.forEach(({ card, step }, n) => {
+    const fire = () => igniteStep(card, step);
+    // The first one lights on the frame this is called rather than a gap after
+    // it, so the sequence starts WITH whatever brought it here.
     if (n === 0) fire();
-    else igniteTimers.push(setTimeout(fire, n * step));
+    else igniteTimers.push(setTimeout(fire, n * gap));
   });
+}
+
+// --- the slam ----------------------------------------------------------------
+// The three choices arrive by being THROWN into their cells: each comes in
+// oversized, lands, and the comb pulses out from where it hit. One after
+// another, lowest tier first, so the best card in the hand is the last thing
+// that lands and the biggest thing that happens.
+//
+// Everything a landing MEANS is igniteStep — the flare, the pop, that tier's
+// sting and the comb's own ripple. What lives here is only WHEN each one is,
+// and the animation that puts the card there.
+
+// The live roll, when the reel is the arrival in use.
+let reelHandle = null;
+// The listeners that let a player cut the sequence short.
+let slamSkip = null;
+// THE NEXT HAND ARRIVES ALREADY LANDED. Set by previewScreen, which wants a
+// STILL of this surface rather than a performance of it — see there.
+let presentSettled = false;
+// What has not landed yet, in sequence order, so a skip can finish the job.
+let slamPending = [];
+
+/**
+ * BRING THE HAND IN, whichever way this build brings hands in.
+ *
+ * One door in front of two arrivals — see CONFIG.upgradeArrival. They differ
+ * only in how the cards get to their cells: a landing is igniteStep either way,
+ * so the flare, the pop, the tier's sting and the comb's ripple are the same
+ * sequence on the same order whichever is running.
+ *
+ * @returns the seconds it takes, or 0 if nothing could run — in which case the
+ *          caller does the read-out itself.
+ */
+function arriveCards() {
+  return CONFIG.upgradeArrival === 'reel' ? rollCards() : slamCards();
+}
+
+/**
+ * THE REEL. Each cell a window onto a column of other upgrades, rolling past
+ * and slowing onto the card you were dealt.
+ *
+ * WHAT ROLLS PAST is the rest of the live offer — upgrades this run could
+ * genuinely have been handed, minus the three it is being handed. The reel is
+ * allowed to tease, not to lie.
+ */
+let reelPool = [];
+let reelAt = 0;
+
+function reelFace() {
+  if (!reelPool.length) return null;
+  if (reelAt >= reelPool.length) {
+    // Reshuffled rather than looped, so a long reel does not repeat the same
+    // run of pictures twice and read as a short loop.
+    for (let i = reelPool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [reelPool[i], reelPool[j]] = [reelPool[j], reelPool[i]];
+    }
+    reelAt = 0;
+  }
+  const def = reelPool[reelAt++];
+  // Its own tier, rolled on the run's own odds. The card's real ring is off for
+  // the duration (see cardReel.js) — a ring that sat still through the whole
+  // roll would name the tier before the reel landed on it.
+  const tier = rarityById(rollRarity(rarityProgress()));
+  return {
+    name: cardName(def),
+    image: def.cardArt ? LEVELUP_IMAGES[def.cardArt]?.src : null,
+    ring: tier ? `#${(tier.color >>> 0).toString(16).padStart(6, '0')}` : null,
+  };
+}
+
+function rollCards() {
+  const settled = presentSettled;
+  presentSettled = false;
+  if (settled || prefersReducedMotion() || !levelUpCards.length) return 0;
+
+  cancelIgnition();
+  showSlots(); // the columns are the arrival here; the slots are not hidden
+  const handle = rollReels(levelUpCards, {
+    face: reelFace,
+    onLand: (card, step) => {
+      slamPending = slamPending.filter((p) => p.card !== card);
+      igniteStep(card, step);
+    },
+    onDone: () => {
+      reelHandle = null;
+      slamPending = [];
+      unbindSlamSkip();
+      setMenuLocked(false);
+    },
+  });
+  if (!handle) return 0;
+  // The same pending list the slam keeps, so ONE skip serves both arrivals.
+  slamPending = igniteOrder().map(({ card }, n) => ({ card, step: n }));
+  reelHandle = reelRolling() ? handle : null;
+  if (reelHandle) bindSlamSkip();
+  const c = CONFIG.upgradeReel ?? {};
+  return (c.first ?? 0.62) + (levelUpCards.length - 1) * (c.stagger ?? 0.3);
+}
+
+/**
+ * Throw the hand into its cells.
+ *
+ * @returns the seconds the whole sequence takes, or 0 if it could not run — in
+ *          which case the caller does the read-out itself.
+ */
+function slamCards() {
+  const cfg = CONFIG.upgradeSlam ?? {};
+  const settled = presentSettled;
+  presentSettled = false;
+  // Reduced motion gets the hand immediately, with the read-out on its own
+  // ladder. A slam is nothing but movement — and so is a preview that has been
+  // asked for a still.
+  if (settled || cfg.enabled === false || prefersReducedMotion() || !levelUpCards.length) return 0;
+
+  cancelIgnition();
+  const first = Math.max(0, cfg.first ?? 0.28);
+  const gap = Math.max(0, cfg.stagger ?? 0.18);
+  const time = Math.max(0.05, cfg.time ?? 0.26);
+  const order = igniteOrder();
+
+  slamPending = order.map(({ card }, n) => ({ card, step: n }));
+  order.forEach(({ card }, n) => {
+    const at = first + n * gap;
+    const slot = card.parentElement;
+    if (slot) {
+      // FILL BOTH, and here that means the card is INVISIBLE until its turn:
+      // the first keyframe is held through the delay. That is the opposite of
+      // what the comb's cells want and exactly what a card wants — three cards
+      // already sitting in their cells waiting to be slammed into them is not a
+      // slam, it is a fade with extra steps.
+      slot.style.setProperty('--sv-slam-len', `${time}s`);
+      slot.style.setProperty('--sv-slam-at', `${at.toFixed(3)}s`);
+      slot.style.setProperty('--sv-slam-from', String(cfg.from ?? 4));
+      slot.classList.add('sv-slam');
+    }
+    // THE RISER STARTS WITH THE THROW, and is told how long the throw takes.
+    // `time` is the same number written into --sv-slam-len above, so the filter
+    // sweep is scheduled across exactly the fall it is scoring and arrives open
+    // on the frame of impact — retune the fall and the riser retunes with it.
+    // It is then cut by its own landing (see igniteStep), so every card gets
+    // its own buildup rather than one riser spanning a hand and being
+    // interrupted by the first of three impacts.
+    igniteTimers.push(setTimeout(() => startCardRiser(card, time), at * 1000));
+
+    // ON THE FRAME IT LANDS, not on the frame it is thrown. The card is in the
+    // air for `time` before it hits anything, and a pop that fires at the top
+    // of the arc is a sound with nothing under it — along with a comb ripple
+    // spreading from a cell that is still empty.
+    igniteTimers.push(setTimeout(() => {
+      slamPending = slamPending.filter((p) => p.card !== card);
+      igniteStep(card, n);
+    }, (at + time) * 1000));
+  });
+
+  const total = first + (order.length - 1) * gap + time;
+  igniteTimers.push(setTimeout(() => { setMenuLocked(false); unbindSlamSkip(); }, total * 1000));
+  bindSlamSkip();
+  return total;
+}
+
+// THE SKIP. Shorter than the roll it replaced — the hand is down in about
+// two-thirds of a second — but twenty level-ups a run is twenty of them, and a
+// player who wants the cards should be able to have them.
+//
+// Bound to `click` rather than to `pointerdown`, and that is the whole reason
+// it is safe: the same event that cuts the sequence short would otherwise still
+// be travelling when the menu unlocks a moment later, and would land on
+// whatever card is under the finger. Stopped in capture, it skips and picks
+// nothing. A key is left to travel on — nothing is focused while the hand is
+// arriving, so it cannot reach a card, and swallowing it would eat Escape.
+function bindSlamSkip() {
+  if (slamSkip) return;
+  const onClick = (e) => {
+    if (!slamPending.length) { unbindSlamSkip(); return; }
+    e.stopPropagation();
+    e.preventDefault();
+    skipSlam();
+  };
+  // A BUTTON, NOT A DIRECTION. Arrows and WASD move a selection around the
+  // hand — looking at the cards is not asking to cut their arrival short, and
+  // a player stepping through them with the keyboard would skip the animation
+  // on the first step every single time. Anything that acts (Enter, Space,
+  // Escape, a letter) still does.
+  const DIRECTIONS = new Set([
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+    'w', 'a', 's', 'd', 'W', 'A', 'S', 'D',
+  ]);
+  const onKey = (e) => {
+    if (DIRECTIONS.has(e.key)) return;
+    if (slamPending.length) skipSlam();
+  };
+  slamSkip = { onClick, onKey };
+  window.addEventListener('click', onClick, true);
+  window.addEventListener('keydown', onKey, true);
+}
+
+function unbindSlamSkip() {
+  if (!slamSkip) return;
+  window.removeEventListener('click', slamSkip.onClick, true);
+  window.removeEventListener('keydown', slamSkip.onKey, true);
+  slamSkip = null;
+}
+
+/**
+ * Every card down on this frame — and the ones that had not landed yet still
+ * get their moment, handed to the ladder in the order they were going to land
+ * in. Skipping the arrival is not the same as skipping the read-out of what you
+ * were dealt.
+ */
+function skipSlam() {
+  const pending = slamPending;
+  slamPending = [];
+  unbindSlamSkip();
+  // A roll is skipped by landing every column where it stands. The cards it had
+  // not reached yet are handed to the ladder below with the slam's, so one skip
+  // serves both arrivals and neither loses its read-out.
+  if (reelHandle) { reelHandle.skip(); reelHandle = null; }
+  for (const card of levelUpCards) {
+    const slot = card.parentElement;
+    if (!slot) continue;
+    // The class goes and the delay with it. Leaving the delay behind on a slot
+    // that is slammed again later — two level-ups in one wave — would hold the
+    // next hand in the air for however long this one had left.
+    slot.classList.remove('sv-slam');
+    slot.style.removeProperty('--sv-slam-at');
+  }
+  showSlots();
+  setMenuLocked(false);
+  igniteLadder(pending);
 }
 
 // THE CHOSEN CARD FLIES TO ITS TILE.
@@ -3917,6 +5083,33 @@ function flyCardToHive(id, card, from) {
   const curve = cssEase(fly.ease ?? 'outCubic');
   const move = flyTransform(from, to);
 
+  // THE CARD IS HELD UP BEFORE IT IS FILED.
+  //
+  // It used to go straight from where it sat to the corner, which is honest
+  // about what happened and gives the player no moment to see WHAT happened:
+  // the thing they chose spent a third of a second shrinking into a hexagon
+  // eight times smaller, while the comb came apart behind it. Three beats
+  // instead — bigger where it stands, a held look at it, then down to the hive
+  // — so the choice is shown before it is put away.
+  //
+  // IN PLACE, NOT TO THE MIDDLE. The card the player clicked is under their
+  // cursor and under their eye, and a hero shot that slides it to the centre
+  // of the screen first makes them follow it there and then follow it out to
+  // the corner — two journeys to say one thing, and the first one is sideways.
+  // Growing where it stands is the whole beat: the card the hand was reaching
+  // for gets bigger, holds, and leaves. Only the flight is travel.
+  const riseSecs = Math.max(0, fly.riseSeconds ?? 0.26);
+  const holdSecs = Math.max(0, fly.holdSeconds ?? 0.42);
+  const riseCurve = cssEase(fly.riseEase ?? 'outCubic');
+  const grow = fly.riseScale ?? 1.35;
+  // GROWING IN PLACE IS NOT A BARE scale(). transform-origin is 0 0 — the
+  // landing depends on that, see flyTransform — so a scale on its own pins the
+  // TOP-LEFT corner and pushes the card down and right by the whole of the
+  // growth, which is a jump to the side dressed up as a zoom. Half the growth
+  // back in each axis puts the card's own centre back where it was sitting.
+  const growX = -(from.width * (grow - 1)) / 2;
+  const growY = -(from.height * (grow - 1)) / 2;
+
   let done = false;
   const land = () => {
     if (done) return;
@@ -3930,6 +5123,33 @@ function flyCardToHive(id, card, from) {
     slamAndRipple(id);
   };
 
+  // The last leg, and the one that was always here: down to the corner.
+  const toHive = () => {
+    if (done) return;
+    // WHERE THE TILE IS NOW, not where it was a second ago. `move` was worked
+    // out when the card was picked, and the card no longer leaves on that
+    // frame — it rises and is held for the best part of a second first. In
+    // that time the corner can genuinely have moved: a second pending level
+    // opens its own menu and files its own pick, and the window can be
+    // resized. A stale destination lands the card beside its tile, which looks
+    // like the packing being wrong rather than the measurement being old.
+    const now = hiveTileRect(id);
+    const leg = now ? flyTransform(from, now) : move;
+    // The name goes here rather than at the start: the held look is what it is
+    // for. See the .sv-hive-flier rules.
+    flier.dataset.leg = 'down';
+    flier.style.transition = `transform ${secs}s ${curve}, opacity ${secs}s ${curve}`;
+    flier.style.transform = leg.css;
+    // Fades only at the very end, so the swap happens under a card that is
+    // still solid — a flier that faded across the whole trip would read as the
+    // pick dissolving rather than as it being filed.
+    flier.style.opacity = String(fly.landOpacity ?? 0.85);
+    // The backstop, armed for THIS leg. transitionend does not fire for a tab
+    // that was hidden mid-flight, and a tile left invisible forever is an
+    // upgrade the player holds and cannot see.
+    setTimeout(land, Math.round(secs * 1000) + 220);
+  };
+
   // Two frames before the transition is armed. One is not enough: the element
   // was appended this frame, and setting the start and end transforms inside a
   // single frame lets the browser coalesce them into one style resolution — the
@@ -3937,26 +5157,43 @@ function flyCardToHive(id, card, from) {
   // depending on what else happened that frame.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (done) return;
-    flier.style.transition = `transform ${secs}s ${curve}, opacity ${secs}s ${curve}`;
-    flier.style.transform = move.css;
-    // Fades only at the very end, so the swap happens under a card that is still
-    // solid — a flier that faded across the whole trip would read as the pick
-    // dissolving rather than as it being filed.
-    flier.style.opacity = String(fly.landOpacity ?? 0.85);
+    if (riseSecs <= 0 && holdSecs <= 0) { toHive(); return; }
+    flier.style.transition = `transform ${riseSecs}s ${riseCurve}`;
+    flier.style.transform = `translate(${growX.toFixed(1)}px, ${growY.toFixed(1)}px) scale(${grow})`;
+    // IT LEAVES WHEN THE SCREEN HAS, not after a fixed hold. The exit wave
+    // calls this (see runExitWave) — the wave's length depends on how many
+    // rings the comb turned out to have, so a timer here reading the same
+    // config would drift from it the moment either side was retuned, and the
+    // card would either chase the wave or sit waiting after it.
+    exitFollow = toHive;
+    // The backstop, and it has to be generous: it is only reached if the wave
+    // never reports, which means a tab that was hidden through the whole exit.
+    // Too tight and it races the wave it is insuring against.
+    setTimeout(toHive, Math.round((riseSecs + holdSecs + 1.5) * 1000));
   }));
 
   flier.addEventListener('transitionend', (e) => {
-    if (e.propertyName === 'transform') land();
+    // The LAST leg only. The rise ends with a transitionend too, and landing on
+    // that one files the card into the corner before it has been looked at.
+    if (e.propertyName === 'transform' && flier.style.opacity) land();
   });
-  // The backstop. transitionend does not fire for a tab that was hidden mid
-  // -flight, and a tile left invisible forever is an upgrade the player holds
-  // and cannot see.
-  setTimeout(land, Math.round(secs * 1000) + 220);
 }
 
 export function showLevelUp() {
   const pool = availableUpgrades();
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
+
+  // WHAT THE REEL ROLLS THROUGH, when the reel is the arrival in use — the rest
+  // of the live offer, so every face that blurs past is an upgrade this run
+  // could genuinely have been handed. The hand itself is taken out: a card
+  // cannot be its own near-miss.
+  //
+  // On a pool worn down to nothing but the three (late in a long run, most
+  // cards maxed) the hand rolls past itself. Everything in it is on the table
+  // anyway, so it gives nothing away, and it is the only honest strip left.
+  reelPool = pool.filter((u) => !picks.includes(u));
+  if (!reelPool.length) reelPool = [...picks];
+  reelAt = reelPool.length; // forces the shuffle on the first face
 
   // A level-up can land while the last one is still dealing itself out (two
   // levels in one wave). Whatever was still to be announced belongs to a hand
@@ -4050,6 +5287,7 @@ export function showLevelUp() {
     card.addEventListener('pointerenter', () => {
       if (menuLocked) return;
       showCardEffect(card, card.dataset.effect);
+      hoverPulse(card);
     });
     card.addEventListener('pointerleave', hideCardEffect);
     // AND THE SAME THING WITH A THUMB. pointerenter never fires on a phone, so
@@ -4059,7 +5297,11 @@ export function showLevelUp() {
     // pulling the thumb off cancels both. See ui/press.js for why a slipped
     // press needs its click eaten rather than merely ignored.
     pressable(card, {
-      onHold: () => { if (!menuLocked) showCardEffect(card, card.dataset.effect); },
+      onHold: () => {
+        if (menuLocked) return;
+        showCardEffect(card, card.dataset.effect);
+        hoverPulse(card);
+      },
       onHoldEnd: hideCardEffect,
       onSlip: hideCardEffect,
     });
@@ -4079,6 +5321,14 @@ export function showLevelUp() {
       // own background, and leaving it up over half-dithered cards reads as a
       // stuck element. Goes on the frame the card is chosen.
       hideCardEffect();
+      // WHICH CELL WAS TAKEN, read while there is still a hand to find it in.
+      // levelUpCards is emptied one line below — the hand stops being a hand
+      // the moment one is taken — and an indexOf against the emptied array is
+      // -1, which files `pickedCell` as null and rings the exit out from the
+      // middle of the row instead of from the card the player clicked. Silent:
+      // the drain still runs, just from the wrong hexagon. (revealUpgradesOut
+      // has a note about the same array for the same reason.)
+      const takenAt = levelUpCards.indexOf(card);
       levelUpCards = [];
       // WHERE THE CARD IS, read before anything is allowed to move it. The
       // dissolve below starts taking it off the screen and the next deal may
@@ -4088,8 +5338,17 @@ export function showLevelUp() {
       const fromRect = card.getBoundingClientRect();
       fromCard.style.width = `${fromRect.width}px`;
 
+      // The exit rings out from that cell — the comb comes apart outward from
+      // the choice — and the tier it was dealt at colours that wave, so the
+      // last thing the screen does is still saying what you got.
+      pickedCell = combPlacement?.laid?.spots?.[takenAt] ?? null;
+      const takenTier = rarityById(card.dataset.rarity);
+      pickedTint = takenTier
+        ? `#${(takenTier.color >>> 0).toString(16).padStart(6, '0')}`
+        : null;
+
       // The picked card does NOT dissolve — it flies. Hidden on this frame so
-      // the clone is the only copy on screen; the other two still dither out,
+      // the clone is the only copy on screen; the other two go with the comb,
       // which is what makes the chosen one read as chosen.
       card.style.visibility = 'hidden';
 
@@ -4129,13 +5388,17 @@ export function showLevelUp() {
     for (const card of el.svCards.querySelectorAll('.sv-card')) fitCardText(card);
   };
   fitAll();
+  // ...and lay the hand out again on the same beat. The card's size is the
+  // stylesheet's, and everything the comb is stepped off comes from measuring
+  // one — see relayoutComb for what a measurement taken too early does.
+  const settle = () => { fitAll(); relayoutComb(); };
   // ...AND AGAIN WHEN THE TYPE ARRIVES, for the reason showGameOver gives about
   // its name fields: the family is a webfont, so a hand dealt before it lands
   // is fitted against the fallback and is a little too big the moment the real
   // face swaps in — measured at 2px past the box, which the content clips in
   // silence. Only reachable on a level-up in the first seconds of a run, which
   // is exactly where the first one is.
-  document.fonts?.ready?.then(fitAll);
+  document.fonts?.ready?.then(settle);
 
   // Gamepad navigation. The cards, not the slots — everything downstream
   // (selection class, focus, the arrow-key geometry) acts on the card itself.
@@ -4174,7 +5437,12 @@ function selectCard(i) {
   // the hover glow: on a controller the pointer never moves, and an effect
   // readable only with a mouse is an effect half the run cannot see.
   const sel = levelUpCards[selectedIndex];
-  if (sel) showCardEffect(sel, sel.dataset.effect);
+  if (sel) {
+    showCardEffect(sel, sel.dataset.effect);
+    // The pad and the keyboard get the comb's answer too — selecting IS
+    // pointing, for anyone not using a mouse.
+    hoverPulse(sel);
+  }
   // Move real focus along with it, so Enter/Space keep working on whatever the
   // pad is pointing at and the two input methods can't disagree about which
   // card is live. preventScroll because the menu is centred already and a
@@ -4377,6 +5645,18 @@ export function updateMenuNav() {
   if (updateGameOverNav()) return;
 
   if (!levelUpCards.length || el.svLevelUpMenu.classList.contains('sv-hidden')) return;
+  // A PAD CAN SKIP THE ARRIVAL. It is the one input the capture listener in
+  // bindSlamSkip never hears — a pad produces no click and no key — so the poll
+  // that already runs every frame is where it belongs. Nothing else is driven
+  // while a card is still in the air: the same press must not skip the slam AND
+  // confirm the card it lands on.
+  if (slamPending.length || reelRolling()) {
+    // `actionPress`, not `anyPress`: the D-pad is a button like any other to
+    // the Gamepad API, so "any press" counts nudging a direction — and moving
+    // the stick to look along the hand is not asking to cut its arrival short.
+    if (menuInput.actionPress) skipSlam();
+    return;
+  }
   // Nothing to drive while the cards are still dissolving in — and in
   // particular no confirm, or a fire button held through the level-up picks
   // the first card before it has finished arriving.
@@ -5430,8 +6710,8 @@ function chainToastAt(x, y, chain) {
     chainToast.node.classList.remove('sv-chain-now');
     // Through the helper, not a bare textContent: the prompt may have left
     // per-glyph spans on this node and the array that indexes them has to go
-    // with them. See setBannerWord.
-    setBannerWord(chainToast, CHAIN_WORDS, false);
+    // with them. See splitWord.
+    splitWord(chainToast, CHAIN_WORDS, false);
     chainToast.count.textContent = `×${chain}`;
     chainToast.count.style.display = '';
     return chainToast;
@@ -5493,7 +6773,15 @@ function chainToastAt(x, y, chain) {
 const CHAIN_WORDS = 'FOOD CHAIN!';
 
 /**
- * PUT WORDS ON THE BANNER, split into glyphs or not.
+ * PUT WORDS ON A POPUP, split into glyphs or not.
+ *
+ * SHARED BY TWO SURFACES NOW — the chain banner's strike prompt and any proc
+ * receipt that asked to be waved (see spawnProcToast). `cls` is which glyph
+ * class the spans get, and it is a parameter rather than one shared name
+ * because the two lines are separate ROLES in the Text panel: they are sized,
+ * tracked and cased independently, and a single class would be one selector
+ * that had to look right at 21px uppercase AND at 13px, which is the kind of
+ * shared rule that gets tuned for one caller and quietly wrecks the other.
  *
  * ONE FUNCTION FOR BOTH, because the two states have to be able to hand over.
  * The prompt arrives, the line is split into per-character spans and rippled;
@@ -5513,7 +6801,7 @@ const CHAIN_WORDS = 'FOOD CHAIN!';
  * `Array.from` rather than split(''), so a wording with an emoji or a combining
  * mark in it comes apart at code POINTS. callouts.csv is a file somebody edits.
  */
-function setBannerWord(t, text, split) {
+function splitWord(t, text, split, cls = 'sv-chain-ch') {
   if (!split) {
     // Cleared first: the assignment below destroys the spans either way, and
     // an array still pointing at them is the stale-node bug above.
@@ -5527,7 +6815,7 @@ function setBannerWord(t, text, split) {
   t.charText = text;
   t.chars = Array.from(text).map((ch) => {
     const span = document.createElement('span');
-    span.className = 'sv-chain-ch';
+    span.className = cls;
     span.textContent = ch;
     t.word.appendChild(span);
     return span;
@@ -5556,7 +6844,7 @@ function setBannerWord(t, text, split) {
  * the Text panel. A px value would look right at 21px and wrong at every other
  * size the panel can set.
  */
-function waveBannerWord(t, wave, p) {
+function waveWord(t, wave, p) {
   if (!t.chars) return;
   const n = t.chars.length;
   const amp = wave.amp ?? 0.1;
@@ -5646,6 +6934,37 @@ const chainPin = {
 function chainBannerScale() {
   const s = CONFIG.strike?.foodChain?.bannerScale;
   return Number.isFinite(s) && s > 0 ? s : 1;
+}
+
+// ---------------------------------------------------------------------------
+// WHERE A PINNED RECEIPT HANGS — above the seal, rewritten every frame.
+//
+// Its own anchor rather than the banner's, though both come off the same ring:
+// the banner also clears the callout slot and its own half-height, because it
+// is the tallest thing on this layer and has "STRIKE NOW!" to stay out of. A
+// receipt is 13px and has nothing to negotiate with, so it sits directly over
+// the ring and lets the banner stack above it on the rare frame both are up.
+//
+// `live` is false with no camera or no seal — a run that has ended, or the
+// Text panel's specimen, which has neither. A pinned popup then finishes its
+// life wherever it was, which is the right answer: the thing it was pinned to
+// is gone, and snapping it to the origin would be worse than letting it drift.
+// ---------------------------------------------------------------------------
+const sealPin = { x: 0, y: 0, live: false };
+
+function pinSeal(camera, pin) {
+  sealPin.live = false;
+  if (!camera || !pin) return;
+  const ring = CONFIG.strike?.ring ?? {};
+  const top = pin.y
+    + (ring.offsetY ?? 0)
+    + (ring.radius ?? 1.9) * (ring.scale ?? 1)
+    + (CONFIG.callouts?.ringGap ?? 0.55);
+  PROJECT_V.set(pin.x + (ring.offsetX ?? 0), top, 0);
+  projectToScreen(camera, PROJECT_V, screenPt);
+  sealPin.x = screenPt.x;
+  sealPin.y = screenPt.y;
+  sealPin.live = true;
 }
 
 function pinChainBanner(camera, pin) {
@@ -5773,7 +7092,21 @@ function calloutSlotHeight() {
 // use this without turning into a strobe.
 const procToasts = new Map();
 
-export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0 }) {
+/**
+ * @param pin   FOLLOW THE SEAL instead of drifting off the spawn point. The
+ *              line is written to the seal's projected position every frame
+ *              (see updateToasts), so it holds station over the animal while
+ *              both it and the camera move. For a receipt that is about the
+ *              PLAYER rather than about a place — a permanent gain has no
+ *              coordinates, and rising off wherever the seal happened to be
+ *              standing is the same "a number that has to be found" problem
+ *              that got the chain banner pinned.
+ * @param wave  RIPPLE THE LABEL IN AND OUT. Splits it into per-glyph spans and
+ *              runs one crest along the line as it arrives and one back the
+ *              other way as it leaves — see the wave block in updateToasts.
+ *              Off by default, so every existing proc is still one text node.
+ */
+export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0, pin = false, wave = false }) {
   if (!el.svToastLayer || !camera) return null;
   PROJECT_V.set(x, y, 0);
   projectToScreen(camera, PROJECT_V, screenPt);
@@ -5799,7 +7132,14 @@ export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0 }) 
 
   const node = document.createElement('div');
   node.className = 'sv-proc';
-  node.textContent = label;
+  // THE LABEL IN ITS OWN BOX, always, waved or not. `splitWord` writes into
+  // `t.word`, so a receipt that is not waved today has to have the same shape
+  // as one that is — building the plain case as a bare text node on the
+  // container would mean the wave could never be turned on for a line without
+  // also rebuilding it, and would put the value span and the glyph spans in
+  // one parent where the ripple would pick the number up as a glyph.
+  const word = document.createElement('span');
+  node.appendChild(word);
   const val = document.createElement('span');
   val.className = 'sv-proc-val';
   val.textContent = value ?? '';
@@ -5808,7 +7148,12 @@ export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0 }) 
 
   const t = pushToast(node, screenPt.x, screenPt.y, 'proc');
   t.val = val;
+  t.word = word;
+  t.chars = null;
+  t.charText = '';
   t.procKey = key;
+  t.follow = !!pin;
+  splitWord(t, label, !!wave, 'sv-proc-ch');
   procToasts.set(key, t);
   return t;
 }
@@ -5835,6 +7180,10 @@ function removeToast(i) {
  */
 export function updateToasts(dt, camera = null, pin = null) {
   pinChainBanner(camera, pin);
+  // The other anchor off the same seal, for the receipts that follow it. Both
+  // are worked out once here rather than per popup: the projection is the
+  // expensive part and it is the same answer for every line on the layer.
+  pinSeal(camera, pin);
   // REAL SECONDS, and it has to be its own clock rather than the age of the
   // banner: the banner's age is deliberately FROZEN while the window runs (see
   // below), so a flash driven off it would stop the instant the thing it is
@@ -5898,17 +7247,17 @@ export function updateToasts(dt, camera = null, pin = null) {
     // of it, and the difference IS the feature.
     const prompting = showing;
     const want = prompting ? (chainPin.text || CHAIN_WORDS) : CHAIN_WORDS;
-    // setBannerWord early-outs when nothing has changed, which is what keeps
+    // splitWord early-outs when nothing has changed, which is what keeps
     // this off the layout on the fifty-nine frames a second where the sentence
     // is the same sentence.
-    setBannerWord(chainToast, want, prompting);
+    splitWord(chainToast, want, prompting);
     const wantDisplay = prompting ? 'none' : '';
     if (chainToast.count.style.display !== wantDisplay) chainToast.count.style.display = wantDisplay;
     chainToast.node.classList.toggle('sv-chain-now', prompting);
     // The ripple, on the same clock as the flash above it and only while the
     // line is up. Nothing to reset when it stops: the spans go with the
     // sentence.
-    if (prompting) waveBannerWord(chainToast, prompt.wave ?? {}, p);
+    if (prompting) waveWord(chainToast, prompt.wave ?? {}, p);
   }
 
   for (let i = toasts.length - 1; i >= 0; i--) {
@@ -5958,6 +7307,20 @@ export function updateToasts(dt, camera = null, pin = null) {
       t.y = chainPin.y;
       t.vx = 0;
       t.vy = 0;
+    } else if (t.follow && sealPin.live) {
+      // A RECEIPT FOLLOWING THE SEAL. The same "written, not integrated" rule
+      // and for the same reason, but NOT the same hold: `pinned` above also
+      // freezes the age, because the banner stays up for as long as its chain
+      // does. This one has a fixed life and is only borrowing the position, so
+      // it arrives, holds station over the animal, and leaves on schedule.
+      //
+      // The rise is zeroed rather than added to the anchor. A pinned line that
+      // kept integrating would climb away from the seal it is pinned to at
+      // 34px a second, which is the pin failing slowly instead of visibly.
+      t.x = sealPin.x;
+      t.y = sealPin.y;
+      t.vx = 0;
+      t.vy = 0;
     } else {
       t.x += t.vx * dt;
       t.y += t.vy * dt;
@@ -5975,6 +7338,34 @@ export function updateToasts(dt, camera = null, pin = null) {
       // the type, and the type is the strip's sibling rather than its child.
       // Custom properties inherit downward only.
       t.node.style.setProperty('--sv-chain-now', chainPin.now.toFixed(3));
+    }
+
+    // ONE CREST IN, ONE CREST BACK OUT. Only for a popup that was split into
+    // glyphs — `t.chars` is null for every other line on the layer, and
+    // waveWord early-outs on it.
+    //
+    // THE TWO WINDOWS ARE THE TWO SWEEPS, which is what makes this an arrival
+    // and a departure rather than a loop that has to be cut off wherever it
+    // happens to be. `tIn` runs 0..1 over the arrival and then sits at 1 for
+    // the whole hold; `tOut` sits at 0 until the departure opens and then runs
+    // 0..1. Both of those resting values put the crest clear of the line — the
+    // raised cosine is exactly zero outside its own width — so the glyphs are
+    // provably at rest for the entire middle of the popup's life with no third
+    // branch saying so.
+    //
+    // THE DEPARTURE RUNS BACKWARDS. `1 - tOut` walks the crest right to left,
+    // so the line unwinds the way it wound up instead of playing the same
+    // gesture twice. It is continuous with the hold as well: at tOut = 0 it is
+    // 1, which is exactly where the arrival left the crest.
+    //
+    // THE BANNER IS EXCLUDED BY NAME. It is the other surface that splits into
+    // glyphs, and its wave is already run above — off its own sweep, its own
+    // numbers and its own one-shot clock, none of which are the popup's life.
+    // Without this it would be waved twice a frame and the second write would
+    // win, which is the chain prompt silently losing its ripple to a block
+    // that is not about it.
+    if (t.chars && t !== chainToast) {
+      waveWord(t, m.wave ?? {}, pose.tOut > 0 ? 1 - pose.tOut : pose.tIn);
     }
 
     // The banner's own size multiplies the pose's, so the arrival pop is a pop
@@ -6016,12 +7407,26 @@ export function popupPose(kind, age, lifeOverride = null) {
   const outTime = Math.max(0, outM.time ?? 0);
   const kIn = inTime > 0 ? ease(inM.ease, age / inTime) : 1;
   const kOut = outTime > 0 ? ease(outM.ease, (age - (life - outTime)) / outTime) : 0;
+  // THE SAME TWO WINDOWS, UNEASED. Everything above wants the curve; the wave
+  // wants the clock. A crest crossing a line is a thing travelling a distance,
+  // so its position has to be linear in time — riding `kIn` instead would make
+  // the ripple accelerate and stall with the pop, which reads as the wave
+  // stuttering rather than as one pass. See waveWord, which says the same
+  // thing about its own `p`.
+  //
+  // Clamped rather than eased, so both sit at rest outside their window: `tIn`
+  // is 1 for the whole hold and `tOut` is 0 until the departure opens, and the
+  // raised cosine is provably zero at either end of its travel.
+  const tIn = inTime > 0 ? Math.max(0, Math.min(1, age / inTime)) : 1;
+  const tOut = outTime > 0 ? Math.max(0, Math.min(1, (age - (life - outTime)) / outTime)) : 0;
 
   // Multiplied for the two that are factors, added for the one that is an
   // offset — so a `life` shorter than the two windows put together blends
   // instead of fighting, and neither window can cancel the other out.
   return {
     life,
+    tIn,
+    tOut,
     scale: lerp(inM.scale ?? 1, 1, kIn) * lerp(1, outM.scale ?? 1, kOut),
     alpha: lerp(inM.fade ?? 1, 1, kIn) * lerp(1, outM.fade ?? 0, kOut),
     lift: lerp(inM.lift ?? 0, 0, kIn) + lerp(0, outM.lift ?? 0, kOut),
@@ -6063,6 +7468,24 @@ export function previewScreen(name) {
   } else if (name === 'cards') {
     // A real deal, the same one Shift+L gives: the tiers are rolled for the
     // level you are actually on, and picking a card grants it.
+    // ALREADY LANDED, which matters to the one thing that reads this.
+    //
+    // The hand arrives by being thrown into its cells, and a card is at
+    // CONFIG.upgradeSlam.from — 1.8x — for the first part of that. A transform
+    // is inside getBoundingClientRect, so anything measuring this surface while
+    // it is still arriving measures a 378px card and reports it hanging off
+    // three sides of the screen. npm run layout did exactly that, at numbers
+    // that match the scale to the pixel, on a hand that fits perfectly the
+    // moment it lands.
+    //
+    // A FLAG RATHER THAN A SKIP AFTERWARDS. Skipping worked until the arrival
+    // moved behind a frame (see revealUpgradesIn): the skip then ran before
+    // there was anything to skip, the slam started a frame later, and the
+    // findings came back identical — a fix that had stopped being one, silently.
+    // Asked for up front, there is no ordering left to get wrong.
+    //
+    // A preview is a still of a surface. This is what makes it one.
+    presentSettled = true;
     showLevelUp();
   } else if (name === 'score card') {
     previewGameOver();
@@ -6128,13 +7551,23 @@ export function previewToasts() {
   // screen pixels, which is the one thing that function exists to work out.
   const proc = document.createElement('div');
   proc.className = 'sv-proc';
-  proc.textContent = 'MANEATER';
+  const procWord = document.createElement('span');
+  proc.appendChild(procWord);
   const procVal = document.createElement('span');
   procVal.className = 'sv-proc-val';
   procVal.textContent = '+12%';
   proc.appendChild(procVal);
   el.svToastLayer.appendChild(proc);
-  pushToast(proc, cx, cy - 40, 'proc');
+  const procToast = pushToast(proc, cx, cy - 40, 'proc');
+  // SPLIT, so the ripple sliders have something to move. The panel is the only
+  // place the wave can be judged — the line it actually decorates fires a
+  // handful of times a run, at the exact moment a boss kill has taken the
+  // camera — and three sliders whose effect you have to beat a boss to see are
+  // three sliders nobody will ever set.
+  procToast.word = procWord;
+  procToast.chars = null;
+  procToast.charText = '';
+  splitWord(procToast, 'MANEATER', true, 'sv-proc-ch');
 }
 
 // The floating hp/air bars are pinned to the seal by projecting its world
@@ -6160,6 +7593,10 @@ export function clearToasts() {
   chainPin.now = 0;
   chainPin.run = -1;
   chainPin.armed = true;
+  // And the receipts' anchor, for exactly the same reason: a pinned line
+  // spawned before the next run's first update would otherwise open at the
+  // dead seal's last screen position.
+  sealPin.live = false;
 }
 
 // The run is NOT posted to the board here — the player names it first, and
@@ -6345,12 +7782,7 @@ function buildHiveSlot() {
   // Delegated on the slot rather than bound per tile: the snapshot is built
   // once per death and thrown away with the screen, so there is nothing to
   // re-bind, and one listener is one listener however deep the build went.
-  slot.addEventListener('pointerover', (e) => {
-    const tile = e.target?.closest?.('.sv-hive-tile');
-    if (tile?.dataset.upgrade) {
-      showUpgradeTip(tile.dataset.upgrade, tile, { owned: Number(tile.dataset.stacks) || 0 });
-    }
-  });
+  slot.addEventListener('pointerover', (e) => finalTip(e.target?.closest?.('.sv-hive-tile')));
   slot.addEventListener('pointerout', (e) => {
     if (!slot.contains(e.relatedTarget)) hideUpgradeTip();
   });
@@ -6360,8 +7792,7 @@ function buildHiveSlot() {
   // as a tap on the slot behind it — which would open the sheet on top of the
   // tip the player asked for.
   pressableWithin(slot, '.sv-hive-tile', {
-    onHold: (tile) => showUpgradeTip(tile.dataset.upgrade, tile,
-      { owned: Number(tile.dataset.stacks) || 0 }),
+    onHold: finalTip,
     onHoldEnd: hideUpgradeTip,
     onSlip: hideUpgradeTip,
   });
@@ -6404,8 +7835,7 @@ function openHiveView() {
   // one that most needs the thumb to be able to. Torn down with the stage's
   // contents in closeHiveView.
   hiveViewPress = pressableWithin(el.svHiveViewStage, '.sv-hive-tile', {
-    onHold: (tile) => showUpgradeTip(tile.dataset.upgrade, tile,
-      { owned: Number(tile.dataset.stacks) || 0 }),
+    onHold: finalTip,
     onHoldEnd: hideUpgradeTip,
     onSlip: hideUpgradeTip,
   });
@@ -6417,11 +7847,27 @@ function openHiveView() {
 
 let hiveViewPress = null;
 
+// THE SCORE SCREEN'S HEXAGONS, ALL FOUR WAYS OF POINTING AT ONE.
+//
+// The snapshot on the rail and the sheet it expands into, each reachable by a
+// pointer and by a thumb — and every one of them is looking at a run that has
+// ENDED. `final` is what tells the tip that: no "next stack" line, because
+// there is no next pick to make, just where each quantity finished.
+//
+// One helper rather than the flag written out four times, because it was
+// written out four times and one of them was already missing it. A fifth
+// surface gets it for free.
+function finalTip(tile) {
+  if (!tile?.dataset.upgrade) return;
+  showUpgradeTip(tile.dataset.upgrade, tile, {
+    owned: Number(tile.dataset.stacks) || 0,
+    final: true,
+  });
+}
+
+
 function hiveViewOver(e) {
-  const tile = e.target?.closest?.('.sv-hive-tile');
-  if (tile?.dataset.upgrade) {
-    showUpgradeTip(tile.dataset.upgrade, tile, { owned: Number(tile.dataset.stacks) || 0 });
-  }
+  finalTip(e.target?.closest?.('.sv-hive-tile'));
 }
 
 function hiveViewOut(e) {
@@ -6803,6 +8249,21 @@ function brkEmpty(panel, message) {
  * object from the recorder, and it is still wrapped, because the alternative
  * to being paranoid here is a run that cannot be restarted.
  */
+// STAGED — see design/COPY-TODO.md. The section heading over the fin split.
+// `[DRAFT]` rather than lorem because a heading lorem would make the panel
+// untestable, and npm run test:copy is red until it is written.
+const FIN_PANEL_TITLE = '[DRAFT] Flippers';
+
+// What one flipper is called in the summary. The SAME two words the level-up
+// card titles itself with (CONFIG.upgrades.flippersUp.sideNames), read from
+// there rather than written again here: a run that ends saying the left fin did
+// the work, after a card that called that fin something else, is two names for
+// one thing in the same run.
+function finName(side) {
+  const card = CONFIG.upgrades?.find((u) => u.id === 'flippersUp');
+  return card?.sideNames?.[side] ?? side;
+}
+
 function renderRunDetail(gameState) {
   const weapons = el.svPanelWeapons;
   const threats = el.svPanelThreats;
@@ -6878,6 +8339,47 @@ function renderRunDetail(gameState) {
       foot.push(['Kills', String(gameState.kills ?? 0)]);
     }
     weapons.appendChild(brkFoot(foot));
+  }
+
+  // --- THE FIN SPLIT ------------------------------------------------------
+  // Under the weapons table rather than beside it, because it is a breakdown OF
+  // one row of that table: every figure here is already inside the gun's total
+  // above, sliced by which flipper threw it and what that flipper was carrying.
+  // A second top-level section would read as damage the table had missed.
+  //
+  // Absent entirely on a run that never took Flippers Up!. The basic shot leaves
+  // both fins from the first second, but nothing tells the two apart until the
+  // card starts feeding one — and a row saying the fins split 50/50 is a
+  // breakdown of nothing, taking up space on a card the player reads in the ten
+  // seconds before they hit retry.
+  const fins = a.fins ?? { rows: [], total: 0 };
+  if (fins.rows.length > 1) {
+    weapons.appendChild(brkSection(FIN_PANEL_TITLE, `${compactDamage(fins.total)} dealt`));
+    weapons.appendChild(brkHead('', 'Dmg', 'Share'));
+    const finList = document.createElement('div');
+    finList.className = 'sv-brk';
+    const bestFin = fins.rows[0].damage;
+    for (const r of fins.rows) {
+      // The element is the fin's TYPE OF PEBBLE, and it goes in the note rather
+      // than the name for the same reason the pick count does on a weapon row:
+      // the thing being compared is the two fins, and a name that changed shape
+      // between the rows would make them hard to read against each other.
+      //
+      // elementLabel is Ethan's own word for the element (CONFIG.biolum), the
+      // same one the weapon's name and the polaroid's stamp use. A fin carrying
+      // nothing gets no note at all — an unlit flipper is not a type.
+      const types = r.types
+        .map((t) => (t.element ? elementLabel(t.element) : null))
+        .filter(Boolean);
+      finList.appendChild(brkRow({
+        name: finName(r.side),
+        note: types.join(' + '),
+        a: compactDamage(r.damage),
+        b: `${Math.round((r.share ?? 0) * 100)}%`,
+        share: bestFin > 0 ? (r.damage / bestFin) * 100 : 0,
+      }));
+    }
+    weapons.appendChild(finList);
   }
 
   // --- THREATS ------------------------------------------------------------

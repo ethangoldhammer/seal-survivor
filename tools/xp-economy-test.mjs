@@ -40,7 +40,7 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG, xpForNextLevel, xpToughnessMul, difficultyRamp, chumValueRamp } from '../path/src/config.js';
-import { enemies, resetEnemies, removeEnemy, updateSpawning } from '../path/src/entities/enemies.js';
+import { enemies, resetEnemies, removeEnemy, updateSpawning, setSpawnLevel } from '../path/src/entities/enemies.js';
 import { resetWaves } from '../path/src/systems/waves.js';
 import { pickups, resetPickups, spawnXpOrb, setChumDifficulty, chumMassMul, chumRadiusOf } from '../path/src/entities/pickups.js';
 import { strikeState, chainXpMul } from '../path/src/systems/strike.js';
@@ -109,6 +109,12 @@ function simulate({ hunt = 7, clear = 0.8, seed = 1, foodChainMul = () => 1 } = 
       gameState.difficulty = t * CONFIG.spawn.difficultyPerSecond;
       setChumDifficulty(gameState.difficulty);
 
+      // The LEVEL-keyed surcharge, pushed in exactly as main.js pushes it. Not
+      // optional for this file: CONFIG.spawn.lateGame makes late creatures
+      // tougher AND their chum worth more, and those are the two halves of the
+      // question this harness exists to answer. Without this line the ladder
+      // below would be measuring a game nobody plays.
+      setSpawnLevel(gameState.level);
       updateSpawning(dt, gameState, scene);
 
       // THE HUNT. Walk backwards: removeEnemy takes an INDEX and splices, so a
@@ -134,6 +140,15 @@ function simulate({ hunt = 7, clear = 0.8, seed = 1, foodChainMul = () => 1 } = 
       // ends — nothing clears faster than about a clownfish, and the sea
       // turtle's invincible-sentinel hp would otherwise divide the hazard to
       // zero and pin the arena (see the note on xp.toughness.max in config.js).
+      //
+      // The reference deliberately carries the CLOCK ramp only, not
+      // lateGameMul('hp'). That asymmetry is the point of the level surcharge
+      // and the pessimistic read of it: the clock ramp cancels because the
+      // seal's damage grows with the run, while the surcharge exists precisely
+      // to outgrow a build that the clock ramp could not keep up with, so it
+      // lands here as kills that genuinely take longer. Pessimistic because the
+      // seal is still taking cards past level 20 and this credits it with none
+      // of them — if the ladder holds against that, it holds.
       const fishDef = CONFIG.enemies.fish;
       const refHp = Math.max(1, (fishDef.hp + (fishDef.hpPerDifficulty ?? 0) * gameState.difficulty)
         * difficultyRamp('hp', gameState.difficulty));

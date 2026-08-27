@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
-import { CONFIG, difficultyRamp, xpToughnessMul } from '../config.js';
+import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul } from '../config.js';
 import { acquireVisual, releaseVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import { bounds, clampBelowSurface, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
@@ -18,6 +18,11 @@ import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/wav
 import { inSpawnGroup, spawnGroupsOf } from '../enemyTable.js';
 import { RigidBody, addBody, removeBody, wrapAngle } from '../systems/rigidBody.js';
 import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
+import {
+  baitBalls, resetBaitBalls, updateBaitBallClock, openBaitBall, baitBallFor,
+  updateBaitBalls, baitFlock, baitSeed, baitBallLedger,
+} from '../systems/baitBall.js';
+import { attachBaitShimmer, updateBaitShimmer, resetBaitShimmer } from '../systems/baitShimmer.js';
 
 // Above this, a creature's hp means "invincible scenery" rather than a real
 // pool anyone is meant to chew through (the sea turtle ships 1e9). Only the
@@ -33,6 +38,7 @@ import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 import { createJawDriver } from '../systems/jaw.js';
 import { createClawDriver, pinchReach, clawSetting } from '../systems/crabClaw.js';
 import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
+import { setOutlineVariant } from '../systems/outlines.js';
 import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
 
@@ -340,6 +346,7 @@ function plowThrough(e, dt) {
 }
 
 export function resetEnemies(scene) {
+  spawnLevel = 1;
   for (const e of enemies) {
     if (e.body) removeBody(e.body);
     // Same as removeEnemy: a run ending is the biggest single handover there
@@ -355,6 +362,13 @@ export function resetEnemies(scene) {
   // full `firstDelay` before its water starts filling, not whatever was left
   // on the clock when the last run ended.
   bossSchoolTimer = 0;
+  // Same again for the bait balls: their clock, and the anchors of anything
+  // still swirling when the run ended. Nothing here removes a fish — the loop
+  // above already emptied the enemy list — this is only the geometry those
+  // fish were orbiting, which would otherwise be handed to the next run's
+  // first school to reuse by schoolId.
+  resetBaitBalls();
+  resetBaitShimmer();
   // The wave clock is spawner state like the timer above it, and resets with
   // it for the same reason: a new run has to open on its own first surge
   // rather than partway through the last one's.
@@ -1006,9 +1020,33 @@ function refreshApexCrowd(dt, playerPos) {
 //
 // `e.lungeStage` / `e.lungeClock` are rolled on first update rather than at
 // spawn, like `glideY` above. `e.lungeTimer` is a DIFFERENT and unrelated
-// thing — the jaws' burst window in CONFIG.bite.lunge, which this creature
-// does not have.
-function lungeChase(e, dt, ctx) {
+// thing — the jaws' burst window in CONFIG.bite.lunge.
+//
+// ---------------------------------------------------------------------------
+// TWO CALLERS, AND `ownCruise` IS WHICH ONE.
+// ---------------------------------------------------------------------------
+// `chase` (the sailfish) has nothing else to do, so the lunge is its ENTIRE
+// behaviour: it steers on every frame, including the slow closing cruise and
+// the backing-off when it finds itself too close to have a wind-up left. That
+// is `ownCruise: true`, which is the default and is exactly what shipped.
+//
+// `hunt` (the sharks and the four chasing bosses) already has five branches, a
+// standoff distance, crowd avoidance, a vertical-authority ramp and a weave —
+// none of which the lunge knows about or should. So it is called there as an
+// OVERLAY with `ownCruise: false`, and the contract is the return value: TRUE
+// means this call has written the velocity for this frame and the caller must
+// not, FALSE means nothing was written and the host behaviour steers as it
+// always did.
+//
+// Only the two COMMITTED stages ever return true under the overlay. The
+// wind-up and the strike are the lunge; the cruise and the rest are a clock
+// ticking, and a hunter that handed those over as well would lose its cruise
+// shaping for two thirds of every cycle — which is most of what a shark looks
+// like.
+//
+// @param ownCruise  false to run as an overlay; see above.
+// @returns whether this call owns the creature's velocity this frame.
+function lungeChase(e, dt, ctx, ownCruise = true) {
   const c = e.def.lunge ?? {};
 
   if (e.lungeStage == null) {
@@ -1049,7 +1087,7 @@ function lungeChase(e, dt, ctx) {
       // out is as much of the shape as the arc in.
       e.lungeVeer = e.heading - Math.sign(diff || 1) * (c.veerSwing ?? 0.9);
     }
-    return;
+    return true;
   }
 
   // --- WIND-UP --------------------------------------------------------------
@@ -1071,20 +1109,26 @@ function lungeChase(e, dt, ctx) {
       e.lungeClock = c.strikeTime ?? 0.8;
       e.animState = 'boost';
     }
-    return;
+    return true;
   }
 
   e.animState = null;
 
   // --- REST -----------------------------------------------------------------
   if (e.lungeStage === 'rest') {
-    if (e.lungeVeer != null) steerTo(e, Math.cos(e.lungeVeer), Math.sin(e.lungeVeer), dt, 6);
-    else steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+    // The peel-off is the sailfish's to steer and the hunter's to ignore: a
+    // shark coming out of a pass already has a cruise, a standoff and a crowd
+    // to swim around, and overriding all three with a fixed heading for three
+    // seconds would put the whole point of `hunt` on a timer.
+    if (ownCruise) {
+      if (e.lungeVeer != null) steerTo(e, Math.cos(e.lungeVeer), Math.sin(e.lungeVeer), dt, 6);
+      else steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+    }
     if (e.lungeClock <= 0) {
       e.lungeStage = 'cruise';
       e.lungeVeer = null;
     }
-    return;
+    return ownCruise;
   }
 
   // --- CRUISE ---------------------------------------------------------------
@@ -1098,14 +1142,23 @@ function lungeChase(e, dt, ctx) {
   // the gate never opens again.
   const range = c.range ?? 12;
   if (ctx.dist < (c.minRange ?? 6)) {
+    // A hunter does NOT back off here, and does not need to: `hunt` already
+    // holds a standoff distance of its own (see pickStandoff / approachVector),
+    // so the gap this floor is waiting for opens by itself. Backing off as well
+    // would be two systems steering the same body apart on the same frame.
+    if (!ownCruise) return false;
     steerTo(e, -ctx.dirX, -ctx.dirY, dt, 6);
-    return;
+    return true;
   }
-  steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+  if (ownCruise) steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
   if (ctx.dist <= range) {
     e.lungeStage = 'wind';
     e.lungeClock = c.windup ?? 0.45;
   }
+  // The wind-up starts on the NEXT frame either way. That matters to the
+  // overlay: returning true here would hand back a frame in which nothing was
+  // written, and the creature would coast through it.
+  return ownCruise;
 }
 
 const BEHAVIORS = {
@@ -1161,7 +1214,15 @@ const BEHAVIORS = {
           sy += (dy / d) * push;
         }
       }
-      if (n > 0) {
+      // A BAIT BALL SKIPS COHESION AND ALIGNMENT, and takes only the
+      // separation below. Both of those terms are already being done better by
+      // the ball itself: the shell spring is cohesion aimed at a RING instead
+      // of a point, and the swirl aligns every fish in the knot by
+      // construction. Left in, they fight it — cohesion pulls toward the
+      // centroid the shell is pushing away from, and the two settle at a
+      // radius neither number describes, which is a ball that quietly ignores
+      // its own `radius` setting.
+      if (n > 0 && !e.baitBall) {
         cx /= n; cy /= n;
         const cd = Math.hypot(cx - px, cy - py);
         if (cd > 1e-4) {
@@ -1174,8 +1235,18 @@ const BEHAVIORS = {
           ay += (avy / al) * (sw.alignment ?? 0);
         }
       }
-      ax += sx * (sw.separation ?? 0);
-      ay += sy * (sw.separation ?? 0);
+      // NO SEPARATION INSIDE A BALL. Its fish are on evenly-spaced slots
+      // around the column (see baitSlot), so the spacing is solved before the
+      // frame starts — and a repulsion term on top of a solved spacing does
+      // not tidy it, it fights it: every fish is pushed off the slot it was
+      // placed on, the ring swells past the `radius` it is supposed to hold,
+      // and the even wall the formation depends on develops the gaps it exists
+      // to prevent. Measured at the schools' own value, a dozen fish settled
+      // 65% wide of the configured shell.
+      if (!e.baitBall) {
+        ax += sx * (sw.separation ?? 0);
+        ay += sy * (sw.separation ?? 0);
+      }
     }
 
     // Per instance, not off the def: this is the one term in the boids that
@@ -1183,9 +1254,67 @@ const BEHAVIORS = {
     // rather than mills. `e.towardPlayer` is baked at spawn — see spawnOne and
     // CONFIG.hunterRamp.swarmSeek. The `??` keeps a hand-built fish (the
     // harnesses in tools/ make them) steering the way it always did.
-    const seek = e.towardPlayer ?? sw.towardPlayer ?? 0;
-    ax += ctx.dirX * seek;
-    ay += ctx.dirY * seek;
+    // A BAIT BALL DOES NOT COME FOR YOU, and that is the entire difference
+    // between it and every other school in the game. An ordinary shoal drifts
+    // at the seal (and drifts harder as the run goes on — see
+    // CONFIG.hunterRamp.swarmSeek), which makes it food that delivers itself.
+    // A ball mills where it is, so it is food you have to go and get, and
+    // going to get it is the decision the whole feature is built on.
+    //
+    // Falls back to the ordinary seek if the ball has ended under it — the
+    // survivors of a dispersed ball are ordinary fish again, and this is the
+    // frame they find out. (updateBaitBalls clears `baitBall` on those fish
+    // too; this is the belt to that braces.)
+    const ball = e.baitBall ? baitBallFor(e.schoolId) : null;
+    let ballSpeed = 0;
+    let ballFlat = 1;
+    if (ball && ball.views) {
+      // THE FLOCK, IN THREE DIMENSIONS. Separation, alignment and cohesion
+      // among ballmates, plus a vortex about the vertical and a soft wall — see
+      // baitFlock, which owns all of it and none of this module's types.
+      //
+      // The views are built once per ball per frame in updateEnemies, not here:
+      // this runs per FISH, and each one needs every other one's position, so
+      // rebuilding the list inside the loop is the same O(n²) work done n times
+      // over.
+      //
+      // The heading comes back as a unit vector in x/y/z. Its horizontal part
+      // is fed to steerTo like any other behaviour — which is what keeps the
+      // facing, the animation state and the flee and strike-panic terms below
+      // all working exactly as they do for an ordinary school — and its
+      // vertical-to-camera part is integrated separately, just below.
+      e.ballView.x = px;
+      e.ballView.y = py;
+      e.ballView.z = e.mesh.position.z - (e.laneZ ?? 0);
+      e.ballView.vx = e.vx;
+      e.ballView.vy = e.vy;
+      e.ballView.vz = e.vz;
+      const f = baitFlock(e.ballView, ball.views, ball);
+      ax += f.x * (sw.responsiveness ?? 4);
+      ay += f.y * (sw.responsiveness ?? 4);
+      // Depth is the one axis nothing else in the game steers on, so it is
+      // integrated here rather than routed through steerTo. Same lerp shape, so
+      // a fish turns through depth at the same rate it turns across the screen.
+      const wantVz = f.z * f.speed;
+      e.vz += (wantVz - e.vz) * Math.min(1, (sw.responsiveness ?? 4) * dt);
+      // The depth cue, stored rather than applied — the scale write in
+      // updateEnemies folds it in beside the hit-pop's, because two systems
+      // each calling setScalar with their own idea of the total delete each
+      // other's work every other frame.
+      e.depthScale = f.scale;
+      ballSpeed = f.speed;
+      // How much of the heading is across the screen rather than through
+      // depth. steerTo normalises whatever pair it is handed, so without this
+      // the horizontal speed is the FULL swim speed no matter how much of the
+      // motion was meant to be going into the picture — a fish crossing the
+      // near face would move at up to 1.4x what was asked for, and it lands
+      // hardest on exactly the fish the eye is following.
+      ballFlat = Math.hypot(f.x, f.y);
+    } else {
+      const seek = e.towardPlayer ?? sw.towardPlayer ?? 0;
+      ax += ctx.dirX * seek;
+      ay += ctx.dirY * seek;
+    }
 
     // Flee anything that eats fish.
     const fleeR = sw.fleeRadius ?? 0;
@@ -1248,7 +1377,35 @@ const BEHAVIORS = {
       ay += Math.sin(ctx.time * 2.3 + e.phase) * w;
     }
 
-    steerTo(e, ax, ay, dt, sw.responsiveness ?? 4, 1 + bolt);
+    // A BALL SWIMS AT THE SPEED ITS OWN ROTATION IMPLIES, whatever species is
+    // in it.
+    //
+    // The speed comes out of the geometry rather than off the fish, and it has
+    // to: `spinRate` says the formation turns once every five seconds, so a
+    // fish out at the shell is travelling at radius x spinRate and one swimming
+    // at any other speed cannot hold the rotation. The roster's small fry run
+    // from 4.6 to 7.6 units a second — as a fraction of their own speed, a ball
+    // of tuna would turn half again as fast as a ball of clownfish off the same
+    // setting, which is a formation whose rotation is decided by a spawn roll.
+    //
+    // SCALED BY THE HORIZONTAL SHARE of the heading, because the heading is a
+    // 3D unit vector and steerTo normalises whatever pair it is handed. Without
+    // this a fish diving through depth would also swim its full speed across
+    // the screen, so its true speed would be up to 1.4x what was asked for —
+    // and that overshoot lands hardest on exactly the fish that are moving
+    // through the near and far faces, which is where the eye is.
+    //
+    // Capped at the fish's own speed, so this can never make one swim faster
+    // than it is able to; a slow species in a fast ball simply lags, which
+    // reads as a straggler rather than as a glitch.
+    //
+    // ADDED to `bolt` rather than multiplied by it, so panic restores the
+    // fish's OWN full speed: a ball with a strike coming through it should
+    // scatter at a bolt, not at a saunter.
+    const mill = ball
+      ? Math.min(1, ballSpeed / Math.max(0.1, e.speed)) * ballFlat
+      : 1;
+    steerTo(e, ax, ay, dt, sw.responsiveness ?? 4, mill + bolt);
   },
 
   // Stays near the seabed rather than swimming freely — chases the player
@@ -1474,13 +1631,37 @@ const BEHAVIORS = {
     // time" means here: the fish stop being enough of a distraction to keep
     // this thing off you.
     let target = null;
-    let best = (e.preyRadius ?? h.preyRadius ?? 0) ** 2;
+    const preyR = e.preyRadius ?? h.preyRadius ?? 0;
+    // A BAIT BALL IS SEEN FROM MUCH FURTHER OFF than one fish, and it has to
+    // be, or the mechanic does not happen at all.
+    //
+    // Measured before this existed: a shark dropped five units from a ball made
+    // ONE pass, took one fish, carried on past on its cruise (see
+    // CONFIG.cruiseHunt — a hunter spends only a fraction of its turn rate on
+    // prey), and at thirty units away was outside its own 15-unit preyRadius
+    // with nothing to bring it back. It then cruised in open water for the
+    // remaining forty seconds of the ball's life. One mouthful per ball is not
+    // a tug of war; it is a shark that happened to swim through some fish.
+    //
+    // The wider radius is what makes it come back round, and it is the truest
+    // thing in this whole file: a ball of fish is a loud, visible, thrashing
+    // mass, and real predators converge on one from a long way out. That it
+    // also fixes the geometry is a bonus rather than the reason.
+    const ballR = preyR * (CONFIG.baitBall?.pull ?? 2.5);
+    let best = Infinity;
     for (const p of ctx.prey) {
       const dx = p.mesh.position.x - px;
       const dy = p.mesh.position.y - py;
       const d2 = dx * dx + dy * dy;
+      // Per-target reach, then NEAREST among what is eligible. Ranking on the
+      // normalised distance instead would have a ball at its far edge outrank a
+      // minnow at arm's length, and a hunter that swims past food it is already
+      // on top of reads as broken rather than as focused.
+      const reach = p.baitBall ? ballR : preyR;
+      if (d2 > reach * reach) continue;
       if (d2 < best) { best = d2; target = p; }
     }
+    if (!target) best = 0;
 
     if (target) {
       e.hunting = true;
@@ -1614,6 +1795,29 @@ const BEHAVIORS = {
       // ring with its head turned in is stalking; one facing along its own
       // arc is just swimming past, and the difference is the whole read.
       updateSwim(e, dt, Math.abs(ctx.dirX * ctx.dist), lat);
+
+      // --- THE COMMITTED PASS ---------------------------------------------
+      // A def carrying a `lunge` block spends part of its approach winding up
+      // and then bursts down a locked line — see lungeChase, and the note there
+      // on `ownCruise` for why this is an overlay rather than a behaviour. It
+      // returns true only on the frames it has actually written the velocity;
+      // every other frame falls straight through to the cruise below, which is
+      // therefore untouched by any of this.
+      //
+      // ABOVE the standoff, deliberately. The crowd logic exists to stop apex
+      // bodies stacking on the player, and it works by refusing to close — so
+      // running it first would hold a shark at arm's length exactly when it has
+      // decided to commit, and the lunge would never leave the wind-up.
+      //
+      // The head goes with it. `weaveLook` below is the IDLE weave, which is
+      // the wrong thing entirely mid-strike: an animal that has committed to a
+      // line is looking down that line, and a snout still sweeping side to side
+      // says it has not decided yet.
+      if (e.def.lunge && lungeChase(e, dt, ctx, false)) {
+        setLookTarget(e, px + ctx.dirX * ctx.dist, py + ctx.dirY * ctx.dist);
+        return;
+      }
+
       const look = weaveLook(e, px + ctx.dirX * ctx.dist, py + ctx.dirY * ctx.dist, lat);
       setLookTarget(e, look.x, look.y);
       if (e.standoffDist == null) e.standoffDist = pickStandoff(CONFIG.apexCrowd);
@@ -2218,7 +2422,12 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // acquireVisual because a RECYCLED body arrives still wearing the skin it
   // died in; see rollBiolumSkinVariant. A no-op for every creature whose
   // preset has no skins listed, which is all of them but the crabs.
-  rollBiolumSkinVariant(visual);
+  // ...and the edge that goes with it. A look is the body and its rim together
+  // (skins.csv `rim`), so the two are rolled from one row and applied as a
+  // pair. Null for every row that says nothing about the rim, which puts the
+  // body back on its species' shared material — not a no-op on a RECYCLED
+  // body, which is still wearing whatever the last roll gave it.
+  setOutlineVariant(visual, assetKey, rollBiolumSkinVariant(visual)?.__rim ?? null);
   container.add(visual);
 
   // Creatures that grow over a run: later spawns come in bigger than the
@@ -2347,30 +2556,38 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // CONFIG.spawn.ramp. The linear term keeps each creature's authored
   // character (a shark gains far more hp per minute than a reef fish); the
   // ramp is what makes minute ten hurt no matter which creature it sends.
-  const hp = (def.hp + def.hpPerDifficulty * difficulty) * difficultyRamp('hp', difficulty);
+  //
+  // ...and on top of BOTH of those, the level surcharge: past CONFIG.spawn
+  // .lateGame.from the water scales against how strong the seal has got as well
+  // as against how long the run has been going. It is a third multiplier rather
+  // than a bigger `ramp`, because it has to be able to leave the first twenty
+  // levels of a run untouched — see the block in config.js.
+  const hp = (def.hp + def.hpPerDifficulty * difficulty) * difficultyRamp('hp', difficulty)
+    * lateGameMul('hp', spawnLevel);
   // Damage and speed ramp with the run the same way hp always has. All three
   // are baked per-instance at spawn rather than read from the shared def
   // every frame: `def` is one object for the whole species, so scaling it in
   // place would retroactively buff everything already on screen.
+  const damageMul = difficultyRamp('damage', difficulty) * lateGameMul('damage', spawnLevel);
   const contactDamage = (def.contactDamage + (def.contactDamagePerDifficulty ?? 0) * difficulty)
-    * difficultyRamp('damage', difficulty);
+    * damageMul;
   // Ranged attackers scale with the same damage curve as contact — otherwise
   // anything with a `shoot` block falls behind over a long run. updateEnemies
   // fires with e.shotDamage, not def.shoot.damage, for the same
   // per-instance reason as above.
-  const shotDamage = def.shoot ? def.shoot.damage * difficultyRamp('damage', difficulty) : 0;
+  const shotDamage = def.shoot ? def.shoot.damage * damageMul : 0;
   // ...and so does the BITE, on the same curve and baked at spawn for the same
   // reason. Zero for everything that leaves `biteDamage` blank in enemies.csv,
   // which is every wildlife row: their snap stays what it always was, a sound
   // and a pose over a contact drain that never stops. The bosses that chase
   // fill it in, and it is the whole of what their jaws are worth — see the
   // hook in main.js and the cut to their contactDamage next to it.
-  const biteDamage = (def.biteDamage ?? 0) * difficultyRamp('damage', difficulty);
+  const biteDamage = (def.biteDamage ?? 0) * damageMul;
   // Speed variance stays outside the ramp: it's the per-individual jitter
   // that keeps a school from moving as one body, not part of the threat
   // curve, and multiplying it up would spread a late-run school apart.
   const speed = (def.speed + (def.speedPerDifficulty ?? 0) * difficulty)
-    * difficultyRamp('speed', difficulty)
+    * difficultyRamp('speed', difficulty) * lateGameMul('speed', spawnLevel)
     + Math.random() * (def.speedVariance ?? 0);
   const heading = Math.random() * Math.PI * 2;
 
@@ -2455,18 +2672,30 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // the species. See CONFIG.hunterRamp.
   const ramp = CONFIG.hunterRamp;
   const rampOn = ramp?.enabled && difficulty > 0;
+  // The level surcharge on all three axes below, as ONE number — see
+  // CONFIG.spawn.lateGame.seek for why they are not three rows. 1 for the whole
+  // first twenty levels, so everything under `rampOn` reads exactly as it did.
+  const seekMul = lateGameMul('seek', spawnLevel);
   // Prey distraction decays toward a floor: each difficulty point sheds
   // `preyFocus` of what is LEFT above the floor, so it falls off quickly at
   // first and then flattens instead of crossing zero.
   const preyBase = def.hunt?.preyRadius ?? 0;
   const preyFloor = preyBase * (ramp?.preyFocusMin ?? 1);
+  //
+  // The surcharge DIVIDES what is left above the floor rather than steepening
+  // the exponent: at seekMul 2 a late shark keeps half the distraction the run
+  // clock had left it, whatever that was. Steepening the exponent instead would
+  // have made the surcharge's size depend on how far into the run the level
+  // happened to land, which is the one thing this ramp exists not to do.
+  // `preyFocusMin` is still the floor — a shark that ignored fish entirely
+  // would switch the whole food chain off. See the note on it in config.js.
   const preyRadius = rampOn
-    ? preyFloor + (preyBase - preyFloor) * (1 - (ramp.preyFocus ?? 0)) ** difficulty
+    ? preyFloor + (preyBase - preyFloor) * ((1 - (ramp.preyFocus ?? 0)) ** difficulty) / seekMul
     : preyBase;
   // ...and turning tightens, compounding and capped, like the spawn ramps.
   const turnRate = def.turnRate
     ? def.turnRate * (rampOn
-      ? Math.min(ramp.turnRateMax ?? Infinity, (1 + (ramp.turnRate ?? 0)) ** difficulty)
+      ? Math.min(ramp.turnRateMax ?? Infinity, (1 + (ramp.turnRate ?? 0)) ** difficulty) * seekMul
       : 1)
     : def.turnRate;
   // ...and a SCHOOL presses harder, which is the only line here that reaches a
@@ -2475,7 +2704,7 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // CONFIG.hunterRamp.swarmSeek for why the schools needed their own.
   const towardPlayer = def.swarm
     ? (def.swarm.towardPlayer ?? 0) * (rampOn
-      ? Math.min(ramp.swarmSeekMax ?? Infinity, (1 + (ramp.swarmSeek ?? 0)) ** difficulty)
+      ? Math.min(ramp.swarmSeekMax ?? Infinity, (1 + (ramp.swarmSeek ?? 0)) ** difficulty) * seekMul
       : 1)
     : 0;
 
@@ -2532,7 +2761,21 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // spawned in the first minute — see CONFIG.xp.toughness for why the ladder
     // needs that. Read here, off the same `hp` the creature is about to carry,
     // so the two can never disagree about how hard this individual was.
-    xp: (def.xp ?? 0) * xpMul * xpToughnessMul(hp, def.hp),
+    //
+    // ...and the level surcharge pays for its own half of that, TWICE OVER, and
+    // deliberately. `hp` above already carries lateGameMul('hp'), so
+    // xpToughnessMul is already paying for this ramp — and then the explicit
+    // term goes on top, which is why a level-28 spawn's chum is worth about 5x
+    // a level-20 one's against only 2.5x the health.
+    //
+    // That gap is the whole tuning, not an oversight. Paying back exactly what
+    // the ramp costs holds INCOME PER KILL level, and a kill is not what the
+    // ladder is denominated in — a level is, and the level cost compounds at
+    // CONFIG.xp.endMul (1.42) on every one of them. Measured on the real
+    // spawner (npm run test:xp), a payback that only matched hp still left
+    // levels 22-26 stretching to 65s apiece; this is the rate that holds them
+    // flat at about 42s, which is the pace the band below them runs at.
+    xp: (def.xp ?? 0) * xpMul * xpToughnessMul(hp, def.hp) * lateGameMul('xp', spawnLevel),
     speed,
     // Per-instance, so a crab that spawned at minute one keeps hitting for
     // what it was worth then. combat.js reads e.contactDamage, not the def.
@@ -2555,6 +2798,27 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     leaving: false,
     phase: Math.random() * Math.PI * 2,
     schoolId,
+    // BAIT BALL STATE, inert on everything else. `baitBall` is the flag the
+    // swarm behaviour branches on and spawnBaitBall sets it straight after this
+    // returns.
+    //
+    // Declared here rather than only on the bait path so the shape of a
+    // creature is one shape. A field that exists on some fish and not others is
+    // a field every reader has to test for, and the first reader that forgets
+    // gets `undefined` arithmetic and a body at NaN.
+    baitBall: false,
+    // Speed through DEPTH. Every other creature in the game has none — the two
+    // axes it steers on are the two you can see — and a bait fish is the one
+    // thing that swims into and out of the picture. Declared on every creature
+    // so the shape of one is one shape; the flock is the only writer.
+    vz: 0,
+    // This fish as baitFlock sees it, reused every frame. See the view pass in
+    // updateEnemies for why it lives on the creature rather than being built
+    // there.
+    ballView: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 },
+    // The depth cue, 1 on anything that is not in a ball. Multiplied into every
+    // scale write so the hit-pop and the column cannot overwrite each other.
+    depthScale: 1,
     biteTimer: 0,
     meals: 0,
     hunting: false,
@@ -2581,6 +2845,23 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // Set for exactly one frame, on the frame the claws meet. systems/
     // combat.js reads it and bills the damage; nothing else may write it.
     justPinched: false,
+    // THE SEAL IS IN THIS ANIMAL'S MOUTH. Owned entirely by systems/bossGrab.js
+    // — true for the length of a grab and false the rest of the time. Read by
+    // systems/combat.js, which suppresses this creature's contact damage while
+    // it holds you: the grab is already billing its own chewing on its own
+    // clock, and charging the body drain on top would be the same attack
+    // collecting twice for the same two seconds.
+    //
+    // Declared here rather than only on the three bosses that can do it, for
+    // the reason every other flag in this record is: the shape of a creature is
+    // one shape, and a field that exists on some of them is a field the first
+    // reader to forget it turns into `undefined`.
+    grabbing: false,
+    // ...and the dead time afterwards, ticked down in the main update beside
+    // every other per-creature clock. Seeded at 0 so a boss may take hold the
+    // first time it lands a clean bite rather than having to serve a cooldown
+    // for something it has not done yet.
+    grabCooldown: 0,
     // A BODY BEING USED AS A WEAPON. Set by the three systems that multiply a
     // boss's contact damage for a committed run — the perk lunge, the kraken's
     // crush and the anglerfish's strike — and cleared when each restores it.
@@ -3128,6 +3409,183 @@ function updateBossForage(dt, scene, difficulty, playerLevel) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE BAIT BALL — putting one in the water
+// ---------------------------------------------------------------------------
+// systems/baitBall.js decides WHETHER and WHERE; this is the half that needs
+// the scene, the roster and the enemy list, and it is deliberately the smaller
+// half. See that file for what a bait ball is and why it is a boss-fight
+// feature without anything in it naming a boss.
+//
+// The fish are ORDINARY SMALL FRY — `forageCandidates` again, the same
+// weighted pool the boss forage draws from, which is `lullEligible` (prey,
+// under a radius cap) filtered by the difficulty and level gates. Nothing about
+// a bait ball is a species: it is a state a school is in, which is why a new
+// little fish added to enemies.csv joins one for free and a new shark can never
+// wander into one.
+function updateBaitBallSpawn(dt, scene, difficulty, playerLevel) {
+  const boss = liveBoss();
+
+  // How full the water is, bosses excluded and leavers excluded. Both
+  // exclusions matter and for the same reason the forage's do: a boss is one
+  // body that is never company, and the clear-out's stragglers are still in
+  // the list for a few seconds after a fight starts — counting them would hold
+  // the emptiness test shut for exactly as long as the arena took to empty,
+  // which is the window this is supposed to open in.
+  let alive = 0;
+  for (const e of enemies) {
+    if (e.isBoss || e.leaving) continue;
+    alive += 1;
+  }
+
+  const spec = updateBaitBallClock(dt, {
+    level: playerLevel,
+    difficulty,
+    // Its ENTRANCE, not just its presence: a ball forming under a boss's
+    // arrival ceremony reads as the water not having been cleared at all,
+    // which is the one beat that whole sequence is built to sell. Passing null
+    // holds the clock rather than spawning without the boss's influence on
+    // placement, which is what a bare `invuln` check here would have done.
+    boss: boss && boss.invuln <= 0
+      ? { x: boss.mesh.position.x, y: boss.mesh.position.y }
+      : null,
+    // ...and while that boss is still ARRIVING, hold the clock outright. A
+    // boss mid-entrance goes in above as `boss: null` — its position is not
+    // where it will fight from, so it must not decide which wall the food
+    // comes through — and calm water is exactly what the clock would then
+    // think it was looking at.
+    hold: !!boss && boss.invuln > 0,
+    aliveNonBoss: alive,
+    maxAlive: CONFIG.spawn.maxAlive,
+    bounds,
+    offscreenX: offscreenX(),
+    player: player.mesh?.position,
+  });
+  if (!spec) return;
+  spawnBaitBall(scene, difficulty, playerLevel, spec);
+}
+
+/**
+ * Put one ball in the water at `spec`, with no clock and no gates.
+ *
+ * Split out of the tick above so the dev key can call it (Shift+B in main.js).
+ * Waiting for the real thing means a level, a boss, and an arena that happens
+ * to be empty — three conditions that only line up minutes apart, which is not
+ * a loop anybody can tune a swirl in.
+ *
+ * @returns the ball, or null if nothing could be spawned.
+ */
+export function spawnBaitBall(scene, difficulty, playerLevel, spec) {
+  const pool = forageCandidates(difficulty, playerLevel);
+  if (!pool.length) return null;
+  let total = 0;
+  for (const p of pool) total += p.w;
+  let roll = Math.random() * total;
+  let picked = pool[pool.length - 1];
+  for (const p of pool) { roll -= p.w; if (roll <= 0) { picked = p; break; } }
+
+  const { key, def } = picked;
+  const c = CONFIG.baitBall ?? {};
+  // maxAlive is a memory bound and binds here like everywhere else. A ball
+  // that arrives half-sized is still a ball; one that overruns the ceiling is
+  // a leak with a nice explanation attached.
+  const n = Math.min(spec.count, CONFIG.spawn.maxAlive - enemies.length);
+  if (n <= (c.disperseAt ?? 3)) return null;
+
+  const id = nextSchoolId++;
+  const ball = openBaitBall(id, { ...spec, count: n });
+
+  for (let i = 0; i < n; i++) {
+    // SEEDED THROUGH THE COLUMN'S VOLUME. The ball is opened before the fish
+    // so baitSeed can scatter them inside the solid the flock is about to hold
+    // — dropped in a box and left to sort themselves out, a ball spends its
+    // first second visibly assembling, and that second is the one the player
+    // is watching it arrive in.
+    const at = baitSeed(i, n, ball);
+    // NO `side`. Declaring an entrance makes spawnOne push the body out to
+    // `offscreenX` on its own (see the `arriving` block there), and that is
+    // exactly wrong for a ball: every fish gets pushed to the SAME x, so the
+    // column it was just placed as is flattened into a vertical line against
+    // the wall, and it then has to swim 16 units to reassemble. Measured — the
+    // first two and a half seconds of every ball's life were spent sorting
+    // itself out somewhere off screen.
+    //
+    // Not needed, either. The ordinary spawn already anchors past the wall, so
+    // the slot positions are themselves offscreen and spawnOne's geometric
+    // fallback sets `entering` from where the body actually is — which is the
+    // whole point of that fallback. The forced ball (Shift+B) places on
+    // station and correctly gets no entrance at all.
+    spawnOne(scene, key, def, difficulty, {
+      x: at.x,
+      y: at.y,
+    }, { schoolId: id, xpMul: c.xpMul ?? 1 });
+    const fish = enemies[enemies.length - 1];
+    if (!fish) continue;
+    fish.baitBall = true;
+    fish.mesh.position.z = (fish.laneZ ?? 0) + at.z;
+    fish.vz = 0;
+    // THE SHIMMER GOES ON THE MATERIAL, once. Every instance of a species
+    // shares one, so this is idempotent after the first fish of the first ball
+    // that species ever forms — and the shader is gated on distance to a live
+    // anchor, so the loose fish of that species elsewhere in the arena, which
+    // wear the same material, are untouched. See systems/baitShimmer.js.
+    fish.mesh.traverse((o) => {
+      if (!o.isMesh || !o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) attachBaitShimmer(m);
+    });
+    // The scale write below only fires on a frame something has changed, and a
+    // fish spawning already on the near side of the column is exactly such a
+    // frame — without this its first cue would wait for its first orbit.
+    fish.__depthDirty = true;
+  }
+
+  return ball;
+}
+
+/**
+ * Where a forced ball goes: the far side of the arena from the seal, on
+ * station immediately rather than swimming in from the wall.
+ *
+ * NOT the ordinary placement, and the difference is the point. The real
+ * entrance is a five-second swim from past the wall, which is the right thing
+ * in a run and pure dead time when you are pressing the key for the ninth time
+ * to look at the swirl. `arriving: false` is set by the caller.
+ */
+export function devBaitBallSpec(atX = null, atY = null) {
+  const c = CONFIG.baitBall ?? {};
+  const margin = c.margin ?? 6;
+  const px = player.mesh?.position?.x ?? 0;
+  const side = px >= (bounds.left + bounds.right) * 0.5 ? -1 : 1;
+  const inset = c.stationInset ?? 0.42;
+  const x = atX ?? (side < 0
+    ? bounds.left + (bounds.right - bounds.left) * inset * 0.5
+    : bounds.right - (bounds.right - bounds.left) * inset * 0.5);
+  const y = atY ?? (bounds.bottom + margin
+    + Math.random() * Math.max(1, (bounds.surfaceY - bounds.bottom) - margin * 2));
+  const min = Math.max(1, Math.round(c.size?.min ?? 10));
+  const max = Math.max(min, Math.round(c.size?.max ?? 18));
+  return {
+    count: min + Math.floor(Math.random() * (max - min + 1)),
+    x, y, stationX: x, stationY: y, side,
+    spin: Math.random() < 0.5 ? -1 : 1,
+  };
+}
+
+// WHAT LEVEL THE SEAL IS, for CONFIG.spawn.lateGame. Pushed in once a frame
+// rather than threaded through every spawn, the same shape and for the same
+// reason as setChumDifficulty in entities/pickups.js: creatures arrive from six
+// places (the ordinary tap, a boss escort, the boss forage, a bait ball, the
+// death pile, a direct spawnNamed from a system) and only some of them have the
+// game state to hand.
+//
+// Starts at 1 and is reset with the roster, so every Node harness that spawns
+// without a run around it reads exactly the pre-lateGame numbers — the
+// surcharge cannot silently colour a test that never opted into it.
+let spawnLevel = 1;
+export function setSpawnLevel(level) { spawnLevel = Math.max(1, Math.floor(level ?? 1)); }
+export function currentSpawnLevel() { return spawnLevel; }
+
 export function updateSpawning(dt, gameState, scene) {
   const d = gameState.difficulty;
 
@@ -3171,6 +3629,13 @@ export function updateSpawning(dt, gameState, scene) {
   // and above the spawn timer, because it keeps its own cadence and the
   // ordinary tap is locked out for the whole fight anyway.
   updateBossForage(dt, scene, d, gameState.level ?? 1);
+
+  // The bait ball, on its own clock beside the forage's and for the same
+  // reason: it is not paced by the difficulty curve and must not be. Below the
+  // hush, so a ball cannot form into water that is still being emptied for a
+  // boss, and above the spawn timer, because the ordinary tap is locked out
+  // for the whole fight the ball mostly lives in.
+  updateBaitBallSpawn(dt, scene, d, gameState.level ?? 1);
 
   spawnTimer -= dt;
   if (spawnTimer > 0) return;
@@ -3387,6 +3852,26 @@ function quarryFor(e, playerPos) {
   return _quarry;
 }
 
+// Predators as plain { x, y } for systems/baitBall.js, which is deliberately
+// free of THREE and of this module so its whole pacing can be simulated
+// headlessly. Pooled rather than mapped: this runs every frame a ball is alive,
+// and a fresh array of eight objects sixty times a second is exactly the kind
+// of churn that shows up as a collection pause and nowhere else.
+// The live anchors, reused every frame — see the shimmer call in updateEnemies.
+const shimmerBalls = [];
+
+const baitThreatPool = [];
+function baitThreats(predators) {
+  for (let i = 0; i < predators.length; i++) {
+    let v = baitThreatPool[i];
+    if (!v) { v = { x: 0, y: 0 }; baitThreatPool[i] = v; }
+    v.x = predators[i].mesh.position.x;
+    v.y = predators[i].mesh.position.y;
+  }
+  baitThreatPool.length = predators.length;
+  return baitThreatPool;
+}
+
 export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, onPlayerBitten) {
   // Advanced once per frame, and the phase every creature's animation stride
   // is measured against. See the LOD note further down.
@@ -3414,6 +3899,79 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     }
     if (e.def.prey) prey.push(e);
     if (e.def.hunt) predators.push(e);
+  }
+
+  // Bait ball anchors, and they have to move BEFORE the behavior loop for the
+  // same reason the crowd does: every fish in a ball steers at the anchor this
+  // frame, and one advanced afterwards would have the whole knot chasing where
+  // its centre used to be — a lag of exactly one frame, which reads as the
+  // ball smearing rather than turning.
+  //
+  // Fed the school map built just above, so the ball's headcount and the boids'
+  // membership can never disagree. Anything it ends comes back as an id, and
+  // those fish drop the flag here — the ordinary swarm is what they were before
+  // and what they go back to.
+  if (baitBalls.size) {
+    // EVERY BALL'S MEMBERS AS PLAIN { x, y, z, vx, vy, vz }, once per frame.
+    // baitFlock is deliberately free of THREE and of this module's types so a
+    // harness can run a whole ball headlessly, and this is the seam that costs.
+    //
+    // Built HERE rather than inside the behaviour loop because the flock is
+    // O(n²) by nature — every fish reads every other — and rebuilding the list
+    // per fish would make it O(n³). The view object is the creature's own
+    // (`e.ballView`), so a ball of eighteen allocates nothing per frame.
+    for (const ball of baitBalls.values()) {
+      const mates = schools.get(ball.id);
+      if (!mates) { ball.views = null; continue; }
+      const views = ball.views && ball.views.length === mates.length ? ball.views : new Array(mates.length);
+      for (let i = 0; i < mates.length; i++) {
+        const m = mates[i];
+        const v = m.ballView;
+        v.x = m.mesh.position.x;
+        v.y = m.mesh.position.y;
+        v.z = m.mesh.position.z - (m.laneZ ?? 0);
+        v.vx = m.vx;
+        v.vy = m.vy;
+        v.vz = m.vz;
+        views[i] = v;
+      }
+      ball.views = views;
+    }
+
+    // THE SHIMMER'S UNIFORMS. Driven from here rather than from main.js's
+    // render pass because this is the one place that already holds the live
+    // anchors — and because it must stop with everything else updateEnemies
+    // stops with. A field that kept drifting behind a level-up card would have
+    // the water visibly moving in a frozen frame.
+    shimmerBalls.length = 0;
+    for (const ball of baitBalls.values()) shimmerBalls.push(ball);
+    updateBaitShimmer(shimmerBalls, dt);
+
+    const dispersed = updateBaitBalls(dt, {
+      schools,
+      predators: baitThreats(predators),
+      player: playerPos,
+      bounds,
+    });
+    for (const ball of dispersed) {
+      const mates = schools.get(ball.id);
+      if (mates) {
+        for (const m of mates) {
+          m.baitBall = false;
+          m.vz = 0;
+          // Forces one last scale write, which is what puts a survivor back to
+          // its own size — see the depth-cue branch in updateEnemies.
+          m.__depthDirty = true;
+        }
+      }
+      // HOW THE EXCHANGE WENT, once, on the frame it is answerable. This is
+      // the only readout of the mechanic there is: while a ball is alive the
+      // split between the two sides is invisible — a boss eating four while
+      // you take nine looks identical to the reverse — and a frame later the
+      // fish are gone and the question cannot be asked at all. Dev only; see
+      // CONFIG.baitBall.log.
+      if (CONFIG.baitBall?.log) console.log(`[bait] ${baitBallLedger(ball)}`);
+    }
   }
 
   // Who gets to press the player this frame, and who holds the ring. Must run
@@ -3531,7 +4089,12 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // damage stays the per-second drain resolveCombat has always applied.
     // Without it there is nothing on screen that distinguishes an animal
     // eating you from one drifting through you.
-    if (e.def.hunt && !e.hunting && e.biteCooldown <= 0) {
+    // `grabbing` is the fourth gate and the newest: an animal that already has
+    // the seal in its mouth must not keep snapping at it. The jaws are shut —
+    // that is what a grab IS — and a chomp playing over the top would both
+    // re-open them on screen and offer main.js a second chance to bill the
+    // bite. See systems/bossGrab.js.
+    if (e.def.hunt && !e.hunting && !e.grabbing && e.biteCooldown <= 0) {
       const reach = playerBiteReach(e) * (CONFIG.bite.lead ?? 1);
       // triggerBite returns whether the snap actually fired (it is rate-limited
       // by the species' own eat cooldown), so the chomp lands on the frame the
@@ -3664,6 +4227,20 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
         if (e.vy < drift) e.mesh.position.y += (drift - e.vy) * dt;
         if (e.mesh.position.y > seabedTopY() + r) e.deep = false;
       }
+    } else if (e.baitBall) {
+      // SWIMMING THROUGH DEPTH. Integrated from the flock's own vz rather than
+      // eased toward a lane: the easing below is speed-limited to
+      // `emergeSpeed` and would smear a fish's whole orbit into a lag.
+      //
+      // Clamped to the ball, so a fish that has been shoved cannot end up
+      // behind the seabed backdrop or in front of the camera. Left to the
+      // easing on the frame the ball ends: `baitBall` goes false, this branch
+      // stops matching, and the survivor glides home to its lane over the same
+      // distance any other creature would.
+      const reach = (CONFIG.baitBall?.radius ?? 1.7) * 2;
+      const lane = e.laneZ ?? 0;
+      e.mesh.position.z = Math.max(lane - reach, Math.min(lane + reach,
+        e.mesh.position.z + e.vz * dt));
     } else if (e.laneZ != null && e.mesh.position.z !== e.laneZ) {
       // HOME, and easing back into its lane. Invisible while it happens — the
       // camera is orthographic, so this changes nothing but draw order — and
@@ -4103,10 +4680,37 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // CONFIG.player.hitRadius rather than the live stat because stats.js
       // copies it through unmodified and no upgrade writes it — if one ever
       // does, this is the line that has to be handed player.stats instead.
-      if (canPinch && e.pinchTimer <= 0 && !e.claw.isStriking()
-        && ctx.dist < pinchReach(e.claw.reach(), CONFIG.player.hitRadius,
-          clawSetting(e.def, 'commitRange') ?? 0.55)) {
-        if (e.claw.strike()) e.pinchTimer = clawSetting(e.def, 'cooldown') ?? 2.6;
+      // The gate is measured inside the guard rather than beside it so the
+      // short-circuit is kept: `reach()` warns loudly when it measures nothing,
+      // and a crab that is dead, trapped or charmed would otherwise ask it
+      // sixty times a second for an answer nobody is going to use.
+      const pinchGate = canPinch && e.pinchTimer <= 0 && !e.claw.isStriking()
+        ? pinchReach(e.claw.reach(), CONFIG.player.hitRadius,
+          clawSetting(e.def, 'commitRange') ?? 0.55)
+        : 0;
+      if (pinchGate > 0 && ctx.dist < pinchGate) {
+        // WANTING IT MORE THE CLOSER YOU ARE — see CONFIG.crabClaw.eager.
+        //
+        // The cooldown is the crab's authored one at the very edge of its reach
+        // and a fraction of it once the seal is in among the legs. One flat
+        // number could not be both, and the one that was here was tuned for the
+        // far end, which made standing on top of a crab no worse per second
+        // than standing beside it — on the one animal in the game whose entire
+        // threat is how far its arms get.
+        //
+        // Measured against the SAME gate the commit was just tested on, so this
+        // scales with the arm rather than with a world constant: a king crab
+        // and a swarm crab both go eager at the same fraction of their own
+        // reach, and a crab that has grown over a run brings its band with it.
+        const eager = CONFIG.crabClaw?.eager;
+        let mul = 1;
+        if (eager?.enabled !== false) {
+          const near = Math.min(0.999, Math.max(0, eager?.nearAt ?? 0.4));
+          // 0 at the gate's edge, 1 at `nearAt` and everywhere inside it.
+          const t = Math.min(1, Math.max(0, (1 - ctx.dist / pinchGate) / (1 - near)));
+          mul = 1 + ((eager?.nearCooldownMul ?? 0.3) - 1) * t;
+        }
+        if (e.claw.strike()) e.pinchTimer = (clawSetting(e.def, 'cooldown') ?? 2.6) * mul;
       }
 
       // Aim at the player in the PLAY PLANE, not at their exact position: the
@@ -4200,6 +4804,11 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // while an eat only happens on contact.
     if (e.biteCooldown > 0) e.biteCooldown -= dt;
     if (e.lungeTimer > 0) e.lungeTimer -= dt;
+    // The dead time between grabs — see systems/bossGrab.js. Ticked here beside
+    // every other per-creature clock rather than inside that file, so it runs
+    // whether or not anything is currently held and cannot get stuck full on a
+    // boss whose grab ended for an odd reason.
+    if (e.grabCooldown > 0) e.grabCooldown -= dt;
 
     // Hit pop: a quick scale punch so damage reads even in a crowd. Scales
     // the size the creature actually IS (spawn scale x however much it has
@@ -4208,7 +4817,26 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     if (e.flash > 0) {
       e.flash = Math.max(0, e.flash - dt);
       const t = e.flash / Math.max(CONFIG.fx.hitFlash, 0.0001);
-      e.visual.scale.setScalar(e.spawnScale * e.baseScale * (1 + CONFIG.fx.hitPop * t));
+      e.visual.scale.setScalar(e.spawnScale * e.baseScale * e.depthScale * (1 + CONFIG.fx.hitPop * t));
+    } else if (e.depthScale !== 1 || e.__depthDirty) {
+      // THE COLUMN'S DEPTH CUE. Written here, in the same place and off the
+      // same three factors as the hit-pop above, because two systems each
+      // calling setScalar with their own idea of the total is two systems
+      // deleting each other's work every other frame — a fish in a ball would
+      // have snapped to flat size for the length of every hit it took.
+      //
+      // The `!== 1` test is what returns a dispersed ball's survivors to their
+      // proper size exactly once: baitFlock stops writing depthScale, the
+      // reset below puts it back to 1, this fires on that frame and then never
+      // again for that fish.
+      // Cleared BEFORE the write, not after: on the frame a ball disperses the
+      // scale still holds the last orbit's cue, and clearing afterwards would
+      // write that stale value and then never fire again — leaving a survivor
+      // permanently 28% too big or too small, with nothing on screen to say
+      // why.
+      if (!e.baitBall) e.depthScale = 1;
+      e.visual.scale.setScalar(e.spawnScale * e.baseScale * e.depthScale);
+      e.__depthDirty = false;
     }
 
     const shoot = e.def.shoot;

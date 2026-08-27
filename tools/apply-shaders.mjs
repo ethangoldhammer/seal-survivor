@@ -455,6 +455,24 @@ function fieldSpans(masked, [open, close]) {
     if (masked[start] === '{' || masked[start] === '[') continue;   // nested: not ours
     let end = start;
     while (end < close && masked[end] !== ',' && masked[end] !== '\n' && masked[end] !== '}') end++;
+    // BACK OFF THE TRAILING WHITESPACE, and this is not tidiness — it is what
+    // stops two edits from overlapping.
+    //
+    // On the LAST field of a one-line block the scan above stops at the `}`, so
+    // the span swallowed the space before it. The addition path anchors its
+    // insert at the last non-whitespace character, which is INSIDE that span —
+    // and the edits are applied right to left on the assumption that they never
+    // overlap. The addition went in first, then the value replacement chewed
+    // back over its own first character, which was the separating comma:
+    //
+    //   greatWhite: { strength: 1.3, wet: 1.2 wetSteps: 3, ... }
+    //
+    // A syntax error, in config.js, written by a button — the second one this
+    // function has produced, and the note in the addition path below is the
+    // first. Trimming here makes the span end exactly where the insert goes, so
+    // the two abut instead of overlapping. `had` was already trimmed, so
+    // nothing else changes.
+    while (end > start && /\s/.test(masked[end - 1])) end--;
     spans.set(m[2], [start, end]);
   }
   return spans;
@@ -574,8 +592,24 @@ function spliceHandPresets(text, presetsByRoot, editBuffer = {}) {
     }
   }
 
+  // OVERLAP IS A BUG, NOT AN EDGE CASE. Applying right to left is only correct
+  // while the spans are disjoint; when they are not, one edit eats another's
+  // text and what lands in config.js is a syntax error nobody typed. Twice now
+  // that has shipped as a file the game could not parse, so it is checked
+  // rather than assumed — throwing here loses one record, which is a keystroke,
+  // against a build that does not start.
+  const ordered = edits.slice().sort((a, b) => b[0] - a[0]);
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const [start] = ordered[i];
+    const [, prevEnd] = ordered[i + 1];
+    if (start < prevEnd) {
+      throw new Error(`[apply-shaders] refusing to write: two edits overlap at ${start} (previous ends ${prevEnd}). `
+        + 'This would splice a syntax error into config.js — see fieldSpans.');
+    }
+  }
+
   let next = text;
-  for (const [start, end, str] of edits.sort((a, b) => b[0] - a[0])) {
+  for (const [start, end, str] of ordered) {
     next = next.slice(0, start) + str + next.slice(end);
   }
   return { text: next, handled, changes, stale, untouched };

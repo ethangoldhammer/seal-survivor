@@ -1,7 +1,7 @@
 import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
 import { TEXT_ROLES } from '../textRoles.js';
 import { fontLabel } from '../fonts.js';
-import { buildSectionedTunerGroups, buildExpandAllToggle, refreshTunerRows } from './tunerControls.js';
+import { buildSectionedTunerGroups, buildExpandAllToggle, buildTunerSearch, refreshTunerRows } from './tunerControls.js';
 import { previewToasts, popupPose, previewScreen, PREVIEW_SCREENS } from './ui.js';
 import { isTypingTarget } from './typing.js';
 import { CALLOUTS, resolveCalloutText } from '../systems/callouts.js';
@@ -240,6 +240,10 @@ export function initTextPanel(onChange) {
 
   // Built after the groups so it can find the wrappers to point at.
   indexGroups(groupsEl);
+
+  // Fifteen roles x seven or eight properties each: "where is the letter
+  // spacing on the chain banner" is two guesses deep without this.
+  panel.appendChild(buildTunerSearch(groupsEl, { placeholder: 'Search text controls…' }));
 
   const expand = document.createElement('div');
   expand.className = 'sv-txp-expand';

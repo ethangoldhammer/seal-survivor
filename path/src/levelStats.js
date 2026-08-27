@@ -779,6 +779,28 @@ export function levelStats(id, level, s = {}) {
 }
 
 /**
+ * WHERE `id` ENDED UP, as rows in levelChanges' shape.
+ *
+ * For the score screen, where there is no next pick. A tip that answers "and
+ * what would ANOTHER one do" is asking about a run that is over — the question
+ * on that screen is what the build you actually played was worth, so every
+ * quantity is printed at the level it finished on and nothing is subtracted.
+ *
+ * `how: 'held'` renders the same way an unlock does — a bare value, no arrow —
+ * because they are the same sentence at two ends of a run: this is what it
+ * does. Kept as its own name rather than folded into 'unlock' so the renderer
+ * and any future caller can still tell "you are being offered this" from "this
+ * is what you had".
+ */
+export function levelValues(id, level, s = {}) {
+  const at = levelStats(id, level, s);
+  if (!at) return null;
+  return Object.keys(at)
+    .filter((stat) => Number.isFinite(at[stat]))
+    .map((stat) => ({ stat, how: 'held', amount: 0, from: null, to: at[stat] }));
+}
+
+/**
  * What one more level of `id` MOVES, in the shape measure() returns — so the
  * caller can hand it straight to phraseAll and get the game's own wording,
  * units and lower-is-better handling for free.
@@ -802,6 +824,30 @@ export function levelChanges(id, from, to, fromStats = {}, toStats = {}, cap = 0
   const top = cap > to ? levelStats(id, cap, toStats) : null;
   const ratios = RATIO_STATS[id] ?? EMPTY;
   const out = [];
+
+  // THE FIRST PICK IS NOT A DELTA, IT IS AN UNLOCK — and getting this wrong was
+  // the bug that made the whole feature look broken on the screen it matters
+  // most.
+  //
+  // A card you do not already hold is measured from level 0, and `lv()` clamps
+  // that to 1 because there is no such thing as level 0 of an ability. So both
+  // sides of the subtraction were level 1, every quantity came out unmoved, and
+  // the flat rule below then KEPT them all — because they will all move on a
+  // later pick. The result was a table reading "bomb damage 61 -> 61, blast 11
+  // -> 11, net depth 14.5 -> 14.5" on every card in the deal you had not taken
+  // yet, which early in a run is nearly all of them.
+  //
+  // What the player is being offered is the whole ability, so the answer is
+  // simply what it does at level one: a value, no arrow, nothing to subtract.
+  // `how: 'unlock'` says so, and `from` is null because there is no before.
+  if (from < 1) {
+    for (const stat of Object.keys(b)) {
+      const y = b[stat];
+      if (!Number.isFinite(y)) continue;
+      out.push({ stat, how: 'unlock', amount: 0, from: null, to: y });
+    }
+    return out;
+  }
   for (const stat of Object.keys(b)) {
     const x = a[stat];
     const y = b[stat];

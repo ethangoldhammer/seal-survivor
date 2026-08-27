@@ -32,7 +32,7 @@ import { CONFIG } from '../../path/src/config.js';
 import { preloadAssets } from '../../path/src/assets.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { scatterSeabed, bedPlacements, clearSeabed } from '../../path/src/systems/seabedScatter.js';
-import { applyGrassSettings, updateGrassSway } from '../../path/src/systems/grassSway.js';
+import { applyGrassSettings, updateGrassSway, shovedInstanceCount } from '../../path/src/systems/grassSway.js';
 import { seabedTopY, bounds } from '../../path/src/arena.js';
 
 const logEl = document.getElementById('log');
@@ -95,6 +95,34 @@ scene.add(key);
 
 let shotIndex = 0;
 const posted = [];
+
+/** The framebuffer as raw RGBA, without adding a cell to the sheet. */
+function pixels(camera) {
+  post.resize();
+  post.render(scene, camera, 1 / 60);
+  const c = document.createElement('canvas');
+  c.width = gl.domElement.width;
+  c.height = gl.domElement.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(gl.domElement, 0, 0);
+  return ctx.getImageData(0, 0, c.width, c.height).data;
+}
+const imageOf = (canvas) =>
+  canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+
+/**
+ * Share of pixels that differ between two frames. The threshold is well above
+ * the post chain's own dither: bloom and the grain both jitter a pixel by a
+ * point or two between identical renders, and counting those would make every
+ * "did it move" check pass on noise.
+ */
+function diffPct(a, b) {
+  let moved = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 24) moved++;
+  }
+  return (moved / (a.length / 4)) * 100;
+}
 function shot(title, caption, camera) {
   post.resize();
   post.render(scene, camera, 1 / 60);
@@ -186,6 +214,12 @@ check('the bed reaches both walls', box.min.x <= bounds.left && box.max.x >= bou
 // wall and the walls move with the aspect ratio, so a fixed frame crops the
 // ends off — which is the one thing this shot exists to show.
 const span = box.max.x - box.min.x;
+// planBed samples the band centred on 0 and scatterSeabed offsets it, so a
+// placement's world x is that offset plus its own. Taken off the DRAWN box
+// rather than by calling bedSpan again — `span` in this file is already a
+// width, and reaching for `span.centre` silently gives NaN, which compares
+// false against everything and reports a bed with no plants in it.
+const bedCentreX = (box.min.x + box.max.x) / 2;
 const VIEW_W = span * 1.04;
 const VIEW_H = VIEW_W * (H / W);
 const wide = new THREE.OrthographicCamera(
@@ -236,21 +270,173 @@ shot('Current, the other', `Half a cycle later (${halfCycle.toFixed(2)}s at ${CO
 
 // A picture cannot assert. Diffing the two frames can: if nothing moved, the
 // sway compiled and did nothing, which is exactly how a broken injection reads.
-const frameA = document.createElement('canvas');
 const cells = [...sheetEl.querySelectorAll('canvas')];
 const [ca, cb] = cells.slice(-2);
-frameA.width = ca.width; frameA.height = ca.height;
-const pa = ca.getContext('2d').getImageData(0, 0, ca.width, ca.height).data;
-const pb = cb.getContext('2d').getImageData(0, 0, cb.width, cb.height).data;
-let moved = 0;
-for (let i = 0; i < pa.length; i += 4) {
-  if (Math.abs(pa[i] - pb[i]) + Math.abs(pa[i + 1] - pb[i + 1]) + Math.abs(pa[i + 2] - pb[i + 2]) > 24) moved++;
-}
-const movedPct = (moved / (pa.length / 4)) * 100;
+const movedPct = diffPct(imageOf(ca), imageOf(cb));
 check('the bed actually moves between the two phases', movedPct > 0.15,
   `${movedPct.toFixed(2)}% of pixels changed`);
 check('...and it is a bend, not the whole bed sliding', movedPct < 25,
   `${movedPct.toFixed(2)}% — much more than this means the roots are moving too`);
+
+// --- the foreground layer ---------------------------------------------------
+// A FEW PLANTS ON THE NEAR SIDE OF THE SEAL, so a dive into the bed reads as
+// swimming through it. tools/seabed-scatter-test.mjs proves the PLAN — the
+// share, the sign of z, that toggling it does not reshuffle the bed. What it
+// cannot prove is that the depth buffer then does the right thing with it, and
+// that is not a formality: these props are opaque meshes rather than alpha
+// cards, which is the only reason a plant at z=+2 can occlude a body at z=0
+// without any sorting work at all. A re-export that turned them transparent
+// would put every foreground plant behind the seal and throw no error.
+const inFront = bed.filter((p) => p.front);
+check('some of the bed is planted in front of the play plane', inFront.length > 0,
+  `${inFront.length} of ${bed.length}`);
+check('the plants are opaque, so the depth buffer sorts them against the seal',
+  draws.every((d) => d.material.transparent !== true),
+  'a transparent bed would need per-object sorting and would draw behind everything');
+
+// A stand-in for the seal, at the play plane and the real length of one (1.68).
+// The point of the shot is what crosses IN FRONT of it.
+const standIn = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.34, 1, 6, 14),
+  new THREE.MeshBasicMaterial({ color: 0xf4f0e6 }),
+);
+standIn.rotation.z = Math.PI / 2;
+standIn.position.set(0, floorY + 0.9, 0);
+
+// Framed on a FOREGROUND plant, not on the thickest patch. The subject of this
+// shot is the occlusion, and at a twelfth of the bed a camera pointed anywhere
+// else photographs a seal standing in an ordinary clearing — which is a picture
+// of the feature not working, taken of the feature working.
+const worldX = bed.map((p) => bedCentreX + p.x);
+const frontX = inFront.map((p) => bedCentreX + p.x);
+let denseX = close.position.x;
+let denseCount = -1;
+for (const fx of frontX) {
+  if (fx < box.min.x + 6 || fx > box.max.x - 6) continue;
+  const near = worldX.filter((px) => Math.abs(px - fx) < 4).length;
+  if (near > denseCount) { denseCount = near; denseX = fx; }
+}
+close.position.x = denseX;
+standIn.position.x = denseX;
+
+// AND MEASURED, not eyeballed. "The plant is in front" is a claim about the
+// depth buffer, and a shot of a plant beside a seal looks much like a shot of a
+// plant behind one. So: how much of the seal does the bed actually cover?
+//
+// Three renders. The empty bed gives the background to subtract; the seal alone
+// against it gives the seal's silhouette; the full frame says which of those
+// silhouette pixels something has since drawn over.
+group.visible = false;
+const emptyFrame = pixels(close);
+scene.add(standIn);
+const sealOnly = pixels(close);
+group.visible = true;
+const fullFrame = pixels(close);
+
+let sealPx = 0;
+let coveredPx = 0;
+for (let i = 0; i < sealOnly.length; i += 4) {
+  const isSeal = Math.abs(sealOnly[i] - emptyFrame[i])
+    + Math.abs(sealOnly[i + 1] - emptyFrame[i + 1])
+    + Math.abs(sealOnly[i + 2] - emptyFrame[i + 2]) > 24;
+  if (!isSeal) continue;
+  sealPx++;
+  const covered = Math.abs(fullFrame[i] - sealOnly[i])
+    + Math.abs(fullFrame[i + 1] - sealOnly[i + 1])
+    + Math.abs(fullFrame[i + 2] - sealOnly[i + 2]) > 24;
+  if (covered) coveredPx++;
+}
+const coveredPct = sealPx ? (coveredPx / sealPx) * 100 : 0;
+check('the seal has a silhouette to measure', sealPx > 500, `${sealPx} pixels`);
+check('plants are drawn OVER the seal, not behind it', coveredPct > 2,
+  `${coveredPct.toFixed(1)}% of the seal is covered by the bed`);
+// The other half of the same claim: it is a few fronds crossing a body, not a
+// hedge. Past about half and the seal stops being readable exactly where it
+// matters most, which is the floor it dives to.
+check('...but it does not bury it', coveredPct < 55,
+  `${coveredPct.toFixed(1)}% covered — past about half the seal stops being readable`);
+
+shot('Swimming through', 'The pale capsule is the seal, at the play plane (z=0) and its real length. '
+  + `${inFront.length} of ${bed.length} plants stand in front of it, and ${coveredPct.toFixed(0)}% of `
+  + 'the seal is drawn over here. The camera is orthographic, so a foreground plant is the same size it '
+  + 'would be at the back — the occlusion is the whole depth cue, which is why there is no scale bump '
+  + 'trying to sell it.', close);
+scene.remove(standIn);
+
+// --- the shove --------------------------------------------------------------
+// PLANTS PUSHED ASIDE by the seal, and springing back once it has gone. Three
+// things a still cannot show, all measured here rather than asserted:
+// that the plants move at all, that they come BACK, and that they overshoot on
+// the way rather than sliding to a halt.
+//
+// The current is switched OFF for this panel and that is doing two jobs. It
+// isolates the shove, so a pixel diff between two frames is the shove and
+// nothing else. And it is the trap: the shove runs above the sway's `enabled`
+// check in updateGrassSway, so a bed that stands still here would mean the two
+// forces got wired to one switch.
+CONFIG.grass.sway.enabled = false;
+applyGrassSettings();
+
+// THE PLANTS ONLY. A shell carries no sway material and therefore no aShove
+// attribute, so registering it would upload a buffer every frame for nothing —
+// and counting it here would make this check fail with the code correct. So the
+// expected number is derived from which draws actually bend, which also makes
+// this the assertion that the shells were left out.
+const plantDraws = draws.filter((d) => d.material?.userData?.__swayAttached);
+check('every plant draw is registered for the shove, and no shell is',
+  shovedInstanceCount() === plantDraws.length && plantDraws.length < draws.length,
+  `${shovedInstanceCount()} registered, ${plantDraws.length} plant draws of ${draws.length}`);
+
+// Same patch the layering shot is framed on. Drawn, because a shove with
+// nothing visible causing it is a picture of plants leaning for no reason.
+log(`\n  shove source at x=${denseX.toFixed(1)} — the thickest patch in the bed, `
+  + `${denseCount} plants inside the radius`);
+const SHOVE_AT = { x: denseX, y: floorY + 1.2 };
+const marker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.34, 20, 14),
+  new THREE.MeshBasicMaterial({ color: 0xffd27f }),
+);
+marker.position.set(SHOVE_AT.x, SHOVE_AT.y, 0);
+
+// Settle the springs first so the bed is genuinely at rest, or the "at rest"
+// reference below is a frame of the bed still recovering from being born.
+const run = (seconds, at) => {
+  for (let t = 0; t < seconds; t += 1 / 60) updateGrassSway(1 / 60, at);
+};
+run(3, null);
+const atRest = pixels(close);
+
+run(1.5, SHOVE_AT);
+scene.add(marker);
+shot('Shoved', 'The seal held still inside the bed, current off so this is the shove alone. '
+  + `Radius ${CONFIG.grass.shove.radius}, pushing ${(CONFIG.grass.shove.strength * 100).toFixed(0)}% of each `
+  + "plant's own height at contact. The plants it is standing over are barely pushed sideways — they are "
+  + 'being passed over, not shouldered.', close);
+const shovedPct = diffPct(atRest, pixels(close));
+check('the seal parts the plants around it', shovedPct > 0.1, `${shovedPct.toFixed(2)}% of pixels moved`);
+check('...and only the ones near it', shovedPct < 12,
+  `${shovedPct.toFixed(2)}% — much more than this means the radius is reaching the whole bed`);
+
+// GONE. Caught part-way back rather than at rest, which is the only frame in
+// which "settles" is distinguishable from "snaps".
+scene.remove(marker);
+run(0.22, null);
+shot('Settling', 'The seal gone, 0.22s later. The plants are on their way back and past upright — '
+  + `springDamping ${CONFIG.grass.shove.springDamping} is under 1 on purpose, so they overshoot and `
+  + 'come back rather than stopping dead, which reads as rubber.', close);
+const midPct = diffPct(atRest, pixels(close));
+check('it is still visibly bent part-way through the recovery', midPct > 0.02,
+  `${midPct.toFixed(2)}% still displaced`);
+check('...but already less bent than at contact', midPct < shovedPct,
+  `${midPct.toFixed(2)}% vs ${shovedPct.toFixed(2)}% at contact`);
+
+// AND THAT IT ACTUALLY COMES BACK. A spring with the sign wrong, or a target
+// that never returns to zero, leaves the bed permanently leaning — which looks
+// exactly like a bed someone tuned that way.
+run(4, null);
+const returnedPct = diffPct(atRest, pixels(close));
+check('the bed returns to where it started', returnedPct < 0.02,
+  `${returnedPct.toFixed(3)}% of pixels still differ after 4s`);
 
 Object.assign(CONFIG.grass.sway, swayWas);
 applyGrassSettings();

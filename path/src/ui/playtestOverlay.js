@@ -93,6 +93,11 @@ export function initPlaytestOverlay() {
   window.addEventListener('keydown', (e) => {
     if (isTypingTarget(e.target) || e.repeat) return;
     if (e.key.toLowerCase() !== 'b') return;
+    // BARE B ONLY. A modified key is somebody else's binding — Shift+B puts a
+    // bait ball in the water (main.js) — and without this test the overlay
+    // toggled on the way past, so the one key that shows you the ball also
+    // covered it with a panel.
+    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
     toggle();
   });
 }

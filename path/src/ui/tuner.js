@@ -1,5 +1,5 @@
 import { CONFIG, TUNER_SCHEMA, DEFAULTS, saveTuningToStorage, loadTuningFromStorage, clearSavedTuning, importTuning, setTuningSaveErrorHandler, resetConfigToDefaults } from '../config.js';
-import { buildSectionedTunerGroups, buildExpandAllToggle, refreshTunerRows } from './tunerControls.js';
+import { buildSectionedTunerGroups, buildExpandAllToggle, buildTunerSearch, refreshTunerRows } from './tunerControls.js';
 import { refreshUpgradeTable, refreshTexturePanelRows } from './textures.js';
 import { isTypingTarget } from './typing.js';
 
@@ -77,6 +77,13 @@ export function initTuner(onChange) {
   groupsEl.appendChild(buildSectionedTunerGroups(
     TUNER_SCHEMA.filter((g) => !g.panel), SECTIONS, onChange, 'tuner',
   ));
+
+  // Above the expand/collapse row, because it is the faster of the two ways
+  // through 46 groups and the one you reach for first. Seven sections deep,
+  // "which family is the bloom knee filed under" is a guess you shouldn't have
+  // to make — type it and the group opens around it, still in its family.
+  const search = buildTunerSearch(groupsEl, { placeholder: 'Search sliders and paths…' });
+  panel.appendChild(search);
 
   const expandAll = document.createElement('div');
   expandAll.className = 'sv-t-expand-row';

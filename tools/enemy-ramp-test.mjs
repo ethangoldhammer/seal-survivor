@@ -32,8 +32,8 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
-import { CONFIG, difficultyRamp } from '../path/src/config.js';
-import { enemies, resetEnemies, removeEnemy, spawnNamed, updateSpawning } from '../path/src/entities/enemies.js';
+import { CONFIG, difficultyRamp, lateGameMul, chumHealRamp } from '../path/src/config.js';
+import { enemies, resetEnemies, removeEnemy, spawnNamed, updateSpawning, setSpawnLevel } from '../path/src/entities/enemies.js';
 import { resetWaves } from '../path/src/systems/waves.js';
 
 const scene = new THREE.Scene();
@@ -256,6 +256,7 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
         for (let i = 0; i < 60 / dt; i++) {
           t += dt;
           gameState.difficulty = t * dps;
+          setSpawnLevel(gameState.level);
           updateSpawning(dt, gameState, scene);
           // The hunt, as a hazard rate scaled by health — the seal's dps is
           // roughly flat, so a tough late creature survives proportionally
@@ -284,7 +285,20 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
     return out;
   }
 
-  const runs = [1, 2, 3].map(populationRun);
+  // NINE SEEDS, and the count is load-bearing rather than cautious. At three
+  // this census sat inside its own noise: adding a spawn source that puts an
+  // AVERAGE OF 0.1 FISH in the water at level 10 — and none at all past level
+  // 13 — moved the level-21 body-size share from 27% to 23%, straight across
+  // the 25% threshold below. Nothing about the roster had changed; a handful of
+  // extra draws twelve simulated minutes earlier had shifted the whole RNG
+  // stream, and every share after it landed somewhere else.
+  //
+  // That is the failure mode the seeding was supposed to remove and only half
+  // did: seeding makes a run REPRODUCIBLE, it does not make three of them
+  // REPRESENTATIVE. A census that flips on an unrelated change is worse than no
+  // census, because the next person to see it red will assume their change
+  // caused it. The whole file is about a minute either way.
+  const runs = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(populationRun);
   const mean = (m, f) => runs.reduce((s, r) => s + r[m][f], 0) / runs.length;
   const share = (m) => mean(m, 'agg') / Math.max(1, mean(m, 'tot'));
 
@@ -387,6 +401,186 @@ section('WHAT THE WATER IS MADE OF — aggressive share of the population');
   check('the water keeps trading up in body size after the mid-game',
     cls(11, 'mid') >= cls(4, 'mid'),
     `${(cls(4, 'mid') * 100).toFixed(0)}% mid-sized at level ${LEVEL_AT[4]} → ${(cls(11, 'mid') * 100).toFixed(0)}% at level ${LEVEL_AT[11]}`);
+}
+
+// ---------------------------------------------------------------------------
+// THE FIFTH AXIS — the one keyed to the player's LEVEL rather than the clock.
+//
+// Everything above this line measures a run against its own length. This block
+// measures it against the BUILD, which is the thing the late game was actually
+// losing to: a seal at level 25 has taken twenty-four cards, and the four
+// minutes of difficulty between it and a seal at level 20 is nowhere near the
+// gap between those two animals. See CONFIG.spawn.lateGame.
+//
+// Read the numbers here as a multiplier ON TOP of every table above — a late
+// creature carries its species' linear term, the roster-wide clock ramp, AND
+// this.
+const LG = CONFIG.spawn.lateGame ?? {};
+const LG_LEVELS = [20, 22, 25, 28, 32, 40];
+section('PAST LEVEL 20 — the surcharge on top of everything above');
+{
+  const axes = ['hp', 'damage', 'speed', 'seek', 'xp'];
+  console.log(`        from level ${LG.from} — nothing at or below it is touched`);
+  console.log('        axis   ' + LG_LEVELS.map((l) => `L${l}`.padStart(8)).join('') + '      caps at');
+  const capLevel = {};
+  for (const k of axes) {
+    const per = LG[k] ?? 0;
+    const max = LG[`${k}Max`] ?? Infinity;
+    capLevel[k] = per > 0 ? (LG.from ?? 0) + Math.log(max) / Math.log(1 + per) : Infinity;
+    console.log(`        ${k.padEnd(7)}` + LG_LEVELS.map((l) => `${lateGameMul(k, l).toFixed(2)}x`.padStart(8)).join('')
+      + `      L${capLevel[k].toFixed(0)}`);
+  }
+
+  // The threshold is a promise about the first two thirds of every run: a build
+  // that ends at 19 has to be bit-for-bit the build that ended at 19 before any
+  // of this existed. `from` itself pays nothing — the surcharge is on levels
+  // PAST it, so the card that takes you to 20 changes nothing.
+  check('the first twenty levels are untouched',
+    axes.every((k) => lateGameMul(k, LG.from) === 1 && lateGameMul(k, 1) === 1),
+    `every axis is exactly 1.00x at level ${LG.from}`);
+  check('...and level 21 is the first that costs anything',
+    lateGameMul('hp', LG.from + 1) > 1,
+    `hp ${lateGameMul('hp', LG.from + 1).toFixed(2)}x at level ${LG.from + 1}`);
+
+  // No cap may land inside the band a run actually plays. A run reaches about
+  // level 29 in fifteen minutes (tools/xp-economy-test.mjs), so a ceiling below
+  // that is a flat spot in exactly the stretch this block exists to steepen —
+  // the same argument the clock ramps' caps get at the top of this file.
+  check('no axis flattens inside a run that is still being played',
+    Math.min(...Object.values(capLevel)) > 29,
+    `earliest is ${Object.entries(capLevel).sort((a, b) => a[1] - b[1])[0][0]} at level ${Math.min(...Object.values(capLevel)).toFixed(0)}`);
+
+  // The same asymmetry guard the clock ramp gets, for the same reason: a run
+  // that makes creatures far tougher than it makes them dangerous is a run that
+  // ends in bullet sponges. Tighter here than the 40x allowed above, because
+  // this ramp is deliberately steep and rides on top of that one.
+  const ratio = lateGameMul('hp', 32) / lateGameMul('damage', 32);
+  check('the surcharge does not make the water spongier than it makes it deadly',
+    ratio <= 1.5, `hp ${lateGameMul('hp', 32).toFixed(2)}x against damage ${lateGameMul('damage', 32).toFixed(2)}x at level 32`);
+
+  // Speed is the one that can break the arena rather than merely unbalance it:
+  // combined with the clock ramp it must stay under the seal's own cruise, or
+  // there is nowhere to go and no reason to steer.
+  const topSpeed = (CONFIG.spawn.ramp.speedMax ?? 1) * (LG.speedMax ?? 1);
+  check('...and the water never simply outswims the seal',
+    topSpeed * CONFIG.enemies.fish.speed < CONFIG.player.maxSpeed,
+    `${(topSpeed * CONFIG.enemies.fish.speed).toFixed(1)} u/s at both caps against a seal at ${CONFIG.player.maxSpeed}`);
+}
+
+// ---------------------------------------------------------------------------
+section('...AND DOES IT REACH A REAL CREATURE?');
+{
+  // Spawned through the shipped spawn path at a FIXED difficulty with only the
+  // level moving, which is the only way to see the surcharge on its own — every
+  // other number in this file moves when the clock does. Same argument as the
+  // SEEKING section above: "the ramp reaches this creature" is a claim about
+  // spawnOne and cannot be checked against the config.
+  const D = 30; // difficulty held still — about six and a half minutes in
+  const born = (key, level) => {
+    setSpawnLevel(level);
+    resetEnemies(scene);
+    setSpawnLevel(level); // resetEnemies clears it — see the note on spawnLevel
+    spawnNamed(scene, key, D);
+    const e = enemies[0];
+    return e ? { hp: e.hp, damage: e.contactDamage, speed: e.speed, xp: e.xp, seek: e.towardPlayer ?? 0 } : null;
+  };
+
+  const SUBJECTS = ['fish', 'barracuda', 'shark'].filter((k) => CONFIG.enemies[k]);
+  console.log(`        at a fixed difficulty of ${D}, level moving alone  (hp / damage / xp)`);
+  console.log('        species     ' + LG_LEVELS.map((l) => `L${l}`.padStart(18)).join(''));
+  for (const k of SUBJECTS) {
+    const cells = LG_LEVELS.map((l) => {
+      const b = born(k, l);
+      return `${b.hp.toFixed(0)}/${b.damage.toFixed(1)}/${b.xp.toFixed(1)}`.padStart(18);
+    });
+    console.log(`        ${k.padEnd(12)}${cells.join('')}`);
+  }
+
+  for (const k of SUBJECTS) {
+    const a = born(k, LG.from);
+    const b = born(k, 28);
+    check(`${k}: level 28 is meaningfully harder than level 20 at the same minute`,
+      b.hp > a.hp * 1.8 && b.damage > a.damage * 1.7,
+      `hp x${(b.hp / a.hp).toFixed(2)}, damage x${(b.damage / a.damage).toFixed(2)}`);
+  }
+
+  // THE PACE CLAIM, and the reason the xp row is inside this block rather than
+  // in the xp curve. A creature that is 2.5x harder to kill for the same chum
+  // is a wall; the ladder holds only if what it drops keeps up with what it
+  // costs. Speed is excluded from "what it costs" deliberately — it makes a
+  // creature harder to CATCH, not slower to kill.
+  for (const k of SUBJECTS) {
+    const a = born(k, LG.from);
+    const b = born(k, 28);
+    check(`${k}: ...and its chum keeps up with its health`,
+      (b.xp / a.xp) >= (b.hp / a.hp),
+      `xp x${(b.xp / a.xp).toFixed(2)} against hp x${(b.hp / a.hp).toFixed(2)}`);
+  }
+
+  // The axis that was silently doing nothing for most of the roster the last
+  // time this file was written — see the SEEKING section. A level-keyed ramp
+  // that reached the hunters and not the schools would be the same bug again,
+  // and the schools are what the water is mostly made of.
+  const school = born('fish', 28);
+  const schoolBase = born('fish', LG.from);
+  check('the schools press harder for the level too, not just the hunters',
+    school.seek > schoolBase.seek * 1.5,
+    `towardPlayer ${schoolBase.seek.toFixed(2)} at level ${LG.from} → ${school.seek.toFixed(2)} at 28`);
+
+  const hunter = born('shark', 28);
+  const hunterBase = born('shark', LG.from);
+  check('...and a hunter turns harder for it',
+    hunter.speed >= hunterBase.speed * 0.9,
+    `a shark still spawns at ${hunter.speed.toFixed(1)} u/s`);
+
+  resetEnemies(scene);
+  setSpawnLevel(1);
+}
+
+// ---------------------------------------------------------------------------
+section('SUSTAIN — what a mouthful of chum is worth as the water fills up');
+{
+  // The other half of "the late game is too easy", and the half that is not a
+  // ramp at all: pickups.healFraction is a share of max HP, so one orb has
+  // always healed the same slice of the bar however big the bar got. What was
+  // never flat is how MANY orbs there are, and a flat per-orb heal against a
+  // rising orb count is a healing rate that climbs on its own with nothing in
+  // the tables saying it does. See CONFIG.pickups.healRamp.
+  //
+  // Keyed to the difficulty clock rather than the player level, unlike
+  // everything above — how much chum is in the water is a spawn-rate fact.
+  const hr = CONFIG.pickups.healRamp ?? {};
+  const heal = (m) => chumHealRamp(m * 60 * dps);
+  console.log('        minute ' + MINUTES.map((m) => `m${m}`.padStart(8)).join(''));
+  console.log('        per orb' + MINUTES.map((m) => `${(heal(m) * 100).toFixed(0)}%`.padStart(8)).join(''));
+  console.log(`        floor ${((hr.min ?? 1) * 100).toFixed(0)}% of pickups.healFraction, reached at minute `
+    + `${((hr.fullAt ?? 0) / dps / 60).toFixed(1)}`);
+
+  check('the opening is left alone',
+    heal(1) === 1 && heal(3) === 1,
+    `a full-value orb through minute ${((hr.from ?? 0) / dps / 60).toFixed(1)}`);
+  check('...and it never falls to nothing — chum still feeds the seal',
+    Math.min(...MINUTES.map(heal)) >= (hr.min ?? 1) && (hr.min ?? 1) >= 0.2,
+    `floors at ${((hr.min ?? 1) * 100).toFixed(0)}%`);
+  check('...falling the whole way, with no flat stretch mid-run',
+    heal(5) > heal(8) && heal(8) > heal(10) && heal(10) > heal(15),
+    MINUTES.map((m) => `m${m}:${(heal(m) * 100).toFixed(0)}%`).join(' '));
+
+  // THE POINT OF THE WHOLE BLOCK, stated as the comparison it is really about.
+  // Contact damage is per second and a late swarm stacks it; sustain has to
+  // lose ground against that or a late run cannot kill the player at all.
+  const dmgAt = (m) => at(CONFIG.enemies.fish, 'damage', m);
+  const sustain = (m) => heal(m) / dmgAt(m);
+  check('sustain loses ground to the water, which is the whole point',
+    sustain(15) < sustain(5) * 0.4,
+    `heal-per-orb against fish dps: x${(sustain(15) / sustain(5)).toFixed(2)} from minute 5 to 15`);
+
+  // The rescue is not on this ramp and must never be. A pity chunk that quietly
+  // stopped rescuing is the one heal in the game that has no business having a
+  // hidden curve on it — see the note in config.js.
+  check('the boss and pity chunks are untouched by it',
+    (CONFIG.chumChunk?.pity?.healMin ?? 0) >= 0.4 && CONFIG.chumChunk?.healMax >= 0.5,
+    `a pity chunk still rolls at least ${((CONFIG.chumChunk?.pity?.healMin ?? 0) * 100).toFixed(0)}% of max HP`);
 }
 
 // ---------------------------------------------------------------------------

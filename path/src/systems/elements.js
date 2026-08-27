@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
-import { setAssetBlendTint } from '../assets.js';
+import { setAssetBlendTint, setAssetBands } from '../assets.js';
 import { player } from '../entities/player.js';
 import { skyLight } from './daylight.js';
 import { setNoiseGlow, setNoiseGlowPulse, clearNoiseGlow } from './noiseShader.js';
@@ -11,6 +11,7 @@ import {
   biolumShockLevelStats, biolumVenomLevelStats,
   biolumChillLevelStats, biolumInfectionLevelStats,
 } from '../levelStats.js';
+import { FLIPPER_SIDES, finElementsIn } from '../flipperSide.js';
 
 // ============================================================================
 // GLOW UP! — the seal's bioluminescence, and the only ELEMENT in the game.
@@ -261,7 +262,49 @@ function fadeSurge(dt) {
 
 /** How far the element has been levelled — 0 when Glow Up! was never taken. */
 function level() {
-  return player.stats?.biolumLevel ?? 0;
+  return levelOf(activeElement());
+}
+
+/**
+ * WHICH ELEMENT EACH FLIPPER IS CARRYING — `{ left, right }`, either side null.
+ *
+ * The scan itself is in flipperSide.js (a leaf module, so entities/player.js can
+ * reach it without importing this file, which imports player.js). This is the
+ * live-run door onto it, so every caller in the game asks the same way it asks
+ * activeElement().
+ */
+export function finElements(picks = player.upgrades) {
+  return finElementsIn(picks);
+}
+
+/** The element on one fin, or null. `side` is 'left' or 'right'. */
+export function finElement(side, picks = player.upgrades) {
+  return finElements(picks)[side] ?? null;
+}
+
+/**
+ * HOW DEEP `id` IS IN THIS BUILD, wherever it came from.
+ *
+ * One element can now reach the water by three routes — the run's Glow Up!, the
+ * left flipper, the right flipper — and every curve in this file is a function
+ * of a level. Before per-flipper elements there was one source and `level()`
+ * could read one field; now "what level is the venom" is a question about the
+ * whole build rather than about one card.
+ *
+ * THE MAX, not the sum. Two sources of the same element are two places it is
+ * coming from, not a double-strength version of it: summing would make a fin
+ * that happened to roll the run's own element quietly worth twice what a fin
+ * that rolled a different one is, which is the opposite of what the roll is for.
+ */
+export function levelOf(id) {
+  if (!id) return 0;
+  const s = player.stats ?? {};
+  let lv = activeElement() === id ? (s.biolumLevel ?? 0) : 0;
+  const fins = finElements();
+  for (const side of FLIPPER_SIDES) {
+    if (fins[side] === id) lv = Math.max(lv, s[`${side}FinElementLevel`] ?? 0);
+  }
+  return lv;
 }
 
 /**
@@ -318,9 +361,17 @@ export function elementHitEvent(id = activeElement()) {
  *
  * Returns the bonus damage dealt, so the caller can attribute it.
  */
-export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks = {}, share = 1, carrier = null) {
-  if (!activeElement() || !cfg().enabled || !enemy) return 0;
-  const lv = level();
+export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks = {}, share = 1, carrier = null, opts = {}) {
+  // WHICH ELEMENT IS LANDING. `opts.element` is how a pellet says it is carrying
+  // something the RUN is not — a flipper's own element, rolled onto that fin by
+  // Flippers Up!. Defaulting to the run's element leaves every existing caller
+  // exactly as it was, which is the point: the fin's element is a second packet
+  // beside the run's, never a replacement for it. The same reasoning `b.chill`
+  // is given in combat.js — a card must not overwrite the element the player is
+  // already playing.
+  const id = opts.element ?? activeElement();
+  if (!id || !cfg().enabled || !enemy) return 0;
+  const lv = levelOf(id);
   if (lv <= 0) return 0;
 
   // NO DAYLIGHT GATE, and no night bonus either. `share` is now only what the
@@ -340,11 +391,11 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
   // infection TICKS, which is how an ability could read as 39 damage across
   // eight runs while quietly adding a third of every pellet's damage.
   hooks.onElementDamage?.(enemy, bonus);
-  const e = elementCfg();
+  const e = elementCfg(id);
   const x = enemy.mesh.position.x;
   const y = enemy.mesh.position.y;
 
-  switch (activeElement()) {
+  switch (id) {
     case 'shock': applyShock(scene, enemy, bonus, enemiesList, hooks, share); break;
     case 'venom': applyVenom(enemy, share); break;
     case 'chill': applyChill(enemy, share, hooks, x, y); break;
@@ -358,7 +409,7 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
     default: break;
   }
 
-  hooks.onElementHit?.(x, y, activeElement(), e?.color ?? 0xffffff);
+  hooks.onElementHit?.(x, y, id, e?.color ?? 0xffffff);
   return bonus;
 }
 
@@ -387,7 +438,9 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
 function applyShock(scene, from, packet, enemiesList, hooks, share) {
   const e = elementCfg('shock');
   if (!e || !enemiesList) return;
-  const lv = level();
+  // levelOf and not level(): this shock may be coming off a flipper rather than
+  // off Glow Up!, and the chain has to be as long as THAT source is deep.
+  const lv = levelOf('shock');
   // levelStats.js owns the curve AND the cap — shared with the tip.
   const chance = biolumShockLevelStats(lv).biolumShockChance;
   if (Math.random() > chance * share) return;
@@ -549,7 +602,7 @@ export function chillEnemy(enemy, amount, duration, freezeFor, hooks, x, y) {
 function applyChill(enemy, share, hooks, x, y) {
   const e = elementCfg('chill');
   if (!e) return;
-  const lv = level();
+  const lv = levelOf('chill');
   const per = biolumChillLevelStats(lv).biolumChillSlow * share;
   const dur = biolumChillLevelStats(lv).biolumChillFreeze;
   chillEnemy(enemy, per, e.duration ?? 2.5, dur, hooks, x, y);
@@ -580,7 +633,7 @@ export function thawChilled(dt, enemiesList) {
 function applyInfection(enemy, share, generation) {
   const e = elementCfg('infection');
   if (!e) return;
-  const lv = level();
+  const lv = levelOf('infection');
   const falloff = (e.hopFalloff ?? 0.8) ** Math.max(0, generation);
   // The level curve from levelStats.js; `share` (which source landed the hit)
   // and `falloff` (how many hops from the first host) are situational and stay
@@ -641,7 +694,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
   // Also before them, and for the third version of that reason: this one has
   // to be able to take the colour OFF the shot, which is exactly what it is
   // asked to do when the element is gone or the ability is switched off.
-  updateShotTint();
+  updateShotTint(dt);
 
   if (!cfg().enabled) return;
 
@@ -677,7 +730,7 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
       const c = elementCfg('venom');
       if (e.venomTick <= 0) {
         e.venomTick = c?.tick ?? 0.35;
-        const lv = level();
+        const lv = levelOf('venom');
         // The curve from levelStats.js; the stack count is this fish's, not
         // the card's, so it stays here.
         const dps = biolumVenomLevelStats(lv, player.stats).biolumVenomDps
@@ -730,7 +783,7 @@ function creep(dt, host, enemiesList, hooks) {
   if (nextGen > (c.generations ?? 4)) return;
   if (infectedCount(enemiesList) >= (c.maxHosts ?? 14)) return;
 
-  const lv = level();
+  const lv = levelOf('infection');
   const range = biolumInfectionLevelStats(lv).biolumInfectSpread;
   const range2 = range * range;
 
@@ -759,7 +812,7 @@ function creep(dt, host, enemiesList, hooks) {
 function drainBursts(scene, enemiesList, hooks) {
   if (!pendingBursts.length) return;
   const c = elementCfg('infection');
-  const lv = level();
+  const lv = levelOf('infection');
   const radius = (c?.burstRange ?? 4.5) + (c?.burstRangePerLevel ?? 0) * (lv - 1);
   const damage = biolumInfectionLevelStats(lv, player.stats).biolumInfectBurst;
   const r2 = radius * radius;
@@ -1111,7 +1164,11 @@ export function updateElementSkin(body, rawDt = 0) {
 // or midnight, where the value is pinned.
 function shotMix() {
   const s = cfg().shot;
-  if (!activeElement() || s?.enabled === false || !cfg().enabled || level() <= 0) return 0;
+  if (s?.enabled === false || !cfg().enabled) return 0;
+  // The PALETTE and not activeElement(), so a run carrying nothing but a lit
+  // flipper still colours its ammunition. It reduces to the old test on a build
+  // with no flippers up, which is every build this shipped with.
+  if (!elementPalette().ids.length) return 0;
   const amount = Math.max(0, Math.min(1, s?.amount ?? 1));
   return Math.round(elementGlow() * amount * 32) / 32;
 }
@@ -1148,9 +1205,62 @@ export function elementTrailMix() {
   return shotMix() * Math.max(0, Math.min(1, s?.trailAmount ?? 1));
 }
 
-function updateShotTint() {
+/**
+ * EVERY ELEMENT IN PLAY, in the order they should run through the noise —
+ * `{ ids, colors }`, both possibly empty.
+ *
+ * Left flipper, right flipper, then the run's own Glow Up!. That order is the
+ * one the player can name: the fins are two things they can point at, and the
+ * seal's own colour is the constant behind them. Deduplicated, because a fin
+ * that rolled the element the run is already carrying is one colour and not
+ * two — the same reason levelOf takes a max rather than a sum.
+ *
+ * The single door onto "what colours is this build", used by the pellet bands,
+ * the fin lights and the muzzle flash, so all three can never disagree about
+ * what the seal is currently throwing.
+ */
+export function elementPalette() {
+  const fins = finElements();
+  const ids = [];
+  for (const side of FLIPPER_SIDES) {
+    const id = fins[side];
+    if (id && levelOf(id) > 0 && !ids.includes(id)) ids.push(id);
+  }
+  const run = activeElement();
+  if (run && levelOf(run) > 0 && !ids.includes(run)) ids.push(run);
+  return { ids, colors: ids.map((id) => elementColor(id)) };
+}
+
+function updateShotTint(dt = 0) {
+  const { colors } = elementPalette();
+  const b = CONFIG.elementBands ?? {};
+
+  // THE FLAT TINT IS STILL THE BASE, and the field is a modulation ON it rather
+  // than a replacement for it. Two reasons, and neither is compatibility for
+  // its own sake:
+  //
+  //   The stone has to be the right colour when it is ALONE. One pellet in the
+  //   air samples one point of the field, so with the tint gone a lone shot
+  //   would be whatever hue the noise happened to be at that spot — the effect
+  //   only resolves into bands in a crowd, and the gun has to read at both ends.
+  //
+  //   The material colour is the only part of this a headless harness can see.
+  //   The shader runs on a GPU that tools/elements-test.mjs does not have, so a
+  //   pellet tinted only in GLSL is a pellet nothing can assert anything about.
+  //
+  // colors[0] and not elementColor(): the first entry is the left flipper's when
+  // there is one, so a run with no Glow Up! at all still colours its ammunition.
   const mix = shotMix();
-  setAssetBlendTint('bullet', mix > 0 ? elementColor() : null, mix);
+  setAssetBlendTint('bullet', mix > 0 ? colors[0] : null, mix);
+
+  // ...and the bands on top. With ONE colour in the palette the field and the
+  // tint are the same hue, so what is left is `gain` — brightness ribbons
+  // travelling through the stream, which is the single-element read. A second
+  // and third colour are what turn those ribbons into alternating hues.
+  const bandAmt = colors.length
+    ? Math.min(1, (b.amount ?? 0.72) + (b.amountPerExtra ?? 0) * (colors.length - 1)) * elementGlow()
+    : 0;
+  setAssetBands('bullet', { colors, amount: bandAmt, dt });
 }
 
 /**

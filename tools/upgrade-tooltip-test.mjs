@@ -71,7 +71,15 @@ globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.Image = dom.window.Image;
 globalThis.CustomEvent = dom.window.CustomEvent;
 globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
-globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
+// SYNCHRONOUS, and that is a decision rather than a shortcut.
+//
+// The level-up menu measures the hand, waits ONE FRAME, and then tiles the comb
+// against a page that has settled — the menu stays locked until it has. jsdom
+// has no compositor and no frames: deferring here means every deal in this file
+// returns a menu that is still locked, so every hover and every pick is refused
+// and reads as this file's subject being broken. Running the callback now is
+// what "the next frame" means in a document that never paints.
+globalThis.requestAnimationFrame = (fn) => { fn(Date.now()); return 0; };
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 // Not copying window.performance: jsdom's delegates to the global one and
 // swapping it in recurses until the stack blows.
@@ -109,6 +117,13 @@ const warnings = [];
 console.warn = (...a) => warnings.push(a.map(String).join(' '));
 
 const { CONFIG } = await import('../path/src/config.js');
+// THE ARRIVAL IS OFF IN HERE. The level-up hand is thrown into its cells now
+// and the menu stays locked until the last card lands — which is right on
+// screen and wrong in a harness that deals a hand and acts on it in the same
+// tick: every hover and every pick would be refused by the lock, and read as
+// this file's subject being broken. The screen has a test of its own, npm run
+// test:comb, and it is the only place that should be driving it.
+CONFIG.upgradeSlam.enabled = false;
 const { initFeedback } = await import('../path/src/systems/feedback.js');
 const { measure, measureTotal, phraseAll, sentenceCase } = await import('../path/src/upgradeText.js');
 const { player } = await import('../path/src/entities/player.js');

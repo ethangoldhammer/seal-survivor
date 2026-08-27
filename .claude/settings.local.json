@@ -45,7 +45,8 @@
       "Bash(cp \"/Users/ethangoldhammer/Documents/_DesignSystems/SealSurvivor/RIV/seal_survivor.riv\" path/src/ui/seal_survivor.riv && ls -l path/src/ui/seal_survivor.riv)",
       "Bash(node -e \"console.log\\(typeof navigator, typeof navigator?.getGamepads\\)\")",
       "Bash(npm run *)",
-      "WebFetch(domain:claude.ai)"
+      "WebFetch(domain:claude.ai)",
+      "Bash(LIVE=/Users/ethangoldhammer/.claude/projects/-Users-ethangoldhammer-Projects-seal-survivor/c3323b3b-0282-4f66-9573-1855b96dcd57/tool-results/artifact-6d5021ec-1787681697-93d1.html; ls -l \"$LIVE\" playtest/atlas.html; echo \"--- live head ---\"; head -c 600 \"$LIVE\"; echo; echo \"--- disk head ---\"; head -c 600 playtest/atlas.html; echo; echo \"--- structural diff \\(tags/script-boundaries only\\) ---\"; grep -o '<[a-zA-Z][a-zA-Z0-9-]*' \"$LIVE\" | sort | uniq -c > /tmp/live.tags; grep -o '<[a-zA-Z][a-zA-Z0-9-]*' playtest/atlas.html | sort | uniq -c > /tmp/disk.tags; diff /tmp/live.tags /tmp/disk.tags | head -40)"
     ]
   }
 }

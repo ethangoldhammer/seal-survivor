@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
+import { rollBiolumSkinVariant } from './biolumSkin.js';
+import { setOutlineVariant } from './outlines.js';
 import { bounds } from '../arena.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { createAnimationController } from './animation.js';
@@ -198,6 +200,11 @@ export function spawnSeagull(scene, enemiesList) {
   // — the two rotations must not compound on one object.
   const container = new THREE.Group();
   const visual = createVisual('seagull');
+  // The bomber's own look, from skins.csv, exactly as a spawned creature gets
+  // one — body and rim from a single row. The seagull is built here rather
+  // than through spawnOne, so the roll has to be made here too or the whole
+  // flock comes out wearing the preset and the table looks broken.
+  setOutlineVariant(visual, 'seagull', rollBiolumSkinVariant(visual)?.__rim ?? null);
   container.add(visual);
   container.position.set(
     fromLeft ? bounds.left - OFFSCREEN_MARGIN : bounds.right + OFFSCREEN_MARGIN,

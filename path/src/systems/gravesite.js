@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { seabedTopY } from '../arena.js';
+import { seabedTopY, SEABED_Z } from '../arena.js';
 import { createVisual, hasModel } from '../assets.js';
 import { emit } from '../entities/particles.js';
 import { makeEpitaph, revealEpitaph, disposeEpitaph } from './epitaph.js';
@@ -66,6 +66,77 @@ function cfg() {
   return CONFIG.gravesite ?? {};
 }
 
+// --- depth ------------------------------------------------------------------
+//
+// THE STONE THAT IS FALLING RIGHT NOW STANDS IN FRONT OF THE PLANTS, and every
+// stone after that session may stand anywhere in the slab.
+//
+// The yard used to sit at one typed depth, CONFIG.gravesite.z, which put it in
+// the MIDDLE of the plant bed — systems/seabedScatter.js scatters through
+// CONFIG.seabed.depth, -5.5 to -1.5, so roughly half the bed is in front of
+// -3.2 and a kelp can stand between the player and the name of the seal that
+// just died. That is the one inscription in the game that has to be readable at
+// the moment it appears: the run has ended, the water has stopped, and the
+// whole beat exists to be looked at. A frond across it is not scenery, it is
+// the death being illegible.
+//
+// It costs nothing to fix, because the camera is ORTHOGRAPHIC (see world.js).
+// Depth here is occlusion order and nothing else — a stone moved two units
+// forward is not one pixel bigger and does not move on screen, which is also
+// why the label can go on projecting it as if it were at z = 0.
+//
+// Older stones are the opposite case. They are scenery by then, and a row of
+// six all standing at exactly the front of the bed reads as a fence; one with a
+// frond across its shoulder reads as a floor that has grown over it. So a
+// resting depth is rolled ONCE, at death, and stored with the rest of the
+// inscription — it is decided the same way `lead` is, and for the same reason:
+// a stone is carved and then it is carved, and a headstone that changed which
+// plants covered it between sessions would be the one thing on the seabed that
+// keeps moving.
+
+/**
+ * The lane the newest stone drops into: in front of the whole plant bed.
+ *
+ * DERIVED FROM THE BED rather than typed as a second number here. The bed's
+ * front edge and the grave's depth are the same fact seen from two sides, and
+ * the failure of writing it twice is silent — somebody drags the bed forward in
+ * the tuner, every future drop is behind it again, and nothing reports it. Same
+ * argument as SEABED_Z, which arena.js owns for arena.js and the spawner both.
+ */
+function dropZ() {
+  const bed = CONFIG.seabed?.depth;
+  const front = Array.isArray(bed) && Number.isFinite(Number(bed[1])) ? Number(bed[1]) : -1.5;
+  // The clearance is over the bed's ROOTS. A plant is a solid extrusion with
+  // thickness and a yaw, so its geometry reaches in front of the point it is
+  // planted at — see the bed panel in tools/looks/graves.js, which measures how
+  // far and is the only thing that can.
+  const z = front + (cfg().dropClear ?? 0.5);
+  // Never in front of the play plane. The stones are scenery on the far side of
+  // the fight, and a marker the seal can be BEHIND is a marker in the way.
+  return Math.min(z, -0.2);
+}
+
+/**
+ * Where a stone stands once it is no longer the newest — rolled at death and
+ * then kept. Anywhere in the visible slab: in front of the bed, among it, or
+ * back against the floor strip.
+ */
+function rollRestZ() {
+  const c = cfg();
+  const span = Array.isArray(c.restZ) ? c.restZ : [-3.8, -1.2];
+  const a = Number(span[0]);
+  const b = Number(span[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return c.z ?? -3.2;
+  // Clamped against the two planes that would make the stone disappear rather
+  // than move it: the seabed strip is DRAWN at SEABED_Z, so anything behind it
+  // is hidden by the floor, and a name nobody can find is worse than a name
+  // behind a plant.
+  const lo = Math.max(Math.min(a, b), SEABED_Z + 0.2);
+  const hi = Math.min(Math.max(a, b), -0.2);
+  if (!(hi > lo)) return Math.min(Math.max(c.z ?? -3.2, SEABED_Z + 0.2), -0.2);
+  return lo + Math.random() * (hi - lo);
+}
+
 // --- recording --------------------------------------------------------------
 
 /**
@@ -77,10 +148,16 @@ function cfg() {
  * that is guaranteed to be on the floor rather than in mid-water.
  *
  * @param {object} rec
- *   x, z   world position of the body at rest. `y` is not taken: the stone
- *          stands on the seabed, which is a fact about the floor and not about
- *          the corpse, and a stone seated from a body that settled a hair proud
- *          of the bed would float by exactly that hair.
+ *   x      world x of the body at rest. `y` is not taken: the stone stands on
+ *          the seabed, which is a fact about the floor and not about the
+ *          corpse, and a stone seated from a body that settled a hair proud of
+ *          the bed would float by exactly that hair.
+ *   z      OPTIONAL, and not the death position — depth is not something a body
+ *          in a side view has an opinion about. Left out, which is what the
+ *          game does, the stone drops in front of the plant bed and rolls the
+ *          depth it will stand at in later sessions; see the depth block above.
+ *          Passed, it pins BOTH, which is what a harness or a look page wants
+ *          when it is photographing one stone at one depth.
  *   name   the seal's name at the time of death. Banked rather than read later,
  *          because the player is about to be offered a re-roll and the stone
  *          must keep the name that actually played the run.
@@ -96,7 +173,12 @@ export function recordGrave({ x, z, name, cause, lead = '', onEtched = null }) {
     // either — dying twice as the same seal is the normal case.
     id: nextId += 1,
     x: Number.isFinite(x) ? x : 0,
-    z: Number.isFinite(z) ? z : (c.z ?? -3.2),
+    // Where it stands TODAY: clear of the plants, because it is about to be
+    // read. An explicit z pins it instead.
+    z: Number.isFinite(z) ? z : dropZ(),
+    // ...and where it stands from the next session on. Rolled here and stored
+    // with the inscription, never re-rolled — see the depth block above.
+    restZ: Number.isFinite(z) ? z : rollRestZ(),
     name: String(name ?? '').trim() || 'A SEAL',
     cause: String(cause ?? '').trim(),
     // The connector, rolled once at death from epitaphs.csv and banked with the
@@ -145,11 +227,18 @@ export function restoreGraves() {
   const c = cfg();
   let n = 0;
   for (const g of loadGraveyard()) {
+    // The depth it was given at death, kept. A record from before the yard had
+    // one — or one somebody edited — rolls now rather than falling back to a
+    // single number, which would stand every old stone in one line. Rolled once
+    // here and written to both fields, so the next save keeps this stone where
+    // this session put it rather than rolling it again.
+    const restZ = Number.isFinite(g.z) ? g.z : rollRestZ();
     graves.push({
       onEtched: null,
       id: nextId += 1,
       x: Number.isFinite(g.x) ? g.x : 0,
-      z: Number.isFinite(g.z) ? g.z : (c.z ?? -3.2),
+      z: restZ,
+      restZ,
       name: g.name,
       cause: g.cause ?? '',
       lead: g.lead ?? '',
@@ -634,8 +723,9 @@ export function reseatGraves() {
 /**
  * The stone the seal is standing over, or null.
  *
- * HORIZONTAL DISTANCE ONLY. The graveyard sits on the floor at z = -3.2 and the
- * seal swims the z = 0 plane, so a true distance is never smaller than that gap
+ * HORIZONTAL DISTANCE ONLY. The graveyard sits on the floor a couple of units
+ * back and the seal swims the z = 0 plane, so a true distance is never smaller
+ * than that gap
  * and every radius would have to be written around a constant that has nothing
  * to do with the question. Depth is not a thing the player can steer in a side
  * view; x is the whole of "am I over it".

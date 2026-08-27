@@ -1,0 +1,78 @@
+# ============================================================================
+# PACKAGING FOR STEAM.
+#
+# THE TARGET IS `dir`, NOT AN INSTALLER — on every platform, and that is the
+# single most important line in this file. SteamPipe uploads a DIRECTORY of
+# files and Steam installs them itself; handing it an NSIS installer or a DMG
+# would ship the player an installer they then have to run, inside a game they
+# already installed. Depots are plain trees.
+#
+# So there is no nsis, dmg, appimage or deb block here on purpose, and adding
+# one would not be an improvement.
+#
+# WHAT GOES WHERE. electron/serve.js reads the built game from
+# `process.resourcesPath/dist` when packaged, so dist-desktop is copied in as
+# `dist` — the rename is deliberate and those two lines have to agree. It is
+# extraResources rather than part of the asar because ~100MB of models and audio
+# in an archive buys nothing: they are already compressed, and Steam wants to
+# delta-patch individual files between builds rather than re-download one
+# enormous blob every time a model changes.
+# ============================================================================
+
+appId: com.ethangoldhammer.sealsurvivor
+productName: Seal Survivor
+# Matches capacitor.config.json's appId so the desktop and phone builds are
+# recognisably the same product.
+
+directories:
+  output: release
+  buildResources: build
+
+# The shell only. path/src is not here because it is already compiled into
+# dist-desktop by vite — shipping the sources as well would be shipping the game
+# twice.
+files:
+  - electron/**/*
+  - package.json
+
+extraResources:
+  - from: dist-desktop
+    to: dist
+
+# steamworks.js is a NATIVE module. Anything with a .node binary has to live
+# outside the asar or it cannot be dlopen'd at runtime — the failure is a
+# require that throws at launch, which electron/steam.js catches and turns into
+# "Steam unavailable", so it would present as achievements silently never
+# firing rather than as a crash. Unpacked, it loads.
+asarUnpack:
+  - node_modules/steamworks.js/**
+
+mac:
+  target:
+    - target: dir
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.games
+  # SIGNING AND NOTARIZATION ARE NOT CONFIGURED HERE and cannot be until there
+  # are credentials. A macOS Steam depot must contain a signed, notarized and
+  # stapled .app or Gatekeeper refuses to launch it on any machine but this one
+  # — the failure is silent for the developer and total for everybody else.
+  # See design/STEAM.md.
+
+win:
+  target:
+    - target: dir
+      arch:
+        - x64
+
+linux:
+  # The Steam Deck runs this through Proton if it is a Windows depot, or
+  # natively from a Linux depot. A native depot avoids needing WebView2-style
+  # runtime assumptions inside the prefix, which is the whole reason Electron
+  # was chosen over Tauri here.
+  target:
+    - target: dir
+      arch:
+        - x64
+  category: Game

@@ -19,7 +19,7 @@
 // index being wrong.
 // ---------------------------------------------------------------------------
 
-import { blueNoiseBand, planBed, bedSpan } from '../path/src/systems/seabedScatter.js';
+import { blueNoiseBand, planBed, bedSpan, plantWorldZ } from '../path/src/systems/seabedScatter.js';
 import { SEABED_PROPS } from '../path/src/seabedProps.js';
 import { CONFIG, DEFAULTS } from '../path/src/config.js';
 
@@ -226,6 +226,70 @@ console.log('\nbed geometry');
   ok(tris < 150000, 'the bed costs less than a third of the creature roster',
     `${tris.toLocaleString()} triangles`);
   ok(variants <= 19, 'one draw call per variant, not per plant', `${variants} draws for ${bed.length} plants`);
+}
+
+console.log('\nthe foreground layer — a few plants on the near side of the seal');
+{
+  const d = DEFAULTS.seabed;
+  const bed = planBed(d, { width: 86, centre: 0 });
+  const front = bed.filter((p) => p.front);
+
+  ok(front.length > 0, 'some plants step in front of the play plane', `${front.length} of ${bed.length}`);
+  // A readability number as much as a look one: every one of these occludes the
+  // seal on its way past, and a bed where most of them do is a bed you cannot
+  // fight in.
+  ok(front.length / bed.length < 0.3, 'but only a few',
+    `${((front.length / bed.length) * 100).toFixed(0)}% of the bed`);
+  // Roughly the share that was asked for. Loose bounds on purpose — it is a
+  // per-plant coin flip over 80-odd plants, so a tight assertion here would be
+  // a flake rather than a check.
+  const want = d.front.share;
+  ok(Math.abs(front.length / bed.length - want) < want,
+    'the share is about what was configured',
+    `${(front.length / bed.length).toFixed(3)} against ${want}`);
+
+  // THE SIGN IS THE WHOLE FEATURE. The play plane is z=0 (entities/player.js
+  // seats the seal there), so "in front" is not a matter of degree.
+  const zFront = front.map((p) => plantWorldZ(p, d));
+  const zBack = bed.filter((p) => !p.front).map((p) => plantWorldZ(p, d));
+  ok(zFront.every((z) => z > 0), 'every one of them is genuinely in front of the seal',
+    `nearest ${Math.min(...zFront).toFixed(2)}, furthest ${Math.max(...zFront).toFixed(2)}`);
+  ok(zBack.every((z) => z < 0), 'and the rest are all still behind it',
+    `${Math.min(...zBack).toFixed(2)} to ${Math.max(...zBack).toFixed(2)}`);
+  // `gap` is a FLOOR, not a target: the band's darts are uniform inside it, so
+  // with a dozen front plants none of them lands exactly on the back edge. What
+  // is guaranteed is that nothing gets in front of it.
+  ok(Math.min(...zFront) >= d.front.gap - 1e-9, 'none of them comes closer than the configured gap',
+    `nearest ${Math.min(...zFront).toFixed(2)} against a gap of ${d.front.gap}`);
+
+  // ANCHORED ON THE BAND'S BACK EDGE, which is the thing that survives a
+  // retune. Anchored on its centre, a band thick enough would put its near half
+  // back behind the seal — and silently, since nothing else would change.
+  const thick = { ...d, depth: [-14, -1.5] };
+  const thickFront = planBed(thick, { width: 86, centre: 0 })
+    .filter((p) => p.front).map((p) => plantWorldZ(p, thick));
+  ok(thickFront.every((z) => z > 0), 'a much thicker band still lands the whole layer in front',
+    `depth 12.5 units deep, front layer ${Math.min(...thickFront).toFixed(2)} to ${Math.max(...thickFront).toFixed(2)}`);
+
+  // TOGGLING IT MUST NOT RESHUFFLE THE BED. The front roll runs on its own RNG
+  // stream for exactly this reason: as another rand() in the placement loop it
+  // would shift every following plant's species and size, so turning the
+  // foreground on or off would redraw the whole seabed.
+  const without = planBed({ ...d, front: { ...d.front, share: 0 } }, { width: 86, centre: 0 });
+  const same = without.length === bed.length && without.every((p, i) =>
+    p.variant === bed[i].variant && p.x === bed[i].x && p.z === bed[i].z
+    && p.scale === bed[i].scale && p.yaw === bed[i].yaw);
+  ok(same, 'turning it off leaves every other plant exactly where it was',
+    'the roll runs on its own seeded stream');
+  ok(without.every((p) => !p.front), 'share 0 puts nothing in front');
+  const all = planBed({ ...d, front: { ...d.front, share: 1 } }, { width: 86, centre: 0 });
+  ok(all.every((p) => p.front), 'share 1 puts everything in front');
+
+  // Same seed, same foreground. The bed is rebuilt on every resize and every
+  // tuner move of the floor, and a foreground layer that reshuffled on a window
+  // drag would read as the scenery glitching.
+  const again = planBed(d, { width: 86, centre: 0 });
+  ok(again.every((p, i) => p.front === bed[i].front), 'the same seed picks the same plants');
 }
 
 console.log(failures ? `\n${failures} failed\n` : '\nall passed\n');

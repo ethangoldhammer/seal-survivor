@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { FILTER_OPTIONS, bloomEnabled, setSetting, screenFilter } from './settings.js';
 import { feedbackState } from './feedback.js';
 import { suffocationCrt } from './oxygenFx.js';
+import { lowHealthVignette, lowHealthFxState } from './lowHealthFx.js';
 import { cineLens } from './cineCamera.js';
 import { gooLayer, activeGooGroups, gooGroupInfo, setGooDivisor } from '../entities/particles.js';
 import { bounds, WAVE, sea, waveTimeNow } from '../arena.js';
@@ -76,6 +77,19 @@ const fragmentShader = /* glsl */ `
   uniform float uMask;
   uniform float uJitter;
   uniform float uBleed;
+
+  // --- near death -----------------------------------------------------------
+  // The frame closing in and going bloody while the health bar is in its last
+  // sliver. Zero for almost every frame of almost every run, so the branch
+  // below is a uniform comparison and nothing else. See systems/lowHealthFx.js
+  // for the ramp and the heartbeat that drive these.
+  uniform float uHurt;
+  uniform vec3  uHurtColor;
+  uniform float uHurtKeep;
+  uniform float uHurtDrain;
+  uniform float uHurtGlow;
+  uniform float uHurtInner;
+  uniform float uHurtOuter;
 
   // --- the cinematic lens ---------------------------------------------------
   // All three are gated to zero when the cinematic camera is off, and the
@@ -402,6 +416,43 @@ const fragmentShader = /* glsl */ `
     // a sharp lane that is also the only bright thing on screen is not.
     if (uPathVignette > 0.0) {
       color *= 1.0 - uPathVignette * lane;
+    }
+
+    // ------------------------------------------------------------------
+    // NEAR DEATH. Last of the three things that darken the edge of the frame,
+    // and unlike the other two it is a TINT rather than a multiply — the
+    // others are the lens, this is blood in the water.
+    //
+    // NOT ASPECT-CORRECTED, on purpose. A circular vignette on a 21:9 monitor
+    // is a porthole: it eats the top and bottom of the frame long before it
+    // touches the sides, so the same numbers read completely differently on a
+    // phone held upright and on an ultrawide. Working in raw uv makes the band
+    // an ellipse that follows the frame — r is 1 at the middle of any edge and
+    // 1.41 in any corner, whatever shape the screen is.
+    if (uHurt > 0.0) {
+      float r = length((uv - 0.5) * 2.0);
+      float m = smoothstep(uHurtInner, uHurtOuter, r) * uHurt;
+      float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+
+      // THE PICTURE FIRST, and it is only ever dimmed and drained — never
+      // replaced. Every silhouette and every highlight stays exactly where it
+      // was, at uHurtKeep of its brightness with most of its own colour gone.
+      // That is the difference between a warning and a blindfold: this runs
+      // over a third of the screen in the one situation where the player most
+      // needs to see the thing about to finish them.
+      vec3 drained = mix(color, vec3(lum), m * uHurtDrain) * mix(1.0, uHurtKeep, m);
+
+      // ...then blood laid over it, ADDED rather than mixed toward.
+      //
+      // The mix was the obvious way to write this and it is close to invisible
+      // in this game. A mix can only ever move a pixel toward the tint, and
+      // this ocean is a screen of near-black water: at 5% luminance there is
+      // nothing there to redirect, so the corners went a slightly warmer black
+      // and the whole effect could be missed entirely on the frames that
+      // matter. Adding light is the only thing that reads on black, and it is
+      // also the truer picture — blood in the water is something ARRIVING,
+      // not the water changing its mind about what colour it is.
+      color = drained + uHurtColor * (m * uHurtGlow);
     }
 
     // ------------------------------------------------------------------
@@ -775,6 +826,13 @@ export function createPost(renderer) {
     uPathWidth: { value: 0.1 },
     uPathFeather: { value: 0.18 },
     uPathVignette: { value: 0 },
+    uHurt: { value: 0 },
+    uHurtColor: { value: new THREE.Color(0x8e0f14) },
+    uHurtKeep: { value: 0.55 },
+    uHurtDrain: { value: 0.75 },
+    uHurtGlow: { value: 0.62 },
+    uHurtInner: { value: 0.45 },
+    uHurtOuter: { value: 1.25 },
     uKnee: { value: 0 },
   };
   const finalPass = makeFullscreenPass(fragmentShader, finalUniforms);
@@ -938,6 +996,46 @@ export function createPost(renderer) {
     // vignette is a straight multiply against the picture and past about 1.2
     // it takes the middle of the screen with it.
     u.uVignette.value = Math.min(1.2, u.uVignette.value + (c.vignette ?? 0.22) * k);
+  }
+
+  // THE BLOODY FRAME. `amount` is lowHealthFx's 0..1 ramp (0 above 15% of the
+  // bar, 1 at empty) and `beat` is where the heart is in its current cycle.
+  //
+  // Written UNCONDITIONALLY, zeros included, for the same reason applyCineLens
+  // clears its own uniforms: nothing else in the pipeline touches uHurt, so a
+  // frame that returned early here would leave the last value it wrote on
+  // screen — the seal heals to full and the corners stay red forever.
+  function applyLowHealthVignette(amount, beat = 0) {
+    const c = CONFIG.fx?.lowHealth ?? {};
+    const u = finalUniforms;
+    const k = Math.max(0, Math.min(1, amount));
+    if (k <= 0) {
+      u.uHurt.value = 0;
+      return;
+    }
+    // Both halves of the beat are scaled by `k` as well as by the beat itself,
+    // so the pulse grows with the emergency instead of arriving at full depth
+    // the moment the threshold is crossed — at 14% it is a breath, at 2% it is
+    // a hammering.
+    const pulse = (c.pulse ?? 0.22) * beat * k;
+    u.uHurt.value = Math.min(1, k * (c.strength ?? 0.9) * (1 + pulse));
+
+    // The aperture narrowing on the beat. This is the half that reads as a
+    // heart rather than as a flashing light — brightness alone has a rate and
+    // no weight to it. Floored so a big `close` cannot walk the inner edge
+    // past the outer one, which would invert the smoothstep and paint the
+    // MIDDLE of the screen instead of the edge.
+    const inner = c.inner ?? 0.45;
+    const outer = c.outer ?? 1.25;
+    const closed = inner - (c.close ?? 0.16) * beat * k;
+    u.uHurtInner.value = Math.max(0.05, Math.min(outer - 0.05, closed));
+    u.uHurtOuter.value = outer;
+    u.uHurtKeep.value = Math.max(0, Math.min(1, c.keep ?? 0.55));
+    u.uHurtDrain.value = Math.max(0, Math.min(1, c.drain ?? 0.75));
+    u.uHurtGlow.value = Math.max(0, c.glow ?? 0.62);
+    // Read every frame rather than at boot, so dragging the swatch in the
+    // tuner is live.
+    u.uHurtColor.value.set(c.color ?? 0x8e0f14);
   }
 
   function applyCineLens() {
@@ -1298,7 +1396,14 @@ export function createPost(renderer) {
     // above. Merged by name so a group with both does not render twice.
     const goo = activeGooGroups();
     for (const g of fieldGroups()) if (!goo.some((x) => x.name === g.name)) goo.push(g);
-    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 0 || cine || goo.length > 0;
+    // ...and a sixth: the seal is nearly dead. Same argument as suffocation —
+    // the bloody frame is the only visual near-death has, so a player who has
+    // turned the screen filter AND bloom off must still get it, and taking the
+    // passthrough here would silently delete it for exactly the people running
+    // the game at its cheapest.
+    const hurt = lowHealthVignette();
+    const postActive = CONFIG.post.enabled || bloomOn() || suffocation > 0 || cine
+      || goo.length > 0 || hurt > 0;
     if (!postActive) {
       renderer.setRenderTarget(null);
       renderer.render(sceneToRender, sceneCamera);
@@ -1317,6 +1422,12 @@ export function createPost(renderer) {
     // After applyPreset, which rewrites uVignette from the preset every frame
     // and would otherwise stamp on the camera state's contribution.
     applyCineLens();
+
+    // Its own uniform rather than another claim on uVignette, so it does not
+    // have to queue behind the preset, the blackout and the camera for the
+    // same 0..1.2 of corner darkening — and so it can TINT, which a multiply
+    // against the picture cannot do.
+    applyLowHealthVignette(hurt, lowHealthFxState.beat);
 
     renderer.setRenderTarget(sceneTarget);
     renderer.clear();

@@ -9,6 +9,11 @@ oxygenRefillRate,the seal,percent,surface refill speed,,,,TRUE,,,,,
 fireRate,the gun,percent,fire rate,,,,TRUE,,TRUE,,,
 damage,the gun,percent,projectile damage,,,,TRUE,,,,,
 speed,the gun,percent,projectile speed,,,,TRUE,,,,,
+leftFinRadiusMul,the gun,percent,lorem ipsum,,,,,,,,,"Flippers Up! — how much bigger the pebbles out of the LEFT flipper are. Renders as '+35% <label>'. Two or three words; it has to name the pebble AND say which side, because the right-hand row sits next to it on the same card once the second stack is taken. Seen on the level-up card and in the Upgrades tab."
+rightFinRadiusMul,the gun,percent,lorem ipsum,,,,,,,,,"The right-hand half of the pair above. Same shape, same length; the two read side by side as '+35% X, +35% Y' on a card that stacked twice, so they should differ only in the word for the side."
+flippersUpStacks,the gun,level,Flippers Up!,,,,,,,,,"NOT NEW COPY — this is the card's own name out of upgrades.csv, repeated here only so a card can never render the raw variable name. phraseAll drops a level stat that arrives beside real ones, and this one always does (the size multiplier moves on every stack), so it is not expected to appear on any card. It exists because 'not expected to' is not the same as 'cannot'."
+leftFinElementLevel,the gun,level,lorem ipsum,,dolor sit amet,,,,,,,"Flippers Up! stack 3 and up: how deep the LEFT flipper's own element is. Two lines needed. `label` is what a deepening stack reads as ('+1 <label> levels'), two or three words naming the fin and its element. `unlock` is the whole clause the card that first lights that fin shows instead — the shape Sea Garlic and the Glow Up! cards use, a bare noun phrase with no verb in front of it, naming what the player just bought. The element itself is rolled per run, so neither line can name a specific one."
+rightFinElementLevel,the gun,level,lorem ipsum,,dolor sit amet,,,,,,,"The right-hand half of the pair above. Same two lines, same lengths; they differ only in the word for the side."
 multishot,the gun,count,projectile,,,,TRUE,,,,,
 multishotLevel,the gun,level,projectile,,,,,,,,,"Bookkeeping, not a card line. `multishot` beside it is the pellet count a player reads; this row exists because every stat an upgrade moves needs an entry, and it is deliberately given no `unlock` text so phraseAll drops it every time — the count row is always moving alongside it. Same word as that row on purpose; there is nothing new to write here."
 pierce,the gun,count,enemy,enemies,,,TRUE,,,,,"Reads as the tail of a sentence — ""Bullets pierce {effect}"" — because that is the shape the card has always had."
@@ -87,11 +92,11 @@ orcaGap,orca family,flat,between strikes,,,,,s,TRUE,,,Seconds before the pod att
 orcaChargeSpeed,orca family,flat,charge speed,,,,,,,,,"How fast an orca crosses to its target. Last in the readout's order on purpose — beside damage and cadence it reads as flavour, so the four-row cap drops it first."
 belugaBubble,baby beluga,flat,bubble size,,,,,m,,,,"How big a trapped fish's bubble is — which is really how big a fish it can take. The card deals no damage at all, so this and the trap length are the whole of what a stack buys."
 belugaTrap,baby beluga,flat,trap length,,,,,s,,,,"How long a fish stays held. Pairs with the bubble size on the same tip; one is what it can catch, the other is how long it keeps it."
-dumboTargets,dumbo octopus,count,charmed at a time,[DRAFT] charmed at once,,,,,,,,"How many fish the dumbo can hold charmed simultaneously. A ROUNDED STEP — 1 at stack 1, 2 by stack 4 — so on the picks in between it shows dimmed and unchanged rather than vanishing. Phrase it so it reads sensibly both as a change (+1 ___) and standing still (2 -> 2)."
+dumboTargets,dumbo octopus,count,charmed at a time,charmed at a time,,,,,,,,"How many fish the dumbo can hold charmed simultaneously. A ROUNDED STEP — 1 at stack 1, 2 by stack 4 — so on the picks in between it shows dimmed and unchanged rather than vanishing. Phrase it so it reads sensibly both as a change (+1 ___) and standing still (2 -> 2)."
 dumboCharm,dumbo octopus,flat,charm time,,,,,s,,,,"How long a fish stays charmed. The card deals no damage at all, so this and the count are most of what a stack buys."
 dumboGap,dumbo octopus,flat,between charms,,,,,s,TRUE,,,Seconds before it charms again. LOWER IS BETTER.
 dumboRange,dumbo octopus,flat,reach,,,,,m,,,,"How far it will look for something to charm. Last in the readout's order, so the four-row cap drops it first."
-octoArms,octopus grabber,count,arms,[DRAFT] arms,,,,,,,,How many fish it can drag at once. Another rounded step — dimmed and unchanged on the picks where it does not tick.
+octoArms,octopus grabber,count,arm,arms,,,,,,,,How many fish it can drag at once. Another rounded step — dimmed and unchanged on the picks where it does not tick.
 octoReach,octopus grabber,flat,arm reach,,,,,m,,,,How far an arm will stretch for a fish.
 octoReel,octopus grabber,flat,yoink speed,,,,,,,,,How fast it drags what it has caught. Last in the order — the cap drops it before the two above.
 musselCount,mussel barrage,count,mussel,mussels,,,,,,,,"How many go out in one barrage. With the damage row, the whole card."
@@ -123,22 +128,22 @@ oysterBlast,oyster blaster,flat,boba size,,,,,m,,,,How wide each bomblet goes of
 oysterGap,oyster blaster,flat,between pearls,,,,,s,TRUE,,,Seconds between shots. LOWER IS BETTER.
 oysterBombletDamage,oyster blaster,flat,boba dmg,,,,,,,,,What one bomblet does. Fifth in the order — the small rider the cap drops.
 sealTeamCount,seal team,count,escort,escorts,,,,,,,,"How many seals swim with you. THE COUNT IS THE LEVEL, capped at maxSeals — so a pick really does buy a seal each time until the cap, and only damage after that. The card is numbered per stack and this is why."
-sealTeamDamage,seal team,flat,[DRAFT] ram damage,,,,,,,,,What one escort's ram hits for. Big Rigz is folded in.
-razorDamage,razor clams,flat,[DRAFT] blade damage,,,,,,,,,What one blade hits for.
-razorCount,razor clams,count,[DRAFT] blades,[DRAFT] blades,,,,,,,,How many go out per volley.
-razorGap,razor clams,percent,[DRAFT] volley rate,,,,,s,TRUE,,,"Seconds between volleys — and it COMPOUNDS rather than stepping, so the tip renders it as a multiplier (x0.95 a level) rather than a subtraction. LOWER IS BETTER; the column is set. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
-razorPierce,razor clams,count,[DRAFT] bodies cut,[DRAFT] bodies cut,,,,,,,,"How many bodies one blade passes through. A rounded step, capped at pierceMax."
-starfishDamage,starfish shuriken,flat,[DRAFT] shuriken damage,,,,,,,,,What one shuriken hits for.
-starfishGap,starfish shuriken,percent,[DRAFT] throw rate,,,,,s,TRUE,,,"Seconds between throws, compounding — rendered as a multiplier like the razor clam's. LOWER IS BETTER. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
-starfishSize,starfish shuriken,flat,[DRAFT] shuriken size,,,,,m,,,,"How big each one is, which is also how easily it connects."
-starfishPierce,starfish shuriken,count,[DRAFT] bodies cut,[DRAFT] bodies cut,,,,,,,,"How many bodies one passes through. Rounded step, capped."
-homingReach,homing pebbles,flat,[DRAFT] seek range,,,,,m,,,,"How far a pebble will look for something to bend toward. The ONLY row this card gets: its level also moves a turn rate and a size bias, and both are facts about the simulation rather than about the pebbles."
-ironLungBonus,iron lung,percent,[DRAFT] damage bonus,,,,,,,,TRUE,"How much extra damage the held breath is worth, as a share — percentOfOne is set, so 0.4 renders as +40%. It scales with your MAX OXYGEN, so every Yoga makes this bigger; that is exactly what the card could not say before."
-biolumShockChance,glow up — voltaic,percent,[DRAFT] arc chance,,,,,,,,TRUE,"How often a shot arcs to a second fish. Capped at chanceMax, so it stops moving before the stack cap does."
-biolumShockArcs,glow up — voltaic,count,[DRAFT] arcs,[DRAFT] arcs,,,,,,,,How many bodies one arc reaches. A rounded step.
-biolumVenomDps,glow up — venom,flat,[DRAFT] poison a second,,,,,,,,,Damage per second while poisoned. THE ONLY THING a venom level buys — its duration and stack cap are flat — which is worth knowing and was invisible before.
-biolumChillSlow,glow up — chill,percent,[DRAFT] slow per hit,,,,,,,,TRUE,"How much each shot slows a body, as a share of its speed. Capped at maxSlow. Enough of them stack into the freeze."
-biolumChillFreeze,glow up — chill,flat,[DRAFT] freeze length,,,,,s,,,,How long a body stays frozen once the slow tops out.
-biolumInfectDps,glow up — infected,flat,[DRAFT] infection a second,,,,,,,,,Damage per second while infected.
-biolumInfectSpread,glow up — infected,flat,[DRAFT] spread range,,,,,m,,,,How far the infection jumps to the next fish — the thing that makes this element scale with a crowd.
-biolumInfectBurst,glow up — infected,flat,[DRAFT] burst damage,,,,,,,,,What a host's death does to everything near it.
+sealTeamDamage,seal team,flat,ram dmg,,,,,,,,,What one escort's ram hits for. Big Rigz is folded in.
+razorDamage,razor clams,flat,blade dmg,,,,,,,,,What one blade hits for.
+razorCount,razor clams,count,blade,blades,,,,,,,,How many go out per volley.
+razorGap,razor clams,percent,rate,,,,,s,TRUE,,,"Seconds between volleys — and it COMPOUNDS rather than stepping, so the tip renders it as a multiplier (x0.95 a level) rather than a subtraction. LOWER IS BETTER; the column is set. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
+razorPierce,razor clams,count,bodies cut,bodies cut,,,,,,,,"How many bodies one blade passes through. A rounded step, capped at pierceMax."
+starfishDamage,starfish shuriken,flat,shuriken dmg,,,,,,,,,What one shuriken hits for.
+starfishGap,starfish shuriken,percent,rate,,,,,s,TRUE,,,"Seconds between throws, compounding — rendered as a multiplier like the razor clam's. LOWER IS BETTER. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
+starfishSize,starfish shuriken,flat,size,,,,,m,,,,"How big each one is, which is also how easily it connects."
+starfishPierce,starfish shuriken,count,bodies cut,bodies cut,,,,,,,,"How many bodies one passes through. Rounded step, capped."
+homingReach,homing pebbles,flat,seek range,,,,,m,,,,"How far a pebble will look for something to bend toward. The ONLY row this card gets: its level also moves a turn rate and a size bias, and both are facts about the simulation rather than about the pebbles."
+ironLungBonus,iron lung,percent,damage bonus,,,,,,,,TRUE,"How much extra damage the held breath is worth, as a share — percentOfOne is set, so 0.4 renders as +40%. It scales with your MAX OXYGEN, so every Yoga makes this bigger; that is exactly what the card could not say before."
+biolumShockChance,glow up — voltaic,percent,arc chance,,,,,,,,TRUE,"How often a shot arcs to a second fish. Capped at chanceMax, so it stops moving before the stack cap does."
+biolumShockArcs,glow up — voltaic,count,arc,arcs,,,,,,,,How many bodies one arc reaches. A rounded step.
+biolumVenomDps,glow up — venom,flat,poison per second,,,,,,,,,Damage per second while poisoned. THE ONLY THING a venom level buys — its duration and stack cap are flat — which is worth knowing and was invisible before.
+biolumChillSlow,glow up — chill,percent,slow per stack,,,,,,,,TRUE,"How much each shot slows a body, as a share of its speed. Capped at maxSlow. Enough of them stack into the freeze."
+biolumChillFreeze,glow up — chill,flat,freeze length,,,,,s,,,,How long a body stays frozen once the slow tops out.
+biolumInfectDps,glow up — infected,flat,infection per second,,,,,,,,,Damage per second while infected.
+biolumInfectSpread,glow up — infected,flat,spread range,,,,,m,,,,How far the infection jumps to the next fish — the thing that makes this element scale with a crowd.
+biolumInfectBurst,glow up — infected,flat,burst damage,,,,,,,,,What a host's death does to everything near it.

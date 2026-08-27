@@ -9,6 +9,7 @@ import {
 import { uploadAsset } from '../systems/assetUpload.js';
 import { stageState, onStageChanged, stageAnchor } from '../systems/stage.js';
 import { fireBossBoom, resetBossBooms } from '../systems/bossBoom.js';
+import { startCardRiser, stopCardRiser, stopAllCardRisers, cardRiserCount } from '../systems/cardRiser.js';
 
 // THE FEEL WORKBENCH — F.
 //
@@ -43,17 +44,55 @@ const RAIL_SECTIONS = [
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
   ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
   ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],
+  // THE LEVEL-UP SCREEN, in the order it happens: the comb powering on, then
+  // one landing (its pop, its knock, and the sting for whichever tier landed),
+  // then the payoff and the door closing. Listed rather than left in
+  // "Everything else" because these are auditioned as a SEQUENCE — the five
+  // rarity stings are a ladder and the only useful question about any one of
+  // them is how it sits against the rung below, which is impossible to ask if
+  // they are scattered down an alphabetical list.
+  //
+  // THE RISER IS PINNED TO THE TOP OF IT, by hand, for the reason the boss's
+  // explosion is pinned to the top of Bosses: it is not a feedback event and so
+  // cannot sit in this ordered list at all. It used to be a CONFIG.sfx voice
+  // fired straight from ui.js, which meant the one sound on this screen with no
+  // row anywhere — not here, not in the ` tuner, not in the old Sound tab.
+  ['The level-up screen', ['combIgnite', 'cardPop', 'cardLand',
+    'rarityCommon', 'rarityUncommon', 'rarityRare', 'rarityEpic', 'rarityLegendary',
+    'combFlood', 'combDrain']],
   // The boss's own voices, which had no home here at all until the
   // explosion needed one. THE EXPLOSION ITSELF IS NOT IN THIS LIST: it is
   // not a feedback event (see BOOM_ROW), and the rail adds it to the top of
   // this section by hand.
-  ['Bosses', ['bossDieFlesh', 'bossDieShell', 'bossDieHull',
+  // Read top to bottom this is one blow going through its three layers: the
+  // moment, then what the thing is made of, then what it says about it. Which
+  // is also the order they fire in (see bossVoice), and the order they have to
+  // be auditioned in — a cry judged without the impact under it is a sound
+  // nobody will ever hear on its own.
+  ['Bosses', ['bossHit', 'bossDeath',
+    'bossDieFlesh', 'bossDieShell', 'bossDieHull',
     'bossHitFlesh', 'bossHitShell', 'bossHitHull', 'bossDaze',
     // The weak spots. Placed under the material voices they play ON TOP of
     // rather than in a section of their own — a crit is bossHitFlesh with
     // hotSpotHit over it, and the two are audited by ear together or not at
     // all.
     'hotSpotHit', 'hotSpotBurst']],
+  // THE CRIES — CONFIG.boss.voiceType, one pair per archetype. Their own
+  // section rather than eighteen more rows under the material voices, because
+  // the question they answer is a different one: up there you are asking
+  // whether steel and flesh sound like steel and flesh, and down here whether
+  // the hammerhead sounds like a smaller shark. Paired hit-then-death per
+  // creature, so one animal is a two-row audition and not a hunt through an
+  // alphabet.
+  ['Boss cries', ['bossHitShark', 'bossDieShark',
+    'bossHitHammerhead', 'bossDieHammerhead',
+    'bossHitOrca', 'bossDieOrca',
+    'bossHitMosasaur', 'bossDieMosasaur',
+    'bossHitSquid', 'bossDieSquid',
+    'bossHitAngler', 'bossDieAngler',
+    'bossHitCrab', 'bossDieCrab',
+    'bossHitBoat', 'bossDieBoat',
+    'bossHitYacht', 'bossDieYacht']],
 ];
 
 // The one rail row that is not a feedback event. `*` so it can never collide
@@ -74,6 +113,14 @@ const GOO_TERMS = 'goo blood gore foam smoke ichor aura hit pickup slime metabal
 // The first pill: CONFIG.fx.goo's own surface keys, which every group is a
 // diff against. Not a group name — `*` so it can never collide with one.
 const GOO_SHARED = '*shared';
+
+// THE CARD RISER, on the same terms as the two above and for the same reason:
+// it is a continuous voice, not a one-shot and not an event. systems/cardRiser.js
+// says why it had to stop being a CONFIG.sfx entry — the short version is that
+// a table of envelopes cannot be told how long the fall it is scoring takes,
+// and this one is scheduled across exactly it.
+const RISER_ROW = '*cardriser';
+const RISER_TERMS = 'riser buildup sweep filter card falling slam fall build cardriser';
 
 const STYLES = `
   .sv-wb { position: fixed; inset: 0 0 96px 0; z-index: 31; display: none;
@@ -456,7 +503,10 @@ function renderRail() {
     // The explosion rides at the top of the Bosses section. It is matched on a
     // bag of words rather than on its id, which is a symbol nobody would type.
     const boomHere = title === 'Bosses' && (!filter || BOOM_TERMS.includes(filter));
-    if (!hits.length && !boomHere) continue;
+    // ...and the card riser rides at the top of the level-up section, on the
+    // same terms. See RISER_ROW.
+    const riserHere = title === 'The level-up screen' && (!filter || RISER_TERMS.includes(filter));
+    if (!hits.length && !boomHere && !riserHere) continue;
     const h = document.createElement('div');
     h.className = 'sv-wb-sec';
     h.textContent = title;
@@ -468,6 +518,15 @@ function renderRail() {
       b.title = 'The kill explosion — the cloud, its surface, the shockwave and the puff they are all made of.';
       b.addEventListener('click', () => { current = BOOM_ROW; render(); });
       list.appendChild(b);
+      shown++;
+    }
+    if (riserHere) {
+      const r = document.createElement('div');
+      r.className = 'sv-wb-ev' + (current === RISER_ROW ? ' sv-wb-on-row' : '');
+      r.innerHTML = '<span class="nm" style="font-weight:600">\u2197 The riser under a card</span>';
+      r.title = 'The filter sweep under one card falling into its cell, scheduled across exactly how long the fall takes and cut by the landing.';
+      r.addEventListener('click', () => { current = RISER_ROW; render(); });
+      list.appendChild(r);
       shown++;
     }
     for (const id of hits) { list.appendChild(railRow(id)); shown++; }
@@ -494,6 +553,7 @@ function render() {
   if (current === '*global') return renderGlobal();
   if (current === GOO_ROW) return renderGoo();
   if (current === BOOM_ROW) return renderBoom();
+  if (current === RISER_ROW) return renderCardRiser();
 
   const event = current;
   const def = CONFIG.feedback[event];
@@ -1313,6 +1373,221 @@ function surfaceCard(cols, target, { title = 'Its surface', sub = '', shared = n
   row('lobe size', 'radius', 3.4, { min: 1, max: 8, step: 0.1, dp: 1,
     title: 'Splat diameter, as a multiple of each particle\u2019s own size. THE control that decides whether anything fuses at all — below about 2 a burst is a group of separate droplets. Not a way to make a mass bigger: for that, scale the emitter\u2019s size and speed together.' });
   return el;
+}
+
+// ---------------------------------------------------------------------------
+// THE CARD RISER — the buildup under one card falling into its cell.
+//
+// The point of the view is that ONE number here is not a number: the length of
+// the sweep is `upgradeSlam.time`, read live, and there is no slider for it in
+// this card because there must not be two. The fall's length is a property of
+// the animation, and the riser's job is to agree with it. So the length is
+// shown as a readout, and the fall itself is tuned where the fall is tuned.
+function renderCardRiser() {
+  const slam = CONFIG.upgradeSlam;
+  const r = slam?.riser;
+  els.name.textContent = 'The riser under a card';
+  els.via.textContent = 'CONFIG.upgradeSlam.riser  →  systems/cardRiser.js';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!slam || !r) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build',
+      'CONFIG.upgradeSlam.riser is missing, so there is nothing to tune.');
+    return;
+  }
+  // The live array, not a copy — every fader below writes into these objects.
+  const bands = (r.bands ??= []);
+
+  // --- WHAT DRIVES IT --------------------------------------------------------
+  const when = card(cols, 'sv-wb-imp', 'What drives it',
+    'It is not a one-shot with a decay. The cutoff is scheduled across exactly how long the card is in the air, so it arrives open on the frame of impact — and is then cut by the landing, which is what a riser is for.');
+  toggle(when, 'riser under the fall', () => r.enabled, (v) => { r.enabled = v; },
+    'Off, a card falls in silence until it lands. The pop and the tier sting are unaffected.');
+
+  const span = document.createElement('div');
+  span.className = 'sv-wb-f';
+  const spanLab = document.createElement('label');
+  spanLab.textContent = 'sweeps across';
+  spanLab.title = 'CONFIG.upgradeSlam.time — the card’s air time, the same number the CSS animation runs on. Read live rather than duplicated: two sliders for one length is how a riser drifts off the thing it is scoring.';
+  const spanVal = document.createElement('div');
+  spanVal.className = 'sub';
+  spanVal.style.margin = '0';
+  spanVal.textContent = Number(slam.time ?? 0.26).toFixed(2)
+    + 's — the card\u2019s fall, tuned under "how the hand arrives" in the \u0060 tuner';
+  span.append(spanLab, spanVal);
+  when.appendChild(span);
+
+  const fireRow = document.createElement('div');
+  fireRow.className = 'sv-wb-f';
+  const fireLab = document.createElement('label');
+  fireLab.textContent = 'try it';
+  const fireBtn = document.createElement('button');
+  fireBtn.className = 'sv-wb-btn sv-stage-fire';
+  fireBtn.textContent = '▶ One card falling';
+  fireBtn.title = 'Starts a real riser at the current fall length and cuts it on the frame the card would land. Not a preview of the sound — it is the sound, including the choke, which is half of it.';
+  fireBtn.addEventListener('click', () => {
+    unlockAudio();
+    const dur = Math.max(0.04, slam.time ?? 0.26);
+    const key = {};
+    startCardRiser(key, dur);
+    // CUT ON THE LANDING, not left to run out. A riser auditioned without its
+    // own ending is a different sound from the one that ships: the whole
+    // gesture is the build being taken away, and a tail nobody will ever hear
+    // is exactly what this stopped being when it left CONFIG.sfx.
+    setTimeout(() => stopAllCardRisers(), dur * 1000);
+  });
+  // ...and the hand, because VARIATION CANNOT BE JUDGED ONE AT A TIME. A single
+  // audition of a riser with variation on sounds exactly like a single audition
+  // of one without; the whole question is whether three in a row sound copied,
+  // and that is three in a row at the real stagger or it is nothing.
+  const seqBtn = document.createElement('button');
+  seqBtn.className = 'sv-wb-btn';
+  seqBtn.textContent = '\u25b6\u25b6 The whole hand';
+  seqBtn.title = 'Throws a full hand at the real stagger, each with its own roll of the variation below. This is the only way to hear whether the riser repeats.';
+  seqBtn.addEventListener('click', () => {
+    unlockAudio();
+    const dur = Math.max(0.04, slam.time ?? 0.26);
+    const gap = Math.max(0, slam.stagger ?? 0.58);
+    for (let i = 0; i < (CONFIG.upgradeChoices ?? 3); i++) {
+      const key = {};
+      setTimeout(() => {
+        startCardRiser(key, dur);
+        setTimeout(() => stopCardRiser(key), dur * 1000);
+      }, i * gap * 1000);
+    }
+  });
+  fireRow.append(fireLab, fireBtn, seqBtn);
+  when.appendChild(fireRow);
+
+  // --- THE MIXER -------------------------------------------------------------
+  // The faders, and the reason this view is laid out the way it is: a riser is
+  // three swept bands at different levels far more often than it is any one of
+  // them, so the BALANCE is the first thing you reach for and the per-band
+  // shaping is the second.
+  //
+  // Level and swell live in the shared envelope below rather than here, so
+  // moving a fader changes the mix and never the shape. That is what makes this
+  // a mixer rather than four copies of the same card.
+  const mixer = card(cols, 'sv-wb-imp', 'The mixer',
+    'One looping noise source per band, each through its own resonant bandpass climbing its own range across the fall. No tone anywhere in it — a riser made of pitched material is a note that gets brighter, because the ear locks onto the fundamental and hears the filter as timbre.');
+  bands.forEach((b, i) => {
+    slider(mixer, `band ${i + 1}`, { max: 2, step: 0.02,
+      get: () => b.level ?? 1, set: (v) => { b.level = v; },
+      title: `The fader for band ${i + 1}. 0 builds no band at all — not a silent one.` });
+  });
+
+  const bandRow = document.createElement('div');
+  bandRow.className = 'sv-wb-f';
+  const bandLab = document.createElement('label');
+  bandLab.textContent = 'how many';
+  bandLab.title = 'The bank is any length. Adding one copies the last band so it arrives somewhere audible rather than at a default nobody chose.';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'sv-wb-btn';
+  addBtn.textContent = '+ band';
+  addBtn.addEventListener('click', () => {
+    const last = bands[bands.length - 1];
+    // A COPY, not a fresh default. A new row at some midpoint is a band you
+    // then have to find by ear before you can tune it; a copy of the last one
+    // is already in the sound, and moving it is the edit.
+    bands.push(last ? { ...last } : { level: 0.5, q: 4, from: 200, to: 4000, at: 0 });
+    changed();
+    render();
+  });
+  const dropBtn = document.createElement('button');
+  dropBtn.className = 'sv-wb-btn';
+  dropBtn.textContent = '− band';
+  dropBtn.disabled = bands.length <= 1;
+  dropBtn.addEventListener('click', () => {
+    if (bands.length <= 1) return;
+    bands.pop();
+    changed();
+    render();
+  });
+  bandRow.append(bandLab, addBtn, dropBtn);
+  mixer.appendChild(bandRow);
+
+  // --- ONE CARD PER BAND -----------------------------------------------------
+  bands.forEach((b, i) => {
+    const el = card(cols, 'sv-wb-imp', `Band ${i + 1}`,
+      i === bands.length - 1 && bands.length > 1
+        ? 'The narrow one, usually. A band held back until the last third gives a quarter-second riser stages it has no room for otherwise.'
+        : 'Where it starts, where it lands on the frame of impact, and how narrow it is on the way.');
+    slider(el, 'width (Q)', { min: 0.1, max: 30, step: 0.1, dp: 1,
+      get: () => b.q ?? 4, set: (v) => { b.q = v; },
+      title: 'Under about 3 is weather — a wash of air with no pitch in it. Over about 15 it sings, and the sweep reads as one voice climbing rather than as movement.' });
+    slider(el, 'climbs from (Hz)', { min: 30, max: 4000, step: 10, dp: 0,
+      get: () => b.from ?? 140, set: (v) => { b.from = v; },
+      title: 'Every band leaves at the throw (or at its entry below) and lands at the impact. The RANGE is what differs.' });
+    slider(el, '...to (Hz)', { min: 100, max: 16000, step: 50, dp: 0,
+      get: () => b.to ?? 5200, set: (v) => { b.to = v; },
+      title: 'Where it is on the frame the card lands. Below "climbs from" this band falls while the others climb — there is no clamp stopping it, and one descending band under two rising ones is a real sound. "Reverse the sweep" under Modulation is the whole bank doing it at once.' });
+    slider(el, 'enters at (of the fall)', { max: 0.95, step: 0.01,
+      get: () => b.at ?? 0, set: (v) => { b.at = v; },
+      title: 'A share of the fall to wait before this band comes in. 0 is from the throw. The cheapest way to make a short riser feel staged.' });
+  });
+
+  // --- MODULATION ------------------------------------------------------------
+  // Shared across the bank on purpose: bands sweeping on different curves is
+  // three risers, not one.
+  const modc = card(cols, 'sv-wb-imp', 'Modulation',
+    'Shared by every band, because the bank has to read as one gesture. The skew decides whether it slides or approaches; the wobble decides whether it is being drawn or is under strain.');
+  toggle(modc, 'reverse the sweep', () => r.reverse === true, (v) => { r.reverse = v; },
+    'Flips every band end for end. Climbing is arrival; falling is the floor dropping out from under the card — the opposite feeling from the same bank. Shared, because half of it going each way is a chord rather than a sweep. One band alone can be made to fall by putting its "to" below its "from".');
+  slider(modc, 'sweep skew', { min: 0.2, max: 4, step: 0.05,
+    get: () => r.curve ?? 1.35, set: (v) => { r.curve = v; },
+    title: '1 is the plain exponential — even in octaves, so even to the ear. Under 1 opens early and hangs at the top; over 1 holds low and rushes the last third, which is the one that reads as an approach rather than a slide.' });
+  slider(modc, 'wobble (semitones)', { max: 6, step: 0.05,
+    get: () => r.wobbleDepth ?? 0, set: (v) => { r.wobbleDepth = v; },
+    title: '0 is a clean sweep. Windowed to nothing at both ends — a wobble still going at the landing would leave the bank somewhere other than where it was aimed, and arriving exactly on the impact is the point of the whole thing.' });
+  slider(modc, '...at (cycles/s)', { max: 40, step: 0.5, dp: 1,
+    get: () => r.wobbleFrom ?? 0, set: (v) => { r.wobbleFrom = v; },
+    title: 'The wobble rate at the throw.' });
+  slider(modc, '...rising to', { max: 60, step: 0.5, dp: 1,
+    get: () => r.wobbleTo ?? 0, set: (v) => { r.wobbleTo = v; },
+    title: 'And at the landing. A wobble that speeds up as it climbs is the oldest trick in the form — its phase is integrated rather than played by an LFO, which would click when its rate was ramped.' });
+  slider(modc, 'resolution (points)', { min: 4, max: 160, step: 1, dp: 0,
+    get: () => r.steps ?? 48, set: (v) => { r.steps = v; },
+    title: 'How finely the sweep and the wobble are scheduled. RESOLUTION, not shape: it has to clear a couple of points per wobble cycle or the wobble aliases into a wrong, slower one. This many points per band per card.' });
+
+  // --- VARIATION -------------------------------------------------------------
+  const vary = (r.vary ??= {});
+  const vc = card(cols, 'sv-wb-imp', 'Variation per throw',
+    'Three cards a level-up and twenty level-ups a run is sixty of these, and sixty identical risers stop being a sound and become a tic. Every number here is rolled once per throw and shared down the bank, so what varies is the riser rather than the bands’ relationship to each other. None of it touches the timing — the length is the fall.');
+  slider(vc, 'register (semitones)', { max: 12, step: 0.25, dp: 2,
+    get: () => vary.pitch ?? 0, set: (v) => { vary.pitch = v; },
+    title: 'The whole bank transposed, either way. The one that does most of the work: same gesture, different register. All of these at 0 makes every trigger identical, which is worth hearing once to know what the variation is buying.' });
+  slider(vc, 'spread', { max: 0.4, step: 0.005, dp: 3,
+    get: () => vary.spread ?? 0, set: (v) => { vary.spread = v; },
+    title: 'Each END of each band nudged independently on top of the transpose, so a throw varies how far each band TRAVELS and not just where it sits. Wants to be the small one — past a little of it they stop being the same three bands.' });
+  slider(vc, 'weight', { max: 0.5, step: 0.01,
+    get: () => vary.level ?? 0, set: (v) => { vary.level = v; },
+    title: 'As a fraction of the level below.' });
+  slider(vc, 'wobble speed', { max: 1, step: 0.01,
+    get: () => vary.wobble ?? 0, set: (v) => { vary.wobble = v; },
+    title: 'One factor for both ends of the wobble ramp, so a bank that varies its speed keeps its acceleration. Two rolls would sometimes invert it.' });
+
+  // --- THE SHAPE -------------------------------------------------------------
+  const shape = card(cols, 'sv-wb-imp', 'Its shape in time',
+    'The two numbers that scale with the fall rather than fighting it. Both are shares, not seconds — a fall retuned from a quarter-second to two-thirds of one keeps this shape exactly.');
+  dbSlider(shape, 'level', { get: () => r.gain ?? 0.14, set: (v) => { r.gain = v; } });
+  slider(shape, 'swells to', { min: 0.2, max: 4, step: 0.05,
+    get: () => r.swell ?? 1.6, set: (v) => { r.swell = v; },
+    title: 'How much louder it is at the impact than at the top of its attack. 1 is a flat level — the filter still opens, but a build with no weight behind it reads as a sweep rather than as a build.' });
+  slider(shape, 'attack (of the fall)', { min: 0.02, max: 0.95, step: 0.01,
+    get: () => r.fadeIn ?? 0.3, set: (v) => { r.fadeIn = v; },
+    title: 'A SHARE of the fall, not seconds — the one unit here that differs from the boss riser’s, and deliberately. A fixed attack right for a two-second arrival never reaches its own level inside a quarter-second one.' });
+  slider(shape, 'cut over (s)', { min: 0.005, max: 0.3, step: 0.005, dp: 3,
+    get: () => r.fadeOut ?? 0.035, set: (v) => { r.fadeOut = v; },
+    title: 'How fast the landing takes it away. Short: being cut IS the gesture, and anything long enough to hear is a tail over the tier’s sting.' });
+
+  const live = document.createElement('div');
+  live.className = 'sub';
+  live.style.margin = '9px 0 0';
+  live.textContent = cardRiserCount()
+    ? `${cardRiserCount()} sounding right now`
+    : 'nothing sounding — one per card in the air, up to the hand';
+  shape.appendChild(live);
 }
 
 function renderBoom() {
