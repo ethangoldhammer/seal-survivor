@@ -112,6 +112,10 @@ function materialTextures(m, seen) {
 // So: a pointer at something the census counts elsewhere (a node, a texture, a
 // geometry, a material, a skeleton) costs a pointer. Everything else is
 // measured as what it actually is.
+// Anything above this is worth naming rather than just counting.
+const HEAVY = 64 * 1024;
+// What each node measured, so only nodes new since the last census are walked.
+const udCache = new WeakMap();
 const PTR = 8;
 // DEEP ENOUGH TO REACH A SERIALISED MESH. three's toJSON() buries the numbers
 // six levels down (object > geometries > data > attributes > position > array),

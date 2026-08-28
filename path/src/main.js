@@ -399,6 +399,11 @@ const dashPrediction = { x: 0, y: 0 };
 let lastCrumbAt = -1e9;
 // And the byte census, which is a scene walk and so runs a quarter as often.
 let lastMemAt = -1e9;
+// Frames at the last heartbeat — the difference is what says the loop is alive.
+let lastCrumbFrames = 0;
+// Every frame animate() completes. Nothing else counts them: perfLog works in
+// times, not in frames, and a hang is a question about frames.
+let frameCount = 0;
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -4790,6 +4795,7 @@ let lastTime = performance.now();
 
 function animate(now) {
   const stamp = now ?? performance.now();
+  frameCount++;
   // A PULSE IN THE CRASH TRAIL — see systems/crashLog.js. A WebContent process
   // that is killed mid-run leaves nothing but the breadcrumbs already written,
   // and 'run:start, ninety seconds ago' says nothing about what the frame was
@@ -4815,9 +4821,32 @@ function animate(now) {
       }
     }
     const mem = world.renderer.info.memory;
+    // FRAMES AND THE RUN CLOCK, because the counters beside them cannot tell a
+    // frozen GAME from a frozen LOOP. A trail of ticks whose enemy count,
+    // geometry count and level are identical for a minute reads as a hang —
+    // and it reads exactly the same whether the frame loop stopped (in which
+    // case these ticks would not be here at all), the world is paused behind a
+    // menu nobody can dismiss, or the clock stopped advancing under a running
+    // renderer. `f` is frames since the last tick and `t` is the run's own
+    // clock: at 60fps five seconds is ~300 frames, so a two-digit `f` is a
+    // stalled renderer and `f300 t0.0` is a stalled world.
+    const frames = frameCount - lastCrumbFrames;
+    lastCrumbFrames = frameCount;
+    // WHO HAS THE SCREEN. A freeze is nearly always something holding the run
+    // — the cards, the dividend, the kill shot, the death dive — so the state
+    // that gates updatePlayer is worth more than any counter here.
+    const held = [
+      gameState.running ? null : 'stopped',
+      gameState.paused ? 'paused' : null,
+      levelUpState.active ? 'cards' : null,
+      hiveRewardActive() ? 'hive' : null,
+      bossKillState.active ? 'killshot' : null,
+      deathState.active ? 'death' : null,
+    ].filter(Boolean).join('+');
     crumb('tick', `L${gameState.level} ${enemies.length}e ${particleCount()}p`
       + ` g${mem.geometries} t${mem.textures} pr${programsEverBuilt()}`
-      + ` c${document.getElementsByTagName('canvas').length}${bossState.enemy ? ' BOSS' : ''}`);
+      + ` c${document.getElementsByTagName('canvas').length}${bossState.enemy ? ' BOSS' : ''}`
+      + ` f${frames} t${gameState.time.toFixed(1)}${held ? ' ' + held : ''}`);
   }
   // LAST frame's totals, read before anything resets them. renderer.info has
   // autoReset off (see world.js), so these have accumulated across every pass
