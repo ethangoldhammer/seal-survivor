@@ -42,6 +42,13 @@ let hushed = false;
 let bossFade = false;
 
 const tracks = new Map(); // name -> AudioBuffer
+
+/** Decoded music in bytes — see systems/memoryCensus.js. */
+export function musicBankBytes() {
+  let n = 0;
+  for (const b of tracks.values()) n += (b?.length ?? 0) * (b?.numberOfChannels ?? 1) * 4;
+  return n;
+}
 // name -> { leadIn, loopEnd, bars }, measured once at decode. See measureTrack.
 const trackMeta = new Map();
 let currentTrack = null;

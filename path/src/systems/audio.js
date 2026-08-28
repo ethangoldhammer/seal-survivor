@@ -140,6 +140,22 @@ const buffers = new Map();
 // name -> index last played, so a random pick never repeats back-to-back.
 const lastPick = new Map();
 
+// The decoded bank in bytes, for systems/memoryCensus.js. Deduped by buffer
+// identity because one file is often several sounds — see the note on the two
+// caches below — so counting per NAME would report the bank several times over.
+export function audioBankBytes() {
+  const seen = new Set();
+  let n = 0;
+  for (const list of buffers.values()) {
+    for (const b of list ?? []) {
+      if (!b || seen.has(b)) continue;
+      seen.add(b);
+      n += (b.length ?? 0) * (b.numberOfChannels ?? 1) * 4;
+    }
+  }
+  return n;
+}
+
 // The Sound tab builds its rows at boot, BEFORE preloadSamples has finished
 // fetching — so a row's "synth / N samples" label is provisional and has to
 // be refreshed once loading lands, or a sound with samples reads as synth

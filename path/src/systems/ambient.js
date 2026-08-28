@@ -32,6 +32,13 @@ let decks = null; // [{ gain, source }, ...] — exactly two
 let live = 0; // index into `decks` of the deck currently in front
 
 const buffers = new Map(); // src string -> AudioBuffer
+
+/** Decoded ambience in bytes — see systems/memoryCensus.js. */
+export function ambientBankBytes() {
+  let n = 0;
+  for (const b of buffers.values()) n += (b?.length ?? 0) * (b?.numberOfChannels ?? 1) * 4;
+  return n;
+}
 let loadRequested = false;
 let started = false;
 let pollTimer = null;

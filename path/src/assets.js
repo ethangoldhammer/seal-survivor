@@ -4967,6 +4967,26 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
   return wrapper;
 }
 
+// EVERYTHING THE CACHES ARE HOLDING, for systems/memoryCensus.js — the byte
+// census the phone takes of itself. Not a debug dump: these five maps are the
+// resident half of the game (templates, sprite variants, the primitive
+// geometry and material caches, and the pool of bodies waiting to be spawned
+// again), and a census that walked only the scene would miss all of it.
+export function assetCensusItems() {
+  const out = [
+    ...loadedModels.values(),
+    ...spriteVariants.values(),
+    ...geometryCache.values(),
+    ...materialCache.values(),
+    ...visualPool.values(),
+    ...outlineMaterials.values(),
+    ...shellMaterials.values(),
+  ];
+  for (const p of rockPools.values()) if (p?.geos) out.push(p.geos);
+  for (const p of bladePools.values()) if (p?.geos) out.push(p.geos);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Creation
 // ---------------------------------------------------------------------------

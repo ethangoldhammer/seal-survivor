@@ -41,5 +41,6 @@ export const KTX2_MODELS = new Set([
     "squid.glb",
     "tang.glb",
     "trawler.glb",
+    "voicemailbomb.glb",
     "yacht.glb"
   ]);

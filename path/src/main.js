@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel, chumHealRamp } from './config.js';
-import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier } from './assets.js';
+import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier, assetCensusItems } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -36,7 +36,7 @@ import { initParticles, updateParticles, resetParticles, updateParticleScale, pa
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
-import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener } from './systems/audio.js';
+import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener, audioBankBytes } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
 import { loadNoteGlyphs } from './systems/noteStorm.js';
@@ -100,9 +100,9 @@ import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/s
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
-import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid } from './systems/music.js';
+import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
 import { shotDue, resetShotGrid, tickInterval, finSplit, dealTick } from './systems/shotGrid.js';
-import { startAmbient, stopAmbient, preloadAmbient } from './systems/ambient.js';
+import { startAmbient, stopAmbient, preloadAmbient, ambientBankBytes } from './systems/ambient.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls, kickGull } from './systems/seagull.js';
@@ -132,6 +132,7 @@ import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } 
 import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
 import { initCrashLog, mark as crumb } from './systems/crashLog.js';
+import { censusReport, censusLine } from './systems/memoryCensus.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
@@ -382,6 +383,8 @@ const dashPrediction = { x: 0, y: 0 };
 
 // When the crash trail last got a heartbeat — see the pulse in animate().
 let lastCrumbAt = -1e9;
+// And the byte census, which is a scene walk and so runs a quarter as often.
+let lastMemAt = -1e9;
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -4753,6 +4756,22 @@ function animate(now) {
   // reads as a load curve rather than as a single word.
   if (stamp - lastCrumbAt > 5000) {
     lastCrumbAt = stamp;
+    // THE BYTE CENSUS, four ticks apart — a walk of the scene and the asset
+    // caches, which is worth a millisecond every twenty seconds and is the
+    // only reading that says WHERE the phone's 1.8GB is. See
+    // systems/memoryCensus.js.
+    if (stamp - lastMemAt > 20000) {
+      lastMemAt = stamp;
+      try {
+        crumb('mem', censusLine(censusReport({
+          items: [world.scene, assetCensusItems()],
+          audioBytes: audioBankBytes() + musicBankBytes() + ambientBankBytes(),
+          targetBytes: post.targetBytes?.() ?? 0,
+        })));
+      } catch (err) {
+        crumb('mem', `census failed: ${err?.message ?? err}`);
+      }
+    }
     const mem = world.renderer.info.memory;
     crumb('tick', `L${gameState.level} ${enemies.length}e ${particleCount()}p`
       + ` g${mem.geometries} t${mem.textures} pr${programsEverBuilt()}`

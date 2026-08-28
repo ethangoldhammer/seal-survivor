@@ -1507,8 +1507,26 @@ export function createPost(renderer) {
   applyPreset(activePreset());
   resize();
 
+  // WHAT THE CHAIN IS HOLDING, in bytes — see systems/memoryCensus.js. Every
+  // one of these is a HalfFloat target (four channels at two bytes), and at a
+  // phone's 1.1 megapixels the full-size pair alone is 18MB before bloom's own
+  // divided copies. Read from the targets themselves rather than recomputed
+  // from the viewport, because resize() is what decides their real size and
+  // the bloom pair is deliberately below it.
+  function targetBytes() {
+    let n = 0;
+    for (const t of [sceneTarget, bloomA, bloomB, defocusA, defocusB, gooTarget]) {
+      const w = t?.width ?? 0;
+      const h = t?.height ?? 0;
+      const bytes = t?.texture?.type === THREE.HalfFloatType ? 8 : 4;
+      n += w * h * bytes;
+    }
+    return n;
+  }
+
   return {
     registerGooField,
     unregisterGooField,
+    targetBytes,
     render, resize, cyclePreset, applyPreset, warm, warmGoo, initTexture };
 }
