@@ -107,6 +107,23 @@ laserEyes.beams,2,1,4,laser beams at level 1
 laserEyes.beamsPerLevel,0.4,0,1,laser beams per level (floored)
 laserEyes.beamsMax,4,1,8,laser beam count cap
 laserEyes.spread,0.17,0,0.8,laser radians between beams once there are more than two
+bubbleJet.damage,9,1,40,jet damage per TICK of contact — bubbleJet.tickEvery decides how often
+bubbleJet.damagePerLevel,2.6,0,15,jet damage per level
+bubbleJet.tickEvery,0.1,0.02,0.5,jet seconds between hits on the SAME target — a stream touching a body every frame deals 60x its listed damage per second
+bubbleJet.reach,22,5,60,jet stream length at level 1
+bubbleJet.reachPerLevel,2.4,0,10,jet stream length per level
+bubbleJet.hold,0.9,0.2,6,jet seconds the stream stays open — the uptime lever, and what the card actually sells
+bubbleJet.holdPerLevel,0.22,0,1,jet hold seconds per level
+bubbleJet.cool,1.9,0.2,8,jet seconds between streams at level 1
+bubbleJet.coolPerLevel,-0.16,-1,0,jet cadence gain per level
+bubbleJet.coolMin,0.5,0.1,4,jet shortest allowed gap — a cool that reached zero would be a permanent stream
+bubbleJet.width,1.1,0.2,4,jet stream thickness at level 1 — also its hit radius
+bubbleJet.widthPerLevel,0.09,0,0.5,jet thickness per level
+bubbleJet.spool,0.35,0.05,2,jet seconds to reach full — a real windup, nothing is cut until armAt of it has passed
+bubbleJet.vent,0.22,0.05,2,jet seconds to die back down
+bubbleJet.armAt,0.85,0.1,1,jet fraction of the spool before it can hurt anything
+bubbleJet.sustainGlow,0.45,0,2,jet bloom floor while the stream burns
+bubbleJet.muzzleForward,0.9,0,3,jet fallback muzzle offset for a model with no mouth anchor
 sealTeam.maxSeals,6,1,12,escort squad size cap
 sealTeam.contactDamage,24,0,80,escort ram damage
 sealTeam.damagePerLevel,8,0,30,escort ram damage per level

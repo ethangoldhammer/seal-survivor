@@ -6,6 +6,8 @@ import { stateForSpeed } from './animation.js';
 import { snapshotMoment } from './bossKill.js';
 import { startBossRagdoll, updateBossRagdoll, ragdollDelta, endBossRagdoll } from './bossRagdoll.js';
 import { fireBossBoom, bossBoomLead } from './bossBoom.js';
+import { fireBossLight, bossLightLead, dropBossLightSubject } from './bossLight.js';
+import { spawnBossDissolve } from './bossDissolve.js';
 import { mark as crumb } from './crashLog.js';
 
 // ---------------------------------------------------------------------------
@@ -123,6 +125,11 @@ export function holdBossCorpse(e, scene) {
     // first one, and without it a boss would fire a fresh explosion every
     // frame for a third of a second.
     boomed: false,
+    // The same latch, for the light. Two of them rather than one because they
+    // are raised at different moments — the light has to be at full when the
+    // explosion goes, so it starts a good half second earlier — and a shared
+    // flag would silently fire whichever came second not at all.
+    lit: false,
     // Cut loose HERE, on the killing frame, for the same reason the burst used
     // to be: the blow that killed it is only knowable while the creature object
     // is still whole, and one frame later systems/boss.js will have noticed the
@@ -232,6 +239,17 @@ export function updateBossCorpses(rawDt, dilatedDt) {
     // The body is still whole under it and stays whole for `afterShot` longer.
     // That is the trick the effect is built on: the boss is never seen being
     // deleted, because the smoke is already over it when it bursts.
+    // AND THE LIGHT COMES UP FIRST. Hung on this countdown for exactly the
+    // reason the explosion is: `left` reaches `afterShot` on the frame the
+    // picture is taken, so anything that has to be AT FULL in the picture is
+    // its own rise ahead of that. It is a longer lead than the boom's, and it
+    // has to be — the light is the thing the smoke is seen against, and a key
+    // that arrives with the cloud is a key nobody can tell was ever there.
+    if (!rec.lit && rec.left <= (c.afterShot ?? 0.18) + bossLightLead()) {
+      rec.lit = true;
+      fireBossLight(e);
+    }
+
     if (!rec.boomed && rec.left <= (c.afterShot ?? 0.18) + bossBoomLead()) {
       rec.boomed = true;
       fireBossBoom(e);
@@ -248,11 +266,27 @@ export function updateBossCorpses(rawDt, dilatedDt) {
 function burst(rec, index) {
   const e = rec.e;
   lastSeen = { x: e.mesh.position.x, y: e.mesh.position.y, r: rec.r };
+  // THE BODY BECOMES A CLOUD OF ITSELF, and this is the one line whose ORDER
+  // is the whole feature: it samples the posed mesh's vertices, so it has to
+  // run while the body is still whole, still skinned into the pose the ragdoll
+  // left it in, and still in the scene graph. One line later — after
+  // releaseVisual — it would read a body that has gone back to the pool and
+  // been reset, and it would draw a perfectly good animal in the wrong shape.
+  //
+  // Before the gibs rather than after, so the chunks are thrown THROUGH a cloud
+  // that is already standing there rather than out of a hole.
+  spawnBossDissolve(e);
   spawnBossGibs(e);
   // AFTER the burst is sampled and before the body goes back to the pool: the
   // chunks come off the pose the ragdoll left it in, and the next creature to
   // wear this body gets a skeleton the mixer can drive again.
   endBossRagdoll(e);
+  // And the key light lets go of the materials it swapped in, for the same
+  // reason and at the same moment — a pooled body carrying a boss's kill light
+  // would hand it to whatever creature wore that visual next. The wash itself
+  // stays and fades on its own clock; it is what is over the wreckage while the
+  // print flies to the corner.
+  dropBossLightSubject(e);
   releaseHitShape(e.hitShape);
   releaseVisual(e.visual);
   rec.scene.remove(e.mesh);
@@ -269,6 +303,7 @@ export function resetBossCorpses() {
   for (let i = held.length - 1; i >= 0; i--) {
     const rec = held[i];
     endBossRagdoll(rec.e);
+    dropBossLightSubject(rec.e);
     releaseHitShape(rec.e.hitShape);
     releaseVisual(rec.e.visual);
     rec.scene.remove(rec.e.mesh);

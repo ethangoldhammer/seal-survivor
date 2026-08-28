@@ -55,6 +55,10 @@ function makeEl() {
     addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); },
     removeEventListener() {},
     click() { for (const fn of this.listeners.click ?? []) fn({}); },
+    // Real methods the panel calls on a real input. A stub that omitted them
+    // fails loudly here, which is the right direction — the dangerous stub is
+    // the one that INVENTS a field and lets a bug through.
+    focus() {}, blur() {}, select() {},
   };
   return node;
 }
@@ -109,6 +113,20 @@ const {
   initUpgradeDebug, setUpgradeDebugVisible, setUpgradeDebugChoice,
   upgradeDebugState, grantUpgrade, spawnCreature,
 } = await import('../path/src/ui/upgradeDebug.js');
+
+// The search field, driven through its own listener rather than through the
+// setter seam — the seam proves the filter and this proves the wiring, and the
+// bug that eats a search box is always in the wiring. `type` is a plain
+// property on the stub, so the field is found by its data attribute the same
+// way every other control in here is.
+function searchField() {
+  return findAll((n) => n.dataset?.search === '1')[0] ?? null;
+}
+function typeSearch(text) {
+  const f = searchField();
+  f.value = text;
+  for (const fn of f.listeners.input ?? []) fn({});
+}
 const { bossArchetypes } = await import('../path/src/systems/boss.js');
 
 // The boot order the game uses: a stat block exists before anything grants.
@@ -158,6 +176,83 @@ const afterClick = player.stats.fireRate;
 recomputeStats();
 check('it survives a recompute', player.stats.fireRate === afterClick,
   'a hand-poked stat would be thrown away by the next level-up');
+
+// ---------------------------------------------------------------------------
+section('THE SEARCH BOX');
+// ---------------------------------------------------------------------------
+// Six family chips over fifty-odd upgrades is coarse, and the box is what makes
+// the panel usable for "where is that one". Four things, and three of them fail
+// by rendering something plausible.
+reset();
+setUpgradeDebugChoice({ family: '(all)', rarity: 'common', search: '' });
+const total = CONFIG.upgrades.length;
+const rowCount = () => findAll((n) => n.dataset?.upgrade).length;
+
+check('the field exists', searchField() != null);
+
+typeSearch('laser');
+check('typing filters the list', rowCount() > 0 && rowCount() < total,
+  `${rowCount()} of ${total} for "laser"`);
+check('...and the typed value is what the panel filters on',
+  upgradeDebugState().search === 'laser');
+check('the header says how many are hidden',
+  /\d+ of \d+ shown/.test(findAll((n) => n._text && / of \d+ shown/.test(n._text))[0]?.textContent ?? ''),
+  'a narrowed list otherwise looks exactly like a short table');
+
+// THE ID, NOT JUST THE NAME. This is the whole reason the haystack is more than
+// `name`: a staged upgrade arrives as lorem (CLAUDE.md), so the name is
+// deliberately not the thing anyone would type. Searching the id has to find it
+// or a half-built card is unreachable in the one panel built to reach it.
+const staged = CONFIG.upgrades.find((u) => /lorem|ipsum/i.test(u.name ?? ''));
+if (staged) {
+  typeSearch(staged.id);
+  check('an id finds a card whose name is still lorem',
+    rowFor(staged.id) != null && rowCount() === 1,
+    `"${staged.id}" → ${rowCount()} row(s), name is "${staged.name}"`);
+} else {
+  check('an id finds its row', (typeSearch('rapidFire'), rowFor('rapidFire') != null));
+}
+
+// EVERY TERM HAS TO HIT. Two words must narrow, not widen — a naive includes()
+// on the joined string does the opposite and looks fine on one word.
+// Derived from the table, not guessed at: a hand-picked pair like "laser eyes"
+// happens to match one upgrade either way, so it passes under the naive
+// implementation too and proves nothing. A family name matches many rows and a
+// member's id matches one, so this pair discriminates by construction.
+const wide = [...new Set(CONFIG.upgrades.map((u) => u.family).filter(Boolean))]
+  .find((f) => CONFIG.upgrades.filter((u) => u.family === f).length > 1);
+const member = CONFIG.upgrades.find((u) => u.family === wide);
+typeSearch(wide);
+const oneTerm = rowCount();
+typeSearch(`${wide} ${member.id}`);
+check('a second term narrows rather than widens', rowCount() < oneTerm && rowCount() > 0,
+  `${oneTerm} for "${wide}", ${rowCount()} for "${wide} ${member.id}"`);
+
+// AN EMPTY LIST HAS TO SAY SO, or a typo reads as an upgrade missing from the
+// table and the panel looks broken.
+typeSearch('zzzznothing');
+check('no matches is a message, not a blank panel',
+  rowCount() === 0 && findAll((n) => n.dataset?.empty === '1').length === 1);
+
+// The box and the chip compose, both narrowing.
+setUpgradeDebugChoice({ family: 'gun' });
+typeSearch('laser');
+check('the chip and the box both apply',
+  findAll((n) => n.dataset?.upgrade).every((n) => {
+    const def = CONFIG.upgrades.find((u) => u.id === n.dataset.upgrade);
+    return def.family === 'gun';
+  }));
+
+// Clearing restores everything. Driven through the × the way a person would,
+// because "the clear button is wired" is exactly the kind of thing that is
+// never true and never noticed.
+setUpgradeDebugChoice({ family: '(all)' });
+const clearBtn = findAll((n) => n.textContent === '\u00d7' && n.listeners?.click?.length)[0];
+check('the clear button exists', clearBtn != null);
+clearBtn?.click();
+check('clearing restores the whole table',
+  rowCount() === total && upgradeDebugState().search === '',
+  `${rowCount()} of ${total}`);
 
 // ---------------------------------------------------------------------------
 section('THE FAMILY FILTER');
@@ -359,6 +454,60 @@ check('a seabed dweller arrives on the sand, not in mid-water',
 
 check('an unknown key spawns nothing and does not throw', spawnCreature('notACreature', 3) === 0);
 resetEnemies(scene);
+
+// ---------------------------------------------------------------------------
+section('THE ATTRACTOR STORM BLOCK');
+// ---------------------------------------------------------------------------
+// Six candidate bullet-hell attacks that nothing in the game rolls — the panel
+// is the ONLY way any of them reaches the water, so a chip that does not select
+// or a button that does not stage is not a broken control, it is a feature with
+// no door. What each storm then does is tested where the storm is
+// (tools/attractor-storm-test.mjs); this is the door.
+{
+  const { attractorStormList, activeAttractorStorm, stopAttractorStorm } =
+    await import('../path/src/systems/attractorStorm.js');
+  const storms = attractorStormList();
+
+  // The LAST match, not the first. This file inits the panel twice — once with
+  // no world and once against a real scene — so both panels' nodes are in the
+  // document while only the second one's are the ones the module is writing to.
+  const chipFor = (id) => findAll((n) => n.dataset?.chip === id).at(-1);
+  const noteText = () => findAll((n) => n.dataset?.stormNote === '1').at(-1)?.textContent ?? '';
+  check('every study in the table has a chip', storms.every((s) => !!chipFor(s.id)),
+    storms.map((s) => s.id).join(', '));
+
+  // The brief under the chips. Six designs is more than anyone holds in their
+  // head between sessions, and the difference between them is the thing being
+  // judged — a blank line here is the panel offering six identical buttons.
+  check('...and the panel prints the selected one\'s brief', noteText().length > 40);
+
+  const second = storms[1];
+  chipFor(second.id).click();
+  check('clicking a chip selects that study',
+    chipFor(second.id).dataset.on === '1'
+    && chipFor(storms[0].id).dataset.on !== '1', second.id);
+  check('...and the brief follows the selection',
+    noteText().includes(second.notes.slice(0, 30)));
+
+  findAll((n) => n.textContent === 'Stage storm')[0].click();
+  check('the button stages the selected study', activeAttractorStorm() === second.id,
+    upgradeDebugState().status);
+
+  // One at a time. These are being judged against each other and two at once is
+  // a question about neither.
+  const first = storms[0];
+  chipFor(first.id).click();
+  findAll((n) => n.textContent === 'Stage storm')[0].click();
+  check('...and staging another replaces it', activeAttractorStorm() === first.id);
+
+  findAll((n) => n.textContent === 'Stop storm')[0].click();
+  check('Stop takes it back out', activeAttractorStorm() === null,
+    upgradeDebugState().status);
+  check('...and says so in a way that explains the cubes still on screen',
+    upgradeDebugState().status.includes('fly on'));
+
+  stopAttractorStorm(scene);
+}
 
 // ---------------------------------------------------------------------------
 section('CLEAR ALL');

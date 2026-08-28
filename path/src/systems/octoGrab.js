@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { averageTextureColor } from './bodyPalette.js';
 import { ASSETS, createVisual, assetSignatureColor, assetBaseColor } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { boneRun, buildChain, applyChainToPoint, measureReach } from './ikChain.js';
@@ -97,43 +98,16 @@ const _camTint = new THREE.Color();
 // have none) and every failure path falls through to the next source rather
 // than throwing. Downscaled to 16x16 by the draw itself, so the read-back is
 // 256 pixels however big the texture is.
+//
+// THE AVERAGE ITSELF LIVES IN systems/bodyPalette.js now, which asks the same
+// question of every material on a body rather than of the first one that
+// answers. Two implementations of "what colour is this texture" would agree for
+// a year and then disagree the first time one of them learned about alpha.
+//
+// The cache below is still this file's, and it is a different cache: that one
+// is keyed on the TEXTURE and this one on the ASSET, because what is expensive
+// here is the traversal and the fallback chain, not the sixteen-pixel read.
 const tintCache = new Map();
-
-function averageTextureColor(tex) {
-  const img = tex?.image;
-  if (!img || typeof document === 'undefined') return null;
-  const w = img.width ?? img.videoWidth ?? 0;
-  const h = img.height ?? img.videoHeight ?? 0;
-  if (!w || !h) return null;
-
-  try {
-    const N = 16;
-    const canvas = document.createElement('canvas');
-    canvas.width = N;
-    canvas.height = N;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
-    ctx.drawImage(img, 0, 0, N, N);
-    const data = ctx.getImageData(0, 0, N, N).data;
-
-    let r = 0, g = 0, b = 0, n = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      // Transparent padding is most of some atlases and is pure black in the
-      // colour channels — averaging it in drags every creature toward dark.
-      if (data[i + 3] < 8) continue;
-      r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
-    }
-    if (!n) return null;
-    // Bytes are sRGB; everything downstream of here is linear, and the glow is
-    // added to a linear frame buffer. Converting on the way in is what stops
-    // the tint reading two stops brighter than the fish it came from.
-    return new THREE.Color().setRGB(
-      r / (n * 255), g / (n * 255), b / (n * 255), THREE.SRGBColorSpace,
-    );
-  } catch {
-    return null; // a tainted or not-yet-decoded image; the fallbacks cover it
-  }
-}
 
 /**
  * @returns {THREE.Color|null} possibly SHARED scratch — read it or copy it on

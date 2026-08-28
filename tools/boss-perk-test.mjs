@@ -430,6 +430,134 @@ check('...in a fan rather than down one line', dirs.size > 1,
   `${dirs.size} distinct headings`);
 
 // ===========================================================================
+section('THE ATTRACTOR STORMS RIDE THE BOSS');
+// ===========================================================================
+// Four of the six studies in attractorStorms.csv are perks, and the property
+// that makes them perks rather than scenery is that the field is ANCHORED ON
+// THE ANIMAL. A storm that opened where the boss happened to be standing and
+// then stayed there is not the boss's attack — it is a thing that happened near
+// it once, and it looks completely correct for the second and a half before the
+// boss swims out of its own attack.
+//
+// Three more things are only checkable from here: that the wind-up is a real
+// tell and not an instant field, that the perk's damage (which rides the
+// difficulty ramp) is what the cubes carry rather than the study's own
+// look-at-it number, and that the cubes file as `boss:` — the prefix
+// capBossDamage and the death-cause table both switch on.
+{
+  const { activeAttractorStorm, attractorStormList, updateAttractorStorm } =
+    await import('../path/src/systems/attractorStorm.js');
+  // The frame loop's own order, and it has to be mirrored rather than
+  // shortcut: the perk OPENS a storm and main.js DRIVES it, so a harness that
+  // only ticked the perk would watch a field open and then never put a cube in
+  // the water — which is exactly the shape of the bug this section exists to
+  // catch, and it would report it as a pass.
+  const frame = (pos = playerNear) => {
+    updateBossPerks(DT, scene, pos, hooks);
+    updateAttractorStorm(DT, scene, pos);
+  };
+  const STUDIES = attractorStormList();
+  const stormPerks = ['saddle', 'ring', 'echo', 'release'];
+
+  check('every storm perk has a study behind it',
+    stormPerks.every((id) => STUDIES.some((s) => s.id === id)),
+    stormPerks.join(', '));
+  check('...and a row in bossPerks.csv',
+    stormPerks.every((id) => !!perkById(id)));
+
+  fresh();
+  const stormBoss = put('bossShark', { boss: true });
+  const row = perkById('saddle');
+  const difficulty = 30;
+  attachBossPerk(scene, stormBoss, row, difficulty);
+
+  // The wind-up is a promise the boss has not kept yet. A field that opened on
+  // the frame the cooldown ran out would be the one attack in the run the
+  // player genuinely could not have played around.
+  let openedAt = -1;
+  for (let i = 0; i < 2400 && openedAt < 0; i++) {
+    frame();
+    if (activeAttractorStorm()) openedAt = i * DT;
+  }
+  check('the storm opens on its own clock', openedAt > 0, `after ${openedAt.toFixed(2)}s`);
+  check('...never before its wind-up is over', openedAt >= (row.cooldown + row.windup) - 0.05,
+    `${openedAt.toFixed(2)}s against cooldown ${row.cooldown} + windup ${row.windup}`);
+
+  // Let it fill, then move the animal and watch the field go with it. Measured
+  // as a DISPLACEMENT rather than as a position, because the cubes are also
+  // flying their own trajectories — the question is whether the whole mass
+  // travelled with the body, not where any one of them ended up.
+  for (let i = 0; i < 90; i++) { frame(); updateProjectiles(DT, scene, enemies); }
+  const mine = () => projectiles.filter((p) => p.source === 'boss:saddle');
+  const centre = () => {
+    const list = mine();
+    if (!list.length) return null;
+    let x = 0;
+    for (const p of list) x += p.mesh.position.x;
+    return x / list.length;
+  };
+  check('it puts cubes in the water', mine().length > 0, `${mine().length} live`);
+  check('...that file as a boss attack, so capBossDamage and the death screen see them',
+    mine().every((p) => p.source.startsWith('boss:')));
+
+  // The perk's number, with damagePerDifficulty resolved — not the study's own,
+  // which is tuned for looking at rather than for a fight at minute nine.
+  const want = row.damage + row.damagePerDifficulty * difficulty;
+  const study = STUDIES.find((s) => s.id === 'saddle');
+  check('...carrying the PERK\'s damage rather than the study\'s',
+    mine().length > 0 && mine().every((p) => Math.abs(p.damage - want) < 1e-6),
+    `${mine()[0]?.damage} against a perk-worth of ${want} and a study-worth of ${study.damage}`);
+  check('...which the two disagree about, so that check can fail',
+    Math.abs(want - study.damage) > 0.5);
+
+  const before = centre();
+  const bossBefore = stormBoss.mesh.position.x;
+  for (let i = 0; i < 60; i++) {
+    stormBoss.mesh.position.x += 0.25;
+    frame();
+    updateProjectiles(DT, scene, enemies);
+  }
+  const moved = stormBoss.mesh.position.x - bossBefore;
+  const followed = centre() - before;
+  check('the field rides the animal', Math.abs(followed - moved) < moved * 0.5,
+    `boss moved ${moved.toFixed(1)}u, the cubes\' middle moved ${followed.toFixed(1)}u`);
+
+  // ...and it closes on its own clock rather than staying open for the fight.
+  let closedAt = -1;
+  for (let i = 0; i < 1200 && closedAt < 0; i++) {
+    frame();
+    if (!activeAttractorStorm()) closedAt = i * DT;
+  }
+  check('the field closes again', closedAt > 0, `${closedAt.toFixed(2)}s later`);
+
+  // A boss that dies takes its field with it. The cubes already in the air fly
+  // on — that is attractorStorm.js's rule and deleting them would take a hit
+  // out of the player's mouth mid-flight — but nothing new arrives, and the
+  // telegraph lines have to leave the scene or they hang in the water for the
+  // rest of the run.
+  fresh();
+  const doomed = put('bossShark', { boss: true });
+  attachBossPerk(scene, doomed, perkById('saddle'), 0);
+  for (let i = 0; i < 2400 && !activeAttractorStorm(); i++) {
+    frame();
+    updateProjectiles(DT, scene, enemies);
+  }
+  for (let i = 0; i < 60; i++) { frame(); updateProjectiles(DT, scene, enemies); }
+  check('a second fight opens its own field', !!activeAttractorStorm());
+  const flying = projectiles.filter((p) => p.source === 'boss:saddle').length;
+  doomed.hp = 0;
+  updateBossPerks(DT, scene, playerNear, hooks);
+  check('...and the boss dying closes it', activeAttractorStorm() === null);
+  check('...without deleting what was already in the air',
+    projectiles.filter((p) => p.source === 'boss:saddle').length === flying,
+    `${flying} still flying`);
+  check('...and without leaving its telegraph in the water',
+    scene.children.filter((o) => o.isLine).length === 0);
+
+  fresh();
+}
+
+// ===========================================================================
 section('THE BARRELS ACTUALLY GO OFF');
 // ===========================================================================
 // The one piece of the shooters that is not the shared projectile system.

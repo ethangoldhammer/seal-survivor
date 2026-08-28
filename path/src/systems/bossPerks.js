@@ -10,6 +10,7 @@ import { enemies, spawnNamed } from '../entities/enemies.js';
 import { emit } from '../entities/particles.js';
 import { isDazed } from './control.js';
 import { applyBossLook, clearBossLook, bossSparkColor } from './bossLook.js';
+import { startAttractorStorm, stopAttractorStorm } from './attractorStorm.js';
 
 // ===========================================================================
 // BOSS PERKS — the one special thing a boss can do.
@@ -160,6 +161,13 @@ function disposeObj(obj) {
 
 /** Put everything back. Called on run reset and whenever a boss leaves. */
 export function resetBossPerks() {
+  // THE FIELD DIES WITH THE FIGHT — but only if this perk is what opened it.
+  // The U panel can stage the same six studies loose in the water with no boss
+  // involved, and a boss dying somewhere else in the arena must not take a
+  // storm somebody is deliberately looking at down with it.
+  if (active && STORM_PERKS.has(active.id) && active.stage === 'storm') {
+    stopAttractorStorm();
+  }
   releaseBoss();
   for (const obj of owned) disposeObj(obj);
   owned.length = 0;
@@ -355,6 +363,20 @@ export function attachBossPerk(scene, enemy, perk, difficulty = 0) {
     active.flashInLife = 0;
   } else if (perk.id === 'phase') {
     active.marker = tellRing(scene, perk, fx.phase?.markerColor ?? 0x9fd8ff, 0.72, 1, 64, 'void');
+  } else if (STORM_PERKS.has(perk.id)) {
+    // ONE RING ON THE BODY, not at a muzzle. The shooters put their tell where
+    // the shot comes from because that is the information — eyes and fins are
+    // at opposite ends of the animal. A storm has no muzzle: it opens AROUND
+    // the boss and the whole field is the attack, so the thing the player needs
+    // to read is which animal is about to become the middle of one.
+    //
+    // Kept in `charges` rather than in a field of its own so the daze
+    // interrupt, which hides every charge ring it finds, covers this perk
+    // without knowing it exists.
+    active.charges = [
+      tellRing(scene, perk, fx[perk.id]?.chargeColor ?? 0x7ff0d4, 0.55, 1, 64,
+        perk.attack ?? 'void'),
+    ];
   } else if (GUNS[perk.id]) {
     // THE TELL IS A RING AT THE MUZZLE, not on the body. Where the shot is
     // coming FROM is the information the player needs — eyes and fins are at
@@ -583,6 +605,7 @@ export function updateBossPerks(dt, scene, playerPos, hooks = {}) {
   else if (active.id === 'teleport') updateTeleport(dt, e, r, playerPos);
   else if (active.id === 'phase') updatePhase(dt, e, r);
   else if (active.id === 'turtles') updateTurtles(dt, scene, e, r, playerPos, dx / dist, dy / dist);
+  else if (STORM_PERKS.has(active.id)) updateStorm(dt, scene, e, r, dist);
   else if (GUNS[active.id]) updateGun(dt, scene, e, r, dist, dx / dist, dy / dist);
   // `giant` and `swift` are absent on purpose — they did everything they do in
   // attachBossPerk and have nothing to tick. A perk that changed the body and
@@ -1522,6 +1545,107 @@ function updateGun(dt, scene, e, r, dist, dirX, dirY) {
     active.timer = Math.max(0.2, p.cooldown ?? 3);
     for (const ring of active.charges) ring.visible = false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE ATTRACTOR STORMS — the boss opens a chaotic field around itself
+// ---------------------------------------------------------------------------
+// Four of the six studies in attractorStorms.csv, wired as perks. The other two
+// are Thomas and are being kept back for a boss of their own — see the note at
+// the top of systems/attractorStorm.js.
+//
+// WHY THIS IS A PERK AND NOT AN ARCHETYPE. It is a thing a boss DOES, the way
+// the eye beam and the aura are: any body can open one, and which body it is
+// changes the fight, because the field rides the animal. A butterfly around a
+// megalodon that is also chasing you is a different problem from the same
+// butterfly around an anglerfish holding station.
+//
+// THE SAME STATE MACHINE AS THE SHOOTERS, one stage longer. `ready` is
+// ordinary hunting, `windup` is the tell, and `storm` is the field being open
+// for `duration` seconds — a shooter's volley is instantaneous and this one has
+// a length, which is the whole difference between dodging a shot and being
+// inside something.
+//
+// COMMITTED ONCE OPEN. A daze during the wind-up cancels it (see
+// INTERRUPTIBLE); a daze during the storm does not, for the same reason it does
+// not stop a lunge already in flight. And the field is stopped by
+// resetBossPerks, so the boss dying takes it with it — the cubes already in the
+// air fly on, which is deliberate and is attractorStorm.js's rule.
+export const STORM_PERKS = new Set(['saddle', 'ring', 'echo', 'release']);
+
+// Ids already complained about, so a broken row is one line in the console and
+// not one every cooldown for the rest of the run.
+const warnedMissingStorm = new Set();
+
+function updateStorm(dt, scene, e, r, dist) {
+  const p = active.perk;
+  active.timer -= dt;
+  const ring = active.charges?.[0] ?? null;
+
+  if (active.stage === 'ready') {
+    if (ring) ring.visible = false;
+    // Same rule as the shooters: the cooldown runs wherever you are, but the
+    // field only opens once you are inside `range`. Otherwise kiting out banks
+    // a storm that arrives the instant you come back, and the range would be
+    // teaching the player a lie about when it is safe to approach.
+    if (active.timer > 0 || dist > (p.range ?? Infinity)) return;
+    active.stage = 'windup';
+    active.timer = Math.max(0.05, p.windup ?? 0.8);
+    return;
+  }
+
+  if (active.stage === 'windup') {
+    const t = 1 - Math.max(0, active.timer) / Math.max(0.05, p.windup ?? 0.8);
+    if (ring) {
+      ring.visible = true;
+      // Tightening onto the body, like every other charge in this file: a
+      // shrinking ring reads as something gathering, a growing one as something
+      // already released. Sized off the boss's own radius so a giant one
+      // telegraphs at the scale it is about to fight at.
+      place(ring, e, r * (2.4 - 1.3 * t));
+      ringAlpha(ring, 0.3 + 0.7 * t);
+      ringSweep(ring, t, 0, t);
+    }
+    if (active.timer > 0) return;
+    const opened = startAttractorStorm(scene, active.id, null,
+      { follow: e, damage: active.damage });
+    // THE STUDY IS GONE. attractorStorms.csv has its own `enabled`, and a row
+    // switched off there — or dropped for a bad `shape`/`plane`/`mode` — leaves
+    // this perk winding up and then opening nothing at all: a boss with a tell
+    // and no attack, which reads as a bug in the fight rather than as a row
+    // somebody turned off. Said once, loudly, and the perk goes back on
+    // cooldown rather than sitting in a stage that never ends.
+    if (!opened) {
+      if (!warnedMissingStorm.has(active.id)) {
+        warnedMissingStorm.add(active.id);
+        console.warn(`[bossPerks] "${active.id}" has no usable row in attractorStorms.csv — `
+          + 'the boss telegraphs and then opens nothing. Re-enable that row or take '
+          + 'this perk out of bossPerks.csv.');
+      }
+      active.stage = 'ready';
+      active.timer = Math.max(0.5, p.cooldown ?? 8);
+      if (ring) ring.visible = false;
+      return;
+    }
+    active.stage = 'storm';
+    active.timer = Math.max(0.5, p.duration ?? 5);
+    return;
+  }
+
+  // Open. The ring stays up at the boss's size for the whole of it — the field
+  // is anchored on this animal and the player has to be able to see which one
+  // in a fight that may have escorts in it.
+  if (ring) {
+    ring.visible = true;
+    place(ring, e, r * 1.25);
+    ringAlpha(ring, 0.45);
+    ringSweep(ring, 1, 0, 0);
+  }
+  if (active.timer > 0) return;
+  stopAttractorStorm(scene);
+  active.stage = 'ready';
+  active.timer = Math.max(0.5, p.cooldown ?? 8);
+  if (ring) ring.visible = false;
 }
 
 // ---------------------------------------------------------------------------

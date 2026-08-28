@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel, chumHealRamp } from './config.js';
-import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier, assetCensusItems } from './assets.js';
+import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier, assetCensusItems, visualPoolCount } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -26,7 +26,10 @@ import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel } from './entities/enemies.js';
 import { noteBaitLoss } from './systems/baitBall.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
+import { updateAttractorStorm, resetAttractorStorm } from './systems/attractorStorm.js';
 import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.js';
+import { noteShove, updateSlam, resetSlam } from './systems/slam.js';
+import { updateDodge, resetDodge } from './systems/dodge.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
 import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks, bubbleOrbs } from './entities/pickups.js';
 import { stepBubbleSpawner, rollBubbleSpawnDelay } from './systems/oxygenBubble.js';
@@ -130,11 +133,15 @@ import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, rese
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
 import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
+import { initBossLight, updateBossLight, resetBossLight } from './systems/bossLight.js';
+import { resetBossDissolve } from './systems/bossDissolve.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
 import { initCrashLog, mark as crumb } from './systems/crashLog.js';
 import { censusReport, censusLine } from './systems/memoryCensus.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
+import { updateBubbleJet, updateJets, resetBubbleJet, setJetStats } from './systems/bubbleJet.js';
+import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
@@ -255,6 +262,7 @@ initBossGibs(world.scene);
 // The shockwave is a scene object (systems/organicRing.js); the smoke is not.
 // Without this the cloud still fires and the front silently never appears.
 initBossBooms(world.scene);
+initBossLight(world.scene);
 // The shape pool itself is built lazily on the first meal, not here: the bone
 // models it draws from may still be loading, and one of them may be an upload
 // that has not happened yet. See ensurePool in systems/gore.js.
@@ -374,6 +382,12 @@ let muzzleCursor = 0; // which flipper the next ALTERNATING volley starts from (
 // thing exists for.
 let finCursor = 0;
 const muzzlePoint = new THREE.Vector3(); // scratch — spawnProjectile copies it immediately
+// THE JET'S OWN scratch, deliberately NOT muzzlePoint. That one is reused by
+// every shot, missile, scallop and pearl in the frame, and the stream does not
+// copy what it is handed — its follow callback holds this vector and re-reads
+// it, so sharing the scratch would have the jet leaving a flipper the moment
+// anything else fired. See systems/bubbleJet.js.
+const jetMuzzle = new THREE.Vector3();
 const impulseDir = new THREE.Vector3(); // scratch — hit direction handed to the bone spring
 const faceDir = { x: 0, y: 1 }; // scratch — the seal's facing, read by the bubble vent
 // Scratch for the per-frame "where would a strike go" prediction the lens
@@ -1436,6 +1450,10 @@ function startGame() {
   resetBossGrab();
   updateBossBar(null);
   resetProjectiles(world.scene);
+  // A staged attractor storm is a dev thing and does not survive a run — its
+  // scaffold is a line mesh in the scene, and a new run starting inside the
+  // last one's telegraph would be the panel lying about what is in the water.
+  resetAttractorStorm(world.scene);
   clearProjectileTrails(world.scene);
   // The breach trail's ribbons and the air ramp they read. Both are per-run:
   // a trail left recording from the last run would draw a stripe from wherever
@@ -1472,6 +1490,10 @@ function startGame() {
   // the next run is worse than one that simply isn't there.
   resetBossCorpses();
   resetBossBooms();
+  resetBossLight();
+  // Only the bookkeeping — the points themselves belong to the particle system
+  // from the moment they are emitted, and resetParticles() is what clears those.
+  resetBossDissolve();
   resetPickups(world.scene);
   // ...and any landing still owed a jet, before the buffer it would fire
   // into is cleared — a column arriving over the menu is the whole reason a
@@ -1493,6 +1515,8 @@ function startGame() {
   resetBossKill();
   resetBeams(world.scene);
   resetLaserEyes();
+  resetBubbleJet(world.scene);
+  resetBurnGlow();
   resetEyeLights();
   resetBossEyes();
   // The last run's trophy goes with it, or the death screen would offer this
@@ -1525,6 +1549,11 @@ function startGame() {
   resetShrimpRing();
   resetClub();
   resetStrike();
+  // A run that ended pinned must not open the next one still ramping, and a
+  // boss mid-lunge when the last run ended must not pay the new run's first
+  // frame for a dodge nobody made.
+  resetSlam();
+  resetDodge();
   // The chain fanfare's floor, on the run clock — which restarts at 0, so a
   // stale stamp from a long previous run would swallow the first link of this
   // one. -Infinity rather than 0: the very first link of a run has nothing to
@@ -2853,7 +2882,19 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
       // call sites. A source that is not a creature — a shot, a blast, 'unknown'
       // — misses the lookup and shoves nobody, which is correct.
       const shove = CONFIG.enemies?.[source]?.playerKnockback;
-      if (shove > 0) applyPlayerKnockback(dir.x, dir.y, shove);
+      if (shove > 0) {
+        // WHAT IT ACTUALLY IMPARTED, not what the row asked for:
+        // applyPlayerKnockback trims to CONFIG.playerKnockback.maxSpeed and
+        // returns the trimmed figure, and systems/slam.js prices the shove off
+        // its speed. Billing the row's number would charge for a shove the
+        // seal never received the moment anyone retunes past the cap.
+        const got = applyPlayerKnockback(dir.x, dir.y, shove);
+        // QUEUED, not charged here. This is inside onPlayerHit; charging the
+        // impact now would be onPlayerHit calling itself from inside its own
+        // body, past its own i-frame gate. updateSlam spends it on the next
+        // frame, which is also the first frame the shove has moved anybody.
+        noteShove(got, source, dir);
+      }
     }
   }
   if (player.hp <= 0 && !deathState.active) killPlayer();
@@ -4763,11 +4804,12 @@ function animate(now) {
     if (stamp - lastMemAt > 20000) {
       lastMemAt = stamp;
       try {
-        crumb('mem', censusLine(censusReport({
+        const pool = visualPoolCount();
+        crumb('mem', `${censusLine(censusReport({
           items: [world.scene, assetCensusItems()],
           audioBytes: audioBankBytes() + musicBankBytes() + ambientBankBytes(),
           targetBytes: post.targetBytes?.() ?? 0,
-        })));
+        }))} pool${pool.bodies}/${pool.keys}`);
       } catch (err) {
         crumb('mem', `census failed: ${err?.message ?? err}`);
       }
@@ -5079,6 +5121,16 @@ function animate(now) {
     // player carried up through the surface in a boss's mouth banks the arc
     // from where they actually are rather than from where they swam to.
     updateBossGrab(dt, { onPlayerHit });
+
+    // BEING THROWN INTO SOMETHING — see systems/slam.js. Here, and not lower
+    // down with the rest of the combat, because this is the one moment the
+    // knock has been integrated and the arena clamp applied: an arrest reads
+    // as "on the wall, still pushing" for exactly this frame and has been bled
+    // by another step of decay by the next one. After updateBossGrab for the
+    // same reason that is after updatePlayer — the jaws are the last word on
+    // where the seal is, and a slam measured before them would be measured
+    // against a position the frame went on to overwrite.
+    updateSlam(dt, enemies, { onPlayerHit });
 
     // AIR TIME. updatePlayer has just integrated the arc and set breachDir, so
     // this is the first moment the ramp can be current — and it must be current
@@ -5898,6 +5950,23 @@ function animate(now) {
       dt, world.scene, player.mesh.position, player.stats.laserEyesLevel, input.aim,
       player.aimRig,
     );
+    // THE BUBBLE JET, next to the laser because they are the same shape of
+    // weapon — a line the seal points — and the two want to be read together
+    // when either is retuned.
+    //
+    // The stat block goes in rather than being imported, so the system can be
+    // driven by a harness without dragging the entity graph in; the MOUTH is
+    // the muzzle, because a stream leaving the middle of the animal reads as
+    // coming out of its chest. emitPoint returns the fallback object itself
+    // when the model has no mouth anchor, which is how the null below tells the
+    // two cases apart — every workbench-swapped model takes that branch.
+    setJetStats(player.stats);
+    updateBubbleJet(
+      dt, world.scene, player.mesh.position, player.stats.bubbleJetLevel, input.aim,
+      emitPointCount(player.aimRig, 'mouth')
+        ? emitPoint(player.aimRig, 'mouth', 0, input.aim, player.mesh.position, jetMuzzle)
+        : null,
+    );
     // The beams the perks above just lit — and, once the seal owns a pair, its
     // own. AFTER the perk update so a beam ignited this frame is placed, drawn
     // and resolved on the same frame it was asked for: a frame of lag here is a
@@ -5928,6 +5997,27 @@ function animate(now) {
         onPlayerHit: (dmg, dir, source, channel) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source, channel); },
       },
     });
+    // The stream, on the same hooks and for the same reason: a jet hit has to
+    // go through damageFrom(source) or it lands in the ledger as an untagged
+    // blow, which is worth zero stack-minutes and reports a return of 0.00x
+    // that no tuning can move. See the note in the beam hook above — this is
+    // the same failure, and the only reason it is not a shared helper is that
+    // the two take different ctx.
+    updateJets(dt, world.scene, {
+      enemies,
+      hooks: {
+        onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => (
+          damageFrom(source ?? 'bubbleJet')(e, dmg, x, y, dir, projectile, at)
+        ),
+        onEnemyKilled: onEnemyKilledFeedback,
+      },
+    });
+    // What the bodies the stream is standing in LOOK like while it burns them.
+    // After updateJets, so a tick landed this frame is on screen this frame
+    // rather than next — and it runs whether or not anything was hit, because
+    // the fall is most of the effect and a level that only moved on a hit would
+    // snap to cold the instant the beam left.
+    updateBurnGlow(dt);
     updateBossAbilities(dt, world.scene, player.mesh.position, {
       // The i-frame check is here rather than inside the perk, for the same
       // reason resolveCombat does it at each of its own damage sites: a dash
@@ -5944,6 +6034,15 @@ function animate(now) {
       // it, which is the counterplay working rather than being skipped.
       onPlayerSnare: (seconds, mul, thaw) => snarePlayer(seconds, mul, thaw),
     });
+
+    // A STAGED ATTRACTOR STORM, if the U panel has put one in the water. Beside
+    // the boss's own abilities because that is what it is standing in for, and
+    // after them so a storm anchored to a boss reads the position that boss's
+    // perk has just moved it to rather than the one it had last frame.
+    //
+    // It does no damage of its own: its cubes are ordinary enemy projectiles
+    // and land through combat.js like every other shot a boss fires.
+    updateAttractorStorm(dt, world.scene, player.mesh.position);
 
     // WHAT THE SCHOOLS SEE COMING. Small fish break away from a strike — the
     // wind-up scatters them in proportion to how much is banked, the dash
@@ -6082,6 +6181,13 @@ function animate(now) {
       },
     });
     perfPhase('combat', performance.now() - _tcombat);
+
+    // A BOSS'S COMMITTED RUN ENDING IN WATER THE SEAL IS NOT IN — see
+    // systems/dodge.js. After resolveCombat rather than before it, because the
+    // question the whole thing turns on is whether the pass CONNECTED, and
+    // this frame's contact has not been resolved until the line above returns.
+    updateDodge(dt, enemies);
+
     const _tabilities = performance.now();
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
 
@@ -7551,6 +7657,14 @@ function animate(now) {
   // second this takes would otherwise leave a half-finished explosion parked
   // over the frame until it closed.
   updateBossBooms(rawDt);
+  // And the light it goes up in front of. The WALL clock again, and for the
+  // same reason: the key has to be at full while the water is held at a tenth
+  // speed, and a rise on the world's clock would be at a tenth brightness in
+  // the one frame that gets kept. Handed the seal rather than reaching for it,
+  // exactly as systems/bossKill.js is handed its framing — `player.body` is the
+  // visual with materials on it, where `player.mesh` is the container that
+  // carries the position.
+  updateBossLight(rawDt, player.mesh?.position, player.body);
   updateHitShapeDebug();
   // The lock-on reticles. Real time, like the flashes above: a mark is a
   // countdown the player is reading off the screen, and a hit-stop that froze

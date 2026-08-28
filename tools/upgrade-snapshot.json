@@ -923,6 +923,29 @@
       }
     ]
   },
+  "bubbleJet": {
+    "cap": 6,
+    "perStack": [
+      {
+        "bubbleJetLevel": 101
+      },
+      {
+        "bubbleJetLevel": 102
+      },
+      {
+        "bubbleJetLevel": 103
+      },
+      {
+        "bubbleJetLevel": 104
+      },
+      {
+        "bubbleJetLevel": 105
+      },
+      {
+        "bubbleJetLevel": 106
+      }
+    ]
+  },
   "electricEel": {
     "cap": 8,
     "perStack": [

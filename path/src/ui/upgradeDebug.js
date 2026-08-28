@@ -6,7 +6,11 @@ import { expandDesc } from '../upgradeText.js';
 import * as playtest from '../systems/playtest.js';
 import { isTypingTarget } from './typing.js';
 import { bossArchetypes, bossPerkList, bossState, forceBoss, previewBossNames } from '../systems/boss.js';
+import { STORM_PERKS } from '../systems/bossPerks.js';
 import { enemies, resetEnemies, spawnNamed } from '../entities/enemies.js';
+import {
+  attractorStormList, startAttractorStorm, stopAttractorStorm, activeAttractorStorm,
+} from '../systems/attractorStorm.js';
 import { bounds, clampBelowSurface } from '../arena.js';
 
 // ---------------------------------------------------------------------------
@@ -67,6 +71,8 @@ let elementRow = null;
 let familyRow = null;
 let bossRow = null;
 let perkRow = null;
+let stormRow = null;
+let stormNoteEl = null;
 let namesEl = null;
 let visible = false;
 
@@ -74,6 +80,10 @@ let visible = false;
 // click gives you the card as it is most often dealt, not as it is best.
 let rarity = null;
 let family = ALL;
+// What is typed in the search box. Held here rather than read off the input at
+// filter time, so the one caller that clears it (the × and Escape) has a single
+// thing to set — and so the filter can be exercised without a DOM.
+let search = '';
 let status = '';
 
 // What the next FORCED BOSS will be. `ROLL` leaves it to the game — the bag
@@ -92,6 +102,11 @@ let creaturePick = 'fish';
 let creatureCount = 1;
 let creatureSelect = null;
 let countRow = null;
+
+// Which of the six candidate attacks the Stage button will put in the water.
+// The first row of attractorStorms.csv, so the button does something the first
+// time it is pressed rather than asking for a chip first.
+let stormPick = attractorStormList()[0]?.id ?? '';
 
 // Set by main.js — the run clock, for the playtest record. Passed in rather
 // than imported because `gameState` is a local in main.js, and a panel reaching
@@ -134,9 +149,34 @@ export function initUpgradeDebug(getTime = null, getWorld = null) {
     + 'background:rgba(232,236,243,0.04);';
   panel.appendChild(headEl);
 
+  // THE SEARCH BOX IS PINNED, above the scrolling block below it. It is the
+  // fastest way to the one row you came for, so it must never be the thing
+  // that has scrolled off — and it is the only control here that answers a
+  // question about the LIST rather than about the water.
+  const find = document.createElement('div');
+  find.style.cssText = 'padding:7px 10px 0;flex:0 0 auto;';
+  find.appendChild(searchControl());
+  panel.appendChild(find);
+
+  // THE CONTROL STACK SCROLLS, AND SHRINKS BEFORE THE LIST DOES.
+  //
+  // It was `flex:0 0 auto` while it held three chip rows, and every block
+  // added since — boss, creature, attractor storm — pushed the upgrade list
+  // and the footer down past the panel's own bottom edge, where `overflow:
+  // hidden` swallowed them. Nothing looked broken from in here: the panel was
+  // exactly as tall as it had been asked to be, and the half of it you wanted
+  // was underneath the screen.
+  //
+  // So: `0 1 auto` to let it give ground, `min-height:0` because a flex item
+  // will otherwise refuse to shrink below its content no matter what its
+  // shrink factor says, and a 60% cap so that a tall window spends its extra
+  // room on upgrades rather than on more debug furniture. The list's own
+  // `min-height` outranks all of it — on a short window the stack scrolls
+  // internally rather than eating the thing the panel is named after.
   const controls = document.createElement('div');
   controls.style.cssText =
-    'padding:7px 10px;flex:0 0 auto;display:flex;flex-direction:column;gap:5px;'
+    'padding:7px 10px;flex:0 1 auto;min-height:0;max-height:60%;overflow-y:auto;'
+    + 'display:flex;flex-direction:column;gap:5px;'
     + 'border-bottom:1px solid rgba(232,236,243,0.12);';
   // All three rows are filled in by render() rather than here, because all
   // three carry a selection: a chip built once keeps the highlight it was born
@@ -147,10 +187,17 @@ export function initUpgradeDebug(getTime = null, getWorld = null) {
   controls.append(rarityRow.wrap, elementRow.wrap, familyRow.wrap);
   controls.appendChild(bossControls());
   controls.appendChild(creatureControls());
+  controls.appendChild(stormControls());
   panel.appendChild(controls);
 
+  // `1 1 0` rather than `1 1 auto`: fifty-six rows of content as a flex basis
+  // makes the list the biggest item in the box and the shrink maths then hands
+  // the controls almost nothing. Basis zero asks for the leftovers instead,
+  // and the min-height is the floor under that — when the leftovers run out
+  // the violation is redistributed back to the stack above, which is the one
+  // that can afford to scroll.
   listEl = document.createElement('div');
-  listEl.style.cssText = 'flex:1 1 auto;overflow:auto;padding:4px 6px;';
+  listEl.style.cssText = 'flex:1 1 0;min-height:110px;overflow:auto;padding:4px 6px;';
   panel.appendChild(listEl);
 
   footEl = document.createElement('div');
@@ -339,6 +386,82 @@ function creatureControls() {
   return wrap;
 }
 
+// ---------------------------------------------------------------------------
+// THE ATTRACTOR STORM BLOCK
+// ---------------------------------------------------------------------------
+// Six candidate bullet-hell attacks built on the strange attractors the bait
+// balls already swim — see systems/attractorStorm.js and attractorStorms.csv.
+//
+// A DIFFERENT PROBLEM FROM THE THREE BLOCKS ABOVE, and the reason this is a
+// panel rather than a perk. Those three exist because the game rolls something
+// and you want a specific outcome. Nothing rolls these at all: they are six
+// designs and only one of them (or none) is going to be committed to a boss,
+// and the only way to choose is to be in the water while one is happening.
+// Putting them in the perk table to try them would mean shipping all six into
+// the rotation to find out which one is worth shipping.
+//
+// ANCHORED ON THE BOSS IF THERE IS ONE, in the middle of the water if not. A
+// storm is a boss attack and reads differently when it has a body at its
+// centre — the saddle study in particular is a shape you are meant to want to
+// swim into — but requiring a boss to be alive would make trying one a
+// two-step job every time, and the first thing you want is just to see it.
+function stormControls() {
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;flex-direction:column;gap:5px;margin-top:3px;padding-top:6px;'
+    + 'border-top:1px solid rgba(232,236,243,0.12);';
+
+  const heading = document.createElement('div');
+  heading.style.cssText = `color:${C.dim};letter-spacing:0.14em;font-size:9px;`;
+  heading.textContent = 'ATTRACTOR STORM — STAGE A CANDIDATE ATTACK';
+  wrap.appendChild(heading);
+
+  stormRow = row('study');
+  wrap.appendChild(stormRow.wrap);
+
+  const buttons = document.createElement('div');
+  buttons.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;';
+  buttons.append(
+    button('Stage storm', () => {
+      const w = world();
+      if (!w?.scene) { status = 'no scene — storms are not wired'; render(); return; }
+      // ON THE LIVE BOSS IF THERE IS ONE, and RIDING it — not merely centred
+      // where it happens to be standing. Four of the six ship as perks and the
+      // whole of what makes them a boss's attack rather than scenery is that
+      // the field goes where the animal goes, so staging one any other way
+      // would be judging a different thing from the one that ships.
+      //
+      // `bossState.enemy` is cleared the frame a boss dies, and the storm drops
+      // the body itself the frame its hp reaches zero, so neither can be left
+      // holding a creature on its way back to the pool.
+      const boss = bossState.enemy ?? null;
+      const staged = startAttractorStorm(w.scene, stormPick, null, { follow: boss });
+      status = staged
+        ? `staged ${staged.id} · ${staged.shape}/${staged.plane} · ${boss ? 'riding the boss' : 'mid-water'}`
+        : `no study called ${stormPick}`;
+      render();
+    }),
+    button('Stop storm', () => {
+      const w = world();
+      const was = activeAttractorStorm();
+      stopAttractorStorm(w?.scene ?? null);
+      // Cubes already in the air are NOT deleted — see steerCube. Said out
+      // loud here because a Stop button that leaves things on screen looks
+      // broken unless you know it is deliberate.
+      status = was ? `stopped ${was} — cubes in the air fly on` : 'no storm staged';
+      render();
+    }),
+  );
+  wrap.appendChild(buttons);
+
+  stormNoteEl = document.createElement('div');
+  stormNoteEl.dataset.stormNote = '1';
+  stormNoteEl.style.cssText = `color:${C.dim};font-size:10px;line-height:1.5;`;
+  wrap.appendChild(stormNoteEl);
+
+  return wrap;
+}
+
 // Every creature the ordinary spawner can send. Derived by SUBTRACTING the boss
 // table rather than by listing the roster, so a new row in enemies.csv turns up
 // here with nothing edited and a new boss stops appearing here for free — the
@@ -426,6 +549,83 @@ function row(label, content = null) {
   if (content) body.append(...content);
   wrap.appendChild(body);
   return { wrap, body };
+}
+
+// ---------------------------------------------------------------------------
+// THE SEARCH BOX
+// ---------------------------------------------------------------------------
+// Six family chips over fifty-six upgrades is a coarse instrument: `aoe` alone
+// is nine rows, and the question is almost always "where is THAT one".
+//
+// BUILT ONCE, HERE, AND NEVER REBUILT — unlike every chip row above it, which
+// render() throws away and remakes because each carries a selection a rebuilt
+// chip would lose. An <input> is the opposite case: rebuilding one mid-keystroke
+// drops the focus and the caret, so the field would accept exactly one letter
+// and then go dead. That is why this hangs off the panel's construction and
+// render() only ever re-runs the filter.
+//
+// IT MATCHES THE ID AS WELL AS THE NAME, and that is not a nicety — it is the
+// only thing that finds a card that has not been written yet. A staged upgrade
+// arrives as lorem (see CLAUDE.md), so its NAME is deliberately not the thing
+// you would type; `bubbleJet` is. Family and description are in the haystack
+// too, so "bubble" finds the jet through its description and "orbit" finds
+// everything that circles the seal without anyone having to tag them.
+function searchControl() {
+  const r = row('find');
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.dataset.search = '1';
+  input.placeholder = 'name, id, family, description';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.style.cssText =
+    'flex:1 1 auto;min-width:0;background:rgba(232,236,243,0.06);font:inherit;'
+    + `color:${C.text};border:1px solid rgba(232,236,243,0.16);border-radius:4px;`
+    + 'padding:2px 6px;outline:none;';
+  input.addEventListener('input', () => { search = input.value; render(); });
+  // ESCAPE CLEARS THE FIELD RATHER THAN CLOSING ANYTHING. It reaches this
+  // handler at all only because the global pause key guards on isTextEntry,
+  // which a text input satisfies — so Escape is genuinely free here, and
+  // clearing is what a filtered list wants it for. The `u` toggle is guarded on
+  // isTypingTarget for the same reason, which is why typing a name with a `u`
+  // in it does not shut the panel.
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !input.value) return;
+    e.stopPropagation();
+    search = '';
+    input.value = '';
+    render();
+  });
+  const clear = document.createElement('button');
+  clear.textContent = '×';
+  clear.title = 'Clear the search (Escape)';
+  clear.style.cssText =
+    'padding:1px 6px;border-radius:4px;cursor:pointer;font:inherit;background:transparent;'
+    + `color:${C.dim};border:1px solid rgba(232,236,243,0.16);`;
+  clear.addEventListener('click', () => {
+    search = '';
+    input.value = '';
+    input.focus();
+    render();
+  });
+  // The row's body is a wrapping flex box built for chips; the field wants the
+  // width, so it gets a nowrap line of its own inside it.
+  const line = document.createElement('div');
+  line.style.cssText = 'display:flex;gap:4px;flex:1 1 auto;min-width:0;';
+  line.append(input, clear);
+  r.body.style.cssText = 'display:flex;flex:1 1 auto;min-width:0;';
+  r.body.appendChild(line);
+  return r.wrap;
+}
+
+// Does `def` match what is typed? Every term has to hit SOMETHING — so "aoe
+// laser" narrows rather than widening, which is the behaviour of every search
+// box a person has ever used and the opposite of a naive `includes` on the
+// whole string.
+function matchesSearch(def) {
+  if (!search.trim()) return true;
+  const hay = `${def.id ?? ''} ${def.name ?? ''} ${def.family ?? ''} ${def.desc ?? ''}`.toLowerCase();
+  return search.toLowerCase().split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
 }
 
 // Derived from the table rather than listed here: `family` decides which damage
@@ -584,8 +784,16 @@ function render() {
   const sub = document.createElement('div');
   sub.style.cssText = `color:${C.dim};margin-top:2px;`;
   const glow = activeElement();
+  // How many rows the two filters are hiding. Without it a narrowed list looks
+  // exactly like a short table, and the family chip is easy to leave set and
+  // then forget about — which is the actual way this panel misleads people.
+  const showing = CONFIG.upgrades
+    .filter((u) => family === ALL || u.family === family)
+    .filter(matchesSearch).length;
+  const narrowed = showing !== CONFIG.upgrades.length;
   sub.textContent = `level ${player.level}  ·  ${held} pick${held === 1 ? '' : 's'} held`
-    + (glow ? `  ·  glow: ${glow}` : '');
+    + (glow ? `  ·  glow: ${glow}` : '')
+    + (narrowed ? `  ·  ${showing} of ${CONFIG.upgrades.length} shown` : '');
   headEl.append(title, sub);
 
   // TIER. Every row of rarities.csv, in ladder order, in its own colour.
@@ -628,6 +836,31 @@ function render() {
   }
   namesEl.textContent = rolledNames.join('\n');
 
+  // STORM. Chips from the table for the same reason the boss ones are, and the
+  // note under them is the row's own `notes` cell — six designs is more than
+  // anybody holds in their head between sessions, and the difference between
+  // them is the thing being judged.
+  stormRow.body.textContent = '';
+  const storms = attractorStormList();
+  for (const s of storms) {
+    stormRow.body.appendChild(chip(s.id, () => stormPick === s.id, () => {
+      stormPick = s.id;
+      render();
+    }));
+  }
+  const live = activeAttractorStorm();
+  const picked = storms.find((s) => s.id === stormPick);
+  // Says whether this study SHIPS as something, which is the first thing you
+  // want to know about it. Four are perks and roll onto ordinary bosses like
+  // the beam and the aura do; the two Thomas ones are being kept back for a
+  // boss of their own and reach the water only through this button.
+  const where = picked && STORM_PERKS.has(picked.id)
+    ? 'boss perk · also in the perk row above'
+    : 'panel only — no boss rolls this';
+  stormNoteEl.textContent = picked
+    ? `${live === picked.id ? '▶ live · ' : ''}${where} · ${picked.notes ?? ''}`
+    : 'attractorStorms.csv has no usable rows';
+
   // CREATURE. Rebuilt from the roster for the same reason the boss chips are,
   // and the selection is re-asserted afterwards: rebuilding the options drops
   // the browser's idea of which one is chosen, and a picker showing one body
@@ -655,8 +888,25 @@ function render() {
   // designer put them in, and a list that reorders itself is one you have to
   // re-read every time.
   listEl.textContent = '';
-  const rows = CONFIG.upgrades.filter((u) => family === ALL || u.family === family);
+  // The chip and the box compose. Both are narrowing, so a search that finds
+  // nothing while a family is selected is usually the family, not the term —
+  // which is what the empty state below says rather than leaving you to guess.
+  const byFamily = CONFIG.upgrades.filter((u) => family === ALL || u.family === family);
+  const rows = byFamily.filter(matchesSearch);
   for (const def of rows) listEl.appendChild(upgradeRow(def));
+  // AN EMPTY LIST HAS TO SAY SO. A blank panel reads as broken, and the one
+  // thing it must never do is let a typo look like an upgrade that is missing
+  // from the table.
+  if (!rows.length) {
+    const none = document.createElement('div');
+    none.dataset.empty = '1';
+    none.style.cssText = `color:${C.dim};padding:10px 6px;`;
+    none.textContent = search.trim()
+      ? `nothing matches "${search.trim()}"`
+        + (family === ALL ? '' : ` in ${family} — ${byFamily.length} row${byFamily.length === 1 ? '' : 's'} here, ${CONFIG.upgrades.length} in the table`)
+      : 'no upgrades in this family';
+    listEl.appendChild(none);
+  }
 
   statusEl.textContent = status;
   statusEl.title = status;
@@ -751,6 +1001,7 @@ export function upgradeDebugState() {
     // its own dead field would be reporting a choice nobody can make.
     element: activeElement(),
     family,
+    search,
     status,
     creature: creaturePick,
     count: creatureCount,
@@ -760,10 +1011,15 @@ export function upgradeDebugState() {
 
 /** Panel state the keyboard also drives, so a test can set it without a click. */
 export function setUpgradeDebugChoice({
-  rarity: tier, family: fam, creature, count,
+  rarity: tier, family: fam, creature, count, search: term,
 } = {}) {
   if (tier !== undefined) rarity = tier;
   if (fam !== undefined) family = fam;
+  // The field is NOT written back from here. This seam sets what the panel
+  // filters on; the input's own value is the person's, and a setter that
+  // stamped over it would make the box and the list disagree the moment a test
+  // ran alongside one. The harness drives the real listener separately.
+  if (term !== undefined) search = term;
   if (creature !== undefined) creaturePick = creature;
   if (count !== undefined) creatureCount = count;
   if (visible) render();

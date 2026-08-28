@@ -446,6 +446,25 @@ const DOCS = {
     attack: 'What KIND of harm this is — kinetic, electric, blast, beam, void, venom, chill or infection. It decides what the telegraph ring looks like: the colour and the crackling/roiling/sagging edge both come from the shared threat palette, so an electric boss draws in the exact cyan of the player\'s Voltaic element. Look only — nothing about damage reads it. Blank keeps the colour the perk had before the palette existed.',
     notes: 'Free text — nothing reads it.',
   },
+  'attractorStorms.csv': {
+    id: 'Which study. The code joins to this, so only ids the game implements are accepted — anything else is refused, loudly. Four of them (saddle, ring, echo, release) are ALSO ids in bossPerks.csv: the same name for the same thing, so the row here says what the field looks like and the row there says what the fight is.',
+    enabled: 'FALSE takes it out of the U panel AND leaves the matching boss perk with nothing to open — the boss telegraphs and no field arrives, which is warned about in the console. To retire one of the four properly, switch it off in bossPerks.csv instead. Blank means enabled.',
+    shape: 'Which system the cubes fly: thomas, lorenz or aizawa. The same three the bait balls swim.',
+    plane: 'Which two of the system\'s three axes go on screen — `xz` or `xy`. The most consequential column here: collision is planar everywhere in this game, so the attractor has to resolve to two coordinates. The third is still integrated and kept hidden, and it is what stops the motion repeating. It is also a free second attack — `ring` and `release` are one Aizawa field seen down two different axes, and one is a hollow ring while the other is a shell.',
+    scale: 'World units per attractor unit. What sizes the pattern against the arena, which is 80 wide.',
+    centre: 'Subtracted from the vertical axis before scaling. The PICTURE, not the system: Lorenz\'s attractor lives around z 25, so 25 here is what puts the butterfly on the anchor instead of far above it.',
+    param: 'The system\'s own constant, where a row wants to move it: thomasB on a thomas row, unused by the other two. Blank is the canonical value. The lattice runs 0.085 against the bait ball\'s 0.19 — below about 0.11 the same equations stop settling into a blob and wander a lattice of channels instead.',
+    rate: 'Attractor time units per second. The speed dial — it changes how fast the shape is traversed without changing the shape.',
+    speedCap: 'The fastest a cube may travel, in world units a second. Not cosmetic: Lorenz runs about forty times faster at a wing rim than at the saddle, so unclamped the slow regions become a stationary wall and the fast ones cross the arena inside a frame. The clamp shortens the integration step rather than the move, so the path is preserved exactly and only its timing changes.',
+    count: 'How many cubes it keeps in the water. On `echo` this is the PAIR total, so it is half as many events as it looks like.',
+    damage: 'Per cube, on contact. One hit and the cube is spent, through the same door every other enemy shot goes through.',
+    life: 'Seconds a cube lives before it expires.',
+    radius: 'The cube\'s hit radius in world units. The drawn cube is exactly this wide, because a bullet hell that is not honest about its hitboxes reads as unfair rather than as hard.',
+    mode: 'What the storm DOES beyond flying its field — field, ring, echo, swarm or release. See the row\'s notes and systems/attractorStorm.js.',
+    period: 'Seconds between the mode\'s own event: the lattice slide, the swarm\'s breath. On `release` it is the DRAW alone — how long the telegraph takes — and the firing then lasts however long the volley needs. Blank means the mode has no event.',
+    reach: 'World units a second the anchor walks toward the seal. Blank is an anchored storm, which is all of them but `ring`.',
+    notes: 'What this design IS, shown under the chips in the U panel. The one column here that is read by a person rather than by the game.',
+  },
 };
 
 DOCS['statText.csv'] = {
@@ -489,6 +508,7 @@ const BLANK_MEANS = {
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
   'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused', attack: 'the old colour' },
+  'attractorStorms.csv': { enabled: 'enabled', notes: '—', centre: '0 (already on the anchor)', param: 'the canonical constant', period: 'no event', reach: 'anchored' },
   // A blank spawn value means "leave the built-in alone", NOT zero — zero
   // would switch a system off, which is the opposite of leaving it alone.
   'spawning.csv': { value: 'config.js default', min: '—', max: '—', notes: '—' },
@@ -623,6 +643,12 @@ export const TABLES = [
     file: 'path/src/bossPerks.csv',
     label: 'Boss perks',
     blurb: 'The one special thing a boss can do. The first boss of a run has none; every one after it gets exactly one, and its name always says which. Only ids the game implements can be added — a perk with no code behind it is refused.',
+    addRows: false,
+  },
+  {
+    file: 'path/src/attractorStorms.csv',
+    label: 'Attractor storms',
+    blurb: 'The SHAPE of six chaotic-field attacks built on the strange attractors the bait balls already swim — how big, how fast, how many. What makes one a fight (cooldown, tell, duration, range, damage) is bossPerks.csv, where four of these six have a row under the same id and roll onto ordinary bosses. The two Thomas rows are not perks: one is a whole arena and one is a body, so both are waiting to be a boss of their own and reach the water only from the U panel. Cubes are stand-ins for the real art.',
     addRows: false,
   },
 ];

@@ -1128,6 +1128,20 @@ export function sampleCount(name) {
   return buffers.get(name)?.length ?? 0;
 }
 
+// ONE loaded buffer, for a caller that has to hold a source open rather than
+// fire and forget. playSfx cannot serve those: it builds an envelope, connects
+// a one-shot and returns, so there is nothing left to stop when the thing
+// making the noise stops. systems/jetBed.js loops this through its own drive
+// and filter, which is why it wants the buffer and not a played voice.
+//
+// `pickSample` rather than `set[0]`, so a bed with several takes recorded still
+// varies between openings — the variation rule is the table's, not each
+// caller's, and a second implementation of it here would be a second one to
+// get wrong.
+export function sampleBuffer(name) {
+  return pickSample(name);
+}
+
 export function playSfx(name, volumeScale = 1, opts = {}) {
   if (isMuted()) { noteSfx(name, 'muted'); return; }
   if (!unlocked || !ctx || !CONFIG.audio.enabled) { noteSfx(name, 'off'); return; }

@@ -120,3 +120,66 @@ Two lines that described the old behaviour:
 `ironLungBonus`'s label ("damage bonus") is unchanged and still reads fine, but
 the number behind it is now measured AT A FULL BREATH rather than being a
 constant. If the tip should say so, that row's `label` is where.
+
+## Bubble Jet Stream — the card, and the words {effect} uses
+
+A new upgrade. A held stream that snakes out of the seal's mouth — a spline
+that lags behind your aim and carries a travelling wave, so a hard turn throws
+an S down its length. It spools up, holds for about a second, vents, and does
+it again; every stack lengthens the hold and shortens the gap, so by the cap it
+is barely off. There is a synth bed underneath that ramps up and holds with it.
+
+The reference is Raiden III's plasma beam: a thick, bright, wobbling line that
+whips rather than points.
+
+`upgrades.csv`, row `bubbleJet` — both staged as lorem:
+
+- `name`. The card title. Two or three words. It is filed with Laser Eyes and
+  Electric Eel, so it wants to sit alongside those rather than under them.
+- `desc`. Flavour and then `{effect}` — the numbers are measured, so the prose
+  half is one short clause. The thing worth saying is that it is HELD: every
+  other weapon the seal owns fires and resolves, and this one stays on.
+
+`statText.csv`, six rows staged with `[DRAFT]` markers rather than lorem, so
+the phrase stays readable while it is wrong. Each row's `notes` column carries
+its own brief; the short version:
+
+- `bubbleJetLevel` — `label` and `unlock`. The unlock is what the FIRST stack
+  reads as, so it has to announce a new weapon rather than a number going up.
+- `jetHold` and `jetCool` — the pair that is actually the card. How long the
+  stream is open, and how long the seal spends venting. They want to read as
+  two halves of one idea, and `jetCool` is a lower-is-better row.
+- `jetDamage` — per TICK of contact, ten times a second per body. The label
+  should not imply a single hit.
+- `jetReach`, `jetWidth` — length, and thickness (which is also its hit
+  radius, so a fatter stream genuinely touches more).
+
+The built-in `name` and `desc` on the `bubbleJet` entry in `path/src/config.js`
+are staged as lorem too. `upgrades.csv` overrides both at boot and nothing
+renders them today — they are the fallback if that row is ever cleared — but
+they are staged rather than left plausible for the reason CLAUDE.md gives:
+plausible copy is what survives a review.
+
+Nothing here has a hive icon yet, so the tile falls back to a monogram. That is
+`tools/atlas-render/icons.json` and a separate job.
+
+## Boss names for the four attractor perks
+
+`path/src/bossNames.csv` — eight staged rows, a prefix and an epithet for each
+of `saddle`, `ring`, `echo` and `release`. The brief for each is in that row's
+own `notes`; the short version is that all four are a boss that opens a
+chaotic FIELD around itself rather than firing something at you, so the
+vocabulary wants to be about weather and water rather than about weapons:
+
+- `saddle` — a butterfly-shaped field whose two lobes swap through the middle,
+  where the boss is standing. The danger is the crossover.
+- `ring` — a spinning ring with a hollow middle and a fast rim, worn by the
+  animal. Safe in the hole or outside it, nowhere in between.
+- `echo` — hands your own shots back as pairs that drift apart and arrive from
+  two sides at once.
+- `release` — draws its attack in the water first, then fires down the drawn
+  line very fast. The drawing is the tell.
+
+Each perk needs at least one part so the naming guarantee has something to
+land on (`tools/boss-test.mjs` checks exactly that); more than one in a slot is
+better, and a `solo` nickname row works too.

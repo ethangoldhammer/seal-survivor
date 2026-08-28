@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
-import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul } from '../config.js';
+import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul } from '../config.js';
 import { acquireVisual, releaseVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import { bounds, clampBelowSurface, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
@@ -2562,13 +2562,18 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // as against how long the run has been going. It is a third multiplier rather
   // than a bigger `ramp`, because it has to be able to leave the first twenty
   // levels of a run untouched — see the block in config.js.
+  //
+  // ...and on top of all THREE, the master dial from CONFIG.pace — one number
+  // for how hard the water is, exactly 1 in the tuned game, so the two ramps
+  // above are what a run actually rides and this only scales them.
   const hp = (def.hp + def.hpPerDifficulty * difficulty) * difficultyRamp('hp', difficulty)
-    * lateGameMul('hp', spawnLevel);
+    * lateGameMul('hp', spawnLevel) * enemyPaceMul('hp');
   // Damage and speed ramp with the run the same way hp always has. All three
   // are baked per-instance at spawn rather than read from the shared def
   // every frame: `def` is one object for the whole species, so scaling it in
   // place would retroactively buff everything already on screen.
-  const damageMul = difficultyRamp('damage', difficulty) * lateGameMul('damage', spawnLevel);
+  const damageMul = difficultyRamp('damage', difficulty) * lateGameMul('damage', spawnLevel)
+    * enemyPaceMul('damage');
   const contactDamage = (def.contactDamage + (def.contactDamagePerDifficulty ?? 0) * difficulty)
     * damageMul;
   // Ranged attackers scale with the same damage curve as contact — otherwise
@@ -2586,8 +2591,12 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // Speed variance stays outside the ramp: it's the per-individual jitter
   // that keeps a school from moving as one body, not part of the threat
   // curve, and multiplying it up would spread a late-run school apart.
+  //
+  // The master dial sits inside the ramped term for the same reason: it is a
+  // scale on the threat curve, and the jitter is not part of that curve.
   const speed = (def.speed + (def.speedPerDifficulty ?? 0) * difficulty)
     * difficultyRamp('speed', difficulty) * lateGameMul('speed', spawnLevel)
+    * enemyPaceMul('speed')
     + Math.random() * (def.speedVariance ?? 0);
   const heading = Math.random() * Math.PI * 2;
 
@@ -2675,7 +2684,15 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // The level surcharge on all three axes below, as ONE number — see
   // CONFIG.spawn.lateGame.seek for why they are not three rows. 1 for the whole
   // first twenty levels, so everything under `rampOn` reads exactly as it did.
-  const seekMul = lateGameMul('seek', spawnLevel);
+  //
+  // ...times the master difficulty dial's aggression axis, which is the only
+  // one of the four that needs its own note: the three lines below used to
+  // apply `seekMul` only inside their `rampOn` branch, which is correct for a
+  // ramp read off the run clock (there is no ramp at difficulty 0) and wrong
+  // for a dial that is meant to hold all run. Each is restated below as
+  // `<base> * <ramp, or 1> * seekMul` — the same value it always produced at
+  // seekMul 1, and now a value at difficulty 0 as well.
+  const seekMul = lateGameMul('seek', spawnLevel) * enemyPaceMul('seek');
   // Prey distraction decays toward a floor: each difficulty point sheds
   // `preyFocus` of what is LEFT above the floor, so it falls off quickly at
   // first and then flattens instead of crossing zero.
@@ -2689,24 +2706,21 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // happened to land, which is the one thing this ramp exists not to do.
   // `preyFocusMin` is still the floor — a shark that ignored fish entirely
   // would switch the whole food chain off. See the note on it in config.js.
-  const preyRadius = rampOn
-    ? preyFloor + (preyBase - preyFloor) * ((1 - (ramp.preyFocus ?? 0)) ** difficulty) / seekMul
-    : preyBase;
+  const preyDecay = rampOn ? ((1 - (ramp.preyFocus ?? 0)) ** difficulty) : 1;
+  const preyRadius = preyFloor + (preyBase - preyFloor) * preyDecay / seekMul;
   // ...and turning tightens, compounding and capped, like the spawn ramps.
-  const turnRate = def.turnRate
-    ? def.turnRate * (rampOn
-      ? Math.min(ramp.turnRateMax ?? Infinity, (1 + (ramp.turnRate ?? 0)) ** difficulty) * seekMul
-      : 1)
-    : def.turnRate;
+  const turnRamp = rampOn
+    ? Math.min(ramp.turnRateMax ?? Infinity, (1 + (ramp.turnRate ?? 0)) ** difficulty)
+    : 1;
+  const turnRate = def.turnRate ? def.turnRate * turnRamp * seekMul : def.turnRate;
   // ...and a SCHOOL presses harder, which is the only line here that reaches a
   // basic fish — the two above read a preyRadius and a turnRate that the swarm
   // species do not declare. Same compounding-and-capped shape; see
   // CONFIG.hunterRamp.swarmSeek for why the schools needed their own.
-  const towardPlayer = def.swarm
-    ? (def.swarm.towardPlayer ?? 0) * (rampOn
-      ? Math.min(ramp.swarmSeekMax ?? Infinity, (1 + (ramp.swarmSeek ?? 0)) ** difficulty) * seekMul
-      : 1)
-    : 0;
+  const swarmRamp = rampOn
+    ? Math.min(ramp.swarmSeekMax ?? Infinity, (1 + (ramp.swarmSeek ?? 0)) ** difficulty)
+    : 1;
+  const towardPlayer = def.swarm ? (def.swarm.towardPlayer ?? 0) * swarmRamp * seekMul : 0;
 
   // Trap-type enemies play a one-shot attack clip on their own timer rather
   // than the continuous idle/swim/boost loop, so they get a tiny dedicated

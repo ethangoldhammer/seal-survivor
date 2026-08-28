@@ -45,6 +45,7 @@ scallopCount,counted,count,wild scallop,,,,TRUE,,,,,
 garlicLevel,,level,sea garlic,,a garlicky aura,,TRUE,,,,,
 eelLevel,,level,electric eel,,chain lightning,,TRUE,,,,,
 laserEyesLevel,,level,laser eyes,,eye beams,,TRUE,,,,,
+bubbleJetLevel,,level,[DRAFT] bubble jet,,[DRAFT] a bubble jet,,,,,,,"The stat name the card falls back to, and what the FIRST stack reads as (`unlock`). Two or three words each; the unlock line is the one a player sees the very first time the card is offered, so it has to say a new weapon has arrived rather than that a number went up."
 starfishLevel,,level,starfish,,starfish projectiles,,TRUE,,,,,
 seagullLevel,,level,seagull,,homing dive-bombers,,TRUE,,,,,
 belugaLevel,,level,beluga,,an oxygen filled bubble that also traps baddies.,,TRUE,,,,,
@@ -122,6 +123,11 @@ laserBeams,laser eyes,count,beam,beams,,,,,,,,How many beams fire at once. A ROU
 laserReach,laser eyes,flat,reach,,,,,m,,,,How far a beam cuts.
 laserGap,laser eyes,flat,between beams,,,,,s,TRUE,,,Seconds between firings. LOWER IS BETTER.
 laserBurn,laser eyes,flat,burn,,,,,,,,,"The lingering damage a cut leaves. Fifth in the order — the small rider, which is the row the four-row cap drops."
+jetDamage,bubble jet,flat,[DRAFT] stream damage,,,,,,,,,"What one TICK of the stream does — it hits ten times a second per body, so this number is small next to a bullet's and the label should not imply a single hit. Two or three words."
+jetHold,bubble jet,flat,[DRAFT] stream time,,,,,s,,,,"How long the stream stays open. WITH jetCool below, this is what the card actually sells — put it first in the reading order, and the two want labels that read as a pair."
+jetCool,bubble jet,flat,[DRAFT] between streams,,,,,s,TRUE,,,"Seconds of venting between streams. LOWER IS BETTER, which the `lower` column already handles — the label just has to make the direction obvious at a glance."
+jetReach,bubble jet,flat,[DRAFT] reach,,,,,m,,,,"How far the stream goes. Same shape as the laser's `reach` row above; it can borrow that word or not."
+jetWidth,bubble jet,flat,[DRAFT] stream width,,,,,,,,,"How thick the stream is, which is also its hit radius — a fatter one genuinely touches more. Last in the order: the small rider, and the row the four-row cap drops."
 oysterDamage,oyster blaster,flat,dmg,,,,,,,,,What the pearl itself hits for before it bursts.
 oysterBomblets,oyster blaster,count,popping boba,bobas,,,,,,,,"How many glowing bomblets a burst throws. A rounded step, so it shows dimmed on the picks where it does not tick."
 oysterBlast,oyster blaster,flat,boba size,,,,,m,,,,How wide each bomblet goes off.

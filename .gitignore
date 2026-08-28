@@ -26,6 +26,7 @@ dist-menu-look
 dist-dividend-look
 dist-score-look
 dist-hurt-look
+dist-killlight-look
 
 # The layout audit's build and its report (npm run layout). Same deal as the
 # look pages: the page and the runner are tracked, what they generate is not.

@@ -533,6 +533,41 @@ export function laserEyesLevelStats(level, s = {}) {
 }
 
 /**
+ * BUBBLE JET STREAM, per level.
+ *
+ * THE HOLD AND THE COOL ARE THE CARD. Damage and reach are the rows a player
+ * reads first and they are the least of what a stack buys: a sustained weapon
+ * is worth its UPTIME, and the two rows that move it are how long the stream
+ * stays open and how long the seal spends venting between. At level 1 it is
+ * open for well under half the cycle and reads as a burst; by the cap it is
+ * barely off, which is the moment the upgrade becomes what its name says.
+ *
+ * That is also why the cool has a floor and the hold has none: a cool that
+ * curves to zero is a permanent stream, which is a damage aura with a shape and
+ * the one thing this weapon must not become. See `coolMin`.
+ */
+export function bubbleJetLevelStats(level, s = {}) {
+  const c = CONFIG.bubbleJet ?? {};
+  const n = lv(level);
+  return {
+    // Per TICK of contact, not per hit — CONFIG.bubbleJet.tickEvery decides how
+    // often that is, so the number is small next to a bullet's.
+    jetDamage: abilityDamageOf((c.damage ?? 9) + (c.damagePerLevel ?? 2.6) * (n - 1), s),
+    jetReach: (c.reach ?? 22) + (c.reachPerLevel ?? 2.4) * (n - 1),
+    jetHold: (c.hold ?? 0.9) + (c.holdPerLevel ?? 0.22) * (n - 1),
+    // THE FLOOR LIVES HERE, not in the system. The laser learned this the hard
+    // way: a clamp applied where the weapon fires and not where the card is
+    // measured makes the hover tip promise a cadence the water never delivers.
+    jetCool: Math.max(c.coolMin ?? 0.5,
+      (c.cool ?? 1.9) + (c.coolPerLevel ?? -0.16) * (n - 1)),
+    // The stream gets FATTER with stacks, which is both the read and a real
+    // increase in what one sweep can touch — the hit test is a distance to the
+    // polyline against half this.
+    jetWidth: (c.width ?? 1.1) + (c.widthPerLevel ?? 0.09) * (n - 1),
+  };
+}
+
+/**
  * OYSTER BLASTER, per level.
  *
  * Same shape as the laser: `bomblets` is a rounded step, and the small rider —
@@ -762,6 +797,7 @@ export const LEVEL_STATS = {
   clubThrow: clubThrowLevelStats,
   harp: harpLevelStats,
   laserEyes: laserEyesLevelStats,
+  bubbleJet: bubbleJetLevelStats,
   oysterBlaster: oysterLevelStats,
   sealTeam: sealTeamLevelStats,
   razorClam: razorClamLevelStats,

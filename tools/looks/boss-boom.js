@@ -32,7 +32,9 @@ import { createPost } from '../../path/src/systems/post.js';
 import {
   initParticles, updateParticles, resetParticles, updateParticleScale,
 } from '../../path/src/entities/particles.js';
-import { fireBossBoom, updateBossBooms, resetBossBooms, bossBoomCount, measureBossBody, initBossBooms } from '../../path/src/systems/bossBoom.js';
+import { fireBossBoom, updateBossBooms, resetBossBooms, bossBoomCount, measureBossBody, initBossBooms, bossBoomPalette } from '../../path/src/systems/bossBoom.js';
+import { bodyPalette } from '../../path/src/systems/bodyPalette.js';
+import { spawnBossDissolve, resetBossDissolve } from '../../path/src/systems/bossDissolve.js';
 import { spawnNamed, resetEnemies } from '../../path/src/entities/enemies.js';
 import { refreshHitShape, hitShapeSpheres } from '../../path/src/systems/hitShape.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from '../../path/src/systems/bossGibs.js';
@@ -191,7 +193,7 @@ function section(title, columns) {
   document.getElementById('sheet').appendChild(row);
 }
 
-function present(title, note, picked = false) {
+function present(title, note, picked = false, swatches = null) {
   const cell = document.createElement('div');
   cell.className = picked ? 'cell pick' : 'cell';
   const canvas = document.createElement('canvas');
@@ -206,6 +208,22 @@ function present(title, note, picked = false) {
   const cap = document.createElement('div');
   cap.className = 'cap';
   cap.innerHTML = `<b>${title}</b>${picked ? ' <span class="tag">— shipped</span>' : ''}<br>${note}`;
+  // THE PALETTE, DRAWN. A list of hexes in a caption is unreadable and the
+  // whole question this section asks — did the cloud get the animal's colours —
+  // is answered by putting the swatches beside the cloud at the width they
+  // actually cover.
+  if (swatches?.length) {
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex;height:14px;margin-top:7px;border-radius:3px;overflow:hidden';
+    for (const sw of swatches) {
+      const cellSw = document.createElement('div');
+      cellSw.style.cssText = `flex:${Math.max(0.02, sw.share)};background:#${sw.hex.toString(16).padStart(6, '0')}`;
+      cellSw.title = `#${sw.hex.toString(16).padStart(6, '0')} · ${Math.round(sw.share * 100)}%`
+        + `${sw.sources ? ` · ${sw.sources.join(', ')}` : ''}${sw.raw ? ' · raw' : ''}`;
+      strip.appendChild(cellSw);
+    }
+    cap.appendChild(strip);
+  }
   cell.appendChild(cap);
   row.appendChild(cell);
 
@@ -473,6 +491,145 @@ for (const [r, note] of [
   present(`Body r=${r}`, `${note} · shown in the arena frustum`, r === 16.8);
 }
 
+// --- STRUCK OFF THE EDGE ----------------------------------------------------
+// THE ONE SECTION WITH AN ANIMAL IN IT, and it has to be: every panel above
+// detonates a `stand()` — a point and a radius — which measures as a CIRCLE by
+// definition and so cannot show the thing this is about. The bands are laid
+// along the body's measured silhouette and pushed outward from it, so the only
+// way to see whether that is happening is to put a body under one.
+//
+// The question: does the cloud stay off the animal. An explosion centred on the
+// centroid puts its brightest, densest lobes exactly where the boss is, and the
+// trophy comes out with a lit shape in it that is the smoke rather than the
+// shark. Left column is that; the rest is the aura.
+section('Struck off the edge <span>— the same explosion, over the animal that made it</span>', 3);
+{
+  const RIM = BOOM_BASE.rim ?? {};
+  for (const [key, name] of [['bossShark', 'megalodon'], ['bossSquid', 'kraken'], ['bossCrab', 'king crab']]) {
+    for (const [rim, label, note] of [
+      [{ ...RIM, enabled: false }, 'rings about the centre',
+        'what this was — the core lands on the body and the animal is photographed through it'],
+      [RIM, 'struck off the edge',
+        'the bands walk the measured silhouette and push outward · nothing is born inside it'],
+    ]) {
+      const e = spawnBoss(key, { x: 0, y: 0 });
+      if (!e) { resetEnemies(scene); continue; }
+      updateParticleScale(fightCam, gl);
+      detonate({ wall: 0.34, body: e, boom: { rim }, cam: fightCam });
+      present(`${name} · ${label}`, note, rim.enabled !== false);
+      resetEnemies(scene);
+    }
+  }
+}
+
+// HOW FAR THE AURA STANDS OFF. `reach` is where the outermost band lands, x the
+// body radius, measured OUTWARD from the skin — the one number to move if the
+// cloud is too thick to see the boss through, or too thin to read as an
+// explosion at all.
+section('How far it stands off <span>— CONFIG.boss.boom.rim.reach, over a megalodon</span>', 4);
+{
+  const RIM = BOOM_BASE.rim ?? {};
+  for (const reach of [0.25, 0.45, RIM.reach ?? 0.6, 0.95]) {
+    const e = spawnBoss('bossShark', { x: 0, y: 0 });
+    if (!e) { resetEnemies(scene); continue; }
+    updateParticleScale(fightCam, gl);
+    detonate({ wall: 0.34, body: e, boom: { rim: { ...RIM, reach } }, cam: fightCam });
+    present(`reach ${reach}`,
+      reach < 0.3 ? 'a rim light — reads as the animal glowing, not as it ending'
+        : reach > 0.9 ? 'the aura has outgrown the body and is closing over it again'
+          : 'a band with the animal legible inside it',
+      reach === (RIM.reach ?? 0.6));
+    resetEnemies(scene);
+  }
+}
+
+// --- EVERY COLOUR IT HAD ----------------------------------------------------
+// THE SECTION THE STAND-INS CANNOT SHOW. Everything above detonates a point and
+// a radius, which has no materials at all — so the palette falls all the way
+// through to the tuned signature and the sheet would prove nothing.
+//
+// systems/bodyPalette.js reads the colours off the LIVE shaders: the texture
+// averages (which is where the megalodon keeps its entire colour), the material
+// colours, the bioluminescent uniforms (which is where the orca keeps its
+// entire colour), the Look panel's signature, and any elemental status. The
+// strip under each cell is what it found, at the width each colour covers.
+//
+// THE AVERAGES ARE ONLY REACHABLE HERE. They need a 2D canvas, so
+// tools/body-palette-test.mjs cannot see them at all and says so — this page is
+// the only place the texture half of the palette is ever checked.
+section('Every colour it had <span>— read off the live shaders, not off one hex per asset</span>', 4);
+for (const [key, name] of BOSSES) {
+  const e = spawnBoss(key, { x: 0, y: 0 });
+  if (!e) { resetEnemies(scene); continue; }
+  const raw = bodyPalette(e);
+  const pal = bossBoomPalette(e);
+  updateParticleScale(fightCam, gl);
+  detonate({ wall: 0.34, body: e, cam: fightCam });
+  present(name,
+    `${raw?.swatches?.length ?? 0} colours off ${Math.round(raw?.tris ?? 0)} triangles · `
+    + `sources: ${[...new Set((raw?.swatches ?? []).flatMap((x) => x.sources))].join(', ') || '—'}`,
+    false, pal.swatches);
+  resetEnemies(scene);
+}
+
+// AND THE SAME FOUR WITH IT SWITCHED OFF, which is the comparison the section
+// exists for: one flat tint off `assetBaseColor`, exactly as this shipped.
+section('...against the single tint it replaced <span>— CONFIG.boss.boom.palette.enabled off</span>', 4);
+for (const [key, name] of BOSSES) {
+  const e = spawnBoss(key, { x: 0, y: 0 });
+  if (!e) { resetEnemies(scene); continue; }
+  const off = { ...(BOOM_BASE.palette ?? {}), enabled: false };
+  updateParticleScale(fightCam, gl);
+  detonate({ wall: 0.34, body: e, boom: { palette: off }, cam: fightCam });
+  present(`${name} · one tint`, 'the Look panel\u2019s signature, lifted — which for a body '
+    + 'that keeps its colour in a texture or in a shader is a colour nothing on screen wears',
+  false, bossBoomPalette(e).swatches);
+  resetEnemies(scene);
+}
+
+// AND WHAT WAS ON IT WHEN IT DIED. An elemental status is on the CREATURE, not
+// in any material — see the venomTimer block in entities/enemies.js — so it is
+// the one part of the palette that is about this individual rather than about
+// the species. It arrives flagged `raw` and skips the hide lift: these are UI
+// colours, authored bright, and put through the correction a near-black hide
+// needs they come out as the same pale wash as everything else.
+section('...and what was on it when it died <span>— the elemental statuses, weighted by what is left of them</span>', 4);
+{
+  const els = CONFIG.biolum?.elements ?? {};
+  for (const [field, id] of [[null, null], ['venomTimer', 'venom'], ['chillTimer', 'chill'], ['infectTimer', 'infection']]) {
+    const e = spawnBoss('bossShark', { x: 0, y: 0 });
+    if (!e) { resetEnemies(scene); continue; }
+    if (field) e[field] = 9;
+    updateParticleScale(fightCam, gl);
+    detonate({ wall: 0.34, body: e, cam: fightCam });
+    present(id ? `${els[id]?.label ?? id}` : 'clean',
+      id ? `${field} · #${(els[id]?.color ?? 0).toString(16)} — the swatch is the element's own `
+        + 'colour, untouched'
+        : 'nothing on the body — the species\u2019 own colours only',
+    false, bossBoomPalette(e).swatches);
+    resetEnemies(scene);
+  }
+}
+
+// HOW FAR A PUFF MOVES FROM THE MEAN toward its own swatch. 0 is the single
+// flat tint; 1 is the full palette with nothing holding it together.
+section('How much of the palette reaches the cloud <span>— CONFIG.boss.boom.palette.spread</span>', 4);
+{
+  const P = BOOM_BASE.palette ?? {};
+  for (const spread of [0, 0.4, P.spread ?? 0.75, 1]) {
+    const e = spawnBoss('bossSquid', { x: 0, y: 0 });
+    if (!e) { resetEnemies(scene); continue; }
+    updateParticleScale(fightCam, gl);
+    detonate({ wall: 0.34, body: e, boom: { palette: { ...P, spread } }, cam: fightCam });
+    present(`spread ${spread}`,
+      spread === 0 ? 'the mean only — one colour, which is what this shipped as'
+        : spread === 1 ? 'every puff its own swatch, with nothing pulling them together'
+          : 'the animal\u2019s colours, still reading as one cloud',
+      spread === (P.spread ?? 0.75));
+    resetEnemies(scene);
+  }
+}
+
 // --- COLOUR -----------------------------------------------------------------
 section('Colour comes off the boss <span>— assetBaseColor, the same field its wreckage uses</span>', 4);
 for (const b of ROSTER) {
@@ -490,6 +647,66 @@ for (const size of [0.65, 1, 1.4, 1.9]) {
       : size > 1.2 ? 'half again on top of that — the cloud outgrows the animal it came out of'
         : 'the body, and half again',
   size === 1);
+}
+
+// --- THE BODY LETTING GO ----------------------------------------------------
+// THE FRAME AFTER THE PHOTOGRAPH. systems/bossCorpse.js hands the visual back
+// to the pool and the boss is simply gone; systems/bossDissolve.js replaces it
+// on that frame with a cloud of its own vertices, each wearing the colour of
+// the skin it came off.
+//
+// THIS SECTION IS THE ONLY PLACE THE TEXEL SAMPLING IS EVER SEEN. It needs a 2D
+// canvas, so tools/boss-dissolve-test.mjs cannot reach it at all and says so —
+// every point there falls through to the palette. Here the megalodon's gums
+// come out pink and its flank grey, in the places those things were, or the
+// UVs are being read wrong and it does not.
+//
+// The mesh is left IN the frame for the first panel of each pair, which is the
+// comparison that matters: the cloud has to be dense enough to stand in for the
+// body it is replacing.
+section('The body letting go <span>— one particle per vertex, in the colour of the skin it came off</span>', 4);
+for (const [key, name] of BOSSES) {
+  const e = spawnBoss(key, { x: 0, y: 0 });
+  if (!e) { resetEnemies(scene); continue; }
+  resetParticles();
+  resetBossBooms();
+  resetBossDissolve();
+  reseed();
+  updateParticleScale(fightCam, gl);
+  const n = spawnBossDissolve(e);
+  // The body goes, exactly as burst() takes it — this panel is what is left.
+  e.visual.visible = false;
+  // A short run on the WATER's clock: by the time this fires the kill shot has
+  // let go and the world is back at full speed.
+  run(0.25, 1, fightCam);
+  present(name, `${n} points · the mesh is hidden, so this is all there is`);
+  e.visual.visible = true;
+  resetEnemies(scene);
+}
+
+// AND HOW IT GOES. The whole point is the ramp: everything stops within a few
+// tenths of a second and then spends three seconds shrinking away, so a panel
+// at the moment of the swap says nothing about whether it works.
+section('...over the next few seconds <span>— tons of drag, then the size ramp</span>', 4);
+for (const after of [0, 0.6, 1.6, 3]) {
+  const e = spawnBoss('bossShark', { x: 0, y: 0 });
+  if (!e) { resetEnemies(scene); continue; }
+  resetParticles();
+  resetBossBooms();
+  resetBossDissolve();
+  reseed();
+  updateParticleScale(fightCam, gl);
+  spawnBossDissolve(e);
+  e.visual.visible = false;
+  run(Math.max(1 / 60, after), 1, fightCam);
+  present(`+${after}s`,
+    after === 0 ? 'the frame of the swap — the cloud is the body'
+      : after < 1 ? 'the drag has caught them and the silhouette is opening'
+        : after < 2 ? 'shrinking, and the current has started to take it'
+          : 'nearly gone',
+  after === 0);
+  e.visual.visible = true;
+  resetEnemies(scene);
 }
 
 // --- AFTER THE SHUTTER ------------------------------------------------------

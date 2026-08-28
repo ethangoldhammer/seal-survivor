@@ -38,6 +38,22 @@
 //   HOLDS               runs before clampToArena for exactly this reason, and
 //                       the failure mode is the seal leaving the world.
 //
+//   IT COSTS SOMETHING  a shove that ARRESTS — against a wall, against a body
+//   TO BE THROWN INTO   — spends in one frame the travel it was going to spend
+//   SOMETHING           over a third of a second, and systems/slam.js charges
+//                       for that. Three prices built off one number, and the
+//                       thing worth failing over is the RELATIONSHIP between
+//                       them: a wall must cost more than open water, and none
+//                       of them may reach the boss per-hit ceiling, or the cap
+//                       becomes the tuning and the numbers here stop meaning
+//                       anything.
+//
+//   AND BEING PINNED    is the one state with no exit but the player's own
+//   RAMPS               swimming, so it gets dearer every second. Free for the
+//                       grace, survivable at one second, fatal by four. Both
+//                       ends are the test: a ramp that bit during the grace
+//                       would tax every accidental brush of a wall in the game.
+//
 //   ALMOST NOBODY DOES  every creature in the game already hands onPlayerHit a
 //   IT                  shove DIRECTION — it has always driven the tail flick
 //                       — so the mechanism reaches all of them and the only
@@ -55,12 +71,15 @@ import { bounds, updateBounds } from '../path/src/arena.js';
 import {
   player, initPlayer, resetPlayer, updatePlayer, applyPlayerKnockback,
 } from '../path/src/entities/player.js';
+import { enemies, spawnNamed, resetEnemies } from '../path/src/entities/enemies.js';
+import { noteShove, updateSlam, resetSlam, slamState } from '../path/src/systems/slam.js';
 
 // The animation controller warns for every state the procedural stand-in has
 // no clip for, which here is all of them — no models are loaded in Node.
 const realWarn = console.warn;
 console.warn = (msg, ...rest) => {
-  if (typeof msg === 'string' && msg.startsWith('[animation]')) return;
+  if (typeof msg === 'string' && (msg.startsWith('[animation]') || msg.startsWith('[assets]')
+    || msg.startsWith('[feedback]'))) return;
   realWarn(msg, ...rest);
 };
 
@@ -243,6 +262,275 @@ section('THE ARENA STILL HOLDS');
 }
 
 // ---------------------------------------------------------------------------
+section('IT COSTS SOMETHING TO BE THROWN INTO SOMETHING');
+// ---------------------------------------------------------------------------
+// systems/slam.js. Three prices built off ONE number (`damagePerSpeed`), which
+// is what makes them comparable — a wall costing more than open water is a
+// claim about `wallMul`, not about two unrelated damage figures somebody typed.
+{
+  const S = K.slam;
+  const MID = (bounds.bottom + bounds.surfaceY) / 2;
+
+  // A recording onPlayerHit, the shape main.js's has.
+  const ledger = () => {
+    const l = { hits: [], total: 0, byChannel: {} };
+    l.onPlayerHit = (dmg, dir, source = '?', channel = 'attack') => {
+      l.hits.push({ dmg, source, channel });
+      l.total += dmg;
+      l.byChannel[channel] = (l.byChannel[channel] ?? 0) + dmg;
+    };
+    return l;
+  };
+
+  /** One frame of the game as main.js runs it: move the seal, then price it. */
+  const step = (l, input = noInput) => { updatePlayer(dt, input); updateSlam(dt, enemies, l); };
+
+  /** Put the seal `gap` units off the right-hand wall, everything cleared. */
+  const atWall = (gap = 0.4) => {
+    resetPlayer();
+    resetSlam();
+    resetEnemies(scene);
+    player.mesh.position.set(bounds.right - player.stats.hitRadius - gap, MID, 0);
+    player.velocity.set(0, 0);
+  };
+
+  // --- THE SHOVE LANDING, in open water --------------------------------------
+  {
+    atRest();
+    resetSlam();
+    const l = ledger();
+    const got = applyPlayerKnockback(1, 0, SPEED);
+    noteShove(got, 'bossHammerhead', { x: 1, y: 0 });
+    for (let i = 0; i < 90; i++) step(l);
+    check('a shove that ends in open water is charged once', l.hits.length === 1,
+      `${l.hits.length} hits, ${l.total.toFixed(1)} damage`);
+    check('...for its speed', Math.abs(l.total - SPEED * S.damagePerSpeed) < 0.01,
+      `${l.total.toFixed(2)} against ${SPEED} u/s x ${S.damagePerSpeed}`);
+    check('...and billed to the animal that threw you', l.hits[0]?.source === 'bossHammerhead',
+      `${l.hits[0]?.source}`);
+    note(`${l.total.toFixed(1)} of a ${player.stats.maxHp} bar for being thrown, `
+      + `against the hammerhead's own ${CONFIG.enemies.bossHammerhead.contactDamage}/s of contact`);
+  }
+
+  // --- ...AND THE SAME SHOVE INTO A WALL -------------------------------------
+  {
+    atWall();
+    const l = ledger();
+    const got = applyPlayerKnockback(1, 0, SPEED);
+    noteShove(got, 'bossHammerhead', { x: 1, y: 0 });
+    for (let i = 0; i < 90; i++) step(l);
+    const arrest = l.hits.length > 1 ? l.total - SPEED * S.damagePerSpeed : 0;
+    check('a shove into a wall costs more than the same shove into water',
+      l.hits.length === 2 && arrest > SPEED * S.damagePerSpeed,
+      `${l.hits.length} hits, ${arrest.toFixed(1)} for the wall on top of `
+      + `${(SPEED * S.damagePerSpeed).toFixed(1)} for the throw`);
+    check('...roughly wallMul times as much, allowing for a frame of decay',
+      arrest > SPEED * S.damagePerSpeed * S.wallMul * 0.8
+      && arrest <= SPEED * S.damagePerSpeed * S.wallMul + 1e-6,
+      `${arrest.toFixed(2)} against a full-speed ${(SPEED * S.damagePerSpeed * S.wallMul).toFixed(2)}`);
+
+    // ONE COLLISION IS ONE EVENT. The seal stays on that wall for the rest of
+    // the shove; without the rising-edge latch it would be billed every frame,
+    // and the failure looks like the wall doing sixty times the damage.
+    check('...and the wall is billed once, not once a frame', l.hits.length === 2,
+      `${l.hits.length} hits over 1.5s parked against it`);
+  }
+
+  // --- SWIMMING INTO A WALL IS FREE ------------------------------------------
+  // The gate is the KNOCK, not the contact. A player who steers into the edge
+  // of the arena at full speed has not been thrown into anything, and a version
+  // of this that charged them would be a tax on using the whole arena.
+  {
+    atWall(6);
+    const l = ledger();
+    for (let i = 0; i < 180; i++) step(l, pushInput(1, 0));
+    check('swimming into a wall under your own power costs nothing', l.total === 0,
+      `${l.total.toFixed(2)} damage in 3s of holding the stick at the wall`);
+  }
+
+  // --- A SHOVE ALONG A WALL IS NOT AN ARREST ---------------------------------
+  // Only the component driving INTO the surface is an impact. A shove that
+  // carries the seal down the length of a wall it is already touching has lost
+  // nothing to it.
+  {
+    atWall(0);
+    const l = ledger();
+    const got = applyPlayerKnockback(0, -1, SPEED);   // straight down the wall
+    noteShove(got, 'bossHammerhead', { x: 0, y: -1 });
+    for (let i = 0; i < 40; i++) step(l);
+    check('a shove ALONG a wall is charged for the throw and nothing else',
+      l.hits.length === 1, `${l.hits.length} hits, ${l.total.toFixed(1)} damage`);
+  }
+
+  // --- INTO A BODY -----------------------------------------------------------
+  {
+    resetPlayer();
+    resetSlam();
+    resetEnemies(scene);
+    player.mesh.position.set(0, MID, 0);
+    player.velocity.set(0, 0);
+    // The measured hitbox is fitted to a GLB no Node harness loads, so it is
+    // live with a `bound` of zero and would answer "no" to every overlap ever
+    // tested. Dropped, which falls this back to the circle — see the same note
+    // in tools/boss-dodge-test.mjs.
+    const e = spawnNamed(scene, 'bossShark', 0, { x: 0, y: MID }, { ignoreCaps: true, overfill: true });
+    e.invuln = 0;
+    e.isBoss = true;
+    e.hitShape = null;
+    e.mesh.position.set(e.radius * 0.8, MID, e.mesh.position.z);
+
+    const l = ledger();
+    const got = applyPlayerKnockback(1, 0, SPEED);   // straight at it
+    noteShove(got, 'bossHammerhead', { x: 1, y: 0 });
+    step(l);
+    check('a shove into a body is charged for the body as well as the throw',
+      l.hits.length === 2, `${l.hits.length} hits, ${l.total.toFixed(1)} damage`);
+    check('...and dearer than the same shove into a wall would have been',
+      S.bodyMul > S.wallMul, `bodyMul ${S.bodyMul} against wallMul ${S.wallMul}`);
+    // Billed to the SHOVER. Being thrown into a shark that was only swimming
+    // past is the hammerhead's doing, and the shark must not appear on the
+    // threat table — or in the epitaph — for having been in the way.
+    check('...billed to the animal that threw you, not the one in the way',
+      l.hits.every((h) => h.source === 'bossHammerhead'),
+      l.hits.map((h) => h.source).join(', '));
+    resetEnemies(scene);
+  }
+
+  // --- NOTHING MAY REACH THE BOSS PER-HIT CEILING ----------------------------
+  // If any single price here could touch CONFIG.boss.damageCap.perHit, the cap
+  // would silently become the tuning and every number above would stop meaning
+  // what it says. Checked against the CAP at the shove ceiling, not at the
+  // hammerhead's number, because that is the worst case a row could ask for.
+  {
+    const worst = Math.min(S.maxDamage, K.maxSpeed * S.damagePerSpeed * Math.max(S.wallMul, S.bodyMul));
+    const ceiling = CONFIG.boss.damageCap.perHit * player.stats.maxHp;
+    check('the dearest possible slam still sits under the boss per-hit cap',
+      worst < ceiling, `${worst.toFixed(1)} against a ${ceiling.toFixed(1)} ceiling`);
+    check('...and maxDamage is what binds it, not the cap',
+      S.maxDamage < ceiling, `maxDamage ${S.maxDamage}, cap ${ceiling.toFixed(1)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('AND BEING PINNED RAMPS');
+// ---------------------------------------------------------------------------
+// A wall at your back and a body on your front. BOTH halves are required, and
+// both ends of the ramp are the test: free during the grace, and steep enough
+// by the fourth second that sitting in it is not a strategy.
+{
+  const S = K.slam;
+  const P = S.pin;
+  const MID = (bounds.bottom + bounds.surfaceY) / 2;
+
+  const ledger = () => {
+    const l = { total: 0, hits: 0 };
+    l.onPlayerHit = (dmg) => { l.total += dmg; l.hits++; };
+    return l;
+  };
+
+  /** Seal against the right wall with a boss leaning on it. */
+  const pinned = () => {
+    resetPlayer();
+    resetSlam();
+    resetEnemies(scene);
+    const x = bounds.right - player.stats.hitRadius;
+    player.mesh.position.set(x, MID, 0);
+    player.velocity.set(0, 0);
+    const e = spawnNamed(scene, 'bossHammerhead', 0, { x, y: MID }, { ignoreCaps: true, overfill: true });
+    e.invuln = 0;
+    e.isBoss = true;
+    e.hitShape = null;
+    e.mesh.position.set(x - e.radius * 0.5, MID, e.mesh.position.z);
+    return e;
+  };
+
+  /** Hold the pin for `seconds`, re-planting both bodies every frame. */
+  const hold = (e, seconds, l) => {
+    const x = bounds.right - player.stats.hitRadius;
+    for (let i = 0; i < Math.round(seconds / dt); i++) {
+      player.mesh.position.x = x;
+      e.mesh.position.x = x - e.radius * 0.5;
+      updateSlam(dt, enemies, l);
+    }
+  };
+
+  {
+    const e = pinned();
+    let l = ledger();
+    hold(e, P.grace * 0.9, l);
+    check('the first moments of wall contact are free', l.total === 0,
+      `${l.total.toFixed(2)} damage in ${(P.grace * 0.9).toFixed(2)}s (grace ${P.grace}s)`);
+
+    l = ledger();
+    hold(e, 1, l);
+    const firstSecond = l.total;
+    l = ledger();
+    hold(e, 1, l);
+    const fourthSecond = l.total;
+    check('...and then it gets worse every second', fourthSecond > firstSecond * 1.5,
+      `${firstSecond.toFixed(1)} in the second after the grace, `
+      + `${fourthSecond.toFixed(1)} in the one after that`);
+    check('...to a ceiling rather than forever', fourthSecond <= P.max + 1e-6,
+      `${fourthSecond.toFixed(1)}/s against a ${P.max}/s cap`);
+    note(`held for four seconds a pin costs about `
+      + `${(firstSecond + fourthSecond + P.max * 2).toFixed(0)} of a ${player.stats.maxHp} bar`);
+  }
+
+  // BOTH HALVES ARE REQUIRED. A wall on its own is a place to be, and a body on
+  // its own is something to swim away from. Either alone charging would make
+  // half the arena and every boss overlap a pin.
+  {
+    const e = pinned();
+    e.mesh.position.x = bounds.left;    // the body wanders off
+    const l = ledger();
+    for (let i = 0; i < Math.round(3 / dt); i++) {
+      player.mesh.position.x = bounds.right - player.stats.hitRadius;
+      updateSlam(dt, enemies, l);
+    }
+    check('a wall with nothing pressing you into it is not a pin', l.total === 0,
+      `${l.total.toFixed(2)} damage in 3s flat against the wall`);
+  }
+  {
+    const e = pinned();
+    const l = ledger();
+    for (let i = 0; i < Math.round(3 / dt); i++) {
+      player.mesh.position.x = 0;       // out in open water, boss on top of it
+      e.mesh.position.x = 0;
+      updateSlam(dt, enemies, l);
+    }
+    check('a body on top of you in open water is not a pin either', l.total === 0,
+      `${l.total.toFixed(2)} damage in 3s inside the boss`);
+  }
+
+  // AND IT LETS GO. A ramp that kept its clock through a break would have the
+  // player pay the fourth second's rate for the first second of the next one.
+  {
+    const e = pinned();
+    const l = ledger();
+    hold(e, 3, l);
+    e.mesh.position.x = bounds.left;
+    updateSlam(dt, enemies, ledger());
+    check('breaking out resets the ramp', slamState.pinTime === 0,
+      `${slamState.pinTime.toFixed(3)}s still on the clock`);
+    resetEnemies(scene);
+  }
+
+  // IT IS STILL NOT A HOLD. The rule from systems/control.js, and the one thing
+  // about being pinned that must never change: it is expensive, never involuntary.
+  {
+    const e = pinned();
+    const from = player.mesh.position.x;
+    for (let i = 0; i < Math.round(0.5 / dt); i++) {
+      updatePlayer(dt, pushInput(-1, 0));
+      updateSlam(dt, enemies, ledger());
+    }
+    check('a pinned seal can still swim out of it', player.mesh.position.x < from - 1,
+      `made ${(from - player.mesh.position.x).toFixed(2)} units of ground in half a second`);
+    resetEnemies(scene);
+  }
+}
+
+// ---------------------------------------------------------------------------
 section('RESET CLEARS IT');
 // ---------------------------------------------------------------------------
 {
@@ -251,6 +539,14 @@ section('RESET CLEARS IT');
   resetPlayer();
   check('a new run does not start mid-shove', player.knockX === 0 && player.knockY === 0,
     `${player.knockX}, ${player.knockY}`);
+
+  // ...NOR MID-PIN, and nor owing for a shove the last run never landed.
+  noteShove(SPEED, 'bossHammerhead', { x: 1, y: 0 });
+  slamState.pinTime = 2;
+  resetSlam();
+  check('...nor still ramping from the last one',
+    slamState.pinTime === 0 && slamState.pendingSpeed === 0,
+    `pin ${slamState.pinTime}s, ${slamState.pendingSpeed} u/s owed`);
 }
 
 // ---------------------------------------------------------------------------

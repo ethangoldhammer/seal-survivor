@@ -199,6 +199,10 @@ export function baseStats() {
     bounceMaxBounces: CONFIG.bounce.maxBounces,
     eelLevel: 0,
     laserEyesLevel: 0,
+    // BUBBLE JET STREAM — how many stacks. A level index like the rest of this
+    // run: the stream's damage, reach, hold and cooldown are all curves off it
+    // in levelStats.js, so nothing here is a quantity.
+    bubbleJetLevel: 0,
     starfishLevel: 0,
     seagullLevel: 0,
     belugaLevel: 0,
@@ -265,7 +269,7 @@ export function baseStats() {
 export const INTEGER_STATS = new Set([
   'multishot', 'multishotLevel', 'pierce', 'missileCount', 'shrapnelCount', 'shrimpCount', 'shrimpLevel',
   'scallopCount', 'bounceMaxBounces', 'projectileBonus', 'orbiterBonus',
-  'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'starfishLevel',
+  'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'bubbleJetLevel', 'starfishLevel',
   'maneaterLevel', 'ironLungLevel', 'homingShotLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
   'dumboLevel', 'harpLevel', 'oysterLevel', 'razorClamLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',

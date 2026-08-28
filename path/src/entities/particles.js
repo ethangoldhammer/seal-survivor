@@ -705,6 +705,94 @@ export function emit(name, x, y, opts = {}) {
   markRange(firstIdx, count);
 }
 
+/**
+ * Fire a burst whose particles are placed INDIVIDUALLY, one per point.
+ *
+ * WHY THIS EXISTS AND emit() COULD NOT DO IT. Every burst in the game until now
+ * has been "n particles from a point": emit() takes one position, rolls an
+ * angle inside a cone and a speed inside a band, and the shape of the burst is
+ * entirely in those two rolls. systems/bossDissolve.js needs the opposite — the
+ * positions ARE the effect, because they are the boss's own vertices, and no
+ * cone or speed band can describe the silhouette of a megalodon.
+ *
+ * Calling emit() a thousand times would work and is the wrong shape: it would
+ * re-resolve the emitter, the goo group, the turbulence settings and the tint
+ * a thousand times, and put a thousand separate ranges on every attribute for
+ * three's uploader to merge. One call, one range, one resolution.
+ *
+ * EVERYTHING ELSE IS STILL THE EMITTER'S. Life, size, drag, gravity, the
+ * per-particle drag scatter, the turbulence, the goo flag and the surface clip
+ * all come from CONFIG.emitters[name] exactly as they do for emit() — this is a
+ * different way of choosing WHERE, not a second particle system. `def.count`,
+ * `def.speed` and `def.cone` are the three the caller replaces, and they are
+ * ignored here rather than being made to mean something else.
+ *
+ * @param cloud {{count, x, y, vx, vy, r, g, b, size}} typed arrays, each at
+ *        least `count` long. `vx/vy` and `size` are optional; `r/g/b` are
+ *        LINEAR 0..1, which is what the buffer holds — a caller with hexes
+ *        should go through THREE.Color rather than dividing by 255.
+ * @param opts {{glow, sizeMul}}
+ */
+export function emitCloud(name, cloud, opts = {}) {
+  const def = CONFIG.emitters[name];
+  if (!def || !geometry || !cloud) return 0;
+  const n = Math.min(cloud.count | 0, cloud.x?.length ?? 0, cloud.y?.length ?? 0);
+  if (!(n > 0)) return 0;
+
+  const sizeMul = Math.max(0, opts.sizeMul ?? 1);
+  const glow = (def.glow ?? 1) * (CONFIG.bloom?.particleOverdrive ?? 1) * (opts.glow ?? 1);
+  const tb = turbSettings();
+  const turb = tb ? (def.turbulence ?? 1) : 0;
+  const dragVary = Math.max(0, tb?.dragVary ?? 0);
+  const wantsGroup = def.goo && gooSettings() ? gooGroupName(def) : null;
+  const gooGroup = wantsGroup ? gooGroupNames().indexOf(wantsGroup) + 1 : 0;
+
+  // NOT thinned by CONFIG.fx.spriteDensity, and this is the one place that is
+  // deliberate rather than an oversight. Thinning a burst makes it sparser;
+  // thinning a cloud whose points ARE a body's vertices punches holes in the
+  // silhouette, which is the whole of what this draws. The caller owns its own
+  // count — see CONFIG.boss.dissolve.points, which is where to turn it down.
+
+  const firstIdx = cursor % capacity;
+  for (let i = 0; i < n; i++) {
+    const idx = cursor % capacity;
+    cursor += 1;
+    const p3 = idx * 3;
+    const p2 = idx * 2;
+
+    attrs.position.array[p3] = cloud.x[i];
+    attrs.position.array[p3 + 1] = cloud.y[i];
+    attrs.position.array[p3 + 2] = 0;
+
+    attrs.aVelocity.array[p3] = cloud.vx ? cloud.vx[i] : 0;
+    attrs.aVelocity.array[p3 + 1] = cloud.vy ? cloud.vy[i] : 0;
+    attrs.aVelocity.array[p3 + 2] = 0;
+
+    attrs.aColor.array[p3] = (cloud.r ? cloud.r[i] : 1) * glow;
+    attrs.aColor.array[p3 + 1] = (cloud.g ? cloud.g[i] : 1) * glow;
+    attrs.aColor.array[p3 + 2] = (cloud.b ? cloud.b[i] : 1) * glow;
+
+    attrs.aGravity.array[p2] = def.gravity ? def.gravity[0] : 0;
+    attrs.aGravity.array[p2 + 1] = def.gravity ? def.gravity[1] : 0;
+
+    const life = rand(def.life, 0.5);
+    attrs.aStart.array[idx] = clock;
+    attrs.aLife.array[idx] = life;
+    attrs.aSize.array[idx] = (cloud.size ? cloud.size[i] : rand(def.size, 0.15)) * sizeMul;
+    attrs.aDrag.array[idx] = Math.max(0.05, rand(def.drag, 2) * (1 + (Math.random() * 2 - 1) * dragVary));
+    attrs.aTurb.array[idx] = turb;
+    // NEVER clipped at the surface. A dissolving body is not a bubble: a boss
+    // killed at the water line would lose every point above it on the first
+    // frame, and the cloud would come out cut off along a straight edge.
+    attrs.aClip.array[idx] = 0;
+    attrs.aGoo.array[idx] = gooGroup;
+    if (gooGroup) gooUntil.set(wantsGroup, Math.max(gooUntil.get(wantsGroup) ?? -1, clock + life));
+  }
+
+  markRange(firstIdx, n);
+  return n;
+}
+
 // Solve every tracked bubble's position and burst the ones that have broken
 // the surface. Mirrors the vertex shader's closed form exactly — the two
 // drifting apart would show up as a pop happening off the bubble.

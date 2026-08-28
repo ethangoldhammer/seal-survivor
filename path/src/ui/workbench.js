@@ -4,12 +4,14 @@ import { emit } from '../entities/particles.js';
 import { describeHaptic, previewHaptic } from '../systems/haptics.js';
 import {
   playSfx, unlockAudio, gainToDb, dbToGain, DB_FLOOR, watchSfx, sfxVoiceLoad,
-  busReduction, sampleCount, reloadSample, getAudioContext, isMuted, setSfxEcho, sfxEchoOpen,
+  busReduction, sampleCount, reloadSample, getAudioContext, isMuted, setSfxEcho, sfxEchoOpen, hasSample,
 } from '../systems/audio.js';
 import { uploadAsset } from '../systems/assetUpload.js';
 import { stageState, onStageChanged, stageAnchor } from '../systems/stage.js';
 import { fireBossBoom, resetBossBooms } from '../systems/bossBoom.js';
 import { startCardRiser, stopCardRiser, stopAllCardRisers, cardRiserCount } from '../systems/cardRiser.js';
+import { stageJet, stopStagedJet, stagedJetOpen, jetStats, bubbleJetState } from '../systems/bubbleJet.js';
+import { jetBedCount } from '../systems/jetBed.js';
 
 // THE FEEL WORKBENCH — F.
 //
@@ -102,6 +104,13 @@ const BOOM_ROW = '*boom';
 // nobody would type, and every other row is found by its own name.
 const BOOM_TERMS = 'boom explosion smoke shockwave boss going up kill';
 
+// THE LIGHT ON THE KILL, on the same terms and beside the explosion it lights.
+// Not a feedback event either — it is a moment with no sound and no rumble, and
+// systems/bossLight.js is driven by the corpse countdown rather than by a
+// feedback() call.
+const LIGHT_ROW = '*killlight';
+const LIGHT_TERMS = 'light kill light shaft god ray hero volumetric wash polaroid trophy photo snapshot beam';
+
 // THE GOO, on the same terms and for a stronger reason. A goo group is a
 // SUBSTANCE, not a moment: `blood` is thrown by a kill, by a body coming apart
 // and by a boss losing a weak spot, and `foam` by four different emitters that
@@ -121,6 +130,19 @@ const GOO_SHARED = '*shared';
 // and this one is scheduled across exactly it.
 const RISER_ROW = '*cardriser';
 const RISER_TERMS = 'riser buildup sweep filter card falling slam fall build cardriser';
+
+// THE BUBBLE JET, on the same terms as the three above and for the same reason
+// the riser is: it is a CONTINUOUS thing, not a moment. Its two feedback events
+// (`jetSpool`, `jetCut`) are in the rail like any others and neither of them
+// carries the weapon's sound — that is a bed held open across the whole burn
+// (systems/jetBed.js), which nothing in CONFIG.sfx can describe.
+//
+// It gets a row rather than living under `jetSpool` because the question you
+// come here to answer is "does the stream look and sound right while it is
+// open", and that is a thing you HOLD, not a thing you fire. An event view with
+// a Fire button cannot ask it.
+const JET_ROW = '*bubblejet';
+const JET_TERMS = 'jet bubble jet stream beam spline snake wiggle moog synth bed drone plasma bubblejet';
 
 const STYLES = `
   .sv-wb { position: fixed; inset: 0 0 96px 0; z-index: 31; display: none;
@@ -503,10 +525,15 @@ function renderRail() {
     // The explosion rides at the top of the Bosses section. It is matched on a
     // bag of words rather than on its id, which is a symbol nobody would type.
     const boomHere = title === 'Bosses' && (!filter || BOOM_TERMS.includes(filter));
+    // ...and the light on the kill rides directly under it, on the same terms.
+    const lightHere = title === 'Bosses' && (!filter || LIGHT_TERMS.includes(filter));
     // ...and the card riser rides at the top of the level-up section, on the
     // same terms. See RISER_ROW.
     const riserHere = title === 'The level-up screen' && (!filter || RISER_TERMS.includes(filter));
-    if (!hits.length && !boomHere && !riserHere) continue;
+    // ...and the stream rides at the top of the weapon section, on the same
+    // terms again. See JET_ROW.
+    const jetHere = title === 'Your weapon' && (!filter || JET_TERMS.includes(filter));
+    if (!hits.length && !boomHere && !lightHere && !riserHere && !jetHere) continue;
     const h = document.createElement('div');
     h.className = 'sv-wb-sec';
     h.textContent = title;
@@ -520,6 +547,15 @@ function renderRail() {
       list.appendChild(b);
       shown++;
     }
+    if (lightHere) {
+      const lr = document.createElement('div');
+      lr.className = 'sv-wb-ev' + (current === LIGHT_ROW ? ' sv-wb-on-row' : '');
+      lr.innerHTML = '<span class="nm" style="font-weight:600">\u2600 The light on the kill</span>';
+      lr.title = 'The hero shaft on the seal and the wash behind the body it beat, raised for the trophy photograph.';
+      lr.addEventListener('click', () => { current = LIGHT_ROW; render(); });
+      list.appendChild(lr);
+      shown++;
+    }
     if (riserHere) {
       const r = document.createElement('div');
       r.className = 'sv-wb-ev' + (current === RISER_ROW ? ' sv-wb-on-row' : '');
@@ -527,6 +563,15 @@ function renderRail() {
       r.title = 'The filter sweep under one card falling into its cell, scheduled across exactly how long the fall takes and cut by the landing.';
       r.addEventListener('click', () => { current = RISER_ROW; render(); });
       list.appendChild(r);
+      shown++;
+    }
+    if (jetHere) {
+      const jr = document.createElement('div');
+      jr.className = 'sv-wb-ev' + (current === JET_ROW ? ' sv-wb-on-row' : '');
+      jr.innerHTML = '<span class="nm" style="font-weight:600">\u224b The bubble jet</span>';
+      jr.title = 'The snaking stream and the bed that holds under it — the wave, the whip, the overdrive. Held open by hand rather than fired.';
+      jr.addEventListener('click', () => { current = JET_ROW; render(); });
+      list.appendChild(jr);
       shown++;
     }
     for (const id of hits) { list.appendChild(railRow(id)); shown++; }
@@ -542,6 +587,8 @@ function renderRail() {
 
 function render() {
   if (!panel) return;
+  // See `jetPoll` — the jet view is the one detail pane with a timer behind it.
+  if (jetPoll) { clearInterval(jetPoll); jetPoll = null; }
   renderRail();
   // The library is part of the detail view, not a fixed sidebar: its + buttons
   // assign to THIS event's voice, and its rows say which voices use each file.
@@ -553,7 +600,9 @@ function render() {
   if (current === '*global') return renderGlobal();
   if (current === GOO_ROW) return renderGoo();
   if (current === BOOM_ROW) return renderBoom();
+  if (current === LIGHT_ROW) return renderKillLight();
   if (current === RISER_ROW) return renderCardRiser();
+  if (current === JET_ROW) return renderBubbleJet();
 
   const event = current;
   const def = CONFIG.feedback[event];
@@ -1383,6 +1432,332 @@ function surfaceCard(cols, target, { title = 'Its surface', sub = '', shared = n
 // this card because there must not be two. The fall's length is a property of
 // the animation, and the riser's job is to agree with it. So the length is
 // shown as a readout, and the fall itself is tuned where the fall is tuned.
+// ---------------------------------------------------------------------------
+// THE BUBBLE JET
+// ---------------------------------------------------------------------------
+// Three things in one view because they are one object to the player: the SHAPE
+// (a whip carrying a travelling wave), the LIGHT it is made of, and the BED
+// underneath it. Splitting them across a tuner group and a sound tab is exactly
+// the arrangement this whole panel exists to undo — you cannot judge how thick
+// the stream should be while the sound telling you how much power it has is
+// two panels away.
+//
+// THE THROUGHPUT IS NOT HERE, and says so out loud. Damage, reach, uptime and
+// cadence are weapons.csv's, because those are read against the rest of the
+// arsenal over a whole run and a slider is the wrong instrument for that
+// comparison. A readout rather than nothing, so the numbers the stream you are
+// looking at is actually carrying are visible while you look at it.
+function renderBubbleJet() {
+  const c = CONFIG.bubbleJet;
+  els.name.textContent = 'The bubble jet';
+  els.via.textContent = 'CONFIG.bubbleJet  →  systems/bubbleJet.js + systems/jetBed.js';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!c) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build',
+      'CONFIG.bubbleJet is missing, so there is nothing to tune.');
+    return;
+  }
+  const l = (c.look ??= {});
+  const bed = (c.bed ??= {});
+
+  // A small labelled <select>. Three of the controls in here are choices from a
+  // list rather than numbers, and typing a key into a text field and finding
+  // out at fire time whether it exists is how `bubbleEmitter` ends up naming a
+  // preset that was renamed six months ago — silently, because emit() returns
+  // on an unknown name.
+  const pick = (host, label, options, get, set, title) => {
+    const row = document.createElement('div');
+    row.className = 'sv-wb-f';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    if (title) lab.title = title;
+    const sel = document.createElement('select');
+    sel.className = 'sv-wb-search';
+    sel.style.cssText = 'margin:0;flex:1;min-width:0';
+    for (const [value, text] of options) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = text;
+      sel.appendChild(o);
+    }
+    sel.value = get();
+    sel.addEventListener('change', () => { set(sel.value); changed(); });
+    row.append(lab, sel);
+    host.appendChild(row);
+    return sel;
+  };
+
+  // --- HOLDING IT OPEN -------------------------------------------------------
+  const drive = card(cols, 'sv-wb-imp', 'Holding it open',
+    'Not a Fire button. This is a sustained weapon — the whole question is what it does while it is <em>on</em>, and a burst you have to re-trigger to look at is a burst, not a stream. Hold opens one at the seal and leaves it; Let go vents it. It does no damage while staged, so the thing you are judging it against is still there afterwards.');
+
+  const holdRow = document.createElement('div');
+  holdRow.className = 'sv-wb-f';
+  const holdLab = document.createElement('label');
+  holdLab.textContent = 'the stream';
+  const holdBtn = document.createElement('button');
+  holdBtn.className = 'sv-wb-btn sv-stage-fire';
+  const dropBtn = document.createElement('button');
+  dropBtn.className = 'sv-wb-btn';
+  dropBtn.textContent = '■ Let go';
+  const status = document.createElement('div');
+  status.className = 'sub';
+  status.style.margin = '0';
+
+  // Polled rather than pushed, and deliberately: the stream is opened and
+  // closed by the game as well as by these two buttons — the seal's own duty
+  // cycle runs underneath this panel whenever the sim is on — so a label driven
+  // by the buttons alone would say "held" over a stream that had already
+  // vented. Cleared when the view is torn down; see `jetPoll`.
+  const refresh = () => {
+    const open = stagedJetOpen();
+    holdBtn.textContent = open ? '● Held' : '▶ Hold';
+    holdBtn.disabled = open;
+    dropBtn.disabled = !open;
+    const st = bubbleJetState();
+    status.textContent = open
+      ? `held · ${st.jets} stream${st.jets === 1 ? '' : 's'} alive · ${jetBedCount()} bed${jetBedCount() === 1 ? '' : 's'} sounding`
+      : (st.open
+        ? `the seal’s own is running — open ${st.held.toFixed(2)}s`
+        : 'nothing open');
+  };
+  holdBtn.addEventListener('click', () => {
+    unlockAudio();
+    const at = stageAnchor();
+    // Along the aim the seal is actually holding is not available from here, so
+    // the stream is pointed to the right — the same direction the stage bar's
+    // `distance` offsets along, so an event fired from the bar and a stream
+    // opened from here are laid out on the same axis.
+    stageJet({ x: at.x, y: at.y }, { x: 1, y: 0 });
+    refresh();
+  });
+  dropBtn.addEventListener('click', () => { stopStagedJet(); refresh(); });
+  holdRow.append(holdLab, holdBtn, dropBtn);
+  drive.appendChild(holdRow);
+  const statusRow = document.createElement('div');
+  statusRow.className = 'sv-wb-f';
+  const statusLab = document.createElement('label');
+  statusLab.textContent = 'right now';
+  statusRow.append(statusLab, status);
+  drive.appendChild(statusRow);
+  refresh();
+  jetPoll = setInterval(refresh, 250);
+
+  // WHAT THE STREAM IS WORTH, measured rather than typed. The same rule the
+  // upgrade cards follow: never write a number next to a curve, print what the
+  // curve actually returns. A readout that disagreed with the water would be
+  // worse than none.
+  // ONE STACK, always — the first pick is the one whose numbers you cannot
+  // read anywhere else, and a readout that tracked whatever level the current
+  // run happened to be at would print a different answer every time the panel
+  // was opened.
+  const stats = jetStats(1);
+  const num = document.createElement('div');
+  num.className = 'sv-wb-none';
+  num.innerHTML = 'Throughput is <b>weapons.csv</b>, not this panel — damage, reach, uptime and cadence are read against the rest of the arsenal over a run.<br>'
+    + `At one stack: ${stats.damage.toFixed(1)} per tick every ${(c.tickEvery ?? 0.1).toFixed(2)}s, `
+    + `${stats.reach.toFixed(0)} long, open ${stats.hold.toFixed(2)}s then ${stats.cool.toFixed(2)}s venting.`;
+  drive.appendChild(num);
+
+  // --- SECONDARY MOTION ------------------------------------------------------
+  const whip = card(cols, 'sv-wb-imp', 'Secondary motion',
+    'The stream is a <b>solid column</b> and does not wiggle on its own. Every bend in it is a consequence of the seal having moved: the energy at the far end left the mouth <em>travel</em> seconds ago and has been going the way it was fired ever since. Stand still and it is a straight bar. Strafe and it leans. Change course and a kink travels off the end.');
+  slider(whip, 'memory', { max: 1, step: 0.005, dp: 3,
+    get: () => l.travel ?? 0.22, set: (v) => { l.travel = v; },
+    title: 'Seconds of muzzle history the column is drawn from — how long the energy takes to reach the tip. 0 is a rigid laser that snaps with your aim. It is also exactly how long the stream takes to straighten out after you stop moving, so this is the settle time as well.' });
+  slider(whip, 'sway', { max: 4, step: 0.02,
+    get: () => l.sway ?? 1.35, set: (v) => { l.sway = v; },
+    title: 'How much of that displacement is applied. 1 is the physical answer; the look usually wants more than physics gives at swimming speed. 0 is a rigid beam, which is a real look — the column stays exactly on the aim.' });
+  slider(whip, 'bend ceiling', { max: 20, step: 0.2, dp: 1,
+    get: () => l.swayMax ?? 6, set: (v) => { l.swayMax = v; },
+    title: 'World units, per node. NOT a taste control — the muzzle is read live off a rig this panel can swap mid-burn, and a run reset moves it across the arena. Either puts a metre of displacement into the history in one frame, and without this the column is flung off the screen.' });
+
+  // --- THE WATER -------------------------------------------------------------
+  const water = card(cols, 'sv-wb-imp', 'The water it is in',
+    'The bend does not snap to where history says it should be — every point <em>eases</em> toward it, so a change of course arrives as a swell travelling through the beam rather than as a crease appearing in it. The turbulence then makes that easing uneven along the length, which is the difference between a smooth bend and something that folds like a ribbon.');
+  slider(water, 'drag', { min: 0.5, max: 40, step: 0.1, dp: 1,
+    get: () => l.drag ?? 7, set: (v) => { l.drag = v; },
+    title: 'Per second. LOW IS HEAVY — syrupy, a long way behind you, and the smoothest. High is nearly rigid, at which point the drag and the turbulence both stop mattering and you are back to reading history directly.' });
+  slider(water, 'turbulence', { max: 1, step: 0.01,
+    get: () => l.dragTurbulence ?? 0.55, set: (v) => { l.dragTurbulence = v; },
+    title: 'How much the drag varies along the length, as a fraction of it. ON THE DRAG, NEVER ON THE POSITION — drag decides how fast a point reaches its target and has no say in where the target is, so with the seal still every point settles to exactly zero however hard this is swinging. That is what lets the beam have this much character and still be dead straight at rest.' });
+  slider(water, '...how fast it drifts', { min: 0.02, max: 8, step: 0.02,
+    get: () => l.turbulenceRate ?? 1.1, set: (v) => { l.turbulenceRate = v; },
+    title: 'How quickly the eddies move. Slow is one lazy fold travelling the beam; fast is a shimmer.' });
+  slider(water, '...how tight', { min: 0.05, max: 4, step: 0.01,
+    get: () => l.turbulenceScale ?? 0.7, set: (v) => { l.turbulenceScale = v; },
+    title: 'Radians of phase per point — how closely packed the eddies are along the length. Tight enough and neighbouring points disagree so much that the column reads as noise rather than as fabric.' });
+  slider(water, 'smoothing', { max: 6, step: 1, dp: 0,
+    get: () => l.normalSmooth ?? 2, set: (v) => { l.normalSmooth = Math.round(v); },
+    title: 'Blur passes over the ribbon\u2019s normals. A fold turns the normal sharply and a sharp turn is a visible seam down the beam, so this is the cheapest smoothing there is. The two ends are never blurred \u2014 the first normal is what welds the ribbon to the seal\u2019s mouth.' });
+  slider(water, 'points', { min: 8, max: 160, step: 1, dp: 0,
+    get: () => l.points ?? 72, set: (v) => { l.points = Math.round(v); },
+    title: 'How many points the spline has. RESOLUTION, not shape \u2014 the per-point turbulence needs enough of them to read as a fold rather than as a zigzag. Takes effect on the NEXT stream: the ribbon is allocated at the count it was born with.' });
+
+  // --- THE COLUMN ------------------------------------------------------------
+  const wave = card(cols, 'sv-wb-imp', 'The column',
+    'It holds full width down almost the whole length and only rounds off at the very end. A long taper is what a <em>spray</em> does, and a sprayed beam reads as weak however bright it is — what sells this is being the same thickness at the far end as at the mouth.');
+  slider(wave, 'holds full to', { min: 0.1, max: 1, step: 0.01,
+    get: () => l.columnFrom ?? 0.88, set: (v) => { l.columnFrom = v; },
+    title: 'Where along the length the round-off begins. Push it to 1 for a bar cut flat at the end; pull it back toward 0.5 and it is a cone again.' });
+  slider(wave, '...ends at', { max: 1, step: 0.01,
+    get: () => l.columnTip ?? 0.62, set: (v) => { l.columnTip = v; },
+    title: 'The width at the very tip, as a fraction of the body. 0 is a point — which is the spray this card exists to argue against. Around 0.6 rounds the end off without narrowing the beam.' });
+  slider(wave, 'muzzle fade', { min: 0.005, max: 0.4, step: 0.005, dp: 3,
+    get: () => l.muzzleFade ?? 0.04, set: (v) => { l.muzzleFade = v; },
+    title: 'How quickly it reaches full width off the mouth. 0 leaves a full-width vertical cut sitting in open water at exactly the point the stream is meant to be emerging from something. Short — the column should clearly ORIGINATE, not fade up out of nothing.' });
+  slider(wave, 'pulse', { max: 0.8, step: 0.01,
+    get: () => l.pulseAmount ?? 0.12, set: (v) => { l.pulseAmount = v; },
+    title: 'The ONE thing that moves on its own, and it moves the WIDTH rather than the position — a travelling swell reads as energy flowing up a solid bar, and the identical amount of travelling SIDEWAYS motion reads as a rope. That is the difference this whole panel is built around. Keep it small; it is texture, not shape.' });
+  slider(wave, '...how fast', { max: 40, step: 0.1, dp: 1,
+    get: () => l.pulseRate ?? 9, set: (v) => { l.pulseRate = v; } });
+  slider(wave, '...how tight', { min: 0.2, max: 24, step: 0.1, dp: 1,
+    get: () => l.pulseLength ?? 5.5, set: (v) => { l.pulseLength = v; },
+    title: 'Radians of phase per unit length. High is a fine ripple running up the bar; low is one slow swell in the whole thing.' });
+
+  // --- THE LIGHT -------------------------------------------------------------
+  const light = card(cols, 'sv-wb-imp', 'The light',
+    'Two ribbons written from the same nodes: a hot core inside a wide soft glow. The widths are not a taste question — the bright pass runs at a sixth of the screen, so anything under about 1.5 bloom pixels contributes nothing however brightly it is authored.');
+  const swatch = document.createElement('div');
+  swatch.className = 'sv-wb-f';
+  const swLab = document.createElement('label');
+  swLab.textContent = 'colour';
+  swLab.title = 'Pushed past 1.0 on its PEAK CHANNEL before it reaches the bright pass, which is the only reason it blooms at all — the threshold is on luminance, where blue is worth 7%.';
+  const sw = document.createElement('input');
+  sw.type = 'color';
+  sw.autocomplete = 'off';
+  sw.value = `#${(l.color ?? 0x62f2ff).toString(16).padStart(6, '0')}`;
+  sw.style.cssText = 'width:30px;height:22px;padding:0;border:1px solid rgba(255,255,255,0.2);border-radius:5px;background:none;cursor:pointer';
+  sw.addEventListener('input', () => { l.color = parseInt(sw.value.slice(1), 16); changed(); });
+  swatch.append(swLab, sw);
+  light.appendChild(swatch);
+  slider(light, 'overdrive', { max: 8, step: 0.05,
+    get: () => l.overdrive ?? 3.2, set: (v) => { l.overdrive = v; },
+    title: 'How far past 1.0 the colour is pushed. Under about 2 the stream is a coloured shape; past it, it is a light source.' });
+  slider(light, 'halo overdrive', { max: 2, step: 0.02,
+    get: () => l.glowOverdriveMul ?? 0.5, set: (v) => { l.glowOverdriveMul = v; },
+    title: 'As a fraction of the core’s. The wide one should be dimmer, or the core stops reading as hotter than what surrounds it.' });
+  slider(light, 'core width', { max: 2, step: 0.01,
+    get: () => l.coreWidthMul ?? 0.34, set: (v) => { l.coreWidthMul = v; },
+    title: 'As a fraction of the stream’s width. Thin, but not sub-pixel in the bloom buffer — see the card’s note.' });
+  slider(light, 'halo width', { max: 4, step: 0.02,
+    get: () => l.glowWidthMul ?? 1, set: (v) => { l.glowWidthMul = v; },
+    title: 'The wide ribbon. This is what actually blooms.' });
+  slider(light, 'core level', { max: 1, step: 0.01,
+    get: () => l.coreOpacity ?? 0.95, set: (v) => { l.coreOpacity = v; } });
+  slider(light, 'halo level', { max: 1, step: 0.01,
+    get: () => l.glowOpacity ?? 0.5, set: (v) => { l.glowOpacity = v; } });
+  slider(light, 'edge softness', { min: 0.05, max: 1, step: 0.01,
+    get: () => l.edgeSoftness ?? 0.6, set: (v) => { l.edgeSoftness = v; },
+    title: 'How much of the half-width is falloff. Baked into a texture at first use — RELOAD to see a change, which is the price of not putting a shader on the one effect that has to stay checkable without a GPU.' });
+  slider(light, 'muzzle spill', { max: 3, step: 0.02,
+    get: () => l.spillStrength ?? 0.75, set: (v) => { l.spillStrength = v; },
+    title: 'The soft glow where the stream leaves the seal — an additive sprite, not a light, because half this game’s creatures are unlit and a real light would simply not reach them.' });
+  slider(light, '...its size', { max: 20, step: 0.1, dp: 1,
+    get: () => l.spillSize ?? 5, set: (v) => { l.spillSize = v; } });
+  slider(light, 'bloom floor', { max: 2, step: 0.02,
+    get: () => c.sustainGlow ?? 0.45, set: (v) => { c.sustainGlow = v; },
+    title: 'How hot the whole frame runs while a stream burns. A FLOOR, not a set — the per-cut spikes have to be able to punch above it.' });
+
+  // --- THE BUBBLES -----------------------------------------------------------
+  const bub = card(cols, 'sv-wb-imp', 'The bubbles',
+    'What makes it a bubble jet rather than a laser. Thrown sideways off the stream at random points along its whole length — at the muzzle only they read as a puff on the end of a beam.');
+  pick(bub, 'made of', Object.keys(CONFIG.emitters ?? {}).map((k) => [k, k]),
+    () => l.bubbleEmitter ?? 'blastBubbles', (v) => { l.bubbleEmitter = v; },
+    'A preset from CONFIG.emitters. A list rather than a text field because emit() returns silently on a name it does not know, so a typo here is an effect that simply stops having bubbles.');
+  slider(bub, 'per second', { max: 120, step: 1, dp: 0,
+    get: () => l.bubblesPerSecond ?? 26, set: (v) => { l.bubblesPerSecond = v; },
+    title: 'Scaled by how far up the stream is, so a spooling jet does not spit at full rate before it is lit.' });
+  slider(bub, 'size', { max: 2, step: 0.01,
+    get: () => l.bubbleScale ?? 0.25, set: (v) => { l.bubbleScale = v; },
+    title: 'Multiplies the preset’s own count as well as its size — see emit().' });
+  slider(bub, 'thrown at', { max: 3, step: 0.02,
+    get: () => l.bubbleSpeed ?? 0.7, set: (v) => { l.bubbleSpeed = v; },
+    title: 'How hard they peel off sideways. Low and they ride along with the stream, which reads as one object rather than as something shedding.' });
+
+  // --- THE BED ---------------------------------------------------------------
+  const sampled = !!bed.sample && hasSample(bed.sample);
+  const b = card(cols, 'sv-wb-imp wide', 'The bed',
+    'One voice that ramps up and then <b>holds</b> — not a sound in CONFIG.sfx, and it could not be: everything in that table knows its own length when it is triggered, and this is held open for as long as the stream burns. The ramp is the only part with movement in it; the hold is deliberately flat, because a sustained sound that keeps developing never arrives.');
+  toggle(b, 'bed under the stream', () => bed.enabled, (v) => { bed.enabled = v; },
+    'Off, the stream is silent apart from its cuts. The two feedback events are unaffected.');
+  pick(b, 'source', [['', 'the synth below'], ...Object.keys(CONFIG.sfx ?? {}).map((k) => [k, `sample: ${k}${hasSample(k) ? '' : ' (nothing loaded)'}`])],
+    () => bed.sample ?? '', (v) => { bed.sample = v; render(); },
+    'A loaded voice is LOOPED in place of the oscillator stack and runs through the same drive, the same filter sweep and the same envelope — so an uploaded bed inherits the shape rather than being a second, unrelated implementation of it. Load takes into a voice from the library below.');
+  if (bed.sample && !sampled) {
+    const n = document.createElement('div');
+    n.className = 'sv-wb-none';
+    n.textContent = `CONFIG.sfx.${bed.sample} has no sample loaded, so the synth below is what you are hearing. Add one from the library and it takes over on the next stream.`;
+    b.appendChild(n);
+  }
+  slider(b, 'level', { max: 1, step: 0.005, dp: 3,
+    get: () => bed.gain ?? 0.22, set: (v) => { bed.gain = v; },
+    title: 'The held level. The ramp climbs to it and then sits there.' });
+  slider(b, 'ramps over', { min: 0.02, max: 3, step: 0.01,
+    get: () => bed.ramp ?? 0.45, set: (v) => { bed.ramp = v; },
+    title: 'Seconds. Deliberately independent of the stream’s own spool: they are the same gesture but do not have to arrive together, and a bed landing a little after the ribbon is at full reads as the thing settling into its note.' });
+  slider(b, '...attack (of that)', { min: 0.01, max: 1, step: 0.01,
+    get: () => bed.attack ?? 0.35, set: (v) => { bed.attack = v; },
+    title: 'A FRACTION of the ramp, not a number of seconds — so retuning the ramp keeps the shape instead of turning it into a click followed by a long climb.' });
+  slider(b, '...level at that point', { max: 1, step: 0.01,
+    get: () => bed.attackLevel ?? 0.55, set: (v) => { bed.attackLevel = v; },
+    title: 'How much of the held level has arrived by the end of the attack. The rest climbs with the filter, which is what makes the spool read as gaining power rather than as a filter opening on a sound that was already there.' });
+  slider(b, 'release', { min: 0.01, max: 1.5, step: 0.01,
+    get: () => bed.release ?? 0.12, set: (v) => { bed.release = v; },
+    title: 'Down, fast. The stream is cut, not faded out — the tail is the room, not the synth.' });
+
+  const tone = card(cols, 'sv-wb-imp', 'The tone',
+    'A stack, not a chord. Three saws a few cents apart beat slowly against each other and are heard as ONE thick voice; past about thirty cents they separate into a detuned mess. The square an octave down carries the weight the saws have none of.');
+  slider(tone, 'note (Hz)', { min: 20, max: 220, step: 1, dp: 0, dead: sampled,
+    get: () => bed.note ?? 55, set: (v) => { bed.note = v; },
+    title: 'Low. Above about 80 this starts competing with the boss cries for the same part of the spectrum.' });
+  pick(tone, 'shape', [['sawtooth', 'sawtooth'], ['square', 'square'], ['triangle', 'triangle'], ['sine', 'sine']],
+    () => bed.wave ?? 'sawtooth', (v) => { bed.wave = v; },
+    'Sawtooth is the Moog answer: everything the drive and the filter do downstream needs harmonics to work on, and a sine has none.');
+  slider(tone, 'voices', { min: 1, max: 7, step: 1, dp: 0, dead: sampled,
+    get: () => bed.unison ?? 3, set: (v) => { bed.unison = Math.round(v); },
+    title: 'An ODD count keeps one voice dead centre, which is what stops the pitch itself drifting as the spread is widened.' });
+  slider(tone, 'spread (cents)', { max: 60, step: 0.5, dp: 1, dead: sampled,
+    get: () => bed.detune ?? 11, set: (v) => { bed.detune = v; } });
+  slider(tone, 'sub', { max: 2, step: 0.02, dead: sampled,
+    get: () => bed.sub ?? 0.7, set: (v) => { bed.sub = v; },
+    title: 'A square an octave below the note. This is the weight — the saws alone are all edge, and the edge is what the drive is about to multiply.' });
+
+  const dirt = card(cols, 'sv-wb-imp', 'The overdrive',
+    'Not a volume. The shaper sits <b>before</b> the filter, which is the ordering that makes this a Moog rather than a loud synth: drive generates the harmonics and the resonant lowpass then decides which of them you hear. Distorting afterwards just fuzzes whatever survived and cannot be swept.');
+  slider(dirt, 'into the shaper', { min: 0.1, max: 8, step: 0.05,
+    get: () => bed.preGain ?? 1.6, set: (v) => { bed.preGain = v; },
+    title: 'How hard the signal hits the curve. This and hardness below do different things: this one decides how much of the waveform is in the bent part.' });
+  slider(dirt, 'hardness', { min: 0.5, max: 30, step: 0.1, dp: 1,
+    get: () => bed.drive ?? 6, set: (v) => { bed.drive = v; },
+    title: 'The curve’s own bend. Normalised so it still reaches full scale — without that, more drive would also mean quieter, and this slider would fight the level.' });
+  slider(dirt, 'resonance', { min: 0.1, max: 24, step: 0.1, dp: 1,
+    get: () => bed.resonance ?? 9, set: (v) => { bed.resonance = v; },
+    title: 'On the second pole only. Stacked in both stages the ladder peaks twice and screams.' });
+  slider(dirt, 'opens from (Hz)', { min: 20, max: 2000, step: 5, dp: 0,
+    get: () => bed.from ?? 180, set: (v) => { bed.from = v; } });
+  slider(dirt, '...to (Hz)', { min: 100, max: 12000, step: 25, dp: 0,
+    get: () => bed.to ?? 2600, set: (v) => { bed.to = v; },
+    title: 'Where the filter sits for the whole hold. Exponential on the way there, because a sweep is heard in octaves — a linear ramp reads as opening instantly and then sitting still.' });
+  slider(dirt, 'closes back to (Hz)', { min: 20, max: 4000, step: 5, dp: 0,
+    get: () => bed.releaseTo ?? 180, set: (v) => { bed.releaseTo = v; },
+    title: 'The filter comes back with the level on release. A bed whose gain alone fell read as someone turning a volume knob down; this is what makes it read as the thing switching off.' });
+  slider(dirt, 'breath depth (Hz)', { max: 1200, step: 10, dp: 0,
+    get: () => bed.breathDepth ?? 220, set: (v) => { bed.breathDepth = v; },
+    title: 'The only movement in the hold, and it has to stay under the threshold of being followed — anything you can track is development, and this is meant to be felt as the thing idling. 0 is a dead hold, which is a real choice for a short one.' });
+  slider(dirt, '...how slowly', { min: 0.02, max: 8, step: 0.02,
+    get: () => bed.breathRate ?? 0.7, set: (v) => { bed.breathRate = v; },
+    title: 'Hz. Under 1 is a swell; over about 4 it is a wobble and reads as an effect rather than as the sound.' });
+}
+
+// The poll behind the "right now" readout. Held module-level and cleared on
+// every re-render, or every visit to this view would leave another interval
+// running against a detached label — invisible, and eventually the panel is
+// doing more work idle than the game is.
+let jetPoll = null;
+
 function renderCardRiser() {
   const slam = CONFIG.upgradeSlam;
   const r = slam?.riser;
@@ -1700,6 +2075,69 @@ function renderBoom() {
       title: 'Rides on the glow rather than the colour: emit() lifts a dark tint clear of the water before it uses it, so a ramp authored into the colour quietly would not exist.' });
   }
 
+  // --- THE COLOURS -------------------------------------------------------------
+  const pal = b.palette;
+  const bp = CONFIG.bodyPalette;
+  if (pal) {
+    const cols2 = card(cols, 'sv-wb-imp', 'Every colour it had',
+      'The cloud is tinted from the animal\u2019s own shaders \u2014 the texture averages, the '
+      + 'material colours, the bioluminescent uniforms, the Look panel\u2019s signature \u2014 '
+      + 'weighted by how much of the body wears each one, plus whatever elemental status was on '
+      + 'it. One hex per asset could not do this: the megalodon keeps its colour in a texture '
+      + 'behind four white materials and the orca keeps its in shader uniforms behind one.');
+    toggle(cols2, 'read the whole body', () => pal.enabled, (v) => { pal.enabled = v; },
+      'Off is the single tint this shipped with: the Look signature, lifted.');
+    slider(cols2, 'how much reaches the cloud', { max: 1, step: 0.02, get: () => pal.spread ?? 0.75, set: (v) => { pal.spread = v; },
+      title: 'How far a puff moves from the body\u2019s mean toward its own swatch. 0 is one flat colour; 1 is the full palette with nothing holding it together.' });
+    slider(cols2, 'colour regions round it', { min: 0.5, max: 6, step: 0.1, dp: 1, get: () => pal.bands ?? 2.5, set: (v) => { pal.bands = v; },
+      title: 'How many times the palette is walked around the cloud. Keep it fractional \u2014 a whole number closes the loop on itself and puts the same colour on both sides of the seam.' });
+    slider(cols2, 'and how they mingle', { max: 0.6, step: 0.02, get: () => pal.jitter ?? 0.18, set: (v) => { pal.jitter = v; },
+      title: 'Scatter on the pick, so a boundary between two regions is a mingling rather than a line. Past about a third it becomes the confetti that picking by position exists to avoid.' });
+    if (bp) {
+      slider(cols2, 'how many colours', { min: 1, max: 10, step: 1, dp: 0, get: () => bp.max ?? 6, set: (v) => { bp.max = Math.round(v); },
+        title: 'Past about six the extras are all within a few percent of each other and only make the cloud slower to work out.' });
+      slider(cols2, '...merged this close', { max: 0.3, step: 0.01, get: () => bp.merge ?? 0.08, set: (v) => { bp.merge = v; },
+        title: 'Compared in HSL, with hue counting for only as much as saturation makes hue mean \u2014 the megalodon\u2019s hue is a meaningless 0 and so is the crab\u2019s.' });
+      slider(cols2, 'trust the texture', { max: 3, step: 0.05, get: () => (bp.weights ??= {}).texture ?? 1.4, set: (v) => { (bp.weights ??= {}).texture = v; },
+        title: 'For a textured body the map IS the colour, and the white material.color over it is a multiplier of 1 that says nothing.' });
+      slider(cols2, '...the skin', { max: 3, step: 0.05, get: () => (bp.weights ??= {}).skin ?? 1.1, set: (v) => { (bp.weights ??= {}).skin = v; },
+        title: 'The bioluminescent pattern\u2019s colours. For the orca this is the entire animal.' });
+      slider(cols2, '...the tuned look', { max: 3, step: 0.05, get: () => (bp.weights ??= {}).look ?? 1.2, set: (v) => { (bp.weights ??= {}).look = v; },
+        title: 'The Look panel\u2019s signature, or the authored colour behind it \u2014 the one colour on the list a person chose on purpose.' });
+      slider(cols2, '...and the element', { max: 5, step: 0.05, get: () => (bp.weights ??= {}).element ?? 2.2, set: (v) => { (bp.weights ??= {}).element = v; },
+        title: 'A boss dying with venom on it IS a green animal, and no material on the body says so. The only source here that is about this individual rather than the species.' });
+    }
+    slider(cols2, 'keeps its light-to-dark order', { max: 1, step: 0.02, get: () => b.tint?.lightnessSpread ?? 0.55, set: (v) => { (b.tint ??= {}).lightnessSpread = v; },
+      title: 'At 0 every swatch is lifted to one lightness, which flattens a palette into the same colour several times. This keeps a share of each swatch\u2019s distance from the body\u2019s mean.' });
+    slider(cols2, '...floored at', { max: 1, step: 0.02, get: () => b.tint?.lightnessFloor ?? 0.42, set: (v) => { (b.tint ??= {}).lightnessFloor = v; },
+      title: 'What stops the dark end going back under the water it was lifted out of.' });
+    slider(cols2, '...and capped at', { min: 0.5, max: 1, step: 0.02, get: () => b.tint?.lightnessCeil ?? 0.9, set: (v) => { (b.tint ??= {}).lightnessCeil = v; },
+      title: 'HSL at 1.0 is white whatever the hue says, so a pale swatch pushed to the top comes out colourless rather than bright.' });
+  }
+
+  // --- THE EDGE ---------------------------------------------------------------
+  const rim = b.rim;
+  if (rim) {
+    const edge = card(cols, 'sv-wb-imp', 'Struck off the edge',
+      'The bands are laid along the animal\u2019s measured silhouette and pushed OUTWARD from it, '
+      + 'so nothing is born inside the outline. Off, they are rings about its centroid and the '
+      + 'brightest part of the cloud lands on the boss the photograph is of.');
+    toggle(edge, 'follow the outline', () => rim.enabled, (v) => { rim.enabled = v; },
+      'Off is the old shape: concentric rings on the body\u2019s middle.');
+    slider(edge, 'sits off the skin', { max: 0.4, step: 0.01, get: () => rim.hug ?? 0.02, set: (v) => { rim.hug = v; },
+      title: 'Where the INNERMOST band lands, x the body radius, measured outward from the outline. 0 is exactly on it \u2014 which is what turns the white-hot first wave into a rim light tracing the animal.' });
+    slider(edge, 'and reaches', { min: 0.1, max: 1.6, step: 0.05, get: () => rim.reach ?? 0.6, set: (v) => { rim.reach = v; },
+      title: 'Where the OUTERMOST band lands. The number to move if the aura is too thick to see the boss through, or too thin to read as an explosion.' });
+    slider(edge, 'how much outline is kept', { max: 1, step: 0.05, get: () => rim.round ?? 0.25, set: (v) => { rim.round = v; },
+      title: '0 traces the collision shape exactly, which is a diagram of the hitbox. 1 is a circle, which is the old effect. Between them is the animal\u2019s mass without the accidents of where its spheres were placed.' });
+    slider(edge, 'smoothing passes', { max: 6, step: 1, dp: 0, get: () => rim.smooth ?? 2, set: (v) => { rim.smooth = Math.round(v); },
+      title: 'A hitbox is a chain of overlapping balls and every seam between two of them is a cusp \u2014 a lobe born on one points its normal off at an angle.' });
+    slider(edge, 'lobes overlap by', { min: 0.2, max: 1, step: 0.02, get: () => rim.overlap ?? 0.62, set: (v) => { rim.overlap = v; },
+      title: 'How many lobes a band gets is DERIVED from its own perimeter, not typed \u2014 a fixed count beads a crab and crowds a megalodon. 1 is lobes exactly touching, which the metaball pass renders as beads.' });
+    slider(edge, '...up to', { min: 8, max: 96, step: 1, dp: 0, get: () => rim.maxPuffs ?? 64, set: (v) => { rim.maxPuffs = Math.round(v); },
+      title: 'The particle backstop. A band pinned here has stopped being derived and is a fixed count on a perimeter nobody measured \u2014 npm run test:boom fails if any band reaches it.' });
+  }
+
   // --- THE SHOCKWAVE ---------------------------------------------------------
   const sc = b.shock;
   if (sc) {
@@ -1724,10 +2162,145 @@ function renderBoom() {
     }
   }
 
+  // --- THE BODY LETTING GO -----------------------------------------------------
+  // A different moment from everything above it — the explosion fires BEFORE the
+  // photograph and this fires on the frame after it, when the visual goes back
+  // to the pool. It lives in this view anyway because it is the same beat and a
+  // rail row of its own would be a third synthetic entry for four sliders.
+  const dis = CONFIG.boss?.dissolve;
+  const disEm = CONFIG.emitters?.bossDissolve;
+  if (dis) {
+    const melt = card(cols, 'sv-wb-imp', 'The body letting go',
+      'On the frame the mesh is handed back to the pool, the boss is replaced by a cloud of '
+      + 'its own surface \u2014 a point per sample, each one wearing the texel it came off. It '
+      + 'is what stops the largest thing in the run vanishing on a cut.');
+    toggle(melt, 'dissolve the body', () => dis.enabled, (v) => { dis.enabled = v; },
+      'Off, the boss simply disappears under its own wreckage, which is what it did.');
+    slider(melt, 'points', { min: 200, max: 3000, step: 50, dp: 0, get: () => dis.points ?? 1400, set: (v) => { dis.points = Math.round(v); },
+      title: 'The one number that costs something \u2014 they come out of the shared pool, and the frame that samples them walks this many triangles through the skeleton.' });
+    slider(melt, 'point size', { min: 0.2, max: 3, step: 0.05, get: () => dis.sizeMul ?? 1, set: (v) => { dis.sizeMul = v; },
+      title: 'x the emitter\u2019s own band. Dense enough that the cloud is a silhouette rather than a scatter is the whole job.' });
+    slider(melt, 'brightness', { max: 1.5, step: 0.02, get: () => dis.glow ?? 0.35, set: (v) => { dis.glow = v; },
+      title: 'Well under 1: every particle is multiplied by CONFIG.bloom.particleOverdrive (3.4) on the way in, which is right for a spark and wrong for a hide. At 1 the megalodon\u2019s mouth blows out to flat white.' });
+    slider(melt, 'the silhouette opens', { max: 5, step: 0.05, get: () => dis.push ?? 1.8, set: (v) => { dis.push = v; },
+      title: 'Per unit of distance from the middle, so the edge drifts and the centre stays. Read it against the emitter\u2019s drag \u2014 travel is push \u00f7 drag, and under about a tenth of the body it is a stencil that dims rather than a body letting go.' });
+    slider(melt, '...and turns', { max: 2, step: 0.05, get: () => dis.swirl ?? 0.5, set: (v) => { dis.swirl = v; },
+      title: 'At 0 every point moves along its own spoke and the moment before the drag catches them reads as a zoom.' });
+    slider(melt, 'edge frays', { max: 1, step: 0.02, get: () => dis.jitter ?? 0.35, set: (v) => { dis.jitter = v; } });
+    slider(melt, 'carries its drift', { max: 1, step: 0.02, get: () => dis.inherit ?? 0.25, set: (v) => { dis.inherit = v; },
+      title: 'A share of what the animal was doing. A cloud hanging exactly where the body was reads as an effect played at a coordinate.' });
+    slider(melt, 'darkest point', { max: 0.6, step: 0.01, get: () => dis.minPeak ?? 0.22, set: (v) => { dis.minPeak = v; },
+      title: 'A floor on the PEAK channel, which keeps the hue and the point\u2019s place in the body\u2019s own light-to-dark order. Every boss is a near-black hide and an untouched texel is a particle nobody can see.' });
+    if (disEm) {
+      slider(melt, 'how hard the water holds', { min: 1, max: 16, step: 0.5, dp: 1,
+        get: () => (Array.isArray(disEm.drag) ? disEm.drag[0] : disEm.drag) ?? 7.5,
+        set: (v) => { disEm.drag = v; },
+        title: 'High \u2014 the points are a body coming apart, not something thrown. At the explosion\u2019s 2.0 they are still visibly travelling when the cloud is meant to be hanging still.' });
+      if (Array.isArray(disEm.life)) {
+        pairSlider(melt, 'and how long they last', disEm.life, 6, 0.1, 1);
+      }
+    }
+  }
+
   // --- THE PUFF --------------------------------------------------------------
   // The ordinary emitter card, on the ordinary emitter. Everything above places
   // and scales these; this is what is being placed.
   burstCard(cols, 'bossBoom');
+}
+
+function renderKillLight() {
+  const L = CONFIG.boss?.light;
+  els.name.textContent = 'The light on the kill';
+  els.via.textContent = 'CONFIG.boss.light  \u2192  CONFIG.damageGlow.sources.killLightHero / killLightSubject';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!L) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build',
+      'CONFIG.boss.light is missing, so there is nothing to tune.');
+    return;
+  }
+  const glow = CONFIG.damageGlow?.sources ?? {};
+
+  // --- WHEN ------------------------------------------------------------------
+  const when = card(cols, 'sv-wb-imp', 'The moment',
+    'It is up before the SMOKE, not before the shutter \u2014 the cloud is the brightest thing in '
+    + 'the frame either side of the picture, and a key still climbing under it is one nobody can '
+    + 'tell was switched on. The lead is the rise plus the explosion\u2019s own, derived.');
+  toggle(when, 'light the kill', () => L.enabled, (v) => { L.enabled = v; },
+    'Off, the trophy is two dark bodies on dark water, which is what it was.');
+  slider(when, 'comes up over', { min: 0.1, max: 1.6, step: 0.05, get: () => L.rise ?? 0.55, set: (v) => { L.rise = v; },
+    title: 'Wall seconds. This IS the lead: it has to be flat by the time the picture is taken.' });
+  slider(when, 'holds for', { max: 3, step: 0.05, get: () => L.hold ?? 1.1, set: (v) => { L.hold = v; },
+    title: 'Has to outlast the shutter and the print\u2019s flight, or the frame goes flat under a still image.' });
+  slider(when, 'and goes out over', { min: 0.1, max: 2.5, step: 0.05, get: () => L.fall ?? 0.8, set: (v) => { L.fall = v; },
+    title: 'Slower than the rise \u2014 a light going out fast reads as a switch, and this one is the moment ending.' });
+
+  // --- THE SHAFT -------------------------------------------------------------
+  const s = L.shaft;
+  if (s) {
+    const shaft = card(cols, 'sv-wb-imp', 'The hero shaft',
+      'Overlapping additive blades, some in front of the seal and some behind it \u2014 that split '
+      + 'is what makes it read as volume rather than as a decal. No real light: half the roster is '
+      + 'unlit MeshBasicMaterial and a SpotLight would miss it entirely.');
+    toggle(shaft, 'shaft', () => s.enabled, (v) => { s.enabled = v; });
+    slider(shaft, 'brightness', { min: 0.4, max: 3, step: 0.05, get: () => s.overdrive ?? 1.5, set: (v) => { s.overdrive = v; },
+      title: 'Pushed past 1 on its peak channel so it crosses the bright pass. Under about 1 the cone is there and does not bloom, which reads as a grey wedge.' });
+    slider(shaft, 'width where it lands', { min: 2, max: 26, step: 0.5, dp: 1, get: () => s.width ?? 11, set: (v) => { s.width = v; } });
+    slider(shaft, 'length', { min: 8, max: 60, step: 1, dp: 0, get: () => s.height ?? 30, set: (v) => { s.height = v; },
+      title: 'World units, hung by its BOTTOM edge on the seal. It wants to run off the top of the frame \u2014 a visible top edge inside the crop reads as a quad.' });
+    slider(shaft, 'rake', { max: 0.6, step: 0.01, get: () => s.tilt ?? 0.17, set: (v) => { s.tilt = v; },
+      title: 'Radians. Upright is a spotlight rig; leaned over is light arriving from somewhere.' });
+    slider(shaft, 'taper at the top', { min: 0.05, max: 1, step: 0.01, get: () => s.topWidth ?? 0.3, set: (v) => { s.topWidth = v; },
+      title: 'As a share of the quad. Narrow where the light comes from and wide where it lands is what makes it a cone rather than a stripe.' });
+    slider(shaft, 'eaten going down', { max: 4, step: 0.05, get: () => s.falloff ?? 1.4, set: (v) => { s.falloff = v; },
+      title: 'A god ray reads as one because you can see it running out. Even brightness down its length is a wall.' });
+    slider(shaft, '...but still arrives', { max: 1, step: 0.02, get: () => s.endLevel ?? 0.45, set: (v) => { s.endLevel = v; },
+      title: 'How much is left at the landing. At 0 the cone is brightest thirty units above the seal and spent by the time it reaches it \u2014 a lit patch of empty water with a dark animal under it.' });
+  }
+
+  // --- THE POOL --------------------------------------------------------------
+  const p = L.pool;
+  if (p) {
+    const pool = card(cols, 'sv-wb-imp', 'Where it lands',
+      'A wide flat glow on the seal, so the cone arrives somewhere. Without it the shaft hangs in '
+      + 'the water with nothing under it and reads as a curtain. Behind the animal, so it is lit '
+      + 'against the pool rather than washed by it.');
+    slider(pool, 'brightness', { max: 3, step: 0.05, get: () => p.overdrive ?? 1.2, set: (v) => { p.overdrive = v; } });
+    slider(pool, 'strength', { max: 1.5, step: 0.02, get: () => p.opacity ?? 0.72, set: (v) => { p.opacity = v; } });
+    slider(pool, 'across', { min: 2, max: 34, step: 0.5, dp: 1, get: () => p.width ?? 15, set: (v) => { p.width = v; } });
+    slider(pool, 'and deep', { min: 1, max: 22, step: 0.5, dp: 1, get: () => p.height ?? 8, set: (v) => { p.height = v; },
+      title: 'Wider than it is tall \u2014 light landing on a surface spreads along it.' });
+  }
+
+  // --- THE WASH --------------------------------------------------------------
+  const w = L.wash;
+  if (w) {
+    const wash = card(cols, 'sv-wb-imp', 'The wash on the body',
+      'BEHIND the dead animal, which is the whole trick: every boss is a near-black hide, and a '
+      + 'glow laid OVER one brightens the hide and the water equally. Behind it, the hide is the '
+      + 'one dark shape on a light field.');
+    toggle(wash, 'wash', () => w.enabled, (v) => { w.enabled = v; });
+    slider(wash, 'brightness', { max: 3, step: 0.05, get: () => w.overdrive ?? 1.1, set: (v) => { w.overdrive = v; } });
+    slider(wash, 'strength', { max: 1.5, step: 0.02, get: () => w.opacity ?? 0.5, set: (v) => { w.opacity = v; } });
+    slider(wash, 'spreads', { min: 0.8, max: 3, step: 0.05, get: () => w.spread ?? 1.55, set: (v) => { w.spread = v; },
+      title: 'x the measured half-extents of the body, off the same hitbox the explosion is sized from \u2014 so a crab is lit wide and a megalodon long. Under about 1.2 it is inside the silhouette and lights the hide instead of standing behind it.' });
+  }
+
+  // --- THE LIFTS -------------------------------------------------------------
+  const lift = card(cols, 'sv-wb-imp', 'The bodies themselves',
+    'The only half that puts anything back INSIDE a silhouette. Both go through the shared '
+    + 'damage-glow handle, which swaps in per-instance materials and carries the injected shaders '
+    + 'across \u2014 a plain clone drops every one of them silently.');
+  slider(lift, 'on the seal', { max: 2, step: 0.05, get: () => L.heroLift ?? 1, set: (v) => { L.heroLift = v; },
+    title: 'x CONFIG.damageGlow.sources.killLightHero.peak.' });
+  slider(lift, '...its peak', { max: 3, step: 0.05, get: () => glow.killLightHero?.peak ?? 0.8,
+    set: (v) => { (glow.killLightHero ??= {}).peak = v; },
+    title: 'The seal is a PALE body, so it needs less than the boss does \u2014 pushed up it blows out flat white in the print.' });
+  slider(lift, 'on the boss', { max: 2, step: 0.05, get: () => L.subjectLift ?? 1, set: (v) => { L.subjectLift = v; } });
+  slider(lift, '...its peak', { max: 3, step: 0.05, get: () => glow.killLightSubject?.peak ?? 0.35,
+    set: (v) => { (glow.killLightSubject ??= {}).peak = v; },
+    title: 'Taken as EMISSIVE, which is light added on top of the shading. Past about a third of a stop the boss stops being a lit body and becomes a flat coloured cutout in the shape of the animal, hue and all.' });
 }
 
 function pairSlider(host, label, pair, max, step, dp) {

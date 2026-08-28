@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, difficultyRamp } from '../config.js';
+import { CONFIG, difficultyRamp, enemyPaceMul } from '../config.js';
 import { createVisual, hasModel } from '../assets.js';
 import { bounds, seabedTopY } from '../arena.js';
 import { pickups, spawnXpOrb } from '../entities/pickups.js';
@@ -149,7 +149,7 @@ function spawnBoat(scene, difficulty) {
   // (which is 0), and speeding hulls up just makes them harder to farm.
   const hp = (CONFIG.boats.hp + CONFIG.boats.hpPerDifficulty * difficulty)
     * (isTrawler ? CONFIG.boats.trawlerHpMul : 1)
-    * difficultyRamp('hp', difficulty);
+    * difficultyRamp('hp', difficulty) * enemyPaceMul('hp');
 
   // A hull is hp the player has to chew through like any other, so it counts
   // toward the arriving-pressure curve the playtest report measures clear

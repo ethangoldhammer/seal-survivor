@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { attractorDeriv } from './attractors.js';
 
 // ---------------------------------------------------------------------------
 // BAIT BALLS — a swirling ball of small fish, and the thing everything in the
@@ -572,6 +573,11 @@ const ATTRACTOR_SPAN = { thomas: 1, lorenz: 5.5, aizawa: 0.45 };
 
 const flowOut = { x: 0, y: 0, z: 0 };
 
+// Scratch for the shared equations, which write into a caller-supplied vector
+// for the same reason everything else in this file does — see attractorFlow's
+// note about the two callers that must not share one.
+const deriv = { x: 0, y: 0, z: 0 };
+
 // The raw system, before de-biasing. Writes into `out` so the caller can hand
 // it either the shared scratch or its own — refreshBias below needs the second,
 // and an earlier version that had both share `flowOut` clobbered a call from
@@ -581,41 +587,27 @@ function rawFlow(shape, ux, uy, uz, c, out) {
   const x = ux * k;
   const y = uz * k;          // the attractor's y is the world's DEPTH
   const z = uy * k;          // ...and its z is the world's UP
-  let dx = 0;
-  let dy = 0;
-  let dz = 0;
 
-  if (shape === 'lorenz') {
-    // Recentred: Lorenz's z lives around 25, so the raw system would place the
-    // whole shape far above the anchor.
-    const zc = z + (c.lorenzLift ?? 25);
-    dx = 10 * (y - x);
-    dy = x * (28 - zc) - y;
-    dz = x * y - (8 / 3) * zc;
-  } else if (shape === 'aizawa') {
-    const a = 0.95;
-    const b = 0.7;
-    const cc = 0.6;
-    const d = 3.5;
-    const e = 0.25;
-    const f = 0.1;
-    const zc = z + (c.aizawaLift ?? 0.8);
-    dx = (zc - b) * x - d * y;
-    dy = d * x + (zc - b) * y;
-    dz = cc + a * zc - (zc * zc * zc) / 3 - (x * x + y * y) * (1 + e * zc) + f * zc * x * x * x;
-  } else {
-    // thomas, and the fallback for an unknown name — bounded whatever you hand
-    // it, which is the right property for a default nobody chose.
-    const b = c.thomasB ?? 0.19;
-    dx = Math.sin(y) - b * x;
-    dy = Math.sin(z) - b * y;
-    dz = Math.sin(x) - b * z;
-  }
+  // The equations themselves live in systems/attractors.js, shared with the
+  // boss attacks that fly the same three systems — see the note at the top of
+  // that file for why one copy and not two. What stays here is everything that
+  // is about a BAIT BALL rather than about the mathematics: the axis swap above,
+  // the per-shape span, and the tuned constants below.
+  //
+  // `lift` is the recentring the ball needs — Lorenz's attractor sits around
+  // z 25 and Aizawa's around 0.8, so without it the whole shape would be placed
+  // far off the anchor.
+  attractorDeriv(shape, x, y, z, {
+    b: shape === 'thomas' ? (c.thomasB ?? 0.19) : undefined,
+    lift: shape === 'lorenz' ? (c.lorenzLift ?? 25)
+      : shape === 'aizawa' ? (c.aizawaLift ?? 0.8)
+        : 0,
+  }, deriv);
 
   // Back to world axes, undoing the swap above.
-  out.x = dx;
-  out.y = dz;
-  out.z = dy;
+  out.x = deriv.x;
+  out.y = deriv.z;
+  out.z = deriv.y;
   return out;
 }
 

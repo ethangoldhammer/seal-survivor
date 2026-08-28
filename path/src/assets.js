@@ -697,6 +697,24 @@ export const ASSETS = {
     forward: '+Z', up: '+Y',
   },
   bounceShot: { shape: 'octahedron', radius: 0.2, color: 0x66ddff, unlit: true },
+  // THE STAND-IN for a staged attractor storm — systems/attractorStorm.js.
+  //
+  // A cube, deliberately and temporarily. The six studies are candidate boss
+  // attacks being played against before any of them is committed, and the
+  // question they are being asked is whether the MOTION reads — whether the
+  // player can learn the shape and dodge it. A body with any character of its
+  // own answers a different question and answers it too flatteringly: a swirl
+  // of beautiful things looks good long before it plays well.
+  //
+  // Square in all three axes on purpose, because the storms rotate their shots
+  // to the direction of travel and a box that is longer one way would read as a
+  // heading the cube does not have.
+  // A UNIT cube, so the caller can pass its hit radius straight in as `scale`
+  // and get a body exactly as wide as the thing it collides with. A bullet hell
+  // has to be honest about that or it reads as unfair rather than as hard.
+  attractorCube: {
+    shape: 'box', width: 1, height: 1, depth: 1, color: 0x7ff0d4, unlit: true,
+  },
   // The harp's music note — a real eighth-note glyph, cut out of the Particle
   // Flow bake by tools/note-glyphs.mjs. 32 triangles and no texture at all.
   //
@@ -4972,6 +4990,15 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
 // resident half of the game (templates, sprite variants, the primitive
 // geometry and material caches, and the pool of bodies waiting to be spawned
 // again), and a census that walked only the scene would miss all of it.
+// How many bodies are parked in the pool, and in how many keys — the other
+// half of the census's node count. A node total on its own cannot say whether
+// the graph is the fight or the furniture waiting behind it.
+export function visualPoolCount() {
+  let bodies = 0;
+  for (const list of visualPool.values()) bodies += list?.length ?? 0;
+  return { bodies, keys: visualPool.size };
+}
+
 export function assetCensusItems() {
   const out = [
     ...loadedModels.values(),
@@ -5389,30 +5416,86 @@ export function visualPoolCaps() {
   return out;
 }
 
-function cloneSafe(template) {
+export function cloneSafe(template) {
   // three.js deep-copies userData on every clone via
-  // JSON.parse(JSON.stringify(...)). Our templates park the whole
-  // AnimationClip array there, so each spawn was serialising and re-parsing
-  // every keyframe track of every clip — 250ms for the hermit crab (69 bones
-  // x 13 clips), 113ms for the school pod. That's what the periodic frame
-  // hitches were.
+  // JSON.parse(JSON.stringify(...)), on EVERY NODE, and both halves of that
+  // sentence cost something different.
   //
-  // The clone never needs those values copied: createVisual reassigns clips,
-  // rig and animationNames by reference the moment this returns. So hide the
-  // root userData for the duration of the clone and put it straight back.
-  // Cost becomes proportional to the rig, not to the animation data.
-  const saved = template.userData;
-  template.userData = {};
+  // THE ROOT was the first half and is the cheaper one: our templates park the
+  // whole AnimationClip array there, so each spawn was serialising and
+  // re-parsing every keyframe track of every clip — 250ms for the hermit crab
+  // (69 bones x 13 clips), 113ms for the school pod.
+  //
+  // THE CHILDREN are the half that was still being paid, and it is worse than
+  // slow. `addOutlineShells` puts a live Mesh on a shell's userData
+  // (`__outlineSource`, deliberately a reference so a rescaled rig stays
+  // honest), and JSON.stringify does not skip an Object3D — it calls its
+  // toJSON(), which serialises the whole mesh, geometry attributes and all,
+  // into plain arrays. Every outlined body was therefore carrying a complete
+  // second copy of its own geometry as JSON: 34MB per node on the phone's own
+  // census, across eighty-odd live and pooled bodies. That is where the
+  // WebContent process's memory was going, and it is why the count grew with
+  // bodies ever spawned rather than with anything on screen.
+  //
+  // So NOTHING is copied by JSON any more. Every node's userData is hidden for
+  // the duration of the clone and then re-attached by hand, one shallow copy
+  // per node, with references left as references. The clone is cheaper than it
+  // has ever been (no serialisation at all, at any depth) and holds no
+  // duplicate data.
+  //
+  // AND THE REFERENCES ARE RE-POINTED at the clone's own nodes. A shell whose
+  // `__outlineSource` still named the TEMPLATE's mesh would be measuring the
+  // wrong animal — it happened to work before only because the JSON blob
+  // carried a copy of the right scale. The parallel walk below is what makes
+  // the reference honest, and it is only correct because both clone paths
+  // (Object3D.clone(true) and SkeletonUtils.clone) build the clone by
+  // traversing the source in the same order.
+  const nodes = [];
+  const saved = [];
+  template.traverse((o) => { nodes.push(o); saved.push(o.userData); o.userData = EMPTY_USER_DATA; });
+
+  let clone;
   try {
     let skinned = false;
-    template.traverse((o) => {
-      if (o.isSkinnedMesh) skinned = true;
-    });
-    return skinned ? skeletonClone(template) : template.clone(true);
+    for (const o of nodes) if (o.isSkinnedMesh) { skinned = true; break; }
+    clone = skinned ? skeletonClone(template) : template.clone(true);
   } finally {
-    template.userData = saved;
+    for (let i = 0; i < nodes.length; i++) nodes[i].userData = saved[i];
   }
+
+  const copies = [];
+  clone.traverse((o) => copies.push(o));
+  // A mismatch means the clone is not shaped like the template and the pairing
+  // below would attach one node's userData to another. Bailing out leaves the
+  // clone with the blank userData it was cloned with, which createVisual
+  // repopulates on the root — wrong in a small way, where the alternative is
+  // wrong in a way that is impossible to trace.
+  if (copies.length !== nodes.length) {
+    console.warn(`[assets] clone shape changed (${nodes.length} -> ${copies.length}); userData not carried over`);
+    return clone;
+  }
+
+  const pairing = new Map();
+  for (let i = 0; i < nodes.length; i++) pairing.set(nodes[i], copies[i]);
+  for (let i = 0; i < nodes.length; i++) {
+    const src = saved[i];
+    if (!src || src === EMPTY_USER_DATA) continue;
+    const keys = Object.keys(src);
+    if (!keys.length) continue;
+    const out = {};
+    for (const k of keys) {
+      const v = src[k];
+      out[k] = v?.isObject3D && pairing.has(v) ? pairing.get(v) : v;
+    }
+    copies[i].userData = out;
+  }
+  return clone;
 }
+
+// One shared blank, handed to every node for the length of a clone. three only
+// ever reads it there, and a fresh {} per node would be an allocation per node
+// per spawn for nothing.
+const EMPTY_USER_DATA = {};
 
 export function hasModel(key) {
   return loadedModels.has(key) || spriteVariants.has(key);

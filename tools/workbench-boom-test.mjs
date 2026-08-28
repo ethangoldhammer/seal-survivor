@@ -145,7 +145,7 @@ section('THE VIEW');
 rowNamed('The boss going up').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
 
 const titles = cards();
-for (const t of ['The moment', 'The cloud', 'Its surface', 'How random it is', 'The outermost ring', 'The shockwave', 'Burst · bossBoom']) {
+for (const t of ['The moment', 'The cloud', 'Its surface', 'How random it is', 'The outermost ring', 'The shockwave', 'The body letting go', 'Burst · bossBoom']) {
   check(`card: ${t}`, titles.some((x) => x.startsWith(t)), titles.join(' · '));
 }
 
@@ -161,7 +161,17 @@ section('EVERY SLIDER WRITES SOMEWHERE');
 // Snapshot the whole of what the effect reads, nudge each slider, and demand
 // that SOMETHING moved. Deep-compared rather than watching one field, because
 // the point is to catch a `set` that wrote to the wrong object.
-const snapshot = () => JSON.stringify([CONFIG.boss.boom, CONFIG.fx.goo.groups.boom, CONFIG.emitters.bossBoom]);
+//
+// CONFIG.bodyPalette is in the snapshot because the explosion's colour card
+// reaches into it: "how much do we trust the texture average" is a fact about
+// reading a body, not about a boss going up, so it lives in its own block and
+// the panel writes across the seam. A slider whose target is not in here reads
+// as deaf when it is working perfectly, which is the same false alarm in the
+// opposite direction from the bug this check exists for.
+const snapshot = () => JSON.stringify([
+  CONFIG.boss.boom, CONFIG.fx.goo.groups.boom, CONFIG.emitters.bossBoom, CONFIG.bodyPalette,
+  CONFIG.boss.dissolve, CONFIG.emitters.bossDissolve,
+]);
 // THE ONE EXEMPTION, and it is exempt for the reason stageState exists: the
 // test body's radius is where the knob happens to be sitting while you work,
 // not an authored value, so it deliberately writes to a module local and never
@@ -230,6 +240,56 @@ const stragglers = TUNER_SCHEMA.flatMap((g) => g.items ?? [])
   .filter((i) => i?.path && (i.path.startsWith('boss.boom') || i.path.startsWith('fx.goo.groups.boom')))
   .map((i) => i.path);
 check('the boom rows moved rather than copied', stragglers.length === 0, stragglers.join(', '));
+
+// ---------------------------------------------------------------------------
+section('THE LIGHT ON THE KILL');
+// The second synthetic row in this section, and it is exposed to every one of
+// the seams the boom row is: a hand-built pane behind a row that is not a
+// feedback event, matched on a bag of words rather than on its id.
+typeFilter('');
+const lightRow = rowNamed('The light on the kill');
+check('the light has a row of its own', !!lightRow);
+if (lightRow) {
+  let prevSec = null;
+  for (const el of [...panel.querySelectorAll('.sv-wb-sec, .sv-wb-ev')]) {
+    if (el.classList.contains('sv-wb-sec')) prevSec = el.textContent;
+    if (el === lightRow) break;
+  }
+  check('...under Bosses, beside the explosion it lights', prevSec === 'Bosses', `under "${prevSec}"`);
+}
+for (const term of ['shaft', 'volumetric', 'trophy', 'wash']) {
+  typeFilter(term);
+  check(`"${term}" finds it`, !!rowNamed('The light on the kill'));
+}
+typeFilter('garlic');
+check('"garlic" does not', !rowNamed('The light on the kill'));
+typeFilter('');
+
+rowNamed('The light on the kill').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+{
+  const titles = cards();
+  for (const t of ['The moment', 'The hero shaft', 'Where it lands', 'The wash on the body', 'The bodies themselves']) {
+    check(`card: ${t}`, titles.some((x) => x.startsWith(t)), titles.join(' · '));
+  }
+  // THE ONE THAT MATTERS, same as for the boom: a handle that moves and changes
+  // nothing is invisible by looking at it. The lift sliders write into
+  // CONFIG.damageGlow.sources rather than into CONFIG.boss.light, which is
+  // exactly the kind of second target a `set` gets wrong, so the snapshot
+  // covers both.
+  const snap = () => JSON.stringify([CONFIG.boss.light, CONFIG.damageGlow.sources]);
+  const deafLight = [];
+  for (const el of [...document.querySelectorAll('.sv-wb-card input[type=range]')]) {
+    const label = el.previousElementSibling?.textContent ?? '?';
+    const before = snap();
+    const lo = Number(el.min);
+    const hi = Number(el.max);
+    const now = Number(el.value);
+    el.value = String(Math.abs(now - lo) > Math.abs(hi - now) ? lo : hi);
+    el.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    if (snap() === before) deafLight.push(label);
+  }
+  check('no slider is deaf', deafLight.length === 0, deafLight.join(', '));
+}
 
 console.log(fails ? `\n${fails} FAILED` : '\nall checks passed');
 process.exit(fails ? 1 : 0);

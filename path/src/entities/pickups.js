@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, chumValueRamp } from '../config.js';
+import { CONFIG, chumValueRamp, xpPaceMul } from '../config.js';
 import { createVisual, ASSETS, getAssetSizeMultiplier } from '../assets.js';
 import { bounds } from '../arena.js';
 import { updateTumble } from '../systems/rocks.js';
@@ -215,7 +215,13 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
     // reason the holdback is here: an orb is worth what it was worth when it hit
     // the water, no matter how long it sits on the seabed before anything eats
     // it. Only the heal and the charge refill are left on the tier alone.
-    value: value * tier.xpMul * mass.value * (CONFIG.xp?.chumMul ?? 1) * chumValueRamp(runDifficulty),
+    //
+    // CONFIG.pace.xp — the master levelling dial — joins them here rather than
+    // folding into chumMul, because that row belongs to spawning.csv and a
+    // slider pointed at a table-owned path is put back at every boot. Two
+    // numbers, two jobs: the shipped balance, and the one you drag mid-run.
+    value: value * tier.xpMul * mass.value * (CONFIG.xp?.chumMul ?? 1)
+      * xpPaceMul() * chumValueRamp(runDifficulty),
     healMul: tier.healMul,
     vx: vel?.x ?? 0,
     vy: vel?.y ?? 0,

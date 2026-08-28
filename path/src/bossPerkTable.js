@@ -120,6 +120,20 @@ export const PERK_IDS = [
   'eyebeam', 'barrels', 'spitfish', 'finfish',
   // Company
   'turtles',
+  // THE FIELD — the boss opens a chaotic flow around itself and the water
+  // between you fills with something you have to read rather than dodge.
+  //
+  // These four ARE attractorStorms.csv rows, sharing their ids on purpose: one
+  // name for one thing, so the join cannot be got wrong and the study's own
+  // `notes` cell is the perk's documentation. What the row here adds is
+  // everything that makes it a fight rather than a demonstration — the
+  // cooldown, the tell, how long it stays open, how close you have to be, and
+  // damage that rides the difficulty ramp like every other perk's.
+  //
+  // The other two studies are Thomas and are deliberately NOT here: one is a
+  // whole arena and one is a body, and both are a boss rather than a thing a
+  // boss does.
+  'saddle', 'ring', 'echo', 'release',
 ];
 
 // Every numeric column, and the floor each one is allowed to reach. Kept as

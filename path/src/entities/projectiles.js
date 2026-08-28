@@ -51,6 +51,22 @@ export function spawnProjectile(scene, {
   // ricochet speed. Null (everything but Ricochet Rounds) skips the whole thing.
   comboSizeStep = 0, comboSizeMax = 1, comboSpring = null,
   jet = false, jetInterval = [0.2, 0.4], jetSpeed = [10, 18], jetTurn = 2.4, jetDrag = 2,
+  // FIELD-STEERED. A function `(p, dt) => void` that writes where this shot
+  // should now BE into `p.flowX` / `p.flowY`; null for every ordinary bullet.
+  //
+  // The third way a shot can decide where it is going, and it is the only one
+  // that is not a heading. `homing` re-aims, `jet` re-kicks, and both leave the
+  // shot travelling in a straight line between frames. A cube riding a strange
+  // attractor has no heading to speak of — its position IS the integrated state
+  // of a chaotic system, and asking it for a direction and a speed is asking
+  // the wrong question (see systems/attractorStorm.js).
+  //
+  // So the owner reports the position and updateProjectiles derives `dir` and
+  // `speed` back out of the move. That is not a detail: everything downstream —
+  // the hit test, `orient`, the arena cull, the playtest ledger — reads those
+  // two fields, and a shot that wrote its own position directly would be
+  // invisible to all of them.
+  flow = null,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
   // HOW FAST THE BODY WHIPS ABOUT ITS OWN LONG AXIS, in radians a second.
   //
@@ -236,12 +252,36 @@ export function spawnProjectile(scene, {
     // clump for the first fifth of a second.
     jetTimer: 0,
 
+    // FIELD STEERING — see the argument note above. `flowX`/`flowY` are the
+    // channel the owner answers on, seeded to the spawn position so a storm
+    // that is asked for a cube's target before it has stepped one gets where it
+    // already is rather than the origin.
+    flow,
+    flowX: origin.x,
+    flowY: origin.y,
+    // Whatever the owner needs to keep per cube. projectiles.js never reads it;
+    // it is here so a storm does not have to hold a second list keyed on
+    // projectile identity, which would have to be kept in step with despawns it
+    // does not own.
+    flowState: null,
+
     // How much of CONFIG.arena.gravity this shot feels ABOVE THE WATER, as a
     // multiplier. 1 is a stone: it falls exactly like the seal that threw it.
     // 0 opts a shot out entirely — for something that has no business falling
     // rather than for something that would merely look better not falling.
     gravityScale,
 
+    // WHICH ASSET THIS SHOT IS WEARING. Nothing in the game reads it — the
+    // mesh has already been built by the time this object exists, so it is not
+    // load-bearing and must never become so.
+    //
+    // It is here because a shot's body is now a JOIN: attractorStorms.csv names
+    // a key, the asset table owns the model, and the two are held together by a
+    // string. "The row says moneyRoll1" and "a money roll is flying" are
+    // different claims, and without this the second one cannot be asked at all
+    // — the mesh is a Group of Groups with the key nowhere in it. See
+    // tools/attractor-storm-test.mjs.
+    asset,
     spin, // radians/sec, purely visual
     roll, // radians/sec about its own long axis — see the argument note above
     rollAngle: 0,
@@ -541,6 +581,45 @@ function steerToward(p, dt) {
   p.dir.set(Math.cos(angle), Math.sin(angle));
 }
 
+// ASK THE FIELD WHERE THIS SHOT SHOULD BE, then turn that back into a heading
+// and a speed. See the `flow` argument note on spawnProjectile for why the
+// owner reports a position rather than a direction.
+//
+// `dir` and `speed` are re-derived rather than merely used to move the mesh,
+// because the integrate-and-project loop below is not the only reader of them:
+// the hit test spends `dir` as the shove direction on the player, `orient`
+// points the body along it, and the arena cull needs the mesh to have actually
+// moved. Writing the position straight onto the mesh here would leave all three
+// looking at the heading the cube launched on, forever.
+//
+// A step that goes nowhere — the middle of Lorenz, a rider that has run off the
+// end of its path — leaves the heading alone and sets the speed to zero rather
+// than dividing by it. The next frame gets a direction to work with, exactly as
+// the gravity path does with a shot thrown straight up.
+function updateFlow(p, dt) {
+  const px = p.mesh.position.x;
+  const py = p.mesh.position.y;
+  p.flowX = px;
+  p.flowY = py;
+  p.flow(p, dt);
+  // THE OWNER JUST LET GO. A storm that has been taken out of the water clears
+  // the hook on each of its cubes, and the right ending for a shot already in
+  // the air is to carry on out of the arena on the heading it had — not to stop
+  // dead, which is what re-deriving from a move of zero would do. Its last
+  // `dir` and `speed` are exactly that heading, so the answer is to leave both
+  // alone.
+  if (!p.flow) return;
+  const dx = p.flowX - px;
+  const dy = p.flowY - py;
+  const d = Math.hypot(dx, dy);
+  if (d > 1e-6) {
+    p.dir.set(dx / d, dy / d, 0);
+    p.speed = d / Math.max(dt, 1e-5);
+  } else {
+    p.speed = 0;
+  }
+}
+
 // ONE BOUNCE OFF THE BUDGET, wherever it was spent.
 //
 // A bouncing shot has two ways to spend a bounce and they live in two files —
@@ -668,6 +747,7 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
     if (p.homingDelay > 0) p.homingDelay -= dt;
     if (p.homing && p.homingDelay <= 0) updateHoming(p, dt, enemiesList);
     if (p.jet && updateJet(p, dt)) onJet?.(p);
+    if (p.flow) updateFlow(p, dt);
 
     // GRAVITY, and only above the water. Below the line the sea carries a
     // shell — which is why a bullet crosses the arena flat and always has —
@@ -685,7 +765,11 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
     // clapping its way across the sky are not in free fall, and it could not
     // work anyway — updateHoming above rewrites `dir` from the target angle
     // every frame, so a fall folded into it would be gone by the next one.
-    const powered = p.homing || p.jet;
+    // A field-steered cube is under power too, and for a plainer reason than a
+    // missile: its position comes out of an integrator that has never heard of
+    // gravity, so a fall folded in here would be undone by the next frame's
+    // report anyway — after having quietly corrupted one frame of the shape.
+    const powered = p.homing || p.jet || !!p.flow;
     if (!powered && p.gravityScale > 0 && p.mesh.position.y > bounds.surfaceY) {
       const g = CONFIG.arena.gravity * (CONFIG.arena.projectileGravity ?? 1) * p.gravityScale;
       const vx = p.dir.x * p.speed;
