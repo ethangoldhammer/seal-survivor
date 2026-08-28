@@ -112,7 +112,10 @@ export function updateShrimpRing(dt, scene, playerPos, shrimpCount, shrimpLevel,
     const reach = scale + 0.5; // rough contact radius for the cloned instance
 
     for (let i = enemiesList.length - 1; i >= 0; i--) {
+      // Shrink-safe: a kill inside this loop can take several creatures out of
+      // the list at once. See the note in systems/club.js.
       const e = enemiesList[i];
+      if (!e) continue;
       if (inst.cooldowns.has(e)) continue;
       // Against the measured body where there is one, so a shrimp brushing a
       // boss's flank connects with the flank and not with a circle drawn

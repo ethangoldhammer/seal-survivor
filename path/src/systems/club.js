@@ -1680,7 +1680,24 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     throwY /= throwLen;
 
     for (let j = enemiesList.length - 1; j >= 0; j--) {
+      // THE LIST SHRINKS UNDER THIS LOOP, and by more than one at a time. A
+      // blast kills everything in its radius, so a single swing that connects
+      // can splice a dozen creatures out of `enemiesList` before the next
+      // iteration reads it — and counting DOWN is only safe against losing one
+      // per step. Once the array is shorter than `j`, `enemiesList[j]` is
+      // undefined and the next line into hitCreatureSegment reads `.hitShape`
+      // off nothing.
+      //
+      // That is a TypeError inside animate(), which means the frame loop stops
+      // and the game freezes on the spot with the renderer still running. It
+      // was reported as "froze at 3:53" and left nothing behind but the crash
+      // trail's `paused+cards` — see systems/crashLog.js.
+      //
+      // Skipping the hole is the whole fix: anything that fell out of the list
+      // during this swing is already dead, and dead is what the loop would
+      // have decided about it anyway.
       const e = enemiesList[j];
+      if (!e) continue;
       if (club.cooldowns.has(e)) continue;
       // ALREADY IN THE AIR — left alone until it lands. Catching a body
       // mid-carom sounds like the fun version and is the bug that ate the

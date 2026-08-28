@@ -1649,7 +1649,10 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
     }
 
     for (let i = enemiesList.length - 1; i >= 0; i--) {
+      // Shrink-safe: a kill inside this loop can take several creatures out
+      // of the list at once. See the note in systems/club.js.
       const e = enemiesList[i];
+      if (!e) continue;
       if (hitThisDash.has(e)) continue;
       // Through the shared test, so a dash connects with the part of the
       // animal the seal actually reached. On a boss that is the difference

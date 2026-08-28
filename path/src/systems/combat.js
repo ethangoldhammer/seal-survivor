@@ -47,7 +47,11 @@ export function resolveCombat(dt, scene, hooks) {
     if (b.hitLock > 0) continue; // just ricocheted — let it clear the body first
 
     for (let j = enemies.length - 1; j >= 0; j--) {
+      // The list can shrink by more than one under this loop — a blast kills
+      // everything in its radius — and counting down is only safe against
+      // losing one per step. See the note in systems/club.js.
       const e = enemies[j];
+      if (!e) continue;
       if (b.hits.has(e)) continue;
       // A boss still making its entrance. Not `b.hits.add(e)` and not a
       // despawn either: the shot passes through and keeps going, so a player

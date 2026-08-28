@@ -631,6 +631,20 @@ export function hitShapeTest(shape, x, y, r = 0, out = null) {
  * Falls back to the circle every creature has always used.
  */
 export function hitCreature(e, x, y, r = 0, out = null) {
+  // NOTHING IS NOT A HIT, and this guard is worth more than it looks. Every
+  // weapon in the game walks the enemy list backwards while killing things out
+  // of it, and a kill can remove SEVERAL creatures at once — a blast clears its
+  // whole radius — so a downward index can outrun the array and read a hole.
+  // Reaching `.hitShape` off that hole is a TypeError raised from inside
+  // animate(), which stops the frame loop: the game freezes on the spot with
+  // the renderer still running and nothing in the console anybody can see. It
+  // shipped that way and was reported as "froze at 3:53".
+  //
+  // The call sites that provably do this carry their own guard as well (see
+  // systems/club.js), because skipping the work is better than doing it and
+  // discarding the answer. This is the backstop for the ten that do not, and
+  // for the next one somebody writes.
+  if (!e?.mesh) return false;
   if (e.hitShape?.alive) {
     // Broad phase first. `bound` is the posed extent of the measured body, NOT
     // e.radius — see buildRecipe.
@@ -689,6 +703,9 @@ const _seg = { x: 0, y: 0 };
  * wherever the shark's origin happens to be.
  */
 export function hitCreatureSegment(e, ax, ay, bx, by, r = 0, out = null) {
+  // The same backstop as hitCreature, and this is the one the club reached
+  // through when it froze a run mid-swing.
+  if (!e?.mesh) return false;
   if (e.hitShape?.alive) {
     const shape = e.hitShape;
     refreshHitShape(shape);
