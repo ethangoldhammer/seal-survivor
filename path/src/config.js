@@ -24476,7 +24476,16 @@ export const CONFIG = {
       // Per-boss overrides go through setHotSpotLook in
       // systems/bossHotSpots.js — the perk's attack colour, the run's element,
       // an archetype column — and REPLACE this rather than multiplying it.
-      litColor: 0xffffff,
+      //
+      // AND IT IS NOT WHITE ANY MORE. 0xe55f5f is the value that was actually
+      // in the water — it lived in imported-tuning.json, where it shadowed the
+      // white above and nothing in this file could say so. It is here now
+      // because a default that is overridden on every machine is not a
+      // default, it is a comment. Everything the note above says about white
+      // still holds and is the reason a tint REPLACES this rather than
+      // multiplying it; what it stops being is a claim about what is on
+      // screen.
+      litColor: 0xe55f5f,
       // What it drifts to as it takes damage. The player reads "nearly done"
       // off the colour and off the pulse rate together.
       hotColor: 0xffc23a,
@@ -24485,15 +24494,30 @@ export const CONFIG = {
       // OVERDRIVEN ON PURPOSE. The scene renders to a HalfFloat target, so a
       // colour past 1 survives the bright pass instead of arriving pre-clipped
       // — which is what lets this THROW light rather than just be a bright
-      // patch. glow x ring puts the boundary band around 8.6, against a bloom
-      // threshold of 0.55 in luminance: the ring is an order of magnitude over
-      // the line and haloes hard, while the interior (fill 0.3) sits under 1
-      // and keeps its detail. `bloom.knee` is the soft shoulder that stops the
-      // final 8-bit write turning it flat white; raising `bloom.threshold` is
-      // the natural mistake and the wrong knob — it decides which pixels get a
-      // halo, not how bright they are, so it would stop this blooming while
-      // leaving it just as clipped.
-      glow: 3.6,
+      // patch. `bloom.knee` is the soft shoulder that stops the final 8-bit
+      // write turning a bright layer flat; raising `bloom.threshold` is the
+      // natural mistake and the wrong knob — it decides which pixels get a
+      // halo, not how bright they are.
+      //
+      // 0.5, HALF WHAT IT WAS AND A THIRD OF WHAT IT WAS BEFORE THAT.
+      // At the old ceiling every layer in this block cleared 1 at once: the
+      // ring, the fill and the spill all landed flat white on top of each
+      // other, so the spot was one saturated mass with no edge anywhere in it.
+      // The response was to pull this to 0.3 until the mass stopped clipping —
+      // which is a real fix for the clipping and no fix at all for the shape,
+      // since dimming everything equally keeps every layer exactly as
+      // indistinguishable as it was, and dark. Once the layers were given an
+      // order it could come back up: this is the level at which the paint
+      // reads the HEAT again, which is the half of the job the reticle in
+      // front of it cannot do.
+      //
+      // So it stays here and the budget is spent BELOW, on giving the layers
+      // different weights. Multiply each by this number: the ring lands at
+      // 0.96, the level's own edge at 0.66, the fill at 0.27 and the spill at
+      // 0.075 — an order between them, with the bloom threshold (0.55 in
+      // luminance) falling between the two lines and the two washes, so the
+      // things that are meant to be edges are the only things that halo.
+      glow: 0.5,
       // THERE IS NO `edge` ANY MORE, and its absence is the point. The glow
       // used to be a quad, so a fraction of that quad's half-width decided
       // where the spot's boundary was drawn — a second number that had to be
@@ -24501,15 +24525,19 @@ export const CONFIG = {
       // shader divides by the radius uniform directly: the drawn boundary and
       // the reach are not two numbers that agree, they are one number.
       // How deeply the edge is chewed, and how fast the chewing crawls. A
-      // round hot spot reads as a decal stamped on the model.
+      // round hot spot reads as a decal stamped on the model — and this is the
+      // answer to that, on the SPILL only, so it is an amplitude on a haze
+      // rather than on the shape.
       //
-      // ON THE SPILL ONLY, so this is an amplitude on a haze rather than on
-      // the shape — and that is why it is smaller than it was. Read against
-      // `spill` below: the jag multiplies the reach beyond the boundary, so
-      // deep chewing on a generous spill is not a gnawed edge, it is the
-      // spot's outline changing size several times a second.
-      jag: 0.2,
-      jagRate: 1.4,
+      // NEARLY OFF NOW. It is a noise field animating on the boundary of the
+      // thing the player is aiming at, on up to three spots at once: the most
+      // literal visual noise in the feature and the least legible thing it
+      // buys. What it was for is covered three times over by the ring, the
+      // rising level and the throb, none of which move the outline. Kept at a
+      // whisper so the edge is not a vector circle; anything here that reads
+      // as MOTION is already too much.
+      jag: 0.06,
+      jagRate: 0.7,
       // --- the shape, and the reason the spot reads as a target ----------
       // THE RING is the loudest thing here and the one that does the work: a
       // hard bright band sitting exactly on the crit boundary. Without it the
@@ -24517,29 +24545,37 @@ export const CONFIG = {
       // a couple of hundred pixels — is a green smear with no size and no
       // edge. `ring` is its brightness against `glow`, `ringWidth` how thick
       // it is as a fraction of the radius.
-      ring: 2.4,
-      ringWidth: 0.13,
-      // ONLY THE RING AND THE SHOCK MAY CLIP — the sentence the four numbers
-      // below are sized by, and the correction that got the spot's shape back.
+      // The brightest layer in the block — the only one meant to clip, and the
+      // reason the boundary is a line rather than the edge of a wash.
+      ring: 3.2,
+      // AND THIS IS THE ONE THAT WAS DOING THE DAMAGE. It was tuned to 0.35,
+      // which is not a band: smoothstep over that half-width lights every
+      // fragment from 0.65r to 1.35r, so the "boundary" was a gradient covering
+      // the entire spot and most of the water around it. Nothing in the effect
+      // had an edge, which is why the whole thing read as a smudge however the
+      // brightness was moved — and moving the brightness is exactly what was
+      // tried. A seventh of the radius is a line.
+      ringWidth: 0.14,
+      // FOUR LAYERS, FOUR DIFFERENT WEIGHTS — the sentence the numbers below
+      // are sized by, and the thing this block did not have.
       //
-      // Multiply each of them by `glow` (3.6) and by the peak of the throb
-      // (x1.55) and read the answer against 1, which is where the 8-bit
-      // composite stops having values. At the old numbers the fill landed at
-      // 1.67 and the SPILL at 1.98 — so the faint outer haze, the part that is
-      // supposed to be the light thinning out, was twice the ceiling. The
-      // whole spot came out as one flat saturated patch the size of the
-      // spill's reach with the boundary band welded into the middle of it:
-      // the ring was drawn correctly and there was nothing darker beside it to
-      // read it against. Every complaint about the shape being soft, smeared
-      // and too big was that one arithmetic mistake.
+      // Multiply each by `glow` and read the answers against each other and
+      // against the bloom threshold (0.55 in luminance):
       //
-      // So the interior terms sit UNDER 1 at the peak of the pulse and the two
-      // lines are left an order of magnitude over it. That is what makes a
-      // boundary: not a brighter ring, a dimmer everything else.
+      //   ring        3.2  x 0.5 = 1.60   a line, clips, haloes hard
+      //   chargeEdge  2.2  x 0.5 = 1.10   a line, just over, haloes softly
+      //   fill        0.9  x 0.5 = 0.45   a wash, under the threshold
+      //   spillGain   0.25 x 0.5 = 0.125  a breath at the edge
+      //
+      // The order is the whole point. Every earlier attempt at this moved all
+      // four together — the fill and the spill were once ABOVE the ceiling and
+      // the fix was to pull the master glow, which dimmed the ring by the same
+      // factor and left the four exactly as indistinguishable as before. Two
+      // things that bloom and two that do not is what gives a small light an
+      // inside, an edge and an outside.
 
       // THE FILL, which is now a LEVEL rather than a wash — see `charge`.
-      // 0.16 x 3.6 x 1.55 = 0.89.
-      fill: 0.16,
+      fill: 0.9,
       // WHERE THE LEVEL STANDS ON A FRESH SPOT, as a fraction of the radius,
       // rising to the boundary as the spot takes damage.
       //
@@ -24556,44 +24592,53 @@ export const CONFIG = {
       charge: 0.34,
       // How bright the level's own leading edge is — the line at the top of
       // the fill. This is what makes 90% look different from 60% in a single
-      // frame rather than over a second of watching. 0.9 x 3.6 = 3.2, so it
-      // crosses the bloom threshold and reads as a line, while staying well
-      // under the boundary ring it is climbing toward: at full heat the two
-      // land on top of each other and the rim doubles, which is the loudest
-      // the spot ever gets before it goes.
-      chargeEdge: 0.9,
+      // frame rather than over a second of watching. Over the bloom threshold
+      // so it reads as a line, and a third under the boundary ring it is
+      // climbing toward — at full heat the two land on top of each other and
+      // the rim doubles, which is the loudest the spot ever gets before it
+      // goes.
+      chargeEdge: 2.2,
       // THE SPILL beyond the boundary: how far out it reaches as a fraction of
       // the radius, and how bright. This is the only part the chewed edge
       // touches — a jag on the RING would be the boundary lying about the
       // crit's reach by the jag's own amplitude.
       //
-      // TIGHT AND FAINT, which is the other half of the correction above. A
-      // haze reaching half the radius again at twice the clip ceiling is not a
-      // haze, it is the spot being that size. 0.16 x 3.6 x 1.55 = 0.89.
-      spill: 0.3,
-      spillGain: 0.16,
+      // TIGHT AND FAINT, which is the other half of the note above. A haze
+      // reaching half the radius again, bright enough to bloom, is not a haze
+      // — it is the spot being that size, and it was the reason a spot looked
+      // twice its reach and had no outer edge to speak of. A quarter of the
+      // radius at a twelfth of the ring's brightness is light thinning out.
+      spill: 0.25,
+      spillGain: 0.25,
       // --- AND THE BURST, ON THE SKIN --------------------------------------
       // Everything else a rupture does happens beside the animal — the goo,
       // the meat, the reticle thrown outward — so the body's own account of a
       // charge going off inside it was a light fading over a fifth of a
       // second. This is one hard band leaving the wound, painted on the flesh
       // like the rest of this: how far past the boundary it travels, how thick
-      // it is, and how bright. Loud on purpose — a shock that does not clip is
-      // a ripple, and the ring it is leaving behind is at 8.6.
+      // it is, and how bright. LOUD ON PURPOSE — it is the only thing in the
+      // block allowed past 1 (6 x 0.3 = 1.8), because a shock that does not
+      // clip is a ripple, and it is over in a fifth of a second.
       //
       // It rides the spot's own fade (`closeSeconds`), so the wave arriving at
       // its full reach and the light going out are the same moment rather than
       // two effects that were tuned to nearly agree.
       burstReach: 0.9,
       burstWidth: 0.18,
-      burstGain: 3,
+      burstGain: 6,
       // Falloff exponent on the hot middle. Higher is a tighter, harder core.
-      core: 3.2,
+      core: 7.1,
       // How white that core goes. This is what stops the spot being a flat
       // counter: the body falls off from the first pixel and the middle is
       // pushed toward white, so there is a bright heart with a green edge
       // rather than one saturated disc.
-      white: 0.85,
+      // ...and NOT ALL THE WAY, which is the change. A middle pushed to white
+      // is a second bright peak inside a shape that now has a bright edge of
+      // its own — two highlights in one small light, and the white one sits
+      // exactly where the colour ramp is supposed to be read, so it costs the
+      // heat shift as well. Half a mix leaves a hot heart without bleaching
+      // the thing that heart is meant to be telling you.
+      white: 0.45,
       // THE THROB, ON THE MUSICAL GRID. One cycle per half bar, so every boss
       // in the water pulses with the track instead of each on its own rad/sec.
       // Any name from BEAT_DIVISIONS; 'free' falls back to `pulse` below.
@@ -24603,7 +24648,7 @@ export const CONFIG = {
       // division down and wraps at the same point — so it visibly doubles in
       // rate while staying on the grid. Multiplying the rate would put a
       // nearly-dead spot at an arbitrary tempo of its own.
-      pulseSync: '1/2',
+      pulseSync: '2 bars',
       // The free-running fallback, radians a second, used only when pulseSync
       // is 'free'. Authored in the same unit as every other oscillator in this
       // file so the two can be compared by eye.
@@ -24612,7 +24657,13 @@ export const CONFIG = {
       // would swing the drawn boundary either side of the number the crit test
       // uses twice a bar, which is a lie told on a schedule about the one thing
       // on a boss the player is aiming at.
-      pulseDepth: 0.55,
+      //
+      // SHALLOWER THAN IT WAS. Half the brightness swinging twice a bar was
+      // the right depth while the spot's shape never changed and the throb was
+      // the only sign of life in it; against a level that rises as the spot is
+      // chewed it is a flicker competing with a readout. Enough to feel the
+      // grid, not enough to be the loudest thing happening.
+      pulseDepth: 0.28,
       // How far apart two spots on one animal sit in the cycle, and how many
       // slots they may land on. SPREAD SHIPS AT 0 — lockstep — which is the
       // opposite call from the schools of fish this machinery was built for,
@@ -24629,7 +24680,7 @@ export const CONFIG = {
       // the flash are both short enough to be events.
       openSeconds: 0.45,
       closeSeconds: 0.22,
-      flashSeconds: 0.16,
+      flashSeconds: 0.2,
       // No `lift` either: the old quad needed nudging toward the camera to sit
       // off the skin, and this IS the skin.
 
@@ -24679,12 +24730,15 @@ export const CONFIG = {
         // reading as six blobs arranged in a circle, and the goo coming out of
         // the middle has nothing left to contrast with.
         //
-        // WHICH IS EXACTLY WHAT SHIPPED. The literal in makeSpotRing carried
-        // `thickness` twice, so this value was overwritten by a 0.17 fallback
-        // further down the same object and the ring drew at nearly twice the
-        // weight described here — the failure this note warns about, arriving
-        // through a dead line rather than through a number anybody chose.
-        thickness: 0.09,
+        // WHICH IS EXACTLY WHAT SHIPPED, TWICE OVER. The literal in
+        // makeSpotRing carried `thickness` twice, so this value was
+        // overwritten by a 0.17 fallback further down the same object — and
+        // then the tuner snapshotted the rendered 0.17 back into
+        // imported-tuning.json, where it shadowed this line as well. Fixing
+        // the literal alone changed nothing on screen for that reason. The
+        // failure this note warns about, arriving through a dead line and
+        // outliving it in a save file.
+        thickness: 0.085,
         // --- HOW MUCH THE WATER HAS BEEN AT IT -------------------------------
         // The ring shader's own numbers, overridden here because its defaults
         // were authored for a blast ring or a strike mark and this is the
@@ -24697,19 +24751,37 @@ export const CONFIG = {
         // is not a chewed edge but a lopsided ring, and is most of why the
         // mark read as distorted rather than as organic.
         noiseScale: 2.4,
+        // ALL THREE OF THE NUMBERS BELOW ARE NEARLY OFF, and that is the
+        // decision rather than three small ones. The wobble, the varying band
+        // weight and the torn segment ends are the ring shader's whole organic
+        // dialect — right on a blast wave or a strike mark, which are big,
+        // brief and alone on screen. This mark is small, permanent and there
+        // are three of them, and at that size every one of those qualities is
+        // read as fuzz on the outline rather than as the water having been at
+        // it. What the shape has to do here is be FINDABLE and be a hexagon.
         // The excursion, as a fraction of the radius (the cap binds at every
-        // legal spot size, so this IS the wobble). Enough to keep the hexagon
-        // hand-cut; not enough to argue with its own corners.
-        wobble: 0.12,
+        // legal spot size, so this IS the wobble).
+        //
+        // AND IT IS NOT ONLY THE WOBBLE, which is the trap in this number. In
+        // the `facet` dialect the polygon and the noise are BOTH scaled by
+        // this amplitude — the hexagon's flats are pulled in by 1.2 of it and
+        // the noise by 0.22 of it — so winding it down to kill the fuzz winds
+        // the hexagon down with it, and the mark quietly becomes a circle.
+        // Which it did: at 0.05 this was the strike mark's own shape in the
+        // strike mark's own family, and the one thing the two marks may never
+        // share is their silhouette. Back up to where the hexagon is a
+        // hexagon; the fuzz is dealt with by the three numbers around it,
+        // which are the ones that only do fuzz.
+        wobble: 0.13,
         // How much the band's weight varies around the ring. The shader's 0.35
         // is a third of the thickness — it sells a goo boundary and eats a
         // thin line, which on a band this narrow is the difference between six
         // segments and six lumps of six different sizes.
-        massVar: 0.14,
+        massVar: 0.05,
         // ...and how ragged the ends of the segments are. Kept, because a
         // bracket cut clean is a vector shape; small, because at this size a
         // torn end is most of a segment.
-        arcJitter: 0.07,
+        arcJitter: 0.02,
         // --- A LOOSE HEXAGON, IN SIX PIECES ---------------------------------
         // The strike mark is a four-armed bracket on a CIRCLE. These are six
         // segments on a HEXAGON, and the difference is what stops a weak spot
@@ -24744,7 +24816,13 @@ export const CONFIG = {
         // an animal and lands wherever that animal's own shading leaves it,
         // while this is drawn over the top of everything, so it does not need
         // the same push to be seen.
-        glow: 2.6,
+        // Trimmed, for the halo rather than for the line: at 2.6 six segments
+        // each threw a soft skirt wide enough to close the gaps between them,
+        // and six pieces whose gaps have filled in is a blob. Far enough down
+        // to give the shape its holes back, not so far that the mark stops
+        // carrying at fight scale — which 2 did, and fight scale is the only
+        // frame this number can be judged in.
+        glow: 2.4,
         // IT TURNS AROUND ITS OWN CENTRE. Radians a second, and higher than it
         // would be on a circle for a reason that only applies to this shape: a
         // rotating circle is invisible — the silhouette is the same at every
@@ -24753,7 +24831,12 @@ export const CONFIG = {
         // mark reads clearly here. Still well under the pace of anything the
         // player has to react to: a spin says LIVE, and a fast one would say
         // URGENT, which is the throb's job.
-        spin: 1.1,
+        // SLOWER. A hexagon sweeping its corners at 1.1 is plainly moving,
+        // which was the point while the spot underneath it was a light that
+        // did nothing but breathe — and is a third motion now, against a level
+        // that rises and a throb that is already on the beat. A spin says
+        // LIVE; it does not have to say it this often.
+        spin: 0.3,
         // Seconds the sweep takes to draw one on. The hand goes round once as
         // the spot opens, so a new weak spot is DRAWN rather than switched on.
         sweepIn: 0.3,
@@ -24761,7 +24844,7 @@ export const CONFIG = {
         // opacity. Driven off the same cycle as the glow, so the ring and the
         // light it surrounds pulse together instead of beating against each
         // other.
-        pulseDepth: 0.35,
+        pulseDepth: 0.18,
         // WHAT A HIT DOES TO IT. The band fattens and brightens for the length
         // of the spot's own flash — the gooey half of the feedback, and the
         // reason it fattens rather than flashing white is that a thicker band
