@@ -70,11 +70,16 @@ export function companionStrikeParts(stats) {
     });
   }
 
-  // ORCA FAMILY — a fixed pod whose stacks buy damage rather than bodies, so
-  // the count comes off CONFIG and only the damage moves with the level.
+  // ORCA FAMILY — one whale per stack until the family is complete, so the
+  // count moves with the level exactly as the damage does. It comes off
+  // podStats rather than CONFIG.orca.count for the reason at the top of this
+  // file: the count read straight from config was right while the pod arrived
+  // whole, and a first pick would now lend three bodies when one is in the
+  // water.
   const orcaLv = lv('orcaLevel');
   if (orcaLv > 0) {
-    parts.push({ id: 'orca', count: CONFIG.orca?.count ?? 0, damage: podStats(orcaLv).damage });
+    const orca = podStats(orcaLv);
+    parts.push({ id: 'orca', count: orca.count, damage: orca.damage });
   }
 
   // HARP SEAL — the note, not the aura. The aura is a lingering field the harp

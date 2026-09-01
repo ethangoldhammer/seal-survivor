@@ -122,7 +122,11 @@ const WANTED = ['enemyShark', 'enemyGreatWhite', 'enemyMegalodon', 'enemyAbyssSh
   'enemyHammerhead', 'enemyBossHammerhead', 'enemyMightyMeg', 'enemyMosasaur',
   'enemyOrcaBull', 'enemyOrcaCow', 'orcaFriendBull', 'orcaFriendCow', 'orcaFriendCalf'];
 
-const models = Object.entries(ASSETS).filter(([, d]) => d.model).map(([k]) => k);
+// Models, plus any procedural shape that declares a layer — see the roster
+// seed below for why a primitive belongs in this list.
+const models = Object.entries(ASSETS)
+  .filter(([, d]) => d.model || d.noiseShader || d.toonShade || d.biolumSkin)
+  .map(([k]) => k);
 const primary = WANTED.filter((k) => models.includes(k));
 const rest = models.filter((k) => !primary.includes(k)).sort();
 
@@ -266,8 +270,18 @@ function surfaceCell() {
 // it exclusively, so an asset declaring `noiseShader` AND `toonShade` — which
 // is every shark in the file — came up as "noise" with the bands invisible in
 // the UI even though they were on the animal.
+//
+// A PRIMITIVE THAT ASKS FOR A LAYER IS IN THE ROSTER TOO. `def.model` was the
+// filter for as long as every wearer was a downloaded animal, and it silently
+// excluded the one kind of subject this page most needs to show: a SHAPE. The
+// pearl is a procedural sphere wearing the wet film, and under the old filter
+// it was invisible here — a surface with a config preset, live uniforms and
+// nowhere to move them. `wearsALayer` is the honest test, since the question
+// this seed is answering is "what is painting on this body", not "where did
+// the geometry come from".
+const wearsALayer = (d) => !!(d.noiseShader || d.toonShade || d.biolumSkin);
 for (const [key, def] of Object.entries(ASSETS)) {
-  if (!def.model) continue;
+  if (!def.model && !wearsALayer(def)) continue;
   layers.set(key, {
     noise: !!def.noiseShader,
     toon: !!def.toonShade,

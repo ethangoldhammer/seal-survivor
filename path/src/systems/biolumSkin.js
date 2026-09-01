@@ -829,6 +829,78 @@ const attached = new Set();
 // worth asking.
 const instances = new Set();
 
+// ---------------------------------------------------------------------------
+// THE UNIFORM BLOCK IS FOUND BY ID, NOT BY THE REFERENCE IN userData.
+// ---------------------------------------------------------------------------
+// Material.clone() deep-copies userData through JSON — unlike cloneSafe, which
+// stopped doing that for Object3D nodes, three still does it for materials —
+// and this module parks a live object full of THREE.Color instances there. A
+// clone therefore comes back carrying a PLAIN COPY of the uniform block: same
+// keys, same numbers, and `uBioColorA.value` a bare {r,g,b} with no `.set`.
+//
+// That is not a hypothetical. Everything that brightens a body clones its
+// material and keeps the injected shader — systems/damageGlow.js on the first
+// hit, emissivePulse, telegraph, crew — and each of those clones inherits
+// `__bioSkin` and `__bioSkinInstance` as true, so it passes every gate this
+// file has while holding uniforms that are wired to nothing. It read as two
+// separate faults: the pattern silently stopped animating on any creature that
+// had been hit (updateBiolumSkin writing clocks into dead data), and then
+// setBiolumSkinVariant threw `.set is not a function` inside animate() and
+// froze the game — which is how a boss dying mid-fight took the frame loop
+// with it.
+//
+// So the material carries an ID, which is a number and survives the round
+// trip, and the block itself is looked up here. The clone's inherited
+// onBeforeCompile closes over the ORIGINAL block, so id -> block is exactly
+// what its shader is reading: repairing the reference reconnects the pair
+// rather than papering over them.
+//
+// WEAK, and it has to be: a ten-minute run makes thousands of per-instance
+// materials, and a strong Map of their uniform blocks would be a leak of the
+// same shape `instances` is a WeakRef set to avoid. The block stays reachable
+// for exactly as long as some material's injector closes over it.
+const uniformBlocks = new Map(); // id -> WeakRef(uniform block)
+let nextBlockId = 1;
+
+function ownUniforms(material, u) {
+  const id = nextBlockId++;
+  material.userData.__bioSkinId = id;
+  material.userData.__bioSkinUniforms = u;
+  uniformBlocks.set(id, new WeakRef(u));
+}
+
+// A live block is one whose colours are still THREE.Colors. Checking the thing
+// that actually breaks — rather than a flag saying whether this material was
+// ever cloned — means a clone made by code that has not been written yet is
+// repaired on the frame it is first read.
+function isLiveBlock(u) {
+  return typeof u?.uBioColorA?.value?.set === 'function';
+}
+
+/**
+ * The live uniform block driving this material's shader, or null.
+ *
+ * Repairs the material as a side effect when it is holding a JSON copy: the
+ * userData reference is re-pointed at the real block, and an instance clone
+ * that no ROSTER knows about is enrolled so sliders reach it too — without
+ * that, a global apply walks only the original, which by then is usually
+ * collected because the clone replaced it on the mesh.
+ */
+export function biolumUniformsOf(material) {
+  const ud = material?.userData;
+  if (!ud) return null;
+  const held = ud.__bioSkinUniforms;
+  if (isLiveBlock(held)) return held;
+  const id = ud.__bioSkinId;
+  if (id == null) return null;
+  const ref = uniformBlocks.get(id);
+  const live = ref?.deref();
+  if (!live) { if (ref) uniformBlocks.delete(id); return null; }
+  ud.__bioSkinUniforms = live;
+  if (ud.__bioSkinInstance) instances.add(new WeakRef(material));
+  return live;
+}
+
 // Every live material, template and instance, pruning WeakRefs whose material
 // has been collected. The prune is why this is a generator over a live set
 // rather than a snapshot.
@@ -930,7 +1002,7 @@ export function attachBiolumSkin(material, mesh, preset = 'lantern', axisName = 
   material.userData.__bioSkinPreset = preset;
 
   const u = freshUniforms();
-  material.userData.__bioSkinUniforms = u;
+  ownUniforms(material, u);
   material.userData.__bioSkinClock = freshClock();
   inject(material, u);
   attached.add(material);
@@ -1387,7 +1459,7 @@ export function instantiateBiolumSkin(root) {
       // exact failure per-instance materials exist to prevent.
       copy.userData.__bioSkinSeed = Math.random();
       const u = freshUniforms();
-      copy.userData.__bioSkinUniforms = u;
+      ownUniforms(copy, u);
       // Inherit the template's clocks so a fish spawning at minute nine isn't
       // a second-zero animal swimming next to a school mid-cycle. (A synced
       // clock would re-derive itself from the transport on the next frame
@@ -1542,7 +1614,7 @@ export function applyBiolumSkinSettings(only = null) {
   // see setBiolumSkinVariant for why that matters now. A slider still passes
   // nothing and moves everything.
   for (const m of (only ?? liveMaterials())) {
-    const u = m.userData.__bioSkinUniforms;
+    const u = biolumUniformsOf(m);
     if (!u) continue;
     const preset = resolve(m.userData.__bioSkinPreset ?? 'lantern');
     // A VARIANT is a third layer, over base and preset, carried per material
@@ -1667,7 +1739,7 @@ export function updateBiolumSkin(rawDt) {
   schoolTravel += rawDt * schoolSpeed;
 
   for (const m of liveMaterials()) {
-    const u = m.userData.__bioSkinUniforms;
+    const u = biolumUniformsOf(m);
     if (!u) continue;
     const cfg = m.userData.__bioSkinResolved ?? EMPTY;
     const clock = (m.userData.__bioSkinClock ??= freshClock());

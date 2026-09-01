@@ -38,6 +38,7 @@
 
 import { CONFIG } from './config.js';
 import { player } from './entities/player.js';
+import { loadoutLabel, DEFAULT_LOADOUT } from './loadout.js';
 import { activeElement, elementLabel } from './systems/elements.js';
 import { sourceLabel } from './systems/playtestAnalysis.js';
 
@@ -52,6 +53,11 @@ import { sourceLabel } from './systems/playtestAnalysis.js';
 export const WEAPON_MODIFIERS = {
   gun: [
     'rapidFire', 'heavyRounds', 'multishot', 'projectileLife', 'velocity',
+    // Listed late — the row carried a name for a while before anything here
+    // claimed it, which is precisely the drift weaponNameAudit() exists to
+    // catch: a written line that can never be reached prints nowhere and
+    // errors nowhere.
+    'homingShot',
     // Not gun upgrades in the ledger — they book their damage under
     // 'bioluminescence' — but they are unarguably a thing that happens to the
     // pebbles, and the rename a player would most want to see. All four are
@@ -119,8 +125,24 @@ function expandTokens(name, picks) {
  * @param picks  the upgrades held, oldest first. Defaults to the live player's;
  *               passed explicitly by the tests, which have no run.
  */
-export function weaponName(source, picks = player?.upgrades ?? []) {
-  const base = sourceLabel(source);
+export function weaponName(source, picks = player?.upgrades ?? [], loadout = player?.loadout) {
+  // THE BASE NAME IS THE LOADOUT'S, not the ledger's, on the one source that
+  // has more than one.
+  //
+  // sourceLabel('gun') is the string playtestAnalysis.js ranks the damage under
+  // and it is a single hardcoded 'Fin Pebbles' — correct while a seal could
+  // only ever have thrown stones, and a lie the moment a run can roll something
+  // else. The polaroid is the one place in the game that says out loud what the
+  // run's build was, and captioning a laser run "Fin Pebbles" is exactly the
+  // disappointment the header of this file was written about.
+  //
+  // ONLY THE BASE. A gun card carrying a `weaponName` still wins over it below,
+  // which is right on either loadout: "Cloned Pebbles" and "Voltaic Pebbles"
+  // are what the player last decided about the weapon, and the loadout is only
+  // what it was called before they decided anything.
+  const base = loadoutLabel(source === 'gun' ? (loadout ?? DEFAULT_LOADOUT) : null)
+    ?? sourceLabel(source);
+  const laser = source === 'gun' && (loadout ?? DEFAULT_LOADOUT) === 'laser';
   const modifiers = WEAPON_MODIFIERS[source];
   if (!modifiers?.length || !picks?.length) return base;
 
@@ -128,7 +150,20 @@ export function weaponName(source, picks = player?.upgrades ?? []) {
   for (let i = picks.length - 1; i >= 0; i--) {
     const id = picks[i]?.id;
     if (!id || !modifiers.includes(id)) continue;
-    const written = String(upgradeById(id)?.weaponName ?? '').trim();
+    // THE LOADOUT'S COLUMN FIRST, falling back to the pebble one. Two columns
+    // and not a token, for the reason upgradeTable.js gives: the word that
+    // differs between "Cloned Pebbles" and its laser equivalent is not reliably
+    // the noun, so nothing can derive one from the other.
+    //
+    // The FALLBACK is deliberate rather than lazy. A laser run holding a card
+    // whose second column is not written yet is captioned with the pebble name,
+    // which is wrong — and it is a great deal less wrong than a polaroid with
+    // no weapon on it, which is what returning null here would produce. The
+    // lorem in that column is what says the line is owed; see CLAUDE.md.
+    const u = upgradeById(id);
+    const written = String(
+      (laser ? u?.weaponNameLaser : null) ?? u?.weaponName ?? '',
+    ).trim();
     if (!written) continue;
     // A row whose token could not be filled — Glow Up! held with no element
     // rolled, which cannot happen in a run but can in a harness and is one bad
@@ -148,7 +183,11 @@ export function weaponName(source, picks = player?.upgrades ?? []) {
  * is a name that can never appear.
  */
 export function weaponNameAudit(upgrades = CONFIG.upgrades ?? []) {
-  const named = (upgrades ?? []).filter((u) => u?.weaponName).map((u) => u.id);
+  // BOTH COLUMNS. A `weaponNameLaser` on a row no weapon claims is exactly as
+  // dead as a `weaponName` on one, and it is the easier of the two to leave
+  // behind — it is the column somebody fills in last.
+  const named = (upgrades ?? []).filter((u) => u?.weaponName || u?.weaponNameLaser)
+    .map((u) => u.id);
   const claimed = new Map();
   for (const [source, ids] of Object.entries(WEAPON_MODIFIERS)) {
     for (const id of ids) {

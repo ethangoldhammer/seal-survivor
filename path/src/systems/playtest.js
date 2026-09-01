@@ -1,5 +1,10 @@
 import { sourceFamily } from './playtestAnalysis.js';
 import { holdReloads } from './reloadHold.js';
+// platform.js only, and only for these two. It imports nothing itself and
+// reads globalThis rather than any game state, so it does not put this file
+// back into the module cycle and does not stop the analysis half running in
+// plain Node — which is the rule the header below is about.
+import { canFilePlaytest, platformName } from '../platform.js';
 // ---------------------------------------------------------------------------
 // PLAYTEST RECORDER
 //
@@ -734,6 +739,22 @@ function deviceProfile() {
     // same machine in the way that matters: the app is a WKWebView with its
     // own memory limit, and it is the one being killed for exceeding it.
     native: !!globalThis.window?.Capacitor?.isNativePlatform?.(),
+    // WHICH SHELL, as a word — 'web', 'ios' or 'desktop'.
+    //
+    // `native` above is two-valued and was written when native could only mean
+    // iOS, so it cannot express the desktop build at all: the .app and Chrome
+    // on the same Mac report an identical profile — same cores, same dpr, same
+    // screen, no touch, native false — and without this every run from the
+    // desktop build is fused to every run from the browser. They are not the
+    // same machine in the way that matters. One renders into a window whose
+    // pixel count the other never had, from a GPU pipeline cache that starts
+    // empty on a fresh install, and it is the one whose frame times nobody
+    // could see.
+    //
+    // `runs.jsonl` is append-only, so a run filed under the wrong shell cannot
+    // be corrected later — which is why this is recorded rather than inferred
+    // from the source log at read time.
+    shell: platformName(),
   };
 }
 
@@ -783,11 +804,54 @@ function persist(finished) {
     }
   }
 
+  // THE DESKTOP SHELL FIRST, because it is this machine's own disk and the
+  // shortest path to it — the same reason the dev branch below beats the
+  // collection. A packaged build reaches neither of the other two: there is no
+  // Vite middleware behind app://seal, and filing our own runs into the shared
+  // collection is exactly the dev-noise problem the note above describes.
+  if (fileToShell(finished)) return;
+
   if (import.meta.env?.DEV) {
     post(ENDPOINT, finished, 'run not written to disk');
     return;
   }
   if (REMOTE_URL) post(`${REMOTE_URL}/runs`, finished, 'run not sent to the collection');
+}
+
+/**
+ * Hand the run to the desktop shell, which writes it into userData for
+ * `npm run perf` to read.
+ *
+ * @returns true only when the run has been HANDED OVER — a false falls through
+ *   to the destinations below, which is the whole reason this reports rather
+ *   than just trying. Claiming a run was filed and then dropping it would lose
+ *   the record with nothing said, and the one thing worse than an unfiled run
+ *   is an unfiled run that looks filed.
+ *
+ * The promise is not awaited: persist() is called from endRun, which runs
+ * inside the frame the player died on, and a disk write must not be in front of
+ * the death screen. A rejection is a console warning — by then the run is
+ * already in localStorage, which is the destination that never fails.
+ */
+function fileToShell(finished) {
+  if (!canFilePlaytest()) return false;
+  try {
+    // THE SAME TEXT THE OTHER TWO DESTINATIONS SEND. Serialising here rather
+    // than passing the object means the line on disk is byte-identical to the
+    // body a POST would have carried, so a desktop run and a browser run are
+    // the same kind of record — see fileRun in electron/playtest.js.
+    window.sealDesktop.filePlaytest(JSON.stringify(finished))
+      .then((ok) => {
+        if (!ok) console.warn('[playtest] the desktop shell would not file the run');
+      })
+      .catch((err) => console.warn('[playtest] run not written to disk —', err?.message ?? err));
+    return true;
+  } catch (err) {
+    // A synchronous throw is the bridge itself failing — the run has gone
+    // nowhere, so say so and let the caller try what is left.
+    console.warn('[playtest] run not written to disk —', err?.message ?? err);
+    return false;
+  }
 }
 
 /**

@@ -6,11 +6,14 @@ import { damageCrew } from './crew.js';
 import { enemies, removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile, spendBounce } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
-import { applyElementalHit, chillEnemy, activeElement } from './elements.js';
+import { applyElementalHit, chillEnemy, activeElement, arcChain } from './elements.js';
 import { applyHarpCharm } from './harp.js';
 import { hitCreature } from './hitShape.js';
 import { hotSpotDamage } from './bossHotSpots.js';
 import { pinchReach, clawSetting } from './crabClaw.js';
+import { trySplit, LASER_ASSET } from './finLaser.js';
+import { zap, releaseBurn } from './burnGlow.js';
+import { spawnProjectile } from '../entities/projectiles.js';
 
 // Where the last hit landed on the body, refilled by every hitCreature call
 // that passes. One shared object rather than one per test: this is the hottest
@@ -83,6 +86,19 @@ export function resolveCombat(dt, scene, hooks) {
       b.hits.add(e);
       e.flash = CONFIG.fx.hitFlash;
       e.hitThisFrame = true;
+      // A LASER BOLT BRIGHTENS WHAT IT HITS. `e.flash` above is the scale pop
+      // every pellet in the game gets — it punches the body's size and touches
+      // its brightness not at all — and for a weapon whose whole identity is
+      // light, the thing it lands on going momentarily hot is the read.
+      //
+      // The BOLT and the beam are one feature and share one handle, so a shark
+      // being held in a laser-eye beam and shot with a fin laser is one body
+      // getting brighter rather than two systems fighting over its materials.
+      // See systems/burnGlow.js for why the two envelopes are separate.
+      //
+      // One property test rather than a branch: every other projectile in the
+      // game carries a different `asset` and falls straight through.
+      if (b.asset === LASER_ASSET) zap(e);
       // WHERE IT LANDED, not where the bullet was. A shot moving 40 units a
       // second is most of a metre inside the animal by the time the test that
       // caught it returns, so passing its own position drew every impact
@@ -131,6 +147,15 @@ export function resolveCombat(dt, scene, hooks) {
           e.mesh.position.x, e.mesh.position.y);
       }
 
+      // A shot that CHAINS (the zap club's thrown variant). Same payload
+      // arrangement as the chill above, and for the same reason: the shot
+      // describes what it is carrying and systems/elements.js owns what a
+      // chain is. Its own channel rather than the run's element, so a player
+      // already playing Voltaic gets both rather than one overwriting the
+      // other. Before the death check, so a club that finishes a fish still
+      // throws its chain off where that fish was standing.
+      if (b.zap) arcChain(scene, e, b.zap.packet, enemies, hooks, b.zap.spec);
+
       // A shot that SHOVES (the thrown club). Same payload arrangement as the
       // chill above and for the same reason — the shot describes what it is
       // carrying and entities/enemies.js owns what a knockback is. Along the
@@ -152,8 +177,36 @@ export function resolveCombat(dt, scene, hooks) {
       }
 
       if (e.hp <= 0) {
+        // WHATEVER WAS LIGHTING THIS BODY LETS GO ON THE FRAME IT DIES, not on
+        // burnGlow's next sweep. systems/bossLight.js attaches its kill light
+        // to the same root and gets the SAME per-instance materials back, so
+        // one frame of overlap is two systems writing one material with
+        // last-write-wins deciding which is visible.
+        //
+        // Fired for EVERY kill here rather than only for laser ones: a boat
+        // that has been held in the bubble jet and is finished with a bullet
+        // is still burning, and it is this line that puts it out. A body that
+        // was never lit is one Map lookup that returns false.
+        releaseBurn(e);
         hooks.onEnemyKilled(e);
         removeEnemy(scene, j);
+      }
+
+      // LATTICE SEALANT — the bolt comes apart on the body it just struck.
+      //
+      // BEFORE the pierce and the chain, and consuming the shot outright, which
+      // is the rule the whole mechanic is built on: a bolt that shattered AND
+      // carried on through its pierce would be paid twice for one hit, and the
+      // picture would not read either — several shards leaving a body the
+      // parent is still visibly flying out of.
+      //
+      // Every other projectile in the game carries no `lattice` payload at all,
+      // so this is one property test rather than a branch, and it returns false
+      // before touching anything else.
+      if (trySplit(scene, b, contact, spawnProjectile)) {
+        hooks.onLatticeSplit?.(b, contact.x, contact.y);
+        despawn(scene, i);
+        break;
       }
 
       if (b.pierce > 0) {
@@ -329,6 +382,20 @@ export function resolveCombat(dt, scene, hooks) {
       // apart the first time.
       const reachSq = pinchReach(e.claw?.reach() ?? 0, pRadius,
         clawSetting(e.def, 'range') ?? 0.65) ** 2;
+      // THE CLAW REACHED THE SEAL. Recorded here because here is the only place
+      // that measures it — `justPinched` next door is the claws MEETING, which
+      // is just as true of a claw that shut on open water.
+      //
+      // OUTSIDE THE I-FRAME CHECK, and that is the whole point of it being its
+      // own flag. Whether this pinch is BILLED is a separate question with a
+      // separate answer: the king crab jabs twenty times in twenty seconds, so
+      // at close range the player is very often inside a window left by the
+      // last one — and both readers of this flag want to know that the claw
+      // reached them, not that it was paid for. Inside the check, the king
+      // crab's grab simply never fired in a real fight (it is gated on this),
+      // and systems/dodge.js paid a boost refill for a pass that had the seal
+      // in its claw. See the field's note in entities/enemies.js.
+      if (px * px + py * py <= reachSq) e.clawLanded = true;
       if (px * px + py * py <= reachSq && !isInvulnerable()) {
         const base = e.contactDamage ?? e.def.contactDamage;
         const knock = clawSetting(e.def, 'knockback') ?? 1.4;
@@ -393,6 +460,84 @@ export function resolveCombat(dt, scene, hooks) {
       // its own answer, exactly like both halves of the pinch.
       const contactMul = e.claw ? (clawSetting(e.def, 'contactMul') ?? 0) : 1;
       if (!(contactMul > 0)) continue;
+
+      // A PACK THAT BITES INSTEAD OF CHEWING — see `contactBite` in
+      // enemies.csv, which is blank for all but the fast pack hunters.
+      //
+      // A drain is bounded by being a rate, but only per animal: five
+      // barracuda overlapping the seal each bill their own 32/s, and 160/s
+      // takes a 115-point bar to zero in seven tenths of a second with nothing
+      // on screen but a continuous flicker. Nothing in the game reads as
+      // having happened, because nothing discrete did.
+      //
+      // So for these species the same damage arrives as one whole number every
+      // `contactBite` seconds of the creature's life, on the 'strike' channel —
+      // which is the i-frame window at the top of onPlayerHit. One bite in the
+      // pack is paid; the rest still swim through you and still get their turn
+      // as soon as the window is up. The pack goes from unbounded to
+      // (bite / CONFIG.player.hitIFrames) per second, and a single one of them
+      // is unchanged.
+      //
+      // DPS-NEUTRAL BY CONSTRUCTION, and that is why the period is the only
+      // number on the row. `contactDamage` still means damage per second of
+      // contact — so the run's damage ramp, `contactDamagePerDifficulty` and
+      // every boss ceiling keep applying to the number they always did, and a
+      // retune of the species' damage cannot silently stop agreeing with the
+      // size of its bite. The period must stay at or above hitIFrames or a solo
+      // hunter starts having its own bites refused, which is a nerf nobody
+      // asked for hiding inside a rhythm change; enemy-bite-test.mjs holds that.
+      const bite = e.def.contactBite ?? 0;
+      if (bite > 0) {
+        // Ticked in entities/enemies.js beside every other per-creature clock,
+        // so it runs whether or not the animal is currently touching you: a
+        // hunter that darts out and comes back pays for the pass it commits to
+        // rather than for how long it managed to stay inside you.
+        if (e.contactBiteTimer > 0) continue;
+        // THE CLOCK IS SPENT ON A BITE THAT LANDED, and this is the whole
+        // difference between a pack that is paced and a pack that has been
+        // deleted. Five barracuda arrive together and their clocks expire
+        // together; the window pays one of them. Resetting all five anyway put
+        // the pack in permanent lockstep — measured, five fish billed EXACTLY
+        // what one fish did, forever, because they never fell out of phase.
+        //
+        // So a refused bite costs the animal nothing and it asks again next
+        // frame, until it is the one that gets through. The pack's ceiling is
+        // then one bite per i-frame window rather than one bite per period,
+        // which is the number CONFIG.player.hitIFrames was chosen to mean.
+        // onPlayerHit reports what it billed for exactly this; see the note on
+        // its return in main.js. `> 0` rather than truthiness because a hook
+        // that returns nothing (an older caller, a harness) must not be read as
+        // a landed hit that stalls the clock forever.
+        // ...AND IT IS CAPPED, which a drain never had to be. See
+        // CONFIG.player.contactBiteCap: a rate lets the player leave partway
+        // through and pay for the time they spent, and one whole number has no
+        // partway. Without this the roster damage ramp turned a barracuda's
+        // touch into a full bar at minute eight and three bars by minute
+        // fifteen — the bite is the feature, being unable to survive one is
+        // not.
+        //
+        // Against `player.stats.maxHp` rather than the config default, so the
+        // ceiling grows with a seal that bought health and the fraction means
+        // the same thing all run.
+        const cap = (CONFIG.player.contactBiteCap ?? 1) * (player.stats?.maxHp ?? 0);
+        const paid = hooks.onPlayerHit(
+          Math.min((e.contactDamage ?? e.def.contactDamage) * contactMul * bite, cap),
+          { x: -dx, y: -dy },
+          e.type,
+          'strike',
+          // AND IT HOLDS THE WINDOW OPEN LONGER THAN A TELEGRAPHED BLOW DOES.
+          // Still the one window — onPlayerHit folds this in with a Math.max —
+          // but a pack that gives no tell has to be answered by the gap between
+          // passes rather than by the gap between swings. This is also the only
+          // lever on what a pack costs: its damage is `bite / this`, where a
+          // single animal's is `bite / its own period`. See
+          // CONFIG.player.biteIFrames.
+          CONFIG.player.biteIFrames ?? 0,
+        );
+        if (paid > 0) e.contactBiteTimer = bite;
+        continue;
+      }
+
       hooks.onPlayerHit(
         (e.contactDamage ?? e.def.contactDamage) * contactMul * dt, // per second on contact
         { x: -dx, y: -dy },

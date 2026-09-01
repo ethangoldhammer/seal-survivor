@@ -260,19 +260,62 @@ export function createClawDriver(instance) {
   let spent = false; // this pinch has already paid out its one hit
   let reach = 0; // measured lazily: the skeleton has to be posed first
 
+  // ---------------------------------------------------------------------
+  // THE HAYMAKER — the same three phases, hauled back and slowed down.
+  // ---------------------------------------------------------------------
+  // A swarm crab's pinch is scenery that occasionally bites, so its wind-up is
+  // 0.42s and its whole job is to be readable at a glance. The king crab's
+  // committed attack is the opposite proposition: it is the thing the fight is
+  // about, and it is followed by the boss LUNGING at where the claw is
+  // pointing. That needs a gesture the player can read from across the arena
+  // and act on with time to spare, so `big` runs the same state machine on a
+  // longer clock with the rear-up multiplied (CONFIG.crabClaw.big).
+  //
+  // ONE MACHINE AND NOT TWO. Everything downstream — the anti-ratchet, the
+  // per-arm lag, `connectAt`, the damage frame, the flinch mute in
+  // entities/enemies.js — reads the phase this produces. A second copy of it
+  // for the boss is a second place for the connect frame to drift out of
+  // agreement with the animation that sells it, which is the failure this file
+  // already carries three warnings about.
+  let big = false;
+
+  // THE CLAW CAN BE TOLD NOT TO LET GO. While `holding`, the clock parks at
+  // the end of the slam — claws shut, arm at full extension — instead of
+  // running the recover, and the caller keeps supplying an aim point the arm
+  // follows. That is what carries a grabbed seal: systems/bossCrab.js moves
+  // the aim through the throw and the player is placed at the claw, so the arm
+  // is not animating alongside the throw, it IS the throw.
+  let holding = false;
+
   // The longest any arm lags the clock, so the pinch stays alive until the
   // LAST claw has finished recovering. Ending it on the leading arm's schedule
   // cuts the trailing one off mid-recover, which shows up as a claw that snaps
   // back to the walk cycle a frame after it lands.
   const maxLag = arms.reduce((m, a) => Math.max(m, a.lag), 0);
 
+  // This pinch's three durations. The haymaker multiplies the wind-up and the
+  // recover and leaves the SLAM alone: a slow strike is one the player can
+  // walk out of after it has committed, which would make the longer telegraph
+  // a promise the attack does not keep.
+  function timings(cfg) {
+    const b = big ? (cfg.big ?? {}) : null;
+    return {
+      windup: Math.max(0.01, cfg.windup * (b?.windupMul ?? 1)),
+      strike: Math.max(0.01, cfg.strike),
+      recover: Math.max(0.01, cfg.recover * (b?.recoverMul ?? 1)),
+    };
+  }
+
   function phase(cfg, elapsed) {
     if (elapsed < 0) return null;
-    const windup = Math.max(0.01, cfg.windup);
-    const strike = Math.max(0.01, cfg.strike);
-    const recover = Math.max(0.01, cfg.recover);
+    const { windup, strike, recover } = timings(cfg);
     if (elapsed < windup) return { name: 'windup', u: elapsed / windup };
     if (elapsed < windup + strike) return { name: 'strike', u: (elapsed - windup) / strike };
+    // HELD. The claws are shut on something and the recover is not allowed to
+    // start — see `holding`. Reported as its own phase rather than as a
+    // stretched strike so `isStriking` stays true (the flinch stays muted, the
+    // arm stays the gesture's) without the connect frame being re-tested.
+    if (holding) return { name: 'hold', u: 1 };
     if (elapsed < windup + strike + recover) {
       return { name: 'recover', u: (elapsed - windup - strike) / recover };
     }
@@ -280,7 +323,8 @@ export function createClawDriver(instance) {
   }
 
   function totalTime(cfg) {
-    return Math.max(0.01, cfg.windup) + Math.max(0.01, cfg.strike) + Math.max(0.01, cfg.recover);
+    const { windup, strike, recover } = timings(cfg);
+    return windup + strike + recover;
   }
 
   return {
@@ -289,15 +333,59 @@ export function createClawDriver(instance) {
     // rate-limits a bite, but a crab's strike is driven by proximity, and a
     // player standing still would otherwise pin the claw at frame 0 of the
     // windup forever and never actually get hit.
-    strike() {
+    strike(opts = null) {
       if (t >= 0) return false;
       t = 0;
       spent = false;
+      big = !!opts?.big;
+      holding = false;
       return true;
     },
 
     isStriking() {
       return t >= 0;
+    },
+
+    /** Is the pinch currently running the haymaker profile? */
+    isBig() {
+      return t >= 0 && big;
+    },
+
+    /**
+     * Keep the claws shut at full extension instead of recovering.
+     *
+     * Only meaningful once the slam has landed — before that the machine has
+     * not reached the pose there would be anything to hold. Turning it off
+     * resumes the recover from where it was parked, so the arm comes down
+     * through its own animation rather than snapping back to the walk cycle.
+     */
+    hold(on) {
+      holding = !!on;
+    },
+
+    isHolding() {
+      return holding && t >= 0;
+    },
+
+    /**
+     * Where the claw actually IS, in world space — the movable finger's bone if
+     * the rig has one, the claw head if it does not.
+     *
+     * This is what a grabbed seal is pinned to, so it is read from the posed
+     * skeleton rather than derived from the aim point: the IK has a weight ramp
+     * and a reach clamp on it, and the arm does not necessarily get to where it
+     * was asked to go. A seal placed at the REQUEST rather than at the claw
+     * floats beside a pincer that never closed on it.
+     *
+     * Null when the arm has no such bone, which every caller treats as "this
+     * creature cannot carry anything".
+     */
+    tip(out, i = 0) {
+      const arm = arms[i % arms.length];
+      const bone = arm?.jaw ?? arm?.scissor ?? null;
+      if (!bone) return null;
+      bone.getWorldPosition(out);
+      return out;
     },
 
     /**
@@ -348,9 +436,21 @@ export function createClawDriver(instance) {
 
       if (t >= 0) {
         t += dt;
-        // Every arm runs the same schedule on its own delayed clock, so the
-        // pinch is over only once the last of them has finished recovering.
-        if (t > totalTime(cfg) + maxLag) t = -1;
+        if (holding) {
+          // THE CLOCK PARKS at the last frame of the slam, and no further. Both
+          // arms still get there — the trailing one is behind by its own lag —
+          // and neither runs on into the recover while there is something in
+          // the claw. Clamped rather than simply not advanced, so a hold turned
+          // on mid-wind-up (which nothing does today, and which would otherwise
+          // freeze the arm halfway up) still plays the rest of the gesture
+          // before it parks.
+          const { windup, strike } = timings(cfg);
+          t = Math.min(t, windup + strike + maxLag);
+        } else if (t > totalTime(cfg) + maxLag) {
+          // Every arm runs the same schedule on its own delayed clock, so the
+          // pinch is over only once the last of them has finished recovering.
+          t = -1;
+        }
       }
 
       for (const arm of arms) {
@@ -391,8 +491,14 @@ export function createClawDriver(instance) {
           // times the size.
           if (p?.name === 'windup') {
             const g = gaping(p.u);
-            _target.addScaledVector(_up, reach * cfg.rise * g);
-            _target.addScaledVector(_toTarget, -reach * cfg.draw * g);
+            // THE HAYMAKER REARS FURTHER, and that is the whole visual claim of
+            // it: the same offsets, multiplied. Both are multiples of the arm's
+            // own reach (see the note above), so the big gesture stays in
+            // proportion on a crab that has grown rather than becoming a small
+            // wave at four times the size.
+            const b = big ? (cfg.big ?? {}) : null;
+            _target.addScaledVector(_up, reach * cfg.rise * (b?.riseMul ?? 1) * g);
+            _target.addScaledVector(_toTarget, -reach * cfg.draw * (b?.drawMul ?? 1) * g);
           }
 
           restoreChain(arm);
@@ -423,6 +529,10 @@ export function createClawDriver(instance) {
             connected = true;
             spent = true;
           }
+        } else if (p?.name === 'hold') {
+          // SHUT, and staying shut. The same angle the last frame of the slam
+          // left, held for as long as there is something in the claw.
+          angle = -cfg.snap;
         } else if (p?.name === 'recover') {
           angle = -cfg.snap * (1 - p.u); // unclench back to the walk cycle
         }
@@ -499,6 +609,8 @@ export function createClawDriver(instance) {
       connected = false;
       reach = 0;
       spent = false;
+      big = false;
+      holding = false;
       for (const arm of arms) {
         arm.weight = 0;
         arm.hasWritten = false;

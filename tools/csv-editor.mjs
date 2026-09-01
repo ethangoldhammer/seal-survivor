@@ -31,7 +31,7 @@ import { readFile, writeFile, stat, readdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, extname, basename } from 'node:path';
-import { DRAFT_PATTERN, isCopyColumn, REVIEW_COLUMN } from './draft-copy.mjs';
+import { DRAFT_PATTERN, BRIEF_PATTERN, isCopyColumn, REVIEW_COLUMN } from './draft-copy.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // 5177 is the door to knock on by hand. PORT is what a harness hands over when
@@ -281,6 +281,7 @@ const DOCS = {
     turnRate: 'Radians/sec. Blank means it pivots on the spot.',
     contactDamage: 'Damage dealt on touching the seal.',
     contactDamagePerDifficulty: 'Contact damage gained per difficulty point.',
+    contactBite: 'Seconds between BITES, for a creature whose body should hurt in whole numbers rather than as a per-second drain. Blank — nearly the whole roster — is the drain, which is the right shape for a body you are inside, because a rate is its own limit. A PACK is not: five barracuda each bill their own 32/s, and 160/s empties the bar in seven tenths of a second with nothing discrete on screen to show for it. Filled in, the same damage arrives on the i-frame channel, so one bite in the pack is paid and the rest wait their turn. `contactDamage` still means damage per SECOND — the bite is that times this — so the run\'s damage ramp keeps working and one of these alone is exactly as dangerous as before. Keep it at or above CONFIG.player.hitIFrames (0.4) or a solo hunter starts having its own bites refused.',
     biteDamage: 'What the JAWS CLOSING cost the seal, as one burst on the frame they shut — separate from the per-second drain of touching the body, and only for a creature with a hunt block to close them with. Blank means the snap is a sound and a pose, which is right for every wildlife row; the bosses that chase fill it in, and it is the whole of what their attack is worth.',
     scalePerDifficulty: 'Visual + hitbox growth over a run.',
     maxGrowth: 'Cap on scalePerDifficulty.',
@@ -308,6 +309,7 @@ const DOCS = {
     weight: 'How likely this is, relative to the other rows. Blank = 1. 0 is never dealt but still shows in the Upgrades tab.',
     cardArt: 'Hex background for the card. Blank means the plain card.',
       weaponName: 'What the WEAPON this upgrade modifies is called once you hold it \u2014 "Cloned Pebbles" instead of "Fin Pebbles". A whole name, not an adjective, so write anything. It shows on the kill-shot polaroid and in the score screen\u2019s weapon table. Blank on nearly every row, which means "this upgrade does not rename anything". `{element}` becomes whichever element Glow Up! rolled this run (Voltaic, Venom, Chill, Infected). When you hold several renaming upgrades the MOST RECENTLY TAKEN one wins.',
+      weaponNameLaser: 'The same rename, for a run holding Laser Eyes \u2014 "Pew Pew Pew" where the pebble gun would read "Rapid Pebbles". The gun is not throwing stones any more, so a name built around them is wrong on the polaroid and in the score screen\u2019s weapon table. Blank falls back to `weaponName`, which is right for a rename that never mentioned the ammunition. Same rules otherwise: a whole name, `{element}` fills in from Glow Up!, and the most recently taken renaming upgrade wins.',
 },
   // The three path-keyed tables share one column contract, so the docs are
   // written once and pointed at rather than copied into places that drift.
@@ -426,6 +428,9 @@ const DOCS = {
     opener: 'TRUE means this archetype may be a run\'s FIRST boss. Blank is FALSE. An ORDINAL, not a level — bosses arrive every few levels, so "never opens a run" spelled in minLevel silently stops meaning it the moment CONFIG.boss.everyLevels moves. The gate covers that one slot only; from the second boss on everything eligible rolls as always. A file with NO opener marked stands the gate down entirely.',
     nightOnly: 'TRUE means the archetype is only in the bag while the water is DARK — the same changeover the glowing roster and the dual-form costumes ride, so a night boss arrives with the cast it belongs to. Blank is FALSE: available whatever the sky is doing.',
     ownNames: 'TRUE means this archetype draws ONLY from bossNames.csv rows that name it, never the shared pool. For a boss that should not sound like the fish — a boat. Leave blank to share.',
+    perkBias: 'Perks this archetype LEANS toward once the run is deep enough — space-separated ids from bossPerks.csv. Blank is the flat weighted roll every boss had before this column existed. It is a lean, not a lock: a biased roll still picks between the named perks by their own weights, and still falls through to the ordinary roll the rest of the time.',
+    perkBiasLevel: 'The player level from which the bias applies. Below it the archetype rolls flat. A LEVEL and not an ordinal, unlike `opener` — this is about how far into a run the player is, which is what decides whether a harder shape of fight is fair.',
+    perkBiasChance: 'How often the lean wins, 0..1. Blank means 1 — a row that troubled to name perks means them.',
     enabled: 'FALSE takes it out of rotation. Blank means enabled.',
     notes: 'Free text — nothing reads it.',
   },
@@ -460,11 +465,20 @@ const DOCS = {
     damage: 'Per cube, on contact. One hit and the cube is spent, through the same door every other enemy shot goes through.',
     life: 'Seconds a cube lives before it expires.',
     radius: 'The cube\'s hit radius in world units. The drawn cube is exactly this wide, because a bullet hell that is not honest about its hitboxes reads as unfair rather than as hard.',
+    body: 'Which asset the cubes are, space-separated, drawn from one at random per cube. Blank is the plain attractorCube. A name that is not an asset is dropped with a warning and the study still fires — it fires the cube — so a misspelling here reads as "the flow broke" rather than as a typo. SIZE IS NOT IN THIS COLUMN and must not be: every body is scaled so its long axis is exactly `radius` doubled, whatever the model\'s own fit, because a bullet hell has to be honest about how big its shots are.',
+    tilt: 'How far the body is canted out of the screen plane, in radians. Blank is 0.55, which is what makes the cube read as a cube. The camera looks straight down -z, so a body whose long axis lies in the screen plane presents the same profile for its whole flight — and for a cylinder (the money rolls, at 0.6) that profile is a rectangle at every angle, which spin cannot fix. A cant brings the end into view. A FISH wants roughly zero: it is already legible side-on, and canting it turns a shoal into foreshortened slivers.',
     mode: 'What the storm DOES beyond flying its field — field, ring, echo, swarm or release. See the row\'s notes and systems/attractorStorm.js.',
     period: 'Seconds between the mode\'s own event: the lattice slide, the swarm\'s breath. On `release` it is the DRAW alone — how long the telegraph takes — and the firing then lasts however long the volley needs. Blank means the mode has no event.',
     reach: 'World units a second the anchor walks toward the seal. Blank is an anchored storm, which is all of them but `ring`.',
     notes: 'What this design IS, shown under the chips in the U panel. The one column here that is read by a person rather than by the game.',
   },
+};
+
+DOCS['uiText.csv'] = {
+  id: 'What the code asks for \u2014 `finPanelTitle`, `tipNext`. Not shown to anyone; it is the join, so renaming one leaves the screen showing the id until the code is renamed with it.',
+  text: 'The line itself. This is the column a player reads.',
+  group: 'Which surface the line is on. Cosmetic \u2014 it orders the rows here and keeps the file readable.',
+  notes: 'The brief: what the line has to convey, how long it can be, and when the player sees it. Nothing in the game reads it \u2014 it is written for whoever writes the line, and `npm run test:copy` prints it beside any row still waiting.',
 };
 
 DOCS['statText.csv'] = {
@@ -489,24 +503,28 @@ const BLANK_MEANS = {
     // Short enough to fit a 92px number column — the full sentence is in the
     // column tooltip, which is where a placeholder that clips belongs anyway.
     speedVariance: '0', speedPerDifficulty: '0', turnRate: 'pivots',
-    contactDamagePerDifficulty: '0', biteDamage: 'no bite', scalePerDifficulty: '0', maxGrowth: '∞',
+    contactDamagePerDifficulty: '0', contactBite: 'drains', biteDamage: 'no bite', scalePerDifficulty: '0', maxGrowth: '∞',
     scaleVariance: '0',
     weightPerDifficulty: '0', maxWeight: '∞', maxConcurrent: '∞',
     minDifficulty: '0', minPlayerLevel: '0', spawnRateMul: '1',
     spawnGroup: 'no group', bioluminescent: 'no', bossMinion: 'no', invincible: 'no',
   },
-  'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up', weaponName: 'renames nothing' },
+  'upgrades.csv': { maxStacks: 'unlimited', enabled: 'enabled', weight: '1', name: 'built-in', desc: 'built-in', cardArt: 'plain card', sfx: 'standard level-up', weaponName: 'renames nothing', weaponNameLaser: 'uses the name above' },
   'quips.csv': { enabled: 'enabled', weight: '1', causes: 'any death' },
   'epitaphs.csv': { enabled: 'enabled', weight: '1', cause: 'any death', notes: '\u2014' },
   'greetings.csv': { enabled: 'enabled', weight: '1', causes: 'any death', when: 'either run' },
   'kickers.csv': { enabled: 'enabled', weight: '1' },
   'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
   'tips.csv': { enabled: 'enabled', order: 'sorts last', desc: 'no line under the label', tag: 'no tag to type', notes: '\u2014' },
+  // No blank has a meaning here: a row with no `text` is dropped, because the
+  // alternative is a heading that renders as nothing and gets chased as a
+  // layout bug. See parseUiTextCsv.
+  'uiText.csv': { group: 'ungrouped', notes: '\u2014' },
   'rarities.csv': { sfx: 'arrives silently', glow: '0 (no bloom)', statMul: '1 (no change)' },
   'flags.csv': { enabled: 'enabled', weight: '1', hulls: 'the general pool', notes: '\u2014' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
-  'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', notes: '—' },
+  'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', perkBias: 'rolls flat', perkBiasLevel: '0 (from the first)', perkBiasChance: '1 (always)', notes: '—' },
   'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused', attack: 'the old colour' },
   'attractorStorms.csv': { enabled: 'enabled', notes: '—', centre: '0 (already on the anchor)', param: 'the canonical constant', period: 'no event', reach: 'anchored' },
   // A blank spawn value means "leave the built-in alone", NOT zero — zero
@@ -566,6 +584,15 @@ export const TABLES = [
     label: 'Tip jar',
     blurb: 'What a tip buys \u2014 the tiers on the panel behind the tip jar, each one a name in the water in a different size. The `id` joins to nothing, so new tiers are just new rows. A row with no price or no label is DROPPED rather than shown with a blank in it: this is the one screen that quotes a number at somebody. Nothing here charges anything \u2014 there is one Ko-fi page and the player types the amount there.',
     addRows: true,
+  },
+  {
+    file: 'path/src/uiText.csv',
+    label: 'Screen text',
+    blurb: 'The labels the screens are BUILT from, which every other table leaves behind \u2014 the heading over a row of numbers in an upgrade tip, an option name in the pause menu, the word after a kill count, the name of the fin a card is about to feed. They were string constants in four .js files until this table existed, which meant the only place they could be written was a source file and this editor could not see them at all. Nothing joins on the words: `id` is the join and the code asks for it by name, so a row deleted or renamed shows its id on screen until the code is changed with it.',
+    // A row here is asked for BY ID from ui.js, settings.js, upgradeTip.js or
+    // config.js, so a new row with nothing reading it is dead weight \u2014
+    // npm run test:uitext names it, and names a read with no row too.
+    addRows: false,
   },
   {
     file: 'path/src/upgrades.csv',
@@ -682,7 +709,8 @@ function columnSpec(file, name, rows) {
   if (name === 'id') return { ...base, type: 'text', readonly: !BY_FILE.get(file).addRows, key: true };
 
   // Handled here rather than in DOCS because it means the same thing in all
-  // ten copy tables, and ten copies of one sentence is nine chances to drift.
+  // eleven copy tables, and eleven copies of one sentence is ten chances to
+  // drift.
   // Two options only: it is either waiting on you or it is yours. TRUE is
   // spelled out rather than offered as a checkbox so the cell reads the same
   // way in a spreadsheet as it does here.
@@ -698,6 +726,15 @@ function columnSpec(file, name, rows) {
       },
       doc: 'Whether this line still wants your eye. Every row that existed when the column was added is TRUE — not because the line is wrong, but because nothing recorded whose words it was. Clear it once you have read the line and kept it (or rewritten it). Nothing in the game reads this column, and it does not block a ship.',
     };
+  }
+
+  // The line IS the row here, so it gets the width. `group` is a combo for the
+  // same reason it is in statText.csv: the surfaces that exist are worth one
+  // click, and a new one is worth typing rather than being refused.
+  if (file === 'path/src/uiText.csv') {
+    if (name === 'text') return { ...base, type: 'text', wide: true };
+    if (name === 'group') return { ...base, type: 'combo', options: [...new Set(rows.map((r) => r.group).filter(Boolean))] };
+    return { ...base, type: 'text' };
   }
 
   if (file === 'path/src/statText.csv') {
@@ -1050,7 +1087,7 @@ const server = createServer(async (req, res) => {
       // The client re-tests cells as they are typed, so it needs the rule
       // rather than an answer computed here — sent as the pattern itself so
       // there is still only one definition of it.
-      return json(res, 200, { tables, draftPattern: DRAFT_PATTERN });
+      return json(res, 200, { tables, draftPattern: DRAFT_PATTERN, briefPattern: BRIEF_PATTERN });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/cardart') {

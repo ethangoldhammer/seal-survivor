@@ -58,7 +58,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 import { CONFIG } from '../path/src/config.js';
 import { installModel } from '../path/src/assets.js';
-import { resetEnemies, spawnNamed } from '../path/src/entities/enemies.js';
+import { resetEnemies, spawnNamed, applyKnockback } from '../path/src/entities/enemies.js';
 import { stateForSpeed } from '../path/src/systems/animation.js';
 import { hitShapeSpheres, tickHitShapes, hitCreature } from '../path/src/systems/hitShape.js';
 import { initParticles, resetParticles } from '../path/src/entities/particles.js';
@@ -67,8 +67,10 @@ import { updateBeatSync, divisionSeconds } from '../path/src/systems/beatSync.js
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
-  hotSpotShells, spotAt, setHotSpotLook, drainHotSpotChum,
+  hotSpotShells, hotSpotRings, spotAt, setHotSpotLook, drainHotSpotChum,
+  drainHotSpotShoves,
 } from '../path/src/systems/bossHotSpots.js';
+import { isOrganicRing, EDGE_KINDS } from '../path/src/systems/organicRing.js';
 import { pipCount, strikeState, updateStrike, resetStrike } from '../path/src/systems/strike.js';
 import { spawnProjectile, updateProjectiles, projectiles } from '../path/src/entities/projectiles.js';
 
@@ -1092,6 +1094,246 @@ section('5d. The colour and the brightness are exposed, per boss');
   check('and handing it back restores the config',
     u.uHotLit.value.getHex() === (l.litColor ?? 0xffffff)
       && Math.abs(u.uHotGlow.value - (l.glow ?? 2.6)) < 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+section('5e. Each spot wears a target ring in front of the animal');
+// ---------------------------------------------------------------------------
+// THE HALF OF THE FEATURE THAT DOES NOT DEPEND ON THE HIDE. The painted glow
+// is additive light on an animal, so how well it reads is a property of the
+// animal; the ring is drawn in front of everything and reads the same on all
+// of them. What is checked here is that it says the same thing the light says
+// — same place, same colour, same moment — because two marks on one spot that
+// disagree are worse than one.
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const t = CONFIG.hotSpots.look.target;
+  const rings = hotSpotRings(e);
+
+  check('one ring per spot', rings.length === owner.spots.length,
+    `${rings.length} rings, ${owner.spots.length} spots`);
+  check('...and every one of them is in the scene',
+    rings.every((r) => r.parent === scene));
+  // A GENERIC TEARDOWN MUST BE ABLE TO TELL. Every organic ring shares one
+  // quad, so anything walking the scene and freeing `obj.geometry` would take
+  // the strike mark's and every boss tell's geometry with it.
+  check('...and flagged as organic rings, so nothing frees the shared quad',
+    rings.every((r) => isOrganicRing(r)));
+
+  // A LOOSE HEX IN SIX PIECES, not the strike mark's four arms on a circle.
+  // Checked because the two marks can appear on the same boss at the same time
+  // — a strike paints the animal while its weak spots are lit — and if they
+  // ever converge on one shape the player is being told two different things
+  // in identical words.
+  check('the outline is faceted rather than round',
+    rings.every((r) => r.material.uniforms.uEdge.value === EDGE_KINDS.facet),
+    `edge ${rings[0]?.material.uniforms.uEdge.value}`);
+  check('...with as many sides as it has segments, so the gaps sit on corners',
+    rings.every((r) => r.material.uniforms.uFacets.value === r.material.uniforms.uArcs.value),
+    `${rings[0]?.material.uniforms.uFacets.value} sides, ${rings[0]?.material.uniforms.uArcs.value} segments`);
+  check('...and it is a hex',
+    rings.every((r) => r.material.uniforms.uFacets.value === 6));
+  check('and it is not the strike mark\'s shape',
+    (CONFIG.strike?.mark?.ring?.arcs ?? 4) !== CONFIG.hotSpots.look.target.arcs
+      || CONFIG.hotSpots.look.target.edge !== 'facet');
+
+  const s = owner.spots[0];
+  const ring = s.ring;
+  const u = ring.material.uniforms;
+
+  // OUTSIDE THE CRIT BOUNDARY, and this is the invariant that stops the ring
+  // being a lie about reach: the crit radius is drawn by the glow's own band,
+  // and a reticle that sat inside it would be promising a smaller target than
+  // the one the game answers to. Bigger is safe — nobody reads the outer edge
+  // of a bracket as the edge of a hitbox — smaller is not.
+  check('the ring sits outside the crit radius it points at',
+    u.uRadius.value > s.r,
+    `ring ${u.uRadius.value.toFixed(2)} vs crit ${s.r.toFixed(2)}`);
+  check('...at the configured multiple of it',
+    Math.abs(u.uRadius.value - s.r * t.radiusMul) < 1e-4,
+    `x${(u.uRadius.value / s.r).toFixed(2)}, configured x${t.radiusMul}`);
+  // The scale and the radius uniform are a PAIR — the world-unit wobble is
+  // divided by that radius, so a mesh scaled by hand wobbles by an amplitude
+  // computed against whatever the radius was last frame.
+  check('...with the mesh scale and the uniform in step',
+    Math.abs(ring.scale.x - u.uRadius.value) < 1e-4,
+    `scale ${ring.scale.x.toFixed(2)}`);
+  check('and it is drawn on the spot, at the spot\'s own depth',
+    Math.hypot(ring.position.x - s.wx, ring.position.y - s.wy) < 1e-4
+      && Math.abs(ring.position.z - s.wz) < 1e-4);
+
+  // IT RIDES THE ANIMAL. Swum on, the light moves with the flesh (section 2)
+  // and the ring has to move with the light rather than staying where the boss
+  // was when the spot opened.
+  const wasX = ring.position.x;
+  e.mesh.position.x += 6;
+  scene.updateMatrixWorld(true);
+  tickHitShapes();
+  updateBossHotSpots(DT, DT);
+  check('it follows the spot when the boss moves',
+    Math.abs(ring.position.x - s.wx) < 1e-4 && Math.abs(ring.position.x - wasX) > 1,
+    `moved ${(ring.position.x - wasX).toFixed(2)}`);
+
+  // THE COLOUR IS THE SPOT'S, and it is re-derived in the ring rather than
+  // shared with the shader's three uniforms — so this is the check that keeps
+  // the two ends from drifting into a red bracket around a white light.
+  const l = CONFIG.hotSpots.look;
+  check('a fresh ring wears the spot\'s base colour',
+    u.uColor.value.getHex() === (l.litColor ?? 0xffffff),
+    `#${u.uColor.value.getHexString()}`);
+
+  // A HIT FATTENS AND BRIGHTENS IT. The gooey half: more mass in the same
+  // place, which is the one response that looks like the stuff coming out of
+  // the wound.
+  // IT TURNS. On a circle a spin is invisible; on a hexagon the corners sweep,
+  // which is the whole reason the shape and the spin were chosen together.
+  const wasSpin = ring.rotation.z;
+  const restR = u.uRadius.value;
+  for (let i = 0; i < 10; i++) updateBossHotSpots(DT, DT);
+  check('it turns about its own centre',
+    Math.abs(ring.rotation.z - wasSpin) > 1e-4,
+    `${(ring.rotation.z - wasSpin).toFixed(3)} rad in 10 frames at ${t.spin}/s`);
+  // ...WITHOUT WANDERING. rotation.z is the only transform the spin may touch:
+  // placeOrganicRing rewrites position and scale every frame, so a spin
+  // implemented as an orbit would fight it and land somewhere off the spot.
+  check('...and stays on the spot while it does',
+    Math.hypot(ring.position.x - s.wx, ring.position.y - s.wy) < 1e-4
+      && Math.abs(u.uRadius.value - restR) < 1e-4);
+
+  const restThick = u.uThickness.value;
+  const restGlow = u.uGlow.value;
+  hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool / (CONFIG.hotSpots.critMul * 6));
+  updateBossHotSpots(DT, DT);
+  check('a hit pops the whole shape outward', u.uRadius.value > restR,
+    `${restR.toFixed(2)} → ${u.uRadius.value.toFixed(2)}`);
+  check('a hit fattens the band', u.uThickness.value > restThick,
+    `${restThick.toFixed(3)} → ${u.uThickness.value.toFixed(3)}`);
+  check('...and brightens it', u.uGlow.value > restGlow,
+    `${restGlow.toFixed(2)} → ${u.uGlow.value.toFixed(2)}`);
+  check('...and pulls the colour toward the struck red',
+    u.uColor.value.getHex() !== (l.litColor ?? 0xffffff),
+    `#${u.uColor.value.getHexString()}`);
+
+  // Let the flash run out, then chew it most of the way down: the colour has
+  // to have moved along the heat ramp on its own, with no hit on it.
+  for (let i = 0; i < 40; i++) updateBossHotSpots(DT, DT);
+  // AND THE POP SETTLES. A swell that did not come back would leave every spot
+  // that has ever been hit permanently bigger than a fresh one, which reads as
+  // the ring lying about the crit radius rather than as a hit.
+  check('...and the pop settles back to the resting size',
+    Math.abs(u.uRadius.value - restR) < 1e-3,
+    `${u.uRadius.value.toFixed(3)} vs ${restR.toFixed(3)}`);
+  const cool = u.uColor.value.getHex();
+  while (s.alive && s.taken < s.pool * 0.8) {
+    hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool / (CONFIG.hotSpots.critMul * 12));
+  }
+  for (let i = 0; i < 40; i++) updateBossHotSpots(DT, DT);
+  check('a chewed spot\'s ring has moved along the heat ramp',
+    s.alive && u.uColor.value.getHex() !== cool,
+    `#${u.uColor.value.getHexString()} from #${cool.toString(16).padStart(6, '0')}`);
+
+  // THE BURST. Thrown outward and eaten away by the same sweep the mark uses
+  // to expire, so the reticle comes apart with the spot instead of blinking
+  // out beside the goo.
+  const beforeR = u.uRadius.value;
+  while (s.alive) hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool);
+  for (let i = 0; i < 4; i++) updateBossHotSpots(DT, DT);
+  check('a rupture throws the ring outward', u.uRadius.value > beforeR,
+    `${beforeR.toFixed(2)} → ${u.uRadius.value.toFixed(2)}`);
+  check('...fattening it as it goes', u.uThickness.value > restThick,
+    `${u.uThickness.value.toFixed(3)}`);
+  check('...and the sweep is eating it away', u.uSweepOut.value > 0,
+    `sweepOut ${u.uSweepOut.value.toFixed(2)}`);
+
+  // AND IT LEAVES. A ring left behind is a bracket hanging in open water at a
+  // place the fight has finished with — and unlike a stale glow, which needs a
+  // body to be painted on, this one would still be drawn.
+  for (let i = 0; i < 90; i++) updateBossHotSpots(DT, DT);
+  check('the burst ring is gone once the light is out',
+    !hotSpotRings(e).includes(ring) && ring.parent === null);
+}
+
+// ---------------------------------------------------------------------------
+section('5g. A rupture shoves the animal, out along the wound');
+// ---------------------------------------------------------------------------
+// THE HALF THAT IS NOT A LIGHT. Everything else about a burst happened around
+// a boss that carried on swimming its line as though nothing had gone off in
+// its flank. Queued rather than applied, for the same reason the meat is —
+// entities/projectiles.js imports this module and entities/enemies.js imports
+// projectiles, so calling applyKnockback from in here would close a cycle
+// through the three biggest modules in the game to deliver one impulse.
+{
+  const e = spawnBoss();
+  const owner = lightUp(e);
+  const s = owner.spots[0];
+  const nx = s.wnx;
+  const ny = s.wny;
+
+  drainHotSpotShoves();          // anything an earlier section left owing
+  e.knockX = 0;
+  e.knockY = 0;
+
+  hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool * 2);
+  const shoves = drainHotSpotShoves();
+  check('bursting one owes a shove', shoves.length === 1, `${shoves.length}`);
+
+  const shove = shoves[0] ?? {};
+  check('...against the boss that was hit', shove.e === e);
+  // OUT ALONG THE SKIN'S NORMAL AT THE SPOT. This is the whole reason the
+  // impulse is fired from the rupture rather than from the hit: the direction
+  // is the wound pointing outward, so a spot on the near flank pushes the
+  // animal away from the player and one on the far side pulls it across.
+  check('...out along the skin\'s normal at the wound',
+    Math.abs(shove.dirX - nx) < 1e-6 && Math.abs(shove.dirY - ny) < 1e-6,
+    `(${shove.dirX?.toFixed(2)}, ${shove.dirY?.toFixed(2)})`);
+  check('...from the point it went off, not from the body\'s middle',
+    Math.abs(shove.x - s.wx) < 1e-6 && Math.abs(shove.y - s.wy) < 1e-6
+      && Math.hypot(shove.x - e.mesh.position.x, shove.y - e.mesh.position.y) > 0.1,
+    `${Math.hypot(shove.x - e.mesh.position.x, shove.y - e.mesh.position.y).toFixed(2)} off centre`);
+  check('...at the strength the CSV owns',
+    shove.strength === CONFIG.hotSpots.burstKnock.strength,
+    `x${shove.strength}`);
+  check('and draining it twice does not shove twice',
+    drainHotSpotShoves().length === 0);
+
+  // AND IT LANDS THROUGH THE ONE SHOVE PATH. Not knockX written from the weak
+  // spots: applyKnockback owns the mass curve, the boss branch, the decay and
+  // the skeleton flinch, and a second implementation would be a second copy of
+  // every one of those rules.
+  const moved = applyKnockback(e, shove.dirX, shove.dirY, 1, { gain: shove.strength });
+  check('the impulse reaches the boss', e.knockX !== 0 || e.knockY !== 0,
+    `(${e.knockX.toFixed(2)}, ${e.knockY.toFixed(2)}) at ${moved.toFixed(1)} u/s`);
+  const along = (e.knockX * nx + e.knockY * ny) / (Math.hypot(e.knockX, e.knockY) || 1);
+  check('...along the wound\'s normal and nowhere else', along > 0.999,
+    `cos ${along.toFixed(4)}`);
+
+  // THE STRENGTH IS A REAL MULTIPLIER, not a flag. Measured against the same
+  // shove at gain 1, because "it moved" was true before this existed too — a
+  // full-charge ram already shoves a boss, and what is being asserted is that
+  // the burst reaches past what a ram can express.
+  e.knockX = 0;
+  e.knockY = 0;
+  const ram = applyKnockback(e, nx, ny, 1);
+  check('...and it is stronger than a full-charge ram',
+    Math.abs(moved / ram - CONFIG.hotSpots.burstKnock.strength) < 1e-6,
+    `x${(moved / ram).toFixed(2)} of a ram`);
+}
+
+// ---------------------------------------------------------------------------
+section('5f. The reticles leave with the body');
+// ---------------------------------------------------------------------------
+{
+  const e = spawnBoss();
+  lightUp(e);
+  const rings = hotSpotRings(e);
+  check('lit, with rings', rings.length > 0, `${rings.length}`);
+  e.hitShape.alive = false;
+  updateBossHotSpots(DT, DT);
+  check('a released boss takes every ring out of the scene with it',
+    rings.every((r) => r.parent === null));
+  check('...and the scene is holding none of ours',
+    !scene.children.some((o) => isOrganicRing(o)));
 }
 
 // ---------------------------------------------------------------------------

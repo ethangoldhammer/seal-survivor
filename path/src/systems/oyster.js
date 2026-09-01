@@ -59,7 +59,14 @@ export function firePearl(scene, origin, dir, level) {
     radius: c.radius,
     asset: 'pearl',
     source: 'oyster',
-    spin: 3,
+    // Spun fast off the muzzle and let down by the water. About the tilted
+    // Y axis, NOT the default z: z is the axis the camera looks down, and no
+    // amount of turning a sphere about it moves a single pixel. See the
+    // `spinAxis` note in entities/projectiles.js.
+    spin: c.pearlSpin,
+    spinAxis: 'y',
+    spinDrag: c.pearlSpinDrag,
+    tilt: c.pearlTilt,
     // Clone Warz buys bomblets, not pearls — the pearl is one heavy shot by
     // design, and the card's promise ("+1 of everything you fire") is answered
     // by the burst, which is where this weapon's projectiles actually are.

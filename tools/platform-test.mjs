@@ -31,7 +31,7 @@
 // ---------------------------------------------------------------------------
 
 const {
-  isDesktopShell, isIOSShell, isBrowser, platformName, canSaveThroughOS,
+  isDesktopShell, isIOSShell, isBrowser, platformName, canSaveThroughOS, canFilePlaytest,
 } = await import('../path/src/platform.js');
 
 let failures = 0;
@@ -60,6 +60,7 @@ check('not iOS', isIOSShell() === false);
 check('is a browser', isBrowser() === true);
 check('names itself web', platformName() === 'web', platformName());
 check('cannot save through the OS', canSaveThroughOS() === false);
+check('cannot file a run', canFilePlaytest() === false);
 
 // ---------------------------------------------------------------------------
 section('a Node harness, with no window at all');
@@ -89,6 +90,11 @@ check(
   canSaveThroughOS() === false,
   'the save button must stay on its browser path',
 );
+check(
+  'cannot file a run until the bridge implements it',
+  canFilePlaytest() === false,
+  'systems/playtest.js stops at a true here — a false must fall through, not drop the run',
+);
 
 // ---------------------------------------------------------------------------
 section('THE TRAP — a desktop shell that also reports as Capacitor native');
@@ -109,6 +115,17 @@ section('a desktop shell that HAS implemented saving');
 setWindow({ sealDesktop: { isDesktop: true, os: 'linux', saveImage: () => {} } });
 check('is desktop', isDesktopShell() === true);
 check('can save through the OS', canSaveThroughOS() === true);
+check(
+  'and still cannot file a run',
+  canFilePlaytest() === false,
+  'each capability is its own key — one implemented does not vouch for the next',
+);
+
+// ---------------------------------------------------------------------------
+section('a desktop shell that HAS implemented the run log');
+setWindow({ sealDesktop: { isDesktop: true, os: 'darwin', filePlaytest: () => {} } });
+check('can file a run', canFilePlaytest() === true);
+check('and still cannot save through the OS', canSaveThroughOS() === false);
 
 // ---------------------------------------------------------------------------
 section('a half-built bridge — the object is there but the flag is not');

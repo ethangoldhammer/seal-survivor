@@ -33,6 +33,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { commands, pages, GROUP_ORDER, ROOT, blurbFromFile, targetFile } from './hub-catalogue.mjs';
+import { MAX_MESSAGE, PROD_BRANCH, SHIP_SCRIPT, checkMessage, shipArgs } from './hub-ship.mjs';
 
 let failures = 0;
 const check = (label, cond, detail = '') => {
@@ -100,6 +101,51 @@ check('no runnable script deploys or publishes',
 
 const shipScript = pkg.scripts.ship ? CMDS.find((c) => c.name === 'ship') : null;
 check('ship is publish-classed', !shipScript || shipScript.risk === 'publish');
+
+// The check that PUBLISH being a hand-written set of strings needs. It named
+// `ship:ios`, which has never existed, while `ship:phone` and `ship:mac` — the
+// two that do — fell through to `check` and rendered with a green one-click
+// run button. Nothing caught it: neither is a wrangler or a git push on its
+// own command line, so the REACHES_OUT scan above sees nothing either.
+const shipLike = CMDS.filter((c) => /^(ship|deploy)(:|$)/.test(c.name));
+const unclassed = shipLike.filter((c) => c.risk !== 'publish');
+check(`every ship*/deploy* script is publish-classed (${shipLike.length})`,
+  !unclassed.length,
+  `add to PUBLISH in hub-catalogue.mjs: ${unclassed.map((c) => c.name).join(', ')}`);
+
+console.log('\nTHE SHIP CARD — the one exception, and the terms it pays for it');
+
+check(`${SHIP_SCRIPT} is a real script`, Boolean(pkg.scripts[SHIP_SCRIPT]));
+check('the card ships web, Mac and phone together',
+  /--phone/.test(pkg.scripts[SHIP_SCRIPT] ?? '') && /--mac/.test(pkg.scripts[SHIP_SCRIPT] ?? ''),
+  pkg.scripts[SHIP_SCRIPT]);
+// The branch name is written down in two files. They disagreeing means the
+// card's "not the branch that deploys" warning is about the wrong branch.
+check('the card and ship.mjs agree on which branch deploys',
+  readFileSync(join(ROOT, 'tools/ship.mjs'), 'utf8').includes(`PROD_BRANCH = '${PROD_BRANCH}'`));
+
+check('refuses an empty message', Boolean(checkMessage('')));
+check('refuses a message of only whitespace', Boolean(checkMessage('   \n ')));
+check('refuses a runaway paste', Boolean(checkMessage('x'.repeat(MAX_MESSAGE + 1))));
+check('refuses a message that is not a string', Boolean(checkMessage(null)));
+check('accepts a real message', checkMessage('fixed the crab') === null);
+// A dry run commits nothing, so it may go without one — and ship.mjs agrees:
+// its own "a commit message is required" is gated on !DRY.
+check('lets a dry run go without a message', checkMessage('', true) === null);
+
+const args = shipArgs('/tmp/msg.txt');
+check('ships with --yes, since a spawned run has no stdin to answer the prompt',
+  args.includes('--yes') && !args.includes('--dry'));
+check('a dry run is --dry and never --yes',
+  shipArgs('/tmp/msg.txt', true).includes('--dry') && !shipArgs('/tmp/msg.txt', true).includes('--yes'));
+// THE ONE THAT MATTERS. A message passed as a bare argument is a message that
+// becomes a flag the moment it starts with a dash, and loses everything after
+// the first newline. --file is the path ship.mjs already had for this.
+check('the message travels as a file, never as an argument',
+  args.includes('--file') && args[args.indexOf('--file') + 1] === '/tmp/msg.txt');
+check('nothing it spawns is a shell string', args.every((a) => !/[;&|`$]/.test(a)));
+check('--yes skips the prompt and nothing else',
+  !shipArgs('/tmp/msg.txt').includes('--no-verify'));
 
 console.log('\nPAGES — every card links to something that is really there');
 
@@ -181,6 +227,18 @@ check('hub.html loads nothing from the internet',
   `inline these: ${external.join(', ')}`);
 check('hub.html asks the API for the catalogue rather than baking one in',
   html.includes('/api/catalogue'));
+// The three things that make the ship card safe to have at all. Each is one
+// line in the page and each is invisible if it goes: a card that ships on a
+// plain click looks exactly like one that does not until the day it does.
+check('the ship button is held, not clicked',
+  html.includes('pointerdown')
+  && !/\$\('#shipgo'\)\s*\.onclick/.test(html)
+  && !/go\.addEventListener\('click'/.test(html));
+check('letting go early cancels', html.includes('pointerleave'));
+check('Enter in the message field cannot ship',
+  /#shipmsg'\)\.onkeydown[^]*?preventDefault/.test(html));
+check('the ship request carries the header that keeps other tabs out',
+  html.includes("'X-Workbench': 'ship'"));
 
 console.log('\nTHE LIVE HUB — the gate, asserted against the endpoint');
 
@@ -242,6 +300,40 @@ if (!up) {
 
   const ship = await post('/api/run', { name: 'ship' });
   check('refuses to ship', ship.status === 403);
+
+  // /api/run must go on refusing EVERY publish script, this one included. The
+  // ship card is a second endpoint rather than an exception carved into this
+  // one, because an exception in a shared gate is a gate that grows holes.
+  const shipAll = await post('/api/run', { name: SHIP_SCRIPT });
+  check(`refuses to ${SHIP_SCRIPT} from /api/run`, shipAll.status === 403);
+
+  const shipPost = (body, headers) => fetch(`${base}/api/ship`, { method: 'POST', headers, body: JSON.stringify(body) })
+    .then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  // Nothing below may actually ship, so every case here is one the endpoint
+  // must REFUSE. The accepted path is asserted against shipArgs above, where
+  // it costs nothing and deploys nothing.
+  const noHeader = await shipPost({ message: 'nope' });
+  check('refuses a ship request without the workbench header', noHeader.status === 403);
+
+  const otherTab = await shipPost({ message: 'nope' }, { 'X-Workbench': 'ship', Origin: 'http://localhost:5555' });
+  check('refuses a ship request from another origin', otherTab.status === 403);
+
+  const noMessage = await shipPost({ message: '  ' }, { 'X-Workbench': 'ship' });
+  check('refuses a ship with no commit message', noMessage.status === 400);
+
+  const huge = await shipPost({ message: 'x'.repeat(MAX_MESSAGE + 1) }, { 'X-Workbench': 'ship' });
+  check('refuses a runaway message', huge.status === 400);
+
+  // A preflight is what a cross-origin fetch with a custom header sends first.
+  // The hub answering it with anything permissive would hand every page on
+  // this machine a deploy button.
+  const preflight = await fetch(`${base}/api/ship`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'http://localhost:5555', 'Access-Control-Request-Method': 'POST' },
+  });
+  check('answers a CORS preflight with nothing that allows it',
+    preflight.status === 404 && !preflight.headers.get('access-control-allow-origin'));
 
   const kill = await post('/api/stop-server', { pid: 1 });
   check('refuses to signal a process it did not find itself', kill.status === 400);

@@ -80,6 +80,10 @@ let clock = 0;
 // would keep drawing a ring around empty water.
 const hosts = [];
 
+// WHAT THIS SYSTEM CAN BUILD — see the note on SHRIMP_RING_ASSETS for why the
+// key lives beside the builder rather than in systems/levelUpWarmup.js.
+export const HARP_ASSETS = ['harp'];
+
 export function createHarpVisual() {
   group = new THREE.Group();
   harps = [];
@@ -97,7 +101,7 @@ export function createHarpVisual() {
 // would appear to fire less often than it does.
 function syncHarps(count) {
   while (harps.length < count) {
-    const mesh = createVisual('harp');
+    const mesh = createVisual(HARP_ASSETS[0]);
     group.add(mesh);
     const c = CONFIG.harp;
     harps.push({ mesh, fireTimer: (harps.length / Math.max(1, count)) * (c.interval ?? 1) });
@@ -120,7 +124,7 @@ export function rebuildHarp() {
   // rebuilding the entries would restart the whole ring in unison.
   for (const h of harps) {
     group.remove(h.mesh);
-    h.mesh = createVisual('harp');
+    h.mesh = createVisual(HARP_ASSETS[0]);
     group.add(h.mesh);
   }
 }

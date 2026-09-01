@@ -138,6 +138,9 @@ export function createAimRig(instance) {
   // for anything you can SEE: the flash, the bullet and the club were all
   // hanging in open water off the end of the flipper.
   const muzzles = fins.map(() => new THREE.Vector3());
+  // Parallel to `muzzles`, so emitPoint can trim by SIDE without knowing how
+  // the asset happened to order its chains. See CONFIG.fins.sides.
+  const muzzleSides = fins.map((f) => f.name ?? null);
   const anchors = {};
   // Parallel to `anchors`, and only holds the ones that declared a normal —
   // a caller reading a name that has none gets undefined rather than a silent
@@ -189,6 +192,7 @@ export function createAimRig(instance) {
     head,
     tail,
     muzzles,
+    muzzleSides,
     anchors,
     anchorNormals,
     anchorSockets,
@@ -206,7 +210,10 @@ export function createAimRig(instance) {
       if (hasAim) _aim.set(aim.x, aim.y, 0).normalize();
 
       finWeight = easeWeight(finWeight, { ...finCfg, enabled: finCfg.enabled && finCfg.ik }, engaged, suppressed, hasAim, dt);
-      for (const chain of fins) applyChain(chain, dt, finCfg, finWeight, finCfg.tipLengthMul ?? 1, _aim);
+      for (const chain of fins) {
+        applyChain(chain, dt, finCfg, finWeight,
+          sideTrim(chain.name, 'tipLengthMul', finCfg.tipLengthMul ?? 1), _aim);
+      }
 
       // ...and then the muzzles, off the same posed bones but at the asset's
       // MEASURED skin edge rather than at the effector. Read after the solve,
@@ -217,7 +224,8 @@ export function createAimRig(instance) {
         // tipWorld measures in units of the chain's own tipLength, so this is
         // the ratio that lands it on muzzleLength instead. A chain with no
         // tipLength has no axis to walk down; its muzzle is the last joint.
-        const along = chain.tipLength > 1e-6 ? (chain.muzzleLength * muzzleMul) / chain.tipLength : 0;
+        const mul = sideTrim(chain.name, 'muzzleLengthMul', muzzleMul);
+        const along = chain.tipLength > 1e-6 ? (chain.muzzleLength * mul) / chain.tipLength : 0;
         tipWorld(chain, muzzles[i], along);
       }
 
@@ -341,6 +349,21 @@ export function createAimRig(instance) {
   };
 }
 
+// The per-side trim, composed with the shared value. See CONFIG.fins.sides:
+// the multipliers multiply and the nudge adds, so the shared slider still moves
+// both fins and this only says how one differs. Matched on the chain's own
+// name, never on its index — index order is whatever the asset file lists.
+//
+// An unnamed chain, or a model with no `sides` block, gets the shared value
+// unchanged, which is what every rig did before this existed.
+function sideTrim(name, key, shared, additive = false) {
+  const t = CONFIG.fins?.sides?.[name];
+  if (!t) return shared;
+  const v = t[key];
+  if (typeof v !== 'number' || !Number.isFinite(v)) return shared;
+  return additive ? shared + v : shared * v;
+}
+
 // --- emit points -----------------------------------------------------------
 //
 // Which bit of the seal a weapon comes out of. `source` is one of the values
@@ -379,10 +402,17 @@ export function emitPoint(rig, source, index, aimDir, fallback, out) {
   const count = emitPointCount(rig, source);
   if (count === 0) return fallback;
 
-  if (source === 'fins') out.copy(rig.muzzles[((index % count) + count) % count]);
+  // Wrapped once and reused, so the point and its per-side trim can never be
+  // read off two different fins.
+  const i = ((index % count) + count) % count;
+  if (source === 'fins') out.copy(rig.muzzles[i]);
   else out.copy(rig.anchors[source]);
 
-  const nudge = cfg.muzzleNudge ?? 0;
+  // Trimmed per side for the fins only — the mouth and the tail are on the
+  // centre line and have no side to be.
+  const nudge = source === 'fins'
+    ? sideTrim(rig.muzzleSides?.[i], 'muzzleNudge', cfg.muzzleNudge ?? 0, true)
+    : (cfg.muzzleNudge ?? 0);
   if (aimDir && nudge !== 0) {
     out.x += aimDir.x * nudge;
     out.y += aimDir.y * nudge;

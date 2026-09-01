@@ -185,6 +185,36 @@ const ASSIGN = {
   // The new `celebrate` voice, fired once as the victory lap starts.
   celebrate:      ['Seal_Weddell_01', 'Seal_Weddell_02', 'Seal_Weddell_03', 'Seal_Weddell_04',
                    'Seal_Weddell_05', 'Seal_Weddell_06', 'Seal_Weddell_07'],
+
+  // =========================================================================
+  // THE MOOG SUB 37 BATCH, August 2026. Eighteen synth one-shots out of a
+  // 128-file pack, and the only ones wired to anything are the three lasers.
+  // The other fifteen ship as library files in the F menu, auditionable
+  // against a fight before any of them takes an event — the same holding
+  // pattern the fish_splash tiers are in above.
+  //
+  // ALL EIGHTEEN ARE 16kHz MONO. That is a preview-grade rate for this bank
+  // (everything else is 22.05kHz or better) and it is audible as a ceiling
+  // around 8kHz — on a laser, which is mostly a downward sweep with no air in
+  // it, that costs nothing. It would cost something on a splash.
+  //
+  // APPLIED BY HAND, NOT BY THIS SCRIPT, and that is worth recording: a run
+  // of the whole file on 2026-08-28 added 38 takes, of which only these three
+  // were new. The other 35 were takes pulled off `chumEaten`, `pickup`,
+  // `kill`, `hit` and six more voices in the F menu — exactly the failure the
+  // header at the top describes, now with a number on it. The tuning was
+  // restored from the .pre-assign backup and only shootLaser written. Treat a
+  // full run as destructive until the mapping is reconciled with what is
+  // actually on those voices today.
+  //
+  // THE FIN LASER'S SHOT. shootLaser was staged with `srcs: []` and a
+  // sawtooth blip waiting for exactly this; three takes is what the row asked
+  // for, because the bolt fires several times a second and pickSample never
+  // repeats a take back to back, so a burst is three sweeps rather than one
+  // stutter. 0.29s / 0.43s / 0.32s — all shorter than the gap between shots,
+  // so no take is cut off by the next.
+  // =========================================================================
+  shootLaser:     ['HGUI_s37_Laser_03_lo', 'HGUI_s37_Laser_05_lo', 'HGUI_s37_Laser_06_lo'],
 };
 
 if (!process.argv.includes('--force')) {

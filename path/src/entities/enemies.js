@@ -3,7 +3,7 @@ import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
 import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul } from '../config.js';
 import { acquireVisual, releaseVisual } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
-import { bounds, clampBelowSurface, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
+import { bounds, clampBelowSurface, midWater, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
 import { shore, shoreOverscan } from '../systems/wallRocks.js';
 import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bitePickup } from './pickups.js';
 import { deathState } from '../systems/deathDive.js';
@@ -110,8 +110,17 @@ export function setStrikeThreat(t = null) {
  * @param e      the creature
  * @param dirX,dirY  unit direction to push along (the dash's heading)
  * @param power  banked charge of the strike, 0..1
+ * @param opts   `{ gain }` — a multiplier on the whole shove AND on the
+ *   skeleton flinch that comes with it, for callers that are not the strike.
+ *   A weak spot rupturing is the one today (CONFIG.hotSpots.burstKnock): it is
+ *   an explosion inside the animal rather than the seal leaning on it, so it
+ *   needs to reach past what a full-charge ram can express, while still
+ *   landing through this one function — the mass curve, the boss branch, the
+ *   decay and the flinch are all rules about being shoved, and a second
+ *   implementation would be a second copy of every one of them. Defaults to 1,
+ *   so every existing caller is untouched.
  */
-export function applyKnockback(e, dirX, dirY, power = 1) {
+export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   const k = CONFIG.strike?.knockback ?? {};
   if (k.enabled === false || !e) return 0;
 
@@ -151,6 +160,12 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   // twice as far as a slightly bigger minnow, it is simply thrown.
   const mass = Math.max(1, size / pivot) ** massExp;
   const push = ((k.speed ?? 26) * scale) / mass;
+  // The caller's own multiplier, folded in once here rather than at each use so
+  // that it reaches every branch below — the rigid-body launch, the shove, the
+  // skeleton flinch and the figure this returns, which is what feedback is
+  // priced off. A bigger push arriving with the same flinch reads as the
+  // animal absorbing it.
+  const gain = Math.max(0, opts?.gain ?? 1);
 
   // A body takes it as a REAL impulse instead: it keeps the velocity (rather
   // than the decaying position offset below), it tumbles, it bounces off the
@@ -164,7 +179,7 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   // a turtle would come off a full-charge strike at walking pace.
   if (e.body) {
     const profile = CONFIG.physics?.[e.body.kind] ?? {};
-    const launch = (profile.strikeImpulse ?? 30) * scale;
+    const launch = (profile.strikeImpulse ?? 30) * scale * gain;
     // WHERE ALONG THE SHELL IT CAUGHT. The impulse itself is along the dash,
     // so a contact point on that same line has no lever arm and produces no
     // roll at all — the turtle would fly dead flat. The seal does not arrive
@@ -187,7 +202,7 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
       e.mesh.position.y - (dirY / len) * r + (dirX / len) * off,
     );
     if (e.anim?.impulse) {
-      const kick = (k.boneImpulse ?? 2.6) * scale;
+      const kick = (k.boneImpulse ?? 2.6) * scale * gain;
       if (kick > 0) {
         _bump.set(dirX / len, dirY / len, 0);
         e.anim.impulse(_bump, kick);
@@ -231,7 +246,7 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   // is the daze's job, on the daze's budget and behind the daze's cooldown.
   const bossKnock = onBoss && bk.enabled !== false && e.hp > 0;
 
-  const boost = bossKnock ? (bk.speedMul ?? 2.5) : heavy ? (hv.speedMul ?? 1.7) : 1;
+  const boost = (bossKnock ? (bk.speedMul ?? 2.5) : heavy ? (hv.speedMul ?? 1.7) : 1) * gain;
   e.knockX = (e.knockX ?? 0) + (dirX / len) * push * boost;
   e.knockY = (e.knockY ?? 0) + (dirY / len) * push * boost;
   // Per-body, because the decays are different journeys: an ordinary knock is
@@ -286,7 +301,7 @@ export function applyKnockback(e, dirX, dirY, power = 1) {
   // every creature carries, and the tumble that only bodies which roll (crabs)
   // do anything with. Both scaled by the same shove, so a flick and a
   // full-commitment ram don't look alike.
-  const kick = (k.boneImpulse ?? 2.6) * scale;
+  const kick = (k.boneImpulse ?? 2.6) * scale * gain;
   if (kick > 0 && e.anim?.impulse) {
     _bump.set(dirX / len, dirY / len, 0);
     e.anim.impulse(_bump, kick);
@@ -416,6 +431,10 @@ export function resetEnemies(scene) {
 //           one. Together with the gravity in updateEnemies that is the whole
 //           climbing behaviour — a crowd shoving toward the same pile of chum
 //           piles UP, and comes back down as soon as it stops shoving.
+//   towers  How hard it climbs is read off the CROWD rather than fixed. Every
+//           body counts how many others share its lateral column first, and a
+//           column with several in it climbs harder, in one lane. See
+//           CONFIG.crabPhysics.tower.
 function resolveCrabCollisions(dt, list) {
   const c = CONFIG.crabPhysics;
   if (!c?.enabled) return;
@@ -423,16 +442,47 @@ function resolveCrabCollisions(dt, list) {
   // Support is recomputed from scratch every frame — a crab whose neighbour
   // walked out from under it has to fall, and a stale height would leave it
   // standing on nothing.
-  for (const e of list) if (e.def.collides) e.supportY = -Infinity;
+  //
+  // The colliding bodies are collected in the same sweep because the crowd
+  // measurement below is a second pass over exactly this set, and the set is
+  // a handful of crabs inside an `enemies` array that can hold two hundred.
+  const bodies = [];
+  for (const e of list) {
+    if (!e.def.collides) continue;
+    e.supportY = -Infinity;
+    e.columnCrowd = 0;
+    e.laneHold = null;
+    bodies.push(e);
+  }
 
-  for (let i = 0; i < list.length; i++) {
-    const a = list[i];
-    if (!a.def.collides) continue;
+  // HOW CROWDED EACH COLUMN IS, measured before anything is resolved so both
+  // halves of a pair agree on it. A "column" is lateral only: z is ignored on
+  // purpose, because two crabs in different depth lanes are on the same patch
+  // of seabed as far as the player's eye is concerned, and height is ignored
+  // because a body already up on the heap is still part of the crowd holding
+  // that heap together.
+  const t = c.tower ?? {};
+  const towerOn = t.enabled !== false && (t.crowd ?? 0) > 0;
+  if (towerOn) {
+    const span = t.span ?? 1.1;
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i];
+        const b = bodies[j];
+        if (Math.abs(b.mesh.position.x - a.mesh.position.x) < (a.radius + b.radius) * span) {
+          a.columnCrowd++;
+          b.columnCrowd++;
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < bodies.length; i++) {
+    const a = bodies[i];
     if (a.bumpCooldown > 0) a.bumpCooldown -= dt;
 
-    for (let j = i + 1; j < list.length; j++) {
-      const b = list[j];
-      if (!b.def.collides) continue;
+    for (let j = i + 1; j < bodies.length; j++) {
+      const b = bodies[j];
       // Held creatures are inert — being frozen in a bubble shouldn't turn
       // a crab into a billiard ball.
       if (a.trapTimer > 0 || a.charmTimer > 0 || b.trapTimer > 0 || b.charmTimer > 0) continue;
@@ -441,10 +491,29 @@ function resolveCrabCollisions(dt, list) {
       const dy = b.mesh.position.y - a.mesh.position.y;
       const dz = b.mesh.position.z - a.mesh.position.z;
       const sum = a.radius + b.radius;
+
+      // HOW MUCH OF A TOWER THIS PAIR IS IN, 0..1. Taken from whichever of the
+      // two is in the busier column: one crab arriving at a heap of six should
+      // climb it, and asking for both to be crowded would mean the newcomer
+      // walks around instead until it has company of its own.
+      const crowd = Math.max(a.columnCrowd, b.columnCrowd);
+      const from = t.crowd ?? 3;
+      const tower = towerOn && crowd >= from
+        ? Math.min(1, (crowd - from + 1) / Math.max(1, (t.full ?? 6) - from + 1))
+        : 0;
+
       // Different depth lanes: they overlap on screen and pass through each
       // other, which is exactly the read we want — one crab in front of
       // another rather than two crabs refusing to share a spot.
-      if (Math.abs(dz) > sum * (c.depthContact ?? 1)) continue;
+      //
+      // A CROWDED COLUMN CLOSES THAT GAP. The lanes exist so a loose crowd has
+      // a front row and a back one; a tower is the opposite situation, where
+      // bodies that pass through each other are bodies that cannot hold each
+      // other up, and the pile just fills the same square of sand instead of
+      // rising out of it.
+      const depthGate = sum * ((c.depthContact ?? 1)
+        + ((t.depthContact ?? 1.6) - (c.depthContact ?? 1)) * tower);
+      if (Math.abs(dz) > depthGate) continue;
 
       // Standing on it. Recorded for ANY horizontally-overlapping pair, not
       // just touching ones, so a crab that has climbed clear of the contact
@@ -455,8 +524,28 @@ function resolveCrabCollisions(dt, list) {
       // the support is real.
       const stackRise = sum * (c.stackHeight ?? 0.6);
       if (Math.abs(dx) < sum * (c.supportSpan ?? 0.85) && Math.abs(dy) > stackRise * 0.5) {
-        if (dy > 0) b.supportY = Math.max(b.supportY, a.mesh.position.y + stackRise);
-        else a.supportY = Math.max(a.supportY, b.mesh.position.y + stackRise);
+        const upper = dy > 0 ? b : a;
+        const lower = dy > 0 ? a : b;
+        upper.supportY = Math.max(upper.supportY, lower.mesh.position.y + stackRise);
+        // INTO THE LANE IT IS STANDING IN. Only in a tower, and only for the
+        // body being carried: a crab riding another one at a different depth
+        // reads as floating in front of it rather than on it, and a stack
+        // several high built out of scattered lanes has no silhouette at all.
+        // The one underneath keeps its own — the pile inherits the lane of
+        // whatever is at the bottom of it (`laneHold ?? laneZ`, so a third
+        // storey takes the ground floor's lane rather than the first's drift
+        // toward it) instead of everything sliding to the play plane.
+        //
+        // A BORROWED LANE, NOT A NEW ONE. Writing `laneZ` would work and would
+        // be wrong: every tower a crab joined would permanently flatten the
+        // spread the depth lanes exist to provide, so a busy seabed would end
+        // the run with the whole family on one plane. This is held only while
+        // something is underneath it — cleared at the top of every pass, like
+        // `supportY` — and the ordinary lane easing below walks the body home
+        // the moment it steps off.
+        if (tower > 0 && (t.laneMerge ?? 0) > 0) {
+          upper.laneHold = lower.laneHold ?? lower.laneZ ?? lower.mesh.position.z;
+        }
       }
 
       const want = sum * (c.contactScale ?? 1);
@@ -480,7 +569,13 @@ function resolveCrabCollisions(dt, list) {
       // lighter one — a stable tiebreak, so a pair at identical height doesn't
       // swap climber every frame and vibrate in place.
       const climberIsB = Math.abs(dy) > 1e-4 ? dy > 0 : b.radius < a.radius;
-      const climb = c.climbBias ?? 0;
+      // A loose pair barges (`climbBias`); a crowded column climbs
+      // (`tower.climbBias`). Same correction either way — all that changes is
+      // how much of it is spent going up instead of going around, which is
+      // what decides whether ten crabs on one pile end up a wide rank or a
+      // tower. Nothing here scripts the tower; it is the crowd's own shoving
+      // with nowhere sideways left to spend it.
+      const climb = (c.climbBias ?? 0) + ((t.climbBias ?? 0.95) - (c.climbBias ?? 0)) * tower;
       // The climber's share of the correction is steered from "straight away
       // from the other body" toward "straight up". The other body still takes
       // the plain sideways shove, which is what it is being climbed off.
@@ -2372,7 +2467,16 @@ export function __spawnPointForTest(def) {
 // individual's chum will be worth when it dies (the lull between waves pays a
 // fraction — see CONFIG.spawn.waves.lull).
 function spawnOne(scene, key, def, difficulty, at, opts = {}) {
-  const { schoolId = null, xpMul = 1 } = opts;
+  // `docile` is the opening shoal's, and nothing else in the game passes it —
+  // see spawnOpeningShoal. It zeroes every way this individual could act on
+  // the seal, and it is applied HERE, beside the other per-instance aggression
+  // bakes, rather than by the caller afterwards: four fields have to go to
+  // zero together, and a shoal that was put in the water to be free food while
+  // still carrying its contact damage would be a handout that chips the seal
+  // it is feeding. Per instance like everything else here — the def is one
+  // object for the whole species, so zeroing it would disarm every fish of
+  // that kind for the rest of the run.
+  const { schoolId = null, xpMul = 1, docile = false } = opts;
   const container = new THREE.Group();
   // Recycled where possible — see acquireVisual in assets.js. A creature's body
   // is the single most expensive thing a spawn allocates (a cloned bone
@@ -2793,9 +2897,9 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     speed,
     // Per-instance, so a crab that spawned at minute one keeps hitting for
     // what it was worth then. combat.js reads e.contactDamage, not the def.
-    contactDamage,
-    biteDamage,
-    shotDamage,
+    contactDamage: docile ? 0 : contactDamage,
+    biteDamage: docile ? 0 : biteDamage,
+    shotDamage: docile ? 0 : shotDamage,
     vx: Math.cos(heading) * speed * 0.5,
     vy: Math.sin(heading) * speed * 0.5,
     heading,
@@ -2846,7 +2950,12 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     turnRate,
     // How hard this individual steers at the seal — see the bake above. Read by
     // the swarm behavior in place of def.swarm.towardPlayer.
-    towardPlayer,
+    towardPlayer: docile ? 0 : towardPlayer,
+    // Harmless, and not coming for you. Stored rather than only acted on above
+    // so the thing the four zeroes MEAN is on the creature: "0 contact damage"
+    // is also what a creature mid-status looks like, and a reader that had to
+    // infer this from four fields would be one field away from being wrong.
+    docile,
     // Jaw state. `biteCooldown` rate-limits the snap; `lungeTimer` is the
     // burst of speed that carries it in. Both tick in updateEnemies.
     jaw,
@@ -2859,6 +2968,17 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // Set for exactly one frame, on the frame the claws meet. systems/
     // combat.js reads it and bills the damage; nothing else may write it.
     justPinched: false,
+    // ...and set by combat.js on the frame the claw REACHED the player — in
+    // reach, i-framed or not. `justPinched` is the claws meeting and is true
+    // whether or not anybody was in them, which makes it the wrong question for
+    // both of its readers: systems/bossCrab.js decides
+    // whether to take hold of the seal, and systems/dodge.js decides whether a
+    // committed run missed. One frame, same as its sibling.
+    clawLanded: false,
+    // Where the claw is being aimed, when something other than the player's own
+    // position is deciding — systems/bossCrab.js, while the king crab is
+    // carrying the seal through a throw. Null the rest of the time.
+    clawAim: null,
     // THE SEAL IS IN THIS ANIMAL'S MOUTH. Owned entirely by systems/bossGrab.js
     // — true for the length of a grab and false the rest of the time. Read by
     // systems/combat.js, which suppresses this creature's contact damage while
@@ -2889,6 +3009,16 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // which is the whole reason the multiplier stopped meaning anything.
     ramming: false,
     biteCooldown: 0,
+    // How soon this animal's BODY may bill again, for the species that carry
+    // `contactBite` in enemies.csv and take their contact damage as one whole
+    // bite rather than as a per-second drain — see the branch in
+    // systems/combat.js for why the pack hunters do.
+    //
+    // Seeded at 0, so the first thing to reach you bites on the frame it
+    // arrives rather than serving a cooldown for a pass it has not made yet.
+    // Declared for every creature, not just the ones that use it, for the same
+    // reason `grabbing` above is.
+    contactBiteTimer: 0,
     lungeTimer: 0,
     look,
     // What the head is pointed at this frame, or null for "nothing in mind".
@@ -3038,6 +3168,13 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // How high whatever this body is standing on holds it, or -Infinity for
     // "nothing but the seabed". Rewritten every frame by resolveCrabCollisions.
     supportY: -Infinity,
+    // The lane this body is borrowing from whatever it is standing on, or null
+    // for "my own". Same lifetime as supportY — see resolveCrabCollisions.
+    laneHold: null,
+    // How many other colliding bodies are sharing this one's lateral column —
+    // the crowd measurement that turns a shoving match into a tower. Also
+    // rewritten every frame by resolveCrabCollisions; see CONFIG.crabPhysics.tower.
+    columnCrowd: 0,
     // A simulated body, for the handful of creatures that get knocked around
     // instead of killed. Null for everything else, and every read of it is
     // guarded — see attachRigidBody.
@@ -3584,6 +3721,86 @@ export function devBaitBallSpec(atX = null, atY = null) {
     x, y, stationX: x, stationY: y, side,
     spin: Math.random() < 0.5 ? -1 : 1,
   };
+}
+
+/**
+ * THE OPENING SHOAL — the fish a run starts with.
+ *
+ * Called once by startGame, on the frame the run begins and after resetPlayer
+ * has put the seal back at midwater (this scatters around wherever it is).
+ * See THE OPENING SHOAL in config.js for why a run needs one: the boost meter
+ * opens dead and only chum fills it, and difficulty 0 is the slowest the tap
+ * ever runs, so the first stretch of a run was a seal that could not dash with
+ * nothing in the water to earn a dash with.
+ *
+ * ONE SPECIES, AND NOT A SCHOOL. One roll off the same small-fry pool the boss
+ * forage draws from, so the scatter reads as a patch of one kind of fish
+ * rather than as one of everything — but with no `schoolId`, so the boids
+ * never run on them. That is the point: a school's cohesion would gather them
+ * into a single knot, and since they are placed in a ring AROUND the seal that
+ * knot's centre is the seal — the shoal would swim into the player's mouth as
+ * one mouthful, which is neither the scatter this is meant to be nor something
+ * the player did. Unschooled, each one wanders where it was put.
+ *
+ * `docile` is what makes them free food rather than an opening fight — see
+ * spawnOne.
+ *
+ * @param at  centre of the scatter; defaults to the seal.
+ * @returns how many fish went in.
+ */
+export function spawnOpeningShoal(scene, at = null) {
+  const c = CONFIG.spawn?.opening ?? {};
+  if (c.enabled === false) return 0;
+  const n = Math.max(0, Math.round(c.count ?? 0));
+  if (n <= 0) return 0;
+
+  // Difficulty 0 and level 1 rather than the live gameState: this is the first
+  // frame of a run by definition, and both are reset around this call anyway.
+  // Reading them would only be a way for a restart to spawn its shoal off the
+  // dead run's numbers.
+  const pool = forageCandidates(0, 1);
+  if (!pool.length) return 0;
+  let total = 0;
+  for (const p of pool) total += p.w;
+  let roll = Math.random() * total;
+  let picked = pool[pool.length - 1];
+  for (const p of pool) { roll -= p.w; if (roll <= 0) { picked = p; break; } }
+  const { key, def } = picked;
+
+  const cx = at?.x ?? player.mesh?.position?.x ?? 0;
+  const cy = at?.y ?? player.mesh?.position?.y ?? midWater();
+  const near = Math.max(0, c.radiusMin ?? 4);
+  const far = Math.max(near, c.radiusMax ?? 10);
+  const margin = c.margin ?? 2;
+  const radius = def.radius ?? 0.4;
+
+  let made = 0;
+  for (let i = 0; i < n; i++) {
+    // maxAlive is a memory bound and binds here like everywhere else, even on
+    // a frame where the arena has just been emptied.
+    if (enemies.length >= CONFIG.spawn.maxAlive) break;
+    // AROUND the seal, not merely near it: the angle is the fish's own slice
+    // of the circle plus a jitter inside that slice, so six fish are six
+    // directions rather than six rolls that can all come up on the same side.
+    const a = ((i + Math.random()) / n) * Math.PI * 2;
+    const d = near + Math.random() * (far - near);
+    // Clamped rather than re-rolled — a seal that starts near a wall simply
+    // gets the wall side of its shoal tucked in against the rock, which is
+    // still food in front of it. Re-rolling would push the whole shoal to one
+    // side, which is the thing the even slices above exist to prevent.
+    const x = Math.min(bounds.right - margin - radius,
+      Math.max(bounds.left + margin + radius, cx + Math.cos(a) * d));
+    const y = Math.min(bounds.surfaceY - margin - radius,
+      Math.max(bounds.bottom + margin + radius, cy + Math.sin(a) * d));
+    // NO `side` and NO `deep`. Both would send the fish out past the picture
+    // to swim in (see the `arriving` block in spawnOne), and a shoal that
+    // spends its first five seconds crossing the wall is a shoal that is not
+    // there for the seconds it exists to fill. Placed inside the arena, the
+    // geometric fallback leaves `entering` false and they are simply here.
+    spawnOne(scene, key, def, 0, { x, y }, { docile: true });
+    made += 1;
+  }
+  return made;
 }
 
 // WHAT LEVEL THE SEAL IS, for CONFIG.spawn.lateGame. Pushed in once a frame
@@ -4255,15 +4472,26 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       const lane = e.laneZ ?? 0;
       e.mesh.position.z = Math.max(lane - reach, Math.min(lane + reach,
         e.mesh.position.z + e.vz * dt));
-    } else if (e.laneZ != null && e.mesh.position.z !== e.laneZ) {
+    } else if ((e.laneHold ?? e.laneZ) != null && e.mesh.position.z !== (e.laneHold ?? e.laneZ)) {
       // HOME, and easing back into its lane. Invisible while it happens — the
       // camera is orthographic, so this changes nothing but draw order — and
       // it happens over a distance rather than instantly so that the one thing
       // it CAN change, which creature sorts in front of which, does not
       // resolve as a snap on a single frame.
-      const step = (entranceCfg().emergeSpeed ?? 6) * dt;
-      const gap = e.laneZ - e.mesh.position.z;
-      e.mesh.position.z = Math.abs(gap) <= step ? e.laneZ : e.mesh.position.z + Math.sign(gap) * step;
+      //
+      // `laneHold` is a lane BORROWED for as long as this body is standing on
+      // another one (resolveCrabCollisions writes it, and clears it every
+      // frame): a crab up a tower is walked into the lane of the tower rather
+      // than into its own, and is released back to its own the moment the
+      // thing underneath it moves. It travels at the tower's own speed, which
+      // is a climb rather than the swim `emergeSpeed` describes.
+      const held = e.laneHold != null;
+      const lane = held ? e.laneHold : e.laneZ;
+      const step = (held
+        ? (CONFIG.crabPhysics?.tower?.laneMerge ?? 4)
+        : (entranceCfg().emergeSpeed ?? 6)) * dt;
+      const gap = lane - e.mesh.position.z;
+      e.mesh.position.z = Math.abs(gap) <= step ? lane : e.mesh.position.z + Math.sign(gap) * step;
     }
 
     // A SIMULATED BODY takes over from here. Its own swimming has already been
@@ -4731,9 +4959,25 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // crab sits at its own depth (enemies.walkingCrab.depthSpread scatters
       // them in z) and reaching to that z would have the claw swipe in front
       // of or behind the seal rather than at it.
-      _clawAim.set(playerPos.x, playerPos.y, 0);
+      // ...UNLESS SOMETHING ELSE IS AIMING IT. `clawAim` is systems/bossCrab.js
+      // driving the king crab's arm through a throw: the seal is in the claw
+      // and the whole point of the gesture is that the arm decides where the
+      // player goes, so for those few tenths of a second the target is not the
+      // player's position but the place the crab is putting them. Cleared by
+      // that file the moment the throw ends; nothing else writes it.
+      if (e.clawAim) _clawAim.set(e.clawAim.x, e.clawAim.y, 0);
+      else _clawAim.set(playerPos.x, playerPos.y, 0);
       e.claw.update(dt, canPinch ? _clawAim : null);
       e.justPinched = e.claw.didConnect();
+      // CLEARED HERE, EVERY FRAME, and the position in the frame is the whole
+      // design. This runs after updateBossAbilities and before resolveCombat,
+      // so a pinch billed on frame N is readable by systems/dodge.js on frame N
+      // (it runs after combat) and by systems/bossCrab.js on frame N+1 (it runs
+      // before this line) — and by nothing after that. Cleared only on the
+      // frames the claws MEET instead, a jab that landed twenty seconds ago
+      // would still read as true, and the king crab's haymaker would take hold
+      // of the seal on the first frame of a lunge that has not connected yet.
+      e.clawLanded = false;
 
       // THE SWING OWNS THE ARM WHILE IT IS SWINGING, and the flinch gets it
       // back afterwards.
@@ -4817,6 +5061,12 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // Kept apart because a snap that misses still costs the animal a moment,
     // while an eat only happens on contact.
     if (e.biteCooldown > 0) e.biteCooldown -= dt;
+    // ...and the third clock, which is neither: how soon the BODY may bill
+    // again on a species whose contact damage arrives as a bite. Ticked here
+    // rather than in systems/combat.js so it runs on the frames the animal is
+    // NOT touching you — a pack hunter's rhythm is its own, not a function of
+    // how long it managed to stay overlapped.
+    if (e.contactBiteTimer > 0) e.contactBiteTimer -= dt;
     if (e.lungeTimer > 0) e.lungeTimer -= dt;
     // The dead time between grabs — see systems/bossGrab.js. Ticked here beside
     // every other per-creature clock rather than inside that file, so it runs

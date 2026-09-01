@@ -7,6 +7,7 @@ import { updateTumble } from '../systems/rocks.js';
 import { isMarked, markWeight, markedTargets } from '../systems/marks.js';
 import { facingHotSpots, hotSpotPoint } from '../systems/bossHotSpots.js';
 import { projectileLife } from '../systems/scaling.js';
+import { releaseLatticeChild, resetLattice } from '../loadout.js';
 
 // One list for both sides — `faction` decides who a bullet can hurt. Two
 // optional behaviors layer on top of the base fly-in-a-straight-line bullet:
@@ -67,7 +68,45 @@ export function spawnProjectile(scene, {
   // two fields, and a shot that wrote its own position directly would be
   // invisible to all of them.
   flow = null,
+  // WHICH TRAIL PRESET this shot uses, overriding the one its asset key would
+  // find. Null for everything that is happy being identified by its body. See
+  // presetFor in systems/projectileTrails.js — this file never draws a ribbon
+  // and has no idea what a preset contains.
+  trailKey = null,
   spin = 0, scale = 1, splashDamage = 0, splashRadius = 0, orient = false, burst = null,
+  // WHICH AXIS `spin` TURNS ABOUT — 'z' (the default, and every spinner that
+  // predates this) or 'y'.
+  //
+  // It exists because z is the axis the CAMERA looks down, and a spin about
+  // the view axis is a pinwheel: it turns the shot's silhouette in the picture
+  // plane without ever bringing a new part of the body into view. That is
+  // right for a starfish, whose whole read is a five-armed shape cartwheeling.
+  // On a BALL it is worse than wrong, it is invisible — a sphere's silhouette
+  // is a circle at every angle about every axis, so the only thing that can
+  // show a sphere rotating is its surface travelling across the silhouette,
+  // and that needs an axis lying IN the picture plane.
+  //
+  // Pair it with `tilt`: the default Euler order is XYZ, so a shot with
+  // rotation.x already set spins about the axis that tilt maps Y to — canted
+  // toward the camera rather than dead vertical, which is what keeps a rolling
+  // pearl from reading as a barber's pole.
+  //
+  // NOTE this only reaches a shot that does not `orient`, since orient rewrites
+  // both y and z every frame. Nothing wants both today.
+  spinAxis = 'z',
+  // HOW FAST `spin` BLEEDS OFF, as an exponential rate in inverse seconds, or
+  // 0 for the constant spin every other spinner in the game has.
+  //
+  // Water drag on a body this small is not a linear brake, it is a torque
+  // proportional to how fast the surface is already moving, which integrates
+  // to spin * e^(-drag*t). So one number says the whole curve, and the reading
+  // to have of it is the half-life: ln(2)/drag seconds to lose half the rate.
+  // At 0.55 that is 1.26s, over a 3.2s flight — the pearl leaves the muzzle
+  // fast enough to blur and is visibly loafing by the time it lands.
+  //
+  // It never reaches zero, which is correct rather than a rounding excuse: a
+  // pearl that STOPPED spinning mid-flight would read as having hit something.
+  spinDrag = 0,
   // HOW FAST THE BODY WHIPS ABOUT ITS OWN LONG AXIS, in radians a second.
   //
   // Not `spin`, and the difference is the axis. `spin` turns a shot in the
@@ -109,7 +148,7 @@ export function spawnProjectile(scene, {
   // It survives `spin`, which writes rotation.z alone, and is meaningless
   // beside `orient`, which rewrites the whole orientation every frame.
   tilt = 0,
-  gravityScale = 1, chill = null, charm = null, knockback = 0,
+  gravityScale = 1, chill = null, charm = null, knockback = 0, zap = null,
   // WHICH FLIPPER'S ELEMENT THIS PELLET IS CARRYING, or null for every shot in
   // the game that carries none. A pure label — this file never reads it. It is
   // set in fire() from the fin the pellet left and spent in combat.js, the same
@@ -135,6 +174,13 @@ export function spawnProjectile(scene, {
   // and a fatter, busier wake is what says so. Defaults to 1, so every shot in
   // the game that does not ask for it is exactly as it was.
   trailScale = 1,
+  // WHAT THIS BOLT SHATTERS INTO when it lands — the fin laser's Lattice
+  // Sealant, or null for every other shot in the game. Fifth payload of
+  // exactly the same kind as `burst`, `chill`, `charm` and `knockback` above,
+  // and the fifth time that sentence is written, which is the point: a shot
+  // describes what it is carrying and systems/finLaser.js is the only thing
+  // that knows what the description MEANS. projectiles.js never acts on it.
+  lattice = null,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
@@ -257,6 +303,7 @@ export function spawnProjectile(scene, {
     // that is asked for a cube's target before it has stepped one gets where it
     // already is rather than the origin.
     flow,
+    trailKey,
     flowX: origin.x,
     flowY: origin.y,
     // Whatever the owner needs to keep per cube. projectiles.js never reads it;
@@ -282,7 +329,9 @@ export function spawnProjectile(scene, {
     // — the mesh is a Group of Groups with the key nowhere in it. See
     // tools/attractor-storm-test.mjs.
     asset,
-    spin, // radians/sec, purely visual
+    spin, // radians/sec, purely visual — DECAYS if spinDrag is set (see below)
+    spinAxis, // 'z' (screen plane) or 'y' — see the argument note above
+    spinDrag, // 1/s exponential bleed on `spin`, 0 for a constant rate
     roll, // radians/sec about its own long axis — see the argument note above
     rollAngle: 0,
     trailScale, // ribbon size multiplier — see the argument note above
@@ -301,6 +350,11 @@ export function spawnProjectile(scene, {
     // is a payload description, exactly like `burst` above, and projectiles.js
     // never acts on it either.
     chill,
+    // The chain this shot throws off what it hits: { packet, spec }, or null
+    // for everything that carries none. FIFTH payload of exactly the same
+    // kind — combat.js hands the spec to arcChain in systems/elements.js,
+    // which owns what a chain IS, and this file never reads it.
+    zap,
     // The harp's note: { duration, auraDuration, auraRadius, auraDamage }, or
     // null for everything else. Third payload of the same kind and the third
     // time this sentence is written, which is the point — a shot describes what
@@ -314,7 +368,14 @@ export function spawnProjectile(scene, {
     // entities/enemies.js along the shot's own heading, and projectiles.js
     // never acts on it either.
     knockback,
+    // See the argument note above. Carried, never read here.
+    lattice,
   });
+  // THE SHOT ITSELF, so a caller that has to reach back into what it just
+  // fired does not have to index the tail of a shared array to find it. Every
+  // caller that predates this ignores the return, which is why it is safe to
+  // add: nothing changes for a spawn that does not want the handle.
+  return projectiles[projectiles.length - 1];
 }
 
 // One clap of the bubble jet: pick a new heading within `jetTurn` of the
@@ -798,18 +859,20 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
       // Mirror instead of rolling belly-up when travelling leftward.
       //
       // `orient: 'axis'` OPTS OUT, for a body that has no belly to protect —
-      // the razor clam's blade, which is symmetric end to end and face to face.
-      // It is not merely unnecessary there, it is wrong: the mirror is a Ry(PI)
-      // composed AFTER the heading (three's XYZ order applies z first), which
-      // lands on the intended pose only when the heading is on an axis. At a
-      // leftward DIAGONAL it is 90 degrees out — measured at 135 and 225
-      // degrees — and a blade fired up-left flies broadside.
+      // the razor clam's blade and the fin laser's bolt, both symmetric end to
+      // end and face to face. It is not merely unnecessary there, it is wrong:
+      // the mirror is a Ry(PI) composed AFTER the heading (three's XYZ order
+      // applies z first), which lands on the intended pose only when the
+      // heading is on an axis. At a leftward DIAGONAL it is 90 degrees out —
+      // measured at 135 and 225 degrees — and a blade fired up-left flies
+      // broadside.
       //
-      // Every other projectile keeps the old behaviour deliberately. It has the
-      // same 90-degree error at those two headings, and a mussel or a gull is
-      // round enough that nobody has ever seen it; changing the shared branch
-      // would silently re-pose every weapon in the game, which is not something
-      // to do from inside a new card.
+      // WHICH IS WHY THE LONG THIN SHOTS ARE THE ONES THAT MOVED. The error is
+      // in every projectile here and always has been, but it only reads as a
+      // bug on a silhouette that has a direction: a mussel or a gull is round
+      // enough that nobody has ever seen it, and a laser bolt at 2.6:1 is
+      // nothing BUT its direction. Changing the shared branch would silently
+      // re-pose every weapon in the game, so the fix stays per-shot.
       const mirror = p.orient !== 'axis' && p.dir.x < 0 ? Math.PI : 0;
       // ...AND THE ROLL, on the same axis the mirror uses, because on a body
       // already pointed down its heading that axis IS the long one. Added to
@@ -823,7 +886,13 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
         p.mesh.rotation.y = mirror;
       }
     }
-    if (p.spin) p.mesh.rotation.z += p.spin * dt;
+    // Drag BEFORE the turn, so the very first frame is already the launch rate
+    // minus one frame of water rather than a free frame at the muzzle value.
+    // Frame-rate independent by construction — e^(-k*a) * e^(-k*b) is
+    // e^(-k*(a+b)), so two half-steps land exactly where one whole one does,
+    // which a `spin -= drag * dt` would not.
+    if (p.spinDrag) p.spin *= Math.exp(-p.spinDrag * dt);
+    if (p.spin) p.mesh.rotation[p.spinAxis === 'y' ? 'y' : 'z'] += p.spin * dt;
     // Rock ammo tumbles about its own arbitrary axis. Only when nothing else
     // is driving the orientation: `orient` and `spin` both write Euler angles
     // straight onto the mesh each frame, which would wipe out the quaternion
@@ -860,11 +929,21 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
 export function despawn(scene, index) {
   const p = projectiles[index];
   if (!p) return;
+  // THE LATTICE'S LIVE BUDGET GETS ITS SLOT BACK HERE, at the one point every
+  // way of leaving the water passes through — hit, pierced out, expired, flew
+  // past the arena. A count decremented at each of those separately is a count
+  // that leaks at whichever one somebody adds next, and a leaked budget
+  // presents as the shatter quietly switching itself off partway through a run.
+  // A no-op for every projectile that is not a split-born bolt.
+  releaseLatticeChild(p);
   scene.remove(p.mesh);
   projectiles.splice(index, 1);
 }
 
 export function resetProjectiles(scene) {
   for (const p of projectiles) scene.remove(p.mesh);
+  // Zeroed rather than decremented per shot: this clears the list wholesale, so
+  // there is nothing left that could be holding a slot.
+  resetLattice();
   projectiles.length = 0;
 }

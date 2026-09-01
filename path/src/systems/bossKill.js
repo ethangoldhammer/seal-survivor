@@ -144,7 +144,7 @@ export function printPhaseSeconds() {
   // before any print exists, and a phase length that depended on whether a
   // 1.7MB WASM file had finished loading would make the held beat after a boss
   // dies a different length from run to run.
-  const still = Math.max(p.holdMs ?? 620, p.writeOnMs ?? 800);
+  const still = Math.max(p.hangMs ?? 1050, p.writeOnMs ?? 800);
   const flight = ((p.ejectMs ?? 260) + still + (p.parkMs ?? 520)) / 1000;
   const beat = Math.max(0, k.beatTime ?? 1.5);
   const leftOfBeat = beat * (1 - Math.max(0, Math.min(1, k.snapshot?.at ?? 0.6)));

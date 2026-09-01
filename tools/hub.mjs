@@ -35,9 +35,15 @@
 // WHAT IT WILL AND WILL NOT DO FOR YOU
 //
 //   It runs checks, audits and generators, and streams their output back. It
-//   starts the servers and links to them. It will NOT deploy, publish or ship
-//   — those get a copyable command and no button, because a page left open in
-//   a background tab all day should not be one stray click from the live site.
+//   starts the servers and links to them. It will NOT deploy or publish —
+//   those get a copyable command and no button, because a page left open in a
+//   background tab all day should not be one stray click from the live site.
+//
+//   `ship:all` is the single exception, and it has a card of its own rather
+//   than a button in a row: it needs a typed commit message and a held press,
+//   and it still runs every gate. The terms are in hub-ship.mjs. Everything
+//   else that reaches the outside world is still terminal-only, and test:hub
+//   asserts that against the endpoint rather than against the comment.
 // ============================================================================
 
 import { createServer } from 'node:http';
@@ -46,6 +52,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { survey, ROLES, stop as stopPid } from './servers.mjs';
 import { commands, pages, GROUP_ORDER, ROOT } from './hub-catalogue.mjs';
+import { SHIP_SCRIPT, checkMessage, shipArgs, shipState, writeMessage } from './hub-ship.mjs';
 
 // The one number in this repo that is allowed to be a constant. PORT is
 // honoured so a second session can run its own hub rather than failing on
@@ -74,9 +81,16 @@ const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 // where they landed, on the same line they always have.
 const URL_RE = /https?:\/\/localhost:\d+[^\s'"()]*/g;
 
-function startRun(entry) {
+// `args` and `cleanup` are for the ship card, which runs a script the plain
+// button path is not allowed to: the same npm script, with flags, and a
+// temp-file message to remove once it has been read. Everything else passes
+// neither and behaves exactly as it did.
+function startRun(entry, { args, cleanup } = {}) {
   const existing = [...runs.values()].find((r) => r.name === entry.name && r.status === 'running');
-  if (existing) return existing;
+  // Not an error — a second click while a run is going is a second look at the
+  // same run. For a ship that is also the thing that makes double-shipping
+  // impossible, so the message file goes now rather than leaking.
+  if (existing) { cleanup?.(); return existing; }
 
   const run = {
     id: nextId++,
@@ -101,7 +115,7 @@ function startRun(entry) {
   // stale listener the panel then has to warn about. Its own group means one
   // signal reaches the whole tree. The hub kills its runs on the way out (see
   // the exit handler at the bottom), so detached never means abandoned.
-  const child = spawn('npm', ['run', entry.name], {
+  const child = spawn('npm', args ?? ['run', entry.name], {
     cwd: ROOT,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -130,12 +144,14 @@ function startRun(entry) {
     run.status = code === 0 ? 'passed' : run.status === 'stopped' ? 'stopped' : 'failed';
     run.exit = code;
     run.ended = Date.now();
+    cleanup?.();
   });
   child.on('error', (err) => {
     run.lines.push(`could not start — ${err.message}`);
     run.status = 'failed';
     run.exit = -1;
     run.ended = Date.now();
+    cleanup?.();
   });
 
   return run;
@@ -179,6 +195,9 @@ function state() {
   return {
     port: PORT,
     origins,
+    // What the ship card shows before you commit to anything: is there
+    // anything to ship, and is this the branch that deploys.
+    ship: shipState(ROOT),
     servers: found.map((p) => ({
       pid: p.pid,
       role: p.role,
@@ -214,6 +233,24 @@ const json = (res, body, code = 200) => {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
 };
+
+// Some other page open on localhost must not be able to deploy this game.
+//
+// The custom header is the guard that actually holds: a cross-origin fetch
+// cannot set one without a CORS preflight, and this server answers OPTIONS
+// with the same flat 404 it answers everything else, so the real request is
+// never sent. The Origin check is the belt to that pair of braces — and it
+// passes a request with no Origin at all, because that is what a direct
+// same-origin POST and the test suite both look like.
+function fromTheWorkbench(req) {
+  if (req.headers['x-workbench'] !== 'ship') return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    const u = new URL(origin);
+    return u.port === String(PORT) && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+  } catch { return false; }
+}
 
 const readBody = (req) => new Promise((done) => {
   let body = '';
@@ -264,6 +301,26 @@ const server = createServer(async (req, res) => {
     if (!entry) return json(res, { error: 'not a script in package.json' }, 400);
     if (entry.risk === 'publish') return json(res, { error: 'publish scripts are terminal-only' }, 403);
     return json(res, { id: startRun(entry).id });
+  }
+
+  // ---------------------------------------------------------------------
+  // SHIP — the one endpoint here that can change what other people see.
+  //
+  // It is a separate route from /api/run on purpose. /api/run refuses every
+  // publish script and must go on refusing them, including this one: a single
+  // endpoint with an exception in it is an endpoint whose exception grows.
+  // ---------------------------------------------------------------------
+  if (req.method === 'POST' && path === '/api/ship') {
+    if (!fromTheWorkbench(req)) return json(res, { error: 'ship is only reachable from the workbench page' }, 403);
+    const { message = '', dry = false } = await readBody(req);
+    const bad = checkMessage(message, dry);
+    if (bad) return json(res, { error: bad }, 400);
+    // The same gate /api/run applies, for the same reason: what gets spawned
+    // is a script that exists in package.json, never text off the wire.
+    const entry = commands().find((c) => c.name === SHIP_SCRIPT);
+    if (!entry) return json(res, { error: `${SHIP_SCRIPT} is not a script in package.json` }, 500);
+    const { file, cleanup } = writeMessage(message);
+    return json(res, { id: startRun(entry, { args: shipArgs(file, Boolean(dry)), cleanup }).id });
   }
 
   if (req.method === 'POST' && path === '/api/stop-run') {

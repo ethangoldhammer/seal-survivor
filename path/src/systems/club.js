@@ -4,7 +4,7 @@ import { bounds } from '../arena.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { spawnProjectile } from '../entities/projectiles.js';
-import { chillEnemy } from './elements.js';
+import { chillEnemy, arcChain } from './elements.js';
 import { orbitTarget, springFollow } from './orbit.js';
 import { player } from '../entities/player.js';
 import { projectileCount, orbiterCount } from '../stats.js';
@@ -13,7 +13,7 @@ import { canHold, isDazed } from './control.js';
 import { recordControl } from './playtest.js';
 import { hitCreatureSegment } from './hitShape.js';
 import { hotSpotDamage } from './bossHotSpots.js';
-import { clubLevelStats, clubBoomLevelStats, clubIceLevelStats } from '../levelStats.js';
+import { clubLevelStats, clubBoomLevelStats, clubIceLevelStats, clubZapLevelStats } from '../levelStats.js';
 
 // Where the wood last met a body. Shared and read immediately — see the note
 // on combat.js's own `contact`.
@@ -149,13 +149,14 @@ let orbitClock = 0;
 const bodyAccel = { x: 0, y: 0, valid: false };
 const _prevVel = { x: 0, y: 0, valid: false };
 
-// THE FOUR KINDS OF CLUB, in the order they are checked for a run that somehow
+// THE FIVE KINDS OF CLUB, in the order they are checked for a run that somehow
 // arrives holding several at once (a debug jump, a harness). The order a run
 // actually TOOK them in beats this — see clubTypesFor.
 const CLUB_TYPES = [
   { key: 'club', asset: 'club' },
   { key: 'boom', asset: 'clubBoom' },
   { key: 'ice', asset: 'clubIce' },
+  { key: 'zap', asset: 'clubZap' },
   { key: 'throw', asset: 'clubThrow' },
 ];
 
@@ -244,6 +245,15 @@ function noteClubs(levels) {
 }
 
 const assetFor = (key) => CLUB_TYPES.find((t) => t.key === key)?.asset ?? 'club';
+
+// EVERY CLUB MODEL A RUN CAN BUILD, derived from the table above rather than
+// listed a second time — see the note on SHRIMP_RING_ASSETS. A fifth club would
+// otherwise arrive with its warm-up quietly one short, and the tell would be a
+// hitch on exactly one card.
+//
+// All four, not just the ones this run has earned: which variant a card offers
+// is rolled at the deal, and the warm-up runs before the pick is known.
+export const CLUB_ASSETS = CLUB_TYPES.map((t) => t.asset);
 
 /**
  * THE WHOLE ARRANGEMENT: which club is in which fin, and what is on the ring.
@@ -391,6 +401,9 @@ function addClub(asset = 'club', mount = 'fin') {
     prevSwing: 0,
     rising: false,
     shockLeft: 0,
+    // Zappy Club's gap, per club for the same reason `shockLeft` is: four
+    // clubs sweeping one school would otherwise fire four chains a contact.
+    zapLeft: 0,
     // Counts down after this socket is (re)primed. See the guard in updateClub.
     armLeft: 0,
     // THE SOCKET. A club is either in the fin or it isn't: the Hurler throws
@@ -996,6 +1009,45 @@ export function clubIce(level) {
 }
 
 /**
+ * The chain a club hit throws, in arcChain()'s own shape — or null if the card
+ * isn't owned.
+ *
+ * The PACKET is read from levelStats rather than worked out here, and that is
+ * the point: the number on the upgrade tip and the number the water sees are
+ * the same call. A share recomputed beside the readout is the exact pairing
+ * that let a claw's commit radius and its damage radius drift apart.
+ *
+ * Everything else is CONFIG.clubZap handed straight through, so this file
+ * never learns what a chain IS — systems/elements.js owns that, and Voltaic
+ * fires the same function with the element's numbers.
+ */
+export function clubZap(level) {
+  const c = CONFIG.clubZap;
+  if (!c?.enabled || !(level > 0)) return null;
+  const st = clubZapLevelStats(level, player.stats);
+  return {
+    packet: st.clubZapDamage,
+    cooldown: c.cooldown ?? 0,
+    spec: {
+      range: targeting(st.clubZapRange),
+      arcs: st.clubZapArcs,
+      falloff: c.arcFalloff ?? 0.62,
+      // The packet is already what the first body should take, so the chain
+      // must not take another share off it on the way in. Voltaic passes its
+      // own `arcDamage` here because its packet is a whole elemental bonus;
+      // this one has been discounted at source.
+      firstShare: 1,
+      floorShare: c.arcDamageFloor ?? 0.06,
+      // Its own tag, not 'club'. The playtest report has to be able to say
+      // whether this card earned its pick, and every point of it was being
+      // filed under the stick that started it otherwise — the same mistake
+      // detonate() documents above.
+      source: 'clubZap',
+    },
+  };
+}
+
+/**
  * Set off a blast at a point, hurting everything but `exclude`.
  *
  * Victims are collected BEFORE any of them are damaged. hurt() removes a dead
@@ -1202,6 +1254,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   const boomLv = Math.max(0, Math.floor(lv.boom ?? 0));
   const iceLv = Math.max(0, Math.floor(lv.ice ?? 0));
   const throwLv = Math.max(0, Math.floor(lv.throw ?? 0));
+  const zapLv = Math.max(0, Math.floor(lv.zap ?? 0));
 
   // `alwaysOn` is an AUTHORING switch, not a balance one: it puts clubs in the
   // fins without the card so a model, a tint or a flop curve can be judged
@@ -1217,10 +1270,11 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // nothing, and there was nothing on screen to explain why. A variant on its
   // own now swings a level-1 club, which is what its card has claimed all
   // along.
-  const carried = (boomLv || iceLv || throwLv) ? 1 : 0;
+  const carried = (boomLv || iceLv || zapLv || throwLv) ? 1 : 0;
   const level = Math.max(c.alwaysOn ? 1 : 0, carried, Math.floor(lv.club ?? 0));
   const blast = clubBlast(boomLv);
   const ice = clubIce(iceLv);
+  const zap = clubZap(zapLv);
   const active = !!c?.enabled && level > 0;
 
   group.visible = active;
@@ -1275,7 +1329,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
   // `noteClubs` is called here and nowhere else: this is the one place in the
   // game entitled to say the run has earned another club, and the order it
   // records is what decides which two are in the seal's hands.
-  const owned = { club: Math.floor(lv.club ?? 0), boom: boomLv, ice: iceLv, throw: throwLv };
+  const owned = { club: Math.floor(lv.club ?? 0), boom: boomLv, ice: iceLv, zap: zapLv, throw: throwLv };
   noteClubs(owned);
   // Clone Warz AND Entourage reach the ring — see clubLayout for why both have
   // a claim on it. Read live off the stat block for the reason scaling.js
@@ -1298,7 +1352,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     // T-menu, or a rig that hasn't resolved yet. Anything ALREADY thrown still
     // has to finish its flight: returning outright here freezes those bodies
     // mid-air, holding a live reference to each one, for the rest of the run.
-    updateFlights(dt, scene, enemiesList, level, blast, ice, hooks);
+    updateFlights(dt, scene, enemiesList, level, blast, ice, zap, hooks);
     return;
   }
 
@@ -1639,6 +1693,8 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       club.prevSwing = swing;
     }
 
+    club.zapLeft = Math.max(0, club.zapLeft - dt);
+
     for (const [enemy, t] of club.cooldowns) {
       const left = t - dt;
       if (left <= 0) club.cooldowns.delete(enemy);
@@ -1760,6 +1816,21 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       // collected at the point of contact rather than wherever the body ends
       // up after being thrown.
       if (ice && chillEnemy(e, ice.slow, ice.duration, ice.freezeFor, hooks, ex, ey)) recordControl('clubIce');
+      // ZAPPY CLUB, before the damage for the same reason the ice is: a body
+      // that dies to the whack still has to read as having thrown the chain,
+      // and arcChain travels from where it WAS rather than from the body, so
+      // a corpse under the first bolt costs the chain nothing.
+      //
+      // Scaled by the swing like everything else this weapon does — a clip
+      // through a school at full whip throws the card's chain, a lazy drift
+      // into one fish throws a fraction of it. The gap is spent whether or not
+      // the chain found anything: it is a charge on the club, not a promise of
+      // a hit, and refunding an empty one would let a player standing at the
+      // edge of a school fire on every contact.
+      if (zap && club.zapLeft <= 0) {
+        club.zapLeft = zap.cooldown;
+        arcChain(scene, e, zap.packet * hitPower, enemiesList, hooks, zap.spec);
+      }
       const blastHere = blast;
 
       // Scaled by how hard this club is actually travelling. A clip through a
@@ -1817,7 +1888,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
     }
   }
 
-  updateFlights(dt, scene, enemiesList, level, blast, ice, hooks);
+  updateFlights(dt, scene, enemiesList, level, blast, ice, zap, hooks);
 }
 
 // --- the flights ------------------------------------------------------------
@@ -1827,7 +1898,7 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
 // a decaying nudge with no notion of hitting anything, and the whole value of
 // this weapon is in what the body collides with on the way. The handoff back
 // to that channel happens when the flight ends (see land()).
-function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
+function updateFlights(dt, scene, enemiesList, level, blast, ice, zap, hooks) {
   const c = CONFIG.club;
   const drag = Math.exp(-c.flightDrag * dt);
 
@@ -1842,6 +1913,7 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
       if (left <= 0) f.lock.delete(other);
       else f.lock.set(other, left);
     }
+    f.zapLeft = Math.max(0, (f.zapLeft ?? 0) - dt);
 
     // A body in the air is not swimming and is not biting. Topped up every
     // frame rather than set once, because enemies.js decrements it — the same
@@ -1915,6 +1987,18 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, hooks) {
       // — which is what makes the two cards worth taking alongside the base
       // club rather than only alongside the thrown one.
       if (ice && chillEnemy(other, ice.slow, ice.duration, ice.freezeFor, hooks, cx, cy)) recordControl('clubIce');
+      // ...AND SO DOES THE CHAIN. A carom is a club hit delivered by a shark,
+      // so it arcs like any other. The gap is the FLIGHT's rather than a
+      // club's — the body is what is doing the hitting now, and the club that
+      // launched it may already be swinging somewhere else.
+      //
+      // Full strength rather than power-scaled, for the same reason the shove
+      // beside it is: a flight has no swing to read, and what it has instead
+      // is a whole body's momentum.
+      if (zap && (f.zapLeft ?? 0) <= 0) {
+        f.zapLeft = zap.cooldown;
+        arcChain(scene, other, zap.packet, enemiesList, hooks, zap.spec);
+      }
       // ...AND SO IS THE SHOVE. A carom is a club hit delivered by a shark, so
       // it knocks what it lands on off its line the way the swing that started
       // it did. Along the flight's own heading, which is the direction the
@@ -2080,6 +2164,7 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
   // to systems/elements.js. Neither is re-implemented here.
   const blast = clubBlast(Math.max(0, Math.floor(riders.boom ?? 0)));
   const ice = clubIce(Math.max(0, Math.floor(riders.ice ?? 0)));
+  const zap = clubZap(Math.max(0, Math.floor(riders.zap ?? 0)));
 
   // THE CLUBS LEAVE THE FINS. Done before the projectiles are spawned so the
   // sockets are already empty on the frame the throw is seen — a fin that
@@ -2145,6 +2230,12 @@ export function fireClubThrow(scene, power, level, clubLevel, velocity, originFo
       splashDamage: blast ? blast.damage : 0,
       splashRadius: blast ? blast.radius : 0,
       chill: ice,
+      // ...and the chain, the third rider described as a payload rather than
+      // fired from here. No per-club gap on this one: a thrown club is one
+      // object that hits once (it pierces, but each body is a separate arrival
+      // frames apart), so the thing `cooldown` exists to stop — four clubs
+      // chaining off one contact — cannot happen to it.
+      zap,
       // AND THE SHOVE, the third thing every club in the run carries. A payload
       // description like `chill` and `splashDamage` beside it — combat.js hands
       // it to applyKnockback along the shot's own heading, and this file never

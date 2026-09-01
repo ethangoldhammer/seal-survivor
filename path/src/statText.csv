@@ -12,65 +12,69 @@ speed,the gun,percent,projectile speed,,,,,,,,,
 leftFinRadiusMul,the gun,percent,left fin projectile size,,,,,,,,,"Flippers Up! — how much bigger the pebbles out of the LEFT flipper are. Renders as '+35% <label>'. Two or three words; it has to name the pebble AND say which side, because the right-hand row sits next to it on the same card once the second stack is taken. Seen on the level-up card and in the Upgrades tab."
 rightFinRadiusMul,the gun,percent,right fin projectile size,,,,,,,,,"The right-hand half of the pair above. Same shape, same length; the two read side by side as '+35% X, +35% Y' on a card that stacked twice, so they should differ only in the word for the side."
 flippersUpStacks,the gun,level,Flippers Up!,,,,,,,,,"NOT NEW COPY — this is the card's own name out of upgrades.csv, repeated here only so a card can never render the raw variable name. phraseAll drops a level stat that arrives beside real ones, and this one always does (the size multiplier moves on every stack), so it is not expected to appear on any card. It exists because 'not expected to' is not the same as 'cannot'."
+andreStacks,the gun,level,André 3000,,,,,,,,,"NOT NEW COPY — the card's own name out of upgrades.csv, repeated here for exactly the reason the row above it is, so a card can never render the raw variable name. The stat is a PARITY (odd stacks buy pierce, even ones spread) rather than an amount, and the thing it bought always moves beside it, so phraseAll drops it every time. It exists because ""not expected to appear"" is not the same as ""cannot""."
 leftFinElementLevel,the gun,level,Fix FX,,Fin FX,,,,,,,"Flippers Up! stack 3 and up: how deep the LEFT flipper's own element is. Two lines needed. `label` is what a deepening stack reads as ('+1 <label> levels'), two or three words naming the fin and its element. `unlock` is the whole clause the card that first lights that fin shows instead — the shape Sea Garlic and the Glow Up! cards use, a bare noun phrase with no verb in front of it, naming what the player just bought. The element itself is rolled per run, so neither line can name a specific one."
 rightFinElementLevel,the gun,level,Finx FX,,Fin FX,,,,,,,"The right-hand half of the pair above. Same two lines, same lengths; they differ only in the word for the side."
 multishot,the gun,count,projectile,,,,,,,,,
 multishotLevel,the gun,level,projectile,,,,,,,,,"Bookkeeping, not a card line. `multishot` beside it is the pellet count a player reads; this row exists because every stat an upgrade moves needs an entry, and it is deliberately given no `unlock` text so phraseAll drops it every time — the count row is always moving alongside it. Same word as that row on purpose; there is nothing new to write here."
 pierce,the gun,count,enemy,enemies,,,,,,,,"Reads as the tail of a sentence — ""Bullets pierce {effect}"" — because that is the shape the card has always had."
+latticeAmount,the gun,count,Lattice Sealant,Lattice Sealant,,,,,,,,
 projectileLifeMul,cross-cutting,percent,projectile lifetime,,,,,,,,,"André 3000's stat. Names how long everything the seal fires stays in the water — the card reads as a bare {effect}, so this label IS the card (""+25% <label>""). Two or three words, and it has to cover missiles and thrown shells as well as the gun, not just the pebbles."
-recoil,the gun,percent,recoil boost,,,,TRUE,,,,,"Sits at 0 by default, so recoil *= 1.3 measures as no change at all and {effect} correctly declines to claim one. The label is here for the day the base is raised off zero."
-projectileBonus,the gun,count,of everything you fire,,,,TRUE,,,TRUE,,"bare: the label is already a whole phrase (""of everything you fire""), so no noun is appended."
-orbiterBonus,the gun,count,of everything that circles you,,,,TRUE,,,TRUE,,
-strikeDamage,the strike,percent,strike damage,,,,TRUE,,,,,
-strikeChainMul,the strike,percent,chain damage,,,,TRUE,,,,,
-strikeDashSpeed,the strike,percent,dash speed,,,,TRUE,,,,,
-strikeDashDuration,the strike,percent,dash length,,,,TRUE,,,,,
-strikeChargeTime,the strike,percent,charge speed,,,,TRUE,,TRUE,,,
-strikeChumRefill,the strike,flat,refill per chum,,,,TRUE,,,,TRUE,"percentOfOne: the stat is a fraction of a meter, so it reads better as a percentage of the thing it fills than as ""+0.15""."
-shrapnelCount,the strike,count,fragment,,,,TRUE,,,,,
-breachChainLevel,the strike,count,link per breach,,,,TRUE,,,,,
-aoeMul,cross-cutting,percent,"blast, aura and wave size",,,,TRUE,,,,,
-targetingMul,cross-cutting,percent,targeting range,,,,TRUE,,,,,
-companionScale,cross-cutting,percent,companion size,,,,TRUE,,,,,
-companionDamageMul,cross-cutting,percent,companion damage,,,,TRUE,,,,,
-biolumLevel,cross-cutting,level,element,,an element on your shots and strike,,TRUE,,,,,
-bounceLevel,ricochet,level,ricochet,,a chaining ricochet shot,,TRUE,,,,,
-bounceFireRate,ricochet,percent,ricochet fire rate,,,,TRUE,,TRUE,,,
-bounceLife,ricochet,flat,ricochet lifespan,,,,TRUE,s,,,,
-bounceMaxBounces,ricochet,count,bounce,,,,TRUE,,,,,
-missileCount,counted,count,seeking mussel,,,,TRUE,,,,,
-shrimpCount,counted,count,orbiting shrimp,orbiting shrimp,,,TRUE,,,,,
+recoil,the gun,percent,recoil boost,,,,,,,,,"Sits at 0 by default, so recoil *= 1.3 measures as no change at all and {effect} correctly declines to claim one. The label is here for the day the base is raised off zero."
+finSpreadMul,the gun,percent,Spread,,,,,,,,,
+projectileBonus,the gun,count,of everything you fire,,,,,,,TRUE,,"bare: the label is already a whole phrase (""of everything you fire""), so no noun is appended."
+orbiterBonus,the gun,count,of everything that circles you,,,,,,,TRUE,,
+strikeDamage,the strike,percent,strike damage,,,,,,,,,
+strikeChainMul,the strike,percent,chain damage,,,,,,,,,
+strikeDashSpeed,the strike,percent,dash speed,,,,,,,,,
+strikeDashDuration,the strike,percent,dash distance,,,,,,,,,
+strikeChargeTime,the strike,percent,charge speed,,,,,,TRUE,,,
+strikeChumRefill,the strike,flat,refill per chum,,,,,,,,TRUE,"percentOfOne: the stat is a fraction of a meter, so it reads better as a percentage of the thing it fills than as ""+0.15""."
+shrapnelCount,the strike,count,bone fragment,,,,,,,,,
+breachChainLevel,the strike,count,link per breach,,,,,,,,,
+aoeMul,cross-cutting,percent,"blast, aura and wave size",,,,,,,,,
+targetingMul,cross-cutting,percent,targeting range,,,,,,,,,
+companionScale,cross-cutting,percent,buddy size,,,,,,,,,
+companionDamageMul,cross-cutting,percent,buddy damage,,,,,,,,,
+biolumLevel,cross-cutting,level,element,,an element on your shots and strike,,,,,,,
+bounceLevel,ricochet,level,bouncher level,,a chaining ricochet shot,,,,,,,
+bounceFireRate,ricochet,percent,bouncer rate,,,,,,TRUE,,,
+bounceLife,ricochet,flat,bouncer lifespan,,,,,s,,,,
+bounceMaxBounces,ricochet,count,bounce,,,,,,,,,
+missileCount,counted,count,heat-seeking mussel,,,,,,,,,
+shrimpCount,counted,count,orbiting shrimp,orbiting shrimps,,,,,,,,
 shrimpLevel,counted,level,orbiting shrimp,orbiting shrimp,,,,,,,,"Bookkeeping, not a card line — see the note on multishotLevel. `shrimpCount` is the row a player reads; this one is dropped by phraseAll on every card because it carries no `unlock`."
-scallopCount,counted,count,wild scallop,,,,TRUE,,,,,
-garlicLevel,,level,sea garlic,,a garlicky aura,,TRUE,,,,,
-eelLevel,,level,electric eel,,chain lightning,,TRUE,,,,,
-laserEyesLevel,,level,laser eyes,,eye beams,,TRUE,,,,,
-bubbleJetLevel,,level,[DRAFT] bubble jet,,[DRAFT] a bubble jet,,,,,,,"The stat name the card falls back to, and what the FIRST stack reads as (`unlock`). Two or three words each; the unlock line is the one a player sees the very first time the card is offered, so it has to say a new weapon has arrived rather than that a number went up."
-starfishLevel,,level,starfish,,starfish projectiles,,TRUE,,,,,
-seagullLevel,,level,seagull,,homing dive-bombers,,TRUE,,,,,
-belugaLevel,,level,beluga,,an oxygen filled bubble that also traps baddies.,,TRUE,,,,,
-sealTeamLevel,,count,escort seal,,,,TRUE,,,,,
-bakalarLevel,,level,Bakalar's boat,,a net full of bombs,,TRUE,,,,,
-calamariLevel,,level,calamari ring,,rings of fried squid,,TRUE,,,,,
-dumboLevel,,level,dumbo octopus,,a charm on nearby enemies,,TRUE,,,,,
-harpLevel,,level,harp seal,,notes that charm the biggest enemy near you,,TRUE,,,,,
-oysterLevel,,level,oyster blaster,,bursting pearls,,TRUE,,,,,
-razorClamLevel,,level,razor clam,,x-tra sharp razor clam blades,,TRUE,,,,,
-octoGrabLevel,,level,octopus grabber,,"an octopus buddy that reels in fish, and pops them into chum for you, {player}",,TRUE,,,,,
-orcaLevel,,level,orca family,,3 orca buddies who will attack yachts and other orca opps.,,TRUE,,,,,
-dolphinPodLevel,,level,dolphin pod,,a pod of dolphins working the surface,,TRUE,,,,,"The card that raises this is a STUB — disabled in upgrades.csv, and no system reads the stat yet (see CONFIG.upgrades.dolphinPod). The label is here anyway because npm run test:text fails on a stat without one: the day the card is switched on, its {effect} has to render as English rather than as dolphinPodLevel."
-musselVolleyLevel,,level,mussel barrage,,"on perfect strike, launches a bearded barrage of mussel munitions",,TRUE,,,,,
-clubLevel,,level,club,,a club in your fin slot.,,TRUE,,,,,
-clubThrowLevel,,level,thrown club,,hurled homing clubs on a strike,,TRUE,,,,,
-clubBoomLevel,,level,club blast,,every club hit detonates,,TRUE,,,,,
-clubIceLevel,,level,club ice,,chill and freeze enemies,,TRUE,,,,,
-clubCount,the bouncer,count,club,,,,TRUE,,,,,"The Bouncer's four. Percentages rather than a level, because the card is a multiplier on a class rather than a level of anything — there is no ""club power 3"" to name, only the numbers it moved."
-clubDamageMul,the bouncer,percent,club damage,,,,TRUE,,,,,
-clubKnockMul,the bouncer,percent,club knockback,,,,TRUE,,,,,
-clubReachMul,the bouncer,percent,club reach,,,,TRUE,,,,,
-homingShotLevel,,level,sonar teeth,,"shots that seek, favouring the biggest body in reach",,TRUE,,,,,
-maneaterLevel,stack-counters,level,maneater,,every human eaten buffs your seal's damage.,,TRUE,,,,,"Counts stacks and nothing else, deliberately: what a stack is WORTH depends on a running total, which is not visible from inside apply(). See applyDamageScaling in stats.js. That makes `level` the honest kind — {effect} would otherwise have to invent a number, which is the exact failure the measured descriptions exist to prevent."
-ironLungLevel,stack-counters,level,iron lung,,oxygen fueled damage,,TRUE,,,,,"NEEDS YOUR WORDS. The old line was 'damage with your maximum oxygen' and the mechanic changed underneath it: the bonus now follows the CURRENT oxygen bar, so it is at its top on a fresh breath and bleeds to nothing by the time you have to surface. Widening the tank raises that ceiling and buys more seconds near it. This is the first-pick unlock line on the card — one short phrase, roughly 4-7 words, the length of the line it replaces. Counts stacks only; a measured number here would be a lie, same as maneater."
+scallopCount,counted,count,scallop,scallops,,,,,,,,
+garlicLevel,,level,sea garlic,,a garlicky aura,,,,,,,
+eelLevel,,level,electric eel,,chain lightning,,,,,,,
+laserEyesLevel,,level,laser eyes,,eye beams,,,,,,,
+bubbleJetLevel,,level,Bubble Beam,,Bubba's Bubble Beam,,,,,,,"The stat name the card falls back to, and what the FIRST stack reads as (`unlock`). Two or three words each; the unlock line is the one a player sees the very first time the card is offered, so it has to say a new weapon has arrived rather than that a number went up."
+starfishLevel,,level,starfish,,starfish projectiles,,,,,,,
+seagullLevel,,level,seagull,,gull buddies that hate crabs,,,,,,,
+belugaLevel,,level,beluga,,an oxygen filled bubble trap that also traps baddies.,,,,,,,
+sealTeamLevel,,count,escort seal,,a seal buddy,,,,,,,
+bakalarLevel,,level,Bakalar's bomb boat,,a net full of bombs,,,,,,,
+calamariLevel,,level,calamari ring,,rings of fried squid,,,,,,,
+dumboLevel,,level,dumbo octopus,,a charming lil' guy,,,,,,,
+harpLevel,,level,harp seal,,music to charm opps,,,,,,,
+oysterLevel,,level,oyster blaster,,bursting pearls,,,,,,,
+razorClamLevel,,level,razor clam,,x-tra sharp razor clam blades,,,,,,,
+octoGrabLevel,,level,octopus grabber,,"an octopus buddy that reels in fish, and pops them into chum for you",,,,,,,
+orcaLevel,,level,orca family,,orca buddies that hate yachts,,,,,,,
+dolphinPodLevel,,level,dolphin pod,,dolphins.,,,,,,,"The card that raises this is a STUB — disabled in upgrades.csv, and no system reads the stat yet (see CONFIG.upgrades.dolphinPod). The label is here anyway because npm run test:text fails on a stat without one: the day the card is switched on, its {effect} has to render as English rather than as dolphinPodLevel."
+musselVolleyLevel,,level,mussel barrage,,"on perfect strike, launches a bearded barrage of mussel munitions",,,,,,,
+clubLevel,,level,club,,a club in your fin slot.,,,,,,,
+clubThrowLevel,,level,thrown club,,hurled homing clubs on a strike,,,,,,,
+clubBoomLevel,,level,club blast,,explosive clubbing,,,,,,,
+clubIceLevel,,level,club ice,,chill your opps,,,,,,,
+clubZapLevel,,level,zap ,,Club Zapper,,,,,,,
+clubCount,the bouncer,count,club,,,,,,,,,"The Bouncer's four. Percentages rather than a level, because the card is a multiplier on a class rather than a level of anything — there is no ""club power 3"" to name, only the numbers it moved."
+clubDamageMul,the bouncer,percent,club damage,,,,,,,,,
+clubKnockMul,the bouncer,percent,club knockback,,,,,,,,,
+clubReachMul,the bouncer,percent,club reach,,,,,,,,,
+homingShotLevel,,level,homing,,"shots that seek, favouring the biggest body in reach",,,,,,,
+maneaterLevel,stack-counters,level,maneater,,every human eaten buffs your seal's damage.,,,,,,,"Counts stacks and nothing else, deliberately: what a stack is WORTH depends on a running total, which is not visible from inside apply(). See applyDamageScaling in stats.js. That makes `level` the honest kind — {effect} would otherwise have to invent a number, which is the exact failure the measured descriptions exist to prevent."
+ironLungLevel,stack-counters,level,Iron Lung,,oxygen fueled damage,,,,,,,
 bakalarBombDamage,bakalar's boat,flat,bomb damage,,,,,,,,,"What one voicemail bomb hits for. Reads as '+22 ___' on a hover tip beside the boat's other level numbers, so it wants to be short and to name the BOMB rather than the boat. Big Rigz is already folded into the figure."
 bakalarBlast,bakalar's boat,flat,blast radius,,,,,m,,,,"How wide the bomb goes off, in world units. Sits next to the damage on the same tip, so the two should not read as the same thing said twice. Splash Zone is folded in. Drop the unit if 'm' is wrong for this game's water."
 bakalarBombGap,bakalar's boat,flat,between bombs,,,,,s,TRUE,,,"Seconds between bomb drops while the boat is sailing. LOWER IS BETTER — the lower column is set, so a level that cuts it renders as a gain rather than a loss. Phrase it so '-0.32s ___' reads right."
@@ -88,6 +92,7 @@ eelChainRadius,electric eel,flat,reach,,,,,m,,,,How far a bolt will hop to find 
 calamariDamage,calamari ring,flat,dmg,,,,,,,,,What the shockwave hits for as it sweeps out.
 calamariRadius,calamari ring,flat,reach,,,,,m,,,,"How far the wave travels before it dies. The card's whole existence is its reach, so this is the row that sells it."
 calamariGap,calamari ring,flat,between waves,,,,,s,TRUE,,,"Seconds between pulses. LOWER IS BETTER — the column is set, so a level that cuts it reads as a gain. It hits a floor inside the cap and drops off the tip after that."
+orcaCount,orca family,count,orca,orcas,,,,,,,,"THE NOUN FOR ONE MEMBER OF THE POD, singular in `label` and plural in `plural` — the card renders it as ''+1 more orca'' on every pick and the hover tip as a count beside the damage rows. One or two words, lowercase, no article; it sits mid-sentence after a number. Seen on the Orca Family card every time it is offered, and in the tip for the whole run. ''orca'' is only the placeholder shape — whale, family member and anything else that reads as one animal of three are all open."
 orcaDamage,orca family,flat,strike damage,,,,,,,,,What one orca's charge hits for. Big Rigz is folded in.
 orcaGap,orca family,flat,between strikes,,,,,s,TRUE,,,Seconds before the pod attacks again. LOWER IS BETTER.
 orcaChargeSpeed,orca family,flat,charge speed,,,,,,,,,"How fast an orca crosses to its target. Last in the readout's order on purpose — beside damage and cadence it reads as flavour, so the four-row cap drops it first."
@@ -111,6 +116,9 @@ clubBoomDamage,boom boom club,flat,blast dmg,,,,,,,,,What the explosion on a clu
 clubBoomRadius,boom boom club,flat,blast radius,,,,,m,,,,How wide it goes off. Splash Zone widens it; the Bouncer deliberately does not.
 clubIceFreeze,cold snap,flat,freeze time,,,,,s,,,,"How long a body is frozen solid once enough hits have landed. The card deals no damage whatsoever, so this and the slow are the entire output."
 clubIceSlow,cold snap,flat,slow per hit,,,,,,,,TRUE,"How much each hit slows a body, as a share of its speed — percentOfOne is set, so 0.06 renders as +6%. Enough of them stack into the freeze above."
+clubZapDamage,[DRAFT] zappy club,flat,arc dmg,,,,,,,,,"What the FIRST body down the chain takes — a share of the swing (CONFIG.clubZap.share), so the Driftwood level, a damage roll and the Bouncer all move it. Every hop after this one is arcFalloff of the one before."
+clubZapArcs,[DRAFT] zappy club,count,hit,hits,,,,,,,,"How many bodies one chain may reach. A rounded step, so it shows dimmed and unchanged on the picks where it does not tick — and a hop that KILLS costs two, so a chain through a school reaches fewer than this."
+clubZapRange,[DRAFT] zappy club,flat,reach,,,,,m,,,,"How far each hop looks for its next body, from the LAST body rather than from the seal — so the chain walks outward through a crowd rather than staying inside one circle."
 clubThrowCount,hurler,count,clubs thrown,clubs thrown,,,,,,,,"How many go out on a FULL charge — a half charge throws fewer, and the card can only honestly promise what a committed release does. This is the whole of what Hurler's own level buys; what the clubs DO belongs to Driftwood."
 harpDamage,harp seal,flat,note damage,,,,,,,,,What one note hits for. Half of the card is the note that charms; the other half is the aura the charmed body drags around. This and 'charm length' are the note's two rows.
 harpCharm,harp seal,flat,charm time,,,,,s,,,,How long the biggest nearby enemy fights for you.
@@ -123,11 +131,11 @@ laserBeams,laser eyes,count,beam,beams,,,,,,,,How many beams fire at once. A ROU
 laserReach,laser eyes,flat,reach,,,,,m,,,,How far a beam cuts.
 laserGap,laser eyes,flat,between beams,,,,,s,TRUE,,,Seconds between firings. LOWER IS BETTER.
 laserBurn,laser eyes,flat,burn,,,,,,,,,"The lingering damage a cut leaves. Fifth in the order — the small rider, which is the row the four-row cap drops."
-jetDamage,bubble jet,flat,[DRAFT] stream damage,,,,,,,,,"What one TICK of the stream does — it hits ten times a second per body, so this number is small next to a bullet's and the label should not imply a single hit. Two or three words."
-jetHold,bubble jet,flat,[DRAFT] stream time,,,,,s,,,,"How long the stream stays open. WITH jetCool below, this is what the card actually sells — put it first in the reading order, and the two want labels that read as a pair."
-jetCool,bubble jet,flat,[DRAFT] between streams,,,,,s,TRUE,,,"Seconds of venting between streams. LOWER IS BETTER, which the `lower` column already handles — the label just has to make the direction obvious at a glance."
-jetReach,bubble jet,flat,[DRAFT] reach,,,,,m,,,,"How far the stream goes. Same shape as the laser's `reach` row above; it can borrow that word or not."
-jetWidth,bubble jet,flat,[DRAFT] stream width,,,,,,,,,"How thick the stream is, which is also its hit radius — a fatter one genuinely touches more. Last in the order: the small rider, and the row the four-row cap drops."
+jetDamage,bubble jet,flat,DPS,,,,,,,,,"What one TICK of the stream does — it hits ten times a second per body, so this number is small next to a bullet's and the label should not imply a single hit. Two or three words."
+jetHold,bubble jet,flat,time,,,,,s,,,,"How long the stream stays open. WITH jetCool below, this is what the card actually sells — put it first in the reading order, and the two want labels that read as a pair."
+jetCool,bubble jet,flat,frequency,,,,,s,TRUE,,,"Seconds of venting between streams. LOWER IS BETTER, which the `lower` column already handles — the label just has to make the direction obvious at a glance."
+jetReach,bubble jet,flat,distance,,,,,m,,,,"How far the stream goes. Same shape as the laser's `reach` row above; it can borrow that word or not."
+jetWidth,bubble jet,flat,phatness,,,,,,,,,"How thick the stream is, which is also its hit radius — a fatter one genuinely touches more. Last in the order: the small rider, and the row the four-row cap drops."
 oysterDamage,oyster blaster,flat,dmg,,,,,,,,,What the pearl itself hits for before it bursts.
 oysterBomblets,oyster blaster,count,popping boba,bobas,,,,,,,,"How many glowing bomblets a burst throws. A rounded step, so it shows dimmed on the picks where it does not tick."
 oysterBlast,oyster blaster,flat,boba size,,,,,m,,,,How wide each bomblet goes off.

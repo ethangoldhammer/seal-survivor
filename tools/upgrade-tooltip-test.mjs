@@ -193,19 +193,28 @@ const tipName = () => fx()?.querySelector('.sv-uptip-name')?.textContent ?? null
 // ---------------------------------------------------------------------------
 section('A card whose face already measures itself adds no "next" row');
 {
-  // bounceShot's desc is "All balls, no pit. {effect}" — the flavour AND the
-  // measurement, on the card. There is nothing left for a tooltip to say about
-  // the stack being offered, and saying it anyway is the failure the dedupe
-  // exists to stop: a box that repeats the line four pixels above it teaches
-  // the player to stop reading the box on the cards where it is the only
-  // information there is.
-  const [card] = deal('bounceShot');
+  // WHICH CARD IS NOT THE POINT — carrying `{effect}` is. This named
+  // `bounceShot` outright, and when that desc was rewritten to flavour alone
+  // the section failed for a reason that has nothing to do with the dedupe it
+  // tests: a card is allowed to stop measuring itself on its face, and nine of
+  // the fifty-five descs deliberately do.
+  //
+  // So it picks the first card that DOES carry the token. The behaviour under
+  // test is unchanged: a face that already states the measurement leaves the
+  // tooltip nothing to say about the stack being offered, and saying it anyway
+  // is a box repeating the line four pixels above it, which teaches the player
+  // to stop reading the box on the cards where it is the only information there
+  // is.
+  const measuring = CONFIG.upgrades.filter((u) => /\{effect\}/.test(u.desc ?? '')).map((u) => u.id);
+  check('some card still measures itself on its face', measuring.length > 0,
+    `${measuring.length} of ${CONFIG.upgrades.length} descs carry {effect}`);
+  const [card] = deal(measuring[0]);
   // Case-insensitively: expandDesc sentence-cases the fragment when it lands
   // after a full stop, which is a difference in the CARD's typography and not
   // in what it says. The dedupe in cardEffect compares the same way.
   const face = card.querySelector('.sv-card-desc').textContent.toLowerCase();
-  check('the desc really does carry the measurement',
-    face.includes(effectOf('bounceShot').toLowerCase()), face);
+  check(`${measuring[0]}: the desc really does carry the measurement`,
+    face.includes(effectOf(measuring[0]).toLowerCase()), face);
   pointerEnter(card);
   check('...so a first pick shows no tooltip at all', shown() === null, shown() ?? '');
 }
@@ -258,8 +267,20 @@ section('The two rows a card face cannot carry');
   pointerEnter(card);
   check('an owned card shows a tooltip even though its face measures itself',
     !!shown(), shown() ?? 'nothing shown');
-  check('...with no "next" row, which the face still carries',
-    tipRow('next') === null, tipRow('next') ?? '');
+  // CONDITIONAL ON THE FACE, because the dedupe is. This block needs
+  // `bounceShot` specifically — it is the card whose damage books against the
+  // `ricochet` tag — and that card's desc has since been rewritten to flavour
+  // alone. With no `{effect}` on the face there is nothing to dedupe against,
+  // so a "next" row is correct rather than a repeat. Asserted both ways so the
+  // check still means something whichever way the desc is written.
+  const faceMeasures = /\{effect\}/.test(byId.get('bounceShot')?.desc ?? '');
+  if (faceMeasures) {
+    check('...with no "next" row, which the face still carries',
+      tipRow('next') === null, tipRow('next') ?? '');
+  } else {
+    check('...with a "next" row, because the face no longer measures itself',
+      tipRow('next') !== null, tipRow('next') ?? 'no row');
+  }
   check('...a running total for the one stack held',
     tipRow('total') === sentenceCase(phraseAll(measureTotal(byId.get('bounceShot'), 1), 1)),
     tipRow('total') ?? 'no row');

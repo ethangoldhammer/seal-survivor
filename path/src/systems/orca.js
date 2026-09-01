@@ -29,10 +29,18 @@ import { orcaLevelStats } from '../levelStats.js';
 // with a clear surface and no sharks left is not idle, not so it can degenerate
 // into a third seal team mopping up minnows.
 //
-// The pod is fixed at `count` and stacks make them hit harder and hunt more
-// often, rather than adding orcas. Splitting three across three levels would
-// mean the first card bought one lone orca — and a lone orca is not the thing
-// the card is promising.
+// ONE WHALE PER STACK, up to `count`. The card stacks three times and each one
+// puts another animal in the water — a lone orca, then a pair, then the family.
+// The pod used to arrive whole on the first pick with five further stacks
+// spending themselves on damage, which meant the card's own name was delivered
+// entirely by its FIRST pick and every one after it was a number. A body you
+// can see joining the line is the thing being bought.
+//
+// `count` is the ceiling and `orcaFamily.maxStacks` is the card: the two have
+// to be the same number or the pod either finishes early or never completes,
+// and tools/orca-pod-test.mjs fails if they drift apart. Damage and cadence
+// still climb per level on top of the body — see orcaLevelStats — so the third
+// pick is a whale AND a sharper pod, not either one alone.
 //
 // THE THREE-STATE LOOP, and why it is three states and not two.
 //
@@ -90,7 +98,25 @@ export function podStats(level) {
   // levelStats.js owns the curve — one implementation, shared with the hover
   // tip that quotes it. Big Rigz is folded in there.
   const s = orcaLevelStats(level, player.stats);
-  return { damage: s.orcaDamage, interval: s.orcaGap, chargeSpeed: s.orcaChargeSpeed };
+  return {
+    count: s.orcaCount, damage: s.orcaDamage,
+    interval: s.orcaGap, chargeSpeed: s.orcaChargeSpeed,
+  };
+}
+
+/**
+ * HOW MANY ORCAS AT THIS LEVEL — the count is the level, capped at `count`.
+ *
+ * Read out of levelStats.js through podStats rather than worked out again here,
+ * which is the same rule the damage curve follows and for the same reason: the
+ * card quotes that file, so a pod sized by a second expression could grow on a
+ * curve the readout does not know about. Level 0 is the only case this owns —
+ * the card not taken at all, which levelStats clamps to 1 because a per-level
+ * readout is only ever asked about levels a run is holding.
+ */
+export function podSize(level) {
+  if (level <= 0) return 0;
+  return podStats(level).count;
 }
 
 // A FAMILY, WHICH IS WHAT THE CARD IS CALLED. The pod used to be three copies
@@ -101,9 +127,12 @@ export function podStats(level) {
 //
 // KEYED BY SLOT and not rolled, so the pod is stable: the same card always
 // buys the same animals in the same order, and a player who has learned that
-// the little one is the calf is not told otherwise on the next run. Slots past
-// the third repeat the adults — the card stacks to six, and a pod of six
-// calves would be a different joke than the one intended.
+// the little one is the calf is not told otherwise on the next run. It also
+// decides what ONE stack looks like now that the stacks arrive one at a time —
+// the bull first, then the cow, then the calf, which is a family assembling
+// rather than a queue of strangers. The fallback past the third slot is kept
+// for a `count` raised above three: it repeats the adults, because a pod of
+// six calves would be a different joke than the one intended.
 const POD_BODIES = ['orcaFriendBull', 'orcaFriendCow', 'orcaFriendCalf'];
 function podAsset(slot) {
   return POD_BODIES[slot] ?? POD_BODIES[slot % 2]; // bull, cow, bull, cow, ...
@@ -546,7 +575,11 @@ export function updateOrcaPod(dt, scene, playerPos, level, enemiesList, hooks = 
   if (breakTimer > 0) breakTimer -= dt;
   updateLead(dt);
 
-  resize(scene, c.count, playerPos);
+  // The pod GROWS with the card: one whale per stack, capped at `count`. resize
+  // adds the new body at the back of the line and places it on its station
+  // straight away, so a pick is an orca arriving rather than one popping in at
+  // the world origin and swimming over.
+  resize(scene, s.count, playerPos);
 
   const point = new THREE.Vector3();
   // The seal's own velocity, which the pod matches while cruising. Read once

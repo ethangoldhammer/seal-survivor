@@ -42,7 +42,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { boats } from '../path/src/systems/boats.js';
 import { player } from '../path/src/entities/player.js';
-import { updateOrcaPod, resetOrcaPod, orcaPodDebug, podStats } from '../path/src/systems/orca.js';
+import { updateOrcaPod, resetOrcaPod, orcaPodDebug, podStats, podSize } from '../path/src/systems/orca.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -150,6 +150,48 @@ check('an overshoot is small next to the hit it missed',
 check('the leash sits just outside the hunt range',
   c.leash > c.huntRange && c.leash < c.huntRange * 2,
   `leash ${c.leash}, hunt ${c.huntRange}`);
+
+// ---------------------------------------------------------------------------
+section('ONE WHALE PER STACK');
+
+// The card buys a body now — three stacks, one orca each — instead of handing
+// over the whole pod on the first pick. Two numbers have to agree for that to
+// land, and they live in different files: CONFIG.orca.count sizes the pod and
+// orcaFamily.maxStacks decides how many times the card may be taken. Below the
+// count and the family never completes; above it and the last picks buy
+// nothing you can see, which is the bug the change was undoing.
+const card = CONFIG.upgrades.find((u) => u.id === 'orcaFamily');
+check('the card stacks exactly as many times as there are orcas',
+  card?.maxStacks === c.count, `${card?.maxStacks} stacks, pod of ${c.count}`);
+
+// And the pod really is sized by the level rather than by the config alone —
+// the first pick used to build all three, which no assertion about the numbers
+// above can see.
+reset();
+{
+  const seal = new THREE.Vector3();
+  const sizes = [];
+  for (let level = 1; level <= c.count + 2; level++) {
+    updateOrcaPod(dt, scene, seal, level, [], {});
+    sizes.push(orcaPodDebug().length);
+  }
+  const wanted = [];
+  for (let level = 1; level <= c.count + 2; level++) wanted.push(Math.min(level, c.count));
+  check('a stack adds an orca, and the pod stops at the full family',
+    sizes.join(',') === wanted.join(','), `${sizes.join(',')} (wanted ${wanted.join(',')})`);
+  check('podSize agrees with the pod it sizes',
+    podSize(1) === 1 && podSize(c.count + 5) === c.count && podSize(0) === 0,
+    `${podSize(1)}, ${podSize(c.count + 5)}, ${podSize(0)}`);
+
+  // The card with no stacks at all is not a pod of one. updateOrcaPod's own
+  // early-out owns this, and it is the branch a `Math.max(1, level)` in the
+  // level curve would quietly break — orcaLevelStats clamps to level 1 because
+  // a per-level readout is only asked about levels a run holds, and the pod
+  // must not inherit that clamp.
+  updateOrcaPod(dt, scene, seal, 0, [], {});
+  check('a run that never took the card has no orcas', orcaPodDebug().length === 0,
+    `${orcaPodDebug().length} in the water`);
+}
 
 // ---------------------------------------------------------------------------
 section('SWIMMING WITH THE SEAL');

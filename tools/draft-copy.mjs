@@ -25,6 +25,29 @@ export const DRAFT_RE = new RegExp(DRAFT_PATTERN, 'i');
 
 export const isDraft = (value) => DRAFT_RE.test(String(value ?? ''));
 
+// A SECOND, INDEPENDENT DETECTOR — read off the BRIEF rather than off the copy.
+//
+// The lorem rule exists because a plausible placeholder is exactly what
+// survives a review and ships by accident, and that is not a hypothetical: two
+// `shot` leads went in as "Shot Down" and "Sealed with a Kiss", with the brief
+// written correctly in `notes` and the word "lorem" nowhere but the row id.
+// They read as finished copy, the gate saw nothing, and they were one green
+// suite away from shipping in a voice that is not Ethan's.
+//
+// So a brief that opens with NEEDS YOUR WORDS flags its row on its own. It
+// cannot be defeated by writing convincing English in the copy cell, because it
+// never looks at the copy cell — and it clears the same way everything else
+// here does: when the line is written, the brief goes with it.
+// As a PATTERN as well as a regex, because the CSV editor rebuilds it in the
+// browser — the same handover `DRAFT_PATTERN` already gets. One definition, so
+// the amber stripe in the editor and the suite that blocks the deploy cannot
+// come to different conclusions about the same row.
+export const BRIEF_PATTERN = '^\\s*NEEDS YOUR WORDS\\b';
+
+export const BRIEF_RE = new RegExp(BRIEF_PATTERN, 'i');
+
+export const hasOpenBrief = (notes) => BRIEF_RE.test(String(notes ?? ''));
+
 // The columns a player actually reads, by bare filename.
 //
 // `notes` is deliberately absent from every one of these: notes is where the
@@ -35,7 +58,11 @@ export const COPY_COLUMNS = {
   // HUD and in the score screen's ledger for as long as the card is held, so a
   // player reads it. It was missing here until André 3000 stopped piercing
   // anything and its "Piercing Pebbles" went stale with nothing able to say so.
-  'upgrades.csv': ['name', 'desc', 'weaponName'],
+  // ...and `weaponNameLaser` beside it, which is the same string on the other
+  // loadout. Listed the moment the column existed rather than the first time a
+  // stale line was noticed in it — which is how `weaponName` got here, one
+  // gone-stale name too late.
+  'upgrades.csv': ['name', 'desc', 'weaponName', 'weaponNameLaser'],
   'tips.csv': ['label', 'desc'],
   'callouts.csv': ['text', 'textTouch', 'textPad'],
   'epitaphs.csv': ['text'],
@@ -48,6 +75,12 @@ export const COPY_COLUMNS = {
   // Every word {effect} can say. `template` is prose too — it is the shape of
   // the phrase, not a format string the game depends on.
   'statText.csv': ['label', 'plural', 'unlock', 'template'],
+  // The screen labels that belong to no other table — a row heading over a
+  // measurement, an option name in the pause menu, the word after a kill
+  // count. They were string constants in four .js files, which meant the one
+  // place they could be written was a source file and the editor's "needs your
+  // words" chip could not see them. See path/src/uiTextTable.js.
+  'uiText.csv': ['text'],
 };
 
 // Is this column one a player reads? Accepts a bare name or a repo path.

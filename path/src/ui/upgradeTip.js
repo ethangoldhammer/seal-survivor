@@ -44,28 +44,28 @@ import { levelChanges, levelValues } from '../levelStats.js';
 import { runTotals, stacksHeld } from '../systems/playtest.js';
 import { sourceForUpgrade, sourceLabel } from '../systems/playtestAnalysis.js';
 import { settings } from '../systems/settings.js';
+import { uiText } from '../uiTextTable.js';
 
 // ---------------------------------------------------------------------------
 // THE WORDS THAT ARE NOT MEASUREMENTS
 //
 // Everything else in a tip is either Ethan's copy out of upgrades.csv or a
-// number out of a measurement. These six are the tip's own chrome — the labels
-// that say what each row IS — and they are staged, not written. See CLAUDE.md:
-// Claude does not write player-facing prose for this game, and a plausible
-// placeholder is exactly what survives a review and ships by accident.
-//
-// The briefs are in design/COPY-TODO.md. npm run test:copy lists them and
-// blocks a ship until they are gone.
+// number out of a measurement. These eight are the tip's own chrome — the
+// labels that say what each row IS — and they are lines somebody has to write,
+// so they live in a table like every other line somebody has to write:
+// uiText.csv, with the brief for each one in its `notes` cell. They were
+// string constants here until the editor's "needs your words" chip could not
+// see them, which is how a staged label stays staged.
 // ---------------------------------------------------------------------------
 const TIP_COPY = {
-  next: '[DRAFT] Next',        // the row headed "what the stack you would take does"
-  total: '[DRAFT] Now',        // the row headed "what the stacks you hold add up to"
-  run: '[DRAFT] This run',     // the row headed "what it has actually done"
-  dealt: '[DRAFT] dealt',      // unit after a damage figure
-  kills: '[DRAFT] kills',      // unit after a kill count
-  fired: '[DRAFT] fired',      // unit after a count of times a control ability went off
-  capped: '[DRAFT] Maxed',     // shown instead of the "next" row when a stack is at its cap
-  quiet: '[DRAFT] Nothing yet', // shown in the "this run" row when the ledger has a zero
+  next: uiText('tipNext'),      // the row headed "what the stack you would take does"
+  total: uiText('tipTotal'),    // the row headed "what the stacks you hold add up to"
+  run: uiText('tipRun'),        // the row headed "what it has actually done"
+  dealt: uiText('tipDealt'),    // unit after a damage figure
+  kills: uiText('tipKills'),    // unit after a kill count
+  fired: uiText('tipFired'),    // unit after a count of times a control ability went off
+  capped: uiText('tipCapped'),  // shown instead of the "next" row when a stack is at its cap
+  quiet: uiText('tipQuiet'),    // shown in the "this run" row when the ledger has a zero
 };
 
 /** How much a tip may say. 'off' | 'short' | 'full'. */

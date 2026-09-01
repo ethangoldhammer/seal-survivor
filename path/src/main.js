@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel, chumHealRamp } from './config.js';
-import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier, assetCensusItems, visualPoolCount } from './assets.js';
+import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier, assetShapeRadius, assetCensusItems, visualPoolCount } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
@@ -23,7 +23,7 @@ import { FLIPPER_SIDES } from './flipperSide.js';
 import { updateFinLights, resetFinLights, finLightColor } from './systems/finLights.js';
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
-import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal } from './entities/enemies.js';
 import { noteBaitLoss } from './systems/baitBall.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
 import { updateAttractorStorm, resetAttractorStorm } from './systems/attractorStorm.js';
@@ -31,6 +31,8 @@ import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.j
 import { noteShove, updateSlam, resetSlam } from './systems/slam.js';
 import { updateDodge, resetDodge } from './systems/dodge.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
+import { isLaser, latticePayload } from './loadout.js';
+import { LASER_ASSET, applyBoltLook, boltColor, updateBoltGlow, disposeFinLaser } from './systems/finLaser.js';
 import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks, bubbleOrbs } from './entities/pickups.js';
 import { stepBubbleSpawner, rollBubbleSpawnDelay } from './systems/oxygenBubble.js';
 import { levelOrbColor } from './systems/levelOrb.js';
@@ -45,6 +47,10 @@ import { createPost } from './systems/post.js';
 import { loadNoteGlyphs } from './systems/noteStorm.js';
 import { warmShaders, warmPipeline } from './systems/shaderWarmup.js';
 import { installBossWarmup } from './systems/bossWarmup.js';
+import {
+  installLevelUpWarmup, beginLevelUpWarmup, tickLevelUpWarmup,
+  cancelLevelUpWarmup, resetLevelUpWarmup,
+} from './systems/levelUpWarmup.js';
 import {
   perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary, perfPhase, perfMark,
   perfFrameJs,
@@ -95,7 +101,7 @@ import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from 
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { initMusselShells, updateMusselShells, clearMusselShells, spawnMusselShell } from './systems/musselShell.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
-import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint, drainHotSpotChum } from './systems/bossHotSpots.js';
+import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint, drainHotSpotChum, drainHotSpotShoves } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
 import { initGore, updateGore, resetGore } from './systems/gore.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
@@ -136,15 +142,18 @@ import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './
 import { initBossLight, updateBossLight, resetBossLight } from './systems/bossLight.js';
 import { resetBossDissolve } from './systems/bossDissolve.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
-import { initCrashLog, mark as crumb } from './systems/crashLog.js';
+import { initCrashLog, mark as crumb, noteError } from './systems/crashLog.js';
+import { guardFrame } from './systems/frameGuard.js';
 import { censusReport, censusLine } from './systems/memoryCensus.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { updateBubbleJet, updateJets, resetBubbleJet, setJetStats } from './systems/bubbleJet.js';
+import { setJetBedsMuted } from './systems/jetBed.js';
 import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
+import { triggerClap, updateClap } from './systems/clap.js';
 import { captureBossShot, resetBossShot, bossShot } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
 import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateTitleSeal } from './systems/titleSeal.js';
@@ -401,6 +410,9 @@ let lastCrumbAt = -1e9;
 let lastMemAt = -1e9;
 // Frames at the last heartbeat — the difference is what says the loop is alive.
 let lastCrumbFrames = 0;
+// Consecutive heartbeats found paused with no screen up — see the strand check
+// in animate(). Zero on any tick that is honestly held.
+let strandedBeats = 0;
 // Every frame animate() completes. Nothing else counts them: perfLog works in
 // times, not in frames, and a hang is a question about frames.
 let frameCount = 0;
@@ -588,6 +600,11 @@ async function boot() {
   // cannot fail, and a warm-up that was skipped because compileAsync threw is
   // exactly the run that most wants the boss one working.
   installBossWarmup({ post, scene: world.scene, camera: world.camera });
+  // The THIRD warm-up, and it spends the other hush the game already has: the
+  // seconds a level-up menu is open. See systems/levelUpWarmup.js — a companion
+  // card builds its body on the first live frame after the pick, which is the
+  // one frame the player is waiting on.
+  installLevelUpWarmup({ post, scene: world.scene, camera: world.camera });
   loading.setProgress(1);
   loading.remove();
 
@@ -1460,6 +1477,11 @@ function startGame() {
   // last one's telegraph would be the panel lying about what is in the water.
   resetAttractorStorm(world.scene);
   clearProjectileTrails(world.scene);
+  // The bolt materials, forgotten rather than disposed — see the cache note in
+  // systems/finLaser.js. Beside the trails because it is the same argument
+  // about the same kind of object: a shared material released between runs is
+  // a shader linked from source again on the first shot of the next one.
+  disposeFinLaser();
   // The breach trail's ribbons and the air ramp they read. Both are per-run:
   // a trail left recording from the last run would draw a stripe from wherever
   // that seal died to wherever this one starts, and a stale ramp would hand
@@ -1513,6 +1535,10 @@ function startGame() {
   // started from a menu, but a level-up left half-dilated by a reload or a
   // restart would hand this one a world running at half speed.
   resetLevelUpTime();
+  // The warm-up's ledger with it. Nothing is re-uploaded by this — the
+  // templates and their GPU residency outlive a restart — it is only the record
+  // of what this run has paid for starting out honest.
+  resetLevelUpWarmup();
   // And for the third: a boss kill shot interrupted by a restart (the score
   // screen is reachable from inside one, since gameplay stays live through it)
   // would hand the new run a dilated clock and a frame still clamped to where
@@ -1657,6 +1683,18 @@ function startGame() {
   bindHiveTips(false);
   gameState.time = 0;
   gameState.difficulty = 0;
+  // THE OPENING SHOAL. A few harmless fish already in the water, scattered
+  // around the seal, so the run's first seconds have something to eat in them
+  // and the boost meter — which opens dead, and which only chum fills — can be
+  // loaded before the spawner's first tick lands. See CONFIG.spawn.opening.
+  //
+  // HERE, and the position in this function is the whole of what makes it
+  // work: after resetEnemies, which throws away the list this would otherwise
+  // be added to; after resetPlayer, because the scatter is centred on the seal
+  // and a shoal placed before it would be arranged around wherever the LAST
+  // run ended; and beside the difficulty reset, because it spawns at
+  // difficulty 0 and this is the line that makes that true.
+  spawnOpeningShoal(world.scene);
   // Cleared with the rest of the run, or a seal that swims into a new run and
   // dies to something unclassified would be handed the LAST run's punchline.
   lastDamageSource = null;
@@ -2085,11 +2123,47 @@ function gainXP(amount, spilled = false) {
     pendingLevels += 1;
     feedback('levelUp', { x: player.mesh.position.x, y: player.mesh.position.y });
   }
-  // `running` as well as `paused`: death is filed mid-frame, from inside
-  // resolveCombat, and the abilities that run after it in the same tick can
-  // still land a kill worth a level. Without this the upgrade card opens over
-  // the death dive and sits there for the whole descent.
-  if (pendingLevels > 0 && !gameState.paused && gameState.running) openLevelUp();
+  // Asked rather than opened — see tryOpenLevelUp, which owns every rule about
+  // whether the cards are allowed on screen yet. Still called from here so a
+  // level that is clear to open does so on the frame the xp landed rather than
+  // waiting for the next one.
+  tryOpenLevelUp();
+}
+
+/**
+ * OPEN THE CARDS IF NOTHING ELSE OWNS THE SCREEN — the one place that decides.
+ *
+ * `pendingLevels` is a queue, not a flag: it is raised by gainXP and spent by
+ * applyLevelChoice, and it can sit at one or more for as long as it takes for
+ * the screen to come free. Called from gainXP (so a clear level opens on its
+ * own frame) and once per frame from animate (so a held one opens the moment
+ * whatever was holding it lets go).
+ *
+ * THE QUEUE, in order of who owns the screen — the same order updateBossDividend
+ * waits in, and for the same reason.
+ *
+ * `bossKillState.active` IS THE ONE THIS EXISTS FOR. The boss dies, its death
+ * pays out enough xp to level, and the level-up cards used to open on that
+ * frame — over the top of the kill shot, with the polaroid still crossing the
+ * screen behind them. The whole ceremony (the held water, the shutter, the
+ * print flying to the corner) is a thing to be watched, so the cards wait for
+ * it to finish and the run gets the two moments in order rather than stacked.
+ *
+ * `running` as well as `paused`: death is filed mid-frame, from inside
+ * resolveCombat, and the abilities that run after it in the same tick can still
+ * land a kill worth a level. Without that the upgrade card opens over the death
+ * dive and sits there for the whole descent.
+ *
+ * `levelUpState.active` is deliberately NOT in here. openLevelUp already knows
+ * what to do with a second card from the same batch, and the state stays true
+ * through the restore ramp after the last pick — a level earned on those live
+ * frames must bring the cards straight back, not queue behind them.
+ */
+function tryOpenLevelUp() {
+  if (pendingLevels <= 0) return;
+  if (!gameState.running || gameState.paused) return;
+  if (bossKillState.active || hiveRewardActive()) return;
+  openLevelUp();
 }
 
 /**
@@ -2126,6 +2200,14 @@ function openLevelUp() {
   // (systems/levelUpTime.js owns the clock it moves on) and the idle mixers,
   // which are ticked below in animate.
   gameState.paused = true;
+  // START PAYING FOR THE PICK NOW. Every companion card builds its body on the
+  // first live frame after the choice, because the systems that size those
+  // rings live inside the gate the line above just shut — so the clone, the
+  // upload and the compile all land on the frame the game is supposed to come
+  // back. The menu is a hush of exactly the shape systems/bossWarmup.js already
+  // spends before an arrival; this spends it, one step per frame, and is a
+  // no-op from the second level-up on.
+  beginLevelUpWarmup();
   // Muffle the mix and queue the upgrade loop — it takes over at the next
   // loop boundary rather than cutting the current one off mid-phrase.
   duckForUpgrade();
@@ -2197,6 +2279,11 @@ function applyLevelChoice(choice) {
   if (pendingLevels > 0) {
     openLevelUp();
   } else {
+    // WHATEVER IS LEFT IN THE QUEUE IS ABANDONED, on the frame the run comes
+    // back. A warm-up exists to keep work off the live frames, so it must never
+    // be the thing adding a step to one — a menu closed before the queue
+    // drained picks with what it got, and the next level-up finishes the rest.
+    cancelLevelUpWarmup();
     gameState.paused = false;
     sweepOpen(); // filter opens back up, main loop returns on the next boundary
     // The run is live again from this frame, in slow motion, and the world
@@ -2781,8 +2868,24 @@ function processPendingSplashes() {
  * subtraction would have been a second, quieter way to lose hp — one that
  * skipped the playtest accounting, the hit flash, the tail impulse and the
  * death check. Anything that hurts the seal should come through here.
+ *
+ * `iFrames` lets a source ask for a longer window than the standard one. It is
+ * folded in with Math.max, so it can only ever lengthen — see the block below.
+ *
+ * RETURNS WHAT IT ACTUALLY BILLED — 0 for a blow the i-frame window refused or
+ * a boss ceiling trimmed to nothing, and the trimmed figure otherwise. Almost
+ * every caller ignores it, and should: a source that fired is done, and asking
+ * whether it landed is how a system starts second-guessing the funnel.
+ *
+ * The exception is a source that has to SPEND SOMETHING to swing. A barracuda's
+ * bite clock (see `contactBite` in systems/combat.js) is reset by the bite, and
+ * resetting it on a bite that was refused is what put a whole pack into
+ * lockstep: five fish whose clocks expired on the same frame all paid for the
+ * one bite that landed, and then all reset together, forever — five animals
+ * billing exactly what one of them did. They have to keep asking until one of
+ * them is the one that gets through.
  */
-function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
+function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames = 0) {
   // ---------------------------------------------------------------------------
   // THE I-FRAME WINDOW, and the one place it is spent. See
   // CONFIG.player.hitIFrames for the argument; the short version is that this
@@ -2809,9 +2912,14 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
   // Callers opt IN by naming the channel, so a damage source added tomorrow
   // gets the old behaviour rather than a silent i-frame it did not ask for.
   if (channel === 'strike') {
-    if (player.invuln > 0) return;
+    if (player.invuln > 0) return 0;
+    // `iFrames` is a source asking for a LONGER window than the standard one —
+    // a contact bite does, because the pack it comes from gives no tell (see
+    // CONFIG.player.biteIFrames). Inside the same Math.max as everything else,
+    // which is the whole safety property: a caller can lengthen the seal's only
+    // defence and can never shorten it, whatever it passes.
     player.invuln = Math.max(
-      CONFIG.player.hitIFrames ?? 0, player.stats?.invulnAfterHit ?? 0,
+      CONFIG.player.hitIFrames ?? 0, player.stats?.invulnAfterHit ?? 0, iFrames ?? 0,
     );
   }
   // THE ONE PLACE EVERY POINT OF DAMAGE ARRIVES — contact, shots, perks,
@@ -2831,7 +2939,7 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
   // actually took. Filing the uncapped figure would leave every incoming-damage
   // reading in the report describing a game nobody played.
   dmg = capBossDamage(dmg, source, player.stats.maxHp, gameState.time, channel);
-  if (!(dmg > 0)) return;
+  if (!(dmg > 0)) return 0;
   playtest.recordPlayerDamage(dmg, source);
   lastDamageSource = source;
   // AND WHO IT WAS, if it was a boss. Every boss source is either the
@@ -2903,6 +3011,7 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack') {
     }
   }
   if (player.hp <= 0 && !deathState.active) killPlayer();
+  return dmg;
 }
 
 /**
@@ -3860,6 +3969,14 @@ function fire() {
   const s = player.stats;
   const fireRate = shotInterval();
   const shotCount = volleyShots();
+  // WHICH GUN THIS RUN ROLLED. Read once for the volley — every pellet in it is
+  // the same weapon — and it forks exactly four things: the body, the flight,
+  // the fan and the payload. Everything else below is untouched, which is the
+  // point: the cadence, the flipper alternation, the per-fin size and element,
+  // the recoil, the muzzle flash and the ledger are all the GUN, and a loadout
+  // that had its own copy of any of them would be a second gun to keep in step.
+  const laser = isLaser(s.loadout);
+  const lc = CONFIG.finLaser ?? {};
 
   const dir = input.aim.clone().normalize();
   // `shotCount` is the volley's WHOLE pellet count, across every flipper — not
@@ -3877,7 +3994,13 @@ function fire() {
   // Pellets sharing one tick get the tiny per-fin offset; pellets on ticks of
   // their own are already separated in TIME and need none, and a volley with
   // no limbs to walk falls back to the normal spread so it still fans.
-  const fan = origins > 1 ? CONFIG.weapon.finSpread : s.spread;
+  // ...times whatever the alternating card has bought. `finSpreadMul` is 1 on
+  // every pebble run and on a laser run that has taken no even-numbered stack
+  // of André 3000, so this is the fan it has always been until something buys
+  // it. It multiplies BOTH branches deliberately: a rig with fins fans by the
+  // small per-fin angle and one without fans by the volley spread, and a card
+  // that widened only one of them would do nothing on half the models.
+  const fan = (origins > 1 ? CONFIG.weapon.finSpread : s.spread) * (s.finSpreadMul ?? 1);
 
   // FLIPPERS UP! — how big the pebble out of origin `o` is. The fin defs in
   // assets.js are ordered ['left', 'right'] and `rig.muzzles` is built by
@@ -3908,6 +4031,16 @@ function fire() {
   // than typed, and an un-upgraded pellet passes exactly the 1.2 createVisual
   // already gave it.
   const bulletSizeMul = getAssetSizeMultiplier('bullet');
+  // ...AND WHAT THE HIT CIRCLE IS MEASURED AGAINST. The pebble's shape is
+  // authored at this radius in assets.js, so `hitRadius / this` is the factor
+  // that draws a stone exactly as big as it hits. It used to be `s.radius`,
+  // which normalised the ratio to 1 on an un-upgraded gun and therefore pinned
+  // the picture to the asset no matter what CONFIG.weapon.radius said — so a
+  // retune of the gun's size moved the hitbox and nothing else, which is the
+  // invisible buff the note above calls the worst of both. Falls back to
+  // `s.radius` so a pebble built from an uploaded model (no authored radius)
+  // keeps exactly the behaviour it had.
+  const bulletShapeRadius = assetShapeRadius('bullet') ?? (s.radius || 1);
 
   // WHICH FLIPPER ORIGIN `o` IS, and what it is carrying. The fin defs in
   // assets.js are ordered ['left', 'right'] and FLIPPER_SIDES is that same
@@ -3978,24 +4111,39 @@ function fire() {
       const offset = (i - (shot.n - 1) / 2) * fan;
       const cos = Math.cos(offset);
       const sin = Math.sin(offset);
-      spawnProjectile(world.scene, {
+      const bolt = spawnProjectile(world.scene, {
         origin: emitPoint(rig, source, o, dir, player.mesh.position, muzzlePoint),
         dir: new THREE.Vector2(dir.x * cos - dir.y * sin, dir.x * sin + dir.y * cos),
         faction: 'player',
         // Air time rides the damage the same way it rides the cadence above.
         // A seal shooting on the way down is a gun platform, and this is what
         // makes that read as a decision rather than as a detour.
-        damage: pellet.multishotDamage * airDamageMul(),
-        speed: s.speed,
-        life: s.life,
+        damage: pellet.multishotDamage * airDamageMul() * (laser ? (lc.damageMul ?? 1) : 1),
+        // FAST AND SHORT, and the product of the two is the range — see
+        // systems/finLaser.js. `s.life` already carries the reach ramp by the
+        // time it gets here (applyLaserReach writes it into the stat block), so
+        // this is only the loadout's own reshaping and the two compose rather
+        // than fighting: a run that has earned three steps is firing a bolt at
+        // 0.42 x 1.45 of the pebble's flight time.
+        speed: s.speed * (laser ? (lc.speedMul ?? 1) : 1),
+        life: s.life * (laser ? (lc.lifeMul ?? 1) : 1),
         radius: pellet.multishotSize * finRadiusMul(o),
         // The drawn stone, kept in step with the hit circle above. Both terms
         // are ratios against the base pebble, so a run with neither card is
         // byte-for-byte the shot it always was.
-        scale: bulletSizeMul * (pellet.multishotSize / (s.radius || 1)) * finRadiusMul(o),
+        scale: bulletSizeMul * (pellet.multishotSize / bulletShapeRadius) * finRadiusMul(o),
         pierce: s.pierce,
-        asset: 'bullet',
+        asset: laser ? LASER_ASSET : 'bullet',
+        // STILL THE GUN, on either loadout. Everything downstream is keyed on
+        // this string — the ledger's damage attribution, weaponName.js, the
+        // hive's routing of the volley, and the `b.source === 'gun'` gate in
+        // combat.js that is the only thing letting an element ride the shot at
+        // all. A loadout that booked its damage under its own name would lose
+        // every one of them at once, silently.
         source: 'gun',
+        // WHAT IT SHATTERS INTO. Null on every pebble run, which keeps a stone
+        // byte-for-byte the projectile it has always been.
+        lattice: laser ? latticePayload(s) : null,
         // What THIS fin is carrying, which is why it rides the pellet rather
         // than being looked up where it lands: two pellets in the same volley
         // can disagree about it. Null on every un-upgraded shot. See combat.js.
@@ -4007,7 +4155,42 @@ function fire() {
         // with it so a curving bullet visibly faces where it is going — a
         // seeker drawn on its launch heading reads as a rendering bug.
         ...seek,
+        // A BOLT FACES WHERE IT IS GOING; a stone tumbles. The pebble asset is
+        // `shape: 'rock'` and gets its own random spin from assets.js, and
+        // pointing one along its heading would throw that away — so this is on
+        // the laser only rather than on both.
+        //
+        // 'axis' AND NOT `true`, and on this shape it is the difference between
+        // a bolt and a bug. The plain form composes a Ry(PI) mirror after the
+        // heading to keep an asymmetric body's belly down, and that mirror is
+        // 90 degrees out at leftward DIAGONALS — see the note in
+        // projectiles.js. A mussel or a gull is round enough that nobody has
+        // ever seen it; a 2.6:1 bolt fired up-left flies visibly SIDEWAYS. The
+        // oval has no belly to protect, so it opts out, exactly as the razor
+        // clam's blade does.
+        //
+        // AFTER the seeker spread rather than before it: homingShotOpts sets
+        // its own `orient: true`, so a laser run that also took Sonar Teeth
+        // would otherwise have the mirror handed straight back to it.
+        orient: laser ? 'axis' : (seek?.orient ?? false),
+        // LIGHT DOES NOT FALL. Above the surface there is nothing holding a
+        // shot up, so a stone thrown out of the water noses over and drops on
+        // the same curve the seal does — which is the whole read of a thrown
+        // stone and exactly wrong for a bolt. A laser fired on the way up
+        // sagged visibly over its flight, and because the fall goes out through
+        // `dir` (see updateProjectiles) the bolt also TURNED to follow it: a
+        // beam of light bending downward on its way across the sky.
+        //
+        // Underwater nothing changes — the sea carries every shot, and this
+        // branch was never reached down there.
+        gravityScale: laser ? 0 : 1,
       });
+      // The colour, the proportion and the halo — after the spawn rather than
+      // inside it, because the asset table has no idea what element this run is
+      // carrying and must not learn. The FIN's element, not the run's: two
+      // bolts in one volley can disagree about it, which is the whole reason it
+      // rides the pellet. See applyBoltLook.
+      if (laser && bolt) applyBoltLook(bolt, finElementFor(o));
     }
     if (points > 0) flashes.push({ o, x: muzzlePoint.x, y: muzzlePoint.y });
   }
@@ -4063,7 +4246,11 @@ function fire() {
     });
   }
 
-  feedback('shoot', {
+  // WHICH GUN JUST WENT OFF. Two events rather than one with a swapped voice —
+  // see CONFIG.feedback.shootLaser for why. Everything in the payload below is
+  // identical either way: the volley leaving a fin is the same event whatever
+  // the fin threw.
+  feedback(laser ? 'shootLaser' : 'shoot', {
     x: points > 0 ? muzzlePoint.x : px + dir.x,
     y: points > 0 ? muzzlePoint.y : py + dir.y,
     dirX: dir.x,
@@ -4241,7 +4428,7 @@ function launchClubThrow(power) {
         });
       },
     },
-    { boom: player.stats.clubBoomLevel, ice: player.stats.clubIceLevel },
+    { boom: player.stats.clubBoomLevel, ice: player.stats.clubIceLevel, zap: player.stats.clubZapLevel },
     // A PERFECT CHARGE HURLS THE RING AS WELL. `perfectStrike` and not
     // `perfect` — the latch is cleared by the release, and what a payoff has
     // to read is the dash IN FLIGHT, which is exactly the distinction the note
@@ -4793,7 +4980,55 @@ let drawsLastFrame = 0;
 
 let lastTime = performance.now();
 
+// WHAT THE LOOP ACTUALLY RUNS.
+//
+// three reschedules the next frame after the callback RETURNS, so anything
+// thrown out of runFrame stops the game where it stands — renderer holding its
+// last picture, music still playing off its own clock, no reset and nothing in
+// a console the player has. Every lock-up this game has had looked like that,
+// whatever the underlying bug was. The guard makes a throw cost one frame.
+//
+// The announcement is the other half of it, and the more important half: an
+// error nobody hears is worse than the freeze it replaced, because the freeze
+// at least got reported. First sighting of a signature goes to the console
+// with the real error object — a live stack for whoever has devtools open —
+// and to the crash trail as one crumb, which is what a phone can be read
+// through later with `npm run crash`.
+//
+// A repeat is counted, not repeated. `frame:stuck` is the verdict that the
+// loop is not coming back, and only THAT is written as the session's error:
+// a hitch the guard absorbed and played on from did not end the run, and
+// calling it the ending would put an 'error' verdict on every session that
+// survived one.
+// A DECLARATION, not `const animate = guardFrame(...)`, and that is not style.
+// boot() is called while this module is still evaluating and hands `animate`
+// to setAnimationLoop; it only gets there after an await, so a const happens
+// to be initialised in time — today. It would stop being initialised in time
+// the moment anything made the path to the loop synchronous, and the failure
+// is a TDZ throw during boot with no game at all. The old `animate` was
+// hoisted and every caller was written against that, so it stays hoisted.
 function animate(now) {
+  return guarded(now);
+}
+
+const guarded = guardFrame(runFrame, {
+  report({ signature, err, count, consecutive, stuck, first }) {
+    if (first) {
+      console.error('[frame] the frame threw and was survived —', err);
+      crumb('frame:throw', signature);
+    }
+    if (stuck) {
+      console.error(`[frame] ${consecutive} frames in a row have thrown — the loop is not recovering.`);
+      crumb('frame:stuck', `${signature} x${count}`);
+      noteError(err, 'frame');
+    }
+  },
+});
+
+// THE FRAME ITSELF. Never handed to setAnimationLoop directly — `animate`
+// below is the guarded one, and it is the only caller. See systems/frameGuard.js
+// for why a throw out of here used to be the end of the game.
+function runFrame(now) {
   const stamp = now ?? performance.now();
   frameCount++;
   // A PULSE IN THE CRASH TRAIL — see systems/crashLog.js. A WebContent process
@@ -4843,6 +5078,32 @@ function animate(now) {
       bossKillState.active ? 'killshot' : null,
       deathState.active ? 'death' : null,
     ].filter(Boolean).join('+');
+    // PAUSED WITH NOTHING HOLDING IT — the other way this game locks up, and
+    // the one the frame guard cannot help with. Every `paused = true` in this
+    // file is a surface going up (the pause menu, the cards, the dividend),
+    // and every one of them is answerable: if the run is frozen and not one of
+    // them says it did it, then a menu failed to open, or opened and lost its
+    // way of being dismissed. The player sees a frozen game with the music
+    // still playing — the same symptom as a dead loop, and a completely
+    // different bug.
+    //
+    // The `held` line below already carries this: a tick reading `paused` with
+    // no `cards`/`hive` beside it IS the strand. That only helps somebody who
+    // pulls the trail and reads a minute of ticks, so the condition says so
+    // itself, once, at the moment it starts.
+    //
+    // TWO HEARTBEATS, not one, and not because a single sighting is ambiguous
+    // — every surface is raised on the same frame as the flag, so there is no
+    // window where an honest pause looks like this. It is that a diagnostic
+    // which cries wolf gets ignored, and five seconds of proof costs nothing
+    // against a freeze nobody can dismiss anyway.
+    const holder = levelUpState.active || hiveRewardActive() || bossKillState.active
+      || deathState.active || isPauseOpen();
+    strandedBeats = gameState.running && gameState.paused && !holder ? strandedBeats + 1 : 0;
+    if (strandedBeats === 2) {
+      console.error('[frame] the run is paused and no screen is holding it — nothing can dismiss this.');
+      crumb('run:stranded', `L${gameState.level} t${gameState.time.toFixed(1)}`);
+    }
     crumb('tick', `L${gameState.level} ${enemies.length}e ${particleCount()}p`
       + ` g${mem.geometries} t${mem.textures} pr${programsEverBuilt()}`
       + ` c${document.getElementsByTagName('canvas').length}${bossState.enemy ? ' BOSS' : ''}`
@@ -5002,7 +5263,22 @@ function animate(now) {
     setBossKillFraming(player.mesh.position, bossCorpseFocus(), world.halfExtents(1));
   }
   const killScale = updateBossKill(rawDt);
+  // A LEVEL HELD BACK BY THE SHOT, released the frame it ends. Immediately
+  // after updateBossKill because that is the call that clears `active`, and a
+  // drain anywhere else in the frame is a menu one frame behind the fact it is
+  // reading. Outside the gameplay block on purpose: that block is also shut by
+  // the workbench's world-only switch, and a queued level must not be able to
+  // strand itself behind a dev panel.
+  tryOpenLevelUp();
   const levelScale = updateLevelUpTime(rawDt);
+  // ONE UNIT OF THE PICK'S COST, and only on a frame the run is frozen for.
+  // Both halves of that gate are load-bearing: `levelUpState.active` alone
+  // stays true through the restore ramp, which is live gameplay and the exact
+  // frames this file exists to keep work off; `gameState.paused` alone is also
+  // the pause menu, which is not a hush anybody asked to spend. See
+  // systems/levelUpWarmup.js — a no-op once the queue has drained, which after
+  // the first level-up of a run is every frame.
+  if (gameState.paused && levelUpState.active) tickLevelUpWarmup();
   const deathScale = updateDeathDive(rawDt);
   // The graveyard, on `rawDt` and NOT on `realDt` below — this is the whole
   // reason the argument is named the way it is. Every one of the four scales
@@ -5944,6 +6220,14 @@ function animate(now) {
         });
       },
     );
+    // A BOLT'S HALO CHARGES OVER ITS FLIGHT. After the step rather than before
+    // it, so the brightness is read off the life this frame actually spent —
+    // ahead of it every bolt is one frame behind its own position, which on the
+    // shortest lattice shards is a visible share of the whole arc.
+    //
+    // Out here rather than inside updateProjectiles because it is one loadout's
+    // look and that function is the shared spawn for every shot in the game.
+    updateBoltGlow(projectiles);
     // Nothing new arrives while the stage is open. Creatures already in the
     // water keep swimming and breathing — freezing them would take the scene's
     // life away with its traffic, and the seal is what an effect is being
@@ -6023,7 +6307,7 @@ function animate(now) {
         // through, for the reason the perk hook below says: a beam should not
         // be the one attack in the game that ignores the seal's only defensive
         // window.
-        onPlayerHit: (dmg, dir, source, channel) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source, channel); },
+        onPlayerHit: (dmg, dir, source, channel, iFrames) => (isInvulnerable() ? 0 : onPlayerHit(dmg, dir, source, channel, iFrames)),
       },
     });
     // The stream, on the same hooks and for the same reason: a jet hit has to
@@ -6041,18 +6325,12 @@ function animate(now) {
         onEnemyKilled: onEnemyKilledFeedback,
       },
     });
-    // What the bodies the stream is standing in LOOK like while it burns them.
-    // After updateJets, so a tick landed this frame is on screen this frame
-    // rather than next — and it runs whether or not anything was hit, because
-    // the fall is most of the effect and a level that only moved on a hit would
-    // snap to cold the instant the beam left.
-    updateBurnGlow(dt);
     updateBossAbilities(dt, world.scene, player.mesh.position, {
       // The i-frame check is here rather than inside the perk, for the same
       // reason resolveCombat does it at each of its own damage sites: a dash
       // through an aura should be a dash through an aura, not the one attack
       // in the game that ignores the seal's only defensive window.
-      onPlayerHit: (dmg, dir, source, channel) => { if (!isInvulnerable()) onPlayerHit(dmg, dir, source, channel); },
+      onPlayerHit: (dmg, dir, source, channel, iFrames) => (isInvulnerable() ? 0 : onPlayerHit(dmg, dir, source, channel, iFrames)),
       // THE ANGLERFISH'S RADIAL GETTING HOLD OF THE SEAL — systems/bossAngler.js.
       //
       // NOT behind the i-frame check above, and that is the one difference
@@ -6062,7 +6340,9 @@ function animate(now) {
       // one moment the circle does nothing. The dash still carries them out of
       // it, which is the counterplay working rather than being skipped.
       onPlayerSnare: (seconds, mul, thaw) => snarePlayer(seconds, mul, thaw),
-    });
+      // The look's drive is the one thing in there that is not gameplay, so it
+      // takes the unscaled clock — see updateBossLook.
+    }, rawDt);
 
     // A STAGED ATTRACTOR STORM, if the U panel has put one in the water. Beside
     // the boss's own abilities because that is what it is standing in for, and
@@ -6187,9 +6467,18 @@ function animate(now) {
       // of the moment — a thinner bolt and a smaller, quieter crack — so the
       // far end of a long chain looks and sounds like the tail of something
       // rather than like six identical strikes.
-      onArc: (fromX, fromY, toX, toY, strength = 1) => {
+      // `source` is which chain this hop belongs to. Both reach here: Voltaic
+      // rides the pellet, and a THROWN zap club carries its chain as a payload
+      // (see systems/combat.js). Same bolt, different event under it — the
+      // club's is the quieter one, for the reasons on `clubZap` in
+      // CONFIG.feedback.
+      onArc: (fromX, fromY, toX, toY, strength = 1, source = null) => {
         spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength);
-        feedback('elementArc', { x: toX, y: toY, scale: 0.55 + 0.45 * strength });
+        const club = source === 'clubZap';
+        feedback(club ? 'clubZap' : 'elementArc', {
+          x: toX, y: toY,
+          scale: (club ? 0.5 : 0.55) + (club ? 0.5 : 0.45) * strength,
+        });
       },
       onFreeze: (x, y) => feedback('elementFreeze', { x, y }),
       // --- harp seal --------------------------------------------------------
@@ -6208,14 +6497,62 @@ function animate(now) {
         // bought the moment, whichever shape it took.
         if (e.charmTimer > 0) feedback('harpCharm', { x, y, scale: 1.2 });
       },
+      // --- fin lasers -------------------------------------------------------
+      // A bolt coming apart. Fired from here for the same reason the charm is:
+      // the split happens where the bolt LANDED, and systems/finLaser.js is
+      // handed a contact point rather than a place in the world it could
+      // announce from.
+      //
+      // The colour is the bolt's own, so a Voltaic run's shatter is the colour
+      // of the shot that made it rather than the stock spark — the same rule
+      // the muzzle flash follows, and the reason both read as one weapon.
+      //
+      // It lands ON TOP of `bulletHit`, which combat.js has already fired for
+      // this impact: the shot did hit something, and that is still the event.
+      // `latticeSplit` carries no shake and no hitstop for exactly that reason
+      // — see its row in CONFIG.feedback.
+      onLatticeSplit: (b, x, y) => {
+        feedback('latticeSplit', {
+          x, y, dirX: b.dir.x, dirY: b.dir.y, color: boltColor(b.finElement),
+        });
+      },
     });
     perfPhase('combat', performance.now() - _tcombat);
+
+    // WHAT THE BODIES THE LASERS ARE TOUCHING LOOK LIKE — systems/burnGlow.js.
+    //
+    // AFTER ALL THREE OF THEM, which is the whole reason it sits here rather
+    // than up beside the weapon that first needed it. The bubble jet and the
+    // beams stoke it from their own updates above; a fin-laser BOLT stokes it
+    // from inside resolveCombat, and with this call above that line every bolt
+    // flash was first written on the frame AFTER the hit — one frame out of
+    // step with the impact sprite and the sound, on an effect that is only
+    // eight frames long.
+    //
+    // It runs whether or not anything was hit, because the fall is most of the
+    // effect: a level that only moved on a hit would snap to cold the instant
+    // the beam left, which reads as a light being switched off rather than as
+    // something cooling.
+    //
+    // Still well before updateBossLight, which takes the same per-instance
+    // materials over on the frame a boss dies.
+    updateBurnGlow(dt);
 
     // A BOSS'S COMMITTED RUN ENDING IN WATER THE SEAL IS NOT IN — see
     // systems/dodge.js. After resolveCombat rather than before it, because the
     // question the whole thing turns on is whether the pass CONNECTED, and
     // this frame's contact has not been resolved until the line above returns.
-    updateDodge(dt, enemies);
+    //
+    // THE CAMERA KICK RIDES THE HOOK, NOT THE FEEDBACK TABLE. Everything else
+    // the dodge does — the burst, the sound, the buzz, the PERFECT DODGE! line
+    // — is authored in CONFIG.feedback.bossDodge and fired from inside
+    // systems/dodge.js, which is where it belongs. The punch cannot be: it is a
+    // call on the world's camera rig, and that module is imported by half a
+    // dozen Node harnesses with no renderer. `onDodge` already exists for the
+    // ledger, so this is the one channel that has to reach out here anyway.
+    updateDodge(dt, enemies, {
+      onDodge: () => world.punchCamera(CONFIG.boss?.dodge?.punch ?? 0.09),
+    });
 
     const _tabilities = performance.now();
     processPendingSplashes(); // safe now that resolveCombat's own loop has finished
@@ -6344,6 +6681,9 @@ function animate(now) {
         feedback('calamariPulse', { x, y });
         world.grid.ripple(x, y, 3, 10);
       },
+      // Per body the front crosses, at the point on the RING rather than on
+      // the body — same call the shrimp ring makes above.
+      onContact: (x, y) => feedback('calamariHit', { x, y }),
     });
     updateDumbo(dt, player.mesh.position, player.stats.dumboLevel, enemies, simClock, {
       onCharm: (e) => {
@@ -6421,6 +6761,7 @@ function animate(now) {
       club: player.stats.clubLevel,
       boom: player.stats.clubBoomLevel,
       ice: player.stats.clubIceLevel,
+      zap: player.stats.clubZapLevel,
       // Passed for the LOOK, not for any behaviour of the swing: it decides
       // whether a fin is holding a Hurler club. The throw itself is fired from
       // the strike release, not from here.
@@ -6517,6 +6858,20 @@ function animate(now) {
         // event than actually connecting with something.
         clubAccent(x, y, { amount: 0.7 });
         world.grid.ripple(x, y, 2.6 + Math.min(2, caught * 0.35), radius * 2.4);
+      },
+      // ONE HOP of a Zappy Club chain. The same bolt Voltaic draws — it is the
+      // one channel in the game that puts a LINE between two bodies, and a
+      // chain that came off a stick rather than a pellet is still the same
+      // thing happening to the water — with the club's own quieter event under
+      // it. `strength` is the hop's share of the packet, so both halves thin
+      // together and the far end of a long chain reads as a tail.
+      //
+      // NOT `elementArc`: that one shakes the camera, and this fires from
+      // inside the crowd the seal is swimming through, several hops at a time,
+      // on a weapon that already lands several times a second.
+      onArc: (fromX, fromY, toX, toY, strength = 1) => {
+        spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength);
+        feedback('clubZap', { x: toX, y: toY, scale: 0.5 + 0.5 * strength });
       },
       // Cold Snap, but only the moment a body actually LOCKS. The per-hit
       // chill has no event of its own on purpose: it lands on every club hit
@@ -6668,6 +7023,21 @@ function animate(now) {
         // beat, so a mistimed dash still bursts nothing.
         const rider = riderDamage(0, player.stats);
         if (rider > 0) spawnShrapnel(at ?? e.mesh.position, rider);
+      },
+      // THE DASH FOUND THE MARK. Fires on the same frame as `strikeRam` and
+      // `hotSpotHit` and on top of both — see CONFIG.feedback.strikeWeakSpot.
+      //
+      // `scale` is the only place the perfect charge has ever been able to
+      // reach the moment it pays out, so both halves of what the player did
+      // ride it: the charge they banked, and whether they released clean.
+      onWeakSpotRam: (e, at, power, perfect) => {
+        feedback('strikeWeakSpot', {
+          x: at?.x ?? e.mesh.position.x,
+          y: at?.y ?? e.mesh.position.y,
+          dirX: strikeState.dashDir.x,
+          dirY: strikeState.dashDir.y,
+          scale: (perfect ? 1.5 : 1) * (0.8 + power * 0.6),
+        });
       },
       onMarked: (e) => {
         feedback('strikeMark', { x: e.mesh.position.x, y: e.mesh.position.y, scale: 0.8 });
@@ -7055,6 +7425,11 @@ function animate(now) {
     // in at full speed under a slow-motion corpse.
     updateDeathPile(dt, world.scene, gameState.difficulty, player.mesh.position);
     updateProjectiles(dt, world.scene, enemies);
+    // The bolts already in the water go on charging and burning out while the
+    // seal sinks. Left out, the last volley of a run would freeze at whatever
+    // brightness it happened to be holding on the frame the player died — and
+    // the descent is the one part of the game you are looking straight at.
+    updateBoltGlow(projectiles);
     // The mix goes down with the body. This normally rides the player's depth
     // inside the run block above, so without it here the muffling froze at
     // whatever depth the seal happened to die at — the descent is the one
@@ -7532,6 +7907,36 @@ function animate(now) {
   // the time the trophy frame is grabbed and would never once be caught in a
   // picture. The camera push in systems/bossKill.js is on the wall clock for
   // exactly the same reason.
+  // THE CLAP, and it goes immediately before the victory lap for the same
+  // ordering reason the lap itself is here: the mixer and the aim rig both
+  // write an absolute pose every frame, so a hand-posed gesture has to run
+  // after both or it is simply overwritten. Before the celebration rather than
+  // after, because the celebration is the one thing allowed to overrule a clap
+  // (systems/clap.js stands down the moment one starts) and the last writer
+  // wins.
+  //
+  // Outside the pause gate, alongside the lap, so the flippers finish a clap
+  // that was in flight when a level-up card came up rather than freezing
+  // half-closed behind it. The PRESS is gated below; the release is not.
+  //
+  // On rawDt: the whole point of this button is that it can be played to
+  // music, and music does not slow down for a hit-stop. See systems/clap.js.
+  if (input.clap && gameState.running && !gameState.paused && !deathState.active) {
+    // WHERE THE HANDS ARE, rather than where the animal is. The two muzzles
+    // are the measured skin at the end of each flipper (systems/aimRig.js), so
+    // their midpoint is within a few tenths of the point the clap is about to
+    // happen at — and it travels with the aim, which the body centre does not.
+    // A seal with no rig falls back to its own position, which is also what
+    // every other event on the animal uses.
+    const m = player.aimRig?.muzzles;
+    const at = (m && m.length >= 2)
+      ? { x: (m[0].x + m[1].x) / 2, y: (m[0].y + m[1].y) / 2 }
+      : { x: player.mesh.position.x, y: player.mesh.position.y };
+    triggerClap(at);
+  }
+  updateClap(rawDt);
+  player.clap?.update(rawDt);
+
   updateCelebration(rawDt);
   player.celebrate?.update(rawDt);
 
@@ -7648,6 +8053,25 @@ function animate(now) {
   // The seal is the listener rather than the camera, since the camera lags
   // behind it and a lagging listener smears the pan.
   updateProjectileVoices(realDt, projectiles, player.mesh.position, gameState.running && !gameState.paused);
+  // THE JET'S BED, on the same terms and directly under it because it is the
+  // same problem: a held, looping voice whose own update lives INSIDE the
+  // pause gate, so a stream held when the level-up cards arrived went on
+  // droning under the menu until the player picked something. Muted where it
+  // stands rather than released — the stream survives the menu and comes back
+  // when the water does. See setJetBedsMuted.
+  //
+  // Called every frame rather than on the pause transitions, so a bed opened
+  // WHILE a menu is up arrives gated too.
+  //
+  // A MENU OVER A LIVE RUN — both terms, and the second one is load-bearing.
+  // This read `!(running && !paused)` and therefore muted whenever there was
+  // no run at all, which is exactly when the workbench stages a jet to listen
+  // to it: opening the F panel to tune the bed silenced the bed. The `▶`
+  // audition plays a file straight to the destination and never touches this
+  // graph, so it kept working and the layers looked broken.
+  //
+  // No run means nothing to interrupt, so nothing to mute.
+  setJetBedsMuted(gameState.running && gameState.paused);
   updateImpactFlashes(realDt);
   // Real time too, and for a sharper version of the flashes' reason: the shell
   // is the thing the hit-stop is being taken FOR. A mussel landing sets 45ms of
@@ -7761,6 +8185,21 @@ function animate(now) {
   // deep inside combat, none of which has a scene, and the queue is what keeps
   // the payout testable without one. See spillHotSpotChum.
   spillHotSpotChum();
+  // ...and the shove each burst put through the animal. Same queue-and-drain
+  // as the meat above and for the same reason — this is the only file that
+  // holds both bossHotSpots and applyKnockback, and reaching for one from the
+  // other would close an import cycle through projectiles.js.
+  //
+  // Through applyKnockback rather than by writing knockX/knockY here: a shove
+  // is a rule about being shoved (the mass curve, the boss branch, the decay,
+  // the skeleton flinch), and the day someone retunes any of those it has to
+  // move this too. See CONFIG.hotSpots.burstKnock.
+  for (const shove of drainHotSpotShoves()) {
+    // Full power, and the burst's own strength on top: a rupture has no
+    // charge to bank the way a strike does — it is either happening or it is
+    // not — so the variable half is the one number the CSV owns.
+    applyKnockback(shove.e, shove.dirX, shove.dirY, 1, { gain: shove.strength });
+  }
   // ...and the streak behind whatever is already in flight. After the spill so
   // a piece born this frame lays its first blob at its birth point rather than
   // one frame downrange, which is the frame the burst is covering anyway.

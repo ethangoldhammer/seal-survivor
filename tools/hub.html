@@ -73,6 +73,29 @@
   .chip.passed { color: var(--go); border-color: #1e4a2a; }
   .chip.failed { color: var(--stop); border-color: #4a2222; }
 
+  /* ---- the ship card ----
+     Red, wide and at the top, because it is the one control here that other
+     people can see the result of. The hold-to-ship fill is a width transition
+     rather than an animation so that letting go cancels it instantly and
+     visibly — a press that got to 80% and stopped has to look like nothing
+     happened, because nothing did. */
+  .ship { border: 1px solid #3a2430; border-radius: 8px; background: var(--panel);
+          padding: 12px 13px; display: flex; flex-direction: column; gap: 9px; }
+  #shipmsg { width: 100%; background: var(--panel2); border: 1px solid var(--line);
+             border-radius: 6px; padding: 8px 11px; color: var(--ink); font-size: 13px; }
+  #shipmsg:focus { outline: 1px solid var(--acc); }
+  .shiprow { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  #shipstate { color: var(--dim); font-size: 12px; flex: 1; min-width: 200px; }
+  #shipstate b { color: var(--ink); font-weight: 600; }
+  #shipstate i { color: var(--warn); font-style: normal; }
+  .shiprow .acts { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+  #shipgo { position: relative; overflow: hidden; padding: 6px 14px; border-color: #4a2222;
+            color: var(--stop); touch-action: none; user-select: none; }
+  #shipgo:disabled { color: var(--faint); border-color: var(--line); }
+  #shipgo .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: #401b1b; }
+  #shipgo.holding .fill { width: 100%; transition: width 1.2s linear; }
+  #shipgo .lbl { position: relative; }
+
   /* ---- cards ---- */
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 8px; }
   .card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
@@ -125,6 +148,23 @@
 </header>
 
 <main>
+  <section id="s-ship">
+    <h2>Ship</h2>
+    <p class="lede">Web, Mac and phone, all three cut from the commit that just passed every test and
+      the production build. The only publish button in the workbench: it wants a commit message and a
+      held press, and every other script that reaches the outside world is still terminal-only.</p>
+    <div class="ship">
+      <input id="shipmsg" placeholder="what changed" autocomplete="off" spellcheck="true" maxlength="4000" />
+      <div class="shiprow">
+        <span id="shipstate"></span>
+        <span class="acts">
+          <button class="btn" id="shipdry" title="Runs every test and the production build, then stops. Commits nothing.">dry run</button>
+          <button class="btn" id="shipgo"><span class="fill"></span><span class="lbl">hold to ship</span></button>
+        </span>
+      </div>
+    </div>
+  </section>
+
   <section id="s-servers">
     <h2>Servers</h2>
     <p class="lede">What is listening right now. The game's port moves every time it restarts,
@@ -142,7 +182,8 @@
   <section id="s-commands">
     <h2>Commands</h2>
     <p class="lede">Every script in package.json, described by the header comment of the file it
-      runs. Run streams the output below. Publish scripts have no button on purpose.</p>
+      runs. Run streams the output below. Publish scripts have no button on purpose — including
+      <code>ship:all</code>, which has its own card at the top rather than a button in a row.</p>
     <div id="commands"></div>
   </section>
 </main>
@@ -171,6 +212,80 @@ let seen = 0;          // lines already rendered for `watching`
 
 const age = (s) => s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? (s / 3600).toFixed(1) + 'h' : (s / 86400).toFixed(1) + 'd';
 const matches = (...bits) => !filter || bits.join(' ').toLowerCase().includes(filter);
+
+// --- ship ------------------------------------------------------------------
+// This card is built in the HTML and only UPDATED here, unlike everything
+// below it. The rest of the page is rebuilt from scratch on every two-second
+// poll, which is fine for a list of buttons and fatal for a text field: it
+// would throw away a half-typed commit message, twice a minute, while you
+// were looking at it.
+function drawShip() {
+  const st = ST.ship ?? {};
+  const line = $('#shipstate');
+  const msg = $('#shipmsg').value.trim();
+  const nothing = !st.files;
+
+  line.textContent = '';
+  if (st.error) {
+    line.append(el('i', null, st.error));
+  } else if (nothing) {
+    line.append(el('span', null, 'working tree clean — nothing to ship'));
+  } else {
+    line.append(el('b', null, st.files + (st.files === 1 ? ' file' : ' files')));
+    line.append(el('span', null, ' would be committed to '));
+    line.append(el('b', null, st.branch));
+    // Off the branch that publishes, ship either switches to it (same commit)
+    // or refuses (diverged). Saying so here is cheaper than finding out after
+    // the whole gate suite has run.
+    line.append(st.deploys
+      ? el('span', null, ' — then tests, build, push, deploy, Mac, phone')
+      : el('i', null, ' — not the branch that deploys (' + st.prod + ')'));
+  }
+
+  $('#shipgo').disabled = nothing || !msg;
+  $('#shipdry').disabled = nothing;
+}
+
+// The ship endpoint wants a header a cross-origin fetch cannot send without a
+// preflight the hub refuses. See fromTheWorkbench in hub.mjs.
+async function ship(dry) {
+  const r = await fetch('/api/ship', {
+    method: 'POST',
+    headers: { 'X-Workbench': 'ship' },
+    body: JSON.stringify({ message: $('#shipmsg').value, dry }),
+  }).then((x) => x.json());
+  if (r.error) { alert(r.error); return; }
+  watch(r.id);
+  poll();
+}
+
+// Hold, don't click. A stray click is a click; nobody holds a button down for
+// a second and a quarter by accident. Letting go early cancels with nothing
+// sent — and pointerleave counts as letting go, so sliding off it is a way out
+// once you have already started.
+{
+  const go = $('#shipgo');
+  let timer = null;
+  const release = () => { clearTimeout(timer); timer = null; go.classList.remove('holding'); };
+  go.addEventListener('pointerdown', (e) => {
+    if (go.disabled) return;
+    e.preventDefault();
+    go.classList.add('holding');
+    timer = setTimeout(() => { release(); ship(false); }, 1200);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) go.addEventListener(ev, release);
+  // A keyboard has no hold. Space and Enter on a focused button would fire it
+  // instantly, so they don't fire it at all — say why rather than doing
+  // nothing, which reads as broken.
+  go.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); alert('Hold the button down to ship.'); }
+  });
+  $('#shipdry').onclick = () => { if (!$('#shipdry').disabled) ship(true); };
+  $('#shipmsg').oninput = drawShip;
+  // Enter in the message field must not ship. It is the most natural key to
+  // press in a text field and the most expensive one to have bound.
+  $('#shipmsg').onkeydown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
+}
 
 // --- servers ---------------------------------------------------------------
 function drawServers() {
@@ -450,6 +565,7 @@ function drawRunSelect() {
 async function poll() {
   ST = await api('/api/state');
   $('#hubport').textContent = ST.port;
+  drawShip();
   drawServers();
   drawPages();
   drawCommands();
@@ -459,16 +575,23 @@ async function poll() {
 function draw() { drawServers(); drawPages(); drawCommands(); }
 
 $('#q').oninput = (e) => { filter = e.target.value.trim().toLowerCase(); draw(); };
+// `/` focuses the filter and Escape clears it — but only from outside a text
+// field. Both used to fire while typing anywhere, which was harmless when the
+// only input on the page WAS the filter, and is a stolen keystroke mid-commit
+// message now that it is not.
+const typing = () => /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '');
 document.addEventListener('keydown', (e) => {
-  if (e.key === '/' && document.activeElement !== $('#q')) { e.preventDefault(); $('#q').focus(); }
-  if (e.key === 'Escape') { $('#q').value = ''; filter = ''; draw(); $('#q').blur(); }
+  if (e.key === '/' && !typing()) { e.preventDefault(); $('#q').focus(); }
+  if (e.key === 'Escape' && (!typing() || document.activeElement === $('#q'))) {
+    $('#q').value = ''; filter = ''; draw(); $('#q').blur();
+  }
 });
 $('#dtoggle').onclick = () => $('#drawer').classList.toggle('hid');
 $('#runsel').onchange = (e) => watch(Number(e.target.value));
 $('#dstop').onclick = async () => { await api('/api/stop-run', { id: watching }); pumpLog(); poll(); };
 
 // Jump links, built from the sections that exist.
-for (const [id, label] of [['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
+for (const [id, label] of [['s-ship', 'ship'], ['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
   const b = el('button', null, label);
   b.onclick = () => document.getElementById(id).scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('#tabs').append(b);

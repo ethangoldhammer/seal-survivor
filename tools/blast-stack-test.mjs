@@ -215,11 +215,14 @@ section('A PERFECT STRIKE — the companions hit with you');
   const parts = companionStrikeParts(squad);
   check('every companion that has a hit lends it', parts.length === 4,
     parts.map((p) => `${p.id} x${p.count} @${p.damage.toFixed(0)}`).join(', '));
-  // BODIES, NOT CARDS. Three orcas and one escort is four animals hitting with
-  // you, and four is the number the moment is about — a count of the picks
-  // would say two.
-  check('...counted as bodies rather than as picks', companionStrikeCount(squad) === 6,
-    `${companionStrikeCount(squad)} bodies from 4 cards`);
+  // BODIES, NOT CARDS. A squad DEEPENED rather than widened is where the two
+  // readings come apart: four cards, and the escorts and the pod have spent
+  // their stacks on animals. Held at one stack each — as `squad` above is —
+  // every companion happens to be a single body and the check would pass on a
+  // count of the picks, which is the answer it exists to rule out.
+  const deep = { sealTeamLevel: 3, orcaLevel: 3, harpLevel: 1, bakalarLevel: 1 };
+  check('...counted as bodies rather than as picks', companionStrikeCount(deep) === 8,
+    `${companionStrikeCount(deep)} bodies from 4 cards`);
 
   // THE CONTROL COMPANIONS LEND NOTHING, and that is the honest answer rather
   // than an oversight: the beluga traps, the dumbo charms, the grabber holds,
@@ -238,7 +241,7 @@ section('A PERFECT STRIKE — the companions hit with you');
   // that the uncapped sum would have gone straight through it is the other
   // half, and without that second reading a cap set far too high passes.
   const maxed = {
-    sealTeamLevel: 6, orcaLevel: 6, harpLevel: 8, bakalarLevel: 8, orbiterBonus: 3,
+    sealTeamLevel: 6, orcaLevel: 3, harpLevel: 8, bakalarLevel: 8, orbiterBonus: 3,
   };
   const cap = STRIKE * CONFIG.strike.companionStack.maxMul;
   const raw = companionStrikeParts(maxed).reduce((a, p) => a + p.count * p.damage, 0)

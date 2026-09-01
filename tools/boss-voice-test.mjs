@@ -36,7 +36,9 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { parseBossCsv } from '../path/src/bossTable.js';
 import bossesCsv from '../path/src/bosses.csv?raw';
-import { bossVoice, onFeedback } from '../path/src/systems/feedback.js';
+import { bossVoice, bossEntranceVoice, onFeedback } from '../path/src/systems/feedback.js';
+import { parseBossPerkCsv } from '../path/src/bossPerkTable.js';
+import bossPerksCsv from '../path/src/bossPerks.csv?raw';
 import { initParticles, resetParticles, updateParticles } from '../path/src/entities/particles.js';
 import { boats, updateBoats, damageBoat, resetBoats } from '../path/src/systems/boats.js';
 import { setWaveTime } from '../path/src/arena.js';
@@ -279,6 +281,132 @@ for (const [, type] of Object.entries(CONFIG.boss.voiceType ?? {})) {
     `${cry?.sfxMinGap}s vs ${CONFIG.feedback.bossHitFlesh.sfxMinGap}s`);
   check(`  ...and the ${type} death is not throttled at all`,
     !CONFIG.feedback[`bossDie${type}`]?.sfxMinGap, `${CONFIG.feedback[`bossDie${type}`]?.sfxMinGap}`);
+}
+
+// ===========================================================================
+section('THE ENTRANCE — an alarm, an animal, and what it is carrying');
+// ===========================================================================
+// Three layers again, but a different question from the cries: those are
+// checked for being TOLD APART under a firefight, and these for reaching a
+// sound at all across two maps and a schedule. The timing — the gaps that are
+// the whole feature — is measured against a live ceremony in tools/boss-test.mjs.
+//
+// Fired through bossEntranceVoice rather than read off the tables, for the
+// reason `fire` exists above: the event name is a STRING BUILT FROM A MAP
+// VALUE, and a table that lines up perfectly is no use if the spelling that
+// assembles it is wrong by a letter.
+function enter(layer, key, perkId) {
+  played.length = 0;
+  CONFIG.feedback = spy;
+  try { bossEntranceVoice(layer, key, perkId); } finally { CONFIG.feedback = realFeedback; }
+  return played;
+}
+
+// THE ALARM — the one layer with no map behind it, and the only thing every
+// boss is guaranteed to say.
+{
+  const def = CONFIG.feedback.bossSiren;
+  check('bossSiren exists', !!def, def ? '' : 'missing from CONFIG.feedback');
+  check('  ...and reaches a voice that can sound', canSound(CONFIG.sfx[def?.sfx]),
+    CONFIG.sfx[def?.sfx] ? `type ${CONFIG.sfx[def?.sfx].type}` : `no CONFIG.sfx.${def?.sfx}`);
+  // The camera is mid-reveal on this frame. A shake here fights the shot, and
+  // the rumble a siren IS belongs in the haptic instead.
+  check('  ...and does not shake the reveal', !def?.shake && !def?.hitstop && !def?.emit && !def?.ripple,
+    JSON.stringify(def));
+  check('  ...and rumbles', Array.isArray(def?.haptic) && def.haptic.length > 0, JSON.stringify(def?.haptic));
+  // Every boss, whatever it is and whether or not it has a body anyone knows.
+  check('every boss sounds it, even one nothing has a row for',
+    enter('siren', 'bossSomethingNew', null).includes('bossSiren'), played.join(', '));
+}
+
+// THE ANIMAL — CONFIG.boss.voiceType, the SAME map the cries use. Asserted
+// through that map rather than through a list here, so an archetype added with
+// a cry and no entrance is a failure rather than a quiet asymmetry.
+const entrances = [];
+for (const [asset, type] of Object.entries(CONFIG.boss.voiceType ?? {})) {
+  const event = `bossArrive${type}`;
+  entrances.push(event);
+  const def = CONFIG.feedback[event];
+  check(`${asset} arrives as ${event}`, !!def, def ? '' : 'no such event — the boss arrives in silence');
+  check(`  ...and ${def?.sfx} can sound`, canSound(CONFIG.sfx[def?.sfx]),
+    CONFIG.sfx[def?.sfx] ? `type ${CONFIG.sfx[def?.sfx].type}` : `no CONFIG.sfx.${def?.sfx}`);
+  check('  ...and adds nothing but sound', !def?.shake && !def?.hitstop && !def?.emit && !def?.ripple && !def?.glow,
+    JSON.stringify(def));
+  check(`  ...and bossEntranceVoice spells it`, enter('type', asset, null).includes(event), played.join(', '));
+}
+
+// A body with no row arrives behind the siren alone — no fallback, the same
+// decision the cry makes and one `??` away from being untrue.
+{
+  const borrowed = enter('type', 'bossSomethingNew', null).filter((e) => entrances.includes(e));
+  check('a boss with no entrance row stays silent', borrowed.length === 0, borrowed.join(', '));
+}
+
+// THE VARIANT — CONFIG.boss.voicePerk, keyed by PERK ID. This is the map most
+// likely to go stale: a perk renamed in bossPerks.csv leaves a row here that
+// reads exactly right and never fires, which is precisely how voiceClass's
+// `bossCrab` survived for as long as it did.
+const PERK_ROWS = parseBossPerkCsv(bossPerksCsv);
+const perkIds = new Set(PERK_ROWS.map((p) => p.id));
+{
+  const dead = Object.keys(CONFIG.boss.voicePerk ?? {}).filter((k) => !perkIds.has(k));
+  check('every voicePerk key is a perk that exists', dead.length === 0,
+    dead.length ? `${dead.join(', ')} — no such row in bossPerks.csv` : `${perkIds.size} perks`);
+}
+
+const variants = [];
+for (const [perk, voice] of Object.entries(CONFIG.boss.voicePerk ?? {})) {
+  const event = `bossArrive${voice}`;
+  if (!variants.includes(event)) variants.push(event);
+  const def = CONFIG.feedback[event];
+  check(`the ${perk} variant announces itself as ${event}`, !!def, def ? '' : 'no such event');
+  check(`  ...and ${def?.sfx} can sound`, canSound(CONFIG.sfx[def?.sfx]),
+    CONFIG.sfx[def?.sfx] ? `type ${CONFIG.sfx[def?.sfx].type}` : `no CONFIG.sfx.${def?.sfx}`);
+  check(`  ...and bossEntranceVoice spells it`, enter('perk', 'enemyMegalodon', perk).includes(event),
+    played.join(', '));
+}
+
+// A PERK WITH NO ROW SAYS NOTHING, and neither does a boss with no perk at
+// all. `giant` and `swift` are the deliberate silences — they change what the
+// animal IS and have no tell, so there is nothing for a cue to announce.
+for (const perk of [null, 'giant', 'swift']) {
+  const spoke = enter('perk', 'enemyMegalodon', perk).filter((e) => variants.includes(e));
+  check(`a boss with ${perk ?? 'no perk'} borrows no variant cue`, spoke.length === 0, spoke.join(', '));
+}
+
+// ...AND THEY ALL HAVE TO BE DIFFERENT SOUNDS, including from the cries they
+// share a bank with. A copied row passes every check above: the entrance would
+// fire, name a real voice, and be the megalodon's hit sound played twice.
+{
+  // DEDUPED, and the orca is why: it rolls between a bull and a cow, so two
+  // rows in voiceType name one voice on purpose. A raw list would report that
+  // deliberate sharing as a copied sound.
+  const all = [...new Set(['bossSiren', ...entrances, ...variants])];
+  const names = all.map((e) => CONFIG.feedback[e]?.sfx).filter(Boolean);
+  const seen = new Set(names.map(fp));
+  check('every entrance voice is a different sound', seen.size === names.length,
+    `${seen.size} distinct of ${names.length}`);
+  // Against the cries as well. The entrance is the same animal, deliberately,
+  // but it is not the same SOUND — it is that cry held open, and an identical
+  // fingerprint means somebody pointed the event at the cry itself.
+  const cryPrints = new Set(cries.map((e) => fp(CONFIG.feedback[e]?.sfx)));
+  const collide = names.filter((n) => cryPrints.has(fp(n)));
+  check('...and none of them is a cry wearing a new name', collide.length === 0, collide.join(', '));
+}
+
+// THE SCHEDULE — the numbers the ceremony is spread across. The gaps
+// themselves are measured against a live arrival in tools/boss-test.mjs; what
+// is checked here is that the AUTHORED order is the order the layers argue
+// for, because a schedule that puts the footnote first is a tuning decision
+// nothing else would catch.
+{
+  const v = CONFIG.boss?.arrival?.voices ?? {};
+  check('the alarm leads', (v.siren ?? 0) <= (v.type ?? 0), `siren ${v.siren}, type ${v.type}`);
+  check('...the animal follows it', (v.type ?? 0) < (v.perk ?? 0), `type ${v.type}, perk ${v.perk}`);
+  // A tenth of a second is roughly where two sounds stop being two sounds.
+  check('...and none of the three is a chord',
+    (v.type ?? 0) - (v.siren ?? 0) > 0.1 && (v.perk ?? 0) - (v.type ?? 0) > 0.1,
+    `${v.siren} / ${v.type} / ${v.perk}`);
 }
 
 // ===========================================================================

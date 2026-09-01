@@ -46,9 +46,13 @@ let teamLungeGate = 0;
 // of six differently-coloured glowing animals orbiting a seal that looked like
 // none of them. Telling WHICH seal broke formation is now the lunge's job (it
 // leaves the ring and dashes), not the paint's.
+// WHAT THIS SYSTEM CAN BUILD — see the note on SHRIMP_RING_ASSETS for why the
+// key lives beside the builder rather than in systems/levelUpWarmup.js.
+export const SEAL_TEAM_ASSETS = ['sealTeam'];
+
 function buildSeal() {
   const root = new THREE.Group();
-  const visual = createVisual('sealTeam');
+  const visual = createVisual(SEAL_TEAM_ASSETS[0]);
   root.add(visual);
   const anim = CONFIG.animation.enabled ? createAnimationController(visual) : null;
   return { root, visual, anim };

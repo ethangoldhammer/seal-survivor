@@ -15,7 +15,7 @@
 
 import './dom-stub.mjs';
 import * as THREE from 'three';
-import { CONFIG } from '../path/src/config.js';
+import { CONFIG, enemyPaceMul } from '../path/src/config.js';
 import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import { resolvePredation } from '../path/src/systems/predation.js';
 
@@ -296,8 +296,17 @@ for (const type of SHARKS) {
   // The window has to be long enough for THIS creature to actually cross the
   // gap, or a slow one is still running in when the clock stops and looks like
   // it never rises. Megalodon at speed 5.5 needs half again as long as a shark.
+  //
+  // ...AND SHORT ENOUGH, which is the same requirement from the other side and
+  // the one that bit. `def.speed` is the authored number, not the speed this
+  // animal swims at: CONFIG.pace.enemy multiplies it at spawn, so with the dial
+  // at 1.5 the megalodon crossed 15% sooner, spent the whole second half parked
+  // under the player, and reported 0% of its rise as "late" — a shark that
+  // arrives early reading identically to one that never climbs. Sized off the
+  // speed it is actually given, so the window tracks the dial in both
+  // directions.
   const gap = 68;   // most of the arena, so the flat run-in is the bulk of the trip
-  const seconds = (gap / CONFIG.enemies[type].speed) * 1.8 + 3;
+  const seconds = (gap / (CONFIG.enemies[type].speed * enemyPaceMul('speed'))) * 1.8 + 3;
   const { path } = run(type, {
     playerAt: { x: gap / 2, y: -5 }, seconds, from: { x: -gap / 2, y: -34 },
     warmup: 0.6, chase: true, lunge: false,

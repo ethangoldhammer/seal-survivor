@@ -158,7 +158,7 @@ function freshRun() {
 // club is the only thing stepping here — the creatures are deliberately NOT
 // updated, so anything that moves was moved by the club and nothing else.
 function swing(seconds, {
-  level = 1, boom = 0, ice = 0, throwLevel = 0, velocity = null, speed = 0, dashing = false,
+  level = 1, boom = 0, ice = 0, zap = 0, throwLevel = 0, velocity = null, speed = 0, dashing = false,
   rig = rigWithFins(), finSpin = 6, hooks = {},
 } = {}) {
   const frames = Math.round(seconds / dt);
@@ -167,7 +167,7 @@ function swing(seconds, {
   const vel = velocity ?? (speed ? { x: speed, y: 0 } : null);
   for (let i = 0; i < frames; i++) {
     rig.pose?.(i * dt * finSpin);
-    updateClub(dt, scene, playerPos, { club: level, boom, ice, throw: throwLevel }, enemies,
+    updateClub(dt, scene, playerPos, { club: level, boom, ice, zap, throw: throwLevel }, enemies,
       { rig, velocity: vel, dashing }, hooks);
   }
 }
@@ -2135,6 +2135,89 @@ section('THE RIBBON — the clubs you are not holding');
   check('a thrown club trails a ribbon at all', one > 0, `${one.toFixed(2)}x at one stack`);
   check('...that thickens with the Hurler\'s stacks', five > one,
     `${one.toFixed(2)}x at one, ${five.toFixed(2)}x at five`);
+}
+
+// ------------------------------------------------------------------- the zap
+
+section('ZAPPY CLUB — a hit throws a chain into the crowd behind it');
+
+// A DENSE SCHOOL, because a chain is a claim about the SECOND body and one
+// fish cannot fail it. Packed inside arcRange of each other and of the seal,
+// so a swing that connects has somewhere to go.
+function school(n = 8) {
+  freshRun();
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(spawnAt('fish', 1.2 + i * 0.9, -20));
+  return out;
+}
+
+// One swing through it, counting the hops the chain reported.
+function zapSwing(seconds, zap, extra = {}) {
+  const arcs = [];
+  school();
+  swing(seconds, {
+    level: 1, zap, finSpin: 10, ...extra,
+    hooks: { onArc: (x1, y1, x2, y2, strength, source) => arcs.push({ strength, source }) },
+  });
+  return arcs;
+}
+
+{
+  const none = zapSwing(1.5, 0);
+  check('no card, no chain', none.length === 0, `${none.length} arc(s)`);
+
+  const held = zapSwing(1.5, 1);
+  check('...and one stack throws one', held.length > 0, `${held.length} arc(s) in 1.5s`);
+  // THE TAG, and it is not cosmetic: every point of this card's damage was
+  // filed under the stick that started it otherwise, and the balance report
+  // could never say whether the pick earned itself.
+  check('...filed under its own card, not the club\'s',
+    held.every((a) => a.source === 'clubZap'), held[0]?.source ?? 'none');
+  // DIMINISHING, which is what makes a long chain a reach rather than a
+  // multiplier — and it is drawn thinner by the same number, so this is the
+  // claim the player can actually see.
+  const chain = held.slice(0, 2);
+  check('...and each hop is worth less than the one before',
+    chain.length < 2 || chain[1].strength < chain[0].strength,
+    chain.map((a) => a.strength.toFixed(2)).join(' -> '));
+}
+
+{
+  // DEEPER STACKS REACH FURTHER. Measured as hops per swing rather than as a
+  // config read — the point is that the level actually arrives in the water.
+  const one = zapSwing(2, 1).length;
+  const five = zapSwing(2, 5).length;
+  check('a deeper stack chains further', five > one, `${one} hop(s) at one stack, ${five} at five`);
+}
+
+{
+  // THE GAP IS REAL. Without it a run with clubs on both fins fires a chain
+  // per club per contact — several a second each, every one of them drawing
+  // bolts — and the water becomes a sheet of lightning that says nothing.
+  const seconds = 3;
+  const arcs = zapSwing(seconds, 1);
+  const st = CONFIG.clubZap;
+  // Two fins, so at most two chains per gap, and each chain is at most `arcs`
+  // hops deep. A generous ceiling on purpose: this is a guard against the
+  // cooldown being ignored outright, not a pin on the exact tuning.
+  const ceiling = Math.ceil(seconds / st.cooldown) * 2 * (st.arcs + st.arcsPerLevel * 4 + 1);
+  check('the per-club gap holds', arcs.length <= ceiling,
+    `${arcs.length} hop(s) against a ceiling of ${ceiling}`);
+}
+
+{
+  // THE PACKET IS THE TIP'S OWN NUMBER. clubZap() reads levelStats rather than
+  // recomputing the share beside it, which is the only arrangement in which
+  // the card's readout and the damage the water sees cannot drift apart.
+  const { clubZap } = await import('../path/src/systems/club.js');
+  const { clubZapLevelStats } = await import('../path/src/levelStats.js');
+  const { player } = await import('../path/src/entities/player.js');
+  const spec = clubZap(3);
+  const tip = clubZapLevelStats(3, player.stats);
+  check('the chain deals what the tip promises',
+    spec && Math.abs(spec.packet - tip.clubZapDamage) < 1e-9,
+    `${spec?.packet?.toFixed(2)} vs ${tip.clubZapDamage.toFixed(2)}`);
+  check('...and the card off is no chain at all', clubZap(0) === null, `${clubZap(0)}`);
 }
 
 // --------------------------------------------------------- and main.js wires it

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { buildChain, applyChainToPoint, measureReach, smoothstep } from './ikChain.js';
-import { trackCoverage } from './animation.js';
+import { applyChainToPoint, smoothstep } from './ikChain.js';
+import { createPoseRig, poseTarget as finTarget } from './poseRig.js';
 import { snapshotMoment } from './bossKill.js';
 import { feedback } from './feedback.js';
 import { setSfxEcho } from './audio.js';
@@ -85,11 +85,7 @@ import { setSfxEcho } from './audio.js';
 // ============================================================================
 
 // Scratch, module-level so posing allocates nothing per frame.
-const _root = new THREE.Vector3();
 const _target = new THREE.Vector3();
-const _up = new THREE.Vector3();
-const _fore = new THREE.Vector3();
-const _lat = new THREE.Vector3();
 
 /**
  * The performance in flight, shared by the player's driver and the escorts.
@@ -283,41 +279,14 @@ function envelope() {
 // ---------------------------------------------------------------------------
 // THE POSES.
 //
-// Every target is built from the chain's OWN root and its OWN measured reach,
-// in the instance's own frame — never in hand-typed world units. Two reasons,
-// both of which have bitten this project before: the seal carries a size
-// multiplier that a literal offset would ignore, and the two flippers do not
-// even have the same reach (1.818 left, 2.037 right — the rig is not
-// symmetric). A target written as "0.8 of the way up this limb's own length"
-// is right on both flippers and stays right if the model is ever re-exported.
+// `finTarget` is systems/poseRig.js's `poseTarget`, imported under the name it
+// has always had here. It measures every target in the CHAIN'S OWN reach and
+// takes `lateral` from the body's centreline rather than from the shoulder —
+// see that file for why both of those are load-bearing rather than tidy.
 //
 // `side` is -1 for the left flipper and +1 for the right, matching the
 // measured rest positions (left at z=-0.71, right at z=+0.74).
 // ---------------------------------------------------------------------------
-
-function finTarget(chain, out, basis, side, up, fore, lateral) {
-  chain.bones[0].updateWorldMatrix(true, true);
-  chain.bones[0].getWorldPosition(_root);
-  const reach = measureReach(chain, 1);
-  // `up` and `fore` are measured from the limb's OWN root, because how high a
-  // flipper is held is a question about that shoulder. `lateral` is measured
-  // from the BODY'S CENTRELINE instead, because how far out to the side a
-  // flipper is held is a question about the animal.
-  //
-  // That distinction is the difference between a clap and a shrug, and it is
-  // worth spelling out because the first version got it wrong in a way that
-  // still looked plausible: anchored at the shoulder, `close: 0.08` asked each
-  // flipper to come 8% of its reach toward the midline FROM A SHOULDER THAT IS
-  // ALREADY 0.24 OUT, so the two hands stopped 0.84 apart — a measurable
-  // closing motion that never touches. Measured from the centreline it means
-  // what it says.
-  const latRoot = _lat.copy(_root).sub(basis.origin).dot(basis.lat);
-  out.copy(_root)
-    .addScaledVector(basis.up, up * reach)
-    .addScaledVector(basis.fore, fore * reach)
-    .addScaledVector(basis.lat, side * lateral * reach - latRoot);
-  return out;
-}
 
 const POSES = {
   // Both flippers thrown up over the head and held there. The plainest read of
@@ -487,93 +456,17 @@ export const CELEBRATION_VARIANTS = Object.keys(POSES);
  *   "this creature doesn't celebrate".
  */
 export function createCelebrationDriver(instance) {
-  const def = instance?.userData?.aimRig;
-  if (!def) return null;
+  // The chains, the body's axes, the target maths and the anti-ratchet
+  // snapshot all live in systems/poseRig.js, shared with the clap button —
+  // see that file for why each of those is load-bearing. What stays here is
+  // the celebration's own clock and its own shapes.
+  const rig = createPoseRig(instance, 'celebrate');
+  if (!rig) return null;
 
-  const tipAxis = def.tipAxis ?? '+Y';
-  const fins = (def.fins ?? [])
-    .map((d) => {
-      const chain = buildChain(instance, d, tipAxis, `celebrate fin "${d.name ?? '?'}"`);
-      if (!chain) return null;
-      // Which side of the body this flipper is on, taken from where the bone
-      // ACTUALLY IS rather than from its name — `left`/`right` in the asset
-      // are labels, and a mirrored re-export would swap the geometry without
-      // touching them. Measured at build time, once.
-      chain.bones[0].updateWorldMatrix(true, true);
-      chain.bones[0].getWorldPosition(_root);
-      instance.worldToLocal(_root);
-      return { chain, side: _root.z < 0 ? -1 : 1 };
-    })
-    .filter(Boolean);
-  const head = def.head ? buildChain(instance, def.head, tipAxis, 'celebrate head chain') : null;
-  const tail = def.tail ? buildChain(instance, def.tail, tipAxis, 'celebrate tail chain') : null;
-  if (!fins.length && !head && !tail) return null;
-
-  const basis = {
-    up: new THREE.Vector3(), fore: new THREE.Vector3(), lat: new THREE.Vector3(),
-    origin: new THREE.Vector3(), // the body's centreline, which `lateral` is measured from
-  };
-  const ctx = { fins, head, tail, basis, phase: 0, solve: null };
-
-  // THE POSE THE SEAL WAS IN WHEN THE BOSS DIED, captured on the first frame
-  // of each celebration and restored at the top of every frame after it.
-  //
-  // This is not tidiness, it is the only thing standing between this system
-  // and a permanent ratchet — and the reason is a property of the model, not
-  // of this code. THE `swim` CLIP DOES NOT KEY THE FRONT FLIPPERS: it writes
-  // 19 of the rig's nodes and shoulder_L_011, uparm_L_012, arm_L_013,
-  // hand_L_014 and shoulder_R_015 are not among them (every other clip in the
-  // file keys 23 and covers them all).
-  //
-  // So while the seal is swimming, NOTHING lays an absolute pose on those
-  // bones each frame. applyChainToPoint blends from whatever is already in a
-  // bone toward its solution, which means on an unkeyed bone it blends from
-  // its own previous output — the weight easing back to 0 hands the flipper
-  // back to the celebration pose rather than to the swim cycle, and the seal
-  // finishes every boss fight a little further into a wave it never lowers.
-  // Measured before this existed: 0.54 out of position after eight kills,
-  // against a control seal that never celebrated.
-  //
-  // Restoring an entry snapshot rather than the bind pose keeps the blend
-  // honest at both ends: the pose grows out of exactly where the animal was
-  // and returns to exactly there, with nothing to pop at either edge.
-  // ...but ONLY on the bones that actually need it, which is the other half of
-  // this and was found the same way (measured, against a control seal).
-  //
-  // Restoring a bone the mixer IS driving does not merely waste work, it
-  // breaks the mixer: three.js's PropertyMixer skips its write whenever the
-  // value it computes equals the one it last wrote, on the reasonable
-  // assumption that nobody else touched the bone in between. Overwrite one and
-  // that cache is stale, so the clip stops restoring it — the right flipper
-  // finished 13.8 degrees out and STAYED there, while the unkeyed left one was
-  // perfect. Exactly backwards from what the fix was supposed to do.
-  //
-  // So a bone is restored only when the mixer cannot be relied on to take it
-  // back, and is otherwise left alone to be overwritten by the clip as the
-  // weight comes off.
-  //
-  // "Cannot be relied on" is NOT the same as "unkeyed", and the difference is
-  // the whole trap. A track with a SINGLE keyframe is a constant: the mixer
-  // computes the same value every frame, its value-unchanged check fires, and
-  // it stops writing after the first one — so a constant-keyed bone is exactly
-  // as unrecoverable as an unkeyed bone, while looking keyed to any check that
-  // only asks whether a track exists. On this model the swim cycle keys
-  // uparm_R_016, arm_R_017, hand_R_018 and neck01_05 with one keyframe each,
-  // against 31 for head_07 and tail01_020 — so the flipper that LOOKED safe
-  // was the one that stuck 74 degrees out of place.
-  // The test itself lives in systems/animation.js, shared with the state
-  // inspector (ui/animDebug.js) — one answer to "will the clip put this bone
-  // back", so the panel cannot tell you something different from what this
-  // file acts on.
-  const coverage = trackCoverage(instance);
-  const mixerOwns = (bone) => coverage.get(bone.name)?.owned === true;
-
-  const posedBones = [...new Set([
-    ...fins.flatMap(({ chain }) => chain.bones),
-    ...(head?.bones ?? []),
-    ...(tail?.bones ?? []),
-  ])].filter((b) => !mixerOwns(b));
-  const entryQ = posedBones.map((b) => b.quaternion.clone());
+  const ctx = { fins: rig.fins, head: rig.head, tail: rig.tail, basis: rig.basis, phase: 0, solve: null };
+  // Which celebration the entry snapshot belongs to. -1 is "we are not holding
+  // one", which is also the flag that says whether the bones still need
+  // putting back.
   let entrySeq = -1;
 
   return {
@@ -593,9 +486,9 @@ export function createCelebrationDriver(instance) {
         // Without this the seal keeps whatever fraction of the pose the last
         // live frame happened to leave in them — small, but it is never
         // cleaned up on the bones the swim clip doesn't key, so it is the seed
-        // of the same ratchet entryQ exists to prevent.
+        // of the same ratchet the entry snapshot exists to prevent.
         if (entrySeq !== -1) {
-          for (let i = 0; i < posedBones.length; i++) posedBones[i].quaternion.copy(entryQ[i]);
+          rig.restore();
           entrySeq = -1;
         }
         return;
@@ -606,27 +499,18 @@ export function createCelebrationDriver(instance) {
       const { phase, weight } = envelope();
 
       // First frame of this celebration: remember where the animal was. After
-      // that, put it back there before posing — see the entryQ note above for
-      // why this is load-bearing rather than housekeeping.
+      // that, put it back there before posing — see systems/poseRig.js for why
+      // this is load-bearing rather than housekeeping.
       if (entrySeq !== celebrationState.seq) {
         entrySeq = celebrationState.seq;
-        for (let i = 0; i < posedBones.length; i++) entryQ[i].copy(posedBones[i].quaternion);
+        rig.capture();
       } else {
-        for (let i = 0; i < posedBones.length; i++) posedBones[i].quaternion.copy(entryQ[i]);
+        rig.restore();
       }
 
       if (weight <= 0.001 && celebrationState.clock > celebrationState.peakAt) return;
 
-      // The seal's own axes, in world space, re-read every frame because the
-      // body turns: `up` is dorsal (-X), `fore` is the nose (+Y) and `lat`
-      // runs left-to-right through the flippers (+Z). Normalised, so the
-      // size multiplier on the instance can't scale the pose targets twice.
-      instance.updateWorldMatrix(true, false);
-      instance.matrixWorld.extractBasis(basis.up, basis.fore, basis.lat);
-      basis.up.normalize().multiplyScalar(-1);
-      basis.fore.normalize();
-      basis.lat.normalize();
-      instance.getWorldPosition(basis.origin);
+      rig.refreshBasis();
 
       ctx.phase = phase;
       ctx.solve = (chain, target) => applyChainToPoint(chain, rawDt, ik, weight, 1, target);
@@ -641,16 +525,14 @@ export function createCelebrationDriver(instance) {
      * boss that died in the previous game.
      */
     reset() {
-      for (const { chain } of fins) chain.primed = false;
-      if (head) head.primed = false;
-      if (tail) tail.primed = false;
+      rig.unprime();
     },
 
     // What actually resolved, for the tests: bone lookup drops names that miss
     // silently, so this is the only way to tell "two flippers" from "two
     // declared, one survived".
-    finCount: fins.length,
-    hasHead: !!head,
-    hasTail: !!tail,
+    finCount: rig.finCount,
+    hasHead: rig.hasHead,
+    hasTail: rig.hasTail,
   };
 }

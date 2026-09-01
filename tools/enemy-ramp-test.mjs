@@ -150,15 +150,31 @@ section('SEEKING — does the behavioural ramp actually reach these creatures?')
   }
 
   // The term has to actually WIN by the end, or "presses harder" is a number
-  // that never changes what the school does. Cohesion is what it competes with:
-  // below it the fish would rather be with each other than with you.
+  // that never changes what the school does.
+  //
+  // MEASURED, NOT COMPARED TO COHESION. This used to read `seek > cohesion`, on
+  // the reasoning that cohesion is what the seek term competes with — below it
+  // the fish would rather be with each other than with you. That is wrong, and
+  // it is wrong in the direction that hides a bug: cohesion points at the
+  // SCHOOL, never away from the seal, so it does not oppose the seek at all,
+  // and neither does wander (a zero-mean sinusoid — raising it from 0 to 4.8
+  // made a school press MORE, not less). Nothing in the boids sum opposes this
+  // term. What the behaviour actually does is SATURATE: a school held on the
+  // seal for 30s stays inside 8 units 31% of the time at 0.3, 48% at 0.4, 94%
+  // at 0.7, and 100% from 0.9 up. Everything above ~0.7 is the same relentless
+  // press, which is why lowering an authored 1.4 to 0.9 changed nothing a
+  // player could feel.
+  //
+  // So the honest pair of thresholds is the saturation point, not cohesion: by
+  // minute 15 a school has to be over it, and at minute one it has to be under
+  // it, or the ramp has no room to do anything.
+  const SATURATES = 0.7;
   const k0 = BASIC[0];
-  const coh = CONFIG.enemies[k0].swarm.cohesion ?? 0;
-  check('...hard enough that the seal outranks the school itself by the end',
-    seekAt(k0, 15) > coh,
-    `${seekAt(k0, 15).toFixed(2)} against a cohesion of ${coh}`);
-  check('...and the opening is left alone', seekAt(k0, 1) < coh,
-    `${seekAt(k0, 1).toFixed(2)} against a cohesion of ${coh} at minute one`);
+  check('...hard enough that the school is glued to the seal by the end',
+    seekAt(k0, 15) > SATURATES,
+    `${seekAt(k0, 15).toFixed(2)} against a press that saturates at ${SATURATES}`);
+  check('...and the opening is left alone', seekAt(k0, 1) < SATURATES,
+    `${seekAt(k0, 1).toFixed(2)} at minute one, below the saturation point`);
 
   // Baked per instance, not read live off the def — a fish keeps the aggression
   // it was born with, so a school does not change its mind mid-chase.

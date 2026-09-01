@@ -265,6 +265,48 @@ section('The animal <span>— what a boss looks like wearing them</span>', 3);
 }
 
 // ---------------------------------------------------------------------------
+section('The mark around it <span>— the half that does not depend on the hide</span>', 3);
+// ---------------------------------------------------------------------------
+// AT FIGHT SCALE, WHICH IS THE ONLY SCALE THIS ARGUMENT CAN BE HAD AT. The
+// painted glow is additive light on an animal, so how far it carries is a
+// property of that animal — and on a boss a couple of hundred pixels across it
+// is competing with its own bloom, the water and whatever else is lit. The
+// ring is drawn in front of everything at a fixed fraction of the spot, so the
+// comparison here is "can you find the thing you are supposed to shoot", not
+// "is the glow pretty".
+{
+  const BASE = { ...(LOOK.target ?? {}) };
+
+  LOOK.target = { ...BASE, enabled: false };
+  newBoss(0);
+  run(30, fightCam);
+  present('Glow alone (control)', 'The light on its own at the frustum the player is given. Everything that differs between this panel and the next is the reticle.');
+
+  LOOK.target = { ...BASE };
+  newBoss(0);
+  run(30, fightCam);
+  present('With the target ring', 'The strike mark\'s own bracket at a fraction of its size, depth-test off so a spot on the far flank is still findable. It wears the spot\'s colour ramp — that is what keeps it from reading as a second strike mark.', true);
+
+  // STRUCK, at the same scale. The band fattens and brightens for the length of
+  // the spot's own flash: more mass in the same place rather than a whiter
+  // white, which is the response that looks like the stuff coming out of it.
+  {
+    const e = newBoss(0);
+    const spot = hotSpotsOf(e).spots[0];
+    // THE GOO IS SIZED AGAINST THE CAMERA, and the panels above this one are
+    // shot on the close cameras — without this the bleed renders at detail-cam
+    // scale over a fight-cam frame and one small leak covers the whole animal.
+    updateParticleScale(fightCam, gl);
+    shoot(spot, spot.pool / (CONFIG.hotSpots.critMul * 6));
+    run(3, fightCam);
+    present('The frame it is hit', 'The ring fattens and brightens with the hit and the ichor comes out of the wound underneath it. If the two do not read as one event, it is `hitSwell` that is wrong, not the goo.');
+    updateParticleScale(detailCam, gl);
+  }
+
+  LOOK.target = BASE;
+}
+
+// ---------------------------------------------------------------------------
 section('One spot <span>— whole, damaged, struck</span>', 3);
 // ---------------------------------------------------------------------------
 {

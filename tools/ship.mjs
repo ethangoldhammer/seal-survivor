@@ -18,10 +18,23 @@
 //                  evidence rather than look like every other commit.
 //   --branch <b>   ship a branch other than SealSurvivor-Main (no deploy)
 //   --file <path>  read the commit message from a file instead of the args
-//   --phone        after the push, install the SAME build on the paired iPhone
-//                  (npm run ship:all). See tools/ship-ios.mjs. It runs LAST on
-//                  purpose: the web deploy takes two minutes and the phone
-//                  takes five, so a sleeping phone never holds back the site.
+//   --mac          after the push, package the Mac app. See tools/ship-mac.mjs.
+//   --phone        after the push, install the SAME build on the paired iPhone.
+//
+// `npm run ship:all` is both of those: web, Mac and phone from one command, all
+// three cut from the commit that just passed every gate.
+//
+// THE ORDER OF THE THREE IS THE POINT. The push is what deploys the site, so it
+// goes first and finishes in two minutes whatever else happens. The Mac build
+// is next at about one minute. The phone is LAST because it takes five and
+// needs hardware that might be asleep — a napping iPhone must never be the
+// reason the site is still on yesterday's build.
+//
+// EACH IS ALLOWED TO FAIL ON ITS OWN. A Mac build that dies does not stop the
+// phone install, and neither can un-deploy the site: by the time either runs,
+// the commit is pushed and the deploy is already in flight. What you get back
+// is a list of which halves landed, and the single command to retry the one
+// that did not.
 // ============================================================================
 
 import { execFileSync, execSync } from 'node:child_process';
@@ -62,6 +75,7 @@ const SKIP = has('--no-verify');
 const BRANCH = valueOf('--branch') ?? PROD_BRANCH;
 const FILE = valueOf('--file');
 const PHONE = has('--phone');
+const MAC = has('--mac');
 
 // The message is every bare argument joined — so quoting is optional and
 // `npm run ship -- fixed the crab` does what it looks like it does. `--file`
@@ -142,6 +156,15 @@ if (SKIP) {
 say();
 
 if (DRY) {
+  if (MAC) {
+    say();
+    const { shipMac, ShipMacError } = await import('./ship-mac.mjs');
+    try { await shipMac({ dry: true }); }
+    catch (err) {
+      if (!(err instanceof ShipMacError)) throw err;
+      die(err.message, err.hint);
+    }
+  }
   if (PHONE) {
     say();
     const { shipPhone, ShipIosError } = await import('./ship-ios.mjs');
@@ -164,6 +187,7 @@ if (!YES) {
   say(deploys
     ? `  ${c.yellow}which auto-deploys to ${LIVE_URL}${c.off}`
     : `  ${c.dim}(no deploy — only ${PROD_BRANCH} publishes)${c.off}`);
+  if (MAC) say(`  ${c.dim}then package the Mac app from that build${c.off}`);
   if (PHONE) say(`  ${c.dim}then install that build on the paired iPhone${c.off}`);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = (await rl.question('\nGo? [y/N] ')).trim().toLowerCase();
@@ -194,6 +218,31 @@ if (deploys) {
   say(`  live in ~2 min  ${c.dim}${LIVE_URL}${c.off}`);
 }
 
+// --- the other two platforms ------------------------------------------------
+//
+// Both run AFTER the push, so neither can delay or undo the deploy, and both
+// are collected rather than thrown: a failed Mac build must not skip the phone
+// install, because the two have nothing to do with each other and finding out
+// about only the first one would mean running the whole command again to
+// discover the second.
+const failed = [];
+
+// The Mac app builds its OWN bundle — dist-desktop, not the dist/ the gates
+// produced. See the note in ship-mac.mjs: the two differ on purpose, so there is
+// nothing here to reuse and --no-verify changes nothing about this half.
+if (MAC) {
+  say();
+  const { shipMac, ShipMacError } = await import('./ship-mac.mjs');
+  try {
+    await shipMac();
+  } catch (err) {
+    if (!(err instanceof ShipMacError)) throw err;
+    say(`\n${c.red}✗ mac: ${err.message}${c.off}`);
+    if (err.hint) say(`${c.dim}  ${err.hint}${c.off}`);
+    failed.push(['mac', 'npm run ship:mac']);
+  }
+}
+
 // The phone build reuses the dist/ the gates just produced, so the app and the
 // site are the same bytes rather than two builds that happen to be adjacent.
 // --no-verify skips that build, and then there is nothing to reuse.
@@ -206,8 +255,14 @@ if (PHONE) {
     if (!(err instanceof ShipIosError)) throw err;
     say(`\n${c.red}✗ phone: ${err.message}${c.off}`);
     if (err.hint) say(`${c.dim}  ${err.hint}${c.off}`);
-    say(`${c.dim}  The web deploy is unaffected — it is already running.${c.off}`);
-    say(`${c.dim}  Retry just this half with: npm run ship:phone${c.off}`);
-    process.exit(1);
+    failed.push(['phone', 'npm run ship:phone']);
   }
+}
+
+if (failed.length) {
+  say(`\n${c.dim}The web deploy is unaffected — it was pushed before any of this ran.${c.off}`);
+  for (const [what, retry] of failed) {
+    say(`${c.dim}  Retry ${what} on its own with: ${retry}${c.off}`);
+  }
+  process.exit(1);
 }

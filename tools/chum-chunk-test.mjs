@@ -669,7 +669,16 @@ section('...and it is thrown, not handed over');
   // working — so the two together say the gate is doing it, not the physics.
   resetPickups(scene);
   player.mesh.position.set(0, 0, 0);
-  const handed = spawnChumChunk(scene, new THREE.Vector3(5, 0, 0), {
+  // ON THE SEAL, not five units away. The control is meant to isolate ONE
+  // thing — the flight gate — and spawning it out at x=5 made it depend on the
+  // magnet as well: `collectRadius` is 0.6, so a piece that far out is only
+  // ever claimed if something drags it in, and with the magnet chain-gated in
+  // this harness nothing does. Both throws then flew the identical 9.43 units
+  // and the check compared a number against itself.
+  //
+  // Placed where it can be taken on frame one, the gate is the only difference
+  // left between the two runs, which is what the comparison is for.
+  const handed = spawnChumChunk(scene, new THREE.Vector3(0, 0, 0), {
     t: 0.4, pips: M.pips ?? 2, tint: M.tint,
     vel: { x: M.tossSpeed ?? 42, y: 0 },
   });
@@ -681,7 +690,8 @@ section('...and it is thrown, not handed over');
     handedOut = Math.max(handedOut, handed.mesh.position.x - handedFrom);
   }
   check('...and the same throw with no flight gate is taken where it stands',
-    handedOut < travelled, `${handedOut.toFixed(2)} vs ${travelled.toFixed(2)} units`);
+    eaten && handedOut < travelled,
+    `${eaten ? 'eaten' : 'never claimed'} after ${handedOut.toFixed(2)} units, against ${travelled.toFixed(2)} flown`);
   parked();
 }
 

@@ -221,7 +221,13 @@ boats.length = 0;
 enemies.length = 0;
 const knownBefore = new Set(scene.children);
 const swimmer = { x: 0, y: 0 };
-updateOrcaPod(dt, scene, swimmer, 2, enemies, {});
+// AT THE FULL POD. The card buys one orca per stack now, so a level picked out
+// of the air decides how many bodies this check covers — driven at 2 it was
+// quietly watching two of the three, and the calf is the one with its own
+// scale. The level and the count are the same number by construction (see
+// podSize in systems/orca.js), which is what makes this the whole family.
+const PODLEVEL = CONFIG.orca.count;
+updateOrcaPod(dt, scene, swimmer, PODLEVEL, enemies, {});
 const podRoots = scene.children.filter((o) => !knownBefore.has(o));
 
 // Shortest angular distance, so the wrap the settled mirror angle does (it is
@@ -236,7 +242,7 @@ for (let i = 0; i < 900; i++) {
   const t = i * dt;
   swimmer.x = Math.cos(t * 2.3) * 9;
   swimmer.y = Math.sin(t * 1.7) * 6;
-  updateOrcaPod(dt, scene, swimmer, 2, enemies, {});
+  updateOrcaPod(dt, scene, swimmer, PODLEVEL, enemies, {});
   podRoots.forEach((r, k) => {
     const y = r.children[0]?.rotation.y ?? 0;
     worstZ = Math.max(worstZ, angleDelta(r.rotation.z, prev[k].z));

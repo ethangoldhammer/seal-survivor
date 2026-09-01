@@ -433,9 +433,15 @@ const gaps = ladderReport(base, 'hunt 7s, clear 80%');
   // forbids is the two extremes: an opening that collapses into "take ten
   // upgrades in ninety seconds", and one so starved that the first upgrade is
   // minutes away.
+  //
+  // THE UPPER BOUND MOVED FROM THREE MINUTES TO FOUR AND A HALF when the mid
+  // band was widened to start at level 5 (see CONFIG.xp.midFrom): levels 5-10
+  // were arriving 16-29s apart, which is the same cadence as levels 11-13, so
+  // the stretch the opening is meant to hand over to the mid-game was being
+  // spent at opening speed. Level 10 now lands around 3.3m rather than 2.8m.
   const l10 = timeToLevel(base, 10) ?? 0;
-  check('the opening is not rushed — level 10 lands between one and three minutes',
-    l10 > 60 && l10 < 180, `level 10 at ${(l10 / 60).toFixed(1)}m`);
+  check('the opening is not rushed — level 10 lands between one and four and a half minutes',
+    l10 > 60 && l10 < 270, `level 10 at ${(l10 / 60).toFixed(1)}m`);
 
   // ...and the very first card, specifically. The holdback bites hardest at
   // difficulty 0, so this is the number that goes wrong first if `start` is

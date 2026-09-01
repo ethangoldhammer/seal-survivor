@@ -31,6 +31,12 @@ export const input = {
   // thing reading it is the first-run coach, which does not teach aiming to a
   // mouse for that exact reason.
   aiming: false,
+  // The clap button — edge-triggered, true for exactly one frame per press.
+  // Edge and nothing else: there is no held state to keep, because the gesture
+  // it starts re-enters itself rather than being sustained (see
+  // systems/clap.js). A key held down does not clap continuously, which is
+  // deliberate — auto-repeat is not a rhythm.
+  clap: false,
 };
 
 // Menu navigation, kept separate from `input` on purpose: gameplay wants a
@@ -81,6 +87,14 @@ let touchStrikePrev = false;
 // LB, RB, LT, RT — Standard Gamepad indices. All four boost.
 const STRIKE_BUTTONS = [4, 5, 6, 7];
 const strikeButtonHeld = {};
+let clapRequested = false;
+// X / Square — Standard Gamepad index 2. The one free face button in
+// gameplay: 0 is the menu confirm (and so cannot be spent, see the firing note
+// in updateInput), 1 is the universal back, and 3 is left unclaimed rather
+// than doubled up on this, so there is still a face button to spend on the
+// next thing that needs one.
+const CLAP_BUTTON = 2;
+let clapButtonHeld = false;
 let domElement = null;
 const mouseNDC = new THREE.Vector2(0, 0);
 // The mouse's charge input, joining the same OR as Space and the four shoulder
@@ -616,6 +630,7 @@ const aimNDC = new THREE.Vector2();
 // frame of the run. Same story for a key still held when a run restarts.
 export function clearPendingInput() {
   strikeRequested = false;
+  clapRequested = false;
   // Adopt whatever is physically down RIGHT NOW as the baseline rather than
   // zeroing it. Clearing to false would make a trigger the player happens to be
   // holding as the run begins read as a brand-new press on the next frame, which
@@ -648,6 +663,11 @@ export function clearPendingInput() {
   input.strike = false;
   input.strikeHeld = anyStrikeDown;
   input.strikeRelease = false;
+  // Adopted rather than zeroed, like the strike buttons above: a face button
+  // still down from dismissing the score card must not read as a fresh press
+  // on the first frame of the new run.
+  clapButtonHeld = !!pad?.buttons[CLAP_BUTTON]?.pressed;
+  input.clap = false;
 }
 
 // The arrow keys, which are NOT rebindable and always steer. Kept as a fixed
@@ -684,6 +704,11 @@ function setKey(e, down) {
     if (down && !e.repeat) strikeRequested = true;
     spaceHeld = down;
   }
+  // The clap. `!e.repeat` is doing real work here rather than being copied off
+  // the line above: this is a key somebody WILL hold down, and auto-repeat
+  // would fire it at whatever rate the OS keyboard is set to — a tempo the
+  // player did not choose and cannot hear coming.
+  if (action === 'clap' && down && !e.repeat) clapRequested = true;
   // 'pause' is deliberately not handled here. It stops the run and opens a
   // menu, which is main.js's business — this file only turns devices into
   // per-frame state and has no idea a menu exists.
@@ -1134,6 +1159,16 @@ export function updateInput(camera, playerPos) {
   // input comes up, so the two triggers behave as one button for charging.
   input.strikeHeld = anyStrikeDown;
   input.strikeRelease = strikeHeldPrev && !anyStrikeDown && !suppressStrikeRelease;
+
+  // --- clap (edge-triggered, like the strike press above) ---
+  // Held state is tracked for the pad only because that is the one device with
+  // no events: the keyboard raises its own edge in setKey. Nothing downstream
+  // reads a held clap — see the note on `input.clap`.
+  const clapDown = !!pad?.buttons[CLAP_BUTTON]?.pressed;
+  if (clapDown && !clapButtonHeld) clapRequested = true;
+  clapButtonHeld = clapDown;
+  input.clap = clapRequested;
+  clapRequested = false;
   // Clear the suppression on the same frame the release it was guarding would
   // have fired. Leaving it set until the next cancel would let it eat a real
   // let-go later — one where the player did mean to launch.

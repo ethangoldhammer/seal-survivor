@@ -58,13 +58,15 @@ import { ease } from '../ease.js';
 import { parseBossNameCsv, rollBossName } from '../bossNameTable.js';
 import { parseBossCsv, newBossBag, nextBoss, FALLBACK_BOSS } from '../bossTable.js';
 import { parseBossPerkCsv, rollBossPerk } from '../bossPerkTable.js';
-import { attachBossPerk, resetBossPerks, updateBossPerks } from './bossPerks.js';
+import { attachBossPerk, resetBossPerks, updateBossPerks, activeBossPerk } from './bossPerks.js';
+import { updateBossLook } from './bossLook.js';
 import { startBossRiser, stopBossRiser } from './bossRiser.js';
 import { startBossMusic, endBossMusic, resetBossMusic, fadeMusicForBoss, primeBossRoom } from './music.js';
 import { startBossKill } from './bossKill.js';
 import { attachBossBoat, isBoatBoss, resetBossBoat, updateBossBoat } from './bossBoat.js';
 import { attachKraken, releaseKraken, resetKraken, updateKraken } from './kraken.js';
 import { attachAngler, releaseAngler, resetAngler, updateBossAngler } from './bossAngler.js';
+import { attachBossCrab, releaseBossCrab, resetBossCrab, updateBossCrab } from './bossCrab.js';
 import { attachHotSpots, resetBossHotSpots } from './bossHotSpots.js';
 import { hideOutlineOn } from './outlines.js';
 import { beginBossWarmup, cancelBossWarmup, tickBossWarmup } from './bossWarmup.js';
@@ -72,7 +74,7 @@ import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
 import { bounds } from '../arena.js';
 import { cineReveal, cineRevealDone } from './cineCamera.js';
-import { feedback } from './feedback.js';
+import { feedback, bossEntranceVoice } from './feedback.js';
 import { damageCreditFor } from './playtest.js';
 // Not sourceLabel directly: the ledger's name for a weapon is its BASE name,
 // and by the time a boss goes down the pebbles are usually something else. See
@@ -407,6 +409,7 @@ export function resetBoss(scene = null) {
   // exit uses releaseKraken, which leaves it drifting.
   if (scene) resetKraken(scene);
   resetAngler();
+  resetBossCrab();
   resetBossHotSpots();
   bossState.enemy = null;
   bossState.name = '';
@@ -421,6 +424,7 @@ export function resetBoss(scene = null) {
   bossState.arrivalFrac = 0;
   bossState.approaching = false;
   bossState.approachLeft = 0;
+  clearEntranceVoices();
   cineRevealDone();
   bossState.maxHp = 1;
   bossState.lastLevel = 0;
@@ -527,6 +531,84 @@ function tickApproach(dt, e) {
   return fullyInside(e) || bossState.approachLeft <= 0;
 }
 
+// ---------------------------------------------------------------------------
+// THE ENTRANCE'S THREE VOICES
+// ---------------------------------------------------------------------------
+// An alarm, then the animal, then what it is carrying — see bossEntranceVoice
+// in systems/feedback.js for what each layer says and CONFIG.boss.arrival.voices
+// for when. This is only the clock.
+//
+// A LIST WITH AN INDEX, ticked against the ceremony's own elapsed time, rather
+// than three setTimeouts. Two reasons, and both of them are bugs that have been
+// written here before:
+//
+//   A timer fires through a pause. An xp spill can open a level-up card in the
+//   middle of an arrival — the ceremony stops dead, because it runs on the
+//   game clock — and three cues arriving over the card while the bar sits
+//   frozen half full is the whole illusion gone.
+//
+//   And a timer outlives its subject. A boss cleared mid-ceremony (a reset, a
+//   dev-panel despawn) would still announce itself, from an ocean with nothing
+//   in it.
+//
+// Crossings, not windows: each entry fires on the first frame past its offset
+// and the index moves on, so a long frame plays its cue late rather than not
+// at all, and a slow one can never play it twice.
+let entranceCues = [];
+let entranceCueIdx = 0;
+
+function clearEntranceVoices() {
+  entranceCues = [];
+  entranceCueIdx = 0;
+}
+
+// Build the running order for THIS boss. Offsets are authored in seconds from
+// the ceremony's first frame, which is the unit the ear works in — but the
+// ceremony's LENGTH is a separate slider, so a schedule authored against a
+// two-second arrival has to survive somebody setting it to one.
+//
+// SCALED, NOT CLAMPED, when it doesn't fit. Clamping would pile every
+// overflowing cue onto the last frame — three sounds at once, which is exactly
+// the chord this feature exists to avoid — and dropping them would mean a cue
+// that silently stops firing at one setting of an unrelated number. Scaling
+// keeps all three, in order, with their spacing in proportion.
+//
+// `share` is what the last cue is allowed to reach: 0.85 of the ceremony, so
+// the perk cue has a moment to speak before `bossArrive` lands on top of it.
+function scheduleEntranceVoices(e, seconds) {
+  clearEntranceVoices();
+  const v = CONFIG.boss?.arrival?.voices ?? {};
+  if (v.enabled === false) return;
+  const key = e?.assetKey ?? e?.def?.asset ?? null;
+  const perkId = bossState.perk?.id ?? null;
+  const cues = [
+    { at: Math.max(0, v.siren ?? 0), layer: 'siren' },
+    { at: Math.max(0, v.type ?? 0.55), layer: 'type' },
+    { at: Math.max(0, v.perk ?? 1.05), layer: 'perk' },
+  ].sort((a2, b2) => a2.at - b2.at);
+
+  const last = cues[cues.length - 1].at;
+  const room = Math.max(0.01, seconds) * 0.85;
+  const squeeze = last > room ? room / last : 1;
+  for (const c of cues) {
+    c.at *= squeeze;
+    c.key = key;
+    c.perkId = perkId;
+  }
+  entranceCues = cues;
+}
+
+// Everything the ceremony has reached by `elapsed`, in order. Called with the
+// ceremony's own elapsed seconds, which freeze when the run does.
+function tickEntranceVoices(elapsed) {
+  while (entranceCueIdx < entranceCues.length && elapsed >= entranceCues[entranceCueIdx].at) {
+    const c = entranceCues[entranceCueIdx++];
+    // Unpositioned, like `bossArrive` — the ceremony is exactly as loud
+    // wherever in the arena the animal happens to be.
+    bossEntranceVoice(c.layer, c.key, c.perkId);
+  }
+}
+
 // THE CEREMONY STARTS. The boss is out from behind the rock and in open water,
 // and everything that announces it fires on this one frame: the bar starts
 // filling, the riser starts climbing, and the camera turns to look at the
@@ -545,6 +627,13 @@ function beginArrival(e) {
     bossState.arrivalFrac = 1;
     bossState.hpFrac = 1;
     e.invuln = 0;
+    // NO CEREMONY, so there is no time to stagger anything across — but the
+    // boss must still announce itself, or switching the arrival off would take
+    // three sounds with it that have nothing to do with the bar filling.
+    // Scheduled at zero and drained in one go: the layers still fire in order,
+    // they simply all land on this frame.
+    scheduleEntranceVoices(e, 0);
+    tickEntranceVoices(Infinity);
     return;
   }
   const seconds = Math.max(0.01, cfg.seconds ?? 2);
@@ -553,6 +642,12 @@ function beginArrival(e) {
   bossState.hpFrac = 0;
   if (cfg.invulnerable !== false) e.invuln = seconds;
   startBossRiser(seconds);
+  // The running order for this animal and this perk, and its first crossing —
+  // the alarm sits at offset 0 by default, so it goes out on the same frame as
+  // the riser it is meant to be heard underneath. Waiting for the next tick
+  // would put it a frame behind the build it is part of.
+  scheduleEntranceVoices(e, seconds);
+  tickEntranceVoices(0);
   // ...and the frame goes to the boss, for as long as the ceremony runs. The
   // subject is a FUNCTION because the animal is still swimming — see cineReveal
   // — and it reads the live reference rather than closing over the creature, so
@@ -595,6 +690,10 @@ function tickArrival(dt, e) {
   const seconds = Math.max(0.01, cfg.seconds ?? 2);
 
   bossState.arrivalFrac = Math.min(1, bossState.arrivalFrac + dt / seconds);
+  // The entrance's voices, against the ceremony's own elapsed time — which is
+  // `arrivalFrac` in seconds, and therefore already paused, dilated and
+  // hit-stopped exactly as everything else in this ceremony is.
+  tickEntranceVoices(bossState.arrivalFrac * seconds);
   // AND THIS IS THE CLOCK THE SHOT ENDS ON. `share` below 1 hands the seal back
   // before the fight starts, which is a kindness nobody asked for — but it is
   // the ceremony's own linear time either way, so a paused run pauses the
@@ -628,6 +727,11 @@ function tickArrival(dt, e) {
   bossState.hpFrac = 1;
   e.invuln = 0;
   stopBossRiser();
+  // The last crossing, then the list is done with. `tickArrival` has already
+  // run it for this frame; this is the belt to that braces, and it is what
+  // makes a leftover cue impossible rather than merely unreachable.
+  tickEntranceVoices(Infinity);
+  clearEntranceVoices();
   feedback('bossArrive');
   // ...and the score changes hands. HERE rather than at the spawn or at the
   // held breath: the riser has spent the whole ceremony climbing toward this
@@ -711,6 +815,9 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     bossState.arriving = false;
     bossState.approaching = false;
     bossState.approachLeft = 0;
+    // Anything the ceremony had not said yet goes with it. A boss cleared
+    // mid-entrance must not carry on announcing itself over an empty ocean.
+    clearEntranceVoices();
     // ...and the frame comes back to the seal if it was away. A reveal reads
     // its subject through `bossState.enemy` and would end itself on the next
     // frame anyway; ending it here is what keeps that from being one frame of
@@ -738,6 +845,9 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // teardown: the cadence stops, the body gets its contact damage and its
     // locomotion state back, and the borrowed materials go back to resting.
     releaseAngler();
+    // Nothing outlives the crab either: the tells go, the bolts already in the
+    // water fly on as the ordinary enemy projectiles they are.
+    releaseBossCrab();
     stopBossRiser();
     // The score goes back to the run's own, at the next bar rather than on this
     // frame: unlike a kill there is no hush to hide the switch under, so this
@@ -859,6 +969,9 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // finish dissolving on its own. See releaseKraken.
     releaseKraken();
     releaseAngler();
+    // Nothing outlives the crab either: the tells go, the bolts already in the
+    // water fly on as the ordinary enemy projectiles they are.
+    releaseBossCrab();
     // A boss killed DURING its own entrance is not reachable while
     // `arrival.invulnerable` is on, but the toggle is a toggle — and a riser
     // left sounding over an empty ocean would climb to its scheduled end and
@@ -1028,7 +1141,17 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // THE PERK, rolled off how many bosses this run has already sent — so the
   // first one has none and every one after it does. `sent` is incremented
   // BEFORE the roll reads it, hence the 0 on the first call. See rollBossPerk.
-  const perk = rollBossPerk(PERKS, bossState.sent);
+  // ...and the ARCHETYPE'S LEAN, if this run is deep enough for it. bosses.csv
+  // `perkBias` names the perks a body wants and `perkBiasLevel` says from when
+  // — the king crab leans on the four attractor studies from level 5, because a
+  // boss that walks the floor is the body in the roster a field opened AROUND
+  // it changes most: everything else can swim out of its own storm.
+  // Below that level, and for every archetype naming nothing, this is the flat
+  // roll it has always been. See rollBossPerk.
+  const perk = rollBossPerk(PERKS, bossState.sent, Math.random, {
+    bias: level >= (archetype.perkBiasLevel ?? 0) ? archetype.perkBias : null,
+    chance: archetype.perkBiasChance,
+  });
   bossState.sent += 1;
   // The run's difficulty goes with it, and it is read once: a perk with a
   // `damagePerDifficulty` in bossPerks.csv resolves what its hits are worth at
@@ -1045,6 +1168,17 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // it and a standoff it will not leave — see systems/kraken.js.
   attachKraken(scene, e);
   attachAngler(scene, e);
+  // ...and, if this one walks, the claw volley it always has. Its own system
+  // for the reason the boat's bombardment and the ambush are: it comes with a
+  // body whose whole threat is eight units long, and a boss that cannot answer
+  // a player who swims up is a boss that is beaten by swimming up. The rolled
+  // perk still lands on top — see systems/bossCrab.js.
+  // The player's LEVEL as well as the run's difficulty: the volley's damage
+  // rides difficulty like every other number in the fight, and the pounce is
+  // gated on level like bosses.csv's `perkBias` is — a late-run crab is allowed
+  // to leave the ground and the one that opens a run is not. Both read once,
+  // here: a boss does not get new moves half way through its own fight.
+  attachBossCrab(scene, e, gameState.difficulty ?? 0, level);
   // ...and the weak spots, which every boss gets rather than only the ones
   // that came with a body built for something. Rolled 1-3 here and PLACED on
   // the first frame that finds the animal posed — see attachHotSpots for why
@@ -1110,7 +1244,7 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
  * updateBoss and BEFORE updateEnemies — see updateBossPerks for why the order
  * is load-bearing rather than tidy.
  */
-export function updateBossAbilities(dt, scene, playerPos, hooks) {
+export function updateBossAbilities(dt, scene, playerPos, hooks, rawDt = dt) {
   updateBossPerks(dt, scene, playerPos, hooks);
   // AFTER the perks, and for the same reason they run before updateEnemies:
   // the boat writes the position and velocity the integrator is about to step,
@@ -1127,6 +1261,15 @@ export function updateBossAbilities(dt, scene, playerPos, hooks) {
   // inside the run gate; unlike it, this one MOVES the animal, so it matters
   // that it runs after the perks — see the yield in systems/bossAngler.js.
   updateBossAngler(dt, scene, playerPos, hooks);
+  // The king crab's volley. Last, and for the boat's reason inverted: it moves
+  // nothing, but it AIMS from four bones on a body a perk may just have moved,
+  // and a volley aimed from last frame's claws misses by a boss's whole stride.
+  updateBossCrab(dt, scene, playerPos, hooks);
+  // ...and the BODY reads what the perk is doing. Last, so the stage it paints
+  // is the one this frame's machines just moved to rather than last frame's,
+  // and on RAW seconds: a boss's own light does not hold its breath because a
+  // hit froze the game for 60ms. See updateBossLook.
+  updateBossLook(rawDt, activeBossPerk());
 }
 
 /**
@@ -1213,6 +1356,7 @@ export function forceBoss(scene, gameState, opts = {}) {
     bossState.enemy.invuln = 0;
     bossState.enemy = null;
     resetBossPerks();
+    releaseBossCrab();
     stopBossRiser(false);
   }
   // A hush that was counting down toward a natural arrival is abandoned with

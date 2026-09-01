@@ -624,6 +624,26 @@ export const ASSETS = {
   // ever moves, this needs re-picking with it: they are one setting wearing
   // two names. `npm run glow` is the audit.
   bullet: { shape: 'rock', radius: 0.18, color: 0x6b7078, unlit: true, rock: { tumble: 7 }, bands: true },
+  // THE FIN LASER'S BOLT — the other thing a run can be firing (see
+  // systems/finLaser.js and CONFIG.loadout).
+  //
+  // An `oval` rather than a rock, and the difference is not the shape, it is
+  // the AXIS. A rock tumbles, which is the whole read of a thrown stone and
+  // exactly wrong for light: a bolt has to lie along its own direction of
+  // travel, which is what `oval` (a sphere stretched on art-forward Y) plus
+  // `orient: true` at the spawn site gives it. The elongation here is only the
+  // body's base proportion — the silhouette the player actually sees is
+  // CONFIG.finLaser.look.length and .width, multiplied on at spawn, because
+  // that is a judgement made by eye in the F menu and this is a mesh.
+  //
+  // NEITHER THE COLOUR NOR THE MATERIAL HERE EVER REACHES A FIRED BOLT.
+  // applyBoltLook swaps in a per-colour material so the shot can follow the
+  // run's element, and it has to: every primitive asset shares ONE cached
+  // material, so tinting this one would tint every bolt on screen at once —
+  // the same trap as fading one bubble and fading all of them. What is written
+  // here is the fallback a tool that builds the asset without the game gets,
+  // and it is the base colour so that fallback is not black.
+  finLaser: { shape: 'oval', radius: 0.13, elongate: 2.4, color: 0x66e0ff, unlit: true, segments: 10 },
   // THE HOMING MUSSEL — a real shell, cut out of the Spline scene in SeaBed by
   // tools/mussel-split.mjs (npm run mussels). See that file for what the source
   // is and what the export does not carry.
@@ -1591,7 +1611,63 @@ export const ASSETS = {
   // Oyster Blaster's payload. Both are unlit glowing spheres rather than
   // models on purpose: a pearl is a highlight, and any baked shading on a
   // thing this bright clips to flat white in the composite anyway.
-  pearl: { shape: 'sphere', radius: 0.4, color: 0xfff3d6, unlit: true },
+  // 24 SEGMENTS RATHER THAN THE 8 THE SHAPE DEFAULTS TO, and both halves of
+  // that matter. The silhouette is the smaller half: at 8 the ball is a
+  // faceted lump, and the thing it is meant to be is the roundest object in
+  // the ocean. The larger half is the UV grid — `segments` is the sphere's
+  // longitude AND latitude count, so at 8 an equirectangular texture is
+  // sampled across a 9x9 lattice of vertices and any print on it shears
+  // visibly as the pearl turns.
+  //
+  // TEXTURE IT THROUGH `map`, not a matcap. The sphere carries proper
+  // equirectangular UVs and the material is a MeshBasicMaterial, so a map goes
+  // on untouched by lighting and TURNS WITH THE BODY — which is the entire
+  // point, since the spin (CONFIG.oyster.pearlSpin) has nothing to show
+  // without it. The bubble's paint (makeShellMaterial) is the other kind and
+  // would be wrong here: a matcap is indexed by the view-space normal, so it
+  // stays nailed to the screen and a pearl wearing one spins with a perfectly
+  // still surface.
+  // LIT, and it is the only primitive shape in the file that is. Everything
+  // else here is `unlit: true` because a bullet is a highlight and shading one
+  // is work nobody sees — and the pearl was too, on that argument, for as long
+  // as it was a featureless blaze.
+  //
+  // It has to be lit now because THE WET FILM IS FENCED TO `#ifdef STANDARD`.
+  // The film reads `geometryNormal` and `geometryViewDir`, which only
+  // <lights_fragment_begin> declares, so on a MeshBasicMaterial the layer is
+  // not merely dim, it is not compiled — and the fence is what keeps that from
+  // being a compile error that renders nothing at all. There is no version of
+  // "shiny, and tunable in the shader lab" that runs unlit.
+  //
+  // WHAT THIS CHANGES ABOUT `glow`. On an unlit material glow multiplies the
+  // COLOUR past 1.0; on a lit one it lands on emissiveIntensity, which does
+  // nothing at all unless `emissive` is a colour — hence the field below. The
+  // pearl's tuned glow keeps its number and its meaning ("how hot it burns"),
+  // but it is now burning UNDER shading rather than instead of it, and the
+  // Look panel's roughness and metalness sliders reach it for the first time.
+  //
+  // roughness 0.12 / metalness 0 is nacre, not chrome: a dielectric with a
+  // tight highlight. Metal would tint the specular with the body colour and
+  // kill the white the highlight has to be.
+  //
+  // THE EMISSIVE IS A TENTH OF THE BODY COLOUR AND THAT IS THE WHOLE POINT OF
+  // IT. Set to the colour itself — the obvious thing, and the first thing
+  // tried — three adds a full (1.0, 0.95, 0.84) to every fragment and the
+  // pearl renders as a flat white disc with no highlight, no rim and no film:
+  // self-illumination at body strength IS the unlit material this stopped
+  // being, arrived at the long way round. Verified on the shader-lab page,
+  // which is the only place a wet-film change can be verified at all.
+  //
+  // A tenth leaves the shading in charge and still gives `glow` something to
+  // scale: at the pearl's tuned 3.65 this lands around a third of the body
+  // colour — a warm core that clears the bloom threshold while the form
+  // survives. Same hue as the body, so the number is a brightness and never
+  // a second opinion about what colour a pearl is.
+  pearl: {
+    shape: 'sphere', radius: 0.4, segments: 24, color: 0xfff3d6,
+    unlit: false, roughness: 0.12, metalness: 0, emissive: 0x191712,
+    noiseShader: 'pearl',
+  },
   pearlBomblet: { shape: 'sphere', radius: 0.2, color: 0xfff0c0, unlit: true },
 
   // Bakalar's voicemail bomb — a fat dark canister with a warm blinking
@@ -1802,6 +1878,14 @@ export const ASSETS = {
   // another rock. Spawned with `orient: true`, so the elongation runs along
   // the direction of travel.
   bossBeam: { shape: 'oval', radius: 0.12, elongate: 5, color: 0xff5a3c, unlit: true },
+
+  // THE KING CRAB'S BOLT — a snapped claw's cavitation, which is a real thing a
+  // crustacean does and the only ranged attack the animal could plausibly have
+  // without growing a weapon. Shorter and fatter than the eye beam's bolt: that
+  // one is light and reads as a line, this one is a collapsing pocket of water
+  // and reads as a slug. Pale rather than coloured, because four of them arrive
+  // at once and a saturated volley on a body this size is a wall of paint.
+  crabBolt: { shape: 'oval', radius: 0.17, elongate: 2.6, color: 0xbfe9ff, unlit: true },
 
   // THE EXPLODING BARREL. What the `barrels` boss perk lobs and what the boat
   // boss rains down the arena (systems/bossPerks.js GUNS.barrels, and the
@@ -3957,7 +4041,7 @@ export const ASSETS = {
 
 // --- the club variants -----------------------------------------------------
 //
-// Derived from `club` rather than written out four times, so the things that
+// Derived from `club` rather than written out five times, so the things that
 // make a club a club — the grip pivot, the forward axis, the fit that ties the
 // drawing to the reach it hits with — can only ever be changed in one place.
 // Four hand-copied entries is four chances for one of them to keep a stale
@@ -3970,12 +4054,13 @@ export const ASSETS = {
 for (const [key, headTint] of [
   ['clubBoom', 0xd94a2b],   // Boom Boom Club — ember
   ['clubIce', 0x7fd4f5],    // Cold Snap — ice
+  ['clubZap', 0x9fe8ff],    // Zappy Club — charged
   ['clubThrow', 0xe0c070],  // Hurler — bound in pale cord
 ]) {
   ASSETS[key] = {
     ...ASSETS.club,
     // THE SHAFT STAYS BROWN. Only the head carries the variant, which is what
-    // makes the set read as four clubs rather than four differently-coloured
+    // makes the set read as five clubs rather than five differently-coloured
     // sticks — and it keeps the silhouette honest, since the wood is the part
     // the seal is actually holding.
     headTint,
@@ -5031,6 +5116,20 @@ export function setAssetSizeMultiplier(key, multiplier) {
 
 export function getAssetSizeMultiplier(key) {
   return sizeMultipliers.get(key) ?? 1;
+}
+
+// The radius the asset's PROCEDURAL SHAPE is built at, before any multiplier.
+//
+// The one caller is the basic shot, and it needs this for a reason worth
+// stating: a projectile's `scale` REPLACES the root scale, so the size the
+// player sees is `scale x this`, while what it can hit is the separate
+// `radius` handed to spawnProjectile. Dividing the hit radius by this is what
+// keeps the two in step — a fatter pebble is drawn exactly as fat as it hits,
+// however CONFIG.weapon.radius is retuned. Null for anything built from a
+// loaded model, which has no authored radius to be relative to.
+export function assetShapeRadius(key) {
+  const r = ASSETS[key]?.radius;
+  return r > 0 ? r : null;
 }
 
 // Called with every visual createVisual hands out, so a system can decorate
@@ -7098,7 +7197,23 @@ function getMaterial(key, def) {
     // this only carves the form back in on a material that has no lighting.
     vertexColors: def.shape === 'rock',
   };
-  const mat = def.unlit === false ? new THREE.MeshStandardMaterial(opts) : new THREE.MeshBasicMaterial(opts);
+  // The lit branch's own three, passed ONLY on that branch: MeshBasicMaterial
+  // has no such properties and three warns per unknown key, once per material,
+  // which on a shared cache is a warning nobody would ever see twice.
+  //
+  // `emissive` is not decoration here, it is what makes `glow` mean anything
+  // on a lit primitive at all — setAssetGlow writes emissiveIntensity, and
+  // intensity times an emissive of black is black. A shape that asks to be lit
+  // and says nothing about emissive keeps three's default of 0x000000, so
+  // nothing that existed before this line moves.
+  const mat = def.unlit === false
+    ? new THREE.MeshStandardMaterial({
+      ...opts,
+      roughness: def.roughness ?? 1,
+      metalness: def.metalness ?? 0,
+      emissive: def.emissive ?? 0x000000,
+    })
+    : new THREE.MeshBasicMaterial(opts);
   mat.userData.__originalMap = null;
   mat.userData.__originalColor = def.color ?? 0xffffff;
   // `shell: true` takes the trap bubble's numbers; `shell: '<configKey>'` takes
@@ -7116,6 +7231,23 @@ function getMaterial(key, def) {
   // `bands: true` takes CONFIG.elementBands; a string names its own block, the
   // same rule `shell` and `chrome` follow. See makeBandMaterial.
   if (def.bands) makeBandMaterial(mat, typeof def.bands === 'string' ? def.bands : 'elementBands');
+  // ...AND THE PROCEDURAL SURFACE, for a shape that asks for it. The model path
+  // has done this since the shader was written (see processMaterial); a
+  // primitive could not, so `noiseShader` on a shape asset was a field that
+  // parsed and did nothing.
+  //
+  // LAST, AND MUTUALLY EXCLUSIVE WITH THE THREE ABOVE. All four of these
+  // install `onBeforeCompile`, which is one slot: an asset asking for a shell
+  // AND a surface would silently get whichever ran last, with the other's
+  // uniforms still sitting in userData claiming to be attached. Nothing wants
+  // both today, and the throw is so the day something does it is a stack trace
+  // rather than an effect that quietly stopped rendering.
+  if (def.noiseShader) {
+    if (def.shell || def.chrome || def.bands) {
+      throw new Error(`asset '${key}': noiseShader cannot share onBeforeCompile with shell/chrome/bands`);
+    }
+    attachNoiseShader(mat, typeof def.noiseShader === 'string' ? def.noiseShader : null);
+  }
   materialCache.set(key, mat);
   return mat;
 }

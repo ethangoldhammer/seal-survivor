@@ -307,12 +307,28 @@ const fired = new Map(); // event -> [files]
 // that way: it downgrades "dead entry" to silence, it never proves a wiring.
 const quotedAnywhere = new Set();
 
+// A COMPARED STRING IS NOT AN EVENT NAME. The first argument is often chosen
+// rather than written — `feedback(s.throwKind === 'slam' ? 'crabSlam' : 'crabHurl')`
+// fires one of two real events, and harvesting every literal in it also picked
+// up `slam`, which is the value being tested against. The audit then reported a
+// missing CONFIG.feedback entry for an event nothing fires, in a file whose
+// actual events are both configured — a false alarm that reads exactly like a
+// real one, and the only kind this audit can produce that costs trust.
+//
+// So drop the operands of an equality comparison before harvesting. Both orders,
+// because either side can hold the literal.
+function eventLiteralsOf(arg) {
+  return arg
+    .replace(/(?:===|!==|==|!=)\s*['"][A-Za-z0-9_]*['"]/g, ' ')
+    .replace(/['"][A-Za-z0-9_]*['"]\s*(?:===|!==|==|!=)/g, ' ');
+}
+
 for (const file of sourceFiles(SRC)) {
   const text = stripComments(await readFile(file, 'utf8'));
   const rel = relative(SRC, file);
 
   for (const m of text.matchAll(/\bfeedback\s*\(/g)) {
-    const arg = firstArgOf(text, m.index + m[0].length - 1);
+    const arg = eventLiteralsOf(firstArgOf(text, m.index + m[0].length - 1));
     for (const lit of arg.matchAll(/['"]([A-Za-z0-9_]+)['"]/g)) {
       if (!fired.has(lit[1])) fired.set(lit[1], []);
       if (!fired.get(lit[1]).includes(rel)) fired.get(lit[1]).push(rel);

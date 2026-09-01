@@ -56,6 +56,11 @@ export const EASE_TABLE = [
   // table exists to make easy to fix.
   { name: 'inQuad', fn: (t) => t * t },
   { name: 'inCubic', fn: (t) => t ** 3 },
+  // outExpo read backwards, and the hardest curve in the IN family: nothing
+  // happens for the first two thirds and then the whole move lands. The guard
+  // is not defensive — 2**(10*(0-1)) is 0.001, not 0, and a curve in this table
+  // that does not start at exactly 0 is one every caller has to know about.
+  { name: 'inExpo', fn: (t) => (t <= 0 ? 0 : 2 ** (10 * (t - 1))) },
 
   // --- IN-OUT: eased at both ends ------------------------------------------
   { name: 'inOutQuad', fn: (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2) },

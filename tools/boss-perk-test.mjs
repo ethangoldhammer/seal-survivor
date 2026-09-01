@@ -267,6 +267,16 @@ const baseRadius = plain.radius;
 const baseScale = plain.visual.scale.x;
 const baseSpeed = plain.speed;
 const baseTurn = plain.turnRate;
+// THE SPECIES' OWN NUMBER, which is NOT `baseTurn` above and never was.
+// `plain.turnRate` is the per-instance value spawnOne bakes — the def times the
+// hunter ramp times `enemyPaceMul`, and CONFIG.pace.enemy is a saved tuning
+// value the player is free to move. The def check below used to compare the
+// instance against the def and therefore asserted "pace is exactly 1", so it
+// went red the moment that dial left 1 (measured: pace.enemy 1.25 makes a
+// 1.05 def spawn at 1.17) while the thing it exists to catch — a `def.turnRate
+// *=` refactor — was working perfectly. Snapshotted here so it compares the def
+// with the def.
+const defTurn = CONFIG.enemies.bossShark.turnRate;
 
 fresh();
 const big = put('bossShark', { boss: true });
@@ -292,7 +302,7 @@ check('...and the turn rate too', Math.abs(fast.turnRate - baseTurn * smul) < 1e
 // The species def is shared by every creature of that type and must never be
 // written — this is the check that catches a `def.turnRate *=` refactor.
 check('...without touching the shared species def',
-  CONFIG.enemies.bossShark.turnRate === baseTurn,
+  CONFIG.enemies.bossShark.turnRate === defTurn,
   `def still ${CONFIG.enemies.bossShark.turnRate}`);
 
 // ===========================================================================
@@ -785,7 +795,38 @@ section('A DAZED BOSS SWIMS BADLY — MEASURED, NOT ASSUMED');
 // absolute threshold you could type here — the only honest question is "how
 // much of what it would have done did it manage".
 {
-  const chase = (dazed) => {
+  // SEEDED, because the claim below is a Monte Carlo one and Math.random makes
+  // it a coin toss. The weave starts at a random phase and lists a random way,
+  // so an unseeded average over eight dazes swung from 26 to 85 degrees run to
+  // run and failed roughly one time in five — on a shipped, working veer. The
+  // standard "fix" for that is to lower the threshold until it stops, which
+  // deletes the assertion; a fixed seed keeps the assertion and removes the
+  // coin toss.
+  //
+  // The SAME seeds drive the run and its control, which is the point: the veer
+  // is then the only difference between them, rather than the only difference
+  // plus eight fresh dice. It makes this check sharper, not merely quieter.
+  const mulberry32 = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  const chase = (dazed, seed) => {
+    const realRandom = Math.random;
+    Math.random = mulberry32(seed);
+    try {
+      return chaseRun(dazed);
+    } finally {
+      Math.random = realRandom;
+    }
+  };
+
+  const chaseRun = (dazed) => {
     fresh();
     const b = put('bossShark', { boss: true, at: { x: 20, y: 0 } });
     const to = { x: 0, y: 0, z: 0 };
@@ -812,12 +853,20 @@ section('A DAZED BOSS SWIMS BADLY — MEASURED, NOT ASSUMED');
 
   // AVERAGED, because the weave starts at a random phase and lists a random
   // way (see dazeEnemy) — a single daze that happens to live near the zero
-  // crossing of its own swing barely veers at all, and a single run comparing
-  // one of those against one control is a coin toss. Eight of each is the
-  // difference between measuring the rule and measuring the roll.
-  const avg = (dazed, key, n = 8) => {
+  // crossing of its own swing barely veers at all, and one of those against
+  // one control measures the roll rather than the rule. Eight of each, over
+  // the same eight fixed seeds on both sides.
+  // 48 IS MEASURED, NOT PICKED. Across 30 independent sets of N seeds the veer
+  // gap settles at ~25 deg, and the spread of that BETWEEN sets is sd 6.7 at
+  // N=8, 3.3 at N=24, 2.6 at N=48. The floor is 14.3 deg, so eight seeds — even
+  // fixed ones — is a sample that can sit under the floor by luck of which
+  // eight, and any change upstream that shifts the RNG stream re-rolls which
+  // eight you got. 48 leaves four sigma of headroom and costs about a fifth of
+  // a second. Seeding stops the flake; the sample size is what stops it coming
+  // back the next time something upstream spawns one more creature.
+  const avg = (dazed, key, n = 48) => {
     let sum = 0;
-    for (let i = 0; i < n; i++) sum += chase(dazed)[key];
+    for (let i = 0; i < n; i++) sum += chase(dazed, 0xB055 + i)[key];
     return sum / n;
   };
 

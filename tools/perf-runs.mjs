@@ -16,34 +16,67 @@
 //   a few, at repeatable moments  one event is expensive (a hull breaking up,
 //                                 a boss arriving) — go and look at that system
 //
-// TWO LOGS, AND THEY ARE NOT THE SAME MACHINE. `playtest/runs.jsonl` is what
-// this machine played; `playtest/remote.jsonl` is what a deployed build filed
-// from somebody's phone. Reading only the first was the whole reason a phone
-// run with 808 hitches never once appeared here: the numbers that matter come
-// from four cores and a 3x display, and the numbers on disk came from ten
-// cores and a desktop GPU. Both are read now and every run says which it is,
-// because a median frame time averaged across the two describes no device that
-// exists.
+// THREE LOGS, AND THEY ARE NOT THE SAME MACHINE. `playtest/runs.jsonl` is what
+// this machine played in a browser; `playtest/remote.jsonl` is what a deployed
+// build filed from somebody's phone; and the desktop log in Electron's userData
+// is what the packaged .app played. Reading only the first was the whole reason
+// a phone run with 808 hitches never once appeared here: the numbers that
+// matter come from four cores and a 3x display, and the numbers on disk came
+// from ten cores and a desktop GPU. All three are read now and every run says
+// which it is, because a median frame time averaged across them describes no
+// device that exists.
+//
+// THE DESKTOP LOG IS NOT IN THE REPO, which is the one surprising thing here.
+// It lives beside the desktop build's save file because that is where the shell
+// can write on a player's machine, and electron/playtest.js explains why it
+// must stay out of the Steam Cloud glob. Absent — because the .app has never
+// been run — is the normal case and not an error.
 //
 // Usage:
-//   npm run perf              the last 5 runs, either log
+//   npm run perf              the last 5 runs, any log
 //   npm run perf -- 20        the last 20
 //   npm run perf -- remote    only the runs phones filed
-//   npm run perf -- local     only this machine's
+//   npm run perf -- local     only this machine's browser runs
+//   npm run perf -- desktop   only the packaged .app's runs
 // ---------------------------------------------------------------------------
 
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Where the desktop shell's run log is, without importing Electron to ask.
+ *
+ * THE DIRECTORY NAME IS package.json's `name`, read rather than typed. Electron
+ * derives userData from app.getName(), which is `productName` when package.json
+ * declares one and `name` otherwise — this package declares only `name`, and
+ * "Seal Survivor" lives in electron-builder.yml where app.getName() never sees
+ * it. Reading the field means a rename moves both halves together instead of
+ * leaving this tool pointed at a directory nothing writes to any more, which
+ * would present as a desktop build that had simply stopped filing runs.
+ */
+function desktopLog() {
+  const name = JSON.parse(readFileSync(resolve(HERE, '../package.json'), 'utf8')).name;
+  const home = homedir();
+  const dir = process.platform === 'darwin'
+    ? join(home, 'Library', 'Application Support', name)
+    : process.platform === 'win32'
+      ? join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), name)
+      : join(process.env.XDG_CONFIG_HOME ?? join(home, '.config'), name);
+  return join(dir, 'playtest.jsonl');
+}
+
 const SOURCES = [
-  { tag: 'local',  file: resolve(HERE, '../playtest/runs.jsonl') },
-  { tag: 'remote', file: resolve(HERE, '../playtest/remote.jsonl') },
+  { tag: 'local',   file: resolve(HERE, '../playtest/runs.jsonl') },
+  { tag: 'desktop', file: desktopLog() },
+  { tag: 'remote',  file: resolve(HERE, '../playtest/remote.jsonl') },
 ];
 
 const args = process.argv.slice(2);
-const only = args.find((a) => a === 'local' || a === 'remote') ?? null;
+const only = args.find((a) => SOURCES.some((s) => s.tag === a)) ?? null;
 const want = Number(args.find((a) => Number(a) > 0)) || 5;
 const wanted = SOURCES.filter((s) => !only || s.tag === only);
 
@@ -67,7 +100,21 @@ const runs = present.flatMap(({ tag, file }) =>
 
 // Chronological across both logs, so `the last 5` means the last five runs
 // played rather than the last five lines of whichever file was read second.
-runs.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
+//
+// `startedAt` is not one type. Older records carry an ISO string and newer ones
+// an epoch number, and comparing them AS STRINGS sorts every numeric stamp
+// before every ISO one — "1787891185136" < "2026-…" on the first character —
+// which silently buried the newest run in the middle of the report. Normalise
+// to epoch ms and compare numbers.
+const at = (r) => {
+  const v = r.startedAt;
+  if (typeof v === 'number') return v;
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+  const t = Date.parse(v ?? '');
+  return Number.isFinite(t) ? t : 0;
+};
+runs.sort((a, b) => at(a) - at(b));
 
 const withPerf = runs.filter((r) => r.perf?.frames);
 if (!withPerf.length) {
@@ -81,7 +128,7 @@ const when = (iso) => (iso ? new Date(iso).toLocaleString() : 'unknown');
 
 const srcCount = (t) => withPerf.filter((r) => r.__src === t).length;
 console.log(`\n${withPerf.length} run(s) with frame times, of ${runs.length} on disk`
-  + ` — ${srcCount('local')} local, ${srcCount('remote')} from phones.`
+  + ` — ${srcCount('local')} local, ${srcCount('desktop')} desktop, ${srcCount('remote')} from phones.`
   + ` Showing the last ${Math.min(want, withPerf.length)}.`);
 
 for (const r of withPerf.slice(-want)) {
@@ -96,9 +143,18 @@ for (const r of withPerf.slice(-want)) {
   // bug in the first cut of this: a run can be filed to the remote log from a
   // desktop, and calling every remote run a phone put a 10-core Mac under a
   // heading that said otherwise.
+  // THE SOURCE AND THE SHELL ARE DIFFERENT FACTS. `__src` is which log the line
+  // came out of; `shell` is what the game was running inside when it played.
+  // They usually agree and the case where they do not is the interesting one —
+  // a desktop build could file to the remote collection, and a browser run
+  // pulled from a phone is not a desktop run whatever log it landed in. Older
+  // records carry no `shell` at all, so `native` stays as the fallback rather
+  // than being replaced by it.
+  const shell = d.shell && d.shell !== 'web' ? ` · ${d.shell} shell`
+    : d.native ? ' · native shell' : '';
   const rig = d.w
     ? `${r.__src} · ${d.w}×${d.h}@${d.dpr ?? 1}x · ${d.cores ?? '?'} cores`
-      + `${d.touch ? ' · touch' : ''}${d.native ? ' · native shell' : ''}`
+      + `${d.touch ? ' · touch' : ''}${shell}`
     : r.__src;
   console.log(`\n─── ${when(r.startedAt)} · level ${r.level ?? '?'} · ${r.endReason ?? '?'} ─────────────────`);
   console.log(`  ${rig}`);

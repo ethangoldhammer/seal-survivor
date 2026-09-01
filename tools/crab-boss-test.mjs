@@ -41,7 +41,11 @@ import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/en
 import { pickups, spawnXpOrb, updatePickups, resetPickups } from '../path/src/entities/pickups.js';
 import { pickCrab, resetCrabSpawner } from '../path/src/systems/crabSpawner.js';
 import { parseBossCsv } from '../path/src/bossTable.js';
+import { parseBossPerkCsv, rollBossPerk } from '../path/src/bossPerkTable.js';
+import { STORM_PERKS } from '../path/src/systems/bossPerks.js';
+import { bossLookFor } from '../path/src/systems/bossLook.js';
 import bossesCsv from '../path/src/bosses.csv?raw';
+import bossPerksCsv from '../path/src/bossPerks.csv?raw';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -258,6 +262,86 @@ section('THE EYES');
   check('a perk\'s beams fire from the eyeballs', nodes.length === 2
     && nodes.every((n) => asset.eyeStalks.some((s) => s.includes(n))),
     nodes.join(', ') || 'none declared');
+}
+
+// ---------------------------------------------------------------------------
+// FROM LEVEL 5 IT LEANS ON THE ATTRACTORS
+//
+// bosses.csv `perkBias` names the perks this archetype wants and
+// `perkBiasLevel` says from when. The crab leans on the four attractor studies,
+// because a boss that walks the seabed is the body in the roster a field
+// opened AROUND it changes most — everything else can simply swim out of its
+// own storm, and this one is standing in the middle of it on legs.
+//
+// A LEAN AND NOT A LOCK, which is the part worth asserting: a bias that always
+// won would be an archetype with a fixed perk, and the whole reason a boss
+// rolls one is that two crab fights should not be the same fight. The chance
+// is checked as a RATE over seeded draws rather than as a single roll, for the
+// reason every Monte Carlo check in this project is: one draw proves nothing,
+// and a threshold lowered to make a flake go away proves less.
+// ---------------------------------------------------------------------------
+{
+  section('THE PERK IT LEANS ON');
+  const PERKS = parseBossPerkCsv(bossPerksCsv, () => {});
+  const bias = ARCH?.perkBias ?? [];
+
+  check('the crab names a perk bias', bias.length > 0, bias.join(' ') || 'none');
+  check('...from level 5', ARCH?.perkBiasLevel === 5, String(ARCH?.perkBiasLevel));
+  check('...with a strong chance rather than a certainty',
+    ARCH?.perkBiasChance >= 0.5 && ARCH?.perkBiasChance < 1,
+    `${ARCH?.perkBiasChance} — a lean, not a lock`);
+  check('...and every perk it names is a real, enabled row',
+    bias.every((id) => PERKS.some((p) => p.id === id)),
+    bias.filter((id) => !PERKS.some((p) => p.id === id)).join(', ') || 'all present');
+  check('...and every one of them is a strange attractor',
+    bias.every((id) => STORM_PERKS.has(id)),
+    bias.filter((id) => !STORM_PERKS.has(id)).join(', ') || 'four studies');
+
+  // The paint is half of what the bias buys. A boss that leans on a perk with
+  // no bossLooks.csv row leans on a fight the player cannot see coming on the
+  // ANIMAL — see systems/bossLook.js.
+  check('...and every one of them paints the body',
+    bias.every((id) => !!bossLookFor(id)),
+    bias.filter((id) => !bossLookFor(id)).join(', ') || 'four looks');
+
+  // Seeded, so this measures the roll and not the day. mulberry32.
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function rate(opts) {
+    const r = rng(20260828);
+    let hits = 0;
+    const N = 4000;
+    for (let i = 0; i < N; i++) {
+      const perk = rollBossPerk(PERKS, 1, r, opts);
+      if (perk && bias.includes(perk.id)) hits++;
+    }
+    return hits / N;
+  }
+
+  const leaned = rate({ bias, chance: ARCH?.perkBiasChance });
+  const flat = rate({});
+  // The floor is the chance itself: the lean lands that often, and the
+  // remaining flat roll can land on one of the same four again.
+  check('a crab past the level meets an attractor most of the time',
+    leaned >= ARCH.perkBiasChance && leaned <= ARCH.perkBiasChance + 0.2,
+    `${(leaned * 100).toFixed(1)}% of 4000 rolls, against a ${ARCH.perkBiasChance} chance`);
+  check('...but not every time — it is still a roll', leaned < 0.95,
+    `${(100 - leaned * 100).toFixed(1)}% of crabs still arrive with something else`);
+  check('a crab BELOW the level rolls flat, like every other boss',
+    flat < leaned - 0.2,
+    `${(flat * 100).toFixed(1)}% against ${(leaned * 100).toFixed(1)}% — spawnBoss passes no bias under perkBiasLevel`);
+  check('...and the bias never produces a boss with NO perk',
+    rollBossPerk(PERKS, 1, rng(7), { bias: ['saddle'], chance: 1 }) != null,
+    'an empty intersection falls through to the ordinary roll');
+  check('...nor overrides the first boss of a run having none',
+    rollBossPerk(PERKS, 0, rng(7), { bias, chance: 1 }) === null);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — all checks');

@@ -100,17 +100,30 @@ const SUBJECTS = ['fish', 'barracuda', 'shark'].filter((k) => CONFIG.enemies[k])
 // false, which is the branch check 2 above exists for.
 const MOMENTS = [['at difficulty 0', 0, 1], ['mid-run', 30, 1], ['late, level 28', 30, 28]];
 
+// The axis weights, read once. Every proportion below is stated against these
+// rather than against a constant, so a retune shows up as a changed printout
+// instead of as a failing suite.
+const W = CONFIG.pace.axes ?? {};
+
 // ---------------------------------------------------------------------------
 section('THE DIALS THEMSELVES');
 {
+  // PIN THE DIAL. These three checks name a dial value in their own titles and
+  // used to read whatever was live instead — so on a tree where the tuner had
+  // been dragged to 1.5 they measured 1.5^weight, reported `hp 1.2000165`, and
+  // called a correctly-tuned game a broken identity. The dials are saved
+  // tuning: `path/src/imported-tuning.json` holds enemy 1.5 and xp 0.85 today
+  // and will hold something else tomorrow, and neither is this suite's to have
+  // an opinion about. What IS this suite's business is that the code is an
+  // identity when the dial says 1, so it sets the dial and asks.
   check('every axis is an identity at enemy = 1',
-    ['hp', 'damage', 'speed', 'seek'].every((k) => enemyPaceMul(k) === 1),
-    ['hp', 'damage', 'speed', 'seek'].map((k) => `${k} ${enemyPaceMul(k)}`).join(', '));
+    atPace({ enemy: 1 }, () => ['hp', 'damage', 'speed', 'seek'].every((k) => enemyPaceMul(k) === 1)),
+    atPace({ enemy: 1 }, () => ['hp', 'damage', 'speed', 'seek'].map((k) => `${k} ${enemyPaceMul(k)}`).join(', ')));
 
-  check('...whatever the weights hold', atPace({ axes: { hp: 1.5, speed: 0.9 } }, () =>
+  check('...whatever the weights hold', atPace({ enemy: 1, axes: { hp: 1.5, speed: 0.9 } }, () =>
     ['hp', 'damage', 'speed', 'seek'].every((k) => enemyPaceMul(k) === 1)));
 
-  check('the levelling dial is an identity at 1', xpPaceMul() === 1);
+  check('the levelling dial is an identity at 1', atPace({ xp: 1 }, () => xpPaceMul() === 1));
 
   // A range input dragged to its floor is the likeliest way to arrive at 0, and
   // "every creature spawns with no health" is not a difficulty setting.
@@ -132,11 +145,31 @@ section('THE DIALS THEMSELVES');
   }));
   console.log(`        at enemy 2: hp x${at2.hp.toFixed(2)}, damage x${at2.damage.toFixed(2)}, `
     + `speed x${at2.speed.toFixed(2)}, aggression x${at2.seek.toFixed(2)}`);
-  check('doubling the dial does NOT double the speed — the arena stops having anywhere to go',
-    at2.speed < at2.hp * 0.75, `speed x${at2.speed.toFixed(2)} against hp x${at2.hp.toFixed(2)}`);
-  check('...nor the aggression, which is between the two',
-    at2.seek > at2.speed && at2.seek < at2.hp,
-    `aggression x${at2.seek.toFixed(2)}`);
+  console.log(`        weights: ${['hp', 'damage', 'speed', 'seek'].map((k) => `${k} ${W[k]}`).join(', ')}`
+    + `  — ordering: ${['hp', 'damage', 'speed', 'seek'].slice().sort((a, b) => W[b] - W[a]).join(' > ')}`);
+
+  // ASSERT THE MECHANISM, NOT A REMEMBERED NUMBER. This used to demand
+  // `speed < hp * 0.75` and `speed < seek < hp`, both of which were true of the
+  // weights on the day it was written and neither of which is a fact about the
+  // code. `seek` has since been tuned 0.5 -> 0.15, which moved aggression from
+  // between speed and health to below both — a real design change, and the
+  // suite reported it as a bug in four lines that named none of it. A weight is
+  // a knob; a knob's value is not a test's to hold.
+  //
+  // What does not move with tuning: each axis is exactly `dial ** weight`, so
+  // that is what is checked, and the ordering above is PRINTED so a retune is
+  // visible in the log rather than fatal.
+  for (const k of ['hp', 'damage', 'speed', 'seek']) {
+    check(`${k} moves as the dial raised to its own weight`,
+      Math.abs(at2[k] - 2 ** W[k]) < 1e-12,
+      `x${at2[k].toFixed(4)} against 2^${W[k]} = ${(2 ** W[k]).toFixed(4)}`);
+  }
+  // The one claim that is design rather than tuning, and the reason `axes`
+  // exists at all: health must outrun speed, or a harder game is just a faster
+  // one and the arena stops having anywhere to go.
+  check('health outruns speed — a harder game is not merely a faster one',
+    W.speed < W.hp && at2.speed < at2.hp,
+    `speed weight ${W.speed} vs hp ${W.hp} — x${at2.speed.toFixed(2)} against x${at2.hp.toFixed(2)}`);
   check('the dial is symmetric — halving undoes doubling',
     Math.abs(atPace({ enemy: 0.5 }, () => enemyPaceMul('hp')) * at2.hp - 1) < 1e-12);
 }
@@ -150,7 +183,8 @@ section('THE IDENTITY — a real spawn at pace 1 is the run that shipped');
   // the same numbers.
   for (const [label, D, L] of MOMENTS) {
     for (const key of SUBJECTS) {
-      const withDials = born(key, D, L);
+      // At pace 1 — the claim is about the code, not about today's tuning.
+      const withDials = atPace({ enemy: 1, xp: 1 }, () => born(key, D, L));
       const control = atPace({}, () => {
         const saved = CONFIG.pace;
         delete CONFIG.pace;
@@ -170,20 +204,29 @@ section('...AND IT REACHES A REAL CREATURE');
   console.log('        enemy 1 -> 2, measured off the spawner  (hp / damage / speed)');
   for (const [label, D, L] of MOMENTS) {
     for (const key of SUBJECTS) {
-      const a = born(key, D, L);
+      // BOTH ENDS PINNED. `a` used to be an unpinned spawn, so on a tree with
+      // the dial tuned to 1.5 this measured 2^w / 1.5^w and called it "1 -> 2".
+      const a = atPace({ enemy: 1 }, () => born(key, D, L));
       const b = atPace({ enemy: 2 }, () => born(key, D, L));
       console.log(`        ${key.padEnd(11)}${label.padEnd(17)}`
         + `x${(b.hp / a.hp).toFixed(2)} / x${(b.damage / a.damage).toFixed(2)} / `
         + `x${(b.speed / a.speed).toFixed(2)}`);
-      check(`${key}, ${label}: health doubles`, Math.abs(b.hp / a.hp - 2) < 1e-9);
-      check(`${key}, ${label}: damage doubles`,
-        !(a.damage > 0) || Math.abs(b.damage / a.damage - 2) < 1e-9);
+      // Against the axis weights, not against remembered numbers: "health
+      // doubles" was only ever true while hp was weighted 1, and it is 0.45
+      // today. What has to hold is that the dial reaches the spawner and
+      // arrives raised to that axis's own weight.
+      check(`${key}, ${label}: health carries the dial at its weight`,
+        Math.abs(b.hp / a.hp - 2 ** W.hp) < 1e-9,
+        `x${(b.hp / a.hp).toFixed(4)} against 2^${W.hp}`);
+      check(`${key}, ${label}: damage carries the dial at its weight`,
+        !(a.damage > 0) || Math.abs(b.damage / a.damage - 2 ** W.damage) < 1e-9,
+        `x${(b.damage / a.damage).toFixed(4)} against 2^${W.damage}`);
       // The jitter rides outside the ramped term on purpose, so the ratio is
       // slightly under the exponent rather than equal to it. Bounded on both
       // sides: the point is that speed moved and moved LESS than health.
       check(`${key}, ${label}: speed moves, and by less than health`,
-        b.speed > a.speed && b.speed / a.speed < 1.35,
-        `x${(b.speed / a.speed).toFixed(3)}`);
+        b.speed > a.speed && b.speed / a.speed <= 2 ** W.speed + 1e-9,
+        `x${(b.speed / a.speed).toFixed(3)} against a ceiling of 2^${W.speed}`);
     }
   }
 }
@@ -194,7 +237,7 @@ section('AGGRESSION — the branch that had no ramp to ride');
   // The three seek fields at difficulty 0, where `rampOn` is false. Every one
   // of them used to ignore the dial entirely here.
   for (const key of SUBJECTS) {
-    const a = born(key, 0);
+    const a = atPace({ enemy: 1 }, () => born(key, 0));
     const b = atPace({ enemy: 2 }, () => born(key, 0));
     const fields = [
       ['turns harder', 'turnRate', (x, y) => y > x],
@@ -213,7 +256,9 @@ section('AGGRESSION — the branch that had no ramp to ride');
   // ...and the aggression axis must not be reaching hp/damage/speed by accident
   // — the three lines it rewrote sit right beside them.
   const only = atPace({ enemy: 2, axes: { hp: 0, damage: 0, speed: 0 } }, () => born(SUBJECTS[0], 30));
-  const base = born(SUBJECTS[0], 30);
+  // Pinned, like every other baseline here: an unpinned control is whatever the
+  // tuner happens to hold, and this comparison only means anything against 1.
+  const base = atPace({ enemy: 1 }, () => born(SUBJECTS[0], 30));
   check('turning the other three axes off leaves hp, damage and speed alone',
     only.hp === base.hp && only.damage === base.damage && only.speed === base.speed,
     `hp ${base.hp.toFixed(1)} -> ${only.hp.toFixed(1)}`);
@@ -250,30 +295,61 @@ section('THE LEVELLING DIAL');
 }
 
 // ---------------------------------------------------------------------------
-section('THE SLIDERS ARE REACHABLE — no table owns these paths');
+section('THE FILE OWNS THEM — behaviour.csv, and no slider beside it');
 {
-  const group = TUNER_SCHEMA.find((g) => g.group === 'Difficulty & pace');
-  check('the group is in the schema', !!group);
-  const paths = group ? group.items.map((i) => i.path) : [];
-  check('...and every row resolves to a number in CONFIG', paths.length > 0 && paths.every((p) => {
-    let v = CONFIG;
-    for (const k of p.split('.')) v = v?.[k];
-    return typeof v === 'number';
-  }), paths.join(' '));
-
-  // The dead-slider bug: a table row for any of these would be silently
-  // reapplied at every boot and on every CSV change, and the slider would move
-  // nothing. Read out of the shipped CSVs rather than out of the roots lists,
-  // so a table that widened its roots is caught too.
+  // THE DIALS MOVED OUT OF THE TUNER, and this section moved with them.
+  //
+  // It used to assert the opposite: that a group existed in TUNER_SCHEMA and
+  // that no CSV owned a pace path. That was the right guard for a slider, and
+  // it was guarding the wrong arrangement. A tuner-only number has no readable
+  // source — config.js said `seek: 0.5` while the game ran 0.15, and editing
+  // that line did nothing, because a saved snapshot beats a config default and
+  // the live value existed only inside a JSON blob that never appears in a
+  // diff. A difficulty curve is read across a whole playtest, not judged in the
+  // second it happens, so it belongs in a file with a min, a max and a note.
+  //
+  // Both halves are still checked, just pointed the other way.
   const { readFileSync, readdirSync } = await import('node:fs');
-  const owned = [];
+  const owned = new Map();
   for (const f of readdirSync('path/src').filter((f) => f.endsWith('.csv'))) {
     for (const line of readFileSync(`path/src/${f}`, 'utf8').split('\n')) {
       const id = line.split(',')[0];
-      if (id.startsWith('pace.')) owned.push(`${f}:${id}`);
+      if (id.startsWith('pace.')) owned.set(id, f);
     }
   }
-  check('no CSV owns a pace.* path', owned.length === 0, owned.join(' '));
+
+  // 1. EVERY pace path is in a table. A key config.js declares and no row
+  // covers is one a saved snapshot can still shadow, which is the whole bug.
+  const declared = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o ?? {})) {
+      if (v && typeof v === 'object') walk(v, `${prefix}${k}.`);
+      else if (typeof v === 'number') declared.push(`${prefix}${k}`);
+    }
+  }(CONFIG.pace, 'pace.'));
+  const uncovered = declared.filter((p) => !owned.has(p));
+  check('every pace path config.js declares has a behaviour.csv row',
+    declared.length > 0 && uncovered.length === 0,
+    uncovered.length ? `no row for ${uncovered.join(' ')}` : `${declared.length} paths, all covered`);
+
+  check('...and they are all in the same file, so there is one place to look',
+    new Set(owned.values()).size === 1, [...new Set(owned.values())].join(' '));
+
+  // 2. THE DEAD-SLIDER BUG, unchanged in substance: a slider pointed at a path
+  // a table owns is put back at every boot and moves nothing. Now that the
+  // table owns them, the failure is a leftover row rather than a missing one.
+  const sliders = TUNER_SCHEMA.flatMap((g) => (g.items ?? []).map((i) => i.path))
+    .filter((p) => typeof p === 'string' && p.startsWith('pace.'));
+  check('no slider still points at a pace path', sliders.length === 0, sliders.join(' '));
+
+  // 3. ...AND THE FILE ACTUALLY REACHES CONFIG. The point of the move: a table
+  // path is stripped from the saved snapshot, so the row is what the game runs.
+  // Asserted against the real merged CONFIG rather than against the CSV text.
+  check('every row resolves to a number in CONFIG', [...owned.keys()].every((p) => {
+    let v = CONFIG;
+    for (const k of p.split('.')) v = v?.[k];
+    return typeof v === 'number';
+  }), [...owned.keys()].join(' '));
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall good');

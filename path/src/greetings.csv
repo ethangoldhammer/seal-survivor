@@ -29,5 +29,5 @@ departedboss,"{departed} couldn't take the heat. Are you cooked, {player}.",,TRU
 stillhere,{departed} got ooh barracuda'd. {player} don't take that mess. ,,TRUE,2,again,barracuda
 shakeitoff,"{departed} got whacked. Now you're family, {player}.",,TRUE,1,again,
 shakeitoffCopy,"{departed} sleeps with the fishes. And now it's time for revenge, {player}.",,TRUE,1,again,
-returncause,"lorem ipsum {cause} dolor sit, {player} amet consectetur",,TRUE,2,again,
-returnplain,lorem ipsum dolor sit amet {player},,TRUE,2,again,
+returncause,Back again?,,TRUE,2,again,
+returnplain,"Seal's never truly die, {player}",,TRUE,2,again,

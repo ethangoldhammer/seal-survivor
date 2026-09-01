@@ -178,6 +178,18 @@ section('EVERY BURST IN THE GAME ASKS FOR THE WINDOW');
     /enemy shot'[^)]*'strike'/.test(combat), 'systems/combat.js');
   check('a clean bite is on the window',
     /function onPlayerBite[\s\S]{0,3000}?e\.type, 'strike'\)/.test(main), 'main.js');
+  check('a pack hunter\'s contact bite is on the window',
+    /contactBite[\s\S]{0,2000}?'strike'/.test(combat), 'systems/combat.js');
+
+  // AND THE WINDOW REPORTS BACK. `contactBite` is the one source that has to
+  // know whether its blow landed — a refused bite must not spend the animal's
+  // clock, or a whole pack goes into lockstep and bills what one of them does
+  // (see tools/contact-bite-test.mjs). onPlayerHit returning nothing would
+  // reintroduce that silently, because `undefined > 0` is simply false and the
+  // clock would then never be spent at all.
+  check('onPlayerHit reports what it billed',
+    /if \(player\.invuln > 0\) return 0;/.test(main) && /^  return dmg;$/m.test(main),
+    'main.js');
 }
 
 // ===========================================================================

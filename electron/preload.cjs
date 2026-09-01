@@ -145,6 +145,24 @@ contextBridge.exposeInMainWorld('sealDesktop', {
   saveImage: (bytes, name) => ipcRenderer.invoke('seal-save:image', bytes, name),
 
   /**
+   * File a finished run in userData, so `npm run perf` can read what this
+   * build actually played. Resolves true once the line is on disk.
+   *
+   * TAKES THE JSON TEXT the recorder already produced for its other
+   * destinations, not the record object — see fileRun in electron/playtest.js
+   * for why a structured clone in this path would make the desktop copy of a
+   * run differ from every other copy of it.
+   *
+   * ITS PRESENCE IS THE CAPABILITY FLAG, like saveImage above: platform.js's
+   * canFilePlaytest() tests for this function, so deleting the handler in the
+   * main process and this line together is how the shell would correctly go
+   * back to saying it cannot file a run — and systems/playtest.js would fall
+   * through to the destinations it had before rather than dropping the run
+   * into a bridge that no longer answers.
+   */
+  filePlaytest: (json) => ipcRenderer.invoke('seal-playtest:file', json),
+
+  /**
    * Steamworks, when there is any. `status()` resolves to
    * { available, status } and NEVER rejects — see electron/steam.js for why
    * "not available" is the normal case rather than an error state.

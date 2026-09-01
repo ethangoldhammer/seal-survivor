@@ -95,3 +95,17 @@ export function platformName() {
 export function canSaveThroughOS() {
   return !!globalThis.window?.sealDesktop?.saveImage;
 }
+
+/**
+ * Can this shell write a finished run somewhere a terminal can read it?
+ *
+ * A capability rather than an identity, for the same reason as the one above
+ * and with a sharper edge: systems/playtest.js treats a true here as "this run
+ * is filed, stop", so a shell that claimed it and did nothing would not merely
+ * fail to write the run — it would suppress the destinations that still worked
+ * and lose the record entirely. Keyed on the bridge function, which exists only
+ * while electron/playtest.js really registers its handler.
+ */
+export function canFilePlaytest() {
+  return !!globalThis.window?.sealDesktop?.filePlaytest;
+}

@@ -1,8 +1,10 @@
 import { CONFIG } from '../config.js';
 import { spawnBeam } from './beams.js';
+import { feedback } from './feedback.js';
 import { eyeSocket, flashEyeLightsLaser } from './eyeLights.js';
 import { player } from '../entities/player.js';
 import { laserEyesLevelStats } from '../levelStats.js';
+import { createShotGrid } from './shotGrid.js';
 
 // LASER EYES — the seal's pair, and the boss's own trick pointed back at it.
 //
@@ -34,9 +36,20 @@ import { laserEyesLevelStats } from '../levelStats.js';
 // swapped in through the workbench), which is why this file still knows about
 // it at all.
 
-const state = {
-  cooldown: 0,
-};
+// THE EYES ARE ON THE MUSIC'S BAR GRID, on their own scheduler.
+//
+// Not the basic shot's — see createShotGrid. One instance holds ONE pending
+// score position and the interval it was derived from, so two weapons sharing
+// it re-derive on each other's numbers every frame and both end up firing on
+// whichever one asked last. It reads on screen as the lock working badly.
+//
+// WHAT THE STACK BUYS IS THE RUNG. Level 1 fires one volley per bar, and every
+// third stack moves it a division finer — see laserRungGap in levelStats.js.
+// The uptime rides along as a fraction of whatever cycle that leaves (see
+// `burnDuty`), so a finer rung chops the same lit second into more beams rather
+// than handing the weapon more of them: the cadence is a rhythm change, not a
+// damage one, which is the only reason it can be levelled this freely.
+const grid = createShotGrid();
 
 function cfg() {
   return CONFIG.laserEyes ?? {};
@@ -66,19 +79,30 @@ export function laserEyeStats(level = 0) {
  */
 export function updateLaserEyes(dt, scene, playerPos, level, aim, rig = null) {
   setLaserRig(rig);
-  if (!(level > 0)) return;
-  state.cooldown -= dt;
-  if (state.cooldown > 0) return;
 
   const c = cfg();
   const s = laserEyeStats(level);
-  state.cooldown = s.fireEvery;
+  // ASKED EVERY FRAME, owned or not. The idle path is what holds the lock: a
+  // scheduler only consulted while the card is held would park nothing, and the
+  // first volley of a fresh stack would land on the frame the card was picked
+  // rather than on a bar line. Same contract the basic shot is on — see the
+  // header of systems/shotGrid.js.
+  if (!grid.shotDue(s.fireEvery, level > 0, dt)) return;
   // THE MUZZLE. The eyes are black at rest, so without this a line of light
   // leaves an unlit socket and reads as a beam with no source. Fired once per
   // VOLLEY rather than once per beam — four beams is still one blink, and
   // stacking four flares would make a high stack visibly brighter at the face
   // for no reason a player could name.
   flashEyeLightsLaser(1);
+  // ...and the sound, on the same terms: ONCE PER VOLLEY, not once per beam.
+  // Fired here rather than in the loop below for exactly the reason the flare
+  // is — four beams is one blink and one shot, and a per-beam call would make
+  // a four-stack louder rather than wider. It goes before the fan is built so
+  // it cannot be skipped by an early return added later.
+  //
+  // At the seal, not at the sockets: the two eyes flatten onto one point in
+  // the play plane anyway (see originFor), and the volley is one event.
+  feedback('laserEyes', { x: playerPos.x, y: playerPos.y });
 
   // A zero-length aim would give a beam with no direction, which normalises to
   // NaN and draws nothing. Default to facing right, the same fallback the
@@ -185,6 +209,6 @@ export function setLaserAim(aim) {
 
 /** A new run starts with the eyes cold. */
 export function resetLaserEyes() {
-  state.cooldown = 0;
+  grid.reset();
   _rig = null;
 }

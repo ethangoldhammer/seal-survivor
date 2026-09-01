@@ -592,6 +592,21 @@ function spawnCube(scene, s, state, line = -1, stagger = 0) {
     source: s.source,
     gravityScale: 0,
     flow: steerCube,
+    // THE STREAK. A bare cube shows a POINT on a trajectory, and a strange
+    // attractor is the trajectory — the fold, the wing crossing and the two
+    // paired cubes coming apart are all things that happened over the last third
+    // of a second and are invisible in any single frame. See CONFIG.trails
+    // .attractorStorm for why it is the thinnest ribbon in the game.
+    //
+    // Named for the system rather than left to the asset key, because a row's
+    // `body` list rolls per shot and a shoal whose ribbons changed colour fish
+    // by fish would read as several things rather than one field.
+    trailKey: 'attractorStorm',
+    // ...and scaled to this row's own shot. `trailScale` multiplies the width,
+    // so a study drawn at twice the hit radius gets twice the streak without a
+    // second column to keep in step with the first. Against 0.5, which is the
+    // radius the preset's width was tuned at.
+    trailScale: (row.radius ?? 0.5) / 0.5,
   });
   const p = projectiles[projectiles.length - 1];
   if (!p) return null;

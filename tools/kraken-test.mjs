@@ -669,7 +669,13 @@ seeded(20260820, () => {
   e.maxHp = 1e9;
   attachKraken(s4, e);
 
-  const cruise = e.def.speed;
+  // THE SPEED THE ANIMAL WAS BORN WITH, not the speed its row lists. Every
+  // spawn-time scale — the run ramps and CONFIG.pace.enemy among them — is
+  // baked onto `e.speed` at spawn, so a dial tuned away from 1 makes the row a
+  // number this creature never travelled at. With the pace dial at 1.5 the row
+  // says 3.5 and the kraken cruises at 4.03, and reading the row called that a
+  // bug. `e.def.speed` is the design intent; `e.speed` is this kraken.
+  const cruise = Number.isFinite(e.speed) ? e.speed : e.def.speed;
   const weave = CONFIG.kraken.trap.weaveSpeed;
   const lunge = CONFIG.kraken.crush.speed;
 
@@ -720,7 +726,7 @@ seeded(20260820, () => {
     `${(100 * pct('PROWL')).toFixed(1)}% prowling against ${(100 * pct('WEAVE')).toFixed(1)}% weaving`);
   ok(pct('WEAVE') < 0.9, '...and the weave is not the whole fight',
     `${(100 * pct('WEAVE')).toFixed(1)}%`);
-  ok(Math.abs(mean('PROWL') - cruise) < 0.5, 'prowling really is the roster row\'s speed',
+  ok(Math.abs(mean('PROWL') - cruise) < 0.5, 'prowling really is its cruise speed',
     `${mean('PROWL').toFixed(2)} against ${cruise}`);
   // The headline: what the player watches, averaged over a fight.
   ok(sum / frames < cruise * 2.5, 'and the animal the player watches is a slow one',

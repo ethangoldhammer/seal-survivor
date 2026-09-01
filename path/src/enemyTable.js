@@ -67,6 +67,30 @@
 //     speedPerDifficulty         0     linear speed gain per difficulty point
 //     turnRate                   none  rad/s; blank = pivots on the spot
 //     contactDamagePerDifficulty 0
+//     contactBite                none  seconds between BITES, for a creature
+//                                      whose contact damage should arrive as
+//                                      one whole number rather than as a
+//                                      per-second drain. Blank — nearly the
+//                                      whole roster — is the drain, which is
+//                                      the right shape for a body you are
+//                                      inside: bounded by being a rate.
+//                                      A PACK is not bounded by that, because
+//                                      each animal bills its own rate: five
+//                                      barracuda at 32/s is 160/s and a bar
+//                                      gone in seven tenths of a second, with
+//                                      nothing discrete on screen to show it.
+//                                      Filled in, the same damage arrives on
+//                                      the 'strike' channel — the i-frame
+//                                      window — so one bite in the pack is
+//                                      paid and the rest wait their turn.
+//                                      `contactDamage` still means damage per
+//                                      SECOND: the bite is that times this, so
+//                                      the run's damage ramp keeps applying to
+//                                      the number it always did and one of
+//                                      these alone is exactly as dangerous as
+//                                      it was. Must be >= CONFIG.player
+//                                      .hitIFrames or a solo hunter's own
+//                                      bites start being refused.
 //     biteDamage                 0     what the JAWS CLOSING costs the player,
 //                                      as one burst on the frame they shut.
 //                                      Blank — every wildlife row — means the
@@ -139,6 +163,10 @@ const OPTIONAL = {
   speedPerDifficulty: { min: 0 },
   turnRate: { min: 0 },
   contactDamagePerDifficulty: { min: 0 },
+  // Seconds between bites, for a creature that takes its contact damage as one
+  // whole number on the i-frame channel instead of as a drain. See the column
+  // note above; blank is the drain, and blank is nearly the whole roster.
+  contactBite: { min: 0 },
   // The burst a closing set of jaws is worth. See the column note above: blank
   // is the whole roster except the bosses that chase.
   biteDamage: { min: 0 },

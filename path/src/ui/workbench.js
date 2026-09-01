@@ -1,5 +1,5 @@
 import { CONFIG, saveTuningToStorage } from '../config.js';
-import { feedback } from '../systems/feedback.js';
+import { feedback, shakeAllowed, hitstopAllowed } from '../systems/feedback.js';
 import { emit } from '../entities/particles.js';
 import { describeHaptic, previewHaptic } from '../systems/haptics.js';
 import {
@@ -12,6 +12,11 @@ import { fireBossBoom, resetBossBooms } from '../systems/bossBoom.js';
 import { startCardRiser, stopCardRiser, stopAllCardRisers, cardRiserCount } from '../systems/cardRiser.js';
 import { stageJet, stopStagedJet, stagedJetOpen, jetStats, bubbleJetState } from '../systems/bubbleJet.js';
 import { jetBedCount } from '../systems/jetBed.js';
+import { boltPalette, redressBolts } from '../systems/finLaser.js';
+import { projectiles } from '../entities/projectiles.js';
+import { player } from '../entities/player.js';
+import { EASINGS } from '../ease.js';
+import { isLaser, laserReachSteps, latticeGenerations, childrenAt, latticeWorstCase, latticeLiveChildren } from '../loadout.js';
 
 // THE FEEL WORKBENCH — F.
 //
@@ -38,8 +43,8 @@ import { jetBedCount } from '../systems/jetBed.js';
 // camera and firing an event are useful from the game as well as from here.
 
 const RAIL_SECTIONS = [
-  ['Your weapon', ['shoot', 'hit', 'bulletHit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
-  ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'breach', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'breathOut', 'bubblePop', 'oxygenWarn']],
+  ['Your weapon', ['shoot', 'shootLaser', 'laserEyes', 'hit', 'bulletHit', 'latticeSplit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
+  ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'clap', 'breach', 'surfacing', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'breathOut', 'bubblePop', 'oxygenWarn']],
   ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'strikeRam', 'strikeMark', 'boostEmpty', 'foodChain']],
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'chumChunkEaten', 'chumFull', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
@@ -79,6 +84,27 @@ const RAIL_SECTIONS = [
     // hotSpotHit over it, and the two are audited by ear together or not at
     // all.
     'hotSpotHit', 'hotSpotBurst']],
+  // THE ENTRANCE, in the order it is heard. The alarm, the animal, the
+  // variant, and the cue the whole thing resolves onto — which is why
+  // `bossArrive` is at the BOTTOM of this section rather than the top: this is
+  // the one part of a boss fight that is a phrase, and a list that put the
+  // resolution first would be unauditionable. Fire them down the section and
+  // you have heard the entrance.
+  //
+  // `bossArrive` had no row anywhere until now, in this panel or the ` tuner —
+  // the loudest cue in the run, and the only way to hear it was to reach a
+  // boss.
+  //
+  // The two variant cues at the end are the odd ones: `bossArriveStorm` is
+  // named by four perks at once (CONFIG.boss.voicePerk), so the shared-voice
+  // marker on it is telling the truth about a decision rather than warning
+  // about a collision.
+  ['The entrance', ['bossSiren',
+    'bossArriveShark', 'bossArriveHammerhead', 'bossArriveOrca',
+    'bossArriveMosasaur', 'bossArriveSquid', 'bossArriveAngler',
+    'bossArriveCrab', 'bossArriveBoat', 'bossArriveYacht',
+    'bossArriveElectric', 'bossArriveStorm',
+    'bossArrive']],
   // THE CRIES — CONFIG.boss.voiceType, one pair per archetype. Their own
   // section rather than eighteen more rows under the material voices, because
   // the question they answer is a different one: up there you are asking
@@ -143,6 +169,35 @@ const RISER_TERMS = 'riser buildup sweep filter card falling slam fall build car
 // a Fire button cannot ask it.
 const JET_ROW = '*bubblejet';
 const JET_TERMS = 'jet bubble jet stream beam spline snake wiggle moog synth bed drone plasma bubblejet';
+
+// THE FIN LASER'S BOLT, on the same terms as the four above and for a reason
+// that is the goo's rather than the jet's: it is a BODY, not a moment. A bolt
+// has no feedback event of its own — the shot fires `shoot` and the impact
+// fires `bulletHit`, exactly as a pebble does — so there is nowhere in a rail
+// of events it could honestly hang, and until it had a row the only way to
+// judge its length was to fire one and watch it leave.
+//
+// It is here rather than in the ` tuner for the reason the boss explosion is:
+// this is the panel with the gun firing in front of it. A bolt's silhouette is
+// judged at the speed it crosses the screen, and a slider two panels away from
+// the thing it moves is a slider you tune by memory.
+const LASER_ROW = '*finlaser';
+const LASER_TERMS = 'laser fin laser bolt beam light shot pebble loadout lattice sealant shatter split glow overdrive halo finlaser';
+
+// THE BED'S LOOPS — the two voices that are not fired by anything.
+//
+// This rail is built from CONFIG.feedback because you tune MOMENTS, and that is
+// still right for every other row in it. These two have no moment: they are
+// buffer material that CONFIG.bubbleJet.bed.layers loops, so nothing in
+// CONFIG.feedback names them and they were unreachable here — you could pick
+// them in the bed's layer list and had nowhere to hear one on its own, set its
+// level, or put a different file behind it.
+//
+// Rows of their own rather than a general "voices with no event" section: two
+// named things somebody can find beat a category nobody looks in, and if a
+// third loop voice ever exists it wants to be named here too.
+const LOOP_ROWS = { '*jetbedloop': 'jetBed', '*jetbedwiggleloop': 'jetBedWiggle' };
+const LOOP_TERMS = 'loop bed jet bubble beam wiggle sample layer stream jetbed';
 
 const STYLES = `
   .sv-wb { position: fixed; inset: 0 0 96px 0; z-index: 31; display: none;
@@ -316,7 +371,10 @@ const els = {};
 
 // ---------------------------------------------------------------------------
 
-const voiceOf = (event) => CONFIG.feedback[event]?.sfx ?? null;
+// A loop row IS its voice; every other row names one through its event. Routed
+// here rather than at each call site so the Library's + / − buttons, the "who
+// else hears this" scan and the take list all work on a loop row unchanged.
+const voiceOf = (event) => LOOP_ROWS[event] ?? CONFIG.feedback[event]?.sfx ?? null;
 const srcsOf = (def) => (Array.isArray(def?.srcs) && def.srcs.length
   ? def.srcs.filter(Boolean)
   : (def?.src ? [def.src] : []));
@@ -533,7 +591,13 @@ function renderRail() {
     // ...and the stream rides at the top of the weapon section, on the same
     // terms again. See JET_ROW.
     const jetHere = title === 'Your weapon' && (!filter || JET_TERMS.includes(filter));
-    if (!hits.length && !boomHere && !lightHere && !riserHere && !jetHere) continue;
+    // ...and the bolt sits under it, in the same section, on the same terms.
+    // See LASER_ROW.
+    const laserHere = title === 'Your weapon' && (!filter || LASER_TERMS.includes(filter));
+    // ...and the bed's two loop voices under the stream they belong to. See
+    // LOOP_ROWS — they are voices, not events, so nothing else would list them.
+    const loopsHere = title === 'Your weapon' && (!filter || LOOP_TERMS.includes(filter));
+    if (!hits.length && !boomHere && !lightHere && !riserHere && !jetHere && !laserHere && !loopsHere) continue;
     const h = document.createElement('div');
     h.className = 'sv-wb-sec';
     h.textContent = title;
@@ -574,6 +638,29 @@ function renderRail() {
       list.appendChild(jr);
       shown++;
     }
+    if (laserHere) {
+      const lz = document.createElement('div');
+      lz.className = 'sv-wb-ev' + (current === LASER_ROW ? ' sv-wb-on-row' : '');
+      lz.innerHTML = '<span class="nm" style="font-weight:600">\u2500 The fin laser\u2019s bolt</span>';
+      lz.title = 'The body of a bolt \u2014 its length, its glow and the halo around it \u2014 and the colour it takes from whichever element the run is carrying.';
+      lz.addEventListener('click', () => { current = LASER_ROW; render(); });
+      list.appendChild(lz);
+      shown++;
+    }
+    if (loopsHere) {
+      for (const [row, voice] of Object.entries(LOOP_ROWS)) {
+        // Skipped rather than shown broken if the voice is ever removed from
+        // CONFIG.sfx — a row that opens onto nothing is worse than no row.
+        if (!CONFIG.sfx[voice]) continue;
+        const lp = document.createElement('div');
+        lp.className = 'sv-wb-ev' + (current === row ? ' sv-wb-on-row' : '');
+        lp.innerHTML = `<span class="nm">\u25cc ${voice}</span>`;
+        lp.title = 'Loop material for the bubble jet\u2019s bed. No event fires it — it is looped as a layer, so this is where to hear it alone and change the file behind it.';
+        lp.addEventListener('click', () => { current = row; render(); });
+        list.appendChild(lp);
+        shown++;
+      }
+    }
     for (const id of hits) { list.appendChild(railRow(id)); shown++; }
   }
 
@@ -603,6 +690,8 @@ function render() {
   if (current === LIGHT_ROW) return renderKillLight();
   if (current === RISER_ROW) return renderCardRiser();
   if (current === JET_ROW) return renderBubbleJet();
+  if (current === LASER_ROW) return renderFinLaser();
+  if (LOOP_ROWS[current]) return renderLoopVoice(LOOP_ROWS[current]);
 
   const event = current;
   const def = CONFIG.feedback[event];
@@ -866,8 +955,35 @@ function render() {
   const L = document.createElement('div');
   const R = document.createElement('div');
   grid.append(L, R);
-  slider(L, 'shake', { max: 2, get: () => def.shake ?? 0, set: (v) => { def.shake = v; } });
-  slider(L, 'hit-stop', { max: 0.2, step: 0.005, dp: 3, get: () => def.hitstop ?? 0, set: (v) => { def.hitstop = v; } });
+  // MUTED EVENTS SAY SO. CONFIG.fx.shakeOnly is a guest list, so most events'
+  // shake never reaches the camera — and a slider that moves a number nothing
+  // reads is the exact trap this project keeps falling into (the dead
+  // `spawnRateMul`, the pace dials). Left EDITABLE rather than disabled: the
+  // honest order of work is to set the amount and then decide whether the
+  // moment earns the list, and a locked track would make that impossible.
+  const shakeMuted = !shakeAllowed(event);
+  slider(L, shakeMuted ? 'shake — muted' : 'shake', {
+    max: 2,
+    title: shakeMuted
+      ? `Not in CONFIG.fx.shakeOnly, so this never reaches the camera. Add "${event}" to that list to let it through.`
+      : 'On the CONFIG.fx.shakeOnly guest list — this one moves the camera.',
+    get: () => def.shake ?? 0,
+    set: (v) => { def.shake = v; },
+  });
+  // Same treatment, same reason — CONFIG.fx.hitstopOnly is the freeze's guest
+  // list, and it is shorter than the shake's by design. Also editable while
+  // muted, for the same reason.
+  const stopMuted = !hitstopAllowed(event);
+  slider(L, stopMuted ? 'hit-stop — muted' : 'hit-stop', {
+    max: 0.2,
+    step: 0.005,
+    dp: 3,
+    title: stopMuted
+      ? `Not in CONFIG.fx.hitstopOnly, so this never freezes the frame. Add "${event}" to that list to let it through.`
+      : 'On the CONFIG.fx.hitstopOnly guest list — this one stops the game.',
+    get: () => def.hitstop ?? 0,
+    set: (v) => { def.hitstop = v; },
+  });
   slider(L, 'glow', { max: 2, step: 0.05, get: () => def.glow ?? 0, set: (v) => { def.glow = v; } });
   slider(R, 'ripple hit', { max: 10, step: 0.1, dp: 1, get: () => def.ripple?.strength ?? 0, set: (v) => { (def.ripple ??= { strength: 0, radius: 4 }).strength = v; } });
   slider(R, 'ripple size', { max: 30, step: 1, dp: 0, get: () => def.ripple?.radius ?? 0, set: (v) => { (def.ripple ??= { strength: 0, radius: 4 }).radius = v; } });
@@ -1447,6 +1563,317 @@ function surfaceCard(cols, target, { title = 'Its surface', sub = '', shared = n
 // arsenal over a whole run and a slider is the wrong instrument for that
 // comparison. A readout rather than nothing, so the numbers the stream you are
 // looking at is actually carrying are visible while you look at it.
+// ---------------------------------------------------------------------------
+// THE FIN LASER'S BOLT
+//
+// One view because a bolt is one object to the player: a SHAPE (long and thin,
+// lying along its own travel), the LIGHT it is made of, and the COLOUR it takes
+// from the run. Splitting those across a tuner group and a config block is the
+// arrangement this whole panel exists to undo — you cannot judge how long a
+// bolt should be while the overdrive deciding whether it blooms at all is
+// somewhere you have to go and find.
+//
+// THE THROUGHPUT IS NOT HERE, and says so out loud. Speed, reach, the reach
+// ramp and every count in Lattice Sealant are weapons.csv's, because those are
+// read against the pebble gun and the rest of the arsenal over a whole run and
+// a slider is the wrong instrument for that comparison. What IS here is a
+// readout of the numbers the run in front of you is actually carrying, so you
+// are not judging a bolt while guessing which one it is.
+//
+// EVERY HANDLE REACHES THE BOLTS ALREADY IN THE AIR. redressBolts re-dresses
+// the live shots on each change — without it a length slider only touches the
+// next bolt fired, which at this cadence means judging a change against a
+// screen still half full of the old one.
+// ---------------------------------------------------------------------------
+
+function renderFinLaser() {
+  const c = CONFIG.finLaser;
+  els.name.textContent = 'The fin laser’s bolt';
+  els.via.textContent = 'CONFIG.finLaser.look  →  systems/finLaser.js';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!c) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build',
+      'CONFIG.finLaser is missing, so there is nothing to tune.');
+    return;
+  }
+  const l = (c.look ??= {});
+
+  // Redress on every change rather than only on the ones that move geometry:
+  // the colour and the overdrive both pick a different cached material, and a
+  // bolt in the air holds the one it was born with.
+  const touched = () => { changed(); redressBolts(projectiles); };
+
+  // The redress rides in `set` rather than being wired to each row, because
+  // slider() calls set() and then changed() — so a row that only wrote the
+  // config would move the number and leave every bolt in the air wearing the
+  // old one, which is exactly the two-panels-away problem the view exists to
+  // fix, reproduced inside the view.
+  const row = (host, label, key, fb, opts = {}) => slider(host, label, {
+    ...opts,
+    get: () => l[key] ?? fb,
+    set: (v) => { l[key] = v; redressBolts(projectiles); },
+    title: opts.title ?? label,
+  });
+
+  // --- WHAT THIS RUN IS CARRYING --------------------------------------------
+  // A readout and not a control, and the distinction is the point of the card:
+  // a bolt's length is a taste question and its reach is not, so the numbers
+  // that decide whether you are looking at a laser at all are shown rather than
+  // offered. See the header.
+  const state = card(cols, 'sv-wb-imp', 'This run',
+    'Read-only. The bolt’s throughput is <b>weapons.csv</b> — speed, reach, the ramp and every count in the shatter are judged against the pebble gun over a run, which is a spreadsheet question rather than a slider one.');
+  const num = document.createElement('div');
+  num.className = 'sv-wb-none';
+  const refreshState = () => {
+    const s = player?.stats ?? {};
+    const on = isLaser(s.loadout);
+    const steps = laserReachSteps(player?.upgrades ?? [], player?.bossesDefeated ?? 0);
+    const gens = latticeGenerations(s.pierce ?? 0);
+    num.innerHTML = on
+      ? `Firing <b>bolts</b>. Reach <b>${steps}/${c.reachStepsMax ?? 0}</b> steps `
+        + `(&times;${(1 + steps * (c.reachStepMul ?? 0)).toFixed(2)} flight)<br>`
+        + `Lattice: <b>${childrenAt(0, s.latticeAmount ?? 0)}</b> wide, `
+        + `<b>${gens}</b> deep — worst case <b>${latticeWorstCase(s.latticeAmount ?? 0, gens)}</b> shards `
+        + `off one bolt, budget <b>${c.lattice?.budget ?? '—'}</b> (<b>${latticeLiveChildren()}</b> live)`
+      : `Firing <b>pebbles</b>. The sliders below still work — they are the bolt’s look, `
+        + `not this run’s — but nothing on screen is wearing them. `
+        + `<code>?loadout=laser</code> forces the roll.`;
+  };
+  refreshState();
+  state.appendChild(num);
+
+  // --- THE BODY -------------------------------------------------------------
+  const body = card(cols, 'sv-wb-imp', 'Its body',
+    'Multipliers on whatever size the shot already is, so Flippers Up! and the shatter’s own falloff still move a bolt. At 1 by 1 the laser is a glowing pebble — the elongation <em>is</em> the silhouette.');
+  row(body, 'length', 'length', 2.6, { min: 0.5, max: 8, step: 0.1, dp: 1,
+    title: 'Along its own direction of travel — the asset is stretched on art-forward Y and the shot is spawned `orient: true`, so this reads as length however the seal is aiming. Long and thin is what separates a bolt from a bead of light.' });
+  row(body, 'width', 'width', 0.45, { min: 0.05, max: 2, step: 0.05,
+    title: 'Across it. It moves the drawn body only — the HIT circle is the gun’s `radius`, in weapons.csv, so a bolt thinned to a hair still connects exactly as a pebble does. That is deliberate: the reach is this loadout’s cost and the hitbox is not.' });
+
+  // --- THE LIGHT ------------------------------------------------------------
+  const light = card(cols, 'sv-wb-imp', 'The light it is made of',
+    'A bolt is mostly glow, and the bright pass thresholds on <b>luminance</b> — where blue counts for 7% and green for 72%. The overdrive normalises on the colour’s <em>peak channel</em> before scaling, which is the only reason a blue bolt and a green one bloom alike.');
+  row(light, 'overdrive', 'overdrive', 2.2, { min: 0.5, max: 6, step: 0.1, dp: 1,
+    title: 'How far past 1 the body is pushed on its peak channel. Under about 1.2 nothing crosses the bright pass and the bolt is a flat shape; far above it every element is pinned white and the colour stops carrying.' });
+  row(light, 'halo', 'glow', 2.4, { min: 0, max: 8, step: 0.1, dp: 1,
+    title: 'The sprite around the body, in bolt-widths. A sprite rather than a second mesh so it stays round however the bolt is turned — a quad would go edge-on and blink out for a whole heading. 0 leaves the bare body.' });
+  row(light, '...its own overdrive', 'glowOverdrive', 0.6, { min: 0.1, max: 2, step: 0.05,
+    title: 'As a fraction of the body’s. Keep it below 1: a halo that outshines what it surrounds is a smudge with no bolt in it. With the charge below, this is the brightness at the PEAK rather than for the whole flight.' });
+  row(light, 'halo position', 'tip', 1, { min: -1, max: 1, step: 0.05,
+    title: 'Along the bolt, as a fraction of its own half-length: 1 is the nose, 0 the middle, -1 the tail. Measured off the body’s real bounds, so the nose stays the nose at any length. Centred, a 2.6:1 bolt lights evenly and reads as a glowing pill instead of a point of light with a streak behind it.' });
+
+  // --- THE CHARGE -----------------------------------------------------------
+  // Its own card rather than four more rows under the halo, because it is a
+  // curve over time and the three sliders only mean anything read together —
+  // `from` and `to` are fractions of the row above, and the peak is where the
+  // row above IS.
+  const ramp = (l.ramp ??= {});
+  const chg = card(cols, 'sv-wb-imp', 'Its charge',
+    'The halo rides up over the flight and is snuffed at the end of it, on the bolt’s <b>own</b> life — so a lattice shard runs the whole arc inside its much shorter one rather than being born half spent. The two ends are fractions of the halo’s overdrive above, which is now the value at the <em>peak</em>.');
+  const rrow = (label, key, fb, opts = {}) => slider(chg, label, {
+    ...opts,
+    get: () => ramp[key] ?? fb,
+    set: (v) => { ramp[key] = v; redressBolts(projectiles); },
+    title: opts.title ?? label,
+  });
+  // A curve is a NAME out of ease.js, never a number written here — see that
+  // file's header on why the vocabulary is shared. A <select> rather than a row
+  // of pills because the list is thirteen long and the pill row in this panel
+  // is already carrying the goo groups.
+  const pickEase = (host, label, key, fb, title) => {
+    const r = document.createElement('div');
+    r.className = 'sv-wb-f';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    lab.title = title.replace(/<[^>]+>/g, '');
+    const sel = document.createElement('select');
+    sel.className = 'sv-wb-search';
+    sel.style.cssText = 'margin:0;flex:1;min-width:0';
+    for (const name of EASINGS) {
+      const o = document.createElement('option');
+      o.value = name;
+      o.textContent = name;
+      sel.appendChild(o);
+    }
+    sel.value = ramp[key] ?? fb;
+    sel.addEventListener('change', () => { ramp[key] = sel.value; touched(); });
+    r.append(lab, sel);
+    host.appendChild(r);
+  };
+  rrow('at the muzzle', 'from', 0.25, { min: 0, max: 1, step: 0.05,
+    title: 'What the bright pass sees is <b>overdrive &times; its own overdrive &times; this</b>, and the threshold is 0.58 — so if that product lands under it, a new bolt has no bloom at all and then <em>ignites</em>. Worth aiming for, and easy to lose: push either overdrive up and the halo brightens without ever lighting up.' });
+  rrow('peaks at', 'peakAt', 0.55, { min: 0.05, max: 0.95, step: 0.05,
+    title: 'Where in the life the halo is brightest. Past the middle, so the brightest moment is out in front of the seal rather than on the fin.' });
+  rrow('at the end', 'to', 0.1, { min: 0, max: 1, step: 0.05,
+    title: 'What is left as it dies. Near 0 the bolt goes out before it despawns, which is what makes the fizzle read as the end of something rather than as a deletion.' });
+  pickEase(chg, 'rise curve', 'rise', 'inExpo',
+    'Muzzle to peak. An <b>in</b> curve holds near the muzzle then rushes — dark, dark, flare. An <b>out</b> curve inverts it into a bolt brightest at the fin, which is a muzzle flash and not a charge.');
+  pickEase(chg, 'fall curve', 'fall', 'inExpo',
+    'Peak to death. An <b>in</b> curve holds bright and then drops away at the very end, which is what “dims as it nears the end of its life” means; an <b>out</b> curve starts fading the instant it peaks.');
+
+  // --- THE COLOUR -----------------------------------------------------------
+  const col = card(cols, 'sv-wb-imp', 'Its colour',
+    'The bolt takes the <b>element the fin is carrying</b>, and the run’s if the fin has none. Two bolts in one volley can disagree — that is why the element rides the pellet rather than being looked up where it lands. The swatch below is the bolt with <em>no</em> element anywhere; the four beside it are not editable here, because renaming an element’s colour in two places is how two spellings of one idea start.');
+  const swatch = document.createElement('div');
+  swatch.className = 'sv-wb-f';
+  const swLab = document.createElement('label');
+  swLab.textContent = 'no element';
+  const sw = document.createElement('input');
+  sw.type = 'color';
+  sw.autocomplete = 'off';
+  sw.value = `#${(l.color ?? 0x66e0ff).toString(16).padStart(6, '0')}`;
+  sw.style.cssText = 'width:30px;height:22px;padding:0;border:1px solid rgba(255,255,255,0.2);border-radius:5px;background:none;cursor:pointer';
+  sw.addEventListener('input', () => { l.color = parseInt(sw.value.slice(1), 16); touched(); });
+  swatch.append(swLab, sw);
+  col.appendChild(swatch);
+
+  // The four elements, as read-only chips. Straight off boltPalette so a chip
+  // that disagreed with a bolt would be a bug in one function rather than a
+  // drift between the panel and the weapon.
+  const strip = document.createElement('div');
+  strip.className = 'sv-wb-f';
+  const stripLab = document.createElement('label');
+  stripLab.textContent = 'elements';
+  const chips = document.createElement('div');
+  chips.style.cssText = 'display:flex;gap:6px;flex:1;min-width:0';
+  for (const p of boltPalette()) {
+    if (!p.id) continue;
+    const dot = document.createElement('div');
+    dot.style.cssText = `flex:1;height:22px;border-radius:5px;border:1px solid rgba(255,255,255,0.2);`
+      + `background:#${(p.color ?? 0xffffff).toString(16).padStart(6, '0')}`;
+    dot.title = `${p.id} — CONFIG.biolum.elements.${p.id}.color. Tuned where the element is tuned.`;
+    chips.appendChild(dot);
+  }
+  strip.append(stripLab, chips);
+  col.appendChild(strip);
+
+  // --- THE RIBBON -----------------------------------------------------------
+  // The trail is CONFIG.trails.finLaser rather than the look block, and it is
+  // shown here anyway for the reason the whole panel exists: a bolt and the
+  // streak behind it are one object to the eye, and tuning them in two places
+  // is how a short bolt ends up with a ribbon twice its own length.
+  const t = (CONFIG.trails ??= {});
+  const tl = (t.finLaser ??= {});
+  const trail = card(cols, 'sv-wb-imp', 'The streak behind it',
+    'CONFIG.trails.finLaser. On a laser the ribbon is not exhaust — it is the shot <em>still being there</em> a moment after it has gone, which is most of what makes something this fast and this short legible. Its colour follows the element too, so only a run carrying none ever shows the authored one.');
+  slider(trail, 'length', { min: 2, max: 40, step: 1, dp: 0,
+    get: () => tl.points ?? 14, set: (v) => { tl.points = Math.round(v); }, title: 'Points of history the ribbon is built through. Geometry, allocated once at this size — so unlike everything above it, this one reaches the NEXT bolt rather than the ones in the air.' });
+  slider(trail, 'width', { min: 0.01, max: 0.6, step: 0.01,
+    get: () => tl.width ?? 0.09, set: (v) => { tl.width = v; }, title: 'At the head. It tapers to nothing at the tail.' });
+  slider(trail, 'glow', { min: 0, max: 8, step: 0.1, dp: 1,
+    get: () => tl.glow ?? 3.2, set: (v) => { tl.glow = v; }, title: 'Brightness at the head. Additive, so this is the alpha as well — black is transparent.' });
+  slider(trail, 'taper', { min: 0.2, max: 4, step: 0.1, dp: 1,
+    get: () => tl.taper ?? 0.9, set: (v) => { tl.taper = v; }, title: 'How fast the width falls off toward the tail. Below 1 the ribbon holds its width most of the way and then drops — which is what makes it read as a line rather than as a comet.' });
+  slider(trail, 'fade', { min: 0.2, max: 4, step: 0.1, dp: 1,
+    get: () => tl.fade ?? 1.2, set: (v) => { tl.fade = v; }, title: 'The same falloff for brightness. Lower than the taper leaves a thin bright line; higher leaves a wide dim one.' });
+}
+
+// ---------------------------------------------------------------------------
+// A LOOP VOICE ON ITS OWN — see LOOP_ROWS.
+//
+// Everything else in this panel is reached through the moment that fires it,
+// and these have no moment. What they still need is everything a voice needs:
+// somewhere to hear it, a level, and a way to put a different recording behind
+// it — the Library dock on the right already targets whatever voiceOf(current)
+// resolves to, which is why its + and − work here without knowing about this.
+//
+// NO PITCH OR FILTER ROWS. They would render and do nothing: a bed layer is
+// played by systems/jetBed.js through its own graph, which reads the BUFFER and
+// none of the one-shot fields. `gain` is here for the same reason with the
+// opposite answer — it is what the ▶ audition below is scaled by, so it is the
+// level you judge the file at even though the bed's own mix is set per layer in
+// the jet panel.
+// ---------------------------------------------------------------------------
+function renderLoopVoice(voice) {
+  const vdef = CONFIG.sfx[voice];
+  els.name.textContent = voice;
+  els.via.textContent = `CONFIG.sfx.${voice}  \u2192  CONFIG.bubbleJet.bed.layers  \u2192  systems/jetBed.js`;
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!vdef) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build', `CONFIG.sfx.${voice} is missing, so there is nothing to tune.`);
+    return;
+  }
+
+  const srcs = srcsOf(vdef);
+  const bed = CONFIG.bubbleJet?.bed ?? {};
+  const layers = Array.isArray(bed.layers) ? bed.layers : [];
+  // Who actually loops this, including the single-name shorthand. Printed
+  // rather than assumed: a layer removed in the jet panel leaves this voice
+  // sitting here doing nothing, and that is worth being told.
+  const usedBy = [
+    ...(bed.sample === voice ? ['the first loop'] : []),
+    ...layers.map((l, i) => (l.sample === voice ? `layer ${i + (bed.sample ? 2 : 1)}` : null)).filter(Boolean),
+  ];
+
+  const c = card(cols, 'sv-wb-imp wide', 'Loop material',
+    'Not a sound anything fires. It is a <b>buffer</b> the bubble jet\u2019s bed loops as one layer, summed with the other layers and the oscillator stack ahead of the overdrive \u2014 so one filter sweep opens across all of them. Its level in that mix is set per layer in the jet panel; this is where you audition the file itself and change which file it is.');
+
+  const where = document.createElement('div');
+  where.className = usedBy.length ? 'sv-wb-scope' : 'sv-wb-none';
+  where.innerHTML = usedBy.length
+    ? `Looped by <b>${usedBy.join('</b>, <b>')}</b> of the bed. Set the balance there \u2014 <b>\u224b The bubble jet</b> in this rail.`
+    : 'Nothing loops this at the moment. Add it as a layer in <b>\u224b The bubble jet</b> and it starts sounding on the next stream.';
+  c.appendChild(where);
+
+  if (!srcs.length) {
+    const n = document.createElement('div');
+    n.className = 'sv-wb-none';
+    n.textContent = 'No file behind it, so this layer is silent. Add one from the Library on the right.';
+    c.appendChild(n);
+  }
+
+  dbSlider(c, 'audition level', { get: () => vdef.gain ?? 0.2, set: (v) => { vdef.gain = v; } });
+
+  // The takes, same row idiom as the event pane's. A loop voice wants exactly
+  // ONE file — the lookup picks at random, which is variation on a one-shot and
+  // a character change on a bed — so this says so rather than only allowing it.
+  if (srcs.length > 1) {
+    const warn = document.createElement('div');
+    warn.className = 'sv-wb-scope';
+    warn.innerHTML = `<b>${srcs.length} files on one loop voice.</b> The bed asks for a buffer once per stream and gets a random one of these, so the bed changes character between bursts rather than layering them. Take all but one out, or make the second a layer of its own.`;
+    c.appendChild(warn);
+  }
+
+  const takes = document.createElement('div');
+  takes.className = 'sv-wb-takes';
+  srcs.forEach((src) => {
+    const row = document.createElement('div');
+    row.className = 'sv-wb-take';
+    const fn = document.createElement('span');
+    fn.className = 'fn';
+    fn.textContent = src.split('/').pop();
+    fn.title = src;
+    const play = document.createElement('button');
+    play.className = 'sv-wb-btn';
+    play.textContent = '\u25b6';
+    play.title = 'Play this file straight through, once — not looped and not through the bed';
+    play.addEventListener('click', () => auditionFile(src, vdef.gain ?? 0.3));
+    const del = document.createElement('button');
+    del.className = 'sv-wb-btn';
+    del.textContent = '\u00d7';
+    del.title = 'Take this file off the voice \u2014 the file stays in the library';
+    del.addEventListener('click', async () => {
+      vdef.srcs = srcs.filter((x) => x !== src);
+      vdef.src = null;
+      changed();
+      await reloadSample(voice);
+      render();
+    });
+    row.append(fn, play, del);
+    takes.appendChild(row);
+  });
+  c.appendChild(takes);
+
+  const hint = document.createElement('div');
+  hint.className = 'sv-wb-none';
+  hint.textContent = 'A new file only reaches a stream that starts after it \u2014 an open bed keeps the buffer it opened with.';
+  c.appendChild(hint);
+}
+
 function renderBubbleJet() {
   const c = CONFIG.bubbleJet;
   els.name.textContent = 'The bubble jet';
@@ -1678,20 +2105,104 @@ function renderBubbleJet() {
     title: 'How hard they peel off sideways. Low and they ride along with the stream, which reads as one object rather than as something shedding.' });
 
   // --- THE BED ---------------------------------------------------------------
-  const sampled = !!bed.sample && hasSample(bed.sample);
+  // THE STACK IS DEAD ONLY WHEN ITS LEVEL IS ZERO. This used to read
+  // `!!bed.sample`, from the days when naming a sample meant the oscillators
+  // were never built — so picking one greyed out the whole tone card. They
+  // layer now, so a sampled bed still has every one of those controls live.
+  const deadStack = (bed.synthLevel ?? 1) <= 0;
   const b = card(cols, 'sv-wb-imp wide', 'The bed',
     'One voice that ramps up and then <b>holds</b> — not a sound in CONFIG.sfx, and it could not be: everything in that table knows its own length when it is triggered, and this is held open for as long as the stream burns. The ramp is the only part with movement in it; the hold is deliberately flat, because a sustained sound that keeps developing never arrives.');
   toggle(b, 'bed under the stream', () => bed.enabled, (v) => { bed.enabled = v; },
     'Off, the stream is silent apart from its cuts. The two feedback events are unaffected.');
-  pick(b, 'source', [['', 'the synth below'], ...Object.keys(CONFIG.sfx ?? {}).map((k) => [k, `sample: ${k}${hasSample(k) ? '' : ' (nothing loaded)'}`])],
+
+  // --- THE LAYERS ------------------------------------------------------------
+  // Every mp3 loop and the oscillator stack sound TOGETHER, summed ahead of the
+  // drive and the ladder — so they saturate and sweep as one instrument rather
+  // than being three sounds mixed afterwards. `bed.sample` is the single-name
+  // shorthand and is layer zero; the list below is everything after it.
+  const layerNote = document.createElement('div');
+  layerNote.className = 'sv-wb-none';
+  layerNote.innerHTML = 'Loops and the stack sound <b>together</b>, summed before the overdrive — so one filter sweep opens across all of them. A layer wants a voice holding exactly <b>one</b> file: the lookup picks a take at random, which is variation on a one-shot and a character change on a bed.';
+  b.appendChild(layerNote);
+
+  const voiceOptions = (blank) => [[blank[0], blank[1]],
+    ...Object.keys(CONFIG.sfx ?? {}).map((k) => [k, `${k}${hasSample(k) ? '' : ' (nothing loaded)'}`])];
+
+  // The shorthand slot, kept because it is what `bed.sample` has always been
+  // and what an older saved tuning carries.
+  pick(b, 'loop', voiceOptions(['', 'none — stack only']),
     () => bed.sample ?? '', (v) => { bed.sample = v; render(); },
-    'A loaded voice is LOOPED in place of the oscillator stack and runs through the same drive, the same filter sweep and the same envelope — so an uploaded bed inherits the shape rather than being a second, unrelated implementation of it. Load takes into a voice from the library below.');
-  if (bed.sample && !sampled) {
-    const n = document.createElement('div');
-    n.className = 'sv-wb-none';
-    n.textContent = `CONFIG.sfx.${bed.sample} has no sample loaded, so the synth below is what you are hearing. Add one from the library and it takes over on the next stream.`;
-    b.appendChild(n);
+    'The first mp3 loop. A loaded voice is looped and run through the same drive, the same filter sweep and the same envelope as the stack — it inherits the shape rather than being a second, unrelated bed. Load files into a voice from the library below.');
+  if (bed.sample) {
+    if (!hasSample(bed.sample)) {
+      const n = document.createElement('div');
+      n.className = 'sv-wb-none';
+      n.textContent = `CONFIG.sfx.${bed.sample} has no file loaded, so this layer is silent and you are hearing the rest of the bed. Add one from the library and it joins on the next stream.`;
+      b.appendChild(n);
+    }
+    slider(b, '...its level', { max: 2, step: 0.01,
+      get: () => bed.sampleLevel ?? 1, set: (v) => { bed.sampleLevel = v; },
+      title: 'Where this loop sits against the other layers and the stack.' });
+    slider(b, '...loops from (s)', { max: 6, step: 0.001, dp: 3,
+      get: () => bed.loopStart ?? 0, set: (v) => { bed.loopStart = v; },
+      title: 'Seconds, not frames, so the points survive a re-record at a different rate. Both at 0 loops the whole file — right for something recorded as a bed, and a click every pass on anything else.' });
+    slider(b, '...to (s)', { max: 6, step: 0.001, dp: 3,
+      get: () => bed.loopEnd ?? 0, set: (v) => { bed.loopEnd = v; },
+      title: 'Left at 0 (or below the start) the loop runs to the end of the file. Clamped to the file length, so an over-long value is the whole file rather than silence.' });
   }
+
+  // The rest of the layers, each one removable.
+  const layers = Array.isArray(bed.layers) ? bed.layers : (bed.layers = []);
+  layers.forEach((layer, i) => {
+    const head = document.createElement('div');
+    head.className = 'sv-wb-take';
+    const lab = document.createElement('span');
+    lab.className = 'fn';
+    // Numbered from what is actually above them: `bed.sample` is layer one when
+    // it names something and is not a layer at all when it is blank, so a bed
+    // built entirely out of this list reads "layer 1, layer 2" rather than
+    // starting at two with nothing before it.
+    lab.textContent = `layer ${i + (bed.sample ? 2 : 1)}`;
+    const del = document.createElement('button');
+    del.className = 'sv-wb-btn';
+    del.textContent = '×';
+    del.title = 'Take this layer out of the bed — the voice and its files stay in the library';
+    del.addEventListener('click', () => { layers.splice(i, 1); changed(); render(); });
+    head.append(lab, del);
+    b.appendChild(head);
+
+    pick(b, '...loop', voiceOptions(['', 'none']),
+      () => layer.sample ?? '', (v) => { layer.sample = v; render(); },
+      'Which voice this layer loops.');
+    slider(b, '...level', { max: 2, step: 0.01,
+      get: () => layer.level ?? 1, set: (v) => { layer.level = v; } });
+    slider(b, '...loops from (s)', { max: 6, step: 0.001, dp: 3,
+      get: () => layer.loopStart ?? 0, set: (v) => { layer.loopStart = v; } });
+    slider(b, '...to (s)', { max: 6, step: 0.001, dp: 3,
+      get: () => layer.loopEnd ?? 0, set: (v) => { layer.loopEnd = v; } });
+  });
+
+  const addRow = document.createElement('div');
+  addRow.className = 'sv-wb-take';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'sv-wb-btn';
+  addBtn.textContent = '+ another loop';
+  addBtn.title = 'Stack another mp3 loop into the bed. It starts pointing at nothing, which is silent rather than wrong.';
+  addBtn.addEventListener('click', () => {
+    // Starts EMPTY rather than guessing a voice. A new row that arrived
+    // already naming something would be an edit nobody made — the same trap
+    // the tuner's own rows used to fall into by writing their midpoint onto
+    // every preset that had no value.
+    layers.push({ sample: '', level: 1, rate: 1, loopStart: 0, loopEnd: 0 });
+    changed();
+    render();
+  });
+  addRow.appendChild(addBtn);
+  b.appendChild(addRow);
+
+  slider(b, 'the stack in that mix', { max: 2, step: 0.01,
+    get: () => bed.synthLevel ?? 1, set: (v) => { bed.synthLevel = v; render(); },
+    title: 'The oscillator stack’s level against the loops above. 0 silences it and leaves the loops — the tone card below then greys out, because there is nothing left for it to shape.' });
   slider(b, 'level', { max: 1, step: 0.005, dp: 3,
     get: () => bed.gain ?? 0.22, set: (v) => { bed.gain = v; },
     title: 'The held level. The ramp climbs to it and then sits there.' });
@@ -1710,18 +2221,18 @@ function renderBubbleJet() {
 
   const tone = card(cols, 'sv-wb-imp', 'The tone',
     'A stack, not a chord. Three saws a few cents apart beat slowly against each other and are heard as ONE thick voice; past about thirty cents they separate into a detuned mess. The square an octave down carries the weight the saws have none of.');
-  slider(tone, 'note (Hz)', { min: 20, max: 220, step: 1, dp: 0, dead: sampled,
+  slider(tone, 'note (Hz)', { min: 20, max: 220, step: 1, dp: 0, dead: deadStack,
     get: () => bed.note ?? 55, set: (v) => { bed.note = v; },
     title: 'Low. Above about 80 this starts competing with the boss cries for the same part of the spectrum.' });
   pick(tone, 'shape', [['sawtooth', 'sawtooth'], ['square', 'square'], ['triangle', 'triangle'], ['sine', 'sine']],
     () => bed.wave ?? 'sawtooth', (v) => { bed.wave = v; },
     'Sawtooth is the Moog answer: everything the drive and the filter do downstream needs harmonics to work on, and a sine has none.');
-  slider(tone, 'voices', { min: 1, max: 7, step: 1, dp: 0, dead: sampled,
+  slider(tone, 'voices', { min: 1, max: 7, step: 1, dp: 0, dead: deadStack,
     get: () => bed.unison ?? 3, set: (v) => { bed.unison = Math.round(v); },
     title: 'An ODD count keeps one voice dead centre, which is what stops the pitch itself drifting as the spread is widened.' });
-  slider(tone, 'spread (cents)', { max: 60, step: 0.5, dp: 1, dead: sampled,
+  slider(tone, 'spread (cents)', { max: 60, step: 0.5, dp: 1, dead: deadStack,
     get: () => bed.detune ?? 11, set: (v) => { bed.detune = v; } });
-  slider(tone, 'sub', { max: 2, step: 0.02, dead: sampled,
+  slider(tone, 'sub', { max: 2, step: 0.02, dead: deadStack,
     get: () => bed.sub ?? 0.7, set: (v) => { bed.sub = v; },
     title: 'A square an octave below the note. This is the weight — the saws alone are all edge, and the edge is what the drive is about to multiply.' });
 
@@ -2390,9 +2901,17 @@ function renderGlobal() {
   cam.appendChild(stopRow);
   slider(cam, 'hitstop scale', { max: 1, get: () => fx.hitstopScale, set: (v) => { fx.hitstopScale = v; } });
   slider(cam, 'hitstop gap', { max: 2, step: 0.05, get: () => fx.hitstopCooldown, set: (v) => { fx.hitstopCooldown = v; } });
+  // The gap used to be the answer here — one stop every 0.4s, whoever asked
+  // first — and it is no longer the interesting one: CONFIG.fx.hitstopOnly now
+  // decides WHICH events may ask at all, so the gap only separates repeats of
+  // the few that can. Says the count rather than the names, because the list is
+  // meant to stay short enough that a number is the alarming part.
+  const stopList = Array.isArray(fx.hitstopOnly) ? fx.hitstopOnly.length : 0;
   const noteText = () => (fx.hitstopEnabled === false
     ? 'Hit-stop is OFF — these two are what it will come back at.'
-    : `The gap is why most events' hit-stop never lands: one every ${fx.hitstopCooldown}s, whoever asks first.`);
+    : stopList
+      ? `Only ${stopList} event${stopList === 1 ? '' : 's'} may freeze the frame (CONFIG.fx.hitstopOnly). The gap separates repeats of those: one every ${fx.hitstopCooldown}s.`
+      : `No guest list, so every event with a hit-stop competes for one every ${fx.hitstopCooldown}s — whoever asks first.`);
   const camNote = document.createElement('div');
   camNote.className = 'sv-wb-none';
   camNote.textContent = noteText();

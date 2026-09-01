@@ -31,6 +31,12 @@
 // restore someone's volume.
 // ---------------------------------------------------------------------------
 
+// The menu is BUILT from the schema below, so every label in it is a line a
+// player reads. Most of them are Ethan's and are written out here; the ones
+// that are not yet come out of uiText.csv, where the editor can find them and
+// the ship gate can count them — see uiTextTable.js.
+import { uiText } from '../uiTextTable.js';
+
 const STORAGE_KEY = 'sealsurvivor.settings.v1';
 
 // Actions that can be rebound. The ARROW KEYS are deliberately not in here:
@@ -43,6 +49,10 @@ export const ACTIONS = [
   { id: 'left', label: 'Swim left', alt: 'Arrow Left' },
   { id: 'right', label: 'Swim right', alt: 'Arrow Right' },
   { id: 'strike', label: 'Charge strike', alt: 'Mouse / bumper' },
+  // The label is Ethan's to write, so it is a row in uiText.csv rather than a
+  // string here. The `alt` is a hardware button name like the two rows around
+  // it, not voice, so it stays.
+  { id: 'clap', label: uiText('clapAction'), alt: 'X / Square' },
   { id: 'pause', label: 'Pause', alt: 'Start' },
 ];
 
@@ -215,7 +225,14 @@ export const SCHEMA = {
       {
         key: 'boostMeter', label: 'Boost meter', type: 'choice',
         options: ['bar', 'ring', 'both'], def: 'both',
-        labels: { ring: 'Ring on the seal', bar: 'Beside the air', both: '[DRAFT] Both' },
+        // All three out of uiText.csv rather than two here and the unwritten
+        // one in the table: an option set split across two files is a set you
+        // cannot read as a set, and `both` is the one still owed.
+        labels: {
+          ring: uiText('boostMeterRing'),
+          bar: uiText('boostMeterBar'),
+          both: uiText('boostMeterBoth'),
+        },
         hint: 'How the strike fuel is drawn',
       },
       // HOW MUCH A HOVERED UPGRADE TELLS YOU — see ui/upgradeTip.js, which is
@@ -241,17 +258,26 @@ export const SCHEMA = {
       // card does — a player who never opens this menu is exactly the one that
       // was written for.
       {
-        key: 'upgradeTips', label: '[DRAFT] Upgrade tips', type: 'choice',
+        key: 'upgradeTips', label: uiText('upgradeTipsLabel'), type: 'choice',
         options: ['off', 'short', 'full'], def: 'full',
-        labels: { off: '[DRAFT] Off', short: '[DRAFT] Short', full: '[DRAFT] Full' },
-        hint: '[DRAFT] How much a hovered upgrade tells you',
+        labels: {
+          off: uiText('upgradeTipsOff'),
+          short: uiText('upgradeTipsShort'),
+          full: uiText('upgradeTipsFull'),
+        },
+        hint: uiText('upgradeTipsHint'),
       },
     ],
   },
   controls: {
     label: 'Controls',
     items: [
-      { key: 'keys', label: 'Key bindings', type: 'keys', def: { up: 'w', down: 's', left: 'a', right: 'd', strike: ' ', pause: 'escape' } },
+      // A BINDING ADDED HERE DOES NOT REACH A SAVED SETTINGS FILE. `coerce`
+      // merges the stored object over this default, so an existing player keeps
+      // their rebinds AND picks up `clap` — but only because the default is
+      // present to be merged under. Deleting a row here would strand whatever
+      // key the player had put on it.
+      { key: 'keys', label: 'Key bindings', type: 'keys', def: { up: 'w', down: 's', left: 'a', right: 'd', strike: ' ', clap: 'e', pause: 'escape' } },
       {
         key: 'deadzone', label: 'Stick deadzone', type: 'range', min: 0.02, max: 0.4, step: 0.01, def: 0.15,
         format: (v) => v.toFixed(2),

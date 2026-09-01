@@ -12,9 +12,20 @@ plausible-sounding placeholder — plausible copy is exactly what survives a
 review and ships by accident. Lorem is unmistakable, and the gate below can
 see it.
 
-For a string that isn't prose (a `.js` UI label, a button, anything where
-lorem would make the thing untestable), stage the real shape with a `[DRAFT]`
-marker in it — `[DRAFT] Boost` — which fails the same gate.
+For a string that isn't prose (a UI label, a button, anything where lorem
+would make the thing untestable), stage the real shape with a `[DRAFT]` marker
+in it — `[DRAFT] Boost` — which fails the same gate.
+
+**A screen label belongs in a table, not in a `.js` file.** `uiText.csv` is
+the home for every string a player reads that no other table already owns — a
+row heading in an upgrade tip, an option name in the pause menu, the word
+after a kill count. The code asks for it by id (`uiText('finPanelTitle')`) and
+a missing row shows the id rather than a blank, so the join cannot fail
+quietly; `npm run test:uitext` fails on a read with no row and on a row with
+no read. Before this table existed these lines were constants in `ui.js`,
+`settings.js`, `upgradeTip.js` and `config.js`, and the editor's "needs your
+words" chip — whose whole job is to gather every outstanding line onto one
+screen — could not see a single one of them.
 
 **Say what the line is for.** Lorem tells Ethan nothing about what to write.
 Put the brief in that row's `notes` column; if the CSV has no `notes` column,
@@ -57,8 +68,8 @@ in the game when it was written are a separate problem: git attributes every
 commit to Ethan, so nothing records which of them he wrote and which arrived
 from a session like this one.
 
-So every one of them carries `review=TRUE` — a stored column in all ten copy
-tables, meaning *not yet signed off*, not *wrong*. Ethan clears a row to blank
+So every one of them carries `review=TRUE` — a stored column in all eleven
+copy tables, meaning *not yet signed off*, not *wrong*. Ethan clears a row to blank
 once he has read the line and kept it or rewritten it. Over time the column
 becomes the record that git could not give us.
 

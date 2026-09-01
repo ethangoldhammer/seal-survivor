@@ -64,9 +64,10 @@ import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entit
 import {
   airRampFor, airRamp, updateAirborne, resetAirborne, airState,
   airDamageMul, airFireRateMul, airPickupMul,
-  canAirJump, spendAirJump, slamFor,
+  canAirJump, spendAirJump, slamFor, launchFor,
 } from '../path/src/systems/airborne.js';
 import { updateBreachTrail, clearBreachTrail, breachTrailCount, breachTrailStats, breachTrailNodes } from '../path/src/systems/breachTrail.js';
+import { onFeedback } from '../path/src/systems/feedback.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -317,6 +318,144 @@ section('THE BANK — the payout survives the descent');
     `below minRamp ${A.slam.minRamp}`);
   check('...and just over the line pays something',
     slamFor({ airPeak: A.slam.minRamp * 1.01 }, 10) !== null);
+}
+
+// ---------------------------------------------------------------------------
+section('THE CROSSING — a head coming up is not an animal leaving the sea');
+// ---------------------------------------------------------------------------
+// One upward crossing used to be one event whatever it was, so the quietest
+// thing the seal does and the loudest were announced with the same sound, the
+// same shake and the same wall of foam. THE FAILURE THIS CATCHES IS THE SPLIT
+// COLLAPSING: a threshold nudged past every reachable speed, or a `flying`
+// that is always true, leaves both cues wired, both audible in the F menu, and
+// one of them never fired in a run. Nothing throws and the panel looks right.
+//
+// So the events are read off a REAL crossing rather than off launchFor, and
+// both sides of the line are flown.
+{
+  const A_L = CONFIG.airborne.launch;
+  // CONFIG.arena.gravity, and read rather than assumed: it is TUNED, and does
+  // not hold config.js's declared 29.7 in a live run.
+  const g = CONFIG.arena.gravity;
+  // The speed that buys exactly `flyAir` seconds of hang — the line itself,
+  // derived here the same way launchFor derives it. A hand-typed speed would
+  // be a second opinion about where the line is.
+  const lineSpeed = (g * A_L.flyAir) / 2;
+
+  // Fly one crossing and report which surface events it announced.
+  function cross(riseSpeed) {
+    const heard = [];
+    const stop = onFeedback((event) => {
+      if (event === 'breach' || event === 'surfacing') heard.push(event);
+    });
+    resetPlayer();
+    resetAirborne();
+    // Started BELOW the water line and driven up through it, rather than
+    // placed above it: `breachDir` is written by the crossing itself, so a
+    // seal spawned in the air has already missed the only frame that fires
+    // anything.
+    player.mesh.position.set(0, bounds.surfaceY - 0.5, 0);
+    player.velocity.set(0, riseSpeed);
+    for (let i = 0; i < 60 && !player.aboveSurface; i++) updatePlayer(dt, noInput);
+    stop();
+    return heard;
+  }
+
+  // Well clear of the line on both sides — the frames before the crossing cost
+  // a little speed to gravity, and a subject sitting exactly on it would be
+  // measuring that loss rather than the decision.
+  const slow = cross(lineSpeed * 0.5);
+  const fast = cross(lineSpeed * 3);
+  check('a slow crossing surfaces', slow.length === 1 && slow[0] === 'surfacing',
+    slow.join(', ') || 'silence');
+  check('a fast one breaches', fast.length === 1 && fast[0] === 'breach',
+    fast.join(', ') || 'silence');
+  // Exactly one of the two, always. Two cues on one crossing is the same bug
+  // as none, and is what a split that forgot its `else` looks like.
+  check('...and never both', slow.length === 1 && fast.length === 1,
+    `${slow.length} slow / ${fast.length} fast`);
+
+  // THE LINE IS REACHABLE FROM BOTH DIRECTIONS. A threshold set above any
+  // speed the seal can leave the water at would make `breach` dead, and one at
+  // zero would make `surfacing` dead — both pass every other check here.
+  check('the line sits inside the speeds a seal actually leaves at',
+    lineSpeed > 1 && lineSpeed < A.jumps.speed,
+    `${lineSpeed.toFixed(1)} u/s, against a ${A.jumps.speed} u/s launch`);
+
+  // The conversion itself. Seconds of air is the unit both numbers are
+  // authored in, so it has to be the unit the code works in.
+  const l = launchFor(player, lineSpeed);
+  check('the line is exactly flyAir seconds of hang', near(l.air, A_L.flyAir, 1e-6),
+    `${l.air.toFixed(3)}s`);
+  check('...and a peak under a fifth of the seal', l.height < 1.3,
+    `${l.height.toFixed(2)} world units of a ~6.1-unit animal`);
+  check('...and it is the boundary, not a gap',
+    launchFor(player, lineSpeed * 1.001).flying && !launchFor(player, lineSpeed * 0.999).flying);
+
+  // The scale the loud cue rides is the formula it has always ridden — the
+  // split must change WHICH cue fires and nothing about how the big one feels.
+  // 14 is the divisor that was hand-typed into player.js for years; fullAir is
+  // where it came from.
+  // The loud cue's ramp is the number that was hand-typed into player.js, moved
+  // rather than rewritten. If this ever stops being 14 it is a decision about
+  // the existing breach and not a side effect of the split.
+  check('a full breach still scales the way it always did', A_L.fullSpeed === 14,
+    `${A_L.fullSpeed} u/s`);
+  check('...and it is a SPEED, not a gravity-derived time — see the config note',
+    near(launchFor(player, A_L.fullSpeed).scale, 1.5, 1e-9),
+    `${launchFor(player, A_L.fullSpeed).scale}`);
+  check('...and the cue is capped', launchFor(player, 9999).scale === 2);
+
+  // THE TWO CUES HAVE TO BE DIFFERENT WEIGHTS. Identical channels would pass
+  // everything above: the split would be working perfectly and inaudible.
+  const B = CONFIG.feedback.breach;
+  const S = CONFIG.feedback.surfacing;
+  // ...ON A CHANNEL THE MUTE LEAVES ALONE. Neither of these is on
+  // CONFIG.fx.shakeOnly, so both shakes are gated to 0 by design — a hundred
+  // and sixteen events carrying one is the same as none of them carrying one,
+  // and the guest list is what fixed that. Comparing them here asked whether
+  // two muted numbers differ, which they cannot, and reported the feature as a
+  // fault: `0 vs 0`.
+  //
+  // The claim is still worth making — the two cues must be different weights or
+  // the split is inaudible — so it is made where the difference survives. The
+  // camera half is checked as gating rather than as magnitude.
+  const gated = CONFIG.fx.shakeOnly ?? [];
+  if (gated.includes('breach') || gated.includes('surfacing')) {
+    check('the quiet one barely moves the camera', S.shake < B.shake * 0.25,
+      `${S.shake} vs ${B.shake}`);
+  } else {
+    check('neither surfacing nor breaching takes the camera — both off the guest list',
+      !(S.shake > 0) && !(B.shake > 0), `${S.shake} / ${B.shake}`);
+    check('...and the quiet one is still the dimmer of the two',
+      S.glow < B.glow * 0.5, `glow ${S.glow} vs ${B.glow}`);
+  }
+  check('...and ripples smaller', S.ripple.strength < B.ripple.strength * 0.5,
+    `${S.ripple.strength} vs ${B.ripple.strength}`);
+  check('...and is its own voice, not the breach again', S.sfx !== B.sfx, `${S.sfx} / ${B.sfx}`);
+  check('...darker than the breach, which is the separation',
+    CONFIG.sfx[S.sfx].filter < CONFIG.sfx[B.sfx].filter,
+    `${CONFIG.sfx[S.sfx].filter}Hz vs ${CONFIG.sfx[B.sfx].filter}Hz`);
+  // A seal resting at the surface bobs through the water line, and every bob
+  // is an honest upward crossing. Only the quiet one can chatter.
+  check('...and is throttled, unlike the breach', S.sfxMinGap > 0 && !B.sfxMinGap,
+    `${S.sfxMinGap}s vs ${B.sfxMinGap}`);
+
+  // THE ESCAPE HATCH, and it has to be the old behaviour exactly rather than
+  // "mostly": switching the split off is how a bad line is ruled out as the
+  // cause of something, which only works if off means off.
+  {
+    const was = A_L.enabled;
+    A_L.enabled = false;
+    const off = cross(lineSpeed * 0.5);
+    // Sampled BEFORE the restore. Asked after it, this reads the live config
+    // and passes or fails on nothing to do with the switch.
+    const silentWhileOff = launchFor(player, 1) === null;
+    A_L.enabled = was;
+    check('with the split off, every crossing is a breach again',
+      off.length === 1 && off[0] === 'breach', off.join(', ') || 'silence');
+    check('...and launchFor says so rather than guessing', silentWhileOff);
+  }
 }
 
 // ---------------------------------------------------------------------------

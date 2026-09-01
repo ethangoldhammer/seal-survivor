@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { ORIGIN, registerScheme, serve } from './serve.js';
 import { registerSaveIpc, flush } from './save.js';
 import { registerSaveImageIpc } from './saveImage.js';
+import { registerPlaytestIpc } from './playtest.js';
 import { initSteam, registerSteamIpc, steamStatus } from './steam.js';
 
 // Before whenReady, necessarily — see registerScheme's note.
@@ -85,6 +86,9 @@ app.whenReady().then(() => {
   // machine than on a slow one.
   registerSaveIpc();
   registerSaveImageIpc();
+  // The run log. Not part of the save — see the header of playtest.js for why
+  // this file must stay out of the Steam Cloud glob that save.json is in.
+  registerPlaytestIpc();
   registerSteamIpc();
   createWindow();
 

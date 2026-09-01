@@ -3,6 +3,9 @@ import { CONFIG } from '../config.js';
 import { hitShapeSpheres, worldToShapeLocal, shapeLocalToWorld } from './hitShape.js';
 import { feedback } from './feedback.js';
 import { advanceCycles, phaseOffset } from './beatSync.js';
+import {
+  makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
+} from './organicRing.js';
 
 // ---------------------------------------------------------------------------
 // WEAK SPOTS ON A BOSS
@@ -61,6 +64,39 @@ import { advanceCycles, phaseOffset } from './beatSync.js';
 // silhouette is the BLOOM doing it, which is the honest way to get a halo:
 // bright skin throws light, a quad pretending to be bright skin does not.
 // ---------------------------------------------------------------------------
+//
+// AND A MARK DRAWN IN FRONT OF IT — the small target rings
+//
+// Everything above is why the glow reads so well when it reads, and it is also
+// exactly why it does not read on every boss: it is ADDITIVE LIGHT ON A HIDE,
+// so its legibility is a property of the animal underneath. Unmissable on the
+// orca's near-black flank; one bright thing among several on a pale hull, a
+// deck full of lights or a crab wearing a lit shell of its own; and correctly
+// occluded the moment the body turns it away.
+//
+// So each spot also gets a RETICLE: the strike mark's own ring (systems/
+// organicRing.js) at a fraction of its size, depth-test off, drawn in front of
+// the animal. The two halves answer different questions and neither does the
+// other's job — the ring says WHERE, from anywhere on screen and on any hide;
+// the glow says WHAT, because heat, the throb, the hit flash and the chewed
+// edge are all readable only on the light itself.
+//
+// IT IS THE MARK'S RING ON PURPOSE, IN A SHAPE OF ITS OWN. A bracket cut into
+// segments is already the game's word for "this is the thing to hit" — a
+// strike paints one on a target — so a smaller one on a weak spot is the same
+// sentence about a smaller subject. What separates them is the SHAPE and the
+// COLOUR: the mark is four arms on a circle in the strike's amber (or its
+// target's status element), and these are six on a loose hexagon wearing the
+// spot's own ramp. The hex is not decoration either — the upgrade comb, the
+// hive and the level-up cells are all hexes, so a target drawn in that shape
+// is speaking a language already on the screen. It all lives in
+// CONFIG.hotSpots.look.target.
+//
+// THE RING IS NOT A PROMISE ABOUT REACH, which is why it is allowed to sit
+// OUTSIDE the crit radius (`radiusMul` > 1) where a boss telegraph never could.
+// The crit boundary is drawn by the glow's own band, at the radius the crit
+// test reads, and the two cannot drift because they are one number. This is a
+// label pointing at that boundary from just outside it.
 //
 // WHAT A SPOT IS ANCHORED TO. A point in the BONE SPACE of one of the hit
 // shape's spheres (systems/hitShape.js), the same anchor the impact smears in
@@ -135,6 +171,13 @@ const SKIN_FRAG_PARS = /* glsl */ `
   // spot in lockstep with the music) a shared slot would hand every spot on
   // every boss in the game the identical gnawed outline.
   uniform float uHotPhase[${MAX_SPOTS}];
+  // HOW FAR THROUGH COMING APART each one is: 0 for its whole lit life, then
+  // 0 → 1 over closeSeconds from the frame it ruptures. Its own array rather
+  // than a fourth slot on aMood, because aMood.w is the seed and the seed is
+  // the one value in there that must never change while a spot exists — the
+  // chewed edge is a function of it, so borrowing that slot would make the
+  // outline crawl as the spot died.
+  uniform float uHotBurst[${MAX_SPOTS}];
   uniform float uHotTime;
   uniform float uHotGlow;
   uniform float uHotJag;
@@ -142,10 +185,15 @@ const SKIN_FRAG_PARS = /* glsl */ `
   uniform float uHotCore;
   uniform float uHotWhite;
   uniform float uHotFill;
+  uniform float uHotCharge;
+  uniform float uHotChargeEdge;
   uniform float uHotRing;
   uniform float uHotRingW;
   uniform float uHotSpill;
   uniform float uHotSpillGain;
+  uniform float uHotBurstReach;
+  uniform float uHotBurstW;
+  uniform float uHotBurstGain;
   uniform float uHotCycle;
   uniform float uHotPulseDepth;
   uniform float uHotFlashSwell;
@@ -164,14 +212,19 @@ const SKIN_FRAG_PARS = /* glsl */ `
                mix(hotHash(i + vec2(0.0, 1.0)), hotHash(i + vec2(1.0, 1.0)), f.x), f.y);
   }
 
-  vec3 hotSpotLight(vec4 s, vec4 m, float phase) {
+  vec3 hotSpotLight(vec4 s, vec4 m, float phase, float burst) {
     if (m.x <= 0.0 || s.w <= 0.0) return vec3(0.0);
 
     // r = 1.0 IS THE CRIT BOUNDARY. Everything below is built around that one
     // fact: the ring is drawn exactly there, the fill is inside it, the spill
     // is outside it, and nothing moves it.
     float r = distance(vHotWorld, s.xyz) / max(0.05, s.w);
-    if (r > 1.0 + uHotSpill * 1.6) return vec3(0.0);
+    // The far edge of everything this spot can paint, and it is the SHOCK that
+    // decides it — a cutoff sized for the spill alone would clip the burst ring
+    // dead at the moment it left the boundary, which reads as the wave hitting
+    // a wall the animal does not have.
+    float outer = 1.0 + uHotSpill * 1.6 + uHotBurstReach * burst;
+    if (r > outer) return vec3(0.0);
 
     // BREATHING IS BRIGHTNESS, NOT SIZE. It used to scale the reach, which
     // meant the drawn boundary swung either side of the number the crit test
@@ -207,11 +260,29 @@ const SKIN_FRAG_PARS = /* glsl */ `
     // shape, which is what this whole arrangement replaced.
     float ring = smoothstep(uHotRingW, 0.0, abs(r - 1.0));
 
-    // THE FILL, deliberately kept well under the ring. A solid interior at
-    // full brightness clips flat once the glow lifts it past 1, and everything
-    // that has to be legible INSIDE the spot — the heat shift, the hot core,
-    // the hit flash — is then invisible because all of it is over the ceiling.
-    float fill = 1.0 - smoothstep(0.72, 1.0, r);
+    // THE FILL, AND IT IS A LEVEL RATHER THAN A WASH.
+    //
+    // It used to be a fixed soft interior, which meant the only thing damage
+    // moved was the colour and the tempo — both of which are qualities of the
+    // light rather than quantities of anything, so "how close is this to
+    // going" was a judgement about a shade of amber. Now the lit interior
+    // GROWS: a fresh spot is lit out to uHotCharge of its radius and a spent
+    // one is lit to the boundary, so the answer is a distance the player can
+    // see against a line that is already drawn.
+    //
+    // NOTHING HERE MOVES THE BOUNDARY. The level rises INSIDE a ring that
+    // stays exactly on the crit radius, which is what separates this from
+    // pulsing the reach: the thing that grows is not the thing being aimed at,
+    // and the moment they meet is the moment the spot bursts.
+    float lvl = mix(uHotCharge, 1.0, m.z);
+    // The same shoulder the ring is drawn with, on purpose. At full heat the
+    // two land on top of each other and have to read as one line rather than
+    // as a hard edge arriving beside a soft one.
+    float fill = 1.0 - smoothstep(lvl - uHotRingW, lvl, r);
+    // ...and the level's own leading edge, so it reads as a surface coming up
+    // rather than as a patch getting wider. This is the part that makes a spot
+    // at 90% look DIFFERENT from one at 60% in a single frame.
+    float front = smoothstep(uHotRingW, 0.0, abs(r - lvl));
     float core = pow(max(0.0, 1.0 - r), uHotCore);
 
     // THE SPILL, outside the boundary, and the ONLY part the chewed edge
@@ -236,6 +307,23 @@ const SKIN_FRAG_PARS = /* glsl */ `
     float reach = 1.0 + uHotSpill * (1.0 + n * uHotJag * mix(1.0, 1.8, m.z));
     float spill = (1.0 - smoothstep(1.0, reach, r)) * step(1.0, r);
 
+    // AND THE BURST: one band leaving the wound.
+    //
+    // Everything else a rupture does happens at the spot's own size — the goo,
+    // the meat, the ring thrown outward — and none of it is drawn ON the
+    // animal, so the skin's own account of the event was a light going out
+    // over a fifth of a second. This is the shock: a hard band that starts on
+    // the boundary the player has been chewing at and races out past it,
+    // painted on the flesh like everything else here, so the body itself shows
+    // the thing that went off inside it.
+    //
+    // It is NOT faded by hand. m.x — the same fade that takes the light out
+    // — multiplies the whole return below, so the wave dying and the spot
+    // going dark are one number and cannot drift into a shock still travelling
+    // over a spot that has already gone.
+    float sr = mix(1.0, outer, burst);
+    float shock = smoothstep(uHotBurstW, 0.0, abs(r - sr)) * step(0.0001, burst);
+
     // GREEN -> AMBER as it takes damage, and all the way to white-red on the
     // frame it is struck. Three colours and three mixes, in that order,
     // because each has to win over the last: a nearly-ruptured spot is already
@@ -244,7 +332,21 @@ const SKIN_FRAG_PARS = /* glsl */ `
     col = mix(col, uHotFlash, m.y);
     col = mix(col, vec3(1.0), core * uHotWhite);
 
-    float shape = fill * uHotFill + ring * uHotRing + spill * uHotSpillGain;
+    // ONLY THE RING AND THE SHOCK MAY CLIP, and that is the whole shape
+    // budget in one line. The scene renders to HalfFloat, so a term over 1
+    // survives the bright pass — but the composite still lands in 8 bits, and
+    // anything past the ceiling there is flat white with no edge and no
+    // interior. When the fill and the spill were both over it the spot was one
+    // saturated smear the size of the spill's reach, with the boundary band
+    // welded into the middle of it: every number in this block was doing
+    // something and none of it could be seen. So the interior terms are sized
+    // to stay under 1 at the PEAK of the throb (x breathe), and the two that
+    // are meant to be lines are left an order of magnitude over it.
+    float shape = fill * uHotFill
+                + front * uHotChargeEdge
+                + ring * uHotRing
+                + spill * uHotSpillGain
+                + shock * uHotBurstGain;
     float lift = 1.0 + m.y * uHotFlashSwell;
     return col * uHotGlow * shape * breathe * lift * m.x;
   }
@@ -255,10 +357,10 @@ const SKIN_FRAG_PARS = /* glsl */ `
 // guard the loop would need.
 const SKIN_FRAG = /* glsl */ `
   {
-    vec3 hot = hotSpotLight(uHotSpot[0], uHotMood[0], uHotPhase[0])
-             + hotSpotLight(uHotSpot[1], uHotMood[1], uHotPhase[1])
-             + hotSpotLight(uHotSpot[2], uHotMood[2], uHotPhase[2])
-             + hotSpotLight(uHotSpot[3], uHotMood[3], uHotPhase[3]);
+    vec3 hot = hotSpotLight(uHotSpot[0], uHotMood[0], uHotPhase[0], uHotBurst[0])
+             + hotSpotLight(uHotSpot[1], uHotMood[1], uHotPhase[1], uHotBurst[1])
+             + hotSpotLight(uHotSpot[2], uHotMood[2], uHotPhase[2], uHotBurst[2])
+             + hotSpotLight(uHotSpot[3], uHotMood[3], uHotPhase[3], uHotBurst[3]);
     // NOTHING NEAR A SPOT DRAWS AT ALL. The shell covers the whole animal, so
     // without this every boss pays a full-body additive pass writing black —
     // and on a body already carrying an outline shell that is the third draw
@@ -293,6 +395,16 @@ const owners = new Map();
 // came off it, with no scene, no pickup list and no game loop.
 const chumQueue = [];
 
+// AND THE SHOVE A RUPTURE PUTS THROUGH THE ANIMAL, queued for the same reason
+// and drained the same way. This module cannot call applyKnockback directly:
+// entities/enemies.js owns it, entities/projectiles.js imports THIS file, and
+// enemies imports projectiles — so the import would close a cycle through the
+// three biggest modules in the game to deliver one impulse a fight. main.js
+// already holds both ends, and the queue is what keeps the shove testable
+// without a scene: the harness bursts a spot and reads the impulse that came
+// off it, exactly as it does for the meat.
+const shoveQueue = [];
+
 const _p = { x: 0, y: 0, z: 0 };
 const _col = new THREE.Color();
 
@@ -309,6 +421,7 @@ function freshUniforms() {
   const spots = [];
   const moods = [];
   const phases = new Float32Array(MAX_SPOTS);
+  const bursts = new Float32Array(MAX_SPOTS);
   for (let i = 0; i < MAX_SPOTS; i++) {
     spots.push(new THREE.Vector4(0, 0, 0, 0));
     moods.push(new THREE.Vector4(0, 0, 0, 0));
@@ -317,6 +430,7 @@ function freshUniforms() {
     uHotSpot: { value: spots },
     uHotMood: { value: moods },
     uHotPhase: { value: phases },
+    uHotBurst: { value: bursts },
     uHotTime: { value: 0 },
     uHotGlow: { value: l.glow ?? 2.6 },
     uHotJag: { value: l.jag ?? 0.34 },
@@ -324,10 +438,15 @@ function freshUniforms() {
     uHotCore: { value: l.core ?? 3.2 },
     uHotWhite: { value: l.white ?? 0.85 },
     uHotFill: { value: l.fill ?? 0.55 },
+    uHotCharge: { value: l.charge ?? 0.34 },
+    uHotChargeEdge: { value: l.chargeEdge ?? 0.9 },
     uHotRing: { value: l.ring ?? 1.7 },
     uHotRingW: { value: l.ringWidth ?? 0.16 },
     uHotSpill: { value: l.spill ?? 0.5 },
     uHotSpillGain: { value: l.spillGain ?? 0.55 },
+    uHotBurstReach: { value: l.burstReach ?? 0.9 },
+    uHotBurstW: { value: l.burstWidth ?? 0.18 },
+    uHotBurstGain: { value: l.burstGain ?? 3 },
     uHotCycle: { value: 0 },
     uHotPulseDepth: { value: l.pulseDepth ?? 0.55 },
     uHotFlashSwell: { value: l.flashSwell ?? 0.35 },
@@ -442,6 +561,193 @@ function dropShells(owner) {
   owner.shells = [];
 }
 
+// ---------------------------------------------------------------------------
+// THE TARGET RING ON ONE SPOT
+// ---------------------------------------------------------------------------
+
+/**
+ * Give a spot its reticle, if there is a scene to hang it in.
+ *
+ * ADDED TO THE SCENE, NOT TO THE ANIMAL. The ring is a readout drawn in world
+ * space at the spot's current position, and parenting it under the boss would
+ * inherit the body's own scale — every rig in the game carries a different fit
+ * multiplier, so an identical `radiusMul` would come out a different size on
+ * each boss for reasons nothing here could see.
+ *
+ * A NULL SCENE IS ORDINARY. tools/boss-hitbox-audit.mjs and anything else
+ * measuring placement builds an owner without a world to draw in; a spot with
+ * no ring is a spot that simply has no reticle, and every other part of the
+ * feature runs unchanged.
+ */
+function makeSpotRing(owner) {
+  const t = look().target ?? {};
+  if (t.enabled === false || !owner.scene) return null;
+  const ring = makeOrganicRing({
+    // A LOOSE HEX IN SIX PIECES. The mark's bracket is four arms on a circle;
+    // this is the same family in the shape the rest of the game's UI is cut
+    // from, which is what keeps a weak spot from reading as a second lock-on.
+    // The two counts move together — see the note in config.
+    edge: t.edge ?? 'facet',
+    arcs: Math.max(0, Math.round(t.arcs ?? 6)),
+    facets: Math.max(3, Math.round(t.facets ?? 6)),
+    arcGap: t.arcGap ?? 0.86,
+    // Kinetic rather than an element: a weak spot is not a status and not an
+    // attack type, and it takes its colour from the spot's own ramp below on
+    // the first frame anyway. `edge` above overrides the dialect this would
+    // otherwise bring with it.
+    type: 'kinetic',
+    color: look().litColor ?? 0xffffff,
+    // ONE `thickness`, and it was two. The literal carried the key twice —
+    // 0.09 up here and 0.17 further down — so the config value every comment
+    // in this feature describes as THIN was read through a fallback nobody
+    // could see and the ring shipped at nearly double its authored weight.
+    // That is the whole reason six segments read as six blobs arranged in a
+    // circle: it is the exact failure the config note warns about, arriving
+    // through a dead line rather than through a number anybody chose.
+    thickness: t.thickness ?? 0.09,
+    glow: t.glow ?? 2.6,
+    // --- HOW MUCH THE WATER IS ALLOWED TO HAVE BEEN AT IT ------------------
+    //
+    // Every one of these is the ring shader's own default made explicit,
+    // because every one of those defaults was authored for a ring the size of
+    // a blast or a strike mark and this is the smallest ring in the game.
+    //
+    // `noiseScale` is the load-bearing one and it is not an amplitude. The
+    // field is sampled in WORLD units — cells per unit — so the grain is a
+    // fixed physical size and a small ring covers less of it: at the shipped
+    // 0.55, a reticle about three units across spans under two cells, which
+    // means the two sides of one hexagon are reading opposite ends of a single
+    // lobe. That is not a chewed edge, it is a lopsided ring, and it is why
+    // the mark read as distorted rather than as organic. Sampled finer, the
+    // perimeter crosses several cells and the wobble goes back to being an
+    // edge quality instead of a shape.
+    noiseScale: t.noiseScale ?? 2.4,
+    // The excursion, as a fraction of the radius. The cap is what binds here
+    // rather than the world-unit amplitude — 0.5 world units over a reticle of
+    // 1.4 to 5.8 is 0.09 to 0.36, above this at every legal spot size — so
+    // this number IS the wobble, at every boss in the game.
+    wobbleMax: t.wobble ?? 0.12,
+    // How much the band's own weight varies around the ring. The default is a
+    // third of the thickness, which sells a goo boundary and eats a thin line:
+    // on a band this narrow it is the difference between six segments and six
+    // lumps of different sizes.
+    massVar: t.massVar ?? 0.14,
+    // ...and how ragged the ends of the six segments are. Kept, because a
+    // bracket cut clean is a vector shape; kept small, because at this size a
+    // torn end is most of a segment.
+    arcJitter: t.arcJitter ?? 0.07,
+    // Over the strike mark's 9, so a spot inside a marked boss's own reticle
+    // draws on top of it rather than fighting it for the same pixels.
+    renderOrder: 10,
+  });
+  owner.scene.add(ring);
+  return ring;
+}
+
+/** Take one off. Safe on a spot that never had one. */
+function dropSpotRing(spot) {
+  if (!spot?.ring) return;
+  disposeOrganicRing(spot.ring);
+  spot.ring = null;
+}
+
+/** Every ring an owner is carrying, for release and reset. */
+function dropRings(owner) {
+  for (const s of owner.spots ?? []) dropSpotRing(s);
+}
+
+const _ringCol = new THREE.Color();
+const _ringTo = new THREE.Color();
+const TAU = Math.PI * 2;
+
+/**
+ * One reticle, for one frame.
+ *
+ * UNSCALED SECONDS, like the hit flash and the fade it rides on. A mark that
+ * froze during the hit-stop it was drawing attention to would be the one thing
+ * on screen holding still at the exact moment the player is looking at it.
+ *
+ * THE COLOUR IS THE SPOT'S, RE-DERIVED HERE rather than shared with the
+ * shader's uniforms. Those are three separate colours the GLSL mixes per
+ * fragment (the fill takes one path, the core another); this is one flat band
+ * and it needs the single colour that mix lands on. Same three inputs, same
+ * order, so a retune of any of them moves both — and the ring cannot end up
+ * red while the light it surrounds is still white.
+ */
+function driveSpotRing(spot, owner, l, dt) {
+  const ring = spot.ring;
+  if (!ring) return;
+  const t = l.target ?? {};
+
+  // Ruptured or released: the fade is running down and the flash is pinned on,
+  // so both halves of the burst read off one number.
+  const dying = spot.dead || !spot.alive;
+  const heat = spot.alive ? Math.min(1, spot.taken / Math.max(1, spot.pool)) : 1;
+  const flash = spot.alive ? spot.flash : 1;
+  const grow = dying ? (t.burstGrow ?? 1.1) * (1 - spot.fade) : 0;
+
+  _ringCol.set(owner.tint ?? l.litColor ?? 0xffffff);
+  _ringTo.set(l.hotColor ?? 0xffc23a);
+  _ringCol.lerp(_ringTo, heat);
+  _ringTo.set(l.flashColor ?? 0xff3a24);
+  _ringCol.lerp(_ringTo, Math.min(1, flash));
+
+  // THE POP. Out on the frame of the hit and eased back on the flash's own
+  // clock, on top of whatever the rupture is doing to the radius — the two
+  // never overlap in practice (a spot that has burst takes no more hits) but
+  // they are written as one expression so that if they ever did, the burst
+  // would carry the pop outward rather than cancelling it.
+  const pop = (t.hitPop ?? 0.3) * flash;
+  const r = spot.r * (t.radiusMul ?? 1.5) * (1 + grow + pop);
+  // Position, scale and the shader's idea of the radius move together — the
+  // world-unit wobble is divided by that radius, so setting the scale by hand
+  // leaves the edge amplitude computed against last frame's size.
+  //
+  // AT THE SPOT'S OWN DEPTH. `depthTest` is off so nothing occludes the ring
+  // either way, but z is still a perspective distance: pinning every reticle
+  // to the arena plane would draw the ones on the near flank of a big animal
+  // at the wrong size.
+  placeOrganicRing(ring, spot.wx, spot.wy, r, spot.wz);
+  ring.rotation.z += (t.spin ?? 0.6) * dt;
+
+  // The sweep on has a clock of its own rather than reading `fade`, so the
+  // hand's travel is a fixed length whatever the spot's open time is set to —
+  // two numbers that mean different things (how fast the light comes up, how
+  // fast the mark is drawn) and would otherwise be one.
+  spot.ringOn = Math.min(1, (spot.ringOn ?? 0) + dt / Math.max(0.02, t.sweepIn ?? 0.3));
+
+  // Breathing on the spot's own cycle and its own phase slot, so the ring and
+  // the light inside it move together instead of beating against each other.
+  const depth = Math.min(1, Math.max(0, t.pulseDepth ?? 0.35));
+  // The same quantised offset the shader is handed for this spot, so a boss
+  // whose spots are spread over the cycle has its rings spread with them.
+  const phase = pulseCycle + phaseOffset(spot.seed, l.pulseSpread ?? 0, l.pulseSteps ?? 2);
+  const wave = 0.5 - 0.5 * Math.cos(phase * TAU);
+
+  updateOrganicRing(ring, dt, {
+    color: _ringCol,
+    // The fade carries the whole arrival and the whole departure; the pulse
+    // only rides on top of it.
+    opacity: spot.fade * (1 - depth + depth * wave),
+    sweepIn: spot.ringOn,
+    sweepOut: dying ? 1 - spot.fade : 0,
+    // The same fallback makeSpotRing uses. Two different ones is how the band
+    // ends up one weight on the frame it is built and another on every frame
+    // after it, which reads as the ring settling for no reason.
+    thickness: Math.max(0.01, (t.thickness ?? 0.09)
+      * (1 + (t.hitSwell ?? 0.55) * flash + (t.burstSwell ?? 1.4) * grow)),
+    glow: Math.max(0, (t.glow ?? 2.6) * (1 + (t.hitGlow ?? 2.2) * flash)),
+    // The edge, re-sent every frame for the same reason the thickness is: the
+    // panel these are tuned from is open while a boss is in the water, and a
+    // number that only lands on a ring built after the change is a slider that
+    // does nothing until the spot it is describing has burst.
+    noiseScale: t.noiseScale ?? 2.4,
+    wobbleMax: t.wobble ?? 0.12,
+    massVar: t.massVar ?? 0.14,
+    arcJitter: t.arcJitter ?? 0.07,
+  });
+}
+
 export function initBossHotSpots() {
   resetBossHotSpots();
 }
@@ -451,12 +757,14 @@ export function disposeBossHotSpots() {
 }
 
 export function resetBossHotSpots() {
-  for (const owner of owners.values()) dropShells(owner);
+  for (const owner of owners.values()) { dropShells(owner); dropRings(owner); }
   owners.clear();
   // Anything a dying fight shook loose and nobody drained. A queue that
   // survived a reset would put the last boss's meat in the water on the first
-  // frame of the next run.
+  // frame of the next run — and shove the next boss on its arrival frame with
+  // an impulse the last one earned.
   chumQueue.length = 0;
+  shoveQueue.length = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -882,7 +1190,11 @@ function tryLightSpot(owner, cands) {
     // slot-derived seed gives the replacement spot the same pulse phase and
     // the same chewed edge as the one that just burst in that position.
     seed: Math.random(),
+    // The reticle in front of the animal. Placed on the first frame like
+    // everything else here — see makeSpotRing.
+    ring: null,
   };
+  spot.ring = makeSpotRing(owner);
 
   owner.spots.push(spot);
   return spot;
@@ -983,6 +1295,12 @@ export function attachHotSpots(scene, e) {
   const owner = {
     e,
     shape,
+    // WHERE THE RETICLES GO. The one thing this module has ever needed the
+    // scene for — the glow is painted on the animal's own meshes and the meat
+    // is queued for main.js to spawn, so `scene` was an unused argument until
+    // the target rings arrived. Kept nullable: a harness that measures
+    // placement has no world to draw in, and gets spots with no rings.
+    scene: scene ?? null,
     want,
     spots: [],
     relightIn: 0,
@@ -1012,6 +1330,10 @@ export function releaseHotSpots(e) {
   const owner = owners.get(e);
   if (!owner) return;
   for (const s of owner.spots) s.dead = true;
+  // AND SO DO THE RETICLES. Nothing ticks these spots after the owner is
+  // dropped below, so a ring left in the scene is a bracket hanging in open
+  // water where a boss used to be, for the rest of the run.
+  dropRings(owner);
   // THE SHELLS COME OFF WITH THEM. Bodies are pooled: a shell left on the
   // visual rides back into the pool and the next creature built from it draws
   // an extra additive pass of itself for the rest of the run — invisible
@@ -1170,6 +1492,16 @@ function ejectChum(spot, c) {
     spot.paid += share;
     queueChum(spot, c, pips);
   }
+}
+
+/**
+ * The shoves a rupture owes, taken the same way as the meat. Each entry is
+ * `{ e, x, y, dirX, dirY, strength }` — where the burst was, which way it is
+ * pushing, and how hard as a multiple of a full-charge ram.
+ */
+export function drainHotSpotShoves() {
+  if (!shoveQueue.length) return [];
+  return shoveQueue.splice(0, shoveQueue.length);
 }
 
 /**
@@ -1377,6 +1709,29 @@ function rupture(spot, c) {
   spot.alive = 0;
   spot.ruptured = true;
 
+  // THE BODY TAKES IT. Out along the skin's normal at the spot, so the
+  // direction is the wound pointing outward — a spot opened on the near flank
+  // shoves the animal away from the player, one on the far side pulls it
+  // across, and either way the burst is something that happened INSIDE the
+  // boss rather than a light going out on it. See CONFIG.hotSpots.burstKnock,
+  // and the queue's note for why this is not a call.
+  const bk = c.burstKnock ?? {};
+  if (bk.enabled !== false && spot.owner?.e) {
+    shoveQueue.push({
+      e: spot.owner.e,
+      // WHERE IT WENT OFF, carried alongside the direction. Nothing needs it
+      // to apply the impulse — the shove is linear on a boss — but a caller
+      // that hands this to a rigid body, or to a bone spring, needs the point
+      // and not just the angle, and a queue entry that only had the angle
+      // would be one somebody has to widen at exactly the wrong moment.
+      x: spot.wx,
+      y: spot.wy,
+      dirX: spot.wnx,
+      dirY: spot.wny,
+      strength: Math.max(0, bk.strength ?? 1.6),
+    });
+  }
+
   if (c.goo !== false) {
     // THE BIG ONE. Scaled by multiplying `size` and `speed` together and by
     // the same factor, which is the only lever that makes a fusing mass bigger
@@ -1517,10 +1872,18 @@ export function updateBossHotSpots(dt, realDt = dt) {
     u.uHotCore.value = l.core ?? 3.2;
     u.uHotWhite.value = l.white ?? 0.85;
     u.uHotFill.value = l.fill ?? 0.55;
+    // Clamped under 1 as well as over 0: a level that started AT the boundary
+    // would be a spot with nothing left to fill, and the whole run-up to a
+    // rupture would be a colour change again.
+    u.uHotCharge.value = Math.min(0.95, Math.max(0, l.charge ?? 0.34));
+    u.uHotChargeEdge.value = l.chargeEdge ?? 0.9;
     u.uHotRing.value = l.ring ?? 1.7;
     u.uHotRingW.value = Math.max(0.01, l.ringWidth ?? 0.16);
     u.uHotSpill.value = Math.max(0.001, l.spill ?? 0.5);
     u.uHotSpillGain.value = l.spillGain ?? 0.55;
+    u.uHotBurstReach.value = Math.max(0, l.burstReach ?? 0.9);
+    u.uHotBurstW.value = Math.max(0.01, l.burstWidth ?? 0.18);
+    u.uHotBurstGain.value = l.burstGain ?? 3;
     u.uHotCycle.value = pulseCycle;
     u.uHotPulseDepth.value = l.pulseDepth ?? 0.55;
     u.uHotFlashSwell.value = l.flashSwell ?? 0.35;
@@ -1547,7 +1910,11 @@ export function updateBossHotSpots(dt, realDt = dt) {
         // a spot that faded politely would read as having been switched off.
         s.fade = Math.max(0, s.fade - closeRate * realDt);
       }
-      if (s.fade <= 0 && (s.dead || !s.alive)) { owner.spots.splice(i, 1); continue; }
+      if (s.fade <= 0 && (s.dead || !s.alive)) {
+        dropSpotRing(s);
+        owner.spots.splice(i, 1);
+        continue;
+      }
 
       if (!shapeLocalToWorld(s.shape, s.index, s.lx, s.ly, s.lz, _p)) { s.dead = true; continue; }
       s.wx = _p.x;
@@ -1581,6 +1948,11 @@ export function updateBossHotSpots(dt, realDt = dt) {
       }
 
       s.flash = Math.max(0, s.flash - flashRate * realDt);
+
+      // AFTER the world position and the flash, both of which it reads. A ring
+      // driven before them lags the light it is drawn around by a frame, which
+      // on a boss crossing the arena is a visible offset.
+      driveSpotRing(s, owner, l, realDt);
     }
 
     // --- into the uniforms ------------------------------------------------
@@ -1591,7 +1963,21 @@ export function updateBossHotSpots(dt, realDt = dt) {
       const s = i < owner.spots.length ? owner.spots[i] : null;
       const sv = u.uHotSpot.value[i];
       const mv = u.uHotMood.value[i];
-      if (!s) { sv.set(0, 0, 0, 0); mv.set(0, 0, 0, 0); u.uHotPhase.value[i] = 0; continue; }
+      if (!s) {
+        sv.set(0, 0, 0, 0);
+        mv.set(0, 0, 0, 0);
+        u.uHotPhase.value[i] = 0;
+        u.uHotBurst.value[i] = 0;
+        continue;
+      }
+      // HOW FAR THROUGH THE BURST, and only for a spot that actually BURST.
+      // `dead` is the other way a light goes out — the boss left the world, or
+      // the shape was released — and a shock wave riding that would fire a
+      // charge going off in the flank of every animal that ever wore a spot,
+      // on the frame its fight ended.
+      u.uHotBurst.value[i] = !s.alive && s.ruptured && !s.dead
+        ? Math.min(1, Math.max(0, 1 - s.fade))
+        : 0;
       // Quantised through the shared helper rather than used raw, so a spot
       // given an offset still lands ON a division instead of a random fraction
       // of one — which would undo the grid the pulse was just put on.
@@ -1632,4 +2018,9 @@ export function liveHotSpotCount() {
 /** For the harness and the look page — the shells painting one boss. */
 export function hotSpotShells(e) {
   return owners.get(e)?.shells ?? [];
+}
+
+/** ...and the reticles drawn in front of it, in spot order. */
+export function hotSpotRings(e) {
+  return (owners.get(e)?.spots ?? []).map((s) => s.ring).filter(Boolean);
 }

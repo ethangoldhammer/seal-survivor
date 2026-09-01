@@ -197,6 +197,64 @@ export function spendAirJump(player, dir) {
  * Returns damage and radius already multiplied, plus the `scale` every feedback
  * channel is driven by, so the call site never re-derives any of it.
  */
+/**
+ * WHICH KIND OF CROSSING THIS WAS, on the way UP.
+ *
+ * The mirror of slamFor below, and deliberately the same shape: the call site
+ * is handed numbers and re-derives nothing. Where slamFor asks how hard the
+ * arc landed, this asks whether there was an arc at all.
+ *
+ * A seal lifting its head for a breath and a seal clearing the water are one
+ * event in the physics and two events to everything else — the first should be
+ * a wet exhale and a ring, the second should be a bark and a wall of foam. The
+ * only thing available at the crossing frame that can tell them apart is the
+ * upward speed, so that is what this converts into the thing a player actually
+ * feels: how long the crossing has just bought in the air.
+ *
+ * `riseSpeed` is the UPWARD speed at the water line, positive. Returns null
+ * only when the split is switched off, which is the old behaviour exactly —
+ * every crossing a breach.
+ *
+ * @returns {{ rise: number, air: number, height: number, flying: boolean,
+ *             power: number, scale: number } | null}
+ */
+export function launchFor(player, riseSpeed = 0) {
+  const c = cfg();
+  const l = c.launch ?? {};
+  if (!c.enabled || l.enabled === false) return null;
+
+  const rise = Math.max(0, riseSpeed);
+  // Ballistic hang, from the one gravity everything above the water falls
+  // under — CONFIG.arena.gravity, NOT a number of this file's own. It is a
+  // TUNED value and does not read 29.7 in a live run, which is exactly why the
+  // threshold is authored in seconds and converted here: a hard-coded speed
+  // would have meant "clear of the water" at one gravity and something else at
+  // the one that actually loads.
+  const g = Math.max(0.01, CONFIG.arena?.gravity ?? 29.7);
+  const air = (2 * rise) / g;
+  const height = (rise * rise) / (2 * g);
+
+  // ...and how loud, which is NOT a gravity question — see the note on the
+  // config block. Floored well above zero: a `fullSpeed` of nothing would make
+  // every crossing infinitely loud rather than switching anything off.
+  const full = Math.max(0.05, l.fullSpeed ?? 14);
+
+  return {
+    rise,
+    air,
+    height,
+    flying: air >= (l.flyAir ?? 0.4),
+    // 0 at a standstill, 1 at a full breach, unbounded above it — the same
+    // role `power` plays on the landing.
+    power: rise / full,
+    // The figure every feedback channel rides, and it is the EXISTING breach
+    // formula moved rather than rewritten: 0.5 + rise/14, capped at 2. Kept to
+    // the letter so splitting the event changes which cue fires and nothing
+    // about how the loud one feels.
+    scale: Math.min(2, 0.5 + rise / full),
+  };
+}
+
 export function slamFor(player, impactSpeed = 0) {
   const c = cfg();
   const s = c.slam ?? {};

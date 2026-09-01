@@ -593,7 +593,7 @@ export function showSnapshotPrint(url, meta = {}) {
     // stood still long enough to look at. Must agree with printPhaseSeconds in
     // systems/bossKill.js, or the ocean comes back under a print that is still
     // on its way to the corner.
-  }, eject + Math.max(num(c.holdMs, 620), num(c.writeOnMs, 800)));
+  }, eject + Math.max(num(c.hangMs, 1050), num(c.writeOnMs, 800)));
 
   return el;
 }

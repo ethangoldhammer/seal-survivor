@@ -63,7 +63,7 @@ import {
 } from '../path/src/systems/bubbleJet.js';
 import { bubbleJetLevelStats } from '../path/src/levelStats.js';
 import {
-  sear, updateBurnGlow, resetBurnGlow, burnHeat, burnCount, burnClass, releaseBurn,
+  sear, zap, updateBurnGlow, resetBurnGlow, burnHeat, burnFlash, burnCount, burnClass, releaseBurn,
 } from '../path/src/systems/burnGlow.js';
 
 let failures = 0;
@@ -628,6 +628,105 @@ section('6b. the body lights up while it burns');
   // something dies would otherwise attach a handle to a corpse the kill light
   // is about to own.
   check('a dead body cannot be seared', sear(dying) === false && burnCount() === 0);
+
+  // -------------------------------------------------------------------------
+  // THE LOOPING BLOOM. A climb is a telegraph and it is over in about a second;
+  // after that a flat level is a constant, and a constant is a thing the eye
+  // stops reporting almost at once — a laser eye held on a boss for thirty
+  // seconds went bright once and then said nothing for the rest of the fight.
+  // The pulse is what keeps a held beam alive without becoming the strobe this
+  // whole file exists to avoid.
+  resetBurnGlow();
+  const held = bodyWith('enemyGreatWhite');
+  for (let k = 0; k < 20; k++) sear(held);      // pinned at full heat
+  const seen = [];
+  const emissive = [];
+  held.mesh.traverse((o) => { if (o.isMesh) emissive.push(o.material); });
+  // One full bloom's worth of frames at the configured rate, re-searing every
+  // frame so the HEAT is a constant and anything that moves is the pulse and
+  // nothing else.
+  const period = 1 / (CONFIG.burnGlow.pulse.rate ?? 2.2);
+  for (let t = 0; t < period * 1.05; t += 1 / 60) {
+    sear(held);
+    updateBurnGlow(1 / 60);
+    seen.push(emissive[0].emissiveIntensity);
+  }
+  const lo = Math.min(...seen);
+  const hi = Math.max(...seen);
+  check('a body held in a beam breathes rather than sitting flat',
+    hi > lo * 1.1, `${lo.toFixed(2)} -> ${hi.toFixed(2)} over one bloom`);
+  // SHALLOW. The trough has to stay obviously lit, or the loop reads as a light
+  // being switched on and off rather than as a fire being fanned — which is the
+  // strobe, arriving by the back door of a "pulse".
+  check('...and never falls back toward cold', lo > hi * 0.5,
+    `trough is ${(lo / hi * 100).toFixed(0)}% of the peak`);
+  // SLOW. Nowhere near the beam's ten damage ticks a second: a pulse at the
+  // damage cadence IS the strobe, dressed up as a design.
+  check('...at a rate well under the beam’s tick cadence',
+    (CONFIG.burnGlow.pulse.rate ?? 2.2) < 4,
+    `${CONFIG.burnGlow.pulse.rate} blooms/sec against ~10 ticks/sec`);
+  // IT SCALES THE HEAT rather than running beside it, so a cold body does not
+  // flicker on its own.
+  resetBurnGlow();
+  const cold = bodyWith('enemyGreatWhite');
+  const coldMats = [];
+  cold.mesh.traverse((o) => { if (o.isMesh) coldMats.push(o.material); });
+  for (let k = 0; k < 60; k++) updateBurnGlow(1 / 60);
+  check('a body nothing is burning does not pulse',
+    coldMats.every((m) => m.emissiveIntensity === 0) && burnCount() === 0);
+
+  // -------------------------------------------------------------------------
+  // THE BOLT. A fin laser has nothing to sustain, so it does not get the climb:
+  // bright on the frame it lands, mostly gone by the next. The other envelope,
+  // on the same handle and the same per-class colour.
+  resetBurnGlow();
+  const shot = bodyWith('enemyGreatWhite');
+  check('a bolt takes hold on one hit', zap(shot) === true && burnFlash(shot) === 1);
+  // AFTER the zap, never before: attachDamageGlow swaps in per-instance clones
+  // on first contact, so a list gathered at spawn holds the shared template —
+  // which stays at zero forever and reads exactly like a flash that never fired.
+  const shotMats = [];
+  shot.mesh.traverse((o) => { if (o.isMesh) shotMats.push(o.material); });
+  updateBurnGlow(1 / 60);
+  const firstFrame = shotMats[0].emissiveIntensity;
+  check('...and is bright on the frame it lands', firstFrame > 0, firstFrame.toFixed(2));
+  // AGAINST THE CLIMB, which is the whole reason it is a second envelope: one
+  // sear is barely warm, and a bolt has one frame to say anything at all.
+  resetBurnGlow();
+  const grazed = bodyWith('enemyGreatWhite');
+  sear(grazed);
+  const grazedMats = [];
+  grazed.mesh.traverse((o) => { if (o.isMesh) grazedMats.push(o.material); });
+  updateBurnGlow(1 / 60);
+  check('a bolt reads harder than one tick of beam does',
+    firstFrame > grazedMats[0].emissiveIntensity * 2,
+    `bolt ${firstFrame.toFixed(2)} against one sear at ${grazedMats[0].emissiveIntensity.toFixed(2)}`);
+
+  // IT RE-ARMS RATHER THAN ACCUMULATING. A stream of bolts is a shimmer at the
+  // weapon's cadence; adding them would pin a body at full white for as long as
+  // the trigger was held, which is `sear`'s job and a different weapon.
+  zap(shot); zap(shot); zap(shot);
+  check('bolts re-arm the flash rather than stacking it', burnFlash(shot) === 1);
+
+  // AND IT IS OVER FAST. Under a fifth of a second, or it is a sustained burn
+  // wearing a bolt's name.
+  let framesLit = 0;
+  while (burnFlash(shot) > 0 && framesLit < 120) { updateBurnGlow(1 / 60); framesLit++; }
+  check('...and it is out inside a fifth of a second',
+    framesLit > 1 && framesLit < 13, `${(framesLit / 60).toFixed(3)}s`);
+  check('...leaving the material exactly where it started',
+    shotMats.every((m) => m.emissiveIntensity === 0) && burnCount() === 0);
+
+  // A BEAM OUT-BURNS A BOLT AT ITS PEAK. The write takes whichever envelope is
+  // higher, so a bolt landing on a body already held in a beam cannot DIM it —
+  // and the sustained weapon's best moment must not look like a bullet.
+  check('a full burn is brighter than a bolt flash',
+    (CONFIG.burnGlow.flashPeak ?? 0.9) < 1,
+    `flashPeak ${CONFIG.burnGlow.flashPeak} of a full burn`);
+
+  resetBurnGlow();
+  check('a dead body cannot be zapped either',
+    zap({ hp: 0, mesh: new THREE.Group() }) === false && burnCount() === 0);
 
   resetBurnGlow();
   scene.clear();

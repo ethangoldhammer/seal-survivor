@@ -47,6 +47,25 @@
 //             from theirs.
 //   weight    how likely it is RELATIVE TO THE OTHER ELIGIBLE ARCHETYPES.
 //             Blank means 1; 0 takes it out without disabling the row.
+//   perkBias  a space-separated list of perk ids this archetype LEANS toward
+//             once it is deep enough into a run — see perkBiasLevel. Blank is
+//             every archetype's default, which is the flat weighted roll every
+//             boss had before this column existed.
+//
+//             IT IS A LEAN, NOT A LOCK. A biased roll still picks between the
+//             named perks by their own bossPerks.csv weights, and it still
+//             falls through to the ordinary roll the rest of the time — a boss
+//             that can only ever arrive one way stops being a roll at all.
+//             Ids that are not in bossPerks.csv are dropped with a warning: a
+//             typo here would otherwise be a bias that silently never fires.
+//   perkBiasLevel
+//             the player level from which the bias applies. Below it the
+//             archetype rolls flat. A LEVEL and not an ordinal, unlike
+//             `opener`: this is about how far into a run the player is, which
+//             is what decides whether a harder shape of fight is fair.
+//   perkBiasChance
+//             how often the lean wins, 0..1. Blank means 1 — a row that names
+//             perks and no chance means them.
 //   ownNames  TRUE means this archetype draws ONLY from name parts that name
 //             it, never from the shared pool. See parseBossNameCsv — a boat is
 //             not a fish and should not be able to roll "Grimtide".
@@ -65,6 +84,7 @@ const FILE = 'bosses.csv';
 // feature quietly switching itself off with no symptom but silence.
 export const FALLBACK_BOSS = Object.freeze({
   id: 'bossShark', enemy: 'bossShark', sizeMul: 1.6, weight: 1, minLevel: 0, ownNames: false,
+  perkBias: [], perkBiasLevel: 0, perkBiasChance: 1,
   // It is the archetype a run is meant to open on, so the emergency one says
   // so too — otherwise the fallback would be a boss that is not allowed to be
   // the first boss, in the exact situation where it is the only boss there is.
@@ -97,6 +117,20 @@ export function parseBossCsv(text, enemies = null, warn = console.warn) {
       continue;
     }
 
+    // A SPACE-SEPARATED LIST, the same shape attractorStorms.csv's `body`
+    // column uses, and for the same reason: a cell holding several ids is one
+    // fact about one row, and splitting it into a second table would put the
+    // relationship somewhere neither file shows it.
+    const perkBias = String(row.perkBias ?? '').trim().split(/\s+/).filter(Boolean);
+    const perkBiasLevel = parseNumber(row.perkBiasLevel, LABEL, id, 'perkBiasLevel', warn,
+      { min: 0, integer: true });
+    const perkBiasChance = parseNumber(row.perkBiasChance, LABEL, id, 'perkBiasChance', warn,
+      { min: 0, max: 1 });
+    if (perkBias.length && perkBiasLevel == null) {
+      warn(`[${LABEL}] "${id}" names a perkBias but no perkBiasLevel — the lean would apply from `
+        + 'the first boss of every run, which is never what a bias is for. Taking it as 0.');
+    }
+
     const sizeMul = parseNumber(row.sizeMul, LABEL, id, 'sizeMul', warn, { min: 0 });
     const weight = parseNumber(row.weight, LABEL, id, 'weight', warn, { min: 0 });
     const minLevel = parseNumber(row.minLevel, LABEL, id, 'minLevel', warn, { min: 0, integer: true });
@@ -119,6 +153,12 @@ export function parseBossCsv(text, enemies = null, warn = console.warn) {
       sizeMul: sizeMul > 0 ? sizeMul : 1,
       weight: weight == null ? 1 : weight,
       minLevel: minLevel == null ? 0 : minLevel,
+      perkBias,
+      perkBiasLevel: perkBiasLevel == null ? 0 : perkBiasLevel,
+      // Blank means 1 rather than 0: a row that troubled to name perks means
+      // them, and a chance nobody filled in that quietly meant "never" is a
+      // bias that looks set up and does nothing.
+      perkBiasChance: perkBiasChance == null ? 1 : perkBiasChance,
       opener: flag('opener'),
       nightOnly: flag('nightOnly'),
       ownNames,

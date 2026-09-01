@@ -148,6 +148,13 @@ export function updateDodge(dt, enemyList, hooks = {}) {
       // times longer than it is wide, and "did it touch you" asked of a circle
       // is a question about a different animal. See systems/hitShape.js.
       if (!run.touched && hitCreature(e, p.x, p.y, r)) run.touched = true;
+      // ...OR REACHED YOU WITHOUT TOUCHING YOU. The king crab's haymaker is a
+      // committed run that connects at arm's length and can end with the seal
+      // in the claw — so the body-overlap test above is answered "no" by a pass
+      // that took hold of the player, and the dodge would pay for being caught.
+      // `clawLanded` is combat.js on the frame the pinch was billed;
+      // `grabbing` covers the whole time it is carrying you.
+      if (!run.touched && (e.clawLanded || e.grabbing)) run.touched = true;
       continue;
     }
 

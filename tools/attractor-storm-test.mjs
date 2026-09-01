@@ -43,6 +43,7 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { bounds } from '../path/src/arena.js';
+import { CONFIG } from '../path/src/config.js';
 import { projectiles, updateProjectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 import {
   attractorStormList, startAttractorStorm, stopAttractorStorm,
@@ -467,6 +468,70 @@ clear();
   run(row.period * 0.6);
   check('...and the volley arrives when the draw ends', mine('release').length > 0,
     `${mine('release').length} cubes`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE RIBBONS');
+// ---------------------------------------------------------------------------
+// A bare cube shows a POINT on a trajectory, and a strange attractor IS the
+// trajectory — the fold, the wing crossing and a pair of echo cubes coming
+// apart all happen over the last third of a second and are invisible in any
+// single frame. So every cube drags a streak.
+//
+// Two ways this fails silently and neither is visible from inside the game.
+// The preset is looked up by name, so a `trailKey` that does not match a
+// CONFIG.trails entry is a storm with no ribbons at all — which looks exactly
+// like a storm whose ribbons are simply thin. And a trail is a Mesh per cube:
+// one that is not torn down when its cube dies is a ribbon frozen in the water
+// AND a draw call held for the rest of the run, which reads as nothing at all
+// until a long session is inexplicably slower.
+{
+  const { updateProjectileTrails, clearProjectileTrails } =
+    await import('../path/src/systems/projectileTrails.js');
+
+  // Trails are held in a Map this module does not export, so they are counted
+  // as what they cost: meshes added to the scene.
+  const ribbons = () => {
+    clearProjectileTrails(scene);
+    const before = scene.children.length;
+    updateProjectileTrails(DT, scene, projectiles);
+    return scene.children.length - before;
+  };
+
+  clear();
+  check('an empty ocean draws no ribbons', ribbons() === 0);
+
+  startAttractorStorm(scene, 'saddle', { x: 0, y: -16, z: 0 });
+  run(4);
+  const cubes = mine('saddle').length;
+  const drawn = ribbons();
+  check('every cube in a storm drags one', drawn === cubes, `${drawn} for ${cubes} cubes`);
+  check('...which is bounded by the study\'s own count, not by the run\'s length',
+    drawn <= STORMS.find((s) => s.id === 'saddle').count,
+    `${drawn} against a count of ${STORMS.find((s) => s.id === 'saddle').count}`);
+
+  // The preset is the system's and not the body's. A row rolls its `body` per
+  // shot, so keying the ribbon on the asset would give one field several
+  // colours — and would break the moment a study is dressed in real art.
+  check('...through the storm\'s own preset rather than its body\'s',
+    mine('saddle').every((p) => p.trailKey === 'attractorStorm'));
+  check('...and that preset exists, which is the whole of whether a ribbon draws',
+    !!CONFIG.trails.attractorStorm);
+  // Thin is the design and not restraint: sixty of these are on screen at once,
+  // and a ribbon only survives that crowding while it stays a line.
+  check('...and is the thinnest in the game',
+    Object.entries(CONFIG.trails)
+      .filter(([, v]) => v && typeof v === 'object' && typeof v.width === 'number')
+      .every(([k, v]) => k === 'attractorStorm' || v.width >= CONFIG.trails.attractorStorm.width),
+    `width ${CONFIG.trails.attractorStorm.width}`);
+
+  // ...and they are given back. Every cube retired, then one more frame.
+  for (const p of projectiles) p.life = 0;
+  updateProjectiles(DT, scene, []);
+  check('a storm that has run out leaves no ribbons behind', ribbons() === 0,
+    `${projectiles.length} projectiles left`);
+  clearProjectileTrails(scene);
+  clear();
 }
 
 // ---------------------------------------------------------------------------

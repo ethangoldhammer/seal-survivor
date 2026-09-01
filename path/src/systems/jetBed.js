@@ -61,6 +61,73 @@ const MAX_VOICES = 4;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// ---------------------------------------------------------------------------
+// THE MENU GATE
+// ---------------------------------------------------------------------------
+// A bed is the one kind of sound in this game that a paused frame cannot stop.
+// Everything else is a one-shot fired from an update that is inside the pause
+// gate, so a level-up simply means nothing new starts. This holds by design and
+// is released by whatever is making the noise — and `updateJets` is inside that
+// gate, so a stream held when the cards came up went on droning under the menu
+// for as long as the menu was open. systems/projectileVoices.js has the same
+// shape and already takes an `active` flag for exactly this reason.
+//
+// MUTED WHERE IT STANDS, not released. The stream is still there — the jet
+// object survives the menu and the player is still holding the trigger — so
+// tearing the voice down would mean coming back to a visible stream with no
+// sound until the next re-trigger, and re-triggering is precisely what
+// startJetBed refuses to do. The gate rides on its OWN node between the
+// envelope and the bus, so muting cannot fight the spool ramp: a bed paused
+// mid-spool resumes to the level its envelope has climbed to in the meantime,
+// which is where it would have been anyway.
+let muted = false;
+
+/**
+ * Silence every open bed, or let them back.
+ *
+ * Called every frame from main.js with `running && !paused`, next to the
+ * projectile voices and for the same reason — a transition-only call would
+ * miss a bed opened WHILE the menu is up (the workbench can do it) and leave
+ * one voice ungated.
+ */
+export function setJetBedsMuted(on) {
+  const want = !!on;
+  if (want === muted) {
+    // Still applied to any voice that has opened since the last change: the
+    // flag is the state, and a bed born during a menu has to arrive gated.
+    for (const v of voices.values()) applyGate(v, want, true);
+    return;
+  }
+  muted = want;
+  for (const v of voices.values()) applyGate(v, want, false);
+}
+
+/** Whether the beds are gated. For the panel and the harness. */
+export function jetBedsMuted() {
+  return muted;
+}
+
+// Seconds. Short enough to be under the menu rather than part of it, long
+// enough not to click — a bed cut in one frame pops, and a pop is the one
+// thing a mute is supposed to avoid.
+const GATE_FADE = 0.06;
+
+function applyGate(v, on, onlyIfUnset) {
+  if (!v?.gate) return;
+  const target = on ? 0 : 1;
+  if (onlyIfUnset && Math.abs(v.gateTarget - target) < 1e-6) return;
+  v.gateTarget = target;
+  try {
+    const now = v.ctx.currentTime;
+    v.gate.gain.cancelScheduledValues(now);
+    // From the LIVE value, not the last scheduled one — the same trap tearDown
+    // and cardRiser both document: an interrupted fade would otherwise jump to
+    // the target it never reached before ramping back.
+    v.gate.gain.setValueAtTime(v.gate.gain.value, now);
+    v.gate.gain.linearRampToValueAtTime(target, now + GATE_FADE);
+  } catch { /* dead context — nothing here is worth taking the frame down for */ }
+}
+
 function bedCfg() {
   return CONFIG.bubbleJet?.bed ?? {};
 }
@@ -221,7 +288,13 @@ export function startJetBed(key) {
   // The level climbing WITH the filter is what makes the spool read as gaining
   // power rather than as a filter opening on a sound that was already there.
   gain.gain.linearRampToValueAtTime(peak, now + ramp);
-  gain.connect(master);
+  // THE MENU GATE, its own node between the envelope and the bus — see the
+  // note on setJetBedsMuted. It starts where the flag currently is, so a bed
+  // opened while the cards are up arrives silent instead of announcing itself
+  // over the menu and then being faded down a frame later.
+  const gate = ctx.createGain();
+  gate.gain.value = muted ? 0 : 1;
+  gain.connect(gate).connect(master);
 
   const ladder = buildLadder(ctx, c.resonance ?? 9);
   const shaper = ctx.createWaveShaper();
@@ -272,28 +345,73 @@ export function startJetBed(key) {
     lfo.start(now);
   }
 
-  // --- the source -----------------------------------------------------------
+  // --- the sources ----------------------------------------------------------
+  // LAYERS AND THE STACK TOGETHER, which is the one thing this section used to
+  // refuse to do. It was an either/or — name a sample and the oscillators were
+  // not built at all — and that made the sample a REPLACEMENT for the bed
+  // rather than a part of it. A recorded loop has the grain and the movement
+  // no oscillator stack has; the stack has the low weight and the drive
+  // response no 16kHz mp3 has. The sound wants both, so both are built and
+  // summed into `pre` — ahead of the drive and the ladder, so the layers are
+  // saturated and swept TOGETHER as one instrument rather than glued into a
+  // pile of separate ones afterwards.
+  //
+  // `synthLevel` at 0 is the old sample-only behaviour; a `layers` list left
+  // empty with no `sample` named is the old synth-only behaviour. Neither is
+  // gone, they are just no longer the only two options.
   const sources = [];
-  const buf = c.sample ? sampleBuffer(c.sample) : null;
-  if (buf) {
-    // AN UPLOADED BED. Looped, and through everything above rather than around
-    // it: the ramp, the drive and the sweep are the sound design, and a sample
-    // that bypassed them would be a second bed with none of the shape this
-    // module exists to give it.
+
+  // Every mp3 layer, in one list. `sample` is the single-name shorthand and is
+  // simply layer zero — it keeps the top-level loopStart/loopEnd/rate that
+  // have always described it, so a bed set up before `layers` existed is
+  // unchanged.
+  const layers = [];
+  if (c.sample) {
+    layers.push({ sample: c.sample, level: c.sampleLevel ?? 1, rate: c.rate, loopStart: c.loopStart, loopEnd: c.loopEnd });
+  }
+  if (Array.isArray(c.layers)) {
+    for (const l of c.layers) if (l?.sample) layers.push(l);
+  }
+
+  for (const l of layers) {
+    // A LAYER THAT IS NOT LOADED IS SKIPPED, not fatal and not silent-by-
+    // accident: sampleBuffer returns null for a voice whose file has not
+    // decoded yet (or at all), and a bed that refused to open because one of
+    // three layers was missing would be a weapon that lost its sound to a
+    // 404. The rest of the bed still plays.
+    //
+    // NOTE it resolves through pickSample, so a voice holding SEVERAL takes
+    // hands back a different one per burst. That is variation on a one-shot
+    // and a character change on a bed — a layer voice wants exactly one file.
+    const buf = sampleBuffer(l.sample);
+    if (!buf) continue;
+    const level = Math.max(0, l.level ?? 1);
+    if (level <= 0) continue;
+    // Looped, and through everything above rather than around it: the ramp,
+    // the drive and the sweep are the sound design, and a sample that bypassed
+    // them would be a second bed with none of the shape this module exists to
+    // give it.
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
     // LOOP POINTS IN SECONDS, not frames, so they survive a re-record at a
     // different rate. Left at 0/0 the whole file loops, which is what a bed
-    // recorded as a bed wants.
-    const end = Math.max(0, c.loopEnd ?? 0);
-    src.loopStart = clamp(c.loopStart ?? 0, 0, buf.duration);
+    // recorded as a bed wants — and is a click every pass on one that was not.
+    const end = Math.max(0, l.loopEnd ?? 0);
+    src.loopStart = clamp(l.loopStart ?? 0, 0, buf.duration);
     src.loopEnd = end > src.loopStart ? Math.min(end, buf.duration) : buf.duration;
-    src.playbackRate.value = Math.max(0.05, c.rate ?? 1);
-    src.connect(pre);
+    src.playbackRate.value = Math.max(0.05, l.rate ?? 1);
+    // PER-LAYER GAIN, so the balance between two loops is set here rather than
+    // by re-recording one of them quieter.
+    const g = ctx.createGain();
+    g.gain.value = level;
+    src.connect(g).connect(pre);
     src.start(now);
     sources.push(src);
-  } else {
+  }
+
+  const synthLevel = Math.max(0, c.synthLevel ?? 1);
+  if (synthLevel > 0) {
     // THE STACK. Three saws a few cents apart and a square an octave down.
     //
     // The detune is what makes it a stack rather than a chord: at a few cents
@@ -313,7 +431,9 @@ export function startJetBed(key) {
       // spread is widened.
       o.detune.value = voicesN === 1 ? 0 : ((i / (voicesN - 1)) * 2 - 1) * detune;
       const g = ctx.createGain();
-      g.gain.value = 1 / voicesN;
+      // Divided by the voice count so widening the unison does not also make
+      // the stack louder, then scaled by `synthLevel` — the layer balance.
+      g.gain.value = (1 / voicesN) * synthLevel;
       o.connect(g).connect(pre);
       o.start(now);
       sources.push(o);
@@ -324,14 +444,18 @@ export function startJetBed(key) {
       sub.type = c.subWave ?? 'square';
       sub.frequency.value = note * 0.5;
       const g = ctx.createGain();
-      g.gain.value = subLevel;
+      g.gain.value = subLevel * synthLevel;
       sub.connect(g).connect(pre);
       sub.start(now);
       sources.push(sub);
     }
   }
 
-  voices.set(key, { ctx, gain, sources, lfo, freqs: ladder.freqs, startedAt: now, ramp });
+  voices.set(key, {
+    ctx, gain, gate, gateTarget: muted ? 0 : 1,
+    sources, lfo, freqs: ladder.freqs, startedAt: now, ramp,
+    layers: layers.length, synth: synthLevel > 0,
+  });
   return true;
 }
 
@@ -347,7 +471,15 @@ export function jetBedState(key) {
     ramp: v.ramp,
     startedAt: v.startedAt,
     sources: v.sources.length,
-    sampled: v.sources.length === 1 && !!v.sources[0].buffer,
+    // HOW MANY OF EACH, because the bed is no longer one or the other. The old
+    // boolean `sampled` could not describe two loops over a stack and would
+    // have answered `false` for a bed that is mostly sample, which is worse
+    // than not answering — it is kept as "is there any sample in this at all"
+    // so an existing reader is not silently inverted.
+    layers: v.layers,
+    synth: v.synth,
+    sampled: v.layers > 0,
+    muted: v.gateTarget === 0,
     breathing: !!v.lfo,
   };
 }

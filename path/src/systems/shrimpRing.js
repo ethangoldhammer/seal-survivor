@@ -10,6 +10,15 @@ import { attachDamageGlow, stoke, cool, glowLevel } from './damageGlow.js';
 // test can overwrite it.
 const ringContact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
 
+// WHAT THIS SYSTEM CAN BUILD, named rather than typed at the createVisual call
+// below, so systems/levelUpWarmup.js can pay for the upload while the cards are
+// up instead of on the frame the run comes back. The key is here and not in the
+// warm-up because a list of asset keys kept next to the system that builds them
+// is a list that moves when it does; kept in the warm-up it is a copy that goes
+// stale the first time an ability changes model, and the failure is silent —
+// the warm-up runs, reports itself finished, and warms the wrong thing.
+export const SHRIMP_RING_ASSETS = ['shrimp'];
+
 // One entry per orbiting instance:
 // { mesh, angleOffset, cooldowns: Map<enemy, secondsLeft>, heat, glow }
 //
@@ -27,7 +36,7 @@ export function createShrimpRingVisual() {
 }
 
 function addInstance() {
-  const mesh = createVisual('shrimp');
+  const mesh = createVisual(SHRIMP_RING_ASSETS[0]);
   group.add(mesh);
   // Its own materials, so this shrimp can light up without lighting the other
   // seven. Null on a build where the model never loaded and the primitive

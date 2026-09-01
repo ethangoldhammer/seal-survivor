@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { attachDamageGlow, stoke, cool, glowLevel } from './damageGlow.js';
+import { ease } from '../ease.js';
 
 // ============================================================================
 // BURN GLOW — a body that is BEING hurt is brighter than one that has been.
@@ -51,9 +52,25 @@ import { attachDamageGlow, stoke, cool, glowLevel } from './damageGlow.js';
 
 const cfg = () => CONFIG.burnGlow ?? {};
 
-// body -> { heat, glow, source }. A Map keyed on the creature itself, so a body
-// that dies and is recycled cannot inherit the last one's heat — the same
-// reason beams.js keys its per-target cooldowns this way.
+// body -> { heat, flash, phase, glow, source }. A Map keyed on the creature
+// itself, so a body that dies and is recycled cannot inherit the last one's
+// heat — the same reason beams.js keys its per-target cooldowns this way.
+//
+// TWO ENVELOPES ON ONE HANDLE, because the game has two shapes of laser and
+// they say different things:
+//
+//   heat   The sustained one. A beam held on a body — laser eyes, the bubble
+//          jet — climbs while contact lasts and falls off when it stops. See
+//          the note above: forty flashes over four seconds is a strobe, and a
+//          state is the only vocabulary damage-over-time has.
+//   flash  The instant one. A fin-laser BOLT is a single arrival with nothing
+//          to sustain, so it gets what every other projectile in the game
+//          gets — one hit, one flash — except that this is brightness rather
+//          than the scale pop `e.flash` already does.
+//
+// They share the material handle and the per-class colour, and the write below
+// takes whichever is higher: a bolt landing on a body already burning must not
+// be able to DIM it.
 const burning = new Map();
 
 // A ceiling. One stream can only touch so many bodies at once, and anything
@@ -87,12 +104,45 @@ function sourceFor(e) {
 }
 
 /**
- * A tick of sustained damage landed on `e`.
+ * FIND OR MAKE THIS BODY'S ENTRY. Shared by both envelopes, so a bolt and a
+ * beam landing on the same shark are one set of instanced materials rather
+ * than two systems each cloning their own and writing over each other.
  *
- * The handle is attached LAZILY, on the first tick rather than at spawn.
+ * The handle is attached LAZILY, on the first contact rather than at spawn.
  * attachDamageGlow clones a material per mesh, and a roster where every body
- * paid that on the chance it might one day be beamed would be hundreds of
- * clones for a weapon most runs never take.
+ * paid that on the chance it might one day be shot with a laser would be
+ * hundreds of clones for a loadout most runs never take.
+ *
+ * @returns the entry, or null if this body cannot be brightened at all.
+ */
+function entryFor(e) {
+  // hp is checked here as well as in the sweep. A hit that lands on the frame
+  // a body dies would otherwise attach a handle to a corpse the kill light is
+  // about to take over, and the two would write the same materials.
+  if (!e || !e.mesh || e.hp <= 0) return null;
+
+  let s = burning.get(e);
+  if (!s) {
+    if (burning.size >= MAX) return null;
+    // The VISUAL where there is one, the mesh otherwise — the same choice
+    // bossLight makes, and for the same reason: the container carries the
+    // position and has no materials on it at all.
+    const root = e.visual?.isObject3D ? e.visual : (e.mesh?.isObject3D ? e.mesh : null);
+    const glow = root ? attachDamageGlow(root) : null;
+    if (!glow) return null;
+    // `phase` starts at zero so the bloom BEGINS on the frame contact does —
+    // the pulse is meant to read as this body catching light, and a shared
+    // clock would have half a school arriving mid-swell. Entries are dropped
+    // when they go cold, so re-contact restarts the bloom rather than picking
+    // up wherever the last one left off.
+    s = { heat: 0, flash: 0, phase: 0, glow, source: sourceFor(e) };
+    burning.set(e, s);
+  }
+  return s;
+}
+
+/**
+ * A tick of SUSTAINED damage landed on `e` — a beam standing on a body.
  *
  * `hits` rides through to stoke() as a multiplier on the row's perHit, which is
  * how a big body is made to climb slowly without a second envelope: see
@@ -100,23 +150,8 @@ function sourceFor(e) {
  */
 export function sear(e, hits = 1) {
   if (cfg().enabled === false) return false;
-  // hp is checked here as well as in the sweep. A tick that lands on the frame
-  // a body dies would otherwise attach a handle to a corpse the kill light is
-  // about to take over, and the two would write the same materials.
-  if (!e || !e.mesh || e.hp <= 0) return false;
-
-  let s = burning.get(e);
-  if (!s) {
-    if (burning.size >= MAX) return false;
-    // The VISUAL where there is one, the mesh otherwise — the same choice
-    // bossLight makes, and for the same reason: the container carries the
-    // position and has no materials on it at all.
-    const root = e.visual?.isObject3D ? e.visual : (e.mesh?.isObject3D ? e.mesh : null);
-    const glow = root ? attachDamageGlow(root) : null;
-    if (!glow) return false;
-    s = { heat: 0, glow, source: sourceFor(e) };
-    burning.set(e, s);
-  }
+  const s = entryFor(e);
+  if (!s) return false;
   // A BIG BODY CLIMBS SLOWLY, and this is the only place the difference lives.
   // Heat saturates at 1, so a boss on the same envelope as a sardine is pinned
   // at full white after two ticks and then says nothing for the remaining
@@ -125,6 +160,60 @@ export function sear(e, hits = 1) {
   const climb = e.isBoss ? (cfg().bossClimb ?? 0.35) : 1;
   s.heat = stoke(s.heat, s.source, Math.max(0, hits) * climb);
   return true;
+}
+
+/**
+ * A BOLT LANDED — one instant of laser, with nothing behind it to sustain.
+ *
+ * The other half of `sear`, and the reason it is a separate envelope rather
+ * than a very hard stoke: heat's whole shape is a climb over several ticks, so
+ * a fin laser firing four times a second through it would arrive as a slow
+ * swell that peaks after the burst is over and outlives it by half a second.
+ * A bolt is an arrival. It has to be bright on the frame it lands and mostly
+ * gone by the next one.
+ *
+ * IT RE-ARMS RATHER THAN ACCUMULATING. Two bolts in one frame are one flash,
+ * and a stream of them is a shimmer at the cadence the weapon is firing —
+ * which is the honest picture. Adding them would pin a body at full white for
+ * as long as the trigger was held, which is what `sear` is for and is a
+ * different weapon.
+ *
+ * The colour and the peak are still the body's own material class, so a boat
+ * shot with a laser goes the same white-hot it goes under a beam.
+ *
+ * @param strength 0..1 — how hard this one landed. The split's shards are
+ *                 worth less than the bolt that made them.
+ */
+export function zap(e, strength = 1) {
+  if (cfg().enabled === false) return false;
+  const s = entryFor(e);
+  if (!s) return false;
+  s.flash = Math.min(1, Math.max(s.flash, strength));
+  return true;
+}
+
+/**
+ * THE LOOPING BLOOM, 0..1 — what a body being held in a beam breathes to.
+ *
+ * A held beam wants to say "this is STILL happening", and a flat level cannot:
+ * once it has climbed it is a constant, and a constant is something the eye
+ * stops reporting within about a second. The pulse is what keeps it alive
+ * without becoming the strobe this file exists to avoid — slow enough to read
+ * as a bloom rather than a flicker, and shallow enough that it never falls
+ * back to cold between swells.
+ *
+ * ASYMMETRIC, on the same attack/release vocabulary CONFIG.emissivePulse uses
+ * for the yacht's money: light arrives faster than it leaves, and a plain sine
+ * reads as a body wobbling in brightness rather than as one catching fire over
+ * and over.
+ */
+function pulseAt(phase) {
+  const p = cfg().pulse ?? {};
+  const attack = Math.min(0.9, Math.max(0.02, p.attack ?? 0.28));
+  const t = phase % 1;
+  return t < attack
+    ? ease(p.rise ?? 'outCubic', t / attack)
+    : 1 - ease(p.fall ?? 'inOutQuad', (t - attack) / (1 - attack));
 }
 
 /**
@@ -138,6 +227,12 @@ export function sear(e, hits = 1) {
  */
 export function updateBurnGlow(dt) {
   if (!burning.size) return;
+  const p = cfg().pulse ?? {};
+  const depth = p.enabled === false ? 0 : Math.min(1, Math.max(0, p.depth ?? 0.34));
+  const rate = Math.max(0, p.rate ?? 2.2);
+  const flashSeconds = Math.max(0.01, cfg().flashSeconds ?? 0.13);
+  const flashPeak = Math.max(0, cfg().flashPeak ?? 0.9);
+  const flashCurve = cfg().flashCurve ?? 'outCubic';
   for (const [e, s] of burning) {
     // GONE, OR DYING. Released rather than left to cool, and this is the line
     // that keeps the handoff to systems/bossLight.js honest: the kill light
@@ -150,12 +245,36 @@ export function updateBurnGlow(dt) {
       continue;
     }
     s.heat = cool(s.heat, s.source, dt);
-    s.glow?.set(glowLevel(s.heat, s.source), s.source);
+    s.flash = Math.max(0, s.flash - dt / flashSeconds);
+    s.phase = (s.phase + dt * rate) % 1;
+
+    // THE SUSTAINED HALF, breathing. The pulse SCALES the level rather than
+    // being added to it, so a body that is barely warm swells barely and a
+    // cold one does not flicker at all — the bloom has to be a property of the
+    // burn, not a light of its own running beside it.
+    const sustained = glowLevel(s.heat, s.source)
+      * (1 - depth + depth * pulseAt(s.phase));
+    // THE INSTANT HALF. Its own clock, unpulsed: a flash that breathed would
+    // be over before the first swell finished.
+    const flash = s.flash > 0 ? flashPeak * ease(flashCurve, s.flash) : 0;
+
+    // WHICHEVER IS BRIGHTER, never the sum. A bolt landing on a body already
+    // held in a beam must not be able to dim it (which the pulse's trough
+    // would do on a max of the two if the flash were written alone), and two
+    // brightnesses added would put a burning boat well past the point where
+    // emissive stops being light on a body and becomes a flat coloured cutout
+    // in the shape of it.
+    s.glow?.set(Math.max(sustained, flash), s.source);
+
     // Cold: drop the entry so an arena that has been fought through does not
     // carry a per-body write forever. The materials stay instanced on the body
     // — that is a one-time cost already paid, and re-searing the same creature
     // gets them back rather than cloning a clone.
-    if (s.heat <= 0) burning.delete(e);
+    //
+    // BOTH envelopes have to be out. A body dropped while its flash was still
+    // running would leave the last written brightness on the material with
+    // nothing left to take it back down.
+    if (s.heat <= 0 && s.flash <= 0) burning.delete(e);
   }
 }
 
@@ -177,6 +296,11 @@ export function resetBurnGlow() {
 /** How hot one body is, 0..1. For the harness and the F panel's readout. */
 export function burnHeat(e) {
   return burning.get(e)?.heat ?? 0;
+}
+
+/** How much bolt-flash is left on one body, 0..1. The other envelope. */
+export function burnFlash(e) {
+  return burning.get(e)?.flash ?? 0;
 }
 
 /** How many bodies are burning. */

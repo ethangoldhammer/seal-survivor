@@ -120,6 +120,10 @@ let timer = 0;
 let pileLeft = 0;
 let pileTimer = 0;
 let pileGap = 0;
+// The ordinary chum wave, which is a queue for the same reason the pile-on is.
+let waveLeft = 0;
+let waveTimer = 0;
+let waveGap = 0;
 
 export function resetCrabSpawner() {
   // 0, not a full interval: the timer is a cooldown on the last wave and there
@@ -127,6 +131,8 @@ export function resetCrabSpawner() {
   timer = 0;
   pileLeft = 0;
   pileTimer = 0;
+  waveLeft = 0;
+  waveTimer = 0;
 }
 
 // Crabs walk on from off the side of the arena rather than appearing in the
@@ -220,8 +226,68 @@ export function updateDeathPile(dt, scene, difficulty, at) {
 // lockout leaves the pile sitting above the threshold, and without charging
 // the cooldown there that refusal would be re-computed every frame for as long
 // as the chum lasts.
+// ONE CRAB AT A TIME, out of the queue a wave leaves behind.
+//
+// A wave used to spawn on a single frame: five crabs appeared at the same
+// wing, at the same instant, and walked in as one rank the whole way across
+// the floor. That reads as a spawn — as five copies of one object issued by a
+// system — where the same five arriving over a couple of seconds read as
+// separate animals that each noticed the food.
+//
+// The caps are re-tested per arrival rather than once for the wave, because
+// the wave now takes real time to land: crabs can die, a boss can turn up, and
+// the family can fill up between the first of them and the last.
+//
+// Drawn per crab for the same reason it always was — a wave landing during
+// dusk arrives visibly mixed instead of all one kind — and now the draw is
+// spread across the window too, so a changeover mid-wave is honoured.
+function releaseWaveCrab(dt, scene, difficulty) {
+  if (waveLeft <= 0) return;
+  waveTimer -= dt;
+  if (waveTimer > 0) return;
+
+  // Jittered so a wave does not file in on a metronome. A fraction of the gap,
+  // so it stays proportional however the window is retuned.
+  const jitter = CONFIG.crabSpawn.waveJitter ?? 0;
+  waveTimer = waveGap * (1 + (Math.random() * 2 - 1) * jitter);
+  waveLeft--;
+
+  if (enemies.length >= CONFIG.spawn.maxAlive) return;
+  const family = crabFamily();
+  const maxConcurrent = family.reduce(
+    (m, { def }) => Math.min(m, def.maxConcurrent ?? Infinity), Infinity,
+  );
+  if (crabCount() >= maxConcurrent) return;
+
+  const key = pickCrab(difficulty);
+  if (!key) return;
+  // A BOSS FIGHT IS NOT A CHUM PILE. The weighted pool is locked to minions
+  // while a boss is in the water, and this is the game's other source of
+  // creatures — left ungated, the crabs would be the one thing that carried on
+  // walking in, and the clear-out would look broken specifically because the
+  // seabed is where the player is farming.
+  //
+  // The test is on the DRAW rather than on the wave, so a crab variant tagged
+  // `bossMinion` in enemies.csv still turns up: a draw that comes back with a
+  // non-escort is skipped instead of substituted, which keeps the day/night
+  // mix pickCrab exists to produce honest rather than quietly re-rolling it
+  // into whichever variant happens to be flagged.
+  //
+  // Deliberately NOT inside pickCrab: the death pile-on draws from the same
+  // function, and a player who dies to a boss leaves it in the water — gating
+  // there would mean the corpse gets no crabs at all, which is a different
+  // system's whole point.
+  if (bossLockout() && !CONFIG.enemies[key]?.bossMinion) return;
+  spawnNamed(scene, key, difficulty, edgeFloorPoint());
+}
+
 export function updateCrabSpawner(dt, scene, difficulty) {
   if (!CONFIG.crabSpawn.enabled) return;
+  // ABOVE THE COOLDOWN, because the cooldown is charged the moment a wave is
+  // called: leaving the queue below it would mean a wave was queued and then
+  // ignored for three seconds, which is the poll-shaped delay this file went
+  // out of its way to remove.
+  releaseWaveCrab(dt, scene, difficulty);
   if (timer > 0) {
     timer -= dt;
     return;
@@ -249,30 +315,18 @@ export function updateCrabSpawner(dt, scene, difficulty) {
   const n = Math.min(desired, maxConcurrent - crabCount(), CONFIG.spawn.maxAlive - enemies.length);
   if (n <= 0) return;
 
-  // A BOSS FIGHT IS NOT A CHUM PILE. The weighted pool is locked to minions
-  // while a boss is in the water, and this is the game's other source of
-  // creatures — left ungated, the crabs would be the one thing that carried on
-  // walking in, and the clear-out would look broken specifically because the
-  // seabed is where the player is farming.
-  //
-  // The test is on the DRAW rather than on the wave, so a crab variant tagged
-  // `bossMinion` in enemies.csv still turns up: a draw that comes back with a
-  // non-escort is skipped instead of substituted, which keeps the day/night
-  // mix pickCrab exists to produce honest rather than quietly re-rolling it
-  // into whichever variant happens to be flagged.
-  //
-  // Deliberately NOT inside pickCrab: the death pile-on draws from the same
-  // function, and a player who dies to a boss leaves it in the water — gating
-  // there would mean the corpse gets no crabs at all, which is a different
-  // system's whole point.
-  const lockout = bossLockout();
-
-  // Drawn per crab rather than once for the wave, so a wave that lands during
-  // dusk arrives visibly mixed instead of all-one-kind.
-  for (let i = 0; i < n; i++) {
-    const key = pickCrab(difficulty);
-    if (!key) continue;
-    if (lockout && !CONFIG.enemies[key]?.bossMinion) continue;
-    spawnNamed(scene, key, difficulty, edgeFloorPoint());
-  }
+  // QUEUED, NOT SPAWNED — releaseWaveCrab walks them on one at a time over
+  // `waveWindow`. Added to whatever is still owed rather than replacing it, so
+  // a second wave called on top of a draining one lengthens the line instead
+  // of cancelling the crabs that had not arrived yet.
+  waveLeft += n;
+  waveGap = (CONFIG.crabSpawn.waveWindow ?? 0) / Math.max(1, waveLeft);
+  // The first one is due immediately, so the seabed still reacts on the frame
+  // the chum lands. The stagger is the gap between arrivals, never a delay
+  // before the first — hence the release right here rather than waiting for
+  // the drain at the top of the next frame: this file went to some trouble to
+  // test the pile every frame instead of polling it, and a queue that always
+  // sat out its first frame would put a sixtieth of a second back.
+  waveTimer = 0;
+  releaseWaveCrab(0, scene, difficulty);
 }

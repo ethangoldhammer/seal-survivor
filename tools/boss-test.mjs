@@ -46,6 +46,7 @@ import { parseBossPerkCsv, rollBossPerk, PERK_IDS } from '../path/src/bossPerkTa
 import { attachBossPerk, updateBossPerks, resetBossPerks, activeBossPerk } from '../path/src/systems/bossPerks.js';
 import { bossArchetypes, bossPerkList, forceBoss, previewBossNames } from '../path/src/systems/boss.js';
 import { ease, EASINGS, isEasing } from '../path/src/ease.js';
+import { onFeedback } from '../path/src/systems/feedback.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const NAMES_CSV = resolve(here, '../path/src/bossNames.csv');
@@ -600,14 +601,29 @@ section('THE WRECKAGE — a boss comes apart');
   // travel, which is why the wreckage is still a shape in the water when the
   // frame holds on it. On the wall clock the same 1.5s would have it on the
   // seabed before the camera let go, and the close-up would frame silt.
+  // THE SAME BURST TWICE, and it has to be the same burst or this measures the
+  // dice. Every gib leaves on a random vector, so the two runs were drawing
+  // different spreads and the ratio between them wandered: 6.1 against 18.4 on
+  // one run and 6.2 against 12.4 on the next, which is either side of a bar set
+  // at half. It failed roughly one chain in three and passed every time it was
+  // re-run on its own, which is the worst way for a check to be wrong.
+  //
+  // Seeded identically before each spawn, the only difference left between the
+  // two is the clock — which is the whole of what the check is about.
+  const gibRandom = Math.random;
+  resetBossGibs();
+  Math.random = seeded(0x6B1B);
+  spawnBossGibs(body());
   let held = 0;
   while (held < 1.5) { updateBossGibs(DT * CONFIG.boss.kill.hold); held += DT; }
   const dilated = spread().far;
   resetBossGibs();
+  Math.random = seeded(0x6B1B);
   spawnBossGibs(body());
   let live = 0;
   while (live < 1.5) { updateBossGibs(DT); live += DT; }
   const real = spread().far;
+  Math.random = gibRandom;
   check('the burst hangs through the held beat', dilated < real * 0.5,
     `${dilated.toFixed(1)} units out dilated against ${real.toFixed(1)} at full speed`);
 
@@ -682,6 +698,48 @@ section('THE WRECKAGE — a boss comes apart');
   check('...with the burst thrown before the visual goes back to the pool',
     corpseSrc.indexOf('spawnBossGibs(e)') > 0
     && corpseSrc.indexOf('spawnBossGibs(e)') < corpseSrc.indexOf('releaseVisual(e.visual)'));
+}
+
+// ---------------------------------------------------------------------------
+section('THE QUEUE — a level earned by the kill waits for the print');
+// ---------------------------------------------------------------------------
+// A boss pays out enough xp to level on the frame it dies, so the level-up
+// cards and the kill shot are competing for the same screen every single time.
+// They used to be stacked: the menu opened over the top of the ceremony, with
+// the polaroid crossing the frame behind it. The cards wait now.
+//
+// main.js CANNOT BE IMPORTED HERE — it builds a whole game at import — so this
+// is read off the source, the same way the kill hook above is. That is enough
+// to catch what actually goes wrong with a queue: a second call site opening
+// the menu directly and quietly bypassing the gate.
+{
+  const mainSrc = readFileSync(resolve(here, '../path/src/main.js'), 'utf8');
+  // ONE OPENER. `openLevelUp()` may be called from the gate and from
+  // applyLevelChoice (the next card of the same batch, which is already past
+  // every gate) — and from nowhere else.
+  const opens = [...mainSrc.matchAll(/(function\s+)?openLevelUp\(\)/g)]
+    .filter((m) => !m[1]).length;   // the declaration itself is not a call
+  check('nothing opens the cards without asking first', opens === 2,
+    `${opens} call(s) to openLevelUp()`);
+
+  const gate = mainSrc.slice(mainSrc.indexOf('function tryOpenLevelUp()'));
+  const body = gate.slice(0, gate.indexOf('\n}'));
+  check('the gate waits for the kill shot', body.includes('bossKillState.active'));
+  check('...and for the hive, which owns the screen the same way',
+    body.includes('hiveRewardActive()'));
+  check('...and for the run to be live and unpaused',
+    body.includes('gameState.running') && body.includes('gameState.paused'));
+  // The state stays true through the restore ramp after the last pick, which is
+  // live gameplay: a level earned there must bring the cards straight back
+  // rather than queue behind a menu that is already closing.
+  check('...but not for the level-up ramp it is itself the end of',
+    !body.includes('levelUpState.active'));
+
+  // AND IT IS DRAINED. A queue with no per-frame release is a level that never
+  // arrives — the xp that raised it has already been spent by then, so nothing
+  // else would ever ask again.
+  check('a held level is released on the frame the shot lets go',
+    /updateBossKill\(rawDt\);[\s\S]{0,600}?tryOpenLevelUp\(\);/.test(mainSrc));
 }
 
 // ---------------------------------------------------------------------------
@@ -1527,13 +1585,24 @@ section('THE PERKS — what they actually do to the water');
     // Laid out along a horizontal line deep in the middle of the arena
     // instead, so the lunge has forty units of clear water in the direction it
     // is going and nothing to be clamped by.
-    const target = { x: 20, y: -15, z: 0 };
-    e.mesh.position.set(-25, -15, 0);
+    // ...AND THE ROOM HAS TO BE THERE WHEN THE DASH FIRES, not when the boss is
+    // planted. The line used to run to a target at x=20, which is exactly the
+    // problem the note above thought it had solved: the boss spends the perk's
+    // 5.5s cooldown SWIMMING to that target, so by the time the dash launches
+    // it is at x≈15 with the wall at 35 — and a 0.9s dash at 34 u/s wants 30
+    // units. It got 20, spent its last 18 frames clamped against the boundary
+    // at ordinary swim speed, and averaged 24.5 u/s against an authored 34.
+    // The dash was correct the whole time; the arena ran out.
+    //
+    // So the target sits near the middle. Wherever the boss converges, a full
+    // dash in any direction still lands inside the water.
+    const target = { x: -5, y: -15, z: 0 };
+    e.mesh.position.set(-30, -15, 0);
     // MEASURED AGAINST A CONTROL, because the boss swims under its own power
     // and would cover ground with no perk at all — a raw displacement proves
     // nothing about whether the dash happened.
     const control = spawnNamed(scene, 'bossShark', 5, undefined, { ignoreCaps: true, overfill: true });
-    control.mesh.position.set(-25, -28, 0);
+    control.mesh.position.set(-30, -28, 0);
 
     let hitWindup = false;
     let hitDash = false;
@@ -1997,6 +2066,162 @@ section('THE ARRIVAL BAR — what it actually draws');
   check('the underlying clock is still linear',
     Math.max(...gaps) - Math.min(...gaps) < 1e-9,
     `frame steps ${Math.min(...gaps).toFixed(5)}–${Math.max(...gaps).toFixed(5)}`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE ENTRANCE — three voices, in order, spread across the ceremony');
+// ---------------------------------------------------------------------------
+// An alarm, then the animal, then what it is carrying — see
+// CONFIG.boss.arrival.voices and bossEntranceVoice in systems/feedback.js.
+//
+// THE THING THIS CATCHES IS A CHORD. Every one of these cues can fire, name a
+// real sound and be perfectly audible while all three land on the same frame —
+// at which point the feature has silently become one muddy sound and nothing
+// throws, nothing warns, and the F menu still auditions three healthy rows.
+// Only the GAPS are the feature, so the gaps are what is measured.
+//
+// Measured through onFeedback rather than by reading the schedule, because the
+// schedule is module-private in systems/boss.js on purpose: what matters is
+// what the ceremony actually emitted and when, not what it meant to.
+{
+  const heard = []; // { event, t } — t in ceremony seconds
+  const tooEarly = [];
+  let clock = 0;
+  const stop = onFeedback((event) => {
+    if (event !== 'bossSiren' && !event.startsWith('bossArrive')) return;
+    // Fired while the boss is still swimming in from behind the rock. Read off
+    // the live flag rather than by counting frames, because beginArrival
+    // CLEARS it before it says anything — so a cue seen with this still true
+    // is one that escaped the ceremony entirely.
+    if (bossState.approaching) tooEarly.push(event);
+    heard.push({ event, t: clock });
+  });
+
+  resetEnemies(scene);
+  resetBoss();
+  const gameState = { difficulty: 5, level: 1, running: true };
+  // A shark with the element on it: the one combination that exercises all
+  // three layers at once. `electric` is the only perk with a look authored for
+  // it AND a voice, so it is the honest subject for "the variant speaks".
+  forceBoss(scene, gameState, { boss: 'bossShark', perk: 'electric' });
+  // The approach is not the ceremony. Cues fired here would be a bug, and the
+  // clock stays at zero through it so one would show up as t = 0 in a list
+  // that has a real t = 0 in it — hence the separate count.
+  swimIn(gameState, scene);
+  check('nothing announces the boss while it is still swimming in',
+    tooEarly.length === 0, tooEarly.join(', '));
+
+  let guard = 0;
+  while (bossState.arriving && guard++ < 10000) {
+    updateBoss(DT, gameState, scene);
+    clock += DT;
+  }
+
+  const order = heard.map((h) => h.event);
+  const at = (name) => heard.find((h) => h.event === name)?.t ?? null;
+
+  check('all three layers speak', order.includes('bossSiren')
+    && order.includes('bossArriveShark') && order.includes('bossArriveElectric'),
+    order.join(' -> ') || 'nothing at all');
+  // ORDER IS THE MIX, the same argument bossVoice makes: the alarm is the
+  // answer and the variant is the footnote, so the footnote may never lead.
+  check('...in that order', order.indexOf('bossSiren') < order.indexOf('bossArriveShark')
+    && order.indexOf('bossArriveShark') < order.indexOf('bossArriveElectric'),
+    order.join(' -> '));
+  check('...and the landing cue is last of all',
+    order.indexOf('bossArrive') === order.length - 1, order.join(' -> '));
+
+  // THE GAPS. A tenth of a second is roughly where two sounds stop being two
+  // sounds, so anything under it is the chord this feature exists to avoid.
+  const gaps = [
+    ['siren -> animal', at('bossArriveShark') - at('bossSiren')],
+    ['animal -> variant', at('bossArriveElectric') - at('bossArriveShark')],
+    ['variant -> landing', at('bossArrive') - at('bossArriveElectric')],
+  ];
+  for (const [what, gap] of gaps) {
+    check(`  ${what} is heard as two sounds`, gap > 0.1, `${gap.toFixed(3)}s apart`);
+  }
+  // ...and the alarm is under the riser from the start rather than somewhere
+  // in the middle of it. Within a frame of zero: it is fired from beginArrival
+  // itself, on the same line the riser starts.
+  check('the alarm goes out on the ceremony’s first frame', at('bossSiren') <= DT + 1e-9,
+    `${at('bossSiren').toFixed(4)}s in`);
+
+  stop();
+}
+
+// ---------------------------------------------------------------------------
+section('THE ENTRANCE — a short ceremony keeps all three, in proportion');
+// ---------------------------------------------------------------------------
+// The trap the scaling exists for. `arrival.seconds` is a slider with nothing
+// to do with sound, and the offsets are authored in seconds against its
+// default — so shortening the ceremony under them would silently drop the last
+// cue off the end. A cue that stops firing at one setting of an unrelated
+// number is the worst kind of bug in a sound bank, because everything about it
+// still looks wired.
+{
+  const heard = [];
+  let clock = 0;
+  const stop = onFeedback((event) => {
+    if (event === 'bossSiren' || event.startsWith('bossArrive')) heard.push({ event, t: clock });
+  });
+
+  const was = CONFIG.boss.arrival.seconds;
+  // Well under the 1.05s the perk cue is authored at, so an unscaled schedule
+  // would lose it outright.
+  CONFIG.boss.arrival.seconds = 0.8;
+  resetEnemies(scene);
+  resetBoss();
+  const gameState = { difficulty: 5, level: 1, running: true };
+  forceBoss(scene, gameState, { boss: 'bossShark', perk: 'electric' });
+  swimIn(gameState, scene);
+  let guard = 0;
+  while (bossState.arriving && guard++ < 10000) {
+    updateBoss(DT, gameState, scene);
+    clock += DT;
+  }
+  CONFIG.boss.arrival.seconds = was;
+
+  const order = heard.map((h) => h.event);
+  const at = (name) => heard.find((h) => h.event === name)?.t ?? null;
+  check('a 0.8s ceremony still says all three', order.includes('bossSiren')
+    && order.includes('bossArriveShark') && order.includes('bossArriveElectric'),
+    order.join(' -> ') || 'nothing at all');
+  check('...still in order', order.indexOf('bossSiren') < order.indexOf('bossArriveShark')
+    && order.indexOf('bossArriveShark') < order.indexOf('bossArriveElectric'),
+    order.join(' -> '));
+  // ...and squeezed rather than piled onto the last frame, which is what a
+  // clamp would have done.
+  check('...and the last one still has room before the landing',
+    at('bossArrive') - at('bossArriveElectric') > 0.05,
+    `${(at('bossArrive') - at('bossArriveElectric')).toFixed(3)}s`);
+
+  stop();
+}
+
+// ---------------------------------------------------------------------------
+section('THE ENTRANCE — a boss with no variant says nothing about one');
+// ---------------------------------------------------------------------------
+// CONFIG.boss.voicePerk is sparse on purpose: `giant` and `swift` change what
+// the animal IS and have no tell, so there is nothing for a cue to announce.
+// One `??` away from every perk-less boss borrowing the storm.
+{
+  const heard = [];
+  const stop = onFeedback((event) => { if (event.startsWith('bossArrive') || event === 'bossSiren') heard.push(event); });
+  resetEnemies(scene);
+  resetBoss();
+  const gameState = { difficulty: 5, level: 1, running: true };
+  forceBoss(scene, gameState, { boss: 'bossShark', perk: null });
+  swimIn(gameState, scene);
+  let guard = 0;
+  while (bossState.arriving && guard++ < 10000) updateBoss(DT, gameState, scene);
+
+  check('the alarm and the animal still speak',
+    heard.includes('bossSiren') && heard.includes('bossArriveShark'), heard.join(', '));
+  const variants = new Set(Object.values(CONFIG.boss.voicePerk ?? {}).map((v) => `bossArrive${v}`));
+  check('...and no variant cue is borrowed',
+    !heard.some((e) => variants.has(e)), heard.join(', '));
+  stop();
 }
 
 // ---------------------------------------------------------------------------

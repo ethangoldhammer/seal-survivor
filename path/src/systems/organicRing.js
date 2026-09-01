@@ -597,6 +597,20 @@ export function updateOrganicRing(mesh, dt, opts = {}) {
   if (opts.color != null) u.uColor.value.set(opts.color);
   if (opts.glow != null) u.uGlow.value = opts.glow;
   if (opts.thickness != null) u.uThickness.value = opts.thickness;
+  // THE EDGE NUMBERS, ALSO WRITABLE PER FRAME. They are set at construction
+  // like everything else and most rings never touch them again — but a ring
+  // built once and then left alone for the whole life of its subject is a ring
+  // whose edge cannot be tuned while it is on screen, which is the only place
+  // an edge can be judged. Passing none of them leaves the built-in values
+  // exactly as they were.
+  //
+  // `wobbleMax` is safe to raise at runtime: it relaxes the outer-edge clamp,
+  // while the `room` clamp against the quad's own padding — fixed at build
+  // time — still binds, so the excursion cannot grow past the geometry.
+  if (opts.noiseScale != null) u.uNoiseScale.value = opts.noiseScale;
+  if (opts.wobbleMax != null) u.uWobbleMax.value = opts.wobbleMax;
+  if (opts.massVar != null) u.uMassVar.value = opts.massVar;
+  if (opts.arcJitter != null) u.uArcJitter.value = opts.arcJitter;
   if (opts.type != null) setRingThreat(mesh, opts.type);
 }
 

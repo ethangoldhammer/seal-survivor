@@ -19,6 +19,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { TABLES, SCHEMA, loadTable, writeCsv, cardArt } from './csv-editor.mjs';
+import { DRAFT_PATTERN, BRIEF_PATTERN, COPY_COLUMNS } from './draft-copy.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 let failed = 0;
@@ -60,6 +61,42 @@ for (const t of TABLES) {
   const changed = a.map((l, i) => l !== b[i]).filter(Boolean).length;
   ok(changed === 1, `${t.file}: editing ${target.name} on the last row changed ${changed} line(s)`);
   if (changed !== 1) console.log(diff(original, rewritten));
+}
+
+// ---------------------------------------------------------------------------
+// THE EDITOR AND THE GATE MUST FLAG THE SAME ROWS.
+//
+// They are two implementations of one rule — the suite tests cells in Node, the
+// editor re-tests them in the browser on every keystroke — and they only stay
+// in step because the server hands the PATTERNS over rather than the answers.
+// When the brief detector was added to the gate and not to that handover, the
+// two disagreed silently: five rows in statText.csv blocked the ship and were
+// invisible in the editor, which is the worst arrangement of the three (both
+// blind is at least honest).
+//
+// So both patterns are checked to exist, to compile, and to answer the way the
+// editor's two helpers will answer with them.
+console.log('\nthe placeholder flag — one rule, two implementations');
+{
+  const draftRe = new RegExp(DRAFT_PATTERN, 'i');
+  const briefRe = new RegExp(BRIEF_PATTERN, 'i');
+  ok(draftRe.test('lorem ipsum dolor sit'), 'the copy detector still sees lorem');
+  ok(!draftRe.test('Snuffed out by a boat!'), '...and leaves a written line alone');
+  ok(briefRe.test('NEEDS YOUR WORDS: a lead for the `shot` cause'),
+    'the brief detector sees an open brief');
+  ok(!briefRe.test('what the line has to do, now that it is written'),
+    '...and leaves a finished note alone');
+  // The case the pair exists for: finished-looking copy with an open brief.
+  ok(!draftRe.test('Shot Down') && briefRe.test('NEEDS YOUR WORDS: a lead'),
+    'a plausible placeholder is caught by the brief alone, which is the whole point');
+
+  // The editor is served these two and nothing else, so a copy column list that
+  // drifted apart from the gate's would flag different rows in each.
+  const html = await readFile(join(ROOT, 'tools', 'csv-editor.html'), 'utf8');
+  ok(html.includes('data.draftPattern') && html.includes('data.briefPattern'),
+    'the editor reads BOTH patterns off the payload');
+  ok(Object.keys(COPY_COLUMNS).length > 0,
+    `the copy-column list is shared, not copied — ${Object.keys(COPY_COLUMNS).length} tables`);
 }
 
 console.log('\nschema — the lists read out of the game source');

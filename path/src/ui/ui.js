@@ -15,6 +15,7 @@ import quipsCsv from '../quips.csv?raw';
 import tipsCsv from '../tips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { parseTipCsv } from '../tipTable.js';
+import { uiText } from '../uiTextTable.js';
 import { availableUpgrades, player } from '../entities/player.js';
 import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // The splash and the score card's turn are pure motion with no way to opt out
@@ -2880,7 +2881,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
            ask what it did. -->
       <div class="sv-shot-view sv-hive-view sv-hidden" id="svHiveView">
         <div class="sv-hive-view-stage" id="svHiveViewStage"></div>
-        <button class="sv-shot-close" id="svHiveViewClose" aria-label="[DRAFT] Close the build">&#10005;</button>
+        <button class="sv-shot-close" id="svHiveViewClose" aria-label="${escapeHtml(uiText('hiveViewClose'))}">&#10005;</button>
       </div>
 
       <div class="sv-shot-view sv-hidden" id="svShotView">
@@ -7611,20 +7612,19 @@ export function clearToasts() {
 // own stats plus the board as it currently stands, so there's something to aim
 // at while typing rather than an empty panel.
 
-// TWO STRINGS THIS SCREEN NOW NEEDS AND DOES NOT HAVE.
-//
-// Staged, not written — see CLAUDE.md. The briefs are in design/COPY-TODO.md
-// and npm run test:copy lists them.
+// TWO STRINGS THIS SCREEN NEEDS, out of uiText.csv with their briefs beside
+// them — see uiTextTable.js. Named here so the two reads happen once at module
+// load rather than on every score screen.
 //
 // The heading over the rail is Ethan's "Kill shots" and is left exactly as it
 // is on every run that HAS kill shots. What is new is a run that has none: the
 // rail is still there, holding the build, and "Kill shots" over a hive would be
 // the screen getting a fact wrong about the run.
-const STRIP_LABEL_BUILD_ONLY = '[DRAFT] Your build';
+const STRIP_LABEL_BUILD_ONLY = uiText('buildStripLabel');
 // The screen reader's name for the hexagon block on the rail, and the button's
 // accessible name. Read aloud in place of a picture, so it has to say what the
 // thing is AND that pressing it opens it.
-const HIVE_SLOT_LABEL = '[DRAFT] Your build — open it';
+const HIVE_SLOT_LABEL = uiText('hiveSlotLabel');
 
 // --- the trophy ------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -7997,7 +7997,7 @@ function wireShotView() {
     // The desktop shell saves through a real dialog, so the file went
     // exactly where the player put it — "your downloads" would be a
     // guess, and usually a wrong one. See handOver in systems/bossShot.js.
-    savedAs: '[DRAFT] Saved',
+    savedAs: uiText('savedAs'),
     opened: 'Opened — press and hold the picture to save it',
     cancelled: '',
     unavailable: 'Nothing to share',
@@ -8079,7 +8079,7 @@ function wireTrophy() {
     // The desktop shell saves through a real dialog, so the file went
     // exactly where the player put it — "your downloads" would be a
     // guess, and usually a wrong one. See handOver in systems/bossShot.js.
-    savedAs: '[DRAFT] Saved',
+    savedAs: uiText('savedAs'),
     // On a phone this is the picture opening full screen, where saving it is a
     // long press. Worth saying, because it is a different gesture from the one
     // the button implied.
@@ -8256,10 +8256,9 @@ function brkEmpty(panel, message) {
  * object from the recorder, and it is still wrapped, because the alternative
  * to being paranoid here is a run that cannot be restarted.
  */
-// STAGED — see design/COPY-TODO.md. The section heading over the fin split.
-// `[DRAFT]` rather than lorem because a heading lorem would make the panel
-// untestable, and npm run test:copy is red until it is written.
-const FIN_PANEL_TITLE = '[DRAFT] Flippers';
+// The section heading over the fin split, out of uiText.csv with its brief in
+// that row's notes — see uiTextTable.js.
+const FIN_PANEL_TITLE = uiText('finPanelTitle');
 
 // What one flipper is called in the summary. The SAME two words the level-up
 // card titles itself with (CONFIG.upgrades.flippersUp.sideNames), read from

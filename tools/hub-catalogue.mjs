@@ -45,7 +45,25 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 //            and nothing else. A deploy is a decision, and a decision should
 //            not be one stray click away from a page you leave open all day.
 // ---------------------------------------------------------------------------
-const PUBLISH = new Set(['deploy', 'deploy:preview', 'ship', 'ship:all', 'ship:ios']);
+//
+//            ONE EXCEPTION, and it is not an exception to the risk class:
+//            `ship:all` stays `publish` and stays button-less HERE, in the
+//            list of a hundred and thirty scripts. It has a card of its own at
+//            the top of the page that takes a typed commit message and a held
+//            press — see hub-ship.mjs for the terms. The distinction that
+//            matters is between a button in a row you might scroll past and a
+//            control you have to mean.
+//
+// The names are the names in package.json. `ship:ios` used to be listed here
+// and no such script has ever existed, which meant the two that DO —
+// `ship:phone` and `ship:mac` — fell through to `check` and rendered with a
+// green one-click run button. A set of strings that is never checked against
+// the scripts it names will go stale exactly this quietly, so test:hub now
+// asserts every ship*/deploy* script is in here.
+const PUBLISH = new Set([
+  'deploy', 'deploy:preview',
+  'ship', 'ship:all', 'ship:phone', 'ship:mac',
+]);
 
 const WRITES = new Set([
   'build', 'whale', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
@@ -109,7 +127,7 @@ const GROUP_BY_NAME = {
   // that leave this machine rather than with the web build.
   ios: 'Publish', 'ios:run': 'Publish', 'ios:sync': 'Publish',
   'ship:all': 'Publish', 'ship:ios': 'Publish',
-  'ship:phone': 'Publish',
+  'ship:phone': 'Publish', 'ship:mac': 'Publish',
   // The desktop build is the Steam/Electron half of shipping: a vite build
   // with its own config, the shell that runs it, and the packer that wraps
   // the two into something installable.
@@ -118,6 +136,7 @@ const GROUP_BY_NAME = {
   // in every way that matters here.
   desktop: 'Servers',
   'desktop:test': 'Checks', 'desktop:test:save': 'Checks', 'desktop:test:shell': 'Checks',
+  'desktop:test:playtest': 'Checks',
   'audit:offline': 'Audits', 'steam:status': 'Audits', 'bait:shader': 'Audits',
   // Reads what the phone's last sessions ended as. A report, not an asset job.
   crash: 'Audits',

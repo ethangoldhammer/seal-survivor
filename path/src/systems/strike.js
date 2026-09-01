@@ -1740,7 +1740,12 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // timing did.
       const spot = hotSpotUnder(e, strikeContact, playerPos);
       const weak = CONFIG.strike.weakSpot ?? {};
-      if (spot && strikeState.armingStrike && weak.enabled !== false) {
+      // Held rather than acted on here, because the EVENT this arms has to
+      // fire after the ram (see the hook below): the three layers that land on
+      // this frame are ordered like bossVoice's, generic first and most
+      // specific last, or the accent arrives before the thing it is accenting.
+      const weakRam = !!spot && strikeState.armingStrike && weak.enabled !== false;
+      if (weakRam) {
         // max() rather than a replacement, so a run that HAS bought the ram a
         // contact share never loses damage by aiming well.
         dmg = Math.max(dmg, stats.strikeDamage * powerDamageMul() * mul
@@ -1777,6 +1782,12 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
           strikeState.dashDir, null, strikeContact);
       }
       hooks.onRam?.(e, strikeState.power, strikeContact);
+      // AND, IF IT WAS AIMED. After the ram on purpose — the ram says a body
+      // was hit, this says where. `perfectStrike` is passed rather than folded
+      // into a number here for the same reason the ram takes `power`: what the
+      // moment was WORTH is a feedback decision and belongs at the call site
+      // in main.js, not in the system that resolved the hit.
+      if (weakRam) hooks.onWeakSpotRam?.(e, strikeContact, strikeState.power, strikeState.perfectStrike);
       if (chain) hooks.onChainHit?.(chain);
 
       // AND THE MARK. Anything big enough to shrug the shove off is painted

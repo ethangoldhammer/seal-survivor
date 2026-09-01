@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { feedback, feedbackState } from './feedback.js';
+import { emitCloud } from '../entities/particles.js';
+import { sear, releaseBurn } from './burnGlow.js';
 
 // BEAMS — a line that stays lit, and cuts whatever is standing in it.
 //
@@ -247,6 +249,25 @@ function quad() {
 
 const matPool = { glow: [], core: [], spill: [] };
 
+// A PRIVATE COPY OF THE PROFILE, per material.
+//
+// The trim draws a SUB-SEGMENT of the beam, and the profile's u axis is exactly
+// where the muzzle fade and the far taper live — so a stub drawn with the whole
+// 0..1 profile squeezes both of them into itself and comes out as a little
+// lozenge sliding down the line instead of as a lit span with a hard cut edge
+// where it is being eaten. Remapping u onto [tail, head] is what makes the cut
+// edge a cut edge, and that remap is `offset`/`repeat`, which are per TEXTURE —
+// so the one shared profile cannot carry it.
+//
+// clone() is the cheap half: it shares the Source, so every copy is the same
+// single 64x64 upload and only the settings are per beam. They ride the pooled
+// materials and are bounded by the most beams ever alive at once, the same as
+// the materials are — and deliberately NOT marked needsUpdate, which would
+// force a re-upload per copy and throw away the sharing that makes this free.
+function profileClone() {
+  return beamProfile().clone();
+}
+
 /**
  * A material for this role, reused if one is going spare.
  *
@@ -271,13 +292,13 @@ function buildMesh(scene, b) {
   const coreColor = hdr(b.coreColor ?? 0xffffff, b.overdrive);
   const glowMat = takeMat('glow', () => new THREE.MeshBasicMaterial({
     color: glowColor,
-    map: beamProfile(),
+    map: profileClone(),
     transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false,
   }), (m) => { m.color.copy(glowColor); m.opacity = 0.55; });
   const coreMat = takeMat('core', () => new THREE.MeshBasicMaterial({
     color: coreColor,
-    map: beamProfile(),
+    map: profileClone(),
     transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false,
   }), (m) => { m.color.copy(coreColor); m.opacity = 0.95; });
@@ -344,12 +365,40 @@ export function spawnBeam(scene, opts = {}) {
     follow: opts.follow ?? null,
     fadeIn: opts.fadeIn ?? (c.fadeIn ?? 0.08),
     fadeOut: opts.fadeOut ?? (c.fadeOut ?? 0.18),
+    // THE WIPE. Seconds for the lit span to run out to the tip, and seconds for
+    // the near end to follow it out — see CONFIG.beams.trim, and trimSpan below
+    // for what they mean geometrically. Per beam rather than read from the
+    // config at draw time so a caller can opt one line out (0 restores the
+    // fade) without turning it off for the boss's.
+    trimIn: Math.max(0, opts.trimIn ?? (c.trim?.in ?? 0)),
+    trimOut: Math.max(0, opts.trimOut ?? (c.trim?.out ?? 0)),
+    // Where the two edges were LAST frame. The sparks are emitted along the run
+    // between then and now rather than at a point, so these are the state that
+    // makes a shower out of what is otherwise four clumps — see trimSparks.
+    lastHead: 0,
+    lastTail: 0,
     // Per-target cooldowns. A Map keyed on the creature itself, so a body that
     // dies and is recycled cannot inherit the last one's timer.
     cooldowns: new Map(),
     dead: false,
     mesh: null,
   };
+  // THE WIPES ARE SCALED TO FIT THE BURN, not clamped into it.
+  //
+  // A beam shorter than its own two wipes is a real case rather than a
+  // pathological one — the boss eye-beam perk floors its duration at 0.2s, and
+  // that is barely longer than the pair. Clamped, the tail starts already ahead
+  // of the head and trimSpan closes the span on frame one: the beam is removed
+  // before it has drawn anything, which looks exactly like the weapon having
+  // failed to fire. Scaled, a very short beam is the same launch-and-fly read
+  // played fast, which is the honest answer and the one the entrance stagger
+  // arrived at for the same reason.
+  const wipes = b.trimIn + b.trimOut;
+  if (wipes > b.life && wipes > 0) {
+    const k = b.life / wipes;
+    b.trimIn *= k;
+    b.trimOut *= k;
+  }
   buildMesh(scene, b);
   beams.push(b);
   return b;
@@ -362,6 +411,17 @@ export function spawnBeam(scene, opts = {}) {
 // This is the beam's SHAPE — its width and its existence. How bright it is is a
 // separate curve; see flare().
 function envelope(b) {
+  // THE WIPE OWNS ARRIVING AND LEAVING WHEN IT IS ON, and the two must never
+  // both run: a beam that trimmed AND faded would come in as a growing span
+  // that was also translucent and half its width, which reads as neither of
+  // them. Full strength throughout, and trimSpan decides what exists.
+  //
+  // This is also what quietly retires `armAt` for a trimmed beam — the gate
+  // below is on this value, so at a flat 1 it never closes, and the span is
+  // what stops the beam cutting where it is not drawn. That is the stricter
+  // rule: armAt could only say "the whole line is too dim to bite yet", where
+  // the span says which PART of the line exists.
+  if (b.trimIn > 0 || b.trimOut > 0) return 1;
   const inT = b.age / Math.max(0.001, b.fadeIn);
   const outT = (b.life - b.age) / Math.max(0.001, b.fadeOut);
   return Math.max(0, Math.min(1, Math.min(inT, outT)));
@@ -391,13 +451,128 @@ function flare(b) {
   return 1 + (peak - 1) * Math.exp(-b.age / t);
 }
 
+// WHERE THE LIT SPAN STARTS AND ENDS, as fractions of the beam's length.
+//
+// Both edges travel the same way, socket to tip — see CONFIG.beams.trim for why
+// that and not a symmetric grow-and-shrink. `head` runs out over `trimIn`;
+// `tail` leaves late enough that it arrives exactly as the beam's life ends, so
+// the last thing drawn is a short bright dash at the far end rather than a
+// beam that vanishes at full length.
+//
+// Returns the whole beam when the trim is off, which is what keeps every
+// untrimmed beam — and every assertion written against one — exactly as it was.
+const FULL_SPAN = { tail: 0, head: 1 };
+const _span = { tail: 0, head: 1 };
+function trimSpan(b) {
+  if (!(b.trimIn > 0) && !(b.trimOut > 0)) return FULL_SPAN;
+  const head = b.trimIn > 0 ? Math.min(1, b.age / b.trimIn) : 1;
+  const outAt = b.life - b.trimOut;
+  const tail = b.trimOut > 0 && b.age > outAt
+    ? Math.min(1, (b.age - outAt) / b.trimOut)
+    : 0;
+  // CLAMPED AGAINST THE HEAD rather than allowed to pass it. A beam whose trim
+  // times overrun its own life — a very short burn, or a stack that shortened
+  // one — would otherwise produce a segment of NEGATIVE length, which draws as
+  // a quad turned inside out and hit-tests as a range that contains nothing.
+  // Neither throws, and both look like the beam having simply failed to appear.
+  _span.tail = Math.min(tail, head);
+  _span.head = head;
+  return _span;
+}
+
+// The profile's u axis, remapped onto the drawn span. See profileClone.
+function setProfileSpan(m, tail, head) {
+  const t = m?.map;
+  if (!t) return;
+  t.offset.x = tail;
+  t.repeat.x = Math.max(1e-4, head - tail);
+}
+
+// --- sparks off the edge that moved ----------------------------------------
+// Emitted along the run the edge crossed SINCE LAST FRAME, not at wherever it
+// happens to be standing now — and that is not a refinement, it is the whole
+// difference between a shower and a dotted line. The edge crosses a 26-unit
+// beam in 70ms, which is four frames at 60Hz and seven world units of travel
+// between them: a burst at the instantaneous position leaves four clumps with
+// visible gaps down the line, and on a machine dropping frames it leaves two.
+//
+// emitCloud is exactly the right shape for that — one call per edge per frame
+// with the whole swept run in it.
+//
+// IT TAKES ITS VELOCITIES AND COLOURS FROM THE CLOUD, not from the emitter, so
+// `speed`, `cone` and `colors` on the `sparks` def are NOT applied for us the
+// way they are on the emit() path. They are read here by hand instead of being
+// re-typed, which is the only version where turning the sparks preset down in
+// the tuner moves these too — two spark sources that looked identical and only
+// one of which answered to the slider would be a genuinely nasty thing to chase.
+const SPARK_CAP = 64;
+const _sparks = {
+  count: 0,
+  x: new Float32Array(SPARK_CAP), y: new Float32Array(SPARK_CAP),
+  vx: new Float32Array(SPARK_CAP), vy: new Float32Array(SPARK_CAP),
+  r: new Float32Array(SPARK_CAP), g: new Float32Array(SPARK_CAP), b: new Float32Array(SPARK_CAP),
+};
+const _sparkCol = new THREE.Color();
+
+function rangeRand(v, fallback) {
+  if (Array.isArray(v)) return v[0] + Math.random() * (v[1] - v[0]);
+  return v ?? fallback;
+}
+
+function sweepSparks(b, from, to, t) {
+  const run = (to - from) * b.length;
+  if (!(run > 1e-3)) return;
+  const def = CONFIG.emitters?.sparks;
+  if (!def) return;
+  const cap = Math.min(SPARK_CAP, Math.max(1, Math.floor(t.sparkCap ?? 24)));
+  const n = Math.min(cap, Math.max(1, Math.ceil(run * (t.sparkPerUnit ?? 0.35))));
+  const colors = def.colors ?? [0xffffff];
+  const speedMul = t.sparkSpeed ?? 0.55;
+  // 1 leaves the cut edge square-on, which is what a thing being severed
+  // throws; 0 is isotropic and stops the edge reading as an edge at all.
+  const across = Math.max(0, Math.min(1, t.sparkSpread ?? 0.8));
+  const px = -b.dirY;
+  const py = b.dirX;
+  for (let i = 0; i < n; i++) {
+    // Jittered along the run rather than evenly spaced: n is small, and n
+    // evenly spaced points moving at a constant rate is a visible marching
+    // comb rather than a spray.
+    const at = (from + (to - from) * Math.random()) * b.length;
+    _sparks.x[i] = b.x + b.dirX * at;
+    _sparks.y[i] = b.y + b.dirY * at;
+    // A direction anywhere in the plane, with its ALONG-THE-BEAM component
+    // squashed by `across`. Decomposing and scaling rather than picking an
+    // angle inside a cone keeps the distribution even instead of piling up at
+    // the cone's edges, and `across` of 0 falls out as the untouched circle.
+    const ang = Math.random() * Math.PI * 2;
+    const ux = Math.cos(ang);
+    const uy = Math.sin(ang);
+    const al = ux * b.dirX + uy * b.dirY;
+    const speed = rangeRand(def.speed, 10) * speedMul;
+    _sparks.vx[i] = (px * (ux * px + uy * py) + b.dirX * al * (1 - across)) * speed;
+    _sparks.vy[i] = (py * (ux * px + uy * py) + b.dirY * al * (1 - across)) * speed;
+    _sparkCol.set(colors[(Math.random() * colors.length) | 0]);
+    _sparks.r[i] = _sparkCol.r;
+    _sparks.g[i] = _sparkCol.g;
+    _sparks.b[i] = _sparkCol.b;
+  }
+  _sparks.count = n;
+  emitCloud('sparks', _sparks);
+}
+
 // Distance from a point to the beam's SEGMENT — not to its infinite line. The
 // difference is everything a length means: an infinite line would let a beam
 // aimed away from the arena still cut something behind the emitter.
-function distanceToBeam(b, px, py) {
+// `n0`/`n1` are the LIT SPAN in world units along the line, which under the
+// trim is a moving window rather than the whole beam. Passing them is not
+// optional dressing: without it a growing beam cuts along its full reach while
+// drawing a stub, which is the same class of bug as hit-testing the infinite
+// line and is harder to see, because the damage happens exactly where the
+// player is looking for it to and merely too early.
+function distanceToBeam(b, px, py, n0 = 0, n1 = b.length) {
   const dx = px - b.x;
   const dy = py - b.y;
-  const t = Math.max(0, Math.min(b.length, dx * b.dirX + dy * b.dirY));
+  const t = Math.max(n0, Math.min(n1, dx * b.dirX + dy * b.dirY));
   const cx = b.x + b.dirX * t;
   const cy = b.y + b.dirY * t;
   return Math.hypot(px - cx, py - cy);
@@ -440,24 +615,64 @@ export function updateBeams(dt, scene, ctx = {}) {
     b.dirX /= len;
     b.dirY /= len;
 
+    // THE SPAN, and it is worked out AFTER the sweep above for the same reason
+    // the damage pass is: the sparks are laid down along the beam's current
+    // line, and on a hard turn last frame's is several degrees away.
+    const span = trimSpan(b);
+    const n0 = span.tail * b.length;   // near end, world units along the line
+    const n1 = span.head * b.length;   // far end
+    const drawn = n1 - n0;
+    // The tail has caught the head — nothing to draw and nothing to cut. Only
+    // reachable when the trim times overrun the beam's life (see trimSpan), and
+    // the honest answer then is that the beam is over.
+    if (!(drawn > 1e-4)) {
+      removeBeam(scene, i);
+      continue;
+    }
+
+    // Sparks off whichever edge moved, along the run it crossed this frame.
+    // Both are checked because both CAN move at once on a burn short enough
+    // for the two wipes to overlap.
+    if (b.trimIn > 0 || b.trimOut > 0) {
+      const t = cfg().trim ?? {};
+      sweepSparks(b, b.lastHead, span.head, t);
+      sweepSparks(b, b.lastTail, span.tail, t);
+    }
+    b.lastHead = span.head;
+    b.lastTail = span.tail;
+
     const env = envelope(b);
     const hot = flare(b);
     // The bloom floor takes the flare at full strength — this is the "blooms
     // really hard and then tames back down" the beam is asked for, and it is
     // the pulse rather than the material that the eye actually reads as heat.
-    lit = Math.max(lit, env * hot);
+    // Scaled by HOW MUCH OF THE BEAM IS LIT, which under the trim is the only
+    // thing that still falls off — the envelope is flat at 1, so without this
+    // the screen's bloom floor would hold full strength until the frame the
+    // last inch of beam disappeared and then drop out in one step.
+    lit = Math.max(lit, env * hot * (drawn / Math.max(1e-4, b.length)));
 
     // --- draw ------------------------------------------------------------
-    const midX = b.x + b.dirX * b.length * 0.5;
-    const midY = b.y + b.dirY * b.length * 0.5;
+    // Centred on the DRAWN span rather than on the beam, which is what makes
+    // the quad a sub-segment: an untrimmed beam has n0 = 0 and drawn = length,
+    // so this is the old midpoint arithmetic with the span folded in.
+    const midX = b.x + b.dirX * (n0 + drawn * 0.5);
+    const midY = b.y + b.dirY * (n0 + drawn * 0.5);
     b.mesh.position.set(midX, midY, 0);
     b.mesh.rotation.z = Math.atan2(b.dirY, b.dirX);
     // The core is thin and the glow is wide, and BOTH breathe with the
     // envelope — a beam that only faded its opacity kept its full width to the
     // last frame and read as being switched off rather than as dying down.
+    // (Under the trim the envelope is a flat 1 and this is the beam's own
+    // width throughout; the span is doing that job instead.)
     const w = b.width * (0.35 + 0.65 * env);
-    b.core.scale.set(b.length, w * (cfg().coreWidthMul ?? 0.38), 1);
-    b.glow.scale.set(b.length, w * (cfg().glowWidthMul ?? 2.6), 1);
+    b.core.scale.set(drawn, w * (cfg().coreWidthMul ?? 0.38), 1);
+    b.glow.scale.set(drawn, w * (cfg().glowWidthMul ?? 2.6), 1);
+    // ...and the profile follows the span, so the muzzle fade stays at the
+    // muzzle and the taper stays at the tip instead of both being squeezed into
+    // whatever is currently lit. See profileClone.
+    setProfileSpan(b.core.material, span.tail, span.head);
+    setProfileSpan(b.glow.material, span.tail, span.head);
     // Clamped at 1: additive blending means anything past full opacity is not
     // brighter, it is just the same pixel — the flare's headroom above that is
     // spent on the bloom floor above and on the spill below, both of which CAN
@@ -469,10 +684,20 @@ export function updateBeams(dt, scene, ctx = {}) {
     // stays a circle whatever angle the beam is at — a radial gradient on a
     // rotated quad is still a circle, but a NON-square one would shear, and
     // this is the one piece here that is deliberately square for that reason.
+    //
+    // IT RIDES THE NEAR END OF THE SPAN, not the socket. While the beam is
+    // growing those are the same point and this is unchanged; once the tail
+    // leaves on the way out, the muzzle is no longer where the light is coming
+    // from — the animal has let go of the beam, and the bright thing in the
+    // water is the cut edge travelling away. Following the tail puts the spill
+    // and the spark shower on the same point, which is what makes the two read
+    // as one event rather than as a glow and some sparks that happen to agree.
     const spillSize = b.width * (cfg().spillSize ?? 9);
+    const nearX = b.x + b.dirX * n0;
+    const nearY = b.y + b.dirY * n0;
     b.spill.position.set(
-      (b.x - midX) * Math.cos(-b.mesh.rotation.z) - (b.y - midY) * Math.sin(-b.mesh.rotation.z),
-      (b.x - midX) * Math.sin(-b.mesh.rotation.z) + (b.y - midY) * Math.cos(-b.mesh.rotation.z),
+      (nearX - midX) * Math.cos(-b.mesh.rotation.z) - (nearY - midY) * Math.sin(-b.mesh.rotation.z),
+      (nearX - midX) * Math.sin(-b.mesh.rotation.z) + (nearY - midY) * Math.cos(-b.mesh.rotation.z),
       -0.01,
     );
     b.spill.rotation.z = -b.mesh.rotation.z;
@@ -499,7 +724,7 @@ export function updateBeams(dt, scene, ctx = {}) {
     if (b.hitsEnemies && ctx.enemies) {
       for (const e of ctx.enemies) {
         if (!e || e.hp <= 0 || e.invuln > 0 || b.cooldowns.has(e)) continue;
-        if (distanceToBeam(b, e.mesh.position.x, e.mesh.position.y) > b.width * 0.5 + (e.radius ?? 0.5)) continue;
+        if (distanceToBeam(b, e.mesh.position.x, e.mesh.position.y, n0, n1) > b.width * 0.5 + (e.radius ?? 0.5)) continue;
         b.cooldowns.set(e, b.tickEvery);
         e.hp -= b.damage;
         // THE SAME SHAPE EVERY OTHER DAMAGE HOOK IN THE GAME HAS —
@@ -513,13 +738,27 @@ export function updateBeams(dt, scene, ctx = {}) {
           e, b.damage, e.mesh.position.x, e.mesh.position.y,
           { x: b.dirX, y: b.dirY }, null, null, b.source,
         );
+        // THE BODY LIGHTS UP WHILE THE BEAM IS ON IT, and it is not the same
+        // thing as `beamCut` above. That is a MOMENT, fired ten times a second
+        // per body, and ten flashes a second is a strobe the player stops
+        // seeing inside a second. This is a STATE that climbs while contact is
+        // held, breathes while it lasts and falls off when the beam leaves —
+        // the only vocabulary damage-over-time has. systems/burnGlow.js, and
+        // the same call bubbleJet.js makes for the same reason.
+        sear(e);
         cut(e.mesh.position.x, e.mesh.position.y, hooks);
-        if (e.hp <= 0) hooks.onEnemyKilled?.(e);
+        // LET THE BODY GO ON THE FRAME IT DIES, not on the next sweep.
+        // systems/bossLight.js attaches its kill light to the same root and
+        // gets the SAME per-instance materials back, so one frame of overlap
+        // is two systems writing one material with last-write-wins deciding
+        // which is visible — a flicker on the first frame of every boss death,
+        // which is the single most looked-at frame in the game.
+        if (e.hp <= 0) { releaseBurn(e); hooks.onEnemyKilled?.(e); }
       }
     }
 
     if (b.hitsPlayer && ctx.playerPos && !b.cooldowns.has(PLAYER)) {
-      const d = distanceToBeam(b, ctx.playerPos.x, ctx.playerPos.y);
+      const d = distanceToBeam(b, ctx.playerPos.x, ctx.playerPos.y, n0, n1);
       if (d <= b.width * 0.5 + (ctx.playerRadius ?? 0.6)) {
         b.cooldowns.set(PLAYER, b.tickEvery);
         hooks.onPlayerHit?.(b.damage, { x: b.dirX, y: b.dirY }, b.source);

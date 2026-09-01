@@ -147,6 +147,24 @@ function fail(err, how) {
 }
 
 /**
+ * AN ERROR THAT WAS CAUGHT, recorded as the thing this session ended on.
+ *
+ * `window.onerror` is how every other failure gets in here, and it fires for
+ * exactly the errors nobody caught. The frame guard (systems/frameGuard.js)
+ * catches its own so the loop can survive them, which means the one failure
+ * mode this file was written for — the frame loop stopping — is now invisible
+ * to the listener above. This is that path back in.
+ *
+ * Reserved for a loop that is NOT coming back. A hitch the guard absorbed is a
+ * crumb, because `err` is what makes verdictFor() call the whole session an
+ * 'error', and a run that recovered and played on for ten minutes did not end
+ * as one.
+ */
+export function noteError(err, how = 'error') {
+  fail(err, how);
+}
+
+/**
  * Install the trail. Call this FIRST, before anything else in the boot, so a
  * throw from the boot itself is inside it.
  *

@@ -210,20 +210,44 @@ export function parseBossPerkCsv(text, warn = console.warn) {
  * a health bar, a name and a body the size of a bus is already a lot to read
  * the first time, and a perk on top of it is the difference between a fight
  * you learn and one you lose without knowing why. Every boss after it has one.
+ *
+ * `opts.bias` is a list of perk ids to lean toward and `opts.chance` is how
+ * often the lean wins — both come off the archetype's bosses.csv row, and the
+ * caller applies the level gate before passing them.
  */
-export function rollBossPerk(perks, bossNumber, random = Math.random) {
+export function rollBossPerk(perks, bossNumber, random = Math.random, opts = {}) {
   if (!perks?.length) return null;
   if ((bossNumber ?? 0) < 1) return null; // the first boss of the run
 
+  // AN ARCHETYPE'S LEAN — bosses.csv `perkBias`, with the caller having already
+  // decided the run is deep enough for it (see spawnBoss). The draw is taken
+  // FIRST, before the weighted walk consumes the stream, so a seeded harness
+  // gets the same sequence of numbers whether or not the lean lands.
+  //
+  // A NARROWED POOL, not a second mechanism: a lean that wins still picks
+  // between the named perks by their own bossPerks.csv weights, through the
+  // same walk below. That is what keeps a biased boss a ROLL — the king crab
+  // leans on the four attractor studies and still meets a different one each
+  // time — and it is why an empty intersection falls through instead of
+  // returning null. A bias naming perks that are all disabled has to be a boss
+  // with an ordinary perk; a boss with NO perk is a thing only the first
+  // arrival of a run is allowed to be.
+  let pool = perks;
+  if (opts.bias?.length) {
+    const wanted = new Set(opts.bias);
+    const leaned = perks.filter((p) => wanted.has(p.id));
+    if (leaned.length && random() < (opts.chance ?? 1)) pool = leaned;
+  }
+
   let total = 0;
-  for (const p of perks) total += p.weight > 0 ? p.weight : 0;
+  for (const p of pool) total += p.weight > 0 ? p.weight : 0;
   // Same contract as every other weighted pick in the project: a table whose
   // weights are all 0 picks uniformly rather than returning nothing.
-  if (total <= 0) return perks[Math.floor(random() * perks.length)];
+  if (total <= 0) return pool[Math.floor(random() * pool.length)];
 
   let roll = random() * total;
-  let last = perks[0];
-  for (const p of perks) {
+  let last = pool[0];
+  for (const p of pool) {
     if (p.weight <= 0) continue;
     last = p;
     roll -= p.weight;

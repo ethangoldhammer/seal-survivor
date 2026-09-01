@@ -445,18 +445,48 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
   const chance = biolumShockLevelStats(lv).biolumShockChance;
   if (Math.random() > chance * share) return;
 
-  const range2 = (e.arcRange ?? 6.5) ** 2;
-  const falloff = Math.max(0, Math.min(1, e.arcFalloff ?? 0.62));
+  arcChain(scene, from, packet, enemiesList, hooks, {
+    range: e.arcRange ?? 6.5,
+    arcs: biolumShockLevelStats(lv).biolumShockArcs,
+    falloff: e.arcFalloff ?? 0.62,
+    firstShare: e.arcDamage ?? 0.7,
+    floorShare: e.arcDamageFloor ?? 0.06,
+    source: 'bioluminescence',
+  });
+}
+
+/**
+ * THE CHAIN ITSELF, with no opinion about who paid for it.
+ *
+ * Voltaic calls this with the element's numbers; Zappy Club calls it with its
+ * own (see CONFIG.clubZap). It lives here rather than in either caller because
+ * the behaviour above is a paragraph of hard-won decisions — travel between
+ * POINTS not bodies, a kill costs an extra hop, diminish and give up on a
+ * share — and a second copy of it in club.js would drift away from this one
+ * the first time either was retuned. One function, two callers, the same
+ * reasoning clubStackTotals is shared for.
+ *
+ * `spec.source` is the damage tag the hops are filed under, so the balance
+ * ledger can tell an arc off a pellet from an arc off a stick.
+ *
+ * @param spec {range, arcs, falloff, firstShare, floorShare, source}
+ */
+export function arcChain(scene, from, packet, enemiesList, hooks = {}, spec = {}) {
+  if (!from || !enemiesList) return 0;
+  const range2 = (spec.range ?? 6.5) ** 2;
+  const falloff = Math.max(0, Math.min(1, spec.falloff ?? 0.62));
   // As a share of the packet, not an absolute — the packet is a fraction of a
   // hit that itself scales all run, so an absolute floor would cut the chain
   // short at level 3 and never bite again by level 30.
-  const floor = packet * Math.max(0, e.arcDamageFloor ?? 0.06);
-  let damage = packet * (e.arcDamage ?? 0.7);
+  const floor = packet * Math.max(0, spec.floorShare ?? 0.06);
+  const source = spec.source ?? 'bioluminescence';
+  let damage = packet * (spec.firstShare ?? 0.7);
+  let hops = 0;
 
   // Hops REMAINING, decremented in two places — once per hop taken, and again
   // for a hop that killed. A plain `for` over a fixed count could not express
   // the second without a second counter that means the same thing.
-  let budget = biolumShockLevelStats(lv).biolumShockArcs;
+  let budget = Math.max(0, Math.floor(spec.arcs ?? 1));
 
   let sx = from.mesh.position.x;
   let sy = from.mesh.position.y;
@@ -490,7 +520,12 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
     // The share of the original packet this hop is worth, for the bolt's
     // thickness. Guarded because a packet of 0 is reachable — a hit on a
     // sentinel-hp body at level 1 rounds there — and NaN width draws nothing.
-    hooks.onArc?.(sx, sy, tx, ty, packet > 0 ? damage / packet : 1);
+    // `source` rides along so the handler can tell an arc off a pellet from
+    // an arc off a stick. The BOLT is the same object either way — one channel
+    // draws a line between two bodies and a chain is a chain — but the events
+    // under it are not: Voltaic's fires a couple of hops from the edge of a
+    // crowd, and the club's fires six from inside one.
+    hooks.onArc?.(sx, sy, tx, ty, packet > 0 ? damage / packet : 1, source);
 
     best.hp -= damage;
     best.flash = CONFIG.fx.hitFlash;
@@ -501,10 +536,7 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
     // no projectile behind an arc every point of chain damage was being
     // credited to Fin Pebbles. The gun is the most overtuned thing in the
     // report; it should not also be wearing another card's output.
-    hooks.onEnemyDamaged?.(
-      best, damage, tx, ty,
-      null, null, null, 'bioluminescence',
-    );
+    hooks.onEnemyDamaged?.(best, damage, tx, ty, null, null, null, source);
     if (best.hp <= 0) {
       const idx = enemiesList.indexOf(best);
       hooks.onEnemyKilled?.(best);
@@ -517,9 +549,11 @@ function applyShock(scene, from, packet, enemiesList, hooks, share) {
 
     sx = tx;
     sy = ty;
+    hops++;
     damage *= falloff;
     if (damage < floor) break;
   }
+  return hops;
 }
 
 // --- venom ------------------------------------------------------------------

@@ -29,7 +29,7 @@ import { bounds } from '../path/src/arena.js';
 import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import { pickups, spawnXpOrb, updatePickups, resetPickups } from '../path/src/entities/pickups.js';
 import { deathState } from '../path/src/systems/deathDive.js';
-import { summonDeathPile, updateDeathPile, resetCrabSpawner } from '../path/src/systems/crabSpawner.js';
+import { summonDeathPile, updateDeathPile, resetCrabSpawner, updateCrabSpawner } from '../path/src/systems/crabSpawner.js';
 import { recordGrave, plantGraves, updateGravesites, clearGraves, graveHasLanded, graveKeepOut } from '../path/src/systems/gravesite.js';
 import { installModel } from '../path/src/assets.js';
 
@@ -45,6 +45,12 @@ Math.random = () => {
   seed = (seed * 1664525 + 1013904223) >>> 0;
   return seed / 4294967296;
 };
+// Two runs of the same scenario have to roll the same dice, or a control run
+// is measuring the weather as well as the change under test — the tumble
+// impulse draws, so the sequences diverge the moment the two runs collide
+// differently. Every A/B below reseeds first.
+const SEED = seed;
+function reseed() { seed = SEED; }
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -238,6 +244,127 @@ check('nobody is left hovering in open water once the food is gone',
   `highest settles ${Math.max(...swarm.map((e) => e.mesh.position.y - FLOOR)).toFixed(2)} above the sand`);
 
 // ---------------------------------------------------------------------------
+section('TOWERS — a crowded column climbs instead of spreading out');
+// ---------------------------------------------------------------------------
+// The section above pins every crab to z 0 by hand, because the depth lanes
+// are exactly what stops bodies interacting. That is the scenario this one
+// refuses to stage: crabs are left in the lanes they spawned in, which is what
+// the game actually produces, and the crowd has to gather itself into a tower
+// out of them (CONFIG.crabPhysics.tower).
+//
+// Measured against a CONTROL RUN with the tower switched off rather than
+// against a bare number: `climbBias` alone already lifts crabs a little, so
+// "they got above the sand" would have passed before any of this existed. What
+// is under test is how much HIGHER a crowded column goes than the same crowd
+// shoving sideways, on the same dice.
+function crowdRun(towerOn, laneMerge = CONFIG.crabPhysics.tower.laneMerge) {
+  reseed();
+  reset();
+  const was = CONFIG.crabPhysics.tower.enabled;
+  const wasMerge = CONFIG.crabPhysics.tower.laneMerge;
+  CONFIG.crabPhysics.tower.enabled = towerOn;
+  CONFIG.crabPhysics.tower.laneMerge = laneMerge;
+  // One tight heap of chum and twelve crabs converging on it — the wave a
+  // full chum drop calls, all wanting the same square of seabed.
+  for (let i = 0; i < 12; i++) spawnXpOrb(scene, { x: (Math.random() - 0.5) * 1.5, y: FLOOR + 0.8, z: 0 }, 5, 0.5);
+  const crowd = [];
+  for (let i = 0; i < 12; i++) crowd.push(crabAt((i % 2 ? 1 : -1) * (4 + i * 1.2), FLOOR + 1));
+  const idle = makePlayer(0, bounds.surfaceY - 2);
+  let peak = 0;
+  let peakLayers = 0;
+  let laneSpreadSum = 0;
+  let laneFrames = 0;
+  const layer = CONFIG.enemies.walkingCrab.radius * 2 * CONFIG.crabPhysics.stackHeight;
+  for (let i = 0; i < 60 * 25; i++) {
+    tick(idle);
+    const hs = crowd.map((e) => e.mesh.position.y - FLOOR - e.radius);
+    peak = Math.max(peak, Math.max(...hs));
+    // How many storeys the heap is standing in, counted off the bodies rather
+    // than off the peak: one crab flicked up by a collision is not a tower.
+    const storeys = new Set(hs.filter((h) => h > layer * 0.4).map((h) => Math.round(h / layer)));
+    peakLayers = Math.max(peakLayers, storeys.size);
+    // HOW FAR EACH CLIMBER IS IN Z FROM THE BODY IT IS STANDING ON. Not the
+    // spread across the whole heap: a bigger tower holds more crabs and would
+    // measure a wider spread for being taller, which is the thing it is
+    // supposed to be rewarded for. Climber against its own support is the pair
+    // the lane merge acts on, so it is the pair to measure.
+    for (const e of crowd) {
+      if (e.mesh.position.y - FLOOR - e.radius <= layer * 0.4) continue;
+      // The same two gates resolveCrabCollisions uses to call one body the
+      // support of another — measured any looser and most of what is counted
+      // is pairs the merge was never offered, which is how a working pull
+      // reads as a dead one.
+      let below = null;
+      for (const o of crowd) {
+        if (o === e) continue;
+        const sum = e.radius + o.radius;
+        if (Math.abs(o.mesh.position.x - e.mesh.position.x) > sum * CONFIG.crabPhysics.supportSpan) continue;
+        if (e.mesh.position.y - o.mesh.position.y <= sum * CONFIG.crabPhysics.stackHeight * 0.5) continue;
+        if (!below || o.mesh.position.y > below.mesh.position.y) below = o;
+      }
+      if (!below) continue;
+      laneSpreadSum += Math.abs(e.mesh.position.z - below.mesh.position.z);
+      laneFrames++;
+    }
+  }
+  CONFIG.crabPhysics.tower.enabled = was;
+  CONFIG.crabPhysics.tower.laneMerge = wasMerge;
+  return { peak, peakLayers, laneSpread: laneFrames ? laneSpreadSum / laneFrames : 0, laneFrames, layer, crowd };
+}
+
+const flat = crowdRun(false);
+const stacked = crowdRun(true);
+// The same tower with the lane merge switched off — the control for the depth
+// check below. Against the tower-off run it would be measuring crowd size as
+// much as lanes: a heap that never forms has almost nobody standing on
+// anybody, and two climbers are closer together in z than eight for reasons
+// that have nothing to do with this.
+const unmerged = crowdRun(true, 0);
+check('a crowded column climbs higher than the same crowd barging',
+  stacked.peak > flat.peak * 1.5,
+  `${stacked.peak.toFixed(2)} up against ${flat.peak.toFixed(2)} with the tower off`);
+check('...into more than one storey', stacked.peakLayers >= 2,
+  `${stacked.peakLayers} storey(s) occupied at once, one is ${stacked.layer.toFixed(2)} tall`);
+check('...and at least two bodies deep off the sand', stacked.peak > stacked.layer * 1.2,
+  `peak ${stacked.peak.toFixed(2)} against a ${stacked.layer.toFixed(2)} layer`);
+check('a climber is drawn into the lane of the crab holding it up',
+  stacked.laneSpread < unmerged.laneSpread * 0.7,
+  `${stacked.laneSpread.toFixed(2)} from its support in z against ${unmerged.laneSpread.toFixed(2)} with laneMerge 0`);
+check('the tower still comes down — nothing is left in open water',
+  stacked.crowd.every((e) => e.mesh.position.y - FLOOR < CONFIG.enemies.walkingCrab.crawl.groundHeight + stacked.layer * 4),
+  `highest settles ${Math.max(...stacked.crowd.map((e) => e.mesh.position.y - FLOOR)).toFixed(2)} above the sand`);
+
+// A PAIR IS NOT A CROWD. Two crabs meeting over one orb should still barge
+// past each other — if the tower fired for every contact, the seabed would be
+// a game of leapfrog and the lanes would never do anything.
+reseed();
+reset();
+{
+  const one = crabAt(-0.6, FLOOR + 1);
+  const two = crabAt(0.6, FLOOR + 1);
+  one.mesh.position.z = 0;
+  two.mesh.position.z = 0;
+  const high2 = makePlayer(0, bounds.surfaceY - 2);
+  let pairPeak = 0;
+  for (let i = 0; i < 60 * 3; i++) {
+    tick(high2);
+    pairPeak = Math.max(pairPeak, Math.max(
+      one.mesh.position.y - FLOOR - one.radius,
+      two.mesh.position.y - FLOOR - two.radius,
+    ));
+  }
+  // Against the TOWER's peak rather than against a layer height: a pair
+  // already climbs a little under the plain `climbBias`, and always did. What
+  // must not happen is a pair behaving like a crowd.
+  check('two crabs on their own still shoulder past instead of towering',
+    pairPeak < stacked.peak * 0.5,
+    `peak ${pairPeak.toFixed(2)} against the crowd's ${stacked.peak.toFixed(2)}`);
+  check('...and the crowd threshold is what separates the two cases',
+    CONFIG.crabPhysics.tower.crowd >= 2,
+    `tower.crowd ${CONFIG.crabPhysics.tower.crowd}`);
+}
+
+// ---------------------------------------------------------------------------
 section('HOOVER — chum is dragged into the mouth, not just shrunk');
 // ---------------------------------------------------------------------------
 reset();
@@ -402,6 +529,49 @@ summonDeathPile();
 for (let i = 0; i < Math.ceil(window / dt) + 10; i++) updateDeathPile(dt, scene, 0, { x: 0, y: FLOOR + 1 });
 check('the pile respects its own ceiling', enemies.length <= CONFIG.crabSpawn.deathPile.maxCrabs,
   `${enemies.length} crabs, ceiling ${CONFIG.crabSpawn.deathPile.maxCrabs} (was ${held2})`);
+
+// ---------------------------------------------------------------------------
+section('STAGGER — a chum wave walks on one crab at a time');
+// ---------------------------------------------------------------------------
+// A wave used to be five crabs on one frame at one wing: they arrived as a
+// rank and read as a spawner firing rather than as animals noticing food.
+// CONFIG.crabSpawn.waveWindow is the queue they come out of now.
+reseed();
+reset();
+deathState.active = false;
+{
+  // A pile big enough to buy several crabs, sitting on the floor.
+  const orbs = CONFIG.crabSpawn.pileThreshold + CONFIG.crabSpawn.orbsPerCrab * 4;
+  for (let i = 0; i < orbs; i++) {
+    spawnXpOrb(scene, { x: (Math.random() - 0.5) * 4, y: FLOOR + 0.5, z: 0 }, 5, 0.5);
+  }
+  const frames = [];
+  const window = CONFIG.crabSpawn.waveWindow;
+  let last = enemies.length;
+  for (let i = 0; i < Math.ceil((window + 1) / dt); i++) {
+    updateCrabSpawner(dt, scene, 0);
+    if (enemies.length > last) frames.push({ frame: i, n: enemies.length - last });
+    last = enemies.length;
+  }
+  check('the pile summons a wave', frames.length > 1, `${enemies.length} crab(s) walked on`);
+  check('...the first one sets off on the frame the chum is noticed',
+    frames.length > 0 && frames[0].frame === 0, `first arrival on frame ${frames[0]?.frame}`);
+  check('...and never more than one on a frame',
+    frames.every((f) => f.n === 1), frames.map((f) => f.n).join(','));
+  const span = frames.length > 1 ? (frames[frames.length - 1].frame - frames[0].frame) * dt : 0;
+  check('...strung out across the window rather than issued at once',
+    span > window * 0.4,
+    `${span.toFixed(2)}s from first to last, window ${window}s`);
+  // The gaps are jittered, so no two are the same length — a wave on a
+  // metronome reads as one system's output however long the window is.
+  const gaps = frames.slice(1).map((f, i) => f.frame - frames[i].frame);
+  check('...with the gaps jittered, not metronomic',
+    CONFIG.crabSpawn.waveJitter === 0 || new Set(gaps).size > 1,
+    `gaps (frames): ${gaps.join(', ')}`);
+  check('...all of them walking on from off-screen',
+    enemies.every((e) => e.entering || Math.abs(e.mesh.position.x) > bounds.right - 0.01),
+    'every arrival starts outside the walls');
+}
 
 // ---------------------------------------------------------------------------
 section('THE GRAVE — the pile breaks up when the stone lands');

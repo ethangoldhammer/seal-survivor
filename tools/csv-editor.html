@@ -247,14 +247,34 @@
   .sound-opt .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
   .sound-opt .detail { color: var(--dim); font-size: 11px; }
 
-  .rowacts { white-space: nowrap; }
+  /* PINNED TO THE RIGHT EDGE, the mirror of the frozen id column on the left.
+     These used to ride the end of the row, which on a table eight columns wide
+     meant scrolling past every one of them to reach Delete -- the button was
+     there the whole time and might as well not have been. */
+  th.acts, td.acts {
+    position: sticky; right: 0; z-index: 12; background: var(--bg);
+    border-left: 1px solid var(--line); white-space: nowrap; width: 1%;
+  }
+  thead th.acts { z-index: 20; cursor: default; }
+  tbody tr:hover td.acts { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+
+  /* Dim rather than hidden. Invisible-until-hover is undiscoverable: nothing on
+     screen says the row can be deleted at all, so you go looking for a menu
+     that does not exist. */
   .rowdel, .rowdup {
     border: none; background: none; color: var(--dim); cursor: pointer;
-    font-size: 15px; padding: 4px 8px; visibility: hidden;
+    font-size: 15px; padding: 4px 6px; border-radius: 4px; opacity: .35;
   }
-  tbody tr:hover .rowdel, tbody tr:hover .rowdup { visibility: visible; }
-  .rowdel:hover { color: var(--bad); }
-  .rowdup:hover { color: var(--accent); }
+  tbody tr:hover .rowdel, tbody tr:hover .rowdup { opacity: 1; }
+  .rowdel[data-armed] {
+    opacity: 1; color: #fff; background: var(--bad);
+    font-size: 11px; font-weight: 600; padding: 3px 7px;
+  }
+  .dlg-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid var(--line); }
+  #askText { font-size: 13px; font-weight: 500; }
+  .rowdel:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
+  .rowdup:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  .rowdel:focus-visible, .rowdup:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: -2px; }
 
   dialog {
     border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
@@ -352,6 +372,14 @@
      survive renderBody without being re-applied to a thousand fresh <td>s. -->
 <style id="colw"></style>
 
+<dialog id="askDlg">
+  <div class="dlg-head"><h2 id="askText"></h2></div>
+  <div class="dlg-foot">
+    <button class="action" id="askNo">Cancel</button>
+    <button class="action primary" id="askOk">OK</button>
+  </div>
+</dialog>
+
 <dialog id="artDlg">
   <div class="dlg-head">
     <h2>Card art</h2>
@@ -394,10 +422,27 @@ boot();
 let draftRe = null;
 const isDraft = (v) => !!draftRe && draftRe.test(String(v ?? ''));
 
-// A row is a draft if any column a player READS still holds a placeholder.
-// `notes` never counts — that is where the brief for the line is written.
+// THE SECOND DETECTOR, and it reads the opposite cell.
+//
+// A placeholder does not have to look like one. Two `shot` leads went in as
+// "Shot Down" and "Sealed with a Kiss" — finished English, brief written
+// correctly in `notes`, nothing for the pattern above to match — and they were
+// invisible here and green in the ship gate at the same time. So a brief that
+// still opens with NEEDS YOUR WORDS flags its row on its own, however written
+// the line beside it reads.
+//
+// It cannot be cleared by editing the copy, which is the point: it clears when
+// the brief goes, and the brief goes when the line is done.
+let briefRe = null;
+const hasOpenBrief = (v) => !!briefRe && briefRe.test(String(v ?? ''));
+
+// A row is a draft if any column a player READS still holds a placeholder, OR
+// if its brief says the row is still waiting. `notes` never counts as COPY —
+// it is where the brief is written — but it is exactly what the second
+// detector reads.
 function rowIsDraft(t, i) {
-  return t.columns.some((c) => c.copy && isDraft(t.rows[i][c.name]));
+  if (t.columns.some((c) => c.copy && isDraft(t.rows[i][c.name]))) return true;
+  return hasOpenBrief(t.rows[i].notes);
 }
 const draftsIn = (t) => t.rows.reduce((n, _, i) => n + (rowIsDraft(t, i) ? 1 : 0), 0);
 
@@ -414,6 +459,7 @@ async function boot() {
   const r = await fetch('/api/tables');
   const data = await r.json();
   draftRe = new RegExp(data.draftPattern, 'i');
+  if (data.briefPattern) briefRe = new RegExp(data.briefPattern, 'i');
   // `origIndex` is what each live row was when the page loaded, so the "this
   // cell changed" highlight survives a row being inserted or deleted above it.
   // Comparing by POSITION instead paints every row below an insert as edited,
@@ -550,7 +596,12 @@ function renderHead() {
     th.append(makeGrip(c, n));
     tr.append(th);
   });
-  if (T().addRows) tr.append(document.createElement('th'));
+  if (T().addRows) {
+    const th = document.createElement('th');
+    th.className = 'acts';
+    th.title = 'Duplicate or delete a row';
+    tr.append(th);
+  }
   $('thead').replaceChildren(tr);
 }
 
@@ -678,7 +729,7 @@ function renderBody() {
     t.columns.forEach((c) => tr.append(cellFor(c, i)));
     if (t.addRows) {
       const td = document.createElement('td');
-      td.className = 'rowacts';
+      td.className = 'acts';
 
       const dup = document.createElement('button');
       dup.className = 'rowdup'; dup.textContent = '⧉'; dup.title = 'Duplicate this row';
@@ -686,11 +737,28 @@ function renderBody() {
 
       const b = document.createElement('button');
       b.className = 'rowdel'; b.textContent = '✕'; b.title = 'Delete this row';
+      // ARMED, NOT PROMPTED. This used to call window.confirm, which the app's
+      // webview suppresses -- it returns false without ever showing a dialog,
+      // so the button reached its handler, asked, was told no, and did nothing.
+      // A click that silently does nothing is indistinguishable from a broken
+      // button, and it was broken for exactly as long as nobody tried it in a
+      // plain browser tab. The confirmation is in the button now: first click
+      // arms it, second deletes. No dialog to be suppressed, and Revert still
+      // undoes it right up until Save.
       b.onclick = () => {
-        if (!confirm(`Delete "${t.rows[i].id || 'this row'}"?`)) return;
+        if (b.dataset.armed !== '1') {
+          disarmAll();
+          b.dataset.armed = '1';
+          b.textContent = 'Delete?';
+          b.title = `Delete "${t.rows[i].id || 'this row'}" — click again`;
+          b.__disarm = setTimeout(() => disarm(b), 4000);
+          return;
+        }
+        disarm(b);
         t.rows.splice(i, 1);
         t.origIndex.splice(i, 1);
         renderTabs(); renderBody(); markDirty();
+        status(`Deleted — Revert undoes it until you save.`);
       };
 
       td.append(dup, b);
@@ -819,7 +887,10 @@ function paint(td, c, i) {
   // The placeholder flag, re-tested on every keystroke — so it clears as the
   // lorem is deleted rather than at the next save. The row's stripe follows
   // the cell, because a row is a draft exactly while one of its cells is.
-  const draft = !!c.copy && isDraft(raw);
+  // The cell tint marks WHERE the placeholder is. For a lorem cell that is the
+  // copy; for a brief-flagged row it is the notes cell holding the brief, since
+  // the copy cell has nothing wrong with it to point at.
+  const draft = (!!c.copy && isDraft(raw)) || (c.name === 'notes' && hasOpenBrief(raw));
   td.classList.toggle('draft', draft);
 
   // The review cell carries its own state, so the column reads as a column of
@@ -927,9 +998,11 @@ function markDirty() {
   $('save').textContent = dirty ? (bad ? `Save (${bad} flagged)` : 'Save') : 'Saved';
 }
 
-function revert() {
+async function revert() {
   const t = T();
-  if (!confirm('Throw away every change to this table since it loaded?')) return;
+  // A <dialog> rather than confirm() for the same reason as above: the native
+  // one never appears here, so Revert was silently a no-op too.
+  if (!(await ask(`Throw away every change to ${t.label} since it loaded?`, 'Throw away'))) return;
   t.rows = clone(t.original);
   t.origIndex = t.rows.map((_, i) => i);
   renderTabs(); renderBody(); markDirty();
@@ -1002,6 +1075,33 @@ async function loadArt() {
   });
   return art;
 }
+
+// A CONFIRMATION THAT ACTUALLY APPEARS. window.confirm is suppressed in the
+// app's webview -- it returns false immediately -- so anything gated on it is
+// dead code that looks like a working button. <dialog> is what the art and
+// sound pickers already use here, and it works.
+function ask(question, okLabel = 'OK') {
+  return new Promise((done) => {
+    const dlg = $('askDlg');
+    $('askText').textContent = question;
+    $('askOk').textContent = okLabel;
+    let answer = false;
+    $('askOk').onclick = () => { answer = true; dlg.close(); };
+    $('askNo').onclick = () => dlg.close();
+    dlg.addEventListener('close', () => done(answer), { once: true });
+    dlg.showModal();
+  });
+}
+
+// The armed state on a row's delete button, undone.
+function disarm(b) {
+  if (!b) return;
+  clearTimeout(b.__disarm);
+  delete b.dataset.armed;
+  b.textContent = '\u2715';
+  b.title = 'Delete this row';
+}
+function disarmAll() { document.querySelectorAll('.rowdel[data-armed]').forEach(disarm); }
 
 // --- cells that hold a LIST -------------------------------------------------
 //

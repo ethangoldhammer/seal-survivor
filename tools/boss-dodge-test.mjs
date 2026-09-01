@@ -54,6 +54,10 @@ import { player, initPlayer, resetPlayer } from '../path/src/entities/player.js'
 import { enemies, spawnNamed, resetEnemies } from '../path/src/entities/enemies.js';
 import { strikeState, resetStrike } from '../path/src/systems/strike.js';
 import { updateDodge, resetDodge, dodgeState } from '../path/src/systems/dodge.js';
+// WHERE THE WORDS GO. feedback() only calls a sink if one is wired, so the
+// channel is inert in every other harness — which is exactly why it has to be
+// wired HERE to be tested at all. See setToastSink in systems/feedback.js.
+import { setToastSink } from '../path/src/systems/feedback.js';
 
 const realWarn = console.warn;
 console.warn = (msg, ...rest) => {
@@ -129,15 +133,18 @@ function boss(key = 'bossHammerhead', x = 0, y = MID) {
  * @param commit  a function writing the committed flag, so both mechanisms can
  *                be exercised through the same body
  * @param path    positions the boss passes through during the run
+ * @param hooks   passed straight through to updateDodge — `onDodge` is the
+ *                channel the camera punch rides in the real game, and the only
+ *                part of the reward a Node harness can see at all.
  */
-function run(e, commit, release, path, frames = 6) {
+function run(e, commit, release, path, hooks = {}, frames = 6) {
   for (const at of path) {
     commit(e);
     e.mesh.position.set(at.x, at.y, e.mesh.position.z);
-    for (let i = 0; i < frames; i++) updateDodge(dt, enemies);
+    for (let i = 0; i < frames; i++) updateDodge(dt, enemies, hooks);
   }
   release(e);
-  updateDodge(dt, enemies);
+  updateDodge(dt, enemies, hooks);
 }
 
 const lungeIn = (e) => { e.lungeStage = 'strike'; };
@@ -291,6 +298,62 @@ section('THE WILDLIFE DOES NOT PAY');
     .filter(([, d]) => d?.lunge && !String(d.group ?? '').includes('boss'))
     .length;
   note(`${lungers} rows in the roster carry a lunge block; the gate is e.isBoss, not the block`);
+}
+
+// ---------------------------------------------------------------------------
+section('IT SAYS SO, AND THE LENS LEANS IN');
+// ---------------------------------------------------------------------------
+// The meter refilling is the reward; the line and the punch are the READ. A
+// dodge that pays silently is indistinguishable from a lucky frame, which is
+// the whole reason a player never learned this was a mechanic.
+{
+  clean();
+  const lines = [];
+  setToastSink((t) => lines.push(t));
+  const e = boss();
+  const near = e.radius * D.nearRadii + D.nearPad;
+  const punches = [];
+  run(e, lungeIn, lungeOut, [{ x: -near, y: MID }, { x: near, y: MID }],
+    { onDodge: () => punches.push(CONFIG.boss.dodge.punch) });
+  setToastSink(null);
+
+  check('a clean dodge puts a line on screen', lines.length === 1,
+    lines.length ? `"${lines[0].label}"` : 'nothing reached the sink');
+  // PRINTED AS WRITTEN. feedback() resolves a `toast` through upgrades.csv
+  // first, so a value that happened to collide with an upgrade id would put
+  // that card's CURRENT name on a dodge. Nothing does today; this is the check
+  // that says so, since the failure reads as a perfectly ordinary line.
+  check('...saying what it is, not an upgrade\'s name',
+    lines[0]?.label === CONFIG.feedback.bossDodge.toast,
+    `${lines[0]?.label} vs ${CONFIG.feedback.bossDodge.toast}`);
+  check('...and it is not pinned to the seal', lines[0]?.pin === false);
+
+  // ONE ANNOUNCEMENT PER DODGE, and the gap is what stops a boss committing
+  // through two mechanisms at once from re-popping its own line.
+  check('the re-pop floor covers the dodge\'s own cooldown',
+    (CONFIG.feedback.bossDodge.toastMinGap ?? 0) > 0,
+    `${CONFIG.feedback.bossDodge.toastMinGap}s vs a ${D.cooldown}s cooldown`);
+
+  // THE PUNCH. It cannot be fired from inside systems/dodge.js — the camera
+  // rig lives in world.js, which no harness can import — so it rides the
+  // `onDodge` hook. Two claims: the hook fires once per paid dodge, and main.js
+  // is still the thing spending it on the lens.
+  check('the dodge hook fires once, with a punch to spend', punches.length === 1,
+    `${punches.length} x ${punches[0]}`);
+  check('...and it is a real amount', D.punch > 0, `${D.punch}`);
+  // Under the shared ceiling, or a dodge landing on top of a food chain link
+  // would be swallowed by the cap instead of adding to it.
+  check('...inside the camera\'s own ceiling',
+    D.punch < (CONFIG.camera.punch?.max ?? 0.14),
+    `${D.punch} vs max ${CONFIG.camera.punch?.max}`);
+  const fs2 = await import('node:fs');
+  const mainSrc = fs2.readFileSync('path/src/main.js', 'utf8');
+  check('main.js still spends it on the camera',
+    /updateDodge\([^)]*\{[\s\S]{0,200}?onDodge[\s\S]{0,200}?punchCamera/.test(mainSrc));
+  // A hitstop here would take the controls away on the one frame the player has
+  // just proved they were using them. The punch is the whole camera response.
+  check('...and nothing stops the frame', CONFIG.feedback.bossDodge.hitstop === 0,
+    `hitstop ${CONFIG.feedback.bossDodge.hitstop}`);
 }
 
 // ---------------------------------------------------------------------------

@@ -332,7 +332,13 @@ for (const file of srcFiles) {
     // Held to the EVENT and the SOURCE like the four above, so main.js and the
     // muzzle emitter are not widened by it: a hand-typed hex on either call is
     // still a failure, and so is a tint on any other burst in either file.
-    if (/^\s*'shoot'/.test(args) && /\bcolor:\s*lead \? flashColor\(/.test(args)) continue;
+    // THE EVENT IS CHOSEN NOW. main.js fires `laser ? 'shootLaser' : 'shoot'`,
+    // so an anchor on a literal opening quote stopped matching and the shot
+    // that has always been exempt here started reading as a stray tint. Match
+    // the pair as well as the bare name; the SOURCE half of the rule is
+    // unchanged, so a hand-typed hex on either branch still fails.
+    if (/^\s*(?:'shoot'|[\w.]+\s*\?\s*'shootLaser'\s*:\s*'shoot')/.test(args)
+      && /\bcolor:\s*lead \? flashColor\(/.test(args)) continue;
     if (/^\s*'muzzle'/.test(args) && /\bcolor:\s*flashColor\(/.test(args)) continue;
     // THE BOSS GOING UP, which is the fifth odd one out and the muzzle's
     // argument again. The cloud is the BOSS'S OWN colour (b.color, off the
@@ -344,6 +350,12 @@ for (const file of srcFiles) {
     // firePuff. Held to the EVENT and the SOURCE, so bossBoom.js is not a
     // blanket exemption and a hand-typed hex there is still a failure.
     if (/^\s*'bossBoom'/.test(args) && /\bcolor:\s*_col\.getHex\(\)/.test(args)) continue;
+    // THE BOLT COMING APART, which is the same argument once more: a lattice
+    // split is the element that threw it breaking up, so the pieces have to be
+    // that element's colour or the burst disagrees with the bolt it came from.
+    // `boltColor(b.finElement)` is the shared resolver every other element
+    // effect reads, not a hex — held to the EVENT and the SOURCE like the rest.
+    if (/^\s*'latticeSplit'/.test(args) && /\bcolor:\s*boltColor\(/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }

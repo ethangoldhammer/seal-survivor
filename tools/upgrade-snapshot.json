@@ -555,15 +555,19 @@
     "cap": 4,
     "perStack": [
       {
+        "andreStacks": 101,
         "projectileLifeMul": 125
       },
       {
+        "andreStacks": 102,
         "projectileLifeMul": 156.25
       },
       {
+        "andreStacks": 103,
         "projectileLifeMul": 195.3125
       },
       {
+        "andreStacks": 104,
         "projectileLifeMul": 244.140625
       }
     ]
@@ -1109,6 +1113,31 @@
       }
     ]
   },
+  "clubZap": {
+    "cap": 5,
+    "perStack": [
+      {
+        "clubReachMul": 118,
+        "clubZapLevel": 101
+      },
+      {
+        "clubDamageMul": 130,
+        "clubZapLevel": 102
+      },
+      {
+        "clubCount": 101,
+        "clubZapLevel": 103
+      },
+      {
+        "clubReachMul": 139.24,
+        "clubZapLevel": 104
+      },
+      {
+        "clubDamageMul": 169,
+        "clubZapLevel": 105
+      }
+    ]
+  },
   "starfish": {
     "cap": 8,
     "perStack": [
@@ -1650,7 +1679,7 @@
     ]
   },
   "orcaFamily": {
-    "cap": 6,
+    "cap": 3,
     "perStack": [
       {
         "orcaLevel": 101
@@ -1660,15 +1689,6 @@
       },
       {
         "orcaLevel": 103
-      },
-      {
-        "orcaLevel": 104
-      },
-      {
-        "orcaLevel": 105
-      },
-      {
-        "orcaLevel": 106
       }
     ]
   },

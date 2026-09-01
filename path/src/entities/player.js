@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, applyIronLung } from '../stats.js';
+import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, applyIronLung, applyLaserReach } from '../stats.js';
+import { rollLoadout, laserReachMul, DEFAULT_LOADOUT } from '../loadout.js';
 import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
 import { flipperSideForStack, finElementsIn, otherSide } from '../flipperSide.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
@@ -9,9 +10,11 @@ import { feedback } from '../systems/feedback.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createAimRig } from '../systems/aimRig.js';
 import { createCelebrationDriver, resetCelebration, celebrationSpin } from '../systems/celebrate.js';
+import { createClapDriver, resetClap } from '../systems/clap.js';
 import { createBreathDriver } from '../systems/breathe.js';
 import { attachPlayerOutline } from '../systems/outlines.js';
 import { cancelDash } from '../systems/strike.js';
+import { launchFor } from '../systems/airborne.js';
 
 // Scratch for the body transform, which composes the mirror, the barrel roll,
 // the crane and the wind-up shudder every frame.
@@ -40,6 +43,7 @@ export const player = {
   body: null, // visual — carries the left/right flip
   aimRig: null, // fin/head IK, muzzles and bone anchors; null for a model with no rig
   celebrate: null, // boss-kill victory pose; null for a model with no rig to pose
+  clap: null, // the clap button's pose; null for a model with no rig to pose
   breathe: null, // the resting breath; null for a model with no breathRig
   velocity: new THREE.Vector2(0, 0),
   // The shove, held apart from `velocity` — see applyPlayerKnockback. World
@@ -175,6 +179,11 @@ export const player = {
   // never disagree about how many bosses a run has beaten; see updateBossShot
   // in main.js.
   bossesDefeated: 0,
+  // WHICH GUN THIS RUN ROLLED — 'pebbles' or 'laser'. Seeded to the default
+  // rather than rolled here: this object is built once at module load and a
+  // run's identity is decided at resetPlayer, which is the one place that runs
+  // per run. See ../loadout.js.
+  loadout: DEFAULT_LOADOUT,
 };
 
 // ---------------------------------------------------------------------------
@@ -225,6 +234,7 @@ export function initPlayer(scene) {
   player.anim = createAnimationController(body);
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
+  player.clap = createClapDriver(body);
   player.breathe = createBreathDriver(body);
   scene.add(group);
   recomputeStats();
@@ -256,6 +266,7 @@ export function rebuildShipBody() {
   // bones that are no longer in the scene.
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
+  player.clap = createClapDriver(body);
   player.breathe = createBreathDriver(body);
 }
 
@@ -281,8 +292,14 @@ export function rebuildShipBody() {
  *   hypothetical block (the hover tips, a Node harness) so the card measures
  *   at a full breath — see ironLungMul in stats.js.
  */
-export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefeated = 0, oxygen) {
-  const s = baseStats();
+export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefeated = 0, oxygen,
+  loadout = DEFAULT_LOADOUT) {
+  // SEEDED WITH THE LOADOUT, before any apply() runs, because two of the gun
+  // cards fork on it — see Pocket Full of Stones and André 3000 in config.js.
+  // Last parameter and defaulted, so every existing caller (the hover tips, the
+  // Node harnesses) gets the pebble gun, which is what they were measuring
+  // before this existed.
+  const s = baseStats(loadout);
 
   // `player.upgrades` holds { id, rarity } rather than bare ids, because the
   // tier a card was DEALT at is part of what that pick is worth and has to
@@ -299,6 +316,13 @@ export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefea
   // The run's other baseline growth, on the same terms and for the same
   // reason — a flat pellet per boss beaten. See applyBossGrowth in stats.js.
   applyBossGrowth(s, bossesDefeated);
+  // ...and the laser's reach ramp, which is the third thing that is a function
+  // of the whole run rather than of one pick. AFTER applyBossGrowth and before
+  // the damage scaling, which is only ordering hygiene — it moves `life` and
+  // nothing else reads or writes that — but the block is built in one order and
+  // a number that arrives at a different point in it is a number somebody will
+  // eventually have to reason about. See applyLaserReach in stats.js.
+  applyLaserReach(s, laserReachMul(picks, bossesDefeated));
   // ...and the two damage-scaling cards after THAT, so Maneater and Iron Lung
   // multiply the finished numbers rather than a partial block. Both are
   // no-ops on a run that holds neither. See applyDamageScaling in stats.js.
@@ -312,6 +336,7 @@ export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefea
 export function recomputeStats() {
   const s = computeStats(
     player.upgrades, player.level, player.humansEaten, player.bossesDefeated, player.oxygen,
+    player.loadout,
   );
   player.stats = s;
   player.hp = Math.min(player.hp, s.maxHp);
@@ -339,6 +364,11 @@ export function statsWithOneMore(id, rarity = null) {
     player.level,
     player.humansEaten,
     player.bossesDefeated,
+    // Oxygen deliberately omitted — see computeStats. The LOADOUT is not: a tip
+    // that measured Pocket Full of Stones against the pebble gun on a laser run
+    // would promise a bolt the card is not going to hand over.
+    undefined,
+    player.loadout,
   );
 }
 
@@ -450,6 +480,22 @@ export function levelableUpgrades() {
   return out;
 }
 
+/**
+ * Does this card put an ANIMAL in the water?
+ *
+ * `family: 'companion'` is two different things: eight cards that add a body
+ * and two — Entourage, Big Rigz — that scale the bodies already there. Only the
+ * first kind spends one of the run's companion slots, and the second kind is
+ * marked in config.js rather than listed here, so a companion added later is
+ * counted without anyone having to remember this function exists.
+ *
+ * Exported for the harnesses, which have to be able to ask the same question
+ * the offer pool asks rather than keeping their own list of ids.
+ */
+export function isCompanionCard(u) {
+  return !!u && u.family === 'companion' && u.companionMod !== true;
+}
+
 export function availableUpgrades() {
   // WHICH EXCLUSIVE GROUPS ARE ALREADY SPOKEN FOR. A card carrying
   // `exclusive: 'group'` locks that group to itself the moment it is taken:
@@ -465,10 +511,18 @@ export function availableUpgrades() {
   // over fifty upgrades — and a cache would have to be invalidated on every
   // pick, which is the one place it would ever be wrong.
   const claimed = new Map();
+  // ...and which companions the run is already carrying, for the other rule of
+  // the same kind: CONFIG.maxCompanionCards caps how many DIFFERENT animals a
+  // run may collect (see the note there). A Set of ids, so six escorts count
+  // once — the cap is on variety, never on depth.
+  const companions = new Set();
   for (const pick of player.upgrades) {
     const u = CONFIG.upgrades.find((x) => x.id === pick.id);
-    if (u?.exclusive && !claimed.has(u.exclusive)) claimed.set(u.exclusive, u.id);
+    if (!u) continue;
+    if (u.exclusive && !claimed.has(u.exclusive)) claimed.set(u.exclusive, u.id);
+    if (isCompanionCard(u)) companions.add(u.id);
   }
+  const companionCap = CONFIG.maxCompanionCards;
 
   return CONFIG.upgrades.filter((u) => {
     // `enabled: false` (set in the upgrade table) removes an upgrade from
@@ -476,6 +530,11 @@ export function availableUpgrades() {
     if (u.enabled === false) return false;
     // Held the group already, and it was somebody else.
     if (u.exclusive && claimed.has(u.exclusive) && claimed.get(u.exclusive) !== u.id) return false;
+    // The run's companion slots are full, and this would be a NEW one. One
+    // already held is always still offered: the cap is on how many different
+    // animals a run collects, not on how deep any of them goes.
+    if (companionCap != null && isCompanionCard(u)
+      && !companions.has(u.id) && companions.size >= companionCap) return false;
     if (u.maxStacks == null) return true;
     return player.upgrades.filter((p) => p.id === u.id).length < u.maxStacks;
   });
@@ -522,6 +581,11 @@ export function resetPlayer() {
   // Before recomputeStats() below for the same reason, and it is the same
   // mistake: a new run must not open firing the last one's boss pellets.
   player.bossesDefeated = 0;
+  // BEFORE recomputeStats() below, and for the same reason the two lines above
+  // are: the block is seeded from this, and two of the gun cards fork on it. A
+  // run that rolled the laser and built its stats against the pebble gun would
+  // fire bolts with the pebble's reach and convert none of its multishot.
+  player.loadout = rollLoadout();
   player.invuln = 0;
   player.dashTimer = 0;
   player.comboSpeedMul = 1;
@@ -540,6 +604,12 @@ export function resetPlayer() {
   // one. See systems/celebrate.js.
   resetCelebration();
   player.celebrate?.reset();
+  // Same two halves for the clap, and the shared half matters more here: its
+  // clock is what the minimum-gap throttle measures against, so a run started
+  // moments after the last clap of the previous one would refuse its first
+  // press. See systems/clap.js.
+  resetClap();
+  player.clap?.reset();
   // A new run starts on a fresh breath, not mid-exhale, and never still
   // relaxed from where the last seal came to rest.
   player.breathe?.reset();
@@ -808,15 +878,51 @@ export function updatePlayer(dt, input) {
   // worth depends on the air that was banked and entities/ has no business
   // knowing about that. See CONFIG.feedback.reentry and systems/airborne.js.
   if (player.breachDir > 0) {
-    feedback('breach', {
+    // TWO KINDS OF CROSSING, and they are not the same moment. A head lifted
+    // for a breath and an animal clearing the sea shared one event — one
+    // sound, one shake, one cloud of foam — which meant the quietest thing the
+    // seal does and the loudest were announced identically, and neither could
+    // be tuned without ruining the other.
+    //
+    // Split on how much AIR the crossing bought rather than on speed, and by
+    // systems/airborne.js rather than here, so the launch and the landing are
+    // decided by one file in one language. `null` is the split switched off:
+    // every crossing is a breach, exactly as before.
+    const up = Math.abs(player.velocity.y);
+    const launch = launchFor(player, up);
+    const flying = !launch || launch.flying;
+    const at = {
       x: pos.x,
       y: bounds.surfaceY,
       dirX: 0,
       dirY: 1,
       vx: player.velocity.x,
-      vy: Math.abs(player.velocity.y),
-      scale: Math.min(2, 0.5 + Math.abs(player.velocity.y) / 14),
-    });
+      vy: up,
+      scale: launch ? launch.scale : Math.min(2, 0.5 + up / 14),
+    };
+    // THE BREATH IS NOT IN HERE and must not be. systems/oxygenFx.js already
+    // fires one `breathIn` per surfacing, off the oxygen bar's rising edge —
+    // which catches an oxygen bubble grabbed underwater too, and this cannot.
+    // These two events are the WATER; the gasp over the top of them is that
+    // one, and the slow crossing is the case where the gasp is most of what
+    // the player hears.
+    if (flying) {
+      // Pitched DOWN as the launch gets bigger, the same trick `reentry` uses
+      // on the other end of the arc and for the same reason: an athletic
+      // breach should land audibly heavier rather than merely louder, and the
+      // two ends of one jump should be shaped by one idea.
+      const power = launch ? launch.power : 0;
+      feedback('breach', {
+        ...at,
+        sfxOpts: { pitch: 1 / (0.92 + power * 0.18), decayMul: 1 + power * 0.3 },
+      });
+    } else {
+      // Scaled against the line rather than against a full breach: a surface
+      // that only just failed to be a flight should be the loud end of THIS
+      // cue, not the silent end of the other one.
+      const frac = launch ? Math.min(1, launch.air / Math.max(0.01, CONFIG.airborne?.launch?.flyAir ?? 0.4)) : 1;
+      feedback('surfacing', { ...at, scale: 0.45 + 0.55 * frac });
+    }
     // Surfacing for air is the moment a seal vocalizes; barking as you dive
     // back under reads as a hiccup. Lowest one-shot priority, so a hit or
     // death cuts it off cleanly.

@@ -156,6 +156,67 @@ export function bossVoice(kind, key, at = {}, opts = {}) {
   feedback(cry, at);
 }
 
+/**
+ * A BOSS ARRIVING, IN THREE LAYERS AND THREE MOMENTS.
+ *
+ * The same idea as bossVoice above — a shared layer, then what the thing is,
+ * then what it says — with one difference that changes everything about it:
+ * these do not fire together. Each is called separately, at its own offset
+ * into the arrival ceremony (CONFIG.boss.arrival.voices, scheduled in
+ * systems/boss.js), because an entrance has two seconds to spend and a blow
+ * has none.
+ *
+ *   'siren'  `bossSiren`. Every boss, always, on the ceremony's first frame.
+ *            The alarm — the game saying SOMETHING IS COMING before the player
+ *            has looked up to see what.
+ *   'type'   `bossArrive<Type>`, from CONFIG.boss.voiceType. The same map the
+ *            cries use and keyed by ASSET for the same reason, because it is
+ *            the same animal: an orca announcing itself and an orca answering
+ *            a pellet have to be one creature.
+ *   'perk'   `bossArrive<Voice>`, from CONFIG.boss.voicePerk, keyed by PERK
+ *            ID. The variant — the element or the storm it is carrying.
+ *
+ * NEITHER OF THE LAST TWO HAS A FALLBACK, exactly as with the cry and for the
+ * stronger version of the same reason: the alarm has already announced every
+ * boss there is, so a missing row costs a detail rather than a moment. A new
+ * archetype arriving in some other animal's voice would be worse than one that
+ * arrives behind the siren alone.
+ *
+ * Routed through feedback() rather than playSfx so these get the same banding,
+ * throttle and mixer ranking as everything else — and so each has a row in the
+ * F menu beside the blows.
+ *
+ * @param layer 'siren' | 'type' | 'perk'
+ * @param key   the asset the boss is wearing — `e.assetKey`
+ * @param perkId the id of the perk it rolled, or null for a boss with none
+ * @param at    the usual feedback payload. Left EMPTY by the caller on
+ *              purpose: an unpositioned event is called at the top band, so
+ *              the ceremony is exactly as loud wherever the boss lands — the
+ *              same decision `bossArrive` already makes.
+ */
+export function bossEntranceVoice(layer, key, perkId, at = {}) {
+  const b = CONFIG.boss ?? {};
+
+  // 1. THE ALARM. Named as a literal here rather than built from `layer`, so
+  // the event audit in tools/upgrade-test.mjs can see it — that check reads
+  // the string literals inside every feedback(...) call, and a name assembled
+  // out of a variable reads to it as an entry nothing can fire.
+  if (layer === 'siren') { feedback('bossSiren', at); return; }
+
+  // 2 and 3 differ only in which map names the voice. Both are sparse, both
+  // are silent with no row, and both warn about the one failure they can have
+  // that is otherwise invisible: a map naming a voice that was never written.
+  const suffix = layer === 'perk' ? b.voicePerk?.[perkId] : b.voiceType?.[key];
+  if (!suffix) return;
+  const event = `bossArrive${suffix}`;
+  if (!CONFIG.feedback[event]) {
+    const from = layer === 'perk' ? `perk "${perkId}"` : `${key}`;
+    console.warn(`[bossEntranceVoice] ${from} names "${suffix}" but there is no ${event} event`);
+    return;
+  }
+  feedback(event, at);
+}
+
 // Anyone who wants to know that an event fired, without being wired into the
 // forty-odd systems that fire them.
 //
@@ -172,6 +233,84 @@ const listeners = new Set();
 export function onFeedback(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+// ============================================================================
+// THE SHAKE GUEST LIST — CONFIG.fx.shakeOnly.
+// ============================================================================
+// A hundred and sixteen of the game's events carry a shake, and that is the
+// problem rather than the feature: when everything rattles the camera, nothing
+// does. A shake means "this one mattered", and a bullet landing, a pickup and a
+// garlic tick all saying it is the same as none of them saying it.
+//
+// So the shake becomes a SHORT LIST rather than a per-event number. The list is
+// what gets read and argued about; the amounts stay exactly as authored, which
+// is what makes this reversible — delete the list and every one of them is back
+// at the value it always had, with nothing to restore from memory.
+//
+// A MUTE, NOT A ZERO, and that distinction is the whole design. Zeroing the
+// hundred rows would have destroyed the authored values, spread the decision
+// across a hundred places in a diff nobody can read, and — because a saved
+// snapshot beats a config default — left the real numbers somewhere else again.
+// See the note on CONFIG.pace: this project keeps relearning that a number with
+// no single readable source is a number nobody can tune.
+//
+// EMPTY OR ABSENT MEANS EVERYTHING SHAKES, so every Node harness that never
+// touches CONFIG.fx measures the game it always did, and so does anyone who
+// deletes the list.
+//
+// IT GATES ONLY THE CAMERA. An event's sound, particles, hit-stop, glow, grid
+// ripple and rumble are untouched — a muted bullet still hits exactly as hard,
+// it just stops moving the lens. The sustained tremble (addSustainedShake) has
+// no event name and is not gated: its one caller is the strike charge.
+let _onlySrc = null;
+let _onlySet = null;
+
+export function shakeAllowed(event) {
+  const only = CONFIG.fx?.shakeOnly;
+  if (!Array.isArray(only) || only.length === 0) return true;
+  // Rebuilt only when the array itself is swapped — the F panel edits this
+  // live, and a Set rebuilt per call would be a hundred allocations a second
+  // in a busy fight.
+  if (only !== _onlySrc) { _onlySrc = only; _onlySet = new Set(only); }
+  return _onlySet.has(event);
+}
+
+// ============================================================================
+// THE HIT-STOP GUEST LIST — CONFIG.fx.hitstopOnly.
+// ============================================================================
+// The same idea as the shake list above, one channel over, and the argument for
+// it is stronger rather than merely analogous: a shake that fires everywhere is
+// noise, but a hit-stop that fires everywhere is a game running in permanent
+// slow motion. Thirty events carried a `hitstop`, and because they all shared
+// ONE 0.4s cooldown (see below) they were not layering — they were competing.
+// The freeze you actually got was whichever event asked first, which in a busy
+// frame is a pellet or a shrimp tick rather than the moment worth freezing.
+//
+// That competition is also why the whole feature was switched off:
+// `fx.hitstopEnabled` has shipped false, so every authored `hitstop` in the
+// table has been dead. The list is what lets it come back on — a freeze is
+// punctuation, and punctuation used on every word is not punctuation.
+//
+// A MUTE, NOT A ZERO, for the reasons the shake list gives at length: the
+// authored amounts stay exactly where they are, so this is one readable line to
+// argue about instead of thirty zeroes in a diff, and deleting the list puts
+// the game back to what it was with nothing to restore from memory.
+//
+// EMPTY OR ABSENT MEANS EVERY EVENT MAY STOP — same failsafe as the shake list,
+// so a Node harness that never touches CONFIG.fx measures the game it always
+// did.
+//
+// `fx.hitstopEnabled` is still the master switch above this: off, nothing
+// freezes, including whatever is named here.
+let _stopSrc = null;
+let _stopSet = null;
+
+export function hitstopAllowed(event) {
+  const only = CONFIG.fx?.hitstopOnly;
+  if (!Array.isArray(only) || only.length === 0) return true;
+  if (only !== _stopSrc) { _stopSrc = only; _stopSet = new Set(only); }
+  return _stopSet.has(event);
 }
 
 export function feedback(event, at = {}) {
@@ -207,7 +346,7 @@ export function feedback(event, at = {}) {
     grid.ripple(x, y, def.ripple.strength * scale, def.ripple.radius);
   }
 
-  if (def.shake) {
+  if (def.shake && shakeAllowed(event)) {
     // Clamped, or a busy fight pins the camera at maximum rattle forever.
     feedbackState.shake = Math.min(CONFIG.fx.maxShake, feedbackState.shake + def.shake * scale);
   }
@@ -226,7 +365,7 @@ export function feedback(event, at = {}) {
   // and the scale below is read only by a stop that was allowed to begin. A
   // stop already running when the switch flips finishes — it is 90ms at the
   // very worst, and cutting it mid-freeze is itself a hitch.
-  if (def.hitstop && CONFIG.fx.hitstopEnabled && hitstopCooldown <= 0) {
+  if (def.hitstop && hitstopAllowed(event) && CONFIG.fx.hitstopEnabled && hitstopCooldown <= 0) {
     feedbackState.hitstop = Math.max(feedbackState.hitstop, def.hitstop);
     hitstopCooldown = CONFIG.fx.hitstopCooldown;
   }

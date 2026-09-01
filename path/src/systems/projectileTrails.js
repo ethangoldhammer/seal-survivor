@@ -163,8 +163,22 @@ function shedParticles(t, p, spec, dt, back, fx = 1) {
 
 // Which trail preset a projectile uses, by its asset key. Anything not
 // listed simply gets no trail.
+//
+// `trailKey` OVERRIDES THE ASSET, and exists for the one case the asset key
+// cannot answer: a shot whose ribbon belongs to the SYSTEM that fired it rather
+// than to the body it happens to be wearing. An attractor storm picks its body
+// at random per shot out of a list (see the `body` column in
+// attractorStormTable.js), so keying its trail on the asset would mean one
+// preset per possible body and a shoal whose ribbons changed colour fish by
+// fish. The storm names its own preset instead and every cube in it matches.
+//
+// Falls THROUGH to the asset when the named preset does not exist, rather than
+// returning nothing: a typo'd key is then a shot with its ordinary trail, not a
+// shot that silently lost one.
 function presetFor(p) {
-  return CONFIG.trails[p.mesh?.name] ?? null;
+  return (p.trailKey ? CONFIG.trails[p.trailKey] : null)
+    ?? CONFIG.trails[p.mesh?.name]
+    ?? null;
 }
 
 // WHAT THIS PROJECTILE IS SHEDDING, which is usually its preset's own chips —
@@ -182,8 +196,17 @@ function presetFor(p) {
 // same asset and so crackle too, which is correct — Seal Team's volley IS the
 // player's gun, scaled (see systems/sealTeam.js), and it already takes the
 // element's colour for exactly that reason.
+// WHICH ASSETS ARE THE GUN'S AMMUNITION. Two now rather than one: a run rolls
+// either pebbles or fin lasers (see ../loadout.js), and both are fired by the
+// same weapon, book their damage under the same source and take the same
+// element. A set rather than a string comparison because the alternative — the
+// second key added to one of the two tests below and not the other — is a bolt
+// that sheds the element's sparks while dragging a ribbon in the stock colour,
+// and nothing about that reads as a missing line.
+const GUN_ASSETS = new Set(['bullet', 'finLaser']);
+
 function shedSpec(p, cfg) {
-  if (p.mesh?.name !== 'bullet') return cfg.particles;
+  if (!GUN_ASSETS.has(p.mesh?.name)) return cfg.particles;
   return elementFlightParticles() ?? cfg.particles;
 }
 
@@ -203,7 +226,7 @@ const _elemCol = new THREE.Color();
 // gun's ammunition and nothing else's.
 function trailColour(p, cfg) {
   _trailCol.set(cfg.color);
-  if (p.mesh?.name !== 'bullet') return _trailCol;
+  if (!GUN_ASSETS.has(p.mesh?.name)) return _trailCol;
   const mix = elementTrailMix();
   if (mix > 0) _trailCol.lerp(_elemCol.set(elementColor()), mix);
   return _trailCol;

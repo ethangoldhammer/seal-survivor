@@ -1837,10 +1837,15 @@ function buildEmitterRow(name) {
   head.append(nameSpan, testBtn);
   el.appendChild(head);
 
-  pairSlider(el, 'size', 0.01, 3, 0.01, def.size, (v) => { def.size = v; });
-  pairSlider(el, 'life', 0.02, 3, 0.01, def.life, (v) => { def.life = v; });
-  pairSlider(el, 'speed', 0, 40, 0.5, def.speed, (v) => { def.speed = v; });
-  slider(el, 'count', 1, 200, 1, () => def.count, (v) => { def.count = Math.round(v); });
+  // ONLY THE FIELDS THE EMITTER ACTUALLY HAS. A cloud placed by its caller
+  // rather than fired from a point (bossDissolve) leaves `count` and `speed`
+  // out on purpose — the positions are a body's own vertices — and a slider
+  // over an absent field is both a lie and, reading pair[0] off undefined, the
+  // throw that took the whole panel and the boot with it.
+  if (def.size) pairSlider(el, 'size', 0.01, 3, 0.01, def.size, (v) => { def.size = v; });
+  if (def.life) pairSlider(el, 'life', 0.02, 3, 0.01, def.life, (v) => { def.life = v; });
+  if (def.speed) pairSlider(el, 'speed', 0, 40, 0.5, def.speed, (v) => { def.speed = v; });
+  if (def.count !== undefined) slider(el, 'count', 1, 200, 1, () => def.count, (v) => { def.count = Math.round(v); });
 
   return el;
 }

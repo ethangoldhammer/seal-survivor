@@ -54,6 +54,9 @@ import { feedback } from './feedback.js';
 // second grab arriving mid-grab is a bug rather than a case to handle.
 let held = null;
 
+// Scratch for the claw anchor, so a grab costs no allocation per frame.
+const _anchor = { x: 0, y: 0, z: 0 };
+
 // How long the seal's own swimming takes to come back once the jaws open.
 // Short, and not zero: `snarePlayer`'s thaw is a ramp rather than a switch, and
 // a hold that ended on one frame reads as the game hitching. A quarter second
@@ -68,6 +71,17 @@ const RELEASE_THAW = 0.25;
 export function resetBossGrab() {
   if (held?.enemy) held.enemy.grabbing = false;
   held = null;
+}
+
+/**
+ * Let go now, because the thing holding the seal says so.
+ *
+ * The claw grab's owner (systems/bossCrab.js) runs its own throw and knows when
+ * it has finished; the shared clock above is only its backstop. `thrown` false
+ * is the tear-up path — the crab died, the run ended — and spits nobody.
+ */
+export function endBossGrab(thrown = true) {
+  release(thrown);
 }
 
 /** Is the seal in something's mouth right now? For the readouts and harnesses. */
@@ -94,11 +108,27 @@ export function grabbedBy() {
  *   ordinary bite feedback still plays — a grab is its own moment and should
  *   not arrive underneath a chomp.
  */
-export function tryBossGrab(e, hooks = {}) {
+export function tryBossGrab(e, hooks = {}, claw = null) {
   const c = CONFIG.bossGrab;
   if (c?.enabled === false) return false;
   if (held) return false;
-  if (!e?.def?.grab) return false;
+  // TWO WAYS TO BE CAUGHT, and the gate is different for each.
+  //
+  //   JAWS — `def.grab`, the sharks and their relatives, taken through the bite
+  //   hook in main.js which has already tested the narrow mouth reach.
+  //
+  //   A CLAW — the king crab's haymaker, which is not a bite and has no mouth.
+  //   Its caller (systems/bossCrab.js) owns the gate: it has run a committed
+  //   attack, the claw has shut, and combat.js has billed the hit. Passing a
+  //   `claw` record IS that authorization, which is why it is not also asked
+  //   for `def.grab` — a crab has no jaws and never will.
+  //
+  // Everything BELOW this point is shared on purpose. One owner of "the seal is
+  // held" is what keeps the snare, the release, the i-frames, the readouts
+  // (playerGrabbed) and combat.js's suppression true for both — two systems
+  // both writing the player's position after updatePlayer is a bug with no
+  // symptom until the frame they disagree.
+  if (!claw && !e?.def?.grab) return false;
   // A creature on its way out of the world, held, charmed or still arriving is
   // not biting anybody — the same four gates every other attack in the game
   // asks about, and `invuln` is the arrival ceremony (see tickArrival).
@@ -113,9 +143,15 @@ export function tryBossGrab(e, hooks = {}) {
     // needs somewhere to start from and the first frame must not jump. See
     // `reelRate` in the config.
     thrash: 0,
+    // THE CLAW'S RECORD, when there is one. `anchor(out)` is asked every frame
+    // for the world point to hold the seal at — the posed claw, not a position
+    // this file could work out — and `hold` is how long it lasts. `throwWith`
+    // is filled in by the crab as it lets go, so the release throws along the
+    // arm's own swing rather than along the body's heading.
+    claw,
   };
   e.grabbing = true;
-  e.grabCooldown = c?.cooldown ?? 9;
+  e.grabCooldown = claw?.cooldown ?? c?.cooldown ?? 9;
 
   // Held BEFORE the feedback, because the feedback carries a hitstop and the
   // hitstop is what makes "you are not driving any more" land before the player
@@ -126,7 +162,7 @@ export function tryBossGrab(e, hooks = {}) {
   // `release`), because a snare that outlived the grip would leave the seal
   // limp for the one second it most needs to swim — thrown clear, at speed,
   // through water a boss is still in.
-  snarePlayer(c?.hold ?? 2, c?.snareMul ?? 0.06, RELEASE_THAW);
+  snarePlayer(holdTime(), c?.snareMul ?? 0.06, RELEASE_THAW);
 
   const p = player.mesh.position;
   feedback('bossGrab', { x: p.x, y: p.y, vx: e.vx, vy: e.vy, scale: 1.4 });
@@ -141,15 +177,47 @@ export function tryBossGrab(e, hooks = {}) {
  *   the boss died, the run ended, the player did. There is nothing to spit and
  *   nobody to throw.
  */
+/** How long this hold lasts — the claw's own, or the shared bite's. */
+function holdTime() {
+  const c = CONFIG.bossGrab ?? {};
+  return held?.claw?.hold ?? c.hold ?? 2;
+}
+
 function release(thrown = true) {
   if (!held) return;
   const c = CONFIG.bossGrab ?? {};
   const e = held.enemy;
   const p = player.mesh.position;
+  const claw = held.claw;
   held = null;
   if (e) e.grabbing = false;
 
+  // BACK ON THE PLAY PLANE. Only the claw grab ever takes the seal off it (see
+  // the depth note in the carry above), and it has to be put back on EVERY exit
+  // — thrown, torn up, boss died — or the run continues with a player sorting
+  // in front of the water it is swimming in. Snapped rather than eased: the
+  // camera is orthographic, so this changes draw order and nothing else, and
+  // the frame it happens on is the frame the seal is being thrown anyway.
+  if (claw) p.z = 0;
+
   if (!thrown) return;
+
+  // THROWN BY THE ARM. A claw grab ends wherever the crab's own throw was
+  // going: systems/bossCrab.js has spent the last fraction of a second moving
+  // the IK target through a slam or a hurl, and it hands the direction and the
+  // speed over here so the seal leaves along the gesture the player just
+  // watched. Falling back to the spit below would throw the seal off the
+  // BODY's heading — which on a crab, an animal that walks sideways, points
+  // somewhere the attack never went.
+  if (claw?.throwWith) {
+    const t = claw.throwWith;
+    applyPlayerKnockback(t.x, t.y, t.speed ?? c.throwSpeed ?? 30);
+    player.snareTimer = Math.min(player.snareTimer, RELEASE_THAW);
+    player.snareThaw = RELEASE_THAW;
+    player.invuln = Math.max(player.invuln ?? 0, c.releaseGrace ?? 0.9);
+    feedback('bossRelease', { x: p.x, y: p.y, dirX: t.x, dirY: t.y, scale: 1.3 });
+    return;
+  }
 
   // SPAT FORWARD AND ASIDE. Along the animal's own heading, rotated off it by
   // `throwSpread`, so the seal ends the moment travelling fast in a direction
@@ -209,13 +277,62 @@ export function updateBossGrab(dt, hooks = {}) {
   }
 
   held.t += dt;
-  if (held.t >= (c.hold ?? 2)) {
+  // The claw grab is ENDED BY ITS OWNER, not by this clock: the crab decides
+  // when the throw has finished travelling and calls releaseBossGrab itself.
+  // The timeout is still here as a guard — a crab that dies mid-throw, or a
+  // state machine that somehow never finishes, must not leave the seal welded
+  // to a claw for the rest of the run.
+  const limit = held.claw ? holdTime() + (held.claw.throwMax ?? 1.5) : holdTime();
+  if (held.t >= limit) {
     release(true);
     return;
   }
 
   // --- carried ---------------------------------------------------------------
   const pos = player.mesh.position;
+
+  // IN THE CLAW. The anchor is the posed bone, asked for every frame, so the
+  // seal goes wherever the arm goes — through the hold, through the swing, and
+  // into the seabed if that is where the crab is putting it. Everything below
+  // (the mouth offset, the thrash, the heading) is about an animal that
+  // carries things in FRONT of itself, and none of it applies.
+  //
+  // ONE FRAME BEHIND, and knowingly: the claw is posed in updateEnemies, which
+  // runs after this. The reel below is what absorbs it — at 60fps the seal
+  // trails the claw by a sixtieth of its swing, which is smaller than the reel
+  // is already smoothing out.
+  if (held.claw) {
+    const at = held.claw.anchor?.(_anchor);
+    if (at) {
+      const k = 1 - Math.exp(-(held.claw.reelRate ?? c.reelRate ?? 14) * dt);
+      pos.x += (at.x - pos.x) * k;
+      pos.y += (at.y - pos.y) * k;
+      // ...AND IN DEPTH, which no other grab needs and this one cannot do
+      // without. The seal lives at z 0 and nothing in the game has ever moved
+      // it; the king crab does not. It is broadside to an orthographic camera
+      // and 15 units deep — measured, its body spans z -7.2 to +8.4 around an
+      // origin on the play plane — and its arm solves to about z +2 at full
+      // extension, because a CCD chain with joint limits converges near its
+      // target rather than on it. So a seal held at z 0 is held two units
+      // BEHIND the claw and inside the animal, where the crab's own near half
+      // draws over it: the grab happens and the player cannot see it.
+      //
+      // Following the claw in z puts the seal in front of the body, which is
+      // both the truth and the only version of this that reads. Restored on
+      // release — see below — and only the HUD's own bar reads the seal's z,
+      // which projects it correctly wherever it is.
+      pos.z += ((at.z ?? 0) - pos.z) * k;
+    }
+    player.velocity.set(0, 0);
+    clampToArena(pos, player.velocity, player.stats.hitRadius, 0);
+    snarePlayer(Math.max(RELEASE_THAW, limit - held.t), c.snareMul ?? 0.06, RELEASE_THAW);
+    // NO CHEWING. A shark's two seconds are spent eating you; a crab's half
+    // second is a wind-up for the throw, and what it costs is on the other end
+    // of that. Billing a crush here as well would be the same attack collecting
+    // twice — see the slam's own damage in systems/bossCrab.js.
+    return;
+  }
+
   const bp = e.mesh.position;
   const head = e.heading ?? Math.atan2(e.vy ?? 0, e.vx ?? 1);
   const fx = Math.cos(head);
@@ -264,7 +381,7 @@ export function updateBossGrab(dt, hooks = {}) {
   // be shortened by an earlier, weaker hold expiring underneath it — or by its
   // own thaw, which would otherwise hand the seal a fraction of its swimming
   // back for the last quarter second of being carried.
-  snarePlayer(Math.max(RELEASE_THAW, (c.hold ?? 2) - held.t), c.snareMul ?? 0.06, RELEASE_THAW);
+  snarePlayer(Math.max(RELEASE_THAW, holdTime() - held.t), c.snareMul ?? 0.06, RELEASE_THAW);
 
   // --- chewing ---------------------------------------------------------------
   // Discrete crunches rather than a per-second drain, and that is a

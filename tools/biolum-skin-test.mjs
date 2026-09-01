@@ -1386,5 +1386,58 @@ section('THE SKIN COLUMN — assets.csv can put a pattern on any model');
   if (beforeEdges === undefined) delete ASSETS[KEY].biolumEdges; else ASSETS[KEY].biolumEdges = beforeEdges;
 }
 
+// --- A GLOW PASS CLONES THE MATERIAL, AND THE CLONE MUST STILL BE DRIVABLE ---
+// systems/damageGlow.js clones a creature's material on its first hit and
+// keeps the injected shader, and every other brightening pass does the same.
+// Material.clone() deep-copies userData through JSON, so the clone comes back
+// holding a PLAIN COPY of the uniform block: `uBioColorA.value` is a bare
+// {r,g,b} with no `.set`, while the shader it inherited is still reading the
+// original block.
+//
+// Unguarded that was two faults from one cause. updateBiolumSkin wrote the
+// clocks into dead data, so the pattern silently stopped animating on any
+// creature that had been hit; and setBiolumSkinVariant — which the boss look
+// calls on every arrival and every death — threw `.set is not a function`
+// inside animate(), which stops the frame loop and freezes the game on the
+// spot with the renderer still running.
+//
+// The check is the whole failure, not the symptom: stamp a variant through the
+// public entry point after the clone, and read the colour back off the block
+// the SHADER holds rather than the one userData names.
+{
+  const tpl = makeBody();
+  attachBiolumSkin(tpl.material, tpl, 'emberClaw');
+  const root = new THREE_NS.Group();
+  const mesh = new THREE_NS.Mesh(tpl.geometry, tpl.material);
+  root.add(mesh);
+  instantiateBiolumSkin(root);
+
+  // The block the compiled shader is bound to, captured before the clone. It
+  // is the ONE that has to move — the clone's own userData copy moving would
+  // be the bug passing itself off as the fix.
+  const live = mesh.material.userData.__bioSkinUniforms;
+
+  // Exactly what attachDamageGlow does: clone, carry the injector over, swap.
+  const copy = mesh.material.clone();
+  copy.onBeforeCompile = mesh.material.onBeforeCompile;
+  copy.customProgramCacheKey = mesh.material.customProgramCacheKey;
+  mesh.material = copy;
+  check('a cloned material comes back holding a dead copy of the block',
+    typeof copy.userData.__bioSkinUniforms?.uBioColorA?.value?.set !== 'function',
+    'if this ever fails, three stopped JSON-copying material userData and the guard can go');
+
+  let threw = null;
+  try {
+    setBiolumSkinVariant(root, { colorA: 0x123456 });
+    updateBiolumSkin(0.016);
+  } catch (e) { threw = e; }
+  check('stamping a variant on the clone does not throw', !threw, threw ? threw.message : '');
+  check('...and the colour lands on the block the shader is reading',
+    live.uBioColorA.value.getHex() === 0x123456,
+    `#${live.uBioColorA.value.getHexString()}`);
+  check('...and the clone stops carrying the dead copy',
+    copy.userData.__bioSkinUniforms === live);
+}
+
 console.log(`\n${failures ? `FAILED — ${failures} check(s)` : 'PASS — all checks'}\n`);
 process.exit(failures ? 1 : 0);

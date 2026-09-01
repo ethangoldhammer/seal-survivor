@@ -36,7 +36,7 @@
 
 import './dom-stub.mjs';
 import * as THREE from 'three';
-import { CONFIG, xpToughnessMul, difficultyRamp } from '../path/src/config.js';
+import { CONFIG, xpToughnessMul, difficultyRamp, lateGameMul, enemyPaceMul } from '../path/src/config.js';
 import { inSpawnGroup } from '../path/src/enemyTable.js';
 import { enemies, resetEnemies, removeEnemy, updateSpawning } from '../path/src/entities/enemies.js';
 import { waveState, updateWaves, resetWaves, waveSpawn, lullEligible } from '../path/src/systems/waves.js';
@@ -313,11 +313,23 @@ const surgeDrops = allDrops.filter((d) => !d.lull && lullEligible(CONFIG.enemies
 // lull multiplier is still exactly testable, just against this rather than
 // against def.xp. Built from the shipped helpers, so if the toughness curve
 // moves, this moves with it instead of going red.
-function fullValue(type) {
+// MIRROR THE SPAWNER LINE FOR LINE. This is not "roughly what a fish is
+// worth" — it is the control the lull multiplier is measured against, so every
+// term spawnOne bakes has to be here or the difference reads as a missing
+// discount. It went red when `enemyPaceMul('hp')` joined the hp bake: the
+// toughness is read off that same hp, so a pace dial at 1.5 lifted every fish's
+// chum about 12% and this control did not follow. `lateGameMul` is 1 at the
+// level this section runs at and is included anyway, because the day it is not
+// is the day this silently drifts again.
+//
+// Deliberately NOT here: `xpPaceMul`. The levelling dial is applied to the orb,
+// not to what the creature carries — see the note on `xp:` in spawnOne.
+function fullValue(type, spawnLevel = 1, difficulty = gameState.difficulty) {
   const def = CONFIG.enemies[type];
-  const d = gameState.difficulty;
-  const hp = (def.hp + (def.hpPerDifficulty ?? 0) * d) * difficultyRamp('hp', d);
-  return (def.xp ?? 0) * xpToughnessMul(hp, def.hp);
+  const d = difficulty;
+  const hp = (def.hp + (def.hpPerDifficulty ?? 0) * d) * difficultyRamp('hp', d)
+    * lateGameMul('hp', spawnLevel) * enemyPaceMul('hp');
+  return (def.xp ?? 0) * xpToughnessMul(hp, def.hp) * lateGameMul('xp', spawnLevel);
 }
 const near = (a, b) => Math.abs(a - b) < Math.max(1e-9, Math.abs(b) * 1e-9);
 
@@ -444,11 +456,15 @@ const off = waveSpawn();
 check('every multiplier reads 1', off.rateMul === 1 && off.groupMul === 1 && off.xpMul === 1 && off.lull === false,
   JSON.stringify(off));
 resetEnemies(scene);
-// At difficulty 0, so "full chum" is a clean comparison: the toughness ramp
-// (CONFIG.xp.toughness) is 1x at the start of a run, and this check is about
-// the WAVE multiplier being gone, not about the toughness one existing.
+// This check is about the WAVE multiplier being gone, not about the other
+// scales existing — so the control is `fullValue`, the same mirror of the
+// spawner the lull section uses, rather than the listed number. At difficulty 0
+// those used to be the same thing; they stopped being when the pace dial joined
+// the hp bake, because the toughness is read off that hp and so is no longer 1x
+// at the start of a run.
 updateSpawning(dt, { difficulty: 0, level: 12 }, scene);
-check('...and spawns pay full chum', enemies.length > 0 && enemies.every((e) => e.xp === e.def.xp),
+check('...and spawns pay full chum',
+  enemies.length > 0 && enemies.every((e) => near(e.xp, fullValue(e.type, 12, 0))),
   `${enemies.length} spawned, all at listed value`);
 W.enabled = true;
 

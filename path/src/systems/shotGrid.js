@@ -156,103 +156,131 @@ export function tickInterval(volleyInterval, origins, shots = origins) {
   return snapToBarGrid(volleyInterval / split, CONFIG.weapon.beatLock?.maxDivision ?? 64);
 }
 
-// Score position of the next shot. Null means unlocked — nothing has been
-// scheduled yet, or the transport went away underneath us.
-let due = null;
-// The run's FIRST shot is the one that waits for a downbeat; every re-lock
-// after it waits only for the next slot. Both are in phase, and the difference
-// is what the wait costs: a bar is up to 2.265s of a gun that will not fire,
-// which is fine once at the top of a run and unacceptable every time the aim
-// stick returns to centre mid-fight.
-let opensRun = true;
-// The interval `due` was worked out with. A pick that moves the gun to another
-// rung has to re-derive: the pending shot was placed on the lattice the gun has
-// just left, and on a rung change that does not nest — bar/4 to the bar/6
-// triplet is the common one — every boundary of the old lattice is off the new
-// one. Left alone it is a single shot up to half a slot out, which is audible
-// as a stumble on the pick and was invisible to every assertion that only ever
-// held one interval.
-let dueInterval = 0;
-// The no-transport path.
-let cooldown = 0;
+// ---------------------------------------------------------------------------
+// ONE SCHEDULER PER WEAPON.
+//
+// This was a single set of module-level variables for as long as the basic shot
+// was the only thing on the grid. It cannot stay that way now the beams are on
+// it too: `due` holds ONE absolute score position and `dueInterval` the one
+// interval it was derived from, so two weapons sharing them do not merely
+// interfere — the faster one re-derives on every call because the interval it
+// reads is the other's, and both end up firing on whichever frame the race
+// happened to land on. Nothing throws, and on screen it looks like the lock
+// working badly rather than like two guns wearing one clock.
+//
+// So the state is closed over per instance, and the module-level API below is
+// one instance the basic shot owns. Every existing caller — main.js and
+// tools/beat-lock-test.mjs — keeps the function it already imports.
+export function createShotGrid() {
+  // Score position of the next shot. Null means unlocked — nothing has been
+  // scheduled yet, or the transport went away underneath us.
+  let due = null;
+  // The run's FIRST shot is the one that waits for a downbeat; every re-lock
+  // after it waits only for the next slot. Both are in phase, and the
+  // difference is what the wait costs: a bar is up to 2.265s of a weapon that
+  // will not fire, which is fine once at the top of a run and unacceptable
+  // every time the aim stick returns to centre mid-fight.
+  let opensRun = true;
+  // The interval `due` was worked out with. A pick that moves the weapon to
+  // another rung has to re-derive: the pending shot was placed on the lattice
+  // it has just left, and on a rung change that does not nest — bar/4 to the
+  // bar/6 triplet is the common one — every boundary of the old lattice is off
+  // the new one. Left alone it is a single shot up to half a slot out, which is
+  // audible as a stumble on the pick and was invisible to every assertion that
+  // only ever held one interval.
+  let dueInterval = 0;
+  // The no-transport path.
+  let cooldown = 0;
 
-export function resetShotGrid() {
-  due = null;
-  dueInterval = 0;
-  opensRun = true;
-  cooldown = 0;
+  function reset() {
+    due = null;
+    dueInterval = 0;
+    opensRun = true;
+    cooldown = 0;
+  }
+
+  /**
+   * Whether this weapon fires this frame.
+   *
+   * Call it EVERY frame of a running game, firing or not: the idle path is what
+   * holds the lock, parking the next shot one slot ahead so that resuming fire
+   * lands on the grid instead of on the frame the aim came back.
+   *
+   * @param interval seconds between shots, already snapped to the grid
+   * @param mayFire  whether the weapon is allowed to fire at all this frame
+   * @param dt       the frame's seconds, for the no-transport fallback only
+   */
+  function shotDue(interval, mayFire, dt) {
+    const lock = CONFIG.weapon.beatLock ?? {};
+    const grid = barGrid();
+
+    if (!grid.running || lock.enabled === false) {
+      due = null;
+      cooldown -= dt;
+      if (!mayFire || cooldown > 0) return false;
+      cooldown = interval;
+      return true;
+    }
+
+    // A schedule further out than a bar and a slot is not a schedule this run
+    // made — play() puts the transport back to zero, so anything held across a
+    // restart points somewhere the clock will not reach for minutes. Re-lock
+    // rather than trust it.
+    const stale = due != null && (due - grid.pos > grid.bar + interval);
+
+    if (!mayFire || due == null || stale || dueInterval !== interval) {
+      const step = opensRun && lock.startOnBar !== false ? grid.bar : interval;
+      // Re-deriving on EVERY interval change is safe, including the
+      // pathological case of a change every frame: untilNext returns the
+      // distance to the next boundary, which shrinks as the clock advances, so
+      // `due` lands on the same absolute boundary each time rather than being
+      // pushed forward. A guard that only re-derived "when it would be sooner"
+      // was the alternative and it keeps the off-lattice shot whenever the
+      // weapon slows down.
+      due = grid.pos + untilNext(grid.phase, step);
+      dueInterval = interval;
+      return false;
+    }
+
+    if (grid.pos < due) return false;
+
+    opensRun = false;
+    // Re-derived from the phase we are at NOW rather than `due + interval`.
+    // This is the self-correcting step — see the header.
+    due = grid.pos + untilNext(grid.phase, interval);
+    dueInterval = interval;
+    cooldown = interval;
+    return true;
+  }
+
+  // What the scheduler is holding, for tests and the debug panel. Score seconds
+  // until the next shot, or null when nothing is locked.
+  function state() {
+    const grid = barGrid();
+    return {
+      locked: due != null && grid.running,
+      opensRun,
+      due,
+      wait: due == null || !grid.running ? null : due - grid.pos,
+    };
+  }
+
+  return { shotDue, reset, state };
 }
 
 // Score seconds from here to the next boundary of `step`, measured off the bar
 // line. Never returns 0: sitting exactly on a boundary means the NEXT one, or a
-// gun held at the gate would fire every frame it was held.
+// weapon held at the gate would fire every frame it was held.
 function untilNext(phase, step) {
   if (!(step > 0)) return 0;
   const left = step - (phase % step);
   return left <= step * 1e-4 ? step : left;
 }
 
-/**
- * Whether the basic shot fires this frame.
- *
- * Call it EVERY frame of a running game, firing or not: the idle path is what
- * holds the lock, parking the next shot one slot ahead so that resuming fire
- * lands on the grid instead of on the frame the aim came back.
- *
- * @param interval seconds between shots, already snapped to the grid
- * @param mayFire  whether the gun is allowed to fire at all this frame
- * @param dt       the frame's seconds, for the no-transport fallback only
- */
-export function shotDue(interval, mayFire, dt) {
-  const lock = CONFIG.weapon.beatLock ?? {};
-  const grid = barGrid();
+// THE BASIC SHOT'S OWN. The module-level API is this instance, so main.js and
+// every assertion written against it are unchanged.
+const basic = createShotGrid();
 
-  if (!grid.running || lock.enabled === false) {
-    due = null;
-    cooldown -= dt;
-    if (!mayFire || cooldown > 0) return false;
-    cooldown = interval;
-    return true;
-  }
-
-  // A schedule further out than a bar and a slot is not a schedule this run
-  // made — play() puts the transport back to zero, so anything held across a
-  // restart points somewhere the clock will not reach for minutes. Re-lock
-  // rather than trust it.
-  const stale = due != null && (due - grid.pos > grid.bar + interval);
-
-  if (!mayFire || due == null || stale || dueInterval !== interval) {
-    const step = opensRun && lock.startOnBar !== false ? grid.bar : interval;
-    // Re-deriving on EVERY interval change is safe, including the pathological
-    // case of a change every frame: untilNext returns the distance to the next
-    // boundary, which shrinks as the clock advances, so `due` lands on the same
-    // absolute boundary each time rather than being pushed forward. A guard
-    // that only re-derived "when it would be sooner" was the alternative and it
-    // keeps the off-lattice shot whenever the gun slows down.
-    due = grid.pos + untilNext(grid.phase, step);
-    dueInterval = interval;
-    return false;
-  }
-
-  if (grid.pos < due) return false;
-
-  opensRun = false;
-  // Re-derived from the phase we are at NOW rather than `due + interval`. This
-  // is the self-correcting step — see the header.
-  due = grid.pos + untilNext(grid.phase, interval);
-  dueInterval = interval;
-  cooldown = interval;
-  return true;
-}
-
-// What the scheduler is holding, for tests and the debug panel. Score seconds
-// until the next shot, or null when nothing is locked.
-export function shotGridState() {
-  const grid = barGrid();
-  return {
-    locked: due != null && grid.running,
-    opensRun,
-    due,
-    wait: due == null || !grid.running ? null : due - grid.pos,
-  };
-}
+export function shotDue(interval, mayFire, dt) { return basic.shotDue(interval, mayFire, dt); }
+export function resetShotGrid() { basic.reset(); }
+export function shotGridState() { return basic.state(); }

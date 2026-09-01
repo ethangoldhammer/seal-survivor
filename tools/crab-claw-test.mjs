@@ -17,6 +17,11 @@
 //   * the arm returns to the walk cycle afterwards (no compounding drift),
 //     which is the failure mode the whole "who restores the pose" section of
 //     crabClaw.js is written around
+//   * THE KING CRAB'S VOLLEY LEAVES FROM THE CLAWS. Four bolts, one from each
+//     half of each cheliped, resolved off the same bone names the pinch uses —
+//     the one claim about that attack a boneless harness cannot check, because
+//     without a skeleton the system falls back to a body-frame guess and every
+//     other assertion about it passes anyway
 //
 // ---------------------------------------------------------------------------
 
@@ -37,6 +42,10 @@ import { createAnimationController, stateForSpeed } from '../path/src/systems/an
 import { createClawDriver, pinchReach, clawSetting } from '../path/src/systems/crabClaw.js';
 import { spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import { bounds } from '../path/src/arena.js';
+import { projectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
+import {
+  attachBossCrab, updateBossCrab, releaseBossCrab, crabVolleyState, volleyMinRange,
+} from '../path/src/systems/bossCrab.js';
 import { parseBossCsv } from '../path/src/bossTable.js';
 import bossesCsv from '../path/src/bosses.csv?raw';
 
@@ -706,6 +715,194 @@ console.log('\nCRAB CLAW\n');
       !c.claw.isStriking() && after.distanceTo(before) > bodyMoved + 0.01,
       `tip moved ${after.distanceTo(before).toFixed(3)} against ${bodyMoved.toFixed(3)} of body travel`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE VOLLEY — the king crab's answer to a player who will not come down.
+//
+// systems/bossCrab.js fires four bolts, one from each HALF of each claw, at a
+// range the pinch will never cover. Two of its claims can only be checked
+// against a real skeleton, which is why they are here and not in
+// tools/crab-boss-test.mjs:
+//
+//   THE MUZZLES ARE BONES. With no rig the system falls back to a body-frame
+//   guess and everything else about the attack still works — the volley fires,
+//   the damage lands, the cadence holds — so a rig that stopped resolving
+//   would be four bolts out of the middle of the animal and a green suite.
+//
+//   THE SEAM WITH THE PINCH IS MEASURED OFF THE ARM. `minReach` is a multiple
+//   of the same reach the commit gate uses, so it can only be checked where
+//   there is an arm to measure. This is the third mechanic on this creature
+//   whose two halves live in different files (see pinchReach), and the other
+//   two have both died quietly to a number retuned on one side.
+// ---------------------------------------------------------------------------
+{
+  console.log('\nTHE VOLLEY');
+  const ARCH = parseBossCsv(bossesCsv, CONFIG.enemies, () => {}).find((b) => b.id === 'bossCrab');
+  const FLOOR = bounds.bottom;
+  const pR = CONFIG.player.hitRadius;
+  const c = CONFIG.enemies.bossCrab.clawVolley ?? {};
+
+  function spawnKing(at) {
+    const e = spawnNamed(scene, 'bossCrab', 0, at, { ignoreCaps: true, overfill: true });
+    const mul = ARCH?.sizeMul ?? 1;
+    e.visual.scale.multiplyScalar(mul);
+    e.spawnScale *= mul;
+    e.sizeMul *= mul;
+    e.radius *= mul;
+    e.isBoss = true;
+    e.entering = false;
+    e.hp = 1e7;
+    return e;
+  }
+
+  // Settle the body so the arms are posed and the walk has started, exactly as
+  // the sections above do — a bone read on frame zero is at its bind pose.
+  resetEnemies(scene);
+  resetProjectiles(scene);
+  const seal = new THREE.Vector3(0, FLOOR + 3, 0);
+  const king = spawnKing({ x: -30, y: FLOOR + 1 });
+  for (let i = 0; i < 30; i++) updateEnemies(dt, scene, seal, () => {}, () => {});
+  attachBossCrab(scene, king, 0);
+
+  check('the boss declares a volley at all', !!CONFIG.enemies.bossCrab.clawVolley,
+    Object.keys(c).join(', ') || 'none');
+  check('...and it resolves FOUR muzzles off the real skeleton',
+    crabVolleyState.muzzles?.length === 4,
+    `${crabVolleyState.muzzles?.length ?? 0} bones (a fallback guess is null here)`);
+  {
+    const rig = king.visual.userData?.clawRig;
+    const want = (rig?.arms ?? []).flatMap((a) => [a.jaw, a.tip]);
+    const got = (crabVolleyState.muzzles ?? []).map((b) => b.name);
+    check('...which are the claw halves the pinch already names',
+      want.length === 4 && want.every((n, i) => got[i] === n),
+      got.join(', ') || 'none');
+  }
+
+  // FOUR PLACES, not two. The whole reason the attack is worth firing from
+  // bones is that a body this wide puts its claws eight units apart; four
+  // shots leaving from two points is the same attack with half the picture.
+  {
+    king.visual.updateMatrixWorld(true);
+    const at = (crabVolleyState.muzzles ?? []).map((b) => b.getWorldPosition(new THREE.Vector3()));
+    let closest = Infinity;
+    for (let i = 0; i < at.length; i++) {
+      for (let j = i + 1; j < at.length; j++) closest = Math.min(closest, at[i].distanceTo(at[j]));
+    }
+    const centre = king.mesh.position;
+    const nearest = Math.min(...at.map((p) => Math.hypot(p.x - centre.x, p.y - centre.y)));
+    check('the four muzzles are four different places',
+      at.length === 4 && closest > 0.2, `closest pair ${closest.toFixed(2)} units apart`);
+    check('...and none of them is the middle of the animal',
+      nearest > king.radius * 0.4,
+      `nearest muzzle ${nearest.toFixed(2)} from centre, on a ${king.radius.toFixed(2)} radius`);
+  }
+
+  // --- the seam with the pinch ----------------------------------------------
+  {
+    const arm = king.claw.reach();
+    const damageAt = pinchReach(arm, pR, clawSetting(king.def, 'range'));
+    const opens = volleyMinRange(king);
+    console.log(`        arm ${arm.toFixed(2)}   pinch reaches ${damageAt.toFixed(2)}`
+      + `   volley opens ${opens.toFixed(2)}   and stops ${(c.range ?? 0).toFixed(2)}`);
+    check('the volley opens no closer than the claw lands',
+      opens >= damageAt,
+      `${opens.toFixed(2)} against the pinch's ${damageAt.toFixed(2)}`);
+    check('...and not so much further that there is a dead band between them',
+      opens - damageAt < arm * 0.35,
+      `${(opens - damageAt).toFixed(2)} units of gap on a ${arm.toFixed(2)}-unit arm`);
+    check('...with the far end well beyond both', (c.range ?? 0) > opens * 2,
+      `${c.range} against ${opens.toFixed(2)}`);
+  }
+
+  // --- the cadence ----------------------------------------------------------
+  // Driven directly rather than through updateBossAbilities: this section wants
+  // the volley on its own, without an arrival, a perk roll or a rolled boss.
+  function fireAt(dist, seconds = 14) {
+    resetProjectiles(scene);
+    attachBossCrab(scene, king, 0);
+    const pp = new THREE.Vector3(king.mesh.position.x + dist, king.mesh.position.y, 0);
+    for (let i = 0; i < 60 * seconds && projectiles.length < 4; i++) {
+      updateBossCrab(dt, scene, pp, {});
+    }
+    return projectiles.slice();
+  }
+
+  check('a seal beyond the volley\'s range is not shot at',
+    fireAt((c.range ?? 46) + 20).length === 0, `nothing inside ${(c.range ?? 46) + 20} units`);
+  check('...and one inside the claw\'s reach is pinched, not shot',
+    fireAt(volleyMinRange(king) * 0.5).length === 0,
+    'the pinch owns that band — see CONFIG.enemies.bossCrab.clawVolley.minReach');
+
+  {
+    const shots = fireAt((c.range ?? 46) * 0.6);
+    check('a seal standing off gets four bolts', shots.length === 4,
+      `${shots.length} fired`);
+    check('...each from its own muzzle', new Set(shots.map(
+      (p) => `${p.mesh.position.x.toFixed(2)}:${p.mesh.position.y.toFixed(2)}`)).size === 4,
+      'four distinct origins');
+    check('...filed under the attack rather than the species',
+      shots.every((p) => p.source === 'boss:clawVolley'), shots[0]?.source ?? 'none');
+    check('...and hostile to the seal', shots.every((p) => p.faction === 'enemy'));
+  }
+
+  // The ramp. A flat number is at its most punishing on the crab that OPENS a
+  // run, which is backwards — the same argument bossPerks.csv's
+  // damagePerDifficulty makes, resolved the same way, once, at attach.
+  {
+    attachBossCrab(scene, king, 0);
+    const early = crabVolleyState.damage;
+    attachBossCrab(scene, king, 10);
+    const late = crabVolleyState.damage;
+    check('a bolt is worth more later in a run', late > early,
+      `${early.toFixed(2)} at difficulty 0, ${late.toFixed(2)} at 10`);
+  }
+
+  // --- the two gates every boss attack takes --------------------------------
+  // A boss mid-entrance and a boss being dazed are both promises: nothing is
+  // happening yet, and the tell you interrupted is not going to be kept. Both
+  // are silent failures if they go — a volley out of the arrival ceremony is
+  // the one hit in a run the player could not have played around.
+  {
+    resetProjectiles(scene);
+    attachBossCrab(scene, king, 0);
+    const pp = new THREE.Vector3(king.mesh.position.x + (c.range ?? 46) * 0.6,
+      king.mesh.position.y, 0);
+    king.invuln = 99;
+    for (let i = 0; i < 60 * 14; i++) updateBossCrab(dt, scene, pp, {});
+    check('a boss still arriving fires nothing', projectiles.length === 0,
+      `${projectiles.length} shots during the ceremony`);
+    king.invuln = 0;
+
+    // ...and a daze cancels the tell rather than the attack.
+    resetProjectiles(scene);
+    attachBossCrab(scene, king, 0);
+    for (let i = 0; i < 60 * 14 && crabVolleyState.stage !== 'windup'; i++) {
+      updateBossCrab(dt, scene, pp, {});
+    }
+    check('it reaches a wind-up at all', crabVolleyState.stage === 'windup',
+      crabVolleyState.stage);
+    king.dazeTimer = 2;
+    updateBossCrab(dt, scene, pp, {});
+    check('...and a daze landing on it cancels the tell',
+      crabVolleyState.stage === 'ready' && projectiles.length === 0,
+      `${crabVolleyState.stage}, ${projectiles.length} shots`);
+    check('...but only for a beat — it re-telegraphs rather than losing the volley',
+      crabVolleyState.timer < (c.cooldown ?? 4.5),
+      `${crabVolleyState.timer.toFixed(2)}s against a ${c.cooldown}s cooldown`);
+    king.dazeTimer = 0;
+  }
+
+  // ...and nothing it put in the scene outlives the fight.
+  {
+    attachBossCrab(scene, king, 0);
+    const rings = crabVolleyState.rings.length;
+    releaseBossCrab();
+    check('releasing takes the tells out of the water',
+      rings === 4 && crabVolleyState.rings.length === 0 && crabVolleyState.crab === null,
+      `${rings} rings up, ${crabVolleyState.rings.length} after`);
+  }
+  resetProjectiles(scene);
 }
 
 console.log(`\n${failures === 0 ? 'all good' : `${failures} FAILED`}\n`);

@@ -226,5 +226,93 @@ section('IT COMES OFF THE BODY AGAIN');
   check('an unskinned body is a no-op rather than a crash', !threw && out === null);
 }
 
+// ===========================================================================
+section('AND THE PAINT MOVES WITH THE FIGHT');
+// ===========================================================================
+// updateBossLook drives one number, 0..1, off the perk's STAGE, and multiplies
+// the two channels that mean "charged" — the marking's strength and the light
+// behind it. What is asserted here is the shape of that drive, because the
+// failure modes are all silent: a drive that never rises is a body that
+// declines to take part in its own attack, and one that never falls is a boss
+// permanently lit, which reads as the tell having stopped meaning anything.
+{
+  const { applyBossLook, clearBossLook, updateBossLook, bossLookDrive } =
+    await import('../path/src/systems/bossLook.js');
+  const mat = {
+    userData: { __bioSkin: true, __bioSkinInstance: true, __bioSkinPreset: 'kingCrab',
+      __bioSkinVariant: null },
+  };
+  const mesh = { isMesh: true, material: mat, traverse(fn) { fn(this); } };
+  const body = { mesh, traverse(fn) { fn(this); fn(mesh); } };
+
+  // `saddle` — the study the king crab leans on from level 5.
+  const perk = { id: 'saddle', attack: 'void' };
+  const resting = applyBossLook({ visual: body }, perk);
+  check('an attractor perk paints the body at all', !!resting,
+    JSON.stringify({ strength: resting?.strength, shellGlow: resting?.shellGlow }));
+  check('...and starts at rest', bossLookDrive() === 0);
+
+  const step = (stage, seconds) => {
+    for (let i = 0; i < Math.round(seconds * 60); i++) {
+      updateBossLook(1 / 60, stage ? { id: 'saddle', stage } : null);
+    }
+    return mat.userData.__bioSkinVariant;
+  };
+
+  // Sitting on its cooldown: nothing moves.
+  step('ready', 1);
+  check('a perk on cooldown leaves the look exactly as authored',
+    bossLookDrive() === 0
+      && mat.userData.__bioSkinVariant.strength === resting.strength,
+    `drive ${bossLookDrive().toFixed(3)}`);
+
+  // Winding up: the drive climbs, and the paint climbs with it.
+  const lit = step('windup', 1);
+  check('a perk winding up lights the body', bossLookDrive() > 0.8,
+    `drive ${bossLookDrive().toFixed(3)} after 1s of tell`);
+  check('...raising the marking', lit.strength > resting.strength,
+    `${resting.strength} -> ${lit.strength.toFixed(2)}`);
+  check('...and the light behind it harder still',
+    (lit.shellGlow / resting.shellGlow) > (lit.strength / resting.strength),
+    `shell x${(lit.shellGlow / resting.shellGlow).toFixed(2)} against `
+    + `marking x${(lit.strength / resting.strength).toFixed(2)}`);
+  // COLOUR IS NOT PART OF IT. The palette is what says WHICH perk this is, and
+  // a look that shifted hue as it climbed would be two bosses in one fight.
+  check('...without touching the palette',
+    lit.colorA === resting.colorA && lit.colorB === resting.colorB
+      && lit.pattern === resting.pattern,
+    'hue and pattern are the perk\'s identity, not its state');
+
+  // ...and it comes back down when the perk does.
+  step('ready', 3);
+  check('and it ebbs when the perk goes quiet', bossLookDrive() < 0.05,
+    `drive ${bossLookDrive().toFixed(3)} three seconds later`);
+  check('...all the way back to what the row authored',
+    Math.abs(mat.userData.__bioSkinVariant.strength - resting.strength) < 0.05,
+    `${mat.userData.__bioSkinVariant.strength.toFixed(2)} against ${resting.strength}`);
+
+  // A FIELD THAT IS OPEN BREATHES. Every other stage is over in under a second;
+  // this one lasts seconds, and a static level over that reads as a still frame.
+  {
+    step('storm', 1.5);
+    const seen = new Set();
+    for (let i = 0; i < 90; i++) {
+      updateBossLook(1 / 60, { id: 'saddle', stage: 'storm' });
+      seen.add(mat.userData.__bioSkinVariant.strength.toFixed(3));
+    }
+    check('an open field breathes rather than holding still', seen.size > 3,
+      `${seen.size} distinct levels over 1.5s`);
+  }
+
+  // ...and none of it survives the body going back to the pool.
+  clearBossLook();
+  check('clearing the look drops the drive with it', bossLookDrive() === 0);
+  // A perk arriving on a body that was never painted must be a no-op rather
+  // than a throw — the boats and every unskinned archetype take this path.
+  let threw = false;
+  try { updateBossLook(1 / 60, { id: 'saddle', stage: 'windup' }); } catch { threw = true; }
+  check('...and driving an unpainted body is a no-op', !threw && bossLookDrive() === 0);
+}
+
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');
 process.exit(failures ? 1 : 0);

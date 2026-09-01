@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { assetSignatureColor, assetBaseColor } from '../assets.js';
+import { biolumUniformsOf } from './biolumSkin.js';
 
 // ============================================================================
 // WHAT COLOUR IS THIS ANIMAL, ACTUALLY — every colour that reaches its shader,
@@ -308,7 +309,9 @@ export function bodyPalette(e) {
 
         // THE BIOLUMINESCENT SKIN, which for the orca IS the animal — the
         // material under it is plain white and says nothing at all.
-        const u = m.userData?.__bioSkinUniforms;
+        // Through the accessor, not off userData: a material cloned by a
+        // glow pass holds a dead JSON copy of the block. See biolumUniformsOf.
+        const u = biolumUniformsOf(m);
         if (u && first) {
           // `pigment` is whether the pattern PAINTS the body or only lights it
           // (see systems/biolumSkin.js). Lit-only colours still belong in the

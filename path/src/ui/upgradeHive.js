@@ -127,6 +127,13 @@ export const EVENT_UPGRADE = {
   // whole pebble volley and the starfish's own tile would stay dark, which is
   // exactly what it did before. main.js tags both call sites.
   shoot: { source: { gun: PEBBLE_VOLLEY, starfish: 'starfish' } },
+  // The fin laser's volley, routed to exactly the same tiles. A laser run is
+  // still the gun — same cards, same damage source — so a separate entry that
+  // lit anything different would be claiming the loadout changed which
+  // upgrades are paying for the shot, which it does not. Split by source for
+  // the same reason `shoot` is, so the row stays correct if anything else ever
+  // fires it.
+  shootLaser: { source: { gun: PEBBLE_VOLLEY } },
   // Same shape, same reason, and it was a live bug: the bounce callback in
   // entities/projectiles.js fires for ANY projectile with bounces left, and
   // scallops carry `bounce: true` — so Ricochet Rounds used to flash every

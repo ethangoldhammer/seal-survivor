@@ -15,9 +15,23 @@
 
 import { CONFIG } from './config.js';
 
-// A fresh stat block at level 1 with no upgrades taken.
-export function baseStats() {
+/**
+ * A fresh stat block at level 1 with no upgrades taken.
+ *
+ * @param loadout which gun this run started as — see systems/loadout roll in
+ *                systems/finLaser.js. It is IN THE BLOCK rather than passed
+ *                alongside it because several upgrades fork on it (Pocket Full
+ *                of Stones, André 3000) and apply() takes exactly one argument.
+ *                A block built with no loadout is the pebble gun, which is what
+ *                every harness and the card-text prober get and want.
+ */
+export function baseStats(loadout = 'pebbles') {
   return {
+    // THE ONLY NON-NUMBER IN THE BLOCK, which is safe and worth stating: every
+    // consumer that walks these fields — the rarity amplifier, the card-text
+    // measurement — guards on `typeof === 'number'`, so a string is skipped
+    // rather than scaled into nonsense.
+    loadout,
     maxHp: CONFIG.player.maxHp,
     thrust: CONFIG.player.thrust,
     friction: CONFIG.player.friction,
@@ -60,6 +74,28 @@ export function baseStats() {
     // the run's element off the pick list.
     leftFinElementLevel: 0,
     rightFinElementLevel: 0,
+    // LATTICE SEALANT'S WIDTH — how many EXTRA children a bolt's first split
+    // throws, on top of CONFIG.finLaser.lattice.children. 0 on every pebble
+    // run and on a laser run that has taken no Pocket Full of Stones, which is
+    // the innate shatter the loadout ships with.
+    //
+    // A separate field from `multishot` and not a reinterpretation of it: the
+    // card converts (see its apply()), so on a laser run the two are different
+    // amounts of different things and a single counter could not say which
+    // stack bought which.
+    latticeAmount: 0,
+    // HOW MANY STACKS OF ANDRÉ 3000, which the card's own parity reads to
+    // decide whether this one is pierce or spread — the same arrangement
+    // `flippersUpStacks` has, and for the same reason: the alternation is
+    // stated once, as arithmetic, rather than inferred from the two things it
+    // moves. Counted on every loadout even though only the laser forks on it,
+    // so the number means "stacks taken" and not "stacks that did something".
+    andreStacks: 0,
+    // HOW MUCH WIDER THE VOLLEY FANS than the gun's own spread. The spread half
+    // of the alternating card, as a multiplier so it composes with a fan that
+    // is already per-fin (CONFIG.weapon.finSpread) or per-volley (`spread`)
+    // depending on the rig — see fire().
+    finSpreadMul: 1,
     multishot: CONFIG.weapon.multishot,
     // HOW MANY STACKS OF MULTISHOT, which is NOT `multishot`. Levelling adds
     // pellets on its own cadence (see applyLevelGrowth), so the pellet count is
@@ -245,6 +281,7 @@ export function baseStats() {
     clubThrowLevel: 0,
     clubBoomLevel: 0,
     clubIceLevel: 0,
+    clubZapLevel: 0,
   };
 }
 
@@ -274,12 +311,17 @@ export const INTEGER_STATS = new Set([
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
   'dumboLevel', 'harpLevel', 'oysterLevel', 'razorClamLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
   'musselVolleyLevel',
-  'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel',
+  'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel', 'clubZapLevel',
   // Flippers Up!. `flippersUpStacks` is a count whose PARITY decides which fin
   // a stack feeds, so a Rare pick scaling it to 1.25 would not merely be a
   // fractional level — it would put the next stack on the wrong flipper, and the
   // element rolled for that pick would land on the other one.
   'flippersUpStacks', 'leftFinElementLevel', 'rightFinElementLevel',
+  // Lattice Sealant's two counts. `andreStacks` is a PARITY like
+  // `flippersUpStacks` above — a rare pick scaling it to 1.25 would put the
+  // next stack on the wrong side of the alternation — and `latticeAmount` is a
+  // count of children, where +1.25 of a bolt is one bolt.
+  'latticeAmount', 'andreStacks',
 ]);
 
 // THE ONE WAY TO READ `projectileBonus`. Every site that spawns a countable
@@ -366,6 +408,36 @@ export function applyBossGrowth(s, bossesDefeated) {
   const kills = Math.max(0, Math.floor(bossesDefeated ?? 0));
   if (!kills) return s;
   s.multishot += (CONFIG.weapon.shotsPerBoss ?? 0) * kills;
+  return s;
+}
+
+// ============================================================================
+// THE FIN LASER'S REACH, spent here for the reason Maneater and Iron Lung are
+// (see below): it cannot be written as arithmetic inside any one apply().
+//
+// It is a function of the WHOLE pick list — how many gun cards are held — and
+// of a run fact apply() has no business reading, the boss count. An apply()
+// that counted its own siblings would also be replayed in PICK ORDER, so the
+// same two cards taken the other way round would be a different range.
+//
+// WHY IT MOVES `life` AND NOT `speed`. Range is life x speed, so either would
+// do the arithmetic — and only one of them is honest. A bolt that got FASTER
+// as the run went on would change how the weapon is aimed, how much lead a
+// moving fish needs and how far into a body it lands, all as a side effect of
+// having taken a fifth gun card. Lengthening the flight changes only how far
+// it goes, which is the thing the ramp is for.
+//
+// The multiplier itself lives in systems/finLaser.js — this file imports CONFIG
+// and nothing else (see the header), and that is worth keeping, so the caller
+// hands the number in rather than this reaching for the module that owns it.
+//
+// Mutates `s` and returns it. A no-op on every pebble run and on any laser run
+// that has not earned a step.
+// ============================================================================
+export function applyLaserReach(s, reachMul = 1) {
+  if (s?.loadout !== 'laser') return s;
+  if (!(reachMul > 1)) return s;
+  s.life *= reachMul;
   return s;
 }
 

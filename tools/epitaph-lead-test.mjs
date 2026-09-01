@@ -75,15 +75,49 @@ section('Every death has words of its own');
 // THE DRIFT CHECK, and the same one deathCauses.js's own test makes: a creature
 // added to enemies.csv and classified into a new cause would fall back here
 // silently. The file says which causes are bare rather than the game showing it.
+// WRITTEN AND SWITCHED OFF ARE DIFFERENT STATES, and this used to conflate
+// them. `causesWithoutLeads` reads the live pool, so a cause whose lines exist
+// but are all `enabled=FALSE` looked exactly like one nobody had written for —
+// and the drift this section is here to catch is the second thing, a creature
+// classified into a cause no one noticed. Switching a line off is a decision;
+// never writing one is an oversight.
+//
+// So the assertion is on the WRITING, and the disabled ones are reported
+// beside it rather than failing. A cause with lines that are all off does fall
+// back to the bare form in game, which is worth seeing — it is just not a
+// drift, and a check that cannot tell the two apart stops meaning either.
 const bare = causesWithoutLeads(rows);
-check('every cause has at least one lead written for it', bare.length === 0,
-  bare.length ? `bare: ${bare.join(', ')}` : `all ${DEATH_CAUSE_IDS.length}`);
+// From the FILE, not from `rows` — parseEpitaphCsv drops a disabled row before
+// it ever gets here, which is exactly why the two states looked identical.
+const written = new Set();
+{
+  const raw = readFileSync(CSV, 'utf8').split('\n').filter(Boolean);
+  const head = raw[0].split(',').map((h) => h.trim());
+  const ci = head.indexOf('cause') >= 0 ? head.indexOf('cause') : head.indexOf('causes');
+  for (const line of raw.slice(1)) {
+    const cell = (line.split(',')[ci] ?? '').trim();
+    for (const c of cell.split(/[\s+]+/).filter(Boolean)) written.add(c);
+  }
+}
+const unwritten = bare.filter((c) => !written.has(c));
+const offOnly = bare.filter((c) => written.has(c));
+check('every cause has at least one lead written for it', unwritten.length === 0,
+  unwritten.length ? `nothing written for: ${unwritten.join(', ')}` : `all ${DEATH_CAUSE_IDS.length}`);
+if (offOnly.length) {
+  console.log(`        note: ${offOnly.join(', ')} — written, every line switched off, so the card`);
+  console.log('        falls back to the bare form. Deliberate as far as this file can tell.');
+}
 
 for (const c of DEATH_CAUSES) {
   const pool = leadPool(rows, c.id);
   const own = pool.every((r) => r.causes?.includes(c.id));
-  check(`${c.id} draws from its own lines`, pool.length > 0 && own,
-    `${pool.length} line(s)`);
+  // Same split. With every one of a cause's own lines switched off the pool is
+  // the GENERAL fallback, so `own` is false — correctly, and for a reason that
+  // is a decision rather than a gap. Held to the written set instead.
+  const offOnlyHere = !own && written.has(c.id) && offOnly.includes(c.id);
+  check(`${c.id} draws from its own lines`, (pool.length > 0 && own) || offOnlyHere,
+    offOnlyHere ? `${pool.length} general line(s) — its own are written but switched off`
+      : `${pool.length} line(s)`);
 }
 
 section('It reads as a sentence');

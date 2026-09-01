@@ -46,7 +46,7 @@
 // graph reaches this, and systems/bakalar.js pulls in three.js, the arena and
 // half the entity layer — routing the tip through that would drag the whole
 // render layer into a tooltip and into every harness that builds one.
-import { CONFIG } from './config.js';
+import { CONFIG, barDivisions, barRungIndex } from './config.js';
 
 // The two multipliers a companion's numbers ride on, read off a PASSED block.
 // Same expressions systems/scaling.js uses; it reads the live player, and these
@@ -314,6 +314,12 @@ export function orcaLevelStats(level, s = {}) {
   const c = CONFIG.orca ?? {};
   const n = lv(level);
   return {
+    // THE COUNT IS THE LEVEL, capped at `count` — one whale per stack until the
+    // family is complete. First in the readout because it is what the card
+    // buys: the pod used to arrive whole and this row would have read 3, 3, 3.
+    // podSize() in systems/orca.js is the same expression and the pod itself is
+    // sized by it, so the number on the card is the number in the water.
+    orcaCount: Math.min(n, c.count ?? n),
     orcaDamage: companionDamage((c.damage ?? 0) + (c.damagePerLevel ?? 0) * (n - 1), s),
     orcaGap: Math.max(c.attackIntervalFloor ?? 0,
       (c.attackInterval ?? 0) - (c.attackIntervalPerLevel ?? 0) * (n - 1)),
@@ -457,6 +463,43 @@ export function clubIceLevelStats(level) {
 }
 
 /**
+ * ZAPPY CLUB, per level — the chain a club hit throws.
+ *
+ * THE ONE READOUT IN THIS FILE THAT READS ANOTHER CARD'S LEVEL, and it has to.
+ * The packet is a SHARE of what the swing hit for (see CONFIG.clubZap), so
+ * every point of it is bought by the Driftwood level, a `damage` roll and the
+ * Bouncer — none of which this card's own level touches. Reading them here is
+ * what makes `clubZapDamage` the number the player will actually see rather
+ * than a share of a hypothetical club.
+ *
+ * `Math.max(1, ...)` on that level for the same reason updateClub floors it:
+ * a rider taken without the base card still swings a level-1 club, and a
+ * readout that said 0 would be describing a weapon that is on screen.
+ *
+ * systems/club.js calls THIS for the packet it actually deals, rather than
+ * recomputing the share beside it — the tip and the damage are one function,
+ * which is the only arrangement in which they cannot drift apart.
+ */
+export function clubZapLevelStats(level, s = {}) {
+  const c = CONFIG.clubZap ?? {};
+  const n = lv(level);
+  const share = (c.share ?? 0) + (c.sharePerLevel ?? 0) * (n - 1);
+  const swing = clubLevelStats(Math.max(1, Math.floor(s?.clubLevel ?? 0)), s).clubDamage;
+  return {
+    // What the FIRST body down the chain takes. abilityDamageOf for the same
+    // reason the blast gets it: the damage lands on a crowd rather than on the
+    // body the club touched, so it is ability damage and a high-tier roll pays
+    // into it.
+    clubZapDamage: abilityDamageOf(swing * share, s),
+    // Floored, so a fractional step is a hop every other stack rather than a
+    // hop that half-exists — and the tip shows it dimmed and unchanged on the
+    // picks where it does not tick.
+    clubZapArcs: Math.max(1, Math.floor((c.arcs ?? 1) + (c.arcsPerLevel ?? 0) * (n - 1))),
+    clubZapRange: (c.arcRange ?? 0) + (c.arcRangePerLevel ?? 0) * (n - 1),
+  };
+}
+
+/**
  * HURLER, per level — HOW MANY, and nothing else.
  *
  * What a thrown club DOES is the Driftwood card's (see clubCarom above), so
@@ -511,9 +554,45 @@ export function harpLevelStats(level, s = {}) {
  * that gives way — the cadence stays, because how often the beam cuts is what a
  * player feels moment to moment.
  */
+// THE LASER'S CADENCE, as a rung on the music's bar ladder.
+//
+// Counted in RUNGS rather than curved in seconds, because a curve in seconds
+// does not survive the snap: against a 2.265s bar the old linear slide put six
+// consecutive levels on bar/1 and the last four on bar/2, so most of the card's
+// stacks bought no change a player could hear and one of them bought a silent
+// gear change. A rung index has exactly as many values as there are audible
+// cadences, which is the only count worth levelling.
+//
+// The ladder is barDivisions' — powers of two AND their triplets — so a stack
+// can move the beam from a bar to a half to a dotted-triplet feel against a
+// basic shot still playing sixteenths. Same ladder Rapid Fire counts on, and
+// the same one snapToBarGrid rounds onto, so nothing here can name a cadence
+// the shot grid would then move.
+//
+// Read off CONFIG.music.barSeconds directly rather than through music.js: this
+// is asked by the card-text probes as well as by the water, and the readout for
+// an upgrade should not drag the audio module in behind it.
+function laserRungGap(c, n) {
+  const bar = Math.max(0.05, CONFIG.music?.barSeconds ?? 2.265);
+  const divs = barDivisions(Math.max(1, c.maxDivision ?? 4));
+  const start = barRungIndex(divs, Math.max(1, c.barDivision ?? 1));
+  const step = Math.floor((n - 1) / Math.max(1, c.levelsPerRung ?? 3));
+  return bar / divs[Math.min(divs.length - 1, start + step)];
+}
+
 export function laserEyesLevelStats(level, s = {}) {
   const c = CONFIG.laserEyes ?? {};
   const n = lv(level);
+  const gap = laserRungGap(c, n);
+  // UPTIME, and the burn derived FROM it rather than beside it. Both were
+  // independent curves and they crossed at the seventh stack — the beam lit for
+  // longer than its own cooldown, permanently on, and no card showed the ratio
+  // that would have said so. A duty cycle cannot cross what it is a fraction
+  // of, and it is also what makes the rung above free: moving the laser to a
+  // finer division chops the same lit second into more pieces instead of
+  // handing the weapon more of them.
+  const duty = Math.min(c.burnDutyMax ?? 0.9,
+    (c.burnDuty ?? 0.22) + (c.burnDutyPerLevel ?? 0.078) * (n - 1));
   return {
     laserDamage: abilityDamageOf((c.damage ?? 7) + (c.damagePerLevel ?? 2.4) * (n - 1), s),
     // BOTH CLAMPS LIVE HERE. The system applied a `beamsMax` ceiling and a
@@ -526,9 +605,8 @@ export function laserEyesLevelStats(level, s = {}) {
     laserBeams: Math.min(c.beamsMax ?? 4,
       Math.max(1, Math.floor((c.beams ?? 2) + (c.beamsPerLevel ?? 0.34) * (n - 1)))),
     laserReach: (c.reach ?? 26) + (c.reachPerLevel ?? 3.2) * (n - 1),
-    laserGap: Math.max(c.fireEveryMin ?? 1.2,
-      (c.fireEvery ?? 2.6) + (c.fireEveryPerLevel ?? -0.18) * (n - 1)),
-    laserBurn: (c.burn ?? 0.85) + (c.burnPerLevel ?? 0.09) * (n - 1),
+    laserGap: gap,
+    laserBurn: gap * duty,
   };
 }
 
@@ -794,6 +872,7 @@ export const LEVEL_STATS = {
   club: clubLevelStats,
   clubBoom: clubBoomLevelStats,
   clubIce: clubIceLevelStats,
+  clubZap: clubZapLevelStats,
   clubThrow: clubThrowLevelStats,
   harp: harpLevelStats,
   laserEyes: laserEyesLevelStats,

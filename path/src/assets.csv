@@ -6,10 +6,12 @@ bossYacht,1,,biolum:bossYacht,"The boss yacht. SIZE 1 IS NOT A CHOICE - it is wh
 bounceShot,1.58,,,
 bubbleOrb,2.84,,,
 bullet,1.2,,,
+finLaser,1,,,the fin laser bolt. 1 because its silhouette is CONFIG.finLaser.look.length/.width — a size here would be a third multiplier on the same shape
 chumChunk,2.2,,,the big health chunk - xpOrb has no row so it renders at 1; this is the multiple of an ordinary orb before CONFIG.chumChunk.scaleMin/Max scales it by the heal it rolled
 club,1,,toon:club+biolum:club,size is CONFIG.club.length at 1 - the hitbox is the config value
 clubBoom,1,,biolum:clubBoom,Boom Boom Club - same model as club - keep equal
 clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
+clubZap,1,,biolum:clubZap,Zappy Club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,,,
 eelCompanion,1.5,,biolum:eelCompanion,
