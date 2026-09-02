@@ -49,24 +49,176 @@ function trailMaterial() {
   return sharedMat;
 }
 
-function makeTrail(scene, cfg) {
-  const maxPts = Math.max(2, Math.round(cfg.points));
-  const positions = new Float32Array(maxPts * 2 * 3);
-  const colors = new Float32Array(maxPts * 2 * 3);
-  const indices = [];
-  for (let i = 0; i < maxPts - 1; i++) {
-    const a = i * 2;
-    indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+// ---------------------------------------------------------------------------
+// ONE MESH PER RIBBON LENGTH, NOT ONE PER RIBBON.
+//
+// A trail was a Mesh in the scene, so a volley cost a draw call each — on top
+// of the pellet's own, which is now an instance (entities/projectiles.js). The
+// phone runs are what made that unaffordable rather than untidy: draws per
+// frame tracked the player's LEVEL and not the creature count, climbing from
+// ~100 at level 1 to a sustained 3184 at level 16 with sixty-one enemies in
+// the water, while the frame rate fell from 57fps to 22. multishot, rapidFire
+// and projectileAmount all multiply the number of things in the air, and every
+// one of those calls crosses into WebKit's GPU process.
+//
+// The ribbons could not go into the instance buffer the pellets use: an
+// InstancedMesh draws one geometry many times, and every ribbon rewrites its
+// own vertices every frame. So they are MERGED instead — one big buffer that
+// several trails write disjoint slices of, drawn once.
+//
+// GROUPED BY `points`, because that is the slot size: a preset's point count
+// is the ribbon's length in frames of history and it is fixed at authoring
+// time. Eight distinct values across every preset in CONFIG.trails, and only
+// the two or three in play at once cost anything — a full volley of pebbles is
+// one draw however many are in the air.
+//
+// THE Z GOES INTO THE VERTICES, and that is the one thing that had to change
+// about how a ribbon is drawn. It used to live on the mesh transform
+// (`mesh.position.z = trailZ(...)`), which a merged mesh cannot express: the
+// mussel's ribbon clears its shell by a multiple of the shell's own depth and
+// the pebble's sits at -0.02, and one transform cannot be both. Written per
+// vertex it is exactly as correct — the material writes no depth but still
+// TESTS it, which is what lets an opaque shell occlude its own trail — and it
+// is now a property of the ribbon rather than of the object drawing it.
+const ribbonGroups = new Map(); // maxPts -> group
+
+// Slots to start a group at. Small on purpose: most groups hold one or two
+// ribbons (a boss missile, a thrown club) and only the gun's ever fills up.
+const RIBBON_START = 8;
+
+const vertsPerSlot = (maxPts) => maxPts * 2;
+const indicesPerSlot = (maxPts) => (maxPts - 1) * 6;
+
+function growRibbons(g, capacity) {
+  const verts = vertsPerSlot(g.maxPts);
+  const pos = new Float32Array(capacity * verts * 3);
+  const col = new Float32Array(capacity * verts * 3);
+  if (g.pos) {
+    // The live slots carry over. Without this a regrow blanks every ribbon in
+    // the air for a frame, which at the moment a volley gets big enough to
+    // trigger one is exactly when somebody is looking at them.
+    pos.set(g.pos);
+    col.set(g.col);
   }
+
+  // The index list is the same shape in every slot, offset by the slot's base
+  // vertex — built once here at capacity rather than per frame, because it
+  // never changes for the life of the buffer.
+  const perSlot = indicesPerSlot(g.maxPts);
+  const idx = new Uint32Array(capacity * perSlot);
+  let w = 0;
+  for (let s = 0; s < capacity; s++) {
+    const base = s * verts;
+    for (let i = 0; i < g.maxPts - 1; i++) {
+      const a = base + i * 2;
+      idx[w++] = a; idx[w++] = a + 1; idx[w++] = a + 2;
+      idx[w++] = a + 1; idx[w++] = a + 3; idx[w++] = a + 2;
+    }
+  }
+
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
 
   const mesh = new THREE.Mesh(geo, trailMaterial());
+  // One mesh spanning the arena can only be culled whole, and its bounding
+  // sphere is whatever the last frame's vertices happened to describe. Same
+  // trade systems/instancedPool.js takes, and for the same reason.
   mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { mesh, geo, history: [], maxPts, emitDebt: 0, extents: null, extentsKey: null };
+  mesh.name = `trails:${g.maxPts}`;
+
+  if (g.mesh) {
+    g.scene.remove(g.mesh);
+    g.geo.dispose();
+  }
+  g.scene.add(mesh);
+  g.mesh = mesh;
+  g.geo = geo;
+  g.pos = pos;
+  g.col = col;
+  g.capacity = capacity;
+}
+
+function ribbonGroup(scene, maxPts) {
+  let g = ribbonGroups.get(maxPts);
+  if (!g) {
+    g = { maxPts, scene, mesh: null, geo: null, pos: null, col: null, capacity: 0, slots: [], dirty: false };
+    ribbonGroups.set(maxPts, g);
+    growRibbons(g, RIBBON_START);
+  }
+  return g;
+}
+
+/** Take a slot in the merged buffer for this ribbon length. */
+function takeRibbonSlot(scene, maxPts) {
+  const g = ribbonGroup(scene, maxPts);
+  if (g.slots.length >= g.capacity) growRibbons(g, g.capacity * 2);
+  const t = {
+    group: g, slot: g.slots.length, history: [], maxPts,
+    emitDebt: 0, extents: null, extentsKey: null,
+  };
+  g.slots.push(t);
+  return t;
+}
+
+/**
+ * Give a slot back.
+ *
+ * SWAP-REMOVE, and the moved ribbon's vertices travel WITH it. Telling it its
+ * new slot number would be enough only if every ribbon were rewritten after
+ * every release — it is not: the frame's writes have already happened by the
+ * time the dead ones are swept, so a ribbon that merely learned its new index
+ * would be drawn from whatever the dead one left in that block until its own
+ * next update. On screen that is one shot's streak flicking onto another's
+ * path for a frame, which is the shape of bug that never reproduces on demand.
+ */
+function freeRibbonSlot(t) {
+  const g = t.group;
+  const verts = vertsPerSlot(g.maxPts);
+  const span = verts * 3;
+  const last = g.slots.length - 1;
+  if (t.slot !== last) {
+    const moved = g.slots[last];
+    g.pos.copyWithin(t.slot * span, last * span, (last + 1) * span);
+    g.col.copyWithin(t.slot * span, last * span, (last + 1) * span);
+    moved.slot = t.slot;
+    g.slots[t.slot] = moved;
+  }
+  g.slots.pop();
+  t.group = null;
+  g.dirty = true;
+}
+
+/**
+ * Draw only the slots that are live, and upload only those.
+ *
+ * The draw range is in INDICES, which is what an indexed geometry counts, and
+ * the vacated tail of the buffer is simply never reached — cheaper and safer
+ * than blanking it, because a blank slot is still vertices the rasteriser has
+ * to be handed.
+ */
+function flushRibbonGroups() {
+  for (const [key, g] of ribbonGroups) {
+    const n = g.slots.length;
+    g.geo.setDrawRange(0, n * indicesPerSlot(g.maxPts));
+    if (n > 0 && g.dirty) {
+      const span = vertsPerSlot(g.maxPts) * 3;
+      g.geo.attributes.position.addUpdateRange(0, n * span);
+      g.geo.attributes.position.needsUpdate = true;
+      g.geo.attributes.color.addUpdateRange(0, n * span);
+      g.geo.attributes.color.needsUpdate = true;
+    }
+    g.dirty = false;
+    // An emptied group is dropped rather than left drawing nothing: a preset
+    // that fired once early in a run should not cost a mesh in the scene for
+    // the rest of it, and the group rebuilds on the next shot that wants it.
+    if (n === 0) {
+      g.scene.remove(g.mesh);
+      g.geo.dispose();
+      ribbonGroups.delete(key);
+    }
+  }
 }
 
 // How big the projectile ACTUALLY renders, in world units.
@@ -257,7 +409,7 @@ function updateTrail(p, dt, scene, live) {
 
   let t = trails.get(p);
   if (!t) {
-    t = makeTrail(scene, cfg);
+    t = takeRibbonSlot(scene, Math.max(2, Math.round(cfg.points)));
     trails.set(p, t);
   }
 
@@ -266,9 +418,11 @@ function updateTrail(p, dt, scene, live) {
   const back = tailBack(t, p, cfg);
   shedParticles(t, p, shedSpec(p, cfg), dt, back, fx);
 
-  // Tracked live, so dragging the depth in the tuner moves a trail that's
-  // already in the air rather than only the next one to spawn.
-  t.mesh.position.z = trailZ(t, p, cfg);
+  // Read live, so dragging the depth in the tuner moves a trail that's already
+  // in the air rather than only the next one to spawn. It goes into the
+  // VERTICES now rather than onto a mesh transform — see the note above
+  // ribbonGroups for why a merged mesh cannot carry it any other way.
+  const z = trailZ(t, p, cfg);
 
   // Record the head position — the shell's TAIL, not its centre — and drop
   // the oldest once past the cap.
@@ -276,8 +430,15 @@ function updateTrail(p, dt, scene, live) {
   t.history.unshift(new THREE.Vector3(head.x, head.y, 0));
   while (t.history.length > t.maxPts) t.history.pop();
 
-  const pos = t.geo.attributes.position;
-  const col = t.geo.attributes.color;
+  // This ribbon's slice of the shared buffers. Written as raw Float32Arrays
+  // rather than through BufferAttribute.setXYZ because the offset is the
+  // slot's and setXYZ would have to be told it every call — and because this
+  // is the one loop in the file that runs per ribbon per frame.
+  const g = t.group;
+  const base = t.slot * vertsPerSlot(t.maxPts) * 3;
+  const pos = g.pos;
+  const col = g.col;
+  g.dirty = true;
   const colour = trailColour(p, cfg);
   const up = new THREE.Vector3(0, 0, 1);
   const dir = new THREE.Vector3();
@@ -300,18 +461,19 @@ function updateTrail(p, dt, scene, live) {
     const w = cfg.width * fx * 0.5 * (1 - f) ** cfg.taper;
     side.crossVectors(dir, up).normalize().multiplyScalar(w);
 
-    const a = i * 2;
-    pos.setXYZ(a, cur.x + side.x, cur.y + side.y, 0);
-    pos.setXYZ(a + 1, cur.x - side.x, cur.y - side.y, 0);
+    const a = base + i * 6;
+    pos[a] = cur.x + side.x; pos[a + 1] = cur.y + side.y; pos[a + 2] = z;
+    pos[a + 3] = cur.x - side.x; pos[a + 4] = cur.y - side.y; pos[a + 5] = z;
 
     // Fade to black toward the tail — with additive blending, black is
     // transparent, so this doubles as the alpha ramp.
     const bright = cfg.glow * (1 - f) ** cfg.fade;
-    col.setXYZ(a, colour.r * bright, colour.g * bright, colour.b * bright);
-    col.setXYZ(a + 1, colour.r * bright, colour.g * bright, colour.b * bright);
+    const r = colour.r * bright;
+    const gr = colour.g * bright;
+    const b = colour.b * bright;
+    col[a] = r; col[a + 1] = gr; col[a + 2] = b;
+    col[a + 3] = r; col[a + 4] = gr; col[a + 5] = b;
   }
-  pos.needsUpdate = true;
-  col.needsUpdate = true;
 }
 
 /**
@@ -333,22 +495,50 @@ export function updateProjectileTrails(dt, scene, projectiles, extra = null) {
 
   // Tear down trails whose mover is gone — a shot that landed, a club that
   // moved into a flipper or was taken off the ring by a level-up.
+  //
+  // NOTHING IS DISPOSED HERE ANY MORE. The geometry belongs to the group and
+  // outlives every ribbon in it; the material belongs to everybody and always
+  // did — disposing it per trail is what used to release the linked program
+  // and make the next shot rebuild the identical shader (see trailMaterial()).
+  // A retiring ribbon only hands its slot back.
   for (const [p, t] of trails) {
     if (live.has(p)) continue;
-    scene.remove(t.mesh);
-    // The GEOMETRY is this trail's own and goes with it. The MATERIAL is
-    // everyone's — disposing it here is what was releasing the program and
-    // making the next shot rebuild the identical shader. See trailMaterial().
-    t.geo.dispose();
+    freeRibbonSlot(t);
     trails.delete(p);
   }
+
+  // LAST, after both the writes and the sweep. The draw range is the live slot
+  // count, so flushing before the sweep would draw the retired ribbons for one
+  // more frame at the positions they died on — and flushing before the writes
+  // would upload the previous frame's buffer, which is a whole volley lagging
+  // its own shots.
+  flushRibbonGroups();
+}
+
+/**
+ * How many ribbons are in the water, and what they cost.
+ *
+ * For the playtest ledger, so a phone run can say how much of its draw count
+ * was the trails rather than the pellets — and the two numbers are no longer
+ * the same one. `ribbons` is how many are drawn; `draws` is how many calls
+ * that takes, which is one per distinct ribbon LENGTH in play rather than one
+ * per shot. A gap between them is the merge working.
+ */
+export function trailCount() {
+  return trails.size;
+}
+
+/** Draw calls the ribbons are costing right now. Diagnostics only. */
+export function trailDrawCount() {
+  return ribbonGroups.size;
 }
 
 export function clearProjectileTrails(scene) {
-  for (const [, t] of trails) {
-    scene.remove(t.mesh);
-    t.geo.dispose();
+  for (const g of ribbonGroups.values()) {
+    scene.remove(g.mesh);
+    g.geo.dispose();
   }
+  ribbonGroups.clear();
   trails.clear();
   // The shared material outlives individual trails but not the system. Dropped
   // here, at the one point where nothing is left holding it, so a run that ends

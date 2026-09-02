@@ -81,6 +81,18 @@ if (!probe.vertexShader.includes('vBandW = (modelMatrix')) {
   console.error('the band vertex injection did not land — three\'s <project_vertex> hook has moved.');
   process.exit(1);
 }
+// AND THE INSTANCE BRANCH, which is the one the game actually runs now: the
+// pellets are drawn from an instance buffer (entities/projectiles.js), and
+// three's <project_vertex> leaves `transformed` in object space, so without
+// this every shot in a volley samples the field at the InstancedMesh's origin
+// and the whole volley comes out one flat colour. Checked as a string here
+// because the compile below cannot see it — the branch is behind an #ifdef,
+// and a driver skips a dead branch without reading it.
+if (!probe.vertexShader.includes('instanceMatrix * bandLocal')) {
+  console.error('the band vertex chunk no longer folds in instanceMatrix — every pellet of a'
+    + '\nvolley will sample the field at the same point and render the same colour.');
+  process.exit(1);
+}
 
 const split = (src, what) => {
   const i = src.indexOf(MARK);
@@ -113,6 +125,30 @@ ${vBody.replace('#include <project_vertex>', '')}
 }
 `;
 
+// THE SAME CHUNK WITH INSTANCING ON, because that is how the pellets are drawn
+// and it is a DIFFERENT SHADER: the #ifdef branch above is skipped entirely by
+// a driver compiling the plain variant, so a typo inside it would pass this
+// page and then render nothing on the one weapon every run has. three defines
+// USE_INSTANCING and declares the attribute itself on an InstancedMesh; both
+// are spelled out here for the same reason the rest of the prelude is.
+const vertexInstanced = `#define USE_INSTANCING
+precision highp float;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat3 normalMatrix;
+uniform mat4 modelMatrix;
+attribute vec3 position;
+attribute vec3 normal;
+attribute mat4 instanceMatrix;
+${vGlobal}
+void main() {
+  vec3 transformed = position;
+  vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(transformed, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+${vBody.replace('#include <project_vertex>', '')}
+}
+`;
+
 const [fGlobal, fBody] = split(probe.fragmentShader.replace('#include <common>', ''), 'fragment');
 const fragment = `precision highp float;
 ${fGlobal}
@@ -131,7 +167,7 @@ const html = `<!doctype html><meta charset="utf-8"><title>band shader check</tit
 <body style="font:13px ui-monospace,monospace;background:#111;color:#ddd;padding:16px">
 <pre id="out">compiling...</pre>
 <script>
-const SRC = ${JSON.stringify({ vertex, fragment })};
+const SRC = ${JSON.stringify({ vertex, vertexInstanced, fragment })};
 const gl = document.createElement('canvas').getContext('webgl2');
 const lines = [];
 let bad = 0;
@@ -171,7 +207,24 @@ if (!gl) {
   bad++;
 } else {
   const v = compile('the band VERTEX chunk compiles', gl.VERTEX_SHADER, SRC.vertex);
+  // The instanced variant is its own compile, not a formality: the #ifdef
+  // branch is invisible to the plain one, and it is the branch the pellets run.
+  const vi = compile('the band VERTEX chunk compiles WITH INSTANCING',
+    gl.VERTEX_SHADER, SRC.vertexInstanced);
   const f = compile('the band FRAGMENT chunk compiles', gl.FRAGMENT_SHADER, SRC.fragment);
+  if (vi && f) {
+    const pi = gl.createProgram();
+    gl.attachShader(pi, vi);
+    gl.attachShader(pi, f);
+    gl.linkProgram(pi);
+    if (gl.getProgramParameter(pi, gl.LINK_STATUS)) {
+      lines.push('ok   the instanced pair links too');
+    } else {
+      bad++;
+      lines.push('FAIL the instanced halves do NOT link');
+      for (const l of (gl.getProgramInfoLog(pi) || '').trim().split('\\n')) lines.push('       ' + l);
+    }
+  }
   if (v && f) {
     // LINKED, not just compiled — see the header. This is the only step that
     // can see a varying the two halves disagree about.

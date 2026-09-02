@@ -88,6 +88,30 @@ function newBucket(t) {
     lowHpSamples: 0,
     aliveSum: 0,
     drawSum: 0,
+    // --- WHERE THE DRAWS GO -------------------------------------------------
+    // `drawSum` says how many draw calls a frame cost and stops there, and on
+    // the phone that number is the whole story: it tracked the player's LEVEL
+    // rather than the creature count, climbing from ~100 a frame at level 1 to
+    // a sustained 3184 at level 16 with sixty-one enemies in the water, with
+    // the frame rate falling from 57fps to 22 alongside it. Every one of those
+    // calls crosses into WebKit's GPU process.
+    //
+    // WHAT IT COULD NOT SAY is which of the things that grow with a BUILD is
+    // responsible — the pellets in the air, the ribbon behind each of them, or
+    // the orbiters and companions an upgrade adds. Those are three different
+    // fixes in three different files, and picking one off a total was
+    // guesswork. Sampled per bucket like `aliveSum` for the same reason: a
+    // build's cost is a curve over a run, and a single number at death is the
+    // death frame.
+    // A COUNT AND A COST, side by side, because they stopped being the same
+    // number the day the pellets went into an instance buffer and the ribbons
+    // were merged. `shotSum` and `ribbonSum` are how many are in the water;
+    // `sceneSum` is what the scene actually costs to draw. A build that
+    // multiplies the first two without moving the third is the fix working.
+    shotSum: 0,      // projectiles in flight
+    ribbonSum: 0,    // trails being drawn — NOT one draw each any more
+    sceneSum: 0,     // top-level scene children: the draw budget itself
+    instancedSum: 0, // of those, the batched ones — InstancedMeshes and merged ribbons
     maxHpSum: 0,
     level: 1,
     stacks: {},
@@ -550,6 +574,10 @@ export function tick(dt, snap) {
   if (frac < LOW_HP_FRAC) bucket.lowHpSamples += 1;
   bucket.aliveSum += snap.alive ?? 0;
   bucket.drawSum += snap.draws ?? 0;
+  bucket.shotSum += snap.shots ?? 0;
+  bucket.ribbonSum += snap.ribbons ?? 0;
+  bucket.sceneSum += snap.sceneChildren ?? 0;
+  bucket.instancedSum += snap.instanced ?? 0;
   bucket.maxHpSum += maxHp;
   bucket.level = snap.level;
 

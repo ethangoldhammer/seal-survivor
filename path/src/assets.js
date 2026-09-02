@@ -7702,8 +7702,25 @@ function makeBandMaterial(mat, cfgKey = 'elementBands') {
       // AFTER project_vertex, where `transformed` is final — reading `position`
       // instead would miss anything a preceding chunk did to the vertex, and
       // the world matrix is what turns it into the field's own space.
+      //
+      // AND THE INSTANCE MATRIX BY HAND, which three's own chunk will not do
+      // for us. <project_vertex> applies `instanceMatrix` to `mvPosition` and
+      // leaves `transformed` in object space, so on an InstancedMesh
+      // `modelMatrix * transformed` is the same point for every instance — the
+      // InstancedMesh's own origin. The bands would still render, and every
+      // pellet in a volley would sample the field at the middle of the arena
+      // and come out the identical colour: a flat wash that moves with the
+      // field's clock and not with the shot, which reads as the effect being
+      // switched off rather than as a bug. The pellets are drawn from an
+      // instance buffer (see entities/projectiles.js), so this branch is the
+      // live one for the asset the whole effect was written for.
       .replace('#include <project_vertex>',
-        '#include <project_vertex>\n\tvBandW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        '#include <project_vertex>\n'
+        + '\tvec4 bandLocal = vec4(transformed, 1.0);\n'
+        + '\t#ifdef USE_INSTANCING\n'
+        + '\t\tbandLocal = instanceMatrix * bandLocal;\n'
+        + '\t#endif\n'
+        + '\tvBandW = (modelMatrix * bandLocal).xyz;');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>',
         '#include <common>\nuniform float uBandTime;\nuniform float uBandAmt;\nuniform float uBandCount;'

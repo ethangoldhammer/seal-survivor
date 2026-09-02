@@ -31,7 +31,7 @@ import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.j
 import { noteShove, updateSlam, resetSlam } from './systems/slam.js';
 import { capPlayerDamage, resetPlayerDamageCap } from './systems/playerDamageCap.js';
 import { updateDodge, resetDodge } from './systems/dodge.js';
-import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
+import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles, flushProjectileInstances } from './entities/projectiles.js';
 import { isLaser, latticePayload } from './loadout.js';
 import { LASER_ASSET, applyBoltLook, boltColor, updateBoltGlow, disposeFinLaser } from './systems/finLaser.js';
 import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks, bubbleOrbs } from './entities/pickups.js';
@@ -73,7 +73,7 @@ import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
 import { updateLowHealthFx, resetLowHealthFx } from './systems/lowHealthFx.js';
 import { playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx } from './systems/playerDamageFx.js';
-import { updateProjectileTrails, clearProjectileTrails } from './systems/projectileTrails.js';
+import { updateProjectileTrails, clearProjectileTrails, trailCount, trailDrawCount } from './systems/projectileTrails.js';
 import { updateAirborne, resetAirborne, airRamp, airDamageMul, airFireRateMul, canAirJump, spendAirJump, slamFor } from './systems/airborne.js';
 import { fireReentrySplash, updateReentrySplash, resetReentrySplash } from './systems/reentrySplash.js';
 
@@ -7500,6 +7500,17 @@ function runFrame(now) {
       // whether the cost grows with the CROWD — and a draw count sampled only
       // at death cannot be plotted against anything.
       draws: drawsLastFrame,
+      // ...and the breakdown, because `draws` alone could not say WHICH of the
+      // things that grow with a build was buying them. See the note on
+      // shotSum in systems/playtest.js.
+      shots: projectiles.length,
+      ribbons: trailCount(),
+      sceneChildren: world.scene.children.length,
+      // The batched ones — the pellets' InstancedMeshes plus the merged ribbon
+      // buffers, which are ordinary Meshes and so would not be counted by the
+      // isInstancedMesh test alone.
+      instanced: world.scene.children.reduce((n, c) => n + (c.isInstancedMesh ? 1 : 0), 0)
+        + trailDrawCount(),
     });
 
     // rawDt, not dt: the hp/air gauges are the player's read-out and must not
@@ -8486,6 +8497,11 @@ function runFrame(now) {
   // hoovering one, the gulp on a strike release — and a menu opening must not
   // leave the seabed frozen a frame behind where the orbs actually are.
   flushPickupInstances();
+  // The pellets, for the same reason and with the same timing argument: a
+  // shot's final position for this frame is not settled until homing, the jet,
+  // the flow fields and the size spring have all run, and several of those sit
+  // outside the pause gate too.
+  flushProjectileInstances(world.scene);
 
   updateParticleScale(world.camera, world.renderer);
   post.resize();

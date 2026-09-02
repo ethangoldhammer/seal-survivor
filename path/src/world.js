@@ -38,7 +38,33 @@ export function createWorld(container) {
   camera.position.set(0, 0, 40);
 
   const adaptive = createAdaptiveScale();
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  // NO MSAA, AND IT IS NOT A QUALITY CUT — it is the removal of something that
+  // has never been doing anything.
+  //
+  // `antialias` is an attribute of the DEFAULT drawing buffer and of nothing
+  // else. The game does not draw the water into that buffer: post.js renders
+  // the whole scene into `sceneTarget` (which is not multisampled and never
+  // was), and the only thing that ever reaches the default framebuffer is the
+  // composite — one fullscreen triangle with no interior edges for a sampler
+  // to find. So every creature silhouette in this game has been resolved by
+  // the composite's own filtering for as long as post has existed, and asking
+  // for MSAA bought exactly zero pixels of it.
+  //
+  // What it cost is the reason to stop: the driver allocates a multisampled
+  // colour buffer at the full size of the canvas and resolves it every frame.
+  // On a phone reporting devicePixelRatio 3 that is a 3.2-megapixel buffer at
+  // four samples, on a WebContent process the phone is already willing to kill
+  // for memory (see CONFIG.render.pixelRatio), plus a resolve's worth of
+  // bandwidth per frame spent on a triangle.
+  //
+  // WHAT IS GIVEN UP, honestly: the passthrough path in post.render — bloom
+  // off AND the screen filter off AND nothing else claiming the pipeline —
+  // renders the scene straight to the default buffer, and that path did have
+  // real MSAA. It is also the path somebody is on because they are running the
+  // game as cheaply as it goes, which is not where four samples per pixel
+  // belong. The attribute cannot be changed after the context is created, so
+  // this is one answer or the other and it cannot be the picture's.
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   // How many real pixels a screen pixel is worth — see CONFIG.render. A CAP on

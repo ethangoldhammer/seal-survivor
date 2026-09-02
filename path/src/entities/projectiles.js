@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { createAnimationController } from '../systems/animation.js';
+import { createInstancedPool } from '../systems/instancedPool.js';
 import { updateTumble } from '../systems/rocks.js';
 import { isMarked, markWeight, markedTargets } from '../systems/marks.js';
 import { facingHotSpots, hotSpotPoint } from '../systems/bossHotSpots.js';
@@ -19,6 +20,100 @@ import { releaseLatticeChild, resetLattice } from '../loadout.js';
 //   chain  — survives hitting an enemy and ricochets on to the next one,
 //            spending a bounce per body (see chainToEnemy)
 export const projectiles = [];
+
+// ---------------------------------------------------------------------------
+// ONE DRAW PER SHAPE, NOT ONE PER SHOT — the same trick entities/pickups.js
+// plays on chum, for the same reason and against a worse number.
+//
+// A pellet was a Mesh in the scene, so a volley was a draw call each. That is
+// affordable while the gun is stock and it stops being affordable exactly
+// where the game gets hard: `multishot`, `rapidFire` and `projectileAmount`
+// all multiply the number in the air, so the draw count is a function of the
+// player's BUILD rather than of anything in the water. The phone runs say so
+// plainly — draws per frame tracked the player's LEVEL and not the creature
+// count, climbing from ~100 at level 1 to a sustained 3184 at level 16 with
+// sixty-one enemies alive, and the frame rate fell from 57 to 22 alongside it.
+// It is a phone-shaped failure specifically: every one of those calls crosses
+// into WebKit's GPU process.
+//
+// The pellet is a rock primitive drawn from six pre-built variants sharing one
+// cached material (assets.js getRockGeometry / getMaterial), which is the
+// exact shape createInstancedPool wants — so forty pellets in the air become
+// six draws rather than forty, and stay six however many the build fires.
+//
+// NOT EVERY PROJECTILE QUALIFIES. A thrown club, a seagull bomb and a mussel
+// are model clones: several nodes deep, sometimes skinned, sometimes carrying
+// an animation controller, and an InstancedMesh can hold none of that. Those
+// keep their place in the scene graph, which costs the draw it always did and
+// is a handful of shots rather than a stream. See `instanceable`.
+let shotPool = null;
+function pool(scene) {
+  if (!shotPool) shotPool = createInstancedPool(scene, 'shots');
+  return shotPool;
+}
+
+/**
+ * Can this body be drawn from an instance buffer?
+ *
+ * A single leaf Mesh and nothing else. Children are the disqualifier that
+ * matters and the one that would be invisible: the pool takes the mesh OUT of
+ * the scene graph, so anything parented to it stops being reachable from the
+ * scene and silently never renders — the shot would still fly and still hit,
+ * wearing none of its trimmings.
+ */
+function instanceable(mesh) {
+  return !!mesh?.isMesh && !mesh.isSkinnedMesh && mesh.children.length === 0
+    && !mesh.userData?.clips?.length && !mesh.userData?.rig;
+}
+
+/**
+ * PUT BACK ANY SHOT THAT HAS STOPPED QUALIFYING SINCE IT WAS ACQUIRED.
+ *
+ * The check at spawn cannot be the only one, because a shot is DRESSED after
+ * spawnProjectile returns. systems/finLaser.js is the live case: it parents a
+ * glow Sprite onto the bolt (`mesh.add(sprite)` in dressBolt) and re-picks the
+ * bolt's material as the charge builds — both after this module has already
+ * handed the mesh to the pool. An instanced mesh is not in the scene graph, so
+ * that Sprite would never render and the swapped material would never be the
+ * one drawn: the bolt would fly, hit, and look wrong, with nothing thrown.
+ *
+ * So the qualification is re-read once a frame and a shot that has grown a
+ * child, changed material or changed geometry goes back into the scene. It
+ * costs one pass over a list the flush already walks, and it means a system
+ * added later cannot break this by decorating a projectile — which is the only
+ * way anybody would ever break it.
+ */
+function reclaimDressedShots(scene) {
+  if (!shotPool) return;
+  for (const p of projectiles) {
+    const m = p.mesh;
+    if (!m?.userData?.__poolKey) continue;
+    if (instanceable(m) && m.material === m.userData.__shotMaterial
+      && m.geometry === m.userData.__poolKey) continue;
+    shotPool.release(m);
+    scene.add(m);
+  }
+}
+
+/**
+ * Copy every live pellet's transform into the instance buffers.
+ *
+ * ONCE A FRAME, LATE — after homing, jets, flow fields, the size spring and
+ * the tumble have all had their turn. Nothing instanced is drawn until this
+ * runs, so calling it early does not merely lose a frame of motion: it draws
+ * the volley where it was before it moved, every frame, which looks like the
+ * shots lagging the gun rather than like a missing flush.
+ */
+export function flushProjectileInstances(scene) {
+  if (!shotPool) return;
+  if (scene) reclaimDressedShots(scene);
+  shotPool.flush();
+}
+
+/** Live instanced pellets and the draws they cost. Diagnostics only. */
+export function projectileInstanceStats() {
+  return shotPool?.stats() ?? { instances: 0, draws: 0 };
+}
 
 export function spawnProjectile(scene, {
   origin, dir, faction, damage, speed, life, radius, pierce = 0, asset, source = null,
@@ -190,7 +285,17 @@ export function spawnProjectile(scene, {
   // else keeps three's default.
   if (roll) mesh.rotation.order = 'ZYX';
   if (tilt) mesh.rotation.x = tilt;
-  scene.add(mesh);
+  // The pellet goes into the instance buffer instead of the scene; anything
+  // with a rig or a hierarchy goes into the scene as it always did. Both are
+  // released through despawn, which does not have to know which it was.
+  if (instanceable(mesh)) {
+    pool(scene).acquire(mesh);
+    // What it was drawn with at the moment it was acquired. The pool takes one
+    // material for the whole group off its first member, so a shot that swaps
+    // its own later would render wearing somebody else's — see
+    // reclaimDressedShots, which is the only reader of this.
+    mesh.userData.__shotMaterial = mesh.material;
+  } else scene.add(mesh);
 
   // A projectile whose model has real animation (currently: the seagull
   // bomb's flapping wings) gets the same idle/swim/boost controller every
@@ -936,12 +1041,25 @@ export function despawn(scene, index) {
   // presents as the shatter quietly switching itself off partway through a run.
   // A no-op for every projectile that is not a split-born bolt.
   releaseLatticeChild(p);
+  // BOTH, unconditionally, and neither needs a flag saying which one took it.
+  // `release` is documented safe on a mesh the pool never held, and
+  // Object3D.remove on a non-child is a no-op — so the two together are the
+  // one exit every shot leaves through, whichever way it was drawn. A stored
+  // "was instanced" boolean would be a second source of truth about a fact the
+  // mesh already carries, and the failure mode of getting it wrong is a pellet
+  // left in the buffer for the rest of the run, drawn at wherever it died.
+  shotPool?.release(p.mesh);
   scene.remove(p.mesh);
   projectiles.splice(index, 1);
 }
 
 export function resetProjectiles(scene) {
   for (const p of projectiles) scene.remove(p.mesh);
+  // Wholesale, rather than a release per shot: this drops the list entirely,
+  // so there is nothing left that could still be holding a slot — and reset()
+  // also takes the InstancedMeshes out of the scene, which matters because the
+  // scene survives a run and an emptied group would otherwise sit in it.
+  shotPool?.reset();
   // Zeroed rather than decremented per shot: this clears the list wholesale, so
   // there is nothing left that could be holding a slot.
   resetLattice();

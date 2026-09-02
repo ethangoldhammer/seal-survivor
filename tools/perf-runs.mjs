@@ -212,6 +212,52 @@ for (const r of withPerf.slice(-want)) {
     }
   }
 
+  // DOES THE DRAW COUNT GROW WITH THE CROWD, OR WITH THE BUILD?
+  //
+  // On the phone it was the build, and that took a long time to see because
+  // every number that could have said so was a single reading taken at death.
+  // Draws per frame climbed from ~100 at level 1 to a sustained 3184 at level
+  // 16 with sixty-one enemies in the water, while the frame rate fell from 57
+  // to 22 — and enemies alive over the same stretch went UP and DOWN with no
+  // relation to any of it. multishot, rapidFire and projectileAmount all
+  // multiply the number of things in the air, so the cost is a function of
+  // what the player picked rather than of what the ocean sent.
+  //
+  // Printed as a curve rather than a total for exactly that reason: the shape
+  // over a run is the finding, and a mean across it hides the shape completely.
+  // `shots` and `ribbons` are HOW MANY, and `scene` is what they cost — they
+  // stopped being the same number once the pellets went into an instance
+  // buffer (entities/projectiles.js) and the ribbons were merged into one mesh
+  // per length (systems/projectileTrails.js). `batched` is how many of the
+  // scene's children are one of those. A run where shots and ribbons climb and
+  // `scene` does not is the batching holding.
+  const withDraws = (r.buckets ?? []).filter((b) => b.samples > 0 && b.drawSum > 0);
+  if (withDraws.length > 1 && withDraws.some((b) => b.shotSum != null)) {
+    console.log('  draws per frame, over the run:');
+    console.log('       t   lvl  alive  draws   shots  ribbons  scene    batched');
+    for (const b of withDraws) {
+      const per = (sum) => (sum == null ? '—' : (sum / b.samples).toFixed(0));
+      console.log(`    ${String(b.t).padStart(4)}  ${String(b.level).padStart(3)}`
+        + `  ${per(b.aliveSum).padStart(5)}  ${per(b.drawSum).padStart(5)}`
+        + `  ${per(b.shotSum).padStart(6)}  ${per(b.ribbonSum).padStart(7)}`
+        + `  ${per(b.sceneSum).padStart(5)}  ${per(b.instancedSum).padStart(9)}`);
+    }
+    // The reading, said in words, because the two columns to compare are not
+    // adjacent and the wrong pair is the natural one to look at.
+    const first = withDraws[0];
+    const last = withDraws[withDraws.length - 1];
+    const growth = (a, b_, key) => (a[key] && a.samples && b_.samples
+      ? (b_[key] / b_.samples) / (a[key] / a.samples) : 0);
+    const draws = growth(first, last, 'drawSum');
+    const alive = growth(first, last, 'aliveSum');
+    if (draws > 1.5 && draws > alive * 1.5) {
+      console.log(`  -> draws grew ${draws.toFixed(1)}x across the run while the crowd grew`
+        + ` ${alive.toFixed(1)}x.`);
+      console.log('     That is the BUILD buying draw calls, not the ocean. Look at the shots');
+      console.log('     and ribbons columns before touching resolution or spawn caps.');
+    }
+  }
+
   // WHICH MOMENTS THE BAD FRAMES LAND IN. `lift` is hitches-per-frame while
   // the mark was hot against the run's own rate — a mark hot for most of the
   // run collects most of the hitches by doing nothing, so the tally on its own

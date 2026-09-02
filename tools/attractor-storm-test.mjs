@@ -481,21 +481,28 @@ section('THE RIBBONS');
 // Two ways this fails silently and neither is visible from inside the game.
 // The preset is looked up by name, so a `trailKey` that does not match a
 // CONFIG.trails entry is a storm with no ribbons at all — which looks exactly
-// like a storm whose ribbons are simply thin. And a trail is a Mesh per cube:
-// one that is not torn down when its cube dies is a ribbon frozen in the water
-// AND a draw call held for the rest of the run, which reads as nothing at all
-// until a long session is inexplicably slower.
+// like a storm whose ribbons are simply thin. And a ribbon that is not torn
+// down when its cube dies is a streak frozen in the water for the rest of the
+// run, which reads as nothing at all until somebody notices a stripe across an
+// empty ocean.
+//
+// COUNTED, NOT MEASURED OFF THE SCENE, and that is a change. This used to
+// count meshes added to the scene, because the Map is not exported and a trail
+// was a Mesh each — so the two numbers were the same one. They are not any
+// more: the ribbons are merged into one mesh per ribbon LENGTH (see the note
+// above ribbonGroups in systems/projectileTrails.js), so counting scene
+// children now answers "how many distinct lengths are in play", which for a
+// storm is always one however many cubes are flying. What this section is
+// actually about is whether every cube HAS a streak, and trailCount() is that
+// question asked directly.
 {
-  const { updateProjectileTrails, clearProjectileTrails } =
+  const { updateProjectileTrails, clearProjectileTrails, trailCount, trailDrawCount } =
     await import('../path/src/systems/projectileTrails.js');
 
-  // Trails are held in a Map this module does not export, so they are counted
-  // as what they cost: meshes added to the scene.
   const ribbons = () => {
     clearProjectileTrails(scene);
-    const before = scene.children.length;
     updateProjectileTrails(DT, scene, projectiles);
-    return scene.children.length - before;
+    return trailCount();
   };
 
   clear();
@@ -509,6 +516,11 @@ section('THE RIBBONS');
   check('...which is bounded by the study\'s own count, not by the run\'s length',
     drawn <= STORMS.find((s) => s.id === 'saddle').count,
     `${drawn} against a count of ${STORMS.find((s) => s.id === 'saddle').count}`);
+  // ...and the whole field costs ONE draw, which is the reason a study may have
+  // sixty cubes in it at all. Sixty ribbons at a draw each is most of a phone's
+  // budget spent on a debug visualisation; see the note above ribbonGroups.
+  check('...and the whole field is one draw between them',
+    trailDrawCount() === 1, `${trailDrawCount()} draw(s) for ${drawn} ribbons`);
 
   // The preset is the system's and not the body's. A row rolls its `body` per
   // shot, so keying the ribbon on the asset would give one field several
