@@ -20496,6 +20496,72 @@ export const CONFIG = {
       muzzleNudge: 0,
       flattenZ: true, // spawn bullets in the body's plane, not the fin's own depth
       alternate: true, // consecutive volleys start from the other flipper
+
+      // ---------------------------------------------------------------------
+      // THE SHOT TWITCH — the flipper flicks up as it throws.
+      // ---------------------------------------------------------------------
+      // The gun already alternates fins (dealTick in systems/shotGrid.js) and
+      // already flashes at the muzzle, but the LIMB never moves: the stone
+      // leaves a flipper held perfectly still on the aim, which reads as the
+      // seal emitting pebbles rather than throwing them. This is the throw.
+      //
+      // ON THE AIM TARGET, NOT ON THE BONES. The fin chain is solved by the CCD
+      // in systems/ikChain.js under joint limits that exist to stop the armpit
+      // pinching (maxBend, maxFold, maxTwist — see npm run test:rig). A rotation
+      // written onto a bone AFTER that solve is outside every one of those
+      // guards, and the one thing a per-shot flick must not be able to do is
+      // fold the animal several times a second. Kicking the DIRECTION the chain
+      // is aiming at means the twitch is solved like any other aim, through the
+      // same limits and the same smoothing, so it cannot reach a pose the cursor
+      // could not.
+      //
+      // UP IS THE AIM'S OWN UP — a quarter turn from where the fin points, taken
+      // toward the surface. A fixed +Y would be a lift while shooting sideways
+      // and nothing at all while shooting straight up; rotating the aim by a
+      // signed angle reads as the same flick whichever way the seal faces.
+      //
+      // PER FIN, kicked by the fin that actually fired (see fire() in main.js),
+      // which is what makes an alternating volley read as two hands taking turns
+      // rather than as one shrug.
+      twitch: {
+        enabled: true,
+        // Radians at full strength. Deliberately small: past about 0.2 the
+        // flipper stops flicking and starts waving, and the aim it is supposed
+        // to be holding visibly stops pointing at the cursor.
+        angle: 0.13,
+        // Seconds the whole gesture lasts. It wants to finish inside one shot
+        // interval — a gun faster than this never lets the fin come home, which
+        // is a raised flipper rather than a twitch. `spring` is the one mode
+        // that degrades gracefully there; see below.
+        duration: 0.15,
+        // WHICH SHAPE. Three, and they differ in what happens at the START:
+        //   'snap'   — all of it on the firing frame, then eased home. The
+        //              hardest read, and the one that survives a fast gun.
+        //   'pop'    — a fast rise and then the fall, so the fin is seen
+        //              travelling up rather than arriving already up.
+        //   'spring' — an impulse into a damped spring. The only mode where two
+        //              shots close together COMPOUND, because the fin is still
+        //              moving when the second one lands.
+        mode: 'snap',
+        // 'pop' only: the fraction of `duration` spent rising.
+        rise: 0.3,
+        // The curve home, for 'snap' and 'pop'. Any name in ease.js.
+        returnEase: 'outCubic',
+        // 'spring' only, and the three numbers are NOT independent. Critical
+        // damping for this stiffness is 2*sqrt(420) = 41, so 24 is deliberately
+        // under it: the fin peaks at `angle` about 50ms in, dips 7% past home on
+        // the way back, and is at rest by 0.29s. Take the damping to 18 and that
+        // dip is 23% — a bounce rather than a settle, and at 5 shots a second
+        // the fin never reaches home at all. `impulse` is not a free number
+        // either: it is whatever makes one kick peak at 1, which is what lets
+        // `angle` mean the same thing in all three modes.
+        spring: { stiffness: 420, damping: 24, impulse: 65 },
+        // ...AND THE FIN STRAIGHTENS AS IT LIFTS. A fraction added to that fin's
+        // `tipLengthMul` for the length of the twitch, which pushes the IK
+        // target further down the limb and extends it. 0 is a pure hinge at the
+        // shoulder; a little of it is the difference between a lift and a flick.
+        reachPop: 0,
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -37256,6 +37322,19 @@ export const TUNER_SCHEMA = [
       { path: 'fins.iterations', min: 1, max: 12, step: 1, label: 'IK passes' },
       { path: 'fins.releaseOnOneShot', type: 'bool', label: 'let one-shots own the fins' },
       { path: 'fins.tipLengthMul', min: 0, max: 3, step: 0.05, label: 'aim target along flipper' },
+      // THE SHOT TWITCH. Look and feel, so it is tunable — the fin that fired
+      // flicks up, through the same IK and the same joint limits as the aim, so
+      // no setting on these rows can reach a pose the cursor could not.
+      { path: 'fins.twitch.enabled', type: 'bool', label: 'flick the fin that fired' },
+      { path: 'fins.twitch.mode', options: ['snap', 'pop', 'spring'], label: 'twitch shape' },
+      { path: 'fins.twitch.angle', min: 0, max: 0.4, step: 0.005, label: 'twitch angle (rad)' },
+      { path: 'fins.twitch.duration', min: 0.04, max: 0.5, step: 0.01, label: 'twitch length (s)' },
+      { path: 'fins.twitch.rise', min: 0.05, max: 0.9, step: 0.05, label: 'pop: share spent rising' },
+      { path: 'fins.twitch.returnEase', options: EASINGS, label: 'twitch: curve home' },
+      { path: 'fins.twitch.spring.stiffness', min: 80, max: 900, step: 10, label: 'spring: stiffness' },
+      { path: 'fins.twitch.spring.damping', min: 6, max: 60, step: 1, label: 'spring: damping' },
+      { path: 'fins.twitch.spring.impulse', min: 5, max: 160, step: 5, label: 'spring: kick per shot' },
+      { path: 'fins.twitch.reachPop', min: 0, max: 0.6, step: 0.02, label: 'twitch: reach opens with it' },
     ],
   },
   {

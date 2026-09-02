@@ -523,5 +523,47 @@ fireFor(1, IV);
 check('and the enabled flag turns the lock off', shotGridState().locked === false);
 CONFIG.weapon.beatLock.enabled = true;
 
+// ---------------------------------------------------------------------------
+// A transport whose CLOCK has stopped is not a transport, and this is the one
+// failure the four properties at the top of this file cannot see: every one of
+// them is measured across shots, so a gun that fires nothing at all passes each
+// of them vacuously. It shipped that way.
+//
+// A suspended AudioContext's currentTime does not advance, so the score clock
+// is frozen while `started` is still true. barGrid used to report `running` off
+// `started && ctx` alone, which parked the run's first shot a bar ahead of a
+// clock that would never reach it — silent for the whole run, with the staleness
+// guard unable to help because a schedule exactly one bar out is not stale.
+// Reachable whenever the context is built outside a real gesture (see
+// resumeOnFirstGesture in systems/audio.js), and on a gamepad it never cleared.
+section('A stopped clock is not a grid');
+music.play(1);
+resetShotGrid();
+fireFor(1, IV);
+check('the grid is locked while the clock runs', shotGridState().locked === true);
+
+const suspendedCtx = audio.getAudioContext();
+suspendedCtx.state = 'suspended';
+// `now` deliberately does NOT advance here — that is what suspended MEANS, and
+// a test that let the clock run would be testing nothing.
+const frozenAt = now;
+let suspendedShots = 0;
+for (let i = 0; i < 600; i++) if (shotDue(IV, true, STEP)) suspendedShots++;
+check('a frozen clock reports itself unlocked', music.barGrid().running === false,
+  'the whole bug: `started && ctx` is not the same question as "is time passing"');
+check('...and the transport really is frozen', near(now, frozenAt, 1e-9));
+check('the gun keeps firing on the fallback countdown', suspendedShots > 10,
+  `${suspendedShots} shots in 10s of frames — it was 0 before the state check`);
+check('...at the interval it was given', near(600 * STEP / Math.max(1, suspendedShots), IV, STEP + 1e-6),
+  `${(600 * STEP / Math.max(1, suspendedShots)).toFixed(4)}s apart vs ${IV.toFixed(4)}`);
+
+// And the point of the fallback: the lock comes back on its own, in phase, the
+// frame after the player's first gesture resumes the context.
+suspendedCtx.state = 'running';
+const afterResume = fireFor(8, IV);
+check('the lock returns when the context does', shotGridState().locked === true);
+check('...and the shots are back on the grid', afterResume.slice(1).every((s) => slotError(s) <= STEP + 1e-6),
+  `worst slot error ${Math.max(...afterResume.slice(1).map(slotError)).toFixed(5)}s`);
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

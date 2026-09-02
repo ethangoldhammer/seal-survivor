@@ -306,9 +306,34 @@ export function cineMenu(held, framing = null) {
     // is squared on any window that isn't 16:9, and the seal fills the screen
     // on a laptop while a phone looks at one whisker.
     const af = cineAspectZoom();
-    if (framing.zoom != null) menuState.zoom = framing.zoom / (af || 1);
-    menuState.offsetX = framing.offsetX ?? menuState.offsetX;
-    menuState.offsetY = framing.offsetY ?? menuState.offsetY;
+    const zoom = framing.zoom != null ? framing.zoom / (af || 1) : menuState.zoom;
+    const offsetX = framing.offsetX ?? menuState.offsetX;
+    const offsetY = framing.offsetY ?? menuState.offsetY;
+    const moved = zoom !== menuState.zoom
+      || offsetX !== menuState.offsetX
+      || offsetY !== menuState.offsetY;
+    menuState.zoom = zoom;
+    menuState.offsetX = offsetX;
+    menuState.offsetY = offsetY;
+
+    // ...AND BACK INTO THE BAG THE RIG IS ACTUALLY READING, if it is already
+    // holding this state. `resolve` folds these three numbers in (see the
+    // branch there) and is run ONCE, by enter() — which is right for every
+    // other state, because every other state's numbers were typed into
+    // config.js and cannot move while the state is up. The menu's are
+    // MEASURED, and there is one thing that moves them under a live state:
+    // turning the phone. The screen recomposes on the resize, hands the new
+    // framing down here, and the rig went on driving to the bag it resolved on
+    // entry — so the menu came back at a zoom composed for the other
+    // orientation, with the buttons and the animal both wrong, and stayed
+    // there because nothing would re-enter a state it had never left.
+    //
+    // machine.to and not machine.cur: mid-blend the frame keeps easing, now
+    // toward the new composition, and tick() copies `to` into `cur` on every
+    // frame the blend is finished. Guarded on the numbers actually having
+    // changed, because this is called every frame the menu is up and resolve()
+    // allocates a bag each time.
+    if (moved && machine.state === 'mainMenu') machine.to = resolve('mainMenu');
   }
 }
 

@@ -4268,6 +4268,12 @@ function fire() {
       if (laser && bolt) applyBoltLook(bolt, finElementFor(o));
     }
     if (points > 0) flashes.push({ o, x: muzzlePoint.x, y: muzzlePoint.y });
+    // ...AND THE LIMB THAT THREW IT MOVES. Gated on the same `points > 0` as
+    // the flash, and for the same reason: a volley coming out of the body
+    // centre has no flipper to flick. One kick per TICK rather than per pellet
+    // — a three-stone tick is one throw off one fin, and three stacked kicks
+    // would be three times the flick for a card that bought pellets.
+    if (points > 0) rig?.kickFin?.(o);
   }
 
   const px = player.mesh.position.x;

@@ -41,13 +41,53 @@ let hushed = false;
 // fadeMusicForBoss, at the bottom of this file with the rest of the silence.
 let bossFade = false;
 
-const tracks = new Map(); // name -> AudioBuffer
+// ---------------------------------------------------------------------------
+// TWO MAPS, AND THE SPLIT BETWEEN THEM IS THE WHOLE OF THE LAZY LOADING.
+//
+//   sources  every slot that HAS music, and where to get it. A catalogue.
+//   tracks   the slots whose audio is decoded and in memory right now. A cache.
+//
+// They used to be one map, and that is what made the bank cost what it did.
+// Web Audio decodes to 32-bit float at the context's rate whatever the file
+// was, so 48kHz stereo is 384KB per SECOND however small the mp3: `public/
+// music` is 13MB on disk and **126MB** decoded. preloadDefaultTracks decoded
+// all twenty-two at boot — the run's loops and the entire boss bank — and
+// nothing ever let one go, on a device that kills the web view for memory.
+// The phone's own census said so: `aud221` of a 505MB total, flat all run, and
+// an idle menu already sitting at 257MB before a creature had spawned.
+//
+// The game plays ONE loop at a time and the next one is never a surprise — it
+// is the slot for the level, or the next entry in the boss rotation, and which
+// of those depends only on whether a boss is alive. So the working set is four
+// or five files rather than twenty-two, and `keepWarm` below is the whole
+// mechanism: decode what could be needed next, drop what cannot.
+//
+// WHICH MAP A QUESTION BELONGS TO is the thing to get right, and every one of
+// the load-bearing reads was against `tracks`:
+//
+//   "is this slot filled?"      sources — slotForLevel, bossBank, hasTrack.
+//                               Against `tracks` these would answer "is it
+//                               resident", so the bank would shrink to the
+//                               warm set and the rotation would collapse to
+//                               the loops it was already playing.
+//   "can I start it now?"       tracks — startSource, queueTrack.
+//
+// An UPLOAD is in both and is never evicted: there is no file to re-fetch it
+// from, so dropping one would not cost a decode, it would destroy the thing
+// the player put there. `pinned` is that.
+const sources = new Map(); // name -> { src } | { pinned: true }
+const tracks = new Map();  // name -> AudioBuffer
 
 /** Decoded music in bytes — see systems/memoryCensus.js. */
 export function musicBankBytes() {
   let n = 0;
   for (const b of tracks.values()) n += (b?.length ?? 0) * (b?.numberOfChannels ?? 1) * 4;
   return n;
+}
+
+/** Does this slot have music behind it, decoded or not? */
+function available(name) {
+  return sources.has(name) || tracks.has(name);
 }
 // name -> { leadIn, loopEnd, bars }, measured once at decode. See measureTrack.
 const trackMeta = new Map();
@@ -432,9 +472,29 @@ export function beatPhase() {
 // stop(). There is no grid to lock to then and the caller has to say what it
 // does instead — silently returning phase 0 would put every weapon in the game
 // on an imaginary downbeat during the menu.
+//
+// ...AND FALSE FOR A CONTEXT THAT IS NOT ACTUALLY RUNNING, which is the same
+// statement and was the bug. `advance` integrates the score clock off
+// ctx.currentTime, and a SUSPENDED context's currentTime does not move — so
+// `started && ctx` reported a live transport whose `pos` was frozen at zero.
+// Nothing threw and the music was merely silent, but shotGrid parked the run's
+// first shot a bar ahead of a clock that would never reach it and the gun never
+// fired at all: not late, not off the beat, silent for the whole run. The
+// staleness guard could not rescue it either, since the schedule it was holding
+// was exactly one bar out and therefore not stale.
+//
+// It is reachable whenever the context is built outside a real gesture — the
+// reduced-motion path and a .riv that fails to load both skip the splash, see
+// resumeOnFirstGesture in systems/audio.js — and it does not clear until the
+// player produces a pointer, key or touch event. A gamepad produces none of
+// those, so a pad player aiming and moving normally stayed stuck indefinitely.
+//
+// Tested against `!== 'running'` rather than `=== 'suspended'` so iOS's
+// 'interrupted' — a phone call mid-run — is the same case, which it is: the
+// clock has stopped either way.
 export function barGrid() {
   const bar = barSeconds();
-  if (!started || !ctx) return { running: false, bar, pos: 0, phase: 0 };
+  if (!started || !ctx || ctx.state !== 'running') return { running: false, bar, pos: 0, phase: 0 };
   advance();
   return {
     running: true,
@@ -574,6 +634,10 @@ export async function loadTrackFromFile(name, file) {
   if (!ensureChain()) return false;
   try {
     tracks.set(name, await ctx.decodeAudioData(await file.arrayBuffer()));
+    // PINNED. There is no file behind an upload to fetch it back from, so
+    // eviction would not cost a decode, it would destroy what the player put
+    // there — see the note above `sources`.
+    sources.set(name, { pinned: true });
     // The measurement belongs to the buffer, not to the slot — a re-upload into
     // an occupied slot would otherwise keep the old file's downbeat and bar
     // count and loop the new one at the wrong length.
@@ -599,13 +663,139 @@ function notifyTracksChanged() {
 }
 
 export function hasTrack(name) {
-  return tracks.has(name);
+  return available(name);
 }
 
 export function clearTrack(name) {
+  sources.delete(name);
   tracks.delete(name);
   trackMeta.delete(name);
   notifyTracksChanged();
+}
+
+// ---------------------------------------------------------------------------
+// DECODING ON DEMAND, AND KNOWING WHAT TO DECODE BEFORE IT IS ASKED FOR
+// ---------------------------------------------------------------------------
+
+// Decodes in flight, so two callers wanting the same loop in the same beat
+// share one fetch. Keyed by name; the entry is dropped when it settles.
+const decoding = new Map();
+
+/**
+ * Have this slot's audio in memory. Resolves to the buffer, or null.
+ *
+ * The measurement is taken here rather than lazily by metaFor, because
+ * `trackMeta` is what survives an eviction: it is three numbers per loop
+ * (downbeat, loop end, bar count) against megabytes of samples, and keeping it
+ * means a loop that comes back does not have to be re-measured — and, more to
+ * the point, that `loopSeconds()` and the bar grid still answer for a loop
+ * that is currently out of memory.
+ */
+function ensureTrack(name) {
+  if (tracks.has(name)) return Promise.resolve(tracks.get(name));
+  const inFlight = decoding.get(name);
+  if (inFlight) return inFlight;
+  const entry = sources.get(name);
+  // A pinned slot with no buffer cannot be recovered — there is no file behind
+  // an upload. Only reachable if something evicted one, which is the bug this
+  // returns null for rather than hiding.
+  if (!entry || entry.pinned) return Promise.resolve(null);
+  if (!ensureChain()) return Promise.resolve(null);
+  const job = (async () => {
+    try {
+      const buffer = await ctx.decodeAudioData(await fetchAudioBytes(entry.src));
+      tracks.set(name, buffer);
+      if (!trackMeta.has(name)) measureTrack(name, buffer);
+      notifyTracksChanged();
+      return buffer;
+    } catch (err) {
+      console.warn(`[music] could not load loop "${entry.src}" —`, err?.message ?? err);
+      // FORGOTTEN, so the bank stops offering a slot that cannot be filled.
+      // Same outcome as the eager loader's `continue`, reached from the other
+      // side: a 404 costs that loop rather than the fight's music.
+      sources.delete(name);
+      return null;
+    } finally {
+      decoding.delete(name);
+    }
+  })();
+  decoding.set(name, job);
+  return job;
+}
+
+/**
+ * WHAT COULD BE NEEDED NEXT, and therefore what has to already be decoded.
+ *
+ * Every switch in this file is scheduled against a boundary that is at most a
+ * bar away — `queueTrack` refuses a name that is not decoded, and startSource
+ * returns on a missing buffer — so "fetch it when the switch comes" is not an
+ * option: it would be a rotation that silently stops advancing, with the
+ * playing loop repeating forever and nothing in a console. The set below is
+ * what makes that unreachable.
+ *
+ * It is knowable because nothing here is random. The run's loop is
+ * slotForLevel(level), a pure function; the boss rotation is a cursor walk. The
+ * only question is whether a boss is alive, and both answers are held at once
+ * rather than switched between — a boss can arrive on any frame, and the whole
+ * point of the arrival being quantised to a bar is that it is fast.
+ */
+function warmSet() {
+  const want = new Set();
+  // Playing, and anything already scheduled. Non-negotiable.
+  if (currentTrack) want.add(currentTrack);
+  if (queuedTrack) want.add(queuedTrack);
+
+  // THE RUN'S LOOP, for this level and for the next one it would move to.
+  // `slotForLevel` clamps at the end of the filled list, so on the last slot
+  // these are the same name and the set simply holds one.
+  const here = slotForLevel(currentLevel);
+  if (here) want.add(here);
+  const next = slotForLevel(currentLevel + Math.max(1, CONFIG.music.levelsPerSlot ?? 1));
+  if (next) want.add(next);
+
+  // THE FIGHT'S LOOP. Both the one an arrival would open on and the one the
+  // chain queues after it: queueNextBossLoop runs immediately after every
+  // switch, so its target has to be resident a whole loop early, not at the
+  // boundary. Held whether or not a boss is alive — see above.
+  const bank = bossBank();
+  if (bank.length) {
+    want.add(bank[arrivalCursor(bossCursor, bank.length)]);
+    want.add(bank[nextBossCursor(bossCursor, bank.length)]);
+  }
+  return want;
+}
+
+/**
+ * Decode what the next few minutes could ask for, and let go of the rest.
+ *
+ * Called after anything that moves the prediction — a run starting, a level,
+ * a boss arriving or dying, a switch landing. Never on a frame clock: the set
+ * only changes at those moments, and re-deriving it sixty times a second would
+ * be a map walk per frame to say nothing has changed.
+ */
+function keepWarm() {
+  const want = warmSet();
+  for (const name of want) ensureTrack(name);
+  for (const name of [...tracks.keys()]) {
+    if (want.has(name)) continue;
+    // An upload has nowhere to come back from. See the note above `sources`.
+    if (sources.get(name)?.pinned) continue;
+    tracks.delete(name);
+    // trackMeta is DELIBERATELY kept — three numbers, and it is what lets the
+    // bar grid still answer for a loop that is out of memory.
+  }
+}
+
+/**
+ * Decode every slot in the catalogue.
+ *
+ * For the tools rather than the game: `npm run test:music` measures the bar
+ * grid of every file in the library at once (trackReport), which is a question
+ * about the FILES and not about what a run is playing. Nothing in the game
+ * calls this, and it is the one path that puts the whole bank in memory.
+ */
+export async function warmAllTracks() {
+  await Promise.all([...sources.keys()].map((name) => ensureTrack(name)));
 }
 
 // Fetches CONFIG.music.defaultSrc into their slots (1-indexed) so the game
@@ -616,40 +806,39 @@ export function clearTrack(name) {
 export async function preloadDefaultTracks() {
   if (defaultsRequested || !ensureChain()) return;
   defaultsRequested = true;
-  const sources = CONFIG.music.defaultSrc ?? [];
-  for (let i = 0; i < sources.length; i++) {
-    const src = sources[i];
-    const name = String(i + 1);
-    if (!src || tracks.has(name)) continue;
-    try {
-      tracks.set(name, await ctx.decodeAudioData(await fetchAudioBytes(src)));
-    } catch (err) {
-      console.warn(`[music] could not load default loop "${src}" —`, err?.message ?? err);
-      continue;
-    }
-    notifyTracksChanged();
-    // play() may have already been called and found nothing loaded yet —
-    // pick it up now instead of staying silent for the rest of the run.
-    if (pendingLevel != null) play(pendingLevel);
-  }
 
-  // The boss bank, after the run's own loops rather than alongside them: the
-  // first ordinary loop has to be decoded before the player can hear anything,
-  // and the boss music is not needed until a fight — which is minutes away at
-  // the very earliest, since the first boss is gated on a level threshold.
+  // THE CATALOGUE FIRST, AND IT IS THE WHOLE BANK. Every slot the build ships
+  // is registered here — synchronously, at no cost, because registering a name
+  // is not decoding a file. This is what slotForLevel and bossBank read, so
+  // the rotation is the full library from the first frame even though almost
+  // none of it is in memory: the alternative, a bank that grew as files landed,
+  // would mean the loop a level picked depended on how far the fetching had got.
+  const defaults = CONFIG.music.defaultSrc ?? [];
+  for (let i = 0; i < defaults.length; i++) {
+    const name = String(i + 1);
+    if (defaults[i] && !available(name)) sources.set(name, { src: defaults[i] });
+  }
   const bossSources = CONFIG.music.bossSrc ?? [];
   for (let i = 0; i < bossSources.length; i++) {
-    const src = bossSources[i];
     const name = BOSS_PREFIX + i;
-    if (!src || tracks.has(name)) continue;
-    try {
-      tracks.set(name, await ctx.decodeAudioData(await fetchAudioBytes(src)));
-    } catch (err) {
-      console.warn(`[music] could not load boss loop "${src}" —`, err?.message ?? err);
-      continue;
-    }
-    notifyTracksChanged();
+    if (bossSources[i] && !available(name)) sources.set(name, { src: bossSources[i] });
   }
+  notifyTracksChanged();
+
+  // THEN THE ONE FILE THE PLAYER IS ABOUT TO HEAR, awaited on its own rather
+  // than as part of the warm set. Everything else in that set is minutes away
+  // at the earliest; this one is the difference between the menu having music
+  // and not, so it is not queued behind twenty other decodes the way it was.
+  const first = slotForLevel(currentLevel) ?? String(1);
+  await ensureTrack(first);
+  // play() may have already been called and found nothing loaded yet — pick it
+  // up now instead of staying silent for the rest of the run.
+  if (pendingLevel != null) play(pendingLevel);
+
+  // ...and the rest of what could be needed next, in the background. Not
+  // awaited: a boss loop is gated on a level threshold and the next ordinary
+  // slot on a level-up, both of which are a long way off compared to a decode.
+  keepWarm();
 }
 
 function startSource(name, when) {
@@ -784,6 +973,10 @@ export function play(level = 1) {
   filter.frequency.cancelScheduledValues(ctx.currentTime);
   filter.frequency.setValueAtTime(Math.max(60, openHz), ctx.currentTime);
   if (!pollTimer) pollTimer = window.setInterval(pollQueue, 40);
+  // The run has a level and a fresh rotation now, so what could be needed next
+  // has changed completely — resetBossMusic above put the cursor back to the
+  // intro, and the last run's fight loops are no longer worth holding.
+  keepWarm();
 }
 
 export function stop() {
@@ -834,7 +1027,25 @@ export function nextBar(now = ctx?.currentTime ?? 0) {
  *                inside a couple of seconds instead of up to eighteen.
  */
 export function queueTrack(name, quantum = 'loop') {
-  if (!started || !tracks.has(name) || name === currentTrack) return;
+  if (!started || name === currentTrack) return;
+  // NOT DECODED IS A BUG HERE, and it has to be a loud one. keepWarm exists so
+  // that every name reaching this line is already in memory; if one is not, the
+  // switch simply does not happen, the playing loop repeats forever, and the
+  // rotation has stopped with nothing in a console to say so. That is the one
+  // failure lazy loading can introduce and the only one that is invisible.
+  //
+  // So: say it once, and start the decode anyway. The boundary this was aiming
+  // for is gone, but the NEXT one will find the file there — a fight that
+  // repeats one loop for an extra eighteen seconds and then carries on is a
+  // recoverable fault; one that never advances again is not.
+  if (!tracks.has(name)) {
+    if (available(name)) {
+      console.warn(`[music] "${name}" was queued before it was decoded — the switch will`
+        + ' be late by up to one loop. Something moved the rotation without warming it.');
+      ensureTrack(name);
+    }
+    return;
+  }
   queuedTrack = name;
   queuedQuantum = quantum === 'bar' ? 'bar' : 'loop';
 }
@@ -856,8 +1067,11 @@ function pollQueue() {
     startSource(name, boundary);
     // A boss fight chains: the loop that just started queues its own successor
     // for the END of itself, so the rotation carries on with no clock outside
-    // the music driving it. See startBossMusic.
+    // the music driving it. See startBossMusic. (queueNextBossLoop warms; the
+    // ordinary case has to do it here, or the loop that just stopped playing
+    // would be held for the rest of the run.)
     if (bossActive) queueNextBossLoop();
+    else keepWarm();
   }
 }
 
@@ -972,6 +1186,11 @@ export function setLevel(level) {
   if (bossActive) return;
   const slot = slotForLevel(level);
   if (slot != null && slot !== currentTrack) queueTrack(slot);
+  // A level moves the ordinary rotation on, so the slot AFTER this one is a
+  // different file. Called even when the slot did not change — most levels do
+  // not cross a boundary, and the one that does must not be the first time
+  // anybody asked for the file it lands on.
+  keepWarm();
 }
 
 // ---------------------------------------------------------------------------
@@ -1017,7 +1236,9 @@ function bossBank() {
   const n = (CONFIG.music.bossSrc ?? []).length;
   for (let i = 0; i < n; i++) {
     const name = BOSS_PREFIX + i;
-    if (tracks.has(name)) out.push(name);
+    // The catalogue, for the reason in slotForLevel: the bank is the library,
+    // not the two loops that are decoded right now.
+    if (available(name)) out.push(name);
   }
   return out;
 }
@@ -1037,22 +1258,49 @@ export function bossMusicActive() {
 // Note the cursor ends up pointing at the loop that is QUEUED, not the one
 // sounding — this runs immediately after a switch. That is what the next fight
 // resumes from; see startBossMusic.
+// WHERE THE CURSOR GOES NEXT, as a pure function of where it is.
+//
+// Pulled out of queueNextBossLoop so that warmSet can ask the same question
+// without moving it. A second copy of this arithmetic is the obvious way to
+// write the predictor and it is the way it would rot: the two would agree
+// today and disagree the first time the intro rule was touched, and the
+// failure is a fight whose next loop was never decoded — the rotation stops
+// advancing, the playing loop repeats forever, and nothing throws.
+function nextBossCursor(cursor, bankLength) {
+  if (bankLength === 0) return 0;
+  const hasIntro = bankLength > 1 && CONFIG.music.bossIntro !== false;
+  let c = cursor + 1;
+  if (hasIntro) {
+    // 0 is the intro and is only ever reached by an arrival; from here the
+    // cursor walks 1..n-1 and wraps back to 1.
+    if (c >= bankLength) c = 1;
+    if (c < 1) c = 1;
+  } else if (c >= bankLength) {
+    c = 0;
+  }
+  return c;
+}
+
+// ...and where an ARRIVAL would put it. The same clamp startBossMusic applies,
+// asked without applying it — the run's first boss gets the intro, every later
+// one is floored above it.
+function arrivalCursor(cursor, bankLength) {
+  if (bankLength === 0) return 0;
+  const floor = bankLength > 1 && CONFIG.music.bossIntro !== false ? 1 : 0;
+  if (cursor < 0) return 0;
+  if (cursor < floor || cursor >= bankLength) return floor;
+  return cursor;
+}
+
 function queueNextBossLoop() {
   const bank = bossBank();
   if (bank.length === 0) return;
-  const hasIntro = bank.length > 1 && CONFIG.music.bossIntro !== false;
-  bossCursor += 1;
-  if (hasIntro) {
-    // 0 is the intro and is only ever reached by the entry below; from here the
-    // cursor walks 1..n-1 and wraps back to 1.
-    if (bossCursor >= bank.length) bossCursor = 1;
-    if (bossCursor < 1) bossCursor = 1;
-  } else if (bossCursor >= bank.length) {
-    bossCursor = 0;
-  }
+  bossCursor = nextBossCursor(bossCursor, bank.length);
   // A bank of one is the fight's whole score: queueTrack refuses a name that is
   // already playing, so it simply keeps looping, which is correct.
   queueTrack(bank[bossCursor], 'loop');
+  // The cursor has moved, so the loop AFTER this one is a different file now.
+  keepWarm();
 }
 
 /**
@@ -1107,9 +1355,10 @@ export function startBossMusic() {
     return false;
   }
   bossActive = true;
-  const floor = bank.length > 1 && CONFIG.music.bossIntro !== false ? 1 : 0;
-  if (bossCursor < 0) bossCursor = 0; // the run's first boss, and the only intro
-  else if (bossCursor < floor || bossCursor >= bank.length) bossCursor = floor;
+  // The run's first boss gets the intro; every later one is floored above it.
+  // See arrivalCursor, which is this clamp asked without applying it — warmSet
+  // needs the answer a whole fight early.
+  bossCursor = arrivalCursor(bossCursor, bank.length);
 
   // UNQUANTISED WHEN THE SCORE IS ALREADY SILENT, and quantised when it is not.
   // The bar line exists to hide a seam — the run's loop being cut mid-phrase —
@@ -1128,11 +1377,13 @@ export function startBossMusic() {
     endBossFade(when);
     // Normally pollQueue chains the rotation when it makes a switch; this one
     // did not go through the queue, so the successor is queued here or a fight
-    // would play its first loop and then stop.
+    // would play its first loop and then stop. (queueNextBossLoop warms the
+    // one after that.)
     queueNextBossLoop();
     return true;
   }
   queueTrack(bank[bossCursor], 'bar');
+  keepWarm();
   return true;
 }
 
@@ -1181,6 +1432,10 @@ export function endBossMusic({ immediate = true } = {}) {
   if (!slot) return;
   if (immediate) startSource(slot, ctx.currentTime + 0.02);
   else queueTrack(slot, 'bar');
+  // The fight's loops can go, all but the one the NEXT arrival would open on —
+  // the cursor is left pointing at it on purpose (see above), and warmSet reads
+  // the same cursor, so that one file stays and the rest of the bank does not.
+  keepWarm();
 }
 
 /**
@@ -1203,7 +1458,13 @@ export function resetBossMusic() {
 // instead of leaving silent gaps.
 export function slotForLevel(level) {
   const filled = [];
-  for (let i = 1; i <= CONFIG.music.slots; i++) if (tracks.has(String(i))) filled.push(String(i));
+  // `available`, not `tracks.has`: the question is which slots HAVE music, and
+  // only a handful are decoded at any moment (see the note above `sources`).
+  // Against the cache this would return the warm set, so the loop a level
+  // picked would depend on what happened to be in memory — and warmSet calls
+  // this to decide what to keep, which would make it a loop that converged on
+  // one file.
+  for (let i = 1; i <= CONFIG.music.slots; i++) if (available(String(i))) filled.push(String(i));
   if (filled.length === 0) return null;
   const idx = Math.floor((level - 1) / Math.max(1, CONFIG.music.levelsPerSlot));
   return filled[Math.min(idx, filled.length - 1)];

@@ -78,7 +78,7 @@ import { setSetting } from '../path/src/systems/settings.js';
 import { skyPlaneMetrics } from '../path/src/systems/sky.js';
 import { createWallRocks } from '../path/src/systems/wallRocks.js';
 import { ASSETS, getAssetSizeMultiplier } from '../path/src/assets.js';
-import { updateCineCamera, resetCineCamera, cineAspectZoom } from '../path/src/systems/cineCamera.js';
+import { updateCineCamera, resetCineCamera, cineAspectZoom, cineMenu } from '../path/src/systems/cineCamera.js';
 import { dayState, resetDayCycle, advanceClock, updateDayCycle } from '../path/src/systems/daylight.js';
 import { player, updatePlayer, recomputeStats, resetPlayer } from '../path/src/entities/player.js';
 
@@ -808,6 +808,93 @@ section('LENS — the camera is what answers the window, and it shows a constant
   check('the punch-in is capped before a 32:9 monitor becomes a keyhole',
     cineAspectZoom() <= (CONFIG.cinecam.base.maxPunch ?? 1.6) + 1e-9,
     `x${cineAspectZoom().toFixed(2)} at the ${(CONFIG.cinecam.base.maxPunch ?? 1.6)} cap`);
+}
+
+// ---------------------------------------------------------------------------
+section('TURNING THE PHONE WITH THE MENU UP');
+
+// The main menu is the one rig state whose numbers are MEASURED rather than
+// typed: systems/mainMenu.js composes a frame around the bust and the row of
+// buttons on this window and hands it down through cineMenu each frame. Every
+// other state's bag is resolved once, on entering it, which is right for
+// numbers that came out of config.js and cannot move — and was wrong here.
+// Rotating the phone recomposes the menu without ever leaving the state, so
+// the rig went on driving to the framing it resolved for the other
+// orientation and stayed there. Measured on a real 852x393 -> 393x852 flip,
+// the menu came back at zoom 2.15 where composing that same window from
+// scratch asks for 7.38: the animal a third the size it should be, with the
+// buttons scattered off it.
+//
+// A PROPERTY AND NOT THE MEASUREMENT. The two zooms below are plausible menu
+// framings and nothing more — what is asserted is that whatever the screen
+// hands over is what the rig arrives at, which stays true when the bust, the
+// lattice or the composition is retuned.
+{
+  const wasEnabled = CONFIG.cinecam.enabled;
+  CONFIG.cinecam.enabled = true;
+
+  const LAND = 852 / 393;
+  const PORT = 393 / 852;
+  // Composed for a landscape phone and for the same phone upright: the crop
+  // has to grow to hold the buttons across a narrow frame, so the upright one
+  // is the wider shot of the two. See composeHeld in systems/mainMenu.js.
+  const LAND_ZOOM = 10.12;
+  const PORT_ZOOM = 7.38;
+  const LAND_OFFY = 2.70;
+  const PORT_OFFY = 3.16;
+
+  // Four seconds of the menu being held on one window: the screen republishes
+  // its framing every frame, exactly as mainMenu.update does.
+  const holdMenu = (aspect, zoom, offsetY, ctx) => {
+    updateBounds(aspect);
+    let out = null;
+    for (let i = 0; i < 240; i++) {
+      cineMenu(true, { zoom, offsetX: 0, offsetY });
+      out = updateCineCamera(DT, ctx);
+    }
+    return out;
+  };
+
+  updateBounds(LAND);
+  resetCineCamera();
+  const ctx = rigCtx();
+  const land = holdMenu(LAND, LAND_ZOOM, LAND_OFFY, ctx);
+  check('the menu gets the framing it composed, landscape',
+    near(land.zoom, LAND_ZOOM, 0.01), `zoom ${land.zoom.toFixed(3)} for ${LAND_ZOOM}`);
+
+  // THE FLIP. No state change — the menu never comes down — so nothing
+  // re-enters `mainMenu` and nothing but this republish can move the bag.
+  const port = holdMenu(PORT, PORT_ZOOM, PORT_OFFY, ctx);
+  check('...and the recomposed framing after a rotation',
+    near(port.zoom, PORT_ZOOM, 0.01), `zoom ${port.zoom.toFixed(3)} for ${PORT_ZOOM}`);
+
+  // What the stale bag left behind, named: the zoom resolved on entry, read
+  // through the new window's aspect term. It is a plausible-looking number
+  // rather than a crash, which is why this is worth asserting by name.
+  updateBounds(LAND);
+  const afLand = cineAspectZoom();
+  updateBounds(PORT);
+  const stale = LAND_ZOOM * (cineAspectZoom() / afLand);
+  check('...and not the one the landscape bag would have given',
+    Math.abs(port.zoom - stale) > 0.5,
+    `${port.zoom.toFixed(2)} vs the stale ${stale.toFixed(2)}`);
+
+  // The offsets travel the same road as the zoom, and a menu framed at the
+  // right size on the wrong centre is just as broken.
+  check('the vertical framing follows the rotation too',
+    near(port.y, ctx.target.y + PORT_OFFY, 0.05),
+    `y ${port.y.toFixed(2)} for ${(ctx.target.y + PORT_OFFY).toFixed(2)}`);
+
+  // Back the way it came, because a fix that only works in one direction is
+  // half a fix — and turning the phone back is the commoner gesture.
+  const back = holdMenu(LAND, LAND_ZOOM, LAND_OFFY, ctx);
+  check('...and back again when the phone is turned the other way',
+    near(back.zoom, LAND_ZOOM, 0.01), `zoom ${back.zoom.toFixed(3)} for ${LAND_ZOOM}`);
+
+  cineMenu(false);
+  CONFIG.cinecam.enabled = wasEnabled;
+  resetCineCamera();
+  updateBounds(LANDSCAPE);
 }
 
 // ---------------------------------------------------------------------------

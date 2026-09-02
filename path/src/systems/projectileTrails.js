@@ -199,7 +199,7 @@ function freeRibbonSlot(t) {
  * to be handed.
  */
 function flushRibbonGroups() {
-  for (const [key, g] of ribbonGroups) {
+  for (const g of ribbonGroups.values()) {
     const n = g.slots.length;
     g.geo.setDrawRange(0, n * indicesPerSlot(g.maxPts));
     if (n > 0 && g.dirty) {
@@ -210,16 +210,31 @@ function flushRibbonGroups() {
       g.geo.attributes.color.needsUpdate = true;
     }
     g.dirty = false;
-    // An emptied group is dropped rather than left drawing nothing: a preset
-    // that fired once early in a run should not cost a mesh in the scene for
-    // the rest of it, and the group rebuilds on the next shot that wants it.
-    if (n === 0) {
-      g.scene.remove(g.mesh);
-      g.geo.dispose();
-      ribbonGroups.delete(key);
-    }
   }
 }
+
+// AN EMPTY GROUP IS KEPT, and the first version of this dropped it. That read
+// as tidy — a preset that fired once early in a run should not cost a mesh in
+// the scene for the rest of it — and it was the most expensive line in the
+// file, because the thing it is tidying away costs NOTHING to keep and a great
+// deal to rebuild.
+//
+// Nothing, because three returns before it draws: `if (drawCount === 0)
+// return;` in WebGLBufferRenderer, and an emptied group's draw range is zero.
+// So the whole saving was one Mesh in scene.children that is never drawn.
+//
+// A great deal, because the gun's group EMPTIES BETWEEN VOLLEYS. Every shot in
+// the air retires within a second or two, and with a rapid-fire build the last
+// one lands a moment before the next volley leaves — so the group was being
+// disposed and rebuilt several times a second, and rebuilt from RIBBON_START,
+// doubling its way back up to whatever the volley needed. Each of those steps
+// allocates two Float32Arrays and a Uint32Array at the new capacity and throws
+// away a GL buffer: at 128 slots of a 20-point ribbon that is about 300KB
+// churned per cycle, several times a second, on the device this whole change
+// exists to cool down. It is the exact shape of the thing it was meant to fix.
+//
+// So a group lives for the run. clearProjectileTrails is what ends it, and
+// that is called between runs (main.js) where a pause for a free is free.
 
 // How big the projectile ACTUALLY renders, in world units.
 //
@@ -528,8 +543,23 @@ export function trailCount() {
   return trails.size;
 }
 
-/** Draw calls the ribbons are costing right now. Diagnostics only. */
+/**
+ * Draw calls the ribbons are costing right now.
+ *
+ * The groups that have somebody in them, NOT every group: an emptied one is
+ * kept (see the note above) and three returns before drawing a zero-length
+ * range, so counting it would report a cost nothing is paying. That number is
+ * `trailBufferCount` below, and the two are deliberately separate — one is
+ * what the frame costs and the other is what the run is holding.
+ */
 export function trailDrawCount() {
+  let n = 0;
+  for (const g of ribbonGroups.values()) if (g.slots.length) n++;
+  return n;
+}
+
+/** Buffers being held, drawn or not — the memory side. Diagnostics only. */
+export function trailBufferCount() {
   return ribbonGroups.size;
 }
 

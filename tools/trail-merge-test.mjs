@@ -40,6 +40,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import {
   updateProjectileTrails, clearProjectileTrails, trailCount, trailDrawCount,
+  trailBufferCount,
 } from '../path/src/systems/projectileTrails.js';
 
 let failures = 0;
@@ -92,9 +93,11 @@ check('the draw range covers exactly the live ribbons',
 // ===========================================================================
 section('Two ribbon LENGTHS are two meshes, and neither is in the other');
 
-// bullet is 8 points, missile is 16 — a slot size cannot be shared, so these
-// have to be separate buffers. Sharing them would put a missile's vertices
-// inside a pebble's slot, which draws as a streak of the wrong length.
+// The pebble and the missile are authored at different `points`, and a slot
+// size cannot be shared — so these have to be separate buffers. Sharing them
+// would put a missile's vertices inside a pebble's slot, which draws as a
+// streak of the wrong length. (Not naming the two numbers on purpose: they are
+// tuned values, and a test that hardcodes one passes on one machine.)
 const rocket = mover('missile', 5, 5);
 updateProjectileTrails(0.016, scene, shots, [rocket]);
 rocket.mesh.position.x += 0.2;
@@ -156,16 +159,43 @@ check('and the mesh itself is not carrying it', merged.position.z === 0,
   `${merged.position.z}`);
 
 // ===========================================================================
-section('An emptied length stops costing a draw');
+section('An emptied length costs no draw, and KEEPS its buffer');
 
+// The first version of this file dropped an empty group, which read as tidy
+// and was the most expensive line in it: the gun's group empties between
+// volleys, so with a rapid-fire build it was disposed and rebuilt from
+// RIBBON_START several times a second — hundreds of KB of typed arrays and a
+// GL buffer churned per cycle, on the device the whole change exists to cool
+// down. Keeping it costs one undrawn Mesh, because three returns before
+// drawing a zero-length range.
 updateProjectileTrails(0.016, scene, survivors);
-check('the missile\'s buffer is gone with it', trailDrawCount() === 1, `${trailDrawCount()}`);
-check('and it left the scene', trailMeshes().length === 1, `${trailMeshes().length}`);
+check('the missile stops costing a draw', trailDrawCount() === 1, `${trailDrawCount()}`);
+check('...but its buffer is still there', trailBufferCount() === 2, `${trailBufferCount()}`);
+
+// NAMED FROM CONFIG, NOT TYPED. `points` is a tuned value — imported-tuning
+// .json overrides the default in config.js, and the missile's is 15 rather
+// than the 16 the source says. A hardcoded name here passes on one machine.
+const missilePts = Math.max(2, Math.round(CONFIG.trails.missile.points));
+const before = trailMeshes().find((m) => m.name === `trails:${missilePts}`);
+const beforeArray = before.geometry.attributes.position.array;
+const beforeCapacity = beforeArray.length;
+// Refill it. A group that had been dropped would rebuild from RIBBON_START and
+// double its way back up — a fresh array every time, which is exactly the
+// churn this is guarding.
+const rocket2 = mover('missile', 5, 5);
+updateProjectileTrails(0.016, scene, survivors, [rocket2]);
+check('and a shot of that length reuses it rather than reallocating',
+  trailMeshes().find((m) => m.name === `trails:${missilePts}`)?.geometry.attributes.position.array
+    === beforeArray,
+  `${beforeCapacity} floats, same array`);
 
 updateProjectileTrails(0.016, scene, []);
 check('no movers, no ribbons', trailCount() === 0, `${trailCount()}`);
 check('and no draws', trailDrawCount() === 0, `${trailDrawCount()}`);
-check('nothing left in the scene', trailMeshes().length === 0, `${trailMeshes().length}`);
+// The buffers stay until the run ends — clearProjectileTrails is what frees
+// them, and main.js calls that between runs.
+check('the buffers are still held for the next volley', trailBufferCount() === 2,
+  `${trailBufferCount()}`);
 
 // ===========================================================================
 section('A group grows past its start capacity without losing anybody');
@@ -187,7 +217,8 @@ check('and it is still one draw', trailDrawCount() === 1, `${trailDrawCount()}`)
 
 clearProjectileTrails(scene);
 check('clearing takes everything', trailCount() === 0 && trailDrawCount() === 0
-  && trailMeshes().length === 0);
+  && trailBufferCount() === 0 && trailMeshes().length === 0,
+  `${trailBufferCount()} buffer(s), ${trailMeshes().length} mesh(es)`);
 
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
 process.exit(failures ? 1 : 0);

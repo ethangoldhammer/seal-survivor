@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { createBoneSpring } from './boneSpring.js';
 import { buildChain, applyChain, coneGate, tipWorld } from './ikChain.js';
+import { ease } from '../ease.js';
 
 // Aim rig — the parts of the seal that point at what the player is pointing
 // at, plus the bone points other systems hang things off.
@@ -74,6 +75,49 @@ const _aim = new THREE.Vector3();
 const _headAim = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _peek = new THREE.Vector3();
+// The twitched aim. Its own scratch and never `_aim` itself: the two fins are
+// twitched by different amounts on the same frame, and the head reads `_aim`
+// after both of them.
+const _finAim = new THREE.Vector3();
+
+// --- THE SHOT TWITCH --------------------------------------------------------
+//
+// One flipper's flick, advanced one frame. Returns how much of CONFIG.fins
+// .twitch.angle that fin is holding right now — 0 at rest, 1 at full, and
+// NEGATIVE while a spring is on the far side of home, which is the undershoot
+// that makes a spring read as a spring.
+//
+// The state is per fin and lives on the rig; what the mode means lives here,
+// beside the arithmetic, rather than in the caller.
+function stepTwitch(s, dt, tc) {
+  const mode = tc.mode ?? 'snap';
+
+  if (mode === 'spring') {
+    // Semi-implicit Euler — velocity first, then position off the NEW velocity.
+    // The explicit form gains energy at this stiffness and a 60fps frame, and
+    // what that looks like is a flipper slowly winding itself into a windmill
+    // over the course of a run rather than anything that reads as a bug.
+    s.v += (-(tc.spring?.stiffness ?? 420) * s.x - (tc.spring?.damping ?? 30) * s.v) * dt;
+    s.x += s.v * dt;
+    // Parked outright once it is under a thousandth of the angle, so a fin at
+    // rest is EXACTLY at rest and the branch below can be skipped whole.
+    if (Math.abs(s.x) < 1e-3 && Math.abs(s.v) < 1e-2) { s.x = 0; s.v = 0; }
+    return s.x;
+  }
+
+  const dur = Math.max(1e-3, tc.duration ?? 0.15);
+  // Infinity while at rest, so a rig that has never fired is never mid-gesture
+  // on its first frame — a 0 default would twitch every flipper on spawn.
+  if (!(s.t < dur)) return 0;
+  const u = s.t / dur;
+  s.t += dt;
+  const home = tc.returnEase ?? 'outCubic';
+  if (mode === 'pop') {
+    const rise = Math.min(0.95, Math.max(0.01, tc.rise ?? 0.3));
+    return u < rise ? ease('outQuad', u / rise) : 1 - ease(home, (u - rise) / (1 - rise));
+  }
+  return 1 - ease(home, u);
+}
 
 // Build the rig for one model instance. Returns null when this model has no
 // aimRig descriptor or nothing in it resolves — every caller treats that as
@@ -138,6 +182,11 @@ export function createAimRig(instance) {
   // for anything you can SEE: the flash, the bullet and the club were all
   // hanging in open water off the end of the flipper.
   const muzzles = fins.map(() => new THREE.Vector3());
+  // ONE TWITCH STATE PER FIN, index-aligned to `fins` and to `muzzles`, because
+  // the thing being tracked is "this flipper just threw something" and the fins
+  // do not throw together. `t` is seconds since the kick for the curve modes;
+  // `x`/`v` are the spring's offset and its rate.
+  const twitches = fins.map(() => ({ t: Number.POSITIVE_INFINITY, x: 0, v: 0 }));
   // Parallel to `muzzles`, so emitPoint can trim by SIDE without knowing how
   // the asset happened to order its chains. See CONFIG.fins.sides.
   const muzzleSides = fins.map((f) => f.name ?? null);
@@ -210,9 +259,41 @@ export function createAimRig(instance) {
       if (hasAim) _aim.set(aim.x, aim.y, 0).normalize();
 
       finWeight = easeWeight(finWeight, { ...finCfg, enabled: finCfg.enabled && finCfg.ik }, engaged, suppressed, hasAim, dt);
-      for (const chain of fins) {
-        applyChain(chain, dt, finCfg, finWeight,
-          sideTrim(chain.name, 'tipLengthMul', finCfg.tipLengthMul ?? 1), _aim);
+
+      // THE FLICK. Suppressed along with the rest of the aim: while a one-shot
+      // is playing the fins belong to the clip, and a shot fired mid-barrel-roll
+      // must not leave half a twitch on a chain the solver is not writing.
+      const tc = finCfg.twitch ?? {};
+      const twitchOn = tc.enabled !== false && !suppressed && hasAim;
+      // Which way round the quarter turn is. `_aim.x` IS the y component of the
+      // aim rotated +90 degrees, so its sign is exactly "does turning that way
+      // go up" — stated once here rather than as a perpendicular built twice.
+      const upSign = _aim.x >= 0 ? 1 : -1;
+
+      for (let i = 0; i < fins.length; i++) {
+        const chain = fins[i];
+        let tipMul = sideTrim(chain.name, 'tipLengthMul', finCfg.tipLengthMul ?? 1);
+        let amount = 0;
+        if (twitchOn) amount = stepTwitch(twitches[i], dt, tc);
+        else { twitches[i].t = Number.POSITIVE_INFINITY; twitches[i].x = 0; twitches[i].v = 0; }
+
+        let target = _aim;
+        if (amount !== 0) {
+          const a = upSign * (tc.angle ?? 0) * amount;
+          const c = Math.cos(a);
+          const sn = Math.sin(a);
+          // An exact rotation about Z rather than an added perpendicular, so
+          // `angle` is honestly the radians it says it is at every aim rather
+          // than only for the small ones.
+          _finAim.set(_aim.x * c - _aim.y * sn, _aim.x * sn + _aim.y * c, 0);
+          target = _finAim;
+          // ...and the reach opens with it, which is what turns a hinge at the
+          // shoulder into a flick of the whole limb. Composed with the per-side
+          // trim above rather than replacing it.
+          tipMul *= 1 + (tc.reachPop ?? 0) * amount;
+        }
+
+        applyChain(chain, dt, finCfg, finWeight, tipMul, target);
       }
 
       // ...and then the muzzles, off the same posed bones but at the asset's
@@ -327,6 +408,7 @@ export function createAimRig(instance) {
     // nothing eases out of a pose that belonged to the previous seal.
     reset() {
       finWeight = 0;
+      for (const t of twitches) { t.t = Number.POSITIVE_INFINITY; t.x = 0; t.v = 0; }
       headWeight = 0;
       tailWeight = 0;
       glanceOut = 0;
@@ -334,6 +416,27 @@ export function createAimRig(instance) {
       for (const chain of fins) { chain.primed = false; chain.hasWritten = false; }
       if (head) { head.primed = false; head.hasWritten = false; }
       tailSpring?.reset();
+    },
+
+    /**
+     * THIS FLIPPER JUST THREW SOMETHING — flick it. `index` is the emit-point
+     * origin the shot left from, the same number emitPoint() was handed, so the
+     * fin that twitches is the fin the pebble came off by construction rather
+     * than by a side name matched at the call site.
+     *
+     * `strength` scales the kick and is 1 for an ordinary pellet. Wrapped like
+     * emitPoint does, so a weapon walking a cursor past the end of the limb list
+     * comes back round instead of silently kicking nothing.
+     */
+    kickFin(index, strength = 1) {
+      const tc = CONFIG.fins?.twitch ?? {};
+      if (tc.enabled === false || !(strength > 0) || fins.length === 0) return;
+      const s = twitches[((index % fins.length) + fins.length) % fins.length];
+      // The spring ACCUMULATES and the curves RESTART, which is the whole
+      // difference between the modes under a fast gun: one compounds, the other
+      // re-throws from wherever it had got to.
+      if ((tc.mode ?? 'snap') === 'spring') s.v += (tc.spring?.impulse ?? 25) * strength;
+      else s.t = 0;
     },
 
     // Shove the tail (a hit, a wall bounce). Handled by the same spring that
