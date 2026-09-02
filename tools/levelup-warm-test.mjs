@@ -208,7 +208,7 @@ for (const file of readdirSync(SYSTEMS).filter((f) => f.endsWith('.js'))) {
   if (!/^\s*(?:const|let|var)?[^/\n]*\bcreateVisual\s*\(/m.test(src)) continue;
   found.push(file);
 }
-const covered = new Set(['shrimpRing.js', 'sealTeam.js', 'harp.js', 'club.js']);
+const covered = new Set(['shrimpRing.js', 'sealTeam.js', 'harp.js', 'club.js', 'sardineSwirl.js']);
 
 // THE DETECTOR IS TESTED FIRST, the same way the copy gate tests its own regex.
 // A scan that has quietly stopped matching finds nothing, allows everything and

@@ -1608,6 +1608,42 @@ export const ASSETS = {
     },
   },
 
+  // SARDINE SWIRL's body — the razor clam's shell, smaller and much shorter.
+  //
+  // A STAND-IN, and deliberately the razor clam's one: the swirl needs a body
+  // that reads as a small hard silver thing turning over in the water, the
+  // blade already is one, and `bladePools` is keyed per ASSET so a second
+  // `shape: 'blade'` entry gets its own pool of warps rather than sharing the
+  // clam's. Real sardine art replaces this row and nothing else.
+  //
+  // THE ASPECT RATIO IS THE WHOLE DIFFERENCE. The clam is 0.17 x 1.1 — six and
+  // a half times as long as it is wide, which is a knife. A sardine is closer
+  // to three, so `length` comes most of the way down while `width` barely
+  // moves, and at assets.csv's 1.6 the drawn body is about 0.83 units long
+  // against the blade's 2.64. Eight of them orbiting the seal at the clam's
+  // proportions would be a bin of knives.
+  //
+  // MORE TWIST AND MORE TAPER THAN THE CLAM, both for the same reason: this
+  // body is a third the length, so the chrome's horizon (CONFIG.chromeBlade,
+  // read off a view-space normal) has a third of the distance to sweep down
+  // it. A shorter shell with the clam's twist shades nearly flat and the metal
+  // never shows — see the note on `twist` in getBladeGeometry.
+  sardineBlade: {
+    shape: 'blade', radius: 0.14, color: 0xdfe9f5, unlit: true, chrome: true,
+    blade: {
+      width: 0.19, length: 0.52, depth: 0.06,
+      // Eight rather than the clam's ten. The bow and the twist are curves at
+      // this length by six; the segments past that are vertices spent on a
+      // body the player sees at a third the size.
+      segments: 8,
+      variants: 7,
+      taper: 0.5,
+      bow: 0.14,
+      twist: 0.7,
+      grit: 0.12,
+    },
+  },
+
   // Oyster Blaster's payload. Both are unlit glowing spheres rather than
   // models on purpose: a pearl is a highlight, and any baked shading on a
   // thing this bright clips to flat white in the composite anyway.
@@ -7223,10 +7259,12 @@ function getMaterial(key, def) {
   // fresnel that sells each of them is tuned separately. See makeShellMaterial.
   if (def.shell) makeShellMaterial(mat, typeof def.shell === 'string' ? def.shell : 'bubbleShell');
   // `chrome: true` takes CONFIG.chromeBlade; `chrome: '<configKey>'` takes its
-  // own block, on the same rule `shell` follows. Only one asset wears it today
-  // (the razor clam's shell) and the key is still read rather than assumed,
-  // because the second polished thing in the game will not want the first
-  // one's horizon. See makeChromeMaterial.
+  // own block, on the same rule `shell` follows. Two assets wear it today and
+  // both take the default block — the razor clam's shell and the sardine
+  // swirl's body, which is deliberately the same object smaller. The key is
+  // still read rather than assumed, because the first polished thing that is
+  // NOT a piece of shell will not want a shell's horizon. See
+  // makeChromeMaterial.
   if (def.chrome) makeChromeMaterial(mat, typeof def.chrome === 'string' ? def.chrome : 'chromeBlade');
   // `bands: true` takes CONFIG.elementBands; a string names its own block, the
   // same rule `shell` and `chrome` follow. See makeBandMaterial.

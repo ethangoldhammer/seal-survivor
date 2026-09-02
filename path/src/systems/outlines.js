@@ -43,6 +43,12 @@ const shellColor = new THREE.Color();
 // The player
 // ---------------------------------------------------------------------------
 
+// The i-frame strobe's own phase. Separate from `pulsePhase` (the wind-up
+// throb) rather than shared, because the two run at different rates for
+// different reasons and can be live on the same frame — a seal that is charging
+// a strike while a window it armed runs out is an ordinary thing to be.
+let blinkPhase = 0;
+
 let playerShells = [];
 // The ink line — a second, thinner set of hulls in flat black, sitting inside
 // the glowing ones so the glow shows as a fringe around it. See
@@ -82,9 +88,11 @@ export function attachPlayerOutline(body) {
   // clear with it — a flare left running from the seal that was just replaced
   // would decay onto shells that never saw the strike.
   pulsePhase = 0;
+  blinkPhase = 0;
   flare = 0;
   hurt = 0;
   hurtPower = 0;
+  hurtHold = 0;
   boosted = false;
   applyPlayerOutline();
 }
@@ -147,6 +155,10 @@ let pulsePhase = 0; // 0..1 through the current throb
 let flare = 0; // the release burst, 1 -> 0 over flareTime
 let hurt = 0; // the damage flash, 1 -> 0 over its (strength-scaled) duration
 let hurtPower = 0; // how big the hit that lit it was, 0..1 — held for the flash
+// Seconds of flat time still owed at the top of the current flash. The decay
+// is squared, so without this the red is past half brightness inside a couple
+// of frames and reads as a flicker — see CONFIG.playerOutline.hit.hold.
+let hurtHold = 0;
 let boosted = false; // was anything added last frame? (see the idle guard)
 
 // Scratch, reused: this runs every frame of a wind-up and applyLook only ever
@@ -182,13 +194,20 @@ export function flashPlayerOutlineDamage(strength = 1) {
   // brightness rather than cutting it short at the scratch's.
   hurtPower = Math.max(hurtPower * hurt, s);
   hurt = 1;
+  // FLAT TIME AT THE TOP before the squared fall starts — see
+  // CONFIG.playerOutline.hit.hold. Re-armed in full by every hit, including one
+  // landing inside another's hold, for the same reason `hurtPower` above takes
+  // a Math.max: the newer event is the one the player is being told about.
+  hurtHold = CONFIG.playerOutline?.hit?.hold ?? 0;
 }
 
 export function resetPlayerOutlineCharge() {
   pulsePhase = 0;
+  blinkPhase = 0;
   flare = 0;
   hurt = 0;
   hurtPower = 0;
+  hurtHold = 0;
   if (boosted) {
     boosted = false;
     applyPlayerOutline();
@@ -205,11 +224,19 @@ export function resetPlayerOutlineCharge() {
  *              damage flash, which is over inside two hit-stops.
  * @param power banked power of the wind-up in progress, 0..1, or 0 when nothing
  *              is being held.
+ * @param invuln SECONDS OF I-FRAMES LEFT — `player.invuln`, not a boolean. The
+ *              strobe only needs to know whether it is above zero, but taking
+ *              the clock itself means the rim can never disagree with the thing
+ *              it is a readout of: there is one number, and this is a picture
+ *              of it. Defaulted, so a caller that has not been updated (or a
+ *              harness testing the wind-up) gets the old behaviour rather than
+ *              a strobe stuck on.
  */
-export function updatePlayerOutline(dt, power) {
+export function updatePlayerOutline(dt, power, invuln = 0) {
   const cfg = CONFIG.playerOutline ?? {};
   const pc = CONFIG.strike?.charge?.outline ?? {};
   const hc = cfg.hit ?? {};
+  const ic = cfg.iframe ?? {};
   // Three switches, not one. The rim's own kills everything downstream of it,
   // but the wind-up and the damage flash are separate features with separate
   // reasons to be turned off — folding them together (as this did while the
@@ -218,6 +245,9 @@ export function updatePlayerOutline(dt, power) {
   const rimOff = cfg.enabled === false;
   const chargeOff = rimOff || pc.enabled === false;
   const hitOff = rimOff || hc.enabled === false;
+  // A fourth switch for the same reason there are three: the strobe is its own
+  // feature and turning it off must not silence the hit that armed the window.
+  const blinkOff = rimOff || ic.enabled === false;
   const wind = chargeOff ? 0 : Math.min(1, Math.max(0, power || 0));
 
   if (flare > 0) flare = Math.max(0, flare - dt / Math.max(0.01, pc.flareTime ?? 0.32));
@@ -227,7 +257,19 @@ export function updatePlayerOutline(dt, power) {
   // lingered as long as a maiming would make every hit read the same size no
   // matter what the brightness said, because duration is the thing you notice
   // when you're looking somewhere else on the screen.
-  if (hurt > 0) {
+  if (hurtHold > 0) {
+    // The hold is spent BEFORE any of the fall, so `hurt` sits at 1 and the rim
+    // sits at full red. Not folded into `span` below as extra length: that
+    // stretches the whole squared curve, which makes the flash longer and no
+    // more readable, because the part that gets longer is the dim tail. This
+    // adds time at the top only.
+    hurtHold = Math.max(0, hurtHold - dt);
+  } else if (hurt > 0) {
+    // ...AND THE SPAN IS THE ONLY CHANNEL STILL READING THE RAW STRENGTH, now
+    // that brightness has a floor under it (see `hurtLit` below). The size read
+    // did not go away, it moved here — and duration is the better home for it:
+    // it is the property that survives being seen out of the corner of an eye,
+    // which is where this rim is read from in a fight.
     const span = lerp(hc.minTime ?? 0.18, hc.time ?? 0.45, hurtPower);
     hurt = Math.max(0, hurt - dt / Math.max(0.01, span));
     if (hurt <= 0) hurtPower = 0;
@@ -235,6 +277,7 @@ export function updatePlayerOutline(dt, power) {
   if (hitOff) {
     hurt = 0;
     hurtPower = 0;
+    hurtHold = 0;
   }
 
   // Rate climbs with banked power — urgency reads as speed, and it keeps
@@ -255,6 +298,39 @@ export function updatePlayerOutline(dt, power) {
   const wave = 0.5 - 0.5 * Math.cos(pulsePhase * TAU);
   const depth = Math.min(1, Math.max(0, pc.pulseDepth ?? 0.55));
   const throb = wind * (1 - depth + depth * wave);
+
+  // THE I-FRAME STROBE. Driven by `invuln > 0` and nothing else, so it covers
+  // every source of immunity that writes that clock at once — the window a
+  // strike arms, the longer one a contact bite arms, the grace a boss grab
+  // throws you clear with, the airborne jump's. One picture for one rule, which
+  // is the same argument onPlayerHit makes for having one window.
+  //
+  // The phase is REZEROED between windows rather than left running, so every
+  // window opens at the top of a blink. A strobe caught mid-trough on the frame
+  // the window opens spends its first blink dark, which reads as the effect
+  // starting late — and the first blink is the one carrying the information.
+  const shielded = !blinkOff && invuln > 0;
+  if (!shielded) blinkPhase = 0;
+  else blinkPhase = (blinkPhase + dt * (ic.hz ?? 9)) % 1;
+  // Cosine, then bent towards a square by `square`. A smooth swell is what the
+  // wind-up means and reusing it here would say the wrong thing — this is a
+  // binary state and it should snap. Math.sign of the cosine is the hard square
+  // and the lerp is how much of it you get; at 0 this is exactly a cosine, at 1
+  // it is on/off.
+  //
+  // `0.5 + 0.5 *`, WHICH IS THE WIND-UP'S CURVE INVERTED, and the sign is the
+  // whole difference between the two effects. The throb next door opens at the
+  // BOTTOM and swells, because a wind-up is something being built. A window is
+  // at its most true the instant it opens and drains from there, so this opens
+  // LIT. Written the other way (it was, for one run of the test) every window
+  // spent its first blink dark and the strobe read as arriving late — and a hit
+  // taken inside a window came out DIMMER than the same hit outside one, which
+  // is the effect subtracting from the flash it is supposed to sit on top of.
+  const cos = Math.cos(blinkPhase * TAU);
+  const sq = Math.min(1, Math.max(0, ic.square ?? 0.8));
+  const bwave = shielded ? 0.5 + 0.5 * (cos * (1 - sq) + Math.sign(cos) * sq) : 0;
+  const bdepth = Math.min(1, Math.max(0, ic.depth ?? 1));
+  const blink = shielded ? (1 - bdepth + bdepth * bwave) : 0;
   // Squared, so the flare falls off its peak fast and then lingers — a linear
   // decay reads as a dimmer switch rather than as something blowing off.
   const burst = flare * flare;
@@ -263,10 +339,19 @@ export function updatePlayerOutline(dt, power) {
   // than as something having just happened to you.
   const sting = hurt * hurt;
 
+  // WHAT THE TWO HIT CHANNELS ARE ACTUALLY MULTIPLIED BY, and it is no longer
+  // the raw strength. Using `hurtPower` here is what made both sliders below
+  // read as broken: at the shipped `flashFraction` an ordinary bite is 0.33, so
+  // a rim tuned to 10.3 lit at 3.1, and turning the slider up did not fix it —
+  // a knob that is quietly divided rather than ignored. See
+  // CONFIG.playerOutline.hit.powerFloor.
+  const hurtLit = Math.max(hurtPower, hc.powerFloor ?? 0);
   const glowAdd = (pc.glowAdd ?? 5) * throb + (pc.flareGlow ?? 9) * burst
-    + (hc.glowAdd ?? 4) * sting * hurtPower;
+    + (hc.glowAdd ?? 4) * sting * hurtLit
+    + (ic.glowAdd ?? 2.6) * blink;
   const thickAdd = (pc.thicknessAdd ?? 0.06) * throb + (pc.flareThickness ?? 0.14) * burst
-    + (hc.thicknessAdd ?? 0.07) * sting * hurtPower;
+    + (hc.thicknessAdd ?? 0.07) * sting * hurtLit
+    + (ic.thicknessAdd ?? 0.04) * blink;
 
   // Idle: write the base look back ONCE and then do nothing at all. Without the
   // latch this would push four materials' worth of colour every frame of a run
@@ -276,7 +361,13 @@ export function updatePlayerOutline(dt, power) {
   // `hurt` is in the test on its own account, not folded into glowAdd: the
   // colour blend below runs off it, so a flash with both `hit` adds tuned to
   // zero still has to reach the materials or the rim would never turn red.
-  if (glowAdd <= 0 && thickAdd <= 0 && hurt <= 0) {
+  // `shielded` is in the test on its own account and not folded into glowAdd,
+  // because a square strobe spends half of every cycle AT ZERO. Without it the
+  // rim would latch back to base at each trough and fire a full
+  // applyPlayerOutline() on the way out — several times a second, fighting the
+  // tuner and re-writing four materials for a state that has not ended. The
+  // trough is part of the blink, not the absence of one.
+  if (glowAdd <= 0 && thickAdd <= 0 && hurt <= 0 && hurtHold <= 0 && !shielded) {
     pulsePhase = 0;
     if (boosted) {
       boosted = false;

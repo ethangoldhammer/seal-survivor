@@ -227,6 +227,26 @@ export const TEXT_ROLES = [
   { key: 'proc', label: 'Upgrade proc', selector: '.sv-proc', section: 'Popups',
     sample: 'MANEATER +12%', motion: 'proc',
     style: { font: FONT_GLOBAL, size: 13, weight: 700, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x9fe3ff, alpha: 1, shadow: 8, glow: 10, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // WHAT A HIT COST — the only place the amount of damage taken is ever written
+  // down. See CONFIG.fx.playerDamage.readout for the mechanic and
+  // CONFIG.textMotion.dmg for the movement.
+  //
+  // `inlineColor`, because the line runs hotter with the size of the hit and
+  // ui.js writes that colour per element. What is set HERE is the bottom of
+  // that ramp — the colour of the smallest hit worth printing — and `colorFrom`
+  // points the Text panel's swatch at the top of it, so the panel shows a live
+  // colour rather than one that has not been what the player sees since the
+  // ramp was added.
+  //
+  // BIGGER AND HEAVIER THAN THE SCORE POPUP, and that is the whole hierarchy
+  // argument. A kill is worth a small white number because there are twelve of
+  // them and none is read alone; being bitten happens once and has to be read
+  // once. Still under the warning band's 24 — an alarm is a sentence about the
+  // run, this is a figure about a moment.
+  { key: 'dmg', label: 'Damage taken', selector: '.sv-dmg', section: 'Popups',
+    sample: '-24', inlineColor: true, motion: 'dmg',
+    colorFrom: 'fx.playerDamage.readout.colorHot',
+    style: { font: FONT_GLOBAL, size: 19, weight: 800, tracking: 0.03, case: 'as typed', useInk: false, color: 0xff9a7a, alpha: 1, shadow: 10, glow: 12, scan: 0, scanGap: 3, scanGlow: 0 } },
 
   // --- the band: the one line that is not about the score ------------------
   // Screen-anchored rather than flying off a kill, but it is the same node

@@ -629,6 +629,13 @@
     font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap;
     transform: translate(-50%, -50%); will-change: transform, opacity; }
   .sv-toast-combo { color: #ffe066; font-size: 15px; }
+  /* The damage readout — what a hit cost, on the seal. Colour is written
+     inline per hit (it runs hotter with the size of the hit), so none here. */
+  .sv-dmg { position: absolute; font-size: 19px; font-weight: 800;
+    letter-spacing: 0.03em; white-space: nowrap;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 14px currentColor;
+    font-variant-numeric: tabular-nums; pointer-events: none;
+    transform: translate(-50%, -50%); will-change: transform, opacity; }
   /* FOOD CHAIN! — the chain-extension banner. Reuses the toast layer and the
      toast update loop, but it is an announcement rather than a number: it
      rises from the seal, only one is ever on screen (an extension re-uses the

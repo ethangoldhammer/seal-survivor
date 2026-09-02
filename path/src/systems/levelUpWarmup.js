@@ -74,6 +74,7 @@ import { SEAL_TEAM_ASSETS } from './sealTeam.js';
 import { HARP_ASSETS } from './harp.js';
 import { CLUB_ASSETS } from './club.js';
 import { CALAMARI_ASSETS } from './calamari.js';
+import { SARDINE_SWIRL_ASSETS } from './sardineSwirl.js';
 
 // The compile/upload context, handed over by main.js once the pipeline exists.
 // Null everywhere else, which is what makes this file inert in a harness.
@@ -104,6 +105,7 @@ export function levelUpWarmupKeys() {
     ...HARP_ASSETS,
     ...CLUB_ASSETS,
     ...CALAMARI_ASSETS,
+    ...SARDINE_SWIRL_ASSETS,
   ])];
 }
 

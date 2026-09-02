@@ -54,10 +54,10 @@ import { getAudioContext, getSfxBus, isAudioLive, sampleBuffer } from './audio.j
 // wrong answer to both.
 const voices = new Map();
 
-// The backstop. There is exactly one jet in a run and one in the workbench, so
-// anything past a handful is a leak — and a leaked LOOPING voice is not a
+// The backstop. One jet in a run, one swirl, and one of each in the workbench,
+// so anything past a handful is a leak — and a leaked LOOPING voice is not a
 // glitch, it is a sound that never stops.
-const MAX_VOICES = 4;
+const MAX_VOICES = 6;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -128,6 +128,14 @@ function applyGate(v, on, onlyIfUnset) {
   } catch { /* dead context — nothing here is worth taking the frame down for */ }
 }
 
+// THE JET'S OWN BED, and the DEFAULT for a caller that names no other. This
+// module started as one sound and is now the game's only sustained-voice
+// engine: systems/sardineSwirl.js holds one open too, on CONFIG.sardineSwirl
+// .bed, and there will be more. The settings are therefore passed in and
+// REMEMBERED ON THE VOICE rather than re-read from one fixed path — a release
+// that read the jet's `release` while letting go of the swirl's would fade the
+// wrong sound at the wrong speed, and nothing about that failure is audible as
+// a bug rather than as a taste.
 function bedCfg() {
   return CONFIG.bubbleJet?.bed ?? {};
 }
@@ -221,7 +229,10 @@ export function releaseJetBed(key, fade) {
   const v = voices.get(key);
   if (!v) return false;
   voices.delete(key);
-  const c = bedCfg();
+  // The settings this voice was OPENED with — see bedCfg. A bed released
+  // against a different block's numbers is a fade at the wrong speed onto the
+  // wrong cutoff, on a sound the caller has already stopped watching.
+  const c = v.cfg ?? bedCfg();
   const rel = fade ?? c.release ?? 0.12;
   try {
     const now = v.ctx.currentTime;
@@ -254,12 +265,17 @@ export function releaseAllJetBeds(fade) {
  * burns, and re-triggering the bed on each of those would be sixty attacks a
  * second and no hold at all. That is the single most important line in here.
  *
+ * `cfg` is the settings block — CONFIG.bubbleJet.bed when it is left out, which
+ * is every caller that predates the swirl. It is READ ONCE HERE and kept on the
+ * voice, so a bed whose block is retuned mid-hold finishes on the numbers it
+ * started with and the next one opens on the new ones.
+ *
  * Returns true when a voice is actually sounding.
  */
-export function startJetBed(key) {
+export function startJetBed(key, cfg = null) {
   if (voices.has(key)) return true;
 
-  const c = bedCfg();
+  const c = cfg ?? bedCfg();
   if (c.enabled === false) return false;
   // Audio is locked until the player's first gesture. Not an error and not
   // worth a warning — the stream still fires, silently.
@@ -452,7 +468,7 @@ export function startJetBed(key) {
   }
 
   voices.set(key, {
-    ctx, gain, gate, gateTarget: muted ? 0 : 1,
+    ctx, gain, gate, gateTarget: muted ? 0 : 1, cfg: c,
     sources, lfo, freqs: ladder.freqs, startedAt: now, ramp,
     layers: layers.length, synth: synthLevel > 0,
   });

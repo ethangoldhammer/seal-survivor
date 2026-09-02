@@ -434,7 +434,21 @@ section('THE REVEAL — the one shot that is not of the seal');
   check('the frame is on the seal to start with', Math.abs(restX - ctx.target.x) < 12,
     `frame at ${restX.toFixed(1)}, seal at ${ctx.target.x}`);
 
+  // SEEDED, like the two blocks above it and for the same reason — this one was
+  // simply never given one. `forceBoss` rolls which side of the arena the
+  // animal comes in on and how far out, and the pan measured below is the
+  // distance from the seal to wherever that landed. Most rolls put the boss
+  // most of an arena away and the frame travels ~64 units; a roll that drops it
+  // near the seal's own x leaves 1.3, and the check asking for more than 5
+  // failed about one run in five on a rig that was working perfectly.
+  //
+  // Seeded rather than loosened: a threshold low enough to accept the closest
+  // roll is one a rig that barely moved would also pass, which is the whole
+  // claim gone. See the note in tools/boss-perk-test.mjs.
+  const realRandom = Math.random;
+  Math.random = seeded(0xCA3E4A);
   const boss = forceBoss(scene, gameState, { boss: 'bossShark', perk: null });
+  Math.random = realRandom;
   check('nothing is revealed while it is still behind the rock', !cineRevealing());
 
   const samples = [];

@@ -711,6 +711,35 @@ export function razorClamLevelStats(level, s = {}) {
 }
 
 /**
+ * SARDINE SWIRL, per level.
+ *
+ * The two axes the card promises, and they are separate curves on purpose.
+ * `sardinePairs` is how many bodies (a PAIR, because a sardine seeded alone has
+ * nothing to diverge from — see systems/sardineSwirl.js) and `sardineScale` is
+ * how big the projection is drawn, which is the same trajectory covering more
+ * water rather than a faster one.
+ *
+ * `sardineSpan` is a DISTANCE and not the projection multiplier the system
+ * spends. The multiplier is world units per attractor unit, which is not a
+ * quantity anyone can picture; how wide the school is IS the second half of
+ * what a stack buys, and a card that added bodies while silently growing is a
+ * card whose other half nothing states. systems/sardineSwirl.js divides this
+ * back down by the attractor's own measured width.
+ */
+export function sardineSwirlLevelStats(level, s = {}) {
+  const c = CONFIG.sardineSwirl ?? {};
+  const n = lv(level);
+  return {
+    sardineDamage: abilityDamageOf((c.damage ?? 0) + (c.damagePerLevel ?? 0) * (n - 1), s),
+    sardinePairs: Math.max(1, Math.round((c.count ?? 0) + (c.countPerLevel ?? 0) * (n - 1))),
+    // A FRACTION OF THE BASE, like the shrimp's size step and for the reason
+    // that one documents: the base is judged by eye and may be retuned, and a
+    // flat per-stack number means something different in two sessions.
+    sardineSpan: (c.span ?? 0) * (1 + (c.spanPerLevel ?? 0) * (n - 1)),
+  };
+}
+
+/**
  * STARFISH SHURIKEN, per level.
  *
  * Its numbers lived in main.js, in a helper beside the frame loop — the only
@@ -880,6 +909,7 @@ export const LEVEL_STATS = {
   oysterBlaster: oysterLevelStats,
   sealTeam: sealTeamLevelStats,
   razorClam: razorClamLevelStats,
+  sardineSwirl: sardineSwirlLevelStats,
   starfish: starfishLevelStats,
   homingShot: homingShotLevelStats,
   ironLung: ironLungLevelStats,

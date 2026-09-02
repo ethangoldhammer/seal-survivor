@@ -6,7 +6,7 @@
 // The question numbers cannot settle. tools/whale-test.mjs proves the rig bends
 // dorsoventrally, that the morphs move the jaw 25 units and that the gulp reach
 // is what CONFIG says — and none of that says whether the animal reads as a
-// whale on screen. Four things about this asset can only be judged by eye:
+// whale on screen. Five things about this asset can only be judged by eye:
 //
 //   THE SCALE      31 world units against an 80-wide frame is a number. Whether
 //                  that is "an event arriving" or "the screen is now whale" is
@@ -23,6 +23,12 @@
 //   THE RIM        outline thickness is OBJECT space, i.e. the source file's
 //                  180-unit scale, so the 1.1 in the asset entry is a
 //                  calculation until you look at it.
+//   THE HITBOX     the shove is tested against a measured profile of this mesh
+//                  (systems/whale.js). Numbers can say it tapers; only the
+//                  outline drawn over the body says it is the RIGHT taper, on
+//                  the right axis, in the right frame — and a profile taken in
+//                  world space here would be the profile of a whale standing
+//                  on its tail, which is a picture and nothing else.
 //
 // Everything on this page comes from the shipping code: the animal is
 // createVisual('whale') — the same instance a sweep builds, fit and size
@@ -40,7 +46,7 @@ import { preloadAssets, createVisual, morphControl, ASSETS } from '../../path/sr
 import { createAnimationController } from '../../path/src/systems/animation.js';
 import { bounds, updateBounds } from '../../path/src/arena.js';
 import {
-  mouthAheadOf, headingFor, intakeRadius,
+  mouthAheadOf, headingFor, intakeRadius, measureBodyProfile,
   resetWhales, spawnWhale, updateWhales,
 } from '../../path/src/systems/whale.js';
 import { enemies, resetEnemies } from '../../path/src/entities/enemies.js';
@@ -320,6 +326,96 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
   }
   morphs.set('mouthNarrow', C.cruiseGape);
   morphs.set('mouthWide', 0);
+}
+
+// ===========================================================================
+// 2b. THE HITBOX — the shape the shove is actually testing against
+// ===========================================================================
+//
+// The only place this can be judged. `npm run test:whale` can prove the profile
+// tapers, that it has no holes and that the old constant radius was claiming
+// water — all of which it does, in numbers. Whether the outline SITS on the
+// animal is a picture, and it is the picture that catches the two failures
+// numbers cannot: a profile measured on the wrong axis, and one measured in
+// the wrong frame (the body is laid along its heading on this page, and world
+// coordinates here would return the profile of a whale standing on its tail).
+//
+// Both shapes are drawn: the silhouette the game now tests against, and the
+// constant-radius capsule it replaced, so the size of the fix is on screen
+// rather than in a commit message.
+{
+  const r = row('The hitbox', 'amber = what the shove tests against now  ·  dotted = the constant radius it replaced');
+
+  // Measured off the SAME instance the panels above are rendering, through the
+  // shipping function, in the frame it is actually sitting in.
+  const profile = measureBodyProfile(visual);
+  const outline = new THREE.Group();
+  if (profile) {
+    // Entity space: +Y along the body, +X the height the camera reads. The group
+    // goes under `container`, which is what carries the heading — so a profile
+    // that disagreed with the drawing would be visibly off the animal rather
+    // than rotating along with it.
+    const top = [];
+    const bottom = [];
+    for (let i = 0; i < profile.n; i++) {
+      const s = profile.minS + profile.step * (i + 0.5);
+      top.push(new THREE.Vector3(profile.hi[i], s, 0));
+      bottom.push(new THREE.Vector3(profile.lo[i], s, 0));
+    }
+    const loop = [...top, ...bottom.reverse(), top[0]];
+    outline.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(loop),
+      new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.95, depthTest: false }),
+    ));
+    // ...and the capsule that used to stand in for all of it.
+    const old = Math.min(span.x, span.y, span.z) * 0.5;
+    const rect = [
+      new THREE.Vector3(old, profile.minS, 0), new THREE.Vector3(old, profile.maxS, 0),
+      new THREE.Vector3(-old, profile.maxS, 0), new THREE.Vector3(-old, profile.minS, 0),
+      new THREE.Vector3(old, profile.minS, 0),
+    ];
+    const capsule = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(rect),
+      new THREE.LineDashedMaterial({ color: 0x7fa6c4, dashSize: 0.35, gapSize: 0.35, transparent: true, opacity: 0.7, depthTest: false }),
+    );
+    // Or the dashes render as a solid line — LineDashedMaterial needs the
+    // distances baked onto the geometry and does not compute them itself.
+    capsule.computeLineDistances();
+    outline.add(capsule);
+    container.add(outline);
+  }
+  check('the hitbox profile could be measured off the built instance', !!profile);
+
+  step(1);
+  gl.render(scene, camera);
+  r.appendChild(cell('hitbox', profile
+    ? 'the body, with both shapes over it — the amber follows the taper, the dotted box does not.'
+      + ' The outline is the BIND pose and the animal is mid-stroke, which is why the fluke end'
+      + ' sits off it — see measureBodyProfile for why the hitbox does not breathe with the wag'
+    : '<span class="tag">NO PROFILE</span> — the shove has fallen back to a plain capsule'));
+
+  // ...and the same outline over open water, so the taper can be read without
+  // the animal's own shading arguing with it.
+  if (profile) {
+    visual.visible = false;
+    gl.render(scene, camera);
+    r.appendChild(cell('hitbox-alone', 'the two shapes alone — every gap between them is water that used to shove you'));
+    visual.visible = true;
+    // The thickest section against the thinnest, which is the whole claim.
+    const halves = [];
+    for (let i = 0; i < profile.n; i++) halves.push((profile.hi[i] - profile.lo[i]) * 0.5);
+    const fluke = halves[0];
+    const barrel = Math.max(...halves);
+    log('');
+    log(`hitbox half-height runs ${fluke.toFixed(2)} at the fluke to ${barrel.toFixed(2)} through the barrel`
+      + ` — the capsule it replaced was ${(Math.min(span.x, span.y, span.z) * 0.5).toFixed(2)} everywhere`);
+    check('the hitbox tapers with the animal', fluke < barrel * 0.25,
+      `${fluke.toFixed(2)} against ${barrel.toFixed(2)}`);
+    check('...and it is the height the camera sees, not the width across the back',
+      Math.abs(barrel * 2 - span.y) < span.y * 0.25,
+      `${(barrel * 2).toFixed(1)} against a ${span.y.toFixed(1)}-tall silhouette`);
+    container.remove(outline);
+  }
 }
 
 // ===========================================================================

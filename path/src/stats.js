@@ -250,6 +250,10 @@ export function baseStats(loadout = 'pebbles') {
     scallopCount: 0,
     oysterLevel: 0,
     razorClamLevel: 0,
+    // SARDINE SWIRL — how many stacks. A level index like the razor clam's:
+    // the school's size, its reach and what one body hits for are all curves
+    // off it in levelStats.js, so nothing here is a quantity.
+    sardineSwirlLevel: 0,
     octoGrabLevel: 0,
     orcaLevel: 0,
     // STUBBED — the card that would raise this is disabled in upgrades.csv and
@@ -309,7 +313,7 @@ export const INTEGER_STATS = new Set([
   'breachChainLevel', 'garlicLevel', 'bounceLevel', 'eelLevel', 'laserEyesLevel', 'bubbleJetLevel', 'starfishLevel',
   'maneaterLevel', 'ironLungLevel', 'homingShotLevel',
   'seagullLevel', 'belugaLevel', 'sealTeamLevel', 'bakalarLevel', 'calamariLevel',
-  'dumboLevel', 'harpLevel', 'oysterLevel', 'razorClamLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
+  'dumboLevel', 'harpLevel', 'oysterLevel', 'razorClamLevel', 'sardineSwirlLevel', 'octoGrabLevel', 'orcaLevel', 'dolphinPodLevel',
   'musselVolleyLevel',
   'biolumLevel', 'clubLevel', 'clubThrowLevel', 'clubBoomLevel', 'clubIceLevel', 'clubZapLevel',
   // Flippers Up!. `flippersUpStacks` is a count whose PARITY decides which fin

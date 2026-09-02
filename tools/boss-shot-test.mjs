@@ -1201,7 +1201,28 @@ check('...starting below the bottom of the screen', /\+ \d+px\)/.test(el.style.t
   el.style.transform);
 
 // The flight, on the wall clock. Two rAFs to start it, then the timers.
-await new Promise((r) => setTimeout(r, 40));
+//
+// WAIT FOR THE THING, NOT FOR A NUMBER. This was `setTimeout(r, 40)`, which is
+// a guess that the two rAFs and the eject timer would all have fired inside
+// 40ms — true on an idle machine and not true under load. `npm run ship` runs
+// this suite after a hundred and fifty others, which is exactly when it is not
+// true: measured, it failed about one run in five, reporting the print still
+// sitting at its start position (`calc(-50% + 476px)`) because the flight had
+// not begun yet. Nothing was wrong with the print.
+//
+// The timeout is the assertion's safety net rather than its schedule: if the
+// eject genuinely never happens, this falls through after two seconds and the
+// checks below fail exactly as they did before. A fixed sleep can only be too
+// short or wastefully long; a poll is neither.
+const waitFor = async (done, ms = 2000) => {
+  const until = Date.now() + ms;
+  while (!done() && Date.now() < until) await new Promise((r) => setTimeout(r, 2));
+  return done();
+};
+// The TRANSFORM only. Waiting on the develop class as well overshot: the two
+// do not land on the same tick, and polling until both were true ran past the
+// hang and caught the print already on its way to the corner.
+await waitFor(() => /translate\(-50%, -50%\)/.test(el.style.transform));
 check('it ejects into the middle of the frame',
   /translate\(-50%, -50%\)/.test(el.style.transform), el.style.transform);
 check('...and develops on the way', el.classList.contains('sv-print-dry'));

@@ -59,6 +59,7 @@ dumboLevel,,level,dumbo octopus,,a charming lil' guy,,,,,,,
 harpLevel,,level,harp seal,,music to charm opps,,,,,,,
 oysterLevel,,level,oyster blaster,,bursting pearls,,,,,,,
 razorClamLevel,,level,razor clam,,x-tra sharp razor clam blades,,,,,,,
+sardineSwirlLevel,,level,Sardine Power,,A silvery swirl of baitfish.,,,,,,,"the Sardine Swirl card. `label` is what the ability is CALLED in a ""+1 <label> level"" line — two or three words, lower case, matching how the other level rows read (""razor clam"", ""sea garlic""). `unlock` is the sentence the FIRST pick shows in place of that: what the player just bought, in five to eight words. What it is: a school of small chrome sardines caught in a strange attractor centred on the seal — they arrive in pairs that look like one fish and then fly apart onto opposite wings, and anything they touch is bitten. Seen on the level-up card and in the upgrade tip."
 octoGrabLevel,,level,octopus grabber,,"an octopus buddy that reels in fish, and pops them into chum for you",,,,,,,
 orcaLevel,,level,orca family,,orca buddies that hate yachts,,,,,,,
 dolphinPodLevel,,level,dolphin pod,,dolphins.,,,,,,,"The card that raises this is a STUB — disabled in upgrades.csv, and no system reads the stat yet (see CONFIG.upgrades.dolphinPod). The label is here anyway because npm run test:text fails on a stat without one: the day the card is switched on, its {effect} has to render as English rather than as dolphinPodLevel."
@@ -86,6 +87,9 @@ seagullSplash,seagull bomb,flat,blast damage,,,,,,,,,"Damage from the explosion,
 seagullSplashRadius,seagull bomb,flat,blast radius,,,,,m,,,,"How wide the explosion reaches. Drop the 'm' if that unit is wrong for this game's water — it is used on Bakalar's blast too, so change both together."
 garlicDps,sea garlic,flat,DPS,,,,,,,,,"What a creature standing in the cloud takes per second. Deliberately a DPS and not a per-tick figure — the 0.25s tick is an implementation detail, and a player is comparing this against every other ability they could take instead."
 garlicRadius,sea garlic,flat,radius,,,,,m,,,,"How far the cloud reaches. Sits beside the damage row on the same tip; the point of showing both is that a stack now buys strength as well as size, so neither label should imply it is only one of the two. Same 'm' as the two blast radii — change all three together."
+sardineDamage,sardine swirl,flat,Swirl Size,,,,,,,,,"one row of the Sardine Swirl tip — what a SINGLE sardine hits a creature for on contact, once per creature every 0.4s. One or two words, lower case, sitting beside the two rows below it in the same tip. Compare ""DPS"" and ""radius"" on the sea garlic rows."
+sardinePairs,sardine swirl,count,Sardines,Sardines,,,,,,,,"one row of the Sardine Swirl tip — how many PAIRS are in the water (the measured number is pairs, not bodies, because a sardine is always seeded with a twin a hair away from it and the two coming apart is the whole ability). One or two words, lower case, and it should not read as a count of individual fish. `plural` only if adding an ""s"" is wrong."
+sardineSpan,sardine swirl,flat,Swirl Size,,,,,m,,,,"one row of the Sardine Swirl tip — how wide the school is drawn, in world units, which is the second thing a stack buys and the reason a maxed swirl covers ground a first pick does not. One or two words, lower case. Same unit as sea garlic's ""radius"" row; if the word there changes, change this one with it."
 eelDamage,electric eel,flat,dmg,,,,,,,,,"What one bolt hits for. Note the tip's figure is the LEVEL curve only — a storm multiplies it on top (CONFIG.eel.storm), deliberately left out so the number does not change with the weather while a thumb is held down."
 eelChain,electric eel,count,target,targets,,,,,,,,"How many bodies one bolt chains through. A count, so it pluralises — 'chains to 5 ___'. Sits beside the reach row and the two must be tellable apart: this is HOW MANY, that is HOW FAR between them."
 eelChainRadius,electric eel,flat,reach,,,,,m,,,,How far a bolt will hop to find the next body. Same 'm' as the blast radii — change them together or not at all.
@@ -146,7 +150,7 @@ sealTeamDamage,seal team,flat,ram dmg,,,,,,,,,What one escort's ram hits for. Bi
 razorDamage,razor clams,flat,blade dmg,,,,,,,,,What one blade hits for.
 razorCount,razor clams,count,blade,blades,,,,,,,,How many go out per volley.
 razorGap,razor clams,percent,rate,,,,,s,TRUE,,,"Seconds between volleys — and it COMPOUNDS rather than stepping, so the tip renders it as a multiplier (x0.95 a level) rather than a subtraction. LOWER IS BETTER; the column is set. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
-razorPierce,razor clams,count,bodies cut,bodies cut,,,,,,,,"How many bodies one blade passes through. A rounded step, capped at pierceMax."
+razorPierce,razor clams,count,body count,body count,,,,,,,,"How many bodies one blade passes through. A rounded step, capped at pierceMax."
 starfishDamage,starfish shuriken,flat,shuriken dmg,,,,,,,,,What one shuriken hits for.
 starfishGap,starfish shuriken,percent,rate,,,,,s,TRUE,,,"Seconds between throws, compounding — rendered as a multiplier like the razor clam's. LOWER IS BETTER. The delta is a multiplier (the curve compounds) and the span is the seconds themselves, so the unit has to be on the span or the row reads as two different quantities."
 starfishSize,starfish shuriken,flat,size,,,,,m,,,,"How big each one is, which is also how easily it connects."
@@ -156,7 +160,7 @@ ironLungBonus,iron lung,percent,damage bonus,,,,,,,,TRUE,"How much extra damage 
 biolumShockChance,glow up — voltaic,percent,arc chance,,,,,,,,TRUE,"How often a shot arcs to a second fish. Capped at chanceMax, so it stops moving before the stack cap does."
 biolumShockArcs,glow up — voltaic,count,arc,arcs,,,,,,,,How many bodies one arc reaches. A rounded step.
 biolumVenomDps,glow up — venom,flat,poison per second,,,,,,,,,Damage per second while poisoned. THE ONLY THING a venom level buys — its duration and stack cap are flat — which is worth knowing and was invisible before.
-biolumChillSlow,glow up — chill,percent,slow per stack,,,,,,,,TRUE,"How much each shot slows a body, as a share of its speed. Capped at maxSlow. Enough of them stack into the freeze."
+biolumChillSlow,glow up — chill,percent,freeze amount,,,,,,,,TRUE,"How much each shot slows a body, as a share of its speed. Capped at maxSlow. Enough of them stack into the freeze."
 biolumChillFreeze,glow up — chill,flat,freeze length,,,,,s,,,,How long a body stays frozen once the slow tops out.
 biolumInfectDps,glow up — infected,flat,infection per second,,,,,,,,,Damage per second while infected.
 biolumInfectSpread,glow up — infected,flat,spread range,,,,,m,,,,How far the infection jumps to the next fish — the thing that makes this element scale with a crowd.

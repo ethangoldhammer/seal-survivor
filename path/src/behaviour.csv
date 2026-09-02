@@ -91,6 +91,7 @@ pace.axes.hp,0.45,0,1.5,"of the dial above, how much goes into HEALTH - as an ex
 pace.axes.damage,1,0,1.5,...how much goes into DAMAGE. At 1 the dial passes through whole.
 pace.axes.speed,0.35,0,1.5,...how much goes into SPEED. Held below hp on purpose: a harder game that is merely a faster one leaves the arena with nowhere to go.
 pace.axes.seek,0.2,0,1.5,"...how much goes into AGGRESSION - prey distraction shed, turning tightened, and a school pressing harder, all through one number. This is the LATE-GAME press only. How hard fish follow at minute one is each species swarm.towardPlayer, and how gradually it climbs is hunterRamp.swarmSeek below; at difficulty 0 the ramp is exactly 1 and this term is all that is left."
+enemies.walkingCrab.crawl.groundHeight,8.5,1,20,"crab ceiling off the seabed - and the ceiling on all crab damage: the pinch reaches about 2.2 above this and a crab has no contact damage, so anything higher than the sum is untouchable. Keep it and the rush height below within a claw of each other."
 enemies.walkingCrab.crawl.floorRushHeight,10.5,1,20,crab rush trigger height
 enemies.walkingCrab.crawl.rushSpeedMul,2.5,1,4,crab rush speed mult
 enemies.walkingCrab.crawl.feed.seekRadius,60,0,60,chum seek radius

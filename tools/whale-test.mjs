@@ -33,6 +33,13 @@
 //   THE CAPSULE    a 31-unit animal tested for contact as a circle at its own
 //                  centre misses the seal along most of its length. The shove
 //                  has to fire from the flank as well as from the head.
+//   THE SILHOUETTE ...and it has to STOP firing where the animal stops. A
+//                  constant radius is over twice the real half-height across
+//                  eleven of this body's twenty-four sections and nineteen
+//                  times it at the fluke, which is a seal thrown by open water.
+//                  Measured off the real glb, because the stand-in every other
+//                  section below runs on is a cone — convex, symmetric and
+//                  tapered exactly the way a wrong profile would guess.
 //   THE ORBS       what the whale swallows pays NOTHING. The one line enforcing
 //                  that is an empty callback, which is exactly the kind of thing
 //                  a later edit "fixes".
@@ -54,13 +61,14 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { ASSETS } from '../path/src/assets.js';
+import { ASSETS, orientationQuaternion } from '../path/src/assets.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import { enemies, resetEnemies } from '../path/src/entities/enemies.js';
 import { pickups, resetPickups } from '../path/src/entities/pickups.js';
 import {
   whaleClock, resetWhaleClock, updateWhaleClock, isPrey, headingFor, intakeRadius, mouthAheadOf,
   resetWhales, spawnWhale, updateWhales, whaleCount,
+  measureBodyProfile, sectionAt, bodyDistance,
 } from '../path/src/systems/whale.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -237,6 +245,147 @@ section('THE HEADING — the whale swims flat, not on its tail');
   check('...in the same sense in both directions',
     Math.sign(leaned.y) === Math.sign(leftLean.y),
     `right ${leaned.y.toFixed(2)}, left ${leftLean.y.toFixed(2)}`);
+}
+
+// ===========================================================================
+section('THE SILHOUETTE — the hitbox is the animal, not a tube around it');
+
+// MEASURED OFF THE REAL glb, and it has to be. Everything below THE CROSSING
+// runs on the cone stand-in createVisual falls back to with no model loaded,
+// and a cone is convex, symmetric about its own axis and tapers exactly the way
+// a naive profile would guess — so a silhouette bug is invisible to every one
+// of those checks. This section builds the profile from the file that ships.
+//
+// The whale is measured in ENTITY space, which is the frame createVisual hands
+// its visual back in: +Y is the direction of travel, +X is what the camera
+// reads as the animal's height. So the model is wrapped in a group and turned
+// by the game's own orientationQuaternion rather than by an angle typed here.
+const entity = new THREE.Group();
+{
+  const posed = model.clone(true);
+  posed.quaternion.copy(orientationQuaternion(ASSETS.whale));
+  entity.add(posed);
+}
+const profile = measureBodyProfile(entity.children[0]);
+check('the body profile could be measured at all', !!profile,
+  profile ? `${profile.n} sections over ${(profile.maxS - profile.minS).toFixed(0)} source units` : 'null');
+
+if (profile) {
+  const entityBox = new THREE.Box3().setFromObject(entity);
+  const eSize = entityBox.getSize(new THREE.Vector3());
+  // t: 0 at the fluke, 1 at the nose.
+  const at = (t) => sectionAt(profile, profile.minS + (profile.maxS - profile.minS) * t);
+  const halfAt = (t) => at(t).half;
+
+  console.log(`  entity box ${eSize.x.toFixed(1)} tall x ${eSize.y.toFixed(1)} long x ${eSize.z.toFixed(1)} wide`);
+  console.log('  half-height along the body: '
+    + [0.05, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95].map((t) => `${t.toFixed(2)}:${halfAt(t).toFixed(1)}`).join('  '));
+
+  // NO HOLES. This model is 2812 triangles over 180 units, so binning the
+  // VERTICES alone leaves empty bins in the middle of the animal — measured,
+  // three of twenty-four, straddling the widest part of the body. An empty bin
+  // is a section with no thickness: a hole through the whale that the seal
+  // swims into without being shoved, and it looks exactly like a correct taper.
+  let thinnest = Infinity;
+  for (let i = 0; i < profile.n; i++) thinnest = Math.min(thinnest, (profile.hi[i] - profile.lo[i]) * 0.5);
+  check('every section along the body has thickness', thinnest > 0,
+    `thinnest section ${thinnest.toFixed(2)} — 0 is a hole you can swim through`);
+
+  // THE TAPER, which is the whole point. A bowhead's tail stock is a stalk and
+  // its fluke is a blade; a constant radius shoves the seal from open water for
+  // most of the length of the animal.
+  const fluke = halfAt(0.05);
+  const barrel = halfAt(0.5);
+  check('the fluke is a fraction of the barrel', fluke < barrel * 0.25,
+    `${fluke.toFixed(1)} at the fluke against ${barrel.toFixed(1)} through the body`);
+  check('...and the barrel is the thickest part of it', barrel > halfAt(0.95) * 1.5,
+    `${barrel.toFixed(1)} amidships against ${halfAt(0.95).toFixed(1)} at the nose`);
+
+  // WHAT THE OLD CAPSULE CLAIMED. Half the smallest of the three extents, held
+  // constant end to end and centred on the container origin — printed as a
+  // multiple of the real half-height so the number is the size of the fix.
+  const oldRadius = Math.min(eSize.x, eSize.y, eSize.z) * 0.5;
+  let over = 0;
+  for (let i = 0; i < profile.n; i++) if (oldRadius > (profile.hi[i] - profile.lo[i]) * 0.5 * 2) over++;
+  console.log(`  the old constant radius was ${oldRadius.toFixed(1)}`
+    + ` — over twice the real half-height across ${over} of ${profile.n} sections`
+    + `, and ${(oldRadius / fluke).toFixed(0)}x it at the fluke`);
+  check('the old constant radius really was claiming water the animal is not in',
+    over > profile.n * 0.3, `${over} of ${profile.n} sections`);
+
+  // OFF ITS OWN ORIGIN. ASSETS.whale.pivot puts the instance origin near the
+  // skull and the body hangs below the axis, so a capsule symmetric about zero
+  // is not even centred on the animal it stands in for.
+  check('the body does not sit centred on its container origin',
+    Math.abs(at(0.5).mid) > barrel * 0.2,
+    `centre of the barrel is ${at(0.5).mid.toFixed(1)} off the origin`);
+}
+
+// ---------------------------------------------------------------------------
+// And the contact test that reads it. bodyDistance takes a point into the
+// animal's own frame first, so it is the thing that has to get the heading, the
+// side-view mirror and the off-centre profile right all at once.
+if (profile) {
+  // A container EACH, not one reused. Both headings are live at the same time
+  // in the mirror check below, and a shared object would have the second `fake`
+  // silently re-aim the first one — which is a test comparing a whale to itself.
+  const fake = (dir) => {
+    const container = new THREE.Object3D();
+    container.rotation.z = headingFor(dir);
+    return {
+      container,
+      profile,
+      flip: dir < 0,
+      length: profile.maxS - profile.minS,
+      bodyRadius: profile.thickest,
+    };
+  };
+  // (along, across) in the animal's own frame -> world, through the same
+  // rotation bodyDistance will undo. Written as the inverse rather than as a
+  // second guess at the maths: a test that builds its points with the same
+  // mistake as the code passes on any heading at all.
+  const world = (w, along, across) => {
+    const th = w.container.rotation.z;
+    const ex = (w.flip ? -1 : 1) * across;
+    return [Math.cos(th) * ex - Math.sin(th) * along, Math.sin(th) * ex + Math.cos(th) * along];
+  };
+  const on = (w, along, across) => bodyDistance(w, ...world(w, along, across)) === 0;
+
+  const mid = profile.minS + (profile.maxS - profile.minS) * 0.5;
+  const sec = sectionAt(profile, mid);
+  const right = fake(1);
+
+  check('a point inside the barrel is on the body', on(right, mid, sec.mid));
+  check('...and one just outside its dorsal edge is not', !on(right, mid, sec.mid - sec.half * 1.2));
+  // THE ASYMMETRY, which is what the flip has to preserve. The pectorals hang
+  // a long way below this animal's axis and nothing hangs above it, so the same
+  // distance either side of the container origin is one point on the whale and
+  // one point in open water.
+  const reach = Math.max(Math.abs(sec.mid - sec.half), Math.abs(sec.mid + sec.half));
+  const deep = -reach * 0.95; // toward the model's back, in entity X
+  check('the body reaches further one side of its origin than the other',
+    on(right, mid, deep) !== on(right, mid, -deep),
+    `entity X ${deep.toFixed(1)} vs ${(-deep).toFixed(1)}`);
+  // ...and that stays true of the SCREEN when it turns round, because the side
+  // view mirrors the visual. Same world point, both headings: a whale drawn the
+  // same way up has to be hit the same way up.
+  const left = fake(-1);
+  const [rx, ry] = world(right, mid, deep);
+  const [lx, ly] = world(left, mid, deep);
+  check('...and the mirror keeps the hitbox the same way up as the drawing',
+    Math.abs(ry - ly) < 1e-6 && Math.abs(rx + lx) < 1e-6
+    && bodyDistance(right, rx, ry) === 0 && bodyDistance(left, lx, ly) === 0,
+    `the animal's back is at y ${ry.toFixed(1)} swimming right and y ${ly.toFixed(1)} swimming left`
+    + ' — the same height, on the other side of the screen');
+
+  // The one that was worst before. Beside the tail, a body-radius off the axis:
+  // open water on any picture of this animal, and a shove under the old test.
+  const tailS = profile.minS + (profile.maxS - profile.minS) * 0.05;
+  const tailSec = sectionAt(profile, tailS);
+  check('open water beside the tail is not the whale',
+    !on(right, tailS, tailSec.mid + profile.thickest * 0.6),
+    `${(profile.thickest * 0.6).toFixed(1)} off a tail ${tailSec.half.toFixed(1)} thick`);
+  check('...but the fluke itself still is', on(right, tailS, tailSec.mid));
 }
 
 // ===========================================================================
@@ -753,6 +902,72 @@ section('THE NUDGE — a ram moves it, and the crossing does not care');
   const flick = rammedRun({ power: 0 });
   check('a flick moves it less than a full charge', flick.peak < full.peak * 0.9,
     `${flick.peak.toFixed(2)} vs ${full.peak.toFixed(2)} units`);
+
+  // -------------------------------------------------------------------------
+  // THE FLINCH — the body BENDS as well as moving.
+  //
+  // The nudge above translates the whole animal along one vector, and on a body
+  // 31 units long that is the one motion the eye reads as the camera rather
+  // than as a hit: every part goes the same way by the same amount, so there is
+  // nothing to see it against. The give the player is actually looking for is
+  // the spine, which is what carries a hit on every other creature in the game.
+  //
+  // Driven through a STUBBED controller. The real one needs a skeleton, and
+  // createVisual has no model to build one from in Node — so a whale spawned
+  // here has `anim: null` and a broken impulse would fire nothing and pass
+  // every check on this page. The stub is the only way to see the call at all.
+  {
+    const flinchRun = ({ dashing = true, power = 1, strength = null } = {}) => {
+      resetWhales(scene);
+      seed([]);
+      const w = spawnWhale(scene, mulberry32(3));
+      const kicks = [];
+      w.anim = {
+        update() {},
+        impulse(dir, mag, tipBias) { kicks.push({ x: dir.x, y: dir.y, mag, tipBias }); },
+      };
+      const p = { position: new THREE.Vector3(0, w.baseY, 0), radius: 0.5 };
+      const ram = { dashing, dirX: w.dir, dirY: 0, power };
+      const held = C.ram.flinch?.strength;
+      if (strength != null) C.ram.flinch.strength = strength;
+      try {
+        for (let i = 0; i < 60 * 60 && whaleCount() > 0; i++) {
+          updateWhales(1 / 60, scene, enemies, { player: p, ram });
+        }
+      } finally {
+        if (strength != null) C.ram.flinch.strength = held;
+      }
+      return kicks;
+    };
+
+    const kicks = flinchRun({});
+    check('a ram shoves the skeleton as well as the body', kicks.length === 1,
+      `${kicks.length} impulse(s) at ${kicks[0]?.mag.toFixed(2) ?? '—'}`);
+    if (kicks.length) {
+      // Along the dash, like the nudge and like every other thing the strike
+      // shoves. A flinch that ran along the whale's own heading instead would
+      // buckle it the same way whichever side it was hit from.
+      check('...along the dash, not along the whale',
+        Math.abs(kicks[0].x - Math.sign(kicks[0].x || 1)) < 1e-6 && Math.abs(kicks[0].y) < 1e-6,
+        `direction [${kicks[0].x.toFixed(2)}, ${kicks[0].y.toFixed(2)}] — a unit vector, or the spring gets a scaled shove twice`);
+      // Small, against the cap on an ordinary creature's hit reaction. This
+      // animal is thirty tonnes and the flinch is the thing that says so.
+      check('...and gently, against what an ordinary hit does',
+        kicks[0].mag < CONFIG.animation.spring.impulseMax * 0.5,
+        `${kicks[0].mag.toFixed(2)} against an impulseMax of ${CONFIG.animation.spring.impulseMax}`);
+      check('...toward the fluke rather than through the middle',
+        kicks[0].tipBias === C.ram.flinch.tipBias, `tipBias ${kicks[0].tipBias}`);
+    }
+    const flickKicks = flinchRun({ power: 0 });
+    check('a flick buckles it less than a full charge',
+      flickKicks.length === 1 && kicks.length === 1 && flickKicks[0].mag < kicks[0].mag * 0.9,
+      `${flickKicks[0]?.mag.toFixed(2)} vs ${kicks[0]?.mag.toFixed(2)}`);
+    check('swimming into it bends nothing', flinchRun({ dashing: false }).length === 0);
+    // Tuned to nothing means nothing, rather than a zero-length impulse the
+    // spring solver has to decide what to do with.
+    check('...and a flinch tuned to zero fires no impulse at all',
+      flinchRun({ strength: 0 }).length === 0);
+  }
 
   // THE SWEEP IS NOT MOVED. This is the claim that separates a nudge from a
   // knock: the body gives, and the line it is travelling along is untouched,

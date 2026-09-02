@@ -57,6 +57,238 @@ const whales = [];
 const _mouth = new THREE.Vector3();
 const _box = new THREE.Box3();
 const _size = new THREE.Vector3();
+const _vert = new THREE.Vector3();
+const _imp = new THREE.Vector3();
+
+// ---------------------------------------------------------------------------
+// THE SILHOUETTE
+// ---------------------------------------------------------------------------
+// A bowhead is a head, a barrel and a stalk with a flat fluke on the end, and
+// the one shape it is NOT is a cylinder. The first version tested contact
+// against a constant-radius capsule — half the smallest of the model's three
+// extents, centred on the container — and it is wrong three ways, all of them
+// measured off the shipped mesh (source units; x12 fit x 2.6 size to reach
+// world):
+//
+//   TOO FAT ALONG THE LENGTH, and this is the one you feel. The capsule's
+//   half-height is 31.3 for the whole animal, against a real half-height of
+//   22.9 through the barrel, 6.1 at the tail stock and 0.9 at the fluke. So
+//   the seal was being thrown by open water — a body's width of it either
+//   side of a tail thirty times thinner than the tube drawn round it, over
+//   the part of the animal it spends the crossing swimming past.
+//
+//   OFF-CENTRE. The whale's axis does not run through its container origin:
+//   the barrel spans -29.9..16.0 about it, so a capsule symmetric about zero
+//   sits about 7 units below the animal it is standing in for.
+//
+//   AND THE AXIS WAS PICKED BY LUCK. `min` of the three extents lands on the
+//   height (62.6) only because it happens to be a hair under the lateral
+//   width (64.3) — 3% apart on this export. Anything that widens the body or
+//   narrows the pectorals silently swaps the hitbox onto the axis pointing
+//   into the screen, which is the one nobody can see, with nothing failing.
+//
+// So the body is a PROFILE — a half-height sampled at intervals along the
+// animal's own axis, measured off the mesh that ships. Everything that asks
+// "is this point on the whale" goes through `bodyDistance` and gets the same
+// answer, which is the same rule the shove and the ram already share.
+//
+// MEASURED FROM THE TRIANGLES, NOT THE VERTICES. This model is 2812 triangles
+// over 180 source units, so binning vertex positions alone leaves whole bins
+// EMPTY — three of twenty-four on the shipped mesh, straddling the widest part
+// of the body, because a long triangle contributes nothing between its corners.
+// An empty bin reads as zero half-height, i.e. a hole in the animal you can
+// swim through, and it looks exactly like a correct taper. Each edge is walked
+// at bin resolution instead, so every bin the surface crosses is filled.
+const PROFILE_BINS = 24;
+
+/**
+ * The silhouette of `object` as a cross-section profile along entity +Y.
+ *
+ * IN THE OBJECT'S OWN PARENT FRAME, whatever that frame is currently doing.
+ * `createVisual` hands back a visual already turned so `forward` is entity +Y
+ * and the model's up is entity ±X (see orientationQuaternion in assets.js), and
+ * entity X is what the camera reads as the animal's height in both views — so
+ * the profile has to be measured in the frame the visual SITS in, not in world
+ * space. Taking world coordinates instead would work at spawn, where the
+ * container has not been rotated yet, and would quietly return the profile of a
+ * whale standing on its tail anywhere else: `npm run looks:whale` lays the body
+ * along its heading before it draws anything.
+ *
+ * THE BIND POSE, and on purpose. A SkinnedMesh's position attribute is the rest
+ * shape — the skinning that bends this animal into its stroke happens on the
+ * GPU and never writes back — so this is the animal straight, whatever the wag
+ * is doing when it is called. Which is what a hitbox should be: the fluke
+ * sweeps 5.6 world units over a cycle, and a body you can be shoved by only on
+ * the half of the stroke it happens to be on is a contact that fires at random.
+ * The cost is that the far tail of the outline `npm run looks:whale` draws will
+ * not sit on a mid-stroke fluke — visible on that page, and 0.16 world units of
+ * half-height either way.
+ *
+ * THE BIND POSE, and on purpose. A SkinnedMesh's position attribute is the rest
+ * shape — the skinning that bends this animal into its stroke happens on the GPU
+ * and never writes back — so this is the animal straight, whatever the wag is
+ * doing when it is called. Which is what a hitbox should be: the fluke sweeps
+ * 5.6 world units over one cycle, and a body you can be shoved by only on the
+ * half of the stroke it happens to be on is a contact that fires at random. The
+ * cost is that the tail end of the outline `npm run looks:whale` draws does not
+ * sit on a mid-stroke fluke — visible on that page, and 0.16 world units of
+ * half-height either way.
+ *
+ * Exported so that page and `npm run test:whale` can run it over the real glb —
+ * the Node harness gets a primitive stand-in from createVisual, so a profile
+ * measured only there would be testing a cone.
+ */
+export function measureBodyProfile(object, bins = PROFILE_BINS) {
+  const parent = object.parent ?? null;
+  (parent ?? object).updateMatrixWorld(true);
+  const toParent = parent ? new THREE.Matrix4().copy(parent.matrixWorld).invert() : null;
+
+  // One transformed copy of every mesh, because the axis range has to be known
+  // before anything can be binned along it and re-reading a skinned attribute
+  // twice is the more expensive half of this.
+  const parts = [];
+  let minS = Infinity;
+  let maxS = -Infinity;
+  object.traverse((o) => {
+    const pos = o.isMesh && o.geometry?.attributes?.position;
+    if (!pos) return;
+    const xs = new Float64Array(pos.count);
+    const ys = new Float64Array(pos.count);
+    for (let i = 0; i < pos.count; i++) {
+      _vert.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      if (toParent) _vert.applyMatrix4(toParent);
+      xs[i] = _vert.x;
+      ys[i] = _vert.y;
+      if (_vert.y < minS) minS = _vert.y;
+      if (_vert.y > maxS) maxS = _vert.y;
+    }
+    parts.push({ xs, ys, idx: o.geometry.index });
+  });
+
+  const span = maxS - minS;
+  if (!parts.length || !(span > 0) || bins < 2) return null;
+
+  const n = bins | 0;
+  const lo = new Float32Array(n).fill(Infinity);
+  const hi = new Float32Array(n).fill(-Infinity);
+  const invStep = n / span;
+
+  const add = (s, a) => {
+    let b = Math.floor((s - minS) * invStep);
+    if (b < 0) b = 0; else if (b >= n) b = n - 1;
+    if (a < lo[b]) lo[b] = a;
+    if (a > hi[b]) hi[b] = a;
+  };
+  // Walk the segment at bin resolution. Capped, so a single degenerate triangle
+  // spanning the whole animal costs a bounded number of samples rather than
+  // however many its length asks for.
+  const walk = (s0, a0, s1, a1) => {
+    const steps = Math.min(64, Math.max(1, Math.ceil(Math.abs(s1 - s0) * invStep)));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      add(s0 + (s1 - s0) * t, a0 + (a1 - a0) * t);
+    }
+  };
+
+  for (const { xs, ys, idx } of parts) {
+    const count = idx ? idx.count : xs.length;
+    for (let i = 0; i + 2 < count; i += 3) {
+      const a = idx ? idx.getX(i) : i;
+      const b = idx ? idx.getX(i + 1) : i + 1;
+      const c = idx ? idx.getX(i + 2) : i + 2;
+      walk(ys[a], xs[a], ys[b], xs[b]);
+      walk(ys[b], xs[b], ys[c], xs[c]);
+      walk(ys[c], xs[c], ys[a], xs[a]);
+    }
+  }
+
+  // A bin nothing reached at all is a hole, and a hole reads as a gap in the
+  // animal rather than as an error. Bridged from its neighbours; if the whole
+  // profile is empty there was no geometry and the caller falls back to the
+  // plain capsule.
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < n; i++) if (lo[i] <= hi[i]) { if (first < 0) first = i; last = i; }
+  if (first < 0) return null;
+  for (let i = 0; i < first; i++) { lo[i] = lo[first]; hi[i] = hi[first]; }
+  for (let i = last + 1; i < n; i++) { lo[i] = lo[last]; hi[i] = hi[last]; }
+  for (let i = first + 1; i < last; i++) {
+    if (lo[i] <= hi[i]) continue;
+    let j = i + 1;
+    while (j < last && lo[j] > hi[j]) j++;
+    for (let k = i; k < j; k++) {
+      const t = (k - i + 1) / (j - i + 1);
+      lo[k] = lo[i - 1] + (lo[j] - lo[i - 1]) * t;
+      hi[k] = hi[i - 1] + (hi[j] - hi[i - 1]) * t;
+    }
+    i = j - 1;
+  }
+
+  let thickest = 0;
+  for (let i = 0; i < n; i++) thickest = Math.max(thickest, (hi[i] - lo[i]) * 0.5);
+  return { n, minS, maxS, step: span / n, lo, hi, thickest };
+}
+
+/**
+ * The body's cross-section at `s` along the axis, as a centre and a half-height.
+ *
+ * Interpolated between bin CENTRES rather than read off the bin the point lands
+ * in: a step function here is a hitbox that changes size in jumps as the animal
+ * slides past, which at a 31-unit body is a shove that fires and stops firing
+ * without the seal moving. Beyond the outermost centres it holds the end bin,
+ * so the profile overstates the very tip by at most half a bin — the resolution
+ * of the whole measurement, and on the safe side of it.
+ */
+export function sectionAt(p, s, out = { mid: 0, half: 0 }) {
+  const f = (s - p.minS) / p.step - 0.5;
+  let i = Math.floor(f);
+  let t = f - i;
+  if (i < 0) { i = 0; t = 0; } else if (i >= p.n - 1) { i = p.n - 2; t = 1; }
+  const lo = p.lo[i] + (p.lo[i + 1] - p.lo[i]) * t;
+  const hi = p.hi[i] + (p.hi[i + 1] - p.hi[i]) * t;
+  out.mid = (lo + hi) * 0.5;
+  out.half = (hi - lo) * 0.5;
+  return out;
+}
+
+const _section = { mid: 0, half: 0 };
+
+/**
+ * How far (x, y) is from that whale's body — 0 anywhere on it.
+ *
+ * THE ONE SHAPE. The shove, the ram and every "is there a whale near me"
+ * question in the game come through here, so there is no way for the body you
+ * can be pushed by to be a different body from the one you can push (see the
+ * crab's claw, which had exactly that pair drift apart in silence).
+ *
+ * The point is taken into the animal's own frame first, so the profile answers
+ * about the body as DRAWN — banked, and mirrored the way the side view mirrors
+ * it. A world-axis-aligned test was close enough while the body was a cylinder
+ * and stops being so the moment the shape has a top and a bottom that differ,
+ * which this one does at both ends of the animal: through the barrel it stands
+ * 29.6 above its own origin and hangs 15.8 below, and where the pectorals are
+ * it hangs 32.4.
+ */
+export function bodyDistance(w, x, y) {
+  const dx = x - w.container.position.x;
+  const dy = y - w.container.position.y;
+  const th = w.container.rotation.z;
+  const cs = Math.cos(th);
+  const sn = Math.sin(th);
+  const along = -sn * dx + cs * dy; // entity +Y — the direction of travel
+  const across = (w.flip ? -1 : 1) * (cs * dx + sn * dy); // entity +X — its height on screen
+
+  const p = w.profile;
+  if (!p) {
+    // No mesh to measure. The plain capsule, which is what this was before.
+    const half = w.length * 0.5;
+    const gap = Math.max(0, Math.abs(along) - half);
+    return Math.hypot(gap, Math.max(0, Math.abs(across) - w.bodyRadius));
+  }
+  const s = Math.min(p.maxS, Math.max(p.minS, along));
+  const sec = sectionAt(p, s, _section);
+  return Math.hypot(Math.abs(along - s), Math.max(0, Math.abs(across - sec.mid) - sec.half));
+}
 
 export function whaleCount() {
   return whales.length;
@@ -74,18 +306,11 @@ export function whaleCount() {
  * Measured to the BODY, not to the container's origin. A bowhead is tens of
  * units long and swims flat, so its centre can be most of a screen away while
  * its flank fills the frame — a plain centre distance would report "nothing
- * near you" about a whale the seal is currently swimming alongside. The two
- * extents are different numbers for the same reason: `length` runs along the
- * crossing (x) and `bodyRadius` across it (y), and using the smaller of them
- * both ways is what would put the nose thirty units away.
+ * near you" about a whale the seal is currently swimming alongside.
  */
 export function whaleDistance(x, y) {
   let best = Infinity;
-  for (const w of whales) {
-    const dx = Math.max(0, Math.abs(w.container.position.x - x) - w.length * 0.5);
-    const dy = Math.max(0, Math.abs(w.container.position.y - y) - w.bodyRadius);
-    best = Math.min(best, Math.hypot(dx, dy));
-  }
+  for (const w of whales) best = Math.min(best, bodyDistance(w, x, y));
   return best;
 }
 
@@ -217,8 +442,13 @@ export function spawnWhale(scene, rand = Math.random) {
   // mouth offset, the despawn margin) is a fraction of what the box says.
   _box.setFromObject(visual);
   _box.getSize(_size);
-  const length = Math.max(_size.x, _size.y, _size.z);
-  const girth = Math.min(_size.x, _size.y, _size.z);
+  // ALONG THE DIRECTION OF TRAVEL, not the largest of the three. Entity +Y IS
+  // the crossing — createVisual has already turned the model onto it — so a
+  // `max` here is a body axis chosen by whichever number happened to be biggest,
+  // which agrees with the heading only by luck.
+  const length = _size.y;
+  // The silhouette, and the fallback if there is nothing to measure it from.
+  const profile = measureBodyProfile(visual);
   // WHERE THE NOSE IS, measured rather than assumed. createVisual orients every
   // creature so its `forward` points at world +Y, and the container has not been
   // rotated or moved yet — so in this frame the box's +Y face IS the nose, and
@@ -248,10 +478,17 @@ export function spawnWhale(scene, rand = Math.random) {
     dir,
     margin,
     length,
-    // Half the smallest extent is the body's radius about its own axis. Used
-    // for the shove capsule, so the seal is pushed by the whale's actual bulk
-    // rather than by a number somebody typed.
-    bodyRadius: girth * 0.5,
+    // The measured silhouette (see measureBodyProfile), and the one number that
+    // stands in for it where a single radius is all a caller can use: the
+    // THICKEST section, which is the widest the animal ever gets on screen.
+    // Off entity X specifically — the axis the camera reads as height in both
+    // views — rather than off whichever of the three extents is smallest.
+    profile,
+    bodyRadius: profile ? profile.thickest : _size.x * 0.5,
+    // Which way the side view has the body mirrored. `bodyDistance` needs it to
+    // read the profile the right way up — the flank a whale swimming left shows
+    // is the other one, and this animal's shape is not symmetric about its axis.
+    flip: CONFIG.view === 'side' && dir < 0,
     noseAhead,
     baseY,
     // The crossing, held apart from where the body is drawn — see the note in
@@ -438,7 +675,11 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
       * (c.bank ?? 0) * DEG;
     w.bank += (targetBank - w.bank) * Math.min(1, (c.bankSmooth ?? 0) * dt);
     w.container.rotation.z = headingFor(w.dir, w.bank);
-    if (CONFIG.view === 'side') w.visual.rotation.y = w.dir < 0 ? Math.PI : 0;
+    // The side-view mirror, and the flag `bodyDistance` reads it back off.
+    // Written together so the hitbox cannot be the right way up about a body
+    // that is drawn the other way — the profile has a back and a belly.
+    w.flip = CONFIG.view === 'side' && w.dir < 0;
+    if (CONFIG.view === 'side') w.visual.rotation.y = w.flip ? Math.PI : 0;
 
     mouthPoint(w, _mouth);
 
@@ -619,11 +860,9 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     }
 
     // --- the shove ---------------------------------------------------------
-    // The body is a CAPSULE, not a circle. A 31-unit animal tested as a sphere
-    // at its own centre either misses the seal entirely along most of its
-    // length (radius small) or shoves from half a screen away (radius large);
-    // neither is the shape on screen. This is the distance from the seal to the
-    // body's axis segment, which is what the silhouette actually is.
+    // The body is the SILHOUETTE, not a circle and no longer a plain capsule
+    // either — see measureBodyProfile at the top of this file for what a
+    // constant radius got wrong at each end of a bowhead.
     //
     // ONE CONTACT TEST, BOTH DIRECTIONS. The whale shoves the seal aside, and a
     // seal that arrived at ramming speed moves the whale a little in return —
@@ -635,16 +874,7 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     const ram = hooks.ram;
     let ramming = false;
     if (p && ((c.shoveForce ?? 0) > 0 || ram?.dashing)) {
-      const half = w.length * 0.5;
-      const ax = w.container.position.x - w.dir * half;
-      const bx = w.container.position.x + w.dir * half;
-      const t = Math.max(0, Math.min(1, (p.position.x - ax) / (bx - ax || 1)));
-      const cx = ax + (bx - ax) * t;
-      const cy = w.container.position.y;
-      const dx = p.position.x - cx;
-      const dy = p.position.y - cy;
-      const hit = w.bodyRadius + (p.radius ?? 0);
-      const touching = dx * dx + dy * dy <= hit * hit;
+      const touching = bodyDistance(w, p.position.x, p.position.y) <= (p.radius ?? 0);
 
       // THE NUDGE, on the frame the ram ARRIVES. Along the dash, like every
       // other thing the strike shoves (see applyKnockback) — the seal is a
@@ -667,6 +897,29 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
         const speed = (rc.speed ?? 5) * scale;
         w.nudgeVX += ((ram.dirX ?? 0) / dLen) * speed;
         w.nudgeVY += ((ram.dirY ?? 0) / dLen) * speed;
+
+        // AND THE SKELETON, on the same contact and along the same dash.
+        //
+        // The nudge above moves the whole animal as one piece, which on a body
+        // this long reads as the CAMERA drifting rather than as a hit: every
+        // part of it goes the same way by the same amount, so there is nothing
+        // for the eye to compare against. The spine springs are what carry a
+        // hit on every other creature in the game (systems/boneSpring.js — the
+        // whale has no flinch clip, and no clips at all), and shoving them here
+        // gives the sweep the thing thirty tonnes still owes you: the body
+        // buckles a little where it was hit and the fluke finishes the flinch
+        // half a second later, down the same travelling wave that gives this
+        // animal its swim.
+        //
+        // Small on purpose, and separate from `speed` rather than derived from
+        // it: one is how far the animal moves and the other is how much of it
+        // bends, and they are not the same feeling at the same number.
+        const fl = rc.flinch ?? {};
+        const kick = (fl.strength ?? 0) * scale;
+        if (kick > 0 && w.anim && CONFIG.animation?.enabled) {
+          _imp.set((ram.dirX ?? 0) / dLen, (ram.dirY ?? 0) / dLen, 0);
+          w.anim.impulse(_imp, kick, fl.tipBias);
+        }
         hooks.onNudge?.(p.position.x, p.position.y, speed);
       }
 

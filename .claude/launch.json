@@ -7,7 +7,7 @@
     "configurations that each started a vite dev server (dev, dev-alt, dev-alt2,",
     "dev-auto, and rive-test, which was a bare `npx vite`). Every dev server",
     "carries the /__tuning writer from vite.config.js, so a second one is not a",
-    "duplicate — any tab still pointed at it can POST its boot-time snapshot over",
+    "duplicate \u2014 any tab still pointed at it can POST its boot-time snapshot over",
     "path/src/imported-tuning.json and silently revert hours of tuning. A picker",
     "with five ways to make that mistake is a trap.",
     "",
@@ -23,46 +23,76 @@
     "the game: they are read-only render servers that write only their own shots",
     "directory, they cannot touch tuning, and each one owns its port so both can",
     "be up at once. They collide with nothing except a second copy of themselves,",
-    "which is what the EADDRINUSE message in atlas-render/server.mjs is for."
+    "which is what the EADDRINUSE message in atlas-render/server.mjs is for.",
+    "",
+    "",
+    "`workbench` ATTACHES (url, no command) and `workbench-start` is the one that starts a hub. That way round because the harness picks `workbench` by name, and the hub is a singleton on a fixed port that is meant to be left running - so the common case for any session is 'show me the workbench', not 'own it'. Starting a second one on 5178 fails the harness's port pre-check before `npm run hub` (which is idempotent and would just say 'already running') ever gets to run. Use workbench-start only when nothing is up. Never fix this with autoPort: a moving port is the exact problem the workbench exists to solve."
   ],
   "configurations": [
     {
       "name": "workbench",
+      "url": "http://localhost:5178",
+      "port": 5178
+    },
+    {
+      "name": "workbench-start",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "hub"],
+      "runtimeArgs": [
+        "run",
+        "hub"
+      ],
       "port": 5178,
       "autoPort": false
     },
     {
       "name": "csv-editor",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "csv"],
+      "runtimeArgs": [
+        "run",
+        "csv"
+      ],
       "autoPort": true
     },
     {
       "name": "game",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "autoPort": true
     },
     {
       "name": "design-picker",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "pick"],
+      "runtimeArgs": [
+        "run",
+        "pick"
+      ],
       "port": 4601,
       "autoPort": false
     },
     {
       "name": "icon-picker",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "icons:pick"],
+      "runtimeArgs": [
+        "run",
+        "icons:pick"
+      ],
       "port": 4599,
       "autoPort": false
     },
     {
       "name": "built-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview", "--", "--port", "4173", "--strictPort"],
+      "runtimeArgs": [
+        "run",
+        "preview",
+        "--",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
       "port": 4173
     }
   ]

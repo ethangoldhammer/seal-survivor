@@ -1294,6 +1294,17 @@ const STYLES = `
     font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap;
     transform: translate(-50%, -50%); will-change: transform, opacity; }
   .sv-toast-combo { color: #ffe066; font-size: 15px; }
+  /* WHAT A HIT COST — the damage readout, on the seal. Same layer and same
+     loop as the score numbers and deliberately heavier than them: a kill is one
+     of a dozen numbers and this is the only one that is READ. The colour is
+     written inline per hit (it runs hotter the bigger the hit — see
+     CONFIG.fx.playerDamage.readout), so there is none here; everything else is
+     re-stated by ui/typography.js from the 'Damage taken' role. */
+  .sv-dmg { position: absolute; font-size: 19px; font-weight: 800;
+    letter-spacing: 0.03em; white-space: nowrap;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 14px currentColor;
+    font-variant-numeric: tabular-nums; pointer-events: none;
+    transform: translate(-50%, -50%); will-change: transform, opacity; }
   /* FOOD CHAIN! — the chain-extension banner. Reuses the toast layer and the
      toast update loop, but it is an announcement rather than a number: it is
      pinned above the seal, only one is ever on screen (an extension re-uses
@@ -5784,6 +5795,11 @@ export function screenToWorld(camera, px, py, out = { x: 0, y: 0 }) {
 
 const PROJECT_V = new THREE.Vector3();
 const screenPt = { x: 0, y: 0 };
+// Scratch for the damage readout's colour ramp — see spawnDamageReadout. Two
+// reused Colors rather than two allocated per hit: this fires several times a
+// second while anything is chewing on you.
+const DMG_COLD = new THREE.Color();
+const DMG_HOT = new THREE.Color();
 
 // ---------------------------------------------------------------------------
 // THE SEAL'S TWO GAUGES — how they MOVE.
@@ -6579,6 +6595,122 @@ export function spawnScoreToast(camera, worldX, worldY, points, multiplier = 1) 
   while (toasts.length > 40) removeToast(0);
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A HIT COST — the damage readout.
+//
+// Everything else that happens when the seal is bitten is ANALOGUE: the rim
+// goes red, the eyes go red, the camera shakes, the animal flinches, the mix
+// thumps. All of it says SOMETHING BIT YOU and none of it says how much. The
+// amount exists in exactly one place — the health bar, at the edge of the
+// screen, which is the one thing a player cannot look at during the two seconds
+// it matters. A kill has had a number floating off it since the first build;
+// being killed never has.
+//
+// ONE LINE, TOTALLING, rather than a column. The failure this has to explain is
+// a pile-on — several sources inside a second, see CONFIG.player.damageCap —
+// and five numbers stacking up the screen is exactly as unreadable as the
+// nothing it replaces. So a hit inside `mergeGap` of the last one adds to the
+// live line and re-pops it in place: what the player sees is one figure
+// climbing while the beating lasts, which is the shape of the event.
+//
+// Deliberately NOT built on spawnProcToast, though the merge looks like its
+// re-pop. That function keys on an upgrade and prints a card's name beside a
+// value, and every one of those is wrong here — there is no card, the label
+// would be a second thing to read, and its "always update, sometimes re-pop"
+// rule is the opposite of what this wants: a merged hit must always re-pop,
+// because the re-pop IS the feedback for the new damage.
+// ---------------------------------------------------------------------------
+let dmgToast = null;
+let dmgTotal = 0;
+
+/**
+ * @param amount  the damage this hit was worth — the BANKED figure out of
+ *   systems/playerDamageFx.js, which is the same number the flash, the shake
+ *   and the grunt were sized off. A second accumulator here would be a second
+ *   opinion about what one hit is.
+ * @param maxHp   the CURRENT bar, for the colour ramp and the percent mode.
+ */
+export function spawnDamageReadout(camera, worldX, worldY, amount, maxHp) {
+  const c = CONFIG.fx?.playerDamage?.readout ?? {};
+  if (c.enabled === false || !el.svToastLayer || !camera || !(amount > 0)) return null;
+  PROJECT_V.set(worldX, worldY, 0);
+  projectToScreen(camera, PROJECT_V, screenPt);
+
+  // Still on screen and still inside the merge window. `age` is the toast
+  // loop's own clock, so this asks "how long since it last popped" rather than
+  // keeping a second timer that could disagree with the one driving the motion.
+  const live = dmgToast && toasts.includes(dmgToast) && dmgToast.age <= (c.mergeGap ?? 0)
+    ? dmgToast : null;
+  dmgTotal = live ? dmgTotal + amount : amount;
+  if (!live && dmgToast) {
+    // THE OLD LINE IS RETIRED, not left to expire on its own. `life` is longer
+    // than `mergeGap` on purpose — a number has to survive being read — so a
+    // hit that arrives after the quiet gap would otherwise build its line on
+    // top of one that is still up, at the same anchor, with the same offset.
+    // Two numbers in one place is neither number, and it is the exact failure
+    // the offset above exists to avoid for the other three lines that share
+    // this anchor. There is one damage readout on screen, always.
+    const i = toasts.indexOf(dmgToast);
+    if (i >= 0) removeToast(i);
+    dmgToast = null;
+  }
+
+  const hp = maxHp > 0 ? maxHp : 1;
+  const lost = dmgTotal / hp;
+  const dp = Math.max(0, Math.min(2, Math.round(c.decimals ?? 0)));
+  // A MINUS AND A NUMBER. The sign is the whole label: every other number that
+  // flies off the seal is a gain and carries a '+', so this reads as the same
+  // channel running the other way without a word of its own to learn.
+  const text = c.percent
+    ? `-${(lost * 100).toFixed(dp)}%`
+    : `-${dmgTotal.toFixed(dp)}`;
+
+  // Hotter the more it cost, from the role's own colour up to `colorHot`. Read
+  // off the ROLE rather than off a constant here, so dragging the type's colour
+  // in the Text panel moves the bottom of the ramp with it — otherwise the
+  // panel would appear to do nothing to every hit but the biggest.
+  const cold = CONFIG.textStyles?.dmg?.color ?? 0xff9a7a;
+  const t = Math.min(1, lost / Math.max(0.001, c.hotAt ?? 0.25));
+  DMG_COLD.set(cold);
+  DMG_HOT.set(c.colorHot ?? 0xff4a2c);
+  const col = DMG_COLD.lerp(DMG_HOT, t);
+
+  if (live) {
+    live.node.textContent = text;
+    live.node.style.color = `#${col.getHexString()}`;
+    // ALWAYS re-popped, unlike a proc receipt's throttled re-arrival: the new
+    // damage is the event, and a total that changed without the line moving
+    // would be the readout going quiet exactly as things got worse. The anchor
+    // is re-taken with it so a pinned line does not jump from a stale point.
+    live.x = screenPt.x;
+    live.y = screenPt.y;
+    live.age = 0;
+    rollTravel(live);
+    return live;
+  }
+
+  const node = document.createElement('div');
+  node.className = 'sv-dmg';
+  node.textContent = text;
+  node.style.color = `#${col.getHexString()}`;
+  el.svToastLayer.appendChild(node);
+  const toast = pushToast(node, screenPt.x, screenPt.y, 'dmg');
+  // Holds station over the animal while both it and the camera move — see the
+  // `follow` branch in updateToasts. The hit happened to the seal, and the seal
+  // is the thing already under the player's eyes.
+  toast.follow = c.pin !== false;
+  toast.pinDy = c.pinOffset ?? 0;
+  dmgToast = toast;
+  while (toasts.length > 40) removeToast(0);
+  return toast;
+}
+
+/** A new run starts with nothing owed and no line in the air. */
+export function resetDamageReadout() {
+  dmgToast = null;
+  dmgTotal = 0;
+}
+
 // The travel half of a popup's motion, rolled once at birth: the speeds it
 // carries for its whole life. The arrival and departure curves are NOT rolled
 // here — they're read per frame, so dragging a slider re-shapes the numbers
@@ -7325,8 +7457,16 @@ export function updateToasts(dt, camera = null, pin = null) {
       // The rise is zeroed rather than added to the anchor. A pinned line that
       // kept integrating would climb away from the seal it is pinned to at
       // 34px a second, which is the pin failing slowly instead of visibly.
+      //
+      // `pinDy` is an offset in SCREEN pixels off that one anchor, so two
+      // followers can share it without stacking on top of each other. The proc
+      // receipt leaves it undefined and sits exactly where it always did; the
+      // damage readout lifts itself clear (CONFIG.fx.playerDamage.readout
+      // .pinOffset), because that slot already holds the receipt, the chain
+      // banner and the STRIKE NOW! prompt, and the number that says you are
+      // dying should not have to queue behind three of them.
       t.x = sealPin.x;
-      t.y = sealPin.y;
+      t.y = sealPin.y + (t.pinDy ?? 0);
       t.vx = 0;
       t.vy = 0;
     } else {

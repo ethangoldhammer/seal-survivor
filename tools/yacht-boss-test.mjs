@@ -29,15 +29,77 @@ import { boatState } from '../path/src/systems/bossBoat.js';
 import { crew, damageCrew, updateCrew, resetCrew } from '../path/src/systems/crew.js';
 import { bounds } from '../path/src/arena.js';
 
+// ---------------------------------------------------------------------------
+// SEEDED, AND RESEEDED PER SCENARIO.
+//
+// Nothing in this file called Math.random itself, which is exactly why it was
+// easy to miss: the dice are thrown inside the systems it drives — the spawn
+// rolls, the boss's shuffle bag, the crew's placement and the perk roll — and
+// they all read the GLOBAL Math.random. Measured before this, the same
+// unchanged tree passed, failed and passed again.
+//
+// PER SCENARIO rather than once at the top, which is the part worth copying.
+// A single seed at the top is still deterministic, but every scenario then
+// inherits the stream position left by the one before it — so adding a check
+// anywhere in this file silently re-rolls every check BELOW it, and the failure
+// reads as a break in whatever you just added. `fresh()` is where a scenario
+// starts, so it is where the stream starts.
+//
+// `YACHT_TEST_SEED=n npm run test:yacht` shifts all of them at once. That door
+// is how a check gets sorted into "the number swings, the verdict doesn't"
+// versus "this is a coin flip" — swept 60 seeds when this landed.
+// ---------------------------------------------------------------------------
+const mulberry32 = (seed) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+const SEED = Number(process.env.YACHT_TEST_SEED ?? 0x7AC47);
+let scenario = 0;
+
 const scene = new THREE.Scene();
 const DT = 1 / 60;
 let fail = 0;
+
+// ---------------------------------------------------------------------------
+// IN THE HULL'S OWN FRAME.
+//
+// "The same spot of deck" and "the same height above it" are claims about the
+// BOAT's space, and both used to be measured as a world-space offset from
+// `hull.mesh.position`. That is the hull's translation and nothing else, so
+// every degree the hull ROLLS moves a man who is welded to the deck and reads
+// as him sliding along it.
+//
+// It passed anyway, and the reason is worth keeping: the roll used to be
+// driven by `performance.now()`, and four SIMULATED seconds pass in a fraction
+// of a wall-clock second in here — so the hull barely rolled during the window
+// and the two were indistinguishable. Putting the roll on the game clock (see
+// systems/bossBoat.js) made the deck really tilt, and this instrument
+// immediately called a correct crew a slipping one: 0.0875 units of "slip" at
+// a threshold of 0.05, on all 40 swept seeds.
+//
+// Measured properly, the same foot goes from local (4.374, 1.125) to
+// (4.374, 1.128) over those four seconds. Three thousandths of a unit. The men
+// were never sliding; the ruler was turning.
+// ---------------------------------------------------------------------------
+const _localV = new THREE.Vector3();
+function inHull(hullEntity, p) {
+  const host = hullEntity.visual ?? hullEntity.mesh;
+  host.updateMatrixWorld(true);
+  return host.worldToLocal(_localV.set(p.x, p.y, p.z ?? 0)).clone();
+}
+
 const check = (n, ok, d = '') => {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${n}${d ? ` — ${d}` : ''}`);
   if (!ok) fail++;
 };
 
 function fresh(boss) {
+  Math.random = mulberry32(SEED + scenario++);
   resetCrew(scene);
   resetEnemies(scene);
   resetProjectiles(scene);
@@ -137,14 +199,14 @@ check('...all still aboard', crew.length === partySize && crew.every((f) => f.st
 const rode = crew[0];
 const startX = rode.rig.points.footL.x;
 const playerPos = { x: bounds.right - 10, y: bounds.bottom + 8, z: 0 };
+const footBefore = inHull(hull, rode.rig.points.footL);
 for (let i = 0; i < 60 * 4; i++) {
   updateBoss(DT, gs, scene);
   updateBossAbilities(DT, scene, playerPos, {});
   updateEnemies(DT, scene, playerPos, () => {}, () => {});
   updateCrew(DT, scene);
 }
-const drift = Math.abs(rode.rig.points.footL.x - hull.mesh.position.x)
-  - Math.abs(startX - at.x);
+const drift = inHull(hull, rode.rig.points.footL).x - footBefore.x;
 check('the hull sailed and took them with it',
   Math.abs(hull.mesh.position.x - at.x) > 1,
   `hull moved ${(hull.mesh.position.x - at.x).toFixed(1)} units`);
@@ -168,7 +230,11 @@ console.log('\nIT COMES ABOUT, AND HE COMES WITH IT');
   const reachBefore = Math.abs(guest.rig.points.hips.x - hull.mesh.position.x);
   // How high he rides above the hull — the number that betrays a man left
   // floating in mid-air where the deck used to be.
-  const liftBefore = guest.rig.points.footL.y - hull.mesh.position.y;
+  // In the hull's frame, like `round.lift` it is compared against — see inHull.
+  // `side` and `reach` stay in WORLD x on purpose: those two are the claim that
+  // the man ended up on the other side of a hull that turned round, which is a
+  // world-space fact and the one thing the local frame would cancel out.
+  const liftBefore = inHull(hull, guest.rig.points.footL).y;
 
   // Send the player the other way, so the hull has to come about. It is not
   // asked to STAY turned: a boat that has crossed the arena settles over the
@@ -188,7 +254,7 @@ console.log('\nIT COMES ABOUT, AND HE COMES WITH IT');
         yaw: boatState.yaw,
         side: Math.sign(guest.rig.points.hips.x - hull.mesh.position.x),
         reach: Math.abs(guest.rig.points.hips.x - hull.mesh.position.x),
-        lift: guest.rig.points.footL.y - hull.mesh.position.y,
+        lift: inHull(hull, guest.rig.points.footL).y,
       };
     }
   }

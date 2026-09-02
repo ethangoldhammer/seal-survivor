@@ -59,6 +59,7 @@ const check = (name, cond, detail = '') => {
 
 const PD = CONFIG.fx.playerDamage;
 const HIT = CONFIG.playerOutline.hit;
+const IFR = CONFIG.playerOutline.iframe;
 const MAX_HP = CONFIG.player.maxHp;
 const AT = { x: 0, y: 0 };
 
@@ -328,10 +329,133 @@ section('RIM — the flash');
     updatePlayerOutline(1 / 120, 0);
     t += 1 / 120;
   }
-  check('the flash is over inside its configured time', t <= HIT.time + 1 / 60, `${t.toFixed(3)}s`);
+  // `hold` is FLAT TIME AT THE TOP and the decay runs its full span afterwards
+  // — see CONFIG.playerOutline.hit.hold — so the whole flash is the two added,
+  // not the longer of them. Read off the config rather than typed, like the
+  // spread ceiling further down.
+  check('the flash is over inside its configured time',
+    t <= HIT.time + (HIT.hold ?? 0) + 1 / 60, `${t.toFixed(3)}s`);
   check('and lands exactly back on the tuned colour', Math.abs(redness() - BASE_RED) < 1e-9);
   check('...and the tuned glow', Math.abs(glowOf() - BASE_GLOW) < 1e-9);
   check('...and the tuned thickness', Math.abs(thickOf() - BASE_THICK) < 1e-12);
+}
+
+// ===========================================================================
+section('RIM — the i-frame strobe');
+// ===========================================================================
+//
+// The seal's only defence had no picture at all: `player.invuln` had two
+// readers in the whole game, the line that sets it and the line that counts it
+// down. A window that refuses a blow left nothing behind, which from the
+// player's side is indistinguishable from damage being arbitrary — a pack takes
+// one bite, five more connect for free, and there is no way to learn that the
+// free ones were a RULE.
+//
+// Driven through the real updatePlayerOutline against a real material, because
+// the strobe's whole job is to reach the shells and every interesting way it
+// could fail is a way of not reaching them.
+{
+  const sampleOver = (seconds, invuln, step = 1 / 240) => {
+    const out = [];
+    for (let t = 0; t < seconds; t += step) {
+      updatePlayerOutline(step, 0, Math.max(0, invuln - t));
+      out.push(glowOf());
+    }
+    return out;
+  };
+
+  reset();
+  const lit = sampleOver(1 / 60, 1)[0];
+  check('being immune lights the rim', lit > BASE_GLOW * 1.02,
+    `${BASE_GLOW.toFixed(2)} -> ${lit.toFixed(2)}`);
+
+  // IT BLINKS, which is the whole word in the request. A rim that merely sat
+  // brighter for the duration would say "something is on" and not "this is a
+  // window that is running out" — and it is indistinguishable from the charge
+  // throb, which already owns steady swelling.
+  reset();
+  const run = sampleOver(1, 1);
+  const hi = Math.max(...run);
+  const lo = Math.min(...run);
+  check('...and it strobes rather than sitting bright', hi > lo * 1.1,
+    `${lo.toFixed(2)} to ${hi.toFixed(2)} over a second`);
+
+  // AT THE TUNED RATE. Counted as crossings of the midpoint rather than trusted
+  // to the config, so a wave that silently stopped oscillating — or one running
+  // at twice the rate because the phase advanced in two places — fails here
+  // instead of passing as "it moved".
+  const mid = (hi + lo) / 2;
+  let crossings = 0;
+  for (let i = 1; i < run.length; i++) {
+    if ((run[i - 1] < mid) !== (run[i] < mid)) crossings++;
+  }
+  check('...at about the tuned rate', Math.abs(crossings / 2 - IFR.hz) <= 1.5,
+    `${(crossings / 2).toFixed(1)} blinks a second against a tuned ${IFR.hz}`);
+
+  // THE TROUGH IS THE BASE RIM, NOT DARKNESS. This is the reason the strobe is
+  // on the rim and not on the seal's own visibility: i-frames run exactly when
+  // a pack is on top of you, and a silhouette that vanished for half of every
+  // cycle would cost more than the information is worth.
+  check('the trough never dims below the ordinary rim', lo >= BASE_GLOW - 1e-9,
+    `${lo.toFixed(2)} against a ${BASE_GLOW.toFixed(2)} base`);
+
+  // EVERY WINDOW OPENS AT THE TOP OF A BLINK. Caught mid-trough, the first blink
+  // of a window is spent dark and the effect reads as starting late — and the
+  // first blink is the one carrying the information.
+  reset();
+  const firstA = sampleOver(1 / 240, 1)[0];
+  updatePlayerOutline(1 / 240, 0, 0);          // window closes
+  const firstB = sampleOver(1 / 240, 1)[0];    // a new one opens
+  // Asserted against the PEAK, not just against the two windows agreeing with
+  // each other: written the other way round both opened at the trough, agreed
+  // perfectly, and this passed while every window spent its first blink dark.
+  check('a fresh window opens at the top of a blink',
+    // Within a percent of the peak rather than exactly it: the first sample is
+    // one step of phase past zero, and `hi` is whichever sample of a long run
+    // landed nearest the true crest. The claim is "opens lit", not "opens on
+    // the exact floating-point maximum".
+    Math.abs(firstA - firstB) < 1e-9 && firstA > BASE_GLOW && firstA >= hi * 0.99,
+    `${firstA.toFixed(3)} then ${firstB.toFixed(3)}, peak ${hi.toFixed(3)}, base ${BASE_GLOW.toFixed(3)}`);
+
+  // ...AND IT ENDS. A strobe that outlived its window would be the rim lying
+  // about the one thing it exists to report.
+  reset();
+  sampleOver(0.5, 0.25);
+  updatePlayerOutline(1 / 240, 0, 0);
+  check('the strobe stops the frame the window does',
+    Math.abs(glowOf() - BASE_GLOW) < 1e-9 && Math.abs(thickOf() - BASE_THICK) < 1e-12,
+    `${glowOf().toFixed(3)} against a ${BASE_GLOW.toFixed(3)} base`);
+
+  // THE HIT OWNS THE HUE AND THE STROBE OWNS THE BRIGHTNESS. The two are live
+  // together for the first fifth of a second of every window — a blow lands,
+  // arms the window, and the rim strobes red while it drains. Sharing a channel
+  // would mean each cancelling the other exactly when both have something to
+  // say.
+  reset();
+  playerDamageFx(MAX_HP * PD.flashFraction, MAX_HP, AT);
+  updatePlayerOutline(0, 0, 1);
+  check('a hit inside a window is still red', redness() > BASE_RED * 2,
+    `${redness().toFixed(2)}`);
+  check('...and brighter than the same hit with no window', (() => {
+    const withWin = glowOf();
+    reset();
+    playerDamageFx(MAX_HP * PD.flashFraction, MAX_HP, AT);
+    updatePlayerOutline(0, 0, 0);
+    return withWin > glowOf();
+  })(), 'the strobe adds on top of the flash rather than replacing it');
+
+  // AND THE SWITCH WORKS, without silencing the hit that armed the window.
+  reset();
+  const was = IFR.enabled;
+  IFR.enabled = false;
+  updatePlayerOutline(1 / 240, 0, 1);
+  check('turning the strobe off leaves the ordinary rim', Math.abs(glowOf() - BASE_GLOW) < 1e-9,
+    `${glowOf().toFixed(3)}`);
+  playerDamageFx(MAX_HP * PD.flashFraction, MAX_HP, AT);
+  updatePlayerOutline(0, 0, 1);
+  check('...and a hit still flashes with it off', redness() > BASE_RED * 2, `${redness().toFixed(2)}`);
+  IFR.enabled = was;
+  reset();
 }
 
 {
@@ -369,7 +493,14 @@ section('RIM — the flash');
   // fails if the effect stops spanning the range it was given — a collapse the
   // fixed 1.5x could not have seen, because any tuning that narrowed minTime
   // and time together would sail through it.
-  const spreadCeiling = HIT.time / HIT.minTime;
+  // ...AND THE HOLD IS IN BOTH ENDS OF IT. It is flat seconds added to every
+  // flash whatever its size (CONFIG.playerOutline.hit.hold), so it lengthens the
+  // graze and the maiming equally and therefore COMPRESSES the ratio between
+  // them. Left out, this asks the size read to span a range the hold has
+  // already eaten into, and the failure would read as the flash having stopped
+  // scaling when what actually happened is that both got longer.
+  const hold = HIT.hold ?? 0;
+  const spreadCeiling = (HIT.time + hold) / (HIT.minTime + hold);
   const spread = graze.life > 0 ? full.life / graze.life : Infinity;
   check('...and burns longer', full.life > graze.life * 1.1,
     `${graze.life.toFixed(3)}s -> ${full.life.toFixed(3)}s`);

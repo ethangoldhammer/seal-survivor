@@ -319,7 +319,21 @@ function ride(dt, e, playerPos) {
   // Level, and facing the way it is going. A hull that pitches with its
   // velocity like a fish is the single fastest way to stop reading as a boat.
   if (e.visual) {
-    const roll = Math.sin(performance.now() * 0.0011) * (c.rollAmount ?? 0.05);
+    // ON THE GAME'S CLOCK, NOT THE WALL'S. This was
+    // `Math.sin(performance.now() * 0.0011)`, which is the one line in this
+    // function that did not read `dt` — so the hull kept rolling through a
+    // pause, rolled at a different rate under a slow frame, and rolled by a
+    // different amount depending on how long the process had been alive.
+    //
+    // That last one is what made `npm run test:yacht` a coin toss: the crew
+    // stand ON this deck, and "their feet stayed on the same spot" was
+    // measuring slip against a hull whose tilt came from how many milliseconds
+    // the test had spent booting. Seeding the harness could not touch it —
+    // there was no dice roll involved, only a clock. Per entity, so a hull
+    // arrives level and the phase resets with the fight rather than continuing
+    // from whatever the wall clock happened to say.
+    e.rollClock = (e.rollClock ?? 0) + dt;
+    const roll = Math.sin(e.rollClock * 1.1) * (c.rollAmount ?? 0.05);
     e.visual.rotation.z = roll;
 
     // IT STEERS ROUND, it does not flip. This used to be one line that snapped

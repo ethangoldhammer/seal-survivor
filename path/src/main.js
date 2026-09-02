@@ -29,6 +29,7 @@ import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, b
 import { updateAttractorStorm, resetAttractorStorm } from './systems/attractorStorm.js';
 import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.js';
 import { noteShove, updateSlam, resetSlam } from './systems/slam.js';
+import { capPlayerDamage, resetPlayerDamageCap } from './systems/playerDamageCap.js';
 import { updateDodge, resetDodge } from './systems/dodge.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles } from './entities/projectiles.js';
 import { isLaser, latticePayload } from './loadout.js';
@@ -58,6 +59,7 @@ import {
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
+import { createSardineSwirlVisual, updateSardineSwirl, resetSardineSwirl } from './systems/sardineSwirl.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, clubTrailMovers } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
@@ -174,7 +176,7 @@ const TIP_TIERS = parseTipCsv(tipsCsv);
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
 import { starfishLevelStats, multishotLevelStats, missileLevelStats,
@@ -313,6 +315,7 @@ initHaptics();
 // by which point the models existed). Declared here, assigned in boot().
 let garlicMesh = null;
 let shrimpGroup = null;
+let sardineSwirlGroup = null;
 let clubGroup = null;
 let belugaDrone = null;
 let eelCompanionMesh = null;
@@ -515,6 +518,11 @@ async function boot() {
   world.scene.add(garlicMesh);
   shrimpGroup = createShrimpRingVisual();
   world.scene.add(shrimpGroup);
+  // The swirl's school. Its own world-space group for the same reason the ring
+  // has one: the field is anchored on the seal's POSITION and not parented to
+  // it, so it does not inherit the body's roll, its scale or its death.
+  sardineSwirlGroup = createSardineSwirlVisual();
+  world.scene.add(sardineSwirlGroup);
   // The clubs live in a world-space group rather than being parented to the
   // fin bones. The aim rig already publishes those tips in world space every
   // frame (systems/aimRig.js), and hanging a mesh off a skinned bone would
@@ -679,6 +687,7 @@ async function boot() {
     else if (key === 'sealTeam') rebuildSealTeam(world.scene);
     else if (key === 'eelCompanion') rebuildEelCompanion(world.scene);
     else if (key === 'shrimp') resetShrimpRing();
+    else if (key === 'sardineBlade') resetSardineSwirl();
     else if (key === 'club') resetClub();
     else if (key === 'dumboOcto') rebuildDumboOcto(world.scene);
     // Both of the harp's keys go through the same rebuild: the note pool is
@@ -1578,12 +1587,22 @@ function startGame() {
   if (!mainMenuActive()) resetCineCamera();
   resetGarlic();
   resetShrimpRing();
+  resetSardineSwirl();
   resetClub();
   resetStrike();
   // A run that ended pinned must not open the next one still ramping, and a
   // boss mid-lunge when the last run ended must not pay the new run's first
   // frame for a dodge nobody made.
   resetSlam();
+  // The rolling second, with the run whose seconds it was counting. A window
+  // carried across a restart would open the new run already owing most of a
+  // bar, and the first real hit of it would be trimmed to nothing — mercy
+  // arriving where nothing had happened yet.
+  resetPlayerDamageCap();
+  // ...and the damage readout's running total with it. A line left in the map
+  // would have the new run's first bite add itself to the last run's dying
+  // total — see the merge in spawnDamageReadout.
+  resetDamageReadout();
   resetDodge();
   // The chain fanfare's floor, on the run clock — which restarts at 0, so a
   // stale stamp from a long previous run would swallow the first link of this
@@ -2939,6 +2958,27 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames =
   // actually took. Filing the uncapped figure would leave every incoming-damage
   // reading in the report describing a game nobody played.
   dmg = capBossDamage(dmg, source, player.stats.maxHp, gameState.time, channel);
+  // ...AND THE CEILING OVER ALL OF IT. See systems/playerDamageCap.js: the
+  // boss's own ceiling above bounds the boss's share of a second and is
+  // deliberately blind to everything else in the water, which is the whole
+  // shape that ends runs — a hit, the shove it throws you with, the wall it
+  // throws you into, the pack you were swimming through, the pin at the end of
+  // it. Five sources on four channels, and until this existed nothing looked at
+  // the total.
+  //
+  // AFTER the boss cap, never before. The boss's figure has to be its own
+  // ceiling's answer before it is counted here, or a hit the boss cap was going
+  // to trim would spend the shared second on damage nobody ever took.
+  const capped = capPlayerDamage(dmg, player.stats.maxHp, gameState.time);
+  dmg = capped.damage;
+  // A TRIMMED SECOND BUYS A MOMENT, and the moment is the point: damage that
+  // silently stops is indistinguishable from damage being arbitrary, which is
+  // the same argument the i-frame strobe was added for. Through the same one
+  // window as everything else (Math.max, so it can only lengthen), which is
+  // also how it gets the rim strobe for nothing.
+  if (capped.capped) {
+    player.invuln = Math.max(player.invuln, CONFIG.player.damageCap?.graceIFrames ?? 0);
+  }
   if (!(dmg > 0)) return 0;
   playtest.recordPlayerDamage(dmg, source);
   lastDamageSource = source;
@@ -2964,6 +3004,21 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames =
   if (shown > 0) {
     player.hitThisFrame = true;
     player.anim?.trigger('hit');
+    // ...AND HOW MUCH IT WAS, in figures. See spawnDamageReadout in ui/ui.js:
+    // every other channel this frame fires — the red rim, the shake, the
+    // flinch, the grunt — says something bit you, and none of them says how
+    // much, so the only place the amount has ever existed is the health bar at
+    // the edge of the screen.
+    //
+    // `shown` and not `dmg`, deliberately. That is the BANKED hit — everything
+    // playerDamageFx has accumulated since the last one it decided to show —
+    // which is the same figure the flash and the shove above are sized off. A
+    // readout printing this frame's slice of a contact rate would print 0.7 to
+    // a player being eaten alive, sixty times a second.
+    spawnDamageReadout(
+      world.camera, player.mesh.position.x, player.mesh.position.y,
+      shown, player.stats.maxHp,
+    );
     // Same shove the enemies get, on the one chain of the seal that's
     // spring-driven rather than IK-driven. Sized by the whole banked hit
     // rather than by this frame's slice of it, so a body chewing on you
@@ -3002,6 +3057,26 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames =
         // its speed. Billing the row's number would charge for a shove the
         // seal never received the moment anyone retunes past the cap.
         const got = applyPlayerKnockback(dir.x, dir.y, shove);
+        // AND THE SEAL IS BRIEFLY UNBITEABLE WHILE IT TRAVELS. See
+        // CONFIG.playerKnockback.invuln: for the length of a shove the player
+        // has no steering authority — the knock is a position offset their
+        // swimming cannot cancel — so every animal on the line they were thrown
+        // along got a free bite out of a punishment that is supposed to cost
+        // POSITION.
+        //
+        // Sized off `got` and not off the row, for the same reason noteShove is
+        // below: one event, one figure, so a shove trimmed by `maxSpeed` cannot
+        // buy a window longer than the travel it actually got.
+        //
+        // It refuses the 'strike' channel and nothing else, so slam.js keeps
+        // its whole price list — the shove, both arrests and the pin are all
+        // 'attack' by design (see the note at the top of updateSlam).
+        const ki = CONFIG.playerKnockback?.invuln;
+        if (got > 0 && ki?.enabled !== false) {
+          player.invuln = Math.max(player.invuln, Math.min(
+            ki?.max ?? 0.5, (ki?.base ?? 0) + got * (ki?.perSpeed ?? 0),
+          ));
+        }
         // QUEUED, not charged here. This is inside onPlayerHit; charging the
         // impact now would be onPlayerHit calling itself from inside its own
         // body, past its own i-frame gate. updateSlam spends it on the next
@@ -5466,6 +5541,27 @@ function runFrame(now) {
       const sx = player.mesh.position.x;
       const sy = bounds.surfaceY;
 
+      // THE ARRIVAL WINDOW — see CONFIG.airborne.slam.invuln.
+      //
+      // A breach lands where the seal took off from, into whatever swam into
+      // that space while it was gone, at a downward speed the player was
+      // rewarded for maximising and with no steering on the way in. Every body
+      // in the landing zone is already inside the hit radius on the frame the
+      // seal arrives, so the most athletic thing in the game was also the most
+      // reliable way to be bitten by three animals at once.
+      //
+      // GATED ON `slam` AND NOT ON THE CROSSING. slamFor returns null under
+      // `minRamp`, so a seal porpoising along the surface skims and buys
+      // nothing — the price of the window is real air time, which is spent out
+      // of the water where nothing can reach you anyway.
+      //
+      // Before the blast is queued rather than after, so the ordering on the
+      // frame reads the way the event does: the seal is safe, and then the
+      // water it landed in goes off.
+      if (slam) {
+        player.invuln = Math.max(player.invuln, CONFIG.airborne.slam?.invuln ?? 0);
+      }
+
       if (slam && slam.damage > 0 && slam.radius > 0) {
         // Through the same queue every blast in the game uses, so the slam
         // breaks wreckage and takes crew off decks exactly like a pearl or a
@@ -6608,6 +6704,17 @@ function runFrame(now) {
       onEnemyDamaged: damageFrom('shrimp'),
       onEnemyKilled: onEnemyKilledFeedback,
       onContact: (x, y) => feedback('shrimpHit', { x, y }),
+    });
+    // SARDINE SWIRL. Not routed through orbiterCount or projectileCount: the
+    // school's size is a curve off its own level (see sardineSwirlLevelStats),
+    // and PAIRS at that — Clone Warz adding one body to a field whose whole
+    // mechanic is two seeds a hair apart would add a sardine with nothing to
+    // diverge from. Entourage's claim on the shrimp is a fact about the shrimp.
+    updateSardineSwirl(dt, world.scene, player.mesh.position,
+      player.stats.sardineSwirlLevel, player.stats, enemies, {
+      onEnemyDamaged: damageFrom('sardineSwirl'),
+      onEnemyKilled: onEnemyKilledFeedback,
+      onContact: (x, y) => feedback('sardineHit', { x, y }),
     });
     updateEel(dt, world.scene, player.mesh.position, player.stats.eelLevel, enemies, {
       onEnemyDamaged: damageFrom('eel'),
@@ -7963,7 +8070,24 @@ function runFrame(now) {
   const windUp = gameState.running && !gameState.paused && CONFIG.strike.enabled && input.strikeHeld
     ? strikeState.pending
     : 0;
-  updatePlayerOutline(realDt, windUp);
+  // `player.invuln` rides along so the rim can strobe while the seal is
+  // immune — see CONFIG.playerOutline.iframe. REAL seconds like the rest of
+  // this call: a hit-stop must not stall the readout of a window that is
+  // draining on the wall clock underneath it.
+  // BOTH CLOCKS, not just the one the rim was born reading. `player.invuln` is
+  // the window a blow arms; strikeState.invulnTimer is the dash's own, gated in
+  // a different file at a different point in the pipeline (isInvulnerable, read
+  // at the SOURCE in combat.js rather than inside onPlayerHit). Two mechanisms,
+  // one idea — and the seal's best defensive tool used to have no picture at
+  // all. See CONFIG.playerOutline.iframe.dash for the switch and the argument.
+  //
+  // Math.max rather than a boolean, because the rim takes the CLOCK: whichever
+  // window has longer to run is the one the strobe is a readout of, and the two
+  // overlapping (a hit taken mid-dash) reads as one continuous window, which is
+  // what it is.
+  const dashInvuln = (CONFIG.playerOutline?.iframe?.dash === false)
+    ? 0 : (strikeState.invulnTimer ?? 0);
+  updatePlayerOutline(realDt, windUp, Math.max(player.invuln, dashInvuln));
   // Real time, like the ring above: the indicator is a readout of where you
   // are pointing RIGHT NOW, and a hit-stop must not freeze it a frame behind
   // the cursor. The guns run themselves, so this reads autofire rather than a

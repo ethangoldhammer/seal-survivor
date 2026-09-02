@@ -841,9 +841,34 @@ check('ticks the rim every frame, on real time',
 // that local.
 {
   const windUpLocal = /const windUp =[^;]*input\.strikeHeld[^;]*strikeState\.pending/s.test(main);
-  const rimReadsIt = /updatePlayerOutline\(\s*realDt,\s*windUp\s*\)/.test(main);
+  // `[,)]` rather than `)`: the claim is that the rim is handed THE LOCAL in
+  // the wind-up slot, and it has never been about how many arguments follow it.
+  // Pinned to the closing paren, this failed the day the rim gained a third
+  // argument — an assertion about argument COUNT wearing the clothes of one
+  // about where the wind-up comes from.
+  const rimReadsIt = /updatePlayerOutline\(\s*realDt,\s*windUp\s*[,)]/.test(main);
   check('the rim reads the BUTTON and the banked power', windUpLocal && rimReadsIt,
     `local ${windUpLocal}, handed to the rim ${rimReadsIt}`);
+  // ...AND THE I-FRAME CLOCK ITSELF, not a boolean derived from it. The strobe
+  // is a picture of `player.invuln`, and handing over `player.invuln > 0` here
+  // would put a second opinion about what "immune" means in main.js — where it
+  // would go stale the first time another source of immunity is added.
+  //
+  // ...AND THAT IS EXACTLY WHAT HAPPENED, so this no longer pins the whole
+  // argument. The game has TWO immunity clocks — `player.invuln`, the window a
+  // blow arms, and `strikeState.invulnTimer`, the dash's own, gated at the
+  // source in combat.js rather than inside onPlayerHit — and the rim is now
+  // handed the longer of them (see CONFIG.playerOutline.iframe.dash). Pinned to
+  // the exact expression, this failed for a change that made the claim MORE
+  // true, which is the shape the note above was written to avoid.
+  //
+  // So the claim is checked as two facts about the slot rather than as its
+  // spelling: it is built from the real clock, and nothing in it is a
+  // comparison. `> 0` anywhere in that argument is the failure this exists for.
+  const iframeArg = /updatePlayerOutline\(\s*realDt,\s*windUp,\s*([^;]*?)\);/.exec(main)?.[1] ?? '';
+  check('the rim is handed the i-frame clock, not a boolean',
+    /player\.invuln/.test(iframeArg) && !/[<>]|!==?|===?/.test(iframeArg),
+    `main.js — \`${iframeArg.replace(/\s+/g, ' ').trim()}\``);
   // ...and it really is ONE reading: the eyes take the same local rather than a
   // second copy of the expression, which is the drift the local exists to stop.
   check('...and the eyes read the same wind-up, not a second copy of it',

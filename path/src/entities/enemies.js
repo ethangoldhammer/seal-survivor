@@ -12,6 +12,7 @@ import { skyLight } from '../systems/daylight.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createHeadLook } from '../systems/headLook.js';
 import { faceSide } from '../systems/facing.js';
+import { turnFish, comesAbout } from '../systems/fishTurn.js';
 import { recordSpawn, SENTINEL_HP } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
@@ -1144,14 +1145,60 @@ function refreshApexCrowd(dt, playerPos) {
 function lungeChase(e, dt, ctx, ownCruise = true) {
   const c = e.def.lunge ?? {};
 
+  // --- NOT AT A CORPSE ------------------------------------------------------
+  //
+  // `minRange` makes a fish that is already on top of its target BACK OFF, so
+  // that its next wind-up starts from far enough out to be a warning. Against a
+  // living player that is the whole point. Against a dead one it is a fish
+  // refusing to touch the body: the seal cannot read a tell it is not alive to
+  // see, and what the player watches instead is the ocean arriving.
+  //
+  // It showed up as one barracuda in twelve — `npm run test:flop` counts what
+  // is ON the corpse on the frame the score card appears, and the swarm packed
+  // 4 before this block existed and 3 after. The mean distance got SHORTER
+  // (15.2u to 13.2u), which is the tell: they were not further away, they were
+  // circling at a floor rather than landing.
+  //
+  // This is the one radius gate in the roster that does not release on its own
+  // as the distance grows — see quarryFor, which relaxes every OTHER behaviour
+  // uniformly by sliding the target rather than by touching the behaviour. A
+  // gate that pushes AWAY cannot be relaxed that way, so it is switched off
+  // here instead, and the dispersal that follows is quarryFor's exactly as it
+  // is for chase, orbit, keepDistance, swarm and hunt.
+  //
+  // The overlay (`ownCruise: false` — the sharks and the chasing bosses) hands
+  // the frame back untouched, which is `hunt` steering the death dive the way
+  // it did before the lunge existed. The live fight is not changed by any of
+  // this: outside the death dive not a line of it runs.
+  if (deathState.active) {
+    // Cleared, not paused. The next live run should re-stagger rather than
+    // resume a cycle from a fight that is over — same reason the stage is
+    // rolled on first update rather than at spawn.
+    e.lungeStage = null;
+    e.lungeVeer = null;
+    e.animState = null;
+    if (!ownCruise) return false;
+    steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+    return true;
+  }
+
   if (e.lungeStage == null) {
     // Staggered, not zeroed. These arrive in twos and threes from the same
     // spawn tick, so a shared clock would have the whole group wind up on the
     // same frame for the rest of its life — one animal with two bodies. A
     // random part of a cooldown spent before the first strike is the cheapest
     // way to make them individuals.
+    //
+    // `stagger` IS HOW MUCH OF THAT COOLDOWN IS ON THE TABLE, and it is the
+    // difference between a pack and several fish. At 1 — the default, and what
+    // the sailfish keeps — a group's runs are spread over a whole cooldown and
+    // never coincide, which is what two of a solitary animal should look like.
+    // Below 1 the group's first strikes land inside a window that narrow and
+    // stay roughly in step from then on, so a pack gathers together and goes
+    // together: three wind-ups starting at once is a swarm telegraphing
+    // itself, which one fish's wind-up cannot be no matter how loud it is.
     e.lungeStage = 'rest';
-    e.lungeClock = (c.cooldown ?? 3.2) * Math.random();
+    e.lungeClock = (c.cooldown ?? 3.2) * (c.stagger ?? 1) * Math.random();
   }
   e.lungeClock = Math.max(0, (e.lungeClock ?? 0) - dt);
 
@@ -4660,6 +4707,15 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // writers were live on the same frames — one aiming the head at the seal,
     // this one aiming it at the fish's own descent — and the body snapped
     // between the two every frame.
+    // A fish that comes about through the camera instead of looping over the
+    // top — see systems/fishTurn.js, which owns mesh.rotation and the visual's
+    // roll outright and must therefore run INSTEAD of the pair below rather
+    // than alongside it. Checked before the speed gate, not inside it: the
+    // turn, the pitch and the bank all have to keep easing through the frames
+    // where a fish has throttled back to nothing to wind up, which is exactly
+    // when the gate below would hand the body back mid-manoeuvre.
+    } else if (e.def.faceMotion && !e.faceLocked && comesAbout(e.def)) {
+      turnFish(e, dt, launched);
     } else if (e.def.faceMotion && !e.faceLocked) {
       if (Math.hypot(e.vx, e.vy) > 0.05) {
         const heading = Math.atan2(e.vy, e.vx) - Math.PI / 2;

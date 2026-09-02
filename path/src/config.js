@@ -2359,6 +2359,63 @@ export const CONFIG = {
       // stop climbing. Same shape as CONFIG.boss.damageCap — the CSV is the
       // early figure, the cap is the late one.
       contactBiteCap: 0.3,
+
+      // ---------------------------------------------------------------------
+      // THE BACKSTOP: how much of the bar ANY combination of sources may take
+      // inside one second. systems/playerDamageCap.js.
+      // ---------------------------------------------------------------------
+      // `hitIFrames` above bounds one KIND of pile-on — several discrete blows
+      // landing on the same frame. It cannot bound the other one, and the other
+      // one is what actually ends runs: a chain of events that are each
+      // individually fair, arriving in an order that compounds.
+      //
+      // The worked example is the hammerhead, because it is the only creature
+      // that moves you. It hits you (contact), that shove throws you into a
+      // wall (slam.wallMul), the wall holds you there while the animal presses
+      // (slam.pin, which RAMPS), and the school you were swimming through is
+      // biting the whole time. Five sources, four channels, none of them a
+      // 'strike' the window would refuse, and the total is not bounded by
+      // anything at all — CONFIG.boss.damageCap.perSecond bounds the BOSS's
+      // share of it and deliberately ignores everything else in the water.
+      //
+      // So this is the same rolling second, source-blind. It is a BACKSTOP and
+      // not the tuning: it sits above the boss's own 0.75 so a boss fight alone
+      // can never reach it, and it binds only when a boss fight is happening
+      // ON TOP of something else. If a normal fight is hitting this ceiling,
+      // the fix is the thing doing the damage, not this number.
+      //
+      // WHY A CEILING RATHER THAN A LONGER WINDOW. Refusing the extra damage
+      // outright (the i-frame answer) would delete the slam and the pin, which
+      // are the two halves of the hammerhead that make it a different boss.
+      // Trimming keeps every mechanic firing and every effect on screen — the
+      // shove still throws you, the wall still slams, the pin still ramps —
+      // and only takes the arithmetic off the top.
+      damageCap: {
+        enabled: true,
+        // The rolling window, seconds. Same length as the boss's, so the two
+        // ceilings are read against the same span and 0.9-vs-0.75 is a
+        // comparison rather than two unrelated numbers.
+        window: 1,
+        // Fraction of `maxHp` that second may cost, from everything at once.
+        //
+        // 0.9 IS CHOSEN AGAINST 0.75. A boss at its own ceiling for a full
+        // second is already 0.75 of the bar; this leaves a fifth of the bar of
+        // headroom for the rest of the arena before anything is trimmed. Below
+        // 0.75 this would silently become the boss cap's replacement, which is
+        // the failure mode worth naming: the tuned ceiling would stop being the
+        // one that binds and CONFIG.boss.damageCap would stop meaning anything.
+        perSecond: 0.9,
+        // ...AND THE SEAL IS BRIEFLY SAFE WHEN IT BITES, so the mercy is
+        // legible instead of being damage that mysteriously stopped. It arms
+        // the same one window everything else does (Math.max, so it can only
+        // lengthen), which means it gets the rim strobe for free — see
+        // CONFIG.playerOutline.iframe.
+        //
+        // SHORT. This is an apology for a pile-on, not a reprieve from the
+        // fight: long enough to swim one body-length out of whatever caused it,
+        // and over before the player can plan around it.
+        graceIFrames: 0.45,
+      },
     },
 
     // A rim drawn around the seal's silhouette, so you can always find yourself
@@ -2453,8 +2510,135 @@ export const CONFIG = {
         // Added to playerOutline.glow / .thickness at the peak of a
         // full-strength flash. Same units and same meaning as the strike
         // wind-up's, and added on top of it — being hit mid-charge shows both.
+        //
+        // READ `powerFloor` BELOW BEFORE REACHING FOR THIS ONE. What arrives on
+        // the rim is this number times the hit's strength, and until the floor
+        // existed an ordinary bite was worth a third of whatever was set here.
+        // Dragging this slider to its stop and getting a third of it is what
+        // sent someone looking, and the answer was never this number.
         glowAdd: 4.0,
         thicknessAdd: 0.07,
+
+        // ---- HOW MUCH OF THE ABOVE AN ORDINARY HIT ACTUALLY GETS -----------
+        //
+        // The flash is scaled by `strength` — how much of the bar the hit cost,
+        // against `fx.playerDamage.flashFraction`. That is the right idea and
+        // it was applied to the wrong channel. At the shipped fraction a hit
+        // has to take THIRTY PERCENT OF THE BAR to light the rim at the number
+        // above; an ordinary bite is a tenth of that, so the rim lit at 0.33 of
+        // whatever was set and the slider read as broken. Which is the worst
+        // shape a knob can have: it is not ignored, it is quietly divided, so
+        // the fix looks like "turn it up" and turning it up does not work.
+        //
+        // So the floor. Brightness is `max(strength, this)` — a graze still
+        // lights the rim properly, a maiming still lights it brighter, and the
+        // range between them is 1.67x rather than 3x.
+        //
+        // THE SIZE READ MOVED TO DURATION, it was not deleted. `time` and
+        // `minTime` above still interpolate on the RAW strength, so a big hit
+        // holds longer than a small one — and duration is the channel that
+        // survives being looked at out of the corner of your eye, which is
+        // where this rim is read from. Brightness is the channel that says
+        // SOMETHING HAPPENED; length is the one that says how much.
+        //
+        // At 0 this is exactly the old behaviour.
+        powerFloor: 0.6,
+
+        // ...AND HOW LONG IT SITS AT FULL BEFORE IT STARTS TO GO.
+        //
+        // The decay is squared (`sting` in systems/outlines.js), which is right
+        // — a hit should peak instantly and let go, and a linear fade reads as
+        // the rim being TINTED red rather than as something having happened.
+        // What squaring also does is spend most of the flash's life dim: over a
+        // 0.2s window the rim is past half brightness within 0.06s, so the red
+        // is a blink at the exact moment the player's eyes are on the thing
+        // that bit them.
+        //
+        // This is flat time at the top before any of that starts. It buys the
+        // red long enough to be RECOGNISED as red rather than merely noticed as
+        // a flicker, and it costs nothing at the other end: the fall is
+        // unchanged, so the flash still lets go the way it always did.
+        //
+        // Deliberately short. Past about a fifth of a second this stops being a
+        // hit and starts being a state, and the rim already has a state — see
+        // the i-frame strobe below, which is a different thing that must not be
+        // confused for this one.
+        hold: 0.07,
+      },
+
+      // ---- I-FRAMES: the window itself, on screen ---------------------------
+      //
+      // THE SEAL'S ONLY DEFENCE HAD NO PICTURE. `player.invuln` had exactly two
+      // readers in the whole game — the line that sets it and the line that
+      // counts it down — so a window that refuses a blow left nothing behind at
+      // all. The blow simply did not happen, which from the player's side is
+      // indistinguishable from damage being arbitrary: a pack of barracuda
+      // takes a bite, five more connect and cost nothing, and there is no way
+      // to learn that the four free seconds you just had were a rule.
+      //
+      // THE RIM, NOT THE BODY. A classic invulnerability blink flickers the
+      // character out, and that is precisely the wrong thing here. This rim
+      // exists so the seal stays findable in a dark, crowded, particle-heavy
+      // frame (see the top of this block) — and the moment i-frames are running
+      // is the moment a pack is on top of you, which is exactly when losing the
+      // seal for half of every strobe cycle would cost more than the
+      // information is worth. So the silhouette stays solid and the rim
+      // strobes: same "that's you and something is happening to you" channel
+      // the damage flash already uses.
+      //
+      // IT OWNS BRIGHTNESS, NOT HUE. The damage flash owns the colour and the
+      // two overlap for the first fifth of a second of every window — a hit
+      // lands, the rim goes red, and it strobes red while the window it armed
+      // runs out. Giving this a colour too would mean the two fighting over one
+      // channel on exactly the frames both are live.
+      iframe: {
+        enabled: true,
+        // Blinks per second. Fast enough to read as a strobe rather than as a
+        // slow pulse the eye follows, and deliberately not so fast it becomes a
+        // shimmer: at 9 a 0.6s bite window is five and a half clean blinks,
+        // which is countable at a glance and is the point — the window has a
+        // LENGTH and the player should be able to feel it.
+        hz: 9,
+        // How much of the rim's brightness the strobe swings, 0..1. Not to
+        // zero: the trough is the base rim, so the seal never dims BELOW its
+        // normal readability while this is running.
+        depth: 1,
+        // A blink is squarer than a throb. 0 is the wind-up's cosine (a smooth
+        // swell), 1 is a hard on/off. High, because the thing being said is
+        // binary — you are immune or you are not — and a sine reads as charging
+        // up, which is what the rim already means when the strike is held.
+        square: 0.8,
+        // Added to playerOutline.glow / .thickness at the top of a blink. Same
+        // units as the wind-up's and the hit's, and added alongside them: being
+        // hit mid-charge while already invulnerable shows all three.
+        //
+        // Under the hit flash's 4.0 on purpose. Being struck is the louder
+        // event; this is the quieter state that follows it, and a strobe that
+        // outshone the blow it came from would read as the reward rather than
+        // as the grace period.
+        glowAdd: 2.6,
+        thicknessAdd: 0.04,
+
+        // ---- AND THE OTHER CLOCK ---------------------------------------
+        //
+        // THE GAME HAS TWO INVULNERABILITY TIMERS AND THIS ONLY EVER DREW ONE.
+        // `player.invuln` is the window a blow arms; `strikeState.invulnTimer`
+        // is the dash's own, and it is gated somewhere else entirely (see
+        // isInvulnerable in systems/strike.js, which combat.js tests at the
+        // SOURCE rather than inside onPlayerHit). They are two mechanisms for
+        // one idea, and the rim was a picture of the quieter of them.
+        //
+        // Which made the seal's best defensive tool invisible. A strike dash is
+        // immunity for its whole length plus `strike.invulnTail`, and nothing
+        // on screen said so — so "dash through the thing that is about to hit
+        // you" is a rule the game enforces and never teaches. Swimming through
+        // a shark unhurt with no explanation reads as a collision bug.
+        //
+        // Off makes the rim mean only "a hit bought you a moment", which is
+        // what it meant before and is a coherent thing for it to mean. On, it
+        // means "you cannot be hurt right now", which is the more useful one
+        // and the reason this defaults true.
+        dash: true,
       },
     },
 
@@ -6165,6 +6349,26 @@ export const CONFIG = {
         // The hard ceiling on how far off its line the body may ever be, in
         // world units, however many rams land together.
         maxOffset: 1.5,
+        // THE BODY BENDING, as opposed to the body MOVING. `speed` above shoves
+        // the whole animal along one vector, and on something 31 units long
+        // that reads as the camera drifting — every part of it goes the same
+        // way at the same time, so there is nothing to see it against. This
+        // shoves the spine springs instead (systems/boneSpring.js, the same
+        // solver that carries every other creature's hit reaction), so the
+        // body buckles where it was struck and the fluke finishes the flinch
+        // after it.
+        //
+        // 4 against `animation.spring.impulseMax` of 14 — a shove a fifth the
+        // size of the biggest hit an ordinary creature takes, on a chain
+        // (whaleBody) that is already the loosest in the roster and will swing
+        // further on the same number. Nudging thirty tonnes, not throwing it.
+        flinch: {
+          strength: 4,
+          // Toward the fluke. The far end of a whale is what moves when
+          // something hits its shoulder; kicking the whole chain equally is a
+          // body pivoting about its middle, which is a fish being flicked.
+          tipBias: 0.9,
+        },
       },
 
       // --- where it swims ------------------------------------------------------
@@ -7022,6 +7226,179 @@ export const CONFIG = {
       basePierce: 3,
       piercePerLevel: 0.6,
       pierceMax: 9,
+    },
+
+    // ---------------------------------------------------------------------------
+    // SARDINE SWIRL — the echo storm, pointed the other way.
+    //
+    // systems/attractorStorm.js's `echo` study is a boss attack: a Lorenz field
+    // anchored on the animal, firing bullets that arrive in PAIRS seeded a hair
+    // apart, travel as one thing for a few seconds and end up on opposite
+    // wings. This is that mechanic as a player ability — the same equations
+    // from systems/attractors.js, the same paired seeding, the same clamp — and
+    // the differences are the three that make it an ability rather than a
+    // hazard:
+    //
+    //   IT IS ANCHORED ON THE SEAL, so the butterfly rides you. What the player
+    //   steers is not the school but where the school IS, which is the whole
+    //   reason a chaotic field is playable from the inside: you cannot aim it,
+    //   you can only put it over something.
+    //
+    //   THE BODIES PERSIST. A storm's cubes are shots, born and spent. These
+    //   are a school: a sardine that leaves the attractor's basin is RESEEDED
+    //   rather than retired, so the count on the card is the count in the water
+    //   at every moment of the run. See systems/sardineSwirl.js.
+    //
+    //   IT BITES ON CONTACT, on a per-sardine per-creature cooldown, exactly as
+    //   the shrimp ring does. A field that hit every frame would be the highest
+    //   DPS in the game by two orders of magnitude, and one that despawned on
+    //   contact would empty itself into the first school it crossed.
+    //
+    // TWO STACK AXES, and they are the two the card promises: `countPerLevel`
+    // buys PAIRS (a sardine seeded alone has nothing to diverge from, which is
+    // the mechanic) and `scalePerLevel` buys the projection — the same
+    // trajectory drawn bigger, so a stacked swirl covers more water rather than
+    // moving faster through the same.
+    // ---------------------------------------------------------------------------
+    sardineSwirl: {
+      // --- the field ---
+      // Lorenz, `xz`, centred at 25 — the same three the echo row picks in
+      // attractorStorms.csv, and for the reason its notes give: the attractor
+      // lives around z 25, so taking that off the projection is what puts the
+      // butterfly ON the seal instead of far above it. Held in code rather than
+      // as settings because they are not a balance choice: they are which
+      // picture this is.
+      //
+      // HOW WIDE THE SCHOOL IS, in world units, at one stack. The projection
+      // multiplier is derived from this rather than typed — see LORENZ_WIDTH in
+      // systems/sardineSwirl.js, which is the attractor's own measured x extent
+      // — because "how much water does this cover" is the question anyone
+      // tuning it is actually asking, and "world units per attractor unit" is
+      // not a quantity a person can picture. Six units against the arena's
+      // eighty is a field you can see the whole of while standing in it.
+      span: 6,
+      // ...and what a stack adds, as a FRACTION of the base rather than a flat
+      // number of units, for the reason CONFIG.shrimpRing.sizePerLevel gives:
+      // the base is judged by eye and may be retuned, and a flat +0.8 would be
+      // an eighth of a stack against one value and half a stack against
+      // another. At 0.13 a maxed swirl is a little under twice the field.
+      spanPerLevel: 0.13,
+      // How fast the state runs, in attractor time per second. The echo study's
+      // 1.08; a Lorenz cube at this rate crosses between the wings every few
+      // seconds, which is the event the whole shape exists to show.
+      rate: 1.08,
+      // World units a second a sardine may cover, applied by SHORTENING THE
+      // INTEGRATION STEP rather than the move — see the note in
+      // systems/attractorStorm.js. Lorenz runs about forty times faster at a
+      // wing rim than at the saddle, and without this the school is a stalled
+      // clump in the slow part and a blur in the fast part.
+      speedCap: 26,
+      // How far apart the two halves of a pair are seeded, in attractor units.
+      // The echo storm's 0.03: at this scale that is under a hundredth of a
+      // world unit, so a pair reads as ONE sardine for its first few seconds
+      // and is on opposite wings by the end. Widen it and the divergence stops
+      // being a surprise; close it and the pair is one body until it is two.
+      separation: 0.03,
+
+      // --- the school ---
+      // PAIRS, not bodies. `count` 3 is six sardines at one stack. A pair is
+      // the unit because a lone seed has nothing to diverge from, which is the
+      // entire mechanic this card borrows.
+      count: 3,
+      countPerLevel: 1,
+      // What one sardine hits for, and what a stack adds to that. A stack buys
+      // bodies and reach already; this is here for the same reason
+      // CONFIG.shrimpRing.damagePerLevel is — an ability that only ever gets
+      // WIDER is one that keeps failing to kill the same things, with more of
+      // it. weapons.csv owns both.
+      damage: 9,
+      damagePerLevel: 2,
+      // Per sardine, per creature. The shrimp ring's 0.4 exactly: a school of
+      // eight sweeping one fish is already eight bites, and anything shorter
+      // turns a body drifting through a crab into a shredder.
+      contactCooldown: 0.4,
+      // THE REACH OF A SARDINE DRAWN AT SIZE 1, in world units. What actually
+      // gets spent is this times the shell's size multiplier from assets.csv —
+      // see sardineReach in systems/sardineSwirl.js, which is razorClamRadius
+      // by another name and exists for the reason that one documents: a body
+      // drawn at 0.83 units with a quarter-unit reach is an ability that
+      // visibly passes through fish, and nothing reports it.
+      radius: 0.26,
+      // The whip about the body's own long axis, radians a second — the same
+      // number CONFIG.razorClam.roll is, and it is doing the same job. The
+      // shell is chrome (CONFIG.chromeBlade is a view-space horizon with one
+      // tight key lobe), so a body that never turns shades as one flat slab and
+      // the metal never shows.
+      roll: 7,
+      rollJitter: 0.5,
+      // The punch on a bite, x its size, at full heat. The glow does the main
+      // read; this is the half that survives a screenshot. Same channel and
+      // same argument as CONFIG.shrimpRing.hitPop.
+      hitPop: 0.3,
+
+      // --- the sound bed (systems/jetBed.js) ----------------------------------
+      // A SUSTAINED VOICE, for the same reason the bubble jet's is: a school
+      // that is in the water for the rest of the run has no length to type into
+      // CONFIG.sfx, and every voice in that table is a one-shot that knows its
+      // own length at the moment it is triggered. This one is held open by
+      // whatever is making the noise and released when the swirl empties. See
+      // the header of systems/jetBed.js for the ramp/hold/release shape.
+      //
+      // IT IS A DIFFERENT INSTRUMENT FROM THE JET'S, deliberately. The jet is a
+      // low saturated burn — a machine running. This is a school: higher, thin,
+      // and breathing faster, so the two can be open at once and still be two
+      // things. Every number below is the same knob the jet's block documents.
+      bed: {
+        enabled: true,
+        // One sample layer over the stack. `swirlBed` is the BubbleBeam_04
+        // recording — the flattest spare in the Moog batch, and its loop points
+        // below are MEASURED rather than 0/0: left whole the file's last window
+        // sits 16.5% of peak from its first, and a bed loops that seam every
+        // 2.29s as an audible tick riding the hold. Cutting at the matching
+        // positive-going zero crossings inside the body takes the step to
+        // nothing across a 1.04s loop.
+        sample: '',
+        layers: [
+          // PLAYED FASTER THAN IT WAS RECORDED. `rate` is tape speed, so the
+          // same material a few semitones up is a shoal rather than a stream —
+          // the cheapest way to get a second character out of the one sustained
+          // recording in the bank, and the loop points are in seconds so they
+          // survive it.
+          { sample: 'swirlBed', level: 0.5, rate: 1.32, loopStart: 0.899, loopEnd: 1.936 },
+        ],
+        // The oscillator stack's level in that mix. The bed is built exactly as
+        // the jet's is — both sum ahead of the drive and the ladder, so the loop
+        // and the saws saturate and sweep together as one instrument.
+        synthLevel: 0.55,
+        // The stack, and it is the jet's an octave and a half up with the sub
+        // pulled most of the way out: weight is what a stream has and a school
+        // has none.
+        note: 138,
+        wave: 'sawtooth',
+        unison: 3,
+        detune: 17,
+        sub: 0.2,
+        subWave: 'triangle',
+        // Softer than the jet's 6 — this is a shimmer and not a burn, and the
+        // drive is what would turn it into one.
+        drive: 2.6,
+        preGain: 1.1,
+        resonance: 6,
+        // The sweep. It opens HIGHER and lands higher than the jet's 180→2600,
+        // which is most of what separates the two by ear.
+        from: 420,
+        to: 4200,
+        ramp: 0.7,
+        attack: 0.4,
+        attackLevel: 0.5,
+        gain: 0.11,
+        // Faster and wider than the jet's 0.7/220 — the hold still goes
+        // nowhere, but a school's nowhere moves more than a machine's.
+        breathRate: 1.6,
+        breathDepth: 420,
+        release: 0.35,
+        releaseTo: 420,
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -13152,6 +13529,26 @@ export const CONFIG = {
         separates: true,
         asset: 'enemyMosasaur', behavior: 'hunt', faceMotion: true,
         hitShape: 'bones',
+        // ITS WEAK SPOT IS THE TIP OF ITS TAIL, and it is the same one every
+        // time. Every other boss rolls a place on its outline each arrival;
+        // this one is told, and the difference is the animal.
+        //
+        // THE ROLL COULD NOT WIN HERE. Twelve fitted spheres and exactly ONE
+        // is wide enough to carry a spot at `minRadius` — the rest are neck,
+        // jaw, paddles and four tail bones a fifth that size. The first spot
+        // takes the torso, correctly; the spacing rule then crushes that whole
+        // torso for being near it, and the second spot has nowhere good left
+        // to go. Every arrangement the placement can reach on this body is
+        // either two spots stacked on one flank or one hanging off a tail bone
+        // — and it re-rolls the choice on every arrival, so the animal never
+        // reads the same way twice.
+        //
+        // Named, it stops being a failure and becomes the fight: the longest
+        // body in the game, whose counterplay has always been its turning
+        // circle, is now a boss you beat by getting BEHIND it. That is the
+        // lunge's own weakness stated as a target — it commits to a run, and
+        // the thing you want is at the end it cannot point at you.
+        weakSpot: 'tail',
         // radius 2 against the shark's 2.2, and both are multiplied by their
         // model's assets.csv size (2.3 for each) before they mean anything — so
         // 4.6 world units against the megalodon's 5.06. LOWER on the longer
@@ -13702,7 +14099,34 @@ export const CONFIG = {
         // step across five beats and the crab would moonwalk.
         beatSync: { beatsPerStride: 1, strides: 1, subdivisions: [2, 1, 0.5, 0.25] },
         crawl: {
-          aggroRadius: 12, wanderChange: 2.5, groundHeight: 2.5,
+          aggroRadius: 12, wanderChange: 2.5,
+          // HOW HIGH A CRAB MAY GET OFF THE SAND UNDER ITS OWN POWER — and
+          // therefore, since `contactMul` is 0 and the pinch is the crab's
+          // whole damage budget, THE CEILING ON EVERY POINT OF DAMAGE THE CRAB
+          // LAYER CAN DO. That is not how this number was read for most of its
+          // life, and it is why the swarm went quiet.
+          //
+          // The claw's own reach is about 2.2 world units (arm x commitRange
+          // plus the seal's radius — see pinchReach), so a crab can hurt you up
+          // to `groundHeight + 2.2` above the bed and NOWHERE ELSE. At 2.5 that
+          // was 4.7 units of a 72.8-unit water column: measured end to end
+          // through updateEnemies and resolveCombat, three crabs walking in for
+          // 20s billed 749 damage with the seal 3.5 units up, 425 at 4.5, and
+          // ZERO from 4.75 upward — they stack directly underneath, rear up,
+          // and are a third of a unit short forever. The seal starts a run 41.6
+          // units off the bed. A crab was a decoration for 94% of the arena.
+          //
+          // TIED TO THE RUSH BAND, which is the number that already says "the
+          // player is down here with us": `floorRushHeight` below is 10.5, so a
+          // crab that decides to charge can now actually arrive. 8.5 + the
+          // smallest reach the size roll produces (2.03) is 10.53 — every crab
+          // in the swarm covers its own trigger, none of them by much.
+          //
+          // It is a CAP, not a target: gravity (CONFIG.crabPhysics) still pulls
+          // them down, the chase steers vertically at 0.3 weight, and a crab
+          // with nothing to chase ambles along the bottom exactly as before.
+          // Only a crab coming for you climbs, and only as far as you are.
+          groundHeight: 8.5,
           floorRushHeight: 10.5, // player within this height of the seabed triggers a rush
           rushAggroRadius: 999, // effectively "always chases" while rushing
           rushSpeedMul: 2.5,
@@ -13813,6 +14237,14 @@ export const CONFIG = {
         restYaw: 0.34,
         weight: 0.35, weightPerDifficulty: 0.03, maxWeight: 0.6, maxConcurrent: 10, minDifficulty: 1.5,
         spawnGroup: 'crab',
+        // NO `crawl` BLOCK, AND THAT IS THE MECHANISM. linkCrabVariants() below
+        // points this crab's `crawl` and `beatSync` straight at the day crab's
+        // objects after every merge, so the night crab walks, feeds, rushes and
+        // piles on by exactly the numbers behaviour.csv and the block above set
+        // — including `groundHeight`, which is the ceiling on every point of
+        // damage a crab does. Declaring either key here would break the link's
+        // silent drop (see RELINKED_KEYS) and start a boot warning, not add a
+        // setting.
     },
       // --- new creatures -------------------------------------------------------
       // THE WILD ORCA IS GONE, and this note is the headstone because its
@@ -13955,6 +14387,16 @@ export const CONFIG = {
       // Glass cannon: hits harder than a shark, dies to almost anything.
       barracuda: {
         asset: 'enemyBarracuda', behavior: 'chase', faceMotion: true,
+        // Comes about through the camera — see systems/fishTurn.js. This is
+        // the animal that needed it most: it had no `turnRate` at all, so its
+        // course was a velocity lerp and its body pivoted on the spot to
+        // follow, and barracuda.glb is 3 nodes with 0 joints and 0 clips, so
+        // there was not one frame of motion anywhere on it that was not the
+        // whole rigid mesh being pointed somewhere.
+        //
+        // Quicker than the shared 0.55 and leaning harder: this is a small
+        // fish that darts, and a long come-about on it reads as a barge.
+        comeAbout: { time: 0.42, bank: 0.3 },
         radius: 0.45, hp: 10, hpPerDifficulty: 1,
         // 28, DOWN FROM 32, and it is an EARLY-RUN cut by construction — the
         // bite cap and the window both bind a few minutes in, so past that this
@@ -13988,6 +14430,70 @@ export const CONFIG = {
         // window a pack is worth about 1.17 of one of them — small, deliberate,
         // and the thing that keeps three of these worth reacting to.
         contactBite: 0.7,
+        // 5.5 rad/s OF TURN, where this row had none at all. A def with no
+        // turnRate takes steerTo's velocity-lerp branch, which re-points the
+        // body over a 0.1s time constant — the animal does not turn, it is
+        // simply pointed somewhere else, and no amount of work on the FACING
+        // can rescue a course that changes that fast. At the 9 it cruises,
+        // 5.5 is a 1.64-unit turning circle, inside the ~1.9 of contact
+        // radius, so it still converges on a seal rather than orbiting it —
+        // which is the trap documented on `turnRate` further up this file.
+        // It lives in enemies.csv with the other movement numbers; this note
+        // is here because the reason is not a number.
+        //
+        // THE DART, AND THE SHIMMY IN FRONT OF IT — see lungeChase in
+        // entities/enemies.js for the machine and systems/fishTurn.js for what
+        // the wind-up looks like. Read the sailfish's `lunge` note below
+        // first: same block, same four stages, and the numbers say what makes
+        // these two different animals rather than one animal at two sizes.
+        //
+        // THE CRUISE IS NOT CUT, and that is the whole difference. The
+        // sailfish banked its speed into the burst and became a creature you
+        // answer by MOVING. This one's identity is that you cannot disengage
+        // from it — 9 against the seal's ~8.9 — and taking that away to buy a
+        // tell would be rewriting the creature rather than making it readable.
+        // So the numbers are chosen to leave the closing speed where it was:
+        // 0.3s at 0.4x, 0.7s at 1.35x, then a short veer, which averages back
+        // out to about 9 over the cycle. What the player gets is not a slower
+        // fish, it is a fish with a moment in it.
+        //
+        //   windup 0.3      At the seal's ~8.9 u/s that is 2.7 units of
+        //                   travel — enough to be off the line if you go NOW,
+        //                   which is what a glass cannon's warning should be
+        //                   worth. The sailfish gives you 0.45s and a body you
+        //                   can see coming; this one gives you a flick.
+        //   strikeTime 0.7  LOCKED TO `contactBite` above, for the reason
+        //                   spelled out on the sailfish's: the bite lands on
+        //                   the pass's own clock, so the damage arrives where
+        //                   the animation already says it does.
+        //                   tools/contact-bite-test.mjs holds the pair.
+        //   range 7         12.15 u/s x 0.7s is 8.5 units of run against 7 of
+        //                   gap: it crosses where you were and blows past.
+        //   strikeTurnRate  0.9 rad/s at 12.15 u/s is a 13.5-unit turning
+        //                   circle. It leans; it cannot follow.
+        //   cooldown 1.1    A third of the sailfish's. Three fish that spend
+        //                   3.2s off after every pass are not a pack.
+        //   veerSwing 0.4   It barely peels off. The sailfish opens a gap on
+        //                   purpose; this one stays on you, which is the
+        //                   thing about it.
+        lunge: {
+          range: 7,
+          minRange: 3,
+          windup: 0.3,
+          windSpeedMul: 0.4,
+          speedMul: 1.35,
+          strikeTime: 0.7,
+          strikeTurnRate: 0.9,
+          cooldown: 1.1,
+          veerSwing: 0.4,
+          // THE SWARM TELL. A pack's first strikes are spread over this much
+          // of a cooldown instead of over a whole one, so three to five
+          // barracuda gather and go roughly together — ragged enough to still
+          // be five animals, close enough that the shimmy reads as the pack
+          // deciding rather than as one fish twitching. The sailfish leaves
+          // this at 1: two of a solitary animal should never coincide.
+          stagger: 0.3,
+        },
         // THEY ARRIVE IN A PACK, and this is the one line that lets the late
         // run feel different rather than merely busier.
         //
@@ -14053,6 +14559,13 @@ export const CONFIG = {
         separates: true,
         asset: 'enemySailfish', behavior: 'chase', faceMotion: true,
         nightAsset: 'enemyGlowSailfish',
+        // Comes about through the camera — see systems/fishTurn.js. Slower
+        // than the shared 0.55 and leaning less: six units of billfish with a
+        // sail running most of its length does not whip round, and `pivot` on
+        // the asset is already tuned to keep that sail trailing the turn
+        // rather than swinging across it. A quick come-about would undo that
+        // in the one second it is most visible.
+        comeAbout: { time: 0.8, bank: 0.16 },
         radius: 0.5, hp: 30, hpPerDifficulty: 2.6,
         speed: 12, speedVariance: 1.6, contactDamage: 24, xp: 13,
         turnRate: 3.2,
@@ -15309,6 +15822,25 @@ export const CONFIG = {
         colors: [0xff6a44, 0xffb04a, 0xffffff], cone: 0.8, drag: 5,
         gravity: [0, 0], inherit: 0.35, glow: 2, goo: 'ichor',
         killAtSurface: false, turbulence: 0.45,
+    },
+      // AND WHAT LEAVES IT WHEN NOBODY IS SHOOTING. The same substance as the
+      // hit's leak, at a fraction of the count, fired on a timer whose gap
+      // closes as the spot fills — see CONFIG.hotSpots.seep.
+      //
+      // ONE OR TWO PARTICLES, which is the whole design of it. This runs for as
+      // long as a spot is damaged, on up to three spots, so anything with a
+      // real count here is a permanent haze around the animal rather than a
+      // wound: the escalation has to be carried by the CADENCE, and the puff
+      // has to be small enough that a single one is a drip.
+      //
+      // Slower and longer-lived than the hit's, because it is not being thrown
+      // by anything — it is leaking, and a drip that shoots away from the body
+      // at hit speed reads as a second, quieter hit.
+      hotSpotSeep: {
+        count: 2, speed: [1.4, 4.5], size: [0.07, 0.16], life: [0.3, 0.6],
+        colors: [0xff6a44, 0xffb04a, 0xffe0c0], cone: 0.7, drag: 4,
+        gravity: [0, 0], inherit: 0.3, glow: 1.6, goo: 'ichor',
+        killAtSurface: false, turbulence: 0.5,
     },
       // THE RUPTURE. The same substance at several times the scale, and the
       // scale is applied by the CALLER multiplying `size` and `speed` by one
@@ -16586,6 +17118,14 @@ export const CONFIG = {
       hotSpotHit:  { emit: 'hotSpotBleed', shake: 0.05, hitstop: 0, glow: 0.45,
                      ripple: { strength: 0.9, radius: 5 },
                      sfx: 'hotSpotHit', haptic: [12], sfxMinGap: 0.07 },
+      // ONE SEEPING. PARTICLES AND NOTHING ELSE — no shake, no glow, no ripple,
+      // no sound, no haptic, and every one of those blanks is deliberate. This
+      // fires several times a second, on up to three spots, for as long as a
+      // fight has damaged weak points in it: any channel that punches would be
+      // punching continuously, and a continuous punch is not an accent, it is
+      // the new floor. The tell is entirely in what comes out of the wound.
+      hotSpotSeep: { emit: 'hotSpotSeep', shake: 0, hitstop: 0, glow: 0,
+                     sfx: null },
       // ONE BURSTING. The loudest thing the feature does and the rarest — a
       // spot has to swallow a real share of the bar to get here — so it is
       // allowed a shake between bossDaze and bigKill, and a real hitstop.
@@ -17117,6 +17657,14 @@ export const CONFIG = {
       // the same frame; the gap collapses that to one clack.
       shrimpHit:   { emit: 'bounce', shake: 0.02, hitstop: 0, glow: 0.15, ripple: { strength: 0.5, radius: 4 }, sfx: 'shrimpHit',
                      haptic: [{ duration: 10, magnitude: 0.2 }], sfxMinGap: 0.06 },
+      // A SARDINE CONNECTING. Quieter and tighter than the shrimp's clack, with
+      // a longer gap on the sound: the swirl is a bigger school on a chaotic
+      // path, so several bodies crossing one creature on one frame is the
+      // NORMAL case here rather than the crowded one. No hitstop and almost no
+      // shake for the same reason — this is a grind that runs for the whole
+      // run, and anything that freezes a frame would be freezing most of them.
+      sardineHit:  { emit: 'bounce', shake: 0.012, hitstop: 0, glow: 0.12, ripple: { strength: 0.35, radius: 3 }, sfx: 'sardineHit',
+                     haptic: [{ duration: 8, magnitude: 0.16 }], sfxMinGap: 0.09 },
       // THE WAVEFRONT CONNECTING, fired at the point on the ring rather than
       // at the body — see the onContact call in systems/calamari.js. Quieter
       // than the shrimp's clack across the board and with almost no shake,
@@ -18243,6 +18791,98 @@ export const CONFIG = {
         // ...and the floor under it, so the smallest hit still flashes for a
         // readable length rather than for two frames.
         minFlash: 0.3,
+
+        // -------------------------------------------------------------------
+        // THE NUMBER — a readout of what the hit actually cost, on the seal.
+        // -------------------------------------------------------------------
+        // Every channel above is ANALOGUE. The rim goes red, the eyes go red,
+        // the camera shakes, the seal flinches, the mix thumps — and all of it
+        // says SOMETHING BIT YOU and none of it says how much. The bar is the
+        // only place the amount exists, it is at the edge of the screen, and it
+        // is the one thing a player cannot look at during the two seconds it
+        // matters.
+        //
+        // Which is why "I just take a ton of damage sometimes" is the standing
+        // report and why nobody can say what killed them. A kill has had a
+        // number floating off it since the first build (spawnScoreToast); being
+        // killed has never had one.
+        //
+        // IT RIDES THE SAME BANKED HIT EVERYTHING ELSE DOES. systems/
+        // playerDamageFx.js already accumulates a per-frame drain into
+        // something worth showing and throttles it to one event per `minGap` —
+        // so the number printed here is the number the flash, the shake and the
+        // grunt were all sized off. A second accumulator would be a second
+        // opinion about what one hit is.
+        //
+        // The TYPE is a role in the Text panel (Y) — 'Damage taken', selector
+        // .sv-dmg — and the MOTION is CONFIG.textMotion.dmg. Neither lives here.
+        // What lives here is what the line SAYS and when it says it.
+        readout: {
+          enabled: true,
+
+          // FOLLOW THE SEAL rather than rise off the water where the bite
+          // landed. Same argument the FOOD CHAIN banner's pin is built on: a
+          // number that has to be FOUND before it can be read is a number
+          // nobody reads in a fight, and this one is being read at the exact
+          // moment the player is busy. It is also about the player rather than
+          // about a place — the hit happened to the seal, and the seal is the
+          // thing already under their eyes.
+          pin: true,
+          // ...AND WHERE ON THE SEAL. Screen pixels off the shared pin point,
+          // negative being up. That anchor already carries the upgrade receipt,
+          // the FOOD CHAIN banner and the STRIKE NOW! prompt, and this is the
+          // one line on it that means the run is in trouble — so it sits above
+          // the stack rather than queueing behind it.
+          pinOffset: -34,
+
+          // ONE RUNNING TOTAL WHILE THE BEATING LASTS, rather than a column of
+          // separate numbers. This is the whole reason the readout is worth
+          // building: the failure it has to explain is a PILE-ON — five sources
+          // across four channels inside a second (see CONFIG.player.damageCap)
+          // — and five numbers stacking up the screen is exactly as unreadable
+          // as the thing it replaced. The live line takes the new total and
+          // re-pops, so what the player sees is one figure climbing.
+          //
+          // Seconds of quiet before the next hit starts a FRESH line. Set to 0
+          // for one floater per hit, which is the other legitimate design and
+          // is why this is a number rather than a switch.
+          //
+          // Just under a second: long enough to hold a burst together, short
+          // enough that two separate mistakes are two separate numbers.
+          mergeGap: 0.9,
+
+          // Print the raw damage, or the share of the bar it cost. RAW by
+          // default and that is the arguable one — a fraction is the honest
+          // unit (max HP nearly doubles over a run, so 20 is an emergency on
+          // wave one and a scratch at level 20, which is why every OTHER
+          // channel here is tuned in fractions). Raw wins anyway because this
+          // number is read against the bar that is already on screen, and a
+          // player converting a percentage back into bar-lengths in the middle
+          // of a fight is doing arithmetic instead of swimming.
+          percent: false,
+          decimals: 0,
+
+          // --- the colour ramp ---------------------------------------------
+          // The line runs hotter the more the hit cost, from the role's own
+          // colour in the Text panel (the bottom of the ramp) to this (the
+          // top). Same two-stop shape the chain banner used to have, and here
+          // for the same reason it is not there any more: this end of it is a
+          // fact about the MECHANIC — how bad a hit has to be to look bad —
+          // rather than about the type, and the Text panel should not be where
+          // someone discovers that.
+          //
+          // Pushed toward orange rather than pure red for the reason the rim's
+          // flash is (see CONFIG.playerOutline.hit.color): a pure red at any
+          // glow clips to a flat unreadable slab in the bright pass, and these
+          // glyphs are small enough that losing their shape loses the number.
+          colorHot: 0xff4a2c,
+          // The fraction of the bar at which the line is fully hot. Matched to
+          // fx.playerDamage.gain's useful range rather than to the flash: the
+          // rim saturates early on purpose because it is a WARNING, and this is
+          // a measurement, so it should still be telling you something at the
+          // sizes where the rim has run out of room.
+          hotAt: 0.25,
+        },
       },
 
       // NEAR DEATH — the other half of damage feedback, and the half that was
@@ -20850,6 +21490,18 @@ export const CONFIG = {
       // The flattest file in the Moog batch, 0.9dB end to end across 3s, which
       // is why it is the steady layer under the one that moves.
       jetBedWiggle: { src: null, srcs: ['/sfx/HGUI_s37_WiggleBeam_01_lo.mp3'], type: 'noise', filter: 2000, decay: 1, gain: 0.2 },
+      // THE SARDINE SWIRL'S BED, and the same rules as the two above in every
+      // respect: buffer only, never fired by playSfx, and never put on a
+      // feedback event — a 2.3s loop played as a one-shot is a drone with no
+      // off switch. CONFIG.sardineSwirl.bed.layers names it and
+      // systems/jetBed.js loops it through that bed's own drive and sweep.
+      //
+      // BubbleBeam_04 rather than a fourth file: it is the spare sustained
+      // recording in the Moog batch and the one the jet's own block already
+      // points at as the quiet third layer. The swirl plays it at 1.32x, which
+      // is a different enough instrument that the two beds can be open at the
+      // same time without reading as one sound.
+      swirlBed: { src: null, srcs: ['/sfx/HGUI_s37_BubbleBeam_04_lo.mp3'], type: 'noise', filter: 2000, decay: 1, gain: 0.2 },
       // Thunder, synthesised rather than sampled — there is no thunder in the
       // sfx library and `boom` is already exactly the right shape for it: a
       // pitch sweeping down through the floor with a big noise bed over it,
@@ -21461,6 +22113,10 @@ export const CONFIG = {
       // A shrimp connecting: a small dry clack, high and instant, so a ring of
       // eight of them reads as a rattle rather than a drone.
       shrimpHit:  { src: null, type: 'noise', filter: 3100,     decay: 0.05, gain: 0.11, pitchVary: 0.18, filterVary: 0.25 },
+      // The swirl's bite. Brighter and shorter than the shrimp's — a small
+      // metal body rather than a shell — and quieter, because a school of these
+      // is grinding continuously and the clack must sit under the fight.
+      sardineHit: { src: null, type: 'noise', filter: 5200,     decay: 0.035, gain: 0.075, pitchVary: 0.22, filterVary: 0.3 },
       // The calamari front connecting. The same one-shot recipe as the shrimp's
       // clack with the filter dropped well down and the decay a little longer,
       // which is the difference between a dry tap and a wet slap — the ring is
@@ -23858,6 +24514,57 @@ export const CONFIG = {
     maxSpeed: 120,
 
     // -------------------------------------------------------------------
+    // BEING THROWN IS NOT A TURN THE ARENA GETS TO TAKE FOR FREE.
+    // -------------------------------------------------------------------
+    // A shove is the one thing in the game that moves the seal without the
+    // player asking, and for the length of it the player has no steering
+    // authority worth the name — the knock is a position offset held apart
+    // from `velocity` precisely so their swimming cannot cancel it (see
+    // applyPlayerKnockback). So for about half a second the seal is a body
+    // being posted through the arena on a line somebody else chose.
+    //
+    // Every creature it passes through on that line gets a free bite. That is
+    // the compounding shape: the hammerhead's hit is a fair price, and the
+    // four barracuda it threw you through are four more prices the player was
+    // given no way to refuse. The shove is a POSITIONAL punishment — the whole
+    // argument for the hammerhead's low contact damage is that losing your
+    // place is what it costs you — and it had quietly become a damage one.
+    //
+    // WHAT THIS DOES AND DOES NOT REFUSE, because it is easy to read as the
+    // slam being deleted. It arms the standard window, which refuses the
+    // 'strike' channel only: bites, pinches, trap snaps, shots. Everything
+    // systems/slam.js charges is on 'attack' and is untouched — the shove
+    // still costs, the wall still costs more, the pin still ramps. The animal
+    // that threw you keeps its whole price list. What it loses is the arena's
+    // free turn on the way past.
+    //
+    // SIZED FROM WHAT WAS ACTUALLY IMPARTED, not from the row: the same figure
+    // slam.js prices the damage off, so a shove trimmed by `maxSpeed` buys a
+    // correspondingly shorter window and the two halves of one event can never
+    // disagree about how big it was.
+    invuln: {
+      enabled: true,
+      // Seconds for merely being shoved at all, before speed is counted. A
+      // floor rather than the whole answer: the frame you are hit is the frame
+      // the crowd around you is closest, whatever happens next.
+      base: 0.2,
+      // ...and seconds per world-unit-per-second of shove on top.
+      //
+      // SET AGAINST `decay`. A shove spends most of its travel in about 2/decay
+      // seconds — at the shipped decay of 7 that is 0.29s — so the hammerhead's
+      // 84 u/s wants roughly 0.29 - 0.2 = 0.09 more, which is 0.0011 per unit.
+      // Rounded to 0.0012 so the window closes a hair AFTER the seal has
+      // stopped rather than a hair before, because the frames either side of
+      // arriving are the ones worth covering.
+      perSpeed: 0.0012,
+      // The ceiling, whatever the arithmetic says. `maxSpeed` is 120 and a
+      // mistuned row asking for it would otherwise buy 0.34s; this is above
+      // that on purpose — it is a backstop against a future row, not the
+      // number that binds today.
+      max: 0.5,
+    },
+
+    // -------------------------------------------------------------------
     // WHAT THE SHOVE COSTS — systems/slam.js, and read the note at the top
     // of that file for the shape. The short version is three prices for one
     // mechanic: the shove landing, the shove ARRESTING against something,
@@ -24269,6 +24976,38 @@ export const CONFIG = {
     // lights on their own.
     goo: true,
 
+    // --- AND WHAT LEAKS OUT OF ONE BETWEEN SHOTS -------------------------
+    // The per-hit leak already grows with heat (`rampMin`/`rampMax` above), and
+    // that only ever shows on the frames the player is landing shots. This is
+    // the WOUND rather than the event: a fresh spot seeps nothing, one about to
+    // burst is bleeding steadily, and the run-up is readable on a boss nobody
+    // is currently shooting — which is most of them, most of the time, on a
+    // screen with three weak points and one seal.
+    //
+    // HEAT MOVES THE GAP, NOT THE COUNT. A fixed cadence throwing more each
+    // time reads as one thing pulsing harder; puffs arriving closer together
+    // read as a leak getting worse. Both the gap and the size ramp, because one
+    // alone reads as a cadence change or a size change rather than as a wound.
+    seep: {
+      enabled: true,
+      // Silent below this fraction of the rupture pool. A spot that dribbles
+      // from the first pellet has nothing left to escalate — and three of them
+      // dribbling from the moment a boss arrives spends the fight's whole
+      // opening on an effect whose entire job is to mean "nearly".
+      from: 0.15,
+      // Seconds between puffs at that threshold, and at the moment it bursts.
+      // The far end is deliberately not frantic: at a tenth of a second this is
+      // ten a second across three spots, which is as much ichor as the game can
+      // carry before the goo pass stops reading as separate drips.
+      everyEmpty: 0.5,
+      everyFull: 0.11,
+      // ...and how big each puff is over the same ramp, as the `scale` on the
+      // event — which reaches the emitter's count and size the same way a hit's
+      // ramp does.
+      scaleEmpty: 0.4,
+      scaleFull: 1.2,
+    },
+
     // --- AND THE SHOVE IT PUTS THROUGH THE ANIMAL -------------------------
     // A rupture is an explosion inside a body, and until now the body did not
     // move. Everything else about the burst — the goo, the shake, the sound,
@@ -24574,8 +25313,54 @@ export const CONFIG = {
       // things that bloom and two that do not is what gives a small light an
       // inside, an edge and an outside.
 
-      // THE FILL, which is now a LEVEL rather than a wash — see `charge`.
+      // THE INTERIOR, ALWAYS LIT. Everything above the level is bare hide
+      // without this, so a fresh spot was a bright outline with the animal's
+      // own dark skin inside it — which reads as a ring drawn ON the boss
+      // rather than as a place on it that is glowing. The floor is what makes
+      // it a lit window; the fill below is what makes that window a gauge.
+      floor: 0.3,
+      // THE FILL, which is a LEVEL rather than a wash — see `charge`. Sits on
+      // top of the floor, so the charged part of the disc is the floor plus
+      // this and the two never read as separate lights.
       fill: 0.9,
+      // AND HOW MUCH BRIGHTER THE WHOLE INSIDE GETS AS IT IS CHEWED, at the
+      // moment before it bursts. Both interior terms take it.
+      //
+      // The level already says the same thing in AREA, and area is the reading
+      // that needs the player to be looking straight at it: on a boss crossing
+      // the arena a growing disc is a disc. Brightness carries at any size, so
+      // between them a spot about to go is unmistakable from anywhere on
+      // screen. This is the one number in the block that is MEANT to push the
+      // interior into the ceiling at the top of its range — a spot that is
+      // about to come apart is allowed to be the brightest thing on the animal.
+      heatGain: 1.8,
+      // --- HOW MUCH OF THE HIDE THE SPOT STANDS IN FOR ---------------------
+      //
+      // 0 is the effect as it shipped: pure additive light, which can only ADD
+      // to whatever the animal already is. That is why the interior kept
+      // losing on dark bodies — a quiet layer over near-black flesh is a quiet
+      // colour over nothing, and the only lever additive gives you is
+      // brightness, which belongs to the ring. Every attempt to fix it by
+      // turning something up took the ring's headroom and put the spot back to
+      // one flat mass.
+      //
+      // Coverage is the other sentence. It replaces this fraction of the flesh
+      // under the spot with the spot's own colour, so the interior reads the
+      // way a decal does — the same on a black flank, a white belly, a lit
+      // deck or a crab's own glowing shell — while every bright layer above it
+      // still adds on top exactly as before. The shell blends premultiplied
+      // for it (see makeSkinMaterial), so this costs no extra draw.
+      //
+      // NOT 1. At full coverage the animal's own shading disappears inside the
+      // circle and the spot becomes a flat sticker again — the exact read the
+      // whole feature was built to avoid, arriving from the other direction.
+      // Under 1 the hide's noise, banding and lighting still show through the
+      // colour, which is what makes it look painted ON something.
+      cover: 0.5,
+      // ...and at the moment before it bursts. Higher, so a spent spot is not
+      // just brighter but more solidly ITS OWN COLOUR — the animal showing
+      // through less and less as the wound takes over.
+      coverFull: 0.85,
       // WHERE THE LEVEL STANDS ON A FRESH SPOT, as a fraction of the radius,
       // rising to the boundary as the spot takes damage.
       //
@@ -26207,6 +26992,40 @@ export const CONFIG = {
       // sequence rather than as something passing through the word.
       wave: { amp: 0.34, size: 0.28, crest: 2.6 },
     },
+    // WHAT A HIT COST — the number on the seal. See
+    // CONFIG.fx.playerDamage.readout for what it says; this is how it moves.
+    //
+    // IT IS THE PROC RECEIPT'S MOTION, NOT THE SCORE POPUP'S, and that is the
+    // decision worth stating. A score number is NOTICED — there are a dozen at
+    // once, they exist to make a kill feel paid, and none of them is read
+    // individually. This one is READ, once, and it is read at the worst moment
+    // in the game to be reading anything. So it takes the receipt's shape: a
+    // slow rise that gravity settles well before the life is up, no scatter,
+    // and a life long enough to still be legible after the player has finished
+    // reacting to being bitten.
+    //
+    // LONGER THAN THE PROC'S 1.6s. A receipt announces something good and can
+    // afford to be missed; this is the only place the amount exists at all
+    // (the bar is at the edge of the screen and unreadable mid-fight), and a
+    // merged line has to survive the whole burst it is totalling.
+    //
+    // It POPS HARDER than the receipt, too. A proc arrives into a calm frame; a
+    // hit arrives into a red rim, a shaking camera and a flinching animal, and
+    // a 1.4 scale-in disappears into that. The bloom on the way in is what
+    // makes it separate from the mess rather than part of it.
+    dmg: {
+      life: 1.9,
+      rise: 30,
+      riseVary: 0,
+      gravity: 52,
+      // No scatter for the same reason the receipt has none: merged, there is
+      // only ever one of these on screen, so it has nothing to get out of the
+      // way of. With `mergeGap` at 0 it becomes a stack, and this is the first
+      // number to raise if it does.
+      scatter: 0,
+      in: { time: 0.1, ease: 'outExpo', scale: 1.75, fade: 0, lift: 0, bloom: 14 },
+      out: { time: 0.55, ease: 'inQuad', scale: 1, fade: 0, lift: -16, bloom: 0 },
+    },
     // THE WARNING BAND — "Oxygen low!", "Health low!", "Warning!".
     // Screen-anchored, so the four travel fields above (rise,
     // riseVary, gravity, scatter) mean nothing here and are left out rather
@@ -26578,6 +27397,47 @@ export const CONFIG = {
     // drifting to a stop otherwise flickers between the two answers, and each
     // flicker restarts the turn — so it never finishes one and sits sideways.
     deadzone: 0.05,
+  },
+
+  // COMING ABOUT — see systems/fishTurn.js, which is where the whole argument
+  // lives. Shared defaults for every creature carrying `comeAbout`; a def may
+  // override any key by declaring `comeAbout: { ... }` instead of `true`.
+  //
+  // The block above is the OTHER answer to the same question and both still
+  // ship: `facing` flips a body between two sides, which is right for a hull,
+  // a boat and anything whose turn is not worth a second of screen time. This
+  // one spends that second, and is worth it only on an animal the player is
+  // being asked to read.
+  fishTurn: {
+    // How long the U-turn takes. Longer than `facing.time` on purpose — the
+    // flip it replaces was hiding a manoeuvre, and 0.4s of a manoeuvre you can
+    // actually see is a fish snapping round through the lens instead of over
+    // the top, which is a different wrong answer.
+    time: 0.55,
+    curve: 'inOutCubic',
+    deadzone: 0.05,
+    // rad/s the nose may re-aim vertically. Bounded at +-90 degrees by
+    // construction (see fishTurn.js), so this is only ever about how twitchy
+    // the climb looks, never about whether the body ends up upside down.
+    pitchRate: 4,
+    // Lean, in radians of roll per rad/s of yaw, capped by `bankMax`. SIGNED:
+    // negate it to lean the fish the other way through the same turn.
+    bank: 0.22,
+    bankMax: 0.5,
+    // How fast the lean catches up, per second. A bank that arrives instantly
+    // is a body snapping to an angle; this is the roll taking hold.
+    bankSettle: 7,
+    // THE WIND-UP SHIMMY. Amplitudes are radians at full ramp, and the ramp is
+    // the square of how far through `lunge.windup` the fish is — so the shake
+    // arrives over the gather rather than switching on with it.
+    //
+    // The yaw is the one that carries on this camera: it swings the nose
+    // toward and away from the lens, so the silhouette narrows and widens and
+    // the tell survives being small and far away. The other two are shaping.
+    wiggleHz: 7,
+    wiggleYaw: 0.3,
+    wigglePitch: 0.1,
+    wiggleBank: 0.22,
   },
 
   bossBoat: {
@@ -29495,6 +30355,41 @@ export const CONFIG = {
       // multiplier per unit/sec of downward velocity, capped by `speedMax`.
       speedBonus: 0.02,
       speedMax: 1.6,
+
+      // -------------------------------------------------------------------
+      // COMING BACK THROUGH THE WATER LINE IS NOT A FREE MOVE, and it used to
+      // be a punished one.
+      // -------------------------------------------------------------------
+      // The whole airborne loop asks the player to leave the water, stay up as
+      // long as they can and drop back in hard — and the arena does not pause
+      // while they are gone. A breach that lands where the seal took off from
+      // lands in whatever swam into that space in the meantime, at a downward
+      // speed the player deliberately maximised, with no steering authority on
+      // the way in and every body already inside their hit radius on the frame
+      // they arrive.
+      //
+      // So the most athletic thing in the game was also the most reliable way
+      // to be bitten by three animals at once, and the mechanic that pays for
+      // committing to the landing (`speedBonus` above) paid in the same
+      // currency it charged: the harder you dropped, the worse it went.
+      //
+      // This is the arrival window. The seal lands, the blast fires, the crowd
+      // it landed in gets its turn a third of a second later — by which time
+      // the player has had a chance to swim.
+      //
+      // GATED ON THE SLAM EXISTING, which is `minRamp` above and nothing else.
+      // A crossing too small to be an event is too small to be protected, and
+      // that gate is what stops the obvious abuse: a seal porpoising along the
+      // surface skims under `minRamp` every time and buys nothing. Real air is
+      // the price, and real air is spent OUT of the water where the arena
+      // cannot reach you anyway.
+      //
+      // FLAT, NOT SCALED BY `power`. What the window has to cover is the crowd
+      // standing where you landed, and that crowd is the same size whether you
+      // fell four units or forty. Scaling it would hand the biggest arcs the
+      // longest immunity on top of the biggest blast, which is two rewards for
+      // one decision.
+      invuln: 0.35,
     },
   },
 
@@ -30706,6 +31601,12 @@ export const CONFIG = {
       // cooldown holds it off for 0.4s, so anything less than 1 here would
       // mean the flare never arrived at all.
       shrimpRing: { perHit: 1, fade: 0.32, peak: 3.2, color: 0xffd2a0 },
+      // The sardine that just bit. The shrimp's numbers with a shorter fade and
+      // a cooler colour: the body is chrome rather than shell, so the flare has
+      // to read as the metal being lit rather than as something warm glowing,
+      // and a school this size holding its heat as long as the ring does would
+      // be a permanent cloud of light around the seal.
+      sardineSwirl: { perHit: 1, fade: 0.22, peak: 3, color: 0xcfe6ff },
       // The cloud is a slow grinder and it ticks five times a second through a
       // crowd, so it climbs rather than snapping — a garlic aura that strobed
       // at its tick rate would be the brightest thing on screen for the whole
@@ -31877,6 +32778,26 @@ export const CONFIG = {
     // the two together.
     { id: 'razorClam', family: 'projectile', name: 'Razor Clams', desc: 'Piercing chrome blades: +blades, wider fan', apply: (s) => { s.razorClamLevel = (s.razorClamLevel ?? 0) + 1; }, maxStacks: 8,
       perLevelName: true },
+
+    // SARDINE SWIRL — a strange attractor the player carries.
+    //
+    // The `echo` boss study (attractorStorms.csv, systems/attractorStorm.js)
+    // turned round: a Lorenz field anchored on the SEAL, holding a school of
+    // small chrome bodies that arrive in pairs seeded a hair apart and end up
+    // on opposite wings. See CONFIG.sardineSwirl for every number and
+    // systems/sardineSwirl.js for the three ways it departs from the storm.
+    //
+    // Levelled rather than counted, though a stack does buy bodies. The reason
+    // is `scalePerLevel`: a stack widens the PICTURE as well as filling it, so
+    // "how many are in the water" is only half of what a pick is, and a count
+    // stat would name the half that is easier to measure. The card's two
+    // measured rows say both — see sardineSwirlLevelStats.
+    // `family: 'projectile'`, the shrimp ring's, and NOT 'companion': that
+    // family spends one of the run's companion slots (see isCompanionCard in
+    // entities/player.js), and a field of bodies the seal carries is a weapon
+    // rather than an animal that came along.
+    { id: 'sardineSwirl', family: 'projectile', name: 'Sardine Swirl', desc: '{effect}',
+      apply: (s) => { s.sardineSwirlLevel = (s.sardineSwirlLevel ?? 0) + 1; }, maxStacks: 8 },
 
     // --- grapple / escort ---------------------------------------------------
     // The only DEFENSIVE companion in the game. Every other one adds output;
@@ -34058,6 +34979,17 @@ function textPanelGroups() {
       ...waveMotionItems('proc'),
     ],
   }, {
+    // WHAT A HIT COST — the damage readout. Its type is the 'Damage taken' role
+    // above; these are the travel and the two curves. The colour ramp is NOT
+    // here: how bad a hit has to be to look bad is a fact about the mechanic,
+    // so it lives with the rest of the damage feedback in the main tuner under
+    // CONFIG.fx.playerDamage.readout, and the Text panel's swatch for the role
+    // reads the hot end of it (`colorFrom`) rather than owning it.
+    group: 'Damage taken — motion',
+    section: 'Popups',
+    panel: 'text',
+    items: popupMotionItems('dmg'),
+  }, {
     group: 'Warning band — motion',
     section: 'Popups',
     panel: 'text',
@@ -34870,6 +35802,30 @@ export const TUNER_SCHEMA = [
       { path: 'shrimpRing.radius', min: 0.5, max: 8, step: 0.1 },
       { path: 'shrimpRing.orbitSpeed', min: -6, max: 6, step: 0.1 },
       { path: 'shrimpRing.scale', min: 0.1, max: 2, step: 0.05 },
+    ],
+  },
+  {
+    group: 'Sardine swirl',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      // damage / damagePerLevel / count / countPerLevel / contactCooldown are
+      // weapons.csv's — the damage economy and the school size. What is here is
+      // the PICTURE the field draws, which is only judgeable with the swirl
+      // running: how much water it covers, how fast the state runs through the
+      // attractor, and how the bodies read while they do it.
+      { path: 'sardineSwirl.span', min: 2, max: 20, step: 0.25, label: 'how wide the school is drawn (m)' },
+      { path: 'sardineSwirl.spanPerLevel', min: 0, max: 0.4, step: 0.01, label: '...and what a stack adds, as a fraction' },
+      { path: 'sardineSwirl.rate', min: 0.2, max: 3, step: 0.02, label: 'attractor time per second' },
+      { path: 'sardineSwirl.speedCap', min: 5, max: 60, step: 1, label: 'ceiling on a body\'s speed (u/s)' },
+      // THE MECHANIC'S OWN KNOB. How far apart the two halves of a pair are
+      // seeded: wide and the divergence is not a surprise, tight and the pair
+      // is one body right up until it is two. See the note in CONFIG below.
+      { path: 'sardineSwirl.separation', min: 0.001, max: 0.3, step: 0.001, label: 'how far apart a pair is seeded' },
+      { path: 'sardineSwirl.radius', min: 0.05, max: 1, step: 0.01, label: 'reach of a body drawn at size 1' },
+      { path: 'sardineSwirl.roll', min: 0, max: 24, step: 0.5, label: 'whip about the long axis (rad/s)' },
+      { path: 'sardineSwirl.rollJitter', min: 0, max: 1, step: 0.05 },
+      { path: 'sardineSwirl.hitPop', min: 0, max: 1, step: 0.05, label: 'scale punch on a bite' },
     ],
   },
   {
@@ -36184,6 +37140,8 @@ export const TUNER_SCHEMA = [
       { path: 'whale.ram.stiffness', min: 1, max: 120, step: 1, label: 'ram: how hard it springs back' },
       { path: 'whale.ram.damping', min: 0, max: 30, step: 0.2, label: 'ram: how much it wobbles (higher = less)' },
       { path: 'whale.ram.maxOffset', min: 0, max: 6, step: 0.1, label: 'ram: furthest it may leave its line' },
+      { path: 'whale.ram.flinch.strength', min: 0, max: 20, step: 0.5, label: 'ram: how much the body buckles' },
+      { path: 'whale.ram.flinch.tipBias', min: 0, max: 1, step: 0.02, label: 'ram: buckle toward the fluke' },
       // --- the gape ---
       // Two morph targets on one jaw: `cruiseGape` is held the whole way
       // across and the feed gape opens on top of it. Both are morph influences,
@@ -36542,6 +37500,8 @@ export const TUNER_SCHEMA = [
       { path: 'playerOutline.hit.time', min: 0.05, max: 1.5, step: 0.01, label: 'damage flash time' },
       { path: 'playerOutline.hit.minTime', min: 0.05, max: 1.5, step: 0.01, label: '...on a graze' },
       { path: 'playerOutline.hit.glowAdd', min: 0, max: 12, step: 0.1, label: 'damage flash glow' },
+      { path: 'playerOutline.hit.powerFloor', min: 0, max: 1, step: 0.01, label: '...an ordinary hit gets at least' },
+      { path: 'playerOutline.hit.hold', min: 0, max: 0.4, step: 0.005, label: '...held at full for' },
       { path: 'playerOutline.hit.thicknessAdd', min: 0, max: 0.4, step: 0.005, label: 'damage flash width' },
     ],
   },
@@ -37034,6 +37994,38 @@ export const TUNER_SCHEMA = [
       { path: 'beatSync.enabled', type: 'bool', label: 'quantise shader FX to the beat' },
       { path: 'beatSync.beatsPerBar', min: 2, max: 12, step: 1, label: 'beats per bar' },
       { type: 'readout', label: 'grid', lines: () => beatGridReadout() },
+    ],
+  },
+  {
+    // THE SWIRL'S SUSTAINED VOICE. The bubble jet's bed is tuned on its own
+    // workbench page (F) because that page also owns the stream's look; this
+    // one has no page of its own, so its knobs are here rather than nowhere —
+    // a number reachable from neither instrument is not tuned, it is frozen.
+    // Everything here is the same knob CONFIG.sardineSwirl.bed documents, and
+    // it is deliberately NOT in weapons.csv: a spreadsheet cannot answer a
+    // question about a sound.
+    group: 'Sardine swirl bed',
+    section: 'Audio',
+    items: [
+      { path: 'sardineSwirl.bed.enabled', type: 'bool', label: 'bed under the school' },
+      { path: 'sardineSwirl.bed.gain', min: 0, max: 0.5, step: 0.005, label: 'held level' },
+      { path: 'sardineSwirl.bed.synthLevel', min: 0, max: 2, step: 0.05, label: 'the oscillator stack in the mix' },
+      { path: 'sardineSwirl.bed.note', min: 40, max: 400, step: 1, label: 'the stack\'s note (Hz)' },
+      { path: 'sardineSwirl.bed.unison', min: 1, max: 7, step: 1 },
+      { path: 'sardineSwirl.bed.detune', min: 0, max: 40, step: 1, label: 'unison spread (cents)' },
+      { path: 'sardineSwirl.bed.sub', min: 0, max: 1.5, step: 0.05, label: 'the octave under it' },
+      { path: 'sardineSwirl.bed.drive', min: 0.1, max: 20, step: 0.1, label: 'overdrive, BEFORE the filter' },
+      { path: 'sardineSwirl.bed.preGain', min: 0.1, max: 4, step: 0.05, label: 'into the shaper' },
+      { path: 'sardineSwirl.bed.resonance', min: 0.1, max: 20, step: 0.1, label: 'ladder resonance' },
+      { path: 'sardineSwirl.bed.from', min: 20, max: 8000, step: 10, label: 'sweep from (Hz)' },
+      { path: 'sardineSwirl.bed.to', min: 20, max: 12000, step: 20, label: '...to (Hz)' },
+      { path: 'sardineSwirl.bed.ramp', min: 0.05, max: 3, step: 0.05, label: 'the spool (s)' },
+      { path: 'sardineSwirl.bed.attack', min: 0.01, max: 1, step: 0.01, label: 'attack, as a fraction of the spool' },
+      { path: 'sardineSwirl.bed.attackLevel', min: 0, max: 1, step: 0.05, label: '...and how far up it gets' },
+      { path: 'sardineSwirl.bed.breathRate', min: 0.05, max: 6, step: 0.05, label: 'the breath (Hz)' },
+      { path: 'sardineSwirl.bed.breathDepth', min: 0, max: 2000, step: 10, label: '...and how wide it swings the cutoff' },
+      { path: 'sardineSwirl.bed.release', min: 0.02, max: 2, step: 0.02, label: 'release (s)' },
+      { path: 'sardineSwirl.bed.releaseTo', min: 20, max: 4000, step: 10, label: '...and the cutoff it closes onto' },
     ],
   },
   {
@@ -38005,11 +38997,21 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.jagRate', min: 0, max: 6, step: 0.1, label: '…crawling at' },
       { path: 'hotSpots.look.ring', min: 0, max: 6, step: 0.05, label: 'boundary ring brightness' },
       { path: 'hotSpots.look.ringWidth', min: 0.02, max: 0.6, step: 0.01, label: '…ring thickness (x radius)' },
-      { path: 'hotSpots.look.fill', min: 0, max: 2, step: 0.05, label: 'interior fill' },
+      { path: 'hotSpots.look.floor', min: 0, max: 2, step: 0.05, label: 'interior glow (always lit)' },
+      { path: 'hotSpots.look.fill', min: 0, max: 2, step: 0.05, label: '…and the filled part on top' },
+      { path: 'hotSpots.look.heatGain', min: 1, max: 4, step: 0.05, label: '…brightens by, at full damage' },
+      { path: 'hotSpots.look.cover', min: 0, max: 1, step: 0.05, label: '…replaces the hide by (0 = pure glow)' },
+      { path: 'hotSpots.look.coverFull', min: 0, max: 1, step: 0.05, label: '…and by this at full damage' },
       { path: 'hotSpots.look.charge', min: 0, max: 0.95, step: 0.02, label: '…filled to (x radius) when fresh' },
       { path: 'hotSpots.look.chargeEdge', min: 0, max: 3, step: 0.05, label: '…brightness of the level\'s own edge' },
       { path: 'hotSpots.look.spill', min: 0, max: 1.5, step: 0.05, label: 'spill past the boundary' },
       { path: 'hotSpots.look.spillGain', min: 0, max: 2, step: 0.05, label: '…spill brightness' },
+      { path: 'hotSpots.seep.enabled', type: 'bool', label: 'damaged spots leak between shots' },
+      { path: 'hotSpots.seep.from', min: 0, max: 0.9, step: 0.05, label: '…starting at this much damage' },
+      { path: 'hotSpots.seep.everyEmpty', min: 0.05, max: 2, step: 0.05, label: '…a puff every (s) there' },
+      { path: 'hotSpots.seep.everyFull', min: 0.03, max: 1, step: 0.01, label: '…and every (s) just before it bursts' },
+      { path: 'hotSpots.seep.scaleEmpty', min: 0, max: 2, step: 0.05, label: '…puff size there' },
+      { path: 'hotSpots.seep.scaleFull', min: 0, max: 3, step: 0.05, label: '…and just before it bursts' },
       { path: 'hotSpots.look.burstReach', min: 0, max: 3, step: 0.05, label: 'burst shock travels (x radius)' },
       { path: 'hotSpots.look.burstWidth', min: 0.02, max: 0.8, step: 0.02, label: '…its thickness' },
       { path: 'hotSpots.look.burstGain', min: 0, max: 8, step: 0.1, label: '…its brightness' },
@@ -38204,6 +39206,14 @@ export const TUNER_SCHEMA = [
       { path: 'fx.playerDamage.minGap', min: 0.02, max: 0.6, step: 0.01, label: 'min gap between hits shown' },
       { path: 'fx.playerDamage.gain', min: 0, max: 12, step: 0.1, label: 'hit size per hp fraction' },
       { path: 'fx.playerDamage.flashFraction', min: 0.05, max: 1, step: 0.01, label: 'hp lost for a full rim flash' },
+      { path: 'fx.playerDamage.readout.enabled', type: 'bool', label: 'show the damage number' },
+      { path: 'fx.playerDamage.readout.pin', type: 'bool', label: '...pinned to the seal' },
+      { path: 'fx.playerDamage.readout.pinOffset', min: -140, max: 140, step: 1, label: '...how far above the seal' },
+      { path: 'fx.playerDamage.readout.percent', type: 'bool', label: '...as a % of the bar' },
+      { path: 'fx.playerDamage.readout.mergeGap', min: 0, max: 3, step: 0.05, label: '...quiet before a new line' },
+      { path: 'fx.playerDamage.readout.decimals', min: 0, max: 2, step: 1, label: '...decimal places' },
+      { path: 'fx.playerDamage.readout.colorHot', type: 'color', label: '...colour of a big hit' },
+      { path: 'fx.playerDamage.readout.hotAt', min: 0.02, max: 1, step: 0.01, label: '...hp lost to reach it' },
       // NEAR DEATH — the state channel, as against the three rows above, which
       // are all about a single hit. `threshold` first: it is the one that
       // decides whether this is a rare emergency or the second half of every
@@ -39218,6 +40228,14 @@ const PATH_TABLES = [
       'eel', 'sealTeam', 'beluga', 'club', 'clubStacks', 'clubThrow', 'clubBoom', 'clubIce', 'clubZap', 'strike',
       'airborne', 'octoGrab', 'harp', 'homingShot', 'maneater', 'ironLung', 'oxygen',
       'starfish', 'laserEyes',
+      // `sardineSwirl` fenced the same way the jet is, and the block splits the
+      // same way: what a sardine hits for, what a stack adds and how many
+      // bodies a stack buys are read against the rest of the arsenal over a
+      // run. The projection scale, the integration rate, the speed clamp, the
+      // pair separation, the roll and the whole sound bed are judged while the
+      // school is on screen and in the F panel, and strip() is per-row so those
+      // keep their sliders.
+      'sardineSwirl',
       // `finLaser` is here FENCED, the same way the laser eyes and the bubble
       // jet are and for the same reason: the block is half throughput and half
       // look. The bolt's speed, its reach, the reach ramp and every count in
@@ -39294,6 +40312,17 @@ const PATH_TABLES = [
       // spreadsheet that no spreadsheet can answer questions about.
       if (id.startsWith('bubbleJet.look.') || id.startsWith('bubbleJet.bed.')) {
         return 'the stream\'s look and its sound bed are judged in the F panel, not over a run';
+      }
+      // FENCED TO THE DAMAGE ECONOMY AND THE SCHOOL SIZE. See the note beside
+      // 'sardineSwirl' in the roots list — everything else in that block is the
+      // picture the field draws, which is judged with the swirl running.
+      const SWIRL_OWNED = new Set([
+        'sardineSwirl.damage', 'sardineSwirl.damagePerLevel',
+        'sardineSwirl.count', 'sardineSwirl.countPerLevel',
+        'sardineSwirl.contactCooldown',
+      ]);
+      if (id.startsWith('sardineSwirl.') && !SWIRL_OWNED.has(id)) {
+        return 'weapons.csv owns the swirl\'s damage economy and its pair count — the field, the roll and the bed are tuner sliders';
       }
       if (LASER_LOOK.has(id)) {
         return 'the eye sockets and the beam tint are judged by eye — weapons.csv owns the laser\'s throughput only';

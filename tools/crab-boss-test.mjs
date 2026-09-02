@@ -154,9 +154,20 @@ section('IT COMES UP THE WATER COLUMN AT YOU');
 // built from those numbers is beaten by swimming up and waiting.
 {
   const ceiling = FLOOR + (DEF.crawl?.groundHeight ?? 2.5);
+  // MEASURED AGAINST THE SWARM'S REACH, NOT ITS FEET. A crab's ceiling is
+  // where it can stand; what the player feels is where it can PINCH, which is
+  // that plus the arm (about 2.2 world units on a swarm crab — see pinchReach
+  // and CONFIG.crabClaw.commitRange). This was a bare `x3` on the standing
+  // heights while the swarm's was 2.5, so raising the swarm's ceiling to a
+  // number that lets it cover its own rush band failed it at 14 vs 25.5 —
+  // an arithmetic yardstick, not a regression. The claim being made is the one
+  // the section is named for: a seal that has climbed out of the swarm's reach
+  // is still inside the boss's.
+  const swarmClaw = 2.2;
+  const swarmReach = (CONFIG.enemies.walkingCrab.crawl?.groundHeight ?? 2.5) + swarmClaw;
   check('its ceiling is well clear of the swarm\'s',
-    (DEF.crawl?.groundHeight ?? 0) > (CONFIG.enemies.walkingCrab.crawl?.groundHeight ?? 2.5) * 3,
-    `${DEF.crawl?.groundHeight} against the swarm's ${CONFIG.enemies.walkingCrab.crawl?.groundHeight}`);
+    (DEF.crawl?.groundHeight ?? 0) > swarmReach,
+    `stands to ${DEF.crawl?.groundHeight} against a swarm that reaches ${swarmReach.toFixed(1)}`);
   check('and it rushes from anywhere in the column',
     (DEF.crawl?.floorRushHeight ?? 0) >= bounds.surfaceY - FLOOR,
     `floorRushHeight ${DEF.crawl?.floorRushHeight} against a ${(bounds.surfaceY - FLOOR).toFixed(1)}-deep column`);
@@ -165,8 +176,11 @@ section('IT COMES UP THE WATER COLUMN AT YOU');
   const e = spawnKingCrab({ x: -20, y: FLOOR + 1 });
   e.entering = false; // already walked on; this section is about the climb
 
-  // The seal hangs eight units up — out of a swarm crab's reach entirely.
-  const player = new THREE.Vector3(0, FLOOR + 8, 0);
+  // The seal hangs just out of a swarm crab's reach — derived rather than
+  // typed, because the flat 8 this used to be stopped being out of reach the
+  // day the swarm's ceiling moved, and a test that quietly starts measuring
+  // something reachable is worse than one that fails.
+  const player = new THREE.Vector3(0, FLOOR + swarmReach + 1, 0);
   let peak = -Infinity;
   let closest = Infinity;
   for (let i = 0; i < 20 * 60; i++) {

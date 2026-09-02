@@ -468,6 +468,106 @@ section('On the skin <span>— the whole reason this is not a quad</span>', 3);
 }
 
 // ---------------------------------------------------------------------------
+section('Against a dark hide <span>— glow alone, and standing in for the flesh</span>', 3);
+// ---------------------------------------------------------------------------
+// THE ONE THING ADDITIVE LIGHT CANNOT DO. A spot on near-black flesh is the
+// brightest thing there and is still only as bright as the number it adds, so
+// the interior — deliberately the quietest layer in the block — lands over a
+// body at nearly zero and comes out a dim smear. Every fix by brightness takes
+// the boundary ring's headroom with it.
+//
+// `cover` is the other lever: the shell blends premultiplied, so the same pass
+// can scale the hide down and stand in for it. Read the three panels for the
+// INTERIOR only — the ring is identical in all of them, which is the point.
+{
+  const BASE = LOOK.cover;
+  const BASE_FULL = LOOK.coverFull;
+  for (const [c, note] of [
+    [0, 'Pure additive — the effect before this existed. The ring carries and the inside of the spot is whatever the hide already was, plus a little.'],
+    [0.5, 'Half the flesh replaced by the spot\'s own colour. The hide\'s shading still reads through it, so it is paint on an animal rather than a sticker over one.'],
+    [0.9, 'Nearly opaque. The animal\'s own lighting is gone inside the circle and the spot goes back to reading as a flat decal — the failure this whole feature was built to avoid, arriving from the other side.'],
+  ]) {
+    LOOK.cover = c;
+    LOOK.coverFull = Math.min(1, c * 1.7);
+    const e = newBoss(0);
+    const spot = hotSpotsOf(e).spots[0];
+    focus(bodyCam, spot);
+    run(24, bodyCam);
+    present(`cover ${c}`, note, c === 0.5);
+    bodyCam.position.set(0, 0, 20);
+    bodyCam.updateMatrixWorld(true);
+  }
+  LOOK.cover = BASE;
+  LOOK.coverFull = BASE_FULL;
+}
+
+// ---------------------------------------------------------------------------
+section('Every boss wearing them <span>— the sheet showed one animal for its whole life</span>', 3);
+// ---------------------------------------------------------------------------
+// AND THAT WAS THE HOLE IN IT. Every panel above is a megalodon, so everything
+// this page could ever say was "the effect works on a megalodon" — while the
+// things that actually break are per-body: the hit shape is fitted per rig,
+// the silhouette is that rig's, and a spot that drifts off the flesh does it on
+// ONE animal while the other eight are fine. That is not a tuning question and
+// no amount of looking at the shark could find it.
+//
+// One panel per archetype, at body scale, with the spots fully open. What to
+// look for is only this: is every light ON the animal, and is it on its OUTER
+// EDGE. A spot floating in open water, or one buried in the middle of a flank,
+// is the bug — see pushToRim in systems/bossHotSpots.js.
+{
+  const BODIES = [
+    'bossShark', 'bossOrca', 'bossMosasaur',
+    'bossSquid', 'bossHammerhead', 'bossAnglerfish',
+    'bossCrab', 'bossBoat', 'bossYacht',
+  ];
+  for (const key of BODIES) {
+    let e = null;
+    try {
+      resetEnemies(scene);
+      resetBossHotSpots();
+      resetParticles();
+      reseed();
+      e = spawnNamed(scene, key, 0, undefined, { ignoreCaps: true, overfill: true });
+    } catch (err) {
+      log(`  ${key}: would not spawn — ${err.message}`, 'bad');
+      continue;
+    }
+    if (!e) { log(`  ${key}: would not spawn`, 'bad'); continue; }
+    e.isBoss = true;
+    e.mesh.position.set(0, 0, 0);
+    e.heading = 0;
+    for (let i = 0; i < 30; i++) e.anim?.update(DT, stateForSpeed(e.def.speed ?? 5), false);
+    e.mesh.rotation.z = -Math.PI / 2;
+    scene.updateMatrixWorld(true);
+    tickHitShapes();
+    attachHotSpots(scene, e);
+    for (let i = 0; i < 45; i++) { tickHitShapes(); updateBossHotSpots(DT, DT); }
+    boss = e;
+    // FRAMED ON THE MEASURED BODY, not on `radius`.
+    //
+    // `radius` is the creature's COLLISION width and says nothing about how
+    // long it is: the mosasaur's is 2 against a body that runs the better part
+    // of thirty units nose to tail, so a camera sized from it puts the tail —
+    // and on this animal the weak spot with it — outside the frame. A panel
+    // that crops the thing it exists to check is worse than no panel, because
+    // it reads as the spot being absent.
+    const box = new THREE.Box3().setFromObject(e.visual);
+    const size = box.getSize(new THREE.Vector3());
+    const mid = box.getCenter(new THREE.Vector3());
+    const cam = ortho(Math.max(6, Math.max(size.y, size.x / (W / H)) * 1.25), mid.y);
+    cam.position.x = mid.x;
+    cam.updateMatrixWorld(true);
+    run(24, cam);
+    const lit = hotSpotsOf(e)?.spots.filter((s) => s.alive && !s.dead).length ?? 0;
+    // Nothing is "shipped" in a roster row — every one of these is the same
+    // effect on a different body, and the panel to look at is whichever one
+    // has a light off the animal.
+    present(key, `${lit} lit. Every light should be ON the body and ON its outer edge.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 log('');
 check('no shader errors across the whole sheet', shaderErrors.length === 0,
   shaderErrors[0] ?? '');

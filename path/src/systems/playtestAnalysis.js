@@ -112,6 +112,7 @@ export const SOURCE_UPGRADES = {
   // razor clam over- or under-tuned however it performs — which is exactly the
   // silent zero the four rows above were each found as.
   razorClam: { upgrades: ['razorClam'], label: 'Razor Clams' },
+  sardineSwirl: { upgrades: ['sardineSwirl'], label: 'Sardine Swirl' },
   orca: { upgrades: ['orcaFamily'], label: 'Orca Family' },
 };
 

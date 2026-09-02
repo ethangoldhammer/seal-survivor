@@ -185,6 +185,10 @@ const SKIN_FRAG_PARS = /* glsl */ `
   uniform float uHotCore;
   uniform float uHotWhite;
   uniform float uHotFill;
+  uniform float uHotFloor;
+  uniform float uHotHeatGain;
+  uniform float uHotCover;
+  uniform float uHotCoverFull;
   uniform float uHotCharge;
   uniform float uHotChargeEdge;
   uniform float uHotRing;
@@ -212,8 +216,9 @@ const SKIN_FRAG_PARS = /* glsl */ `
                mix(hotHash(i + vec2(0.0, 1.0)), hotHash(i + vec2(1.0, 1.0)), f.x), f.y);
   }
 
-  vec3 hotSpotLight(vec4 s, vec4 m, float phase, float burst) {
-    if (m.x <= 0.0 || s.w <= 0.0) return vec3(0.0);
+  // rgb = the light this spot adds. a = how much of the HIDE it stands in for.
+  vec4 hotSpotLight(vec4 s, vec4 m, float phase, float burst) {
+    if (m.x <= 0.0 || s.w <= 0.0) return vec4(0.0);
 
     // r = 1.0 IS THE CRIT BOUNDARY. Everything below is built around that one
     // fact: the ring is drawn exactly there, the fill is inside it, the spill
@@ -224,7 +229,7 @@ const SKIN_FRAG_PARS = /* glsl */ `
     // dead at the moment it left the boundary, which reads as the wave hitting
     // a wall the animal does not have.
     float outer = 1.0 + uHotSpill * 1.6 + uHotBurstReach * burst;
-    if (r > outer) return vec3(0.0);
+    if (r > outer) return vec4(0.0);
 
     // BREATHING IS BRIGHTNESS, NOT SIZE. It used to scale the reach, which
     // meant the drawn boundary swung either side of the number the crit test
@@ -275,10 +280,25 @@ const SKIN_FRAG_PARS = /* glsl */ `
     // pulsing the reach: the thing that grows is not the thing being aimed at,
     // and the moment they meet is the moment the spot bursts.
     float lvl = mix(uHotCharge, 1.0, m.z);
+    // THE WHOLE DISC IS LIT, ALWAYS. The level above says how far the spot has
+    // been chewed; this says the spot is a spot. Without it the part of the
+    // interior above the level is bare hide — so a fresh weak spot was a ring
+    // with the animal's own dark skin inside it, which reads as an outline
+    // drawn ON the boss rather than as a place that is glowing. The floor is
+    // what makes it a lit window; the level is what makes it a gauge.
+    float body = 1.0 - smoothstep(1.0 - uHotRingW, 1.0, r);
     // The same shoulder the ring is drawn with, on purpose. At full heat the
     // two land on top of each other and have to read as one line rather than
     // as a hard edge arriving beside a soft one.
     float fill = 1.0 - smoothstep(lvl - uHotRingW, lvl, r);
+    // AND THE WHOLE INSIDE BRIGHTENS AS IT TAKES DAMAGE. The level covers more
+    // of the disc as the spot fills, which is a change in AREA — legible when
+    // you are looking straight at it and easy to miss on a boss crossing the
+    // arena. This is the same fact told in brightness, which carries at any
+    // size: a fresh spot is a soft window, one about to go is a hot one. Both
+    // interior terms take it, so the floor and the level rise together and the
+    // spot never reads as two lights.
+    float heat = mix(1.0, uHotHeatGain, m.z);
     // ...and the level's own leading edge, so it reads as a surface coming up
     // rather than as a patch getting wider. This is the part that makes a spot
     // at 90% look DIFFERENT from one at 60% in a single frame.
@@ -342,13 +362,42 @@ const SKIN_FRAG_PARS = /* glsl */ `
     // something and none of it could be seen. So the interior terms are sized
     // to stay under 1 at the PEAK of the throb (x breathe), and the two that
     // are meant to be lines are left an order of magnitude over it.
-    float shape = fill * uHotFill
+    float shape = body * uHotFloor * heat
+                + fill * uHotFill * heat
                 + front * uHotChargeEdge
                 + ring * uHotRing
                 + spill * uHotSpillGain
                 + shock * uHotBurstGain;
     float lift = 1.0 + m.y * uHotFlashSwell;
-    return col * uHotGlow * shape * breathe * lift * m.x;
+
+    // AND HOW MUCH OF THE ANIMAL THIS STANDS IN FOR — see the note on the
+    // blend mode in makeSkinMaterial.
+    //
+    // ADDITIVE LIGHT CANNOT WIN AN ARGUMENT WITH A DARK HIDE. That reads as
+    // backwards and it is the whole problem: a spot on near-black flesh IS the
+    // brightest thing there, and it is still only as bright as the number it
+    // adds — so the interior, which is deliberately the quietest layer in the
+    // block, lands at a third of the ceiling over a body at nearly zero and
+    // comes out a dim smear. Turning it up is the move that has already failed
+    // twice: it takes the ring's headroom with it and puts the whole spot back
+    // into one flat saturated mass.
+    //
+    // What the interior actually wants to say is not "there is light here", it
+    // is "this patch of the animal is a different colour" — and that is a
+    // statement about the hide, not about light on top of it. Coverage
+    // replaces the hide by this fraction, so a faint interior reads on black
+    // flesh, on a white belly and on a lit deck for the same reason a decal
+    // does, while every bright layer above it still adds on top exactly as it
+    // did. At 0 this is the effect as it shipped, additive and nothing else.
+    //
+    // IT DOES NOT BREATHE and it does not take the flash. Those move LIGHT;
+    // a hide that changed colour twice a bar would read as the animal's own
+    // skin flickering, which is a different creature rather than a marked one.
+    // Only the fill's own fade and the heat ramp move it, because both are
+    // statements about the spot's state rather than about its brightness.
+    float cover = clamp(max(body, fill) * mix(uHotCover, uHotCoverFull, m.z) * m.x, 0.0, 1.0);
+
+    return vec4(col * uHotGlow * shape * breathe * lift * m.x, cover);
   }
 `;
 
@@ -357,16 +406,29 @@ const SKIN_FRAG_PARS = /* glsl */ `
 // guard the loop would need.
 const SKIN_FRAG = /* glsl */ `
   {
-    vec3 hot = hotSpotLight(uHotSpot[0], uHotMood[0], uHotPhase[0], uHotBurst[0])
-             + hotSpotLight(uHotSpot[1], uHotMood[1], uHotPhase[1], uHotBurst[1])
-             + hotSpotLight(uHotSpot[2], uHotMood[2], uHotPhase[2], uHotBurst[2])
-             + hotSpotLight(uHotSpot[3], uHotMood[3], uHotPhase[3], uHotBurst[3]);
+    vec4 h0 = hotSpotLight(uHotSpot[0], uHotMood[0], uHotPhase[0], uHotBurst[0]);
+    vec4 h1 = hotSpotLight(uHotSpot[1], uHotMood[1], uHotPhase[1], uHotBurst[1]);
+    vec4 h2 = hotSpotLight(uHotSpot[2], uHotMood[2], uHotPhase[2], uHotBurst[2]);
+    vec4 h3 = hotSpotLight(uHotSpot[3], uHotMood[3], uHotPhase[3], uHotBurst[3]);
+    // THE LIGHT SUMS AND THE COVERAGE DOES NOT. Two spots overlapping would
+    // add their light, which is what light does — but coverage is a fraction
+    // of one surface, and adding two of them takes it past 1 and punches a
+    // hole in the animal. The strongest claim on the hide wins. In practice
+    // they never overlap (minGapFrac keeps them apart), which is exactly why
+    // this has to be right rather than merely usually right.
+    vec3 hot = h0.rgb + h1.rgb + h2.rgb + h3.rgb;
+    float cover = max(max(h0.a, h1.a), max(h2.a, h3.a));
     // NOTHING NEAR A SPOT DRAWS AT ALL. The shell covers the whole animal, so
-    // without this every boss pays a full-body additive pass writing black —
-    // and on a body already carrying an outline shell that is the third draw
-    // of the same geometry.
-    if (hot.r + hot.g + hot.b < 0.002) discard;
-    gl_FragColor = vec4(hot, 1.0);
+    // without this every boss pays a full-body pass writing nothing — and on a
+    // body already carrying an outline shell that is the third draw of the same
+    // geometry. Both channels have to be quiet: a fragment with no light but
+    // real coverage is the darkened edge of a patch, and discarding it would
+    // cut the patch off with a hard rim.
+    if (hot.r + hot.g + hot.b < 0.002 && cover < 0.002) discard;
+    // PREMULTIPLIED. hot is already the light's full contribution and is NOT
+    // scaled by the coverage — the blend adds it whole and uses the alpha only
+    // to decide how much of the animal underneath survives.
+    gl_FragColor = vec4(hot, cover);
   }
 `;
 
@@ -438,6 +500,10 @@ function freshUniforms() {
     uHotCore: { value: l.core ?? 3.2 },
     uHotWhite: { value: l.white ?? 0.85 },
     uHotFill: { value: l.fill ?? 0.55 },
+    uHotFloor: { value: l.floor ?? 0.3 },
+    uHotHeatGain: { value: l.heatGain ?? 1.8 },
+    uHotCover: { value: l.cover ?? 0.5 },
+    uHotCoverFull: { value: l.coverFull ?? 0.85 },
     uHotCharge: { value: l.charge ?? 0.34 },
     uHotChargeEdge: { value: l.chargeEdge ?? 0.9 },
     uHotRing: { value: l.ring ?? 1.7 },
@@ -471,7 +537,32 @@ function makeSkinMaterial(u) {
     // anything drawn behind it later for no gain.
     depthTest: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    // PREMULTIPLIED ALPHA, WHICH IS ADDITIVE AND A DECAL IN ONE PASS.
+    //
+    // src x ONE + dst x (1 - srcAlpha). Read the two halves separately and it
+    // is obvious what it buys: with alpha 0 the destination survives whole and
+    // the colour is added on top — that is AdditiveBlending exactly, which is
+    // what this was and what every bright layer in the shader still wants. With
+    // alpha above 0 the animal underneath is scaled down first, so the same
+    // pass can also STAND IN for the hide instead of only lighting it.
+    //
+    // WHY THAT MATTERS ON A DARK ANIMAL. Additive light can only ever add, so
+    // a quiet layer over near-black flesh is a quiet colour over nothing and
+    // reads as a smear; the only lever is brightness, and brightness is the
+    // ring's, not the interior's. Coverage is a different sentence — "this
+    // patch of animal is a different colour" — and it lands the same way on a
+    // black flank, a white belly and a lit deck.
+    //
+    // The alternative was a second shell in NormalBlending under this one,
+    // which is a third full-body draw of the boss's geometry to say something
+    // one blend function already says. See the shader's gl_FragColor.
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendEquationAlpha: THREE.AddEquation,
+    blendSrcAlpha: THREE.OneFactor,
+    blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
     // FRONT faces. The outline shells are BackSide because they are a rim
     // pushed outward; this is paint on the skin the camera can see.
     side: THREE.FrontSide,
@@ -835,6 +926,47 @@ export function perimeterCandidates(shape, rays = 24) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// A BOSS THAT IS TOLD WHERE ITS WEAK SPOT GOES
+//
+// `weakSpot` on a creature (CONFIG.enemies) names one end of the animal, and
+// the roll below is skipped: the spot opens at that end, on every arrival, for
+// the whole life of the archetype.
+//
+// WHY A PIN AND NOT A BETTER ROLL. The weighted pick answers "somewhere good
+// on this outline", which is the right question for a body with a lot of
+// outline and wrong for one where the answer is a design decision. The
+// mosasaur is the case that forced it — see the note on its `weakSpot` — but
+// the mechanism is the general one, because "this animal's weak point is its
+// X" is a thing a designer says about an animal, not a thing a placement
+// heuristic can be tuned into discovering.
+//
+// ALONG THE BODY'S OWN AXIS, from `heading`, rather than in world x or y: the
+// animal turns, and a tail found in world space is whichever end happened to
+// be pointing left. `faceMotion` bodies keep `heading` in step with where they
+// are going, and the mesh's own rotation is derived from it — so this is the
+// same forward every other system on the creature reads.
+const PINS = { tail: -1, head: 1 };
+
+// Candidates ordered by how far they sit along that axis: the far end of the
+// named side first, so the caller can walk outward-in and take the first place
+// that survives the snap and the hull-match tests. Not a single point, because
+// the extreme candidate can be one the mesh cannot support — and "the tail" is
+// an END of an animal, not a vertex.
+function pinnedOrder(cands, e, pin) {
+  const dir = PINS[pin];
+  if (!dir) return null;
+  const a = e.heading ?? 0;
+  const fx = Math.cos(a) * dir;
+  const fy = Math.sin(a) * dir;
+  const ox = e.mesh?.position.x ?? 0;
+  const oy = e.mesh?.position.y ?? 0;
+  return cands
+    .map((c) => ({ c, along: (c.wx - ox) * fx + (c.wy - oy) * fy }))
+    .sort((p, q) => q.along - p.along)
+    .map((p) => p.c);
+}
+
 // Pick one candidate, biased toward the big parts of the animal and away from
 // the spots already placed.
 //
@@ -853,7 +985,9 @@ export function perimeterCandidates(shape, rays = 24) {
 // how big it is — shrinking them to fit a fin tip is fixing the wrong end.
 function pickCandidate(cands, taken, minGap, bias = 1, minHostR = 0) {
   let total = 0;
+  let fitTotal = 0;
   const weights = new Array(cands.length);
+  const fits = new Array(cands.length);
   for (let i = 0; i < cands.length; i++) {
     const c = cands[i];
     let w = Math.pow(c.hostR, bias);
@@ -868,7 +1002,14 @@ function pickCandidate(cands, taken, minGap, bias = 1, minHostR = 0) {
     // Crushed rather than rejected, like the spacing rule: on a small enough
     // animal there may be no host that fits, and a hard filter there means the
     // spots silently never appear.
-    if (c.hostR < minHostR) w *= 0.02;
+    //
+    // BUT KEPT IN ITS OWN POOL, which is the correction — see below. Crushing
+    // both of these by the same factor makes them the same kind of objection,
+    // and they are not: "there is nowhere better" is a fact about the animal,
+    // while "this one is too close to the last spot" is a preference about the
+    // arrangement, and a preference must never be able to outvote the fact.
+    const tooSmall = c.hostR < minHostR;
+    if (tooSmall) w *= 0.02;
     for (const t of taken) {
       const dx = c.wx - t.wx;
       const dy = c.wy - t.wy;
@@ -879,16 +1020,43 @@ function pickCandidate(cands, taken, minGap, bias = 1, minHostR = 0) {
       if (dx * dx + dy * dy < minGap * minGap) w *= 0.02;
     }
     weights[i] = w;
+    fits[i] = !tooSmall;
     total += w;
+    if (!tooSmall) fitTotal += w;
   }
   if (total <= 0) return null;
 
-  let roll = Math.random() * total;
+  // A HOST THAT CAN CARRY THE SPOT WINS OUTRIGHT OVER ONE THAT CANNOT, and the
+  // two crushes above are why this has to be a separate pass rather than a
+  // bigger multiplier.
+  //
+  // THE MOSASAUR IS THE CASE. Twelve fitted spheres and exactly ONE of them is
+  // wide enough to hold a spot at `minRadius`; the rest are neck, jaw, paddles
+  // and four tail bones a fifth of that. The first spot lands on the torso, as
+  // it should — and then the spacing rule crushes the whole of that torso for
+  // being near it, by the same 0.02 the too-small hosts carry. Two crushed
+  // pools of similar weight, so the roll is a coin toss, and about half the
+  // time the second spot opens on a tail bone with a radius floored at nearly
+  // five times the flesh it is attached to: a light bigger than the tail, a
+  // boundary ring entirely in open water, and a crit zone that is mostly sea.
+  // Read from the water it does not look like a placement rule tie-breaking —
+  // it looks like the spot came off the animal, which is exactly how it was
+  // reported.
+  //
+  // So the fallback is a FALLBACK. Roll among the hosts that fit; only when the
+  // animal genuinely has none — which is the case the crush was written for —
+  // fall through to the rest. A second spot crowding the first on the torso is
+  // a worse arrangement and still a spot on the boss; a spot on the tail tip is
+  // not a spot on the boss at all.
+  const useFit = fitTotal > 0;
+  let roll = Math.random() * (useFit ? fitTotal : total);
   for (let i = 0; i < cands.length; i++) {
+    if (useFit && !fits[i]) continue;
     roll -= weights[i];
     if (roll <= 0) return cands[i];
   }
-  return cands[cands.length - 1];
+  for (let i = cands.length - 1; i >= 0; i--) if (!useFit || fits[i]) return cands[i];
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -991,6 +1159,76 @@ function supportOnSkin(sx, sy, sz, nx, ny, tol) {
   return { x: skinCloud[bi * 3], y: skinCloud[bi * 3 + 1], z: skinCloud[bi * 3 + 2], along: best };
 }
 
+// ---------------------------------------------------------------------------
+// AND IT HAS TO STAY THERE — THE RIM IS AN INVARIANT, NOT A PLACEMENT
+//
+// Everything above puts a spot on the outer edge of the collision hull, and
+// then the animal swims. The anchor is a point in one sphere's BONE SPACE, so
+// it rides the flesh faithfully — and being on the rim is not a property of
+// the flesh, it is a property of the flesh's relationship to every OTHER piece
+// of the animal. A shark bends; a sphere that had nothing in front of it now
+// sits behind two others; the spot is inside the body, and nothing in the
+// per-frame path was in a position to notice.
+//
+// WHY THAT IS A GAMEPLAY BUG AND NOT A LOOK ONE. The game is played in two
+// dimensions. A shot travelling toward a weak spot stops at the FIRST hull
+// surface it meets, and the contact it writes is the point the crit test is
+// asked about — so a crit zone a body-thickness behind that surface cannot be
+// hit at all, from any angle, by any weapon. It is not "hard to hit"; it is
+// unreachable, while still being lit, painted and pointed at by a reticle.
+// Measured with tools/boss-hitbox-audit.mjs, a dead-centre shot at a weak spot
+// paid out on 0% of tries at the boat, 25% at the squid and 45% at the yacht.
+//
+// So the rim is re-established every frame: walk the anchor out along its own
+// outward direction until it is outside every padded sphere. That is the exact
+// surface `hitShapeTest` writes contacts on, so the spot lands where a shot
+// can land, by construction rather than by luck.
+//
+// THE DIRECTION IS RE-DERIVED FROM THE HOST SPHERE, not taken from the stored
+// normal. The stored one is the placement normal carried through the bone's
+// matrix, which is right for the goo and the shove — those are about the wound
+// — and can point anywhere after the bone has turned. Away from the centre of
+// the sphere the spot is riding is outward from that body part at the pose it
+// is in NOW, which is the only reading that cannot walk a spot out through the
+// opposite flank.
+
+/**
+ * How far along (nx, ny) the point (px, py) has to travel to leave the padded
+ * sphere union. 0 when it is already outside.
+ *
+ * Marched sphere by sphere rather than solved in one go, because the union of
+ * overlapping spheres has no closed form: leaving one puts you inside the next,
+ * and the exit that matters is the last one. Bounded by the sphere count, so a
+ * pathological arrangement costs one pass and not a hang.
+ */
+function pushToRim(spheres, pad, px, py, nx, ny) {
+  let t = 0;
+  for (let pass = 0; pass < spheres.length + 2; pass++) {
+    let moved = false;
+    const cx = px + nx * t;
+    const cy = py + ny * t;
+    for (const s of spheres) {
+      const r = s.wr * pad;
+      if (!(r > 0)) continue;
+      const dx = s.wx - cx;
+      const dy = s.wy - cy;
+      const proj = dx * nx + dy * ny;
+      const perp2 = dx * dx + dy * dy - proj * proj;
+      if (perp2 >= r * r) continue;              // the ray misses this one
+      const half = Math.sqrt(r * r - perp2);
+      // Inside it only when the entry is behind us and the exit ahead. A
+      // sphere further down the ray that we have not reached yet is not
+      // containing us and must not push us into it.
+      if (proj - half > 1e-4 || proj + half <= 1e-4) continue;
+      t += proj + half;
+      moved = true;
+      break;
+    }
+    if (!moved) break;
+  }
+  return t;
+}
+
 // Resolve a picked candidate onto the mesh. Returns how far it moved, or -1
 // when no flesh sits along its ray at all — which is a real answer rather than
 // a failure: a fitted sphere claiming body where the mesh has none is exactly
@@ -1056,6 +1294,18 @@ function spotRadius(bodyR, hostR) {
 // reason to leave the boss a spot short — it is a reason to look somewhere
 // else on the animal, which is what the weighted roll is for.
 function lightSpot(owner, cands, tries = 12) {
+  // TOLD, NOT ROLLED. The order is fixed — the far end of the named side
+  // first — so this walks inward from the tip and takes the first place the
+  // mesh and the hull both agree on, rather than re-rolling the same weighted
+  // pick a dozen times over a body that has one answer.
+  const pin = pinnedOrder(cands, owner.e, owner.e?.def?.weakSpot);
+  if (pin) {
+    for (let i = 0; i < pin.length; i++) {
+      const spot = tryLightSpot(owner, cands, pin[i]);
+      if (spot) return spot;
+    }
+    return null;
+  }
   for (let i = 0; i < tries; i++) {
     const spot = tryLightSpot(owner, cands);
     if (spot) return spot;
@@ -1063,13 +1313,13 @@ function lightSpot(owner, cands, tries = 12) {
   return null;
 }
 
-function tryLightSpot(owner, cands) {
+function tryLightSpot(owner, cands, forced = null) {
   const c = cfg();
   const e = owner.e;
   const taken = owner.spots.filter((s) => s && s.alive && !s.dead);
   // In multiples of the animal's own size, so "not on top of each other" means
   // the same thing on a megalodon and on a crab.
-  const pick = pickCandidate(cands, taken, (c.minGapFrac ?? 0.7) * (e.radius ?? 1),
+  const pick = forced ?? pickCandidate(cands, taken, (c.minGapFrac ?? 0.7) * (e.radius ?? 1),
     c.hostBias ?? 3,
     // The smallest host that can carry a spot without the floor overriding the
     // cap — i.e. the host at which the two agree.
@@ -1091,7 +1341,17 @@ function tryLightSpot(owner, cands) {
   // A candidate with no flesh within reach is dropped rather than used: that
   // is a fitted sphere claiming body where there is none, and a spot there
   // would be a crit zone over open water.
-  const r0 = spotRadius(e.radius, pick.hostR);
+  // A PINNED SPOT IS NOT CAPPED BY ITS HOST, and that is the one place the pin
+  // has to change more than the choice. `hostCap` exists to stop a spot the
+  // ROLL happened to drop on a fin tip being drawn several times the size of
+  // the fin — an accident, caught. A tail bone the designer named is not that
+  // accident, and capping it there would produce a light a fifth of the size
+  // of every other boss's, on the one boss whose weak point the player is
+  // meant to go looking for. Sized against the whole animal instead, the way
+  // `radiusFrac` reads everywhere else.
+  const r0 = forced
+    ? Math.max(c.minRadius ?? 0.6, Math.min(c.maxRadius ?? 3.2, (e.radius ?? 1) * (c.radiusFrac ?? 0.34)))
+    : spotRadius(e.radius, pick.hostR);
   const moved = snapToSkin(pick, c.snapTube ?? 0.35, r0);
   if (moved < 0) return null;
 
@@ -1288,7 +1548,18 @@ export function attachHotSpots(scene, e) {
     console.warn(`[hotSpots] countMax ${hi} is above the ${MAX_SPOTS} the shader can paint — clamped.`);
     hi = MAX_SPOTS;
   }
-  const want = lo + Math.floor(Math.random() * (hi - lo + 1));
+  let want = lo + Math.floor(Math.random() * (hi - lo + 1));
+  // A TOLD BOSS GETS ONE. "Its weak spot is the tip of its tail" is a sentence
+  // about a place, and a second spot pinned to the same place is two lights on
+  // one tail bone with their reticles drawn on top of each other. The roll
+  // still happens for every other archetype.
+  //
+  // This costs the fight the bar those extra spots carried — `ruptureFraction`
+  // is per spot, so one weak point is a third of what a three-spot boss holds
+  // in weak points rather than a different arrangement of the same total. That
+  // is the trade the pin makes, and it is stated here rather than absorbed
+  // quietly: this animal is longer to chew and has one place to chew it.
+  if (PINS[e.def?.weakSpot]) want = 1;
   if (want <= 0) return null;
 
   const u = freshUniforms();
@@ -1872,6 +2143,17 @@ export function updateBossHotSpots(dt, realDt = dt) {
     u.uHotCore.value = l.core ?? 3.2;
     u.uHotWhite.value = l.white ?? 0.85;
     u.uHotFill.value = l.fill ?? 0.55;
+    u.uHotFloor.value = Math.max(0, l.floor ?? 0.3);
+    // At least 1: a "heat gain" under one would DIM a spot as it filled, which
+    // is the opposite sentence in the same words and is the kind of thing a
+    // slider dragged past its own middle can say by accident.
+    u.uHotHeatGain.value = Math.max(1, l.heatGain ?? 1.8);
+    // Both clamped to 0..1. Over 1 is a hole in the animal — the blend scales
+    // the destination by (1 - alpha), so 1.2 does not mean "more opaque", it
+    // means the flesh behind the spot is multiplied by a negative number and
+    // the patch renders as a black bite out of the boss.
+    u.uHotCover.value = Math.min(1, Math.max(0, l.cover ?? 0.5));
+    u.uHotCoverFull.value = Math.min(1, Math.max(0, l.coverFull ?? 0.85));
     // Clamped under 1 as well as over 0: a level that started AT the boundary
     // would be a spot with nothing left to fill, and the whole run-up to a
     // rupture would be a colour change again.
@@ -1947,7 +2229,101 @@ export function updateBossHotSpots(dt, realDt = dt) {
         s.wny = s.ny;
       }
 
+      // BACK OUT ONTO THE RIM — see pushToRim. The anchors ride the flesh
+      // faithfully and the flesh moves behind other flesh, so this is the one
+      // place "on the outer edge" can be kept true rather than merely arranged
+      // once. Both anchors take the SAME correction: the crit reach so a shot
+      // can reach it, and the painted centre so the light stays the same
+      // distance inboard of it that placement chose. Moving one alone is
+      // exactly the drift `hullMatch` exists to prevent.
+      {
+        const spheres = hitShapeSpheres(s.shape);
+        const pad = CONFIG.hitShape?.padding ?? 1;
+        // Outward from the piece of body the spot is riding, at the pose it is
+        // in this frame. `wnx` is the placement normal carried through the
+        // bone and can point anywhere once that bone has turned — good enough
+        // for the goo, which only has to leave the wound, and not good enough
+        // for a push that could otherwise walk a spot out through the far side.
+        const host = spheres[s.index];
+        let ox = s.wnx;
+        let oy = s.wny;
+        if (host) {
+          const hx = (s.cwx ?? s.wx) - host.wx;
+          const hy = (s.cwy ?? s.wy) - host.wy;
+          const hl = Math.hypot(hx, hy);
+          if (hl > 1e-4) {
+            ox = hx / hl;
+            oy = hy / hl;
+            // AND IT BECOMES THE SPOT'S NORMAL, rather than being a second
+            // opinion held privately by this block. Four things read that
+            // direction — the goo, the rupture's shove, the seeker's "is this
+            // spot pointing at me" test and the audit's probe — and every one
+            // of them is asking the same question this push just answered:
+            // which way is OUT of the animal here, right now. Two answers to
+            // that is how a shot gets aimed down one line while the light is
+            // pushed along another, which reads as the crit simply not paying.
+            s.wnx = ox;
+            s.wny = oy;
+          }
+        }
+        const push = pushToRim(spheres, pad, s.cwx ?? s.wx, s.cwy ?? s.wy, ox, oy);
+        if (push > 1e-4) {
+          s.cwx += ox * push;
+          s.cwy += oy * push;
+          s.wx += ox * push;
+          s.wy += oy * push;
+        }
+      }
+
       s.flash = Math.max(0, s.flash - flashRate * realDt);
+
+      // WHAT IS COMING OUT OF IT WHILE NOBODY IS SHOOTING.
+      //
+      // The per-hit leak already scales with heat (`rampMin`/`rampMax`), so a
+      // late crit throws more than an early one — but that is only visible on
+      // the frames the player is landing shots, and it says nothing at all
+      // about a spot they opened and walked away from. This is the state of
+      // the wound rather than the event: a fresh spot seeps nothing, one about
+      // to go is bleeding steadily, and the run-up is legible on a boss the
+      // player is not currently shooting.
+      //
+      // ON A HEAT-DRIVEN INTERVAL rather than a heat-scaled count, because the
+      // two look completely different. A fixed cadence throwing more each time
+      // reads as one thing pulsing harder; puffs arriving closer together read
+      // as a leak getting worse, which is what it is. `everyFull` at the
+      // bottom and `everyEmpty` at the top, so heat shortens the gap.
+      const seep = c.seep ?? {};
+      if (seep.enabled !== false && s.alive && !s.dead) {
+        const h = Math.min(1, s.taken / Math.max(1, s.pool));
+        // Below the threshold it is silent. A spot that dribbles from the
+        // first pellet has nothing left to escalate, and three of them
+        // dribbling from the moment a boss arrives is the fight's whole
+        // opening spent on an effect that is supposed to mean "nearly".
+        if (h > (seep.from ?? 0.15)) {
+          const t = (h - (seep.from ?? 0.15)) / Math.max(0.01, 1 - (seep.from ?? 0.15));
+          const gap = (seep.everyEmpty ?? 0.5) + ((seep.everyFull ?? 0.11) - (seep.everyEmpty ?? 0.5)) * t;
+          s.seepIn = (s.seepIn ?? Math.random() * gap) - realDt;
+          if (s.seepIn <= 0) {
+            s.seepIn = Math.max(0.02, gap);
+            // Out along the skin, at the same offset a hit's leak uses — fired
+            // from the centre the lobes fuse into a disc sitting ON the light
+            // and cover the very thing they are meant to be advertising.
+            const out = s.r * (c.bleedOffset ?? 0.8);
+            feedback('hotSpotSeep', {
+              x: s.wx + s.wnx * out,
+              y: s.wy + s.wny * out,
+              dirX: s.wnx,
+              dirY: s.wny,
+              // ...and it grows on the same ramp, so the puffs get closer
+              // together AND bigger. One or the other alone reads as a cadence
+              // change or as a size change; together it reads as a wound.
+              scale: (seep.scaleEmpty ?? 0.4) + ((seep.scaleFull ?? 1.2) - (seep.scaleEmpty ?? 0.4)) * t,
+            });
+          }
+        } else {
+          s.seepIn = null;
+        }
+      }
 
       // AFTER the world position and the flash, both of which it reads. A ring
       // driven before them lags the light it is drawn around by a frame, which

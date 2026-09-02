@@ -62,6 +62,11 @@ razorClam.radius,0.24,0.05,1.5,razor clam blade hit radius
 razorClam.basePierce,3,0,20,razor clam bodies one blade cuts past the first
 razorClam.piercePerLevel,0.6,0,3,razor clam pierce per level (floored)
 razorClam.pierceMax,9,0,30,razor clam pierce ceiling
+sardineSwirl.damage,9,1,60,sardine swirl damage one sardine deals on contact
+sardineSwirl.damagePerLevel,2,0,20,sardine swirl contact damage added per stack
+sardineSwirl.count,3,1,12,sardine swirl PAIRS in the school at level 1 — bodies are twice this
+sardineSwirl.countPerLevel,1,0,4,sardine swirl pairs added per stack
+sardineSwirl.contactCooldown,0.4,0.05,2,sardine swirl per-sardine re-hit delay against one creature
 seagullBomb.baseFireRate,2.3,0.5,10,seagull seconds between runs at level 1
 seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
 seagullBomb.damage,87,1,150,seagull direct hit damage

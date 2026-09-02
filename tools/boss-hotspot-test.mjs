@@ -1129,8 +1129,18 @@ section('5e. Each spot wears a target ring in front of the animal');
   check('the outline is faceted rather than round',
     rings.every((r) => r.material.uniforms.uEdge.value === EDGE_KINDS.facet),
     `edge ${rings[0]?.material.uniforms.uEdge.value}`);
-  check('...with as many sides as it has segments, so the gaps sit on corners',
-    rings.every((r) => r.material.uniforms.uFacets.value === r.material.uniforms.uArcs.value),
+  // GAPS ON CORNERS IS THE CLAIM, and equal counts are only one way to get it.
+  // Six facets and three arcs puts each gap on every OTHER corner, which is the
+  // same read — a gap that lands mid-edge is the thing this is guarding
+  // against, and that happens when the facet count is not a whole multiple of
+  // the arc count. Written as equality it was a tripwire on a tuner slider
+  // (`look.target.facets` / `.arcs`) rather than a check on the geometry.
+  check('...with the gaps on corners — facets a whole multiple of segments',
+    rings.every((r) => {
+      const f = r.material.uniforms.uFacets.value;
+      const a = r.material.uniforms.uArcs.value;
+      return a > 0 && f % a === 0;
+    }),
     `${rings[0]?.material.uniforms.uFacets.value} sides, ${rings[0]?.material.uniforms.uArcs.value} segments`);
   check('...and it is a hex',
     rings.every((r) => r.material.uniforms.uFacets.value === 6));
@@ -1203,9 +1213,23 @@ section('5e. Each spot wears a target ring in front of the animal');
 
   const restThick = u.uThickness.value;
   const restGlow = u.uGlow.value;
+
+  // THE POP IS A SLIDER, AND THIS CHECKS THE WIRE RATHER THAN THE SETTING.
+  // `look.target.hitPop` is a look number the tuner owns, and it is 0 in the
+  // shipped tuning — a decision about how the ring reads, not a bug. Asserting
+  // `uRadius > restR` against whatever the slider holds made this a tripwire on
+  // that decision: red the moment the pop was dialled out, and green again on a
+  // build where the pop was wired to nothing but the slider happened to be up.
+  // Neither verdict is about the code.
+  //
+  // So the knob is DRIVEN to a known value here and put back afterwards. What
+  // is being asserted is that the radius follows it at all, which is true
+  // whatever the tuner is set to and is the only half of this a test can own.
+  const shippedPop = t.hitPop;
+  t.hitPop = 0.9;
   hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool / (CONFIG.hotSpots.critMul * 6));
   updateBossHotSpots(DT, DT);
-  check('a hit pops the whole shape outward', u.uRadius.value > restR,
+  check('a hit pops the whole shape outward — at hitPop 0.9', u.uRadius.value > restR,
     `${restR.toFixed(2)} → ${u.uRadius.value.toFixed(2)}`);
   check('a hit fattens the band', u.uThickness.value > restThick,
     `${restThick.toFixed(3)} → ${u.uThickness.value.toFixed(3)}`);
@@ -1224,6 +1248,9 @@ section('5e. Each spot wears a target ring in front of the animal');
   check('...and the pop settles back to the resting size',
     Math.abs(u.uRadius.value - restR) < 1e-3,
     `${u.uRadius.value.toFixed(3)} vs ${restR.toFixed(3)}`);
+  // Put back only after the settle has been watched — the decay is the other
+  // half of the wiring and it has to run at the value that caused the swell.
+  t.hitPop = shippedPop;
   const cool = u.uColor.value.getHex();
   while (s.alive && s.taken < s.pool * 0.8) {
     hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool / (CONFIG.hotSpots.critMul * 12));
@@ -1236,11 +1263,16 @@ section('5e. Each spot wears a target ring in front of the animal');
   // THE BURST. Thrown outward and eaten away by the same sweep the mark uses
   // to expire, so the reticle comes apart with the spot instead of blinking
   // out beside the goo.
+  // `burstGrow` is the same kind of number as `hitPop` above and is 0 in the
+  // shipped tuning for the same reason — driven, then put back.
+  const shippedGrow = t.burstGrow;
+  t.burstGrow = 0.6;
   const beforeR = u.uRadius.value;
   while (s.alive) hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool);
   for (let i = 0; i < 4; i++) updateBossHotSpots(DT, DT);
-  check('a rupture throws the ring outward', u.uRadius.value > beforeR,
+  check('a rupture throws the ring outward — at burstGrow 0.6', u.uRadius.value > beforeR,
     `${beforeR.toFixed(2)} → ${u.uRadius.value.toFixed(2)}`);
+  t.burstGrow = shippedGrow;
   check('...fattening it as it goes', u.uThickness.value > restThick,
     `${u.uThickness.value.toFixed(3)}`);
   check('...and the sweep is eating it away', u.uSweepOut.value > 0,

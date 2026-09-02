@@ -350,10 +350,19 @@ console.log('\nAND EVERY OTHER CHASER IS UNTOUCHED');
 // matters for the rest of the roster is that nothing else has one — a chaser
 // that quietly started bursting is exactly the regression this file cannot see
 // from the sailfish's own numbers.
+//
+// TWO NAMES, NOT ONE, and the list is spelled out rather than counted: the
+// barracuda gained a dart of its own so that it would telegraph (see its
+// `lunge` note in config.js and tools/fish-turn-test.mjs, which owns that
+// creature's claims). A count would have let the next accidental one in as
+// soon as anybody deleted a deliberate one.
+const DELIBERATE = ['barracuda', 'sailfish'];
 const bursting = Object.entries(CONFIG.enemies)
   .filter(([, def]) => def.behavior === 'chase' && def.lunge)
-  .map(([id]) => id);
-check('only the sailfish bursts', bursting.length === 1 && bursting[0] === 'sailfish',
+  .map(([id]) => id)
+  .sort();
+check('only the two that mean to burst do',
+  bursting.length === DELIBERATE.length && bursting.every((id, i) => id === DELIBERATE[i]),
   bursting.join(', ') || 'nothing');
 
 // A plain chaser still closes the whole way in, at its own speed, with no

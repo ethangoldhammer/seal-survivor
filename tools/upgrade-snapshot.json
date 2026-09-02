@@ -1649,6 +1649,35 @@
       }
     ]
   },
+  "sardineSwirl": {
+    "cap": 8,
+    "perStack": [
+      {
+        "sardineSwirlLevel": 101
+      },
+      {
+        "sardineSwirlLevel": 102
+      },
+      {
+        "sardineSwirlLevel": 103
+      },
+      {
+        "sardineSwirlLevel": 104
+      },
+      {
+        "sardineSwirlLevel": 105
+      },
+      {
+        "sardineSwirlLevel": 106
+      },
+      {
+        "sardineSwirlLevel": 107
+      },
+      {
+        "sardineSwirlLevel": 108
+      }
+    ]
+  },
   "octoGrab": {
     "cap": 8,
     "perStack": [
