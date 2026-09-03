@@ -141,8 +141,30 @@ function texLabel(t) {
   const url = src?.src ?? src?.currentSrc ?? null;
   if (typeof url === 'string' && url) return url.slice(url.lastIndexOf('/') + 1).slice(0, 48);
   if (t?.name) return `name:${String(t.name).slice(0, 40)}`;
-  if (src && typeof src.width === 'number') return `canvas ${src.width}x${src.height}`;
-  return t?.isCompressedTexture ? 'compressed (no source)' : 'no source';
+  // NAME THE KIND, NOT JUST THE SIZE. The first cut of this called anything
+  // with a width and no `src` a canvas, and the first report back was eight
+  // rows of `canvas 1024x1024` — which read as "the leak is canvas textures"
+  // and was very probably wrong. A texture decoded out of a GLB arrives as an
+  // ImageBitmap: width, height, no src, and nothing whatsoever to do with a
+  // 2D context. Mislabelling those as canvases points the search at five call
+  // sites that are all module-cached and innocent.
+  //
+  // Compressed first, because a KTX2 texture has no `data` shaped like an
+  // image at all and would otherwise fall through to "no source".
+  if (t?.isCompressedTexture) return `compressed ${t.image?.width ?? '?'}x${t.image?.height ?? '?'}`;
+  if (src && typeof src.width === 'number') {
+    // getContext FIRST: a 2D canvas is identified by what it can do, not by
+    // its constructor name, which is `Object` for anything a harness builds
+    // and can be minified on a real page.
+    if (typeof src.getContext === 'function') return `canvas ${src.width}x${src.height}`;
+    const kind = src.constructor?.name ?? 'image';
+    const short = kind === 'ImageBitmap' ? 'bitmap'
+      : kind === 'HTMLImageElement' ? 'img'
+        : kind === 'HTMLCanvasElement' ? 'canvas'
+          : kind.toLowerCase();
+    return `${short} ${src.width}x${src.height}`;
+  }
+  return 'no source';
 }
 
 const TEX_SLOTS = ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'roughnessMap',

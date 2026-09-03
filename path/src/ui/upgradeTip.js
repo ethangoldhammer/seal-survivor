@@ -641,21 +641,27 @@ export function renderTipInto(node, content) {
   node.textContent = '';
   if (!content) return node;
 
-  const head = document.createElement('div');
-  head.className = 'sv-uptip-head';
-  const name = document.createElement('span');
-  name.className = 'sv-uptip-name';
-  name.textContent = content.name;
-  head.appendChild(name);
-  // The count, as a number rather than as a word — the tile already carries a
-  // pip and this is the same fact, said where there is room for it.
-  if (content.stacks > 1) {
-    const pip = document.createElement('span');
-    pip.className = 'sv-uptip-stacks';
-    pip.textContent = `×${content.stacks}`;
-    head.appendChild(pip);
+  // NO NAME, NO HEAD. The level-up card blanks the name (see cardTipContent in
+  // ui.js) because it is the card's own title a line above; the box is then
+  // the rows alone. The stack count lives in the head and goes with it — on
+  // that surface it is the pick being offered, not a count the player holds.
+  if (content.name) {
+    const head = document.createElement('div');
+    head.className = 'sv-uptip-head';
+    const name = document.createElement('span');
+    name.className = 'sv-uptip-name';
+    name.textContent = content.name;
+    head.appendChild(name);
+    // The count, as a number rather than as a word — the tile already carries a
+    // pip and this is the same fact, said where there is room for it.
+    if (content.stacks > 1) {
+      const pip = document.createElement('span');
+      pip.className = 'sv-uptip-stacks';
+      pip.textContent = `×${content.stacks}`;
+      head.appendChild(pip);
+    }
+    node.appendChild(head);
   }
-  node.appendChild(head);
 
   if (content.desc) {
     const d = document.createElement('div');

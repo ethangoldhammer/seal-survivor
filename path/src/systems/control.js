@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 
 // ===========================================================================
 // CROWD CONTROL — who may be held, and who simply may not.
@@ -103,6 +104,11 @@ export function controlImmune(e) {
  * canControl below, which is the question a targeting scan should be asking.
  */
 export function canHold(e) {
+  // Scenery is not held, charmed or dazed — it is knocked around. Refused
+  // HERE so every chooser that asks canHold/canControl (the bubble, the arms,
+  // the net, the charm pulse) skips it while choosing, and the two verbs below
+  // never convert it into a daze. See isScenery.
+  if (isScenery(e)) return false;
   return !!e && !controlImmune(e);
 }
 
@@ -149,6 +155,7 @@ export function dazeReady(e) {
  * covered, because holdEnemy and charmEnemy do the conversion themselves.
  */
 export function canControl(e) {
+  if (isScenery(e)) return false;
   return canHold(e) || dazeReady(e);
 }
 
@@ -215,6 +222,7 @@ export function consumeDazes(out = []) {
  */
 export function holdEnemy(e, seconds) {
   if (!(seconds > 0)) return false;
+  if (isScenery(e)) return false;
   if (!canHold(e)) return dazeEnemy(e, seconds);
   e.trapTimer = Math.max(e.trapTimer ?? 0, seconds);
   return true;
@@ -227,6 +235,7 @@ export function holdEnemy(e, seconds) {
  */
 export function charmEnemy(e, seconds) {
   if (!(seconds > 0)) return false;
+  if (isScenery(e)) return false;
   if (!canHold(e)) return dazeEnemy(e, seconds);
   e.charmTimer = Math.max(e.charmTimer ?? 0, seconds);
   return true;

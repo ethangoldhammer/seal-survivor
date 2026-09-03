@@ -1221,6 +1221,10 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   const e = spawnNamed(scene, key, gameState.difficulty ?? 0, undefined, {
     ignoreCaps: true,
     overfill: true,
+    // ...and this body's HEALTH is measured against the level that summoned
+    // it, not against the clock handed in above. The clock still decides what
+    // it hits for and how fast it moves. See CONFIG.spawn.bossHp.
+    boss: true,
   });
   if (!e) return null; // unreachable today; the guard costs nothing
 

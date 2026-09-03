@@ -55,6 +55,18 @@ const blocks = [];
  */
 export function attachBaitShimmer(material) {
   if (!material || attached.has(material) || !('color' in material)) return false;
+  // A COPY THAT ALREADY CARRIES THE CLOSURE. systems/damageGlow.js and
+  // systems/emissivePulse.js hand a hit creature a per-instance material by
+  // cloning it and copying `onBeforeCompile` across by reference — so a fish
+  // that has been hit wears a new material object whose shader is already
+  // this injection, bound to the ORIGINAL's uniform block (which is in
+  // `blocks` and fed every frame, so the copy shimmers correctly as it is).
+  // Not in the set, so without this it would be injected a second time,
+  // chained onto the first: every varying and uniform declared twice, three
+  // functions given two bodies, and the material failing to compile — every
+  // fish of that species drawn as nothing. The closure is marked so a copy of
+  // it can be recognised however it travelled.
+  if (material.onBeforeCompile?.__baitShimmer) { attached.add(material); return false; }
   attached.add(material);
 
   const u = {
@@ -80,6 +92,11 @@ export function attachBaitShimmer(material) {
     // that bug.
     if (typeof prev === 'function') prev(shader, renderer);
     Object.assign(shader.uniforms, u);
+    // ONCE PER PROGRAM, whatever chain led here. The marker above catches the
+    // copies this project makes; this catches any it does not — a chain built
+    // from a closure that was already this one is a chain that has already
+    // injected, and injecting again is the compile failure described there.
+    if (shader.vertexShader.includes('vBaitWorld')) return;
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vBaitWorld;')
@@ -140,6 +157,7 @@ ${NOISE_FIELD_GLSL}`)
   // injection, and the shimmer would be missing on some draws and not others.
   const prevKey = material.customProgramCacheKey;
   material.customProgramCacheKey = () => `baitShimmer|${typeof prevKey === 'function' ? prevKey.call(material) : ''}`;
+  material.onBeforeCompile.__baitShimmer = true;
   material.needsUpdate = true;
   return true;
 }

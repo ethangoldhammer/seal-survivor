@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
-import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul } from '../config.js';
-import { acquireVisual, releaseVisual } from '../assets.js';
+import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul, bossDifficulty } from '../config.js';
+import { acquireVisual, releaseVisual, bodyPending } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import { bounds, clampBelowSurface, midWater, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
 import { shore, shoreOverscan } from '../systems/wallRocks.js';
@@ -16,11 +16,11 @@ import { turnFish, comesAbout } from '../systems/fishTurn.js';
 import { recordSpawn, SENTINEL_HP } from '../systems/playtest.js';
 import { approachVector, assignFeedingSlots, crowdAvoid, pickStandoff } from '../systems/apexCrowd.js';
 import { updateWaves, waveSpawn, resetWaves, lullEligible } from '../systems/waves.js';
-import { inSpawnGroup, spawnGroupsOf } from '../enemyTable.js';
+import { inSpawnGroup, spawnGroupsOf, isScenery } from '../enemyTable.js';
 import { RigidBody, addBody, removeBody, wrapAngle } from '../systems/rigidBody.js';
 import { attachHitShape, releaseHitShape } from '../systems/hitShape.js';
 import {
-  baitBalls, resetBaitBalls, updateBaitBallClock, openBaitBall, baitBallFor,
+  baitBalls, resetBaitBalls, updateBaitBallClock, openBaitBall, baitBallFor, openingBallSpecs,
   updateBaitBalls, baitFlock, baitSeed, baitBallLedger,
 } from '../systems/baitBall.js';
 import { attachBaitShimmer, updateBaitShimmer, resetBaitShimmer } from '../systems/baitShimmer.js';
@@ -2307,6 +2307,29 @@ export function wearsNightForm() {
 // gate. Unlike those three it asks nothing about the creature's place in the
 // run — only whether the water is meant to be calm right now — so it sits
 // ahead of the weight maths rather than scaling it.
+// NOT WITHOUT ITS BODY. A species whose model is `defer: true` in ASSETS (the
+// megalodon, which the shark boss also wears) is not resident until something
+// asks for it, and until the file lands createVisual hands out the primitive
+// stand-in — a dark cone swimming at 5.5 u/s, indistinguishable from a broken
+// art pipeline and reported as one. So a spawn is refused while ANY body the
+// species could roll is still in flight: the day form, the night form, and
+// every entry of an `assets` list, because which one this individual would
+// have worn is decided later and the refusal has to cover all of them.
+// bodyPending starts the fetch, so the first refused roll is what gets the
+// file moving; a pool pick simply lands on another species this once.
+//
+// The boss does not come through here — see spawnNamed's `overfill`, and
+// bossBodyReady in systems/boss.js, which waits for the same file with a
+// deadline and its own decision about what happens when the deadline passes.
+function bodyMissing(key, def) {
+  if (def.nightAsset && bodyPending(def.nightAsset)) return true;
+  if (Array.isArray(def.assets)) {
+    for (const k of def.assets) if (k && bodyPending(k)) return true;
+    if (def.assets.some(Boolean)) return false;
+  }
+  return bodyPending(def.asset ?? key);
+}
+
 function pickType(difficulty, playerLevel = 1, lull = false) {
   // Per-type headcount, so `maxConcurrent` can keep any one species in check,
   // and the same walk tallies each `spawnGroup` for the family-wide cap. A
@@ -2352,6 +2375,10 @@ function pickType(difficulty, playerLevel = 1, lull = false) {
     // creature with minPlayerLevel simply cannot appear until the player
     // reaches that level, however long the run has gone on.
     if (playerLevel < (def.minPlayerLevel ?? 0)) continue;
+    // After the gates above and not before them: the body is fetched the
+    // moment the species becomes eligible, and not one frame earlier — a
+    // level-8 animal should not cost the boot its 3.7MB.
+    if (bodyMissing(key, def)) continue;
     // Between waves, only the small fry. An empty pool is a legitimate answer
     // here — a lull with every little fish already at its cap is simply quiet,
     // and the caller treats "nothing to send" as nothing to send.
@@ -2523,7 +2550,12 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // it is feeding. Per instance like everything else here — the def is one
   // object for the whole species, so zeroing it would disarm every fish of
   // that kind for the rest of the run.
-  const { schoolId = null, xpMul = 1, docile = false } = opts;
+  // `boss` says this body is arriving as THE boss rather than as wildlife —
+  // passed by systems/boss.js, which is the only thing in the game that
+  // summons one. It decides which axis the health below is measured on, and
+  // nothing else: everything a boss is otherwise made of is its enemies.csv
+  // row, exactly like every other creature.
+  const { schoolId = null, xpMul = 1, docile = false, boss = false } = opts;
   const container = new THREE.Group();
   // Recycled where possible — see acquireVisual in assets.js. A creature's body
   // is the single most expensive thing a spawn allocates (a cloned bone
@@ -2717,8 +2749,17 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // ...and on top of all THREE, the master dial from CONFIG.pace — one number
   // for how hard the water is, exactly 1 in the tuned game, so the two ramps
   // above are what a run actually rides and this only scales them.
-  const hp = (def.hp + def.hpPerDifficulty * difficulty) * difficultyRamp('hp', difficulty)
-    * lateGameMul('hp', spawnLevel) * enemyPaceMul('hp');
+  //
+  // ...and a BOSS reads none of that from the clock. Its health is measured on
+  // an axis derived from the level that summoned it — see CONFIG.spawn.bossHp,
+  // which is where the argument lives. The number is in the same units, so the
+  // three factors below are the same three factors; only what goes into them
+  // changed. The level surcharge is dropped for a boss because the axis it
+  // exists to add is now the only axis there is.
+  const bossAxis = boss ? bossDifficulty(spawnLevel) : null;
+  const hpAxis = bossAxis ?? difficulty;
+  const hp = (def.hp + def.hpPerDifficulty * hpAxis) * difficultyRamp('hp', hpAxis)
+    * (bossAxis == null ? lateGameMul('hp', spawnLevel) : 1) * enemyPaceMul('hp');
   // Damage and speed ramp with the run the same way hp always has. All three
   // are baked per-instance at spawn rather than read from the shared def
   // every frame: `def` is one object for the whole species, so scaling it in
@@ -3154,6 +3195,10 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // rather than like the fish losing interest.
     chillTimer: 0,
     chillSlow: 0,
+    // Seconds left FROZEN SOLID by the cold specifically — trapTimer says
+    // "held" and is shared with the bubble and the net, so the blue look and
+    // the ice shatter on death both read this instead (systems/statusFx.js).
+    freezeTimer: 0,
     infectTimer: 0,
     infectDps: 0,
     infectTick: 0,
@@ -3435,6 +3480,12 @@ export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(CONFIG.en
   // thing a boss does is send everything else home (see clearForBoss), so the
   // overshoot lasts a few seconds and ends well under the cap.
   if (enemies.length >= CONFIG.spawn.maxAlive && !opts.overfill) return null;
+  // A direct spawn refuses a body that is not resident, exactly as the pool
+  // does — `ignoreCaps` is about population, not about wearing a cone. The one
+  // exception is the boss, and `overfill` is its door: systems/boss.js has
+  // already waited for this file with a deadline, and what a boss does when
+  // the deadline passes is that file's decision, not this one's.
+  if (!opts.overfill && bodyMissing(key, def)) return null;
   if (!opts.ignoreCaps) {
     if (def.maxConcurrent != null) {
       const current = enemies.filter((e) => e.type === key).length;
@@ -3445,7 +3496,13 @@ export function spawnNamed(scene, key, difficulty, at = edgeSpawnPoint(CONFIG.en
     // exactly the crowd the cap exists to prevent.
     if (groupAtCap(def)) return null;
   }
-  spawnOne(scene, key, def, difficulty, at);
+  // OPTS ARE FORWARDED. They were not, which was silent: every key spawnOne
+  // reads (`schoolId`, `xpMul`, `docile`, and now `boss`) was simply dropped
+  // on this path, so a direct spawn could never be given one. Nothing in the
+  // game passed one through here until the boss did, which is why it never
+  // showed up as a bug — it would have shown up as a boss quietly reading the
+  // wrong axis.
+  spawnOne(scene, key, def, difficulty, at, opts);
   return enemies[enemies.length - 1];
 }
 
@@ -3484,12 +3541,31 @@ let bossSchoolTimer = 0;
 // to enemies.csv joins the boss forage for free and a new shark can never
 // wander into it.
 function forageCandidates(difficulty, playerLevel) {
+  // THE DAY/NIGHT GATE, and it belongs here for the same reason it belongs in
+  // the pool spawner: this is a second door into the water, and a door that
+  // does not ask the clock is not a smaller gate, it is no gate at all.
+  //
+  // It was missing, and nothing noticed while a forage only fired during a
+  // lull deep into a run. CONFIG.baitBall.opening changed that — a ball is
+  // rolled within the first seconds of a run now — and a lanternfish, a
+  // species whose whole definition is `bioluminescent: true`, turned up in a
+  // ball in broad daylight. `npm run test:nightlife` is what caught it.
+  //
+  // Deliberately the SAME expression as the pool spawner's, not a filter of
+  // its own: a species is excluded by being weighted to zero, so the three
+  // kinds of creature (day, glowing, and the dual ones that change clothes at
+  // dusk) are treated here exactly as they are there. A `continue` on
+  // `bioluminescent` would have read the same on the day it was written and
+  // then quietly disagreed the first time the dual case was retuned.
+  const glowMul = nightlifeWeight(true);
+  const dayMul = nightlifeWeight(false);
   const pool = [];
   for (const [key, def] of Object.entries(CONFIG.enemies)) {
     if (!lullEligible(def)) continue;
     if (difficulty < (def.minDifficulty ?? 0)) continue;
     if (playerLevel < (def.minPlayerLevel ?? 0)) continue;
-    const w = (def.weight ?? 0) * (def.spawnRateMul ?? 1);
+    let w = (def.weight ?? 0) * (def.spawnRateMul ?? 1);
+    w *= def.bioluminescent ? glowMul : (def.nightAsset ? Math.max(dayMul, glowMul) : dayMul);
     if (w <= 0) continue;
     pool.push({ key, def, w });
   }
@@ -3768,6 +3844,38 @@ export function devBaitBallSpec(atX = null, atY = null) {
     x, y, stationX: x, stationY: y, side,
     spin: Math.random() < 0.5 ? -1 : 1,
   };
+}
+
+/**
+ * THE OPENING BAIT BALLS — one to three balls placed around the seal on the
+ * frame a run begins, beside the opening shoal and for the same reason: the
+ * boost meter opens dead and only chum fills it, and a ball is the pocket of
+ * chum worth farming. systems/baitBall.js decides how many and where
+ * (openingBallSpecs); this puts them in the water. Called from startGame
+ * right after spawnOpeningShoal, so the same ordering rules apply — after
+ * resetEnemies and resetPlayer, at difficulty 0 and level 1.
+ *
+ * PLACED ON STATION, which is the one thing the ordinary spawnBaitBall does
+ * not expect: openBaitBall opens every ball `arriving`, and spawnOne's
+ * geometric fallback can mark a fish `entering`. Both are cleared here, the
+ * same fix the dev key needs (see spawnBaitBallNow in main.js) — left set, the
+ * anchor swims to a point it is standing on and the fish are free to drift out
+ * through a wall they were never behind.
+ *
+ * @returns the balls made.
+ */
+export function spawnOpeningBaitBalls(scene, at = null) {
+  const seal = at ?? player.mesh?.position ?? { x: 0, y: midWater() };
+  const specs = openingBallSpecs({ player: { x: seal.x, y: seal.y }, bounds });
+  const made = [];
+  for (const spec of specs) {
+    const ball = spawnBaitBall(scene, 0, 1, spec);
+    if (!ball) continue;
+    ball.arriving = false;
+    for (const en of enemies) if (en.schoolId === ball.id) en.entering = false;
+    made.push(ball);
+  }
+  return made;
 }
 
 /**
@@ -5141,6 +5249,14 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // the size the creature actually IS (spawn scale x however much it has
     // grown), so the punch is a relative bump rather than a jump to a fixed
     // absolute scale.
+    //
+    // NEVER ON SCENERY. Twenty systems write `e.flash` when they land a hit,
+    // and a turtle takes every one of them — it is in the list and it has a
+    // hitbox. Cleared HERE, at the one consumer, rather than guarded at each
+    // writer, for the same reason its hp is sealed rather than checked: the
+    // twenty-first ability would forget. A turtle is knocked around; it does
+    // not pop as though it were hurt.
+    if (e.flash > 0 && isScenery(e)) e.flash = 0;
     if (e.flash > 0) {
       e.flash = Math.max(0, e.flash - dt);
       const t = e.flash / Math.max(CONFIG.fx.hitFlash, 0.0001);

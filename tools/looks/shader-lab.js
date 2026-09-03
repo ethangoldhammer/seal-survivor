@@ -56,7 +56,7 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
-import { preloadAssets, createVisual, ASSETS } from '../../path/src/assets.js';
+import { preloadAssets, createVisual, ASSETS, setAssetOutline, hasOutline, assetOutlineBase } from '../../path/src/assets.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, updateBiolumSkin, splitForEdges, BIOLUM_PATTERNS } from '../../path/src/systems/biolumSkin.js';
 import { attachNoiseShader, applyNoiseSettings, setNoiseWetEnv } from '../../path/src/systems/noiseShader.js';
 import { attachToonShade, applyToonSettings } from '../../path/src/systems/toonShade.js';
@@ -118,7 +118,10 @@ initCreatureOutlines();
 // the ones this was built for are at the top rather than alphabetically buried
 // among eighty fish.
 // ---------------------------------------------------------------------------
-const WANTED = ['enemyShark', 'enemyGreatWhite', 'enemyMegalodon', 'enemyAbyssShark',
+// The two whale bodies first: CONFIG.whale.asset picks either, and both wear a
+// per-asset rim (ASSETS.<key>.outline) that only this page's own-rim section
+// can reach — see buildPanels.
+const WANTED = ['whale', 'humpbackWhale', 'enemyShark', 'enemyGreatWhite', 'enemyMegalodon', 'enemyAbyssShark',
   'enemyHammerhead', 'enemyBossHammerhead', 'enemyMightyMeg', 'enemyMosasaur',
   'enemyOrcaBull', 'enemyOrcaCow', 'orcaFriendBull', 'orcaFriendCow', 'orcaFriendCalf'];
 
@@ -142,6 +145,13 @@ const edited = {
   // Both are written through to config.js by tools/apply-shaders.mjs; see
   // writeFlatRoots there.
   creatureOutline: {}, companionOutline: {},
+  // A rim the ASSET declares (`outline: { color, thickness, glow }` on its
+  // ASSETS entry — the whales, the boats, the seagull) rather than one of the
+  // two CONFIG families. Keyed by ASSET KEY, since that is the unit it belongs
+  // to, and written back into assets.js by tools/apply-shaders.mjs
+  // (writeAssetOutlines). Not a preset: commit() pushes it straight at the
+  // registry via setAssetOutline instead of rebuilding a CONFIG bag.
+  assetOutline: {},
 };
 let subject = null;          // the live visual in the scene
 let subjectKey = null;
@@ -595,6 +605,9 @@ function commit() {
   // 2. What a human actually dialled, over the pristine values.
   for (const [root, presets] of Object.entries(edited)) {
     const c = (CONFIG[root] ??= {});
+    // The per-asset rims are not CONFIG presets — see the edit buffer's note —
+    // so rebuildPreset would only grow a CONFIG.assetOutline bag nothing reads.
+    if (root === 'assetOutline') continue;
     for (const [name, fields] of Object.entries(presets)) {
       if (name === '__flat') { Object.assign(c, fields); continue; }
       // The per-species switches, merged INTO `on` rather than replacing it:
@@ -627,6 +640,10 @@ function commit() {
   applyBiolumSkinSettings();
   applyCreatureOutlines();
   applyCompanionOutlines();
+  // The asset-declared rims. One shared material per asset (see
+  // outlineMaterials in assets.js), so this reaches every shell of the body on
+  // screen, and a field left unset falls back to what the entry declared.
+  for (const [key, fields] of Object.entries(edited.assetOutline)) setAssetOutline(key, fields);
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,9 +1244,10 @@ function buildPanels() {
   // saying the sliders below did not control it, which is a tool describing its
   // own gap rather than closing it.
   const rimRoot = outlineRootFor(subjectKey);
-  p.appendChild(section('outline', rimRoot, null, OUTLINE, (body) => {
-    // The view switch first, because it is the one that decides whether any of
-    // the rest of this section is visible on the model at all.
+
+  // The view switch first, because it is the one that decides whether any of
+  // the rest of either rim section is visible on the model at all.
+  const rimViewRow = (body) => {
     const see = document.createElement('div');
     see.className = 'row';
     see.innerHTML = `<label>show rim</label>
@@ -1242,6 +1260,39 @@ function buildPanels() {
       draw();
     });
     body.appendChild(see);
+    return see;
+  };
+
+  // A RIM THE ASSET DECLARES ITSELF. Neither CONFIG family builds shells on a
+  // body whose ASSETS entry carries `outline: {...}` — the whales, the boats,
+  // the seagull — so the shared sliders below were inert on exactly those, and
+  // the one tool that can see the animal could not touch the blue on the
+  // bowhead. These three numbers are THIS SPECIES ALONE, and record writes them
+  // into that entry in assets.js rather than into config.js.
+  //
+  // Thickness is in the SOURCE FILE'S units (the shader offsets in object
+  // space), which is why the range is built off the asset's own number — the
+  // bowhead sits at 1.1 and the humpback at 0.11 for the same on-screen rim.
+  // 4x its own value, so the current setting lands a quarter of the way along.
+  if (hasOutline(subjectKey)) {
+    const base = assetOutlineBase(subjectKey) ?? {};
+    const declared = base.thickness ?? 0.03;
+    const OWN = [
+      { key: 'thickness', label: 'thickness', min: 0, max: +(declared * 4).toPrecision(3), step: +(declared / 100).toPrecision(2), def: declared },
+      { key: 'glow', label: 'glow', min: 0, max: 5, step: 0.05, def: base.glow ?? 1 },
+    ];
+    p.appendChild(section('own rim', 'assetOutline', subjectKey, OWN, (body) => {
+      rimViewRow(body);
+      const which = document.createElement('div');
+      which.className = 'row warnrow';
+      which.innerHTML = '<label>own rim</label><output>'
+        + `editing ASSETS.${subjectKey}.outline — this species alone. `
+        + 'record writes it into assets.js.</output>';
+      body.appendChild(which);
+      colorRow(body, 'assetOutline', subjectKey, 'color', 'colour', base.color ?? 0x000000);
+    }));
+  } else p.appendChild(section('outline', rimRoot, null, OUTLINE, (body) => {
+    const see = rimViewRow(body);
 
     // WHOSE RIM IS THIS. Said out loud, because the four sliders above are ONE
     // SHARED SET per root: moving them here moves every threat, or every ally,
@@ -1431,6 +1482,7 @@ async function apply() {
   const bits = [];
   if (r.rows?.length) bits.push(`assets.csv ${r.rows.length} row(s)`);
   if (r.presets?.length) bits.push(`config.js +${r.presets.join(', ')}`);
+  if (r.rims?.length) bits.push(`assets.js ${r.rims.join(', ')}`);
   // A note is the interesting case — an asset with no CSV row, a comment left
   // arguing for a number that just moved, or a dev server up whose saved
   // tuning still shadows what was written. `~` lines are the per-field diff

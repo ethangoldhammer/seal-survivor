@@ -88,7 +88,12 @@ await preloadAssets();
 updateBounds(16 / 9);
 
 // --- the whale, built the way a sweep builds one ----------------------------
-const visual = createVisual('whale');
+// WHICHEVER BODY THE SWEEP IS SET TO — the bowhead or the humpback. The two
+// are animated in opposite ways (procedural wag vs an authored clip), and
+// every panel below asks the instance which it got rather than assuming.
+const KEY = C.asset ?? 'whale';
+const DEF = ASSETS[KEY];
+const visual = createVisual(KEY);
 // LAID FLAT BY THE GAME'S OWN HEADING, not by a preview-only rotation.
 //
 // createVisual orients every creature so its `forward` points at world +Y, so
@@ -106,13 +111,25 @@ container.rotation.z = headingFor(1);
 scene.add(container);
 const anim = createAnimationController(visual);
 const morphs = morphControl(visual);
+// Clip-driven or wagged: the state and the pace both follow from it, exactly
+// as systems/whale.js decides them.
+const clipDriven = anim.hasClip('idle');
+const STATE = clipDriven ? 'idle' : C.wagState;
+const clipLen = clipDriven
+  ? (visual.userData.clips.find((k) => k.name === DEF.animations?.idle)?.duration ?? 0)
+  : 0;
 
 check('the model loaded rather than falling back to the cone',
-  visual.name === 'whale' && !!visual.userData?.rig,
-  visual.userData?.rig ? 'real rig attached' : 'FELL BACK — every panel below is a cone');
+  visual.name === KEY && !!visual.userData?.rig,
+  visual.userData?.rig ? `real rig attached (${KEY})` : 'FELL BACK — every panel below is a cone');
 check('the animation controller built off the real skeleton', anim != null);
-check('the morph targets resolved by name', morphs.available,
-  Object.keys(ASSETS.whale.morphs).join(', '));
+if (DEF.morphs) {
+  check('the morph targets resolved by name', morphs.available,
+    Object.keys(DEF.morphs).join(', '));
+} else {
+  check('the feeding loop is bound', clipDriven,
+    clipDriven ? `"${DEF.animations?.idle}" ${clipLen.toFixed(3)}s, played at ${C.clipSpeed}x` : 'no clip bound for idle — the body will hold still');
+}
 
 // HOW BIG IT ACTUALLY IS, measured off the built instance. `fit` scales a
 // grandchild and the assets.csv multiplier scales the root, so neither number
@@ -143,8 +160,12 @@ log(`arena ${bounds.width.toFixed(0)} wide, ${(bounds.surfaceY - bounds.bottom).
 log(`nose ${noseAhead.toFixed(1)} ahead of the pivot  ·  gulp centred ${mouthAhead.toFixed(1)} ahead`);
 log(`gulp reach ${C.mouthRadius} (${(C.mouthRadius / length * 100).toFixed(0)}% of its own length)`
   + `  ·  crossing at ${C.speed} u/s takes ${((bounds.width + length * 1.5) / C.speed).toFixed(1)}s`);
-log(`wag state "${C.wagState}" — amplitude ${CONFIG.animation.states[C.wagState].wagAmplitude} rad,`
-  + ` speed ${CONFIG.animation.states[C.wagState].wagSpeed}`);
+if (clipDriven) {
+  log(`clip "${DEF.animations?.idle}" ${clipLen.toFixed(3)}s at ${C.clipSpeed}x — one loop every ${(clipLen / C.clipSpeed).toFixed(2)}s`);
+} else {
+  log(`wag state "${C.wagState}" — amplitude ${CONFIG.animation.states[C.wagState].wagAmplitude} rad,`
+    + ` speed ${CONFIG.animation.states[C.wagState].wagSpeed}`);
+}
 log('');
 
 check('it is bigger than the biggest boss body', length > 27,
@@ -231,13 +252,14 @@ function row(heading, sub) {
 
 // One frame of the real update order.
 function step(n = 1) {
-  for (let i = 0; i < n; i++) anim?.update(DT, C.wagState, false);
+  anim?.setRate(C.clipSpeed ?? 1);
+  for (let i = 0; i < n; i++) anim?.update(DT, STATE, false);
   container.updateMatrixWorld(true);
 }
 
 // Where the fluke tip is right now, so the stroke can be MEASURED off the
 // picture rather than asserted next to it.
-const tipBone = visual.getObjectByName(ASSETS.whale.rig.wagChain.at(-1));
+const tipBone = visual.getObjectByName((DEF.rig.wagChain ?? DEF.rig.springChains[0].names).at(-1));
 const _tip = new THREE.Vector3();
 const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
 
@@ -245,8 +267,12 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
 // 1. THE STROKE — one full wag cycle, so the amplitude can be judged
 // ===========================================================================
 {
-  const r = row('The stroke', `state "${C.wagState}" over one cycle — the fluke should sweep UP and DOWN, not side to side`);
-  const cycle = (Math.PI * 2) / CONFIG.animation.states[C.wagState].wagSpeed;
+  const r = row('The stroke', clipDriven
+    ? `one loop of "${DEF.animations?.idle}" at ${C.clipSpeed}x — the jaw should open and shut once, the fluke sweep UP and DOWN`
+    : `state "${C.wagState}" over one cycle — the fluke should sweep UP and DOWN, not side to side`);
+  const cycle = clipDriven
+    ? clipLen / (C.clipSpeed ?? 1)
+    : (Math.PI * 2) / CONFIG.animation.states[C.wagState].wagSpeed;
   const frames = Math.round(cycle / DT);
   step(1);
   let lo = Infinity;
@@ -310,7 +336,7 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
 // ===========================================================================
 // 2. THE GAPE — the two morphs, at the influences CONFIG actually uses
 // ===========================================================================
-{
+if (morphs.available) {
   const r = row('The gape', `cruiseGape ${C.cruiseGape} held all the way across, feedGape ${C.feedGape} on top with prey in reach`);
   const states = [
     ['shut', 0, 0, 'jaw closed — not a state the sweep ever holds, here for reference'],
@@ -421,7 +447,7 @@ const flukeY = () => (tipBone ? tipBone.getWorldPosition(_tip).y : NaN);
 // ===========================================================================
 // 3. THE SPOUT
 // ===========================================================================
-{
+if (morphs.available) {
   const r = row('The spout', `blowhole morph, popped above ${C.spoutDepth} of the water column`);
   for (const v of [0, 0.5, 1]) {
     morphs.set('blowhole', v);

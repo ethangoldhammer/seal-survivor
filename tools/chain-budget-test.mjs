@@ -28,6 +28,7 @@ import {
   strikeState, resetStrike, updateCharge, tryStrike, updateStrike, feedChum,
   restoreCharge, strikeLoaded, consumeChainLink, liveChain, cancelDash,
   chainStrike, pipCount, pipValue, linkCost,
+  minFire,
 } from '../path/src/systems/strike.js';
 
 const stats = {
@@ -53,7 +54,7 @@ const tick = (s) => { for (let t = 0; t < s; t += DT) updateStrike(DT, null, { x
 function strike({ early = false } = {}) {
   let guard = 0;
   if (early) {
-    const floor = CONFIG.strike.charge.minFire ?? 0.35;
+    const floor = minFire() ?? 0.35;
     while (strikeState.charge > 0 && strikeState.pending < floor + 0.02 && guard++ < 5000) {
       updateCharge(DT, true, stats);
     }

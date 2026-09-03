@@ -60,7 +60,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONFIG } from '../path/src/config.js';
+import { CONFIG, TUNER_SCHEMA } from '../path/src/config.js';
 import { ASSETS, orientationQuaternion } from '../path/src/assets.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import { enemies, resetEnemies } from '../path/src/entities/enemies.js';
@@ -215,6 +215,75 @@ if (skin) {
   const descending = zs.every((z, i) => i === 0 || z < zs[i - 1]);
   check('the wag chain is ordered root-to-tip along the body',
     descending, `z runs ${zs.map((z) => z.toFixed(0)).join(' -> ')} (head is +Z)`);
+}
+
+// ===========================================================================
+section('THE OTHER BODY — public/models/humpback.glb, built by tools/build-humpback.mjs');
+//
+// The sweep can wear either animal (CONFIG.whale.asset). The humpback is the
+// clip-driven one, and the things that go wrong with it are different from the
+// bowhead's: a texture that was meant to be stripped coming back (the body is
+// painted, and a map underneath the pigment is a photograph bleeding through),
+// the Sketchfab water quad surviving (it floats 5 units above the animal and
+// every measurement in systems/whale.js comes off the bounding box), a clip
+// name that no longer matches the mapping (the body holds still, silently),
+// and a bone name that GLTFLoader's sanitizer changed under us.
+{
+  const H = ASSETS.humpbackWhale;
+  check('CONFIG.whale.asset names a registered model', !!ASSETS[C.asset]?.model, `"${C.asset}"`);
+  check('the tuner can switch bodies and pace the loop',
+    ['whale.asset', 'whale.clipSpeed'].every((p) => TUNER_SCHEMA.some((g) => g.items?.some((i) => i.path === p))));
+  check('clipSpeed is a slow-down, not a speed-up', C.clipSpeed > 0 && C.clipSpeed <= 1, `${C.clipSpeed}x`);
+
+  const hbuf = readFileSync(resolve(HERE, '../public/models/humpback.glb'));
+  const hg = await new GLTFLoader().parseAsync(
+    hbuf.buffer.slice(hbuf.byteOffset, hbuf.byteOffset + hbuf.byteLength), '',
+  );
+  const hm = hg.scene;
+  hm.updateMatrixWorld(true);
+  const meshes = [];
+  const bones = new Set();
+  hm.traverse((o) => { if (o.isMesh) meshes.push(o); if (o.isBone) bones.add(o.name); });
+  check('one skinned mesh — the water quad is gone', meshes.length === 1 && meshes[0].isSkinnedMesh,
+    meshes.map((m) => `${m.name} (${m.geometry.attributes.position.count} verts)`).join(', '));
+  const mats = meshes.flatMap((m) => (Array.isArray(m.material) ? m.material : [m.material]));
+  check('no texture in the file — the pigment is the hide', mats.every((m) => !m.map),
+    mats.map((m) => m.type).join(', '));
+  check('the material is lit (KHR_materials_unlit stripped) so it can band', mats.every((m) => !m.isMeshBasicMaterial),
+    mats.map((m) => m.type).join(', '));
+  const clipName = H.animations?.idle;
+  const eat = hg.animations.find((a) => a.name === clipName);
+  check(`the mapped clip "${clipName}" is in the file`, !!eat,
+    eat ? `${eat.duration.toFixed(3)}s, ${eat.tracks.length} tracks` : `clips: ${hg.animations.map((a) => a.name).join(', ')}`);
+  const named = (H.rig.springChains ?? []).flatMap((c) => c.names);
+  const missing = named.filter((n) => !bones.has(n));
+  check('every bone the spring chains name exists after the loader\'s sanitizer', missing.length === 0,
+    missing.length ? `missing: ${missing.join(', ')}` : `${named.length} bones`);
+
+  // Head at +Z, as `forward` claims — the jaw ahead of the fluke.
+  const jaw = hm.getObjectByName('jaw');
+  const fluke = hm.getObjectByName('tailFin02');
+  if (jaw && fluke) {
+    const jz = jaw.getWorldPosition(new THREE.Vector3()).z;
+    const fz = fluke.getWorldPosition(new THREE.Vector3()).z;
+    check('the jaw is at +Z and the fluke at -Z, so forward:+Z is the nose', jz > 0 && fz < 0,
+      `jaw z ${jz.toFixed(2)}, fluke z ${fz.toFixed(2)}`);
+  }
+  // ...and the clip actually works the jaw. A clip that binds but keys nothing
+  // we can see is the same as no clip.
+  if (eat && jaw) {
+    const rest = jaw.quaternion.clone();
+    const mixer = new THREE.AnimationMixer(hm);
+    const action = mixer.clipAction(eat);
+    action.play();
+    let widest = 0;
+    for (let i = 0; i < 20; i++) {
+      mixer.update(eat.duration / 20);
+      widest = Math.max(widest, rest.angleTo(jaw.quaternion));
+    }
+    check('the feeding loop opens the jaw', widest > 0.5,
+      `${(widest * 180 / Math.PI).toFixed(0)}° at the widest`);
+  }
 }
 
 // ===========================================================================
@@ -924,6 +993,7 @@ section('THE NUDGE — a ram moves it, and the crossing does not care');
       const kicks = [];
       w.anim = {
         update() {},
+        setRate() {},
         impulse(dir, mag, tipBias) { kicks.push({ x: dir.x, y: dir.y, mag, tipBias }); },
       };
       const p = { position: new THREE.Vector3(0, w.baseY, 0), radius: 0.5 };

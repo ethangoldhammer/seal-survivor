@@ -630,7 +630,14 @@
     },
     "bakalarBoat": {
       "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "bakalarBoat"
+      },
       "assets": {
+        "noiseShader": null,
+        "toonShade": null,
         "biolumSkin": "bakalarBoat",
         "csvSkinColumn": "bakalarBoat"
       },
@@ -638,16 +645,17 @@
         "biolumSkin": {
           "bakalarBoat": {
             "pigment": 1,
-            "scale": 0.1,
-            "contrast": 1.6,
-            "coverage": 0.45,
+            "pigmentGlow": 0,
+            "scale": 0.04,
+            "contrast": 2.1,
+            "coverage": 0.6,
             "strength": 1.8,
-            "flow": 0.3,
+            "flow": 1.18,
             "pattern": "lattice",
-            "colorA": 16711718,
-            "colorB": 8072703,
-            "colorC": 16765286,
-            "shellColor": 16734750
+            "colorA": 16777215,
+            "colorB": 0,
+            "colorC": 0,
+            "shellColor": 13619151
           }
         }
       }
@@ -957,28 +965,28 @@
         "toonShade": {
           "whale": {
             "strength": 1,
-            "steps": 4,
-            "gamma": 1.75,
+            "steps": 3,
+            "gamma": 2.6,
             "low": 0.17,
             "high": 0.99,
-            "soft": 0,
-            "range": 1.6
+            "soft": 0.7,
+            "range": 1.5
           }
         },
         "biolumSkin": {
           "whale": {
-            "pigment": 0.08,
+            "pigment": 0,
             "pigmentGlow": 0.22,
-            "scale": 0.05,
+            "scale": 0.04,
             "contrast": 1.6,
             "coverage": 0.45,
             "strength": 2.78,
-            "flow": 0.88,
-            "pattern": "veins",
+            "flow": 0.44,
+            "pattern": "flow",
             "colorA": 0,
             "colorB": 4013373,
-            "colorC": 9737364,
-            "shellColor": 16734750
+            "colorC": 13750737,
+            "shellColor": 3355443
           }
         }
       }
@@ -1192,9 +1200,9 @@
         "toonShade": {
           "bossBoat": {
             "strength": 1,
-            "steps": 4,
-            "gamma": 1,
-            "low": 0.51,
+            "steps": 3,
+            "gamma": 2.15,
+            "low": 0.81,
             "high": 1,
             "soft": 0,
             "range": 1
@@ -1204,13 +1212,13 @@
           "bossBoat": {
             "pigment": 0,
             "pigmentGlow": 0,
-            "scale": 0.07,
-            "contrast": 1.6,
-            "coverage": 0.45,
-            "strength": 2.88,
+            "scale": 0.91,
+            "contrast": 1.9,
+            "coverage": 0.28,
+            "strength": 1.02,
             "flow": 0.3,
-            "pattern": "lattice",
-            "colorA": 16777215,
+            "pattern": "billow",
+            "colorA": 12653845,
             "colorB": 5526612,
             "colorC": 10395294,
             "shellColor": 0
@@ -1849,276 +1857,156 @@
           }
         }
       }
+    },
+    "humpbackWhale": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "humpbackWhale",
+        "biolum": "humpbackWhale"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "humpbackWhale",
+        "biolumSkin": "humpbackWhale",
+        "csvSkinColumn": "humpbackWhale"
+      },
+      "presets": {
+        "toonShade": {
+          "humpbackWhale": {
+            "strength": 1,
+            "steps": 4,
+            "gamma": 1.75,
+            "low": 0.17,
+            "high": 0.99,
+            "soft": 0,
+            "range": 1.6
+          }
+        },
+        "biolumSkin": {
+          "humpbackWhale": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.04,
+            "contrast": 1.5,
+            "coverage": 0.4,
+            "strength": 0.6,
+            "flow": 0.54,
+            "pattern": "marble",
+            "colorA": 1317924,
+            "colorB": 3820376,
+            "colorC": 12767188,
+            "shellColor": 10475752
+          }
+        }
+      }
+    },
+    "seagull": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "seagull"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "seagull",
+        "csvSkinColumn": "seagull"
+      },
+      "presets": {
+        "biolumSkin": {
+          "seagull": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.07,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 2.38,
+            "flow": 1.24,
+            "pattern": "marble",
+            "colorA": 1184274,
+            "colorB": 16769920,
+            "colorC": 16772127,
+            "shellColor": 2630949
+          }
+        }
+      }
+    },
+    "dumboOcto": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "dumboOcto"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "dumboOcto",
+        "csvSkinColumn": "dumboOcto"
+      },
+      "presets": {
+        "biolumSkin": {
+          "dumboOcto": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.48,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.32,
+            "pattern": "blotches",
+            "colorA": 16774912,
+            "colorB": 16731438,
+            "colorC": 16776698,
+            "shellColor": 8789652
+          }
+        }
+      }
     }
   },
   "config": {
     "toonShade": {
-      "bossHammerhead": {
-        "gamma": 2.8
-      },
-      "voicemailBomb": {
-        "strength": 0.3
-      },
-      "brownFish": {
-        "steps": 2,
-        "high": 0.96,
-        "gamma": 1.4
-      },
-      "fishPackB": {
-        "strength": 1,
-        "steps": 2,
-        "low": 0.16,
-        "soft": 0.34
-      },
-      "sailfish": {
-        "high": 1.55,
-        "low": 0.86,
-        "gamma": 0.5,
-        "steps": 2
-      },
-      "headstone": {
-        "steps": 6,
-        "soft": 0.06
-      }
-    },
-    "sealShader": {
-      "greatWhite": {
-        "wet": 1.2,
-        "wetSteps": 3,
-        "wetTight": 69,
-        "wetRim": 1.38,
-        "wetCaustics": 1.15,
-        "wetGlow": 1.95
-      },
-      "bossHammerhead": {
-        "paint": 1,
-        "baseColor": 10395294
-      },
-      "bossAnglerfish": {
-        "wet": 0.6
-      },
-      "walkingCrab": {
-        "wet": 0.9
+      "bossBoat": {
+        "low": 0.81,
+        "gamma": 2.15,
+        "steps": 3
       }
     },
     "biolumSkin": {
-      "seaTurtle": {
-        "pattern": "marble",
-        "pigmentGlow": 0.68,
-        "shellColor": 1456951,
-        "colorA": 49722,
-        "flow": 0.94,
-        "colorB": 2765355,
-        "colorC": 3596883
-      },
-      "abyssHunter": {
-        "scale": 0.05,
-        "pattern": "pulse",
-        "shellColor": 5723991
-      },
-      "hammerhead": {
-        "strength": 2.2
-      },
-      "beluga": {
-        "colorA": 15133418,
-        "scale": 0.06,
-        "colorB": 6710886,
-        "colorC": 6710886,
-        "shellColor": 16777215,
-        "flow": 1.16,
-        "pigmentGlow": 0,
-        "pigment": 1
-      },
-      "clubBoom": {
-        "colorB": 16711744,
-        "colorA": 0,
-        "flow": 1.32,
+      "dumboOcto": {
+        "pigment": 1,
+        "colorA": 16774912,
+        "colorB": 16731438,
         "colorC": 16776698,
-        "shellColor": 0,
-        "scale": 0.13
+        "shellColor": 8789652,
+        "scale": 0.48,
+        "pattern": "blotches",
+        "flow": 1.32
       },
-      "hide": {
-        "pattern": "veins",
-        "scale": 0.06,
-        "colorA": 13096933,
-        "colorB": 921361,
-        "flow": 1.26,
-        "pigmentGlow": 0,
-        "contrast": 3.3,
-        "coverage": 0.86,
-        "strength": 0.52
-      },
-      "anglerfish": {
-        "pigment": 0,
-        "colorA": 0,
-        "colorB": 15461355,
-        "strength": 0.64,
-        "colorC": 0,
-        "shellColor": 8026746,
-        "coverage": 0.28,
-        "flow": 1.62,
-        "scale": 0.57,
-        "pigmentGlow": 0.8
-      },
-      "bossAnglerfish": {
-        "colorA": 0,
-        "colorB": 8881800,
-        "colorC": 2697513,
-        "scale": 0.11,
-        "coverage": 0.26,
-        "shellColor": 11579568
-      },
-      "brownFish": {
-        "colorA": 11254202,
-        "colorC": 16757504,
-        "shellColor": 11382189,
-        "pigmentGlow": 0.06,
-        "pigment": 1,
-        "contrast": 0.9,
-        "strength": 1.82
-      },
-      "emberClaw": {
-        "scale": 0.16,
-        "coverage": 0.72,
-        "colorA": 14079702,
-        "pigment": 0,
-        "colorC": 12219159,
-        "colorB": 12871708,
-        "pigmentGlow": 0.42,
-        "strength": 0.86
-      },
-      "fish": {
-        "pigment": 0,
-        "pigmentGlow": 0.64,
-        "coverage": 0.44,
-        "flow": 1.62,
-        "strength": 2,
-        "colorA": 15072511,
-        "colorB": 7093382,
-        "colorC": 3552822,
-        "shellColor": 1842204
-      },
-      "fishPackA": {
-        "colorA": 16777215,
-        "colorB": 7895160,
-        "colorC": 12763842,
-        "shellColor": 1710618,
-        "scale": 0.73,
-        "flow": 0.86,
-        "coverage": 0.42,
-        "strength": 2.42
-      },
-      "fishPackB": {
-        "pigment": 0.48,
-        "colorA": 328965,
-        "colorB": 8882055,
-        "colorC": 12010943,
-        "shellColor": 0,
-        "contrast": 3.55,
-        "flow": 0.76
-      },
-      "fishPackC": {
-        "colorB": 16742190,
-        "colorC": 16228769,
-        "scale": 0.11,
-        "flow": 2
-      },
-      "club": {
-        "pattern": "veins",
-        "colorA": 15857913,
-        "colorB": 4868682,
-        "shellColor": 4072217,
-        "colorC": 11906199,
-        "flow": 1.42
-      },
-      "puffer": {
-        "colorA": 13172480,
-        "colorB": 5373742,
-        "scale": 0.05,
-        "coverage": 0.42,
-        "strength": 2.04
-      },
-      "reeffish": {
-        "pigment": 1,
-        "scale": 0.28,
-        "colorA": 16121599,
-        "colorB": 0,
-        "colorC": 16777215,
-        "shellColor": 7111125,
-        "flow": 0.98
-      },
-      "squidGlow": {
-        "pigmentGlow": 0,
-        "scale": 0.79,
-        "coverage": 0.66,
-        "pattern": "lattice",
-        "flow": 1.58,
-        "colorA": 16449791,
-        "shellColor": 16736609,
-        "pigment": 1,
-        "colorC": 4534341
-      },
-      "stingray": {
-        "pigment": 1,
-        "colorA": 13948116,
-        "colorB": 12763842,
+      "bossBoat": {
         "pattern": "billow",
-        "colorC": 0,
-        "shellColor": 4868682,
-        "flow": 1.5,
-        "coverage": 0.24,
-        "contrast": 1.25,
-        "scale": 0.43,
-        "pigmentGlow": 0
-      },
-      "surgeonFish": {
-        "pigment": 1,
-        "colorB": 15132390,
-        "colorC": 3788,
-        "shellColor": 1443327,
-        "strength": 0.92
-      },
-      "tang": {
-        "pigment": 1,
-        "colorA": 14408667,
-        "colorB": 0,
-        "colorC": 0,
-        "shellColor": 16777215,
-        "scale": 0.08,
-        "strength": 2.22,
-        "flow": 0.62
-      },
-      "headstone": {
-        "colorA": 0,
-        "colorB": 9868950,
-        "colorC": 6052956,
-        "shellColor": 2697513,
-        "flow": 1.42,
-        "coverage": 0.52,
-        "scale": 0.74
-      }
-    },
-    "creatureOutline": {
-      "__flat": {
-        "thickness": 0.07,
-        "glow": 1.5,
-        "color": 0
-      },
-      "__on": {
-        "enemySeaTurtle": true,
-        "enemyGreatWhite": true,
-        "enemyBossHammerhead": true,
-        "gorebone": true,
-        "voicemailBomb": true,
-        "clubBoom": true,
-        "enemyFish": false
+        "scale": 0.91,
+        "colorA": 12653845,
+        "contrast": 1.9,
+        "coverage": 0.28,
+        "strength": 1.02
       }
     },
     "companionOutline": {
       "__flat": {
-        "thickness": 0.01,
-        "color": 0
+        "thickness": 0.005
+      },
+      "__on": {
+        "dumboOcto": true
+      }
+    },
+    "assetOutline": {
+      "bossBoat": {
+        "color": 16777215
       }
     }
-  }
+  },
+  "recorded": "bossBoat"
 }

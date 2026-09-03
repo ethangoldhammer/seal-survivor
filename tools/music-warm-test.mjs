@@ -285,6 +285,143 @@ await settle();
 check('...and still plays when the run comes back to it', playing() === 'UPLOAD',
   String(playing()));
 
+// IN MEMORY, as opposed to catalogued: hasTrack answers "does this slot have
+// music behind it", which is true of every slot from the first frame. Whether
+// the bytes are decoded is what trackReport walks.
+const warm = (name) => music.trackReport().some((r) => r.name === name);
+
+// ===========================================================================
+section('A new run opens on the first loop, however far the last one climbed');
+
+// THE SCORE CARD. A run that climbed to slot 3 or beyond had slot 1 walk out
+// of the warm set — it was neither the loop for this level nor the next — and
+// the next run's play(1) then asked startSource for a buffer that was not in
+// memory. startSource declines a name it cannot start, so the previous run's
+// loop simply carried on under the new run: the transport reported a fresh
+// start, the beat grid re-anchored, and the music never went back to the top.
+// Slot 2 is the pinned upload from the section above, and the walk climbs one
+// slot per level-up so every switch is warm: levels 4, 7, 10 are slots 2, 3, 4.
+music.stop();
+music.play(1);
+await run(0.2);
+await settle();
+for (const level of [4, 7, 10]) {
+  music.setLevel(level);
+  await settle();
+  await run(LOOP + 0.2);
+  await settle();
+}
+check('the run climbed past the opening loop', playing() === 's4', String(playing()));
+check('...which stayed in memory the whole way', warm('1'));
+music.restMusic(0.3);
+await run(0.5);
+// The card then hands over to a new run the way startGame does.
+const took = music.releaseMusicIntoRun(1);
+check('the new run takes the transport over', took === true);
+check('...and opens on the first loop ON THE FRAME, not wherever the last run died',
+  playing() === 's1', String(playing()));
+
+// The same restart with the opening loop genuinely cold — the case the warm set
+// no longer produces, but the one play() has to survive: evicted by anything,
+// the file is fetched and the run still opens on it. Emptying the slot count
+// for one keepWarm is how the test evicts, since nothing in the game can.
+music.stop();
+music.play(1);
+await run(0.2);
+await settle();
+for (const level of [4, 7, 10]) {
+  music.setLevel(level);
+  await settle();
+  await run(LOOP + 0.2);
+  await settle();
+}
+check('back on a late slot', playing() === 's4', String(playing()));
+CONFIG.music.slots = 0;
+music.setLevel(10);
+CONFIG.music.slots = 6;
+check('...with the opening loop out of memory', !warm('1'));
+const before = sourcesStarted.length;
+music.restMusic(0.3);
+await run(0.5);
+warnings.length = 0;
+music.releaseMusicIntoRun(1);
+check('a cold opening loop does not start anything yet', sourcesStarted.length === before);
+check('...and says so, because the warm set was supposed to hold it',
+  warnings.some((w) => w.includes('opening loop')));
+await settle();
+await run(0.2);
+await settle();
+check('...but the run still opens on it once it lands', playing() === 's1', String(playing()));
+check('...exactly once', sourcesStarted.length === before + 1, `${sourcesStarted.length - before} started`);
+
+// ===========================================================================
+section('Levelling up during a fight keeps the loop the kill hands back to warm');
+
+// setLevel stands down during a boss fight — it must not queue the run's next
+// loop under the boss music — but it also stopped moving the warm set, so a
+// player who levelled from 7 to 13 during the fight had the kill hand the
+// transport to a slot nobody had decoded: endBossMusic asked startSource for
+// it, startSource declined, and the BOSS loop played on for the rest of the run.
+music.stop();
+music.play(1);
+await run(0.2);
+await settle();
+for (const level of [4, 7]) {
+  music.setLevel(level);
+  await settle();
+  await run(LOOP + 0.2);
+  await settle();
+}
+check('the run is on its third loop', playing() === 's3', String(playing()));
+warnings.length = 0;
+music.startBossMusic();
+await settle();
+await run(LOOP);
+await settle();
+check('the fight is up', String(playing()).startsWith('b'), String(playing()));
+music.setLevel(13);
+await settle();
+await run(LOOP);
+await settle();
+check('...and levelling inside it did not end its music', String(playing()).startsWith('b'), String(playing()));
+check('...but did warm the loop the kill will hand back to', warm('5'));
+music.endBossMusic();
+await settle();
+await run(0.2);
+await settle();
+check('the kill hands the transport to the level the run reached',
+  playing() === 's5', String(playing()));
+check('...on the frame, with nothing queued late',
+  !warnings.some((w) => w.includes('before it was decoded')),
+  warnings.filter((w) => w.includes('before it was decoded'))[0] ?? '');
+
+// ===========================================================================
+section('A switch aimed at a cold file lands when the file does, not never');
+
+// The last resort under all of the above. queueTrack warned and started the
+// decode, and then nothing ever asked again — the boundary it was aiming for
+// came and went, and so did every one after it.
+music.stop();
+music.play(1);
+await run(0.2);
+await settle();
+check('on the first loop', playing() === 's1', String(playing()));
+// A jump of three slots at once: the warm set holds slot 2 for the next
+// level-up, not slot 4 — made certain here rather than inherited from whatever
+// the section above left in memory.
+CONFIG.music.slots = 0;
+music.setLevel(1);
+CONFIG.music.slots = 6;
+check('the far slot is cold', !warm('4'));
+warnings.length = 0;
+music.setLevel(10);
+check('the switch was asked for before its file was decoded',
+  warnings.some((w) => w.includes('before it was decoded')));
+await settle();
+await run(LOOP * 2 + 0.2);
+await settle();
+check('...and still lands once the file is in memory', playing() === 's4', String(playing()));
+
 // ===========================================================================
 section('A file that 404s leaves the bank rather than stalling it');
 

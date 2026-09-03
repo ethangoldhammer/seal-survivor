@@ -132,6 +132,12 @@ export function baseStats(loadout = 'pebbles') {
     // rhythm loop — a faster wind-up and a fatter bite per orb.
     strikeChargeTime: CONFIG.strike.charge.time,
     strikeChumRefill: CONFIG.strike.charge.chumRefill,
+    // Booster Pack. Extra pip CONTAINERS on the bar past what the refill
+    // derives, and passive pip regen in pips per second — the only refill that
+    // is not food. Both 0 until the card is taken; see pipCount / updateCharge
+    // in systems/strike.js.
+    strikeExtraPips: 0,
+    strikePipRegen: 0,
     // How wide the release gulp reaches (see CONFIG.strike.charge.gulp). Per-run
     // rather than read off CONFIG at the point of use, because Attractor scales
     // it — it's the mouth's reach, and the mouth is upgradeable.
@@ -364,6 +370,13 @@ export function orbiterCount(base, s) {
   return base + (s?.orbiterBonus ?? 0);
 }
 
+// The four stats "all damage" reaches. Listed once so applyLevelGrowth,
+// applyDamageScaling and applyIronLung can never fall out of step about which
+// ones a run-wide multiplier moves — a stat scaled by one and restored by
+// another would drift a little further from the truth on every frame of every
+// dive.
+const DAMAGE_STATS = ['damage', 'strikeDamage', 'abilityDamageMul', 'companionDamageMul'];
+
 // Baseline growth, applied AFTER upgrades so the basic shot keeps pace as you
 // level even on a run where you never picked a damage upgrade. Extra pellets
 // arrive on a fixed cadence (every `levelsPerExtraShot`) on top of whatever
@@ -381,12 +394,25 @@ export function orbiterCount(base, s) {
 // first, i.e. worth a third as much for having been taken early. Taking it
 // with the block already assembled means every flat card keeps the share of
 // the bar it bought.
+//
+// DAMAGE COMPOUNDS TOO, and for the same reason. The flat `damagePerLevel` on
+// the pebble is kept — it is what makes the opening gun grow — but a boss's
+// health is a product of ramps, and by level 20 a flat +1.6 a level is a gun
+// losing ground every fight. So the same multiplier shape the bar gets lands
+// on every one of DAMAGE_STATS: the gun, the strike, and the two
+// cross-cutting multipliers everything thrown and every escort reads through.
+// On the finished block, after the flat growth, so a +damage card keeps the
+// share it bought exactly as a +max-health card does. See
+// CONFIG.weapon.damageMulPerLevel for the rate and npm run test:leveldamage
+// for what it does to a boss fight.
 export function applyLevelGrowth(s, level) {
   const lvl = Math.max(1, level ?? 1);
   s.damage += CONFIG.weapon.damagePerLevel * (lvl - 1);
   s.speed += CONFIG.weapon.speedPerLevel * (lvl - 1);
   s.multishot += Math.floor((lvl - 1) / CONFIG.weapon.levelsPerExtraShot);
   s.maxHp *= Math.pow(1 + (CONFIG.player.hpPerLevel ?? 0), lvl - 1);
+  const dmgMul = Math.pow(1 + (CONFIG.weapon.damageMulPerLevel ?? 0), lvl - 1);
+  if (dmgMul !== 1) for (const k of DAMAGE_STATS) s[k] *= dmgMul;
   return s;
 }
 
@@ -546,12 +572,6 @@ export function ironLungMul(s, oxygen) {
   const bonus = (c.damagePerOxygen ?? 0) * level * held;
   return 1 + Math.min(bonus, c.maxBonus ?? Infinity);
 }
-
-// The four stats "all damage" reaches. Listed once so applyDamageScaling and
-// applyIronLung can never fall out of step about which ones the lung moves —
-// a stat scaled by one and restored by the other would drift a little further
-// from the truth on every frame of every dive.
-const DAMAGE_STATS = ['damage', 'strikeDamage', 'abilityDamageMul', 'companionDamageMul'];
 
 /**
  * WHAT THE BREATH IS WORTH RIGHT NOW — re-derived from the stash, every frame.

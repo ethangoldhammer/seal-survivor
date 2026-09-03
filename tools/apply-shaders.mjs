@@ -38,6 +38,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT = resolve(HERE, '..');
 const CSV = join(PROJECT, 'path/src/assets.csv');
 const CONFIG_JS = join(PROJECT, 'path/src/config.js');
+const ASSETS_JS = join(PROJECT, 'path/src/assets.js');
 export const DEFAULT_SRC = join(PROJECT, 'tools/looks/shader-lab.json');
 
 // --- the smallest CSV reader/writer that round-trips this file --------------
@@ -815,6 +816,190 @@ async function writeFlatRoots(edits, { dry }, notes) {
   return written;
 }
 
+// --- the rims an ASSET declares ---------------------------------------------
+//
+// `outline: { color, thickness, glow }` on an ASSETS entry in assets.js — the
+// whales, the boats, the seagull. Neither CONFIG rim family builds shells on
+// those bodies, so writeFlatRoots cannot reach them and the lab's shared rim
+// sliders were inert on exactly the species whose rim was being complained
+// about. The lab edits these under `config.assetOutline.<assetKey>` and this
+// splices them into that entry, comments left standing, same bar as the rims
+// above: the file must still parse.
+//
+// The `{...}` opened by `key: {` that sits DIRECTLY inside `block` — depth one,
+// not the first textual match. assets.js is one 400-entry object literal and
+// `outline: {` appears inside dozens of entries, so "the first one after the
+// entry opens" is the wrong entry's rim whenever this one has none.
+function directChild(masked, key, [open, close]) {
+  const re = new RegExp(`(^|[\\s,{])(${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|"${key}")\\s*:\\s*\\{`, 'gm');
+  re.lastIndex = open + 1;
+  let m;
+  while ((m = re.exec(masked)) && m.index < close) {
+    const at = m.index + m[0].length - 1;
+    let depth = 0;
+    for (let i = open + 1; i < at; i++) {
+      if (masked[i] === '{') depth++;
+      else if (masked[i] === '}') depth--;
+    }
+    if (depth !== 0) continue;
+    let d = 0;
+    for (let i = at; i < close; i++) {
+      if (masked[i] === '{') d++;
+      else if (masked[i] === '}') { d--; if (!d) return [at, i]; }
+    }
+    return null;
+  }
+  return null;
+}
+
+// An entry the file builds AFTER the literal — the club variants:
+//
+//   for (const [key, headTint] of [['clubBoom', 0xd94a2b], ...]) {
+//     ASSETS[key] = { ...ASSETS.club, headTint, outline: { ...ASSETS.club.outline } };
+//   }
+//
+// There is no `clubBoom: {` anywhere in assets.js, so directChild finds nothing
+// and the edit used to die with "no ASSETS.clubBoom entry" — while the lab
+// happily showed an own-rim panel for it, because at runtime the spread gives
+// clubBoom a rim of its own. The file's stated design is that a variant's rim
+// IS the base club's ("can only ever be changed in one place"), so that is where
+// the edit belongs: [parent, everyKeyTheLoopBuilds], or null if `key` is not
+// derived this way. A loop that gives its variants an outline of their OWN
+// (an `outline: {` that does not spread the parent's) comes back with `ownRim`
+// set, because then the parent's rim is not the one on screen.
+function derivedAsset(text, masked, key) {
+  const head = /for\s*\(\s*const\s*\[\s*key\b[^\]]*\]\s*of\s*\[/g;
+  let m;
+  while ((m = head.exec(masked))) {
+    const listOpen = m.index + m[0].length - 1;
+    let d = 0, listClose = -1;
+    for (let i = listOpen; i < masked.length; i++) {
+      if (masked[i] === '[') d++;
+      else if (masked[i] === ']') { d--; if (!d) { listClose = i; break; } }
+    }
+    if (listClose < 0) continue;
+    // Strings are blanked in `masked`, so the names come from the source.
+    const keys = [...text.slice(listOpen, listClose).matchAll(/\[\s*'([\w$]+)'/g)].map((x) => x[1]);
+    if (!keys.includes(key)) continue;
+    const bodyOpen = masked.indexOf('{', listClose);
+    if (bodyOpen < 0) continue;
+    d = 0;
+    let bodyClose = -1;
+    for (let i = bodyOpen; i < masked.length; i++) {
+      if (masked[i] === '{') d++;
+      else if (masked[i] === '}') { d--; if (!d) { bodyClose = i; break; } }
+    }
+    const body = masked.slice(bodyOpen, bodyClose + 1);
+    if (!/ASSETS\s*\[\s*key\s*\]\s*=\s*\{/.test(body)) continue;
+    const parent = /\.\.\.ASSETS\.([\w$]+)/.exec(body)?.[1];
+    if (!parent) continue;
+    const own = /\boutline\s*:\s*\{([^}]*)\}/.exec(body);
+    const ownRim = !!own && !new RegExp(`\\.\\.\\.ASSETS\\.${parent}\\.outline\\b`).test(own[1]);
+    return { parent, keys, ownRim };
+  }
+  return null;
+}
+
+// The whole `export const ASSETS = {...}` literal, as [open, close].
+function assetsBlock(masked) {
+  const m = /export\s+const\s+ASSETS\s*=\s*\{/.exec(masked);
+  if (!m) return null;
+  const open = m.index + m[0].length - 1;
+  let d = 0;
+  for (let i = open; i < masked.length; i++) {
+    if (masked[i] === '{') d++;
+    else if (masked[i] === '}') { d--; if (!d) return [open, i]; }
+  }
+  return null;
+}
+
+/**
+ * Write the lab's per-asset rim edits into assets.js. Returns the snapshot keys
+ * that now shadow what was written — the T-menu stores the same three numbers
+ * as `assetLooks.<key>.outlineColor` / `outlineThickness` / `outlineGlow` — so
+ * clearTuning can hand ownership back to the file.
+ *
+ * An entry with no `outline` block is reported, not given one: the lab only
+ * shows its own-rim section on a body that already has one (hasOutline), and a
+ * rim conjured onto an entry that never declared one would be a roster change
+ * arriving through a colour picker.
+ */
+async function writeAssetOutlines(edits, { dry }, notes) {
+  const byKey = edits.assetOutline ?? {};
+  const keys = Object.keys(byKey).filter((k) => byKey[k] && Object.keys(byKey[k]).length);
+  if (!keys.length) return [];
+  const text = await readFile(ASSETS_JS, 'utf8');
+  const masked = maskCode(text);
+  const all = assetsBlock(masked);
+  if (!all) {
+    notes.push('! assets.js: no `export const ASSETS = {` literal found — no rim was written');
+    return [];
+  }
+  const TUNED = { color: 'outlineColor', thickness: 'outlineThickness', glow: 'outlineGlow' };
+  const changes = [];
+  const stale = [];
+  const written = [];
+  const allEdits = [];
+  // Gathered per TARGET entry before anything is spliced: two club variants
+  // edited in one session both land on `club.outline`, and two edits into one
+  // block have to be one splice — or one conflict.
+  const targets = new Map(); // entry key -> { fields, askedBy: { field: key }, owners: Set }
+  for (const key of keys) {
+    const fields = {};
+    for (const [k, v] of Object.entries(byKey[key])) if (k in TUNED && v != null) fields[k] = v;
+    if (!Object.keys(fields).length) continue;
+    let target = key;
+    let owners = [key];
+    if (!directChild(masked, key, all)) {
+      const derived = derivedAsset(text, masked, key);
+      if (!derived) { notes.push(`! ${key}: assets.js has no ASSETS.${key} entry — its rim was not written`); continue; }
+      if (derived.ownRim) { notes.push(`! ${key}: assets.js builds it in a loop that gives each variant a rim of its own — no block to splice into; its rim was not written`); continue; }
+      target = derived.parent;
+      owners = [derived.parent, ...derived.keys];
+    }
+    const t = targets.get(target) ?? { fields: {}, askedBy: {}, owners: new Set(), redirects: [] };
+    // Reported only if something in the block actually moves — a re-run on a
+    // rim the file already holds has to be quiet, like every other splice here.
+    if (target !== key) t.redirects.push(`${key}: assets.js derives it from ASSETS.${target} and spreads ${target}'s rim onto it, so the edit lands on ${target}.outline — which ${owners.slice(1).join(', ')} all share`);
+    for (const [k, v] of Object.entries(fields)) {
+      if (k in t.fields && t.fields[k] !== v) {
+        notes.push(`! ${target}.outline.${k}: ${t.askedBy[k]} asks ${fieldLiteral(k, t.fields[k])} and ${key} asks ${fieldLiteral(k, v)} — one rim, two numbers; neither was written`);
+        delete t.fields[k];
+        t.askedBy[k] = null;
+        continue;
+      }
+      if (t.askedBy[k] === null) continue;      // already in conflict
+      t.fields[k] = v;
+      t.askedBy[k] = key;
+    }
+    for (const o of owners) t.owners.add(o);
+    targets.set(target, t);
+  }
+  for (const [key, { fields, owners, redirects }] of targets) {
+    if (!Object.keys(fields).length) continue;
+    const entry = directChild(masked, key, all);
+    const block = entry && directChild(masked, 'outline', entry);
+    if (!block) { notes.push(`! ${key}: ASSETS.${key} declares no \`outline: {\` — its rim was not written`); continue; }
+    const before = changes.length;
+    allEdits.push(...spliceFields(text, masked, block, fields, `${key}.outline`, changes, stale));
+    if (changes.length > before) changes.splice(before, 0, ...redirects);
+    // Every key the T-menu could be shadowing this rim under, not just the one
+    // that was edited: the variants inherit the number from the file, so a
+    // saved `assetLooks.clubIce.outlineThickness` would keep the ice club on
+    // the old rim while the other four moved.
+    for (const k of Object.keys(fields)) for (const o of owners) written.push(`assetLooks.${o}.${TUNED[k]}`);
+  }
+  for (const one of changes) notes.push(`~ ${one}`);
+  for (const one of stale) notes.push(`! ${one}: the comment above it argues for the value that was just replaced — reword it`);
+  if (!allEdits.length) return [];
+  let next = text;
+  for (const [start, end, str] of allEdits.sort((a, b) => b[0] - a[0])) {
+    next = next.slice(0, start) + str + next.slice(end);
+  }
+  if (next !== text && !dry) await writeFile(ASSETS_JS, next);
+  return written;
+}
+
 // --- the third gate: the saved snapshot -------------------------------------
 //
 // A value in imported-tuning.json BEATS the config.js default it shadows, so a
@@ -884,7 +1069,9 @@ async function clearTuning(handled, { dry }, notes) {
     // would otherwise be looked for as a preset named "thickness", find nothing,
     // and be reported as cleared when the number that shadows config.js was
     // still sitting there.
-    if (FLAT_ROOTS.includes(root)) {
+    // `assetLooks.<key>.outlineColor` is the same leaf shape: the T-menu's copy
+    // of a rim writeAssetOutlines just put into assets.js.
+    if (FLAT_ROOTS.includes(root) || root === 'assetLooks') {
       const leaf = parts.pop();
       let bag = doc[root];
       for (const step of parts.slice(1)) bag = bag?.[step];
@@ -960,11 +1147,15 @@ export async function applyRecorded(doc, { dry = false, only = doc.recorded, bat
   // you just ticked whenever you ticked it on a different animal than the one
   // you then hit record on.
   const flat = await writeFlatRoots(doc.config ?? {}, { dry }, notes);
+  // The asset-declared rims, into assets.js. Same scoping argument as the two
+  // roots above: the edit buffer holds nothing but clicks, each already named
+  // by the species it belongs to.
+  const rims = await writeAssetOutlines(doc.config ?? {}, { dry }, notes);
   // Ownership last, and only for what actually got written: clearing the
   // snapshot for a preset this run did not touch would silently revert somebody
   // else's tuning to a config default.
-  await clearTuning(new Set([...presets, ...flat]), { dry }, notes);
-  return { rows, presets: [...presets, ...flat], notes };
+  await clearTuning(new Set([...presets, ...flat, ...rims]), { dry }, notes);
+  return { rows, presets: [...presets, ...flat], rims, notes };
 }
 
 /**

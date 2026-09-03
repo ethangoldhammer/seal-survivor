@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { attachDamageGlow, stoke, cool, glowLevel } from './damageGlow.js';
 import { ease } from '../ease.js';
+import { isScenery } from '../enemyTable.js';
 
 // ============================================================================
 // BURN GLOW — a body that is BEING hurt is brighter than one that has been.
@@ -186,6 +187,8 @@ export function sear(e, hits = 1) {
  */
 export function zap(e, strength = 1) {
   if (cfg().enabled === false) return false;
+  // A bolt landing on scenery is a bolt landing on a rock: nothing lights up.
+  if (isScenery(e)) return false;
   const s = entryFor(e);
   if (!s) return false;
   s.flash = Math.min(1, Math.max(s.flash, strength));

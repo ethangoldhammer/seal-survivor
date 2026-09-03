@@ -1,14 +1,14 @@
 id,name,desc,review,maxStacks,enabled,weight,cardArt,sfx,weaponName,weaponNameLaser
-rapidFire,Supa Dupa Seal,{effect},,8,TRUE,1,Beach_001,,Rapid Pebbles,Pew Pew Pew
-heavyRounds,André the Giant,{effect},,,TRUE,1,Beach_002,,Giant Pebbles,Bigger Lasers
+rapidFire,Supa Dupa Seal,Shoot faster.,,8,TRUE,1,Beach_001,,Rapid Pebbles,Pew Pew Pew
+heavyRounds,André the Giant,Hit harder.,,,TRUE,1,Beach_002,,Giant Pebbles,Bigger Lasers
 flippersUp,Flippers Up!,Upgrade a fin blaster.,,6,TRUE,1,SeaLion,,,
 overboost,None,,,,FALSE,1,Beach_003,,,
-maxSpeed,Speedy Seal,{effect},,,TRUE,1,OpeanOcean_001,,,
-multishot,Pocket Full of Stones,{effect},,99,TRUE,1,Beach_003,,Cloned Pebbles,More Lasers
+maxSpeed,Speedy Seal,Speed up!,,,TRUE,1,OpeanOcean_001,,,
+multishot,Pocket Full of Stones,More shots.,,99,TRUE,1,Beach_003,,Cloned Pebbles,More Lasers
 projectileLife,André 3000,{effect},,4,TRUE,1,OpeanOcean_003,,Piercing Pebbles,Piercing Beams
 vitality,Healthy Pup!,Health up.,,,TRUE,1,Beach_001,,,
 magnet,C.H.U.M.,{effect},,,TRUE,1,Beach_002,,,
-regen,Seal all Wounds,{effect},,,TRUE,1,Beach_003,,,
+regen,Seal all Wounds,Health regen.,,,TRUE,1,Beach_003,,,
 velocity,Seal the Deal,{effect},,,TRUE,1,OpeanOcean_003,,Swift Pebbles,Quick Lasers
 homingMissile,Homing Mussels,Heat-seeking mussel launcher.,,15,TRUE,1,VampireSquid,,,
 seaGarlic,Sea Garlic,It's like garlic to a vampire. For for fish.,,9,TRUE,1,Reef_003,,,
@@ -23,8 +23,9 @@ sealTeam,Seal Team,Squad up! Add up to 6 seals to your team...,,6,TRUE,1,SeaLion
 beluga,Baby Beluga Bubble Blaster,Beluga buddy. {effect},,8,TRUE,1,OpeanOcean_003,,,
 strikePower,Chain Gang,{effect},,5,TRUE,1,GreatWhite,,,
 strikeDash,Your Dasher is On The Way!,{effect},,5,TRUE,1,Reef_002,,,
-strikeShrapnel,The Bone Zone,Explosive strikes. {effect},,6,TRUE,1,TidePool_001,,,
+strikeShrapnel,The Bone Zone,Dash to unleash the bones of your prey.,,6,TRUE,1,TidePool_001,,,
 strikeCharge,Epic Seal Time,Elevated seal systems. {effect},,4,TRUE,1,TidePool_002,,,
+boosterPack,Booster Pack,{effect},,6,TRUE,1,TidePool_002,,,
 breachChain,Big Willy Style,{effect},,3,TRUE,1,TidePool_003,,,
 oxygenMax,Yoga,"Breathe deeper, {player}. ",,5,TRUE,1,Beach_003,,,
 oxygenRefill,Mammal Mode,Do the mammal stuff.,,5,TRUE,1,Reef_002,,,
@@ -50,10 +51,10 @@ biolumChill,A chill guy.,{effect} ,,6,TRUE,0.2,AnglerFish,,{element} Pebbles,{el
 biolumInfection,Infected!,{effect} ,,6,TRUE,0.2,AnglerFish,,{element} Pebbles,{element} Lasers
 club,Basic Baby Club,{effect} ,,6,TRUE,1,SeaLion,,,
 clubThrow,Throwin' Clubs,{effect} ,,5,TRUE,1,SeaLion,,,
-clubBoom,Boom Boom Club,{effect} ,,5,TRUE,1,DeepSea_003,,,
+clubBoom,Boom Boom Club,Explosive clubbing.,,5,TRUE,1,DeepSea_003,,,
 clubIce,Iced Out in the Club,{effect},,5,TRUE,1,OpeanOcean_003,,,
 clubZap,Electric Club,Zappin' Up!,,5,TRUE,1,DeepSea_003,,,
 clubPower,Clubs Going Up!,{effect},,5,TRUE,1,SeaStar,,,
 homingShot,Homing Pebbles,{effect} ,,5,TRUE,1,OpeanOcean_001,,Pigeon Powered Homing Pebbles,Homing Lasers
-maneater,Maneater,{effect},,5,TRUE,0.7,GreatWhite,,,
+maneater,Maneater,"Eat human flesh, increase seal strength.",,5,TRUE,0.7,GreatWhite,,,
 ironLung,Iron Lung,{effect} ,,5,TRUE,0.7,Humpback,,,

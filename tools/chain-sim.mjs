@@ -61,6 +61,7 @@ import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entit
 import {
   strikeState, resetStrike, updateCharge, tryStrike, updateStrike, strikeLoaded,
   feedChum, consumeStrikeLink, consumeChainLink, linkPips, pipCount, liveChain,
+  minFire,
 } from '../path/src/systems/strike.js';
 import {
   updatePickups, resetPickups, spawnXpOrb, pickups, gulpPickups,
@@ -183,7 +184,7 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
     // brain struck on every cooldown. What is left is the real constraint —
     // enough fuel to fire, and whatever rhythm the scenario is testing.
     if (!holding && sinceStrike >= cadence
-      && strikeState.charge > CONFIG.strike.charge.minFire) holding = true;
+      && strikeState.charge > minFire(stats)) holding = true;
     if (holding) stat.holdFrames++;
 
     player.chumSealed = holding && CONFIG.strike.charge.gulp?.blockEating !== false;
@@ -194,7 +195,7 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
     // for the bar, which is what the reach and damage multipliers are there to
     // sell and what most of a real hold looks like; it is also up to a second
     // with the mouth shut, which the window has to survive.
-    const canFire = strikeState.pending >= CONFIG.strike.charge.minFire;
+    const canFire = strikeState.pending >= minFire(stats);
     // 'full' holds until the tank is dry or the bank is capped — the bar
     // running dry is what ends a wind-up in play, and without that clause a
     // 'full' brain on a part-full bar would hold the button forever.

@@ -195,6 +195,24 @@ export const TEXT_ROLES = [
   { key: 'cardDesc', label: 'Card text', selector: '.sv-card-desc', section: 'Upgrade cards',
     sample: '+18% armour, and chum sticks to you.', fit: true,
     style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.92, shadow: 4, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // THE TWO TOOLTIPS. One builder (ui/upgradeTip.js) fills both, but they are
+  // two roles because they are two surfaces sized against different things:
+  // the card tooltip hangs under a hexagon that already carries the name and
+  // the description, so it is the breakdown alone and can afford a bigger
+  // face; the hive tooltip floats beside a bare tile, has to carry the name
+  // as well, and has to stay small enough to sit inside the hive.
+  //
+  // Neither `fit`s: the card's own type shrinks to its hexagon, the tooltip
+  // is a box outside it. Every size INSIDE the box — the name, the stack count,
+  // the row labels — is written in em in ui.js, so the one number here moves
+  // all of them together. The row accents (the stack pip, the "next" value)
+  // keep their own colour: they are the panel's blue, not the type's ink.
+  { key: 'cardTip', label: 'Card tooltip', selector: '.sv-card-fx', section: 'Upgrade cards',
+    sample: 'NEXT  +6 more orbiting shrimp',
+    style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0, case: 'as typed', useInk: false, color: 0xcfeaff, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'hiveTip', label: 'Hive tooltip', selector: '.sv-uptip', section: 'Upgrade cards',
+    sample: 'Barnacle Plating  ×3',
+    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0, case: 'as typed', useInk: false, color: 0xcfeaff, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
 
   // --- popups: the numbers that fly off the kills --------------------------
   // `motion` names the CONFIG.textMotion block this role flies on. The Text

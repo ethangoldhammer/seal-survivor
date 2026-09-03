@@ -31,6 +31,9 @@ strikeDashDuration,the strike,percent,dash distance,,,,,,,,,
 strikeChargeTime,the strike,percent,charge speed,,,,,,TRUE,,,
 strikeChumRefill,the strike,flat,refill per chum,,,,,,,,TRUE,"percentOfOne: the stat is a fraction of a meter, so it reads better as a percentage of the thing it fills than as ""+0.15""."
 shrapnelCount,the strike,count,bone fragment,,,,,,,,,
+strikeExtraPips,the strike,count,boost pip,boost pips,,,,,,,,"Booster Pack, odd stacks: one more container on the boost bar — a pip's worth more boost to hold, and the perfect strike lands as the last one empties. Renders as '+1 <label>'. Two or three words for the thing one segment of the fuel ring IS."
+strikePipRegen,the strike,flat,boost regen,,,,,pips/s,,,,"Booster Pack, even stacks: passive fill in pips per second, the only refill that is not food. Renders as '+0.12<unit> <label>' — the unit column is the suffix on the number, so change both together. Two or three words."
+boosterPackStacks,the strike,level,Booster Pack,,,,,,,,,"NOT NEW COPY — the card's own name out of upgrades.csv, repeated here for the reason andreStacks is: a `level` row never reaches the card, and a stat with no row would render as its variable name."
 breachChainLevel,the strike,count,link per breach,,,,,,,,,
 aoeMul,cross-cutting,percent,"blast, aura and wave size",,,,,,,,,
 targetingMul,cross-cutting,percent,targeting range,,,,,,,,,

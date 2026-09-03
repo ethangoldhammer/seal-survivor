@@ -266,7 +266,7 @@ for (const p of [0.12, 0.35, 0.6, 0.85, 1]) {
   s.pending = p;
   settle(s);
   draw();
-  const armed = p >= CONFIG.strike.charge.minFire;
+  const armed = p >= (CONFIG.strike.charge.minFirePips ?? 1) * (CONFIG.strike.charge.chumRefill ?? 0.2);
   present(`fill ${Math.round(p * 100)}%`,
     `${armed ? 'armed — the ready hue' : 'under minFire — still the charging hue'}`,
     p === 1);

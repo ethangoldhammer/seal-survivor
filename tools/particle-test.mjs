@@ -193,7 +193,15 @@ check('an untinted burst is still the emitter\'s palette', offPalette === 0,
 // ---------------------------------------------------------------------------
 const MAIN = fs.readFileSync(path.join(HERE, '../path/src/main.js'), 'utf8');
 const killCall = /function onEnemyKilledFeedback[\s\S]*?\n}/.exec(MAIN)?.[0] ?? '';
-check('the kill feedback passes a colour', /color:\s*assetBaseColor\(/.test(killCall));
+// THE ONE BODY THAT IS NOT ITS OWN COLOUR WHEN IT DIES is a frozen one: it
+// shatters into ice (CONFIG.feedback.killFrozen, systems/statusFx.js), and ice
+// is the ice's colour whatever the animal was — a creature tint over the
+// splinters would turn the shatter lime or purple. The regex admits exactly
+// that branch and nothing else: the resolver is still assetBaseColor, the
+// guard is still the one word `frozen`.
+check('the kill feedback passes a colour', /color:\s*(?:frozen \? undefined : \()?assetBaseColor\(/.test(killCall));
+check('...and only a body that died as ice is exempt',
+  /const frozen = isFrozen\(e\)/.test(killCall) && /killFrozen/.test(killCall));
 
 // THE SECOND EXCEPTION, and there are exactly two.
 //

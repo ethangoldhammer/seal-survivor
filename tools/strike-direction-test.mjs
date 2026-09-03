@@ -191,7 +191,14 @@ section('WIRING — both call sites go through the one function');
 const main = fs.readFileSync(MAIN, 'utf8');
 check('main.js imports strikeDirection', /import \{[^}]*\bstrikeDirection\b[^}]*\} from '\.\/systems\/strike\.js'/.test(main));
 check('the launch calls it', /const dir = strikeDirection\(input\.move, input\.aim\)/.test(main));
-check('the lens prediction calls it', /dashDir: strikeDirection\(input\.move, input\.aim, dashPrediction\)/.test(main));
+// The prediction flies the whole dash (predictDash) — and predictDash launches
+// through strikeDirection, so the corridor still starts on the halfway rule.
+check('the lens prediction flies the dash', /dashDir: predictDash\(input\.move, input\.aim, strikeState\.pending, player\.stats, player\.comboSpeedMul, dashPrediction\)\.dir/.test(main));
+{
+  const strikeSrc = fs.readFileSync(path.join(HERE, '../path/src/systems/strike.js'), 'utf8');
+  const forecast = strikeSrc.slice(strikeSrc.indexOf('export function predictDash('));
+  check('...and the forecast launches through strikeDirection', /const launch = strikeDirection\(move, aim, out\.dir\)/.test(forecast));
+}
 // The old rule, in either place, means one of the two is out of step again.
 check('the movement-first fallback is gone',
   !/input\.move\.lengthSq\(\) > 0\.001 \? input\.move/.test(main));

@@ -43,11 +43,12 @@ import {
   latticeLiveChildren, latticeHasRoom, acquireLatticeChild, releaseLatticeChild, resetLattice,
 } from '../path/src/loadout.js';
 import {
-  trySplit, applyBoltLook, updateBoltGlow, boltGlowGain, boltTipOffset, LASER_ASSET,
+  trySplit, applyBoltLook, updateBoltGlow, boltGlowGain, boltTipOffset, boltHitEnds, LASER_ASSET,
 } from '../path/src/systems/finLaser.js';
 import { createVisual } from '../path/src/assets.js';
 import { spawnProjectile, updateProjectiles, projectiles, resetProjectiles } from '../path/src/entities/projectiles.js';
 import { bounds } from '../path/src/arena.js';
+import { hitCreature, hitCreatureSegment } from '../path/src/systems/hitShape.js';
 
 let failures = 0;
 function check(name, cond, detail = '') {
@@ -686,6 +687,49 @@ console.log('\nTHE HALO — what the charge costs');
   check('the sweep survives having no 2D canvas', !threw);
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\nTHE HIT TEST — reaches what the visual reaches');
+// ---------------------------------------------------------------------------
+// A bolt is drawn 2.6:1 (look.length) and combat.js hands it the PEBBLE's
+// circular hit radius — the two are only kept in step for the pebble (see the
+// note on `radius`/`scale` in main.js). Undressed, a fish sitting on the
+// bolt's own nose, well outside that circle, would visibly be touched by the
+// beam and read as a miss. This is the report of a run where that happened —
+// "measure against visual" rather than trust the fix by eye.
+{
+  const p = { mesh: createVisual(LASER_ASSET), dir: new THREE.Vector2(1, 0), life: 1 };
+  p.mesh.position.set(0, 0, 0);
+  applyBoltLook(p, null);
+
+  check('a dressed bolt measures its own half-length', p.boltHalfLength > 0,
+    `${p.boltHalfLength.toFixed(4)} pre-scale units`);
+
+  const ends = boltHitEnds(p, { ax: 0, ay: 0, bx: 0, by: 0 });
+  const noseReach = ends.ax - p.mesh.position.x;
+  check('the segment reaches out to the nose, not just the centre',
+    noseReach > p.boltHalfLength * 0.9, `${noseReach.toFixed(3)} world units`);
+
+  // A fish sitting right on the nose — inside the segment's reach, outside a
+  // point test's. This is the exact shape of the reported bug: a shot that
+  // LOOKS like it touched the body and a hit test that says it didn't.
+  const fish = { mesh: { position: new THREE.Vector3(noseReach - 0.05, 0, 0) }, radius: 0.3 };
+  const r = p.radius ?? 0.2;
+
+  check('a point test at the centre misses a body sitting on the nose',
+    !hitCreature(fish, p.mesh.position.x, p.mesh.position.y, r),
+    `centre to fish is ${noseReach.toFixed(2)}, reach is only ${(r + fish.radius).toFixed(2)}`);
+  check('the segment test catches it — this is the fix',
+    hitCreatureSegment(fish, ends.ax, ends.ay, ends.bx, ends.by, r),
+    `swept ${ends.bx.toFixed(2)},${ends.by.toFixed(2)} → ${ends.ax.toFixed(2)},${ends.ay.toFixed(2)}`);
+
+  // A shot with nothing cached (never dressed, or not a laser at all) must not
+  // silently claim a reach it never measured.
+  const bare = { mesh: { position: new THREE.Vector3(3, 4, 0) }, dir: new THREE.Vector2(1, 0) };
+  const bareEnds = boltHitEnds(bare, { ax: 0, ay: 0, bx: 0, by: 0 });
+  check('an undressed shot collapses to the point it always was',
+    bareEnds.ax === 3 && bareEnds.ay === 4 && bareEnds.bx === 3 && bareEnds.by === 4);
+}
 
 // ---------------------------------------------------------------------------
 console.log('\nOUT OF THE WATER — light does not fall');

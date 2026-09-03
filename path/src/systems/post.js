@@ -107,9 +107,13 @@ const fragmentShader = /* glsl */ `
   uniform float uPathAmount;
   uniform vec2  uPathDir;
   uniform float uPathLength;
-  uniform float uPathWidth;
+  uniform float uPathWidth;     // half-width at the seal
+  uniform float uPathWidthFar;  // half-width at the far end — the taper
   uniform float uPathFeather;
   uniform float uPathVignette;
+  uniform float uPathNoise;     // edge break-up, as a fraction of the local half-width
+  uniform float uPathNoiseScale;
+  uniform float uPathNoisePhase;  // accumulated by the rig, so a speed that ramps cannot make the pattern jump
   uniform float uKnee;
 
   uniform float uFlare;
@@ -136,20 +140,70 @@ const fragmentShader = /* glsl */ `
     return uResolution.x / max(uResolution.y, 1.0);
   }
 
+  // Smooth value noise on the hash above. Two of these make the corridor's
+  // edge; nothing else needs one.
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
   // How far outside the dash corridor a pixel is, 0 inside and 1 well clear.
-  // The corridor is a capsule: the segment from the seal out along the dash
-  // direction, thickened by uPathWidth. A capsule rather than a cone because
-  // the near end has to stay the same width as the rest — taper it and the
-  // lane pinches shut exactly where the seal is standing, which is the one
-  // place it must not.
+  //
+  // The corridor is a CONE: uPathWidth wide at the seal, tapering to
+  // uPathWidthFar at uPathLength, where the dash would land. Rounded at both
+  // ends — a disc of the near width sits on the seal so the shape never
+  // pinches shut where the player is standing, and a disc of the far width
+  // caps the tip so the taper can be taken to a point without the tip
+  // becoming a razor.
+  //
+  // The edge is then broken up by noise. Two things, both in the cone's OWN
+  // frame (distance along it, distance across it) so the pattern turns with
+  // the heading instead of the cone sliding through a pattern fixed to the
+  // screen:
+  //
+  //   WARP  a low-frequency field bends the whole outline sideways, so the
+  //         cone wavers as a shape rather than just fuzzing.
+  //   FRAY  a higher one, scrolling OUTWARD along the cone, chews the edge —
+  //         the scroll direction is why it reads as flow toward the target.
+  //
+  // Both scale with the local half-width, so the tip frays in proportion to
+  // how thin it is and a strong setting cannot swallow it whole.
   float pathMask(vec2 uv) {
     if (uPathAmount <= 0.001 || uPathLength <= 0.0) return 1.0;
     vec2 a = vec2(aspectOf(), 1.0);
     vec2 p = (uv - uFocusUv) * a;
-    vec2 d = uPathDir * uPathLength;
-    float t = clamp(dot(p, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
-    float dist = length(p - d * t);
-    return smoothstep(uPathWidth, uPathWidth + uPathFeather, dist);
+    vec2 dir = uPathDir;
+    vec2 nrm = vec2(-dir.y, dir.x);
+    float along = dot(p, dir);
+    float across = dot(p, nrm);
+    float t = clamp(along / uPathLength, 0.0, 1.0);
+    float halfW = mix(uPathWidth, uPathWidthFar, t);
+
+    if (uPathNoise > 0.0) {
+      float s = uPathNoiseScale;
+      float tm = uPathNoisePhase;
+      float warp = vnoise(vec2(along * s * 0.45 - tm * 0.35, across * s * 0.45 + 11.7)) * 2.0 - 1.0;
+      across += warp * uPathNoise * halfW * 0.8;
+      float fray = vnoise(vec2(along * s - tm, across * s * 1.6 + 3.1)) * 2.0 - 1.0;
+      fray += 0.5 * (vnoise(vec2(along * s * 2.3 - tm * 1.6, across * s * 3.2 + 7.9)) * 2.0 - 1.0);
+      halfW *= 1.0 + uPathNoise * fray * 0.667;
+    }
+
+    float dist;
+    if (along < 0.0) {
+      dist = length(vec2(along, across)) - halfW;
+    } else if (along > uPathLength) {
+      dist = length(vec2(along - uPathLength, across)) - halfW;
+    } else {
+      dist = abs(across) - halfW;
+    }
+    return smoothstep(0.0, uPathFeather, dist);
   }
 
   vec2 curveUv(vec2 uv) {
@@ -824,8 +878,12 @@ export function createPost(renderer) {
     uPathDir: { value: new THREE.Vector2(1, 0) },
     uPathLength: { value: 0 },
     uPathWidth: { value: 0.1 },
+    uPathWidthFar: { value: 0.01 },
     uPathFeather: { value: 0.18 },
     uPathVignette: { value: 0 },
+    uPathNoise: { value: 0 },
+    uPathNoiseScale: { value: 9 },
+    uPathNoisePhase: { value: 0 },
     uHurt: { value: 0 },
     uHurtColor: { value: new THREE.Color(0x8e0f14) },
     uHurtKeep: { value: 0.55 },
@@ -1076,8 +1134,12 @@ export function createPost(renderer) {
     u.uPathDir.value.set(cineLens.pathDirX, cineLens.pathDirY);
     u.uPathLength.value = cineLens.pathLength;
     u.uPathWidth.value = cineLens.pathWidth;
+    u.uPathWidthFar.value = cineLens.pathWidthFar;
     u.uPathFeather.value = cineLens.pathFeather;
     u.uPathVignette.value = cineLens.pathVignette;
+    u.uPathNoise.value = cineLens.pathNoise;
+    u.uPathNoiseScale.value = cineLens.pathNoiseScale;
+    u.uPathNoisePhase.value = cineLens.pathNoisePhase;
 
     // Summed onto whatever the CRT/VHS preset asked for rather than replacing
     // it — the preset's vignette is part of that look, and a camera state

@@ -8,10 +8,10 @@ import { projectiles, despawn, chainToEnemy, deflectProjectile, spendBounce } fr
 import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy, activeElement, arcChain } from './elements.js';
 import { applyHarpCharm } from './harp.js';
-import { hitCreature } from './hitShape.js';
+import { hitCreature, hitCreatureSegment } from './hitShape.js';
 import { hotSpotDamage } from './bossHotSpots.js';
 import { pinchReach, clawSetting } from './crabClaw.js';
-import { trySplit, LASER_ASSET } from './finLaser.js';
+import { trySplit, LASER_ASSET, boltHitEnds } from './finLaser.js';
 import { zap, releaseBurn } from './burnGlow.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 
@@ -20,6 +20,10 @@ import { spawnProjectile } from '../entities/projectiles.js';
 // loop in the game and the value is consumed before the next test overwrites
 // it. Read it immediately or copy it.
 const contact = { x: 0, y: 0, nx: 0, ny: 0, depth: 0, sphere: null, index: -1 };
+
+// Scratch for a fin laser bolt's own nose-to-tail segment. Refilled per bolt
+// by boltHitEnds and read immediately, same discipline as `contact` above.
+const boltEnds = { ax: 0, ay: 0, bx: 0, by: 0 };
 
 // A chaining shot (the bounce weapon) spends one of its bounces to ricochet off
 // whatever it just hit and carry on, instead of being consumed by the impact.
@@ -68,7 +72,19 @@ export function resolveCombat(dt, scene, hooks) {
       // has always been and for a boss is a shape fitted to its own bones.
       // Both answer through the same call so there is one hit test in the game
       // and not two that can drift apart.
-      if (!hitCreature(e, b.mesh.position.x, b.mesh.position.y, b.radius, contact)) continue;
+      //
+      // A FIN LASER BOLT IS SWEPT ALONG ITS OWN LENGTH rather than tested as a
+      // point. Drawn 2.6:1 (CONFIG.finLaser.look.length), its nose reaches well
+      // past the pebble-sized hit circle a bolt still carries — see the note in
+      // applyBoltLook — so a point test misses exactly the shots that visibly
+      // touched a body near the tip. `hitCreatureSegment` is the same swept-line
+      // test a club swing already uses; every other projectile in the game
+      // carries no `boltHalfLength` and boltHitEnds collapses to the point it
+      // always was, so this changes nothing for them.
+      const hit = b.asset === LASER_ASSET
+        ? (boltHitEnds(b, boltEnds), hitCreatureSegment(e, boltEnds.ax, boltEnds.ay, boltEnds.bx, boltEnds.by, b.radius, contact))
+        : hitCreature(e, b.mesh.position.x, b.mesh.position.y, b.radius, contact);
+      if (!hit) continue;
 
       // A WEAK SPOT, IF THE SHOT FOUND ONE. Returns the damage unchanged for
       // every hit on every creature in the game that is not a boss wearing

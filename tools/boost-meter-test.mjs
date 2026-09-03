@@ -24,14 +24,18 @@ import {
 import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
-  chainLevel, chainDamageMul, comboSpeedMul, tryStrike, consumeStrikeLink, linkPips, linkCost, cancelDash,
+  chainLevel, chainDamageMul, comboSpeedMul, chargeThrustMul, tryStrike, consumeStrikeLink, linkPips, linkCost, cancelDash,
   updateCharge, perfectCrossed, strikeLoaded, inSweetSpot, sweetOffset, sweetHalfWidth,
   consumeChainLink,
   strikeBurst, riderDamage,
+  minFire, basePips, windUpTime,
 } from '../path/src/systems/strike.js';
 import { magnetRadius, magnetSpeed, magnetDistance, magnetState, chumSweep, foodReach, foodPull } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
 import { updatePickups, resetPickups, spawnXpOrb } from '../path/src/entities/pickups.js';
+// For the half of the boost-thrust bonus that lives outside strike.js: the
+// multiplier is worthless if updatePlayer stops reading it.
+import { player, updatePlayer, recomputeStats, resetPlayer } from '../path/src/entities/player.js';
 
 // ============================================================================
 // THE BOOST METER — the pip economy and the tick that reports it.
@@ -252,7 +256,7 @@ const startPips = CONFIG.strike.charge.startPips ?? 0;
 check(`a run opens with ${startPips} of its ${pipCount(stats())} pips`,
   near(strikeState.charge, startPips / pipCount(stats())));
 check('  ...so nothing can be fired until something is eaten',
-  startPips > 0 || strikeState.charge < (CONFIG.strike.charge.minFire ?? 0.35));
+  startPips > 0 || strikeState.charge < minFire(stats()));
 // And the meter has NO passive regeneration, which is what makes the 0 bite:
 // a run left alone for ten seconds is still on empty.
 for (let i = 0; i < 600; i++) tick(1 / 60);
@@ -477,7 +481,7 @@ function strike({ late = 0, early = false, st = stats() } = {}) {
     // the wind-up never completes — so there is no perfect charge behind it and
     // nothing arms. This is the release that costs you the chain now; a LATE
     // one does not, which is the whole of the change (see tryStrike).
-    const floor = CONFIG.strike.charge.minFire ?? 0.35;
+    const floor = minFire(stats()) ?? 0.35;
     while (strikeState.pending < floor + 0.02 && guard++ < 20000) updateCharge(STEP, true, st);
     updateCharge(STEP, false, st);
     return tryStrike(dir, st);
@@ -498,7 +502,7 @@ const feed = (n) => { for (let i = 0; i < n; i++) feedChum(stats()); };
 // whichever is higher: two pips of a five-pip bar. Feeding exactly one and
 // wondering why nothing fires is the mistake this exists to name.
 const pipsToFire = () => Math.max(linkPips(stats()),
-  Math.ceil((CONFIG.strike.charge.minFire ?? 0.35) * pipCount(stats())));
+  Math.ceil(minFire(stats()) * pipCount(stats())));
 
 console.log('\nA RELEASE OPENS THE WINDOW AND SCORES NOTHING ITSELF');
 fuelled();
@@ -514,7 +518,7 @@ feed(pipsToFire());
 check(`${linkPips(stats())} mouthful is the gate (a ${pipCount(stats())}-pip bar)`,
   linkPips(stats()) === 1);
 check(`  ...though ${pipsToFire()} are needed before a strike can fire at all`,
-  strikeState.charge >= CONFIG.strike.charge.minFire);
+  strikeState.charge >= minFire(stats()));
 const depthBefore = liveChain();
 check('the second strike fires', strike() === true);
 check('  ...and it too adds nothing — the FOOD did all of it',
@@ -705,8 +709,8 @@ cancelDash();
 // two different files — `perfectAt` in weapons.csv, `minFire` in config.js —
 // so nothing but this stops them being tuned past each other.
 check('a perfect charge is always enough to fire',
-  perfectAt >= CONFIG.strike.charge.minFire,
-  `perfectAt ${perfectAt} vs minFire ${CONFIG.strike.charge.minFire}`);
+  perfectAt >= minFire(stats()),
+  `perfectAt ${perfectAt} vs minFire ${minFire(stats())}`);
 
 fuelled();
 check('a reset clears the latch, the stamp and the pop',
@@ -763,7 +767,7 @@ check('  ...and running one half-width past it',
 // THE LATE SIDE EXISTS AT ALL. Sitting on a loaded wind-up has to expire, and
 // nothing in the meter changes while it does — which is why this is timed.
 check('  ...so holding on past it is a miss', inSweetSpot(stats()) === false);
-check('  ...with the wind-up still perfectly fireable', strikeState.pending >= CONFIG.strike.charge.minFire);
+check('  ...with the wind-up still perfectly fireable', strikeState.pending >= minFire(stats()));
 // The sign says WHICH mistake it was, which is what a tell would need.
 check('being late reads as a positive offset', sweetOffset() > 0, sweetOffset().toFixed(3));
 fuelled();
@@ -1228,6 +1232,133 @@ while (strikeState.active && g < 600) { tick(1 / 60); g++; }
 check('letting it run out opens the same window',
   near(strikeState.chainTimer, CONFIG.strike.chainWindow, 0.02));
 check('cancelling twice is harmless', (cancelDash(), cancelDash(), !strikeState.active));
+
+console.log('\nHELD FUEL IS ACCELERATION — thrust rises with the pips in the bar');
+// A stocked meter makes the seal get moving quicker before any of it is spent.
+// Two halves, and they are in different files: the multiplier (strike.js) and
+// the line that actually spends it (entities/player.js). Checking only the
+// first would go on passing if updatePlayer stopped reading the field, which
+// is exactly how a bonus dies silently.
+resetStrike();
+strikeState.charge = 0;
+check('an empty bar is no bonus at all', near(chargeThrustMul(stats()), 1, 1e-9));
+const perPip = CONFIG.strike.chargeThrustPerPip ?? 0;
+feedChum(stats());
+check('one mouthful is exactly one pip of thrust',
+  near(chargeThrustMul(stats()), Math.min(CONFIG.strike.chargeThrustMax ?? Infinity, 1 + perPip), 1e-9));
+feedChum(stats());
+check('  ...and two is two — it counts pips, not bars',
+  near(chargeThrustMul(stats()), Math.min(CONFIG.strike.chargeThrustMax ?? Infinity, 1 + perPip * 2), 1e-9));
+// Fractional, deliberately: a wind-up burns the bar continuously, and a bonus
+// that stepped down a whole pip at a time would jolt under the player's hand.
+strikeState.charge = 1.5 / pipCount(stats());
+check('half a pip is half a step, not none of one',
+  near(chargeThrustMul(stats()), Math.min(CONFIG.strike.chargeThrustMax ?? Infinity, 1 + perPip * 1.5), 1e-9));
+restoreCharge(stats());
+const full = chargeThrustMul(stats());
+check('a full bar never passes the cap',
+  full <= (CONFIG.strike.chargeThrustMax ?? Infinity) + 1e-9);
+
+// THE OTHER HALF. The real updatePlayer, from rest, over a window short enough
+// that the speed ceiling — which this bonus deliberately does NOT raise — is
+// nowhere near binding. Asserted as the RATIO against a control run rather than
+// as "faster", because a floor that multiplies into a stated multiplier is
+// unbounded and invisible: only the exact number catches a bonus applied twice.
+player.mesh = new THREE.Group();
+player.body = new THREE.Group();
+recomputeStats();
+const PDT = 1 / 60;
+const push = { move: new THREE.Vector2(1, 0), aim: new THREE.Vector2(1, 0) };
+function sprint(boost) {
+  resetPlayer();
+  player.mesh.position.set(0, -8, 0);
+  player.velocity.set(0, 0);
+  for (let t = 0; t < 0.15; t += PDT) {
+    player.chargeThrustMul = boost;
+    updatePlayer(PDT, push);
+  }
+  return player.velocity.x;
+}
+const plain = sprint(1);
+const boosted = sprint(full);
+check('updatePlayer really spends it — the swim accelerates by exactly the multiplier',
+  plain > 0 && near(boosted / plain, full, 1e-6));
+// The CEILING is not part of the deal — comboSpeedMul raises it, this does not.
+// Driven rather than reasoned about: put the seal over the top speed with the
+// bonus at full and watch the clamp still cut it back to maxSpeed.
+resetPlayer();
+player.mesh.position.set(0, -8, 0);
+player.velocity.set(player.stats.maxSpeed * 3, 0);
+player.chargeThrustMul = full;
+updatePlayer(PDT, { move: new THREE.Vector2(0, 0), aim: new THREE.Vector2(1, 0) });
+check('  ...and the speed CEILING is untouched by it',
+  player.velocity.x <= player.stats.maxSpeed + 1e-6);
+player.chargeThrustMul = 1;
+
+
+// ---------------------------------------------------------------------------
+// BOOSTER PACK. Odd stacks add a pip CONTAINER, even stacks add regen. The
+// container claim: the bar gets LONGER, a pip stays one chum and a fifth of a
+// second of holding, and THE WIND-UP IS STILL THE WHOLE BAR — so the hold is
+// a pip longer and the perfect strike lands as the last container empties.
+console.log('\nBOOSTER PACK — a container is one more pip of boost to hold');
+const packed = (extra = 1, regen = 0) => ({ ...stats(), strikeExtraPips: extra, strikePipRegen: regen });
+check('no card: the bar is the refill\'s five pips',
+  pipCount(stats()) === basePips(stats()) && near(windUpTime(stats()), CONFIG.strike.charge.time));
+check('one container: six pips on a five-pip refill',
+  pipCount(packed(1)) === 6 && basePips(packed(1)) === 5);
+check('  ...one chum is one of the six', near(pipValue(packed(1)), 1 / 6));
+check('  ...and the smallest release is one of the six', near(minFire(packed(1)), 1 / 6));
+check('  ...the hold is a fifth of a second longer', near(windUpTime(packed(1)), 1.2));
+check('  ...and the sweet spot is the same fraction of it',
+  near(sweetHalfWidth(packed(1)) / windUpTime(packed(1)), sweetHalfWidth(stats()) / windUpTime(stats())));
+check('  ...capped by maxPips like everything else',
+  pipCount(packed(99)) === CONFIG.strike.charge.maxPips);
+
+{
+  const frames = (st) => { fuelled(); let f = 0; while (!strikeLoaded() && f < 10000) { updateCharge(1 / 60, true, st); f++; } return f; };
+  const plain = frames(stats());
+  check(`a five-pip bar loads in ${plain} frames`, plain === 60);
+  const boxed = frames(packed(1));
+  check(`  ...a six-pip bar in ${boxed} — one pip's worth more`, boxed === 72);
+  check('  ...and it loads on the frame the tank runs dry', near(strikeState.charge, 0, 1e-6) && near(strikeState.pending, 1, 1e-6));
+}
+{
+  fuelled();
+  strikeState.charge = 1 / 6;
+  for (let i = 0; i < 120; i++) updateCharge(1 / 60, true, packed(1));
+  check('one pip alone banks one sixth of a strike — a dodge',
+    near(strikeState.pending, 1 / 6, 1e-6) && near(strikeState.charge, 0, 1e-6));
+}
+
+console.log('\nBOOSTER PACK — regen is the one refill that is not food');
+fuelled();
+strikeState.charge = 0;
+for (let i = 0; i < 60; i++) updateCharge(1 / 60, false, packed(0, 0.5));
+check('half a pip a second: one second fills half a pip',
+  near(strikeState.charge, 0.5 * pipValue(packed(0, 0.5)), 1e-6));
+for (let i = 0; i < 60; i++) updateCharge(1 / 60, false, packed(0, 0.5));
+check('  ...two seconds fill exactly one pip, snapped to the boundary',
+  near(strikeState.charge, pipValue(packed(0, 0.5))));
+check('  ...and the pip is booked, so it is heard', pendingPips() === 1);
+check('  ...but it is not a mouthful — no chain progress', strikeState.pipsSinceStrike === 0);
+fuelled();
+strikeState.charge = 0;
+for (let i = 0; i < 60; i++) updateCharge(1 / 60, false, packed(0, 0));
+check('no regen stack: nothing fills', strikeState.charge === 0);
+fuelled();
+strikeState.charge = 0.5;
+updateCharge(1 / 60, true, packed(0, 0.5));
+check('paused while holding — the bar only falls', strikeState.charge < 0.5);
+fuelled();
+strikeState.charge = 0;
+strikeState.active = true;
+updateCharge(1 / 60, false, packed(0, 0.5));
+check('paused while dashing', strikeState.charge === 0);
+strikeState.active = false;
+fuelled();
+for (let i = 0; i < 60; i++) updateCharge(1 / 60, false, packed(0, 0.5));
+check('a full bar stays full and books nothing', strikeState.charge === 1 && pendingPips() === 0);
 
 console.log(`\n${checks - failures}/${checks} checks passed\n`);
 process.exit(failures ? 1 : 0);

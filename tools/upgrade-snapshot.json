@@ -1357,6 +1357,41 @@
       }
     ]
   },
+  "boosterPack": {
+    "cap": 6,
+    "perStack": [
+      {
+        "strikeDamage": 105,
+        "strikeExtraPips": 101,
+        "boosterPackStacks": 1
+      },
+      {
+        "strikeDamage": 110,
+        "strikePipRegen": 100.12,
+        "boosterPackStacks": 2
+      },
+      {
+        "strikeDamage": 115,
+        "strikeExtraPips": 102,
+        "boosterPackStacks": 3
+      },
+      {
+        "strikeDamage": 120,
+        "strikePipRegen": 100.24,
+        "boosterPackStacks": 4
+      },
+      {
+        "strikeDamage": 125,
+        "strikeExtraPips": 103,
+        "boosterPackStacks": 5
+      },
+      {
+        "strikeDamage": 130,
+        "strikePipRegen": 100.36,
+        "boosterPackStacks": 6
+      }
+    ]
+  },
   "breachChain": {
     "cap": 3,
     "perStack": [

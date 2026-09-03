@@ -941,7 +941,7 @@ export const ASSETS = {
     // CONFIG.creatureOutline draws on a shark. It rides the size slider (the
     // shell is baked into the template, before the per-instance multiplier),
     // so a big move on the gull's size wants this renormalised.
-    outline: { color: 0xffd27a, thickness: 0.71, glow: 2.4 },
+    outline: { color: 0x000000, thickness: 0.1633, glow: 2.4 },
     // One 24.77s "Take 001" with every animation baked end to end (743 frames,
     // keyed on every one) and no range markers. Rather than re-exporting it
     // split, the ranges live here — see buildSubclips(). Frames are against
@@ -1089,7 +1089,7 @@ export const ASSETS = {
     // fit 12 over that box one object unit is 0.0665 world before the 2.6 size
     // multiplier, so 1.1 buys a 0.19-world rim, a little heavier than the
     // 0.12 a shark carries because there is a lot more silhouette to hold.
-    outline: { color: 0x9fd8e8, thickness: 1.1, glow: 1.6 },
+    outline: { color: 0xffffff, thickness: 0.121, glow: 1.6 },
     // THE FILE IS PURE WHITE. Its one material is an untextured
     // MeshStandardMaterial at #ffffff — not an art choice, just the slot the
     // exporter left behind, and the pack's own 4096x4096 diffuse is never wired
@@ -1102,6 +1102,81 @@ export const ASSETS = {
     // crosses at, the read is the silhouette and the pale rim — not skin
     // detail. Dark slate keeps the outline doing the work.
     tint: 0x3d4b57,
+    material: { roughness: 0.72, metalness: 0.0 },
+    shape: 'cone', radius: 2.4, height: 14, color: 0x51606b, unlit: true,
+  },
+
+  // THE HUMPBACK — the other body the sweep can wear (CONFIG.whale.asset).
+  // Built from the Sketchfab pack by tools/build-humpback.mjs, which is where
+  // every fact below about the file was measured; see its header.
+  //
+  // The opposite animal to the bowhead in one respect: it SHIPS CLIPS. The
+  // bowhead is wagged by the procedural rig because its file has no swim
+  // cycle; this one is driven by an authored feeding loop, so there is no
+  // `wagChain` here — a sine drive would fight the clip — and the rig below
+  // is springs only, the same arrangement as enemyMegalodon.
+  humpbackWhale: {
+    model: '/models/humpback.glb',
+    // The same 31.2 world units as the bowhead (12 x assets.csv's 2.6), for
+    // the same reason: the sweep is relief, and only size says so at a glance.
+    // The file is 17.8 source units long, so one source unit is 1.75 world.
+    fit: 12,
+    // Measured: the jaw joint sits at z=+3.7 and the fluke at z=-9, the
+    // dorsal ridge is +Y and the pectorals hang at y=-1 to either side in X.
+    // Same frame as the bowhead, which is a coincidence of exporters and not
+    // something to rely on for the next animal.
+    forward: '+Z', up: '+Y',
+    pivot: 0.18, // about the skull, like the bowhead — the gulp is measured off the mouth
+    // ONE CLIP, ONE STATE. "EAT-delphinidae" is 0.875s: the jaw swings 67°,
+    // the throat pouch (jaw_001, 7.2 source units of travel) balloons, the
+    // fins sweep 20-30° and every tail bone rolls 10-25°. Bound to 'idle'
+    // ONLY. Binding it to a second state as well would make it a "shared"
+    // clip in createAnimationController's terms, and the shared branch
+    // multiplies in CONFIG.animation.states.idle.clipTimeScale — a number
+    // tuned for the seal's rest pose, on the seal's beat grid. Distinct, it
+    // plays at its authored tempo times the one dial meant for it,
+    // CONFIG.whale.clipSpeed. "SWIM-delphinidae" is also in the file
+    // (tools/build-humpback.mjs keeps it) and is the alternative to map here.
+    animations: { idle: 'EAT-delphinidae' },
+    rig: {
+      // The bend axis. Tail bones run their length along local +Y (tail02
+      // sits at +1.80 Y from tail01, tail03 at +1.49, and so on) and their
+      // local X is the animal's lateral axis — so a roll about X is the
+      // dorsoventral stroke. Only the spring solver reads `boneAxis`; `axis`
+      // is recorded for the hit flinch and for honesty, there is no wag here.
+      axis: 'x',
+      boneAxis: '+Y',
+      springChains: [
+        // THE PEDUNCLE AND FLUKE. Starts on tail01, which hangs off ROOT-rot
+        // beside `body` and forks into nothing but the tail — the rule from
+        // enemyMegalodon: never spring the bone the rest of the animal hangs
+        // from. tail02 drives no vertices and is kept for the chain's
+        // continuity; tailFin02 is the fluke's centre and the last thing to
+        // finish a stroke. The two lobes (tail05_L/R) fork off tail05 and
+        // already ride its lag, as the orca's do.
+        { role: 'whaleBody', names: ['tail01', 'tail02', 'tail03', 'tail04', 'tail05', 'tailFin02'] },
+        // THE PECTORALS. Off `body`, outside the tail chain, and enormous on
+        // this species — 14 source units tip to tip on an 18-unit animal —
+        // so a rigid pair reads instantly. `whaleFin` is looser than a fin,
+        // see CONFIG.animation.spring.roleLooseness.
+        { role: 'whaleFin', names: ['fin_L', 'finTip_L'] },
+        { role: 'whaleFin', names: ['fin_R', 'finTip_R'] },
+      ],
+    },
+    // NO MORPHS. The gape is in the clip; systems/whale.js's morph-driven
+    // gape and spout are both guarded on morphControl().available and simply
+    // do not run for this body.
+    //
+    // Cold rim like the bowhead's. Thickness is OBJECT space — this file's
+    // units — and the body is 17.8 of them long against the bowhead's 180.4,
+    // so the bowhead's 1.1 would be a rim ten times too heavy here. 0.11 is
+    // the same fraction of the animal: ~0.19 world at fit 12 x 2.6.
+    outline: { color: 0x000000, thickness: 0.022, glow: 2.9 },
+    // WHITE, because the pigment multiplies the material colour and this
+    // body is all pigment — `biolum:humpbackWhale` in assets.csv paints it.
+    // The build step already left the file's one material white and lit;
+    // this pins it against a re-export that does not.
+    tint: 0xffffff,
     material: { roughness: 0.72, metalness: 0.0 },
     shape: 'cone', radius: 2.4, height: 14, color: 0x51606b, unlit: true,
   },
@@ -1238,7 +1313,7 @@ export const ASSETS = {
     forward: '+Y', up: '+X', // mirrored basis, same as `trawler` — see its note
     modelUnlit: true,
     tint: 0x14202c,
-    outline: { color: 0xffd27a, thickness: 0.025 },
+    outline: { color: 0xffffff, thickness: 0.025 },
     shape: 'box', width: 3.4, height: 1.3, depth: 1.4, color: 0xffd27a, unlit: true,
   },
 
@@ -1258,7 +1333,7 @@ export const ASSETS = {
     forward: '+Y', up: '+X', // mirrored basis, same as `trawler` — see its note
     modelUnlit: true,
     tint: 0x2a1a1a,
-    outline: { color: 0xff6a5a, thickness: 0.02 },
+    outline: { color: 0xffffff, thickness: 0.02 },
     shape: 'box', width: 8, height: 2.6, depth: 2.4, color: 0xff6a5a, unlit: true,
   },
 
@@ -1823,9 +1898,12 @@ export const ASSETS = {
     headFrom: 0.6,
     modelUnlit: true, // flat, so scene lighting can neither wash it out nor black it
     // Thickness is in SOURCE units, and this model is 0.5 long by 0.07 across
-    // — the boats' 0.02 would be a rim a third the width of the shaft.
-    // Measured for this file rather than copied from another one.
-    outline: { color: 0x1a1208, thickness: 0.006 },
+    // — the boats' 0.02 would be a rim a third the width of the shaft. It was
+    // measured at 0.006 for this file, then thinned in the shader lab; the
+    // number here is what the lab wrote. ONE RIM FOR ALL FIVE CLUBS: the
+    // variants below spread this block, so a rim edit on any of them lands
+    // here (tools/apply-shaders.mjs resolves the loop) and moves the set.
+    outline: { color: 0x1a1208, thickness: 0.00186 },
     // DERIVED, not copied. This was the literal 2.2 while CONFIG.club.length
     // was also 2.2, which is fine right up until the length moves — and now
     // that weapons.csv owns the reach it moves without anyone touching this
@@ -4401,6 +4479,24 @@ export function installModel(key, source, clips = []) {
     return false;
   }
   loadedModels.set(key, prepareModel(source, def, clips, null, key));
+  // AND DROP WHAT THE POOL IS HOLDING FOR THIS KEY.
+  //
+  // A body cloned before this moment was cloned from whatever the key had
+  // then — for a deferred model (megalodon, mosasaur, bossYacht) that is the
+  // built-in primitive, because the real one had not arrived. Parked in the
+  // pool it outlives the model landing, and the next spawn is handed a cone
+  // instead of the rig that is now sitting right there. Nothing about it looks
+  // wrong: the creature spawns, it moves, it just is not the animal.
+  //
+  // The same applies to a model uploaded from the T-menu over a key that is
+  // already in play — the pooled bodies are the old model and no reload
+  // happens, so they would keep appearing until the pool churned them out.
+  //
+  // Scoped to the key rather than clearVisualPool(), which also throws away
+  // every other key's high-water mark and would re-cost the whole roster for
+  // one model arriving. The peak is kept for the same reason: how many of this
+  // creature the game had in the water is still true, whatever body they wore.
+  evictPooled(key);
   return true;
 }
 
@@ -4562,6 +4658,42 @@ export function ensureAssetLoaded(key) {
 /** Is this asset's real model built and ready for createVisual? */
 export function isAssetLoaded(key) {
   return loadedModels.has(key);
+}
+
+/**
+ * Is this body one the ordinary spawner has to WAIT for — deferred, and not
+ * landed yet? Starts the fetch as a side effect, so the first roll that asks
+ * is the one that gets the file moving and a later roll finds it resident.
+ *
+ * THE HOLE THIS CLOSES. `defer` was written for bosses, and systems/boss.js
+ * holds an arrival until the body is in. But an asset key is not a boss: the
+ * megalodon body is worn by `bossShark` AND by the ordinary `megalodon` that
+ * rolls out of the pool from level 8, and that spawner went straight to
+ * createVisual — which, for a model that is not resident, hands back the
+ * primitive stand-in. A 2.2-radius unlit cone, in the water, at speed, with
+ * nothing thrown and nothing logged. entities/enemies.js asks this before it
+ * rolls a species and refuses the roll instead.
+ *
+ * Inert while assetsReady() is false, for the reason bossBodyReady is: a Node
+ * harness loads nothing, every creature there is a primitive on purpose, and
+ * holding one species back would only change what the census tests count.
+ */
+export function bodyPending(key) {
+  const def = ASSETS[key];
+  if (!def?.defer || !assetsPreloaded || loadedModels.has(key)) return false;
+  ensureAssetLoaded(key);
+  return true;
+}
+
+/**
+ * HARNESS ONLY. Flip assetsReady() by hand so a terminal test can exercise the
+ * deferred-body refusal above, which is deliberately inert until preload has
+ * run — and preload fetches by URL, which no terminal script can serve. Pair
+ * it with installModel to put the body in place and watch the refusal lift.
+ * Nothing under path/src calls this.
+ */
+export function markAssetsPreloaded(on = true) {
+  assetsPreloaded = !!on;
 }
 
 // Has preloadAssets finished at least once? False in every Node harness, which
@@ -5502,7 +5634,30 @@ const visualPool = new Map();
 // template, so what is retained is a node hierarchy and (if it is skinned) one
 // Skeleton with its bone texture — 16KB of GPU for a 126-bone crab. Disposing
 // and re-cloning it is the expensive half, which is why the floor is generous.
-const POOL_MIN_PER_KEY = 24;
+// A FLOOR, AND IT USED TO BE 24 — which quietly cost more than the flat cap it
+// replaced. The floor was written to stop a rare creature being sized down to
+// the handful that happened to die together, but the peak above already does
+// that job: peak is the most that were CONCURRENTLY ALIVE, so a rare creature's
+// peak is small because the creature is rare, not because of when it died.
+//
+// What the floor actually did was multiply across the roster. Measured with
+// tools/crowd-profile.mjs at a 220-alive crowd, 16 of 21 keys had a peak
+// between 1 and 13 and every one of them was held at 24: the pool was sized for
+// 564 bodies to cover 220 in the water, and ~325 of those were the floor alone.
+//
+// That is not free the way the note above assumes. A parked body is cheap in
+// GPU terms — the phone's own heartbeat reports 2MB of bone textures across a
+// whole run, so that part held — but it is a node hierarchy and a Skeleton on
+// the JS heap, and the same heartbeat reports 20,525 nodes and 632 skeletons at
+// 363MB, which is where iOS jetsams the WebContent process. See the crash trail
+// (npm run crash): both kills sat on a FLAT 363MB, so this is a resident-set
+// ceiling rather than a leak, and the floor is the largest single lever on it.
+const POOL_MIN_PER_KEY = 6;
+// Spare capacity above the observed peak, so a wave that runs slightly busier
+// than the busiest one so far is absorbed rather than re-cloning. This is what
+// the generous floor was really buying, expressed as what it is: headroom on a
+// number the run measures, not a constant that ignores it.
+const POOL_HEADROOM = 4;
 // A backstop, not a target. Something spawning hundreds of one key at once is
 // a spawn-table bug, and the pool should not quietly hold the evidence.
 const POOL_MAX_PER_KEY = 96;
@@ -5514,7 +5669,7 @@ const peakLiveByKey = new Map();
 
 function poolCap(key) {
   const peak = peakLiveByKey.get(key) ?? 0;
-  return Math.min(POOL_MAX_PER_KEY, Math.max(POOL_MIN_PER_KEY, peak));
+  return Math.min(POOL_MAX_PER_KEY, Math.max(POOL_MIN_PER_KEY, peak + POOL_HEADROOM));
 }
 
 function captureRest(visual) {
@@ -5630,6 +5785,16 @@ export function releaseVisual(visual) {
  * change — invalidates every body already built from it, and a recycled one
  * would come back wearing the old asset.
  */
+// Everything parked for one key, let go. See installModel for why a key's
+// pooled bodies stop being valid the moment its model is replaced.
+function evictPooled(key) {
+  const free = visualPool.get(key);
+  if (!free?.length) return 0;
+  for (const v of free) disposeVisual(v);
+  visualPool.delete(key);
+  return free.length;
+}
+
 export function clearVisualPool() {
   for (const free of visualPool.values()) for (const v of free) disposeVisual(v);
   visualPool.clear();

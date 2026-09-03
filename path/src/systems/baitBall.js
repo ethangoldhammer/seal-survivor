@@ -195,7 +195,18 @@ export function updateBaitBallClock(dt, ctx) {
     // swims them in — see updateBaitBalls. A ball that blinked into existence
     // mid-water would be the one spawn in the game the player is guaranteed to
     // be looking at when it happens.
-    x: side * ctx.offscreenX,
+    //
+    // PADDED BY THE COLUMN'S OWN RADIUS. baitSeed scatters each fish up to
+    // `c.radius` in from this anchor (toward centre, not just around it — see
+    // the note there), and `ctx.offscreenX` is the ordinary entrance margin,
+    // sized for a spawn that arrives as a point. A ball is a solid: the
+    // member rolled nearest centre can land a whole radius short of the
+    // anchor, and without this the ordinary margin has nothing left over for
+    // that member's own body — measured, one came in 0.07 units on the
+    // visible side of the line (npm run test:entrance, THE SCHOOL). Adding the
+    // radius here gives this the guarantee offscreenX already makes for every
+    // other spawn: nothing it can produce is ever on screen.
+    x: side * (ctx.offscreenX + (c.radius ?? 1.2)),
     y: stationY,
     stationX,
     stationY,
@@ -203,6 +214,83 @@ export function updateBaitBallClock(dt, ctx) {
     spin: rand() < 0.5 ? -1 : 1,
     shape: rollBaitShape(rand, c),
   };
+}
+
+/**
+ * THE OPENING BALLS — the specs for the balls a run starts with, placed ON
+ * STATION around the seal the way spawn.opening scatters its loose fish.
+ *
+ * Not the clock above. The clock's rule for every ball — form past the wall,
+ * away from the player, swim in — is what makes a ball mid-run a decision
+ * rather than a handout, and it is precisely wrong at t=0: a run begins with
+ * the emptiest water it will ever have and a seal with no chum, so the first
+ * thing it should see is the food, right there, before the spawner's first
+ * tick lands. One to three of them, rolled once, each in its own slice of the
+ * circle so three are three directions rather than three rolls that came up
+ * on the same side.
+ *
+ * Pure, like the clock, and for the same reason: entities/enemies.js owns the
+ * scene and spawns the fish, and the harness can ask "where do they land"
+ * without a scene at all.
+ *
+ * @param ctx { player: {x, y}, bounds, rand }
+ */
+export function openingBallSpecs(ctx) {
+  const c = cfg();
+  const o = c.opening ?? {};
+  if (c.enabled === false) return [];
+  const rand = ctx.rand ?? Math.random;
+  const n = rollOpeningCount(rand, c);
+  if (n <= 0) return [];
+
+  const b = ctx.bounds;
+  const margin = c.margin ?? 6;
+  const px = ctx.player?.x ?? 0;
+  const py = ctx.player?.y ?? (b.bottom + b.surfaceY) * 0.5;
+  // Outside `flee.radius`, whatever the rows say: a ball placed inside its own
+  // flee distance from the seal slides away on its first frame, which is the
+  // opening handing the player food and then pulling it back.
+  const near = Math.max(o.radiusMin ?? 14, (c.flee?.radius ?? 9) + (c.radius ?? 1.2) * 2);
+  const far = Math.max(near, o.radiusMax ?? 24);
+  const min = Math.max(1, Math.round(c.size?.min ?? 10));
+  const max = Math.max(min, Math.round(c.size?.max ?? 18));
+  const mid = (b.left + b.right) * 0.5;
+
+  const specs = [];
+  // A random phase so the slices do not always start from the same bearing —
+  // one ball straight to the right of the seal every run is a fixture, not a
+  // scatter.
+  const phase = rand() * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    // The jitter stays in the MIDDLE HALF of the slice, so two neighbours can
+    // never both drift to the shared edge and land side by side: with three
+    // balls the closest two can come is sixty degrees apart.
+    const a = phase + ((i + 0.25 + rand() * 0.5) / n) * Math.PI * 2;
+    const d = near + rand() * (far - near);
+    // Clamped rather than re-rolled, like the shoal: a seal that starts near a
+    // wall gets that ball tucked in against the rock, still in front of it.
+    const x = Math.min(b.right - margin, Math.max(b.left + margin, px + Math.cos(a) * d));
+    const y = Math.min(b.surfaceY - margin, Math.max(b.bottom + margin, py + Math.sin(a) * d));
+    specs.push({
+      count: min + Math.floor(rand() * (max - min + 1)),
+      x, y, stationX: x, stationY: y,
+      side: x < mid ? -1 : 1,
+      spin: rand() < 0.5 ? -1 : 1,
+      shape: rollBaitShape(rand, c),
+      // Placed, not arriving. The caller clears `arriving` on the ball and
+      // `entering` on its fish — see spawnOpeningBaitBalls.
+      opening: true,
+    });
+  }
+  return specs;
+}
+
+/** How many balls a run opens with, rolled once. `max` clamps `min`, so a max of 0 is off. */
+export function rollOpeningCount(rand = Math.random, c = cfg()) {
+  const cap = Math.max(0, Math.round(c.maxBalls ?? 1));
+  const max = Math.max(0, Math.min(cap, Math.round(c.opening?.max ?? 0)));
+  const min = Math.max(0, Math.min(max, Math.round(c.opening?.min ?? 0)));
+  return min + Math.floor(rand() * (max - min + 1));
 }
 
 /**

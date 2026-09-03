@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>bait shimmer shader check</title>
+<body style="font:13px ui-monospace,monospace;background:#111;color:#ddd;padding:16px">
+<pre id="out">compiling...</pre>
+<script>
+const SRC = {"fragment":"precision highp float;\n#define PI 3.141592653589793\nvarying vec3 vBaitWorld;\nuniform float uBaitStrength;\nuniform float uBaitTime;\nuniform float uBaitScale;\nuniform float uBaitContrast;\nuniform vec3 uBaitTint;\nuniform int uBaitCount;\nuniform vec4 uBaitBalls[8];\nconst vec3 NOISE_LUMA = vec3(0.2126, 0.7152, 0.0722);\n\nvec3 noiseHash3(vec3 p) {\n  p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),\n           dot(p, vec3(269.5, 183.3, 246.1)),\n           dot(p, vec3(113.5, 271.9, 124.6)));\n  return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);\n}\n\n// Classic Perlin: dot each corner's random gradient with the offset to the\n// sample point, then interpolate with the quintic-ish smoothstep so the\n// first derivative is continuous across cell boundaries (a plain lerp shows\n// the lattice as faint creases).\nfloat perlin3(vec3 p) {\n  vec3 i = floor(p);\n  vec3 f = fract(p);\n  vec3 u = f * f * (3.0 - 2.0 * f);\n  return mix(\n    mix(mix(dot(noiseHash3(i + vec3(0.0, 0.0, 0.0)), f - vec3(0.0, 0.0, 0.0)),\n            dot(noiseHash3(i + vec3(1.0, 0.0, 0.0)), f - vec3(1.0, 0.0, 0.0)), u.x),\n        mix(dot(noiseHash3(i + vec3(0.0, 1.0, 0.0)), f - vec3(0.0, 1.0, 0.0)),\n            dot(noiseHash3(i + vec3(1.0, 1.0, 0.0)), f - vec3(1.0, 1.0, 0.0)), u.x), u.y),\n    mix(mix(dot(noiseHash3(i + vec3(0.0, 0.0, 1.0)), f - vec3(0.0, 0.0, 1.0)),\n            dot(noiseHash3(i + vec3(1.0, 0.0, 1.0)), f - vec3(1.0, 0.0, 1.0)), u.x),\n        mix(dot(noiseHash3(i + vec3(0.0, 1.0, 1.0)), f - vec3(0.0, 1.0, 1.0)),\n            dot(noiseHash3(i + vec3(1.0, 1.0, 1.0)), f - vec3(1.0, 1.0, 1.0)), u.x), u.y), u.z);\n}\n\n// Three octaves, unrolled at a fixed count on purpose: making it a uniform\n// would mean recompiling the shader every time the tuner moved, and three is\n// enough to break up the lattice without the top octave aliasing into noise\n// at the size this renders.\nfloat noiseFbm(vec3 p) {\n  float v = 0.0;\n  float a = 0.5;\n  for (int i = 0; i < 3; i++) {\n    v += a * perlin3(p);\n    p *= 2.02;   // not exactly 2, so octave lattices don't line up\n    a *= 0.5;\n  }\n  return v;\n}\nvoid main() {\n  // Everything the injection reads that three declares for real. diffuseColor\n  // is the one that matters — leave it out and this fails on a line the game\n  // compiles fine.\n  vec4 diffuseColor = vec4(1.0);\n  gl_FragColor = vec4(0.0);\n  if (uBaitStrength > 0.0 && uBaitCount > 0) {\n    // HOW MUCH OF A BALL THIS FRAGMENT IS IN. Nearest of up to\n    // MAX_SHIMMER_BALLS, smoothstepped to zero at the ball's own reach, so a\n    // fish of the same species swimming loose elsewhere in the arena is\n    // untouched — which it must be, because it shares this material.\n    float baitIn = 0.0;\n    for (int i = 0; i < 8; i++) {\n      if (i >= uBaitCount) break;\n      vec4 b = uBaitBalls[i];\n      float d = distance(vBaitWorld, b.xyz);\n      baitIn = max(baitIn, 1.0 - smoothstep(b.w * 0.55, b.w, d));\n    }\n    if (baitIn > 0.0) {\n      // THE SAME FIELD THE FLOCK SWIMS IN. Same divisor, same drift along z —\n      // see baitNoise in systems/baitBall.js, which is a hand port of noiseFbm\n      // and is checked against it in tools/bait-ball-test.mjs.\n      vec3 np = vec3(vBaitWorld.x, vBaitWorld.y, vBaitWorld.z) / max(0.0001, uBaitScale);\n      np.z += uBaitTime;\n      float n = clamp(noiseFbm(np) * uBaitContrast * 0.5 + 0.5, 0.0, 1.0);\n      // Signed about the middle, so the field DARKENS as much as it brightens\n      // and the mass keeps its average. A one-sided lift just makes the whole\n      // ball paler and reads as fog.\n      float lift = (n - 0.5) * 2.0 * uBaitStrength * baitIn;\n      diffuseColor.rgb = mix(diffuseColor.rgb, uBaitTint, max(0.0, lift));\n      diffuseColor.rgb *= 1.0 + lift * 0.6;\n    }\n  }\n  gl_FragColor = diffuseColor;\n}\n","vertex":"precision highp float;\nuniform mat4 modelMatrix;\nuniform mat4 modelViewMatrix;\nuniform mat4 projectionMatrix;\nattribute vec3 position;\nvarying vec3 vBaitWorld;\nvoid main() {\n  vec3 transformed = position;\n  vBaitWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);\n}\n"};
+const gl = document.createElement('canvas').getContext('webgl2');
+const lines = [];
+let bad = 0;
+function compile(kind, source, label) {
+  const s = gl.createShader(kind);
+  gl.shaderSource(s, source);
+  gl.compileShader(s);
+  if (gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    lines.push('ok   ' + label + ' compiles');
+    return true;
+  }
+  bad++;
+  const log = gl.getShaderInfoLog(s) || '';
+  lines.push('FAIL ' + label + ' does NOT compile');
+  for (const l of log.trim().split('\n')) lines.push('       ' + l);
+  const body = source.split('\n');
+  const seen = new Set();
+  for (const m of log.matchAll(/ERROR: \d+:(\d+)/g)) {
+    const n = +m[1];
+    if (seen.has(n)) continue;
+    seen.add(n);
+    lines.push('');
+    for (let i = Math.max(0, n - 3); i < Math.min(body.length, n + 2); i++) {
+      lines.push((i === n - 1 ? '  >> ' : '     ') + String(i + 1).padStart(4) + '  ' + body[i]);
+    }
+  }
+  return false;
+}
+if (!gl) {
+  lines.push('no webgl2 context — nothing was checked, and the game needs one');
+  bad++;
+} else {
+  compile(gl.VERTEX_SHADER, SRC.vertex, 'the shimmer vertex splice');
+  compile(gl.FRAGMENT_SHADER, SRC.fragment, 'the shimmer fragment injection');
+  lines.push('     every bait ball shares this one program, so this is all of them');
+}
+lines.push('');
+lines.push(bad === 0 ? 'ALL GOOD' : bad + ' PROBLEM(S)');
+document.getElementById('out').textContent = lines.join('\n');
+document.title = bad === 0 ? 'bait shimmer ok' : 'bait shimmer FAILED';
+</script>

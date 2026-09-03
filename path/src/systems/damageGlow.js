@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { ease } from '../ease.js';
 
@@ -143,6 +144,11 @@ export function attachDamageGlow(root) {
       copy.userData.__heatEmissive = lit ? (copy.emissive?.getHex?.() ?? 0x000000) : 0;
       copy.userData.__heatIntensity = lit ? (copy.emissiveIntensity ?? 0) : 0;
       copy.userData.__heatColor = copy.color?.getHex?.() ?? 0xffffff;
+      // THE TWO LAYERS THIS MATERIAL IS COMPOSED FROM, kept on the material
+      // rather than in any handle's closure — see compose() below for why.
+      copy.userData.__heatT = 0;
+      copy.userData.__heatCfg = null;
+      copy.userData.__tint = null;
       owned.push(copy);
       return copy;
     };
@@ -156,6 +162,7 @@ export function attachDamageGlow(root) {
   // nothing" is a needsUpdate risk for no picture.
   let wrote = -1;
   let wroteColor = -1;
+  let wroteTint = '';
 
   const handle = {
     /**
@@ -169,29 +176,96 @@ export function attachDamageGlow(root) {
       wrote = t;
       wroteColor = c.color;
       for (const m of owned) {
-        const d = m.userData;
-        if (d.__heatLit) {
-          if (t <= 0) {
-            m.emissive.setHex(d.__heatEmissive);
-            m.emissiveIntensity = d.__heatIntensity;
-          } else {
-            m.emissive.setHex(c.color);
-            m.emissiveIntensity = d.__heatIntensity + c.peak * t;
-          }
-        } else if (m.color) {
-          // Overdrive past 1 rather than a tint toward the hot colour: an
-          // unlit material has no other way to cross the bright pass, and
-          // pulling the hue over instead would recolour the shrimp rather
-          // than lighting it.
-          m.color.setHex(d.__heatColor).multiplyScalar(1 + c.peak * t);
-        }
+        m.userData.__heatT = t;
+        m.userData.__heatCfg = t > 0 ? c : null;
+        compose(m);
+      }
+    },
+    /**
+     * THE STATUS LAYER — what the body is WEARING, under whatever heat is on
+     * it. A frozen fish is blue and a poisoned one is green for as long as the
+     * status lasts, which is a different thing from a hit's flash: it is a
+     * resting state, and the heat above rides on top of it and hands back to
+     * it when it cools rather than to the template's own colour.
+     *
+     * Composed with the heat rather than written beside it because both land
+     * on the SAME cloned materials — attachDamageGlow hands an already
+     * instanced material back rather than cloning a clone — so two writers
+     * with last-write-wins deciding would be a burn erasing a poison every
+     * frame. See systems/statusFx.js for the caller.
+     *
+     * @param color     hex, or null to take the layer off
+     * @param body      0..1 how far the material's own colour moves toward it
+     * @param emissive  0..1 how far a lit material's emissive colour moves
+     * @param intensity emissive intensity added at emissive = 1; an unlit
+     *                  stand-in takes it as colour overdrive instead
+     */
+    setTint(color, body = 0, emissive = 0, intensity = 0) {
+      const on = color != null && (body > 0 || (emissive > 0 && intensity > 0));
+      const key = on ? `${color}|${body.toFixed(3)}|${emissive.toFixed(3)}|${intensity.toFixed(3)}` : '';
+      if (key === wroteTint) return;
+      wroteTint = key;
+      const tint = on ? { color, body, emissive, intensity } : null;
+      for (const m of owned) {
+        m.userData.__tint = tint;
+        compose(m);
       }
     },
     /** Back to cold. Called when the instance goes away or the run ends. */
     release() { handle.set(0, null); },
+    /** The status layer off. A body released to the pool must not keep it. */
+    releaseTint() { handle.setTint(null); },
     /** For the harness and the look pages. */
     get materials() { return owned; },
   };
 
   return handle;
+}
+
+const _rest = new THREE.Color();
+const _tintCol = new THREE.Color();
+
+/**
+ * WRITE ONE MATERIAL FROM ITS TWO LAYERS.
+ *
+ * The rest state is the template's colour, moved toward the status tint by
+ * however much of it there is; the heat is then laid over that. A lit material
+ * takes the status as colour AND as emissive — a frozen body is blue in the
+ * shadow and faintly lit blue — while heat replaces the emissive outright for
+ * as long as it lasts, which is what "a bolt landing on a poisoned shark still
+ * flashes white" means. An unlit stand-in has one channel for all of it and
+ * takes both as overdrive on the tinted colour.
+ */
+function compose(m) {
+  const d = m.userData;
+  const tint = d.__tint;
+  const t = d.__heatT ?? 0;
+  const c = d.__heatCfg;
+  const body = tint ? Math.max(0, Math.min(1, tint.body)) : 0;
+  const em = tint ? Math.max(0, Math.min(1, tint.emissive)) : 0;
+  if (tint) _tintCol.setHex(tint.color);
+  if (d.__heatLit) {
+    if (m.color) {
+      m.color.setHex(d.__heatColor);
+      if (body > 0) m.color.lerp(_tintCol, body);
+    }
+    const restIntensity = d.__heatIntensity + (tint ? em * tint.intensity : 0);
+    if (t > 0 && c) {
+      m.emissive.setHex(c.color);
+      m.emissiveIntensity = restIntensity + c.peak * t;
+    } else {
+      _rest.setHex(d.__heatEmissive);
+      if (em > 0) _rest.lerp(_tintCol, em);
+      m.emissive.copy(_rest);
+      m.emissiveIntensity = restIntensity;
+    }
+  } else if (m.color) {
+    // Overdrive past 1 rather than a tint toward the hot colour: an unlit
+    // material has no other way to cross the bright pass, and pulling the
+    // hue over instead would recolour the shrimp rather than lighting it.
+    m.color.setHex(d.__heatColor);
+    if (body > 0) m.color.lerp(_tintCol, body);
+    const over = 1 + (t > 0 && c ? c.peak * t : 0) + (tint ? em * tint.intensity : 0);
+    m.color.multiplyScalar(over);
+  }
 }

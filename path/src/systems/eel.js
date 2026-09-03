@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
@@ -371,6 +372,9 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
   // ...whereas how far the FIRST zap will look for a victim is acquisition.
   let bestD = targeting(CONFIG.eel.initialRange);
   for (const e of enemiesList) {
+    // Never scenery — the first zap and every hop after it. A turtle beside
+    // the seal would take the eel's whole chain, every time. See isScenery.
+    if (isScenery(e)) continue;
     const d = Math.hypot(e.mesh.position.x - origin.x, e.mesh.position.y - origin.y);
     if (d < bestD) { bestD = d; current = e; }
   }
@@ -404,7 +408,7 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
     let next = null;
     let nd = stats.chainRadius;
     for (const e of enemiesList) {
-      if (visited.has(e) || e.hp <= 0) continue;
+      if (visited.has(e) || e.hp <= 0 || isScenery(e)) continue;
       const d = e.mesh.position.distanceTo(target.mesh.position);
       if (d < nd) { nd = d; next = e; }
     }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { createVisual } from '../assets.js';
 import { bounds } from '../arena.js';
 import { createAnimationController } from '../systems/animation.js';
@@ -875,6 +876,9 @@ export function chainToEnemy(p, enemiesList, exclude = null) {
 
   for (const e of enemiesList) {
     if (e === exclude || e.hp <= 0) continue;
+    // Same rule as seekable(): a ricochet that bounced into a turtle would
+    // spend its hop on a wall.
+    if (isScenery(e)) continue;
     const dx = e.mesh.position.x - pos.x;
     const dy = e.mesh.position.y - pos.y;
     const d = dx * dx + dy * dy;

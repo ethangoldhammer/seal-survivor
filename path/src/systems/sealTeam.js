@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { faceSide } from './facing.js';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { bounds } from '../arena.js';
@@ -206,6 +207,9 @@ function nearestEnemy(enemies, pos, range) {
   let bestD = range * range;
   for (const e of enemies) {
     if (e.hp <= 0) continue;
+    // Never scenery: an escort that charged a turtle would bounce off it for
+    // the whole lunge, and the evolved shot would empty into it. See isScenery.
+    if (isScenery(e)) continue;
     const dx = e.mesh.position.x - pos.x;
     const dy = e.mesh.position.y - pos.y;
     // Squared distance, so the mark's pull is squared with it — the escorts

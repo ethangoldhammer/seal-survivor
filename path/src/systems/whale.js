@@ -432,7 +432,15 @@ export function spawnWhale(scene, rand = Math.random) {
   const c = CONFIG.whale ?? {};
 
   const container = new THREE.Group();
-  const visual = createVisual('whale');
+  // WHICH ANIMAL. Two bodies can make the crossing and they are animated in
+  // opposite ways: the bowhead (`whale`) ships no clips and is wagged by the
+  // procedural rig at `wagState`; the humpback (`humpbackWhale`) ships an
+  // authored feeding loop bound to 'idle' and plays it at `clipSpeed`. The
+  // choice is a config field rather than a hardcoded key so the tuner can flip
+  // between them mid-run; everything else in this file measures the body it
+  // was handed and does not care which it got.
+  const assetKey = c.asset ?? 'whale';
+  const visual = createVisual(assetKey);
   container.add(visual);
 
   // MEASURE the body, do not derive it. `fit` scales a grandchild of what
@@ -474,6 +482,11 @@ export function spawnWhale(scene, rand = Math.random) {
     container,
     visual,
     anim,
+    // The locomotion state this body is driven in. A body with a clip bound
+    // for 'idle' plays that clip; one without takes the procedural state the
+    // config names. Decided once, off the controller, so the update loop is
+    // not re-asking every frame.
+    state: anim?.hasClip('idle') ? 'idle' : (c.wagState ?? 'idle'),
     morphs: morphControl(visual),
     dir,
     margin,
@@ -987,6 +1000,13 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     // at 15 u/s, which that helper reads as a full sprint, and a bowhead
     // sprinting is a bowhead having a seizure. Its stroke is slow and long, so
     // it takes the state whose wagSpeed/wagAmplitude say so.
-    if (CONFIG.animation.enabled && w.anim) w.anim.update(dt, c.wagState ?? 'idle', false);
+    //
+    // A clip-driven body (the humpback) plays its authored loop at `clipSpeed`
+    // instead — set every frame so the tuner slider is live. It is a no-op on
+    // the procedural bowhead, whose 'whaleCruise' state has no clip to pace.
+    if (CONFIG.animation.enabled && w.anim) {
+      w.anim.setRate(c.clipSpeed ?? 1);
+      w.anim.update(dt, w.state, false);
+    }
   }
 }

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { chainHex } from './chainColor.js';
-import { pipCount, liveChain, releaseOffset, sweetHalfWidth, chainWindowLeft } from './strike.js';
+import { pipCount, liveChain, releaseOffset, sweetHalfWidth, chainWindowLeft, minFire } from './strike.js';
 import { ease } from '../ease.js';
 import { playerOverlayZ } from '../entities/player.js';
 // Read live, per frame: which of the two fuel views the player asked for.
@@ -1519,7 +1519,7 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
   // Armed reads the POWER BANKED, not the fuel left — they move in opposite
   // directions while holding, and the one the player needs to know about is
   // whether letting go now would actually launch anything.
-  u.uArmed.value = strikeState.pending >= CONFIG.strike.charge.minFire ? 1 : 0;
+  u.uArmed.value = strikeState.pending >= minFire() ? 1 : 0;
   // Normalised so the flash fades out over flashTime rather than popping off.
   u.uFlash.value = Math.max(0, Math.min(1, strikeState.flash / Math.max(0.01, CONFIG.strike.charge.flashTime)));
   // ONE EXPRESSION, quoted rather than re-derived. The strip under the FOOD

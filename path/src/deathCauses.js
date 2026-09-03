@@ -105,7 +105,10 @@ export const DEATH_CAUSES = [
   { id: 'boss', label: 'a boss', threat: 'Boss attacks', prefix: 'boss:', sources: ['bossShark', 'bossOrca', 'bossSquid', 'bossCrab', 'bossMosasaur', 'bossHammerhead', 'bossBoat', 'bossYacht', 'bossAnglerfish'] },
   { id: 'drowning', label: 'running out of air', threat: 'Drowning', sources: ['drowning'] },
   { id: 'lightning', label: 'a lightning strike', threat: 'Lightning', sources: ['lightning'] },
-  { id: 'shot', label: 'something that shoots', threat: 'Enemy fire', sources: ['enemy shot'] },
+  // `boat:` is the deck guns on the ordinary boats and trawlers — the fish
+  // they throw and the artillery trawler's mussels and gulls (systems/boats.js).
+  // They file here rather than under `boat`, which is the two BOSS hulls.
+  { id: 'shot', label: 'something that shoots', threat: 'Enemy fire', prefix: 'boat:', sources: ['enemy shot'] },
 ];
 
 export const DEATH_CAUSE_IDS = DEATH_CAUSES.map((c) => c.id);

@@ -7,11 +7,13 @@ import { skyLight } from './daylight.js';
 import { setNoiseGlow, setNoiseGlowPulse, clearNoiseGlow } from './noiseShader.js';
 import { advanceCycles } from './beatSync.js';
 import { holdEnemy, clearDaze } from './control.js';
+import { noteVenomTick } from './statusFx.js';
 import {
   biolumShockLevelStats, biolumVenomLevelStats,
   biolumChillLevelStats, biolumInfectionLevelStats,
 } from '../levelStats.js';
 import { FLIPPER_SIDES, finElementsIn } from '../flipperSide.js';
+import { isScenery } from '../enemyTable.js';
 
 // ============================================================================
 // GLOW UP! — the seal's bioluminescence, and the only ELEMENT in the game.
@@ -371,6 +373,11 @@ export function applyElementalHit(scene, enemy, baseDamage, enemiesList, hooks =
   // already playing.
   const id = opts.element ?? activeElement();
   if (!id || !cfg().enabled || !enemy) return 0;
+  // NOTHING LANDS ON SCENERY. The bonus damage would be absorbed anyway (its
+  // hp is sealed), but the STATUS would not: a turtle would carry venom green,
+  // ice and a ring of contagion motes, and read as a thing being hurt. It is
+  // a thing being shoved. See isScenery.
+  if (isScenery(enemy)) return 0;
   const lv = levelOf(id);
   if (lv <= 0) return 0;
 
@@ -502,6 +509,9 @@ export function arcChain(scene, from, packet, enemiesList, hooks = {}, spec = {}
     let bestD = range2;
     for (const other of enemiesList) {
       if (struck.has(other)) continue;
+      // The arc never jumps to scenery: a turtle in the crowd would eat a hop
+      // of the chain (and flash for it) while the fish behind it went unshocked.
+      if (isScenery(other)) continue;
       const dx = other.mesh.position.x - sx;
       const dy = other.mesh.position.y - sy;
       const d2 = dx * dx + dy * dy;
@@ -597,6 +607,10 @@ function applyVenom(enemy, share) {
  *   records it as a control event, which is the whole reason this returns.
  */
 export function chillEnemy(enemy, amount, duration, freezeFor, hooks, x, y) {
+  // The ice club comes in here without passing applyElementalHit, so the
+  // scenery rule is repeated at this door. A frozen turtle would be a turtle
+  // that stopped drifting — the one thing it is for.
+  if (isScenery(enemy)) return false;
   const e = elementCfg('chill') ?? {};
   const max = e.maxSlow ?? 0.7;
   enemy.chillSlow = Math.min(max, (enemy.chillSlow ?? 0) + amount);
@@ -620,6 +634,14 @@ export function chillEnemy(enemy, amount, duration, freezeFor, hooks, x, y) {
     // shaken out of is a real contribution to the fight, and it discharges into
     // a daze the moment the recovery is over. See systems/control.js.
     if (!holdEnemy(enemy, freezeFor)) return false;
+    // WHY IT IS HELD, for the look. `trapTimer` is deliberately shared with
+    // the beluga's bubble and Bakalar's net, so nothing downstream can read
+    // "held" and know it was the cold — and a body in a bubble must not turn
+    // blue. This is that record: how long it has left as ICE, aged beside the
+    // chill in thawChilled. On a boss the hold is a daze and the body keeps
+    // steering, but it is still a body the cold has just landed on, so it
+    // wears the same look for the same seconds. Read by systems/statusFx.js.
+    enemy.freezeTimer = Math.max(enemy.freezeTimer ?? 0, freezeFor);
     // Spent. Without this the fish thaws straight back into the frozen state on
     // the next pellet and never moves again, which is a stun-lock rather than
     // an element.
@@ -654,6 +676,8 @@ function applyChill(enemy, share, hooks, x, y) {
  */
 export function thawChilled(dt, enemiesList) {
   for (const e of enemiesList) {
+    // The ice itself, aged on the same clock as the hold it describes.
+    if (e.freezeTimer > 0) e.freezeTimer = Math.max(0, e.freezeTimer - dt);
     if (!(e.chillTimer > 0)) continue;
     e.chillTimer -= dt;
     // Thaw gradually rather than snapping back to full speed: the slow decays
@@ -769,6 +793,12 @@ export function updateElements(dt, scene, enemiesList, hooks = {}, projectiles =
         // the card's, so it stays here.
         const dps = biolumVenomLevelStats(lv, player.stats).biolumVenomDps
           * (e.venomStacks ?? 1);
+        // THE TICK IS SEEN, not only subtracted. A poison that only moved a
+        // number was invisible between hits; the body flashes and sheds a drop
+        // on every application so the damage-over-time reads AS over time.
+        // Before the damage, so a tick that kills still shows on the body the
+        // burst comes off — see systems/statusFx.js.
+        noteVenomTick(e);
         dead = damageOverTime(scene, enemiesList, i, e, dps * (c?.tick ?? 0.35), hooks);
       }
       if (!dead && e.venomTimer <= 0) { e.venomTimer = 0; e.venomStacks = 0; }
@@ -825,6 +855,7 @@ function creep(dt, host, enemiesList, hooks) {
   for (const other of enemiesList) {
     if (taken >= (c.spreadPerHop ?? 1)) break;
     if (other === host || other.infectTimer > 0) continue;
+    if (isScenery(other)) continue;
     const dx = other.mesh.position.x - host.mesh.position.x;
     const dy = other.mesh.position.y - host.mesh.position.y;
     if (dx * dx + dy * dy > range2) continue;
@@ -859,6 +890,7 @@ function drainBursts(scene, enemiesList, hooks) {
 
     for (let i = enemiesList.length - 1; i >= 0; i--) {
       const e = enemiesList[i];
+      if (isScenery(e)) continue;
       const dx = e.mesh.position.x - b.x;
       const dy = e.mesh.position.y - b.y;
       if (dx * dx + dy * dy > r2) continue;
@@ -1362,6 +1394,7 @@ export function clearStatuses(enemiesList) {
     e.venomStacks = 0;
     e.chillTimer = 0;
     e.chillSlow = 0;
+    e.freezeTimer = 0;
     e.infectTimer = 0;
     e.infectDps = 0;
     e.infectGen = 0;

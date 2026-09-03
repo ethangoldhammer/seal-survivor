@@ -66,7 +66,7 @@ const PUBLISH = new Set([
 ]);
 
 const WRITES = new Set([
-  'build', 'whale', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
+  'build', 'whale', 'humpback', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
   'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
   'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit', 'shrink',
@@ -110,7 +110,7 @@ const GROUP_BY_NAME = {
   // Cuts a usable one-shot out of a long library bed. An asset job, and
   // destructive with --write.
   'sfx:excerpt': 'Assets',
-  bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', notes: 'Assets', takes: 'Assets',
+  bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', humpback: 'Assets', notes: 'Assets', takes: 'Assets',
   anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
   emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',
   placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets',

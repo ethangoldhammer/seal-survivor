@@ -26,8 +26,12 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { readFile } from 'node:fs/promises';
 import { CONFIG } from '../path/src/config.js';
-import { enemies, spawnNamed, resetEnemies } from '../path/src/entities/enemies.js';
-import { parseEnemyCsv, ENEMY_TABLE_FIELDS } from '../path/src/enemyTable.js';
+import { enemies, spawnNamed, resetEnemies, updateEnemies } from '../path/src/entities/enemies.js';
+import { parseEnemyCsv, ENEMY_TABLE_FIELDS, isScenery } from '../path/src/enemyTable.js';
+import { applyElementalHit, chillEnemy, resetElements } from '../path/src/systems/elements.js';
+import { player } from '../path/src/entities/player.js';
+import { markTarget, isMarked, resetMarks } from '../path/src/systems/marks.js';
+import { canHold, canControl, holdEnemy, charmEnemy } from '../path/src/systems/control.js';
 import * as playtest from '../path/src/systems/playtest.js';
 import { SENTINEL_HP } from '../path/src/systems/playtest.js';
 
@@ -146,6 +150,71 @@ resetEnemies(scene);
 spawnNamed(scene, 'seaTurtle', 1, { x: 0, y: -5 });
 const after = playtest.endRun('death').buckets[0];
 check('a turtle spawn adds no pressure', (after?.spawnHp ?? 0) === 0, `spawnHp=${after?.spawnHp ?? 0}`);
+
+// ---------------------------------------------------------------------------
+section('It is knocked around, and that is all — no flash, no status, no lock');
+
+// The rule, in full: a turtle is never TARGETED, never FLASHES from damage,
+// never wears an element. It has a body and a mass; a hit may shove it and
+// nothing else. Each case below is a door a different system comes through.
+resetEnemies(scene);
+resetMarks();
+spawnNamed(scene, 'seaTurtle', 1, { x: 0, y: -5 });
+const sc = enemies[enemies.length - 1];
+spawnNamed(scene, 'fish', 1, { x: 3, y: -5 });
+const fish = enemies[enemies.length - 1];
+check('isScenery reads the turtle', isScenery(sc) === true);
+check('isScenery clears a fish', isScenery(fish) === false);
+
+// The hit pop. Twenty writers set `e.flash`; the consumer in updateEnemies is
+// where it is refused, so write it the way every one of them does.
+sc.flash = CONFIG.fx.hitFlash;
+fish.flash = CONFIG.fx.hitFlash;
+const scale0 = sc.visual.scale.x;
+updateEnemies(1 / 60, scene, { x: 0, y: 0 }, () => {}, () => {}, () => {});
+check('the turtle does not pop when hit', sc.flash === 0 && Math.abs(sc.visual.scale.x - scale0) < 1e-6,
+  `flash=${sc.flash} scale ${scale0} -> ${sc.visual.scale.x}`);
+check('a fish still pops', fish.flash > 0, `flash=${fish.flash}`);
+
+// The elements. applyElementalHit is the one door for the gun's element; the
+// ice club comes through chillEnemy on its own.
+// Hold the venom card, the way tools/elements-test.mjs does: which card you
+// hold IS the element.
+resetElements(scene);
+const venomCard = (CONFIG.upgrades ?? []).find((u) => u.element === 'venom');
+player.upgrades.length = 0;
+player.upgrades.push({ id: venomCard.id, rarity: 'common' });
+player.stats.biolumLevel = 1;
+const bonus = applyElementalHit(scene, sc, 100, enemies, {}, 1);
+check('an element lands nothing on the turtle', bonus === 0 && !(sc.venomTimer > 0),
+  `bonus=${bonus} venomTimer=${sc.venomTimer}`);
+const fishBonus = applyElementalHit(scene, fish, 100, enemies, {}, 1);
+check('the same element still lands on a fish', fishBonus > 0 && fish.venomTimer > 0,
+  `bonus=${fishBonus} venomTimer=${fish.venomTimer}`);
+const froze = chillEnemy(sc, 1, 5, 2, {}, 0, -5);
+check('ice does not take on the turtle', froze === false && !(sc.chillTimer > 0) && !(sc.trapTimer > 0),
+  `froze=${froze} chillTimer=${sc.chillTimer} trapTimer=${sc.trapTimer}`);
+player.upgrades.length = 0;
+resetElements(scene);
+
+// Holds and charms — the bubble, the net, the arms, the charm pulse all ask
+// canHold/canControl while choosing, and the two verbs are the only doors.
+check('the turtle cannot be held or charmed',
+  canHold(sc) === false && canControl(sc) === false
+  && holdEnemy(sc, 3) === false && charmEnemy(sc, 3) === false
+  && !(sc.trapTimer > 0) && !(sc.charmTimer > 0) && !(sc.dazeTimer > 0),
+  `trap=${sc.trapTimer} charm=${sc.charmTimer} daze=${sc.dazeTimer}`);
+check('a fish still can', canHold(fish) === true && holdEnemy(fish, 3) === true && fish.trapTimer > 0);
+fish.trapTimer = 0;
+
+// The reticle — the instruction every seeker and escort obeys outright.
+check('the turtle cannot be marked', markTarget(sc) === false && !isMarked(sc));
+// A body big enough to mark (the reticle has a size floor a small fish is
+// under), so the negative above is read against a positive.
+spawnNamed(scene, 'shark', 1, { x: 6, y: -5 });
+const shark = enemies[enemies.length - 1];
+check('a shark can', markTarget(shark) === true && isMarked(shark), `radius=${shark.radius}`);
+resetMarks();
 
 // ---------------------------------------------------------------------------
 console.log(failures ? `\n${failures} FAILED\n` : '\nAll passed.\n');

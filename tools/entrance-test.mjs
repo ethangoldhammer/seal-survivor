@@ -57,7 +57,8 @@ import { updateBoss, resetBoss, bossState, bossBanner, forceBoss } from '../path
 import {
   updateCineCamera, resetCineCamera, cineDebug, cineRevealing, cineSubject,
 } from '../path/src/systems/cineCamera.js';
-import { resetWaves, setBossCycle } from '../path/src/systems/waves.js';
+import { resetWaves, setBossCycle, lullEligible } from '../path/src/systems/waves.js';
+import { resetBaitBalls, updateBaitBallClock, baitSeed } from '../path/src/systems/baitBall.js';
 
 const DT = 1 / 60;
 const ASPECT = 16 / 9;
@@ -319,6 +320,44 @@ section('THE SCHOOL — the scatter cannot put one on screen');
   check('a run\'s worth of real spawning puts nobody on screen',
     onScreen.length === 0, onScreen.slice(0, 4).join('; ') || `${spawned} creatures through the real spawner`);
   resetEnemies(scene);
+
+  // THE BAIT BALL, COMPUTED RATHER THAN SAMPLED. A ball's fish are seeded
+  // through the column's volume around an anchor that declares no `side`, so
+  // they never get spawnOne's outward push — the anchor alone has to be far
+  // enough out that the member rolled nearest the arena still clears the
+  // picture. The seeded run above can only prove that for the draws it made:
+  // this one placed a member 0.07 units inside the edge on one seed and
+  // passed on the next, which is a pass that means nothing. So build the
+  // worst case by hand — baitSeed's angle at exactly pi and its radius at
+  // its full extent — on the biggest body a ball can hold, and ask that.
+  const bc = CONFIG.baitBall ?? {};
+  resetBaitBalls();
+  const ballRand = seeded(0xBA17);
+  const spec = updateBaitBallClock((bc.firstDelay ?? 10) + 1, {
+    level: 12, difficulty: 8, boss: null, hold: false, aliveNonBoss: 0,
+    maxAlive: CONFIG.spawn.maxAlive, bounds,
+    offscreenX: bounds.right + shoreOverscan() + (CONFIG.spawn.entrance.margin ?? 1.5),
+    player: { x: 0, y: -12 }, rand: ballRand,
+  });
+  check('the clock will place a ball', !!spec, spec ? `anchor x ${spec.x.toFixed(1)}` : 'no spec');
+  if (spec) {
+    const R = bc.radius ?? 1.7;
+    // Toward the arena is +x from a left-wall anchor and -x from a right-wall
+    // one: index 0 puts baitSeed's angle at 0 (cos +1), index count/2 at pi
+    // (cos -1). rand 0.5 leaves the angle jitter at zero, rand 1 takes the
+    // radius to its ceiling. The member on the arena side, as far in as
+    // baitSeed can put one.
+    const worst = [0.5, 1, 0.5];
+    const inwardIndex = spec.x < 0 ? 0 : spec.count / 2;
+    const inner = baitSeed(inwardIndex, spec.count, { x: spec.x, y: spec.y, shell: R }, () => worst.shift() ?? 0.5, bc);
+    let fishR = 0;
+    for (const def of Object.values(CONFIG.enemies)) if (lullEligible(def)) fishR = Math.max(fishR, def.radius ?? 0);
+    const clear = Math.abs(inner.x) - fishR - edgeX();
+    check('...and its innermost fish is off the picture in the worst case, not on average',
+      clear > 0,
+      `anchor ${Math.abs(spec.x).toFixed(2)}, in by ${(Math.abs(spec.x) - Math.abs(inner.x)).toFixed(2)}, nose r ${fishR.toFixed(2)}, edge ${edgeX().toFixed(2)} — clears by ${clear.toFixed(2)}`);
+  }
+  resetBaitBalls();
 }
 
 // ---------------------------------------------------------------------------

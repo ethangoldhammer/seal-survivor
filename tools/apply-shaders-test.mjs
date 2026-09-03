@@ -313,8 +313,10 @@ await writeFile(flatMod, src
   .replace('async function devServerBlocking(', 'async function unusedDevServerBlocking(')
   .replace(/^async function unusedDevServerBlocking\(what, notes\) \{/m,
     'async function devServerBlocking() { return false; }\nasync function unusedDevServerBlocking(what, notes) {')
-  .replace('async function writeFlatRoots(', 'export async function writeFlatRoots('));
-const { writeFlatRoots, clearRimTuning } = await import('file://' + flatMod);
+  .replace('async function writeFlatRoots(', 'export async function writeFlatRoots(')
+  .replace(/const ASSETS_JS = .*;/, `const ASSETS_JS = ${JSON.stringify(join(dir, 'assets.js'))};`)
+  .replace('async function writeAssetOutlines(', 'export async function writeAssetOutlines('));
+const { writeFlatRoots, clearRimTuning, writeAssetOutlines } = await import('file://' + flatMod);
 
 // Both blocks as config.js actually lays them out: prose above the numbers, an
 // `on` list nested inside, and a same-named `on` in a NEIGHBOURING root — which
@@ -392,6 +394,169 @@ console.log('\nTHE RIM BLOCKS, SPLICED');
   const none = await writeFlatRoots({ creatureOutline: { __flat: { glow: 1 } } }, { dry: false }, gone);
   check('a root with no block is reported, not appended',
     none.length === 0 && gone.some((n) => n.includes('no `creatureOutline: {` block')), gone.join(' · '));
+}
+
+// ---------------------------------------------------------------------------
+// The rim an ASSET declares — `outline: {...}` on its ASSETS entry, which is the
+// whales, the boats and the seagull. Neither CONFIG family reaches it, so the
+// lab writes these into assets.js. The traps are all about WHICH block: the
+// file is one object literal in which `outline: {` appears inside dozens of
+// entries, an entry can nest a same-named key deeper, and the entry being
+// written may have no rim at all — in which case the first `outline: {` after
+// it is the NEXT species' rim.
+// ---------------------------------------------------------------------------
+const ASSETS_FIXTURE = join(dir, 'assets.js');
+const ASSET_SRC = `import * as THREE from 'three';
+// A helper above the literal, with a rim-shaped thing in it that is not a rim.
+const decoy = { outline: { color: 0x123456, thickness: 9 } };
+export const ASSETS = {
+  enemyWhale: {
+    model: 'models/decoy.glb',
+    outline: { color: 0x000000, thickness: 0.5 },
+  },
+  whale: {
+    model: 'models/whale.glb',
+    rig: { outline: { color: 0x111111, thickness: 7 } },
+    // Cold rim like the bowhead's. Object-space thickness — 180 source units.
+    outline: { color: 0x9fd8e8, thickness: 1.1, glow: 1.6 },
+    tint: 0xffffff,
+  },
+  bareFish: {
+    model: 'models/bare.glb',
+  },
+  humpbackWhale: {
+    model: 'models/humpback.glb',
+    outline: { color: 0x9fd8e8, thickness: 0.11, glow: 1.6 },
+  },
+};
+export const decoyToo = { whale: { outline: { color: 0xabcdef, thickness: 3 } } };
+`;
+
+console.log('\nTHE RIM AN ASSET DECLARES, SPLICED INTO assets.js');
+{
+  await writeFile(ASSETS_FIXTURE, ASSET_SRC);
+  const notes = [];
+  const written = await writeAssetOutlines({
+    assetOutline: {
+      whale: { color: 0xffb070, thickness: 1.35 },
+      humpbackWhale: { glow: 0.9 },
+      bareFish: { color: 0xff0000 },
+    },
+  }, { dry: false }, notes);
+  const out = await readFile(ASSETS_FIXTURE, 'utf8');
+  let mod = null, err = '';
+  try {
+    mod = await import('data:text/javascript,' + encodeURIComponent(out.replace("import * as THREE from 'three';", '')));
+  } catch (e) { err = e.message; }
+  const A = mod?.ASSETS;
+  check('the spliced file still parses', !!A, err);
+  check('the colour lands on the named entry', A?.whale?.outline?.color === 0xffb070, String(A?.whale?.outline?.color));
+  check('...as a hex literal, the way the file writes colours', /color: 0xffb070/.test(out));
+  check('thickness moves beside it', A?.whale?.outline?.thickness === 1.35);
+  check('a field nobody touched is left alone', A?.whale?.outline?.glow === 1.6 && A?.whale?.tint === 0xffffff);
+  check('the OTHER whale gets only its own edit',
+    A?.humpbackWhale?.outline?.glow === 0.9 && A?.humpbackWhale?.outline?.color === 0x9fd8e8);
+  check('a key that is a SUFFIX of another (enemyWhale) is untouched',
+    A?.enemyWhale?.outline?.color === 0x000000 && A?.enemyWhale?.outline?.thickness === 0.5);
+  check('a same-named key nested deeper in the entry is not the one written',
+    A?.whale?.rig?.outline?.color === 0x111111 && A?.whale?.rig?.outline?.thickness === 7);
+  check('a decoy above the literal is untouched', /const decoy = \{ outline: \{ color: 0x123456, thickness: 9 \} \};/.test(out));
+  check('a decoy below it is untouched', /decoyToo = \{ whale: \{ outline: \{ color: 0xabcdef/.test(out));
+  check('an entry with NO rim is reported, and the next species\' rim is not written instead',
+    A?.humpbackWhale?.outline?.color === 0x9fd8e8 && notes.some((n) => n.includes('bareFish') && n.includes('declares no')),
+    notes.join(' · '));
+  check('the comment above the rim survives', out.includes("Cold rim like the bowhead's"));
+  check('...and is reported as arguing for a replaced number',
+    notes.some((n) => n.includes('whale.outline.color') && n.includes('reword')), notes.join(' · '));
+  check('the snapshot keys come back in the T-menu\'s shape',
+    written.includes('assetLooks.whale.outlineColor') && written.includes('assetLooks.whale.outlineThickness')
+      && written.includes('assetLooks.humpbackWhale.outlineGlow') && written.length === 3,
+    written.join(', '));
+
+  await writeFile(ASSETS_FIXTURE, ASSET_SRC);
+  await writeAssetOutlines({ assetOutline: { whale: { glow: 3 } } }, { dry: true }, []);
+  check('--dry writes nothing to assets.js', (await readFile(ASSETS_FIXTURE, 'utf8')) === ASSET_SRC);
+}
+
+// ---------------------------------------------------------------------------
+// An entry the file DERIVES after the literal. The club variants are built in a
+// loop that spreads `ASSETS.club` — there is no `clubBoom: {` to splice into,
+// and the writer used to give up with "no ASSETS.clubBoom entry" while the lab
+// showed a working own-rim panel for it. The design in assets.js is that the
+// variants share the base club's rim, so that is where the edit goes, and the
+// snapshot clear has to cover every variant or the file's new number reaches
+// four clubs and not the fifth.
+// ---------------------------------------------------------------------------
+const DERIVED_SRC = (ASSET_SRC + `
+export const club = 1;
+for (const [key, headTint] of [
+  ['clubBoom', 0xd94a2b],   // ember
+  ['clubIce', 0x7fd4f5],    // ice
+]) {
+  ASSETS[key] = {
+    ...ASSETS.club,
+    headTint,
+    color: headTint,
+    outline: { ...ASSETS.club.outline },
+  };
+}
+// A variant family whose parent has no rim at all.
+for (const [key, tint] of [['fishRed', 0xff0000]]) {
+  ASSETS[key] = { ...ASSETS.bareFish, tint };
+}
+// And one that gives its variants a rim of their OWN — the parent's is not the
+// one on screen, so an edit must not be routed there.
+for (const [key, glow] of [['whaleGhost', 4]]) {
+  ASSETS[key] = { ...ASSETS.whale, outline: { color: 0xffffff, thickness: 2, glow } };
+}
+`).replace("export const ASSETS = {", `export const ASSETS = {
+  club: {
+    model: 'models/club.glb',
+    // Measured for this file: 0.5 long by 0.07 across.
+    outline: { color: 0x1a1208, thickness: 0.006 },
+  },`);
+
+console.log('\nA RIM ON AN ENTRY THE FILE DERIVES');
+{
+  await writeFile(ASSETS_FIXTURE, DERIVED_SRC);
+  const notes = [];
+  const written = await writeAssetOutlines({
+    assetOutline: {
+      clubBoom: { thickness: 0.00186 },
+      fishRed: { color: 0xff00ff },
+      whaleGhost: { glow: 1 },
+    },
+  }, { dry: false }, notes);
+  const out = await readFile(ASSETS_FIXTURE, 'utf8');
+  let mod = null, err = '';
+  try {
+    mod = await import('data:text/javascript,' + encodeURIComponent(out.replace("import * as THREE from 'three';", '')));
+  } catch (e) { err = e.message; }
+  const A = mod?.ASSETS;
+  check('the spliced file still parses', !!A, err);
+  check('the variant\'s edit lands on the base club', A?.club?.outline?.thickness === 0.00186, String(A?.club?.outline?.thickness));
+  check('...and reaches the variant through the loop', A?.clubBoom?.outline?.thickness === 0.00186);
+  check('...and its siblings, because they share it', A?.clubIce?.outline?.thickness === 0.00186);
+  check('the loop itself is untouched', /outline: \{ \.\.\.ASSETS\.club\.outline \},/.test(out));
+  check('the redirect is reported, naming every club that shares the rim',
+    notes.some((n) => n.startsWith('~ clubBoom') && n.includes('club.outline') && n.includes('clubIce')), notes.join(' · '));
+  check('the snapshot keys cover the base AND every variant',
+    ['club', 'clubBoom', 'clubIce'].every((k) => written.includes(`assetLooks.${k}.outlineThickness`)), written.join(', '));
+  check('a variant of a parent with no rim is reported, not given one',
+    notes.some((n) => n.startsWith('! bareFish') && n.includes('declares no')) && !/bareFish: \{[^}]*outline/.test(out), notes.join(' · '));
+  check('a variant with a rim of its OWN is not routed onto its parent',
+    A?.whale?.outline?.glow === 1.6 && notes.some((n) => n.startsWith('! whaleGhost') && n.includes('rim of its own')), notes.join(' · '));
+
+  // Two variants, two numbers, one rim.
+  await writeFile(ASSETS_FIXTURE, DERIVED_SRC);
+  const clash = [];
+  const w2 = await writeAssetOutlines({
+    assetOutline: { clubBoom: { thickness: 0.002, glow: 2 }, clubIce: { thickness: 0.003 } },
+  }, { dry: false }, clash);
+  const after = await readFile(ASSETS_FIXTURE, 'utf8');
+  check('a conflict between variants writes neither number',
+    /thickness: 0\.006/.test(after) && clash.some((n) => n.includes('one rim, two numbers')), clash.join(' · '));
+  check('...but a field only one of them moved still lands', /glow: 2/.test(after) && w2.includes('assetLooks.clubIce.outlineGlow'), w2.join(', '));
 }
 
 console.log('\nHANDING THE RIMS BACK FROM THE SNAPSHOT');

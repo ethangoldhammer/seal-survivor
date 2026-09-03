@@ -330,6 +330,22 @@ export function applyBoltLook(p, finElement = null) {
 
   if (mesh.isMesh) mesh.material = boltMaterial(hex, lk.overdrive ?? 2.2);
 
+  // MEASURED FOR THE HIT TEST TOO, not only the halo below. A bolt is drawn
+  // `length`:`width` — 2.6:1 shipped — and the collision radius combat.js
+  // gets off spawnProjectile is the PEBBLE's circle: the pebble keeps its hit
+  // circle and its drawn size locked together on purpose (see the note on
+  // `radius`/`scale` in main.js), and a bolt stretches the mesh well past that
+  // circle afterwards without anyone re-measuring it. The result is a beam
+  // that visibly reaches a fish while its centre is still a half-body-length
+  // short of the circle that decides whether it landed — shots that look like
+  // hits and read as misses. combat.js sweeps a SEGMENT along this instead of
+  // testing the bolt as a point; see boltHitEnds.
+  //
+  // Cached in PRE-SCALE units for the same reason boltTipOffset's own doc
+  // gives: combat.js runs every frame and only has to multiply by the mesh's
+  // current scale, not walk the geometry again.
+  p.boltHalfLength = boltTipOffset(mesh);
+
   // The halo. A SPRITE rather than a second stretched mesh, because it has to
   // read as light spilling off the bolt from every angle — a quad that turned
   // with the body would go edge-on the moment the bolt was fired sideways, and
@@ -444,6 +460,43 @@ export function updateBoltGlow(projectiles = []) {
     sprite.material = glowMaterial(boltColor(p.finElement), od * (step / steps));
   }
   } catch { /* no 2D canvas — see above */ }
+}
+
+/**
+ * Where the bolt's own nose and tail sit in world space right now — the
+ * segment combat.js should sweep instead of testing the bolt as a point.
+ *
+ * See the note in applyBoltLook: `boltHalfLength` is the measured half-length
+ * in pre-scale units, so this only multiplies by the mesh's CURRENT scale
+ * (which already carries `look.length`, Flippers Up!, and the split's own
+ * falloff) rather than remeasuring the geometry — this runs in combat's
+ * hottest loop, once per live bolt per frame.
+ *
+ * `b.dir` stands in for the mesh's own local +Y in world space rather than
+ * reading it off the rotation matrix: `orient: 'axis'` is what puts the mesh
+ * there in the first place, so the two already agree, and trySplit's own
+ * fan-out leans on the same assumption.
+ *
+ * A bolt with nothing cached (never dressed — a stub in a harness, or a shot
+ * that isn't a laser at all) collapses to the point it already was, so the
+ * caller can use this unconditionally without a fallback branch of its own.
+ */
+export function boltHitEnds(b, out) {
+  const mesh = b?.mesh;
+  const x = mesh?.position.x ?? 0;
+  const y = mesh?.position.y ?? 0;
+  const half = b?.boltHalfLength;
+  if (!mesh || !b?.dir || !(half > 0)) {
+    out.ax = out.bx = x;
+    out.ay = out.by = y;
+    return out;
+  }
+  const reach = half * mesh.scale.y;
+  const dx = b.dir.x * reach;
+  const dy = b.dir.y * reach;
+  out.ax = x + dx; out.ay = y + dy;
+  out.bx = x - dx; out.by = y - dy;
+  return out;
 }
 
 /**

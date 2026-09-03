@@ -565,8 +565,12 @@ section('WHOSE TEXTURES — the census, and the orphan gap');
   };
   const shared = tex('seagull_albedo.png');
   const solo = tex('crab_albedo.png');
+  // A real canvas-shaped source, so the labeller's kind-detection is exercised
+  // rather than its fallback: `getContext` is what tells a 2D canvas from an
+  // ImageBitmap decoded out of a GLB, and conflating those two sent the first
+  // reading of this census after five innocent call sites.
   const canvas = new THREE.Texture();
-  canvas.source = { data: { width: 64, height: 64 } };
+  canvas.source = { data: { width: 64, height: 64, getContext: () => null } };
 
   const mesh = (map) => {
     const m = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
@@ -590,7 +594,7 @@ section('WHOSE TEXTURES — the census, and the orphan gap');
   check('...naming each by the file its image came from',
     t.topTextures.some((x) => x.source === 'crab_albedo.png'),
     JSON.stringify(t.topTextures.map((x) => x.source)));
-  check('...and a canvas texture by its size, since it has no file',
+  check('...and a canvas texture by its kind and size, since it has no file',
     t.topTextures.some((x) => x.source === 'canvas 64x64'),
     JSON.stringify(t.topTextures.map((x) => x.source)));
   check('the orphan gap is what the renderer holds and the scene does not',
@@ -606,6 +610,18 @@ section('WHOSE TEXTURES — the census, and the orphan gap');
   noteTextures(scene, 10, 99);
   check('...and the next sample after it picks the new one up',
     perfSummary().topTextures.some((x) => x.source === 'never_seen.png'));
+
+  // THE DISTINCTION THAT MATTERS. An ImageBitmap is what a GLB's texture
+  // decodes to — width, height, no src, no 2D context — and reading it as a
+  // canvas is how the first report came back naming the wrong suspect.
+  const bmp = new THREE.Texture();
+  class ImageBitmap { constructor() { this.width = 512; this.height = 512; } }
+  bmp.source = { data: new ImageBitmap() };
+  scene.add(mesh(bmp));
+  noteTextures(scene, 10, 200);
+  check('...and a decoded model image is NOT called a canvas',
+    perfSummary().topTextures.some((x) => x.source === 'bitmap 512x512'),
+    JSON.stringify(perfSummary().topTextures.map((x) => x.source)));
 
   // A run reset has to clear it, or one run's roster is reported against the
   // next one's — the same rule every other counter here follows.

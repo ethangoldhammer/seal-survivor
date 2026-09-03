@@ -215,6 +215,23 @@ const OPTIONAL = {
 // had flooded in unkilled. A flag cannot be mistaken for a measurement.
 const FLAGS = ['bioluminescent', 'bossMinion', 'invincible'];
 
+/**
+ * IS THIS BODY SCENERY — a thing the player swims past and knocks around,
+ * never an opponent. The one predicate behind every rule of the form "never
+ * a turtle": nothing may TARGET it (seekers, escorts, the reticle, the chain
+ * arc, the contagion), nothing may put a STATUS on it, and nothing may make it
+ * FLASH as though it were hurt. It has a body and a mass and that is all a
+ * hit is allowed to reach.
+ *
+ * Read off the live flag AND the def, the same pair systems/whale.js and
+ * entities/projectiles.js already check: the flag is installed at spawn by
+ * makeInvincible, the def is the truth about the species, and there are
+ * windows (a stub in a harness, a body mid-spawn) where only one is set.
+ */
+export function isScenery(e) {
+  return !!(e && (e.invincible || e.def?.invincible));
+}
+
 // Every field this file owns, in one place — config.js needs the same list to
 // strip these out of saved tuning, so that a snapshot can't quietly become a
 // second opinion on numbers the CSV is meant to decide.

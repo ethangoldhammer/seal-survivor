@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { createVisual } from '../assets.js';
 import { rollBiolumSkinVariant } from './biolumSkin.js';
 import { setOutlineVariant } from './outlines.js';
@@ -129,7 +130,9 @@ function findCluster(enemiesList, accept) {
   // Acquisition: how wide a knot counts as one pile worth diving on.
   const r2 = targeting(c.clusterRadius) ** 2;
   const candidates = [];
-  for (const e of enemiesList) if (accept(e)) candidates.push(e);
+  // Scenery is never a candidate, in either tier — as a member it would fatten
+  // a knot it does not belong to, and as a centre it would name the pile.
+  for (const e of enemiesList) if (!isScenery(e) && accept(e)) candidates.push(e);
   if (!candidates.length) return null;
 
   const cap = Math.max(1, Math.round(c.scanCap ?? 48));

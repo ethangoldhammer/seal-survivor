@@ -763,6 +763,7 @@ export function createWorld(container) {
     velocity: { x: 0, y: 0 },
     aim: { x: 0, y: 0 },
     dashDir: { x: 0, y: 0 },
+    dashReach: 0,
     chargePower: 0,
     strikeHeld: false,
     charging: false,
@@ -792,6 +793,7 @@ export function createWorld(container) {
       cineCtx.aim.y = signals?.aim?.y ?? 0;
       cineCtx.dashDir.x = signals?.dashDir?.x ?? 0;
       cineCtx.dashDir.y = signals?.dashDir?.y ?? 0;
+      cineCtx.dashReach = signals?.dashReach ?? 0;
       cineCtx.chargePower = signals?.chargePower ?? 0;
       cineCtx.strikeHeld = !!signals?.strikeHeld;
       cineCtx.charging = !!signals?.charging;
@@ -869,6 +871,11 @@ export function createWorld(container) {
       const uv = projectAt(on.x, on.y, camera.zoom, camera.position.x, camera.position.y);
       cineLens.focusX = uv.u;
       cineLens.focusY = uv.v;
+      // The corridor's reach is smoothed by the rig in WORLD units and turned
+      // into uv here, at the zoom the camera ended up at, with the same
+      // divide projectAt uses for the focal point — so the far end of the
+      // cone lands on the world point the dash would reach, punch and all.
+      cineLens.pathLength = (cineLens.pathReach * camera.zoom) / (camera.top - camera.bottom);
     }
 
     // The framing, banked before the caller shakes the camera on top of it.

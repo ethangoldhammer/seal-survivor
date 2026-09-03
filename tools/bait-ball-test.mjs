@@ -44,13 +44,14 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import {
   enemies, resetEnemies, updateSpawning, updateEnemies,
-  spawnBaitBall, devBaitBallSpec, spawnNamed,
+  spawnBaitBall, devBaitBallSpec, spawnNamed, spawnOpeningBaitBalls,
 } from '../path/src/entities/enemies.js';
 import { resolvePredation } from '../path/src/systems/predation.js';
 import { resetWaves } from '../path/src/systems/waves.js';
+import { bounds } from '../path/src/arena.js';
 import { player } from '../path/src/entities/player.js';
 import {
-  baitBalls, resetBaitBalls, updateBaitBallClock, openBaitBall, baitBallFor,
+  baitBalls, resetBaitBalls, updateBaitBallClock, openBaitBall, baitBallFor, openingBallSpecs,
   updateBaitBalls, baitFlock, baitSeed, baitMealHeal, noteBaitLoss,
   baitBallLedger, baitNoise, attractorFlow, rollBaitShape, STRANGE_SHAPES,
 } from '../path/src/systems/baitBall.js';
@@ -195,6 +196,72 @@ check(`level ${C.minLevel} does`, runClock({ level: C.minLevel, seconds: 900 }).
   const firstTwoMinutes = spawns.filter((sp) => sp.t < 120).length;
   check('...and they keep coming through the opening',
     firstTwoMinutes >= 3, `${firstTwoMinutes} in the first two minutes`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE OPENING BALLS — placed round the seal on the first frame');
+// ---------------------------------------------------------------------------
+// Not the clock: a run's first balls are put on station beside the opening
+// shoal, and the claims are about WHERE. Inside the frame, outside the flee
+// radius (or the ball slides away from the seal on its first frame), in the
+// water, and in different directions from one another.
+{
+  const O = C.opening;
+  check('the opening is configured — 1 to 3 balls',
+    O && O.min >= 1 && O.max >= O.min && O.max <= C.maxBalls,
+    O ? `${O.min}-${O.max} of maxBalls ${C.maxBalls}` : 'no opening block');
+  const seal = { x: 4, y: -18 };
+  const counts = [];
+  let tooClose = 0;
+  let tooFar = 0;
+  let outOfWater = 0;
+  let sameDirection = 0;
+  let arriving = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const specs = openingBallSpecs({ player: seal, bounds: ARENA, rand: mulberry32(seed) });
+    counts.push(specs.length);
+    const angles = [];
+    for (const sp of specs) {
+      const d = Math.hypot(sp.stationX - seal.x, sp.stationY - seal.y);
+      if (d < C.flee.radius) tooClose++;
+      if (d > O.radiusMax + 1e-6) tooFar++;
+      if (sp.stationY > ARENA.surfaceY || sp.stationY < ARENA.bottom
+        || sp.stationX < ARENA.left || sp.stationX > ARENA.right) outOfWater++;
+      if (sp.x !== sp.stationX || sp.y !== sp.stationY) arriving++;
+      angles.push(Math.atan2(sp.stationY - seal.y, sp.stationX - seal.x));
+    }
+    for (let i = 0; i < angles.length; i++) {
+      for (let j = i + 1; j < angles.length; j++) {
+        let gap = Math.abs(angles[i] - angles[j]);
+        if (gap > Math.PI) gap = Math.PI * 2 - gap;
+        // Thirty degrees, not the sixty the slices promise: the wall clamp
+        // can fold a station toward its neighbour's bearing.
+        if (gap < Math.PI / 6) sameDirection++;
+      }
+    }
+  }
+  check('a run gets `opening.min` to `opening.max` of them, rolled per run',
+    counts.every((n) => n >= O.min && n <= O.max) && new Set(counts).size > 1,
+    counts.join(' '));
+  check('...each outside the flee radius, so none runs from the seal at once',
+    tooClose === 0, `${tooClose} inside ${C.flee.radius}`);
+  check('...and inside `opening.radiusMax`', tooFar === 0, `${tooFar} past ${O.radiusMax}`);
+  check('...in the water', outOfWater === 0, `${outOfWater} out`);
+  check('...on station, with no swim in', arriving === 0, `${arriving} placed off station`);
+  check('...in different directions from one another',
+    sameDirection === 0, `${sameDirection} pairs within 30°`);
+  // A seal against a wall gets its balls tucked in, not pushed out of the arena.
+  const corner = openingBallSpecs({ player: { x: ARENA.right - 1, y: ARENA.bottom + 1 }, bounds: ARENA, rand: mulberry32(9) });
+  check('...and a seal in a corner still gets them, inside the walls',
+    corner.length > 0 && corner.every((sp) => sp.stationX <= ARENA.right - C.margin + 1e-6
+      && sp.stationY >= ARENA.bottom + C.margin - 1e-6),
+    `${corner.length} balls`);
+  // Off means off.
+  const was = O.max;
+  CONFIG.baitBall.opening.max = 0;
+  const none = openingBallSpecs({ player: seal, bounds: ARENA, rand: mulberry32(2) }).length;
+  CONFIG.baitBall.opening.max = was;
+  check('...and `opening.max` 0 is none at all', none === 0, `${none}`);
 }
 
 const room = C.maxWater;
@@ -978,6 +1045,50 @@ function wiringRun(seed) {
   out.scaleSpan = out.scaleMax - out.scaleMin;
   Math.random = orig;
   return out;
+}
+
+// THE OPENING, through the real spawner. resetEnemies then
+// spawnOpeningBaitBalls, exactly as startGame does it, at difficulty 0 and
+// level 1 — the pure specs above cannot know whether `forageCandidates` has a
+// species to offer at that gate, and a roster edit that raised every small
+// fry's minDifficulty would leave the opening placing balls out of an empty
+// pool with nothing to say so.
+{
+  const out = [];
+  for (let seed = 1; seed <= 12; seed++) {
+    const scene = new THREE.Scene();
+    const orig = Math.random;
+    Math.random = mulberry32(seed);
+    resetEnemies(scene);
+    resetWaves(0);
+    // The seal handed in explicitly, as startGame's shoal call can be — the
+    // harness player has no mesh, and the spawner's own fallback is midwater.
+    const seal = { x: 3, y: -16 };
+    const made = spawnOpeningBaitBalls(scene, seal);
+    const balls = [...baitBalls.values()];
+    const fish = enemies.filter((e) => e.baitBall);
+    out.push({
+      made: made.length,
+      balls: balls.length,
+      arriving: balls.filter((b) => b.arriving).length,
+      entering: fish.filter((e) => e.entering).length,
+      flagged: fish.length,
+      dist: balls.map((b) => Math.hypot(b.x - seal.x, b.y - seal.y)),
+    });
+    Math.random = orig;
+  }
+  const O = C.opening;
+  check('startGame\'s call puts the opening balls in the water at difficulty 0, level 1',
+    out.every((r) => r.made >= 1 && r.made <= O.max && r.balls === r.made),
+    out.map((r) => r.made).join(', '));
+  check('...with fish that carry the flag the swarm reads',
+    out.every((r) => r.flagged > C.disperseAt * r.made), out.map((r) => r.flagged).join(', '));
+  check('...placed, not arriving — no anchor swimming to where it stands',
+    out.every((r) => r.arriving === 0 && r.entering === 0),
+    `${out.reduce((a, r) => a + r.arriving, 0)} arriving, ${out.reduce((a, r) => a + r.entering, 0)} entering`);
+  const within = Math.max(...out.flatMap((r) => r.dist));
+  check('...within `opening.radiusMax` of the seal the spawner itself reads',
+    within <= O.radiusMax + 1e-6, `furthest ${within.toFixed(1)}`);
 }
 
 {

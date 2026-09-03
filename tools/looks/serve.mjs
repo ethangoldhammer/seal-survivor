@@ -121,6 +121,7 @@ const server = http.createServer(async (req, res) => {
       report = await applyRecorded(JSON.parse(body.toString()), { dry: false });
       if (report.rows.length) console.log(`  assets.csv: ${report.rows.join('; ')}`);
       if (report.presets.length) console.log(`  config.js: +${report.presets.join(', ')}`);
+      if (report.rims?.length) console.log(`  assets.js: ${report.rims.join(', ')}`);
       for (const n of report.notes) console.log(`  ${n}`);
     } catch (err) {
       console.log(`  apply failed: ${err.message}`);

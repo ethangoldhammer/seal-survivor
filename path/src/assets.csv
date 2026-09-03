@@ -13,7 +13,7 @@ clubBoom,1,,biolum:clubBoom,Boom Boom Club - same model as club - keep equal
 clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
 clubZap,1,,biolum:clubZap,Zappy Club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
-dumboOcto,1.9,,,
+dumboOcto,1.9,,biolum:dumboOcto,
 eelCompanion,1.5,,biolum:eelCompanion,
 enemyAbyssShark,2.62,,biolum:abyssHunter,night variant of enemyGreatWhite - keep these two equal
 enemyAnglerfish,2.5,,biolum:anglerfish,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
@@ -71,6 +71,7 @@ voicemailBomb,1,,toon:voicemailBomb,"Toon-banded and outlined. Size 1 is the mod
 trapBubble,5.02,,,
 trawler,0.84,,,
 whale,2.6,,toon:whale+biolum:whale,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."
+humpbackWhale,2.6,,toon:humpbackWhale+biolum:humpbackWhale,"The humpback sweeper - the other body CONFIG.whale.asset can pick. Equal to whale on purpose: same fit (12), so the same 31.2 world units of animal. Its file ships NO texture (tools/build-humpback.mjs strips it); the biolum preset at pigment 1 is the whole hide, so the surface cell is load-bearing here rather than a glow on top."
 gorebone,,,toon:gorebone,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."
 enemyBrownFish,,,toon:brownFish+biolum:brownFish,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."
 enemyFishPackB,,,toon:fishPackB+biolum:fishPackB,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."

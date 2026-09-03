@@ -450,6 +450,16 @@ export function createAnimationController(instance) {
   // entities/enemies.js, which quantises it to musical subdivisions so a
   // faster gait still starts each cycle on a beat.
   let beatSyncBeats = 0;
+  // A flat multiplier on locomotion playback, on top of everything above. 1 is
+  // the clip as authored (or as clipTimeScale / the beat grid stretched it).
+  // This is the per-CREATURE dial the state table cannot be: clipTimeScale is
+  // per state and shared by every animal in that state, and it is skipped
+  // entirely for a state with its own distinct clip, on the argument that an
+  // authored clip already knows its own speed. The humpback's feeding loop is
+  // exactly such a clip and is played at a fifth of its authored pace
+  // (CONFIG.whale.clipSpeed) — so the caller sets this, live, every frame.
+  // Never applied to a one-shot: a bite or a death at 0.2x is a glitch.
+  let rate = 1;
   // Position within the current procedural wag cycle, 0..1. Only used by the
   // sine fallback, and only while that state is beat-synced — see
   // proceduralDrive, which advances it as a PHASE rather than multiplying the
@@ -614,7 +624,7 @@ export function createAnimationController(instance) {
         const target = beats * beatDuration();
         if (clipLen > 0 && target > 0) base = clipLen / target;
       }
-      action.timeScale = oneShotNow ? base : base * playbackDir;
+      action.timeScale = oneShotNow ? base : base * playbackDir * rate;
       mixer.update(dt);
       // Additive flinch on top of the clip: nudge the head after the mixer
       // has already written this frame's pose, rather than replacing it.
@@ -718,6 +728,20 @@ export function createAnimationController(instance) {
     // Which way locomotion runs: 1 forward, -1 reversed. See playbackDir.
     // A reversed LoopRepeat action wraps around the start correctly, so this
     // is safe to flip mid-cycle — the legs just change which way they push.
+    // Playback pace for locomotion, as a multiplier on whatever the state and
+    // the beat grid already decided. See `rate`. Non-finite or non-positive
+    // values are refused rather than freezing the animal.
+    setRate(mul) {
+      rate = Number.isFinite(mul) && mul > 0 ? mul : 1;
+    },
+    // Whether this model has an authored clip bound for `state` — i.e. whether
+    // update(dt, state) would play a clip or fall through to the procedural
+    // rig. A caller with one code path for both kinds of body (the whale sweep
+    // drives a clip-driven humpback and a rig-driven bowhead) asks this rather
+    // than guessing from the asset.
+    hasClip(state) {
+      return !!stateAction[state];
+    },
     setPlaybackDirection(dir) {
       playbackDir = dir < 0 ? -1 : 1;
     },
@@ -736,6 +760,7 @@ export function createAnimationController(instance) {
       locomotionState = 'idle';
       playbackDir = 1;
       beatSyncBeats = 0;
+      rate = 1;
       beatCycle = 0;
       // AND THE RAGDOLL, WHICH OUTLIVES THE CREATURE OTHERWISE. This controller
       // is cached on the visual and handed to whoever recycles that body (see

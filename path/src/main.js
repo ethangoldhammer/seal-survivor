@@ -23,7 +23,7 @@ import { FLIPPER_SIDES } from './flipperSide.js';
 import { updateFinLights, resetFinLights, finLightColor } from './systems/finLights.js';
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
-import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal, spawnOpeningBaitBalls } from './entities/enemies.js';
 import { noteBaitLoss } from './systems/baitBall.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
 import { updateAttractorStorm, resetAttractorStorm } from './systems/attractorStorm.js';
@@ -63,7 +63,7 @@ import { createSardineSwirlVisual, updateSardineSwirl, resetSardineSwirl } from 
 import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, clubTrailMovers } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -106,6 +106,8 @@ import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact }
 import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint, drainHotSpotChum, drainHotSpotShoves } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
 import { initGore, updateGore, resetGore } from './systems/gore.js';
+import { initIceShatter, updateIceShatter, resetIceShatter, spawnIceShatter } from './systems/iceShatter.js';
+import { updateStatusFx, resetStatusFx, isFrozen } from './systems/statusFx.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/strikeRing.js';
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
@@ -278,6 +280,8 @@ initBossLight(world.scene);
 // models it draws from may still be loading, and one of them may be an upload
 // that has not happened yet. See ensurePool in systems/gore.js.
 initGore(world.scene);
+// The ice a frozen kill throws — systems/iceShatter.js.
+initIceShatter(world.scene);
 initHitShapeDebug(world.scene);
 initMarks(world.scene);
 initFeedback(world.grid);
@@ -405,7 +409,7 @@ const faceDir = { x: 0, y: 1 }; // scratch — the seal's facing, read by the bu
 // Scratch for the per-frame "where would a strike go" prediction the lens
 // corridor is drawn along. Read and copied inside updateCamera on the same
 // frame it's written, so one object is enough.
-const dashPrediction = { x: 0, y: 0 };
+const dashPrediction = { dir: { x: 0, y: 0 }, reach: 0, x: 0, y: 0 };
 
 // When the crash trail last got a heartbeat — see the pulse in animate().
 let lastCrumbAt = -1e9;
@@ -1521,6 +1525,7 @@ function startGame() {
   // Same for what is left of the crew — bones sink for five and a half seconds
   // and would otherwise still be arriving on the seabed of the next run.
   resetGore();
+  resetIceShatter();
   // ...and any body still being held for a photograph. Released rather than
   // burst: this is a restart, and a boss exploding over the opening frame of
   // the next run is worse than one that simply isn't there.
@@ -1557,6 +1562,7 @@ function startGame() {
   resetLaserEyes();
   resetBubbleJet(world.scene);
   resetBurnGlow();
+  resetStatusFx();
   resetEyeLights();
   resetBossEyes();
   // The last run's trophy goes with it, or the death screen would offer this
@@ -1714,6 +1720,9 @@ function startGame() {
   // run ended; and beside the difficulty reset, because it spawns at
   // difficulty 0 and this is the line that makes that true.
   spawnOpeningShoal(world.scene);
+  // ...and the balls beside it, under the same ordering rules. See
+  // CONFIG.baitBall.opening.
+  spawnOpeningBaitBalls(world.scene);
   // Cleared with the rest of the run, or a seal that swims into a new run and
   // dies to something unclassified would be handed the LAST run's punchline.
   lastDamageSource = null;
@@ -2009,6 +2018,20 @@ function killPlayer() {
     // Fades rather than cuts, and over its own longer `fadeOut` — the water
     // should still be there for a moment after the score is on screen.
     stopAmbient();
+    // THE PARKED BODIES GO HERE, not at the next Play. The pool is at its
+    // largest exactly now — a run's worth of high-water marks, ~460 skinned
+    // hierarchies at level 11 on the phone's own heartbeat — and every one of
+    // them is invisible by definition, so nothing on screen changes. What
+    // changes is what the phone is holding while the player sits on the score
+    // card and the menu, which can be minutes: the crash trail (npm run crash)
+    // has a WebContent kill 29ms into this screen's first polaroid, on a
+    // resident set the pool was a third of, and two more kills SEVEN and
+    // thirty-eight seconds into the relaunch that followed — the phone had not
+    // recovered from the last session by the time the next one booted. The
+    // next run re-clones from a small first wave, which is what a fresh boot
+    // does anyway.
+    crumb('pool:clear', `${visualPoolCount().bodies}`);
+    clearVisualPool();
     // The boss count is handed over rather than read off the roll of
     // photographs: `bossState.defeated` is what the run actually did, and the
     // photographs are a feature that can be switched off, capped, or fail on a
@@ -3249,12 +3272,18 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   }
 
   const big = e.def.radius >= 1 || schoolWipe;
+  // A BODY THAT DIED AS ICE SHATTERS rather than bleeds: the same kill, with
+  // the spray and the goo swapped for splinters and a glassy ice mass (see
+  // CONFIG.feedback.killFrozen) and a handful of solid shards under them. Read
+  // off `freezeTimer`, which only the cold writes — a fish killed inside the
+  // beluga's bubble is held, not frozen, and bleeds like anything else.
+  const frozen = isFrozen(e);
   // Bigger/tougher creatures drop in pitch and ring out longer, so a
   // megalodon dying doesn't sound identical to a minnow. Radius drives it
   // (it tracks size directly); hp folds in so a tanky small enemy still
   // lands heavier than a fragile one.
   const heft = Math.min(3, e.def.radius + (e.def.hp ?? 10) / 120);
-  feedback(killEvent ?? (big ? 'bigKill' : 'kill'), {
+  feedback(killEvent ?? (frozen ? (big ? 'bigKillFrozen' : 'killFrozen') : (big ? 'bigKill' : 'kill')), {
     sfxOpts: { pitch: 1 / (0.75 + heft * 0.35), decayMul: 1 + heft * 0.35 },
     x: e.mesh.position.x,
     y: e.mesh.position.y,
@@ -3277,8 +3306,19 @@ function onEnemyKilledFeedback(e, killEvent = null) {
     // individual rolled one of them at spawn (see spawnOne in enemies.js).
     // Reading the def here would tint the burst off a sibling variant's
     // colour, or off undefined for any def that only lists `assets`.
-    color: assetBaseColor(e.assetKey ?? e.def.asset) ?? undefined,
+    //
+    // ...unless it died as ICE. Then the burst is the ice's colour, not the
+    // animal's: the emitters on the frozen events carry their own palette and
+    // a creature tint over them would turn the shatter lime or purple.
+    color: frozen ? undefined : (assetBaseColor(e.assetKey ?? e.def.asset) ?? undefined),
   });
+  if (frozen && !killEvent) {
+    spawnIceShatter(e.mesh.position.x, e.mesh.position.y, {
+      radius: e.radius ?? e.def.radius,
+      vx: e.vx,
+      vy: e.vy,
+    });
+  }
 
   // ...and what it was MADE OF, under that. Bosses only: this is a fight
   // ending, and firing a material voice for every minnow would put a second
@@ -5506,6 +5546,10 @@ function runFrame(now) {
     // field for the same reason as dashTimer: entities/ doesn't import from
     // systems/. Must be set BEFORE updatePlayer consumes it.
     player.comboSpeedMul = comboSpeedMul();
+    // ...and a stocked boost meter makes it get moving quicker — thrust only,
+    // multiplied over the combo above. Same plain-field reason, same ordering
+    // requirement: updatePlayer reads it on the line below.
+    player.chargeThrustMul = chargeThrustMul(player.stats);
 
     updatePlayer(dt, input);
 
@@ -6503,13 +6547,14 @@ function runFrame(now) {
     //
     // Written every frame rather than imported by enemies.js, which would wire
     // a cycle: systems/strike.js already imports removeEnemy from there. The
-    // heading is the SAME strikeDirection() the release and the lens corridor
-    // use, so the fish flee the line the dash would actually take.
+    // heading is the SAME forecast the lens corridor draws — predictDash, the
+    // whole flight and not just the launch — so the fish flee the line the
+    // dash would actually take.
     {
       const winding = CONFIG.strike.enabled && input.strikeHeld && strikeState.pending > 0;
       const aim = strikeState.active
         ? strikeState.dashDir
-        : strikeDirection(input.move, input.aim, dashPrediction);
+        : predictDash(input.move, input.aim, strikeState.pending, player.stats, player.comboSpeedMul, dashPrediction).dir;
       setStrikeThreat({
         active: strikeState.active || winding,
         x: player.mesh.position.x,
@@ -6730,6 +6775,10 @@ function runFrame(now) {
     // the pellet and are handed to the fish on impact — so every other element
     // pays one compare for this.
     }, projectiles);
+    // WHAT A BODY WEARING A STATUS LOOKS LIKE — systems/statusFx.js. After
+    // the elements have ticked, so a poison tick's flash lands on the frame
+    // the damage does, and after the burn, whose heat it composes under.
+    updateStatusFx(dt, enemies);
 
     // Sea garlic and the shrimp ring damage independently of gunfire.
     updateGarlic(dt, world.scene, player.mesh.position, player.stats.garlicLevel, enemies, {
@@ -7723,7 +7772,7 @@ function runFrame(now) {
   // — so a fumbled release leaves the seal holding a sliver it cannot spend,
   // and calling that a denied press would be scolding a player mid-wind-up.
   const chargeEmpty = strikeState.charge <= (calloutCfg.boostEmpty ?? 0.02);
-  const strikeBanked = strikeState.pending >= (CONFIG.strike.charge.minFire ?? 0.2);
+  const strikeBanked = strikeState.pending >= minFire(player.stats);
   // A press against a dead meter. One frame by construction, so it cannot hold
   // its own callout up — the row's `hold` is what keeps it on screen.
   const boostDenied = CONFIG.strike.enabled && input.strike && chargeEmpty && !strikeBanked;
@@ -8278,6 +8327,8 @@ function runFrame(now) {
   // sink on their own schedule rather than the eater's, so they keep settling
   // over a death, and they hold still behind a menu.
   updateGore(gameState.paused ? 0 : dt);
+  // The ice off a frozen kill, on the same clock for the same reasons.
+  updateIceShatter(gameState.paused ? 0 : dt);
   // And the body the wreckage is still inside. Two clocks, both of them
   // needed: the countdown to the burst is racing a shutter and so runs on the
   // WALL clock, while the drift, the sink and the roll are the world's and run
@@ -8498,11 +8549,14 @@ function runFrame(now) {
   world.updateCamera(player.mesh.position, realDt, {
     velocity: player.velocity,
     aim: input.aim,
-    // Where a strike released THIS frame would actually go — literally the
-    // same function the release calls, not a copy of the rule, so the corridor
-    // and the dash cannot drift apart. Written into a reused object because
-    // this runs every frame.
-    dashDir: strikeDirection(input.move, input.aim, dashPrediction),
+    // Where a strike released THIS frame would actually LAND — the whole dash
+    // flown ahead of time through the same launch rule and the same per-frame
+    // steering the seal runs (predictDash / dashSteer in strike.js), not a
+    // copy of either, so the corridor and the dash cannot drift apart. The
+    // chord to the landing point: its direction, and its length in world
+    // units. Written into a reused object because this runs every frame.
+    dashDir: predictDash(input.move, input.aim, strikeState.pending, player.stats, player.comboSpeedMul, dashPrediction).dir,
+    dashReach: dashPrediction.reach,
     chargePower: strikeState.pending,
     // The button, for the lens; the fuel-gated flag, for everything that a
     // dry meter really should stop. See the note in cineCamera.js.

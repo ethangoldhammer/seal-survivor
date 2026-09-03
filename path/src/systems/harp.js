@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { createVisual } from '../assets.js';
 import { spawnProjectile } from '../entities/projectiles.js';
 import { removeEnemy } from '../entities/enemies.js';
@@ -400,6 +401,10 @@ function pickTarget(playerPos, range, enemiesList) {
 
   for (const e of enemiesList) {
     if (e.hp <= 0 || e.invuln > 0) continue;
+    // Never scenery, in EITHER tier: canControl already refuses a turtle, but
+    // the damage fallback below is bulk-ranked and a turtle is the bulkiest
+    // thing in most crowds — every note would have gone into it.
+    if (isScenery(e)) continue;
     // Already carrying a ring. Re-charming it would refresh a timer and waste
     // the note that could have started a second grinder somewhere else.
     if (e.harpAura > 0) continue;

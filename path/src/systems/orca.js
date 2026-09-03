@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { createVisual } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
@@ -411,6 +412,10 @@ function acquire(m, enemiesList) {
   bestD2 = fallback2;
   for (const e of enemiesList) {
     if (e.radius < c.fallbackMinRadius) continue;
+    // The one gate this tier needs on top of size: "big enough" is exactly
+    // what a sea turtle is, and a pod charging a body it cannot kill would
+    // ram it for as long as it stayed. See isScenery.
+    if (isScenery(e)) continue;
     const dx = e.mesh.position.x - m.pos.x;
     const dy = e.mesh.position.y - m.pos.y;
     const w = markWeight(e);

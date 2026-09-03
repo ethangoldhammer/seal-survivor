@@ -1193,13 +1193,35 @@ export const CONFIG = {
         //
         // Distances are in aspect-corrected uv, where 1.0 is the height of the
         // frame, so they mean the same thing at any window shape.
+        //
+        // The reach and the heading have no numbers here. The cone points at
+        // and grows out to exactly where the dash would LAND — predictDash()
+        // in strike.js flies the whole dash ahead of time through the seal's
+        // own launch and steering rules, converted to uv at the frame's final
+        // zoom — so retuning the dash retunes the readout, and there is no
+        // length to go stale.
         path: {
           enabled: true,
-          width: 0.1,        // half-width of the sharp lane
-          feather: 0.18,     // falloff either side of it
-          length: 0.3,       // reach at zero charge
-          lengthPerPower: 0.35, // ...and how much further a full meter throws it
+          width: 0.1,        // half-width at the seal
+          widthFar: 0.01,    // half-width at the far end — the taper, nearly a point
+          feather: 0.18,     // falloff outside the edge
           vignette: 0.45,    // darkening OUTSIDE the lane, added to the state's own
+          // The cone does not snap. It TURNS onto a new heading and GROWS to
+          // a new reach, each an exponential approach with this time
+          // constant in seconds — 63% of the way in one, 95% in three. Short,
+          // because a prediction that lags the cursor is a lie about where
+          // the dash goes; long enough that a nudge reads as a swing.
+          turnLag: 0.08,
+          growLag: 0.12,     // also the grow-out from the seal when the corridor lights
+          // Edge break-up: how far the outline wanders, as a fraction of the
+          // local half-width; how many ripples per frame-height along the
+          // cone; how fast they churn and flow outward at an empty meter,
+          // and how much faster on top of that at a full one (the ramp rides
+          // strikeState.pending, so it climbs with the hold).
+          noise: 0.7,
+          noiseScale: 9,
+          noiseSpeed: 1.2,
+          noiseSpeedPerPower: 0,
         },
 
         droplets: {
@@ -2687,7 +2709,7 @@ export const CONFIG = {
       // rim below is a fifth of this, which is the whole friend/threat read now
       // that both are the same colour.
       thickness: 0.07,
-      glow: 1.5,
+      glow: 2,
       opacity: 1,
       // A BOSS NEVER WEARS THIS RIM. Not a per-species switch, because it
       // cannot be one: `bossShark` is built from `enemyMegalodon` — the same
@@ -2806,7 +2828,7 @@ export const CONFIG = {
       // this said while both were fat glowing bands a hair apart. With both
       // drawn in ink the gap has to be big enough to see as a difference in
       // weight, because weight is now the only thing telling them apart.
-      thickness: 0.01,
+      thickness: 0.005,
       glow: 2.0,
       opacity: 1,
       // Keyed by ASSET key, exactly as creatureOutline.on is. A key not listed
@@ -2819,7 +2841,7 @@ export const CONFIG = {
         orcaFriendBull: false,
         orcaFriendCow: false,
         orcaFriendCalf: false,
-        dumboOcto: false,
+        dumboOcto: true,
         belugaDrone: false,
         eelCompanion: false,
         // THE BOMBER. Not listed at all until now, which is a stronger absence
@@ -2837,6 +2859,33 @@ export const CONFIG = {
       // without needing an upgrade pick every time. Extra pellets arrive on a
       // fixed level cadence on top of that.
       damagePerLevel: 1.6,
+      // BASELINE DAMAGE GROWTH, compounding per level — the damage half of
+      // what CONFIG.player.hpPerLevel is for the bar, and applied the same way
+      // (applyLevelGrowth, on the finished block). `damagePerLevel` above is
+      // FLAT, and flat is the wrong shape against a boss: a boss's health is
+      // a linear term times the clock ramp (1.05 per 20s) times the level
+      // surcharge past 20, and the fight it makes is one the seal can only
+      // keep up with by multiplying. Measured on the naked gun in
+      // npm run test:leveldamage — before this, the level-20 boss took ten
+      // times the pebbles of the level-10 one and the level-25 boss twenty.
+      //
+      // IT CANNOT CATCH UP ON ITS OWN, and the harness says what it would
+      // take. The water's health is keyed to the CLOCK — spawn.ramp.hp in
+      // spawning.csv compounds every 20s — while this is keyed to LEVELS,
+      // which arrive a minute or more apart by the twenties. Holding the
+      // level-20 fight at the level-10 fight's length would need about 25% a
+      // level, a x70 gun by level 20. So this halves the late fights rather
+      // than flattening them; the shape lives in spawn.ramp.hp and the boss
+      // rows' hpPerDifficulty.
+      //
+      // Reaches ALL FOUR damage stats (DAMAGE_STATS in stats.js) — the gun,
+      // the strike, everything thrown and every escort — not just the pebble,
+      // which is what "player base damage" has to mean when 80% of a run's
+      // damage is the strike (npm run playtest).
+      //
+      // weapons.csv owns it — see the row there for the number and what it is
+      // worth by level 20; this is the fallback the CSV's type is read off.
+      damageMulPerLevel: 0.05,
       speedPerLevel: 0.35,
       // HALVED WHEN A PELLET STOPPED MEANING TWO. `multishot` is the volley's
       // whole pellet count now rather than a per-flipper one (see the note on
@@ -4278,7 +4327,13 @@ export const CONFIG = {
       // The window gates the chain LINK; it must never gate the refill.
       charge: {
         time: 1.0,       // seconds of wind-up a full bar buys — i.e. its drain time
-        minFire: 0.35,   // power that must be banked before a release will fire
+        // Power that must be banked before a release will fire — in PIPS, so
+        // it survives a card that changes what a mouthful is worth. 1: the
+        // single pip a boss fight leaves you buys the smallest dash there is,
+        // a straight burst with no steering (dashControl.steerOffPips) — a
+        // dodge, which is exactly what pays that pip back (CONFIG.dodge). It
+        // was a bar fraction (0.35) that no single pip could reach.
+        minFirePips: 1,
         chumRefill: 0.2, // bar returned per chum swallowed — i.e. 5 chum a link
 
         // --- THE PERFECT CHARGE -----------------------------------------------
@@ -4651,6 +4706,15 @@ export const CONFIG = {
         perfectMul: 2,
       },
       cardDamage: 5,   // strike damage added per strike-family card
+      // BOOSTER PACK. Odd stacks add a pip CONTAINER to the bar (a pip's
+      // worth more boost to hold — see windUpTime in systems/strike.js), even
+      // stacks add passive regen, in pips per second. weapons.csv owns both:
+      // the regen is the only refill in the game that is not food, and how
+      // much of one it is decides whether the food chain still matters.
+      boosterPack: {
+        pipsPerStack: 1,
+        regenPerStack: 0.12, // pips/sec — a pip every ~8s at one stack
+      },
       powerShare: 3,   // slices Killer Instinct pays at once
 
       // The NOMINAL strike — what the RIDERS measure themselves against: Bone
@@ -5059,6 +5123,23 @@ export const CONFIG = {
         // On top of `dashTurnRate`, which is left alone so a tuned slider keeps
         // meaning what it meant. 2 takes the turn radius from 3.8 units to 1.9.
         steerMul: 2,
+        // THE TAKEOVER. The hands do not have the whole turn rate from the
+        // first frame: a strike is a commitment, and the launch line has to
+        // mean something for at least a moment. Authority starts at
+        // `steerFrom` of the rate and eases back in to all of it over the
+        // dash along `steerEase` (an ease.js name — see the table there; an
+        // unknown name reads as linear). Where the dash LANDS still follows
+        // the swim/aim blend; this shapes how soon a change of hands can
+        // bend the line.
+        steerFrom: 0,
+        steerEase: 'inOutQuad',
+        // WHAT WAS PAID FOR IT, in pips. A dash bought with steerOffPips or
+        // fewer has no steering — a one-pip release is a quick straight burst
+        // out of a line, a dodge rather than a homing strike — and the
+        // authority climbs to all of it at steerFullPips. Multiplies the
+        // takeover above.
+        steerOffPips: 1,
+        steerFullPips: 3,
 
         // THE THROTTLE. Stick magnitude asks for a speed: fully forward is the
         // whole dash, easing off bleeds toward `minSpeedMul` of it, so a strike
@@ -5113,6 +5194,35 @@ export const CONFIG = {
       // point of a combo is to feel more agile, not to trade agility for speed.
       comboSpeedPerLevel: 0.09,
       comboSpeedMax: 1.75,
+      // A FULL METER IS ALREADY A FASTER SEAL, before any of it is spent.
+      // Ordinary swimming thrust — not the ceiling, not the dash — climbs a
+      // little with every pip of boost currently in the bar, so the fuel reads
+      // as something the animal is carrying rather than a number waiting to be
+      // cashed. Multiplies with comboSpeedMul rather than replacing it: the
+      // chain is what you have KEPT ALIVE, this is what you are HOLDING.
+      //
+      // ACCELERATION ONLY, deliberately. Raising the top speed with it would
+      // make a stocked meter a different animal to steer, and the meter empties
+      // during a wind-up — the seal would slow down mid-hold, which is exactly
+      // the moment the player is committing to a line. Thrust alone means a
+      // full bar gets you moving sooner and nothing about the swim changes.
+      //
+      // Read off the FRACTIONAL pip depth, like comboSpeedMul, so the burn of a
+      // wind-up bleeds it away smoothly instead of stepping down a pip at a
+      // time under the player's hands.
+      //
+      // SIZED SMALL, and here is the reason it has to be. The water's drag is
+      // linear (`friction`, 0.98 a frame), so the seal's CRUISING speed is a
+      // straight function of its thrust — about 15.8 u/s against a 34 u/s
+      // ceiling the clamp therefore never gets to enforce. Raising thrust by a
+      // quarter raises the cruise by a quarter as well; the ceiling does not
+      // hold it back, because the water gets there first. So this reads as
+      // "off the mark quicker" only while it stays small: 0.03 a pip is +15%
+      // over a five-pip bar, which is a nudge on both counts. Push it to a
+      // third and a stocked meter is a different animal to steer, which is
+      // what the cap is for.
+      chargeThrustPerPip: 0.03,
+      chargeThrustMax: 1.15,
       // WHAT AN ORB PAYS INTO THE STRIKE METER, as a fraction of a full bar.
     // The blue (strike) orb is not here because it fills the bar outright —
     // that is the whole of what it is. These two have another job and pay a
@@ -6450,6 +6560,24 @@ export const CONFIG = {
       // wagSpeed/wagAmplitude pairs those names actually mean. Its own state
       // rather than a borrowed one — see the note on `whaleCruise` there.
       wagState: 'whaleCruise',
+      // WHICH ANIMAL MAKES THE CROSSING — a key in ASSETS. Two bodies are
+      // rigged for it and they are moved in opposite ways:
+      //   'whale'          the bowhead. No clips; the procedural rig wags it
+      //                    at `wagState` above and its jaw is two morphs.
+      //   'humpbackWhale'  the humpback. An authored feeding loop
+      //                    ("EAT-delphinidae") bound to 'idle', paced by
+      //                    `clipSpeed` below; the jaw is in the clip.
+      // systems/whale.js measures whichever body it is handed, so every other
+      // number in this block is the same for both.
+      asset: 'humpbackWhale',
+      // PLAYBACK PACE of a clip-driven body's loop, as a multiple of the clip
+      // as authored. The humpback's EAT is 0.875s of full-tempo chewing — a
+      // gulp every second on a 31-unit animal reads as a fish, not a whale.
+      // 0.2 is one slow mouthful every 4.4s, in the family of the bowhead's
+      // 5.5s stroke. Per-creature on purpose: CONFIG.animation.states'
+      // clipTimeScale is per STATE and is skipped for a clip only one state
+      // uses, so it cannot be this dial. Ignored by the procedural bowhead.
+      clipSpeed: 0.2,
       // Degrees of bank into the vertical drift, so the body leans through the
       // shallow climbs and dips rather than sliding along level.
       bank: 7,
@@ -9556,6 +9684,62 @@ export const CONFIG = {
         // them flat at about 42s, which is the pace of the band below them.
         xp: 0.15,
         xpMax: 12,
+      },
+
+      // A BOSS'S HEALTH IS DECIDED BY THE LEVEL THAT SUMMONED IT.
+      //
+      // Everything else in the water reads the run clock, and that is right for
+      // wildlife: what is swimming past at minute ten should be minute ten's
+      // water however the player got there. A boss is not that. It arrives
+      // BECAUSE of a level — every fifth one, see CONFIG.boss.everyLevels — so
+      // the clock deciding how much health it brings meant the one creature
+      // summoned by the level bar was the one creature that ignored it.
+      //
+      // What that cost: `ramp.hp` compounds every 20s and a late level takes
+      // over a minute to earn, so boss health grew about 1.3x per MINUTE while
+      // the seal's growth arrived per LEVEL. The two axes could not be tuned
+      // against each other because they were not the same axis. Measured on
+      // the naked gun before this existed, the level-20 boss took ten times
+      // the pebbles of the level-10 one (npm run test:leveldamage). It also
+      // meant a slow, careful run was punished twice — for the minutes it
+      // spent, with a boss that had been growing the whole time.
+      //
+      // Now the same arithmetic runs on a level-derived axis instead: a boss's
+      // "difficulty" is `first` at the opening fight and climbs `perLevel`
+      // from there. Everything downstream is untouched — the row's own
+      // `hpPerDifficulty` in enemies.csv, the compounding `ramp.hp` above and
+      // its cap, the master dial — because only the NUMBER GOING IN changed.
+      // That is the whole of it, and it is why there is no second curve here
+      // to keep in step with the first.
+      //
+      // ONLY HP, deliberately. A boss's contact damage and speed still read
+      // the clock, and they should: what a boss HITS for is already held to a
+      // fraction of the player's bar every second (CONFIG.boss.damageCap), so
+      // the ramp underneath it is mostly bounded already, and the clock is a
+      // real pressure the fight is allowed to carry. Health is the axis that
+      // was running away from the player's damage, and health is what moved.
+      //
+      // `lateGameMul('hp')` is NOT applied on top of this. That surcharge is
+      // the level half of a clock-keyed creature; a boss is now all level, and
+      // spending it too would charge the same axis twice.
+      bossHp: {
+        // 0 puts bosses back on the run clock, exactly as they were, with the
+        // level surcharge back on top of them. The one honest way to compare
+        // this against what it replaced.
+        enabled: true,
+        // WHERE THE OPENING FIGHT SITS, in difficulty units. 4.5 is the
+        // difficulty the first boss arrives at today on a normally-paced run
+        // (level 5 at about a minute, npm run test:xp) — chosen so the fight
+        // that teaches you what a boss is, is exactly the fight it always was.
+        first: 4.5,
+        // ...and what each level after the first boss adds. Read against
+        // weapon.damageMulPerLevel, which is the seal's half of the same
+        // conversation and now on the same axis: 1.9 holds the naked gun's
+        // time-to-kill rising gently across a run — about 35s on the opening
+        // boss and 63s at level 20, against 279s before — so a late boss still
+        // demands a build without outrunning one. npm run test:leveldamage
+        // prints the whole table and refuses a curve that inverts.
+        perLevel: 1.9,
       },
 
       // --- NIGHT DIFFICULTY (stub — not wired to anything yet) ----------------
@@ -15015,6 +15199,56 @@ export const CONFIG = {
         turbulence: 0.55,
     },
 
+      // --- A STATUS ON A BODY (systems/statusFx.js) ---------------------------
+      // What a chilled or poisoned creature SHEDS while it wears the status.
+      // Both are rates per body, carried as debt, so the counts here are per
+      // emission and tiny — a frozen shark at twelve a second is a steady
+      // frost, not a burst.
+      //
+      // FROST. Shed off a frozen body the whole time it is ice, and a trickle
+      // off a merely chilled one. Light, slow, and it RISES — cold water
+      // sinks, but what comes off ice in the water is the air and the
+      // crystals shaken loose, and a frost that fell would read as snow. Takes
+      // the current hard (turbulence high) so it hangs and drifts rather than
+      // streaming off in a line. Chill's own palette.
+      frostBreath: {
+        count: 1, speed: [0.2, 0.9], size: [0.08, 0.2], life: [0.6, 1.4],
+        colors: [0xdff6ff, 0xffffff, 0xbdf5ff], cone: 0, drag: 1.5,
+        gravity: [0, 0.35], inherit: 0.15, glow: 1.6, turbulence: 1.3,
+      },
+      // A TICK OF POISON. A few heavy drops out of the body on every tick,
+      // falling under their own weight the way the pellet's drip does — this
+      // is the same substance, now coming OUT of the fish. Venom's palette.
+      venomTickDrip: {
+        count: 4, speed: [0.6, 2.2], size: [0.08, 0.18], life: [0.4, 0.9],
+        colors: [0x7dff3d, 0xc6ff9e, 0x3aa81f], cone: 0, drag: 2.0,
+        gravity: [0, -2.4], inherit: 0.1, glow: 2.0,
+      },
+
+      // --- A FROZEN KILL (CONFIG.feedback.killFrozen) ------------------------
+      // The `explosion` and `killGoo` pair, for a body that died as ice.
+      //
+      // THE SPLINTERS. Fast, small, short — a hard thing breaking, not a soft
+      // thing bursting — and they FALL, because these are the crystals, and
+      // the solids under them (systems/iceShatter.js) are what floats.
+      iceShatter: {
+        count: 26, speed: [4, 14], size: [0.06, 0.2], life: [0.3, 0.8],
+        colors: [0xffffff, 0xdff6ff, 0xbdf5ff], cone: 0, drag: 5,
+        gravity: [0, -0.8], inherit: 0.3, glow: 2.4,
+      },
+      // THE ICE ITSELF, into the `ice` goo group — killGoo's proportions,
+      // because those are the ones that fuse at fight scale (see the note on
+      // CONFIG.fx.goo.groups.gore), with the mass thrown a little harder and
+      // held a little tighter so it tears into separate jagged bodies rather
+      // than a blob: the surface does the rest. Gravity UP, slightly. Ice
+      // floats.
+      killIceGoo: {
+        count: 12, speed: [1.6, 6], size: [0.22, 0.44], life: [0.7, 1.4],
+        colors: [0xcfefff, 0xffffff, 0x8fd4ff], cone: 0, drag: 3.6,
+        gravity: [0, 0.5], inherit: 0.3, glow: 1.3, goo: 'ice',
+        turbulence: 0.4,
+      },
+
       // --- A BOSS GOING UP (goo group `boom`) ---------------------------------
       // ONE LOBE CLUSTER of the explosion in systems/bossBoom.js, which fires
       // this several dozen times in a few tenths of a second — a ring at a
@@ -15147,7 +15381,7 @@ export const CONFIG = {
       // these are born ON the water line and the surface clip would delete
       // half of them on their first frame.
       breachFoam: {
-        count: 16, speed: [3, 11], size: [0.22, 0.44], life: [0.32, 0.7],
+        count: 16, speed: [2.4, 8.8], size: [0.18, 0.35], life: [0.32, 0.7],
         colors: [0xdff4ff, 0xffffff, 0xa9dcff], cone: 1.0, drag: 2.6,
         gravity: [0, -9], inherit: 0.5, glow: 1.3, goo: 'foam',
         killAtSurface: false, turbulence: 0.4,
@@ -15166,7 +15400,7 @@ export const CONFIG = {
       // one. More lobes is the only lever that fixes it: bigger ones alone weld
       // the ring into a slab and faster ones alone open the gaps further.
       reentryFoam: {
-        count: 46, speed: [5, 19], size: [0.3, 0.6], life: [0.4, 0.95],
+        count: 22, speed: [4, 15.2], size: [0.21, 0.44], life: [0.4, 0.95],
         colors: [0xdff4ff, 0xffffff, 0x9fd8ff], cone: 1.7, drag: 2.2,
         gravity: [0, -11], inherit: 0.35, glow: 1.5, goo: 'foam',
         killAtSurface: false, turbulence: 0.4,
@@ -15212,7 +15446,12 @@ export const CONFIG = {
       // `killAtSurface: false` for the usual reason and one extra: these are
       // born ON the line, and the whole point of them is to cross it twice.
       reentryCavity: {
-        count: 40, speed: [2, 27], size: [0.3, 0.58], life: [0.9, 1.35],
+        // 24 and not 28: the cavity is emitted from a 12-point RING, and each
+        // point fires its share floored at one lobe, so a count that does not
+        // divide by the ring's points loses a couple to the rounding and the
+        // hole comes out short of what is authored. A multiple of 12 spends
+        // exactly what it says. `npm run test:splash` checks the arithmetic.
+        count: 24, speed: [1.6, 21.6], size: [0.24, 0.46], life: [0.9, 1.35],
         colors: [0xbfe6ff, 0xdff4ff, 0x8fcdf0], cone: 0.6, drag: 3.1,
         gravity: [0, 16], inherit: 0.3, glow: 1.1, goo: 'foam',
         killAtSurface: false, turbulence: 0.3,
@@ -15239,7 +15478,7 @@ export const CONFIG = {
       // own length, and past about fifteen it stops being a column and becomes
       // a string of beads.
       reentryJet: {
-        count: 18, speed: [15, 32], size: [0.24, 0.46], life: [0.55, 0.95],
+        count: 13, speed: [12, 25.6], size: [0.19, 0.37], life: [0.55, 0.95],
         colors: [0xe8faff, 0xffffff, 0xa9dcff], cone: 0.22, drag: 0.8,
         gravity: [0, -19], inherit: 0.12, glow: 1.7, goo: 'foam',
         killAtSurface: false, turbulence: 0.15,
@@ -15277,7 +15516,7 @@ export const CONFIG = {
       // the water line, and the surface clip would delete half of it on the
       // first frame.
       blastFoam: {
-        count: 20, speed: [4, 16], size: [0.28, 0.55], life: [0.5, 1.1],
+        count: 15, speed: [3.2, 12.8], size: [0.22, 0.44], life: [0.5, 1.1],
         colors: [0xdff4ff, 0xffffff, 0xa9dcff], cone: 0, drag: 2.8,
         gravity: [0, 3], inherit: 0.15, glow: 1.3, goo: 'foam',
         killAtSurface: false, turbulence: 0.4,
@@ -15787,7 +16026,7 @@ export const CONFIG = {
       // do. These are set so one lobe reads as a patch of white water at fight
       // scale, and the hull clearance follows them automatically.
       hullFoam: {
-        count: 3, speed: [0.3, 1.8], size: [0.24, 0.45], life: [0.9, 2.2],
+        count: 3, speed: [0.24, 1.44], size: [0.19, 0.36], life: [0.9, 2.2],
         colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 0.9, drag: 2.4,
         gravity: [0, 0.7], inherit: 0.45, glow: 1.0, goo: 'foam',
         killAtSurface: false, turbulence: 0.8,
@@ -16548,6 +16787,13 @@ export const CONFIG = {
       // spray leaves behind. Both are tinted by the creature that died.
       kill:      { emit: 'explosion',   goo: 'killGoo', shake: 0.22, hitstop: 0,     glow: 0.6,  ripple: { strength: 2.4, radius: 10 },  sfx: 'kill',     haptic: [18], sfxMinGap: 0.05 },
       bigKill:   { emit: 'bigExplosion',goo: 'killGoo', shake: 0.7,  hitstop: 0.07,  glow: 1.2,  ripple: { strength: 4.5, radius: 18 },  sfx: 'bigKill',  haptic: [30, 25, 45] },
+      // THE SAME TWO KILLS FOR A BODY THAT DIED AS ICE — see the `frozen`
+      // branch of onEnemyKilledFeedback in main.js. Every number but the two
+      // bursts is the kill's own, on purpose: a frozen kill is a kill, and it
+      // must sound and shake like one. The bursts are the splinters and the
+      // ice mass in place of the spray and the blood.
+      killFrozen:    { emit: 'iceShatter', goo: 'killIceGoo', shake: 0.22, hitstop: 0,     glow: 0.6,  ripple: { strength: 2.4, radius: 10 },  sfx: 'kill',     haptic: [18], sfxMinGap: 0.05 },
+      bigKillFrozen: { emit: 'iceShatter', goo: 'killIceGoo', shake: 0.7,  hitstop: 0.07,  glow: 1.2,  ripple: { strength: 4.5, radius: 18 },  sfx: 'bigKill',  haptic: [30, 25, 45] },
       // A bolt landing on the water. The heaviest shake in the table — heavier
       // than bigKill — because unlike everything else here it is not something
       // the player did, and the only way an event with no input behind it reads
@@ -18457,7 +18703,10 @@ export const CONFIG = {
             // the landing, the breach, and the white water off a hull.
             whitewater: {
               // Master. 0 restores the plain additive surface above exactly.
-              strength: 1,
+              // CALMED from 1: at full strength the whole cavity whitens and a
+              // landing reads as a wall of paint rather than as water with air
+              // in it. The air is meant to be the TELL, not the subject.
+              strength: 0.25,
               // How much density ABOVE the isoline counts as fully packed. This
               // is the control that decides how much of a burst is white and
               // how much is veil, and it is the one to drag first. Low turns
@@ -18476,14 +18725,19 @@ export const CONFIG = {
               // THINNEST — packed foam is solid and featureless, and it is the
               // ragged aerated edge that reads as bubbles. Modulating the core
               // as hard as the fringe makes the whole mass look mouldy.
-              bubbles: 0.65,
+              // Calmed with the rest of the air. Above ~0.5 the fringe is all
+              // texture and the mass reads as boiling rather than aerated.
+              bubbles: 0.3,
               bubbleScale: 1.15, // cells per world unit
               // The trapped air CLIMBING, in world units a second. The texture
               // is sampled in world space and scrolled upward through a mass
               // that is itself moving, which is what air in water does. At 0
               // the bubbles are painted on and the whole thing goes back to
               // being a texture rather than a substance.
-              airRise: 1.6,
+              // Slowed to about half. At 1.6 the bubbles climb faster than the
+              // mass they are in, which reads as the texture sliding across the
+              // foam instead of air rising through it.
+              airRise: 0.9,
               // Authored bright for the usual reason: the composite writes
               // linear straight to the framebuffer with no sRGB conversion, so
               // everything lands about a stop and a half darker than its hex.
@@ -18651,6 +18905,27 @@ export const CONFIG = {
             spec: 0,
             specPower: 16,
             normal: 1.2,
+          },
+          // A FROZEN BODY COMING APART (systems/statusFx.js, killIceGoo). The
+          // blood surface made HARD: a narrow transition so the edge is a
+          // crisp facet rather than a wet meniscus, a high isoline and a
+          // smaller splat so the lobes only just fuse and the mass tears
+          // into jagged separate bodies rather than a blob, and a hot, tight
+          // specular — glass, not meat. Alpha, not additive: a piece of ice
+          // hides the water behind it. The rim is the one thing kept from
+          // blood, wider and brighter, because a shard's edge is where the
+          // light gathers.
+          ice: {
+            radius: 2.6,
+            iso: 0.82,
+            soft: 0.07,
+            opacity: 0.95,
+            additive: false,
+            rim: 1.1,
+            rimWidth: 0.4,
+            spec: 1.3,
+            specPower: 42,
+            normal: 9,
           },
         },
       },
@@ -19173,6 +19448,32 @@ export const CONFIG = {
         // and with a bouncing corpse there has to be something that guarantees
         // the score card arrives even if the body is still ticking over.
         settleMax: 6,
+
+        // --- the floor ---------------------------------------------------------
+        // The seabed holds the whole animal, not its pivot. The pivot used to
+        // rest `hitRadius` (one unit) above bounds.bottom, which is a fifth of
+        // a unit UNDER the drawn sand line — and the body is six units long, so
+        // a tumbling corpse drove its nose three units into the bed and lay
+        // with its belly through it. Now the lowest point of the body, at
+        // whatever angle it is holding this frame, is what meets the sand
+        // (arena.seabedTopY); see restY in systems/deathDive.js.
+        //
+        // How far into the silt that lowest point may go, world units. Zero
+        // sits it exactly on the line; a little bedding reads as weight.
+        sink: 0.12,
+        // Which point is "lowest": the share of the body's vertices allowed
+        // under the line, thinnest first. At 0 it is the single lowest vertex
+        // — a flipper tip on a seal lying on its side — and the body hovers a
+        // fin's depth above the sand. A few percent beds the fins and rests
+        // the flank on the line. See bodyLowest in entities/player.js.
+        floorShare: 0.04,
+        // How fast the sand pushes a body back out when something has put it
+        // below the line — a hard landing's overshoot, or a death ON the floor,
+        // where the pivot starts a body-height too low. World units per second
+        // of dilated time. Bounded rather than a snap so a floor death is
+        // lifted onto the bed in slow motion instead of popping up a unit on
+        // its first frame.
+        floorGive: 12,
       },
 
       // --- THE TURN ------------------------------------------------------------
@@ -24038,9 +24339,17 @@ export const CONFIG = {
       seagull: {
         pigment: 1,
         luminous: false,
-        strength: 0,
+        strength: 2.38,
         pulseAmp: 0,
         schoolAmp: 0,
+        pigmentGlow: 0,
+        scale: 0.07,
+        flow: 1.24,
+        pattern: 'marble',
+        colorA: 0x121212,
+        colorB: 0xffe380,
+        colorC: 0xffec1f,
+        shellColor: 0x282525,
       },
       beluga: {
         pigment: 1,
@@ -24355,7 +24664,7 @@ export const CONFIG = {
       surgeonFish: { luminous: false, pigment: 1, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 0.92, flow: 0.3, pattern: 'blotches', colorA: 0x00e5ff, colorB: 0xe6e6e6, colorC: 0x000ecc, shellColor: 0x1605ff },
       tuna: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.05, contrast: 0.75, coverage: 0.45, strength: 1.8, flow: 1.18, pattern: 'pulse', colorA: 0xffffff, colorB: 0x4d4d4d, colorC: 0x6e6e6e, shellColor: 0x111212 },
       hammerhead: { luminous: false, pigment: 1, scale: 0.07, contrast: 3.35, coverage: 0.45, strength: 2.2, flow: 0.94, pattern: 'blotches', colorA: 0x000000, colorB: 0x3a1778, colorC: 0xe6e6e6, shellColor: 0x1a1919 },
-      bossBoat: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.07, contrast: 1.6, coverage: 0.45, strength: 2.88, flow: 0.3, pattern: 'lattice', colorA: 0xffffff, colorB: 0x545454, colorC: 0x9e9e9e, shellColor: 0x000000 },
+      bossBoat: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.91, contrast: 1.9, coverage: 0.28, strength: 1.02, flow: 0.3, pattern: 'billow', colorA: 0xc11515, colorB: 0x545454, colorC: 0x9e9e9e, shellColor: 0x000000 },
       bossYacht: { luminous: false, pigment: 1, scale: 0.34, contrast: 1.5, coverage: 0.08, strength: 1.8, flow: 0.48, pattern: 'veins', colorA: 0x00e5ff, colorB: 0x000000, colorC: 0x2f2e2d, shellColor: 0xffffff },
       bossAnglerfish: { luminous: false, pigment: 0, pigmentGlow: 0, scale: 0.11, contrast: 1.6, coverage: 0.26, strength: 1.8, flow: 0.3, pattern: 'blotches', colorA: 0x000000, colorB: 0x878688, colorC: 0x292929, shellColor: 0xb0b0b0 },
       stingray: { luminous: false, pigment: 1, pigmentGlow: 0, scale: 0.43, contrast: 1.25, coverage: 0.24, strength: 1.8, flow: 1.5, pattern: 'billow', colorA: 0xd4d4d4, colorB: 0xc2c2c2, colorC: 0x000000, shellColor: 0x4a4a4a },
@@ -24376,9 +24685,17 @@ export const CONFIG = {
       // ------------------------------------------------------------------
       orcaFriendCow: { luminous: true, pigment: 1, scale: 0.13, contrast: 1.6, coverage: 0.2, strength: 0.72, flow: 1.22, pattern: 'marble', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x000000 },
       orcaFriendCalf: { luminous: true, pigment: 1, pigmentGlow: 0, scale: 0.04, contrast: 2.9, coverage: 0.45, strength: 1.9, flow: 1.54, pattern: 'net', colorA: 0x000000, colorB: 0xffffff, colorC: 0x000000, shellColor: 0x3d3d3d },
-      bakalarBoat: { luminous: true, pigment: 1, scale: 0.1, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 0.3, pattern: 'lattice', colorA: 0xff0026, colorB: 0x7b2dff, colorC: 0xffd166, shellColor: 0xff5a1e },
+      bakalarBoat: { luminous: true, pigment: 1, scale: 0.04, contrast: 2.1, coverage: 0.6, strength: 1.8, flow: 1.18, pattern: 'lattice', colorA: 0xffffff, colorB: 0x000000, colorC: 0x000000, shellColor: 0xcfcfcf },
       boat: { luminous: true, pigment: 1, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.24, pattern: 'veins', colorA: 0x000000, colorB: 0x8f8f8f, colorC: 0x000000, shellColor: 0xababab },
-      whale: { luminous: true, pigment: 0.08, pigmentGlow: 0.22, scale: 0.05, contrast: 1.6, coverage: 0.45, strength: 2.78, flow: 0.88, pattern: 'veins', colorA: 0x000000, colorB: 0x3d3d3d, colorC: 0x949494, shellColor: 0xff5a1e },
+      whale: { luminous: true, pigment: 0, pigmentGlow: 0.22, scale: 0.04, contrast: 1.6, coverage: 0.45, strength: 2.78, flow: 0.83, pattern: 'flow', colorA: 0x000000, colorB: 0x3d3d3d, colorC: 0xd1d1d1, shellColor: 0x333333 },
+      // THE HUMPBACK'S WHOLE HIDE. humpback.glb ships no texture at all (the
+      // build step strips the Sketchfab gradient — tools/build-humpback.mjs),
+      // so this is not a glow laid over a photograph, it is the paint: pigment
+      // 1 on a white-tinted body, a dark marbled back with pale throat
+      // pleats. Placed, not designed — the shader lab is where it gets its
+      // look; these are the numbers that make it render as an animal rather
+      // than the orange of an empty preset in the meantime.
+      humpbackWhale: { luminous: true, pigment: 1, pigmentGlow: 0, scale: 0.04, contrast: 1.5, coverage: 0.4, strength: 0.6, flow: 0.83, pattern: 'marble', colorA: 0x141c24, colorB: 0x3a4b58, colorC: 0xc2cfd4, shellColor: 0x36464a },
       musicNote: { luminous: true, pigment: 0.96, pigmentGlow: 0, scale: 0.06, contrast: 1.6, coverage: 0.45, strength: 2.12, flow: 1.88, pattern: 'blotches', colorA: 0xffffff, colorB: 0x969696, colorC: 0x030b7c, shellColor: 0x000000 },
 
 
@@ -28712,6 +29029,84 @@ export const CONFIG = {
     // is now worth 26 xp: a real reward, not a shortcut through a third of
     // the level curve.
     chumXp: 1,
+
+    // THE DECK GUNS — boats shoot back (systems/boats.js, armBoat / updateBoatGun).
+    //
+    // Every hull carries one gun, chosen at spawn from `tiers` by the run's
+    // difficulty: the heaviest tier the boat qualifies for. It throws FISH —
+    // small fry at first, trout later, a sailfish once the run is deep — down
+    // into the water at the seal, led by the seal's velocity like the boss
+    // boat leads its shells. A fish shot is kinetic: it hits or it swims off,
+    // and it is only thrown while the seal is UNDER the surface and inside
+    // `range`, so a boat crossing the far side of the arena is still a target
+    // and not a turret.
+    //
+    // An ARTILLERY TRAWLER is a trawler that also carries anti-air: while the
+    // seal is above the surface it fires homing mussels (the seal's own
+    // barrage shell, turned around) and a bad gull, both of which chase.
+    // `turnRate` is the whole counterplay — out-turn them and they overshoot —
+    // so it is deliberately low in the air, where the seal has the least
+    // control. Underwater an artillery trawler fires its tier's fish like any
+    // other boat.
+    //
+    // Damage rides the same difficulty ramp and enemy pace as the hull's hp
+    // (spawn.ramp.damage, pace.axes.damage), so a tier's `damage` is what it
+    // is worth at difficulty 0. The per-boat pick is random between the two
+    // cooldowns, so a pair of boats never fires in lockstep.
+    //
+    // These live here rather than in a CSV for the same reason bossBoat's
+    // patterns do: the boats are not a spawning.csv root, and the numbers are
+    // one system's, tuned against each other.
+    guns: {
+      enabled: true,
+      range: 30, // world units from hull to seal, beyond which nothing fires
+      lead: 0.3, // seconds of the seal's velocity the throw leads by
+      windup: 0.45, // seconds between deciding to fire and the throw
+      trawlerRateMul: 0.8, // a trawler reloads this much faster (0.8 = 25% more shots)
+      openingDelay: 3, // a fresh hull sails this long before its first shot
+      tiers: [
+        {
+          id: 'fish', minDifficulty: 0, asset: 'enemyFish',
+          scale: 0.85, radius: 0.42, orient: true,
+          damage: 6, speed: 11, life: 3, count: 1, spread: 0.18,
+          cooldownMin: 2.8, cooldownMax: 4.6,
+        },
+        {
+          id: 'trout', minDifficulty: 7, asset: 'enemyTrout',
+          scale: 0.8, radius: 0.5, orient: true,
+          damage: 10, speed: 12.5, life: 3.2, count: 2, spread: 0.2,
+          cooldownMin: 2.6, cooldownMax: 4.2,
+        },
+        {
+          id: 'sailfish', minDifficulty: 15, asset: 'enemySailfish',
+          scale: 0.45, radius: 0.6, orient: true,
+          damage: 16, speed: 15, life: 3.5, count: 1, spread: 0,
+          cooldownMin: 3, cooldownMax: 4.6,
+        },
+      ],
+      artillery: {
+        enabled: true,
+        minDifficulty: 10, // ~2m15s at spawn.difficultyPerSecond 0.075
+        chance: 0.5, // of a qualifying trawler
+        scaleMul: 1.12, // on top of trawlerScale — it reads as the bigger hull
+        windup: 0.6,
+        cooldown: 3.6, // between anti-air volleys
+        // Volleys alternate mussel, gull, mussel, gull.
+        mussel: {
+          asset: 'missile', scale: 1, radius: 0.4, orient: true,
+          damage: 14, speed: 12, life: 4, turnRate: 1.3,
+          count: 2, spread: 0.55, // fired wide and allowed to come back
+          blastRadius: 2.6, // it is a shell: a fuse and a boom, not a bullet
+          source: 'boat:mussel',
+        },
+        gull: {
+          asset: 'seagull', scale: 0.3, radius: 0.8, orient: true,
+          damage: 18, speed: 14, life: 4, turnRate: 1.7,
+          count: 1, spread: 0,
+          source: 'boat:gull',
+        },
+      },
+    },
   },
 
   // ---------------------------------------------------------------------------
@@ -29933,6 +30328,18 @@ export const CONFIG = {
     // clear-out would be followed by a ball on the very next frame, every
     // single fight.
     firstDelay: 10,
+    // THE OPENING BALLS — the bait-ball half of the opening shoal.
+    // spawn.opening scatters a few loose fish round the seal on the frame a
+    // run begins; this places one to three balls beside them, ON STATION, at
+    // `radiusMin`..`radiusMax` from the seal in even slices of the circle. A
+    // run begins with the emptiest water it will ever have and a seal with no
+    // chum, so the first thing it sees is the food, right there — not, as the
+    // clock would have it, a wall ten seconds later with a ball behind it.
+    // Rolled once per run; `max` is clamped to `maxBalls`, and 0 is off.
+    // radiusMin is floored at flee.radius plus a shell, or the ball would
+    // slide away from the seal on its first frame. See openingBallSpecs in
+    // systems/baitBall.js and spawnOpeningBaitBalls in entities/enemies.js.
+    opening: { min: 1, max: 3, radiusMin: 14, radiusMax: 24 },
     // How many fish. Big enough to be a body of food rather than a snack — the
     // point is that neither side gets all of it.
     size: { min: 10, max: 18 },
@@ -31859,6 +32266,108 @@ export const CONFIG = {
     flashCurve: 'outCubic',
   },
 
+  // ---------------------------------------------------------------------------
+  // STATUS LOOKS — what a body wearing chill or venom looks like, and what it
+  // sheds, for as long as it wears it. See systems/statusFx.js.
+  //
+  // THE COLOURS ARE NOT HERE. They are read from CONFIG.biolum.elements at draw
+  // time — chill's and venom's own — and pushed to a body tint by `saturate`
+  // and `lightness` (a pale pellet colour multiplied into a texture is a
+  // dimmer fish, not a blue one). Retune the element and the body follows.
+  //
+  // `body` is how far the material's own colour moves toward the tint, 0..1;
+  // `emissive` how far a lit body's emissive moves, with `intensity` the light
+  // it gives off at full. An unlit stand-in takes the intensity as overdrive.
+  // ---------------------------------------------------------------------------
+  statusFx: {
+    enabled: true,
+    // The fish everything is scaled against: a body this radius sheds particles
+    // at the authored size, a shark sheds them bigger, within the band in
+    // `minScale`/`maxScale` on each emitter row.
+    refRadius: 0.6,
+    chill: {
+      // At FULL slow, not yet frozen. The ramp is this times how much of its
+      // speed the cold has taken, so the freeze arrives as a visible step at
+      // the top of a climb rather than out of nowhere.
+      body: 0.35,
+      emissive: 0.5,
+      // ICE. A step above the top of the ramp, and the look the shatter comes
+      // off.
+      frozenBody: 0.75,
+      frozenEmissive: 0.9,
+      intensity: 1.2,
+      saturate: 0.9,
+      lightness: 0.55,
+      frost: {
+        emitter: 'frostBreath',
+        // Emissions per second off a frozen body of the reference radius...
+        perSecond: 12,
+        // ...and off a merely chilled one at full slow, scaled down by the
+        // slow. A trickle, so the ramp is visible off the body as well as on
+        // it.
+        chilledPerSecond: 3,
+        // Where in the body the frost starts, as a share of its radius.
+        spread: 0.8,
+        minScale: 0.7,
+        maxScale: 2.2,
+      },
+    },
+    venom: {
+      // Higher than the chill's ramp because it starts from a fraction of
+      // itself (see `firstStack`) and a brown fish at a fifth of the way to
+      // green is a brown fish.
+      body: 0.6,
+      emissive: 0.6,
+      intensity: 0.9,
+      // What ONE stack is worth of the full green, so a single dose reads as
+      // poisoned; every stack after it deepens toward 1.
+      firstStack: 0.5,
+      saturate: 0.9,
+      lightness: 0.42,
+      // THE TICK, seen: a flash laid over the standing green on every
+      // application, gone inside `seconds`, and a few drops shed off the
+      // body. This is what makes damage-over-time read as OVER TIME.
+      tick: {
+        emitter: 'venomTickDrip',
+        seconds: 0.24,
+        intensity: 2.4,
+        body: 0.3,
+        scale: 1,
+        minScale: 0.7,
+        maxScale: 2,
+      },
+    },
+    // THE SOLIDS OFF A FROZEN KILL — systems/iceShatter.js. Everything sized
+    // off the body's own radius, never a world unit typed by hand.
+    shatter: {
+      enabled: true,
+      count: 10,
+      perRadius: 9,
+      max: 180,
+      speed: [3, 12],
+      // Shard size as a multiple of the body's radius.
+      size: 0.34,
+      sizeJitter: 0.7,
+      life: 1.4,
+      lifeJitter: 0.4,
+      // Seconds of the melt at the end of a life.
+      fade: 0.5,
+      drag: 2.4,
+      // Ice floats: a terminal RISE, and how hard it heads there.
+      rise: 0.9,
+      buoyancy: 2.2,
+      spin: 12,
+      spinDamp: 1.2,
+      // Share of the body's velocity the shards keep.
+      carry: 0.35,
+      color: 0xd6f4ff,
+      tint: 0.35,
+      emissive: 0x2f8fc4,
+      emissiveIntensity: 0.45,
+      roughness: 0.12,
+    },
+  },
+
   emissivePulse: {
     enabled: true,
     // THE YACHT'S MONEY. Both rolls on the same division and the same shape, so
@@ -32817,6 +33326,20 @@ export const CONFIG = {
     // per breach rather than shortening the cooldown, so the ceiling stays
     // "how often you can get out of the water", not "how fast you can skim
     // the water line" — see CONFIG.strike.chainOn.cooldowns.breach.
+    // BOOSTER PACK — alternates, the way André 3000 does on a laser loadout:
+    // odd stacks add a pip container to the boost bar, even stacks add regen.
+    // The parity is the stack counter, which is a `level` row in statText and
+    // so never reaches the card; {effect} reads the pip or the regen alone.
+    { id: 'boosterPack', family: 'strike', name: 'Booster Pack', desc: '{effect}',
+      perLevelName: true,
+      apply: (s) => {
+        const stack = (s.boosterPackStacks ?? 0) + 1;
+        s.boosterPackStacks = stack;
+        const b = CONFIG.strike.boosterPack ?? {};
+        if (stack % 2 === 1) s.strikeExtraPips = (s.strikeExtraPips ?? 0) + (b.pipsPerStack ?? 1);
+        else s.strikePipRegen = (s.strikePipRegen ?? 0) + (b.regenPerStack ?? 0.12);
+        s.strikeDamage += CONFIG.strike.cardDamage;
+      }, maxStacks: 6 },
     { id: 'breachChain', family: 'strike', name: 'Porpoising', desc: 'Breaching the surface extends your food chain: +links per breach',
       perLevelName: true,
       apply: (s) => {
@@ -33880,6 +34403,10 @@ export const CONFIG = {
       // least to say and banding has most.
       shark: { steps: 3, low: 0.3, gamma: 1.15, soft: 0.12, range: 1.5 },
       orca: { steps: 2, low: 0.22, high: 1.0, soft: 0.06 },
+      // The humpback sweep. The bowhead's banding (the `whale` preset the
+      // shader lab recorded below), copied as a starting point: same size on
+      // screen, same dark painted hide, same job.
+      humpbackWhale: { strength: 1, steps: 4, gamma: 1.75, low: 0.17, high: 0.99, soft: 0, range: 1.6 },
 
       // BAKALAR'S VOICEMAIL BOMB, and it needs the same correction the mussel
       // does below for the same cause: it is a near-black body. Its albedo is
@@ -34452,6 +34979,14 @@ const SYNCED_FX = [
   ['cold snap club', () => resolveBiolumCfg('biolumSkin.presets.clubIce'), ['pulseSync', 'flickerSync']],
   ['zappy club', () => resolveBiolumCfg('biolumSkin.presets.clubZap'), ['pulseSync', 'flickerSync']],
   ['octopus grabber — skin', () => resolveBiolumCfg('biolumSkin.presets.octoGrabber'), ['pulseSync', 'flickerSync']],
+  // Beside the grabber because they are the two octopuses and the grid is
+  // read down the column — not because they share anything else. This one
+  // arrived through the shader lab's record, which writes a preset into the
+  // generated block at the end of this file and knows nothing about the
+  // inventory up here, so it became an owner with no row and `npm run
+  // test:beat` caught it. Any future preset recorded that way lands the
+  // same way.
+  ['dumbo octopus', () => resolveBiolumCfg('biolumSkin.presets.dumboOcto'), ['pulseSync', 'flickerSync']],
   ['hammerhead', () => resolveBiolumCfg('biolumSkin.presets.hammerhead'), ['pulseSync', 'flickerSync']],
   ['boss yacht — hull', () => resolveBiolumCfg('biolumSkin.presets.bossYacht'), ['pulseSync', 'flickerSync']],
   ['orca escort — cow', () => resolveBiolumCfg('biolumSkin.presets.orcaFriendCow'), ['pulseSync', 'flickerSync']],
@@ -34465,6 +35000,7 @@ const SYNCED_FX = [
   ['tuna', () => resolveBiolumCfg('biolumSkin.presets.tuna'), ['pulseSync', 'flickerSync']],
   ['eel companion', () => resolveBiolumCfg('biolumSkin.presets.eelCompanion'), ['pulseSync', 'flickerSync']],
   ['whale', () => resolveBiolumCfg('biolumSkin.presets.whale'), ['pulseSync', 'flickerSync']],
+  ['humpback whale — hide', () => resolveBiolumCfg('biolumSkin.presets.humpbackWhale'), ['pulseSync', 'flickerSync']],
   ['harp note', () => resolveBiolumCfg('biolumSkin.presets.musicNote'), ['pulseSync', 'flickerSync']],
 
   // ...AND THE REST OF THE ROSTER, which had grown to seventeen presets with
@@ -35183,12 +35719,12 @@ for (const [root, presets] of Object.entries({
     "bossAnglerfish": { strength: 1, steps: 4, gamma: 3, low: 0.06, high: 1, soft: 0.38, range: 2.6 },
     "orcaFriendBull": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
     "barracuda": { strength: 1, steps: 3, gamma: 2.55, low: 0.24, high: 1, soft: 0, range: 1 },
-    "whale": { strength: 1, steps: 4, gamma: 1.75, low: 0.17, high: 0.99, soft: 0, range: 1.6 },
+    "whale": { strength: 1, steps: 3, gamma: 2.6, low: 0.17, high: 0.99, soft: 0.7, range: 1.5 },
     "fisherman": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1.8 },
     "walkingCrab": { strength: 1, steps: 2, gamma: 2.4, low: 0.28, high: 1, soft: 0, range: 1 },
     "tuna": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
     "bossBarrel": { strength: 1, steps: 5, gamma: 1, low: 0.28, high: 1.21, soft: 0.1, range: 1.25 },
-    "bossBoat": { strength: 1, steps: 4, gamma: 1, low: 0.51, high: 1, soft: 0, range: 1 },
+    "bossBoat": { strength: 1, steps: 3, gamma: 2.15, low: 0.81, high: 1, soft: 0, range: 1 },
     "gorebone": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
     "brownFish": { strength: 1, steps: 2, gamma: 1.4, low: 0.28, high: 0.96, soft: 0, range: 1 },
     "fishPackB": { strength: 1, steps: 2, gamma: 1, low: 0.16, high: 1, soft: 0.34, range: 1 },
@@ -35220,6 +35756,8 @@ for (const [root, presets] of Object.entries({
     "anglerfish": { pigment: 0, pigmentGlow: 0.8, scale: 0.57, contrast: 1.6, coverage: 0.28, strength: 0.64, flow: 1.62, pattern: 'blotches', colorA: 0x000000, colorB: 0xebebeb, colorC: 0x000000, shellColor: 0x7a7a7a },
     "club": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.42, pattern: 'veins', colorA: 0xf1f8f9, colorB: 0x4a4a4a, colorC: 0xb5ac97, shellColor: 0x3e2319 },
     "headstone": { pigment: 0, pigmentGlow: 0, scale: 0.74, contrast: 1.6, coverage: 0.52, strength: 1.8, flow: 1.42, pattern: 'blotches', colorA: 0x000000, colorB: 0x969696, colorC: 0x5c5c5c, shellColor: 0x292929 },
+    // STATED, not inherited. Every other pigment preset says which roster it is on; this one was left unsaid and so took `base.luminous`, which is TRUE — the same silent inheritance that once put fifteen daylight species on the night roster. `true` is what it already resolved to, so nothing moves: it is a deep-sea animal with the highest strength in the family (1.8), and it is a companion rather than a spawned enemy, so the flag reads its look and not a spawn gate. Written down so it is a decision.
+    "dumboOcto": { pigment: 1, pigmentGlow: 0, scale: 0.48, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.32, pattern: 'blotches', colorA: 0xfff700, colorB: 0xff4d2e, colorC: 0xfffdfa, shellColor: 0x861e94, luminous: true },
   },
 })) {
   const bag = ((CONFIG[root] ??= {}).presets ??= {});
@@ -35846,6 +36384,30 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    group: 'Status looks',
+    panel: 'companions',
+    section: 'Auras & orbits',
+    items: [
+      { path: 'statusFx.chill.body', min: 0, max: 1, step: 0.05, label: 'chilled body tint (at full slow)' },
+      { path: 'statusFx.chill.frozenBody', min: 0, max: 1, step: 0.05, label: 'frozen body tint' },
+      { path: 'statusFx.chill.frozenEmissive', min: 0, max: 1, step: 0.05, label: 'frozen glow mix' },
+      { path: 'statusFx.chill.intensity', min: 0, max: 4, step: 0.1, label: 'cold glow' },
+      { path: 'statusFx.chill.frost.perSecond', min: 0, max: 40, step: 1, label: 'frost off ice (per sec)' },
+      { path: 'statusFx.chill.frost.chilledPerSecond', min: 0, max: 20, step: 0.5, label: 'frost off a chilled body (per sec)' },
+      { path: 'statusFx.venom.body', min: 0, max: 1, step: 0.05, label: 'poisoned body tint (at max stacks)' },
+      { path: 'statusFx.venom.firstStack', min: 0, max: 1, step: 0.05, label: 'one stack is this much of it' },
+      { path: 'statusFx.venom.intensity', min: 0, max: 4, step: 0.1, label: 'venom glow' },
+      { path: 'statusFx.venom.tick.intensity', min: 0, max: 6, step: 0.1, label: 'tick flash' },
+      { path: 'statusFx.venom.tick.seconds', min: 0.05, max: 1, step: 0.01, label: 'tick flash length' },
+      { path: 'statusFx.shatter.count', min: 0, max: 40, step: 1, label: 'ice shards (base)' },
+      { path: 'statusFx.shatter.perRadius', min: 0, max: 30, step: 1, label: 'ice shards per unit of radius' },
+      { path: 'statusFx.shatter.size', min: 0.05, max: 1, step: 0.01, label: 'shard size (x body radius)' },
+      { path: 'statusFx.shatter.life', min: 0.2, max: 4, step: 0.1 },
+      { path: 'statusFx.shatter.rise', min: 0, max: 4, step: 0.1, label: 'shards float up at' },
+      { path: 'statusFx.shatter.color', type: 'color' },
+    ],
+  },
+  {
     group: 'Glow Up! — Infected',
     panel: 'companions',
     section: 'Auras & orbits',
@@ -36012,7 +36574,7 @@ export const TUNER_SCHEMA = [
     items: [
       { path: 'strike.enabled', type: 'bool', label: 'strike system' },
       { path: 'strike.charge.time', min: 0.15, max: 3, step: 0.05, label: 'charge: seconds a full bar buys' },
-      { path: 'strike.charge.minFire', min: 0, max: 0.9, step: 0.05, label: 'charge: minimum to fire' },
+      { path: 'strike.charge.minFirePips', min: 1, max: 6, step: 1, label: 'charge: pips needed to fire' },
       { path: 'strike.charge.chumRefill', min: 0.02, max: 1, step: 0.02, label: 'charge: refill per chum' },
       { path: 'strike.charge.gulp.blockEating', type: 'bool', label: 'gulp: charging seals the mouth' },
       { path: 'strike.charge.gulp.radius', min: 0, max: 20, step: 0.5, label: 'gulp: chum swallowed on release (radius)' },
@@ -36121,6 +36683,8 @@ export const TUNER_SCHEMA = [
       { path: 'strike.dashFaceLerp', min: 1, max: 40, step: 0.5, label: 'dash facing snap' },
       { path: 'strike.comboSpeedPerLevel', min: 0, max: 0.4, step: 0.01, label: 'combo: speed per link' },
       { path: 'strike.comboSpeedMax', min: 1, max: 3, step: 0.05, label: 'combo: speed cap' },
+      { path: 'strike.chargeThrustPerPip', min: 0, max: 0.1, step: 0.005, label: 'boost: thrust per held pip' },
+      { path: 'strike.chargeThrustMax', min: 1, max: 1.6, step: 0.05, label: 'boost: thrust cap' },
       { path: 'strike.orbSpawnMin', min: 2, max: 30, step: 1 },
       { path: 'strike.orbSpawnMax', min: 2, max: 40, step: 1 },
       { path: 'strike.shrapnel.count', min: 1, max: 24, step: 1, label: 'shrapnel: fragments' },
@@ -36424,11 +36988,16 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.base.vignette', min: 0, max: 1, step: 0.02, label: 'vignette (base, adds to the post preset)' },
       // --- the dash corridor ---
       { path: 'cinecam.lens.path.enabled', type: 'bool', label: 'highlight the dash path while charging' },
-      { path: 'cinecam.lens.path.width', min: 0.01, max: 0.4, step: 0.005, label: 'dash path: lane half-width' },
-      { path: 'cinecam.lens.path.feather', min: 0.02, max: 0.6, step: 0.01, label: 'dash path: lane falloff' },
-      { path: 'cinecam.lens.path.length', min: 0, max: 1, step: 0.02, label: 'dash path: reach at zero charge' },
-      { path: 'cinecam.lens.path.lengthPerPower', min: 0, max: 1.2, step: 0.02, label: 'dash path: extra reach at full charge' },
+      { path: 'cinecam.lens.path.width', min: 0.01, max: 0.4, step: 0.005, label: 'dash path: half-width at the seal' },
+      { path: 'cinecam.lens.path.widthFar', min: 0, max: 0.4, step: 0.005, label: 'dash path: half-width at the far end' },
+      { path: 'cinecam.lens.path.feather', min: 0.02, max: 0.6, step: 0.01, label: 'dash path: edge falloff' },
       { path: 'cinecam.lens.path.vignette', min: 0, max: 1, step: 0.02, label: 'dash path: darkening outside the lane' },
+      { path: 'cinecam.lens.path.turnLag', min: 0.01, max: 0.5, step: 0.01, label: 'dash path: turn lag (s)' },
+      { path: 'cinecam.lens.path.growLag', min: 0.01, max: 0.6, step: 0.01, label: 'dash path: grow lag (s)' },
+      { path: 'cinecam.lens.path.noise', min: 0, max: 1.5, step: 0.02, label: 'dash path: edge break-up' },
+      { path: 'cinecam.lens.path.noiseScale', min: 1, max: 24, step: 0.5, label: 'dash path: break-up ripples per frame height' },
+      { path: 'cinecam.lens.path.noiseSpeed', min: 0, max: 60, step: 0.25, label: 'dash path: break-up speed' },
+      { path: 'cinecam.lens.path.noiseSpeedPerPower', min: 0, max: 120, step: 0.5, label: 'dash path: extra break-up speed at full charge' },
       { path: 'cinecam.lens.droplets.enabled', type: 'bool', label: 'water on the lens after a breach' },
       { path: 'cinecam.lens.droplets.perBreach', min: 0, max: 1, step: 0.02, label: 'droplets: wetness per breach' },
       { path: 'cinecam.lens.droplets.life', min: 0.3, max: 10, step: 0.1, label: 'droplets: time to dry (s)' },
@@ -36641,6 +37210,10 @@ export const TUNER_SCHEMA = [
       { path: 'strike.chainDamageMax', min: 1, max: 20, step: 0.25, label: 'chain: max strike damage multiplier' },
       // --- control during the dash ---
       { path: 'strike.dashControl.steerMul', min: 0.5, max: 5, step: 0.1, label: 'dash: steering (x turn rate)' },
+      { path: 'strike.dashControl.steerFrom', min: 0, max: 1, step: 0.05, label: 'dash: steering authority at the launch (x)' },
+      { path: 'strike.dashControl.steerEase', type: 'choice', options: EASINGS, label: 'dash: steering takeover curve' },
+      { path: 'strike.dashControl.steerOffPips', min: 0, max: 6, step: 0.5, label: 'dash: no steering at this many pips or fewer' },
+      { path: 'strike.dashControl.steerFullPips', min: 1, max: 12, step: 0.5, label: 'dash: full steering from this many pips' },
       { path: 'strike.dashControl.throttle', type: 'bool', label: 'dash: stick throttles the speed' },
       { path: 'strike.dashControl.minSpeedMul', min: 0.1, max: 1, step: 0.05, label: 'dash: speed at a released stick (x)' },
       { path: 'strike.dashControl.throttleLerp', min: 1, max: 30, step: 0.5, label: 'dash: how fast the throttle responds' },
@@ -37218,6 +37791,9 @@ export const TUNER_SCHEMA = [
       // Fractions of the water column, 0 = surface, 1 = seabed. Kept off both
       // ends: along the floor it scrapes the crab layer, along the surface it
       // hides behind the waves.
+      // --- which animal, and how fast it chews ---
+      { path: 'whale.asset', type: 'choice', options: ['humpbackWhale', 'whale'], label: 'the animal (takes effect on the next sweep)' },
+      { path: 'whale.clipSpeed', min: 0.02, max: 2, step: 0.01, label: 'humpback: feeding loop speed (x authored)' },
       { path: 'whale.depthMin', min: 0, max: 1, step: 0.01, label: 'shallowest crossing' },
       { path: 'whale.depthMax', min: 0, max: 1, step: 0.01, label: 'deepest crossing' },
       { path: 'whale.offscreenMargin', min: 0, max: 60, step: 1, label: 'spawn distance off-screen' },
@@ -39617,6 +40193,9 @@ export const TUNER_SCHEMA = [
       { path: 'death.flop.spinKick', min: 0, max: 10, step: 0.2, label: 'tumble kick per bounce' },
       { path: 'death.flop.rollKick', min: 0, max: 10, step: 0.2, label: 'barrel roll kick per bounce' },
       { path: 'death.flop.settleMax', min: 1, max: 12, step: 0.5, label: 'bounce time ceiling (s)' },
+      { path: 'death.flop.sink', min: -0.5, max: 1, step: 0.02, label: 'bedded into the sand' },
+      { path: 'death.flop.floorShare', min: 0, max: 0.2, step: 0.01, label: 'share of the body under the line' },
+      { path: 'death.flop.floorGive', min: 1, max: 40, step: 0.5, label: 'sand push-out speed' },
       // ...and the body.
       { path: 'death.flop.spinMul', min: 0.5, max: 4, step: 0.1, label: 'tumble (x)' },
       { path: 'death.flop.rollMul', min: 0.5, max: 4, step: 0.1, label: 'barrel roll (x)' },
@@ -39953,6 +40532,29 @@ export function lateGameMul(which, level) {
   const over = Math.floor(level ?? 1) - (lg.from ?? Infinity);
   if (!(rate > 0) || !(over > 0)) return 1;
   return Math.min(lg[`${which}Max`] ?? Infinity, (1 + rate) ** over);
+}
+
+// WHAT DIFFICULTY A BOSS FIGHTS AT — see CONFIG.spawn.bossHp, which is where
+// the reasoning is.
+//
+// Returns a number in the SAME UNITS as the run clock's difficulty, so it can
+// be handed to difficultyRamp and to a row's hpPerDifficulty without either of
+// them knowing where it came from. That is the point of the shape: this
+// re-keys one input rather than introducing a second curve that would have to
+// be kept in step with the first.
+//
+// Returns null when the block is switched off, which is the caller's signal to
+// fall back to the clock — an explicit "not in charge" rather than a 1 or a 0,
+// either of which would be a real difficulty a boss could be spawned at.
+//
+// Floors the level for the reason lateGameMul does: xp spills in over several
+// seconds, and a fractional level would put a fraction of a step on a boss
+// that happened to be summoned mid-payout.
+export function bossDifficulty(level) {
+  const b = CONFIG.spawn?.bossHp;
+  if (!b?.enabled) return null;
+  const step = Math.max(0, Math.floor(level ?? 1) - (CONFIG.boss?.everyLevels ?? 5));
+  return (b.first ?? 0) + (b.perLevel ?? 0) * step;
 }
 
 // THE MASTER DIFFICULTY DIAL, resolved for one axis — see CONFIG.pace.

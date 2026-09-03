@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isIOSShell } from '../platform.js';
 import { LEVELUP_IMAGES } from './levelUpImages.js';
 import { hexMaskSet, noiseMaskSet } from './dither.js';
 import { rollReels, cancelReel, reelRolling } from './cardReel.js';
@@ -1879,16 +1880,32 @@ const STYLES = `
   .sv-card-fx { position: absolute; z-index: 5; pointer-events: none;
     max-width: 190px; padding: 6px 9px; border-radius: 7px;
     background: rgba(9,14,22,0.94); border: 1px solid rgba(122,215,255,0.35);
-    color: #cfeaff; font-size: 11px; line-height: 1.35; text-align: center;
+    line-height: 1.35; text-align: center;
     box-shadow: 0 4px 14px rgba(0,0,0,0.5);
     opacity: 0; transition: opacity 0.12s ease-out; }
+  /* NO FONT, SIZE OR COLOUR HERE, nor on .sv-uptip below: both boxes are text
+     roles now ('Card tooltip' and 'Hive tooltip' in textRoles.js), and the
+     Text panel (Y) writes those three. Everything inside a box is sized in em
+     off the role and dimmed with opacity rather than its own grey, so one row
+     in the panel moves the whole tip and the colour swatch actually reaches
+     it. The accents — the stack pip, the "next" value — are the one exception
+     and keep the panel blue. */
   .sv-card-fx.sv-fx-on { opacity: 1; }
   /* The card tooltip holding ROWS rather than the one sentence it started as
      (see cardTipContent). A row is a label column and a value, so it reads left
      to right; centred, the three labels would each start at a different x and
-     the table would stop being one. Wider for the same reason .sv-uptip is. */
-  .sv-card-fx.sv-card-fx-rows { text-align: left; max-width: min(240px, 76vw);
-    width: max-content; }
+     the table would stop being one. Wider for the same reason .sv-uptip is.
+     NO HEAD ON THIS SURFACE: the name is the card's title directly above it
+     (cardTipContent blanks it), so the box is the breakdown alone — and the
+     line the name used to take is spent on a bigger face, wider rows and more
+     air between them. The hive tips keep the 11px/9px pair in .sv-uptip below,
+     since a tile there has no title to lean on and its box has to stay small
+     enough to sit inside a hexagon's neighbourhood. */
+  .sv-card-fx.sv-card-fx-rows { text-align: left; max-width: none; white-space: nowrap;
+    width: max-content; padding: 10px 14px; border-radius: 9px;
+    line-height: 1.45; }
+  .sv-card-fx-rows .sv-uptip-rows { margin-top: 0; column-gap: 12px; row-gap: 7px; }
+  .sv-card-fx-rows .sv-uptip-label { font-size: 0.81em; }
 
   /* --- THE UPGRADE TIP ----------------------------------------------------
      The floating half of ui/upgradeTip.js: the box the three HIVE surfaces
@@ -1910,12 +1927,19 @@ const STYLES = `
      covered by one.
 
      Wider than .sv-card-fx because it holds rows rather than a sentence, and
-     the widest of them is a run line with three facts in it. */
+     the widest of them is a run line with three facts in it.
+
+     NO CAP AND NO WRAP, on this box or the card's row variant below: a row is
+     a label and a value, and a value broken onto a second line under its own
+     label stops reading as a row. The box grows to its longest line instead.
+     showUpgradeTip and showCardEffect both MEASURE the box before placing it
+     and clamp it to the window, so a wide tip slides in from the edge rather
+     than running off it. */
   .sv-uptip { position: fixed; z-index: 26; pointer-events: none;
-    width: max-content; max-width: min(260px, 76vw);
+    width: max-content; white-space: nowrap;
     padding: 7px 10px; border-radius: 8px; text-align: left;
     background: rgba(9,14,22,0.96); border: 1px solid rgba(122,215,255,0.35);
-    color: #cfeaff; font-size: 11px; line-height: 1.4;
+    line-height: 1.4;
     box-shadow: 0 6px 20px rgba(0,0,0,0.55);
     opacity: 0; transition: opacity 0.12s ease-out; }
   .sv-uptip.sv-uptip-on { opacity: 1; }
@@ -1934,10 +1958,10 @@ const STYLES = `
      drifts onto it is still a hold on the hexagon underneath. */
   .sv-uptip { -webkit-user-drag: none; }
   .sv-uptip-head { display: flex; align-items: baseline; gap: 6px; }
-  .sv-uptip-name { font-size: 12px; font-weight: 700; color: #eaf6ff; }
-  .sv-uptip-stacks { font-size: 10px; font-variant-numeric: tabular-nums;
+  .sv-uptip-name { font-size: 1.09em; font-weight: 700; }
+  .sv-uptip-stacks { font-size: 0.91em; font-variant-numeric: tabular-nums;
     color: rgba(122,215,255,0.8); }
-  .sv-uptip-desc { color: rgba(232,236,243,0.62); margin-top: 2px; }
+  .sv-uptip-desc { opacity: 0.7; margin-top: 2px; }
   /* A ROW IS A LABEL AND A VALUE, and the label column is fixed so three rows
      line up as a table rather than as three sentences of different lengths.
      ch and not px: the label column holds typed words in the tuned face, and
@@ -1952,12 +1976,12 @@ const STYLES = `
      enough to leave a stripe of empty space in every tip. */
   .sv-uptip-row { display: contents; }
   .sv-uptip-label { text-transform: uppercase; white-space: nowrap;
-    font-size: 9px; letter-spacing: 0.07em; color: rgba(232,236,243,0.4); }
-  .sv-uptip-text { min-width: 0; color: #cfeaff; }
+    font-size: 0.82em; letter-spacing: 0.07em; opacity: 0.45; }
+  .sv-uptip-text { min-width: 0; }
   /* The measured next stack is the row the tip exists for, so it is the one
      that is not grey. */
   .sv-uptip-row[data-row="next"] .sv-uptip-text { color: #9fe3ff; font-weight: 600; }
-  .sv-uptip-row[data-row="run"] .sv-uptip-text { color: rgba(232,236,243,0.78);
+  .sv-uptip-row[data-row="run"] .sv-uptip-text { opacity: 0.8;
     font-variant-numeric: tabular-nums; }
   /* A quantity that does not move on THIS pick but will on a later one — the
      rounded steps, where a second laser beam lands on stack four and nothing
@@ -1965,7 +1989,7 @@ const STYLES = `
      actually moving still read first, and present so the tip does not change
      shape between picks with nothing saying why. */
   .sv-uptip-row[data-flat] .sv-uptip-text,
-  .sv-uptip-row[data-flat] .sv-uptip-label { color: rgba(232,236,243,0.34); }
+  .sv-uptip-row[data-flat] .sv-uptip-label { opacity: 0.36; }
 
   .sv-hint { font-size: 11px; color: rgba(232,236,243,0.35); margin-top: 14px; letter-spacing: 0.04em; }
 
@@ -4539,11 +4563,15 @@ function cardEffect(choice, desc) {
 // actually done this run. Both come from the same builder the three hive
 // surfaces use, so "what does +1 do" cannot read differently on two screens.
 //
-// TWO THINGS ARE DROPPED FOR THIS SURFACE AND ONLY THIS ONE:
+// THREE THINGS ARE DROPPED FOR THIS SURFACE AND ONLY THIS ONE:
 //
-//   the desc     it is on the card's face, four pixels above the tooltip. The
-//                hive tiles have no face to put it on, which is why the row
-//                exists at all.
+//   the name     it is the card's title, in 14px bold, directly above the box.
+//                A tip that opens by repeating it spends its first line on the
+//                one fact the player already has, and the hive tiles — which
+//                are bare icons — are the surfaces the head was written for.
+//   the desc     same reason: it is on the card's face, four pixels above the
+//                tooltip. The hive tiles have no face to put it on, which is
+//                why the row exists at all.
 //   the `next` row when cardEffect() deduped it — most stat cards spell their
 //                effect out verbatim in `desc`, and the whole argument in
 //                cardEffect's comment applies unchanged: a box repeating the
@@ -4562,6 +4590,7 @@ function cardTipContent(choice, effectText) {
     rarity: choice.rarity ?? null,
   });
   if (!content) return null;
+  content.name = '';
   content.desc = '';
   if (!effectText) content.rows = content.rows.filter((r) => r.key !== 'next');
   return content.rows.length ? content : null;
@@ -7880,7 +7909,18 @@ function showTrophy() {
   // Only when there is something to warm. warmShareCards renders every kill
   // shot at share size; on a run with no kills it is a render of nothing, and
   // warmRunSheet composes a sheet whose whole content is the scorecard.
-  if (shots.length) warmShareCards().then(() => warmRunSheet(recapRun ?? {}));
+  //
+  // NOT INSIDE THE iOS SHELL. The warm-up exists for navigator.share's
+  // transient activation, and the shell never reaches navigator.share — its
+  // sheet is the Capacitor plugin (nativeShareImage in bossShot.js), which
+  // takes a blob whenever it is handed one. So on the phone this was a
+  // 1600x2000 canvas, a Rive instance and a PNG per trophy, plus the whole-run
+  // sheet composed from them, all built on the frame the score card arrives —
+  // over a scene that is still fully resident. The crash trail has the
+  // WebContent process killed 29ms into the first of those cards. Every
+  // consumer already awaits cardImage(), so a press renders what it needs
+  // then; the shot viewer swaps the composite for the card when it lands.
+  if (shots.length && !isIOSShell()) warmShareCards().then(() => warmRunSheet(recapRun ?? {}));
   if (el.svTrophyStatus) el.svTrophyStatus.textContent = '';
   el.svTrophy.classList.remove('sv-hidden');
   if (shots.length) wireTrophy();

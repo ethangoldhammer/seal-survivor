@@ -110,10 +110,32 @@ export const cineLens = {
   pathAmount: 0,   // 0..1, blended in with the charge state
   pathDirX: 1,     // WORLD-space direction, normalized. See the note in post.js
   pathDirY: 0,     //   on why a world vector is usable directly in the shader.
-  pathLength: 0,   // reach, in aspect-corrected uv (1.0 = the frame's height)
-  pathWidth: 0,    // half-width of the sharp lane
+  pathReach: 0,    // how far the cone reaches, WORLD units, smoothed — see corridor
+  pathLength: 0,   // ...the same in aspect-corrected uv; world.js converts it
+                   //   at the zoom the frame ended up at (1.0 = the frame's height)
+  pathWidth: 0,    // half-width of the cone at the seal
+  pathWidthFar: 0, // half-width at the far end — the taper
   pathFeather: 0,
   pathVignette: 0, // extra darkening OUTSIDE the lane
+  pathNoise: 0,    // how far the edge is broken up, as a fraction of the local half-width
+  pathNoiseScale: 0,
+  pathNoisePhase: 0, // the fray's clock — integrated here, see corridor.phase
+};
+
+// The corridor's own motion. The heading the rig is handed changes the
+// instant the cursor does, and a cone that snaps to it flickers between two
+// trajectories every time the aim is nudged; this one TURNS onto the new
+// heading and GROWS out to the new reach, each at its own lag. Angles rather
+// than vectors, so a swing through 180 degrees takes the short way round
+// instead of collapsing through zero length in the middle.
+const corridor = {
+  live: false,  // false until the corridor lights; the first frame snaps
+  heading: 0,   // radians, world space
+  reach: 0,     // world units
+  // The break-up's own clock. Its SPEED ramps with the charge, so the phase
+  // has to be integrated rather than read as time x speed — the product
+  // would jump every frame the speed moved and the edge would stutter.
+  phase: 0,
 };
 
 const rig = {
@@ -213,6 +235,8 @@ export function cineAspectZoom() {
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
+
+const TAU = Math.PI * 2;
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -535,6 +559,8 @@ export function resetCineCamera() {
   cineLens.dropAge = 0;
   cineLens.active = false;
   cineSubject.active = false;
+  corridor.live = false;
+  corridor.reach = 0;
 }
 
 /**
@@ -846,27 +872,60 @@ export function updateCineCamera(dt, ctx) {
   const amount = (pathCfg.enabled ?? true) ? p.path : 0;
   cineLens.pathAmount = amount;
   if (amount > 0.001) {
-    // Where the strike will actually GO — the halfway point between the swim
-    // and the aim, handed in by main.js from strikeDirection(), the same
-    // function the release itself calls. Pointing this at the cursor (or at
-    // the movement stick) instead would light up a path the dash isn't going
-    // to take, which is worse than not drawing one.
+    // Where the strike will actually LAND — the chord to the end of the dash
+    // as predictDash() in strike.js flies it, launch rule and per-frame
+    // steering both, handed in by main.js. Pointing this at the cursor, at
+    // the movement stick, or even at the launch heading alone would light up
+    // a path the dash isn't going to take, which is worse than not drawing
+    // one.
     const dx = ctx.dashDir?.x ?? 0;
     const dy = ctx.dashDir?.y ?? 0;
     const len = Math.hypot(dx, dy);
-    if (len > 0.001) {
-      cineLens.pathDirX = dx / len;
-      cineLens.pathDirY = dy / len;
+    // A zero heading (both hands idle) holds the last one rather than
+    // snapping the cone to +x.
+    const want = len > 0.001 ? Math.atan2(dy, dx) : corridor.heading;
+    // ...and how far, the same forecast's chord length. World units;
+    // world.js converts to uv once the frame's final zoom is known.
+    const reach = Math.max(0, ctx.dashReach ?? 0);
+
+    if (!corridor.live) {
+      // The frame the corridor lights: nothing to turn from, so the heading
+      // snaps; the reach starts at ZERO so the cone grows out of the seal
+      // toward where the dash will land rather than appearing whole.
+      corridor.live = true;
+      corridor.heading = want;
+      corridor.reach = 0;
+    } else {
+      // Exponential approach, wrapped so the turn takes the short way round.
+      let delta = want - corridor.heading;
+      delta = ((delta + Math.PI) % TAU + TAU) % TAU - Math.PI;
+      const kTurn = 1 - Math.exp(-dt / Math.max(0.0001, pathCfg.turnLag ?? 0.08));
+      corridor.heading += delta * kTurn;
     }
-    // Reach grows with banked power, because the dash's reach does too — so
-    // the corridor is a live readout of how far this strike will carry, not
-    // just decoration.
-    const power = clamp(ctx.chargePower ?? 0, 0, 1);
-    cineLens.pathLength = ((pathCfg.length ?? 0.3) + (pathCfg.lengthPerPower ?? 0.35) * power) * amount;
+    const kGrow = 1 - Math.exp(-dt / Math.max(0.0001, pathCfg.growLag ?? 0.12));
+    corridor.reach += (reach - corridor.reach) * kGrow;
+
+    cineLens.pathDirX = Math.cos(corridor.heading);
+    cineLens.pathDirY = Math.sin(corridor.heading);
+    cineLens.pathReach = corridor.reach;
     cineLens.pathWidth = pathCfg.width ?? 0.1;
+    cineLens.pathWidthFar = pathCfg.widthFar ?? 0.01;
     cineLens.pathFeather = Math.max(0.01, pathCfg.feather ?? 0.18);
     cineLens.pathVignette = (pathCfg.vignette ?? 0.45) * amount;
+    cineLens.pathNoise = pathCfg.noise ?? 0.7;
+    cineLens.pathNoiseScale = pathCfg.noiseScale ?? 9;
+    // Base churn plus a ramp with the banked charge: a strike wound further
+    // frays faster, so the cone gets more agitated the longer it is held.
+    const power = clamp(ctx.chargePower ?? 0, 0, 1);
+    const noiseSpeed = (pathCfg.noiseSpeed ?? 1.2) + (pathCfg.noiseSpeedPerPower ?? 0) * power;
+    corridor.phase += dt * noiseSpeed;
+    cineLens.pathNoisePhase = corridor.phase;
   } else {
+    // Dropped while dark so the next wind-up grows out fresh; the blend-out
+    // above this threshold keeps the cone at its length and fades it.
+    corridor.live = false;
+    corridor.reach = 0;
+    cineLens.pathReach = 0;
     cineLens.pathLength = 0;
     cineLens.pathVignette = 0;
   }

@@ -47,6 +47,23 @@
 //                            to. Both directions are checked, the second by
 //                            tuning the bounce to never end.
 //
+//   THE FLOOR IS PAPER       The pivot used to rest `hitRadius` above the
+//                            arena floor — one unit, on a body six long, and
+//                            a fifth of a unit UNDER the drawn sand. A tumbling
+//                            corpse put its nose three units into the bed. The
+//                            body's lowest CORNER, at the angle it is holding,
+//                            is what meets the sand now — checked on every
+//                            frame of a death, on the real model, and the lift
+//                            out of the sand a floor death needs is checked to
+//                            be a bounded rate rather than a snap.
+//
+//   THE FLOOR IS TOO HIGH    The first version rested the bounding BOX on the
+//                            sand, and a seal on its side has a flipper tip
+//                            0.4 under its flank: the animal hovered. The rest
+//                            is the posed vertices with a small share allowed
+//                            under the line, and the real seal is checked to
+//                            end with its flank on the sand, not its fin.
+//
 // What it cannot tell you is whether any of it looks funny. It can tell you the
 // body bounces, that it stops, and that something is fired every time it lands.
 // ---------------------------------------------------------------------------
@@ -66,8 +83,9 @@ import { createAnimationController } from '../path/src/systems/animation.js';
 import { onFeedback } from '../path/src/systems/feedback.js';
 import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import {
-  deathState, startDeathDive, updateDeathDive, resetDeathDive,
+  deathState, startDeathDive, updateDeathDive, resetDeathDive, corpseRestY, corpseSandY,
 } from '../path/src/systems/deathDive.js';
+import { bodyLowest } from '../path/src/entities/player.js';
 
 // The animation controller warns for every state the procedural stand-in has no
 // clip for, which here is all of them — no models are loaded in Node.
@@ -249,19 +267,29 @@ function die({ from = 20, vx = 4, vy = 0, maxSeconds = 60 } = {}) {
     }
   });
 
-  const floor = bounds.bottom + (player.stats?.hitRadius ?? 1);
+  // A reference line for the apex heights. The rest height itself moves with
+  // the body's angle (see restY in deathDive.js), so the apexes are measured
+  // off a fixed line and only compared with each other.
+  const floor = corpseSandY();
   const apexes = [];   // how high it came back up between one contact and the next
   let elapsed = 0;
   let finished = -1;
   let contacts = 0;
   let peak = 0;
   let airborneAfterFinish = false;
+  // How far under the sand the body's lowest corner ever went, and the biggest
+  // single-frame lift the sand gave it.
+  let deepest = 0;
+  let biggestLift = 0;
 
   startDeathDive(() => { finished = elapsed; });
   while (deathState.phase !== 'done' && elapsed < maxSeconds) {
+    const before = player.mesh.position.y;
     updateDeathDive(DT);
     elapsed += DT;
     const y = player.mesh.position.y;
+    deepest = Math.max(deepest, corpseRestY() - y);
+    biggestLift = Math.max(biggestLift, y - before);
     // The apex of a bounce is the highest the body got between the contact that
     // started it and the one that ended it — measured that way round rather
     // than by watching for the frame it turns over, since the contact frame is
@@ -274,10 +302,10 @@ function die({ from = 20, vx = 4, vy = 0, maxSeconds = 60 } = {}) {
     } else if (contacts > 0) {
       peak = Math.max(peak, y - floor);
     }
-    if (finished >= 0 && y > floor + 0.05) airborneAfterFinish = true;
+    if (finished >= 0 && y > corpseRestY() + 0.05) airborneAfterFinish = true;
   }
   off();
-  return { events, apexes, elapsed, finished, floor, airborneAfterFinish };
+  return { events, apexes, elapsed, finished, floor, airborneAfterFinish, deepest, biggestLift };
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +327,41 @@ section('THE LANDING — it bounces, each one lower, and then it stops');
   check('the body is at rest when the score screen is handed the run',
     !run.airborneAfterFinish);
   check('...and it is resting ON the floor',
-    Math.abs(player.mesh.position.y - run.floor) < 1e-6,
-    `${(player.mesh.position.y - run.floor).toFixed(4)} off`);
+    Math.abs(player.mesh.position.y - corpseRestY()) < 1e-6,
+    `${(player.mesh.position.y - corpseRestY()).toFixed(4)} off`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE FLOOR — the sand holds the whole body, not the pivot');
+{
+  // The pivot's own floor is `hitRadius` above the arena bottom. Anything the
+  // body reaches below that is what used to be under the sand.
+  const box = player.bodyBox;
+  check('the body has been measured', !!box, box ? `y ${box.min.y.toFixed(2)}..${box.max.y.toFixed(2)}` : 'player.bodyBox is null');
+  const reach = box ? Math.max(-box.min.y, box.max.y, -box.min.x, box.max.x) : 0;
+  check('...and it reaches further than the hit radius the old floor held',
+    reach > (player.stats?.hitRadius ?? 1) + 0.25, `${reach.toFixed(2)} vs ${player.stats?.hitRadius ?? 1}`);
+  // Every frame of a death from the top: the lowest corner never goes under
+  // the sand line by more than the frame's own travel allows. A landing at
+  // terminal speed overshoots by a frame's worth and is pushed back out.
+  const run = die({ from: bounds.frameTop - 2 });
+  const sinkMax = (CONFIG.death.sinkSpeedMax ?? 20) * (CONFIG.death.depthBoost ?? 2.2);
+  check('no part of the body goes under the sand past a frame of travel',
+    run.deepest <= sinkMax * DT + 1e-6, `${run.deepest.toFixed(3)} under, one frame at terminal is ${(sinkMax * DT).toFixed(3)}`);
+  // The rest line is where the corner meets the sand: at 'done' the body is
+  // exactly there, whatever angle it came to rest at.
+  check('at the end the lowest point is on the sand line',
+    Math.abs(player.mesh.position.y - corpseRestY()) < 1e-6,
+    `${(player.mesh.position.y - corpseRestY()).toFixed(4)} off`);
+  // A death ON the floor starts with the pivot a body-height too low. The sand
+  // lifts it out at `floorGive`, not in one frame.
+  const give = CONFIG.death.flop.floorGive ?? 12;
+  const low = die({ from: bounds.bottom + (player.stats?.hitRadius ?? 1), vx: 0 });
+  check('a floor death is lifted onto the bed, not snapped',
+    low.biggestLift <= give * DT + (CONFIG.death.kickUp ?? 5) * DT + 1e-6,
+    `biggest single-frame rise ${low.biggestLift.toFixed(3)}, cap ${(give * DT + (CONFIG.death.kickUp ?? 5) * DT).toFixed(3)}`);
+  check('...and still ends on the sand',
+    low.finished > 0 && Math.abs(player.mesh.position.y - corpseRestY()) < 1e-6);
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +527,48 @@ section('THE SKELETON — on the real seal, the limbs actually move');
     const foot = player.body.getObjectByName('foot_R_025');
     const head = player.body.getObjectByName('head_07');
     check('the ragdoll bones resolved on the rebuilt body', !!flipper && !!foot && !!head);
+    // The floor is only as honest as the box under it: a stand-in ellipsoid
+    // reaches 1.9 along the body; the seal reaches 3.2. rebuildShipBody has to
+    // measure again or the real animal lands on the stand-in's floor.
+    const rb = player.bodyBox;
+    check('the rebuilt body was measured off the real seal',
+      !!rb && rb.max.y > 3 && rb.min.y < -2.5,
+      rb ? `y ${rb.min.y.toFixed(2)}..${rb.max.y.toFixed(2)}, x ${rb.min.x.toFixed(2)}..${rb.max.x.toFixed(2)}` : 'null');
+    {
+      const real = die({ from: bounds.frameTop - 2 });
+      const sinkMax = (CONFIG.death.sinkSpeedMax ?? 20) * (CONFIG.death.depthBoost ?? 2.2);
+      check('on the real seal, no part goes under the sand past a frame of travel',
+        real.deepest <= sinkMax * DT + 1e-6, `${real.deepest.toFixed(3)} under`);
+      check('and the seal ends on the sand line',
+        Math.abs(player.mesh.position.y - corpseRestY()) < 1e-6);
+      // NOT HOVERING. With the body at rest, the share of its posed vertices
+      // under the sand is the configured share — the fins bedded, the flank on
+      // the line — and the very lowest vertex is BELOW the line, not on it: a
+      // rest measured off the box left the whole seal a fin's depth in the
+      // water above the sand.
+      {
+        const share = CONFIG.death.flop.floorShare ?? 0.04;
+        const tip = bodyLowest(0);
+        const line = bodyLowest(share);
+        note(`at rest: tumble ${player.mesh.rotation.z.toFixed(2)} rad, lowest vertex ${tip?.toFixed(2)} under the pivot, rest line ${line?.toFixed(2)}`);
+        check('the rest is the body, not the tip of a fin',
+          tip != null && tip - line > 0.05,
+          `lowest vertex ${tip?.toFixed(2)} under the pivot, the rest line ${line?.toFixed(2)}`);
+        check('...and the rest line is the configured share of the body',
+          Math.abs((player.mesh.position.y - line) - corpseSandY()) < 1e-6);
+      }
+      // The POSED seal, not the bind pose: the death clip and the limp curl
+      // it, so lying and on end are a few tenths apart rather than the unit
+      // the bind pose promises — but they are apart, and that is the claim.
+      // The stand-in is a ball and cannot show it, which is why it is here.
+      const flat = player.mesh.rotation.z;
+      const lying = corpseRestY();
+      player.mesh.rotation.z = flat + Math.PI / 2;
+      const upended = corpseRestY();
+      player.mesh.rotation.z = flat;
+      check('the rest height follows the angle the body lies at',
+        Math.abs(upended - lying) > 0.15, `${lying.toFixed(2)} lying, ${upended.toFixed(2)} on end`);
+    }
 
     // How far each bone strays from where it started, at its furthest, over one
     // death. Measured against a CONTROL RUN with the flop switched off rather

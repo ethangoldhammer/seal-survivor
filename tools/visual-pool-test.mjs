@@ -101,16 +101,25 @@ check('including one buried in the hierarchy', !deep.parent);
 // ===========================================================================
 section('The cap is the key\'s own busiest moment');
 
-// A key that never got busy keeps the floor. Nothing here goes near it — the
-// point is that a rare creature is not sized down to the handful that happened
-// to die together.
+// A quiet key keeps everything it is handed, and a little spare on top. It is
+// NOT sized down to the handful that happened to die together — but nor is it
+// held at a flat floor it will never use, which is what a 24 here cost across
+// a 21-key roster: 564 bodies pooled to cover 220 in the water.
 clearVisualPool();
 const few = [];
 for (let i = 0; i < 6; i++) few.push(acquireVisual(KEY));
 for (const v of few) releaseVisual(v);
 check('a quiet key keeps everything it is handed', (visualPoolStats()[KEY] ?? 0) === 6,
   JSON.stringify(visualPoolCaps()[KEY]));
-check('and its cap is the floor, not its peak', visualPoolCaps()[KEY].cap === 24,
+check('and its cap is its own peak plus headroom, not a flat floor',
+  visualPoolCaps()[KEY].cap === 10, JSON.stringify(visualPoolCaps()[KEY]));
+
+// The floor still catches a key that has barely been seen, so the first few
+// spawns of something rare are not disposed and re-cloned one at a time.
+clearVisualPool();
+const one = acquireVisual(KEY);
+releaseVisual(one);
+check('a key seen once is floored, not sized to 1', visualPoolCaps()[KEY].cap === 6,
   JSON.stringify(visualPoolCaps()[KEY]));
 
 // The case the flat 24 got wrong: a school bigger than the old cap. All 40

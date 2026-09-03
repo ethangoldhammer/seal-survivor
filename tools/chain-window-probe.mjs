@@ -5,6 +5,7 @@ import {
   strikeState, resetStrike, updateCharge, tryStrike, feedChum, updateStrike,
   strikeLoaded, sweetHalfWidth, sweetOffset, inSweetSpot, perfectCrossed,
   consumeChainLink, liveChain, cancelDash,
+  minFire,
 } from '../path/src/systems/strike.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
 
@@ -97,7 +98,7 @@ function auditLead(DT, label) {
     // ...against what a release on this frame would actually be worth.
     // inSweetSpot is what tryStrike asks, and with the button already up the
     // offset no longer moves, so this IS the release frame's verdict.
-    const wouldBite = strikeState.pending >= CONFIG.strike.charge.minFire && inSweetSpot(stats);
+    const wouldBite = strikeState.pending >= minFire(stats) && inSweetSpot(stats);
     if (saysHit !== wouldBite) disagreements++;
     if (U.uLeadGlow.value > 0 || saysHit !== wouldBite) {
       rows.push({ f, off: sweetOffset(), r: U.uLeadR.value, saysHit, wouldBite, glow: U.uLeadGlow.value });

@@ -230,8 +230,10 @@ section('...and a card that does NOT still gets it');
   check('shrimpRing shows a tooltip', !!shown(), shown() ?? 'nothing shown');
   check('...quoting what apply() actually does', tipRow('next') === sentenceCase(effectOf('shrimpRing')),
     `card desc says "${byId.get('shrimpRing').desc}", row says "${tipRow('next')}"`);
-  check('...named, so the box says what it is about', tipName() === byId.get('shrimpRing').name,
-    tipName() ?? '');
+  // The card's title is a line above the box, so the box does not repeat it —
+  // the hive surfaces keep the head, this one is the breakdown alone.
+  check('...and NOT named, since the card face already is', tipName() === null,
+    tipName() ?? 'no name');
   pointerLeave(card);
   check('leaving the card takes it away', shown() === null, shown() ?? '');
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { faceSide } from './facing.js';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import { bounds } from '../arena.js';
 import { createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { orbitTarget, springFollow } from './orbit.js';
@@ -304,6 +305,7 @@ export function updateBeluga(dt, scene, playerPos, level, enemiesList, clock, ho
       let bestD = Infinity;
       for (const e of enemiesList) {
         if (e.trapTimer > 0) continue; // already trapped, leave it be
+        if (isScenery(e)) continue;    // never aimed at a turtle — see isScenery
         const d = e.mesh.position.distanceTo(drone.position);
         if (d < bestD) { bestD = d; target = e; }
       }
@@ -503,6 +505,9 @@ function drift(b, dt, clock) {
 function touchedEnemy(b, enemiesList) {
   for (const e of enemiesList) {
     if (e.trapTimer > 0) continue;
+    // A bomblet drifts through scenery: popping on a turtle it cannot seal
+    // would spend the whole cluster on nothing.
+    if (isScenery(e)) continue;
     const dx = e.mesh.position.x - b.mesh.position.x;
     const dy = e.mesh.position.y - b.mesh.position.y;
     const reach = b.radius + e.radius;

@@ -13,7 +13,10 @@ import { createCelebrationDriver, resetCelebration, celebrationSpin } from '../s
 import { createClapDriver, resetClap } from '../systems/clap.js';
 import { createBreathDriver } from '../systems/breathe.js';
 import { attachPlayerOutline } from '../systems/outlines.js';
-import { cancelDash } from '../systems/strike.js';
+import { cancelDash, dashSteer, strikeState } from '../systems/strike.js';
+
+// dashSteer's per-frame result, reused so a dash frame allocates nothing.
+const steerStep = { heading: 0, speed: 0, breakOut: false };
 import { launchFor } from '../systems/airborne.js';
 
 // Scratch for the body transform, which composes the mirror, the barrel roll,
@@ -45,6 +48,19 @@ export const player = {
   celebrate: null, // boss-kill victory pose; null for a model with no rig to pose
   clap: null, // the clap button's pose; null for a model with no rig to pose
   breathe: null, // the resting breath; null for a model with no breathRig
+  // The body's extent, as a Box3 in the container's frame with the body's own
+  // rotation at identity — so +y is the art's forward (nose), x is belly to
+  // back and z is flank to flank. Measured off whatever is actually under
+  // `body` (the stand-in until the model resolves, then the real seal) by
+  // measureBody. The death dive reads it to rest the animal's lowest point on
+  // the sand instead of its pivot: the pivot sits `hitRadius` above the floor,
+  // one unit, and the seal is six long.
+  bodyBox: null,
+  // The same body as VERTICES — every visible, non-outline mesh under `body`.
+  // bodyLowest() poses them (skinned, so the limp limbs count where they
+  // actually hang) and answers how far below the pivot the animal reaches as
+  // it stands this frame. The box above is the cheap fallback.
+  bodyProbe: null,
   velocity: new THREE.Vector2(0, 0),
   // The shove, held apart from `velocity` — see applyPlayerKnockback. World
   // units per second, decaying; zero on every frame nothing has hit the seal.
@@ -159,6 +175,12 @@ export const player = {
   // thrust, the speed ceiling AND the dash turn rate together, so a combo is
   // uniformly more agile rather than fast-but-unsteerable.
   comboSpeedMul: 1,
+  // Thrust multiplier from the boost meter's current fuel, pushed in by main.js
+  // each frame (same reason again). Scales ORDINARY SWIMMING ACCELERATION only
+  // — not the ceiling, not the dash — so a full bar gets the seal moving sooner
+  // without changing what it is to steer. See chargeThrustMul in
+  // systems/strike.js.
+  chargeThrustMul: 1,
   // HOW MANY BODIES THE SEAL HAS SWALLOWED THIS RUN. Maneater's whole payload,
   // and the only run-scoped number the stat block is built against other than
   // `level`. It lives here rather than in the stats because it is not a stat:
@@ -219,6 +241,118 @@ export function playerOverlayZ() {
   return -(SEAL_REAR_EXTENT_PER_SIZE * (getAssetSizeMultiplier('ship') || 1) + OVERLAY_CLEARANCE);
 }
 
+const _measureRel = new THREE.Matrix4();
+const _measureInv = new THREE.Matrix4();
+const _measureBox = new THREE.Box3();
+
+/**
+ * The body's bounding box in the container's frame, body rotation aside.
+ *
+ * Each mesh's box is carried through its transform RELATIVE to the body, then
+ * the body's own scale (the size multiplier lives on the root — see
+ * createVisual) is put back on. Skinned meshes are boxed posed rather than
+ * bind-pose, the same distinction assets.js draws in referenceBox, and a mesh
+ * createVisual hid as an outlier stays out of the measurement.
+ *
+ * Forced world matrices first: a body that has never been through a render
+ * has stale ones and every mesh measures at the origin.
+ */
+function measureBody(body) {
+  body.updateMatrixWorld(true);
+  _measureInv.copy(body.matrixWorld).invert();
+  const box = new THREE.Box3();
+  body.traverse((o) => {
+    if (!o.isMesh || !o.visible || !o.geometry) return;
+    if (o.isSkinnedMesh) {
+      o.computeBoundingBox();
+      _measureBox.copy(o.boundingBox);
+    } else {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      _measureBox.copy(o.geometry.boundingBox);
+    }
+    _measureRel.multiplyMatrices(_measureInv, o.matrixWorld);
+    _measureBox.applyMatrix4(_measureRel);
+    box.union(_measureBox);
+  });
+  if (box.isEmpty()) return null;
+  _measureRel.makeScale(body.scale.x, body.scale.y, body.scale.z);
+  return box.applyMatrix4(_measureRel);
+}
+
+/**
+ * The meshes bodyLowest samples: every visible, non-outline mesh under the
+ * body. The outline shells are left out — they are the same vertices pushed
+ * outward by the rim, and would only thicken the answer.
+ */
+function probeBody(body) {
+  const meshes = [];
+  let count = 0;
+  body.traverse((o) => {
+    if (!o.isMesh || !o.visible || !o.geometry?.attributes?.position) return;
+    if (o.userData?.__isOutline) return;
+    meshes.push(o);
+    count += o.geometry.attributes.position.count;
+  });
+  if (!meshes.length) return null;
+  // Doubles, not floats: the rest height is compared to the pivot exactly,
+  // and a float32 line is off by 1e-5 at a depth of forty.
+  return { meshes, ys: new Float64Array(count) };
+}
+
+const _probeV = new THREE.Vector3();
+
+/**
+ * HOW FAR BELOW THE PIVOT THE BODY REACHES, in world y, as it stands this
+ * frame — under whatever tumble, roll and crane the container and the body
+ * are holding — as a positive distance.
+ *
+ * Posed, not bind-pose: a SkinnedMesh's getVertexPosition runs every vertex
+ * through its bones' world matrices, so a flipper the ragdoll has let hang
+ * counts where it hangs. That answer is only right when the bones and the
+ * mesh were updated TOGETHER — the skin is undone through the mesh's own
+ * world matrix, and bones one update behind it come out somewhere else
+ * entirely (in the harness, five units under a body three long). So the
+ * whole rig's world matrices are refreshed here first. In the game that
+ * repeats what the renderer is about to do for a hundred-odd nodes, which is
+ * nothing next to the vertices.
+ *
+ * `share` is the fraction of the body allowed to be UNDER the answer — the
+ * thinnest few percent of it. At zero the answer is the single lowest vertex,
+ * which for a seal on its side is the tip of one flipper, and the whole animal
+ * then hovers a flipper's depth above the sand. A few percent lets the fin bed
+ * into the silt and rests the body itself on the line, which is what a body on
+ * sand looks like. The stand-in ellipsoid has no fins and does not care.
+ *
+ * Returns null for a body nothing has probed.
+ */
+export function bodyLowest(share = 0) {
+  const probe = player.bodyProbe;
+  if (!probe || !player.mesh) return null;
+  player.mesh.updateMatrixWorld(true);
+  const ys = probe.ys;
+  let n = 0;
+  for (const mesh of probe.meshes) {
+    const count = mesh.geometry.attributes.position.count;
+    for (let i = 0; i < count; i++) {
+      mesh.getVertexPosition(i, _probeV);
+      _probeV.applyMatrix4(mesh.matrixWorld);
+      ys[n++] = _probeV.y;
+    }
+  }
+  if (n === 0) return null;
+  const view = ys.subarray(0, n);
+  const k = Math.min(n - 1, Math.max(0, Math.floor(share * n)));
+  let line;
+  if (k === 0) {
+    line = Infinity;
+    for (let i = 0; i < n; i++) if (view[i] < line) line = view[i];
+  } else {
+    view.sort();
+    line = view[k];
+  }
+  return player.mesh.position.y - line;
+}
+
 export function initPlayer(scene) {
   const group = new THREE.Group();
   group.name = 'player';
@@ -231,6 +365,8 @@ export function initPlayer(scene) {
 
   player.mesh = group;
   player.body = body;
+  player.bodyBox = measureBody(body);
+  player.bodyProbe = probeBody(body);
   player.anim = createAnimationController(body);
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
@@ -257,6 +393,8 @@ export function rebuildShipBody() {
   body.rotation.y = oldRotationY;
   player.mesh.add(body);
   player.body = body;
+  player.bodyBox = measureBody(body);
+  player.bodyProbe = probeBody(body);
   // The shells hang off the meshes inside the OLD body, which just left the
   // scene — a rebuilt seal starts with no outline until they're remade.
   attachPlayerOutline(body);
@@ -589,6 +727,7 @@ export function resetPlayer() {
   player.invuln = 0;
   player.dashTimer = 0;
   player.comboSpeedMul = 1;
+  player.chargeThrustMul = 1;
   player.chumSealed = false;
   // A run that ended held does not start held.
   player.snareTimer = 0;
@@ -693,13 +832,15 @@ export function updatePlayer(dt, input) {
   if (player.dashTimer > 0) player.dashTimer -= dt;
   const dashing = player.dashTimer > 0;
   const combo = player.comboSpeedMul || 1;
+  // Thrust only — the ceiling and the dash below read `combo` alone.
+  const boost = player.chargeThrustMul || 1;
   // Advanced exactly once a frame, here, because it is a clock as well as a
   // multiplier — reading it twice would run the hold out at double speed.
   const snare = snareFactor(dt);
 
   if (CONFIG.player.thrustEnabled) {
-    player.velocity.x += input.move.x * s.thrust * combo * snare * dt;
-    player.velocity.y += input.move.y * s.thrust * combo * snare * dt;
+    player.velocity.x += input.move.x * s.thrust * combo * boost * snare * dt;
+    player.velocity.y += input.move.y * s.thrust * combo * boost * snare * dt;
   }
 
   // Steering mid-dash. A strike used to be a straight line you waited out —
@@ -717,46 +858,32 @@ export function updatePlayer(dt, input) {
   // ride. Turn authority was never really the problem — 12 rad/s already bends
   // a base dash through 151 degrees — being locked to 46 u/s with no way out
   // was.
+  //
+  // THE RULE ITSELF IS dashSteer IN systems/strike.js — turn, throttle and
+  // break-out — because the lens corridor forecasts a dash by running the
+  // same function ahead of time, and a copy here would be a corridor that
+  // lies the first time one of them is retuned.
   if (dashing && input.move.lengthSq() > 0.001) {
-    const dc = CONFIG.strike.dashControl ?? {};
-    const stick = Math.min(1, input.move.length());
     const v = player.velocity.length();
-
     if (v > 0.001) {
       const cur = Math.atan2(player.velocity.y, player.velocity.x);
-      let delta = Math.atan2(input.move.y, input.move.x) - cur;
-      while (delta > Math.PI) delta -= Math.PI * 2;
-      while (delta < -Math.PI) delta += Math.PI * 2;
-
-      // BREAK OUT. Steering hard AGAINST the dash ends it on the spot and hands
-      // back ordinary swimming, at the cost of the reach not yet spent. The
-      // test is on the angle rather than on a button so it needs no new input:
-      // shoving the stick backwards is already what a player does when they
-      // want out, and it could not previously mean anything.
-      const breakAngle = (dc.breakOutAngle ?? 2.2);
-      if (dc.breakOut !== false && Math.abs(delta) >= breakAngle && stick >= (dc.breakOutStick ?? 0.7)) {
+      // How far through the strike this is, for the takeover curve. A dash
+      // that is not a strike (the breach impulse borrows dashTimer for its
+      // ceiling) has no launch to be committed to, and steers at full
+      // authority as it always did.
+      const strike = strikeState.active && strikeState.dashDuration > 0;
+      const progress = strike ? 1 - strikeState.dashTimeLeft / strikeState.dashDuration : 1;
+      // ...and what it was bought with: a one-pip dash does not steer at all.
+      const power = strike ? strikeState.power : 1;
+      dashSteer(cur, v, input.move.x, input.move.y, input.aim.x, input.aim.y, combo, dt, s, progress, power, steerStep);
+      if (steerStep.breakOut) {
+        // BREAK OUT. Steering hard AGAINST the dash ends it on the spot and
+        // hands back ordinary swimming, at the cost of the reach not yet
+        // spent.
         player.dashTimer = 0;
         cancelDash();
       } else {
-        // THE TURN. `dashTurnRate` is the base; `steerMul` scales it and lives
-        // apart so the rate can be raised without touching a slider that has
-        // already been tuned. Still scaled by the combo alongside the speed it
-        // divides, so the radius stays constant as a chain makes you faster.
-        const rate = CONFIG.strike.dashTurnRate * (dc.steerMul ?? 1) * combo;
-        const maxStep = rate * dt;
-        const a = cur + Math.max(-maxStep, Math.min(maxStep, delta));
-
-        // THE THROTTLE. A half-pushed stick asks for a slower dash, and easing
-        // right off bleeds toward `minSpeedMul` of it — so a dash can be shed
-        // into a normal swim instead of being waited out. Approached rather
-        // than snapped: an instant speed change reads as the dash stuttering.
-        let target = v;
-        if (dc.throttle !== false) {
-          const floor = (dc.minSpeedMul ?? 0.45);
-          const want = s.strikeDashSpeed * combo * (floor + (1 - floor) * stick);
-          target = v + (want - v) * Math.min(1, (dc.throttleLerp ?? 7) * dt);
-        }
-        player.velocity.set(Math.cos(a) * target, Math.sin(a) * target);
+        player.velocity.set(Math.cos(steerStep.heading) * steerStep.speed, Math.sin(steerStep.heading) * steerStep.speed);
       }
     }
   }

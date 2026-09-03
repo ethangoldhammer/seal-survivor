@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { ease, isEasing } from '../ease.js';
 import { removeEnemy, applyKnockback } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
 import { markTarget } from './marks.js';
@@ -360,6 +361,221 @@ export function strikeReach(stats = null) {
 }
 
 /**
+ * ONE FRAME OF THE DASH'S STEERING — the rule updatePlayer applies to the seal
+ * every dash frame the stick is held, and the rule predictDash() below runs
+ * ahead of time to say where a dash would land. One function so the two can
+ * never disagree: the corridor is only worth drawing if it is the dash.
+ *
+ * Reads a heading and a speed, returns the next pair in `out`. The player
+ * turns the result back into a velocity; the prediction integrates it.
+ *
+ *   TURN      the heading swings toward the SAME blend of swim and aim the
+ *             launch used (strikeDirection, CONFIG.strike.aimBlend) at
+ *             dashTurnRate x steerMul, scaled by the combo alongside the
+ *             speed it divides, so the turn RADIUS stays constant as a chain
+ *             makes the seal faster. It used to swing onto the raw stick,
+ *             which at 24 rad/s erased the aim's share of the launch within
+ *             two frames — aimBlend set where the dash pointed for a
+ *             thirtieth of a second and the stick decided where it went.
+ *             Steering toward the blend keeps the split real for the whole
+ *             flight, and live: move either hand mid-dash and the seal
+ *             follows the new halfway.
+ *   TAKEOVER  the turn is not at full authority from the first frame. A
+ *             dash is a commitment, and a seal that can be dragged off its
+ *             launch line on frame two never committed to anything — so the
+ *             turn rate is scaled by `progress` through the dash on a curve:
+ *             steerFrom of it at the launch, all of it by the end, along
+ *             CONFIG.strike.dashControl.steerEase. The hands ease back in.
+ *   BOUGHT    ...and only by a dash that PAID for it. A one-pip release is a
+ *             quick straight burst — a dodge, not a homing strike — so the
+ *             authority is also scaled by the power the dash was bought
+ *             with, in pips: nothing at steerOffPips or under, all of it
+ *             from steerFullPips up.
+ *   THROTTLE  a half-pushed stick asks for a slower dash, easing off bleeds
+ *             toward minSpeedMul of it; approached, never snapped.
+ *   BREAK OUT shoving the stick backwards ends the dash. Reported as
+ *             `out.breakOut` and nothing else changes — the caller decides
+ *             what ending it means (the player cancels, the forecast stops).
+ *
+ * @param heading  radians, the dash's current direction
+ * @param speed    world units/s
+ * @param moveX/Y  input.move — NOT normalized, the magnitude is the throttle
+ * @param aimX/Y   input.aim — normalized, may be zero (then the stick alone steers)
+ * @param combo    player.comboSpeedMul
+ * @param dt       seconds
+ * @param stats    player.stats (strikeDashSpeed)
+ * @param progress 0..1 through the dash — 0 at the launch, 1 at its end.
+ *                 Pass 1 for full authority (a dash that is not a strike).
+ * @param power    0..1, what the dash was bought with (strikeState.power).
+ *                 Pass 1 for a dash that is not a strike.
+ * @param out      { heading, speed, breakOut } — reused, allocates nothing
+ */
+export function dashSteer(heading, speed, moveX, moveY, aimX, aimY, combo, dt, stats, progress = 1, power = 1, out = { heading: 0, speed: 0, breakOut: false }) {
+  const dc = CONFIG.strike.dashControl ?? {};
+  const stick = Math.min(1, Math.hypot(moveX, moveY));
+  // The break-out reads the STICK, not the blend: it is the player shoving
+  // backwards against the line, and the aim has nothing to do with wanting out.
+  let stickDelta = Math.atan2(moveY, moveX) - heading;
+  while (stickDelta > Math.PI) stickDelta -= TAU;
+  while (stickDelta < -Math.PI) stickDelta += TAU;
+
+  out.heading = heading;
+  out.speed = speed;
+  out.breakOut = false;
+  // The test is on the angle rather than on a button so it needs no new
+  // input: shoving the stick backwards is already what a player does when
+  // they want out, and it could not previously mean anything.
+  const breakAngle = dc.breakOutAngle ?? 2.2;
+  if (dc.breakOut !== false && Math.abs(stickDelta) >= breakAngle && stick >= (dc.breakOutStick ?? 0.7)) {
+    out.breakOut = true;
+    return out;
+  }
+
+  // The steer target: the same rule as the launch, on this frame's hands.
+  steerMove.x = moveX; steerMove.y = moveY;
+  steerAim.x = aimX ?? 0; steerAim.y = aimY ?? 0;
+  const want = strikeDirection(steerMove, steerAim, steerTarget);
+  let delta = (want.x === 0 && want.y === 0) ? 0 : Math.atan2(want.y, want.x) - heading;
+  while (delta > Math.PI) delta -= TAU;
+  while (delta < -Math.PI) delta += TAU;
+
+  // `dashTurnRate` is the base; `steerMul` scales it and lives apart so the
+  // rate can be raised without touching a slider that has already been tuned.
+  const rate = CONFIG.strike.dashTurnRate * (dc.steerMul ?? 1) * combo * steerAuthority(dc, progress, power, stats);
+  const maxStep = rate * dt;
+  out.heading = heading + Math.max(-maxStep, Math.min(maxStep, delta));
+
+  if (dc.throttle !== false) {
+    const floor = dc.minSpeedMul ?? 0.45;
+    const want = (stats?.strikeDashSpeed ?? CONFIG.strike.dashSpeed ?? 0) * combo * (floor + (1 - floor) * stick);
+    out.speed = speed + (want - speed) * Math.min(1, (dc.throttleLerp ?? 7) * dt);
+  }
+  return out;
+}
+
+/**
+ * How much of the turn rate the hands have at `progress` through a dash bought
+ * with `power` — the TAKEOVER curve times what was PAID for it.
+ *
+ * Takeover: steerFrom at the launch, 1 at the end, shaped by steerEase (a
+ * name from ease.js; an unknown name is linear rather than a throw, because a
+ * typo in the tuner must not lock the seal on a line).
+ *
+ * Paid: in pips, so it survives a card that changes the bar. A dash of
+ * steerOffPips or fewer has no steering at all — a one-pip release is a
+ * straight burst out of a line, the dodge a boss fight pays for — and the
+ * authority climbs linearly to all of it at steerFullPips.
+ */
+export function steerAuthority(dc, progress, power = 1, stats = null) {
+  const from = Math.min(1, Math.max(0, dc?.steerFrom ?? 0));
+  const t = Math.min(1, Math.max(0, progress ?? 1));
+  const name = dc?.steerEase;
+  const k = isEasing(name) ? ease(name, t) : t;
+  const takeover = from + (1 - from) * k;
+
+  const off = Math.max(0, dc?.steerOffPips ?? 1);
+  const full = Math.max(off + 1e-6, dc?.steerFullPips ?? 3);
+  const pips = Math.min(1, Math.max(0, power ?? 1)) * pipCount(stats);
+  const paid = Math.min(1, Math.max(0, (pips - off) / (full - off)));
+  return takeover * paid;
+}
+
+// dashSteer's scratch — strikeDirection takes vectors, and a dash frame must
+// not allocate three of them.
+const steerMove = { x: 0, y: 0 };
+const steerAim = { x: 0, y: 0 };
+const steerTarget = { x: 0, y: 0 };
+
+// The forecast integrates at the frame rate the seal is simulated at, so a
+// turn capped per frame lands on the same heading the real dash reaches.
+const FORECAST_DT = 1 / 60;
+const forecastStep = { heading: 0, speed: 0, breakOut: false };
+
+/**
+ * WHERE A DASH RELEASED RIGHT NOW WOULD LAND — the whole dash, not the launch.
+ *
+ * The launch heading (strikeDirection: the aimBlend point between the swim
+ * and the aim) is only the FIRST frame of a dash. With the stick held the
+ * seal keeps steering every frame after it (dashSteer above — toward that
+ * same blend now, and once toward the raw stick, which at 24 rad/s erased
+ * the aim inside two frames), throttled by the stick and dragged by the
+ * water. The balance between the two hands is a balance of the whole flight,
+ * and the only honest way to draw it is to fly it.
+ *
+ * This replays the dash as updatePlayer will run it: the impulse, then per
+ * frame the stick's thrust, the steer (dashSteer above, the same function),
+ * the dash ceiling, the water's drag and the integration, for the duration
+ * the release would set at this power. A break-out stops it where it broke.
+ * In the water only — a dash that breaches follows gravity from there, which
+ * the corridor does not draw.
+ *
+ * Returns the CHORD from the seal to the landing point: `dir` is the direction
+ * to it and `reach` the distance, both zero if nothing would fire. The real
+ * path bends at the start, so the chord is where the dash ENDS rather than
+ * every point it passes through; the bend is short enough at the shipped
+ * turn rate that the cone covers it.
+ *
+ * @param move   input.move — NOT normalized
+ * @param aim    input.aim — normalized
+ * @param power  0..1, the banked charge (strikeState.pending in a wind-up)
+ * @param stats  player.stats
+ * @param combo  player.comboSpeedMul
+ * @param out    reused target: { dir: { x, y }, reach, x, y }
+ */
+export function predictDash(move, aim, power, stats, combo = 1, out = { dir: { x: 0, y: 0 }, reach: 0, x: 0, y: 0 }) {
+  const launch = strikeDirection(move, aim, out.dir);
+  if (launch.x === 0 && launch.y === 0) {
+    out.reach = 0; out.x = 0; out.y = 0;
+    return out;
+  }
+  const c = CONFIG.strike.charge ?? {};
+  const t = Math.min(1, Math.max(0, power || 0));
+  const duration = (stats?.strikeDashDuration ?? CONFIG.strike.dashDuration ?? 0)
+    * lerp(c.reachMulMin ?? 1, c.reachMulMax ?? 1, t);
+  const dashSpeed = (stats?.strikeDashSpeed ?? CONFIG.strike.dashSpeed ?? 0);
+  const maxSpeed = stats?.maxSpeed ?? CONFIG.player.maxSpeed ?? 0;
+  const thrust = CONFIG.player.thrustEnabled ? (stats?.thrust ?? CONFIG.player.thrust ?? 0) : 0;
+  const friction = stats?.friction ?? CONFIG.player.friction ?? 1;
+  const mx = move?.x ?? 0, my = move?.y ?? 0;
+  const held = mx * mx + my * my > 0.001;
+  const ceiling = Math.max(maxSpeed, dashSpeed) * combo;
+
+  // The impulse.
+  let vx = launch.x * dashSpeed * combo;
+  let vy = launch.y * dashSpeed * combo;
+  let x = 0, y = 0;
+  for (let left = duration; left > 1e-6; left -= FORECAST_DT) {
+    const dt = Math.min(FORECAST_DT, left);
+    // Thrust lands before the steer reads the velocity, as in updatePlayer.
+    vx += mx * thrust * combo * dt;
+    vy += my * thrust * combo * dt;
+    if (held) {
+      const v = Math.hypot(vx, vy);
+      if (v > 0.001) {
+        dashSteer(Math.atan2(vy, vx), v, mx, my, aim?.x ?? 0, aim?.y ?? 0, combo, dt, stats, 1 - left / duration, t, forecastStep);
+        if (forecastStep.breakOut) break;
+        vx = Math.cos(forecastStep.heading) * forecastStep.speed;
+        vy = Math.sin(forecastStep.heading) * forecastStep.speed;
+      }
+    }
+    const speed = Math.hypot(vx, vy);
+    if (speed > ceiling) { vx *= ceiling / speed; vy *= ceiling / speed; }
+    const drag = Math.pow(friction, dt * 60);
+    vx *= drag; vy *= drag;
+    x += vx * dt;
+    y += vy * dt;
+  }
+  out.x = x;
+  out.y = y;
+  out.reach = Math.hypot(x, y);
+  if (out.reach > 1e-6) {
+    out.dir.x = x / out.reach;
+    out.dir.y = y / out.reach;
+  }
+  return out;
+}
+
+/**
  * Has this dash already connected with `target`, and if not, claim it.
  *
  * The creature loop below has always had this bookkeeping internally; the boat
@@ -459,6 +675,26 @@ export function comboSpeedMul() {
   );
 }
 
+/**
+ * HOW MUCH FASTER THE SEAL GETS MOVING WITH A STOCKED BAR — thrust only.
+ *
+ * A multiplier on ordinary swimming acceleration, one step per pip of boost
+ * currently held, capped by `chargeThrustMax`. Deliberately NOT applied to the
+ * speed ceiling or to the dash: see CONFIG.strike.chargeThrustPerPip for why
+ * the fuel buys acceleration and nothing else.
+ *
+ * Fractional, like comboSpeedMul, so the burn of a wind-up bleeds the bonus
+ * away smoothly rather than dropping it a pip at a time mid-hold.
+ *
+ * @param stats the run's stat block — only for pipCount, which a card moves.
+ */
+export function chargeThrustMul(stats = null) {
+  const per = CONFIG.strike.chargeThrustPerPip ?? 0;
+  if (!CONFIG.strike.enabled || per <= 0) return 1;
+  const pips = Math.max(0, Math.min(1, strikeState.charge)) * pipCount(stats);
+  return Math.min(CONFIG.strike.chargeThrustMax ?? Infinity, 1 + per * pips);
+}
+
 let orbTimer = 0;
 let pipCooldown = 0; // seconds until the next queued pip tick may be heard
 const hitThisDash = new Set();
@@ -553,12 +789,29 @@ let perfectEdge = false;
 export function updateCharge(dt, held, stats) {
   if (!CONFIG.strike.enabled) return;
 
+  // THE WIND-UP IS THE WHOLE BAR. Fuel and power move together, so a perfect
+  // charge lands on the frame the tank runs dry — with a Booster Pack
+  // container on the bar there is simply more of it, and the hold is longer
+  // by a pip's worth (windUpTime). A pip is one chum and 1/pipCount of a
+  // strike, whatever the bar's length.
+  const time = windUpTime(stats);
   strikeState.charging = !!held && strikeState.charge > 0;
   if (strikeState.charging) {
     // Never more than is in the tank, so the two always move together.
-    const burn = Math.min(strikeState.charge, dt / Math.max(0.05, stats.strikeChargeTime));
+    const burn = Math.min(strikeState.charge, dt / time);
     strikeState.charge -= burn;
     strikeState.pending = Math.min(1, strikeState.pending + burn);
+  }
+
+  // BOOSTER PACK'S REGEN — the one refill that is not food, in pips per
+  // second. Gradual on purpose (the ring fills visibly rather than ticking
+  // whole pips in), through fillMeter so a completed pip is heard like any
+  // other. Off while the seal is burning or dashing: regen fighting the burn
+  // would make the hold cost less than it says. It feeds no chain link —
+  // feedChum is the only thing that does, and a link has to be eaten.
+  const regen = Math.max(0, stats?.strikePipRegen ?? 0);
+  if (regen > 0 && !strikeState.charging && !strikeState.active && strikeState.charge < 1) {
+    fillMeter(regen * pipValue(stats) * dt, stats);
   }
 
   // ---- WHERE THIS WIND-UP IS AGAINST ITS SWEET SPOT ----------------------
@@ -577,7 +830,7 @@ export function updateCharge(dt, held, stats) {
   // tryStrike asks for it, and the sweet spot could never be hit at all. What
   // ends a wind-up is clearPending(), and that ends this with it.
   const left = Math.max(0, Math.min(strikeState.charge, 1 - strikeState.pending));
-  if (left <= 1e-6 && strikeState.pending >= (CONFIG.strike.charge.minFire ?? 0.35)) {
+  if (left <= 1e-6 && strikeState.pending >= minFire(stats) - FIRE_EPS) {
     // += on the frames after, 0 on the frame itself, so `sinceLoaded` is the
     // age of the moment rather than the age plus one frame.
     //
@@ -607,7 +860,7 @@ export function updateCharge(dt, held, stats) {
     // IS the time still to run. A wind-up paused by letting go without firing
     // keeps its distance, which is right: no fuel is burning, so the moment is
     // no closer than it was.
-    strikeState.toLoaded = left * Math.max(0.05, stats.strikeChargeTime);
+    strikeState.toLoaded = left * time;
   }
 
   // THE PERFECT CHARGE LANDING. An EDGE, latched — `pending` clamps at 1 and
@@ -696,8 +949,7 @@ export function strikeLoaded() {
  * look, and it is the one number in this whole feature worth arguing about.
  */
 export function sweetHalfWidth(stats = null) {
-  const time = Math.max(0.05, stats?.strikeChargeTime ?? CONFIG.strike.charge.time ?? 1);
-  return time * Math.max(0, CONFIG.strike.charge.sweetFraction ?? 0.05);
+  return windUpTime(stats) * Math.max(0, CONFIG.strike.charge.sweetFraction ?? 0.05);
 }
 
 /**
@@ -710,7 +962,7 @@ export function sweetHalfWidth(stats = null) {
  * "you let go with fuel still in the bar", late is "you sat on it".
  */
 export function sweetOffset() {
-  if (strikeState.pending < (CONFIG.strike.charge.minFire ?? 0.35)) return -Infinity;
+  if (strikeState.pending < minFire() - FIRE_EPS) return -Infinity;
   return releaseOffset();
 }
 
@@ -767,7 +1019,7 @@ export function tryStrike(aimDir, stats) {
 
   // Not enough banked. `pending` is kept, not cleared: the fuel is already
   // spent, and confiscating the progress as well would punish a fumble twice.
-  if (strikeState.pending < c.minFire) return false;
+  if (strikeState.pending < minFire(stats) - FIRE_EPS) return false;
 
   // ON THE BEAT? Asked FIRST, before anything is spent: clearPending() below
   // throws the wind-up's timing away along with its power, and every payoff
@@ -1284,15 +1536,62 @@ export function pendingPips() {
  */
 export function pipCount(stats = null) {
   const c = CONFIG.strike.charge;
+  const extra = Math.max(0, Math.round(stats?.strikeExtraPips ?? 0));
+  return Math.max(1, Math.min(c.maxPips ?? 12, basePips(stats) + extra));
+}
+
+/**
+ * The bar's length before Booster Pack adds containers to it —
+ * round(1 / strikeChumRefill), capped like the bar. `strikeChargeTime` is the
+ * hold that burns THIS many pips; see windUpTime.
+ */
+export function basePips(stats = null) {
+  const c = CONFIG.strike.charge;
   const refill = Math.max(0.02, stats?.strikeChumRefill ?? c.chumRefill ?? 0.2);
   const base = Math.max(1, Math.round(1 / refill));
   return Math.max(1, Math.min(c.maxPips ?? 12, base));
+}
+
+/**
+ * SECONDS A FULL BAR TAKES TO BURN — and, since the wind-up is the whole bar,
+ * seconds to a perfect charge. `strikeChargeTime` is the time for the bar the
+ * refill derives; a Booster Pack container adds a pip's worth of holding on
+ * top, so a pip burns in the same fifth of a second whatever the bar's length
+ * and the perfect strike still lands as the last container empties.
+ */
+export function windUpTime(stats = null) {
+  const time = Math.max(0.05, stats?.strikeChargeTime ?? CONFIG.strike.charge.time ?? 1);
+  return time * pipCount(stats) / basePips(stats);
 }
 
 /** What one chum is worth, as a fraction of the whole bar. Always one pip. */
 export function pipValue(stats = null) {
   return 1 / pipCount(stats);
 }
+
+/**
+ * THE POWER A RELEASE NEEDS TO FIRE, as a fraction of the bar — counted in
+ * PIPS (CONFIG.strike.charge.minFirePips) for the reason pipValue exists:
+ * the bar is a whole number of mouthfuls, and "one pip fires" survives a card
+ * that changes what a mouthful is worth. It was a bar fraction (0.35) before,
+ * which on a five-pip bar meant a single pip could never be spent — the one
+ * mouthful you have in a boss fight bought nothing, and the dodge that pays
+ * the meter back could not be made with it.
+ *
+ * One pip buys the smallest dash there is: reachMulMin of the duration, no
+ * steering (see steerAuthority) — a quick straight burst out of a line,
+ * more a dodge than a strike.
+ */
+export function minFire(stats = null) {
+  const pips = Math.max(0, CONFIG.strike.charge.minFirePips ?? 1);
+  return Math.min(1, pips * pipValue(stats));
+}
+
+// A pip is banked by burning it out of the tank a frame at a time, and the sum
+// of those burns lands a rounding hair under the pip's own value — so every
+// gate on minFire compares with this much slack, or the one pip a boss fight
+// leaves you could bank to 0.19999999999999998 and never fire.
+const FIRE_EPS = 1e-6;
 
 /**
  * What one chum is worth RIGHT NOW, as a multiplier on the BASE mouthful.

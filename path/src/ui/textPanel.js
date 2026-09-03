@@ -97,6 +97,13 @@ const STYLES = `
     position: static; transform: none; inset: auto; }
   .sv-txp-spec .sv-callout, .sv-txp-spec .sv-callout-boost {
     display: block; width: auto; max-width: 100%; text-align: left; }
+  /* The two tooltips are boxes that are born at opacity 0 and fade in when
+     shown — in here they are always shown, so the fade is overridden along
+     with the position. The box keeps its own padding, border and fill: what
+     is being judged is type on THAT fill, not on the strip's. */
+  .sv-txp-spec .sv-uptip, .sv-txp-spec .sv-card-fx {
+    position: static; opacity: 1; transition: none; display: inline-block;
+    width: auto; max-width: 100%; text-align: left; }
   /* The button role paints a fill as well as text, so it wants to be a shape
      rather than a run of inline words. */
   .sv-txp-spec .sv-btn { display: inline-block; }

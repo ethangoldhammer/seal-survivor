@@ -12,10 +12,18 @@ import { updateHullWake } from './boatWake.js';
 import { emit } from '../entities/particles.js';
 import { createAttractiveClam, updateAttractiveClam, disposeAttractiveClam } from './attractiveClam.js';
 import { feedback, bossVoice } from './feedback.js';
+import { fireBossShot } from './bossPerks.js';
+import { player } from '../entities/player.js';
+import { projectiles } from '../entities/projectiles.js';
+import { rollBiolumSkinVariant } from './biolumSkin.js';
+import { setOutlineVariant } from './outlines.js';
 
-// Boats sail along the water line. They don't chase or attack — they're
-// targets floating above the fight, and shooting one showers the water with
-// chum. A TRAWLER (bigger, tougher) also drops an attractive clam — swim into
+// Boats sail along the water line. They don't chase — they're targets
+// floating above the fight, and shooting one showers the water with chum —
+// but they do shoot back: every hull carries a deck gun that throws fish down
+// at the seal, and a late-run ARTILLERY TRAWLER adds homing mussels and a bad
+// gull for a seal that leaves the water. See CONFIG.boats.guns, armBoat and
+// updateBoatGun below. A TRAWLER (bigger, tougher) also drops an attractive clam — swim into
 // it and every chum bit settled on the sea floor comes up to you. That makes
 // a big seabed pile worth deliberately farming, and it plays against the
 // crab-spawning system, which punishes exactly the same pile.
@@ -115,6 +123,10 @@ function spawnBoat(scene, difficulty) {
   const isTrawler = Math.random() < CONFIG.boats.trawlerChance;
   const mesh = createVisual(isTrawler ? 'trawler' : 'boat');
   if (isTrawler) mesh.scale.multiplyScalar(CONFIG.boats.trawlerScale);
+  // Armed before the scale is read: an artillery trawler is the bigger hull,
+  // and spawnScale is what the hit-flash pop returns the mesh to.
+  const gun = armBoat(isTrawler, difficulty);
+  if (gun.artillery) mesh.scale.multiplyScalar(CONFIG.boats.guns?.artillery?.scaleMul ?? 1);
   // The scale the hull was actually built at — the trawler multiplier plus
   // whatever the tuner's Size slider contributed. The hit reaction scales
   // relative to this so a pop never snaps the boat to some other size.
@@ -159,7 +171,9 @@ function spawnBoat(scene, difficulty) {
   const boat = {
     mesh,
     isTrawler,
+    isArtillery: !!gun.artillery,
     assetKey,
+    gun,
     hp,
     maxHp: hp,
     // Where this hull has been hit, in its own frame, newest last — see
@@ -242,6 +256,217 @@ function spawnBoat(scene, difficulty) {
 // materials and its own beat clock — see systems/attractiveClam.js. The asset
 // entry `attractorOrb` is kept as the fallback for anything that still asks
 // assets.js for one (the tuner's Look panel enumerates the table).
+/**
+ * WHICH TIER OF FISH a boat spawned at this difficulty throws: the heaviest
+ * row of CONFIG.boats.guns.tiers whose minDifficulty it has reached, or null
+ * with the guns off or no tier reachable. Exported for the harness; the game
+ * reads it once, at spawn, through armBoat.
+ */
+export function boatGunTier(difficulty) {
+  const g = CONFIG.boats.guns;
+  if (!g?.enabled || !Array.isArray(g.tiers)) return null;
+  let best = null;
+  for (const t of g.tiers) {
+    if (!t) continue;
+    if ((t.minDifficulty ?? 0) > difficulty) continue;
+    if (!best || (t.minDifficulty ?? 0) >= (best.minDifficulty ?? 0)) best = t;
+  }
+  return best;
+}
+
+/**
+ * THE GUN A HULL CARRIES, decided once at spawn so a boat that sailed in as a
+ * fish-thrower stays one however long it lives; difficulty is read here and
+ * never again. Damage is priced at spawn for the same reason the hull's hp is,
+ * and on the same ramp, so the two grow together.
+ *
+ * `artillery` is the anti-air battery — only a trawler, only past the
+ * artillery threshold, only on the roll. Its ordnance is priced the same way.
+ */
+export function armBoat(isTrawler, difficulty) {
+  const g = CONFIG.boats.guns ?? {};
+  const tier = boatGunTier(difficulty);
+  const price = (d) => d * difficultyRamp('damage', difficulty) * enemyPaceMul('damage');
+  const rate = isTrawler ? (g.trawlerRateMul ?? 1) : 1;
+  const gun = {
+    tier: tier ? tier.id : null,
+    shot: tier ? { ...tier, damage: price(tier.damage ?? 0) } : null,
+    rate,
+    // The first shot waits for the hull to be well inside the arena, then a
+    // full reload on top so two boats spawned together still drift apart.
+    timer: (g.openingDelay ?? 3) + (tier ? reload(tier, rate) : 0),
+    stage: 'ready', // 'ready' | 'windup'
+    windup: 0,
+    pending: null, // which battery the windup is for: 'fish' | 'mussel' | 'gull'
+    artillery: null,
+    aaTimer: 0,
+    aaNext: 'mussel',
+  };
+  const a = g.artillery;
+  if (isTrawler && a?.enabled && difficulty >= (a.minDifficulty ?? Infinity)
+    && Math.random() < (a.chance ?? 0)) {
+    gun.artillery = {
+      mussel: a.mussel ? { ...a.mussel, damage: price(a.mussel.damage ?? 0) } : null,
+      gull: a.gull ? { ...a.gull, damage: price(a.gull.damage ?? 0) } : null,
+      cooldown: a.cooldown ?? 3.6,
+      windup: a.windup ?? 0.6,
+    };
+    gun.aaTimer = g.openingDelay ?? 3;
+  }
+  return gun;
+}
+
+function reload(tier, rate) {
+  return randomBetween(tier.cooldownMin ?? 3, tier.cooldownMax ?? 4.5) * rate;
+}
+
+// Where a shot leaves the hull: the waterline amidships, so a fish comes out
+// of the water beside the boat rather than off the mast.
+const _muzzle = new THREE.Vector3();
+function muzzle(b) {
+  return _muzzle.set(
+    b.mesh.position.x + (b.offsetX ?? 0),
+    Math.min(b.mesh.position.y, bounds.surfaceY) - 0.3,
+    b.mesh.position.z,
+  );
+}
+
+// Where the seal WILL be: led by its velocity the way the boss boat leads its
+// station-keeping, so a fish thrown at a seal crossing the screen lands in
+// front of it rather than in its wake. Velocity is read off the live player
+// rather than passed in, because playerPos is only a position.
+const _aim = new THREE.Vector3();
+function aimAt(playerPos) {
+  const lead = CONFIG.boats.guns?.lead ?? 0;
+  const v = player.velocity;
+  return _aim.set(
+    playerPos.x + (v?.x ?? 0) * lead,
+    playerPos.y + (v?.y ?? 0) * lead,
+    0,
+  );
+}
+
+function inRange(b, playerPos) {
+  const range = CONFIG.boats.guns?.range ?? Infinity;
+  const dx = playerPos.x - b.mesh.position.x;
+  const dy = playerPos.y - b.mesh.position.y;
+  return dx * dx + dy * dy <= range * range;
+}
+
+/**
+ * One volley of `row` from hull `b`, fanned about the line from the muzzle to
+ * `at`. A row with `turnRate` is a seeker and chases the seal; a row with
+ * `blastRadius` is a shell and goes off on its fuse (bossPerks' ordnance list
+ * handles the boom, exactly as it does for the boss boat's barrels).
+ */
+function volley(scene, b, row, at, source) {
+  const from = muzzle(b);
+  const heading = Math.atan2(at.y - from.y, at.x - from.x);
+  const count = Math.max(1, row.count ?? 1);
+  const half = (count - 1) / 2;
+  const spread = row.spread ?? 0;
+  const homing = row.turnRate != null;
+  const gun = {
+    asset: row.asset,
+    radius: row.radius ?? 0.4,
+    scale: row.scale ?? 1,
+    orient: row.orient ?? true,
+    spin: row.spin ?? 0,
+    tilt: row.tilt ?? 0,
+    homing,
+    fuse: (row.blastRadius ?? 0) > 0,
+  };
+  for (let i = 0; i < count; i++) {
+    const a = heading + (i - half) * spread;
+    fireBossShot(scene, {
+      gun,
+      origin: from,
+      dirX: Math.cos(a),
+      dirY: Math.sin(a),
+      damage: row.damage ?? 0,
+      speed: row.speed ?? 10,
+      life: row.life ?? 3,
+      blastRadius: row.blastRadius ?? 0,
+      turnRate: row.turnRate,
+      chase: homing ? player : null,
+      source,
+    });
+    // Dressed exactly as the same animal is when it SPAWNS (entities/enemies.js
+    // spawnOne, systems/seagull.js): roll its skins.csv variant and point its
+    // rim at that variant's colour. Without this a gull thrown off a trawler
+    // wore the bare `seagull` preset and the species' shared rim, so an edit to
+    // the seagull's look in the shader lab reached the bomber and not the shot.
+    // A no-op on a body with no skins and no rim, which is most fish.
+    const shot = projectiles[projectiles.length - 1];
+    if (shot?.mesh) {
+      setOutlineVariant(shot.mesh, row.asset, rollBiolumSkinVariant(shot.mesh)?.__rim ?? null);
+    }
+  }
+  return count;
+}
+
+/**
+ * THE DECK GUN, once a frame per hull. Two batteries on two clocks:
+ *
+ *  - the FISH gun reloads on `timer`, and fires only at a seal that is under
+ *    the surface and inside range. A seal in the air is left to the artillery,
+ *    and a boat is never a turret on the far side of the arena.
+ *  - the ANTI-AIR battery (artillery trawlers only) reloads on `aaTimer` and
+ *    fires only at a seal ABOVE the surface, alternating mussels and a gull.
+ *
+ * Both go through a short windup, and a windup is abandoned if the seal has
+ * crossed the surface in the meantime — the shot was for where it was.
+ *
+ * Returns the number of shots fired this frame, for the harness.
+ */
+export function updateBoatGun(dt, scene, b, playerPos) {
+  const gun = b.gun;
+  const g = CONFIG.boats.guns;
+  if (!gun || !g?.enabled) return 0;
+  const airborne = playerPos.y > bounds.surfaceY;
+
+  gun.timer -= dt;
+  if (gun.artillery) gun.aaTimer -= dt;
+
+  if (gun.stage === 'windup') {
+    gun.windup -= dt;
+    const wantsAir = gun.pending !== 'fish';
+    if (wantsAir !== airborne) { gun.stage = 'ready'; gun.pending = null; return 0; }
+    if (gun.windup > 0) return 0;
+    gun.stage = 'ready';
+    const which = gun.pending;
+    gun.pending = null;
+    if (which === 'fish') {
+      return volley(scene, b, gun.shot, aimAt(playerPos), `boat:${gun.tier}`);
+    }
+    const row = gun.artillery?.[which];
+    if (!row) return 0;
+    gun.aaNext = which === 'mussel' ? 'gull' : 'mussel';
+    return volley(scene, b, row, aimAt(playerPos), row.source ?? `boat:${which}`);
+  }
+
+  if (!inRange(b, playerPos)) return 0;
+
+  if (airborne) {
+    const a = gun.artillery;
+    if (!a || gun.aaTimer > 0) return 0;
+    const which = a[gun.aaNext] ? gun.aaNext : (a.mussel ? 'mussel' : (a.gull ? 'gull' : null));
+    if (!which) return 0;
+    gun.aaTimer = a.cooldown;
+    gun.stage = 'windup';
+    gun.windup = a.windup;
+    gun.pending = which;
+    return 0;
+  }
+
+  if (!gun.shot || gun.timer > 0) return 0;
+  gun.timer = reload(gun.shot, gun.rate);
+  gun.stage = 'windup';
+  gun.windup = g.windup ?? 0.45;
+  gun.pending = 'fish';
+  return 0;
+}
+
 export function spawnAttractorOrb(scene, pos) {
   const c = CONFIG.attractorOrb;
   const mesh = createAttractiveClam();
@@ -415,6 +640,7 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     });
 
     updateHullSmoke(dt, b);
+    updateBoatGun(dt, scene, b, playerPos);
 
     // Sailed off the far side — despawn quietly, no reward. Its crew goes with
     // it: they're still standing on a boat that just left the arena. Measured

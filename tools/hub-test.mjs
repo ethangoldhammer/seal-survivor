@@ -175,7 +175,15 @@ check('every look page in tools/looks is on a card',
   `no looks:* script builds these, so nothing can open them: ${missedLook.join(', ')}`);
 
 // Same question at the repo root, where the previews live.
-const rootHtml = readdirSync(ROOT).filter((f) => f.endsWith('.html'));
+//
+// DOTFILES ARE NOT PAGES. A shader check or a probe written as
+// `.something.html` is a scratch artifact somebody dropped in the root while
+// working — untracked, usually deleted within the hour — and asking the hub to
+// carry a card for it would turn this check into a nag that fires whenever
+// another session is mid-experiment. The convention already says what it is:
+// the leading dot means hidden.
+const rootHtml = readdirSync(ROOT)
+  .filter((f) => f.endsWith('.html') && !f.startsWith('.'));
 const missedRoot = rootHtml.filter((f) => !catalogued.has(f));
 check('every page in the repo root is on a card',
   !missedRoot.length,

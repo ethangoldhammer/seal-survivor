@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { isScenery } from '../enemyTable.js';
 import {
   makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
   setRingThreat, __organicRingShader,
@@ -129,6 +130,11 @@ export function resetMarks() {
 export function markable(target, isBoat = false) {
   const cfg = CONFIG.strike?.mark ?? {};
   if (cfg.enabled === false) return false;
+  // NEVER A TURTLE. The reticle is the seal saying "that one", and every
+  // seeker and escort in the game obeys it outright (CONFIG.homing). Painting
+  // a body nothing can hurt would turn that instruction into "empty every
+  // volley into the wall" — see isScenery for the rule in full.
+  if (isScenery(target)) return false;
   if (isBoat) return cfg.boats !== false;
   return (target?.radius ?? 0) >= (cfg.minRadius ?? 0.65);
 }

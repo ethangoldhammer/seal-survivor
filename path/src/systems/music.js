@@ -752,6 +752,15 @@ function warmSet() {
   if (here) want.add(here);
   const next = slotForLevel(currentLevel + Math.max(1, CONFIG.music.levelsPerSlot ?? 1));
   if (next) want.add(next);
+  // ...AND THE LOOP THE NEXT RUN OPENS ON. Every run starts on slotForLevel(1),
+  // and the score card hands over to it with no boundary to hide a decode
+  // behind: releaseMusicIntoRun wants it playing on the frame Play is pressed,
+  // under the resting lid, with the opening move starting from it. A run that
+  // climbed past it had let it go, and the next run opened on the last run's
+  // loop (play() survives that now — see the cold path there — but it survives
+  // it late). One file, for the one switch in the game that is never a surprise.
+  const opening = slotForLevel(1);
+  if (opening) want.add(opening);
 
   // THE FIGHT'S LOOP. Both the one an arrival would open on and the one the
   // chain queues after it: queueNextBossLoop runs immediately after every
@@ -950,11 +959,69 @@ export function play(level = 1) {
   // fresh source underneath it changes nothing about the gain it plays into.
   // Cleared with no fade: this is frame one of a run, not the end of a beat.
   releaseMusicHush(0);
-  const when = ctx.currentTime + 0.02;
   rateCurve = null;
   opening = null;
   rateNow = rateTarget = targetRate();
   rateTau = 0;
+  // Open at the surface value; the first updateDepth call glides it to
+  // wherever the player actually is. Under the menu it opens at `menuHz`
+  // instead — set here rather than by startMusicAtRest because a track that had
+  // not decoded yet comes back through play() from preloadDefaultTracks, and
+  // a pin applied once on the way in would be overwritten by that second pass.
+  const openHz = atRest ? (CONFIG.music.menuHz ?? 500) : CONFIG.music.surfaceHz;
+  filter.frequency.cancelScheduledValues(ctx.currentTime);
+  filter.frequency.setValueAtTime(Math.max(60, openHz), ctx.currentTime);
+  if (tracks.has(slot)) {
+    openOn(slot);
+  } else {
+    // NOT IN MEMORY. startSource declines a name it cannot start, and for one
+    // whole release that is what happened here: the run climbed past its
+    // opening loop, the warm set let the file go, and the next run's play(1)
+    // reset the transport, re-anchored the beat grid, and left the LAST run's
+    // loop playing under it. Nothing threw. The music simply never went back
+    // to the top.
+    //
+    // So the open is deferred to the decode rather than skipped. Whatever is
+    // playing carries on until the file lands — under the score card that is
+    // the resting loop, which is what the player was already hearing — and
+    // then the run opens on its own loop from its own downbeat, picking up any
+    // opening move in flight (startSource copies the rate curve onto the new
+    // node). `started` is left as it was, exactly as the not-catalogued case
+    // above leaves it: releaseMusicIntoRun and preloadDefaultTracks both
+    // already know how to follow a `pendingLevel`.
+    //
+    // At boot this is the expected route — startMusicAtRest runs before the
+    // first decode has landed — so the warning is for a transport that was
+    // already running: that is a loop the warm set should have been holding.
+    if (started) {
+      console.warn(`[music] the run's opening loop "${slot}" was not decoded when the run started —`
+        + ' it will open late by one decode. warmSet should have held it.');
+    }
+    pendingLevel = level;
+    const seq = ++openSeq;
+    ensureTrack(slot).then((buffer) => {
+      // Superseded by a later play(), a stop(), or the eager loader's own
+      // play(pendingLevel) — any of which has already done this or unwanted it.
+      if (!buffer || pendingLevel !== level || seq !== openSeq) return;
+      pendingLevel = null;
+      openOn(slot);
+    });
+  }
+  // The run has a level and a fresh rotation now, so what could be needed next
+  // has changed completely — resetBossMusic above put the cursor back to the
+  // intro, and the last run's fight loops are no longer worth holding.
+  keepWarm();
+}
+
+// A cold open in flight; see play(). Bumped per deferred open so a decode that
+// lands after a newer play() has taken over does not start a second loop.
+let openSeq = 0;
+
+// Start `slot` from the top as the run's loop: the transport's origin, its
+// beat grid and its poll all begin here. The one place a source is started
+// without a boundary to wait for.
+function openOn(slot) {
+  const when = ctx.currentTime + 0.02;
   startSource(slot, when);
   // Beat 0 is where the first loop starts, not where play() was called — and
   // the score clock is parked until then, since `advance` floors its dt at
@@ -964,26 +1031,19 @@ export function play(level = 1) {
   loopAnchor = 0;
   lastTick = when;
   started = true;
-  // Open at the surface value; the first updateDepth call glides it to
-  // wherever the player actually is. Under the menu it opens at `menuHz`
-  // instead — set here rather than by startMusicAtRest because a track that had
-  // not decoded yet comes back through play() from preloadDefaultTracks, and
-  // a pin applied once on the way in would be overwritten by that second pass.
-  const openHz = atRest ? (CONFIG.music.menuHz ?? 500) : CONFIG.music.surfaceHz;
-  filter.frequency.cancelScheduledValues(ctx.currentTime);
-  filter.frequency.setValueAtTime(Math.max(60, openHz), ctx.currentTime);
   if (!pollTimer) pollTimer = window.setInterval(pollQueue, 40);
-  // The run has a level and a fresh rotation now, so what could be needed next
-  // has changed completely — resetBossMusic above put the cursor back to the
-  // intro, and the last run's fight loops are no longer worth holding.
-  keepWarm();
 }
 
 export function stop() {
   stopSource();
   // The menu's half-speed goes with its hold. stopSource has already dropped
   // the node, so this only re-stamps the model — no ramp to leave hanging.
-  // ...and any move in flight, which a stopped transport must not keep.
+  // ...and any move in flight, which a stopped transport must not keep. The
+  // scale lands where the move was going rather than where it had got to: left
+  // mid-curve, the next play() would be born at that speed with nothing left
+  // to finish the move, and a transport stopped a frame into the opening ramp
+  // came back at half tempo for the whole of the next run.
+  if (rateCurve) rateScale = rateCurve.to;
   rateCurve = null;
   opening = null;
   if (atRest) { atRest = false; setMusicRateScale(1, 0); }
@@ -1042,12 +1102,34 @@ export function queueTrack(name, quantum = 'loop') {
     if (available(name)) {
       console.warn(`[music] "${name}" was queued before it was decoded — the switch will`
         + ' be late by up to one loop. Something moved the rotation without warming it.');
-      ensureTrack(name);
+      // ...AND ASKED FOR AGAIN WHEN IT LANDS. "Start the decode anyway" used to
+      // be the whole recovery, and it recovered nothing: the decode landed,
+      // nobody queued the file, and the next boundary went by like the last
+      // one. What re-asks is the same question the caller asked, re-derived —
+      // is this still the loop the run (or the fight) is owed? — so a decode
+      // that lands after the level moved on again, or after the fight ended,
+      // does not drag the rotation back to it.
+      ensureTrack(name).then((buffer) => {
+        if (!buffer || !started || queuedTrack || currentTrack === name) return;
+        if (name !== owedTrack()) return;
+        queueTrack(name, quantum);
+      });
     }
     return;
   }
   queuedTrack = name;
   queuedQuantum = quantum === 'bar' ? 'bar' : 'loop';
+}
+
+// The loop the transport should be moving to next, as a pure function of where
+// the run is: the fight's queued entry while a boss is up (the cursor points at
+// the loop QUEUED, see queueNextBossLoop), the level's slot otherwise.
+function owedTrack() {
+  if (bossActive) {
+    const bank = bossBank();
+    return bank.length ? bank[Math.max(0, Math.min(bossCursor, bank.length - 1))] : null;
+  }
+  return slotForLevel(currentLevel);
 }
 
 function pollQueue() {
@@ -1183,13 +1265,21 @@ export function setLevel(level) {
   // boundary, ending the fight's score while the boss was still alive. The
   // level is still recorded above, and endBossMusic reads it on the way out, so
   // the loop that comes back after the kill is the one this level asked for.
-  if (bossActive) return;
-  const slot = slotForLevel(level);
-  if (slot != null && slot !== currentTrack) queueTrack(slot);
+  if (!bossActive) {
+    const slot = slotForLevel(level);
+    if (slot != null && slot !== currentTrack) queueTrack(slot);
+  }
   // A level moves the ordinary rotation on, so the slot AFTER this one is a
   // different file. Called even when the slot did not change — most levels do
   // not cross a boundary, and the one that does must not be the first time
   // anybody asked for the file it lands on.
+  //
+  // AND DURING A FIGHT, which is not the same as queuing during one. The stand-
+  // down above used to return before this line, so a player who levelled from
+  // 4 to 10 while the boss was up had the warm set still holding slots 4 and
+  // 5 when the kill asked for slot 10's loop — endBossMusic found it cold, the
+  // switch never happened, and the boss music played on for the rest of the
+  // run. The level moves the prediction whether or not it moves the music.
   keepWarm();
 }
 
@@ -1430,7 +1520,13 @@ export function endBossMusic({ immediate = true } = {}) {
   // loop, which is the point of doing it under the hush.
   const slot = slotForLevel(currentLevel);
   if (!slot) return;
-  if (immediate) startSource(slot, ctx.currentTime + 0.02);
+  // A slot that is not decoded cannot be started now, and startSource would
+  // decline it silently — leaving the fight's loop playing to the end of the
+  // run. Queued instead, it warns, decodes, and lands on the first bar line
+  // after the file is in memory (see queueTrack): a bar and a bit late, but
+  // it arrives. setLevel keeps the slot warm through a fight so this is the
+  // fallback, not the route.
+  if (immediate && tracks.has(slot)) startSource(slot, ctx.currentTime + 0.02);
   else queueTrack(slot, 'bar');
   // The fight's loops can go, all but the one the NEXT arrival would open on —
   // the cursor is left pointing at it on purpose (see above), and warmSet reads

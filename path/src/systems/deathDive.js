@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { bounds } from '../arena.js';
-import { player } from '../entities/player.js';
+import { bounds, seabedTopY } from '../arena.js';
+import { player, bodyLowest } from '../entities/player.js';
 import { stateForSpeed } from './animation.js';
 import { feedback } from './feedback.js';
 import { setSfxRateScale, openBusFilter } from './audio.js';
@@ -61,8 +61,12 @@ const _blow = new THREE.Vector3();
 const _flow = new THREE.Vector3();
 const _rollQ = new THREE.Quaternion();
 const _craneQ = new THREE.Quaternion();
+const _zAxis = new THREE.Vector3(0, 0, 1); // the tumble axis — mesh.rotation.z
 const _yAxis = new THREE.Vector3(0, 1, 0); // the art's forward — the roll axis
 const _xAxis = new THREE.Vector3(1, 0, 0); // the crane axis, as in updatePlayer
+const _cornerQ = new THREE.Quaternion();
+const _tumbleQ = new THREE.Quaternion();
+const _corner = new THREE.Vector3();
 
 export const deathState = {
   active: false,
@@ -176,10 +180,59 @@ function limpSpring() {
   return limpCfg;
 }
 
-// Where the body comes to rest. The same hitRadius clampToArena uses, so the
-// corpse settles exactly as deep as a living seal is allowed to swim.
-function floorY() {
-  return bounds.bottom + (player.stats?.hitRadius ?? 1);
+// THE SAND LINE — where the body's lowest point stops. The drawn top of the
+// seabed (arena.seabedTopY, which is what a crab's feet and a plant's roots
+// also stand on), less however far into the silt the flop lets it bed.
+function sandY() {
+  return seabedTopY() - (flop().sink ?? 0);
+}
+
+// How far BELOW THE PIVOT the body reaches this frame, under the tumble
+// (mesh.rotation.z) and the barrel roll and crane (body.quaternion) it is
+// holding right now. The animal is not a ball — six long, a unit and a half
+// deep, three and a half across the fins — and which of those is pointing
+// down changes every frame of a tumble, so the pose is measured, not a
+// radius taken.
+//
+// THE POSED VERTICES, with the thinnest `floorShare` of them allowed under
+// the line (see bodyLowest). The bounding box was tried first and hovered
+// the body: its lowest corner on a seal lying on its side is a flipper tip,
+// 0.4 under the flank, and the whole animal floated that far above the sand.
+// The box is kept as the fallback for a body with no probe, and the hit
+// radius for a body nothing has measured at all — the old floor, which held
+// the living seal's hit circle and put a tumbling corpse's nose three units
+// into the bed.
+function bodyDrop() {
+  const posed = bodyLowest(flop().floorShare ?? 0.04);
+  if (posed != null) return posed;
+  const box = player.bodyBox;
+  if (!box) return player.stats?.hitRadius ?? 1;
+  _tumbleQ.setFromAxisAngle(_zAxis, player.mesh.rotation.z);
+  _cornerQ.copy(_tumbleQ).multiply(player.body.quaternion);
+  let lowest = Infinity;
+  for (let i = 0; i < 8; i++) {
+    _corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+    _corner.applyQuaternion(_cornerQ);
+    if (_corner.y < lowest) lowest = _corner.y;
+  }
+  return -lowest;
+}
+
+// Where the PIVOT rests so that the body's lowest point sits on the sand at
+// its current angle. Moves as the body turns: a corpse rolling flat under
+// `settleTurn` settles lower as it goes, which is the sand taking it.
+function restY() {
+  return sandY() + bodyDrop();
+}
+
+/** The pivot height the corpse rests at THIS FRAME — for the flop harness. */
+export function corpseRestY() {
+  return restY();
+}
+
+/** The sand line the corpse's lowest point rests on — for the flop harness. */
+export function corpseSandY() {
+  return sandY();
 }
 
 /**
@@ -225,8 +278,8 @@ export function startDeathDive(finish) {
   // ceiling (arena.airScale) silently flattens it — a surface death loses
   // about 14% of its sink rate for air nothing usually dies in. A death up
   // in that air just pins the ratio at 1, which is the right answer anyway.
-  const span = Math.max(1, bounds.frameTop - floorY());
-  const drop = Math.max(0, player.mesh.position.y - floorY());
+  const span = Math.max(1, bounds.frameTop - sandY());
+  const drop = Math.max(0, player.mesh.position.y - sandY());
   sinkScale = 1 + ((c.depthBoost ?? 2.2) - 1) * Math.min(1, drop / span);
 
   // Tumble scaled by how fast it was going, so a seal killed at a standstill
@@ -391,7 +444,6 @@ export function updateDeathDive(rawDt) {
   const dt = rawDt * scale;
   flopClock += dt;
   const f = flop();
-  const rest = floorY();
   const pos = player.mesh.position;
 
   if (deathState.phase === 'sink') {
@@ -415,10 +467,8 @@ export function updateDeathDive(rawDt) {
     if (pos.x < bounds.left + radius) { pos.x = bounds.left + radius; vel.x = Math.abs(vel.x) * 0.4; }
     if (pos.x > bounds.right - radius) { pos.x = bounds.right - radius; vel.x = -Math.abs(vel.x) * 0.4; }
 
-    if (pos.y <= rest) {
-      pos.y = rest;
-      land(Math.abs(vel.y));
-    }
+    // The floor, once the body has turned this frame — see the note at the
+    // shared block below the settle branch.
   } else {
     // Settling — which is now several contacts rather than one. The clock that
     // ends the run is still the wall one; see the note at the top.
@@ -447,16 +497,6 @@ export function updateDeathDive(rawDt) {
     const radius = player.stats?.hitRadius ?? 1;
     if (pos.x < bounds.left + radius) { pos.x = bounds.left + radius; vel.x = Math.abs(vel.x) * 0.4; }
     if (pos.x > bounds.right - radius) { pos.x = bounds.right - radius; vel.x = -Math.abs(vel.x) * 0.4; }
-    if (pos.y <= rest) {
-      pos.y = rest;
-      // ONCE IT IS DOWN, THE FLOOR IS JUST THE FLOOR. Gravity still runs while
-      // the body lies there — it has to, or a corpse would hang at the top of
-      // its last bounce — so without this every frame of the settle pause is
-      // another contact: another silt puff, another thud, another spin kick.
-      // Count the EDGE, not the frames the body spends touching the sand.
-      if (resting) { if (vel.y < 0) vel.y = 0; }
-      else contact(Math.abs(vel.y));
-    }
     // ...and the ceiling. Wall-clock, counted from the first contact: whatever
     // the restitution is tuned to, the body is put down after this and the
     // pause that ends the run starts.
@@ -478,6 +518,11 @@ export function updateDeathDive(rawDt) {
     }
 
     if (resting && settleClock >= (c.settle ?? 0.5)) {
+      // The sand, one last time, so the frame the card fades up over has the
+      // body ON the bed rather than a frame's worth of gravity under it — the
+      // physics stop at 'done', and whatever this frame leaves is what lies
+      // there for as long as the player takes to type a name.
+      pos.y = Math.max(pos.y, restY());
       deathState.phase = 'done';
       // The track is still playing — it isn't stopped by the death any more —
       // so hand its rate back before the card appears, or it sits at `minRate`
@@ -521,6 +566,32 @@ export function updateDeathDive(rawDt) {
   _rollQ.setFromAxisAngle(_yAxis, player.mirrorAngle + player.rollAngle);
   _craneQ.setFromAxisAngle(_xAxis, player.craneAngle);
   player.body.quaternion.copy(_craneQ).multiply(_rollQ);
+
+  // THE FLOOR, for both phases, and AFTER the body has turned: the rest height
+  // is a function of the angle (see bodyDrop), so testing it against the pose
+  // the body was leaving would let a nose swinging down through the sand go
+  // unnoticed until the next frame.
+  //
+  // A contact is the body COMING DOWN through the line, not being under it —
+  // `vel.y < 0`. A body the sand is still pushing out (below) with a rebound
+  // already on it is not landing again, and a floor death, whose pivot starts
+  // a body-height too low, is lifted onto the bed by `floorGive` and lands
+  // properly on the way back down from its `kickUp`.
+  //
+  // ONCE IT IS DOWN, THE FLOOR IS JUST THE FLOOR. Gravity still runs while the
+  // body lies there — it has to, or a corpse would hang at the top of its last
+  // bounce — so without the `resting` gate every frame of the settle pause is
+  // another contact: another silt puff, another thud, another spin kick. Count
+  // the EDGE, not the frames the body spends touching the sand.
+  const rest = restY();
+  if (pos.y <= rest) {
+    if (vel.y < 0) {
+      if (deathState.phase === 'sink') land(-vel.y);
+      else if (!resting) contact(-vel.y);
+      else vel.y = 0;
+    }
+    pos.y = Math.min(rest, pos.y + (f.floorGive ?? 12) * dt);
+  }
 
   // Publish the drift back onto the player. Nothing reads it for control any
   // more, but the grid's wake still pulls on it — left at whatever the seal
