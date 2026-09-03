@@ -152,7 +152,36 @@ export function createAdaptiveScale() {
       return false;
     },
 
-    /** A new run starts at the resolution the player asked for. */
+    /**
+     * A NEW RUN STARTS WHERE THE LAST ONE SETTLED, not back at the top.
+     *
+     * This used to set `scale = 1`, and on the machine the whole feature exists
+     * for that meant proving the same thing over and over. Eleven of twelve
+     * recorded phone runs ended at the 0.6 floor — not most of them, all but
+     * one — and every one of them opened at 1.0 and walked down through 0.9 and
+     * 0.8 to get there. The controller is deliberately slow (see the note on
+     * `settle`: a full two-second window at the new resolution before the next
+     * decision), so that walk is most of a minute.
+     *
+     * WHAT THAT COST, and it is not just a soft minute. At the shipped
+     * `pixelRatio: 3` a phone opens every run at 3.16 megapixels against the
+     * 1.14 it settles on — 2.8x the fill, and post.js's render targets go with
+     * it: 47MB of them instead of 17MB. On iOS that is 30MB of extra pressure
+     * on a WebContent process that gets killed for memory, arriving in the
+     * first seconds of every run. The reset was re-creating the worst moment
+     * of the session on purpose, once per run.
+     *
+     * `drops` still goes back to zero, and that is the half that keeps this
+     * honest: the scale is carried but the ROUND TRIP BUDGET is not, so a
+     * machine that has cooled down — or a player who quit a boss fight and
+     * started a quiet run — can still climb all the way back. What is not
+     * carried is the evidence, so nothing here is remembered as a verdict.
+     *
+     * PER SESSION, not per install. Nothing is written to storage. Thermal
+     * state is a fact about the next ten minutes rather than about the device,
+     * and a phone that ran hot on Tuesday should not open cold on Wednesday at
+     * a resolution it was never asked to justify.
+     */
     reset() {
       recent.fill(0);
       recentAt = 0;
@@ -161,7 +190,7 @@ export function createAdaptiveScale() {
       badStreak = 0;
       goodStreak = 0;
       drops = 0;
-      scale = 1;
+      // `scale` is deliberately untouched.
     },
   };
 }

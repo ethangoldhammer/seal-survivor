@@ -140,6 +140,43 @@ function buildRibbon(nodes) {
   return geo;
 }
 
+// ---------------------------------------------------------------------------
+// THE MATERIALS OUTLIVE THE JET, and it turned out to matter.
+//
+// The note in removeJet below used to argue there was "no churn here to pool
+// against — at most one jet alive, opened a handful of times a run". The first
+// half is true and the second was worth measuring: `jetStats` puts the cycle at
+// hold + cool = 2.8-3.1s at every stack level, which is about 140 jets in a
+// 400-second run, each building and disposing three mapped materials.
+//
+// That is the beams bug at a different address. three refcounts a linked
+// program by the materials using it, and a jet is usually the only thing alive
+// wearing this one — so the last dispose deletes the program and the next jet
+// links the identical shader from source. It is the top entry in the phone's
+// own report: `basic,highp,srgb-linear,false,,uv,...` rebuilt 40 times in a
+// 445s run, more than every other key put together.
+//
+// Retired materials go on a free list instead. Never disposed during a run, so
+// an idle pooled one keeps the refcount above zero and a jet opening after a
+// quiet stretch finds its shader linked. Bounded by the most jets alive at
+// once, which is one.
+//
+// THE GEOMETRY IS STILL DISPOSED and must be: each ribbon owns a Float32Array
+// sized to that jet's node count, so unlike the beams' shared unit quad there
+// is nothing to share and pooling would only hold the largest one ever built.
+const matPool = { glow: [], core: [], spill: [] };
+
+function takeMat(role, make, reset) {
+  const m = matPool[role].pop();
+  if (!m) return make();
+  reset(m);
+  return m;
+}
+
+function giveMat(role, m) {
+  if (m) matPool[role].push(m);
+}
+
 function buildMesh(scene, j) {
   const group = new THREE.Group();
   const l = look();
@@ -153,16 +190,16 @@ function buildMesh(scene, j) {
   // constraint sets the widths: CONFIG.bloom.divisor is 6, so anything under
   // about 1.5 bloom pixels contributes nothing to the bright pass however
   // brightly it is authored.
-  const glowMat = new THREE.MeshBasicMaterial({
+  const glowMat = takeMat('glow', () => new THREE.MeshBasicMaterial({
     color: glowColor, map: jetProfile(),
     transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
-  });
-  const coreMat = new THREE.MeshBasicMaterial({
+  }), (m) => { m.color.copy(glowColor); m.opacity = 0; });
+  const coreMat = takeMat('core', () => new THREE.MeshBasicMaterial({
     color: coreColor, map: jetProfile(),
     transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
-  });
+  }), (m) => { m.color.copy(coreColor); m.opacity = 0; });
   const glow = new THREE.Mesh(buildRibbon(j.nodes), glowMat);
   const core = new THREE.Mesh(buildRibbon(j.nodes), coreMat);
   core.position.z = 0.01;
@@ -172,11 +209,11 @@ function buildMesh(scene, j) {
   // creatures are unlit MeshBasicMaterial and a real light would simply not
   // reach them.
   const spillColor = hdr(j.color, j.overdrive * (l.spillOverdriveMul ?? 0.4));
-  const spillMat = new THREE.MeshBasicMaterial({
+  const spillMat = takeMat('spill', () => new THREE.MeshBasicMaterial({
     color: spillColor, map: glowSprite(),
     transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
     depthWrite: false, toneMapped: false,
-  });
+  }), (m) => { m.color.copy(spillColor); m.opacity = 0; });
   const spill = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), spillMat);
   spill.position.z = -0.01;
 
@@ -317,18 +354,16 @@ function removeJet(scene, i) {
   releaseJetBed(j, 0.05);
   if (j.mesh) {
     scene.remove(j.mesh);
-    // DISPOSED, not pooled — the opposite of beams.js, and for the opposite
-    // reason. Its geometry is one shared unit quad that nothing writes to, so
-    // pooling its materials is what keeps a program linked between volleys.
-    // Each of these owns a per-instance Float32Array of vertices that would
-    // simply leak; and there is at most one jet alive, opened a handful of
-    // times a run, so there is no churn here to pool against.
+    // GEOMETRY DISPOSED, MATERIALS RETIRED — see the pool note above buildMesh.
+    // Each ribbon owns a Float32Array sized to this jet's nodes and would
+    // simply leak; the three materials are identical from one jet to the next
+    // and are what keeps the program linked between them.
     j.core.geometry.dispose();
     j.glow.geometry.dispose();
     j.spill.geometry.dispose();
-    j.core.material.dispose();
-    j.glow.material.dispose();
-    j.spill.material.dispose();
+    giveMat('core', j.core.material);
+    giveMat('glow', j.glow.material);
+    giveMat('spill', j.spill.material);
   }
   j.cooldowns.clear();
   jets.splice(i, 1);

@@ -99,6 +99,106 @@ let texturesAdded = 0;
 let texturesPeak = 0;
 let programsPeak = 0;
 
+// --- WHICH texture, and whether anything still points at it -----------------
+//
+// `texturesPeak` says 970 were alive at once and stops there, which is the same
+// gap `programsAdded` had before the cache key closed it: a number that names a
+// problem without naming its owner. A phone run climbs 352 -> 970 across four
+// minutes and nothing in the record says whose they are.
+//
+// three keeps no texture list — `info.memory.textures` is a bare count — so
+// this walks the SCENE instead, every few seconds, and groups what it finds by
+// where the image came from. Two numbers come out of that, and they answer
+// different questions:
+//
+//   BY SOURCE      Which asset is multiplying. A texture cloned per instance
+//                  shows up as one source with a rising count; a hundred
+//                  distinct sources is a roster, not a leak.
+//   THE ORPHANS    `live - reachable`. A texture the renderer still holds that
+//                  nothing in the scene points at any more is retained by
+//                  something that dropped its owner without disposing it —
+//                  which is the shape of a leak rather than of churn, and is
+//                  invisible to every other number here.
+//
+// Sampled rather than continuous, because a full scene walk is not a per-frame
+// cost worth paying to answer a question about minutes. Every SAMPLE_EVERY
+// seconds, and the peak of each group is what is kept.
+const TEX_SAMPLE_EVERY = 5;      // seconds between scene walks
+const TEX_GROUPS_KEPT = 8;       // reported, most numerous first
+const TEX_KEYS_MAX = 300;        // bound on the map, like KEYS_KEPT below
+
+const texBySource = new Map();   // source label -> most ever seen at once
+let texReachablePeak = 0;
+let texOrphanPeak = 0;
+let texNextSample = 0;
+
+// A readable name for where an image came from. `source.data` is the decoded
+// image and carries the URL for anything fetched; a canvas texture has none, so
+// it falls back to the texture's own name and then to its type — which is
+// enough to tell "the seagull's albedo" from "somebody's CanvasTexture".
+function texLabel(t) {
+  const src = t?.source?.data;
+  const url = src?.src ?? src?.currentSrc ?? null;
+  if (typeof url === 'string' && url) return url.slice(url.lastIndexOf('/') + 1).slice(0, 48);
+  if (t?.name) return `name:${String(t.name).slice(0, 40)}`;
+  if (src && typeof src.width === 'number') return `canvas ${src.width}x${src.height}`;
+  return t?.isCompressedTexture ? 'compressed (no source)' : 'no source';
+}
+
+const TEX_SLOTS = ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'roughnessMap',
+  'metalnessMap', 'aoMap', 'bumpMap', 'lightMap', 'envMap', 'specularMap'];
+
+/**
+ * Walk the scene and fold this moment's textures in. Cheap enough at one call
+ * every few seconds; deliberately not called per frame.
+ *
+ * Silent and free when the caller passes nothing, which is every Node harness:
+ * there is no scene to walk there and no renderer to compare against.
+ */
+export function noteTextures(scene, liveCount = 0, clock = lastStamp / 1000) {
+  // THE WALL CLOCK, and it has to be. The obvious argument to pass from the
+  // game loop is `gameState.time`, which is the RUN clock: it stops while the
+  // level-up cards are up, stops while the workbench is staging, and slows with
+  // every hitstop and the kill shutter. A sampler on that clock stops sampling
+  // exactly during the moments most worth a sample, and reports a tidy even
+  // spread that skipped them. `lastStamp` is performance.now() as perfFrame
+  // received it, so the default here is real seconds whatever the water is
+  // doing — the caller can still pass one, which is what the suite does.
+  if (!scene?.traverse || clock < texNextSample) return;
+  texNextSample = clock + TEX_SAMPLE_EVERY;
+  // Deduped by identity: one texture on four materials is one texture, and
+  // counting it four times would invent a leak that is really sharing working.
+  const seen = new Set();
+  const here = new Map();
+  scene.traverse((o) => {
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) {
+      for (const slot of TEX_SLOTS) {
+        const t = m?.[slot];
+        if (!t?.isTexture || seen.has(t)) continue;
+        seen.add(t);
+        const k = texLabel(t);
+        here.set(k, (here.get(k) ?? 0) + 1);
+      }
+    }
+  });
+  for (const [k, n] of here) {
+    const was = texBySource.get(k);
+    if (was === undefined && texBySource.size >= TEX_KEYS_MAX) continue;
+    if (was === undefined || n > was) texBySource.set(k, n);
+  }
+  if (seen.size > texReachablePeak) texReachablePeak = seen.size;
+  const orphans = Math.max(0, liveCount - seen.size);
+  if (orphans > texOrphanPeak) texOrphanPeak = orphans;
+}
+
+function topTextures() {
+  return [...texBySource.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TEX_GROUPS_KEPT)
+    .map(([source, peak]) => ({ peak, source }));
+}
+
 // --- WHICH shader, and whether it had been built before ---------------------
 //
 // `programsAdded` says forty programs were linked and stops there, which is the
@@ -131,6 +231,28 @@ let programRebuilds = 0;         // builds of a key already built this run
 // stop being added. A run that reaches this has already answered the question.
 const KEYS_KEPT = 400;
 
+// --- WHICH PROGRAMS THE WARM-UP MISSED --------------------------------------
+//
+// `programBuilds` above answers "was the same shader linked twice", which is a
+// warm-up being THROWN AWAY and is a different bug with a different fix. The
+// question it cannot answer is the common one: a run reports 345 programs built
+// after boot, every one of them linked ONCE, and the report names none of them
+// because `topPrograms` only lists keys with a count above one. Three hundred
+// mid-run links, and nothing saying what they were.
+//
+// So the keys are credited to the FRAMES THEY LANDED ON. A program linked on a
+// 16ms frame cost nothing anybody felt and warming it buys nothing; the same
+// program linked on a 600ms frame is the worst frame of the run. Ranking by the
+// time of the frames a key appeared on puts the warm-up's work list in order,
+// which "345 programs" never could.
+//
+// Two maps rather than one, because a key can be both: linked once on a hitch
+// (a warm-up miss) and linked again later (a rebuild). They are separate
+// diagnoses and merging them loses which is which.
+const hitchPrograms = new Map(); // cacheKey -> { builds, ms } over hitch frames
+// Reused, so the common case — a frame that built nothing — allocates nothing.
+const frameNewKeys = [];
+
 /**
  * Fold this frame's program list in. Takes three's live array
  * (`renderer.info.programs`), and picks out the ones built since the last call
@@ -141,12 +263,16 @@ const KEYS_KEPT = 400;
  * there is no GL context there and so no programs to read.
  */
 function notePrograms(list) {
+  frameNewKeys.length = 0;
   if (!list?.length) return;
   let highest = lastProgramId;
   for (const p of list) {
     if (p.id <= lastProgramId) continue;
     if (p.id > highest) highest = p.id;
     const key = p.cacheKey ?? '(no key)';
+    // Every new key this frame, whatever its build count — the hitch
+    // classifier below decides whether this frame is worth crediting it to.
+    frameNewKeys.push(key);
     const seen = programBuilds.get(key);
     if (seen !== undefined) {
       programBuilds.set(key, seen + 1);
@@ -374,6 +500,10 @@ export function perfRunStart(stamp = performance.now(), programs = 0, textures =
   programsAdded = 0;
   texturesAdded = 0;
   texturesPeak = textures;
+  texBySource.clear();
+  texReachablePeak = 0;
+  texOrphanPeak = 0;
+  texNextSample = 0;
   programsPeak = programs;
   // Seeded from the live set rather than from -1: everything the warm-up built
   // is already there, and counting it as "built during the run" would put the
@@ -381,6 +511,8 @@ export function perfRunStart(stamp = performance.now(), programs = 0, textures =
   // `programs` seed above.
   programBuilds.clear();
   programRebuilds = 0;
+  hitchPrograms.clear();
+  frameNewKeys.length = 0;
   lastProgramId = -1;
   for (const p of programList ?? []) if (p.id > lastProgramId) lastProgramId = p.id;
   lastHeap = heap;
@@ -460,6 +592,23 @@ export function perfFrame(stamp, programs = lastPrograms, textures = lastTexture
     // that did both is still best described by the compile.
     else if (collected) { hitchGC++; why = 'gc'; }
     else { hitchNeither++; why = 'other'; }
+
+    // AFTER THE CHAIN, not inside it. Slipped between two `else if`s this
+    // rebinds the rest of them to itself, so a frame that linked a program also
+    // ran the texture branch — the four counters stopped summing to the hitch
+    // count, which is exactly what tools/perf-log-test.mjs asserts.
+    //
+    // Credited here rather than in notePrograms because whether this frame is a
+    // hitch is not known until now. Bounded by the same cap the build map uses:
+    // a run that has linked four hundred distinct programs on slow frames has
+    // answered the question several times over.
+    if (frameNewKeys.length && hitchPrograms.size < KEYS_KEPT) {
+      for (const key of frameNewKeys) {
+        const seen = hitchPrograms.get(key);
+        if (seen) { seen.builds++; seen.ms += ms; }
+        else hitchPrograms.set(key, { builds: 1, ms });
+      }
+    }
   }
   if (ms >= SPIKE_MS) spikes++;
 
@@ -535,6 +684,11 @@ export function perfSummary() {
     // ...against how many were ALIVE at once at the worst moment. Read as a
     // pair: added far above peak is churn, the two rising together is a leak.
     texturesPeak,
+    // See noteTextures: which images the scene is holding, and how many the
+    // renderer still has that nothing in the scene points at any more.
+    texturesReachablePeak: texReachablePeak,
+    texturesOrphanPeak: texOrphanPeak,
+    topTextures: topTextures(),
     programsPeak,
     // And the split that says which kind of problem those programs are. See
     // the note above programBuilds: `programRebuilds` above zero is a shader
@@ -542,6 +696,9 @@ export function perfSummary() {
     programRebuilds,
     programKeys: programBuilds.size,
     topPrograms: topPrograms(),
+    // What to warm next, in order. See missedPrograms.
+    missedPrograms: missedPrograms(),
+    hitchProgramKeys: hitchPrograms.size,
     // Where the frame time went, and which moments the bad frames landed in.
     // See the note above MARK_LINGER for why `lift` is the column to read and
     // `hitches` on its own is not.
@@ -624,6 +781,17 @@ function markLift() {
 const KEY_CHARS = 220;
 const TOP_KEPT = 6;
 
+// The warm-up's work list: keys that linked on a frame the player felt, worst
+// first. Ranked on the TIME of those frames rather than on the count, because
+// one link on a 600ms frame is the thing to fix and forty on 34ms frames are
+// not. A run whose warm-up covered everything prints nothing here.
+function missedPrograms() {
+  return [...hitchPrograms.entries()]
+    .sort((a, b) => b[1].ms - a[1].ms)
+    .slice(0, TOP_KEPT)
+    .map(([key, v]) => ({ builds: v.builds, ms: v.ms, key: key.slice(0, KEY_CHARS) }));
+}
+
 function topPrograms() {
   return [...programBuilds.entries()]
     .filter(([, n]) => n > 1)
@@ -658,12 +826,31 @@ export function perfRunReport(label = 'run', extra = '') {
     `       of those: ${s.hitchCompile} shader link · ${s.hitchUpload} texture upload · ${s.hitchGC} collection · ${s.hitchNeither} none of those`,
     `       built this run: ${s.programsAdded} programs (${s.programKeys} distinct, ${s.programRebuilds} rebuilt), ${s.texturesAdded} textures`
     + `\n       alive at peak: ${s.programsPeak} programs, ${s.texturesPeak} textures`
+    + (s.texturesReachablePeak
+      ? ` (${s.texturesReachablePeak} reachable from the scene`
+        + `${s.texturesOrphanPeak ? `, ${s.texturesOrphanPeak} held by nothing` : ''})`
+      : '')
       + (s.heapPeakMB > 0 ? `  ·  heap peak ${s.heapPeakMB.toFixed(0)}MB, ${s.heapFreedMB.toFixed(0)}MB collected` : ''),
   ];
   // Only when something actually rebuilt. A clean run should print nothing
   // here, so the block appearing at all is the signal.
+  if (s.topTextures?.length) {
+    console.log('       textures, by where the image came from:');
+    for (const t of s.topTextures) console.log(`         x${String(t.peak).padStart(3)}  ${t.source}`);
+  }
   for (const p of s.topPrograms) {
     lines.push(`       rebuilt ${p.builds}x: ${p.key}`);
+  }
+  // The warm-up's work list. Printed after the rebuilds because a rebuild is
+  // the worse of the two findings — no warm-up can fix a program that is being
+  // released and relinked — and printed at all only when a link actually landed
+  // on a frame somebody felt.
+  if (s.missedPrograms.length) {
+    lines.push(`       linked ON A HITCH — the warm-up missed these `
+      + `(${s.hitchProgramKeys} distinct, worst first):`);
+    for (const p of s.missedPrograms) {
+      lines.push(`         ${p.ms.toFixed(0)}ms over ${p.builds} frame(s): ${p.key}`);
+    }
   }
   // The frame's own breakdown. Prints whenever anything was timed, because a
   // phase table with `render` at 80% is the answer to "should I optimise the

@@ -4700,13 +4700,20 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       }
     // `faceLocked` is a system saying it is writing the heading itself this
     // frame — the same handoff `perkDrive` makes for the velocity, and needed
-    // for the same reason. The speed gate below used to be the whole handoff,
-    // which works only while "a system is driving" and "the body is moving" are
-    // the same thing. They are not: systems/bossAngler.js holds the anglerfish
-    // on the seabed and settles it there at several units a second, so both
-    // writers were live on the same frames — one aiming the head at the seal,
-    // this one aiming it at the fish's own descent — and the body snapped
-    // between the two every frame.
+    // for the same reason. The speed gate below is not that handoff: it works
+    // only while "a system is driving" and "the body is moving" are the same
+    // thing, and they are not.
+    //
+    // NOTHING SETS IT TODAY, and that is the lesson rather than an oversight.
+    // systems/bossAngler.js used to, because it holds the anglerfish still on
+    // the seabed and must still aim it at the seal — and taking turns with this
+    // block over the same pose is what put that body 179.9 degrees off vertical
+    // on the frames the two swapped. A system that wants a body pointed
+    // somewhere its velocity does not say now hands `turnFish` a DIRECTION
+    // (`e.turnAim`, see systems/fishTurn.js) and lets one writer compose the
+    // pose, which is the fix rather than a better-timed handover. The gate is
+    // kept for a system that genuinely owns a whole transform — a grab, a
+    // ragdoll — where there is no orientation left for this to compute.
     // A fish that comes about through the camera instead of looping over the
     // top — see systems/fishTurn.js, which owns mesh.rotation and the visual's
     // roll outright and must therefore run INSTEAD of the pair below rather

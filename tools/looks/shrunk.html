@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Shrink — before / after</title>
+    <style>
+      html, body { margin: 0; background: #0a0f16; color: #cfe6ff;
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #log { padding: 10px; }
+      #grid { display: grid; gap: 14px; padding: 10px; }
+      .cell { background: #070b14; border: 1px solid #16233a; border-radius: 6px; padding: 8px; }
+      .strip { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+      .shot { background: #050a12; border-radius: 4px; }
+      .shot img { display: block; }
+      .lbl { padding: 3px 6px; color: #6f8db4; font-size: 11px; }
+      .cap { padding: 2px 4px 8px; color: #9fc4ea; }
+    </style>
+  </head>
+  <body>
+    <div id="log">rendering…</div>
+    <div id="grid"></div>
+    <script type="module" src="./shrunk.js"></script>
+  </body>
+</html>

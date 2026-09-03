@@ -108,9 +108,10 @@ function num(def, c, key, fallback) {
  * on the same body, which is the two-writers bug the anglerfish's comment is
  * about, arriving from a third direction.
  *
- * @param e         the creature. Reads vx/vy, def, and the lunge stage; keeps
- *                  its own state in `__turn*` fields, all rolled on the first
- *                  frame so a fish never eases in from a heading it never had.
+ * @param e         the creature. Reads vx/vy (or `turnAim`, below), def, and
+ *                  the lunge stage; keeps its own state in `__turn*` fields,
+ *                  all rolled on the first frame so a fish never eases in from
+ *                  a heading it never had.
  * @param dt        seconds.
  * @param launched  the rigid body is flying, so IT owns the transform — write
  *                  nothing, the same handoff the shared path makes. No
@@ -126,7 +127,37 @@ export function turnFish(e, dt, launched = false) {
   const def = e.def;
 
   const dead = num(def, c, 'deadzone', 0.05);
-  const speed = Math.hypot(e.vx, e.vy);
+
+  // --- WHAT IT IS POINTING AT ----------------------------------------------
+  // Velocity, unless something has set `turnAim` this frame.
+  //
+  // WHY AN INPUT RATHER THAN A SECOND WRITER. A creature that is going
+  // somewhere points where it is going, and for every fish in the roster that
+  // is the whole story. An AMBUSHER is the exception: systems/bossAngler.js
+  // spends most of its fight at a dead stop with its lure lit, and a trap that
+  // is not looking at you is scenery.
+  //
+  // That used to be solved by the ambush writing the orientation itself on the
+  // frames it held station and handing the body back on the frames it moved,
+  // gated on `faceLocked`. Two writers with two different decompositions of the
+  // same pose, taking turns: measured over a fight, the handoff frames inside
+  // the recovery swung the body up to 166.9 degrees between two frames and put
+  // the dorsal 179.9 degrees off vertical — the fish snapping round and
+  // finishing upside down, every cycle. Neither writer was wrong on its own;
+  // they simply did not agree about what the numbers on the object meant.
+  //
+  // So there is one writer and the ambush hands it a DIRECTION instead. The
+  // yaw, the pitch and the bank keep easing through the switch because there is
+  // no switch: `turnAim` changes what the targets are computed from and nothing
+  // about the state carrying the body between them.
+  //
+  // `turnAimRate` and `turnAimTime` let the aimer name its own pitch rate and
+  // yaw duration — an anglerfish lurks at 0.9 rad/s and snaps onto you at 2.4
+  // during a tell, and that difference is the telegraph.
+  const aim = e.turnAim;
+  const ax = aim ? aim.x : e.vx;
+  const ay = aim ? aim.y : e.vy;
+  const speed = Math.hypot(ax, ay);
 
   // 'YXZ' is what makes `rotation.y` a world yaw rather than a third rotation
   // stacked inside the heading. Set once, on the frame this creature is first
@@ -135,11 +166,11 @@ export function turnFish(e, dt, launched = false) {
   // Euler's order every frame dirties the matrix for nothing.
   if (e.__turnYaw == null) {
     e.mesh.rotation.order = 'YXZ';
-    e.__turnYaw = e.vx < 0 ? LEFT : RIGHT;
+    e.__turnYaw = ax < 0 ? LEFT : RIGHT;
     e.__turnFrom = e.__turnYaw;
     e.__turnTo = e.__turnYaw;
     e.__turnT = 1;
-    e.__turnPitch = speed > dead ? Math.atan2(e.vy, Math.abs(e.vx)) : 0;
+    e.__turnPitch = speed > dead ? Math.atan2(ay, Math.abs(ax)) : 0;
     e.__turnBank = 0;
     e.__wigglePhase = Math.random() * Math.PI * 2;
   }
@@ -149,9 +180,9 @@ export function turnFish(e, dt, launched = false) {
   // with a beginning and an end rather than a constant swing — and it is a
   // longer duration than the flip it replaces, since there is now something to
   // watch happen.
-  const time = Math.max(0.001, num(def, c, 'time', 0.55));
+  const time = Math.max(0.001, aim?.time ?? num(def, c, 'time', 0.55));
   const curve = num(def, c, 'curve', 'inOutCubic');
-  const want = e.vx < -dead ? LEFT : (e.vx > dead ? RIGHT : e.__turnTo);
+  const want = ax < -dead ? LEFT : (ax > dead ? RIGHT : e.__turnTo);
   if (want !== e.__turnTo) {
     // From where the body actually is, so a turn reversed halfway through
     // continues from here instead of snapping back to begin the new one.
@@ -170,9 +201,9 @@ export function turnFish(e, dt, launched = false) {
   // frame (the fish's own climb), and a duration ease restarted on every new
   // target never finishes one. Bounded by construction — `Math.abs(e.vx)` puts
   // it in (-PI/2, PI/2) whichever side the yaw has settled on.
-  const pitchRate = Math.max(0.01, num(def, c, 'pitchRate', 4));
+  const pitchRate = Math.max(0.01, aim?.rate ?? num(def, c, 'pitchRate', 4));
   if (speed > dead) {
-    const wantPitch = Math.atan2(e.vy, Math.abs(e.vx));
+    const wantPitch = Math.atan2(ay, Math.abs(ax));
     const step = Math.max(-pitchRate * dt, Math.min(pitchRate * dt, wantPitch - e.__turnPitch));
     e.__turnPitch += step;
   }

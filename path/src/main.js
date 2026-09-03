@@ -54,7 +54,7 @@ import {
 } from './systems/levelUpWarmup.js';
 import {
   perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary, perfPhase, perfMark,
-  perfFrameJs,
+  perfFrameJs, noteTextures,
 } from './systems/perfLog.js';
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
@@ -5237,6 +5237,16 @@ function runFrame(now) {
     heapUsed(),
     world.renderer.info.programs,
   );
+  // WHOSE textures, on a sampled clock. `info.memory.textures` is a bare count
+  // and three keeps no list, so this walks the scene every few seconds and
+  // groups what it finds by where the image came from — and compares the total
+  // against the renderer's, because a texture the renderer holds that nothing
+  // in the scene points at is a leak rather than a roster. Rate-limited inside
+  // noteTextures, on the WALL clock — deliberately not gameState.time, which
+  // stops while the cards are up and slows with every hitstop, so a sampler on
+  // it would skip the moments most worth sampling. Calling this every frame
+  // costs one comparison.
+  noteTextures(world.scene, world.renderer.info.memory.textures);
   // The same three counters, mirrored OUT of the process into localStorage.
   //
   // Everything perfFrame accumulates lives in memory, so a WebContent kill
@@ -6288,6 +6298,25 @@ function runFrame(now) {
     }
     perfPhase('world', performance.now() - _tworld);
 
+    // SPLIT THREE WAYS, because "shots" was one span over eight systems and the
+    // report could not tell them apart. It spiked to 198ms in a single frame on
+    // twelve of thirty recorded runs against a 0.2ms average — a 900x outlier
+    // with no name on it, and no way to get one off a phone.
+    //
+    // Four buckets because they are four different fixes:
+    //
+    //   shots   the projectile simulation. Count-driven, so it rises with the
+    //           volley and the enemy list, and a spike here is the pool
+    //           doubling (see growRibbons and instancedPool.grow).
+    //   beams   the eye beams, the bubble jet and the jets. Each of these
+    //           paints a taper profile onto a 2D canvas the FIRST time one is
+    //           spawned (see systems/beams.js), which is a one-off cost that
+    //           lands mid-fight and looks exactly like a simulation spike.
+    //   bossfx  the boss — its lifecycle, its shots, its perks, and the staged
+    //           storm. Two spans under one name, which perfPhase sums.
+    //
+    // A span that covered all of them could only ever answer "shots", which is
+    // where this went round twice.
     const _tshots = performance.now();
     updateProjectiles(
       dt, world.scene, enemies,
@@ -6330,6 +6359,8 @@ function runFrame(now) {
     // Out here rather than inside updateProjectiles because it is one loadout's
     // look and that function is the shared spawn for every shot in the game.
     updateBoltGlow(projectiles);
+    const _tboss = performance.now();
+    perfPhase('shots', _tboss - _tshots);
     // Nothing new arrives while the stage is open. Creatures already in the
     // water keep swimming and breathing — freezing them would take the scene's
     // life away with its traffic, and the seal is what an effect is being
@@ -6356,6 +6387,14 @@ function runFrame(now) {
     // accounting as a bite rather than being a second, quieter way to lose hp.
     // The seal's own eyes, BEFORE updateBeams so a beam lit this frame is
     // resolved on the frame it was asked for rather than the next one.
+    const _tbeams = performance.now();
+    // THE SAME NAME AS THE SPAN BELOW, on purpose. perfPhase accumulates by
+    // name, so the boss's lifecycle here and its perks after the beams add up
+    // to one number for "what the boss cost this frame" — which is the question
+    // — rather than two halves nobody would think to sum. It also keeps the
+    // phase list clear of a `boss` that would sit beside the `boss` MARK in the
+    // same report meaning something else entirely.
+    perfPhase('bossfx', _tbeams - _tboss);
     setLaserAim(input.aim);
     // The rig goes in so the beams leave the eye sockets the orbs are sitting
     // in rather than a point near the middle of the body — see the origin note
@@ -6427,6 +6466,8 @@ function runFrame(now) {
         onEnemyKilled: onEnemyKilledFeedback,
       },
     });
+    perfPhase('beams', performance.now() - _tbeams);
+    const _tbossfx = performance.now();
     updateBossAbilities(dt, world.scene, player.mesh.position, {
       // The i-frame check is here rather than inside the perk, for the same
       // reason resolveCombat does it at each of its own damage sites: a dash
@@ -6480,7 +6521,7 @@ function runFrame(now) {
       });
     }
 
-    perfPhase('shots', performance.now() - _tshots);
+    perfPhase('bossfx', performance.now() - _tbossfx);
     const _tenemies = performance.now();
     updateEnemies(dt, world.scene, player.mesh.position, (x, y) => {
       feedback('chumEaten', { x, y, scale: 0.8 });

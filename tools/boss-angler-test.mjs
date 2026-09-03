@@ -95,7 +95,9 @@ import { attachEmissiveCues, cueLevel, cueDuration } from '../path/src/systems/e
 import {
   attachAngler, releaseAngler, updateBossAngler, anglerStage, anglerState, isAnglerBoss,
 } from '../path/src/systems/bossAngler.js';
-import { bounds, seabedTopY } from '../path/src/arena.js';
+import { bounds, seabedTopY, clampBelowSurface } from '../path/src/arena.js';
+// The facing path out of entities/enemies.js — see the note on `step`.
+import { turnFish, comesAbout } from '../path/src/systems/fishTurn.js';
 import { beams, resetBeams } from '../path/src/systems/beams.js';
 // The SHIPPING roster row, parsed from the shipping csv the same way
 // systems/boss.js parses it — the boss's sizeMul is a third of what its radius
@@ -192,9 +194,51 @@ function makeBoss(scene) {
   };
   return e;
 }
-// Step the body the way the integrator does, so a test that moves the boss
-// moves the thing the fight actually reads.
-const step = (e, dt) => { e.mesh.position.x += e.vx * dt; e.mesh.position.y += e.vy * dt; };
+// ONE WHOLE FRAME OF THE THINGS THAT HAPPEN AFTER updateBossAngler, in the
+// order main.js runs them: the integrator, the arena clamp, and the facing.
+//
+// THE LAST TWO USED TO BE MISSING AND THAT IS WHY THIS FILE PASSED THROUGH TWO
+// SHIPPED BUGS. The fight sets a velocity and an aim; it does not move the body
+// and, since the come-about, it does not write a single rotation. So a harness
+// that only integrated was measuring an animal with no walls and no
+// orientation:
+//
+//   THE SNAP AND THE FLIP. Orientation used to be split between this file's
+//   subject and entities/enemies.js, handed back and forth mid-stage. Measured
+//   through the real path, the handoffs inside the recovery swung the body
+//   166.9 degrees between two frames and left the dorsal 179.9 degrees off
+//   vertical. Every assertion in IT IS NEVER UPSIDE DOWN below passed anyway,
+//   because the writer that produced those frames was never called here.
+//
+//   BEING STUCK. The clamp is a POSITION clamp and does not touch the velocity
+//   that drove into it, so a committed lunge along the seabed spent its whole
+//   run and its whole follow-through being pushed back 0.4 units a frame —
+//   335 lunge frames and 224 snap frames in a 90-second fight. With no clamp in
+//   the harness the body simply flew through the floor and nothing looked
+//   wrong.
+//
+// So the walls and the facing are part of a step now. `turnFish` is called
+// exactly as the shipped branch calls it — see the facing block in
+// entities/enemies.js — which is what makes the numbers below the game's.
+const step = (e, dt) => {
+  e.mesh.position.x += e.vx * dt;
+  e.mesh.position.y += e.vy * dt;
+  clampBelowSurface(e.mesh.position, e.radius);
+  if (e.def.faceMotion && !e.faceLocked && comesAbout(e.def)) turnFish(e, dt, false);
+};
+
+// WHERE THE NOSE ACTUALLY POINTS, composed, rather than the value of any one
+// rotation. The come-about spreads the pose across three axes on two objects
+// (mesh yaw, mesh pitch, visual bank) and no single number in it is the
+// heading — a check written against `mesh.rotation.z` measures a convention
+// rather than an animal, and would have to be rewritten every time the
+// decomposition changed. The model's forward is entity +Y; see
+// orientationQuaternion in assets.js.
+function forwardOf(e) {
+  e.mesh.updateMatrixWorld(true);
+  return new THREE.Vector3(0, 1, 0)
+    .applyQuaternion(e.mesh.getWorldQuaternion(new THREE.Quaternion()));
+}
 const at = (e, x, y) => { e.mesh.position.set(x, y, 0); };
 
 const scene = new THREE.Scene();
@@ -246,8 +290,16 @@ section('THE CADENCE');
 const trace = [];
 {
   attachAngler(scene, boss);
+  // ON THE FLOOR, BOTH OF THEM, and that is not scene-setting. The arena clamp
+  // is part of a step now (see `step`), so a boss placed at the origin is
+  // placed at the WATERLINE and spends the settle sinking 24 units to its
+  // resting line — by the time the lurk's timer runs out the seal is 10 units
+  // above it and outside `triggerRange`, so it charges the lure instead and no
+  // cadence assertion below ever sees a lunge. The animal waits on the bottom;
+  // a test of its melee has to start there too.
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
   // In range from the first frame, so the lurk exits as soon as it has settled.
-  player.x = 6; player.y = 0;
+  player.x = 6; player.y = floorLine();
   let last = null;
   for (let i = 0; i < 60 * 12; i++) {
     updateBossAngler(DT, scene, player, {});
@@ -278,13 +330,14 @@ section('THE LINE IS LOCKED AT THE END OF THE WIND-UP');
 // ---------------------------------------------------------------------------
 {
   releaseAngler();
-  at(boss, 0, 0); boss.vx = 0; boss.vy = 0;
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
   attachAngler(scene, boss);
-  player.x = 6; player.y = 0;
+  player.x = 6; player.y = floorLine();
   // Run to the moment it commits.
   let committed = null;
   for (let i = 0; i < 60 * 6 && !committed; i++) {
     updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
     if (anglerState.stage === 'lunge') committed = { x: anglerState.dirX, y: anglerState.dirY };
   }
   check('it committed to a direction', !!committed,
@@ -294,6 +347,7 @@ section('THE LINE IS LOCKED AT THE END OF THE WIND-UP');
   const vel = [];
   for (let i = 0; i < 20; i++) {
     updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
     if (anglerState.stage === 'lunge') vel.push([boss.vx, boss.vy]);
   }
   const [vx, vy] = vel[vel.length - 1] ?? [0, 0];
@@ -316,9 +370,9 @@ section('THE LIGHT SAYS WHAT THE BODY IS DOING');
 // ---------------------------------------------------------------------------
 {
   releaseAngler();
-  at(boss, 0, 0);
+  at(boss, 0, floorLine());
   attachAngler(scene, boss);
-  player.x = 6; player.y = 0;
+  player.x = 6; player.y = floorLine();
   // MEASURED ONCE EACH STAGE HAS SETTLED, and that is not fussiness. A hold
   // RAMPS onto its level, so the first frames of every stage are still showing
   // the previous one: sampled from frame zero, the lurk's floor is the
@@ -332,6 +386,7 @@ section('THE LIGHT SAYS WHAT THE BODY IS DOING');
   let inStage = 0;
   for (let i = 0; i < 60 * 14; i++) {
     updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
     const s = anglerStage();
     inStage = s.stage === prev ? inStage + DT : 0;
     prev = s.stage;
@@ -406,15 +461,16 @@ section('THE HANDBACK');
 // ---------------------------------------------------------------------------
 {
   releaseAngler();
-  at(boss, 0, 0);
+  at(boss, 0, floorLine());
   boss.contactDamage = CONFIG.enemies.bossAnglerfish.contactDamage;
   const base = boss.contactDamage;
   attachAngler(scene, boss);
-  player.x = 6; player.y = 0;
+  player.x = 6; player.y = floorLine();
   // Kill it mid-lunge, the worst moment: contact damage is multiplied and the
   // locomotion state is pinned.
   for (let i = 0; i < 60 * 6; i++) {
     updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
     if (anglerState.stage === 'lunge') break;
   }
   check('contact damage is multiplied while committed',
@@ -431,12 +487,13 @@ section('A PERK MID-DASH OWNS THE BODY');
 // ---------------------------------------------------------------------------
 {
   releaseAngler();
-  at(boss, 0, 0); boss.vx = 0; boss.vy = 0;
+  at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
   boss.contactDamage = CONFIG.enemies.bossAnglerfish.contactDamage;
   attachAngler(scene, boss);
-  player.x = 6; player.y = 0;
+  player.x = 6; player.y = floorLine();
   for (let i = 0; i < 60 * 6; i++) {
     updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
     if (anglerState.stage === 'lunge') break;
   }
   const wasLunging = anglerState.stage === 'lunge';
@@ -448,6 +505,7 @@ section('A PERK MID-DASH OWNS THE BODY');
   // With no perk running, the ambush must be the thing moving the body.
   boss.vx = 0; boss.vy = 0;
   updateBossAngler(DT, scene, player, {});
+  step(boss, DT);
   check('with no perk active the ambush drives the body',
     wasLunging && Math.hypot(boss.vx, boss.vy) > 1,
     `${Math.hypot(boss.vx, boss.vy).toFixed(1)}u/s`);
@@ -472,6 +530,7 @@ section('A HIT BITES THE LURE BRIGHT');
   const calm = anglerStage().emissive;
   boss.hp -= 1000 * (CONFIG.boss.angler.hurtDamage * 3);
   updateBossAngler(DT, scene, player, {});
+  step(boss, DT);
   const bitten = anglerStage().emissive;
   check('a real hit flashes the lure', bitten > calm * 1.5,
     `x${calm.toFixed(2)} lurking -> x${bitten.toFixed(2)} hit`);
@@ -483,6 +542,7 @@ section('A HIT BITES THE LURE BRIGHT');
   const settled = anglerStage().emissive;
   boss.hp -= 1000 * (CONFIG.boss.angler.hurtDamage * 0.2);
   updateBossAngler(DT, scene, player, {});
+  step(boss, DT);
   check('a scratch does not', anglerStage().emissive <= settled * 1.2,
     `x${settled.toFixed(2)} -> x${anglerStage().emissive.toFixed(2)}`);
   releaseAngler();
@@ -628,12 +688,19 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
     Math.hypot(boss.vx, boss.vy) < 0.05, `${Math.hypot(boss.vx, boss.vy).toFixed(4)} u/s`);
 
   // Now put the player somewhere else and watch it turn to look.
+  //
+  // MEASURED OFF THE COMPOSED NOSE, not off `mesh.rotation.z`. The come-about
+  // spreads the pose over a yaw, a pitch and a bank (see systems/fishTurn.js)
+  // and rotation.z is only the pitch — against a seal on the left it reads a
+  // perfectly aimed fish as PI off, because the side it is aimed from lives on
+  // a different axis. The forward vector is the animal either way and cannot go
+  // stale when the decomposition next changes.
   const facingErr = () => {
-    const want = Math.atan2(player.y - boss.mesh.position.y, player.x - boss.mesh.position.x) - Math.PI / 2;
-    let d = want - boss.mesh.rotation.z;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    return Math.abs(d);
+    const f = forwardOf(boss);
+    const dx = player.x - boss.mesh.position.x;
+    const dy = player.y - boss.mesh.position.y;
+    const d = Math.hypot(dx, dy) || 1;
+    return Math.acos(Math.min(1, Math.max(-1, (f.x * dx + f.y * dy) / d)));
   };
   player.x = -(CONFIG.boss.angler.lureRange + 10); player.y = floorLine() + 12;
   const before = facingErr();
@@ -646,26 +713,28 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
   // AND THE TURN IS RATE-LIMITED, not a snap — that is what makes circling work.
   //
   // MEASURED AS A DURATION rather than as one frame's step, and the difference
-  // is the mechanism rather than the taste. `rotation.z` is no longer a value
-  // that is eased toward a target: it is COMPOSED, every frame, from an eased
-  // pitch and an eased side (see faceToward — the two have to be one manoeuvre
-  // or the body spends the turn upside down). So a single frame's change in the
-  // heading is not the rate limit and never was a direct reading of it; writing
-  // rotation.z by hand and stepping once now measures the composition
-  // re-deriving itself from state the write did not touch, which reads as an
-  // enormous instantaneous rate on a fish that is turning perfectly smoothly.
+  // is the mechanism rather than the taste. No single number on the object is
+  // the heading any more: the pose is a yaw, a pitch and a bank composed across
+  // two objects (systems/fishTurn.js), so writing one of them by hand and
+  // stepping once measures the composition re-deriving itself from state the
+  // write did not touch — an enormous instantaneous rate on a fish that is
+  // turning perfectly smoothly.
   //
   // What the check was always about survives intact: a HALF TURN takes about
   // PI / lurkTurnRate seconds, which is 3.5 at the shipped 0.9 — long enough
   // that a player can swim round behind it, which is the whole counterplay.
-  // Per-frame smoothness is asserted properly, against a derived ceiling, in
-  // IT IS NEVER UPSIDE DOWN below.
+  // That number reaches the come-about as `turnAim.time`, so this is also what
+  // holds the ambush's two turn rates to meaning something once the aiming and
+  // the turning live in different files. Per-frame smoothness is asserted
+  // properly, against a derived ceiling, in IT IS NEVER UPSIDE DOWN below.
   releaseAngler();
   at(boss, 0, floorLine());
   boss.mesh.rotation.set(0, 0, 0);
   boss.visual.rotation.set(0, 0, 0);
   delete boss.visual.userData.__face;
-  delete boss.__facePitch;
+  // The come-about's state, so the reversal below is timed from a fish that has
+  // just arrived rather than from one holding a heading out of the last run.
+  delete boss.__turnYaw;
   attachAngler(scene, boss);
   // Straight out to one side and out of the lure's reach, so what is being
   // timed is a lurk turn rather than a wind-up's — the two have different rates
@@ -673,7 +742,7 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
   // stopped lurking entirely.
   const out = CONFIG.boss.angler.lureRange + 10;
   player.x = out; player.y = floorLine();
-  for (let i = 0; i < 60 * 8; i++) updateBossAngler(DT, scene, player, {});
+  for (let i = 0; i < 60 * 8; i++) { updateBossAngler(DT, scene, player, {}); step(boss, DT); }
   check('it has settled looking one way', facingErr() < 0.05,
     `${(facingErr() * 180 / Math.PI).toFixed(1)} degrees off`);
   // ...and now the seal is on the other side. A full reversal.
@@ -681,6 +750,7 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
   let took = null;
   for (let i = 0; i < 60 * 15 && took == null; i++) {
     updateBossAngler(DT, scene, player, {});
+    step(boss, DT);
     if (facingErr() < 0.05) took = (i + 1) * DT;
   }
   const half = Math.PI / CONFIG.boss.angler.lurkTurnRate;
@@ -1369,12 +1439,34 @@ section('IT IS NEVER UPSIDE DOWN');
 
   const rot = new THREE.Matrix4();
   const dor = new THREE.Vector3();
-  // Degrees the back is off vertical. 0 is upright; 180 is belly-up.
+  // DEGREES OF ROLL — how far the back is from where "up" would put it FOR THE
+  // HEADING THE ANIMAL CURRENTLY HAS. 0 is upright; 180 is belly-up.
+  //
+  // NOT THE ANGLE TO WORLD VERTICAL, which is what this used to measure and
+  // which is a different quantity the moment a fish is allowed to point up or
+  // down. An anglerfish nosing straight at a seal above it has its dorsal 90
+  // degrees off world vertical and is perfectly, obviously upright: the back is
+  // exactly where the back belongs on a vertical fish. Measured that way the
+  // pitch and the roll are added together and reported as one number, so the
+  // check either has to tolerate a full 90 degrees — which is also the reading
+  // for a fish lying on its side — or fail on a body doing nothing wrong.
+  //
+  // So world up is projected into the plane the roll turns in (perpendicular to
+  // the nose) and the dorsal is compared against THAT. Pitch cancels out
+  // exactly, and what is left is only the thing the section is named after.
   const tilt = () => {
     boss.mesh.updateMatrixWorld(true);
     rot.extractRotation(boss.visual.matrixWorld);
     dor.copy(DORSAL).applyMatrix4(rot);
-    return Math.acos(THREE.MathUtils.clamp(dor.y, -1, 1)) * 180 / Math.PI;
+    const f = forwardOf(boss);
+    const want = new THREE.Vector3(0, 1, 0);
+    want.addScaledVector(f, -want.dot(f));
+    // Nose within a whisker of straight up: there is no roll to speak of and
+    // the projection is numerically meaningless. Reported as 0 rather than as
+    // noise, which is also the honest answer.
+    if (want.lengthSq() < 1e-6) return 0;
+    want.normalize();
+    return Math.acos(THREE.MathUtils.clamp(want.dot(dor), -1, 1)) * 180 / Math.PI;
   };
 
   const settle = (px) => {
@@ -1385,7 +1477,8 @@ section('IT IS NEVER UPSIDE DOWN');
     // The facing state lives on the VISUAL and visuals are pooled, so a run
     // that did not clear it would measure the last one's turn.
     delete boss.visual.userData.__face;
-    delete boss.__facePitch;
+    // ...and the come-about's, which is where the pose actually lives now.
+    delete boss.__turnYaw;
     boss.vx = 0; boss.vy = 0; boss.hp = boss.maxHp;
     boss.deep = false; boss.entering = false;
     attachAngler(scene, boss);
@@ -1414,7 +1507,9 @@ section('IT IS NEVER UPSIDE DOWN');
   boss.mesh.rotation.set(0, 0, 0);
   boss.visual.rotation.set(0, 0, 0);
   delete boss.visual.userData.__face;
-  delete boss.__facePitch;
+  // The come-about's state, so the reversal below is timed from a fish that has
+  // just arrived rather than from one holding a heading out of the last run.
+  delete boss.__turnYaw;
   boss.vx = 0; boss.vy = 0; boss.hp = boss.maxHp;
   boss.deep = false; boss.entering = false;
   attachAngler(scene, boss);
@@ -1442,15 +1537,24 @@ section('IT IS NEVER UPSIDE DOWN');
     }
     prev = now;
   }
-  // 90 DEGREES IS THE CEILING AND IT IS NOT A FUDGE. A turnaround is a half
-  // roll about the animal's own forward axis (systems/facing.js), so halfway
-  // through it the back genuinely does point at the camera — that is every
-  // creature in this game turning round, and it is 90 degrees exactly. Past it
-  // the belly has started to come up, which nothing should ever do.
-  check('across a whole fight the back never passes the camera',
-    worst <= 91, `worst ${worst.toFixed(1)} degrees, in the ${worstAt}`);
-  check('...which is the half roll every creature does, not an inversion',
-    worst > 45, `worst ${worst.toFixed(1)} degrees — under this it is not rolling at all`);
+  // THE CEILING IS THE BANK AND NOTHING ELSE. This animal comes about through
+  // the camera now (see systems/fishTurn.js): the turnaround is a YAW about
+  // world up, so the back stays up through every frame of it by construction
+  // rather than by two clocks agreeing. The only roll left in the body is the
+  // lean it takes into its own turn, which `comeAbout.bank` caps outright.
+  //
+  // This is the check that changed shape when the come-about landed, and the
+  // old number is worth keeping written down: the shared heading-plus-roll pair
+  // turned a fish by rolling it onto its side and back, so halfway through a
+  // reversal the dorsal genuinely pointed at the camera and 90 degrees was the
+  // PASS. On a 12-unit body that was the flip the fight was reported for.
+  const bankCap = (CONFIG.enemies.bossAnglerfish.comeAbout?.bankMax
+    ?? CONFIG.fishTurn?.bankMax ?? 0.5) * 180 / Math.PI;
+  check('across a whole fight the back never leaves the top of the animal',
+    worst <= bankCap + 1, `worst ${worst.toFixed(1)} degrees, in the ${worstAt}`
+    + ` — against a ${bankCap.toFixed(1)} degree bank cap`);
+  check('...and it does lean into its turns, rather than tracking like a plank',
+    worst > 3, `worst ${worst.toFixed(1)} degrees — under this it is not banking at all`);
 
   // --- AND IT DOES NOT SNAP -------------------------------------------------
   // A snap is a DISCONTINUITY, not a fast turn, so the two have to be told
@@ -1471,23 +1575,34 @@ section('IT IS NEVER UPSIDE DOWN');
   // over it is a frame that moved further than a turn could carry it, which is
   // the definition of a snap and the only thing being asked here — the wind-up
   // legitimately turns at 2.4 rad/s and its frames are quick.
-  const fastest = CONFIG.boss.angler.windupTurnRate ?? 2.4;
+  //
+  // THE COME-ABOUT'S OWN YAW IS THE OTHER CANDIDATE FOR FASTEST, and it has to
+  // be in the ceiling or this measures the ambush's turn rates against a fish
+  // that is repositioning under the def's. A half turn over `comeAbout.time`
+  // through an inOutCubic peaks at 3x its average, hence the same 3x the roll
+  // gets above; whichever of the two is quicker sets the bar.
+  const fastest = Math.max(
+    CONFIG.boss.angler.windupTurnRate ?? 2.4,
+    Math.PI / (CONFIG.enemies.bossAnglerfish.comeAbout?.time ?? CONFIG.fishTurn?.time ?? 0.55),
+  );
   const ceiling = 4 * fastest * DT * 180 / Math.PI;
   check('no frame jumps further than the fastest turn could carry it',
     worstJump <= ceiling, `worst ${worstJump.toFixed(2)} degrees against a ${ceiling.toFixed(2)} ceiling`);
   check('...and the typical frame is nothing at all', p99 < ceiling * 0.6,
     `median ${jumps[Math.floor(jumps.length / 2)].toFixed(3)}, p99 ${p99.toFixed(2)} degrees`);
   // THE HANDOFF FRAMES SPECIFICALLY, and what is asked of them is that they are
-  // not OUTLIERS. Every stage change is a moment the facing may change owner —
-  // into and out of the lunge, where `faceMotion` takes the wheel back — and an
-  // owner that re-seeds rather than continues produces a jolt on one frame in a
-  // hundred, which a median or a p99 over the whole fight would never show.
+  // not OUTLIERS. Every stage change is a moment what the body is pointing at
+  // changes — into and out of the lunge, where the aim gives way to the
+  // velocity — and this is the check the shipped snap walked straight through
+  // for as long as the harness left `turnFish` out of a step. Measured with it
+  // in, and with the ambush still writing its own pose, the recovery's handoffs
+  // moved the body 166.9 degrees in a frame against a ceiling of 9.17.
   check('changing stage does not jolt the body', handoff <= ceiling,
     `worst ${handoff.toFixed(2)} degrees on a handoff frame, against ${ceiling.toFixed(2)}`);
 
   releaseAngler();
-  check('release hands the facing back to entities/enemies.js',
-    boss.faceLocked === false, String(boss.faceLocked));
+  check('release hands the aim back to entities/enemies.js',
+    boss.turnAim == null, String(boss.turnAim));
   resetBeams(scene);
 }
 

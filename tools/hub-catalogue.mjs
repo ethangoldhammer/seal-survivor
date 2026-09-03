@@ -69,7 +69,7 @@ const WRITES = new Set([
   'build', 'whale', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
   'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
-  'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit',
+  'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit', 'shrink',
   'ios', 'ios:run', 'ios:sync',
 ]);
 
@@ -122,6 +122,10 @@ const GROUP_BY_NAME = {
 'audit:hitboxes': 'Audits', 'copy:review': 'Audits', 'net:glsl': 'Audits',
   'net:look': 'Look pages',
   ktx2: 'Assets', props: 'Assets', seabed: 'Assets', 'icons:app': 'Assets',
+  // Rewrites the source models in place, bringing every map down to the size
+  // the model is drawn at. An asset job and a destructive one — and `ktx2` has
+  // to run after it or the game goes on loading the old compressed twins.
+  shrink: 'Assets',
   'spline:kit': 'Assets',
   // The iOS build drives Xcode and a device, so it lives with the other things
   // that leave this machine rather than with the web build.

@@ -55,6 +55,11 @@ const MIME = {
 // startsWith check is what stops ../ walking out of a mount.
 const MOUNTS = [
   ['/models/', join(PROJECT, 'public/models')],
+  // The pre-shrink copies, for tools/looks/shrunk.js's before/after. Absent in
+  // the normal case and harmless when it is — a page that does not ask for one
+  // never notices, and the directory is deleted once the comparison has been
+  // looked at.
+  ['/models-orig/', join(PROJECT, 'public/models-orig')],
   ['/textures/', join(PROJECT, 'public/textures')],
   ['/sprites/', join(PROJECT, 'public/sprites')],
   ['/flags/', join(PROJECT, 'public/flags')],

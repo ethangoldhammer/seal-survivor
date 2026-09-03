@@ -1267,6 +1267,11 @@ export const ASSETS = {
   // there are people standing on it.
   bossYacht: {
     model: '/models/yacht.glb',
+    // NOT BUILT AT BOOT — see the note above ensureAssetLoaded. Only a boss
+    // ever wears this body, and a boss announces itself three seconds early
+    // (the archetype is drawn at the start of the hush), which is ample runway
+    // to fetch it — 4.6MB of geometry and transcoded texture. systems/boss.js holds the arrival until it lands.
+    defer: true,
     // Longer and lower than the trawler's 11, which is the shape of the claim
     // this boat makes. Everything else about the fight is measured off `fit`
     // and the row's radius, so nothing downstream needed a second edit.
@@ -2199,6 +2204,11 @@ export const ASSETS = {
   // downloads. Both are in git history if the otter ever comes back.
   enemyMegalodon: {
     model: '/models/megalodon.glb',
+    // NOT BUILT AT BOOT — see the note above ensureAssetLoaded. Only a boss
+    // ever wears this body, and a boss announces itself three seconds early
+    // (the archetype is drawn at the start of the hush), which is ample runway
+    // to fetch it — 11.1MB of geometry and transcoded texture. systems/boss.js holds the arrival until it lands.
+    defer: true,
     fit: 7.0,
     pivot: 0.15, // turn about the head, not the belly
     forward: '+Z', up: '+Y', // was '-Z' — verified backwards via axis-marked silhouette
@@ -2296,6 +2306,11 @@ export const ASSETS = {
   // a boss is ever read from.
   enemyMosasaur: {
     model: '/models/mosasaurus.glb',
+    // NOT BUILT AT BOOT — see the note above ensureAssetLoaded. Only a boss
+    // ever wears this body, and a boss announces itself three seconds early
+    // (the archetype is drawn at the start of the hush), which is ample runway
+    // to fetch it — 4.9MB of geometry and transcoded texture. systems/boss.js holds the arrival until it lands.
+    defer: true,
     // 7.4, the kraken's number rather than the megalodon's 7.0 — and unlike the
     // kraken's, this length is all BODY. Against the assets.csv size of 2.3 and
     // bossMosasaur's 1.6 that measures 27.2 units on screen, the longest final
@@ -4389,8 +4404,183 @@ export function installModel(key, source, clips = []) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// THE LOOSE SIDE-CAR TEXTURE CACHE, at module scope rather than inside
+// preloadAssets — because loading an entry is no longer something that only
+// happens at boot. A deferred asset (see `defer` below) arrives minutes later
+// and has to reach the same cache, or the second creature to want
+// /textures/emissive/oyster.jpg decodes its own copy of it.
+//
+// Keyed by flipY as well as URL because the caller sets flipY per ENTRY (from
+// the model's format), and while a clone could carry its own value, two entries
+// that disagree would each need their own upload anyway — keeping them in
+// separate cache slots just makes that explicit instead of surprising.
+const looseTextures = new Map();
+let looseTextureLoader = null;
+
+async function loadSharedTexture(url, flipY) {
+  looseTextureLoader ??= new THREE.TextureLoader();
+  const cacheKey = `${url}|${flipY}`;
+  let pending = looseTextures.get(cacheKey);
+  if (!pending) {
+    pending = looseTextureLoader.loadAsync(url).then((t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.flipY = flipY;
+      return t;
+    });
+    looseTextures.set(cacheKey, pending);
+  }
+  return (await pending).clone();
+}
+
+/**
+ * Build one asset entry's model and put it in `loadedModels`.
+ *
+ * Extracted from preloadAssets so that the same work can happen LATER — see
+ * ensureAssetLoaded. Every line of it used to live inside the boot loop, and
+ * the only thing that changed is where it can be called from.
+ */
+async function loadModelEntry(key, def) {
+  // Resolved ONCE and used for both the loader choice and the cache key.
+  // Picking the loader off `def.model` and then fetching the resolved URL
+  // would be harmless today (both are .glb) but it is the same-file-two-
+  // names bug that loadSharedModel exists to prevent, waiting to happen.
+  const url = resolveModelUrl(def.model);
+  const picked = loaderFor(url);
+  if (!picked) throw new Error(`no loader for ${url}`);
+  // Parsed at most once per URL however many entries name it; this is
+  // always our own instance of it. Clips are shared as-is: an
+  // AnimationClip is inert data that the per-entry AnimationMixer reads
+  // and never writes, and buildSubclips already clones before slicing.
+  const parsed = await loadSharedModel(picked, url);
+  const source = instantiateParsedModel(parsed.source);
+  const clips = parsed.animations;
+  // Which way up a loaded-by-hand texture goes is a per-FORMAT decision,
+  // not one convention for the whole roster. GLTFLoader sets
+  // flipY = false on the maps it creates, because glTF UVs are top-left
+  // origin; FBXLoader sets nothing, so an FBX keeps the THREE.Texture
+  // default of true. A texture we load ourselves has to match whatever
+  // the model's own maps did, or it renders vertically mirrored.
+  //
+  // `def.texture.flipY` overrides that, and the reason it has to exist is
+  // that the rule above assumes the loose texture was DERIVED FROM the
+  // model's own maps — which is true of every emissive mask here, since
+  // they were thresholded from the embedded diffuse and so inherit its
+  // orientation. It is not true of a model that ships no maps at all: its
+  // sidecars came from somewhere else entirely and carry whatever
+  // convention that tool wrote. See enemyHammerhead, which is the only
+  // asset in that position.
+  const flipY = def.texture?.flipY ?? /\.fbx$/i.test(def.model ?? '');
+  let overrideTex = null;
+  if (def.texture?.map) {
+    try {
+      overrideTex = await loadSharedTexture(def.texture.map, flipY);
+    } catch (err) {
+      console.warn(`[assets] "${key}" texture ${def.texture.map} failed to load — keeping the model's own texture.`, err?.message ?? err);
+    }
+  }
+  // The emissive mask (CONFIG.glow.emissiveMaps). sRGB like the colour
+  // map, not linear: it was thresholded in sRGB space from an sRGB
+  // source, so decoding it as linear would pull the midtones down and
+  // shrink the lit area against what the mask actually looks like.
+  //
+  // A failure here is deliberately non-fatal and non-blocking — the
+  // model still loads, it just has no mask, and the toggle then does
+  // nothing for this one asset rather than taking the creature with it.
+  let emissiveTex = null;
+  if (def.texture?.emissive) {
+    try {
+      // flipY is not a hardcoded false: that is the glTF value, and it
+      // silently mirrored the mask on every FBX creature. A flipped mask
+      // still looks like a plausible mask, so it was measured rather
+      // than eyeballed — rasterising the seagull's own mapped UV
+      // triangles onto its art sheet puts 0.6% of the mapped area on
+      // sheet background the right way up and 24.1% the wrong way up.
+      // tools/uv-flip-check.mjs re-runs that on any model.
+      emissiveTex = await loadSharedTexture(def.texture.emissive, flipY);
+    } catch (err) {
+      console.warn(`[assets] "${key}" emissive mask ${def.texture.emissive} failed to load — it will fall back to uniform glow.`, err?.message ?? err);
+    }
+  }
+  loadedModels.set(key, prepareModel(source, def, clips, overrideTex, key, emissiveTex));
+}
+
+// ---------------------------------------------------------------------------
+// ASSETS THAT ARE NOT BUILT AT BOOT — `defer: true` on the def.
+//
+// Three models in the roster are only ever worn by a BOSS, and a boss is a
+// thing the game knows is coming three seconds before it arrives: the archetype
+// is drawn at the START of the hush precisely so the warm-up has something to
+// warm (see systems/boss.js). That is more than enough runway to also FETCH the
+// body, and it means megalodon, mosasaurus and the yacht — 21MB of the 76MB the
+// model bank costs in geometry and transcoded texture — are not resident during
+// the minutes of a run where no boss exists.
+//
+// ONLY THE THREE, and that is the whole eligibility rule: a model shared with
+// an ordinary enemy cannot be deferred, because an ordinary enemy can spawn on
+// any frame with no warning at all. The anglerfish, the crab's pincer, the
+// hammerhead and the trawler are all worn by something that swims in level one,
+// so they stay at boot however big they are.
+//
+// The guard that makes this safe is in systems/boss.js and not here: the
+// arrival WAITS for the body rather than spawning without it. createVisual
+// falls back to a primitive for a model it does not have, which for a boss
+// would be a grey blob with a health bar — a failure that looks like a bug in
+// the art pipeline and would be reported as one.
+const inFlightAssets = new Map();
+
+/**
+ * Have this asset's model built, loading it now if it was deferred.
+ *
+ * Idempotent and safe to call every frame: an entry already loaded resolves
+ * immediately, and one in flight returns the same promise rather than starting
+ * a second fetch of the same file.
+ *
+ * @returns true once the model is usable, false if it could not be loaded —
+ *   in which case createVisual's primitive fallback is what the caller gets,
+ *   exactly as it would have before any of this existed.
+ */
+export function ensureAssetLoaded(key) {
+  if (loadedModels.has(key)) return Promise.resolve(true);
+  const def = ASSETS[key];
+  if (!def?.model) return Promise.resolve(false);
+  let job = inFlightAssets.get(key);
+  if (!job) {
+    job = loadModelEntry(key, def)
+      .then(() => true)
+      .catch((err) => {
+        console.warn(`[assets] deferred "${key}" could not load ${def.model} —`
+          + ' it will fall back to the built-in shape.', err?.message ?? err);
+        return false;
+      })
+      .finally(() => inFlightAssets.delete(key));
+    inFlightAssets.set(key, job);
+  }
+  return job;
+}
+
+/** Is this asset's real model built and ready for createVisual? */
+export function isAssetLoaded(key) {
+  return loadedModels.has(key);
+}
+
+// Has preloadAssets finished at least once? False in every Node harness, which
+// has no way to serve a model file and therefore renders the whole roster as
+// primitives (see createVisual's fallback).
+//
+// WHAT READS IT: systems/boss.js, to decide whether waiting for a deferred body
+// could possibly help. In a world where NOTHING loaded, holding the arrival is
+// not patience, it is a run that never meets a boss — and every harness in the
+// repo would sit in that state. `defer` is an optimisation over a working
+// loader; where there is no loader it has to mean nothing at all.
+let assetsPreloaded = false;
+export function assetsReady() {
+  return assetsPreloaded;
+}
+
 export async function preloadAssets(onProgress) {
-  const entries = Object.entries(ASSETS).filter(([, def]) => def.model);
+  // `defer` entries are skipped here and loaded on demand — see above.
+  const entries = Object.entries(ASSETS).filter(([, def]) => def.model && !def.defer);
   const spriteEntries = Object.entries(ASSETS).filter(([, def]) => def.sprites?.length);
   const total = entries.length + spriteEntries.length;
   let done = 0;
@@ -4398,29 +4588,6 @@ export async function preloadAssets(onProgress) {
   const step = () => {
     done += 1;
     onProgress?.(done / total);
-  };
-
-  // Loose side-car textures have the same duplicate problem as the models —
-  // enemyOyster and scallopShell both name /textures/emissive/oyster.jpg — and
-  // TextureLoader caches nothing either. Same treatment: decode once, hand out
-  // clones over the shared Source. Keyed by flipY as well as URL because the
-  // caller sets flipY per ENTRY (from the model's format), and while a clone
-  // could carry its own value, two entries that disagree would each need their
-  // own upload anyway — keeping them in separate cache slots just makes that
-  // explicit instead of surprising.
-  const looseTextures = new Map();
-  const loadSharedTexture = async (url, flipY) => {
-    const cacheKey = `${url}|${flipY}`;
-    let pending = looseTextures.get(cacheKey);
-    if (!pending) {
-      pending = textureLoader.loadAsync(url).then((t) => {
-        t.colorSpace = THREE.SRGBColorSpace;
-        t.flipY = flipY;
-        return t;
-      });
-      looseTextures.set(cacheKey, pending);
-    }
-    return (await pending).clone();
   };
 
   await Promise.all([
@@ -4433,68 +4600,7 @@ export async function preloadAssets(onProgress) {
     }),
     ...entries.map(async ([key, def]) => {
       try {
-        // Resolved ONCE and used for both the loader choice and the cache key.
-        // Picking the loader off `def.model` and then fetching the resolved URL
-        // would be harmless today (both are .glb) but it is the same-file-two-
-        // names bug that loadSharedModel exists to prevent, waiting to happen.
-        const url = resolveModelUrl(def.model);
-        const picked = loaderFor(url);
-        if (!picked) throw new Error(`no loader for ${url}`);
-        // Parsed at most once per URL however many entries name it; this is
-        // always our own instance of it. Clips are shared as-is: an
-        // AnimationClip is inert data that the per-entry AnimationMixer reads
-        // and never writes, and buildSubclips already clones before slicing.
-        const parsed = await loadSharedModel(picked, url);
-        const source = instantiateParsedModel(parsed.source);
-        const clips = parsed.animations;
-        // Which way up a loaded-by-hand texture goes is a per-FORMAT decision,
-        // not one convention for the whole roster. GLTFLoader sets
-        // flipY = false on the maps it creates, because glTF UVs are top-left
-        // origin; FBXLoader sets nothing, so an FBX keeps the THREE.Texture
-        // default of true. A texture we load ourselves has to match whatever
-        // the model's own maps did, or it renders vertically mirrored.
-        //
-        // `def.texture.flipY` overrides that, and the reason it has to exist is
-        // that the rule above assumes the loose texture was DERIVED FROM the
-        // model's own maps — which is true of every emissive mask here, since
-        // they were thresholded from the embedded diffuse and so inherit its
-        // orientation. It is not true of a model that ships no maps at all: its
-        // sidecars came from somewhere else entirely and carry whatever
-        // convention that tool wrote. See enemyHammerhead, which is the only
-        // asset in that position.
-        const flipY = def.texture?.flipY ?? /\.fbx$/i.test(def.model ?? '');
-        let overrideTex = null;
-        if (def.texture?.map) {
-          try {
-            overrideTex = await loadSharedTexture(def.texture.map, flipY);
-          } catch (err) {
-            console.warn(`[assets] "${key}" texture ${def.texture.map} failed to load — keeping the model's own texture.`, err?.message ?? err);
-          }
-        }
-        // The emissive mask (CONFIG.glow.emissiveMaps). sRGB like the colour
-        // map, not linear: it was thresholded in sRGB space from an sRGB
-        // source, so decoding it as linear would pull the midtones down and
-        // shrink the lit area against what the mask actually looks like.
-        //
-        // A failure here is deliberately non-fatal and non-blocking — the
-        // model still loads, it just has no mask, and the toggle then does
-        // nothing for this one asset rather than taking the creature with it.
-        let emissiveTex = null;
-        if (def.texture?.emissive) {
-          try {
-            // flipY is not a hardcoded false: that is the glTF value, and it
-            // silently mirrored the mask on every FBX creature. A flipped mask
-            // still looks like a plausible mask, so it was measured rather
-            // than eyeballed — rasterising the seagull's own mapped UV
-            // triangles onto its art sheet puts 0.6% of the mapped area on
-            // sheet background the right way up and 24.1% the wrong way up.
-            // tools/uv-flip-check.mjs re-runs that on any model.
-            emissiveTex = await loadSharedTexture(def.texture.emissive, flipY);
-          } catch (err) {
-            console.warn(`[assets] "${key}" emissive mask ${def.texture.emissive} failed to load — it will fall back to uniform glow.`, err?.message ?? err);
-          }
-        }
-        loadedModels.set(key, prepareModel(source, def, clips, overrideTex, key, emissiveTex));
+        await loadModelEntry(key, def);
       } catch (err) {
         console.warn(
           `[assets] "${key}" could not load ${def.model} — using the built-in shape instead.`,
@@ -4519,6 +4625,7 @@ export async function preloadAssets(onProgress) {
   applyBubbleShellSettings();
 
   if (total === 0) onProgress?.(1);
+  assetsPreloaded = true;
 }
 
 const AXES = {

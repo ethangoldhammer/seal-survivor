@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 import {
-  perfRunStart, perfFrame, perfSummary, perfWindow, perfStop, perfMark, perfPhase, perfFrameJs,
+  perfRunStart, perfFrame, perfSummary, perfWindow, perfStop, perfMark, perfPhase, perfFrameJs, noteTextures
 } from '../path/src/systems/perfLog.js';
 
 let failures = 0;
@@ -277,6 +277,62 @@ check('a dropped frame still reports its build',
   s.frames === framesBefore && s.programRebuilds === 4,
   `${s.frames} frames, ${s.programRebuilds} rebuilt`);
 
+// ---------------------------------------------------------------------------
+// AND WHICH OF THEM ACTUALLY COST ANYTHING.
+//
+// Every check above is about REBUILDS, and a rebuild is the rarer of the two
+// findings. The common one is a run that links three hundred distinct programs
+// after boot — every one of them once, so `topPrograms` (which lists only keys
+// built more than once) names none of them, and the report says "345 programs"
+// and stops. That is the shape a real phone run came in with.
+//
+// So the keys are also credited to the frames they landed on, and ranked by the
+// time of those frames: a link on a 16ms frame is a link nobody felt and
+// warming it buys nothing, while the same link on a 600ms frame is the worst
+// frame of the run. The ordering IS the warm-up's work list, and a ranking by
+// count instead of by time would put the cheap one first.
+perfRunStart(0, 0, 0, 0, [prog(0, 'water')]);
+t = 0;
+gl(16, [prog(0, 'water')]);
+gl(16, [prog(1, 'cheap')]);        // linked on a frame nobody felt
+gl(120, [prog(2, 'costly')]);      // linked on a stall
+gl(60, [prog(3, 'middling')]);
+s = perfSummary();
+check('a link on a fast frame is not on the list',
+  !s.missedPrograms.some((p) => p.key === 'cheap'),
+  s.missedPrograms.map((p) => p.key).join(', ') || 'nothing named');
+check('a link on a hitch is', s.missedPrograms.some((p) => p.key === 'costly'),
+  s.missedPrograms.map((p) => p.key).join(', ') || 'nothing named');
+check('and the worst frame is named first',
+  s.missedPrograms[0]?.key === 'costly',
+  `${s.missedPrograms[0]?.key} at ${s.missedPrograms[0]?.ms.toFixed(0)}ms`);
+check('...by the TIME it cost, not by how many times it linked',
+  s.missedPrograms[0]?.ms > s.missedPrograms[1]?.ms,
+  `${s.missedPrograms[0]?.ms.toFixed(0)}ms vs ${s.missedPrograms[1]?.ms.toFixed(0)}ms`);
+check('a rebuild loop is NOT reported as a warm-up gap',
+  s.topPrograms.length === 0, `${s.topPrograms.length} named as churn`);
+
+// The regression that broke the four counters. The credit above sits inside the
+// hitch branch, and slipping it between two `else if`s rebinds the rest of the
+// chain to it — so a frame that linked a program also ran the texture branch.
+// It reads as an extra hitch appearing out of nowhere.
+check('crediting a key did not disturb the attribution',
+  s.hitchCompile + s.hitchUpload + s.hitchGC + s.hitchNeither === s.hitches,
+  `${s.hitchCompile}+${s.hitchUpload}+${s.hitchGC}+${s.hitchNeither} vs ${s.hitches}`);
+
+// A clean run — everything the warm-up was asked for, warmed — must print
+// nothing. The block appearing at all is the signal, so it may not appear on a
+// run with no misses.
+perfRunStart(0, 0, 0, 0, [prog(0, 'water')]);
+t = 0;
+gl(16, [prog(0, 'water')]);
+gl(120, [prog(0, 'water')]);        // a stall that linked nothing
+s = perfSummary();
+check('a stall that linked nothing names no programs', s.missedPrograms.length === 0,
+  `${s.missedPrograms.length} named`);
+check('...and a new run forgets the last run\'s misses', s.hitchProgramKeys === 0,
+  `${s.hitchProgramKeys}`);
+
 // ===========================================================================
 section('Phases — where inside the frame the time went');
 
@@ -493,6 +549,70 @@ perfPhase('menu-phase', 10);
 perfFrameJs(999);
 check('and ignores marks and phases', perfSummary().marks.length === marksBefore,
   `${perfSummary().marks.length} vs ${marksBefore}`);
+
+section('WHOSE TEXTURES — the census, and the orphan gap');
+{
+  // A scene with three images: one shared by two materials, one on its own,
+  // and one canvas texture with no URL at all. Deduped by identity, so the
+  // shared one is ONE texture and not two — counting it twice would invent a
+  // leak out of sharing working correctly.
+  const THREE = await import('three');
+  const scene = new THREE.Scene();
+  const tex = (label) => {
+    const t = new THREE.Texture();
+    t.source = { data: { src: `/models/${label}` } };
+    return t;
+  };
+  const shared = tex('seagull_albedo.png');
+  const solo = tex('crab_albedo.png');
+  const canvas = new THREE.Texture();
+  canvas.source = { data: { width: 64, height: 64 } };
+
+  const mesh = (map) => {
+    const m = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+    m.material.map = map;
+    return m;
+  };
+  scene.add(mesh(shared), mesh(shared), mesh(solo), mesh(canvas));
+
+  perfRunStart(0, 0, 0, 0);
+  // liveCount deliberately above what the scene holds: three reachable here,
+  // ten alive in the renderer, so seven are held by something that dropped its
+  // owner without disposing them.
+  noteTextures(scene, 10, 0);
+  const t = perfSummary();
+
+  check('the census reads the scene', t.texturesReachablePeak === 3,
+    `${t.texturesReachablePeak} reachable`);
+  check('...and a texture on two materials is counted once',
+    (t.topTextures.find((x) => x.source === 'seagull_albedo.png') ?? {}).peak === 1,
+    JSON.stringify(t.topTextures.map((x) => `${x.source} x${x.peak}`)));
+  check('...naming each by the file its image came from',
+    t.topTextures.some((x) => x.source === 'crab_albedo.png'),
+    JSON.stringify(t.topTextures.map((x) => x.source)));
+  check('...and a canvas texture by its size, since it has no file',
+    t.topTextures.some((x) => x.source === 'canvas 64x64'),
+    JSON.stringify(t.topTextures.map((x) => x.source)));
+  check('the orphan gap is what the renderer holds and the scene does not',
+    t.texturesOrphanPeak === 7, `${t.texturesOrphanPeak}`);
+
+  // THE RATE LIMIT, which is the whole reason this is affordable: a second
+  // call inside the sampling window must not walk the scene again.
+  scene.add(mesh(tex('never_seen.png')));
+  noteTextures(scene, 10, 1);
+  check('a second call inside the window does nothing',
+    !perfSummary().topTextures.some((x) => x.source === 'never_seen.png'),
+    'sampled, not per frame');
+  noteTextures(scene, 10, 99);
+  check('...and the next sample after it picks the new one up',
+    perfSummary().topTextures.some((x) => x.source === 'never_seen.png'));
+
+  // A run reset has to clear it, or one run's roster is reported against the
+  // next one's — the same rule every other counter here follows.
+  perfRunStart(0, 0, 0, 0);
+  check('a fresh run starts with an empty census',
+    perfSummary().topTextures.length === 0 && perfSummary().texturesOrphanPeak === 0);
+}
 
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
 process.exit(failures ? 1 : 0);

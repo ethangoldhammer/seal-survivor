@@ -133,14 +133,30 @@ section('It settles instead of oscillating');
 }
 
 // ---------------------------------------------------------------------------
-section('A new run starts where the player left it');
+section('A new run starts where the last one settled, and can still climb back');
+// It used to go back to 1.0, and on the machine this feature exists for that
+// meant re-proving the same verdict every run: eleven of twelve recorded phone
+// runs ended at the 0.6 floor, and every one opened at 1.0 and walked down to
+// it. At the shipped pixelRatio of 3 that walk is 3.16 megapixels against the
+// 1.14 it settles on, with post.js's render targets at 47MB instead of 17MB —
+// most of a minute of the worst frames in the run, on the device being killed
+// for memory, once per run.
 {
   const a = createAdaptiveScale();
   feed(a, 3000, SLOW);
   const cut = a.value;
   a.reset();
-  check('reset returns to full resolution', a.value === 1, `was ${cut.toFixed(2)}x`);
-  check('and forgets the drop count', a.drops === 0);
+  check('the scale carries into the next run', a.value === cut, `${a.value.toFixed(2)}x`);
+  check('and the drop count does not', a.drops === 0);
+
+  // THE HALF THAT KEEPS IT HONEST. Carrying the scale without clearing `drops`
+  // would be a verdict rather than a starting point — maxDrops gates recovery,
+  // so a machine that had spent its round trips could never climb back and the
+  // first bad minute of a session would set the resolution for all of it. A
+  // phone that has cooled between runs has to be able to get its pixels back.
+  feed(a, 6000, FAST);
+  check('...so a machine that is now coping recovers', a.value > cut,
+    `${cut.toFixed(2)}x -> ${a.value.toFixed(2)}x`);
 }
 
 // ---------------------------------------------------------------------------

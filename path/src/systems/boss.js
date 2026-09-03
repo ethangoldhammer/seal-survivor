@@ -69,6 +69,7 @@ import { attachAngler, releaseAngler, resetAngler, updateBossAngler } from './bo
 import { attachBossCrab, releaseBossCrab, resetBossCrab, updateBossCrab } from './bossCrab.js';
 import { attachHotSpots, resetBossHotSpots } from './bossHotSpots.js';
 import { hideOutlineOn } from './outlines.js';
+import { ASSETS, ensureAssetLoaded, isAssetLoaded, assetsReady } from '../assets.js';
 import { beginBossWarmup, cancelBossWarmup, tickBossWarmup } from './bossWarmup.js';
 import { startCelebration } from './celebrate.js';
 import { bossCycleRelief, setBossCycle } from './waves.js';
@@ -104,6 +105,75 @@ const BOSS_DEFS = new Set(ROSTER.map((b) => CONFIG.enemies[b.enemy]).filter(Bool
 /** Is this creature's def one the boss roster spawns? Independent of `isBoss`. */
 export function isBossDef(def) {
   return !!def && BOSS_DEFS.has(def);
+}
+
+// --- THE DEFERRED BODIES ----------------------------------------------------
+// Three archetypes wear a model that is not built at boot (`defer: true` in
+// assets.js — megalodon, mosasaurus, the yacht). These two are the whole of
+// what boss.js has to know about that: ask for it as early as possible, and
+// refuse to arrive without it.
+//
+// Which ASSET an archetype wears is `CONFIG.enemies[enemy].asset`, not the
+// archetype id and not the enemy key — the same indirection spawnNamed uses.
+// Reading it off the wrong one of those three is the kind of mistake that
+// silently never loads anything and never waits for anything, so it is written
+// once here rather than at both call sites.
+function bossAssetKey(archetype) {
+  return CONFIG.enemies[archetype?.enemy]?.asset ?? null;
+}
+
+/** Start fetching this archetype's body. Idempotent; safe every frame. */
+function ensureBossBody(archetype) {
+  const key = bossAssetKey(archetype);
+  if (key) ensureAssetLoaded(key);
+}
+
+// HOW LONG AN ARRIVAL MAY WAIT for a body that is still loading, in seconds of
+// held breath beyond the hush.
+//
+// BOUNDED, and the bound is the important half. Waiting is better than arriving
+// as a primitive — a grey blob wearing a boss health bar reads as a broken art
+// pipeline and would be reported as one. But waiting FOREVER is worse than
+// either: a fetch that fails, a file that is not deployed, or a Node harness
+// with no models at all would mean the run simply never meets a boss, with the
+// spawner held and the ocean empty and nothing in a console. That is a run
+// quietly ending rather than a body arriving late.
+//
+// Six seconds is far beyond any plausible read of a 5MB local file and short
+// enough that the failure, if it ever happens, is a beat rather than a hang.
+const BODY_WAIT_SECONDS = 6;
+let bodyWaitLeft = 0;
+let bodyWaitWarned = false;
+
+/**
+ * Is this archetype's body built and ready for createVisual?
+ *
+ * True for every archetype whose asset is not deferred, which is most of them —
+ * their model has been resident since boot, so this is the ordinary answer and
+ * the wait never happens. Also true once the deadline is spent, which is what
+ * makes the wait a delay rather than a condition.
+ */
+function bossBodyReady(archetype, dt) {
+  const key = bossAssetKey(archetype);
+  if (!key || !ASSETS[key]?.defer) return true;
+  // NOTHING EVER LOADED, so there is nothing to wait for — a Node harness, or
+  // a build whose preload never finished. Every creature is a primitive in that
+  // world and holding this one back only costs the run its boss. See
+  // assetsReady.
+  if (!assetsReady()) return true;
+  if (isAssetLoaded(key)) { bodyWaitLeft = 0; return true; }
+  ensureAssetLoaded(key);
+  if (bodyWaitLeft <= 0 && !bodyWaitWarned) bodyWaitLeft = BODY_WAIT_SECONDS;
+  bodyWaitLeft -= Math.max(0, dt) || 0;
+  if (bodyWaitLeft > 0) return false;
+  // Spent. Arrive with whatever createVisual can give us and say so ONCE — an
+  // arrival per level would otherwise repeat this for the rest of the run.
+  if (!bodyWaitWarned) {
+    bodyWaitWarned = true;
+    console.warn(`[boss] "${key}" did not load in ${BODY_WAIT_SECONDS}s — the fight will`
+      + ' arrive wearing the built-in shape. Check that its model is deployed.');
+  }
+  return true;
 }
 const PERKS = parseBossPerkCsv(bossPerksCsv);
 // The name table is parsed LAST and handed the other two, so a name part
@@ -1046,6 +1116,15 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
       // ...and now the empty ocean is spent building it. See
       // systems/bossWarmup.js: the body, its textures and its programs, one
       // step per frame, so the arrival frame has nothing left to pay for.
+      //
+      // FETCHED FIRST, for the three archetypes whose model is not resident.
+      // megalodon, mosasaurus and the yacht are `defer: true` in assets.js —
+      // 21MB of the model bank that only a boss ever wears — and this is the
+      // moment the game first knows which of them it needs. The warm-up below
+      // has nothing to warm until this lands, and it is written to be a no-op
+      // on a body that is not there yet, so the two run in the order they
+      // resolve rather than in the order they are called.
+      ensureBossBody(bossState.pending);
       beginBossWarmup(bossState.pending);
       // ...and the ROOM the run's music will ring out into when the camera
       // turns, built here for the same reason the body is: an impulse is two
@@ -1059,7 +1138,14 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
     // countdown's early return, so it runs on every frame of the quiet rather
     // than on none of them.
     tickBossWarmup();
-    bossState.hushLeft -= dt;
+    // THE HUSH ABSORBS THE WAIT. A deferred body that is still loading holds
+    // the countdown here rather than after it, and that is not tidiness: the
+    // hush is already a held breath with the spawner stopped, so extending it
+    // is invisible, while a wait on the far side would push the ARRIVAL off
+    // the level grid the whole fight cadence is built on (5, 10, 15…) by
+    // however long the fetch took. Bounded by the same deadline — see
+    // bossBodyReady, which is what spends it.
+    if (bossBodyReady(bossState.pending, dt)) bossState.hushLeft -= dt;
     // Exactly what is left and not a frame more. There is no gap to cover at
     // the far end: every spawner in the game runs BEFORE this function in the
     // frame (see main.js), so the last tick the spawner takes with the hush
@@ -1084,6 +1170,28 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   const archetype = bossState.pending
     ?? nextBoss(ROSTER, bossState.bag, level, Math.random, bossMoment(opts))
     ?? FALLBACK_BOSS;
+
+  // THE BODY HAS TO BE THERE, and this is the one gate every arrival passes
+  // through — the hush, a hush switched off in the tuner, and forceBoss alike.
+  // Putting it here rather than in the hush is what makes it total: the paths
+  // with no hush in front of them are exactly the ones with no runway, and they
+  // are the ones that would otherwise arrive as a primitive.
+  //
+  // WHAT A MISS LOOKS LIKE WITHOUT IT: createVisual falls back to the built-in
+  // shape for a model it does not have, so the marquee spawn of the run is a
+  // grey blob wearing a boss health bar. It fights correctly, it is named
+  // correctly, and it reads as a broken art pipeline rather than as a slow
+  // fetch — which is why waiting is better than arriving on time.
+  //
+  // `pending` is deliberately NOT cleared on this path: the draw has already
+  // come out of the shuffle bag, and re-entering next frame must not draw a
+  // second time. The spawner is held for the same frame so the ocean stays
+  // empty rather than refilling under a boss that is still loading.
+  if (!bossBodyReady(archetype, dt)) {
+    bossState.pending = archetype;
+    holdSpawns(0.5);
+    return null;
+  }
   bossState.pending = null;
   const key = archetype.enemy;
   if (!CONFIG.enemies[key]) {

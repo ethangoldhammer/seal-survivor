@@ -167,6 +167,25 @@ for (const r of withPerf.slice(-want)) {
       + `${p.hitchGC != null ? ` · ${p.hitchGC} collection` : ''} · ${p.hitchNeither} none of those`);
     console.log(`  built this run: ${p.programsAdded} programs, ${p.texturesAdded} textures`
       + (p.heapPeakMB ? `  ·  heap peak ${p.heapPeakMB.toFixed(0)}MB, ${p.heapFreedMB.toFixed(0)}MB collected` : ''));
+    // WHICH ONES, and it is a different list from the churn below. `rebuilt`
+    // is a program being thrown away and relinked, which no warm-up can fix;
+    // this is a program that was never warmed at all and linked on a frame the
+    // player felt. Ranked by the time of those frames — one link on a 600ms
+    // frame is the thing to go and warm, and forty on 34ms frames are not.
+    //
+    // Absent on runs recorded before the recorder collected it, which is every
+    // run on disk today; the block simply does not print rather than claiming
+    // a clean warm-up.
+    if (p.missedPrograms?.length) {
+      console.log(`  the warm-up missed these — linked ON A HITCH `
+        + `(${p.hitchProgramKeys} distinct, worst first):`);
+      for (const q of p.missedPrograms) {
+        console.log(`     ${q.ms.toFixed(0)}ms over ${q.builds} frame(s)  ${q.key}`);
+      }
+    }
+    if (p.topPrograms?.length) {
+      for (const q of p.topPrograms) console.log(`  rebuilt ${q.builds}x: ${q.key}`);
+    }
   }
 
   // WHERE THE FRAME TIME WENT. Two columns and they answer different
@@ -293,6 +312,9 @@ for (const r of withPerf.slice(-want)) {
         console.log(`  -> ${firstDraw} of ${p.hitches} hitches are FIRST-DRAW costs: ${p.programsAdded} shader programs and`);
         console.log(`     ${p.texturesAdded} textures arrived during play. The warm-up is meant to have paid for`);
         console.log(`     those before the run started, so whatever it is compiling, it is not this.`);
+        console.log(p.missedPrograms?.length
+          ? `     The keys are listed above — warm those and this block goes away.`
+          : `     This run predates the key list; play one more and it will name them.`);
       } else if ((p.hitchGC ?? 0) / p.hitches >= 0.5) {
         console.log(`  -> ${p.hitchGC} of ${p.hitches} hitches are the COLLECTOR — the heap dropped on those`);
         console.log(`     frames. ${p.heapFreedMB?.toFixed(0) ?? '?'}MB was reclaimed across the run against a ${p.heapPeakMB?.toFixed(0) ?? '?'}MB peak.`);

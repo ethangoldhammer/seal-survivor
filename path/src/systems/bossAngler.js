@@ -3,7 +3,6 @@ import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { activeBossPerk } from './bossPerks.js';
 import { attachEmissiveCues, resetEmissiveCues } from './emissivePulse.js';
-import { faceSide } from './facing.js';
 import { spawnBeam } from './beams.js';
 import {
   makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing, threatColor,
@@ -122,114 +121,104 @@ const cfg = () => CONFIG.boss?.angler ?? {};
 
 // HOW AN AMBUSHER AIMS WITHOUT MOVING.
 //
-// `faceMotion` in entities/enemies.js only writes `mesh.rotation.z` when the
-// body is travelling faster than 0.05 u/s — below that it declines, and the
-// heading simply stays where it was. For every other creature that is correct:
-// a drifting fish has no opinion about which way it points. For this one it is
-// the whole problem, because the animal spends most of the fight at a dead
-// stop and must still be looking at you — an anglerfish aiming its lure
-// somewhere else is not a trap, it is scenery.
+// A creature points where it is going, and entities/enemies.js works that out
+// from the velocity — `faceMotion` for most of the roster, `turnFish` for a
+// body long enough that the turn itself has to be watchable. For every other
+// animal that is the whole story. For this one it is the whole problem, because
+// the ambush spends most of the fight at a dead stop and must still be looking
+// at you: an anglerfish aiming its lure somewhere else is not a trap, it is
+// scenery.
 //
-// The first version of this file solved it by creeping toward the player fast
-// enough to clear that 0.05 gate. That works, and it is why the boss slowly
-// swam at you for the whole fight and never actually held station.
+// THIS FILE USED TO WRITE THE ORIENTATION ITSELF on the frames it held station,
+// declaring `e.faceLocked` so enemies.js stood down, and handing the body back
+// on the frames it moved. Two writers with two different decompositions of the
+// same pose, taking turns — and the turns are where it came apart. Measured
+// over a fight, the handoffs inside the recovery (which alternates every few
+// frames between drifting toward a station and holding on arrival) swung the
+// body up to 166.9 degrees between two frames and left the dorsal 179.9 degrees
+// off vertical. That is the snapping and the flipping, and neither writer was
+// wrong on its own: they simply did not agree about what the numbers on the
+// object meant, and every frame that crossed between them paid for it.
 //
-// So the ambush writes the heading itself, and the 0.05 gate becomes the
-// HANDOFF rather than an obstacle: below it this function owns the facing,
-// above it (the lunge, the reposition) enemies.js does, and the two can never
-// both be writing on the same frame. Eased at `turnRate` rather than snapped,
-// so the turn onto you is a thing you can watch happen — which is half the
-// tell.
+// SO THE AMBUSH DOES NOT WRITE A POSE ANY MORE. It hands `turnFish` a DIRECTION
+// — `e.turnAim`, cleared at the top of every frame and set only by the stages
+// that are holding station — and one writer composes the whole orientation out
+// of yaw, pitch and bank as it always did. The yaw and the pitch keep easing
+// straight through a stage change, because there is no longer anything to hand
+// over: a stage that stops aiming simply lets the same eased values follow the
+// velocity again.
+//
+// `rate` is the pitch rate in radians/second, and `time` the seconds the yaw is
+// given for a half turn at it — so `lurkTurnRate` still means exactly what it
+// says (slow, so a player circling wide can get behind it) and the wind-up's
+// harder rate is still the half of the telegraph that says WHERE.
 function faceToward(e, dx, dy, dt, turnRate) {
-  if (!e.mesh) return;
   const rate = Math.max(0.01, turnRate);
+  e.turnAim = { x: dx, y: dy, rate, time: Math.PI / rate };
+}
 
-  // TWO ROTATIONS, AND THEY ARE ONE MANOEUVRE. Getting that wrong is what put
-  // this animal on its back, and it went wrong twice for two different reasons.
+// ---------------------------------------------------------------------------
+// NOT GRINDING INTO THE SCENERY
+// ---------------------------------------------------------------------------
+// The arena clamp in entities/enemies.js is a POSITION clamp: it puts a body
+// back inside the walls after the integrator has stepped it out of them, and it
+// does not touch the velocity that took it there. For a creature that steers
+// toward a target every frame that is fine — the next frame's steering points
+// somewhere else and it peels off.
+//
+// This one commits. The lunge locks a direction and drives down it for 0.75s at
+// 26 u/s with nothing correcting it, and it starts from a body already resting
+// 0.6 units above its own floor limit, so a lunge at a seal anywhere below the
+// horizontal buries it immediately. Measured over a fight with the seal on the
+// seabed beside it: the clamp fired on 335 lunge frames and 224 snap frames,
+// pushing the body back up to 0.4 units EVERY FRAME. The fish spent the whole
+// attack and the whole follow-through pressed into the floor at full speed,
+// playing its boost take and going nowhere. Against a wall it is the same
+// picture sideways, and worse, because there is nothing at all for the
+// remaining velocity to do.
+//
+// So the velocity is clipped on the way out instead, against the same limits
+// the clamp uses, and the clamp then never has anything to correct.
+//
+// A CLIP IS A SLIDE, NOT A STOP, and that distinction is the whole behaviour:
+// only the component driving INTO the boundary is removed. A lunge along the
+// seabed keeps essentially all of its speed and runs the length it was meant
+// to; a lunge into a wall keeps almost none, which is the caller's cue that the
+// run is over (see the lunge stage). The animal holds the bottom without being
+// stuck to it, and can still leave it — a lunge upward is unclipped until the
+// surface, which is the one boundary it is allowed to be surprised by.
+//
+// THE ENTRANCE IS EXEMPT. While `entering`, `deep` or `leaving` is set the side
+// walls and the floor are deliberately open (see the clamp branches in
+// entities/enemies.js) and clipping here would hold the animal outside the door
+// it is currently coming through.
+function clipToScenery(e, dt) {
+  if (dt <= 0 || e.deep || e.entering || e.leaving) return 1;
+  const r = e.radius ?? 0;
+  const p = e.mesh.position;
+  const before = Math.hypot(e.vx, e.vy);
+  // The rule is "this frame may not take the body FURTHER out than it already
+  // is", which is one expression covering both cases rather than two.
   //
-  // THE FIRST VERSION WROTE ONLY THE HEADING. `rotation.z` points the NOSE, and
-  // aiming a nose that starts pointing right at something on the left is 180
-  // degrees in the plane of the screen — which puts the dorsal exactly where
-  // the belly was. Measured on the shipped fish with the seal to its left:
-  // dorsal 180.0 degrees off vertical, for the whole time it was lurking.
-  // `faceMotion` in entities/enemies.js never had that problem because it
-  // writes the heading AND calls faceSide; this function was written to take
-  // the facing off it below its 0.05 u/s gate and reproduced only the first
-  // half. Half of a two-part transform is not a subset of it.
-  //
-  // THE SECOND VERSION ADDED THE ROLL AND RACED IT. faceSide eases the side
-  // over CONFIG.facing.time — 0.4s — while the heading eases at `turnRate`,
-  // 0.9 rad/s at the lurk, which is 3.5 seconds for the same half turn. So the
-  // body finished rolling nearly three seconds before the nose came round, and
-  // spent the gap upside down: 173.8 degrees at worst, measured over a fight.
-  // Two eased values that describe one turn have to be driven by one clock.
-  //
-  // SO THE DECOMPOSITION IS THE SIDE-ON ONE, and it makes the animal upright by
-  // construction rather than by timing:
-  //
-  //   THE SIDE is a YAW about world up (rotation.y on the visual, which is the
-  //   model's own forward axis). A fish turning round in place swims a
-  //   horizontal U-turn; on this camera that is a rotation through
-  //   pointing-at-the-lens, and the dorsal stays up through every frame of it.
-  //
-  //   THE PITCH is what is left: how far above or below the target is, measured
-  //   INSIDE whichever half-plane it is in (`Math.abs(dx)`), so it is bounded
-  //   at +-90 degrees and can never carry the body past vertical. That bound is
-  //   the guarantee — the dorsal works out to (-sin p, cos p), and cos p is
-  //   positive for every pitch in range, whichever side the yaw has settled on.
-  //
-  // The yaw is given `PI / rate` seconds, which is exactly how long this turn
-  // rate would take to sweep a half turn — so the two stay in step at every
-  // speed the fight asks for, and `lurkTurnRate` still means what it says
-  // (slow, so a player circling wide can get behind it).
-  let frac = 0;
-  if (CONFIG.view === 'side' && e.visual) {
-    const face = faceSide(e.visual, dx, dt, { time: Math.PI / rate });
-    frac = Math.min(1, Math.max(0, face.at / Math.PI));
-  }
-
-  // The heading the pitch and the settled side agree on. Blended by the SAME
-  // eased fraction the yaw is using rather than switching on the side's sign:
-  // switching would step the target by most of PI on the frame the seal crosses
-  // vertical, and the ease below would then chase a discontinuity — which is
-  // the snap, arriving from the other direction.
-  // THE RATE LIMIT GOES ON THE PITCH, NOT ON THE FINISHED HEADING, and that is
-  // the difference between a body that is upright by construction and one that
-  // is upright when the numbers happen to agree.
-  //
-  // Rate-limiting the composed heading was the third version of this and it was
-  // still wrong: `frac` is eased with an inOutCubic, which runs at twice its
-  // average rate through the middle of the turn, so the target outran a heading
-  // capped at the average and the body sat at the difference — 134 degrees off
-  // vertical at worst, measured. A cap that the thing it is chasing is allowed
-  // to exceed is not a cap.
-  //
-  // The pitch is a bounded quantity (+-90 degrees) that only has to follow the
-  // seal, so capping IT is what `turnRate` was always describing: how fast the
-  // animal can re-aim. The heading is then composed from two already-smooth
-  // values and is never chased at all.
-  const wantPitch = Math.atan2(dy, Math.abs(dx));
-  // Seeded outright the first time, or a fresh arrival opens the fight sweeping
-  // its nose up from wherever the number happened to start.
-  if (e.__facePitch == null) e.__facePitch = wantPitch;
-  const dp = Math.max(-rate * dt, Math.min(rate * dt, wantPitch - e.__facePitch));
-  e.__facePitch += dp;
-  const pitch = e.__facePitch;
-
-  e.mesh.rotation.z = (1 - frac) * (pitch - Math.PI / 2) + frac * (Math.PI / 2 - pitch);
-
-  // WHO OWNS THE FACING THIS FRAME, declared by the frame that wrote it rather
-  // than inferred from a speed. `faceMotion` gives up below 0.05 u/s, and that
-  // gate used to be the whole handoff — safe while the ambush was a literal
-  // dead stop, and wrong the moment it started settling onto the seabed at up
-  // to 3.4 u/s. Both writers were then live on the same frames: this one aiming
-  // at the seal, faceMotion aiming at the fish's own vertical drift, each
-  // overwriting the other every frame. That is the other half of the snapping.
-  //
-  // Cleared at the top of the stage machine, so a stage that does not call this
-  // hands the facing straight back — which is what the lunge and the recovery
-  // want, because there the animal genuinely is going somewhere.
-  e.faceLocked = true;
+  // For a body inside the walls `min(p, limit)` is the limit, so the velocity is
+  // capped at exactly the boundary and the animal slides along it. For a body
+  // already OUTSIDE — an arrival that hands over half inside the rock, a
+  // knockback — it is the body's own position, so the cap is zero and it is
+  // merely stopped from digging deeper. It is deliberately NOT pushed out here:
+  // solving for the boundary in one frame is a velocity of several hundred
+  // units a second, which the snap's drag would then inherit and coast on, and
+  // which `turnFish` would read as a direction and point the animal down. The
+  // position clamp in entities/enemies.js already puts a body back inside; this
+  // only has to stop the fight fighting it.
+  const lo = (v, at, edge) => Math.max(v, (Math.min(at, edge) - at) / dt);
+  const hi = (v, at, edge) => Math.min(v, (Math.max(at, edge) - at) / dt);
+  e.vx = lo(e.vx, p.x, bounds.left + r);
+  e.vx = hi(e.vx, p.x, bounds.right - r);
+  e.vy = lo(e.vy, p.y, bounds.bottom + r);
+  e.vy = hi(e.vy, p.y, bounds.surfaceY - r);
+  const after = Math.hypot(e.vx, e.vy);
+  // How much of the speed survived. 1 is open water.
+  return before > 1e-6 ? after / before : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +295,13 @@ function driftToStation(e, dt, c, dx, dy, hasPlayer) {
     const sp = c.repositionSpeed ?? (e.def.speed ?? 4.2);
     e.vx = (sx / sd) * sp;
     e.vy = (sy / sd) * sp;
+    // A station is clamped into water the animal can occupy, so this should
+    // never bite — but the body it is steering may not have started there (an
+    // arrival lands inside the wall, a knockback puts it anywhere), and a drift
+    // that spends its whole run pressed into the rock is the reposition failing
+    // silently. Clipped rather than aborted: it slides out along the boundary
+    // and arrives.
+    clipToScenery(e, dt);
     return false;
   }
   e.vx = 0; e.vy = 0;
@@ -365,6 +361,13 @@ function holdFloor(e, dt, c) {
   if (Math.abs(gap) < 0.05) { e.vy = 0; return; }
   const sp = Math.max(0, c.floorSink ?? 3.4);
   e.vy = Math.max(-sp, Math.min(sp, gap * (c.floorEase ?? 1.8)));
+  // The settle is an ease onto a line 0.6 units above the clamp, so it does not
+  // overshoot on its own. It is clipped anyway because the body it is settling
+  // may arrive from BELOW that clamp — the deep entrance hands over the frame
+  // the fish is clear of the seabed strip, and a lunge along the floor ends
+  // wherever it ended. Without this the hold's first frames are a downward
+  // velocity into a floor that is already under the animal.
+  clipToScenery(e, dt);
 }
 
 // ---------------------------------------------------------------------------
@@ -527,12 +530,12 @@ export function releaseAngler() {
     e.ramming = false;
     e.animState = null;
     e.perkDrive = false;
-    // A boss killed mid-tell hands its eyes back dark, and the facing goes back
-    // to entities/enemies.js. The stage machine stops running on the frame it
-    // dies, so neither clear at the top of it ever comes — and a corpse left
-    // with the facing locked is one nothing else can turn.
+    // A boss killed mid-tell hands its eyes back dark, and the aim goes back to
+    // the velocity. The stage machine stops running on the frame it dies, so
+    // neither clear at the top of it ever comes — and a corpse left aiming at
+    // the seal is one that keeps turning to watch it.
     e.telegraph = 0;
-    e.faceLocked = false;
+    e.turnAim = null;
   }
   anglerState.cues?.release();
   anglerState.cues = null;
@@ -806,10 +809,13 @@ function stageMachine(dt, scene, e, playerPos, hooks) {
   // predator must never do.
   if (anglerState.cooldown > 0) anglerState.cooldown -= dt;
   anglerState.playerAt = hasPlayer ? { x: px, y: py } : null;
-  // ...and the same for the facing. faceToward sets it on any frame it writes
-  // the heading; a frame that does not hands the body straight back to
-  // `faceMotion` in entities/enemies.js.
-  e.faceLocked = false;
+  // ...and the same for the aim. faceToward sets it on any frame a stage is
+  // holding station and looking at the seal; a frame that does not leaves
+  // `turnFish` in entities/enemies.js reading the velocity, which is what every
+  // stage that is actually going somewhere wants. Cleared here, once, for the
+  // reason the telegraph below is: a clear at the bottom of each of eight
+  // stages is eight places to forget it.
+  e.turnAim = null;
   // CLEARED HERE, ONCE, and written back only by the two stages that are
   // actually telegraphing something. Every other arrangement leaks: a clear at
   // the bottom of each of the six other stages is six places to forget it, and
@@ -1063,7 +1069,22 @@ function stageMachine(dt, scene, e, playerPos, hooks) {
     e.vx = anglerState.dirX * (c.lungeSpeed ?? 26);
     e.vy = anglerState.dirY * (c.lungeSpeed ?? 26);
 
-    if (anglerState.timer <= 0) {
+    // THE RUN ENDS WHEN IT RUNS OUT OF WATER, and not only when the clock says
+    // so. The line is locked at the end of the tell and nothing corrects it
+    // (that is the counterplay — see the note above), which also means nothing
+    // steers it around the scenery: a seal on the seabed is a line that goes
+    // into the floor, and a seal in a corner is a line that goes into the rock.
+    //
+    // `clipToScenery` slides rather than stops, so a lunge along the bottom
+    // keeps its speed and reaches what it was aimed at. What is left of the
+    // speed is therefore the whole test: a run that has lost most of it has hit
+    // something square, and an ambusher that keeps driving at a wall for
+    // another half second is the animal the player learns to fight from inside
+    // a corner. The jaws close on it — the same `bite` the timeout fires, for
+    // the reason that stage exists at all: selling the miss is most of what
+    // makes the dodge land.
+    const left = clipToScenery(e, dt);
+    if (anglerState.timer <= 0 || left < (c.lungeStopFrac ?? 0.35)) {
       anglerState.stage = 'snap';
       anglerState.timer = c.snapTime ?? 0.45;
       e.contactDamage = anglerState.baseContact;
@@ -1089,6 +1110,11 @@ function stageMachine(dt, scene, e, playerPos, hooks) {
     const decay = Math.max(0, 1 - dt * (c.snapDrag ?? 4));
     e.vx *= decay;
     e.vy *= decay;
+    // The coast is where most of the grinding used to happen: the lunge put the
+    // body on the floor and this spent another 0.45s pushing it further in
+    // while the drag ran out. Clipped, the remaining speed carries it ALONG the
+    // boundary instead, which is a fish that has hit the bottom and slid.
+    clipToScenery(e, dt);
     if (anglerState.timer <= 0) {
       anglerState.stage = 'recover';
       anglerState.timer = c.recoverTime ?? 1.6;

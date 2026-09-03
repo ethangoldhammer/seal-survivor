@@ -11955,6 +11955,18 @@ export const CONFIG = {
       lungeTime: 0.75,
       lungeSpeed: 26,
       lungeDamage: 2,      // x contact damage, for the committed run only
+      // WHEN A COMMITTED RUN COUNTS AS HAVING HIT SOMETHING, as the share of
+      // the lunge speed still surviving after the velocity has been clipped
+      // against the arena — see clipToScenery in systems/bossAngler.js.
+      //
+      // The clip is a SLIDE, so this is a shape test and not a wall detector: a
+      // lunge along the seabed loses almost nothing and runs its full length,
+      // and a lunge square into rock loses almost everything. 0.35 is the line
+      // between the two, and it is generous on purpose — an ambusher that
+      // aborted the moment it grazed the floor would never complete the one
+      // attack the fight is built around, since both animals are usually on the
+      // bottom when it fires.
+      lungeStopFrac: 0.35,
       snapTime: 0.45,
       snapDrag: 4,
       recoverTime: 1.6,
@@ -13497,6 +13509,22 @@ export const CONFIG = {
         deepSpawn: true,
         separates: true,
         asset: 'enemyBossAnglerfish', behavior: 'hunt', faceMotion: true,
+        // COMES ABOUT THROUGH THE CAMERA — see systems/fishTurn.js. This is the
+        // animal that decided the shared heading-plus-roll pair had to go: at
+        // twelve world units it is the longest body in the water, and the old
+        // path turned it by rolling it onto its side and back through every
+        // change of direction. Measured over a fight before this flag: the
+        // dorsal reached 179.9 degrees off vertical inside the recovery, which
+        // is the fish finishing its reposition upside down.
+        //
+        // It is also what lets the ambush aim while standing still, through
+        // `turnAim` rather than through a second writer — see the note in
+        // fishTurn.js and faceToward in systems/bossAngler.js.
+        //
+        // Slower than the shared 0.55 and leaning less even than the sailfish:
+        // this body is twice that one's length and a fraction of its speed, and
+        // an anglerfish that whips round has stopped being the thing that waits.
+        comeAbout: { time: 1.1, bank: 0.12, pitchRate: 2.4 },
         // A BONE HULL, like the kraken's and the mosasaur's. The field is only
         // ever TESTED FOR TRUTHINESS — entities/enemies.js calls
         // attachHitShape(visual, key) and never reads the value — so 'box'
