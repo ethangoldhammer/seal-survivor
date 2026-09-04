@@ -85,6 +85,8 @@ import { stateForSpeed } from './animation.js';
 import { menuInput, touchSlots } from '../input.js';
 import { feedback } from './feedback.js';
 import { mountBuildStamp } from '../ui/buildStamp.js';
+import { mountNameTag } from '../ui/nameTag.js';
+import { playerName } from './playerName.js';
 
 // The live menu, or null. One at a time by construction — it holds a pose on
 // the one seal there is.
@@ -498,6 +500,20 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   // sit in the corner of the whole run.
   const stamp = mountBuildStamp(labelLayer);
 
+  // THE NAMETAG, to the right of the seal — the `NAMETAG` artboard, with the
+  // name the splash just took (ui/nameTag.js). In the label layer for the same
+  // reason the stamp is: it is the menu's, and it leaves with the menu. WHERE
+  // it sits is answered every frame in placeLabels, off the measured bust, so
+  // it stays beside the animal through a resize; on Play it flies off the
+  // right-hand edge (see release) while the buttons fade.
+  //
+  // BESIDE THE SEAL AND NOT ON IT. Putting the name ON the animal is a
+  // different piece of work — it has to be sampled in the seal's own UV space
+  // by the shader already injected into its material, not held in front of the
+  // flank as a quad. See design/NAME-ON-THE-SEAL.md.
+  const tag = mountNameTag({ parent: labelLayer, name: playerName(), cfg: cfg.nametag });
+  const _tagTop = new THREE.Vector3();
+
   // ONE ELEMENT PER LINE, always — a single-line label is a block of one, so
   // there is no second path through any of this. The wrapper is a block that
   // centres its rows and each row is nowrap: the wrapper's scrollWidth is then
@@ -546,6 +562,25 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   function placeLabels(w) {
     const [vw, vh] = viewport();
     stamp.el.style.opacity = String(labelFade(w));
+    // The tag hangs off the bust's right edge, and the bust is measured in
+    // world units — so both of its right-hand corners go through the camera
+    // and the tag is sized off the pixels between them. ONLY WHILE HELD: once
+    // it is flying, the camera under it is pulling out and a box re-placed
+    // every frame would drift with the zoom on top of its own fly. The fly is
+    // measured from where the card stood when Play was pressed.
+    if (tag && tag.phase === 'held') {
+      _project.set(bust.max.x, bust.min.y, 0).project(camera);
+      _tagTop.set(bust.max.x, bust.max.y, 0).project(camera);
+      const yBottom = ((1 - _project.y) / 2) * vh;
+      const yTop = ((1 - _tagTop.y) / 2) * vh;
+      tag.place({
+        x: ((_project.x + 1) / 2) * vw,
+        yBottom,
+        bustHeight: Math.max(0, yBottom - yTop),
+        viewportW: vw,
+        fade: labelFade(w),
+      });
+    }
     menu.items.forEach((item, i) => {
       _project.copy(item.world).project(camera);
       labels[i].style.left = `${((_project.x + 1) / 2) * vw}px`;
@@ -1090,6 +1125,10 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     // A menu that tore down holding one would leave a permanent glow on the
     // arena's lattice at whatever the last cursor position unprojects to.
     dropCursor();
+    // The tag's runtime before its element: `labelLayer.remove()` would take
+    // the canvas with it but leave the WASM-side artboard and its render loop
+    // alive behind a detached node.
+    tag?.dispose();
     labelLayer.remove();
     scene.remove(menu.mesh);
     menu.mesh.geometry.dispose();
@@ -1134,6 +1173,9 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // priority list picks up the run's opening shot and blends there from
       // exactly where this one had got to.
       if (cineEnabled()) cineMenu(false);
+      // The name card leaves to the right, on its own clock (CONFIG.splashBust
+      // .nametag.flyTime), and switches itself off when it gets there.
+      tag?.flyOut();
       // The bones go back to the mixer NOW rather than easing. The pin holds
       // the tail and the hind flippers, and at the moment of release the camera
       // is still on the crop — where all three are off the bottom of the frame.
@@ -1304,6 +1346,7 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       );
       fitScrim(w);
       placeLabels(w);
+      tag?.update(dt);
       // The rim, mixed against the frame as it stands this frame — the pull-out
       // changes pixels-per-unit continuously, and a rim asked for in pixels has
       // to be re-answered every one of them.

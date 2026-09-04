@@ -759,6 +759,57 @@ export function prefetchSamples() {
   return prefetching;
 }
 
+// DUAL-MONO COMES BACK AS ONE CHANNEL, and it is the largest thing that can be
+// done to this bank without changing a single sound.
+//
+// A decoded buffer is float32 PCM — length x channels x 4 bytes — and the whole
+// bank is decoded at boot and never released (see preloadSamples). Measured on
+// the phone that was being killed for memory, the referenced sfx came to 77MB
+// of the census's `aud` figure, and every one of the 162 files is stereo.
+//
+// Most of them are not. Library one-shots are routinely delivered as a stereo
+// file with identical channels, and a sample of twenty found fourteen with L
+// and R bit-identical. Those cost twice what they need to and sound EXACTLY the
+// same either way: a one-channel buffer played through this graph puts the same
+// signal in both ears that a dual-mono file does.
+//
+// So the test is the honest one — are the channels actually the same — rather
+// than a blanket downmix, which would flatten the genuinely wide ones (the
+// mosasaur, the lightning, the shipwreck) and be a change to the mix rather
+// than a saving. Nothing is re-encoded and no file on disk is touched: an mp3
+// round-tripped to mono would pay another generation of lossy encoding for a
+// saving we can have for free at decode.
+//
+// EPSILON, not equality. The two channels of a dual-mono mp3 are decoded
+// independently and can differ in the last bit or two from the codec alone,
+// so an exact compare would find almost nothing. 1/32768 is a 16-bit LSB —
+// below the noise floor of anything here, and far under the ~0.10 fraction of
+// differing frames that separated the dual-mono files from the wide ones when
+// this was measured.
+const MONO_EPSILON = 1 / 32768;
+
+function collapseIfDualMono(buffer) {
+  if (!buffer || buffer.numberOfChannels !== 2) return buffer;
+  let L, R;
+  try { L = buffer.getChannelData(0); R = buffer.getChannelData(1); } catch { return buffer; }
+  for (let i = 0; i < L.length; i++) {
+    // Early exit is what makes this cheap on the files it cannot help: a truly
+    // stereo recording differs within the first few thousand samples, so the
+    // full scan is only ever paid by a file that is about to halve.
+    if (Math.abs(L[i] - R[i]) > MONO_EPSILON) return buffer;
+  }
+  let mono;
+  try { mono = ctx.createBuffer(1, buffer.length, buffer.sampleRate); } catch { return buffer; }
+  // copyToChannel where it exists, element-wise where it does not — the stub
+  // context the harnesses run against implements createBuffer but not always
+  // the copy helpers, and a throw here would cost the sound entirely.
+  try { mono.copyToChannel(L, 0); } catch {
+    const out = mono.getChannelData(0);
+    for (let i = 0; i < L.length; i++) out[i] = L[i];
+  }
+  return mono;
+}
+
 // One file, decoded at most once.
 function decodeFor(src) {
   let pending = decodedBySrc.get(src);
@@ -771,7 +822,7 @@ function decodeFor(src) {
         // names the file. Passing the cached copy would leave the second
         // sound to want it decoding a zero-length buffer — which throws, gets
         // caught, and comes out as a synth fallback with no obvious cause.
-        return await ctx.decodeAudioData(bytes.slice(0));
+        return collapseIfDualMono(await ctx.decodeAudioData(bytes.slice(0)));
       } catch (err) {
         console.warn(`[audio] could not decode ${src} —`, err?.message ?? err);
         return null;

@@ -4227,6 +4227,133 @@ const FBX_TEXTURE_SLOTS = [
   'metalnessMap', 'emissiveMap', 'aoMap', 'displacementMap', 'lightMap', 'envMap',
 ];
 
+// ---------------------------------------------------------------------------
+// `?notex` — AN AUDITION WITH NO PHOTO TEXTURES.
+//
+// Every model in the roster carries its colour in a jpeg: 232MB of VRAM across
+// 32 files (`npm run tex`), sampled on every fragment of every creature in the
+// water. The question this mode exists to answer is how much of the frame that
+// costs — and the only honest way to ask it is to take the maps away and leave
+// everything else standing: the procedural layers (CONFIG.sealShader's
+// mottling, the toon banding, the biolum pigment, the wet film) all inject at
+// chunks whose USE_MAP test sits INSIDE the chunk, so they land on a bare
+// material unchanged. What they land on is the map's MEAN COLOUR, measured
+// once at load off the decoded image and multiplied into `material.color` —
+// the same multiplier the map was, collapsed to one value — so the animal
+// keeps its palette rather than turning white. `def.tint` still wins over it,
+// exactly as it did over the map.
+//
+// A QUERY PARAM, like ?sandbox and ?tune: visible in the address bar, survives
+// a reload, gone when it is edited out. Never localStorage — a sticky, invisible
+// mode that quietly halves the game's VRAM is the worst kind of flag to leave
+// armed on somebody's phone. It works on a production build on purpose, so it
+// can be auditioned on the device the question is actually about.
+//
+// WHAT IT DOES NOT TOUCH: the five starfish sprites and the flag are alpha
+// cutouts whose SHAPE is the texture — strip them and they draw as squares;
+// they total under 1MB. Canvas textures (beams, epitaphs, the boss light) are
+// procedural already. An alpha-tested model material keeps its map for the
+// same reason, and says so in the console.
+//
+// The compressed twins are declined too (see resolveModelUrl): a KTX2 texture
+// cannot be drawn to a canvas to take its mean, and a mode whose whole point is
+// to skip the upload has no use for a file optimised for uploading.
+const NO_TEXTURES = (() => {
+  try {
+    return new URLSearchParams(window.location.search).has('notex');
+  } catch {
+    return false; // No location (the harness). Textures as shipped.
+  }
+})();
+
+/** True when this page load asked for the no-texture audition (`?notex`). */
+export function texturesDisabled() {
+  return NO_TEXTURES;
+}
+
+// Mean colour per Source, so the second material on a shared image reads the
+// number rather than the bitmap — which by then has been closed (below).
+const meanColours = new Map();
+const noTexStats = { materials: 0, stripped: 0, keptCutouts: 0, unreadable: 0 };
+
+/**
+ * The alpha-weighted mean of a texture's image, as a linear Color — or null
+ * when there is nothing to read (compressed data, a texture with no image,
+ * a context that cannot draw). Alpha-weighted so an atlas's transparent
+ * padding does not drag every animal towards black.
+ */
+function meanColorOf(tex) {
+  const src = tex?.source;
+  if (!src) return null;
+  if (meanColours.has(src.uuid)) return meanColours.get(src.uuid);
+  let out = null;
+  try {
+    const img = src.data;
+    const w = img?.width ?? img?.naturalWidth ?? 0;
+    const h = img?.height ?? img?.naturalHeight ?? 0;
+    if (img && w > 0 && h > 0 && !tex.isCompressedTexture && !tex.isDataTexture && typeof document !== 'undefined') {
+      const N = 16;
+      const canvas = document.createElement('canvas');
+      canvas.width = N;
+      canvas.height = N;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, N, N);
+      const d = ctx.getImageData(0, 0, N, N).data;
+      let r = 0; let g = 0; let b = 0; let a = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const wgt = d[i + 3] / 255;
+        r += d[i] * wgt; g += d[i + 1] * wgt; b += d[i + 2] * wgt; a += wgt;
+      }
+      // Averaged in the space the image is stored in, then decoded once — a
+      // map is sRGB and `material.color` is linear.
+      if (a > 0) out = new THREE.Color().setRGB(r / a / 255, g / a / 255, b / a / 255, THREE.SRGBColorSpace);
+    }
+  } catch {
+    out = null;
+  }
+  meanColours.set(src.uuid, out);
+  return out;
+}
+
+/**
+ * Take every map off a material, folding the colour map's mean into
+ * `material.color` first. The decoded image is closed once nothing will read
+ * it again — the census counts it against the process, and on a phone the
+ * process is what gets killed.
+ */
+function stripMaps(m2) {
+  noTexStats.materials++;
+  const cutout = m2.alphaTest > 0 || !!m2.alphaMap;
+  for (const slot of FBX_TEXTURE_SLOTS) {
+    const t = m2[slot];
+    if (!t?.isTexture) continue;
+    if (slot === 'map') {
+      const mean = meanColorOf(t);
+      if (mean && m2.color) m2.color.multiply(mean);
+      else if (!mean) noTexStats.unreadable++;
+    }
+    if (cutout && (slot === 'map' || slot === 'alphaMap')) {
+      noTexStats.keptCutouts++;
+      continue;
+    }
+    m2[slot] = null;
+    noTexStats.stripped++;
+    // Release the pixels. `close` is an ImageBitmap method; an <img> has none
+    // and simply falls out of reach when the texture does.
+    // The colour map was averaged above, before this; a closed bitmap reads
+    // as 0x0 to meanColorOf, which leaves the colour alone rather than
+    // throwing.
+    const img = t.source?.data;
+    if (img && typeof img.close === 'function') img.close();
+    t.dispose();
+  }
+}
+
+/** What the audition did to the roster, for the console and the harness. */
+export function noTexturesReport() {
+  return { on: NO_TEXTURES, ...noTexStats };
+}
+
 // Every .fbx here is a third-party export whose material slots name side-car
 // textures that live on the author's own machine — `F:\3dsmax\...\
 // T_Seagull_BaseColor.jpg`, `D:\artworks\...\beluga_whale_diff.png`,
@@ -4308,7 +4435,7 @@ export function initModelTranscoder(renderer) {
  * testing files no Node loader can parse.
  */
 export function resolveModelUrl(url) {
-  if (!ktx2Loader || typeof url !== 'string') return url;
+  if (!ktx2Loader || NO_TEXTURES || typeof url !== 'string') return url;
   const name = url.startsWith('/models/') ? url.slice('/models/'.length) : null;
   return name && KTX2_MODELS.has(name) ? `/models-ktx2/${name}` : url;
 }
@@ -4584,7 +4711,7 @@ async function loadModelEntry(key, def) {
   // model still loads, it just has no mask, and the toggle then does
   // nothing for this one asset rather than taking the creature with it.
   let emissiveTex = null;
-  if (def.texture?.emissive) {
+  if (def.texture?.emissive && !NO_TEXTURES) {
     try {
       // flipY is not a hardcoded false: that is the glTF value, and it
       // silently mirrored the mask on every FBX creature. A flipped mask
@@ -4750,6 +4877,10 @@ export async function preloadAssets(onProgress) {
   // whole point. Uploaded/restored models take their own path and never
   // consult this cache, so there is nothing left to serve.
   parsedModelCache.clear();
+  if (NO_TEXTURES) {
+    const r = noTexturesReport();
+    console.info(`[assets] ?notex — ${r.stripped} maps stripped from ${r.materials} materials, ${r.keptCutouts} cutout maps kept, ${r.unreadable} colour maps unreadable (left white)`);
+  }
 
   // The seabed's bubble prop is in now, so the film can finally pick its
   // painted layer up off it. Harmless when nothing wears a shell yet: the
@@ -5173,6 +5304,15 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       // near-black silhouette came back white.
       m2.userData.__originalColor = m2.color ? m2.color.getHex() : null;
       if (overrideTex) m2.map = overrideTex;
+      // The no-texture audition (see NO_TEXTURES). After the override so the
+      // hammerhead's loose jpeg is folded in like everyone's embedded one, and
+      // the stashes are re-taken so the texture panel's "reset" returns to
+      // the bare material rather than putting a closed bitmap back.
+      if (NO_TEXTURES) {
+        stripMaps(m2);
+        m2.userData.__originalMap = null;
+        m2.userData.__originalColor = m2.color ? m2.color.getHex() : null;
+      }
       if (def.material) {
         const dm = def.material;
         if (dm.roughness != null && 'roughness' in m2) m2.roughness = dm.roughness;

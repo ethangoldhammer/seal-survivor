@@ -38,7 +38,7 @@ import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb
 import { stepBubbleSpawner, rollBubbleSpawnDelay } from './systems/oxygenBubble.js';
 import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
-import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, emit } from './entities/particles.js';
+import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -54,7 +54,7 @@ import {
 } from './systems/levelUpWarmup.js';
 import {
   perfFrame, perfRunStart, perfRunReport, perfWindow, perfSummary, perfPhase, perfMark,
-  perfFrameJs, noteTextures,
+  perfFrameJs, perfJsSoFar, noteTextures,
 } from './systems/perfLog.js';
 import { showLoading } from './ui/loading.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.js';
@@ -5098,6 +5098,8 @@ const SWARM_MARK = 60;
 // The whole of last frame's draw calls, summed across every pass post.js
 // made. Read at the top of the frame before anything resets it.
 let drawsLastFrame = 0;
+// Previous heartbeat's JS totals — see the tick crumb for why it is a diff.
+let lastCrumbJs = { ms: 0, frames: 0 };
 
 let lastTime = performance.now();
 
@@ -5170,6 +5172,9 @@ function runFrame(now) {
         crumb('mem', `${censusLine(censusReport({
           items: [world.scene, assetCensusItems()],
           audioBytes: audioBankBytes() + musicBankBytes() + ambientBankBytes(),
+          // ...and the same three separately, so the trail says WHICH bank is
+          // holding it. See the note over censusReport.
+          audioParts: { sfx: audioBankBytes(), music: musicBankBytes(), ambient: ambientBankBytes() },
           targetBytes: post.targetBytes?.() ?? 0,
         }))} pool${pool.bodies}/${pool.keys}`);
       } catch (err) {
@@ -5225,8 +5230,23 @@ function runFrame(now) {
       console.error('[frame] the run is paused and no screen is holding it — nothing can dismiss this.');
       crumb('run:stranded', `L${gameState.level} t${gameState.time.toFixed(1)}`);
     }
+    // DRAWS AND JS MILLISECONDS, which are the two the counts above could not
+    // give. Everything else here says how much is in the world; these two say
+    // whether the frame is being spent on the CPU or waiting on the GPU, and at
+    // a sustained 25fps on the phone that is the entire question. A frame of
+    // 40ms with 8ms of JS in it is GPU-bound and no amount of tidying the scene
+    // graph will move it; the same frame with 35ms of JS is ours to fix.
+    //
+    // Diffed against the previous sample rather than read as a run mean: a run
+    // that starts smooth and degrades reports the degraded stretch instead of
+    // an average that hides it.
+    const js = perfJsSoFar();
+    const jsFrames = js.frames - lastCrumbJs.frames;
+    const jsMs = jsFrames > 0 ? (js.ms - lastCrumbJs.ms) / jsFrames : 0;
+    lastCrumbJs = js;
     crumb('tick', `L${gameState.level} ${enemies.length}e ${particleCount()}p`
       + ` g${mem.geometries} t${mem.textures} pr${programsEverBuilt()}`
+      + ` d${drawsLastFrame} js${jsMs.toFixed(1)}`
       + ` c${document.getElementsByTagName('canvas').length}${bossState.enemy ? ' BOSS' : ''}`
       + ` f${frames} t${gameState.time.toFixed(1)}${held ? ' ' + held : ''}`);
   }
@@ -5341,6 +5361,11 @@ function runFrame(now) {
   // machine struggling would cut the resolution of a game that is running
   // perfectly well. See tickAdaptiveScale in world.js.
   world.tickAdaptiveScale(stamp - lastTime, gameState.running && !gameState.paused);
+  // The controller has just judged this frame; hand the same verdict to the
+  // particle system. See the relief note in entities/particles.js — pixels
+  // were not enough on the phone, and particles were what the frame time
+  // actually correlated with.
+  setParticleRelief(world.adaptiveScale());
 
   // THE WHOLE FRAME'S JS, wrapping every phase below rather than sitting
   // beside them. The leaf phases cannot tell untimed work from the tab not

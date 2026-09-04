@@ -59,6 +59,74 @@ const blurFragmentShader = /* glsl */ `
   }
 `;
 
+// THE LENS FLARE, shared by two shaders. It used to live inside the composite
+// and run at FULL resolution: three ghosts, a halo and a nine-tap streak —
+// thirteen dependent fetches on every screen pixel, for an effect the tuning
+// sets to 0.008 in ordinary play. It now runs ONCE at bloom resolution
+// (flarePass, below), folded into the bloom buffer together with the bloom
+// intensity, so the composite reads one texel that already carries both. The
+// ghosts were sampled from that 1/6-res buffer to begin with, so nothing is
+// lost but the cost.
+const LENS_FLARE_GLSL = /* glsl */ `
+  uniform float uFlare;
+  uniform float uFlareSpacing;
+  uniform float uFlareHalo;
+  uniform float uFlareStreak;
+  uniform float uFlareStreakGain;
+
+  // Lens flares, derived from the bloom buffer rather than from an authored
+  // rig — so an explosion, a glowing orca patch or the sun on the water all
+  // throw one automatically, and nothing has to be tagged as a flare source.
+  //
+  // Ghosts are the classic trick: reflections inside a lens land mirrored
+  // through the optical centre, so sampling the bright buffer along the line
+  // from a pixel through the middle of the frame finds whatever would have
+  // bounced onto it.
+  vec3 lensFlare(vec2 uv) {
+    vec2 toCentre = vec2(0.5) - uv;
+    vec3 sum = vec3(0.0);
+
+    for (int i = 1; i <= 3; i++) {
+      vec2 g = uv + toCentre * (2.0 * float(i) * uFlareSpacing);
+      // Ghosts fade toward the edge of frame — an untapered one parks a bright
+      // blob in the corner and sits there.
+      float w = 1.0 - clamp(length(g - 0.5) * 1.6, 0.0, 1.0);
+      vec3 tint = vec3(1.0, 0.75, 0.55);
+      if (i == 2) tint = vec3(0.55, 0.85, 1.0);
+      else if (i == 3) tint = vec3(0.7, 1.0, 0.8);
+      sum += texture2D(tBloom, clamp(g, 0.0, 1.0)).rgb * w * tint;
+    }
+
+    float len = length(toCentre);
+    if (len > 0.0001) {
+      vec2 halo = uv + (toCentre / len) * uFlareHalo;
+      sum += texture2D(tBloom, clamp(halo, 0.0, 1.0)).rgb * 0.6 * vec3(0.6, 0.8, 1.0);
+    }
+
+    // The anamorphic smear — a horizontal blue streak off anything bright.
+    vec3 streak = vec3(0.0);
+    for (int i = -4; i <= 4; i++) {
+      streak += texture2D(tBloom, clamp(uv + vec2(float(i) * uFlareStreak, 0.0), 0.0, 1.0)).rgb;
+    }
+    sum += streak * (1.0 / 9.0) * uFlareStreakGain * vec3(0.35, 0.65, 1.0);
+
+    return sum * uFlare;
+  }
+`;
+
+// The fold: bloom × intensity + flare, at bloom resolution, into the spare
+// ping-pong buffer. Only rendered when the flare is above its floor; with the
+// flare off the composite reads the bloom result directly, as it always did.
+const flareFragmentShader = /* glsl */ `
+  uniform sampler2D tBloom;
+  uniform float uBloomIntensity;
+  varying vec2 vUv;
+  ${LENS_FLARE_GLSL}
+  void main() {
+    gl_FragColor = vec4(texture2D(tBloom, vUv).rgb * uBloomIntensity + lensFlare(vUv), 1.0);
+  }
+`;
+
 const fragmentShader = /* glsl */ `
   uniform sampler2D tDiffuse;
   uniform sampler2D tBloom;
@@ -116,11 +184,7 @@ const fragmentShader = /* glsl */ `
   uniform float uPathNoisePhase;  // accumulated by the rig, so a speed that ramps cannot make the pattern jump
   uniform float uKnee;
 
-  uniform float uFlare;
-  uniform float uFlareSpacing;
-  uniform float uFlareHalo;
-  uniform float uFlareStreak;
-  uniform float uFlareStreakGain;
+  ${LENS_FLARE_GLSL}
   uniform float uDrops;        // 0..1, decays after a breach
   uniform float uDropDensity;
   uniform float uDropSize;
@@ -325,44 +389,6 @@ const fragmentShader = /* glsl */ `
     return (b.w > a.w ? b : a).xyz;
   }
 
-  // Lens flares, derived from the bloom buffer rather than from an authored
-  // rig — so an explosion, a glowing orca patch or the sun on the water all
-  // throw one automatically, and nothing has to be tagged as a flare source.
-  //
-  // Ghosts are the classic trick: reflections inside a lens land mirrored
-  // through the optical centre, so sampling the bright buffer along the line
-  // from a pixel through the middle of the frame finds whatever would have
-  // bounced onto it.
-  vec3 lensFlare(vec2 uv) {
-    vec2 toCentre = vec2(0.5) - uv;
-    vec3 sum = vec3(0.0);
-
-    for (int i = 1; i <= 3; i++) {
-      vec2 g = uv + toCentre * (2.0 * float(i) * uFlareSpacing);
-      // Ghosts fade toward the edge of frame — an untapered one parks a bright
-      // blob in the corner and sits there.
-      float w = 1.0 - clamp(length(g - 0.5) * 1.6, 0.0, 1.0);
-      vec3 tint = vec3(1.0, 0.75, 0.55);
-      if (i == 2) tint = vec3(0.55, 0.85, 1.0);
-      else if (i == 3) tint = vec3(0.7, 1.0, 0.8);
-      sum += texture2D(tBloom, clamp(g, 0.0, 1.0)).rgb * w * tint;
-    }
-
-    float len = length(toCentre);
-    if (len > 0.0001) {
-      vec2 halo = uv + (toCentre / len) * uFlareHalo;
-      sum += texture2D(tBloom, clamp(halo, 0.0, 1.0)).rgb * 0.6 * vec3(0.6, 0.8, 1.0);
-    }
-
-    // The anamorphic smear — a horizontal blue streak off anything bright.
-    vec3 streak = vec3(0.0);
-    for (int i = -4; i <= 4; i++) {
-      streak += texture2D(tBloom, clamp(uv + vec2(float(i) * uFlareStreak, 0.0), 0.0, 1.0)).rgb;
-    }
-    sum += streak * (1.0 / 9.0) * uFlareStreakGain * vec3(0.35, 0.65, 1.0);
-
-    return sum * uFlare;
-  }
 
   void main() {
     vec2 uv = vUv;
@@ -398,10 +424,18 @@ const fragmentShader = /* glsl */ `
 
     vec2 texel = 1.0 / uResolution;
 
+    // Three fetches only when the preset actually splits the channels — the
+    // 'off' preset (the Video tab's filter switch) zeroes uChroma, and paying
+    // three full-res reads to split by nothing was the composite's biggest
+    // cost with the filter off.
     vec3 color;
-    color.r = texture2D(tDiffuse, uv + vec2(uChroma, 0.0) * texel).r;
-    color.g = texture2D(tDiffuse, uv).g;
-    color.b = texture2D(tDiffuse, uv - vec2(uChroma, 0.0) * texel).b;
+    if (uChroma > 0.0) {
+      color.r = texture2D(tDiffuse, uv + vec2(uChroma, 0.0) * texel).r;
+      color.g = texture2D(tDiffuse, uv).g;
+      color.b = texture2D(tDiffuse, uv - vec2(uChroma, 0.0) * texel).b;
+    } else {
+      color = texture2D(tDiffuse, uv).rgb;
+    }
 
     // Tilt shift. Mixed in BEFORE the glow, because a defocused image is what
     // the lens delivers to the sensor and the bloom is what the sensor does
@@ -429,6 +463,9 @@ const fragmentShader = /* glsl */ `
       color += texture2D(tBloom, uv).rgb * uBloomIntensity;
     }
 
+    // Never taken now — render() folds the flare into tBloom at bloom
+    // resolution (see LENS_FLARE_GLSL) and zeroes this uniform. Kept so the
+    // fold can be A/B'd against the full-res original by not zeroing it.
     if (uFlare > 0.0) color += lensFlare(uv);
     if (dropSpec > 0.0) color += vec3(dropSpec) * vec3(0.8, 0.92, 1.0);
 
@@ -838,6 +875,18 @@ export function createPost(renderer) {
 
   const brightPass = makeFullscreenPass(brightFragmentShader, { uThreshold: { value: 0.55 } });
   const blurPass = makeFullscreenPass(blurFragmentShader, { uDirection: { value: new THREE.Vector2(1, 0) } });
+  const flarePass = makeFullscreenPass(flareFragmentShader, {
+    tBloom: { value: null },
+    uBloomIntensity: { value: 0 },
+    uFlare: { value: 0 },
+    uFlareSpacing: { value: 0.32 },
+    uFlareHalo: { value: 0.42 },
+    uFlareStreak: { value: 0.006 },
+    uFlareStreakGain: { value: 0.5 },
+  });
+  // Compiled now, not on the first frame a state's flare crosses the floor —
+  // that frame is the round-start push-in, which is the worst one to hitch.
+  renderer.compile(flarePass.scene, camera);
 
   const finalUniforms = {
     tDiffuse: { value: sceneTarget.texture },
@@ -983,8 +1032,11 @@ export function createPost(renderer) {
     // the picture directly rather than added as a halo, so its resolution is
     // visible in a way the glow's is not — a quarter-res defocus reads as a
     // low-res copy of the scene fading in at the edges of frame.
-    const dw = Math.max(1, Math.floor(w / 2));
-    const dh = Math.max(1, Math.floor(h / 2));
+    // ...unless CONFIG.cinecam.lens.tiltShift.divisor says otherwise: it is
+    // the cost lever for that chain, clamped at 2 for the reason above.
+    const ddiv = Math.max(2, Math.round(CONFIG.cinecam?.lens?.tiltShift?.divisor ?? 2));
+    const dw = Math.max(1, Math.floor(w / ddiv));
+    const dh = Math.max(1, Math.floor(h / ddiv));
     defocusA.setSize(dw, dh);
     defocusB.setSize(dw, dh);
     finalUniforms.uResolution.value.set(w, h);
@@ -1497,25 +1549,57 @@ export function createPost(renderer) {
 
     for (const group of goo) renderGooGroup(sceneCamera, group);
 
-    // The flares are sampled from the bloom buffer, so they need it filled
-    // even when bloom itself is switched off — the bright pass is what finds
-    // the flare sources, and it's the same work either way. Only the additive
-    // glow in the composite is gated on `bloom.enabled`.
-    const wantBloomBuffer = bloomOn() || finalUniforms.uFlare.value > 0;
-    if (wantBloomBuffer) {
+    // THE BLOOM BUFFER IS BUILT FOR TWO CUSTOMERS — the glow, and the flare
+    // that samples ghosts out of it — and skipped when neither is live. The
+    // flare has a FLOOR (CONFIG.cinecam.lens.flare.floor): below it the ghosts
+    // are invisible, and before the floor existed a base-state flare of 0.008
+    // kept all nine bloom draws alive on a machine whose player had switched
+    // bloom off to make the game cheaper.
+    const lens = CONFIG.cinecam?.lens ?? {};
+    const flareFloor = lens.flare?.floor ?? 0.01;
+    const flareOn = finalUniforms.uFlare.value > 0 && finalUniforms.uFlare.value >= flareFloor;
+    // Impact pulses temporarily push the glow brighter, on top of the steady
+    // base intensity from the slider.
+    const intensity = bloomOn()
+      ? CONFIG.bloom.intensity * (1 + feedbackState.glowPulse * CONFIG.bloom.pulseStrength)
+      : 0;
+    if (bloomOn() || flareOn) {
       const bloomResult = renderBloom();
-      finalUniforms.tBloom.value = bloomResult.texture;
-    }
-    if (bloomOn()) {
-      // Impact pulses temporarily push the glow brighter, on top of the
-      // steady base intensity from the slider.
-      finalUniforms.uBloomIntensity.value = CONFIG.bloom.intensity * (1 + feedbackState.glowPulse * CONFIG.bloom.pulseStrength);
+      if (flareOn) {
+        // The fold: intensity and flare applied at bloom resolution, into the
+        // ping-pong buffer renderBloom did not return. The composite then
+        // reads the finished sum at intensity 1 with its own flare zeroed —
+        // thirteen full-res fetches become one.
+        const spare = bloomResult === bloomA ? bloomB : bloomA;
+        const f = flarePass.uniforms;
+        f.tBloom.value = bloomResult.texture;
+        f.uBloomIntensity.value = intensity;
+        f.uFlare.value = finalUniforms.uFlare.value;
+        f.uFlareSpacing.value = finalUniforms.uFlareSpacing.value;
+        f.uFlareHalo.value = finalUniforms.uFlareHalo.value;
+        f.uFlareStreak.value = finalUniforms.uFlareStreak.value;
+        f.uFlareStreakGain.value = finalUniforms.uFlareStreakGain.value;
+        renderer.setRenderTarget(spare);
+        renderer.render(flarePass.scene, camera);
+        finalUniforms.tBloom.value = spare.texture;
+        finalUniforms.uBloomIntensity.value = 1;
+      } else {
+        finalUniforms.tBloom.value = bloomResult.texture;
+        finalUniforms.uBloomIntensity.value = intensity;
+      }
     } else {
       finalUniforms.uBloomIntensity.value = 0;
     }
+    finalUniforms.uFlare.value = 0;
 
-    if (finalUniforms.uDefocus.value > 0) {
+    // The tilt-shift chain has a floor too (lens.tiltShift.floor). Its own
+    // states already skip it at exactly 0; the floor is for the blend tails,
+    // where a defocus fading out through 0.01 was still buying four draws.
+    const defocusFloor = lens.tiltShift?.floor ?? 0.02;
+    if (finalUniforms.uDefocus.value >= defocusFloor) {
       finalUniforms.tDefocus.value = renderDefocus().texture;
+    } else {
+      finalUniforms.uDefocus.value = 0;
     }
 
     renderer.setRenderTarget(null);

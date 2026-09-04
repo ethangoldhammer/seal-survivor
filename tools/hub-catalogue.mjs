@@ -66,6 +66,7 @@ const PUBLISH = new Set([
 ]);
 
 const WRITES = new Set([
+  'notex',
   'build', 'whale', 'humpback', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
   'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
@@ -101,6 +102,7 @@ const GROUP_BY_NAME = {
   atlas: 'Servers', 'icons:pick': 'Servers', pick: 'Servers',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
+  notex: 'Audits',
   // Reports by default and only rewrites files with --write, so it reads as
   // an audit until you ask it not to.
   'sfx:trim': 'Audits',

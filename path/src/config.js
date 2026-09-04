@@ -433,6 +433,41 @@ export const CONFIG = {
     inEase: 'outCubic',
     outTime: 1.15,
     outEase: 'inOutCubic',
+    // --- THE NAMETAG --------------------------------------------------------
+    // The player's name on a card to the RIGHT of the seal — the `NAMETAG`
+    // artboard in seal_survivor.riv, mounted by ui/nameTag.js and placed by
+    // the menu every frame off the measured bust. Every size here is a
+    // fraction of the BUST on screen, so the card scales with the animal and
+    // not with the window. On Play it flies off the right-hand edge and is
+    // switched off; the buttons fade on the same press.
+    nametag: {
+      enabled: true,
+      // The artboard's backing store, in pixels across. Not the card's CSS
+      // size — see the note in ui/nameTag.js.
+      surface: 1024,
+      // NOT ON THE SEAL, and there are no offsets here for putting it there. A
+      // name ON the animal is a mark in its UV space, blended by the shader
+      // already injected into its material — not a card positioned in front of
+      // the flank. See design/NAME-ON-THE-SEAL.md.
+
+      // The card's height, in bust heights.
+      height: 0.26,
+      // Air between the bust's right edge and the card, in bust heights.
+      gap: 0.06,
+      // Where the card's centre sits on the bust: 0 the bottom of the measured
+      // box (the crop's waist), 1 the crown.
+      y: 0.62,
+      // The fly-out on Play — seconds, and a curve from ease.js. Faster than
+      // the glide it rides on (outTime), so the card is gone before the frame
+      // has opened far enough to show where it went.
+      flyTime: 0.55,
+      flyEase: 'inCubic',
+      // How far past the screen edge the fly ends, in card widths.
+      overshoot: 0.25,
+      // The nearest the card may get to the right edge while held, in CSS px;
+      // on a phone held upright it shrinks to fit inside this.
+      margin: 8,
+    },
     // HOW MUCH OF THE POINTER'S OFFSET THE NECK IS ASKED FOR, 0..1. 1 aims the
     // head straight at the cursor, which sounds like the point and is not: the
     // neck's cone (CONFIG.head.frontCone) is authored for a seal swimming along
@@ -1167,10 +1202,21 @@ export const CONFIG = {
           // draws, and each roughly doubles the apparent blur radius — 2 is a
           // gentle optical falloff, 4 is unmistakably a miniature.
           radius: 2,
+          // The chain's buffer is the screen over this. 2 is half res, the
+          // floor — see the note in post.js resize() for why a quarter-res
+          // defocus reads as a low-res copy of the scene. The cost lever.
+          divisor: 2,
+          // Below this the chain is skipped and the picture is left sharp;
+          // for the tails of a blend, where 0.01 of blur was buying four draws.
+          floor: 0.02,
         },
         flare: {
           enabled: true,
           strength: 1,   // master scale over every state's `flare`
+          // Below this the flare pass is skipped AND, with bloom off, the
+          // bloom buffer it would have sampled is not built. The base state's
+          // 0.2 × a master of 0.04 is 0.008 — under this floor, and invisible.
+          floor: 0.01,
           // Ghosts are sampled from the bloom buffer along the line through the
           // centre of frame, so anything bright throws them with no authoring.
           ghosts: 3,
@@ -18412,6 +18458,15 @@ export const CONFIG = {
       // full strength here, which is the point: what comes off a death still
       // reads as heavy while the spray around it gets out of the way.
       spriteDensity: 0.6,
+      // HOW HARD THE ADAPTIVE CONTROLLER LEANS ON PARTICLES — exponents on its
+      // scale, so 1.0 (a machine keeping up) multiplies by exactly one and costs
+      // nothing. See the relief note in entities/particles.js for the measurement.
+      //
+      // At the 0.4 floor these give roughly half the particles at 72% size, and
+      // because fill is count x area that is about a quarter of the pixels. Lower
+      // the exponents to lean less; zero on both switches the relief off.
+      reliefCountPow: 0.75,
+      reliefSizePow: 0.35,
 
       // THE CURRENT. One divergence-free swirl field covering the whole arena
       // that every particle in the game is pushed by — see entities/particles.js
@@ -32601,13 +32656,31 @@ export const CONFIG = {
       raiseAfter: 10,
       step: 0.1,
       // Below this the rim lights and the grid lines crawl — see the sweep
-      // note on `pixelRatio` above. 0.6 of a 2.0 cap is still 1.2x on a retina
-      // panel, which is well short of ugly and is 36% of the pixels.
-      floor: 0.6,
+      // note on `pixelRatio` above. THE TARGET IS 1.2x ON A RETINA PANEL, which
+      // is well short of ugly, and this number is that target divided by the
+      // cap it multiplies.
+      //
+      // It was 0.6, and the note here read "0.6 of a 2.0 cap is still 1.2x".
+      // That was true when the cap was 2.0. The cap is 3 now and nobody
+      // re-derived the floor, so it had been delivering 1.8x — fifty per cent
+      // more pixels than the line above it claims, and the phone was pinned
+      // against it all run: the crash trail reports scale 1.8 with autoScale
+      // 0.6, which is this floor, reached and stuck.
+      //
+      // 0.4 x 3 = the 1.2x that was always intended. On a machine that is not
+      // in pain this changes nothing at all — the controller only ever descends
+      // when frames are late, and the laptops it was tuned on sit at 1.0.
+      floor: 0.4,
       // Every round trip is a visible resolution change. A machine that keeps
       // failing at a level is left there rather than walked up and down it for
       // the rest of the run.
-      maxDrops: 4,
+      //
+      // Six, because six 0.1 steps is exactly 1.0 down to the floor. At four it
+      // could not reach its own floor from the top, so the two limits disagreed
+      // and whichever bound first was the real one — on the phone that was this
+      // one, and it stopped the descent two steps early with the frame still at
+      // 33ms against an 18ms target.
+      maxDrops: 6,
     },
   },
 
@@ -34281,6 +34354,45 @@ export const CONFIG = {
       softness: 0.4,
       curve: 1.5,
     },
+
+    // THE NAME, CHANGING. Not a surface but a word: when the dice rolls a new
+    // name into the splash's pill, the old one is photographed off the canvas
+    // and boiled away through the field while Rive draws the new one under it
+    // and the pill re-hugs (see ui/nameSwap.js). Billow, the same grain the
+    // tips flake into — it is the one algorithm that reads as letters breaking
+    // up rather than as weather over them. `scale` is the field's detail and
+    // `time` the whole dissolve; `cell` sizes the grain against the type.
+    nameSwap: {
+      enabled: true,
+      algo: 'billow',
+      time: 0.45,
+      scale: 4,
+      cell: 1.2,
+      softness: 0.18,
+      boilHz: 12,
+      drift: 40,
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // THE SPLASH SKY SHADER — retro scanline bands over slow clouds, a WGSL
+  // fragment (splash/SkyScanlines in seal_survivor.riv) painted across the sky
+  // band by a Rive node script. These are its knobs: the game writes them into
+  // the artboard's view model (SKY_FX_BINDINGS in ui/riveContract.js) on load
+  // and whenever a slider moves, so the look is tuned here rather than in the
+  // editor. Speeds are per second of the splash's own clock. THE NUMBERS ARE
+  // ETHAN'S, set on the node in the Rive editor and copied here so that binding
+  // the inputs to the view model changed nothing about the look.
+  // ---------------------------------------------------------------------------
+  splashSky: {
+    bandDrift: 0.4,     // rad/s the scanlines slide toward the horizon
+    bandDensity: 1,     // 1 = design density, more = tighter bands
+    bandStrength: 1,    // 0..1 how hard a band darkens the sky
+    shimmer: 0.08,      // 0..0.2 sideways interference on the bands
+    cloudSpeed: 1,      // how fast the cloud field evolves
+    cloudScale: 0.2,    // noise cells across the band — bigger is finer
+    cloudAmount: 1,     // 0..1 how visible the clouds are
+    noiseDetail: 1,     // 1..6 octaves of the cloud noise; fractional is fine
   },
 
   // ---------------------------------------------------------------------------
@@ -36941,6 +37053,27 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    // The player's name on a card to the seal's right on the main menu
+    // (ui/nameTag.js), and how it leaves when Play is pressed. Every size is
+    // a fraction of the BUST on screen, so the card scales with the animal
+    // rather than with the window.
+    //
+    // There are no rows here for a name ON the seal, and that is a decision
+    // rather than an omission: see design/NAME-ON-THE-SEAL.md.
+    group: 'Main menu: name tag',
+    section: 'Interface & controls',
+    items: [
+      { path: 'splashBust.nametag.enabled', type: 'bool', label: 'the card beside the seal' },
+      { path: 'splashBust.nametag.height', min: 0.05, max: 1, step: 0.01, label: 'card height (bust heights)' },
+      { path: 'splashBust.nametag.gap', min: -0.5, max: 1, step: 0.01, label: 'gap from the bust (bust heights)' },
+      { path: 'splashBust.nametag.y', min: -0.5, max: 1.5, step: 0.01, label: 'card centre up the bust (0 waist, 1 crown)' },
+      { path: 'splashBust.nametag.margin', min: 0, max: 64, step: 1, label: 'nearest it may get to the screen edge (px)' },
+      { path: 'splashBust.nametag.flyTime', min: 0.1, max: 3, step: 0.05, label: 'fly-out on Play (s)' },
+      { path: 'splashBust.nametag.flyEase', type: 'choice', options: EASINGS, label: '...its curve' },
+      { path: 'splashBust.nametag.overshoot', min: 0, max: 2, step: 0.05, label: '...how far past the edge it ends (card widths)' },
+    ],
+  },
+  {
     group: 'Cine camera: rig',
     section: 'Camera',
     items: [
@@ -36975,11 +37108,14 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.lens.tiltShift.enabled', type: 'bool', label: 'tilt shift' },
       { path: 'cinecam.lens.tiltShift.strength', min: 0, max: 1.5, step: 0.02, label: 'tilt shift: master strength' },
       { path: 'cinecam.lens.tiltShift.radius', min: 1, max: 6, step: 1, label: 'tilt shift: blur iterations (cost)' },
+      { path: 'cinecam.lens.tiltShift.divisor', min: 2, max: 4, step: 1, label: 'tilt shift: buffer divisor (cost)' },
+      { path: 'cinecam.lens.tiltShift.floor', min: 0, max: 0.2, step: 0.005, label: 'tilt shift: skip below (cost)' },
       { path: 'cinecam.base.defocus', min: 0, max: 1, step: 0.02, label: 'tilt shift: edge blur (base)' },
       { path: 'cinecam.base.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'tilt shift: sharp radius (base)' },
       { path: 'cinecam.base.focusFeather', min: 0.02, max: 0.8, step: 0.01, label: 'tilt shift: falloff width (base)' },
       { path: 'cinecam.lens.flare.enabled', type: 'bool', label: 'lens flares' },
       { path: 'cinecam.lens.flare.strength', min: 0, max: 2, step: 0.02, label: 'flare: master strength' },
+      { path: 'cinecam.lens.flare.floor', min: 0, max: 0.1, step: 0.002, label: 'flare: skip below (cost)' },
       { path: 'cinecam.base.flare', min: 0, max: 2, step: 0.02, label: 'flare: amount (base)' },
       { path: 'cinecam.lens.flare.spacing', min: 0.05, max: 1, step: 0.01, label: 'flare: ghost spacing' },
       { path: 'cinecam.lens.flare.halo', min: 0, max: 1, step: 0.01, label: 'flare: halo distance' },
@@ -39533,6 +39669,22 @@ export const TUNER_SCHEMA = [
       { path: 'reveals.scoreCard.inTime', min: 0.1, max: 3, step: 0.05, label: 'score card: in (s)' },
       { path: 'reveals.scoreCard.softness', min: 0.02, max: 1, step: 0.02, label: 'score card: edge softness' },
       { path: 'reveals.scoreCard.scale', min: 1, max: 20, step: 1, label: 'score card: detail' },
+      { path: 'reveals.nameSwap.enabled', type: 'bool', label: 'name swap: dissolve the old name' },
+      { path: 'reveals.nameSwap.algo', options: ['value', 'perlin', 'simplex', 'worley', 'ridged', 'billow'], label: 'name swap: noise' },
+      { path: 'reveals.nameSwap.time', min: 0.1, max: 2, step: 0.05, label: 'name swap: gone in (s)' },
+      { path: 'reveals.nameSwap.scale', min: 1, max: 20, step: 1, label: 'name swap: noise detail' },
+      { path: 'reveals.nameSwap.cell', min: 0.2, max: 4, step: 0.1, label: 'name swap: grain (x pill height)' },
+      { path: 'reveals.nameSwap.softness', min: 0, max: 1, step: 0.02, label: 'name swap: edge softness' },
+      { path: 'reveals.nameSwap.boilHz', min: 0, max: 30, step: 1, label: 'name swap: boil rate (fps)' },
+      { path: 'reveals.nameSwap.drift', min: 0, max: 200, step: 5, label: 'name swap: drift (px/s)' },
+      { path: 'splashSky.bandDrift', min: -3, max: 3, step: 0.05, label: 'splash sky: scanline drift (rad/s)' },
+      { path: 'splashSky.bandDensity', min: 0.2, max: 4, step: 0.05, label: 'splash sky: scanline density' },
+      { path: 'splashSky.bandStrength', min: 0, max: 1, step: 0.02, label: 'splash sky: scanline strength' },
+      { path: 'splashSky.shimmer', min: 0, max: 0.25, step: 0.005, label: 'splash sky: shimmer' },
+      { path: 'splashSky.cloudSpeed', min: 0, max: 6, step: 0.1, label: 'splash sky: cloud evolution' },
+      { path: 'splashSky.cloudScale', min: 0.5, max: 12, step: 0.25, label: 'splash sky: cloud scale' },
+      { path: 'splashSky.cloudAmount', min: 0, max: 1, step: 0.02, label: 'splash sky: cloud amount' },
+      { path: 'splashSky.noiseDetail', min: 1, max: 6, step: 0.25, label: 'splash sky: noise detail (octaves)' },
       { path: 'reveals.field.size', min: 48, max: 224, step: 16, label: 'field bake size (px)' },
       { path: 'reveals.field.levels', min: 2, max: 24, step: 1, label: 'field levels' },
       { path: 'reveals.field.phases', min: 1, max: 10, step: 1, label: 'boil frames' },

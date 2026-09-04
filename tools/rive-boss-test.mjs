@@ -96,7 +96,7 @@ globalThis.__riveControl = {
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
-    if (spec === '@rive-app/canvas') return { url: 'stub:rive', format: 'module', shortCircuit: true };
+    if (spec === '@rive-app/canvas' || spec === '@rive-app/webgl2') return { url: 'stub:rive', format: 'module', shortCircuit: true };
     if (spec.endsWith('.riv?url') || spec.endsWith('.wasm?url')) {
       return { url: 'stub:rivurl', format: 'module', shortCircuit: true };
     }
@@ -212,7 +212,8 @@ check('...and it does not autoplay into an empty run', built?.autoplay === false
 // splash nobody built would pass whatever the answer was.
 const { mountRiveSplash } = await import('../path/src/ui/riveSplash.js');
 mountRiveSplash({ parent: document.body });
-const splash = riveLog.built.find((o) => o.artboard === 'Splash Screen');
+const { SPLASH_ARTBOARD } = await import('../path/src/ui/riveContract.js');
+const splash = riveLog.built.find((o) => o.artboard === SPLASH_ARTBOARD);
 check('the splash names its artboard too, now that there are two',
   !!splash, `built: ${riveLog.built.map((o) => o.artboard ?? '(FILE DEFAULT)').join(', ')}`);
 

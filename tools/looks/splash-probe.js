@@ -26,6 +26,22 @@
 // that quietly loses its seal.
 import { mountRiveSplash } from '../../path/src/ui/riveSplash.js';
 import { SPLASH_BINDINGS } from '../../path/src/ui/riveContract.js';
+import { NAME_SWAP_DEFAULTS } from '../../path/src/ui/nameSwap.js';
+
+// The sky shader's knobs at the shipped values (CONFIG.splashSky). A plain
+// object rather than the config, so this page keeps the standalone property the
+// module has — see the header of ui/riveSplash.js.
+const SKY_FX = {
+  bandDrift: 0.4,
+  bandDensity: 1,
+  bandStrength: 1,
+  shimmer: 0.08,
+  cloudSpeed: 1,
+  cloudScale: 0.2,
+  cloudAmount: 1,
+  noiseDetail: 1,
+};
+window.__skyFx = SKY_FX;
 
 const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
@@ -36,6 +52,12 @@ say(`viewport ${window.innerWidth}x${window.innerHeight}`);
 
 const handle = mountRiveSplash({
   parent: stage,
+  // The dice's dissolve at its defaults, so the look can be seen here too.
+  nameSwap: NAME_SWAP_DEFAULTS,
+  // The sky shader's knobs, through the same path the game uses — a mutable
+  // object the module polls. `__skyFx` on the window is the handle for driving
+  // them from the console: set a field and the sky follows within 250ms.
+  skyFx: SKY_FX,
   // The whole point of the page. `startFallback` stays off so a stray pointer
   // event while screenshotting does not tear the card down mid-look.
   background: 'transparent',
@@ -53,7 +75,7 @@ const handle = mountRiveSplash({
     // here as well unless the page says so out loud.
     const vmi = handle.rive?.viewModelInstance;
     for (const [role, prop] of Object.entries(SPLASH_BINDINGS)) {
-      if (role === 'name') continue;
+      if (!prop.startsWith('t')) continue; // only the triggers are worth a line
       let has = false;
       try { has = !!vmi?.trigger(prop); } catch { has = false; }
       say(`${prop}: ${has ? 'bound' : 'NOT IN THIS EXPORT'}`);
@@ -129,39 +151,12 @@ function sweepListeners() {
     say(`sweep: no trigger fired, but ${states} state change(s) — listeners are alive`);
   }
 }
-// ?guards — DOES A PRESS AT MOUNT START THE RUN?
-//
-// The splash begins a run on a press anywhere that is not the dice or the name
-// field, which is a very large button; two guards keep an accidental press off
-// it (a release whose press began elsewhere, and a dead time right after the
-// splash appears). Both are invisible when they work, and the dead time cannot
-// be tested from outside the page at all — a driver's round trip is longer than
-// the window it guards. So the page tests it itself, on the frame it mounts.
-if (location.search.includes('guards')) {
-  const fire = (type, ax, ay) => {
-    const wrap = stage.querySelector('.sv-riv'); const c = stage.querySelector('canvas');
-    if (!wrap || !c) return false;
-    const r = c.getBoundingClientRect();
-    const sc = Math.min(r.width / 1920, r.height / 1080);
-    const x = r.left + (r.width - 1920 * sc) / 2 + ax * sc;
-    const y = r.top + (r.height - 1080 * sc) / 2 + ay * sc;
-    wrap.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-    return true;
-  };
-  const alive = () => !handle.isDestroyed;
-  // Straight away: a full click on empty artboard, inside the dead time.
-  setTimeout(() => {
-    fire('pointerdown', 960, 250); fire('pointerup', 960, 250);
-    setTimeout(() => {
-      say(`guard: a click ${Math.round(performance.now())}ms after load — ${alive() ? 'ignored (dead time held)' : 'STARTED (dead time failed)'}`);
-      // ...and again once the dead time is well past, which must start it.
-      setTimeout(() => {
-        fire('pointerdown', 960, 250); fire('pointerup', 960, 250);
-        setTimeout(() => say(`guard: a click after the dead time — ${alive() ? 'ignored (BAD)' : 'started (good)'}`), 150);
-      }, 700);
-    }, 150);
-  }, 0);
-}
+// ?guards USED TO TEST THE PRESS-AT-MOUNT GUARDS. There is nothing to guard
+// now: a run begins only when the artboard's own Start button fires `tStart`
+// (on pointer DOWN — see onSplashPointer in riveSplash.js), and a press on
+// empty water focuses the name field and nothing else. The sweep above is the
+// check that still matters: it must report tStart firing somewhere.
+if (location.search.includes('guards')) say('guards: retired — the artboard owns Start now; run the sweep instead');
 
 // A BUTTON, NOT A KEY. The splash holds focus on its hidden name field the
 // whole time it is up, so every letter you press is typed into it — a keyboard

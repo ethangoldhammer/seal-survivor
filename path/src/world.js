@@ -18,6 +18,7 @@ import { createHorizonGlow } from './systems/horizon.js';
 import { createWallRocks, shoreOverscan } from './systems/wallRocks.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
+import { mark as crashMark } from './systems/crashLog.js';
 
 // FLOOR_OVERSCAN moved to arena.js — updateBounds clamps the field-of-view
 // setting against it and cannot import this file. Only the death dive's framing
@@ -137,6 +138,33 @@ export function createWorld(container) {
   // Off, so the counts accumulate across every pass of a frame. main.js reads
   // them at the top of the next frame and resets by hand — see the note there.
   renderer.info.autoReset = false;
+  // THE GPU DYING IS INVISIBLE FROM EVERYWHERE ELSE, and it is the one ending
+  // this game had no way to record.
+  //
+  // A WebGL context loss is not a JavaScript error: nothing throws, no handler
+  // runs, and the frame loop simply stops drawing. On the phone WebKit then
+  // reloads the page, and what the player sees is the game "resetting to the
+  // loading screen" — identical, from the outside, to the process being killed
+  // for memory. The two were indistinguishable in the crash trail, and the
+  // device's own logs say it is NOT the memory one: no JetsamEvent at any of
+  // the resets, no WebContent crash report, and a CPU exception at 54% average
+  // that took no action.
+  //
+  // So the trail records it. A run that ends `... -> gl:lost` is a GPU fault
+  // and a run that ends `... -> tick` is not, which is the whole question.
+  //
+  // `preventDefault` is what allows a restore to be attempted at all — without
+  // it WebKit will not fire webglcontextrestored — but nothing here tries to
+  // rebuild the scene, because a half-restored renderer that draws nothing is
+  // worse than a reload. The mark is the point.
+  renderer.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    try { crashMark('gl:lost', renderer.info?.render?.calls ?? ''); } catch { /* never block the handler */ }
+  });
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    try { crashMark('gl:restored'); } catch { /* as above */ }
+  });
+
   container.appendChild(renderer.domElement);
 
   const ambient = new THREE.AmbientLight(0xffffff, CONFIG.lighting.ambient);

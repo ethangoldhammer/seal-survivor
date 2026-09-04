@@ -56,6 +56,18 @@
 // line in the console and nothing else. That is what lets this land before the
 // button exists in the editor; see PENDING_BINDINGS in riveContract.js.
 //
+// THE ARTBOARD OWNS THE POINTER. `Splash Responsive` (riveContract.js) has
+// working listeners on its dice and its Start button — hover, click and press
+// all arrive through the view model, measured in the browser — so nothing here
+// hit-tests a rectangle any more. The previous artboard's listeners were inert
+// and this file carried hand-measured hit boxes for the dice and the field,
+// which pointed at empty water the moment anything moved in the editor. Gone.
+//
+// One thing the artboard cannot do is raise the phone keyboard: only a focus()
+// call inside a real gesture handler does that. So the wrapper's pointerup
+// still exists, and its whole job is to hand focus to the hidden field when the
+// press was not on a button — see onSplashPointer.
+//
 // ---------------------------------------------------------------------------
 // THERE IS STILL A WAY OUT WITHOUT THE TRIGGER, and it is not politeness. If a
 // .riv is ever exported without `tStart` — renamed in the editor, or an older
@@ -64,12 +76,17 @@
 // the old behaviour alive for exactly that case and for nothing else.
 // ---------------------------------------------------------------------------
 
-import { Rive, Layout, Fit, Alignment } from '@rive-app/canvas';
+// THE WEBGL2 PACKAGE, not the canvas one the boss bar and polaroid use. The
+// splash is the surface with feathers in it — the wordmark's shadows, the
+// buttons' hover lift — and only the Rive Renderer draws a feather soft; the
+// Canvas2D renderer draws it as a hard offset copy. Same JavaScript API, its
+// own WASM. See riveRuntimeGl.js.
+import { Rive, Layout, Fit, Alignment } from '@rive-app/webgl2';
 // Points the runtime at our own copy of its WASM instead of unpkg. Imported for
 // the side effect, and it has to happen before any Rive instance exists — see
-// riveRuntime.js.
-import './riveRuntime.js';
-import { SPLASH_ARTBOARD, SPLASH_BINDINGS, SPLASH_INPUTS } from './riveContract.js';
+// riveRuntimeGl.js.
+import './riveRuntimeGl.js';
+import { SPLASH_ARTBOARD, SPLASH_STATE_MACHINE, SPLASH_BINDINGS, SKY_FX_BINDINGS } from './riveContract.js';
 import { loadPlayerName, savePlayerName, sanitizeName, MAX_NAME_LEN } from '../systems/playerName.js';
 // What the dice button spends. Parsed once at module load, out of
 // sealNames.csv — see the note above and path/src/sealNameTable.js.
@@ -82,6 +99,8 @@ import { touchPrimary } from '../devices.js';
 // property the header above is built on — see ui/tipJar.js.
 import { mountSplashTipJar } from './tipJar.js';
 import { mountBuildStamp } from './buildStamp.js';
+// The old name boiling out of the pill when the dice rolls — see nameSwap.js.
+import { swapWithNoise } from './nameSwap.js';
 import { parseTipCsv } from '../tipTable.js';
 import tipsCsv from '../tips.csv?raw';
 
@@ -93,80 +112,6 @@ const TIP_TIERS = parseTipCsv(tipsCsv);
 // would push 644KB of binary through the module graph on every reload.
 import splashUrl from './seal_survivor.riv?url';
 
-// ---------------------------------------------------------------------------
-// THE DICE BUTTON, HIT-TESTED HERE — a WORKAROUND, and one with a deletion
-// condition written into it.
-//
-// The artboard's own listeners do not fire. Not the dice's and not the Start
-// button's: driving `pointerDown`/`pointerUp` straight into the state machine
-// instance, 576 presses covering the whole artboard, produces no trigger and
-// no state change at all — so this is upstream of the canvas, the coordinate
-// maths, the browser and the runtime version (2.39.2 and 2.40.0 both). It is
-// something about how the two listeners are authored in seal_survivor.riv,
-// which is why `tStart` has only ever been reachable with the Enter key.
-// `npm run looks:splash` has a "sweep for live listeners" button that says
-// which state the shipped file is in.
-//
-// So the press is caught on the WRAPPER and mapped into artboard space by
-// hand. The rectangle below is the glyph's own box, MEASURED off the rendered
-// artboard rather than guessed — and that is also the weakness: move the
-// button in the Rive editor and this rect points at empty water, silently.
-//
-// IT DISABLES ITSELF. The moment `tRandomizeName` arrives from the artboard,
-// `riveButtonLive` latches and this path never runs again — so the day the
-// listener is fixed, the workaround stops participating on its own and the
-// only thing left to do is delete it.
-// ---------------------------------------------------------------------------
-
-// The glyph measured at 288.7..368.2 x 726.7..792.7 in artboard units, grown
-// to a comfortable target. The name field's left edge is at x≈404, so the box
-// stops well short of it: a press meant for the field must never roll a name.
-const DICE_HIT = { minX: 268, maxX: 392, minY: 703, maxY: 816 };
-
-// THE NAME FIELD, measured the same way — the panel's own edges, walked across
-// the render rather than read off a design. This box is not a control here: it
-// is what a press must NOT be taken for. A tap on the field means "I want to
-// type", and with the rule below (anywhere else starts the run) it is the one
-// place on the splash where nothing at all should happen.
-const FIELD_HIT = { minX: 411, maxX: 1509, minY: 702, maxY: 830 };
-
-/** Is an artboard-space point inside one of the boxes above? */
-function inside(box, p) {
-  return !!p && p.x >= box.minX && p.x <= box.maxX && p.y >= box.minY && p.y <= box.maxY;
-}
-
-// The artboard's own size, for the mapping below. Read off the loaded file
-// when it can be, because a resized artboard would move every hit box on the
-// screen; these are what `Splash Screen` measures today.
-const ARTBOARD_W = 1920;
-const ARTBOARD_H = 1080;
-
-// How long to wait for the ARTBOARD to answer before doing it ourselves. The
-// trigger arrives from inside Rive's advance, a frame or more after the press,
-// so firing on the press itself would double up the day the listener works.
-// Three frames is under the eye's threshold for a button and well over Rive's.
-const DICE_GRACE_MS = 60;
-
-// How long after the splash appears a press cannot yet start the run. Long
-// enough to swallow the gesture that brought the player here, short enough
-// that somebody who means it never notices.
-const START_DEADTIME_MS = 400;
-
-/**
- * A client point in ARTBOARD units, for `Fit.Contain` centred — which is the
- * layout this file mounts with, a few lines below. Rive computes the same
- * matrix internally and does not expose it, and the alternative (reaching into
- * `rive._layout` and `rive.runtime`) is two underscored properties that a
- * runtime bump is free to rename.
- */
-function toArtboard(rect, clientX, clientY) {
-  const scale = Math.min(rect.width / ARTBOARD_W, rect.height / ARTBOARD_H);
-  if (!(scale > 0)) return null;
-  return {
-    x: (clientX - rect.left - (rect.width - ARTBOARD_W * scale) / 2) / scale,
-    y: (clientY - rect.top - (rect.height - ARTBOARD_H * scale) / 2) / scale,
-  };
-}
 
 export function mountRiveSplash({
   parent = document.body,
@@ -223,6 +168,18 @@ export function mountRiveSplash({
   // module deliberately knows nothing about the rest of the UI — ui.js hands
   // in a reveal, and a test page can hand in nothing.
   exit,
+  // How the OLD name leaves the pill when the dice rolls a new one: the
+  // settings object for ui/nameSwap.js (CONFIG.reveals.nameSwap in the game).
+  // Undefined or `enabled: false` means the text simply changes. Only the dice
+  // does this — a typed keystroke is the player watching their own letters
+  // land, and a dissolve per keystroke would be noise over the thing they are
+  // looking at.
+  nameSwap,
+  // THE SKY SHADER'S KNOBS — CONFIG.splashSky in the game, by reference so the
+  // tuner's sliders reach a splash that is already up. Each field is written to
+  // the view-model number of the same name in SKY_FX_BINDINGS when it changes.
+  // Undefined leaves the artboard's own defaults alone.
+  skyFx,
 } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'sv-riv';
@@ -304,37 +261,83 @@ export function mountRiveSplash({
   // is no longer on the page.
   let randomTrigger = null;
   let onRandomTrigger = null;
-  // When this splash went up, for the dead time above.
-  const mountedAt = performance.now();
-  // Whether the press being released began on the splash — see maybeStart.
-  let pressBeganHere = false;
-
-  // THE STATE MACHINE'S OWN INPUTS, once the machine is running. The game
-  // says whether the pointer is on the button and when it was pressed; the
-  // artboard decides what either looks like. See SPLASH_INPUTS.
-  let hoverInput = null;
-  let clickInput = null;
-  // How long the press animation runs, read off the file so a retime in the
-  // editor carries. Only used on touch — see maybeDice.
-  let clickDur = 0.6;
+  // What the cursor currently says, so it is only rewritten on change.
   let hoverOn = false;
-  let touchHoverTimer = 0;
+  // The dissolve in flight, if any, so a second roll or the teardown can end it.
+  let swap = null;
+  // What the sky shader was last told, per knob, so a slider is written only
+  // when it moved; and the timer that watches CONFIG for that.
+  const skyWritten = {};
+  let skyTimer = 0;
+  // The tuner has no change event this module can hear, so the knobs are
+  // compared on a slow clock. Eight number compares four times a second is
+  // nothing; a rAF loop for it would not be.
+  const SKY_POLL_MS = 250;
+  // The last name the dice put in the field. SPACE rolls a new name, but only
+  // while the field holds a rolled name or nothing — the moment the player has
+  // typed something of their own, space is a space again, because names have
+  // spaces in them ("Whiskered Lenny") and a key that eats them mid-word is a
+  // field that cannot be typed into.
+  let lastRolled = '';
+  // The artboard's own report of the row's width, subscribed so the centring
+  // in fitEntryRowNow follows the pill while it interpolates to a new name.
+  let widthProp = null;
+  let onWidth = null;
+  // WHAT THE FIELD SHOWS WHEN THE NAME IS EMPTY: the artboard's own default
+  // for `strPlayerName`, read off the view model before the first write. The
+  // name pill hugs its text now (see riveContract.js), so an empty string is
+  // not an empty box but an 80px stub with nothing in it — and the line that
+  // belongs there is already in the file, in Ethan's words, as the instance
+  // default. Read, never written here.
+  let placeholder = '';
 
-  // Set the first time the ARTBOARD fires the dice trigger. It latches off the
-  // hand-rolled hit test above — see the note at the top of the file.
-  let riveButtonLive = false;
+  // THE ENTRY ROW, for fitEntryRow. The row hugs the name (see `entryScale` in
+  // riveContract.js), so its width is a function of the text — and the
+  // artboard reports that width back through `numEntryWidth`, measured by its
+  // own layout, so nothing here estimates a font. The fallback below is only
+  // for the frame before the first layout has run, when the number reads 0:
+  // Playfair Display SC at 84px is about 50px a character in small caps.
+  // The entry is a COLUMN now — dice above the pill, start below — so the
+  // only width that matters is the pill's: its text plus 40px of padding a
+  // side. The strip it is centred in is 324 tall (80 + 16 + 132 + 16 + 80) and
+  // anchored to the bottom of the screen, so a 16:9 window does not lose the
+  // start button off the bottom edge.
+  const ENTRY_FIXED_W = 2 * 40;                     // the pill's padding
+  const ENTRY_PER_CHAR = 52;
+  const ENTRY_STRIP_H = 324;                        // the strip's design height
+  const ENTRY_STRIP_BOTTOM = 72;                    // px between the strip and the bottom edge: room for the tip jar
+  // The column may not climb past this fraction of the screen's height, or on
+  // a phone held sideways it sits on the wordmark. Width alone fits the pill;
+  // height is what a 393px-tall screen runs out of.
+  const ENTRY_MAX_HEIGHT_FRAC = 0.42;
+  const ENTRY_PILL_H = 132;                         // the pill's design height
+  const ENTRY_PILL_TOP = 80 + 16;                   // dice and gap above the pill
+  const ENTRY_MARGIN = 24;                          // breathing room at each screen edge
+  const ENTRY_MIN_SCALE = 0.3;
+  // The row's width is re-read after every change the artboard reports, but
+  // while the pill is INTERPOLATING to a new name the width is mid-way, and a
+  // scale computed from a mid-way width is wrong twice — once on the way and
+  // once back. So the number is only recomputed once the width has held still
+  // for this long, which is longer than one frame and shorter than the eye.
+  const ENTRY_SETTLE_MS = 120;
+  // The scale last written, so the row's design width can be recovered from
+  // the width the artboard reports at that scale (everything in the row scales
+  // with the same number, so width / scale is the width at 1).
+  let entryScale = 1;
+  let entrySettleTimer = 0;
 
   // Rive draws at the canvas's backing-store size, not its CSS size, so a
   // resize that only changes layout leaves the animation rendering at the old
   // resolution until the drawing surface is resynced.
-  const onResize = () => rive?.resizeDrawingSurfaceToCanvas();
+  const onResize = () => { rive?.resizeDrawingSurfaceToCanvas(); fitEntryRow(); };
 
   function destroy(reason = 'manual') {
     if (destroyed) return;
     destroyed = true;
 
     window.removeEventListener('resize', onResize);
-    clearTimeout(touchHoverTimer);
+    clearTimeout(entrySettleTimer);
+    clearInterval(skyTimer);
     for (const [target, type, fn] of inputListeners) target.removeEventListener(type, fn);
 
     // THE NAME IS BANKED ON THE WAY OUT, whatever ended the splash. Not on
@@ -364,6 +367,11 @@ export function mountRiveSplash({
     if (randomTrigger && onRandomTrigger) randomTrigger.off(onRandomTrigger);
     randomTrigger = null;
     onRandomTrigger = null;
+    if (widthProp && onWidth) { try { widthProp.off(onWidth); } catch { /* gone with the file */ } }
+    widthProp = null;
+    onWidth = null;
+    swap?.cancel();
+    swap = null;
 
     // cleanup() stops the render loop and frees the WASM-side artboard. Without
     // it the instance keeps drawing into a detached canvas. The canvas keeps
@@ -405,127 +413,61 @@ export function mountRiveSplash({
   // the same event: on the fallback path that tap also ends the splash, and
   // focusing a field inside a wrapper that is about to be removed would be a
   // keyboard flashing up over the first frame of the run.
-  // WHAT A PRESS ON THE SPLASH MEANS, decided here because the artboard cannot
-  // decide it — see the note at the top of the file. Three places, and the
-  // third is everywhere else:
+  // WHAT A PRESS ON THE SPLASH MEANS. The artboard decides the buttons — its
+  // dice fires `tRandomizeName` on click, its Start fires `tStart` on pointer
+  // DOWN — and the one thing left to this side is focus:
   //
-  //   the dice   roll a name
-  //   the field  take focus, so the player can type. NOTHING else: this is the
-  //              one press that must not start the run, or a player reaching
-  //              for the keyboard would be thrown into the game instead.
-  //   anywhere   start the run
+  //   the field, or anywhere that is not a button   focus the name field
   //
-  // "Anywhere else starts" is looser than the artboard's own Start button,
-  // which is a rectangle somewhere in the file we cannot see. It is also the
-  // only thing that makes the game startable on a phone at all, since `tStart`
-  // has never fired and Enter needs a keyboard. When the artboard's listener
-  // works this whole path can go.
-  // A press BEGINNING on the splash, which is what makes the release above a
-  // click rather than the tail of somebody else's gesture.
-  const onSplashDown = () => { pressBeganHere = true; };
-
+  // Anywhere-that-is-not-a-button rather than the field's own rectangle,
+  // because the field's rectangle is a layout the runtime computes and does
+  // not expose, and a phone needs focus() inside THIS gesture handler to raise
+  // its keyboard. The cost is a keyboard on a tap into empty water, which is a
+  // player reaching for the field and missing.
+  //
+  // Start is on pointer DOWN in the artboard for exactly this handler's sake:
+  // `tStart` reaches `.on()` from inside Rive's next advance, one frame after
+  // the press, which is well before the release — so by the time this pointerup
+  // arrives destroy() has run and nothing here fires. A press on Start never
+  // focuses the field, and a phone never flashes its keyboard over the first
+  // frame of the run.
+  //
+  // A button is told apart by asking the artboard: its own enter listeners
+  // have set `bRandomHover` / `bStartHover` by the time the release arrives (a
+  // tap is a pointerdown over the button, which is an enter). A read of the
+  // view model is synchronous, so this is the same gesture and the same call
+  // stack.
   const onSplashPointer = (e) => {
     // First, and before any branch below can end the splash — see onGesture.
     onGesture?.();
-    const began = pressBeganHere;
-    pressBeganHere = false;
     if (startFallback) { dismiss(e); return; }
-
-    const p = toArtboard(canvas.getBoundingClientRect(), e.clientX, e.clientY);
-
-    if (inside(FIELD_HIT, p)) {
-      // Focus is given HERE and nowhere else now. It used to be handed over on
-      // any press at all, which was right while every press also meant
-      // "nothing" — it is wrong now that a press elsewhere starts the run,
-      // because raising a phone's keyboard on the way into the game is a
-      // keyboard that opens over the first second of play.
-      if (document.activeElement !== nameInput) nameInput.focus();
-      return;
-    }
-
-    if (inside(DICE_HIT, p)) { maybeDice(); return; }
-
-    maybeStart(began);
+    if (destroyed) return;
+    if (overButton()) return;
+    if (document.activeElement !== nameInput) nameInput.focus();
   };
 
-  // BEGIN THE RUN, unless the artboard beats us to it. Same grace period and
-  // the same reasoning as the dice: `tStart` arrives from inside Rive's
-  // advance, a frame or more after the press, and destroy() is idempotent
-  // anyway — so the check is simply whether the splash is still standing.
-  //
-  // TWO GUARDS, because "anywhere else starts the run" is a very large button
-  // and both of these are ways of pressing it without meaning to:
-  //
-  //   the press must have BEGUN here. A pointerup on its own is not a click —
-  //   it is also what arrives when a drag that started somewhere else lets go
-  //   over the splash, or when a press that dismissed something underneath
-  //   releases up here. Those must not start a run.
-  //
-  //   ...and not in the first moments. The splash mounts under whatever
-  //   gesture brought the player to it (a reload, a click on the page, a
-  //   dismissed dialog), and a run that begins before the title has been read
-  //   looks exactly like the splash failing to appear at all.
-  function maybeStart(began) {
-    if (destroyed) return;
-    if (!began) return;
-    if (performance.now() - mountedAt < START_DEADTIME_MS) return;
-    setTimeout(() => {
-      if (destroyed) return;
-      destroy('press');
-    }, DICE_GRACE_MS);
+  // Is the pointer over the dice or the Start button, as far as the ARTBOARD
+  // is concerned? Its own hover listeners keep these booleans; the game only
+  // reads them. False for an export without the property, which is a splash
+  // without that button.
+  function overButton() {
+    const vmi = rive?.viewModelInstance;
+    if (!vmi) return false;
+    for (const prop of [SPLASH_BINDINGS.hover, SPLASH_BINDINGS.startHover]) {
+      try { if (vmi.boolean(prop)?.value) return true; } catch { /* not in this export */ }
+    }
+    return false;
   }
 
-  // Is the point inside the dice's box, in artboard units? Used by the hover
-  // writer, which asks it of every mouse move.
-  function overDice(clientX, clientY) {
-    return inside(DICE_HIT, toArtboard(canvas.getBoundingClientRect(), clientX, clientY));
-  }
-
-  // THE LIT STATE, written straight at the artboard. The hover half of the
-  // workaround: the button's highlight is the artboard's own animation off
-  // `bRandomHover`, and with the file's hover listeners inert this is the only
-  // thing that ever sets it. Written on change only — a boolean assigned every
-  // mousemove is a dirty flag on the view model sixty times a second.
-  //
-  // The CURSOR rides along, because a thing that lights up under the pointer
-  // and does not become a hand still does not read as a button.
-  function setDiceHover(on) {
+  // THE CURSOR, because a thing that lights up under the pointer and does not
+  // become a hand still does not read as a button. The lit state itself is the
+  // artboard's own transition off `bRandomHover`; this only follows it. A frame
+  // behind, since the listener writes during Rive's advance, and nobody can see
+  // a frame.
+  function syncCursor(on) {
     if (hoverOn === on) return;
     hoverOn = on;
     canvas.style.cursor = on ? 'pointer' : '';
-    try { if (hoverInput) hoverInput.value = on; } catch { /* see writeName */ }
-  }
-
-  // Did that press land on the dice? Only asked while the artboard has never
-  // answered for itself — see DICE_HIT at the top of the file.
-  function maybeDice() {
-    if (riveButtonLive || destroyed) return;
-
-    // THE PRESS ANIMATION, which the artboard only plays while it also thinks
-    // the button is hovered — correct for a mouse, and impossible on a finger,
-    // which never hovers anything. So a touch press holds the hover input up
-    // for the length of the press animation and then drops it: a tap gets the
-    // same animation a click does rather than nothing at all.
-    try {
-      if (touchPrimary() && hoverInput) {
-        hoverInput.value = true;
-        clearTimeout(touchHoverTimer);
-        touchHoverTimer = setTimeout(() => {
-          if (destroyed) return;
-          try { if (hoverInput) hoverInput.value = false; } catch { /* see writeName */ }
-        }, clickDur * 1000);
-      }
-      clickInput?.fire();
-    } catch (err) {
-      console.warn(`[riveSplash] could not fire ${SPLASH_INPUTS.click} —`, err?.message ?? err);
-    }
-
-    // The grace period is the whole reason this is not a race: if the artboard
-    // was going to answer, it has by now, and `riveButtonLive` is set.
-    setTimeout(() => {
-      if (riveButtonLive || destroyed) return;
-      randomizeName();
-    }, DICE_GRACE_MS);
   }
 
   // Enter starts the run from the keyboard, on both paths. It is what the
@@ -534,10 +476,36 @@ export function mountRiveSplash({
   // mouse. Not a general keydown — only this one key, and only from the field.
   const onNameKey = (e) => {
     onGesture?.();
+    if (e.key === ' ' && spaceRolls()) {
+      e.preventDefault();
+      randomizeName();
+      return;
+    }
     if (e.key !== 'Enter') return;
     e.preventDefault();
     destroy('enter');
   };
+
+  // Is space the dice right now? See `lastRolled`.
+  function spaceRolls() {
+    const v = nameInput.value;
+    return v === '' || v === lastRolled;
+  }
+
+  // SPACE FROM ANYWHERE ON THE PAGE. The field normally holds focus on a
+  // desktop, so this is for the moments it does not — the tip jar was clicked,
+  // the page was clicked outside the wrapper — and for the same rule.
+  const onWindowKey = (e) => {
+    if (e.key !== ' ' || e.target === nameInput || destroyed) return;
+    if (isTextEntry(e.target)) return;
+    if (!spaceRolls()) return;
+    e.preventDefault();
+    randomizeName();
+  };
+
+  function isTextEntry(el) {
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+  }
 
   // MIRRORED ON EVERY KEYSTROKE, through the same sanitiser the leaderboard
   // uses. Sanitising HERE rather than on the way out is what makes the artboard
@@ -559,57 +527,131 @@ export function mountRiveSplash({
   // input.js for what that costs for the rest of the run.
   const onSplashMove = (e) => {
     if (e.pointerType && e.pointerType !== 'mouse') return;
-    // MOUSE ONLY, which is the right filter for a hover as well as for the
-    // seal's aim: a finger is never "hovering" a button, and a touch that lit
-    // this one would leave it lit until the next tap somewhere else.
-    if (!riveButtonLive && !destroyed) setDiceHover(overDice(e.clientX, e.clientY));
+    if (!destroyed) syncCursor(overButton());
     onPointer?.(e.clientX, e.clientY);
   };
 
   // The pointer leaving the window entirely produces no move inside it, so
-  // without this the button stays lit after the cursor is gone.
-  const onSplashLeave = () => setDiceHover(false);
+  // without this the hand stays up after the cursor is gone.
+  const onSplashLeave = () => syncCursor(false);
 
   const inputListeners = [
     [wrap, 'pointermove', onSplashMove],
     [wrap, 'pointerleave', onSplashLeave],
-    [wrap, 'pointerdown', onSplashDown],
     [wrap, 'pointerup', onSplashPointer],
     [window, 'keydown', dismiss],
+    [window, 'keydown', onWindowKey],
     [nameInput, 'input', onNameInput],
     [nameInput, 'keydown', onNameKey],
   ];
   for (const [target, type, fn] of inputListeners) target.addEventListener(type, fn);
 
-  // Take the dice button's inputs off the running machine. See the call site
-  // for why it cannot happen any earlier.
-  function takeInputs(machines) {
-    try {
-      const inputs = machines.length ? (rive.stateMachineInputs(machines[0]) ?? []) : [];
-      hoverInput = inputs.find((i) => i.name === SPLASH_INPUTS.hover) ?? null;
-      clickInput = inputs.find((i) => i.name === SPLASH_INPUTS.click) ?? null;
-      if (!hoverInput || !clickInput) {
-        console.info(
-          `[riveSplash] this export has ${inputs.length ? inputs.map((i) => i.name).join(', ') : 'no'} state machine inputs — `
-          + `the dice button wants "${SPLASH_INPUTS.hover}" and "${SPLASH_INPUTS.click}" to animate.`,
-        );
-      }
-      // The press animation's own length, for the touch pulse in maybeDice.
-      const press = rive.animator?.animations?.find((a) => a.name === 'Random_Click');
-      const fps = press?.animation?.fps ?? 0;
-      if (fps > 0) clickDur = press.animation.duration / fps;
-    } catch (err) {
-      console.info('[riveSplash] could not read the splash state machine inputs —', err?.message ?? err);
-    }
-  }
-
   // Push the current text at the artboard. A no-op until the view model is
   // bound, which is what makes it safe to call from the input handler before
   // the file has finished loading — a fast typist beats a 1.7MB parse.
+  // SHRINK THE ROW TO THE SCREEN. Written on every name change and every
+  // resize, because both move the answer: the row is as wide as the name, and
+  // the screen is as wide as the phone is being held. 1 on any screen that fits
+  // the row at design size, which is every desktop.
+  //
+  // Written a frame LATE on purpose: a name change reflows the row inside
+  // Rive's next advance, and the width bound out of it is the width of the
+  // previous frame's text until then. The rAF here lands after that advance.
+  function fitEntryRow() {
+    clearTimeout(entrySettleTimer);
+    entrySettleTimer = setTimeout(fitEntryRowNow, ENTRY_SETTLE_MS);
+  }
+
+  function fitEntryRowNow() {
+    if (destroyed) return;
+    try {
+      const vmi = rive?.viewModelInstance;
+      const scaleProp = vmi?.number(SPLASH_BINDINGS.entryScale);
+      if (!scaleProp) return;
+      // The pill's width at scale 1, recovered from what the artboard reports
+      // at the scale last written. Estimated from the text only before the first
+      // layout has run.
+      let rowW = 0;
+      try { rowW = (vmi.number(SPLASH_BINDINGS.entryWidth)?.value ?? 0) / (entryScale || 1); } catch { rowW = 0; }
+      if (!(rowW > 0)) rowW = ENTRY_FIXED_W + (nameInput.value || placeholder).length * ENTRY_PER_CHAR;
+      const avail = canvas.clientWidth - 2 * ENTRY_MARGIN;
+      if (!(avail > 0)) return;
+      const byWidth = avail / rowW;
+      const byHeight = (canvas.clientHeight * ENTRY_MAX_HEIGHT_FRAC) / ENTRY_STRIP_H;
+      const s = Math.max(ENTRY_MIN_SCALE, Math.min(1, byWidth, byHeight));
+      // Written on a real change only: every write re-lays the row out, and the
+      // layout engine would happily animate a 0.3% correction on every frame.
+      if (Math.abs(s - entryScale) < 0.005) return;
+      entryScale = s;
+      scaleProp.value = s;
+    } catch { /* an export without the number keeps its design size */ }
+  }
+
+  // PUSH THE SKY KNOBS AT THE ARTBOARD, changed ones only. Safe on an export
+  // without the shader: the number simply is not there and the write is
+  // skipped. See SKY_FX_BINDINGS.
+  function syncSkyFx() {
+    if (!skyFx || destroyed) return;
+    const vmi = rive?.viewModelInstance;
+    if (!vmi) return;
+    for (const [knob, prop] of Object.entries(SKY_FX_BINDINGS)) {
+      const v = Number(skyFx[knob]);
+      if (!Number.isFinite(v) || skyWritten[knob] === v) continue;
+      try {
+        const p = vmi.number(prop);
+        if (p) { p.value = v; skyWritten[knob] = v; }
+      } catch { /* not in this export */ }
+    }
+  }
+
+  // WHERE THE PILL IS, in CSS px of the canvas, from what the artboard reports
+  // (the pill's own width) and the entry's design: a column of dice, pill and
+  // start, centred both ways in a strip 324 tall whose top sits at 65% of the
+  // artboard, the pill 96 down from the column's top at scale 1. The one place
+  // those numbers are repeated outside the .riv; if the column is redesigned
+  // in the editor this is the line to revisit.
+  function pillRect() {
+    const vmi = rive?.viewModelInstance;
+    if (!vmi) return null;
+    let w = 0; let s = 1;
+    try {
+      w = vmi.number(SPLASH_BINDINGS.entryWidth)?.value ?? 0;
+      s = vmi.number(SPLASH_BINDINGS.entryScale)?.value ?? 1;
+    } catch { return null; }
+    if (!(s > 0) || !(w > 2)) return null;
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    // The strip hangs a fixed 72px off the bottom of the artboard, so its top
+    // is the height less that gap less its own 324.
+    // The column sits on the strip's BOTTOM edge (not centred in it), so a
+    // shrunken column stays as low as it can and clear of the wordmark.
+    const stripBottom = H - ENTRY_STRIP_BOTTOM;
+    return {
+      x: (W - w) / 2,
+      y: stripBottom - ENTRY_STRIP_H * s + ENTRY_PILL_TOP * s,
+      w,
+      h: ENTRY_PILL_H * s,
+      radius: 29 * s,
+    };
+  }
+
+  // Photograph the pill as it is and start it boiling away. Called by the dice
+  // BEFORE the new name is written, while the canvas still shows the old one.
+  function beginNameSwap() {
+    if (!nameSwap || nameSwap.enabled === false || destroyed || !rive) return;
+    const rect = pillRect();
+    if (!rect) return;
+    swap?.cancel();
+    // Reads the LAST DRAWN frame, which still shows the old name — possible
+    // only because the context below was created with preserveDrawingBuffer.
+    swap = swapWithNoise({ wrap, source: canvas, rect, radius: rect.radius, opts: nameSwap });
+  }
+
   function writeName(value) {
+    fitEntryRow();
     try {
       const prop = rive?.viewModelInstance?.string(SPLASH_BINDINGS.name);
-      if (prop) prop.value = value;
+      if (prop) prop.value = value || placeholder;
     } catch (err) {
       // A missing property throws rather than returning null on some paths.
       // The splash still works — the name is stored either way, and the only
@@ -632,10 +674,31 @@ export function mountRiveSplash({
   function randomizeName() {
     if (destroyed) return '';
     const name = randomPlayerName(nameInput.value);
+    // The old name has to be photographed before it is overwritten.
+    if (name !== nameInput.value) beginNameSwap();
     nameInput.value = name;
+    lastRolled = name;
     writeName(name);
     return name;
   }
+
+  // THE CONTEXT IS OURS FIRST. The WebGL2 runtime calls getContext('webgl2')
+  // with preserveDrawingBuffer OFF, and a WebGL canvas whose buffer is not
+  // preserved is blank to drawImage the moment the browser has composited the
+  // frame — which is every moment the name swap (nameSwap.js) wants to
+  // photograph the pill, since it runs from inside Rive's own advance, before
+  // this frame is drawn and after the last one was shown. getContext hands back
+  // the FIRST context made on a canvas, attributes and all, so asking here with
+  // the buffer preserved is what the runtime then draws into. The other
+  // attributes match the runtime's own request so nothing about the surface
+  // differs. `drawFrame()` was tried instead and does nothing while the frame
+  // loop has a request pending, which is always.
+  try {
+    canvas.getContext('webgl2', {
+      alpha: true, depth: true, stencil: true, antialias: true,
+      premultipliedAlpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance',
+    });
+  } catch { /* no WebGL2: the runtime will say so itself via onLoadError */ }
 
   rive = new Rive({
     src: splashUrl,
@@ -647,6 +710,21 @@ export function mountRiveSplash({
     // guards against is a silent one: the splash would simply come up as the
     // boss health bar one morning, with nothing in the code having changed.
     artboard: SPLASH_ARTBOARD,
+    // NAMED HERE, NOT ONLY IN play() BELOW. `autoBind` binds the view model to
+    // the state machines that exist at load; a machine first instanced by a
+    // later play() is never bound, its listeners write into nothing, and the
+    // artboard's own buttons go dead with no error anywhere. That is exactly
+    // what the previous artboard's "inert listeners" were. See
+    // SPLASH_STATE_MACHINE in riveContract.js for the measurement.
+    stateMachines: SPLASH_STATE_MACHINE,
+    // GPU CANVAS, and it can only be asked for HERE. The sky band is painted by
+    // a WGSL shader (splash/SkyScanlines) that a Rive node script renders into a
+    // GPU canvas, and `context:gpuCanvas()` throws "requires a RenderContext"
+    // unless the file was IMPORTED in deferred mode — the runtime fixes the mode
+    // at import and warns rather than switching if the flag arrives later. The
+    // cost of asking on a file that has no shader is nothing; the cost of not
+    // asking is a sky that renders flat with three errors in the console.
+    enableGPUCanvas: true,
     // autoplay would start the artboard's FIRST TIMELINE. This file has three
     // of them plus a state machine, and the state machine is what sequences
     // them — so play it explicitly once the names are known, rather than
@@ -658,7 +736,10 @@ export function mountRiveSplash({
     // artboard's own default instance, which is what the boss bar and the
     // polaroid already use.
     autoBind: true,
-    layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
+    // LAYOUT, not Contain. The artboard is built from percentage slots and
+    // leaf components, so the runtime sizes it to the canvas and it reflows —
+    // no letterbox in portrait, no bars on an ultrawide. See riveContract.js.
+    layout: new Layout({ fit: Fit.Layout, alignment: Alignment.Center }),
     onLoad: () => {
       // A splash that gets dismissed during the load would otherwise come back
       // on screen the moment loading finishes.
@@ -697,7 +778,7 @@ export function mountRiveSplash({
         randomTrigger = null;
       }
       if (randomTrigger) {
-        onRandomTrigger = () => { riveButtonLive = true; randomizeName(); };
+        onRandomTrigger = () => randomizeName();
         randomTrigger.on(onRandomTrigger);
       } else {
         console.info(
@@ -724,7 +805,19 @@ export function mountRiveSplash({
       const remembered = loadPlayerName();
       if (remembered && isNameBuried(remembered)) savePlayerName(randomPlayerName(remembered));
       nameInput.value = loadPlayerName();
+      // The file's default for the name, before anything overwrites it — see
+      // `placeholder` above. A file with no default shows an empty pill, which
+      // is what it showed before.
+      try { placeholder = rive.viewModelInstance?.string(SPLASH_BINDINGS.name)?.value ?? ''; } catch { placeholder = ''; }
+      // Re-fit whenever the artboard reports a new row width — a new name, a
+      // new scale landing — once it has settled; see ENTRY_SETTLE_MS.
+      try {
+        widthProp = rive.viewModelInstance?.number(SPLASH_BINDINGS.entryWidth) ?? null;
+        if (widthProp) { onWidth = () => fitEntryRow(); widthProp.on(onWidth); }
+      } catch { widthProp = null; }
       writeName(nameInput.value);
+      syncSkyFx();
+      if (skyFx) skyTimer = setInterval(syncSkyFx, SKY_POLL_MS);
 
       // Focus so a keyboard player can type without clicking. Two exceptions:
       //
@@ -751,14 +844,6 @@ export function mountRiveSplash({
       // playing" even when the machine started fine.
       requestAnimationFrame(() => {
         if (destroyed) return;
-
-        // THE STATE MACHINE'S INPUTS, taken here and not next to the play()
-        // above, for exactly the reason this frame is being waited for at all:
-        // the machine INSTANCE — which is what owns the inputs — does not
-        // exist until the runtime's next frame. Asked for one line after
-        // play(), `stateMachineInputs` answers "no state machine inputs" about
-        // a file that has two, and the button silently never animates.
-        takeInputs(machines);
 
         onReady?.({
           artboards: rive.contents?.artboards?.map((a) => a.name) ?? [],

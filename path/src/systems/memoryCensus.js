@@ -241,7 +241,19 @@ export function censusItems(items) {
  * carry. Every part is optional — a caller that cannot reach the audio banks
  * gets a report without them rather than a throw.
  */
-export function censusReport({ items = [], audioBytes = 0, targetBytes = 0 } = {}) {
+// `audioBytes` stays a single number so every existing caller keeps working;
+// `audioParts` is the optional breakdown, and it exists because a lump `aud`
+// figure named a problem it could not attribute. The phone reported 131MB of
+// audio against roughly 70MB that the music warm set and the sfx bank could
+// account for between them — the missing 60MB is the whole question, and no
+// amount of measuring the files on disk answers it, because what matters is
+// what is DECODED AND STILL HELD at that moment on that device.
+//
+// Three banks, three owners, each with its own eviction story: sfx decodes
+// everything at boot and releases none of it, music keeps a warm set of five
+// to seven loops, ambient runs a small bed. Which of those is holding the
+// surplus decides what to fix, and they are indistinguishable in one number.
+export function censusReport({ items = [], audioBytes = 0, audioParts = null, targetBytes = 0 } = {}) {
   const c = censusItems(items);
   const mb = (n) => Math.round(n / MB);
   return {
@@ -253,6 +265,12 @@ export function censusReport({ items = [], audioBytes = 0, targetBytes = 0 } = {
     heavy: c.heavy,
     heavyCount: c.heavyCount,
     audioMB: mb(audioBytes),
+    // Rounded the same way as every other figure here, and only present when
+    // the caller could reach the banks — a harness that cannot is not made to
+    // invent zeroes that would read as "the music bank is empty".
+    audioParts: audioParts
+      ? { sfxMB: mb(audioParts.sfx ?? 0), musicMB: mb(audioParts.music ?? 0), ambientMB: mb(audioParts.ambient ?? 0) }
+      : null,
     targetMB: mb(targetBytes),
     totalMB: mb(c.geo + c.tex + c.bones + c.userData + audioBytes + targetBytes),
     meshes: c.meshes,
@@ -264,7 +282,13 @@ export function censusReport({ items = [], audioBytes = 0, targetBytes = 0 } = {
 export function censusLine(r) {
   const top = (r.heavy ?? [])
     .map((h) => `${h.name}:${Math.round(h.b / 1024)}k[${h.keys}]`).join(' ');
-  return `geo${r.geoMB} tex${r.texMB} bone${r.boneMB} ud${r.udMB} aud${r.audioMB} rt${r.targetMB}`
+  // The split rides INSIDE the aud figure rather than as three more top-level
+  // fields, so the line stays readable and anything grepping for `aud<n>` still
+  // finds it: `aud131(sfx28 mus40 amb63)`.
+  const a = r.audioParts
+    ? `aud${r.audioMB}(sfx${r.audioParts.sfxMB} mus${r.audioParts.musicMB} amb${r.audioParts.ambientMB})`
+    : `aud${r.audioMB}`;
+  return `geo${r.geoMB} tex${r.texMB} bone${r.boneMB} ud${r.udMB} ${a} rt${r.targetMB}`
     + ` = ${r.totalMB}MB · ${r.nodes} nodes ${r.skeletons} skel`
     + (r.heavyCount ? ` · ${r.heavyCount} heavy: ${top}` : '');
 }

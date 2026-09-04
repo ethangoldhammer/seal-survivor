@@ -97,7 +97,7 @@ dom.window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
-    if (spec === '@rive-app/canvas') return { url: 'stub:rive', format: 'module', shortCircuit: true };
+    if (spec === '@rive-app/canvas' || spec === '@rive-app/webgl2') return { url: 'stub:rive', format: 'module', shortCircuit: true };
     if (spec.endsWith('.riv?url') || spec.endsWith('.wasm?url')) {
       return { url: 'stub:rivurl', format: 'module', shortCircuit: true };
     }

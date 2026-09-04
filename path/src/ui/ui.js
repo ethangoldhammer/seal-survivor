@@ -41,6 +41,7 @@ import { pipCount } from '../systems/strike.js';
 // two things advancing it would run the drift at double speed.
 import { advanceMeterNoise, meterNoiseFrame, resetMeterNoise } from '../systems/meterNoise.js';
 import { mountRiveSplash } from './riveSplash.js';
+import { warmNameSwap } from './nameSwap.js';
 // THE AUDITION — a second name screen behind a URL switch, and a pair that
 // deletes cleanly when one of them wins. See ui/splashChoice.js.
 import { mountSplineSplash } from './splineSplash.js';
@@ -3244,6 +3245,12 @@ export function showStartMenu() {
       // arrives here a frame earlier and is a real gesture, so the context is
       // already awake by the time the trigger lands.
       onGesture: unlockAudio,
+      // How the old name leaves the pill when the dice rolls a new one. The
+      // object itself, not a copy, so the tuner's sliders reach a splash that
+      // is already up. See ui/nameSwap.js.
+      nameSwap: CONFIG.reveals?.nameSwap,
+      // The sky shader's knobs, by reference — see CONFIG.splashSky.
+      skyFx: CONFIG.splashSky,
     });
     return;
   }
@@ -3812,6 +3819,8 @@ function runReveal(name, { target, inner, from, to, seconds, onDone }) {
 //
 // The splash is first because it's the first one needed, and by some margin.
 export function warmReveals() {
+  // The name pill's dissolve shares the bake path; see ui/nameSwap.js.
+  warmNameSwap(CONFIG.reveals?.nameSwap);
   if (!supportsMask() || prefersReducedMotion()) return;
   // NOT 'upgrades'. That surface left the dither behind — it is a honeycomb
   // that snaps on now (ui/upgradeComb.js), and it has no masks to bake.

@@ -59,6 +59,9 @@ import {
   updateParticles,
   resetParticles,
   turbulenceAt,
+  particleCount,
+  particleCapacity,
+  setParticleRelief,
 } from '../path/src/entities/particles.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -768,4 +771,114 @@ check('a reset still uploads the whole buffer when an emit follows it',
   `${startCov.size} of ${A.aStart.array.length} floats`);
 
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
+// ---------------------------------------------------------------------------
+section('THE LIVE COUNT IS A LOAD, NOT A HIGH-WATER MARK');
+// ---------------------------------------------------------------------------
+// This is the crash trail's only view of how much the particle system is
+// doing, and it was reporting the ring buffer's capacity rather than the load:
+// `Math.min(cursor, capacity)` over a write head that only climbs, so it read
+// the cap from the first wrap onward and never came down. Every tick of every
+// run on the phone said `8000p`, which looked like a system pinned at its
+// ceiling and was really a counter that had stopped being able to say anything.
+//
+// The check that matters is that it can COME DOWN. A saturating counter passes
+// any test that only emits and looks for a big number.
+{
+  resetParticles();
+  const cap = particleCapacity();
+  check('an empty system reports nothing alive', particleCount(0) === 0, `${particleCount(0)}`);
+
+  // Enough bursts to wrap the ring at least once — the exact condition that
+  // used to pin the old counter at capacity forever.
+  // `burst` above returns the slots an emit actually wrote, so the emitter
+  // name is verified rather than assumed — a name the config does not carry
+  // writes nothing and would make the count below trivially zero.
+  const names = Object.keys(CONFIG.emitters);
+  let wrote = 0;
+  for (let i = 0; i < 40; i++) wrote += burst(names[i % names.length], 0, -2).length;
+  check('the bursts actually wrote slots', wrote > 0, `${wrote} slots`);
+  const alive = particleCount();
+  check('a burst is counted while it lives', alive > 0, `${alive} alive of ${wrote} written`);
+  check('...and never more than the ring holds', alive <= cap, `${alive} of ${cap}`);
+
+  // The whole point: run the clock past every particle's life and the number
+  // must fall to nothing. The old implementation returned `cap` here.
+  const late = particleCount(1e6);
+  check('...and falls back to zero once they have all expired', late === 0,
+    `${late} still counted a million seconds later`);
+  check('...which the old high-water version could not do', late !== cap,
+    `${late} vs a capacity of ${cap}`);
+  resetParticles();
+}
+
+// ---------------------------------------------------------------------------
+section('PARTICLE RELIEF FOLLOWS THE ADAPTIVE CONTROLLER');
+// ---------------------------------------------------------------------------
+// The renderer is fill-bound and particles are what frame time correlated with
+// on the phone (-0.57, against -0.21 for enemies). So the adaptive controller
+// that already gives back pixels gives back particles too — and the two things
+// that must hold are that a machine keeping up pays NOTHING, and that goo is
+// left alone on both axes.
+{
+  const sizesOf = (idx) => idx.map((i) => A.aSize.array[i]);
+  const spriteName = Object.keys(CONFIG.emitters).find((n) => !CONFIG.emitters[n].goo);
+  const gooName = Object.keys(CONFIG.emitters).find((n) => CONFIG.emitters[n].goo);
+
+  setParticleRelief(1);
+  resetParticles();
+  const fullIdx = burst(spriteName, 0, -2);
+  const fullSize = sizesOf(fullIdx).reduce((a, b) => a + b, 0) / Math.max(1, fullIdx.length);
+
+  // A machine at 1.0 must be bit-for-bit what it was before any of this
+  // existed — the relief multiplies by exactly one there.
+  setParticleRelief(1);
+  resetParticles();
+  const againIdx = burst(spriteName, 0, -2);
+  check('relief 1.0 changes the count not at all', againIdx.length === fullIdx.length,
+    `${againIdx.length} vs ${fullIdx.length}`);
+
+  // At the resolution floor the burst is thinner and smaller, and BOTH move —
+  // fill is count x area, so taking a little of each beats taking a lot of one.
+  setParticleRelief(0.4);
+  resetParticles();
+  const lowIdx = burst(spriteName, 0, -2);
+  const lowSize = sizesOf(lowIdx).reduce((a, b) => a + b, 0) / Math.max(1, lowIdx.length);
+  check('under relief the sprite burst is thinner', lowIdx.length < fullIdx.length,
+    `${lowIdx.length} vs ${fullIdx.length}`);
+  check('...and its particles are smaller', lowSize < fullSize,
+    `${lowSize.toFixed(3)} vs ${fullSize.toFixed(3)}`);
+  // Thinning may make a burst sparse, never delete it.
+  check('...but the burst still happens', lowIdx.length >= 1, `${lowIdx.length}`);
+
+  // GOO IS EXEMPT ON BOTH AXES. A goo particle is a lobe of a mass: thinning
+  // opens holes in the isoline and shrinking breaks the fusion between
+  // neighbours, so relief here would read as the metaball shader being broken.
+  if (gooName) {
+    // SEEDED, because `rand(def.size, 0.15)` varies per particle: two
+    // unseeded bursts differ whether or not relief touched them, and the
+    // comparison would be of two random draws rather than of the multiplier.
+    const realRandom = Math.random;
+    const seeded = (n) => () => (n = (n * 1664525 + 1013904223) >>> 0) / 4294967296;
+
+    Math.random = seeded(0x9E3779B9);
+    setParticleRelief(1);
+    resetParticles();
+    const gFull = burst(gooName, 0, -2);
+    const gFullSize = sizesOf(gFull).reduce((a, b) => a + b, 0) / Math.max(1, gFull.length);
+
+    Math.random = seeded(0x9E3779B9);
+    setParticleRelief(0.4);
+    resetParticles();
+    const gLow = burst(gooName, 0, -2);
+    const gLowSize = sizesOf(gLow).reduce((a, b) => a + b, 0) / Math.max(1, gLow.length);
+    Math.random = realRandom;
+    check('goo keeps every lobe under relief', gLow.length === gFull.length,
+      `${gLow.length} vs ${gFull.length}`);
+    check('...at full size, so the isoline still fuses',
+      Math.abs(gLowSize - gFullSize) < 1e-6, `${gLowSize.toFixed(3)} vs ${gFullSize.toFixed(3)}`);
+  }
+  setParticleRelief(1);
+  resetParticles();
+}
+
 process.exit(failures ? 1 : 0);

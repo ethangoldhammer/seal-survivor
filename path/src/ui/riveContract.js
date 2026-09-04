@@ -21,14 +21,47 @@
 // which of two copies is newer and reverted a finished export once. See the
 // README.
 
-/** The title-screen artboard. Named explicitly since the file gained a second. */
-export const SPLASH_ARTBOARD = 'Splash Screen';
+/**
+ * The title-screen artboard. Named explicitly since the file gained a second.
+ *
+ * `Splash Responsive` (2026-09-03) is the layout-driven rebuild: every slot is
+ * a percentage and the art is nested leaf components, so it reflows to any
+ * size under `Fit.Layout`. The old fixed 1920x1080 `Splash Screen` is still in
+ * the file, untouched, and mounting it again is this one line.
+ */
+export const SPLASH_ARTBOARD = 'Splash Responsive';
+
+/**
+ * The splash's state machine, NAMED AT CONSTRUCTION — and that is load-bearing.
+ *
+ * `autoBind` binds the view model to whatever state machines exist when the
+ * file loads. A machine started later with `rive.play(name)` is a fresh
+ * instance the binding never reaches: its listeners still run, their
+ * viewModelChange actions write into nothing, and `bRandomHover` / `tStart` /
+ * `tRandomizeName` never move. Measured on 2.39.2, and `rive.bind()` after the
+ * fact does not repair it. So the name goes in the constructor (with
+ * `autoplay: false`, so it still starts only when the game says) — which is
+ * why this cannot be read off the loaded file the way the artboard list is.
+ */
+export const SPLASH_STATE_MACHINE = 'State Machine 1';
 
 /** The in-game boss health bar. CONFIG.boss.bar.artboard can override it. */
 export const BOSS_BAR_ARTBOARD = 'Boss Health';
 
 /** The kill-shot card — the polaroid the run's trophies are printed on. */
 export const SNAPSHOT_ARTBOARD = 'Polaroid';
+
+/**
+ * The player's name on a card beside the seal, on the main menu (ui/nameTag.js).
+ * Its text run is bound to `strPlayerName` on ViewModel1, so it shares the
+ * splash's binding and needs none of its own.
+ *
+ * It was in the editor for a while before it was in the file: the artboard's
+ * "include in export" was off, and an export with it off simply leaves the
+ * artboard out with nothing to say so. That is exactly the case the scan in
+ * tools/rive-boss-test.mjs exists for.
+ */
+export const NAMETAG_ARTBOARD = 'NAMETAG';
 
 /**
  * The splash's own two properties, and they are the only place in this file
@@ -57,31 +90,42 @@ export const SPLASH_BINDINGS = {
   name: 'strPlayerName',           // what the player is typing, mirrored in live
   start: 'tStart',                 // Rive -> game: begin the run
   random: 'tRandomizeName',        // Rive -> game: roll me a name
+  // A BOOLEAN the artboard's own hover listeners keep up to date: true while
+  // the pointer is over the dice. The game only READS it — for the cursor, and
+  // to tell a tap on the dice from a tap on the field (see onSplashPointer in
+  // ui/riveSplash.js). The lit state is the artboard's own transition off it.
+  hover: 'bRandomHover',
+  // The same for the Start button, which is the dice's twin — same slot, same
+  // hover and press states, a different glyph and a different action.
+  startHover: 'bStartHover',
+  // A NUMBER the game writes: the size of the whole entry row (dice, name pill,
+  // start) as a fraction of design size, 1 on any screen that fits it. NOT a
+  // transform: in the file it drives the row's real layout numbers through
+  // formula converters — button 80, font 84, padding 40, gap 16, radius 29, row
+  // height 132, each times this — so the row is laid out and centred by the
+  // layout engine at that size, and grows and shrinks about its own centre. A
+  // transform scale had no pivot and hung off the top-left corner. The row HUGS
+  // the typed name, so its width is a function of the name, and on a narrow
+  // screen the only way to keep a long name and both buttons on screen is to
+  // shrink the row as one. Rive has no viewport units, so the game measures and
+  // hands the number over; see fitEntryRow in ui/riveSplash.js.
+  entryScale: 'numEntryScale',
+  // The row's TRUE width, in artboard units, written BY the artboard: its
+  // layout's computed width is bound out to this number, so the game never
+  // has to guess how wide a name renders. Read only.
+  entryWidth: 'numEntryWidth',
+  // RETIRED, kept so an older export still validates: these positioned the row
+  // when it was absolute and transform-scaled. The row is centred by its strip's
+  // own alignment now and nothing writes them.
+  entryShiftX: 'numEntryShiftX',
+  entryShiftY: 'numEntryShiftY',
 };
 
-/**
- * The splash's STATE MACHINE INPUTS — the dice button's hover and press.
- *
- * These are what the game sets, and the artboard's own state machine decides
- * what they look like: `Random_Hover` and `Random_Click` are its states, not
- * ours, so retiming or redrawing either is an editor change with nothing to do
- * on this side.
- *
- * WHY THE GAME SETS THEM AT ALL. The artboard has hover and click listeners of
- * its own and they never fire — `npm run looks:splash` sweeps all 1920x1080
- * and no listener responds — so the pointer has to be read on our side and
- * handed over. See the note on DICE_HIT in ui/riveSplash.js, which is also the
- * thing to delete the day the listeners work.
- *
- * INPUTS RATHER THAN VIEW-MODEL PROPERTIES, deliberately. The file still has a
- * `bRandomHover` boolean wired to the same animation, and this runtime cannot
- * act on a view-model property from inside a state machine — setting it changes
- * nothing, measured. An input drives the machine today.
- */
-export const SPLASH_INPUTS = {
-  hover: 'randomHover',  // boolean: the pointer is over the dice
-  click: 'randomClick',  // trigger: it was just pressed
-};
+// THERE ARE NO STATE MACHINE INPUTS ANY MORE. The old artboard's listeners
+// never fired, so the game hit-tested the dice itself and drove `randomHover`
+// / `randomClick` inputs by hand. `Splash Responsive` has working listeners on
+// its own buttons (measured: hover, dice and start all arrive through the view
+// model), so the artboard owns the pointer and the game only listens.
 
 /**
  * The data-binding properties the boss bar drives, by role. All three sit on
@@ -167,6 +211,25 @@ export const SNAPSHOT_BINDINGS = {
  * it out of this list — which is the only thing stopping "pending" from
  * becoming a permanent hole in the check.
  */
+/**
+ * THE SKY SHADER'S KNOBS. Numbers on ViewModel1 that the game writes from
+ * CONFIG.splashSky (so the tuner drives them live) and that the ShaderFill
+ * node's inputs are bound to in the editor. Not part of riveRequirements: an
+ * export without the shader node still shows a sky, just a flat one, and that
+ * must not fail a build. See splash/SkyScanlines in the .riv for what each
+ * one means; the comment at the top of that shader is the spec.
+ */
+export const SKY_FX_BINDINGS = {
+  bandDrift: 'numSkyBandDrift',
+  bandDensity: 'numSkyBandDensity',
+  bandStrength: 'numSkyBandStrength',
+  shimmer: 'numSkyShimmer',
+  cloudSpeed: 'numSkyCloudSpeed',
+  cloudScale: 'numSkyCloudScale',
+  cloudAmount: 'numSkyCloudAmount',
+  noiseDetail: 'numSkyNoiseDetail',
+};
+
 export const PENDING_BINDINGS = [];
 // EMPTY IS THE NORMAL STATE, and not a sign this can be deleted: a name lives
 // here only for as long as it takes an export to catch up with the code, which
@@ -225,7 +288,8 @@ export const VIEW_MODELS = {
 /** Everything a usable export must contain, flat, for a validator to walk. */
 export function riveRequirements(bossArtboard = BOSS_BAR_ARTBOARD) {
   return {
-    artboards: [SPLASH_ARTBOARD, bossArtboard, SNAPSHOT_ARTBOARD],
+    artboards: [SPLASH_ARTBOARD, bossArtboard, SNAPSHOT_ARTBOARD, NAMETAG_ARTBOARD],
+    stateMachines: [SPLASH_STATE_MACHINE],
     // Deduped: `strBossName` and `strPlayerName` are each on BOTH view models,
     // and a validator that listed one twice would report the same name passing
     // (or failing) twice.

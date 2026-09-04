@@ -515,6 +515,39 @@ function rand(range, fallback) {
  * `breathBubbles` with bigger numbers would have meant tuning the seal's breath
  * in two places forever.
  */
+// PARTICLE RELIEF — what a struggling machine gives back after pixels.
+//
+// systems/adaptiveScale.js exists because this renderer is fill-bound, and its
+// header says pixels were "the only thing left to give back". On the phone they
+// were not enough: with the resolution controller pinned at its floor the frame
+// was still 33ms, and measured against the crash trail the thing it correlated
+// with was PARTICLES — -0.57 against frame rate, where enemies managed -0.21
+// and draw calls nothing at all. Zero particles ran at 57fps with 82 creatures
+// on screen; three thousand ran at 30fps with the same crowd. JS moved 6.0ms to
+// 8.5ms across that whole range, so it is not simulation. It is additive
+// sprites, and their cost is the pixels they cover.
+//
+// So the same controller drives this. Not a device check: the machine that is
+// in pain is the one that says so, a desktop sitting at 1.0 is untouched by
+// arithmetic that multiplies by one, and there is no phone-detection to be
+// wrong about in three years.
+//
+// COUNT AND SIZE TOGETHER, because fill is count x area and area is the square
+// of size — so a modest shrink buys more than the same fraction off the count,
+// and taking a little of each keeps a burst looking like itself rather than
+// like a sparse version of itself.
+//
+// GOO IS EXEMPT, on both axes and for the reason the density note below gives:
+// a goo particle is a lobe of a mass, not a speck. Thinning opens holes in the
+// isoline and shrinking breaks the fusion that makes neighbours one surface —
+// see the goo-scale note, where radius and iso describe a RELATIONSHIP.
+let relief = 1;
+
+/** Driven from main.js with world.adaptiveScale(). 1 is "no relief". */
+export function setParticleRelief(value) {
+  relief = Math.max(0.05, Math.min(1, Number.isFinite(value) ? value : 1));
+}
+
 export function emit(name, x, y, opts = {}) {
   const def = CONFIG.emitters[name];
   if (!def || !geometry) return;
@@ -572,7 +605,9 @@ export function emit(name, x, y, opts = {}) {
   // making the mass sparser. Keyed on the resolved group, not on `def.goo`, so
   // an emitter that named a group which does not exist — and is therefore
   // drawing as sprites — is thinned along with the rest of them.
-  const density = gooGroup > 0 ? 1 : Math.max(0, CONFIG.fx?.spriteDensity ?? 1);
+  const reliefCount = gooGroup > 0 ? 1 : relief ** (CONFIG.fx?.reliefCountPow ?? 0.75);
+  const reliefSize = gooGroup > 0 ? 1 : relief ** (CONFIG.fx?.reliefSizePow ?? 0.35);
+  const density = (gooGroup > 0 ? 1 : Math.max(0, CONFIG.fx?.spriteDensity ?? 1)) * reliefCount;
   // Still at least one particle: an event that fires is an event you can see.
   // Thinning is allowed to make a burst sparse, never to delete it silently.
   const count = Math.max(1, Math.round((def.count ?? 8) * (opts.scale ?? 1) * density));
@@ -670,7 +705,7 @@ export function emit(name, x, y, opts = {}) {
     // bubble has burst at the surface since. The bug is invisible in a fresh
     // harness, where clock starts at 0 and every early value is exact.
     const start32 = attrs.aStart.array[idx];
-    attrs.aSize.array[idx] = rand(def.size, 0.15) * sizeMul;
+    attrs.aSize.array[idx] = rand(def.size, 0.15) * sizeMul * reliefSize;
     attrs.aDrag.array[idx] = drag;
     attrs.aTurb.array[idx] = turb;
     attrs.aClip.array[idx] = clipsAtSurface ? 1 : 0;
@@ -896,6 +931,48 @@ export function resetParticles() {
   gooUntil.clear();
 }
 
-export function particleCount() {
-  return Math.min(cursor, capacity);
+// HOW MANY ARE ACTUALLY ALIVE — and it used to be how many slots had ever been
+// written, which is a different question with the same shape.
+//
+// `cursor` is the ring buffer's write head and only ever climbs, so the old
+// `Math.min(cursor, capacity)` returned the capacity from the moment the ring
+// first wrapped and never came down again. In the crash trail that read as
+// `8000p` on every tick of every run — a number that looked like a system
+// pinned at its cap and was really just saying "this ring has wrapped once".
+// It could not have reported a quiet moment if there had been one.
+//
+// Aliveness is the shader's test, done here on the same two attributes: a
+// particle is alive while its age is inside its life. Cleared slots carry
+// aStart = -1e9 and fail that by nine orders of magnitude, so they need no
+// special case.
+//
+// The scan is the whole buffer, and that is affordable because of WHO CALLS
+// IT: the crash trail's heartbeat, once every five seconds. It is not a
+// per-frame number and must never become one.
+export function particleCount(now = clock) {
+  if (!attrs.aStart || !attrs.aLife) return 0;
+  const start = attrs.aStart.array;
+  const life = attrs.aLife.array;
+  const upto = Math.min(cursor, capacity);
+  let alive = 0;
+  for (let i = 0; i < upto; i++) {
+    const age = now - start[i];
+    // NOT `age >= 0`, for the reason spelled out where aStart is written: the
+    // attribute is a Float32Array and the clock is a double, so the stored
+    // start is a ROUNDED copy that can land slightly AHEAD of the clock it came
+    // from. Once the clock stops being exactly representable — a second or so
+    // into any real session — a freshly emitted particle has a tiny negative
+    // age, and a hard zero here counted it as not yet born. The whole burst
+    // would have been invisible on the frame it was emitted.
+    //
+    // A millisecond of slack is far below any real life value and far above
+    // float32's error at any clock this game reaches.
+    if (age > -1e-3 && age < life[i]) alive++;
+  }
+  return alive;
+}
+
+/** The ring's own size, for anything that wants the ceiling rather than the load. */
+export function particleCapacity() {
+  return capacity;
 }

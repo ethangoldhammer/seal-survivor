@@ -201,6 +201,25 @@ const body = SKIP
   : `${message}\n`;
 
 git('add', '-A');
+
+// THE TREE CAN GO CLEAN WHILE THE GATE RUNS, and the preflight check above
+// cannot catch it. Tests and the production build take minutes, and this repo
+// is routinely worked by several sessions at once — so another one committing
+// the same dirty files in the meantime leaves nothing here to commit. Before
+// this, `git commit` failed on an empty index and node printed an execFileSync
+// stack trace, which reads like ship is broken rather than like the work
+// already landed.
+//
+// Checked AFTER `add -A` rather than before, because that is the state the
+// commit will actually see: a tree with only ignored or unstageable changes is
+// equally empty to git and should get the same answer.
+if (!git('diff', '--cached', '--name-only') && !has('--allow-empty')) {
+  die('nothing left to commit — the tree went clean while the checks ran',
+    `Another session very likely committed these files in the meantime. `
+    + `\`git log -1\` will show whose. Everything passed, so nothing is wrong `
+    + `with the work — there is simply nothing here that is not already in.`);
+}
+
 execFileSync('git', ['commit', '-m', body], { stdio: 'inherit' });
 const sha = git('rev-parse', '--short', 'HEAD');
 say(`\n${c.green}✓ committed ${sha}${c.off}`);

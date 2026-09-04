@@ -433,6 +433,22 @@ export function perfPhase(name, ms) {
  * One call a frame, and it must WRAP every leaf phase rather than sit beside
  * them — see the note above jsFrameMs for the split it exists to make.
  */
+/**
+ * JS milliseconds and frames accumulated so far this run.
+ *
+ * Exported for the crash trail, which needs the INTERVAL rather than the run
+ * mean: it samples this at each heartbeat and diffs against the last sample,
+ * so a run that starts smooth and ends at 25fps reports the 25fps stretch
+ * rather than an average that hides it.
+ *
+ * The pair is returned together on purpose — dividing a total by frames
+ * counted somewhere else is how a ratio ends up describing two different
+ * spans.
+ */
+export function perfJsSoFar() {
+  return { ms: jsTotalMs, frames };
+}
+
 export function perfFrameJs(ms) {
   if (!recording) return;
   jsFrameMs += ms;
