@@ -64,10 +64,29 @@ export const menuInput = {
   // which is what the strip is for on a pad.
   tabPrev: false,
   tabNext: false,
-  // ANY face/shoulder/stick button going down, edge-triggered. For surfaces
-  // that ask for "press anything to continue" rather than for a choice — the
-  // splash. The keyboard's version of this is a bare keydown listener; the pad
-  // has no events at all, so this is that listener's other half.
+  // THE DICE, on a pad. Edge-triggered, and the reason they exist is that a
+  // name can no longer be typed anywhere a pad can reach: the splash takes no
+  // typing at all and the score card's "Next seal" is a readout with a Roll
+  // button beside it. Without these a pad player gets whatever the game rolled
+  // for them and has no say in it.
+  //
+  // Both shoulders on a side, so it does not matter which finger goes first:
+  //   RB / RT   a new name
+  //   LB / LT   back to the one before it
+  //
+  // Deliberately the SAME buttons as tabNext/tabPrev, which is not a conflict:
+  // the tab strip belongs to the pause menu and these belong to the two name
+  // screens, and no pad can reach both at once.
+  nameNext: false,
+  namePrev: false,
+  // ANY face/stick button going down, edge-triggered. For surfaces that ask for
+  // "press anything to continue" rather than for a choice — the splash. The
+  // keyboard's version of this is a bare keydown listener; the pad has no
+  // events at all, so this is that listener's other half.
+  //
+  // THE FOUR SHOULDERS ARE NOT IN IT, because on the one screen that asks
+  // "press anything" they are the dice (see nameNext/namePrev above), and a
+  // button that rolls a name must not also start the run with it.
   anyPress: false,
   // Like `anyPress` but with the D-pad excluded — a press that is a DECISION
   // rather than any contact at all. See anyActionButtonDown.
@@ -876,17 +895,46 @@ const PAUSE_BUTTON = 9; // Start, Standard Gamepad
 const BACK_BUTTON = 1;
 const TAB_PREV_BUTTON = 4;
 const TAB_NEXT_BUTTON = 5;
+// THE DICE PAIR — see menuInput.nameNext. Both shoulders on a side, so the
+// triggers ARE included here even though the tab strip above refuses them: a
+// name screen is not a list being stepped past, and rolling one name too many
+// costs a press of the other shoulder rather than losing your place.
+const NAME_NEXT_BUTTONS = [5, 7]; // RB, RT
+const NAME_PREV_BUTTONS = [4, 6]; // LB, LT
+// How far an analog trigger has to be pulled before it counts. `pressed` alone
+// breaks low enough on some pads that a resting finger rolls a name; a bumper
+// reports 1 the moment it is down, so this changes nothing for the digital
+// half of each pair.
+const NAME_TRIGGER_BREAK = 0.5;
+let nameNextHeld = false;
+let namePrevHeld = false;
 let backHeld = false;
 let tabPrevHeld = false;
 let tabNextHeld = false;
 let anyHeld = false;
 let actionHeld = false;
 
-// Is ANY button on the pad down right now? Deliberately every button rather
-// than a list: this is what "press anything" means, and a list would be a
-// promise the next controller layout could break.
+const NAME_BUTTONS = new Set([...NAME_NEXT_BUTTONS, ...NAME_PREV_BUTTONS]);
+
+// Is a shoulder on the given side down far enough to count? See
+// NAME_TRIGGER_BREAK for why a trigger is not simply asked whether it is
+// `pressed`.
+function nameButtonDown(pad, indices) {
+  return indices.some((i) => {
+    const b = pad?.buttons?.[i];
+    if (!b?.pressed) return false;
+    // A pad that reports no value at all still gets to press its own button.
+    return !Number.isFinite(b.value) || b.value >= NAME_TRIGGER_BREAK;
+  });
+}
+
+// Is ANY button on the pad down right now? Every button except the four
+// shoulders, which are the dice on the only screen that asks this — see
+// menuInput.anyPress. Otherwise a list rather than an exclusion, because "press
+// anything" is a promise the next controller layout should not be able to
+// break.
 function anyButtonDown(pad) {
-  return !!pad?.buttons?.some((b) => b?.pressed);
+  return !!pad?.buttons?.some((b, i) => b?.pressed && !NAME_BUTTONS.has(i));
 }
 
 // ...and the same question with the D-PAD LEFT OUT.
@@ -962,6 +1010,16 @@ function updateMenuInput(pad) {
   menuInput.tabNext = nextDown && !tabNextHeld;
   tabNextHeld = nextDown;
 
+  // THE DICE. One edge per SIDE rather than per button, so a player squeezing
+  // RT while RB is already down rolls one name, not two.
+  const nameNextDown = nameButtonDown(pad, NAME_NEXT_BUTTONS);
+  menuInput.nameNext = nameNextDown && !nameNextHeld;
+  nameNextHeld = nameNextDown;
+
+  const namePrevDown = nameButtonDown(pad, NAME_PREV_BUTTONS);
+  menuInput.namePrev = namePrevDown && !namePrevHeld;
+  namePrevHeld = namePrevDown;
+
   // True on the frame the pad goes from nothing-down to something-down. A
   // second button pressed while the first is still held is NOT a fresh edge
   // here — which is fine for the one thing this drives: a "press anything"
@@ -1001,11 +1059,18 @@ export function resetMenuInput() {
   backHeld = !!pad?.buttons[BACK_BUTTON]?.pressed;
   tabPrevHeld = !!pad?.buttons[TAB_PREV_BUTTON]?.pressed;
   tabNextHeld = !!pad?.buttons[TAB_NEXT_BUTTON]?.pressed;
+  // The dice too — a shoulder held as the score card arrives must be let go of
+  // before it rolls, or the boost the player was holding when they died names
+  // their next seal.
+  nameNextHeld = nameButtonDown(pad, NAME_NEXT_BUTTONS);
+  namePrevHeld = nameButtonDown(pad, NAME_PREV_BUTTONS);
   anyHeld = anyButtonDown(pad);
   actionHeld = anyActionButtonDown(pad);
   menuInput.back = false;
   menuInput.tabPrev = false;
   menuInput.tabNext = false;
+  menuInput.nameNext = false;
+  menuInput.namePrev = false;
   menuInput.anyPress = false;
   menuInput.actionPress = false;
   // NOT re-baselined here. This is called on the frame the pause menu opens,

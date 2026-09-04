@@ -310,9 +310,14 @@ await writeFile(flatMod, src
   // happens to be up, which would turn this file into a test that passes by not
   // running. The guard has its own reason to exist and is not what is under
   // test here.
-  .replace('async function devServerBlocking(', 'async function unusedDevServerBlocking(')
-  .replace(/^async function unusedDevServerBlocking\(what, notes\) \{/m,
-    'async function devServerBlocking() { return false; }\nasync function unusedDevServerBlocking(what, notes) {')
+  // The `export ` is optional because the splicer's helpers are shared with
+  // tools/apply-accessories.mjs now and carry one; without it here the rename
+  // still fires (the pattern is a substring) and the stub does NOT, which
+  // leaves the real guard renamed away and every rim test dying on a
+  // ReferenceError several hundred lines later.
+  .replace(/(export )?async function devServerBlocking\(/, '$1async function unusedDevServerBlocking(')
+  .replace(/^(export )?async function unusedDevServerBlocking\(what, notes\) \{/m,
+    'async function devServerBlocking() { return false; }\n$1async function unusedDevServerBlocking(what, notes) {')
   .replace('async function writeFlatRoots(', 'export async function writeFlatRoots(')
   .replace(/const ASSETS_JS = .*;/, `const ASSETS_JS = ${JSON.stringify(join(dir, 'assets.js'))};`)
   .replace('async function writeAssetOutlines(', 'export async function writeAssetOutlines('));

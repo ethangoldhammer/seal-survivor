@@ -20,11 +20,21 @@
 //
 // It does write three things, all of them generated and all of them named:
 // the shot PNGs (into --out), the spec list next to this file, and — on /bake —
-// path/src/ui/upgradeIcons.js, by shelling out to tools/upgrade-icons.mjs. That
+// ONE generated icon module, by shelling out to the tool that owns it. That
 // last one is what puts an icon in the game, and it runs the SAME bake the
 // terminal does rather than a second copy of it; a button that embedded its own
 // version of the round trip is a button that produces a different module from
 // the one `npm run icons -- --bake` produces.
+//
+// WHICH module is `--bake-with`, and it used to be nothing — the bake was
+// hardcoded to the upgrade icons whatever list the server had been started for.
+// That was already a footgun with two lists (this file's own startup banner
+// warned that "apply to the game" on the design picker bakes the UPGRADE icons,
+// which is a note explaining a bug rather than a fix), and with a third list it
+// is a button that silently overwrites the wrong module. So the baker is named
+// at startup alongside the list, `none` is a real choice for a picker whose
+// shots do not go in the game at all, and the page asks the server which it is
+// so the button can say so.
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
@@ -52,6 +62,41 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
 // The pages take it as a query string, so nothing here has to understand it.
 const listArg = process.argv.indexOf('--list');
 const LIST = listArg > -1 ? process.argv[listArg + 1] : null;
+
+// WHAT "apply to the game" BAKES. A named choice rather than a path, because a
+// path is a thing you can typo into a script that does not exist and a thing
+// somebody eventually points at the wrong file; these three are the only
+// answers, and an unrecognised one is refused at startup rather than at the
+// moment somebody presses the button.
+//
+// Every entry runs a tool that ALSO runs from a terminal with the same
+// arguments — see the note at the top. The `module` is only for saying what was
+// written; the tool decides that for itself.
+const BAKERS = {
+  upgrades: {
+    tool: 'tools/upgrade-icons.mjs',
+    module: 'path/src/ui/upgradeIcons.js',
+    what: 'the upgrade hive',
+  },
+  accessories: {
+    tool: 'tools/accessory-icons.mjs',
+    module: 'path/src/ui/accessoryIcons.js',
+    what: 'the accessory drawer',
+  },
+  // A picker whose shots are for documents. Not an omission — the button is
+  // shown and refuses with a sentence, which is better than a button that is
+  // missing (looks broken) or one that quietly bakes something else (was the
+  // behaviour, and is the reason this map exists).
+  none: null,
+};
+const bakerArg = process.argv.indexOf('--bake-with');
+const BAKER_KEY = bakerArg > -1 ? process.argv[bakerArg + 1] : 'upgrades';
+if (!(BAKER_KEY in BAKERS)) {
+  console.error(`--bake-with ${BAKER_KEY} is not one of: ${Object.keys(BAKERS).join(', ')}`);
+  process.exit(1);
+}
+const BAKER = BAKERS[BAKER_KEY];
+
 await mkdir(SHOTS, { recursive: true });
 
 const MIME = {
@@ -134,6 +179,17 @@ const server = http.createServer(async (req, res) => {
     const names = await readdir(dir).catch(() => []);
     res.writeHead(200, { 'content-type': 'application/json' })
       .end(JSON.stringify(names.filter((n) => !n.startsWith('.'))));
+    return;
+  }
+
+  // WHICH MODULE THIS SERVER'S APPLY BUTTON WRITES. Asked for rather than
+  // guessed from the list: the page knows its list from the query string, and a
+  // page that inferred the baker from that would be a second place the mapping
+  // lives — which is how the button ends up promising one module and the server
+  // writing another.
+  if (req.method === 'GET' && url.pathname === '/baker.json') {
+    res.writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ key: BAKER_KEY, ...(BAKER ?? {}) }));
     return;
   }
 
@@ -236,7 +292,19 @@ const server = http.createServer(async (req, res) => {
     .join('\n').trim();
 
   if (req.method === 'POST' && url.pathname === '/bake') {
-    const args = ['--import', './tools/vite-loader.mjs', 'tools/upgrade-icons.mjs', '--bake', SHOTS];
+    if (!BAKER) {
+      // Said in full rather than 404'd. The person pressing this has a picker
+      // open and a shot they like; what they need is where it went, not a
+      // failure.
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+        ok: false,
+        log: `This picker bakes nothing into the game — it was started with `
+          + `--bake-with none.\nThe spec you saved and the PNGs under ${SHOTS} are the output.`,
+      }));
+      console.log('  bake refused: this server was started with --bake-with none');
+      return;
+    }
+    const args = ['--import', './tools/vite-loader.mjs', BAKER.tool, '--bake', SHOTS];
     if (url.searchParams.get('strict') !== '0') args.push('--strict');
     try {
       // cwd is the PROJECT, because the loader path above is relative to it and
@@ -295,10 +363,10 @@ server.listen(PORT, () => {
   const q = LIST ? `?list=${LIST}` : '';
   console.log(`atlas renderer on http://localhost:${PORT}/render.html${q}`);
   console.log(`  pick angles at  http://localhost:${PORT}/picker.html${q}`);
-  // The bake is the upgrade icons' round trip and nothing else's. Saying so on
-  // a server started for a different list would be an invitation to press a
-  // button that rewrites a module this list has no business in.
-  if (LIST) console.log('  (shots here are for documents — "apply to the game" bakes the UPGRADE icons, not these)');
   console.log(`writing shots to ${SHOTS}`);
-  if (!LIST) console.log('  picker.html can bake straight into path/src/ui/upgradeIcons.js');
+  // Which module the apply button writes, said every time. It used to be an
+  // apology on the banner of any server started with a --list; now it is a fact
+  // about this server, and `none` is a server that writes no module at all.
+  if (BAKER) console.log(`  "apply to the game" bakes ${BAKER.what} into ${BAKER.module}`);
+  else console.log('  "apply to the game" is off here — these shots do not go in the game');
 });

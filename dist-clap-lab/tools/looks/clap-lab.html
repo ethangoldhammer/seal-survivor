@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Clap lab — where the flippers meet</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #1c3a4f;
+        color: #dff0ff; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #stage { position: fixed; inset: 0; display: block; z-index: 1; }
+      #panel { position: fixed; left: 12px; top: 10px; z-index: 3; width: 276px;
+        background: rgba(6, 18, 28, 0.82); border: 1px solid rgba(160, 210, 255, 0.18);
+        border-radius: 8px; padding: 10px 12px; max-height: calc(100vh - 20px); overflow-y: auto; }
+      #panel h1 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+        margin: 0 0 8px; color: #9fdcff; font-weight: 600; }
+      #panel h2 { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+        margin: 10px 0 4px; color: #7fb8d8; font-weight: 600; }
+      .row { display: grid; grid-template-columns: 82px 1fr 48px; gap: 6px; align-items: center; margin: 2px 0; }
+      .row label { color: #b9d6ee; }
+      .row input[type=range] { width: 100%; }
+      .row output { color: #ffe08a; text-align: right; }
+      .btns { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+      button { background: #24506b; color: #fff; border: 1px solid rgba(160,210,255,.3);
+        border-radius: 5px; padding: 4px 9px; font: inherit; cursor: pointer; }
+      button.on { background: #4f9ad0; }
+      #vals { white-space: pre; color: #ffe08a; margin-top: 8px; }
+      #note { color: #7fe6a0; margin-top: 6px; min-height: 1.5em; }
+      .cap { position: fixed; z-index: 2; pointer-events: none; color: #9fdcff;
+        letter-spacing: .12em; text-transform: uppercase; font-size: 10px;
+        text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+      #hint { position: fixed; left: 324px; bottom: 10px; z-index: 3; color: #b9d6ee;
+        text-shadow: 0 1px 3px rgba(0,0,0,.55); pointer-events: none; }
+      #hint b { color: #fff; }
+    </style>
+    <!-- THE PANE SUSPENDS rAF. See splash-bust.html for the note; `?raf=native`
+         opts a real browser back out. -->
+    <script>
+      if (!/[?&]raf=native/.test(location.search)) {
+        window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+        window.cancelAnimationFrame = (id) => clearTimeout(id);
+      }
+    </script>
+    <script type="module" crossorigin src="../../assets/clap-lab-Kbohd4i8.js"></script>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div class="cap" id="capSide">side — the game's view</div>
+    <div class="cap" id="capFront">from the nose</div>
+    <div class="cap" id="capTop">from above</div>
+    <div id="panel">
+      <h1>Clap lab</h1>
+      <div class="btns">
+        <button id="bClap">clap (space)</button>
+        <button id="bLoop">loop</button>
+        <button id="bScrub">hold pose</button>
+        <button id="bSwim">swim</button>
+        <button id="bSave">save (W)</button>
+        <button id="bReset">defaults</button>
+      </div>
+      <div id="sliders"></div>
+      <div id="vals"></div>
+      <div id="note"></div>
+    </div>
+    <div id="hint"><b>space</b> clap · <b>W</b> save preset to tools/looks/clap-lab.json · green = hands (muzzles), red = IK targets, cyan = chest</div>
+  </body>
+</html>

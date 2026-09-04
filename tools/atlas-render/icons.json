@@ -351,8 +351,8 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -159.81250000000023,
-    "pitch": -10.06640625,
+    "yaw": -26,
+    "pitch": 17.4,
     "roll": 0,
     "clipAt": 0.33,
     "sceneNote": "chum coming to you",
@@ -377,7 +377,7 @@
           0.5,
           -0.4
         ],
-        "scale": 0.45
+        "scale": 1
       },
       {
         "asset": "chumChunk",
@@ -388,9 +388,10 @@
           -0.6,
           0.55
         ],
-        "scale": 0.38
+        "scale": 2
       }
-    ]
+    ],
+    "zoom": 1.003
   },
   {
     "key": "regen",
@@ -2209,7 +2210,7 @@
     "name": "Entourage",
     "family": "companion",
     "enabled": true,
-    "kind": "none",
+    "kind": "image",
     "square": true,
     "outSize": 128,
     "toon": true,
@@ -2219,10 +2220,11 @@
     "bandGamma": 1,
     "bandSoft": 0,
     "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "yaw": -41.88749999999993,
+    "pitch": 10.907812499999993,
     "roll": 0,
-    "clipAt": 0.33
+    "clipAt": 0.33,
+    "image": "/sprites/starfish-2.webp"
   },
   {
     "key": "projectileAmount",
@@ -2517,16 +2519,16 @@
     "square": true,
     "outSize": 128,
     "toon": true,
-    "bands": 3,
-    "bandLow": 70,
+    "bands": 2,
+    "bandLow": 0,
     "bandHigh": 255,
-    "bandGamma": 1,
-    "bandSoft": 0,
-    "outline": 0.02,
-    "yaw": -26,
-    "pitch": 17.4,
+    "bandGamma": 2.6,
+    "bandSoft": 0.08,
+    "outline": 0.016,
+    "yaw": -47.93437499999959,
+    "pitch": 73.85859375,
     "roll": 0,
-    "clipAt": 0.33,
+    "clipAt": 0.65,
     "noise": {
       "size": 0.04,
       "strength": 0.83,
@@ -2543,7 +2545,8 @@
         "white": 0.4,
         "scale": 1.4
       }
-    }
+    },
+    "flatColor": 4892927
   },
   {
     "key": "biolumInfection",

@@ -300,3 +300,42 @@ than lorem — the real shape, marked so the gate can see it.
 
 Each row's `notes` column says what the number actually is, which is the part
 worth reading before naming it.
+
+### `callouts.csv`, one row — `resumed`
+
+The band line on a run that came back after the phone killed the page. It is
+the only thing that tells the player the reset was not their doing, so it has
+one job: say that this is the run they were already in, not a new one.
+
+Seen once, in the first seconds of a resumed run, while the player is being
+dropped into open water at whatever level they had reached — so it is read
+under pressure and cannot be long. Roughly the length of the `surface` coach
+line, one sentence; the band holds it for six seconds and the greeting is
+suppressed behind it.
+
+What it must NOT imply: that anything was saved, or that the player can save.
+The arena is gone — only the seal's own progress came back.
+
+## The accessory drawer (main menu)
+
+Five lines, all staged as lorem in `path/src/uiText.csv`, group `accessory drawer`:
+
+- `accessoryDrawerTitle` — heading over the strip of wearables on the main menu.
+- `accessoryDrawerEmpty` — what the drawer says before anything is unlocked.
+- `accessoryBare` — the "wearing nothing" tile, which is a choice and not a dash.
+- `accessoryHatName` — the captain's cap.
+- `accessoryGlassesName` — the pixel sunglasses.
+
+Each row's `notes` column carries the brief: where it appears, how long it can
+be, and what it has to do next to the thing beside it. `npm run test:copy` will
+keep failing until all five are yours.
+
+**The imported wardrobe has no names yet.** `accessoryBowler`, `accessoryTricorn`,
+`accessoryFedora`, `accessoryRounds`, `accessoryAviators` and `accessoryWireFrames`
+arrived from `npm run accessories:import` after these five rows were written, and
+their tiles currently show the raw asset key. Each needs a `uiText.csv` row named
+`<assetKey>Name` and a line in `TILE_NAME` in `path/src/ui/accessoryDrawer.js` —
+the id has to be a literal in the call or `npm run test:uitext` cannot check it.
+Deliberately NOT staged as lorem: six more failing gate lines for accessories
+somebody else is still importing would bury the five above, which are the ones
+the drawer cannot work without.

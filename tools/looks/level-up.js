@@ -51,6 +51,20 @@ import { initTypography } from '../../path/src/ui/typography.js';
 import { initUI, showLevelUp } from '../../path/src/ui/ui.js';
 import { combSize } from '../../path/src/ui/upgradeComb.js';
 import { setHiveUpgrades, toggleHive } from '../../path/src/ui/upgradeHive.js';
+// THE SEAL UNDER THE HAND — the one part of this screen that is not DOM. It
+// draws to a canvas of its own between the comb and the cards, from a scene of
+// its own, so this page can host it without growing a world: preload the
+// models, push the saved looks (the same four calls the bust page makes, in
+// the same order main.js makes them), and hand it the frames. `?seal=0` leaves
+// it out, for a look at the comb alone.
+import {
+  preloadAssets, applySavedAssetLooks, applyNoiseSettings, applyToonSettings,
+  applyBiolumSkinSettings,
+} from '../../path/src/assets.js';
+import {
+  installLevelUpSeal, prepareLevelUpSeal, enterLevelUpSeal, leaveLevelUpSeal,
+  updateLevelUpSeal, resetLevelUpSeal, levelUpSealState, levelUpSealLive,
+} from '../../path/src/systems/levelUpSeal.js';
 
 const panel = document.getElementById('panel');
 const readEl = document.getElementById('read');
@@ -237,6 +251,7 @@ window.addEventListener('message', (e) => { if (e.data === 'roll') replay(); });
 // What has been picked so far, so the corner fills up the way it does in a run
 // and every flight after the first has a hive that has already made room.
 const taken = [];
+const WANT_SEAL = new URLSearchParams(location.search).get('seal') !== '0';
 
 initTypography();
 initUI({
@@ -248,6 +263,9 @@ initUI({
   // middle of it makes the exit impossible to watch at exactly the settings you
   // are trying to judge.
   onLevelChoice(choice) {
+    // The pick: the seal shoots off the top, exactly as applyLevelChoice sends
+    // it in main.js.
+    leaveLevelUpSeal();
     // FILED FIRST, FLOWN SECOND, which is the order the game uses and the only
     // one that works: the card's flight ends at its own hexagon in the corner,
     // so the tile has to exist before the flight can be told where to go.
@@ -271,7 +289,46 @@ function deal() {
   seedRandom();
   showLevelUp();
   Math.random = nativeRandom;
+  // The seal comes up with the cards, as the ramp's callback has it in main.js.
+  if (sealReady) enterLevelUpSeal();
   report();
+}
+
+// --- the seal ---------------------------------------------------------------
+// The page's own frame loop, which the DOM half of this screen never needed.
+// Wall dt, capped exactly as the game caps it. Steps through
+// window.requestAnimationFrame so the scrubber's queue owns it while scrubbing;
+// `window.__sealStep(dt, n)` drives it by hand from the console for a pane that
+// throttles rAF (see the note in the html about why there is no shim here).
+let sealReady = false;
+let sealLast = performance.now();
+function sealFrame(now) {
+  const dt = Math.min(0.05, Math.max(0, (now - sealLast) / 1000));
+  sealLast = now;
+  updateLevelUpSeal(dt);
+  window.requestAnimationFrame(sealFrame);
+}
+window.__sealStep = (dt = 1 / 60, n = 1) => {
+  for (let i = 0; i < n; i++) updateLevelUpSeal(dt);
+  return levelUpSealState.phase;
+};
+window.__sealReset = () => resetLevelUpSeal();
+window.__sealReady = () => sealReady;
+window.__seal = () => levelUpSealLive();
+if (WANT_SEAL) {
+  installLevelUpSeal({});
+  preloadAssets().then(() => {
+    applySavedAssetLooks();
+    applyNoiseSettings();
+    applyToonSettings();
+    applyBiolumSkinSettings();
+    prepareLevelUpSeal();
+    sealReady = true;
+    // If a hand is already on the table, bring the seal up under it now.
+    if (document.querySelector('#svCards .sv-card')) enterLevelUpSeal();
+    sealLast = performance.now();
+    window.requestAnimationFrame(sealFrame);
+  }).catch((err) => console.error('[level-up look] the seal could not be built', err));
 }
 
 // How long the whole screen takes: the last card landing is not the last thing

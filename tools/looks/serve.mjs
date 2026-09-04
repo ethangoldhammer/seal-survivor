@@ -17,6 +17,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyRecorded } from '../apply-shaders.mjs';
+import { applyPlacements } from '../apply-accessories.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT = resolve(HERE, '../..');
@@ -151,6 +152,52 @@ const server = http.createServer(async (req, res) => {
       // Nothing recorded yet is the normal first run, not an error.
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
     }
+    return;
+  }
+
+  // THE ACCESSORY LAB'S SAVE, which is the /shader/ pair above wearing a
+  // different apply. Same shape and the same reason for it: the file lives
+  // beside the page so a rebuild cannot delete it, and the write goes straight
+  // on into the game rather than waiting for somebody to remember a CLI.
+  //
+  // See tools/apply-accessories.mjs for why the apply also has to DELETE from
+  // imported-tuning.json, and why it refuses while the game is up.
+  if (req.method === 'POST' && url.pathname.startsWith('/accessory/')) {
+    const name = url.pathname.slice('/accessory/'.length).replace(/[^\w.-]/g, '');
+    if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    let doc;
+    try { doc = JSON.parse(body.toString()); } catch (err) {
+      res.writeHead(400).end('not valid json: ' + err.message); return;
+    }
+    await mkdir(HERE, { recursive: true });
+    await writeFile(join(HERE, name), body);
+    console.log(`  wrote tools/looks/${name} (${body.length} bytes)`);
+    let report = null;
+    try {
+      report = await applyPlacements(doc, { dry: false });
+      for (const n of report.notes) console.log(`  ${n}`);
+    } catch (err) {
+      console.log(`  apply failed: ${err.message}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify({ saved: true, error: err.message }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ saved: true, ...report }));
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname.startsWith('/accessory/')) {
+    const name = url.pathname.slice('/accessory/'.length).replace(/[^\w.-]/g, '');
+    if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }
+    // Read first, then write the head — see the note on /preset/ below for the
+    // crash that teaches.
+    let body = '{}';
+    try { body = await readFile(join(HERE, name)); } catch { /* nothing saved yet */ }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(body);
     return;
   }
 

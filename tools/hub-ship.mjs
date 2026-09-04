@@ -64,8 +64,16 @@ export function checkMessage(message, dry = false) {
 
 // The argv for `npm run`. Never a shell string, and the message never appears
 // here at all — only the path of the file holding it.
-export function shipArgs(file, dry = false) {
-  return ['run', SHIP_SCRIPT, '--', ...(dry ? ['--dry'] : ['--yes']), '--file', file];
+// `dry` and `skipVerify` are mutually exclusive and the order below is the
+// whole rule: a dry run is a preflight, so asking for both means you wanted the
+// preflight and the verify flag is meaningless. Never both on one command line
+// — ship.mjs would run neither the tests nor the commit and report success.
+export function shipArgs(file, dry = false, skipVerify = false) {
+  if (dry) return ['run', SHIP_SCRIPT, '--', '--dry', '--file', file];
+  // --no-verify is ship.mjs's own flag and it is deliberately loud there: it
+  // stamps the commit message so an unverified public build leaves evidence
+  // rather than looking like every other commit. Nothing extra is needed here.
+  return ['run', SHIP_SCRIPT, '--', '--yes', ...(skipVerify ? ['--no-verify'] : []), '--file', file];
 }
 
 // Its own directory, so the cleanup is one rm of something we made and can

@@ -85,10 +85,10 @@ hunterRamp.turnRate,0.02,0,0.08,hunter turn growth per 20s
 hunterRamp.turnRateMax,3.05,1,4,hunter turn growth cap (x)
 hunterRamp.swarmSeek,0.02,0,0.08,how much harder a SCHOOL presses per 20s. Multiplies swarm.towardPlayer - the only term in the boids pointing at the seal. Nothing else in this block reaches the basic fish; they read no preyRadius and no turnRate.
 hunterRamp.swarmSeekMax,3,1,6,cap on that (x). At 3 the pull at the seal is the strongest term in the school's steering and a shoal hunts as a body; at 1 schools mill around you all run exactly as they do today.
-pace.enemy,1,0.25,3,"HOW HARD THE WATER IS. 1 is the tuned game; 0.5 is half, 2 is twice. Multiplied into hp, damage, speed and aggression where each is baked onto a creature at spawn, so it rides on TOP of both run ramps and a creature already on screen keeps what it was born with."
-pace.xp,0.7,0.25,4,"LEVELLING PACE (x) - what a mouthful of chum is worth. Applied to the orb, not to what the creature carries."
+pace.enemy,.85,0.25,3,"HOW HARD THE WATER IS. 1 is the tuned game; 0.5 is half, 2 is twice. Multiplied into hp, damage, speed and aggression where each is baked onto a creature at spawn, so it rides on TOP of both run ramps and a creature already on screen keeps what it was born with."
+pace.xp,0.8,0.25,4,"LEVELLING PACE (x) - what a mouthful of chum is worth. Applied to the orb, not to what the creature carries."
 pace.axes.hp,0.45,0,1.5,"of the dial above, how much goes into HEALTH - as an exponent, so 1 is the full dial and 0 leaves the stat alone. The four axes are deliberately unequal; see the note on CONFIG.pace.axes. Moving this does nothing while pace.enemy sits at 1, which is the right way round."
-pace.axes.damage,1,0,1.5,...how much goes into DAMAGE. At 1 the dial passes through whole.
+pace.axes.damage,.65,0,1.5,...how much goes into DAMAGE. At 1 the dial passes through whole.
 pace.axes.speed,0.35,0,1.5,...how much goes into SPEED. Held below hp on purpose: a harder game that is merely a faster one leaves the arena with nowhere to go.
 pace.axes.seek,0.2,0,1.5,"...how much goes into AGGRESSION - prey distraction shed, turning tightened, and a school pressing harder, all through one number. This is the LATE-GAME press only. How hard fish follow at minute one is each species swarm.towardPlayer, and how gradually it climbs is hunterRamp.swarmSeek below; at difficulty 0 the ramp is exactly 1 and this term is all that is left."
 enemies.walkingCrab.crawl.groundHeight,8.5,1,20,"crab ceiling off the seabed - and the ceiling on all crab damage: the pinch reaches about 2.2 above this and a crab has no contact damage, so anything higher than the sum is untouchable. Keep it and the rush height below within a claw of each other."

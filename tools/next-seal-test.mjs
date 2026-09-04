@@ -152,7 +152,6 @@ ui.initUI({ onStart() {}, onRestart() { restarts += 1; }, onLevelChoice() {}, on
 
 const $ = (id) => document.getElementById(id);
 const click = (node) => node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-const warning = () => ($('svNextWarn').classList.contains('sv-hidden') ? '' : $('svNextWarn').textContent);
 
 /**
  * A death, as the game performs one: the seal's name goes into the ledger and
@@ -169,10 +168,9 @@ function die(as) {
   return $('svNextInput');
 }
 
-function typeInto(input, text) {
-  input.value = text;
-  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-}
+// The name is rolled, never typed — so this is the only way it moves, and the
+// harness has to use the same door the player does.
+const roll = () => click($('svNextRoll'));
 
 const tryAgain = () => click($('svRestartBtn'));
 
@@ -211,49 +209,99 @@ section('ten deaths, ten seals');
     lived.every((n, i) => !lived.slice(0, i).some((p) => p.toLowerCase() === n.toLowerCase())));
 }
 
-section('typing one of your own dead');
+section('the name cannot be typed, only rolled');
 {
+  // THE POINT OF THE ROW NOW. It is a readout: a readonly field that takes no
+  // focus and no keystrokes, so the only name that can reach the next run is
+  // one the roller handed over — which is also why nothing here can name a
+  // buried seal any more.
   clearNameLedger();
   const input = die('FAT TONY');
-  typeInto(input, 'FAT TONY');
-  check('the field says so while you type', /already buried/i.test(warning()), warning());
-  check('...and names the seal', /FAT TONY/i.test(warning()), warning());
+  check('the field is read-only', input.readOnly, String(input.readOnly));
+  check('...and asks for no keyboard on a phone',
+    input.getAttribute('inputmode') === 'none', input.getAttribute('inputmode'));
+  check('...and is out of the tab order, so nothing can focus it',
+    input.getAttribute('tabindex') === '-1', input.getAttribute('tabindex'));
 
-  typeInto(input, 'BRINE');
-  check('a free name clears the warning', warning() === '', warning());
+  const rolled = [];
+  for (let i = 0; i < 30; i += 1) { roll(); rolled.push(input.value); }
+  check('every roll hands back a free name', rolled.every((n) => !isNameBuried(n)),
+    rolled.filter((n) => isNameBuried(n)).join(', '));
+  check('...and none of them is the seal that just died',
+    rolled.every((n) => n.toLowerCase() !== 'fat tony'));
+
   tryAgain();
-  check('and is taken', loadPlayerName() === 'BRINE', loadPlayerName());
-}
-{
-  // Committed anyway. The warning was up, the player pressed Try again, and the
-  // run has to start as SOMEBODY — just never as the dead seal.
-  clearNameLedger();
-  const input = die('FAT TONY');
-  typeInto(input, 'FAT TONY');
-  tryAgain();
-  check('pressing Try again on a buried name does not resurrect it',
-    loadPlayerName().toLowerCase() !== 'fat tony', loadPlayerName());
-  check('...it starts the run as somebody free instead',
-    !!loadPlayerName() && !isNameBuried(loadPlayerName()), loadPlayerName());
+  check('Try again takes whatever the last roll left', loadPlayerName() === rolled.at(-1),
+    `"${loadPlayerName()}" vs "${rolled.at(-1)}"`);
 }
 
 section('the ways out are never closed');
 {
   clearNameLedger();
   const input = die('FAT TONY');
-  typeInto(input, '');
+  // The field cannot be emptied by a player any more, but commitNextSeal still
+  // guards it: this is the state a stray write would leave, and Try again is
+  // the button that has to get them back into a game regardless.
+  input.value = '';
   tryAgain();
-  check('a cleared field still names the seal', !!loadPlayerName(), `"${loadPlayerName()}"`);
+  check('an empty field still names the seal', !!loadPlayerName(), `"${loadPlayerName()}"`);
   check('...with something free', !isNameBuried(loadPlayerName()), loadPlayerName());
 
   const input2 = die(loadPlayerName());
-  click($('svNextRoll'));
+  roll();
   check('Roll never hands back one of the dead', !isNameBuried(input2.value), input2.value);
-  check('and clears any warning it was showing', warning() === '', warning());
 
   const before = restarts;
   tryAgain();
   check('Try again still restarts the run', restarts === before + 1, `${before} -> ${restarts}`);
+}
+
+section('the shoulders are the dice');
+{
+  // The row is a readout, so a pad's only other route to a new name would be to
+  // walk the cursor onto Roll and confirm. Right rolls, left goes back through
+  // what has already been offered — see updateMenuNav.
+  //
+  // `menuInput` is set by hand here, which is where the seam is: turning a held
+  // shoulder into one edge per press is input.js's job and is checked there
+  // (tools/input-device-test.mjs). What this file owns is what the card DOES
+  // with the edge once it arrives.
+  clearNameLedger();
+  const input = die('FAT TONY');
+  const first = input.value;
+
+  menuInput.nameNext = true;
+  ui.updateMenuNav();
+  menuInput.nameNext = false;
+  const second = input.value;
+  check('the right shoulder rolls a new name', second !== first, `${first} -> ${second}`);
+
+  menuInput.namePrev = true;
+  ui.updateMenuNav();
+  menuInput.namePrev = false;
+  check('the left shoulder goes back to the one before it', input.value === first,
+    `${second} -> ${input.value}`);
+
+  // Nothing before the first name. A wrap-around to the far end of a list the
+  // player cannot see is worse than a button that does nothing.
+  menuInput.namePrev = true;
+  ui.updateMenuNav();
+  menuInput.namePrev = false;
+  check('...and stops at the first, rather than wrapping', input.value === first, input.value);
+
+  // ROLLING FROM PARTWAY BACK DROPS WHAT WAS IN FRONT, the way a browser's
+  // history does — otherwise the right shoulder sometimes rolls and sometimes
+  // replays, which is a button whose meaning the player cannot see.
+  menuInput.nameNext = true;
+  ui.updateMenuNav();
+  menuInput.nameNext = false;
+  check('rolling from partway back is a new name, not the one it replaced',
+    input.value !== second && input.value !== first, input.value);
+
+  const taken = input.value;
+  tryAgain();
+  check('and Try again takes whatever is showing', loadPlayerName() === taken,
+    `"${loadPlayerName()}" vs "${taken}"`);
 }
 
 section('a graveyard full of one family');
@@ -314,7 +362,13 @@ section('the two name fields stay separate');
   click($('svNextRoll'));
   check('rolling the next seal does not touch it',
     $('svNameInput').value === before, `"${before}" -> "${$('svNameInput').value}"`);
-  typeInto(input, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
+  // A long name in the next-seal row must never stack the leaderboard's. Set
+  // directly rather than rolled: this is a layout claim, and it needs the
+  // longest name the field can hold rather than whatever the table drew.
+  input.value = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+  // The re-fit is not reachable from outside, so it is triggered the way the
+  // font picker triggers it — see the TYPOGRAPHY_EVENT listener in initUI.
+  document.dispatchEvent(new dom.window.Event('sv-typography', { bubbles: true }));
   check('a long next-seal name never stacks the leaderboard row',
     !$('svNameRow').classList.contains('sv-name-stacked'));
 }

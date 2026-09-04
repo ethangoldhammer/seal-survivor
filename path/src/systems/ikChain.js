@@ -528,6 +528,39 @@ export function applyChainToPoint(chain, dt, cfg, weight, tipMul, target) {
   for (let i = 0; i < n; i++) chain.animQ[i].copy(bones[i].quaternion);
 
   if (weight > 0.001) {
+    // WARM-STARTED FROM LAST FRAME'S ANSWER, not from the clip. CCD is a local
+    // search, and a three-bone limb reaching for a point off to one side of
+    // its shoulder has two folds that reach it about equally well. Started
+    // from the clip pose every frame, the search lands in whichever of the two
+    // that frame's tip happens to lean toward, and the idle clip's breath is
+    // enough to lean it the other way once a cycle: measured on the menu's
+    // faced bust at 25-50 degrees of body turn, the wrist jumped 0.55 rad and
+    // the elbow 0.28 in one frame, every 0.6 s, with the target moving four
+    // thousandths of a unit — a flipper that twitched on a screen where
+    // nothing else moved. Nothing downstream could hide it: the bend cap and
+    // the joint limits were not engaged, and the smoothing only turned each
+    // flip into a four-frame kick.
+    //
+    // Started from the pose it settled into last frame, the search stays in the
+    // fold it is already in, and the two answers stop trading places. It is
+    // ONLY the starting point: `wanted` is still measured from the clip, the
+    // caps still clamp toward the clip, and the weight still blends from it —
+    // so a warm start cannot take a limb anywhere the cold start could not.
+    // `primed` is false on the first frame and after a reset, where the clip
+    // is the only pose there is.
+    //
+    // OPT-IN, per solve, and off in every run. A warm start is not free: the
+    // local search settles a little short of where the cold one reaches —
+    // measured on the seal's neck, 0.93 world units of mouth travel on a swing
+    // that reaches 1.07 cold, thirteen per cent less neck. That is a change to
+    // how the animal aims, everywhere, to fix a flip that only the menu's faced
+    // bust ever shows. So systems/aimRig.js asks for it on the flippers while
+    // the bust is faced and nowhere else, and a run's chains solve exactly as
+    // they did.
+    if (chain.primed && cfg.warmStart === true) {
+      for (let i = 0; i < n; i++) bones[i].quaternion.copy(chain.smoothQ[i]);
+      bones[0].updateWorldMatrix(true, true);
+    }
     solveChain(chain, target, cfg, tipMul);
 
     const soft = cfg.softness ?? 1;

@@ -66,8 +66,8 @@ const PUBLISH = new Set([
 ]);
 
 const WRITES = new Set([
-  'notex',
-  'build', 'whale', 'humpback', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply',
+  'notex', 'accessories:icons',
+  'build', 'whale', 'humpback', 'notes', 'split', 'mussels', 'placeholder', 'webp', 'shaders:apply', 'accessories:apply', 'accessories:import',
   'anglerfish', 'guest', 'icons', 'icons:sheet',
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
   'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit', 'shrink',
@@ -99,7 +99,8 @@ const GROUP_BY_PREFIX = [
 // than quietly appearing in a bucket called "Other".
 const GROUP_BY_NAME = {
   dev: 'Servers', csv: 'Servers', preview: 'Servers', hub: 'Servers', servers: 'Servers',
-  atlas: 'Servers', 'icons:pick': 'Servers', pick: 'Servers',
+  atlas: 'Servers', 'icons:pick': 'Servers', 'accessories:pick': 'Servers',
+  'accessories:icons': 'Assets', pick: 'Servers',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   notex: 'Audits',
@@ -115,7 +116,7 @@ const GROUP_BY_NAME = {
   bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', humpback: 'Assets', notes: 'Assets', takes: 'Assets',
   anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
   emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',
-  placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets',
+  placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets', 'accessories:apply': 'Assets', 'accessories:import': 'Assets',
   test: 'Checks',
   // The chain trace is a CHECK that prints rather than asserts: it replays the
   // release path in main.js's own order and shows the log the in-game overlay

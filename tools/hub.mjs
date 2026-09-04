@@ -312,7 +312,7 @@ const server = createServer(async (req, res) => {
   // ---------------------------------------------------------------------
   if (req.method === 'POST' && path === '/api/ship') {
     if (!fromTheWorkbench(req)) return json(res, { error: 'ship is only reachable from the workbench page' }, 403);
-    const { message = '', dry = false } = await readBody(req);
+    const { message = '', dry = false, noVerify = false } = await readBody(req);
     const bad = checkMessage(message, dry);
     if (bad) return json(res, { error: bad }, 400);
     // The same gate /api/run applies, for the same reason: what gets spawned
@@ -320,7 +320,7 @@ const server = createServer(async (req, res) => {
     const entry = commands().find((c) => c.name === SHIP_SCRIPT);
     if (!entry) return json(res, { error: `${SHIP_SCRIPT} is not a script in package.json` }, 500);
     const { file, cleanup } = writeMessage(message);
-    return json(res, { id: startRun(entry, { args: shipArgs(file, Boolean(dry)), cleanup }).id });
+    return json(res, { id: startRun(entry, { args: shipArgs(file, Boolean(dry), Boolean(noVerify)), cleanup }).id });
   }
 
   if (req.method === 'POST' && path === '/api/stop-run') {

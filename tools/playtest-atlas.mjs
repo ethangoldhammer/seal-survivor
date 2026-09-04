@@ -217,6 +217,10 @@ ${STYLE}
 
   <div class="filters" role="group" aria-label="Filters">
     <label class="field">
+      <span>When</span>
+      <select id="f-window"></select>
+    </label>
+    <label class="field">
       <span>Build</span>
       <select id="f-build"></select>
     </label>
@@ -233,6 +237,7 @@ ${STYLE}
       <select id="f-client"></select>
     </label>
     <p class="hint" id="filter-note"></p>
+    <button class="linkish" type="button" id="collapse-all"></button>
   </div>
 
   <div id="body"></div>
@@ -359,6 +364,22 @@ section { background: var(--surface); border: 1px solid var(--border); border-ra
 h2 { font-size: 15px; font-weight: 620; margin: 0 0 3px; letter-spacing: -0.01em; }
 .note { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; max-width: 68ch; }
 
+/* A collapsed section keeps its heading and loses everything under it. The
+   whole strip is the hit target, not just the chevron — a 17px glyph is a
+   miserable thing to aim at, and there is nothing else in that row to click. */
+.sect-toggle {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  background: none; border: 0; padding: 0; margin: 0 0 3px;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.sect-toggle h2 { margin: 0; }
+.chev { flex: none; color: var(--muted); font-size: 13px; line-height: 1; transition: transform 0.12s; }
+section.closed .chev { transform: rotate(-90deg); }
+section.closed { padding-bottom: 16px; }
+section.closed .sect-body { display: none; }
+.linkish { background: none; border: 0; padding: 0; font: inherit; font-size: 12.5px; color: var(--player); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; align-self: center; white-space: nowrap; }
+#collapse-all { margin-left: auto; }
+
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 2px; background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
 .kpi { background: var(--surface); padding: 16px 18px; }
 .kpi .k { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 5px; }
@@ -388,6 +409,12 @@ svg { display: block; max-width: 100%; height: auto; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 10px 8px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+th .sarrow { font-size: 9px; margin-left: 4px; opacity: 0; }
+th.sortable:hover .sarrow { opacity: 0.4; }
+th.sorted { color: var(--ink); }
+th.sorted .sarrow { opacity: 1; }
 td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 tr:last-child td { border-bottom: 0; }
 td.name { font-variant-numeric: normal; }
@@ -411,7 +438,7 @@ code, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
 .hit { fill: transparent; cursor: crosshair; }
 .cross { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 3 3; }
 
-.field select:focus-visible, a:focus-visible {
+.field select:focus-visible, a:focus-visible, button:focus-visible, th.sortable:focus-visible {
   outline: 2px solid var(--player);
   outline-offset: 2px;
 }
@@ -420,7 +447,7 @@ code, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
    a reader who asked for no motion gets none, and an instant tooltip is no
    worse than a faded one. */
 @media (prefers-reduced-motion: reduce) {
-  .tip { transition: none; }
+  .tip, .chev { transition: none; }
 }
 
 @media (max-width: 620px) {
@@ -491,9 +518,104 @@ function showTip(x, y, title, rows) {
 }
 const hideTip = () => tip.classList.remove('on');
 
+// --- collapsing ----------------------------------------------------------
+//
+// Which sections are shut is a per-reader convenience, so it lives in that
+// reader's browser and nowhere else. Every access is guarded: localStorage
+// throws outright in a thumbnail capture and in a browser set to block site
+// data, and the page has to render correctly with no stored value at all.
+const SECTIONS = ['flags', 'curves', 'clear', 'abilities', 'threat', 'runs'];
+const COLLAPSE_KEY = 'atlas.collapsed';
+let collapsed = new Set();
+try {
+  const stored = JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? 'null');
+  if (Array.isArray(stored)) collapsed = new Set(stored.filter((k) => SECTIONS.includes(k)));
+} catch (err) { /* no stored state; every section opens */ }
+function saveCollapsed() {
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch (err) { /* not fatal */ }
+}
+
+// Takes a section already built as <h2> followed by its content and rebuilds it
+// as a toggle plus a body. Done here rather than inside each section builder so
+// the six of them stay about their own subject and cannot drift apart on the
+// heading markup.
+function collapsible(sec, key) {
+  const kids = [...sec.childNodes];
+  const title = kids[0].textContent;
+  sec.textContent = '';
+
+  const chev = h('span', { class: 'chev', 'aria-hidden': 'true' }, '▾');
+  const btn = h('button', { class: 'sect-toggle', type: 'button', 'aria-controls': 'sect-' + key },
+    [chev, h('h2', {}, title)]);
+  const inner = h('div', { class: 'sect-body', id: 'sect-' + key }, kids.slice(1));
+  sec.appendChild(btn);
+  sec.appendChild(inner);
+
+  const apply = () => {
+    const shut = collapsed.has(key);
+    sec.classList.toggle('closed', shut);
+    btn.setAttribute('aria-expanded', shut ? 'false' : 'true');
+  };
+  btn.addEventListener('click', () => {
+    if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+    saveCollapsed();
+    apply();
+    syncCollapseAll();
+  });
+  apply();
+  return sec;
+}
+
+function syncCollapseAll() {
+  const allShut = SECTIONS.every((k) => collapsed.has(k));
+  $('#collapse-all').textContent = allShut ? 'Expand all' : 'Collapse all';
+}
+$('#collapse-all').addEventListener('click', () => {
+  if (SECTIONS.every((k) => collapsed.has(k))) collapsed.clear();
+  else for (const k of SECTIONS) collapsed.add(k);
+  saveCollapsed();
+  render();
+});
+
 // --- filters -------------------------------------------------------------
 const builds = [...new Set(RUNS.map((r) => r.meta?.build ?? 'unknown'))].sort();
 const clients = [...new Set(RUNS.map((r) => r.meta?.client ?? 'unknown'))].sort();
+
+// ONE clock reading for the whole visit, taken when the page opens.
+//
+// Calling Date.now() per filter would let the counts in the dropdown disagree
+// with the rows they describe — a run 23h59m old at boot slides out of "last 24
+// hours" while the page is sitting there, and the label would still say it is
+// in. Fixed at load, the count and the filter are answering the same question.
+//
+// Deliberately NOT baked into the file by the generator: the page has no
+// generated-at timestamp in its markup, which is the property that makes an
+// unchanged regeneration byte-identical and lets the publish check say CURRENT
+// instead of republishing daily over a date that moved.
+const NOW = Date.now();
+const WINDOWS = [
+  { v: 'all', label: 'Any time' },
+  { v: '1', label: 'Last hour' },
+  { v: '24', label: 'Last 24 hours' },
+  { v: '72', label: 'Last 3 days' },
+  { v: '168', label: 'Last 7 days' },
+  { v: '720', label: 'Last 30 days' },
+];
+// A run with no start time cannot be placed on the clock, so it answers no
+// window but "any time". There are none in the archive today; a truncated
+// record would be one, and silently dating it to 1970 would park it in every
+// window that has a lower bound and none that has an upper one.
+function withinWindow(run, hours) {
+  if (hours === 'all') return true;
+  const t = run.startedAt ?? 0;
+  return t > 0 && NOW - t <= Number(hours) * 3600000;
+}
+const windowLabel = () => WINDOWS.find((w) => w.v === $('#f-window').value)?.label ?? 'Any time';
+
+for (const w of WINDOWS) {
+  const n = RUNS.filter((r) => withinWindow(r, w.v)).length;
+  $('#f-window').appendChild(h('option', { value: w.v }, w.label + (w.v === 'all' ? '' : '  (' + n + ')')));
+}
 
 function fillSelect(sel, values, allLabel, counts) {
   sel.appendChild(h('option', { value: 'all' }, allLabel));
@@ -510,14 +632,15 @@ fillSelect($('#f-build'), builds, 'All builds', countBy((r) => r.meta?.build ?? 
 fillSelect($('#f-client'), clients, 'All browsers', countBy((r) => r.meta?.client ?? 'unknown'));
 
 function selected() {
-  const b = $('#f-build').value, s = $('#f-source').value, c = $('#f-client').value;
+  const b = $('#f-build').value, s = $('#f-source').value, c = $('#f-client').value, w = $('#f-window').value;
   return RUNS.filter((r) =>
     (b === 'all' || (r.meta?.build ?? 'unknown') === b) &&
     (s === 'all' || r.source === s) &&
-    (c === 'all' || (r.meta?.client ?? 'unknown') === c));
+    (c === 'all' || (r.meta?.client ?? 'unknown') === c) &&
+    withinWindow(r, w));
 }
 
-for (const id of ['#f-build', '#f-source', '#f-client']) $(id).addEventListener('change', render);
+for (const id of ['#f-window', '#f-build', '#f-source', '#f-client']) $(id).addEventListener('change', render);
 
 // --- charts --------------------------------------------------------------
 const W = 640, H = 210;
@@ -777,63 +900,160 @@ function threatSection(runs) {
   return s;
 }
 
+// Which column the run table is sorted on, kept outside the builder so it
+// survives a re-render — a filter change must not silently throw the reader
+// back to newest-first while they are reading down a score column.
+let runSort = { key: 'when', dir: -1 };
+
+const RUN_COLS = [
+  { key: 'when', label: 'When', sort: (a) => a.startedAt ?? 0 },
+  { key: 'source', label: 'Source', sort: (a, run) => run?.source ?? '' },
+  { key: 'build', label: 'Build', sort: (a, run) => run?.meta?.build ?? '' },
+  { key: 'duration', label: 'Survived', num: true, sort: (a) => a.duration ?? 0 },
+  { key: 'level', label: 'Level', num: true, sort: (a) => a.level ?? 0 },
+  { key: 'kills', label: 'Kills', num: true, sort: (a) => a.kills ?? 0 },
+  { key: 'score', label: 'Score', num: true, sort: (a) => a.score ?? 0 },
+  { key: 'end', label: 'Ended', sort: (a) => a.endReason ?? '' },
+];
+
 function runTable(runs, singles) {
   const s = h('section');
   s.appendChild(h('h2', {}, 'Every run'));
-  s.appendChild(h('p', { class: 'note' }, 'Newest first. Runs below ' + MIN_JUDGED + 's are listed but excluded from the aggregate above.'));
+  s.appendChild(h('p', { class: 'note' },
+    'Click a column to sort; click again to reverse. Runs below ' + MIN_JUDGED + 's are listed but excluded from the aggregate above.'));
+
+  const byId = new Map(runs.map((r) => [r.id, r]));
   const t = h('table');
-  t.appendChild(h('thead', {}, h('tr', {}, [
-    h('th', {}, 'When'), h('th', {}, 'Source'), h('th', {}, 'Build'),
-    h('th', { class: 'num' }, 'Survived'), h('th', { class: 'num' }, 'Level'),
-    h('th', { class: 'num' }, 'Kills'), h('th', { class: 'num' }, 'Score'), h('th', {}, 'Ended'),
-  ])));
+  const headRow = h('tr');
   const tb = h('tbody');
-  const order = [...singles].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-  for (const a of order) {
-    const run = runs.find((r) => r.id === a.id);
-    const when = a.startedAt ? new Date(a.startedAt) : null;
-    tb.appendChild(h('tr', {}, [
-      h('td', { class: 'name' }, when ? when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'),
-      h('td', { class: 'name' }, h('span', { class: 'pill' + (run?.source === 'live' ? ' live' : '') }, run?.source ?? '—')),
-      h('td', { class: 'name' }, h('code', {}, run?.meta?.build ?? 'unknown')),
-      h('td', { class: 'num' }, formatClock(a.duration)),
-      h('td', { class: 'num' }, String(a.level)),
-      h('td', { class: 'num' }, String(a.kills)),
-      h('td', { class: 'num' }, a.score ? a.score.toLocaleString() : '0'),
-      h('td', { class: 'name' }, a.endReason),
-    ]));
+
+  const fill = () => {
+    const col = RUN_COLS.find((c) => c.key === runSort.key) ?? RUN_COLS[0];
+    // Strings compare with localeCompare and numbers by subtraction; one
+    // comparator for both would sort "9:41" above "10:02" on the clock column
+    // and put build shas in codepoint order.
+    const order = [...singles].sort((x, y) => {
+      const a = col.sort(x, byId.get(x.id)), b = col.sort(y, byId.get(y.id));
+      const d = typeof a === 'string' || typeof b === 'string'
+        ? String(a).localeCompare(String(b))
+        : a - b;
+      // Ties fall back to time, so the order inside a run of equal levels is
+      // stable and readable rather than whatever the input happened to be.
+      return (d || (x.startedAt ?? 0) - (y.startedAt ?? 0)) * runSort.dir;
+    });
+
+    tb.textContent = '';
+    for (const a of order) {
+      const run = byId.get(a.id);
+      const when = a.startedAt ? new Date(a.startedAt) : null;
+      tb.appendChild(h('tr', {}, [
+        h('td', { class: 'name' }, when ? when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'),
+        h('td', { class: 'name' }, h('span', { class: 'pill' + (run?.source === 'live' ? ' live' : '') }, run?.source ?? '—')),
+        h('td', { class: 'name' }, h('code', {}, run?.meta?.build ?? 'unknown')),
+        h('td', { class: 'num' }, formatClock(a.duration)),
+        h('td', { class: 'num' }, String(a.level)),
+        h('td', { class: 'num' }, String(a.kills)),
+        h('td', { class: 'num' }, a.score ? a.score.toLocaleString() : '0'),
+        h('td', { class: 'name' }, a.endReason),
+      ]));
+    }
+
+    for (const th of headRow.children) {
+      const on = th.dataset.key === runSort.key;
+      th.classList.toggle('sorted', on);
+      th.setAttribute('aria-sort', on ? (runSort.dir === 1 ? 'ascending' : 'descending') : 'none');
+      th.querySelector('.sarrow').textContent = on && runSort.dir === 1 ? '▲' : '▼';
+    }
+  };
+
+  for (const c of RUN_COLS) {
+    const th = h('th', {
+      class: 'sortable' + (c.num ? ' num' : ''), tabindex: '0', role: 'columnheader', scope: 'col',
+    }, [c.label, h('span', { class: 'sarrow', 'aria-hidden': 'true' }, '▼')]);
+    th.dataset.key = c.key;
+    const click = () => {
+      // A new column opens on its most useful end — biggest first for a number
+      // or a clock, A-Z for a name. Re-clicking the current column flips it.
+      if (runSort.key === c.key) runSort = { key: c.key, dir: -runSort.dir };
+      else runSort = { key: c.key, dir: c.num || c.key === 'when' ? -1 : 1 };
+      fill();
+    };
+    th.addEventListener('click', click);
+    th.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); click(); }
+    });
+    headRow.appendChild(th);
   }
+
+  t.appendChild(h('thead', {}, headRow));
   t.appendChild(tb);
+  fill();
   s.appendChild(h('div', { class: 'scroll' }, t));
   return s;
 }
 
 // --- render --------------------------------------------------------------
+//
+// THE BUILD PIN AND A TIME WINDOW FIGHT EACH OTHER.
+//
+// The page opens pinned to the newest build, which is right for reading a
+// build's behaviour and wrong for "what has been played lately" — asking for
+// the last 24 hours while pinned quietly hides every recent run that happens to
+// be on an older build, and the count in the dropdown said they were there.
+// Rather than silently unpinning (a control changing itself is its own kind of
+// lie), say how many are being held back and offer the one click.
+function noteFor(runs) {
+  const note = $('#filter-note');
+  note.textContent = '';
+  const win = $('#f-window').value;
+
+  if (win !== 'all') {
+    const inWindow = RUNS.filter((r) => withinWindow(r, win)).length;
+    const hidden = inWindow - runs.length;
+    if (hidden > 0) {
+      note.appendChild(document.createTextNode(
+        inWindow + ' run' + (inWindow === 1 ? '' : 's') + ' in ' + windowLabel().toLowerCase() +
+        ', ' + hidden + ' hidden by the other filters. '));
+      const b = h('button', { class: 'linkish', type: 'button' }, 'Show them all');
+      b.addEventListener('click', () => {
+        for (const id of ['#f-build', '#f-source', '#f-client']) $(id).value = 'all';
+        render();
+      });
+      note.appendChild(b);
+      return;
+    }
+  }
+
+  const mixed = new Set(runs.map((r) => r.meta?.build ?? 'unknown')).size > 1;
+  note.textContent = mixed
+    ? 'Showing more than one build — runs from different builds describe different games. Filter to one before drawing conclusions.'
+    : 'One build in view.';
+}
+
 function render() {
   const runs = selected();
   const body = $('#body');
   body.innerHTML = '';
+  syncCollapseAll();
 
   $('#stamp-count').textContent = runs.length + ' of ' + RUNS.length + ' runs';
 
   if (!runs.length) {
+    noteFor(runs);
     body.appendChild(h('section', {}, h('p', { class: 'empty' }, 'No runs match these filters.')));
     return;
   }
 
   const agg = analyzeRuns(runs);
-  const mixed = new Set(runs.map((r) => r.meta?.build ?? 'unknown')).size > 1;
-  $('#filter-note').textContent = mixed
-    ? 'Showing more than one build — runs from different builds describe different games. Filter to one before drawing conclusions.'
-    : 'One build in view.';
+  noteFor(runs);
 
   body.appendChild(kpis(agg, runs));
-  body.appendChild(flagsSection(agg));
-  body.appendChild(curveSection(agg));
-  body.appendChild(clearSection(agg));
-  body.appendChild(abilitySection(agg));
-  body.appendChild(threatSection(runs));
-  body.appendChild(runTable(runs, agg.runs));
+  body.appendChild(collapsible(flagsSection(agg), 'flags'));
+  body.appendChild(collapsible(curveSection(agg), 'curves'));
+  body.appendChild(collapsible(clearSection(agg), 'clear'));
+  body.appendChild(collapsible(abilitySection(agg), 'abilities'));
+  body.appendChild(collapsible(threatSection(runs), 'threat'));
+  body.appendChild(collapsible(runTable(runs, agg.runs), 'runs'));
 }
 
 // OPENS ON THE NEWEST BUILD, not on everything.

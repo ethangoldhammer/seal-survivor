@@ -23,8 +23,11 @@
 // axis the game stopped using.
 //
 // WHAT IT MAY WRITE: tools/atlas-render/design-icons.json (the angles) and
-// PNGs under design/shots. It never runs the game and never loads config.js,
-// so it cannot touch imported-tuning.json.
+// PNGs under design/shots — and nothing in the game, which is now enforced
+// rather than warned about. See --bake-with below.
+//
+// It never runs the game and never loads config.js, so it cannot touch
+// imported-tuning.json.
 // ============================================================================
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -50,9 +53,16 @@ gen.on('exit', (code) => {
     console.error('\nthe spec generator failed — not starting the server');
     process.exit(code ?? 1);
   }
-  const server = spawn(process.execPath,
-    ['tools/atlas-render/server.mjs', '--port', String(PORT), '--out', SHOTS, '--list', LIST],
-    { cwd: ROOT, stdio: 'inherit' });
+  // --bake-with none, and it is a fix rather than a setting. This page's
+  // "apply to the game" ran the UPGRADE bake — the server's own banner used to
+  // warn about it — so a design shot applied here overwrote the hive's icons
+  // with whatever PNGs happened to be in design/shots. There is nothing in the
+  // game for these to become, so the button now says that.
+  const server = spawn(process.execPath, [
+    'tools/atlas-render/server.mjs',
+    '--port', String(PORT), '--out', SHOTS, '--list', LIST,
+    '--bake-with', 'none',
+  ], { cwd: ROOT, stdio: 'inherit' });
   server.on('exit', (c) => process.exit(c ?? 0));
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.kill(sig));
 });

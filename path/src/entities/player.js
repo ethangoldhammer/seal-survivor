@@ -1409,9 +1409,14 @@ export function applyRecoil(dir, share = 1) {
 // the tail spring's weight eases to zero and the corpse sinks with a tail as
 // stiff as a board. The fins and head still go slack, but they do that on
 // their own, because the dive stops feeding the rig an aim to point at.
-export function updateAimRig(dt, aim, engaged, charge = 0, limp = false) {
+export function updateAimRig(dt, aim, engaged, charge = 0, limp = false, faceOut = 0) {
   player.aimRig?.update(dt, aim, {
     engaged,
+    // How far the head leans OUT OF THE SCREEN — 0 in a run, raised by the main
+    // menu as the bust turns to face the camera. Handed down as an argument
+    // rather than read from systems/mainMenu.js: entities/ does not import from
+    // systems/, which is why `charge` arrives the same way.
+    faceOut,
     // Passed through as well as consumed below: the tail is the one chain the
     // rig keeps solving through the death dive, and a dead animal's tail is
     // looser than a swimming one's. See CONFIG.death.flop.tailLooseness.

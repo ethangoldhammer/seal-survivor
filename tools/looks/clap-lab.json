@@ -1,0 +1,26 @@
+{
+  "clap": {
+    "pose": {
+      "up": -0.2,
+      "fore": 0.12,
+      "close": 0,
+      "bob": 0,
+      "headUp": -0.15,
+      "headFore": 0.7,
+      "headWeight": 0.6
+    },
+    "ik": {
+      "maxFold": 2.4,
+      "maxBend": 2,
+      "maxTwist": 0.7,
+      "smoothing": 45,
+      "iterations": 4,
+      "softness": 0.8
+    },
+    "attack": 0.06,
+    "hold": 0.04,
+    "release": 0.22,
+    "weight": 1
+  },
+  "savedAt": "2026-09-04T19:03:40.928Z"
+}

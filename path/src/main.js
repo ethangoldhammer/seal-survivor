@@ -140,6 +140,9 @@ import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
 import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime, cardsArriveAt, saluteEnabled } from './systems/levelUpTime.js';
+// The seal that swims up under the cards and watches you pick — a second
+// animal on a canvas of its own over the comb. See systems/levelUpSeal.js.
+import { installLevelUpSeal, prepareLevelUpSeal, enterLevelUpSeal, leaveLevelUpSeal, updateLevelUpSeal, resetLevelUpSeal } from './systems/levelUpSeal.js';
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
 import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
@@ -155,6 +158,7 @@ import { updateBubbleJet, updateJets, resetBubbleJet, setJetStats } from './syst
 import { setJetBedsMuted } from './systems/jetBed.js';
 import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
+import { updateAccessories } from './systems/accessories.js';
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { triggerClap, updateClap } from './systems/clap.js';
@@ -165,7 +169,7 @@ import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateT
 // is mounted from here rather than from ui.js because it lives IN THE ARENA:
 // it poses the run's own seal and claims the run's own camera, neither of which
 // the UI layer has ever known about.
-import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid } from './systems/mainMenu.js';
+import { mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid, mainMenuFaceOut } from './systems/mainMenu.js';
 // The tip sheet, for the menu's fourth button. Parsed here the way pauseMenu,
 // riveSplash and ui all parse it — one `?raw` import and one parse per screen
 // that can open the panel, which is a few hundred bytes and no shared state
@@ -184,7 +188,7 @@ import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip
 import { starfishLevelStats, multishotLevelStats, missileLevelStats,
          scallopLevelStats, bounceLevelStats } from './levelStats.js';
 import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
-import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, CALLOUTS } from './systems/callouts.js';
+import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, pushCallout, CALLOUTS } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
 // THE HELLO at the top of a run, which is not a tip: it fires every run and
 // its words are rolled rather than written into callouts.csv. See
@@ -222,6 +226,10 @@ import { buryName, isNameBuried } from './systems/nameLedger.js';
 import './systems/nameExport.js';
 import { initPlaytestOverlay, showPlaytestReport } from './ui/playtestOverlay.js';
 import { claimCrash, armCrash, disarmCrash, crashBeat } from './systems/crashWatch.js';
+// ...and the other half of the same problem. crashWatch says a run was killed;
+// this is what makes that worth knowing — the run itself, kept outside the
+// process so the next boot can hand it back. See systems/runSnapshot.js.
+import { resumable, saveRun, readRun, clearRun, noteResume } from './systems/runSnapshot.js';
 
 // Restore any saved tuning BEFORE anything reads CONFIG — world/grid/camera
 // creation below all pull from it immediately, not just once gameplay starts.
@@ -263,6 +271,9 @@ const DEV_UI = !!import.meta.env?.DEV
 const container = document.getElementById('root') ?? document.body;
 const world = createWorld(container);
 const post = createPost(world.renderer);
+// Told which renderer to match (pixel ratio, colour space) and nothing more:
+// the seal itself is built on the first level-up, during the ramp.
+installLevelUpSeal({ renderer: world.renderer });
 initInput(world.renderer.domElement);
 initParticles(world.scene);
 initImpactFlashes(world.scene);
@@ -457,7 +468,93 @@ function heapUsed() {
 // FIRST, and before boot() is even called: a throw from the boot itself is the
 // one crash with nothing else to report it. See systems/crashLog.js — this
 // costs a localStorage read and tells the next launch what killed this one.
-initCrashLog();
+//
+// ...and it hands back the verdict on the LAST session, which is the other
+// half of the question the crash net has to answer. See pendingResume below.
+const priorVerdict = initCrashLog();
+
+// THE RUN THAT WAS KILLED, IF IT IS WORTH HANDING BACK.
+//
+// THREE THINGS HAVE TO AGREE, and they are three because each one alone says
+// something the other two do not:
+//
+//   priorVerdict  HOW the last session ended. 'cut' is the process going away
+//                 with a run still open — on iOS, the content process killed
+//                 for memory and the page reloaded beneath the app. 'cut-bg'
+//                 is the same thing to a backgrounded app, which iOS does
+//                 routinely and which costs the player their run just as
+//                 completely. 'clean' is a deliberate reload or close and
+//                 'error' is the game itself throwing: neither is something to
+//                 restore from, and the first of those is what keeps a
+//                 developer's mid-run refresh from silently resuming.
+//   priorCrash    that a RUN was live when it happened, rather than a menu.
+//   resumable     the snapshot's own policy — recent enough, far enough in,
+//                 and not already restored twice. See systems/runSnapshot.js
+//                 for why that last one is not optional.
+//
+// DECIDED HERE, before boot() rather than at the menu it replaces. The whole
+// asset load runs between the two, and the age check has to be answered against
+// the moment the page came up — not against however long a loading bar took on
+// a phone that has just shed a two-gigabyte process.
+//
+// A snapshot none of this vouches for is DROPPED rather than kept. It belongs
+// to a run that ended some other way, and a save nobody is coming back for is
+// one that will eventually be restored over the wrong run.
+const resumeRules = {
+  maxAgeMs: (CONFIG.crashResume?.maxAgeMinutes ?? 15) * 60_000,
+  minLevel: CONFIG.crashResume?.minLevel ?? 2,
+  maxResumes: CONFIG.crashResume?.maxResumes ?? 2,
+};
+// THE NATIVE SHELL'S OWN ACCOUNT, when there is one.
+//
+// ios/App/App/GameBridgeViewController.swift stamps a lifetime count of
+// WebContent kills onto every document it loads, at document start, from the
+// one place that watches the process die rather than inferring it afterwards.
+// Undefined everywhere else — the web build, the desktop build, a dev server —
+// which is why nothing below is allowed to REQUIRE it.
+//
+// The count is compared against the last one this page saw, because the number
+// itself says nothing: what matters is whether it went up between the session
+// that ended and the one reading it now.
+const nativeKill = (() => {
+  const stamp = globalThis.__sealNativeKill;
+  if (!stamp || !Number.isFinite(stamp.count)) return null;
+  const KEY = 'sv.nativeKills';
+  let seen = 0;
+  try {
+    seen = Number(localStorage.getItem(KEY)) || 0;
+    localStorage.setItem(KEY, String(stamp.count));
+  } catch {
+    // No storage is no comparison. The verdict below still stands on its own.
+  }
+  return { count: stamp.count, at: stamp.at ?? 0, fresh: stamp.count > seen };
+})();
+
+const pendingResume = (() => {
+  if (CONFIG.crashResume?.enabled === false) return null;
+  const snap = readRun();
+  if (!snap) return null;
+  // The native stamp WIDENS this rather than gating it. It is the only witness
+  // that can say a kill happened for certain, but it is also the only one that
+  // is absent on four of the five ways this game is run — so it is allowed to
+  // confirm a session the breadcrumbs called clean (the process can go away
+  // before pagehide has finished writing) and never to veto one they called
+  // cut.
+  const killed = priorVerdict?.kind === 'cut' || priorVerdict?.kind === 'cut-bg' || !!nativeKill?.fresh;
+  if (!killed || !priorCrash || !resumable(snap, resumeRules)) {
+    clearRun();
+    return null;
+  }
+  // Spent BEFORE the run is rebuilt — the loop this counter guards against is
+  // one where the restore itself is what dies, and a counter bumped on the far
+  // side of that would never bump at all.
+  return noteResume(snap);
+})();
+if (pendingResume) {
+  console.warn(`[crash] last session was ${priorVerdict?.kind ?? 'unrecorded'} mid-run`
+    + `${nativeKill?.fresh ? ` (WebContent kill #${nativeKill.count} on this install)` : ''}`
+    + ` — resuming at level ${pendingResume.level}.`, pendingResume);
+}
 
 boot();
 
@@ -667,7 +764,12 @@ async function boot() {
   // The join between callouts.csv and the code that fires each row, checked
   // once, out loud. A mis-typed id is otherwise a callout that simply never
   // happens, which is indistinguishable from one whose condition never came up.
-  checkCallouts(COACH_IDS);
+  // The coach's own steps, plus the one coach line this file fires itself: the
+  // band notice on a run that came back after the page was killed under it. It
+  // is a coach rather than a warn because nothing has gone wrong in the water —
+  // and because a coach outranks a warning, which is what lets it hold the band
+  // through the greeting that would otherwise open the run over the top of it.
+  checkCallouts([...COACH_IDS, 'resumed']);
   bindPauseKey();
   bindFullscreenKey();
   onSettingsChanged(handleSettingsChange);
@@ -744,6 +846,20 @@ async function boot() {
     showHud();
     startGame();
     setStagePanelVisible(true);
+  } else if (pendingResume) {
+    // STRAIGHT BACK IN, with no card and no menu in between.
+    //
+    // There is nothing to ask. The player did not choose to stop — a process
+    // they cannot see was killed for memory and the page was reloaded beneath
+    // the app — so a dialog offering to continue would be asking permission to
+    // undo something that was never a decision. The band says what happened
+    // (the `resumed` row) and Restart is one tap away in the pause menu for
+    // anyone who wanted the fresh run after all.
+    //
+    // The splash and the name card are skipped with it, deliberately: they are
+    // the top of a session, and this is the middle of a run.
+    showHud();
+    startGame(pendingResume);
   } else {
     showStartMenu();
   }
@@ -1404,8 +1520,15 @@ function restartRun() {
   });
 }
 
-function startGame() {
-  crumb('run:start');
+/**
+ * @param resume  a snapshot from systems/runSnapshot.js when the last session
+ *   was killed mid-run, or null for an ordinary new run. Applied at the END of
+ *   this function, on top of a completed reset, rather than by a second route
+ *   into the game: every line below is a thing the run needs done, and a
+ *   parallel start path would be a second copy of all of it, drifting.
+ */
+function startGame(resume = null) {
+  crumb(resume ? 'run:resume' : 'run:start');
   // Back to the resolution the player asked for. A run that ended on a machine
   // mid-struggle must not hand the next one a cut it never earned — and the
   // next run may be a different window size, a different scene, or simply the
@@ -1449,6 +1572,13 @@ function startGame() {
   // are the ones that ended in death.
   if (playtest.isRecording()) playtest.endRun('restart');
   disarmCrash();
+  // ...and the run the net was holding, which by the time we are here is either
+  // being restored on top of this reset (the caller has it in hand already) or
+  // has been declined. Either way nothing after this point should be able to
+  // find it: a snapshot that outlives the run it describes is one that will
+  // eventually be restored over a different one.
+  clearRun();
+  runResumes = resume?.resumes ?? 0;
   // Frame times are per RUN, and the recorder is cleared here rather than at
   // boot on purpose: boot is a loading screen and a shader warm-up, and the
   // multi-second frames those produce would sit at the top of the worst-frames
@@ -1549,6 +1679,7 @@ function startGame() {
   // started from a menu, but a level-up left half-dilated by a reload or a
   // restart would hand this one a world running at half speed.
   resetLevelUpTime();
+  resetLevelUpSeal();
   // The warm-up's ledger with it. Nothing is re-uploaded by this — the
   // templates and their GPU residency outlive a restart — it is only the record
   // of what this run has paid for starting out honest.
@@ -1794,7 +1925,11 @@ function startGame() {
   // is spoken a second later: rolling it is also what banks this run as one
   // that happened, so a player who quits during the opening camera move is
   // still greeted as a returning player next time. See resetGreetingRun.
-  resetGreetingRun();
+  // NOT ON A RESUME. A hello is the top of a session and this is the middle of
+  // a run — and rolling one again would bank the same run twice in the
+  // returning-player record, since the line the player already got was rolled
+  // when this run first started. See resetGreetingRun.
+  if (!resume) resetGreetingRun();
   clearCalloutUi();
   // Same for the grave caption. Cut rather than faded: this is the run being
   // built, and a caption fading out over the opening frames is the last run
@@ -1806,6 +1941,13 @@ function startGame() {
   // 'paint' highlight swapped in, which belongs back on its object before
   // anything else can be spawned wearing it.
   clearTelegraph();
+
+  // THE RUN THAT WAS KILLED, PUT BACK ON TOP OF THE RESET ABOVE.
+  //
+  // Last, and after every reset rather than in place of any of them: the arena
+  // this seal comes back into is a genuinely new one, and the only thing being
+  // restored is the seal's own progress through the run it was already in.
+  if (resume) applyRunSnapshot(resume);
 
   // Records the knobs this run was played under alongside the run itself: a
   // balance verdict only means anything next to the numbers that produced it,
@@ -1828,12 +1970,163 @@ function startGame() {
     // pipeline that already exists rather than needing an endpoint of its own.
     // Read it as "the run BEFORE this one died at these counters".
     ...(priorCrash ? { priorCrash } : {}),
+    // How many times this install has had its content process killed, from the
+    // native shell. The one number that says whether a change to the game
+    // actually moved the thing — a run's own census cannot see it, because the
+    // process that carries the census is the process that dies.
+    ...(nativeKill ? { nativeKills: nativeKill.count } : {}),
+    // ...and whether THIS run is a restored one, which every reading taken from
+    // it has to be read against: it opened into a fresh arena at a difficulty
+    // it did not build up to, so its early minutes are not comparable with a
+    // run that started at level one.
+    ...(resume ? { resumedFrom: { level: resume.level, resumes: resume.resumes } } : {}),
   });
 
   // Zero dt: this is the reset, not a frame. The seal's gauges are smoothed
   // (see resetPlayerBars) and the reset has just seeded them at full — letting
   // time pass here would start them chasing before the run has begun.
   updateHUD(gameState, player, null, rapidFireTimer, world.camera, 0);
+
+  // The first entry in the net's record for this run, written on the frame the
+  // run begins. Without it a kill in the opening seconds — which is exactly
+  // when a relaunching phone is most fragile, see the two 7s and 38s cuts in
+  // the September trail — would find nothing to come back to.
+  captureRunSnapshot();
+}
+
+// ---------------------------------------------------------------------------
+// THE CRASH NET — keeping the run somewhere the process cannot take it.
+//
+// systems/runSnapshot.js owns the storage, the shape and the rules. These two
+// functions are the join: one reads the run out of the game, the other writes
+// it back in. They are a pair and they have to stay one — a field captured and
+// not applied is a card the player silently does not get back, which is the
+// one failure here that nothing else in the game would notice.
+// ---------------------------------------------------------------------------
+
+// How many times THIS run has already been restored, carried across each save
+// so the counter that breaks a resume loop survives the run it is counting.
+let runResumes = 0;
+
+/**
+ * Write the run down. Cheap enough to call on the crash heartbeat, and called
+ * on every event that changes what a restore would produce.
+ */
+function captureRunSnapshot() {
+  if (CONFIG.crashResume?.enabled === false) return;
+  if (!gameState.running) return;
+  saveRun({
+    resumes: runResumes,
+    picks: player.upgrades,
+    loadout: player.loadout,
+    level: gameState.level,
+    xp: gameState.xp,
+    xpToNext: gameState.xpToNext,
+    time: gameState.time,
+    difficulty: gameState.difficulty,
+    kills: gameState.kills,
+    score: gameState.score,
+    humansEaten: player.humansEaten,
+    bosses: bossState.defeated,
+    hp: player.hp,
+    oxygen: player.oxygen,
+    pendingLevels,
+    bossNextLevel: bossState.nextLevel,
+    bossLastLevel: bossState.lastLevel,
+  });
+}
+
+/**
+ * Put a snapshot back on top of a completed reset.
+ *
+ * ORDER IS THE WHOLE FUNCTION. computeStats replays the picks, then the level
+ * growth, then the boss pellet, then the two damage-scaling cards — so every
+ * input has to be in place before the block is built, and the two that are
+ * themselves clamped BY the block (health against maxHp, air against
+ * maxOxygen) have to come after it and force a second pass. That is the same
+ * ordering trap addUpgrade documents at length in entities/player.js, and it
+ * fails the same silent way: a resumed seal holding Iron Lung would deal the
+ * damage of a tank it no longer has.
+ */
+function applyRunSnapshot(snap) {
+  // The picks, oldest first, exactly as they were dealt — the tier included,
+  // because the rarity a card arrived at is part of what it is worth and the
+  // roller would never deal the same hand twice.
+  player.upgrades.length = 0;
+  for (const pick of snap.picks ?? []) player.upgrades.push({ ...pick });
+  // The gun. resetPlayer has just rolled a fresh one, and a run that comes back
+  // holding a different weapon than it died with is a different run.
+  if (snap.loadout) player.loadout = snap.loadout;
+  player.level = snap.level;
+  player.humansEaten = snap.humansEaten;
+  player.bossesDefeated = snap.bosses;
+  // BEFORE the first recompute, because Iron Lung reads it — and it is
+  // deliberately the raw stored value rather than a clamped one, since the cap
+  // it would be clamped against does not exist until the line below has run.
+  player.oxygen = snap.oxygen;
+  recomputeStats();
+  // ...and now against the tank the block actually has, with one more pass so
+  // the damage scaling is worth what the clamped bar says rather than what the
+  // stored number did.
+  player.oxygen = Math.max(0, Math.min(snap.oxygen, player.stats.maxOxygen));
+  recomputeStats();
+  // NEVER ZERO. The snapshot may well have been taken on a seal that was one
+  // hit from death, and the net's job is to hand the run back, not to hand back
+  // a death the player never actually took.
+  player.hp = Math.max(1, Math.min(snap.hp, player.stats.maxHp));
+
+  gameState.level = snap.level;
+  gameState.xp = snap.xp;
+  gameState.xpToNext = snap.xpToNext > 0 ? snap.xpToNext : CONFIG.xp.first;
+  gameState.time = snap.time;
+  gameState.difficulty = snap.difficulty;
+  gameState.kills = snap.kills;
+  gameState.score = snap.score;
+  // The cards that were owed. Not opened here — tryOpenLevelUp runs every frame
+  // and owns every rule about when the screen is allowed up, and a menu forced
+  // open from inside the run's own construction would be a menu over a world
+  // that has not drawn a frame yet.
+  pendingLevels = snap.pendingLevels ?? 0;
+
+  // THE CORNER. startGame set the hive from an empty upgrade list a few hundred
+  // lines above — correct for a new run, and the reason a resumed one has to say
+  // it again now that the picks are back. Without this the seal is holding forty
+  // stacks and the hive is showing none of them.
+  setHiveUpgrades(player.upgrades);
+
+  // WHERE THE BOSS SCHEDULE HAD GOT TO. resetBoss put the cadence back to its
+  // opening threshold a few hundred lines above; without these three a seal
+  // resumed at level fourteen either re-fights everything it has already
+  // beaten or waits out a gap that passed ten minutes ago. `defeated` is the
+  // one place a boss kill is counted (see updateBossShot, which mirrors it onto
+  // the player), so it has to be written here and not onto the player.
+  bossState.defeated = snap.bosses;
+  bossState.nextLevel = snap.bossNextLevel;
+  bossState.lastLevel = snap.bossLastLevel;
+  // The dividend is settled up rather than owed. Every boss in the count above
+  // was already paid for in the session that died; leaving the ledger at zero
+  // would hand a resumed run the whole run's worth of stacks over again.
+  pendingBossStacks = 0;
+  bossesPaid = snap.bosses;
+
+  // The music opens where the run had climbed to, not on the first loop. The
+  // level was 1 when releaseMusicIntoRun ran above, which is the correct
+  // opening for a new run and the wrong one for this.
+  setMusicLevel(gameState.level);
+  setSpawnLevel(gameState.level);
+
+  // ...and the only thing that tells the player any of this happened. Pushed
+  // rather than pinned: the row carries its own hold, and a notice about
+  // something that is already over must not be the kind of line that waits for
+  // its subject to leave.
+  pushCallout(CALLOUTS.get('resumed'));
+
+  // Straight back to disk, with the restore's own numbers and the spent resume
+  // counter. A second kill moments later — the aftershock is a documented
+  // pattern on a phone that has just lost a two-gigabyte process — must find
+  // the run as it stands now and must not find a counter that has forgotten it
+  // already spent one of its two lives.
+  captureRunSnapshot();
 }
 
 // Dying stops the RUN, not the frame. The seal goes limp and sinks, time and
@@ -1988,6 +2281,8 @@ function killPlayer() {
     },
   };
   disarmCrash();
+  // The run ended the way runs are supposed to. Nothing is coming back for it.
+  clearRun();
   if (DEV_UI) showPlaytestReport(playtest.endRun('death', perfRecord));
   else playtest.endRun('death', perfRecord);
   // Frame times for the run just ended, alongside it. Printed at DEATH rather
@@ -2235,6 +2530,7 @@ function openLevelUp() {
   // between two picks would be a dip to nowhere and a second wait.
   if (levelUpState.active) {
     showLevelUp();
+    enterLevelUpSeal();
     return;
   }
   // Freezes the run on this frame: no steering, no attacks, no spawning, no
@@ -2250,13 +2546,21 @@ function openLevelUp() {
   // spends before an arrival; this spends it, one step per frame, and is a
   // no-op from the second level-up on.
   beginLevelUpWarmup();
+  // The watching seal is built here too, at the top of the ramp, so its one
+  // settle-and-measure (and its shaders' compile, which is async) lands in the
+  // slow-motion beat rather than on the frame the cards arrive. A no-op from
+  // the second level-up on, and when the feature is switched off.
+  prepareLevelUpSeal();
   // Muffle the mix and queue the upgrade loop — it takes over at the next
   // loop boundary rather than cutting the current one off mid-phrase.
   duckForUpgrade();
   // The cards arrive at the BOTTOM of the ramp, not on the frame the XP bar
   // filled — the level is worth watching land, and a menu over the top of it
   // is a screenshot of the fight you were in the middle of.
-  startLevelUpTime(showLevelUp);
+  startLevelUpTime(() => {
+    showLevelUp();
+    enterLevelUpSeal();
+  });
   startSalute();
 }
 
@@ -2297,6 +2601,10 @@ function startSalute() {
 }
 
 function applyLevelChoice(choice) {
+  // The watching seal shoots off the top of the screen on the pick. Before the
+  // next hand is dealt below (a second level in the batch re-enters it), so a
+  // seal mid-exit knows to come back rather than to stay.
+  leaveLevelUpSeal();
   // A rolled card locks its variant in on the pick, not on the draw — the
   // other two cards on screen may also have been offering Glow Up! rolls,
   // and only the one actually taken should decide the run's element.
@@ -2317,6 +2625,12 @@ function applyLevelChoice(choice) {
   // actually held — a pick taken at minute nine hasn't had a run to prove
   // itself and shouldn't be ranked as if it had.
   playtest.recordUpgrade(choice.id, gameState.time);
+  // ...and the net, on the pick. The heartbeat would get to it within a couple
+  // of seconds anyway, but the card screen is one of the two places the trail
+  // says the process is most often killed — the level-up warm-up and the kill
+  // shot's Rive card are both transient allocations on top of a whole resident
+  // arena — so the one write that must not be two seconds late is this one.
+  captureRunSnapshot();
   pendingLevels -= 1;
   if (pendingLevels > 0) {
     openLevelUp();
@@ -2384,6 +2698,12 @@ function updateBossShot() {
   player.bossesDefeated = bossState.defeated;
   if (gained) crumb('boss:defeated', bossState.defeated);
   recomputeStats();
+  // The net, on the event rather than only on the next heartbeat. A boss kill
+  // is the single most expensive thing in the game to lose — minutes of fight,
+  // a stat block that just changed, and the dividend behind it — and it is also
+  // the moment the process is most likely to be killed, since the kill shot's
+  // Rive card and the corpse effects all land within a second of it.
+  if (gained) captureRunSnapshot();
   // ONLY ON THE WAY UP. The comparison above is a mirror and so is true in
   // both directions — a restart puts `defeated` back to 0 and comes through
   // here to re-derive the block, which is correct and is emphatically not a
@@ -5316,6 +5636,13 @@ function runFrame(now) {
   // textures, programs and geometries are what this game grows without bound,
   // and heapUsed() reads 0 on iOS because Safari has no performance.memory.
   // Throttled to once every couple of seconds inside crashBeat.
+  // The run itself, on the same beat and for the same reason: whatever the
+  // census says at the moment of death, the run that produced it should not
+  // also be lost. captureRunSnapshot is a JSON.stringify of a few dozen fields
+  // and one setItem — the same order of cost as the beacon beside it — but it
+  // is NOT throttled by crashBeat's own timer, so it is called here rather than
+  // handed in.
+  captureRunSnapshot();
   crashBeat({
     elapsed: Math.round(gameState.time ?? 0),
     level: gameState.level ?? 0,
@@ -8108,6 +8435,9 @@ function runFrame(now) {
       titleSealEngaged() || mainMenuEngaged(),
       0,
       deathState.active,
+      // The head leans out of the screen while the menu has the bust turned to
+      // face the camera — 0 the rest of the time. See mainMenuFaceOut.
+      mainMenuFaceOut(),
     );
 
     // THE SEAL BREATHES ON THE MENU. Same emitters, same anchors, same buffer
@@ -8160,7 +8490,13 @@ function runFrame(now) {
   //
   // On rawDt: the whole point of this button is that it can be played to
   // music, and music does not slow down for a hit-stop. See systems/clap.js.
-  if (input.clap && gameState.running && !gameState.paused && !deathState.active) {
+  //
+  // AND ON THE MENU, for no reason but fun. The bust is the run's own seal
+  // with the run's own rig, the flippers are already being aimed there, and a
+  // button that does nothing on the screen where the player is looking at the
+  // animal the longest is a button that reads as broken. The pin only holds
+  // the waist down (systems/splashBust.js), so the clap has both flippers.
+  if (input.clap && (gameState.running || mainMenuActive()) && !gameState.paused && !deathState.active) {
     // WHERE THE HANDS ARE, rather than where the animal is. The two muzzles
     // are the measured skin at the end of each flipper (systems/aimRig.js), so
     // their midpoint is within a few tenths of the point the clap is about to
@@ -8239,6 +8575,13 @@ function runFrame(now) {
   // through the level-up cards and the pause menu, and go out over a beat when
   // the seal dies rather than switching off on the frame of the bite.
   updateEyeLights(realDt, player.aimRig, { lit: deathState.active ? 0 : 1, charge: windUp });
+  // What the seal is wearing. Real time and outside the run gate, like the eyes
+  // above and for a simpler reason: a hat is not an event, it is part of the
+  // animal, and it has to be on the head through the title card, the level-up
+  // cards, the pause menu and the death dive alike. Every frame rather than on
+  // change, because that is what makes the placement sliders move the thing on
+  // screen while they are being dragged — see systems/accessories.js.
+  updateAccessories(player.body);
   // ...and the same system on whatever is hunting it. Real time and outside
   // the run gate for the same reasons as the seal's, and fed the live enemy
   // list rather than a list this file keeps: a boss can die, be removed and
@@ -8561,6 +8904,9 @@ function runFrame(now) {
   // leaving the pad on presses the hexagon behind whatever the player is
   // actually looking at.
   if (mainMenuActive()) mainMenu()?.update(realDt, { pad: !isPauseOpen() && !tipSheetOpen() });
+  // The seal under the cards, on the wall clock: it is a screen element, not
+  // a body in the dilated water, and it draws to its own canvas.
+  updateLevelUpSeal(realDt);
   // The stage parks the shot on the seal, and records where it is so a staged
   // event fires ON the seal rather than at wherever the world origin happens
   // to be. Unconditional — the position has to be current the moment the panel

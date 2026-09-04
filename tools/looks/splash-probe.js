@@ -80,24 +80,34 @@ const handle = mountRiveSplash({
       try { has = !!vmi?.trigger(prop); } catch { has = false; }
       say(`${prop}: ${has ? 'bound' : 'NOT IN THIS EXPORT'}`);
     }
-    // WHAT THE FIELD SAYS, sampled rather than listened for: the dice button
-    // writes into the hidden <input>, so a press that fired the trigger shows
-    // up here and one the artboard swallowed does not. That distinction is the
-    // whole reason this readout exists — the two failures (a button whose
-    // listener never fires, and a game that never subscribed) are identical on
-    // screen.
-    const field = stage.querySelector('input');
+    // WHAT THE NAME SAYS, sampled rather than listened for: a press that fired
+    // the trigger shows up here and one the artboard swallowed does not. That
+    // distinction is the whole reason this readout exists — the two failures (a
+    // button whose listener never fires, and a game that never subscribed) are
+    // identical on screen.
+    //
+    // Read off the view model, which is where the name lives now. There used to
+    // be a hidden <input> to read instead; the splash takes no typing any more,
+    // so `strPlayerName` is the only copy of it outside this module.
     let last = null;
     setInterval(() => {
-      const now = field?.value ?? '';
+      const now = shownName();
       if (now === last) return;
       last = now;
-      say(`name field: "${now}"`);
+      say(`name: "${now}"`);
     }, 100);
   },
   onError: (err) => say(`LOAD FAILED — ${err?.message ?? err}`),
   onDismiss: (why) => say(`dismissed (${why})`),
 });
+
+// WHAT THE ARTBOARD IS SHOWING AS THE NAME. The splash takes no typing, so
+// there is no field to read — `strPlayerName` is the value, and the dice
+// writing into it is the only thing that moves it.
+function shownName() {
+  try { return handle.rive?.viewModelInstance?.string(SPLASH_BINDINGS.name)?.value ?? '(gone)'; }
+  catch { return '(gone)'; }
+}
 
 // ---------------------------------------------------------------------------
 // THE LISTENER SWEEP — press L.
@@ -116,7 +126,7 @@ const handle = mountRiveSplash({
 // which can be cleared by clicking harder. What is left is the file.
 //
 // A hit is anything the state machine did in response: a state change, or the
-// name field moving because tRandomizeName landed. It presses tStart too, so
+// name moving because tRandomizeName landed. It presses tStart too, so
 // the splash may dismiss itself mid-sweep — that IS the pass condition, and it
 // is reported before the page goes.
 // ---------------------------------------------------------------------------
@@ -125,9 +135,8 @@ function sweepListeners() {
   const sm = rive?.animator?.stateMachines?.[0]?.instance;
   if (!sm) { say('sweep: no state machine instance'); return; }
   const b = rive.artboard.bounds;
-  const field = () => stage.querySelector('input')?.value ?? '(gone)';
   const NX = 32, NY = 18;
-  let before = field();
+  let before = shownName();
   const changes = [];
   for (let gy = 0; gy < NY; gy++) {
     for (let gx = 0; gx < NX; gx++) {
@@ -139,7 +148,7 @@ function sweepListeners() {
       sm.pointerDown(x, y, 0); sm.advanceAndApply(0.016);
       sm.pointerUp(x, y, 0); sm.advanceAndApply(0.016);
       if (handle.isDestroyed) { say(`sweep: tStart FIRED at artboard ${Math.round(x)},${Math.round(y)}`); return; }
-      if (field() !== before) { changes.push(`${Math.round(x)},${Math.round(y)}`); before = field(); }
+      if (shownName() !== before) { changes.push(`${Math.round(x)},${Math.round(y)}`); before = shownName(); }
     }
   }
   const states = sm.stateChangedCount();
@@ -153,16 +162,15 @@ function sweepListeners() {
 }
 // ?guards USED TO TEST THE PRESS-AT-MOUNT GUARDS. There is nothing to guard
 // now: a run begins only when the artboard's own Start button fires `tStart`
-// (on pointer DOWN — see onSplashPointer in riveSplash.js), and a press on
-// empty water focuses the name field and nothing else. The sweep above is the
-// check that still matters: it must report tStart firing somewhere.
+// (on pointer DOWN — see riveSplash.js), and a press on empty water does
+// nothing at all. The sweep above is the check that still matters: it must
+// report tStart firing somewhere.
 if (location.search.includes('guards')) say('guards: retired — the artboard owns Start now; run the sweep instead');
 
-// A BUTTON, NOT A KEY. The splash holds focus on its hidden name field the
-// whole time it is up, so every letter you press is typed into it — a keyboard
-// shortcut here reads as the page ignoring you while quietly filling the field
-// with the shortcut. The button sits above the splash wrapper and opts back
-// into pointer events; see the stylesheet.
+// A BUTTON, NOT A KEY. The splash listens on the window for space (roll) and
+// Enter (start), so a keyboard shortcut here would either be swallowed by one
+// of those or fight them for the next key somebody adds. The button sits above
+// the splash wrapper and opts back into pointer events; see the stylesheet.
 document.getElementById('sweep')?.addEventListener('click', () => {
   say('sweeping…');
   // Deferred a frame so the line above is painted before the sweep blocks the

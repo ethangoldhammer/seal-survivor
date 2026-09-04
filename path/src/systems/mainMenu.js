@@ -86,6 +86,8 @@ import { menuInput, touchSlots } from '../input.js';
 import { feedback } from './feedback.js';
 import { mountBuildStamp } from '../ui/buildStamp.js';
 import { mountNameTag } from '../ui/nameTag.js';
+import { cycleAccessory, accessoryTurn } from './accessories.js';
+import { mountAccessoryDrawer } from '../ui/accessoryDrawer.js';
 import { playerName } from './playerName.js';
 
 // The live menu, or null. One at a time by construction — it holds a pose on
@@ -118,6 +120,30 @@ export function mainMenuEngaged() {
  */
 export function mainMenuAim() {
   return mainMenuEngaged() ? live.aim : null;
+}
+
+/**
+ * How far the head should look OUT OF THE SCREEN while this screen owns the
+ * body — 0 with the seal in profile, 1 with it turned square to the lens.
+ *
+ * The aim the rig solves is a SCREEN-PLANE direction, so the look target has
+ * always had no depth. That is right for an animal seen from the side and wrong
+ * the moment the bust turns to face the camera: the seal stands upright, the
+ * cursor is above it, and a target with no depth is a head pointing at the sky
+ * — the top of a skull, with the eyes the turn exists to show looking over you.
+ * So the rig is told to lean the target toward the lens by however much the
+ * body is faced. See the `faceOut` block in systems/aimRig.js.
+ *
+ * |sin| of the turn rather than the turn itself, so it is 0 at the profile, 1
+ * at a quarter turn either way, and follows the same ease the body does — the
+ * head leans out as the animal comes round rather than snapping when it
+ * arrives.
+ *
+ * Read by main.js and handed down through updateAimRig, because
+ * entities/player.js does not import from systems/.
+ */
+export function mainMenuFaceOut() {
+  return mainMenuEngaged() ? (live.faceOut ?? 0) : 0;
 }
 
 /** The live menu's handle, or null. */
@@ -192,6 +218,47 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   const _z = new THREE.Vector3(0, 0, 1);
   const _focus = { x: 0, y: 0 };
   const _bustQuat = new THREE.Quaternion();
+  // --- HOW THE ANIMAL IS STANDING, and why it turns at all -------------------
+  //
+  // What the seal has on can ask to be SEEN. The sunglasses are placed as a
+  // front-facing decal yawed round to a profile camera (the cheat that makes
+  // them read at all), so in profile the animal is wearing a thing pointing at
+  // the viewer rather than at itself; the cap reads from anywhere and takes a
+  // coin-flip between the profile and a three-quarter. Both are one number —
+  // radians about the animal's own long axis, rolled by equipAccessory and read
+  // here. See `showTurns` in CONFIG.accessories.
+  //
+  // THE PLUMB TURNS WITH THE ANIMAL; THE CANT DOES NOT. `q = Rz(lean) *
+  // Ry(turn) * Rz(plumb)`, and the order is the whole fix. The plumb is
+  // MEASURED in profile (bustPlumb): the authored idle curls the spine some
+  // twenty degrees, and the plumb is the counter-rotation that stands it
+  // upright — a rotation about the animal's own lateral axis, which in profile
+  // happens to be the screen's z. Applied about the screen's z on a TURNED
+  // animal it is no longer a plumb at all: the curl it corrects has swung round
+  // toward the camera and the correction is a flat sideways cant. Measured,
+  // that put the head 0.65 world units off the waist at the quarter turn — the
+  // seal leaning over, its head behind the name tag — and threw the flipper IK
+  // against a limit it oscillated on (0.17 units of fin a frame). Composed
+  // after the turn, in the model's frame, the plumb stays about the animal's
+  // lateral axis and the head sits over the waist at every turn: 0.05 there,
+  // and the fins go still. `cfg.lean` is the authored screen-plane cant of the
+  // whole portrait and stays outside both, which is what it always was.
+  //
+  // THE HEAD STILL FOLLOWS THE CURSOR, and that is free rather than lucky: the
+  // aim is a direction in the SCREEN plane (bustAim) and the neck IK solves
+  // toward a world point, neither of which knows about a spin around the axis
+  // it is being aimed along. Measured at every turn this can take — with the
+  // cursor somewhere the neck can actually reach, the head lands within a
+  // couple of degrees of where it lands in profile, and the positions where it
+  // gives up are the cone gate's, the same ones it gives up on already.
+  const _turnQuat = new THREE.Quaternion();
+  const _plumbQuat = new THREE.Quaternion();
+  const _y = new THREE.Vector3(0, 1, 0);
+  // EASED, because equipping is a click and a body that snapped ninety degrees
+  // on one would read as a different seal rather than as this one turning.
+  // Seeded at the target rather than at 0 so the screen does not open on a
+  // profile and immediately swing.
+  let turn = accessoryTurn();
   const _project = new THREE.Vector3();
   // The seal is not swimming, so the lattice's wake has no speed to read.
   const _still = { x: 0, y: 0 };
@@ -214,12 +281,20 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   const idleState = stateForSpeed(0, false);
   let plumb = 0;
 
+  // THE SETTLE RUNS AT TURN 0, DELIBERATELY. The crop below is measured once, on
+  // this pose, and the profile is the WIDER silhouette — face-on the animal is
+  // only as broad as its shoulders, in profile it is as broad as it is deep. So
+  // a frame composed on the profile holds every turn an accessory can ask for,
+  // and one composed on a face-on seal would let a hat swing out of shot the
+  // first time somebody put the cap on.
   function poseStep(dt) {
     seal.anim?.update(dt, idleState, false);
     body.quaternion.setFromAxisAngle(_z, plumb + (cfg.lean ?? 0));
     body.updateMatrixWorld(true);
     aim.lerp(wantAim, 1 - Math.exp(-(cfg.aimLerp ?? 7) * dt));
     if (aim.lengthSq() > 1e-8) aim.normalize();
+    // `faceOut` is 0 here on purpose: the settle runs at turn 0 (see above), so
+    // the pose the crop is measured on is the profile, head and all.
     rig?.update(dt, aim, { engaged: true });
     // ...and the pin LAST, because the rig's tail chain is a spring that writes
     // the very bones being held (see the note in splashBust.js).
@@ -512,7 +587,59 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   // by the shader already injected into its material, not held in front of the
   // flank as a quad. See design/NAME-ON-THE-SEAL.md.
   const tag = mountNameTag({ parent: labelLayer, name: playerName(), cfg: cfg.nametag });
+
+  // THE DRAWER — a strip of what the seal can wear, along the bottom. A STUB;
+  // read the header of ui/accessoryDrawer.js before extending it. In the label
+  // layer for the same reason the tag and the stamp are: it is the menu's, and
+  // the one `remove()` that takes the buttons away takes it too.
+  //
+  // It is handed `sealScreen` rather than measuring the animal itself — the
+  // press that cycles and the drop that equips have to agree about where the
+  // seal is, and two projections of the same box is two things to keep in step
+  // with a resize.
+  //
+  // POINTER-EVENTS. The label layer is `pointer-events:none` so a press on a
+  // button's text still reaches the canvas; the drawer turns them back on for
+  // itself, which also means onDown's `e.target !== canvas` guard rejects a
+  // press on a tile before it can squash a hexagon behind it.
+  const drawer = mountAccessoryDrawer({
+    parent: labelLayer,
+    sealRect: sealScreen,
+    onEquip: () => { /* the slot is the whole change; nothing else to do yet. */ },
+  });
   const _tagTop = new THREE.Vector3();
+
+  // --- WHERE THE SEAL IS, IN PIXELS ------------------------------------------
+  //
+  // The measured bust box put through the camera: centre, and the radius of a
+  // circle over it. Two things want this and they want the same answer — the
+  // press that cycles what the animal is wearing, and the drawer's drop target
+  // — so it is one function rather than a hit test in each.
+  //
+  // THE BOX, NOT A RAYCAST, and that is a decision. Raycasting the body would
+  // be exact, but three prefilters a SkinnedMesh with the bounding sphere of
+  // its BIND pose, and this animal is held in a pose nothing in the file was
+  // authored for: a press on the standing bust can be rejected before a single
+  // triangle is tested, which presents as the seal ignoring every other click.
+  // The menu is a portrait with the animal filling most of the frame, so the
+  // box is a fair description of "on the seal" and it cannot fail that way.
+  //
+  // Narrower than the box is wide: the bust is much taller than it is broad and
+  // a circle on its long axis would reach out over open water on both sides.
+  const _bustMid = new THREE.Vector3();
+  const _bustEdge = new THREE.Vector3();
+  function sealScreen() {
+    const [vw, vh] = viewport();
+    _bustMid.set((bust.min.x + bust.max.x) / 2, (bust.min.y + bust.max.y) / 2, 0).project(camera);
+    _bustEdge.set(bust.max.x, (bust.min.y + bust.max.y) / 2, 0).project(camera);
+    const x = ((_bustMid.x + 1) / 2) * vw;
+    const y = ((1 - _bustMid.y) / 2) * vh;
+    const halfW = Math.abs(((_bustEdge.x + 1) / 2) * vw - x);
+    // 1.35x the half-width, so the target covers the shoulders without becoming
+    // the whole screen. Tuned by eye and deliberately not a config key: it is
+    // the size of a click target, not a look.
+    return { x, y, r: Math.max(24, halfW * 1.35) };
+  }
 
   // ONE ELEMENT PER LINE, always — a single-line label is a block of one, so
   // there is no second path through any of this. The wrapper is a block that
@@ -562,6 +689,10 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   function placeLabels(w) {
     const [vw, vh] = viewport();
     stamp.el.style.opacity = String(labelFade(w));
+    // The drawer leaves on the buttons' curve, not the camera's: it is chrome
+    // that has no business in a run, and the same argument that takes the words
+    // away early takes a row of tiles with them.
+    drawer?.setWeight(labelFade(w));
     // The tag hangs off the bust's right edge, and the bust is measured in
     // world units — so both of its right-hand corners go through the camera
     // and the tag is sized off the pixels between them. ONLY WHILE HELD: once
@@ -933,6 +1064,24 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     if (mouse) pointerInside = true;
     pointTo(e.clientX, e.clientY, { look: mouse });
     if (hovered < 0) {
+      // THE SEAL ITSELF. A press on the animal cycles what it is wearing, and
+      // the bare seal is a position in that cycle — see cycleAccessory. This is
+      // the whole of "try things on" for a player who never opens the drawer,
+      // and it is checked BEFORE the water knock because the animal is a target
+      // and the water is what is left.
+      //
+      // The knock still fires. The press did happen on the water's surface as
+      // far as the lattice is concerned, and swallowing it would make the one
+      // part of this screen that answers everywhere stop answering on the one
+      // thing you most want to poke.
+      const rect = sealScreen();
+      if (Math.hypot(e.clientX - rect.x, e.clientY - rect.y) <= rect.r) {
+        cycleAccessory(1);
+        drawer?.refresh();
+        feedback('uiClick');
+        waterKnock(cursorWorld.x, cursorWorld.y);
+        return;
+      }
       // OPEN WATER. The lattice does not care what was over it — a screen that
       // only answers on three small targets teaches you not to touch it — so a
       // press anywhere puts a knock in the water under the pointer.
@@ -1093,6 +1242,8 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     weight: 0,
     releaseFrom: 0,
     aim,
+    // Republished every frame beside the aim — see mainMenuFaceOut.
+    faceOut: 0,
     handle: null,
     // What the ARENA's lattice is asked for while this screen is up — see
     // mainMenuGrid, and wakeFor for why the dent is a blend, not a switch.
@@ -1125,6 +1276,9 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     // A menu that tore down holding one would leave a permanent glow on the
     // arena's lattice at whatever the last cursor position unprojects to.
     dropCursor();
+    // The drawer first: it captures the pointer while a tile is being dragged,
+    // and a captured pointer on a node torn out from under it never releases.
+    drawer?.destroy();
     // The tag's runtime before its element: `labelLayer.remove()` would take
     // the canvas with it but leave the WASM-side artboard and its render loop
     // alive behind a detached node.
@@ -1264,7 +1418,22 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // updatePlayer is writing again by then — takes it over smoothly, so the
       // animal turns from standing to swimming over the same second the camera
       // pulls back, instead of snapping on the frame the run begins.
-      _bustQuat.setFromAxisAngle(_z, plumb + (cfg.lean ?? 0));
+      // The turn eases toward whatever the current accessory asks for. The
+      // SNAP at the end is not tidiness: an exponential ease never arrives, and
+      // a body left a ten-thousandth of a radian short forever is a quaternion
+      // that never stops being rewritten — which keeps the pin and the rig
+      // solving a pose that is not changing.
+      const wantTurn = accessoryTurn();
+      turn += (wantTurn - turn) * (1 - Math.exp(-(CONFIG.accessories?.turnLerp ?? 6) * dt));
+      if (Math.abs(wantTurn - turn) < 1e-4) turn = wantTurn;
+      // FADED WITH THE SHOT, not just with the turn. Through the glide `w` runs
+      // to 0 and the run takes the body back; a head still leaning at the lens
+      // while the animal swims away would be the one part of the release that
+      // did not let go.
+      state.faceOut = Math.abs(Math.sin(turn)) * w;
+      _bustQuat.setFromAxisAngle(_z, cfg.lean ?? 0)
+        .multiply(_turnQuat.setFromAxisAngle(_y, turn))
+        .multiply(_plumbQuat.setFromAxisAngle(_z, plumb));
       body.quaternion.slerp(_bustQuat, w);
       if (mainMenuEngaged()) {
         pin?.apply();

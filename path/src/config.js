@@ -21053,6 +21053,45 @@ export const CONFIG = {
       // blend, so the peek still tips up or down toward whatever it lost.
       cameraBias: 0.85,
       peekKeepY: 0.35,
+      // HOW FAR OUT OF THE SCREEN THE HEAD LOOKS when the body has been turned
+      // to face the camera — depth added to a target that has only ever had a
+      // screen-plane direction. Zero in a run, where the animal is seen from
+      // the side and the cursor really is in its plane; raised by the main menu
+      // in step with the bust's turn (see `showTurns` in CONFIG.accessories).
+      //
+      // HOW FAR OUT OF THE SCREEN, as a multiple of the unit screen-plane aim.
+      // 1 is a right angle's worth — with the cursor straight above, a seal
+      // looking up AND at you, 45 degrees off the lens. That read as "still
+      // looking up". 4 puts the eyes 16 degrees off the lens with the cursor
+      // over the buttons (MEASURED on the eye normals: 0.96 toward the camera),
+      // which is a seal looking at you that glances toward the cursor, and the
+      // on-screen swing between the buttons is still 46 degrees against 37 at
+      // 1 — because the chest lean below is doing most of that work now. The
+      // cursor's pull is what is left over, on purpose: past about 6 it stops
+      // steering the head at all.
+      faceOutDepth: 4,
+      // HOW MUCH MORE THE NECK MAY BEND while it is doing that. Leaning the
+      // target out of the screen spends part of a three-bone chain's 0.4-radian
+      // budget on depth, and what is left is the swing ACROSS the screen — the
+      // one the player is driving with the cursor. Measured on the muzzle over
+      // the button row, that travel fell from 43 degrees to 24 the moment the
+      // lean came on: a head aimed beautifully at the lens that had stopped
+      // following anything. 1.5 bought it back at a depth of 1; at a depth of
+      // 4 the neck is asked to fold further still, and 2.2 is where the swing
+      // stops growing (46 degrees; 2.2 and 3 measure the same). 1 is the old
+      // cap and the old problem. Menu-only — a run's neck never sees it.
+      faceOutBend: 2.2,
+      // HOW FAR THE CHEST COMES FORWARD UNDER IT, radians about chest_04's
+      // see-saw axis at full face. The neck alone tips the head down on a
+      // bolt-upright body, which reads as a nod; the mid-section leaning in is
+      // what reads as the animal paying attention. The sign is MEASURED on the
+      // faced bust — positive brings the head toward the lens. 0.7 brings the
+      // skull 1.4 world units forward and 0.4 down the frame; it is also what
+      // lets the eyes stay on the camera with the cursor LOW beside the animal
+      // (0.89 toward the lens, against 0.72 at 0.3), because the neck no longer
+      // has to do the whole fold on its own. Past about 0.9 the animal reads as
+      // diving at you rather than leaning in.
+      faceOutLean: 0.7,
       glanceWeight: 0.45,
       // ...and the neck is no longer what reaches a target behind the animal:
       // the BODY twists to bring it into view, which is how a seal actually does
@@ -28070,6 +28109,13 @@ export const CONFIG = {
     // World units. The eyeball geometry it sits in is 0.14 across, so this
     // covers the seal's own dark eye rather than floating inside it.
     radius: 0.08,
+    // How far the bead's CENTRE is pulled back into the head along the
+    // socket's normal, world units. 0 is a sphere standing on the face — fine
+    // from the side, a marble glued to the skull the moment the bust faces the
+    // camera. 0.045 leaves a 0.035 dome: from the side its outline is 0.13
+    // across, still covering the 0.14 eye; from the front it is an eye. Past
+    // the radius the bead is gone entirely.
+    beadSink: 0.045,
 
     // --- the halo, and how hard it blooms -------------------------------------
     // THE HALO IS THE ONLY PART THAT BLOOMS. CONFIG.bloom.divisor is 6, so the
@@ -28180,6 +28226,323 @@ export const CONFIG = {
     farEye: 0,
     fadeIn: 9,
     fadeOut: 5,
+  },
+
+  // WHAT THE SEAL WEARS — a hat, a pair of sunglasses, anything small enough to
+  // ride a bone. systems/accessories.js parents the mesh to the bone named
+  // below and writes this placement onto it every frame, so every slider here
+  // moves the thing on screen while you drag it.
+  //
+  // THE PLACEMENT IS BONE-LOCAL AND THE NUMBERS ARE WORLD UNITS. Those two
+  // facts fight each other and both are deliberate. Bone-local is the only
+  // frame in which a hat stays on a head: the skull turns, the neck IK bends it
+  // at the cursor and the whole animal mirrors when it swims the other way, and
+  // an offset in any other frame has to be recomputed against all three or the
+  // hat slides off. World units is what makes the sliders readable — the bone
+  // carries the model's fit scale, measured at 2.8875 on head_07, so a raw
+  // bone-local 0.1 is not a tenth of anything you can see. The system divides
+  // that scale back out, so `lift` 0.1 is a tenth of a world unit and the seal
+  // is 2.6 units long for comparison.
+  //
+  // WHICH BONE. `head_07` for both, and NOT the eye bones — those carry the
+  // blink on all three channels (scale 0.2..1.3), so anything parented there is
+  // squashed several-fold several times a second. head_07's scale track is a
+  // flat 1.0 in every clip and it is the last bone of the aim rig's head chain,
+  // so an accessory rides the cursor for free. Same reasoning as the eye
+  // sockets above; see systems/eyeLights.js.
+  //
+  // WHAT THE SIX PLACEMENT NUMBERS DO. All of them are in the SEAL's frame, not
+  // the bone's — see the placement block in systems/accessories.js:
+  //
+  //     snout   along body +Y, the way the animal swims
+  //     lift    up the screen (body -X; the side-on view puts +X downward)
+  //     depth   toward the lens, body +Z
+  //     pitch   about the camera axis — tips it forward and back
+  //     yaw     about the vertical — swings it toward or away from the lens
+  //     roll    about the swim axis — tips it side to side
+  //
+  // They keep those meanings on every bone in the dropdown, which is the point
+  // of routing them through `boneAlign`: the bone frames differ by a quarter
+  // turn and more, so an offset written in bone axes would be true for head_07
+  // and wrong the moment the dropdown moved.
+  //
+  // THE REST ALIGNMENT IS `boneAlign` BELOW, AND IT IS NOT A SLIDER. It is the
+  // bone's own rest orientation measured against the body, and every offset and
+  // every rotation here is composed through it — which is the whole reason the
+  // six numbers each mean one thing. Kept separate from the trims rather than
+  // folded into their defaults: folded in, "no rotation" would read as -1.5708
+  // on one slider and every adjustment from there would compound against a
+  // quarter turn, which is how a `roll` ends up swinging a hat in a plane that
+  // has nothing to do with rolling.
+  accessories: {
+    enabled: true,
+
+    // ONE AT A TIME, AND THAT IS A SHAPE RATHER THAN A RULE. The asset key of
+    // what the seal has on, or '' for a bare seal. It used to be a `worn`
+    // boolean on each item, which could express two hats at once — a state
+    // nothing in the game wants, that the config file could hold, that a tuner
+    // could produce with one click, and that some function would then have had
+    // to quietly resolve. Making it a single slot means "wearing both" cannot
+    // be written down, so nothing has to defend against it.
+    //
+    // The cost, and it is the right one to pay: adding a second SLOT later — a
+    // hat and glasses together, because those two genuinely do not conflict —
+    // is a change here rather than an accident. When that day comes this
+    // becomes a slot per body part, not a boolean per item.
+    equipped: 'accessoryGlasses',
+
+    // HOW FAST THE ANIMAL TURNS when what it is wearing asks for a different
+    // view of it — see `showTurns` below. Exponential, per second. Slow enough
+    // to read as the seal showing you the thing rather than as a cut, fast
+    // enough that clicking through the drawer does not feel like waiting.
+    turnLerp: 6,
+
+    // THE REST ORIENTATION OF EACH BONE THAT CAN CARRY SOMETHING, as an euler
+    // (XYZ, radians) taking the seal's body frame into that bone's. MEASURED,
+    // not derived: the seal is loaded, the rig left at rest, and each bone's
+    // world quaternion taken against the body's. The quarter turn in all three
+    // is the rig's convention — every bone runs its length along its own +Y —
+    // and the small x is the natural droop of the head and neck at rest.
+    //
+    // A bone with no row here still works: the placement falls back to that
+    // bone's own axes and warns once, which is the honest failure — the sliders
+    // still move the thing, they just stop meaning what their labels say.
+    boneAlign: {
+      head_07: [-0.0233, -1.5708, 0],
+      neck02_06: [-0.0827, -1.5708, 0],
+      mouth_08: [-0.0788, -1.5707, 0],
+    },
+    // Keyed by asset — the key IS the entry in ASSETS (assets.js), which is
+    // where the model file, its fit and its stand-in shape live. Adding a
+    // third accessory is an ASSETS entry, a block here and a group in
+    // TUNER_SCHEMA; nothing in systems/accessories.js needs to know about it.
+    items: {
+      accessoryHat: {
+        // STUB — see systems/accessoryInventory.js. Every accessory is unlocked
+        // today because nothing yet says what unlocks one; this is the field
+        // the inventory reads, sitting here so the panel is wired to a real
+        // source rather than to a list it invents. Whatever earns an accessory
+        // — a boss down, a run length, a shop — writes this.
+        unlocked: true,
+        // HOW THE SEAL STANDS WHILE WEARING IT, as body turns in radians about
+        // its own long axis — 0 is the profile the bust is composed in, and
+        // -PI/2 brings the belly round to the lens (MEASURED: the front
+        // flippers' midpoint against chest_04 puts the ventral side at +z there,
+        // and the two eye anchors go from pure depth to pure screen-width).
+        //
+        // A LIST, AND ONE IS PICKED WHEN IT GOES ON. A cap reads from any angle,
+        // so it gets two and the choice is a coin: the same hat looks like a
+        // different portrait each time it is put on, which is most of what makes
+        // a wardrobe worth opening twice. One entry is a deterministic pose; an
+        // empty list or a missing field is the profile, which is what everything
+        // did before this existed.
+        showTurns: [0, -0.7854],
+        // WHICH BONE, from the head chain — see the note above for why the eye
+        // bones are not on the list. A dropdown rather than a free field: a
+        // typo'd bone name is a hat that silently does not appear, and the
+        // three offered are the only ones on this rig an accessory has any
+        // business riding. `neck01_05` looks like a fourth and is not: its
+        // SCALE is keyed 0.884..1.000 across the clips, so anything hung off it
+        // breathes in and out by a ninth — invisible in a still pose and
+        // obvious in motion. npm run test:accessories measures every option in
+        // the list against the file and fails on one that is animated.
+        bone: 'head_07',
+        // SOLVED AGAINST THE SKULL AND THE HAT TOGETHER. The highest vertex
+        // head_07 drives sits 0.489 world units above the bone's origin and
+        // 0.093 forward of it, and at `size` 0.85 captains_hat.glb's own brim
+        // is 0.220 below its centre — so 0.709 would rest the brim exactly ON
+        // the crown. It is set 0.11 under that on purpose. `0.709` is the
+        // single highest vertex on the skull touching the single lowest one on
+        // the cap, which is a hat balanced on a point: measured along its own
+        // footprint the band still floated 0.016 to 0.065 clear all the way
+        // back. This buries the crown band by about 0.03 and leaves the visor
+        // proud, which is how a cap is actually worn.
+        snout: 0.33, lift: 0.505, depth: 0,
+        // ZERO, now that there is a real hat. The quarter turn that used to be
+        // here stood the stand-in CONE up — every primitive in assets.js points
+        // along the game's forward +Y, so a cone over the skull lay on its side
+        // and read as a fin. captains_hat.glb declares its own up and forward
+        // (see the entry in assets.js), so the base alignment already lands it
+        // the right way round and these three are a trim again.
+        pitch: -0.525, yaw: 3.15, roll: 0,
+        // The cap's front-to-back length in world units (`fit: 1` normalises
+        // the file's longest axis, and on this model that is the peak). At 0.85
+        // it comes out 0.63 across against a skull 0.691 wide at the eyes — a
+        // cap that sits ON the head rather than swallowing it, with the visor
+        // overhanging the brow.
+        size: 1.275,
+      },
+      // SOLVED, not eyeballed: the eye sockets are already measured in this
+      // bone's own space a few blocks up (CONFIG.eyes' anchors in assets.js),
+      // so the placement that puts the lens plane on the midpoint between them
+      // is arithmetic. The glasses' origin is their area-weighted centroid,
+      // which for a pair with long temples sits well behind the lenses — which
+      // is exactly why placing them by dragging until "the origin looks right"
+      // lands them inside the skull.
+      accessoryGlasses: {
+        unlocked: true,
+        // ONE ENTRY, so this is a rule and not a roll. The glasses are placed
+        // as a front-facing decal yawed round to a profile camera (see the note
+        // by `yaw` below) — the cheat that makes them read at all — and in
+        // profile the seal is wearing a thing pointing at the viewer rather
+        // than at itself. Turning the animal to the lens is what makes the pair
+        // sit on a face instead of hovering beside one, and it is the reason
+        // this list is a per-accessory field rather than a menu setting.
+        showTurns: [-1.5708],
+        bone: 'head_07',
+        // SLID BACK A LENS-WIDTH from centred on the socket, which is the
+        // second half of the same cheat. Both lenses of a camera-facing pair
+        // sit at one depth and the seal's two sockets project onto one screen
+        // pixel, so the pair cannot straddle the eye the way it would on a face
+        // turned toward you: centred, the BRIDGE lands on the socket and the
+        // eye shows through the gap as a dark bead that reads as a nostril.
+        // 0.21 puts the front lens over it and leaves the far one on cheek.
+        snout: 0.524, lift: 0.194, depth: -0.006,
+        // A QUARTER TURN OFF ANATOMICAL, ON PURPOSE, and the `depth` above is
+        // half of the same decision. Worn the way a real pair sits, the lens
+        // plane is edge-on to a camera that only ever sees this animal in
+        // profile, and what reaches the screen is the temple bar with the
+        // lenses as a chip on the end of it — correct, and unreadable as
+        // sunglasses. Yawed to the lens they read, and then the pair has to be
+        // pushed OUT to the near cheek or the plate is buried in a skull 0.691
+        // wide: 0.297 puts the lens plane 0.40 out, a lens thickness proud of
+        // the 0.326 the skin reaches at the eye. The temples run back into the
+        // head, which is where they should be — invisible.
+        //
+        // The sign of the yaw matters and is not symmetric: the other quarter
+        // turn points the temples at the camera and leaves the lenses inside
+        // the head. It is the same cheat every side-on character with pixel
+        // shades makes, and it is a taste call — npm run looks:accessories
+        // renders both, and worn anatomically beside them.
+        pitch: -0.108, yaw: 0.059, roll: -0.019,
+        // The width across the face, and it is set from the SKULL rather than
+        // from the eyes. The two sockets are 0.487 world units apart, and a
+        // pair sized to that disappears: the head is 0.691 wide in the flesh at
+        // the eye plane, so anything narrower than about 0.7 is inside the
+        // cheeks with only a sliver of lens showing. Measured by skinning the
+        // body and taking the z span of the vertices around the eye.
+        size: 0.786,
+      },
+
+      // ------------------------------------------------------------------
+      // THE REST OF THE WARDROBE. Six more, imported by
+      // tools/optimize-accessories.mjs; the ASSETS entries carry the files.
+      //
+      // EVERY NUMBER BELOW IS DERIVED FROM THE TWO SOLVED ITEMS ABOVE, and
+      // saying that plainly is the point of this comment. They are not
+      // eyeballed and they are not final. The two above were dialled against
+      // a seal on a screen; these are placed so that each one lands where its
+      // solved sibling already lands, which is the only starting point that
+      // is a measurement rather than a guess:
+      //
+      //   A HAT'S `lift` puts its LOWEST VERTEX at the height the captain's
+      //   cap's brim already sits — 0.197 above head_07, which is the skull's
+      //   top vertex at 0.489 less the 0.292 the cap is deliberately buried
+      //   by. So lift = 0.197 + (the model's own centroid-to-brim drop, in
+      //   fit:1 units, times `size`). createVisual re-centres every model on
+      //   its AREA-WEIGHTED centroid, so that drop is measured from there and
+      //   not from the bounding box — for a hat those two are 5% of its
+      //   height apart, which is the difference between a brim on the skull
+      //   and a brim inside it.
+      //
+      //   A PAIR OF GLASSES' `lift` puts its bounding-box centre where the
+      //   pixel pair's already is, 0.171 above the bone. The bbox centre
+      //   rather than the centroid this time, and deliberately: for a pair
+      //   with long temples the centroid sits well behind the lenses (the
+      //   note on accessoryGlasses above says so), and it is the LENS that
+      //   has to land on the eye.
+      //
+      //   `size` matches the width ACROSS THE HEAD: 0.945 world units for the
+      //   hats, which is what the cap measures at its 1.275, and 0.786 for
+      //   the glasses, which is what the pixel pair measures. Divided by each
+      //   model's own x extent in fit:1 units, since `fit` normalises the
+      //   LONGEST axis and on every one of these that is the front-to-back
+      //   one, not the width.
+      //
+      //   `snout`, `depth` and the three rotations are inherited outright.
+      //   They are facts about where the skull and the eye are, not about
+      //   which hat is on.
+      //
+      // THE ONE PLACE THIS DIFFERS FROM ITS SIBLING is the hats' `yaw`. The
+      // cap declares `forward: '-Z'` and then carries a yaw of 3.15 to turn
+      // it back, which is a half turn cancelling a wrong declaration. These
+      // three declare the forward that was measured on them, so their yaw
+      // starts at 0 and is a trim.
+      //
+      // Run `npm run looks:accessorylab` and drag them. What that writes back
+      // through tools/apply-accessories.mjs replaces every number here.
+      // ------------------------------------------------------------------
+
+      accessoryBowler: {
+        // A hat, so a coin between the profile and a three-quarter — see the
+        // note on `showTurns` under accessoryHat.
+        showTurns: [0, -0.7854],
+        unlocked: true,
+        bone: 'head_07',
+        snout: 0.46, lift: 0.474, depth: 0,
+        pitch: -0.438, yaw: 0, roll: 0,
+        size: 1.027,
+      },
+      accessoryTricorn: {
+        // A hat, so a coin between the profile and a three-quarter — see the
+        // note on `showTurns` under accessoryHat.
+        showTurns: [0, -0.7854],
+        unlocked: true,
+        bone: 'head_07',
+        snout: 0.33, lift: 0.456, depth: 0,
+        pitch: -0.336, yaw: 0, roll: 0,
+        size: 1.025,
+      },
+      accessoryFedora: {
+        // A hat, so a coin between the profile and a three-quarter — see the
+        // note on `showTurns` under accessoryHat.
+        showTurns: [0, -0.7854],
+        unlocked: true,
+        bone: 'head_07',
+        snout: 0.256, lift: 0.486, depth: -0.001,
+        pitch: -0.343, yaw: 0, roll: 0,
+        // The widest of the three, because the brim is the widest thing here
+        // relative to the hat's own length: 0.807 of it against the bowler's
+        // 0.920, so it takes more `size` to reach the same 0.945 across.
+        size: 1.171,
+      },
+      accessoryRounds: {
+        // Eyewear, so the animal turns to the lens: these are placed as
+        // front-facing decals yawed round to a profile camera, and in profile
+        // that reads as a thing pointing at the viewer rather than worn. See
+        // the note on `showTurns` under accessoryGlasses.
+        showTurns: [-1.5708],
+        unlocked: true,
+        bone: 'head_07',
+        snout: 0.719, lift: 0.202, depth: -0.006,
+        pitch: -0.224, yaw: 0.059, roll: -0.019,
+        size: 1.09,
+      },
+      accessoryAviators: {
+        // Eyewear, so the animal turns to the lens: these are placed as
+        // front-facing decals yawed round to a profile camera, and in profile
+        // that reads as a thing pointing at the viewer rather than worn. See
+        // the note on `showTurns` under accessoryGlasses.
+        showTurns: [-1.5708],
+        unlocked: true,
+        bone: 'head_07',
+        snout: 0.515, lift: 0.175, depth: -0.006,
+        pitch: -0.108, yaw: 0.059, roll: -0.019,
+        size: 0.811,
+      },
+      accessoryWireFrames: {
+        // Eyewear, so the animal turns to the lens: these are placed as
+        // front-facing decals yawed round to a profile camera, and in profile
+        // that reads as a thing pointing at the viewer rather than worn. See
+        // the note on `showTurns` under accessoryGlasses.
+        showTurns: [-1.5708],
+        unlocked: true,
+        bone: 'head_07',
+        snout: 0.524, lift: 0.183, depth: -0.006,
+        pitch: -0.108, yaw: 0.059, roll: -0.019,
+        size: 0.786,
+      },
+    },
   },
 
   // LASER EYES — the seal's own pair. systems/laserEyes.js fires them; what a
@@ -29659,6 +30022,33 @@ export const CONFIG = {
       waveColorNear: 0xff5fd2,
       waveColorFar: 0x8a3cff,
     },
+  },
+
+  // ---------------------------------------------------------------------------
+  // THE CRASH NET — what happens to a run the process was killed underneath.
+  //
+  // Not a save system and not an offer of one. iOS kills WKWebView's content
+  // process at its memory limit and Capacitor reloads the page beneath the app
+  // (systems/crashWatch.js), which the player experiences as the game resetting
+  // itself for no reason. These are the terms on which the run comes back. See
+  // systems/runSnapshot.js for what is kept and, more importantly, what is not.
+  // ---------------------------------------------------------------------------
+  crashResume: {
+    enabled: true,
+    // A snapshot older than this is a run that was walked away from, not one
+    // that was killed. Fifteen minutes is long enough to cover a relaunch that
+    // took a while — a phone that has just shed a two-gigabyte process is not
+    // a fast phone for the next few seconds — and short enough that coming
+    // back to the game tomorrow starts at the title.
+    maxAgeMinutes: 15,
+    // Below this, replaying is cheaper than explaining. A level-1 run is thirty
+    // seconds and no cards.
+    minLevel: 2,
+    // How many times ONE run may be restored before the net gives up on it. A
+    // board heavy enough to exhaust the process is a plausible cause of the
+    // kill and not only its victim, so an unbounded net can hand the player an
+    // unescapable loop. Two.
+    maxResumes: 2,
   },
 
   // ---------------------------------------------------------------------------
@@ -34267,6 +34657,72 @@ export const CONFIG = {
     // deliberately, and the note in CONFIG.reveals says why.
   },
 
+  // THE SEAL UNDER THE HAND — the main menu's bust, swimming up from below the
+  // cards to watch you choose, and off the top of the screen the moment you
+  // do. See systems/levelUpSeal.js. It is a SECOND seal on a canvas of its own
+  // over the comb, not the run's animal: that one is mid-arena behind a
+  // near-opaque honeycomb, saluting.
+  //
+  // Every length here is in SCREEN terms — a fraction of the viewport or a
+  // pixel count — because this thing is composed against a DOM layout and
+  // nothing in it is a world unit. The head follows the pointed-at card
+  // through the same aim rig the run uses (CONFIG.head), remapped through the
+  // bust's spread exactly as the main menu remaps the cursor (bustAim).
+  levelUpSeal: {
+    enabled: true,
+    height: 0.34,     // bust height, as a fraction of the viewport height
+    gap: 28,          // px between the bottom of the card row and the crown
+    // Never less of the bust than this on a short screen. When the cards run
+    // to the bottom, the seal comes up BEHIND them (it draws under the stage)
+    // rather than staying off screen — a phone in portrait still gets a head.
+    minVisible: 0.45,
+    offsetX: 0,       // off centre, as a fraction of the viewport width
+    column: 2.4,      // the canvas's width, as a multiple of the bust's own
+    lean: 0.05,       // screen-plane cant, radians — the bust's is 0.05 too
+    aimSpread: 0.7,   // how much of the offset to a card the head takes — see bustAim
+    aimLerp: 7,       // per second, the look easing toward the card
+    faceOut: 0,       // 0..1, look OUT of the screen at the viewer when nothing is pointed at
+    delay: 0.1,       // seconds after the cards land before it starts up
+    inTime: 0.75,
+    inEase: 'outCubic',
+    outTime: 0.45,
+    outEase: 'inCubic',
+    // THE SWIM. On the way up and on the way off it is the run's own animal:
+    // the body on its heading (nose up, no plumb, no cant), the swim or boost
+    // clip picked from its actual speed exactly as stateForSpeed picks it in a
+    // run, the fins at the rig's idle weight, the tail on its spring, the waist
+    // free. Off, it rises already standing — the old behaviour.
+    swimRig: true,
+    // How far through the rise the animal starts turning from a swimmer into
+    // the bust (0..1 of inTime). The plant itself eases at pinLerp.
+    plantAt: 0.6,
+    // How fast the waist plants once it has arrived (and lets go again to
+    // swim off), and how fast the body blends between the swimming heading
+    // and the standing pose. A pin snapped on in one frame is a tail going
+    // straight.
+    pinLerp: 6,
+    // THE POINT. While a card is pointed at, the head and ONE flipper aim at
+    // it through the run's own rig (CONFIG.head, CONFIG.fins). `fin` is which:
+    //   near   the flipper on the card's side of the screen (default)
+    //   far    the other one
+    //   left / right   that side of the animal, whatever the turn
+    //   both / none
+    // `finIdle` is what the OTHER flipper(s) keep of the rig — 0 hands them to
+    // the clip, 1 aims them too (which is `both`).
+    fin: 'near',
+    finIdle: 0,
+    // THE EXIT SPIN — the barrel roll a full-power strike buys (CONFIG.strike.
+    // roll), about the animal's own spine, over the exit. `spinTurns` whole
+    // turns in `spinTime` of the exit (a fraction of outTime, from its start),
+    // with the same smoothstep the strike's roll uses.
+    spin: true,
+    spinTurns: 2,
+    spinTime: 1,
+    spinEase: 'inOutCubic',
+    outlinePx: 2,     // the rim, in screen pixels — the bust's outlinePx is the same idea
+    inkPx: 1,
+  },
+
   // ---------------------------------------------------------------------------
   // REVEALS — how surfaces arrive and leave.
   //
@@ -34325,6 +34781,31 @@ export const CONFIG = {
       scale: 6, // coarser than the default: bigger cells read better full-screen
       softness: 0.3,
       curve: 1.4,
+
+      // ...AND THE WHOLE CARD PULLED UP OFF THE TOP OF THE SCREEN, which is
+      // what actually ships now. A curtain going up: the title screen is a
+      // thing that was in front of the ocean and is now out of the way, rather
+      // than a thing that stopped existing where it stood.
+      //
+      // `ease` is the whole feel of it and the reason this is tunable at all.
+      // The default is an IN curve on purpose — it leans off the top slowly and
+      // is fastest as the last of it clears, which reads as weight being lifted
+      // rather than as a panel being animated. An OUT curve here is the same
+      // move backwards and feels like the screen was yanked; see path/src/ease.js.
+      //
+      // `distance` is in screen heights, and a hair over 1 rather than exactly
+      // 1 so a rounded pixel row can never be left showing along the top edge.
+      curtain: {
+        enabled: true,
+        seconds: 0.7,
+        distance: 1.02,
+        ease: 'inCubic',
+        // The dither and the lift are two answers to the same question — the
+        // surface coming apart where it stands, or the surface leaving — so
+        // only one runs by default. Turn this on to have it break up on the
+        // way out as well; the numbers above it still drive the dissolve.
+        dissolve: false,
+      },
     },
 
     // THE SCORE CARD. Ridged comes in as veins and strands rather than blobs —
@@ -35099,6 +35580,12 @@ const SYNCED_FX = [
   // test:beat` caught it. Any future preset recorded that way lands the
   // same way.
   ['dumbo octopus', () => resolveBiolumCfg('biolumSkin.presets.dumboOcto'), ['pulseSync', 'flickerSync']],
+  // The accessories, which arrive the same way the dumbo did — a preset
+  // written into the generated block at the end of this file, with nothing
+  // down there aware of the inventory up here. `npm run test:beat` is what
+  // notices; see the note on the row above.
+  ['accessory — tricorn', () => resolveBiolumCfg('biolumSkin.presets.accessoryTricorn'), ['pulseSync', 'flickerSync']],
+  ['accessory — rounds', () => resolveBiolumCfg('biolumSkin.presets.accessoryRounds'), ['pulseSync', 'flickerSync']],
   ['hammerhead', () => resolveBiolumCfg('biolumSkin.presets.hammerhead'), ['pulseSync', 'flickerSync']],
   ['boss yacht — hull', () => resolveBiolumCfg('biolumSkin.presets.bossYacht'), ['pulseSync', 'flickerSync']],
   ['orca escort — cow', () => resolveBiolumCfg('biolumSkin.presets.orcaFriendCow'), ['pulseSync', 'flickerSync']],
@@ -35649,6 +36136,59 @@ function bandMotionItems(key) {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// THE SLIDERS FOR WHAT THE SEAL WEARS — one set of eight per accessory, built
+// from CONFIG.accessories.items rather than written out.
+//
+// They WERE written out, twice, when there were two accessories. Six more
+// arrived at once and the hand-written version would have been 64 near-
+// identical rows differing only in a key and a word — and, worse, a place to
+// forget one. npm run test:accessories checks that every item in the config has
+// a control for all eight fields, so a forgotten row is a red test rather than
+// an accessory that exists and cannot be placed; generating them means that
+// test can no longer fail for that reason at all, which is the better outcome
+// than catching it. Same shape as creatureOutline's and companionOutline's
+// generated groups further down.
+//
+// THE LABEL IS NOT PLAYER-FACING. It reads "fedora: lift" on a slider in a dev
+// panel; what the player sees is uiText's `<key>Name`, staged as lorem.
+// ---------------------------------------------------------------------------
+const ACCESSORY_SLIDER_NAMES = {
+  accessoryHat: 'hat',
+  accessoryGlasses: 'glasses',
+  accessoryBowler: 'bowler',
+  accessoryTricorn: 'tricorn',
+  accessoryFedora: 'fedora',
+  accessoryRounds: 'rounds',
+  accessoryAviators: 'aviators',
+  accessoryWireFrames: 'wire frames',
+};
+
+const accessoryKeys = () => Object.keys(CONFIG.accessories?.items ?? {});
+const accessoryName = (key) => ACCESSORY_SLIDER_NAMES[key] ?? key;
+
+function accessoryPlacementItems() {
+  return accessoryKeys().flatMap((key) => {
+    const it = accessoryName(key);
+    const p = (field) => `accessories.items.${key}.${field}`;
+    return [
+      // A DROPDOWN AND NOT A FREE FIELD. A typo'd bone name is an accessory
+      // that silently does not appear, and the three offered are the only
+      // bones on this rig whose scale is not animated — see the note on
+      // CONFIG.accessories, and the BONES section of npm run test:accessories,
+      // which measures every option here against the file.
+      { path: p('bone'), label: `${it}: bone`, options: ['head_07', 'neck02_06', 'mouth_08'] },
+      { path: p('snout'), min: -0.6, max: 0.6, step: 0.005, label: `${it}: toward the snout` },
+      { path: p('lift'), min: -0.6, max: 0.6, step: 0.005, label: `${it}: lift` },
+      { path: p('depth'), min: -0.6, max: 0.6, step: 0.005, label: `${it}: toward the camera` },
+      { path: p('pitch'), min: -3.15, max: 3.15, step: 0.005, label: `${it}: pitch` },
+      { path: p('yaw'), min: -3.15, max: 3.15, step: 0.005, label: `${it}: yaw` },
+      { path: p('roll'), min: -3.15, max: 3.15, step: 0.005, label: `${it}: roll` },
+      { path: p('size'), min: 0.02, max: 1.5, step: 0.005, label: `${it}: size (world units)` },
+    ];
+  });
+}
+
 function textPanelGroups() {
   const groups = [{
     group: 'Global type',
@@ -35845,6 +36385,9 @@ for (const [root, presets] of Object.entries({
     "sailfish": { strength: 1, steps: 2, gamma: 0.5, low: 0.86, high: 1.55, soft: 0, range: 1 },
     "surgeonFish": { strength: 1, steps: 3, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
     "headstone": { strength: 1, steps: 6, gamma: 1, low: 0.28, high: 1, soft: 0.06, range: 1 },
+    "accessoryFedora": { strength: 1, steps: 3, gamma: 2.3, low: 0.28, high: 1, soft: 0.12, range: 1 },
+    "accessoryGlasses": { strength: 1, steps: 2, gamma: 1.25, low: 0.28, high: 1, soft: 0, range: 0.65 },
+    "accessoryHat": { strength: 1, steps: 2, gamma: 1, low: 0.28, high: 1, soft: 0, range: 1 },
   },
   sealShader: {
     "sealTeam": { strength: 0.83, size: 0.04, contrast: 3.55, wet: 0.6, wetGloss: 0.7, wetSteps: 2, wetSoft: 0.5, wetTight: 24, wetEdge: 0.15, wetRim: 0.9, wetRimPower: 3.4, wetPatch: 0.6, wetCaustics: 1.2, wetCausticScale: 4, wetCausticUp: 0.75, wetGlow: 1.3, wetTint: 0.5, color: 0x000000, wetColor: 0xdff2ff },
@@ -35868,8 +36411,9 @@ for (const [root, presets] of Object.entries({
     "anglerfish": { pigment: 0, pigmentGlow: 0.8, scale: 0.57, contrast: 1.6, coverage: 0.28, strength: 0.64, flow: 1.62, pattern: 'blotches', colorA: 0x000000, colorB: 0xebebeb, colorC: 0x000000, shellColor: 0x7a7a7a },
     "club": { pigment: 0, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.42, pattern: 'veins', colorA: 0xf1f8f9, colorB: 0x4a4a4a, colorC: 0xb5ac97, shellColor: 0x3e2319 },
     "headstone": { pigment: 0, pigmentGlow: 0, scale: 0.74, contrast: 1.6, coverage: 0.52, strength: 1.8, flow: 1.42, pattern: 'blotches', colorA: 0x000000, colorB: 0x969696, colorC: 0x5c5c5c, shellColor: 0x292929 },
-    // STATED, not inherited. Every other pigment preset says which roster it is on; this one was left unsaid and so took `base.luminous`, which is TRUE — the same silent inheritance that once put fifteen daylight species on the night roster. `true` is what it already resolved to, so nothing moves: it is a deep-sea animal with the highest strength in the family (1.8), and it is a companion rather than a spawned enemy, so the flag reads its look and not a spawn gate. Written down so it is a decision.
     "dumboOcto": { pigment: 1, pigmentGlow: 0, scale: 0.48, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.32, pattern: 'blotches', colorA: 0xfff700, colorB: 0xff4d2e, colorC: 0xfffdfa, shellColor: 0x861e94, luminous: true },
+    "accessoryRounds": { pigment: 1, pigmentGlow: 0, scale: 0.53, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.1, pattern: 'blotches', colorA: 0xe7f2f4, colorB: 0xff2eb2, colorC: 0xffd166, shellColor: 0xeca78e },
+    "accessoryTricorn": { pigment: 0, pigmentGlow: 0, scale: 1, contrast: 1.6, coverage: 0.45, strength: 1.8, flow: 1.26, pattern: 'blotches', colorA: 0x000000, colorB: 0x696969, colorC: 0xffffff, shellColor: 0x000000 },
   },
 })) {
   const bag = ((CONFIG[root] ??= {}).presets ??= {});
@@ -38198,6 +38742,9 @@ export const TUNER_SCHEMA = [
       { path: 'head.maxTwist', min: 0, max: 0.6, step: 0.02, label: 'neck twist limit' },
       { path: 'head.frontCone', min: 0, max: 3.14, step: 0.02, label: 'start giving up past' },
       { path: 'head.backCone', min: 0, max: 3.14, step: 0.02, label: 'fully given up past' },
+      { path: 'head.faceOutDepth', min: 0, max: 6, step: 0.05, label: 'look out of the screen (faced)' },
+      { path: 'head.faceOutBend', min: 1, max: 3, step: 0.05, label: '...and this much more neck to do it' },
+      { path: 'head.faceOutLean', min: -1.2, max: 1.2, step: 0.01, label: '...and the chest leans in by' },
       { path: 'head.cameraBias', min: 0, max: 1, step: 0.02, label: 'peek to camera (blend)' },
       { path: 'head.peekKeepY', min: 0, max: 1, step: 0.02, label: 'peek: keep target height' },
       { path: 'head.glanceWeight', min: 0, max: 1, step: 0.02, label: 'glance strength' },
@@ -38243,6 +38790,7 @@ export const TUNER_SCHEMA = [
       { path: 'eyes.roughness', min: 0, max: 0.6, step: 0.01, label: 'wetness (lower = sharper glint)' },
       { path: 'eyes.metalness', min: 0, max: 1, step: 0.02, label: 'metallic' },
       { path: 'eyes.radius', min: 0.02, max: 0.3, step: 0.005, label: 'eye size' },
+      { path: 'eyes.beadSink', min: 0, max: 0.12, step: 0.005, label: 'sunk into the skull by' },
       // The halo is the only part that blooms. Floored above the point where
       // it stops: at a sixth-scale bright pass anything under about 0.3 is
       // sub-pixel there and the glow simply vanishes.
@@ -38279,6 +38827,33 @@ export const TUNER_SCHEMA = [
       { path: 'eyes.farEye', min: 0, max: 1, step: 0.02, label: 'away-facing eye keeps' },
       { path: 'eyes.fadeIn', min: 1, max: 20, step: 0.5, label: 'light-up speed' },
       { path: 'eyes.fadeOut', min: 1, max: 20, step: 0.5, label: 'go-out speed (death)' },
+    ],
+  },
+  {
+    group: 'What the seal wears',
+    section: 'Creature rigging',
+    items: [
+      { path: 'accessories.enabled', type: 'bool', label: 'accessories' },
+      // ONE SLOT, so this is a choice and not two switches — the config cannot
+      // express a seal wearing both. `''` is the bare seal and is a position in
+      // the list rather than an absence: taking a hat off has to be something
+      // you can do from here, and from the menu's own cycle.
+      {
+        path: 'accessories.equipped', type: 'choice', label: 'wearing',
+        options: ['', ...accessoryKeys()],
+        labels: ['nothing', ...accessoryKeys().map(accessoryName)],
+      },
+      // THE OFFSETS ARE ALONG THE CHOSEN BONE'S OWN AXES, in world units, and
+      // the names are that bone's rest orientation measured in the seal's body
+      // space — see the note on CONFIG.accessories for the mapping and for why
+      // two of the three are stored negated. Ranges are ±0.6 against a seal 2.6
+      // world units long: past that an accessory is not badly placed, it is off
+      // the animal.
+      //
+      // The rotations START AT THE MEASURED REST ALIGNMENT rather than at zero,
+      // so a slider parked in the middle is a hat lying on its side. Reset
+      // returns them to the measured angle, not to 0.
+      ...accessoryPlacementItems(),
     ],
   },
   {
@@ -39636,6 +40211,37 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    group: 'Level-up: the seal',
+    section: 'Gameplay',
+    items: [
+      { path: 'levelUpSeal.enabled', type: 'bool', label: 'the seal swims up to watch you pick' },
+      { path: 'levelUpSeal.height', min: 0.1, max: 0.8, step: 0.01, label: 'bust height (of the screen)' },
+      { path: 'levelUpSeal.gap', min: -120, max: 200, step: 2, label: 'crown sits this far under the cards (px)' },
+      { path: 'levelUpSeal.minVisible', min: 0, max: 1, step: 0.05, label: 'at least this much of it on a short screen' },
+      { path: 'levelUpSeal.offsetX', min: -0.45, max: 0.45, step: 0.01, label: 'off centre (of the width)' },
+      { path: 'levelUpSeal.lean', min: -0.5, max: 0.5, step: 0.01, label: 'cant (rad)' },
+      { path: 'levelUpSeal.aimSpread', min: 0, max: 1, step: 0.05, label: 'how far the head follows a card' },
+      { path: 'levelUpSeal.aimLerp', min: 0.5, max: 20, step: 0.5, label: 'look eases at (per second)' },
+      { path: 'levelUpSeal.faceOut', min: 0, max: 1, step: 0.05, label: 'looks at you when nothing is pointed at' },
+      { path: 'levelUpSeal.delay', min: 0, max: 1.5, step: 0.02, label: 'starts up this long after the cards (s)' },
+      { path: 'levelUpSeal.inTime', min: 0.1, max: 3, step: 0.05, label: 'swims up over (s)' },
+      { path: 'levelUpSeal.inEase', type: 'choice', options: EASINGS, label: 'swim-up curve' },
+      { path: 'levelUpSeal.swimRig', type: 'bool', label: 'swims in and out as the run\'s seal (off: rises standing)' },
+      { path: 'levelUpSeal.plantAt', min: 0, max: 1, step: 0.05, label: 'starts standing up this far through the rise' },
+      { path: 'levelUpSeal.pinLerp', min: 0.5, max: 30, step: 0.5, label: 'waist plants / body stands at (per second)' },
+      { path: 'levelUpSeal.fin', type: 'choice', options: ['near', 'far', 'left', 'right', 'both', 'none'], label: 'which flipper points at the card' },
+      { path: 'levelUpSeal.finIdle', min: 0, max: 1, step: 0.05, label: 'the other flipper keeps this much aim' },
+      { path: 'levelUpSeal.outTime', min: 0.1, max: 3, step: 0.05, label: 'leaves over (s)' },
+      { path: 'levelUpSeal.outEase', type: 'choice', options: EASINGS, label: 'leave curve' },
+      { path: 'levelUpSeal.spin', type: 'bool', label: 'barrel-rolls on the way off' },
+      { path: 'levelUpSeal.spinTurns', min: 0, max: 6, step: 0.5, label: 'spin: turns' },
+      { path: 'levelUpSeal.spinTime', min: 0.1, max: 1, step: 0.05, label: 'spin: over this much of the exit' },
+      { path: 'levelUpSeal.spinEase', type: 'choice', options: EASINGS, label: 'spin: curve' },
+      { path: 'levelUpSeal.outlinePx', min: 0, max: 12, step: 0.5, label: 'rim (px)' },
+      { path: 'levelUpSeal.inkPx', min: 0, max: 8, step: 0.5, label: 'ink line (px)' },
+    ],
+  },
+  {
     group: 'Level-up pause',
     section: 'Gameplay',
     items: [
@@ -39665,6 +40271,11 @@ export const TUNER_SCHEMA = [
       { path: 'reveals.splash.outTime', min: 0.1, max: 3, step: 0.05, label: 'splash: clear over (s)' },
       { path: 'reveals.splash.softness', min: 0.02, max: 1, step: 0.02, label: 'splash: edge softness' },
       { path: 'reveals.splash.scale', min: 1, max: 20, step: 1, label: 'splash: detail' },
+      { path: 'reveals.splash.curtain.enabled', type: 'bool', label: 'splash: lift it away like a curtain' },
+      { path: 'reveals.splash.curtain.ease', type: 'choice', options: EASINGS, label: 'splash: curtain — curve' },
+      { path: 'reveals.splash.curtain.seconds', min: 0.1, max: 2.5, step: 0.05, label: 'splash: curtain — travel (s)' },
+      { path: 'reveals.splash.curtain.distance', min: 0.5, max: 2, step: 0.02, label: 'splash: curtain — distance (x screens)' },
+      { path: 'reveals.splash.curtain.dissolve', type: 'bool', label: 'splash: curtain — break up on the way out too' },
       { path: 'reveals.scoreCard.algo', options: ['value', 'perlin', 'simplex', 'worley', 'ridged', 'billow'], label: 'score card: noise' },
       { path: 'reveals.scoreCard.inTime', min: 0.1, max: 3, step: 0.05, label: 'score card: in (s)' },
       { path: 'reveals.scoreCard.softness', min: 0.02, max: 1, step: 0.02, label: 'score card: edge softness' },

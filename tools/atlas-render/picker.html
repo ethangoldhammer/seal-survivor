@@ -145,6 +145,12 @@ const renderer = makeRenderer();
 $('stage').appendChild(renderer.domElement);
 
 const LIST = new URLSearchParams(location.search).get('list') ?? 'icons.json';
+// Which tool writes this list, for the "it is generated" message when it is
+// missing — which is the normal state of a fresh checkout. Derived rather than
+// mapped: every list is written by the tool of the same name.
+const GENERATOR = LIST.replace(/\.json$/, '') === 'icons'
+  ? 'upgrade-icons.mjs'
+  : `${LIST.replace(/\.json$/, '')}.mjs`;
 let specs = [];
 let cur = null;      // the spec being edited (a live reference into `specs`)
 let built = null;    // { scene, radius, ... } from buildIcon
@@ -386,7 +392,7 @@ function buildPanel() {
   const btns = document.createElement('div');
   btns.className = 'btns';
   btns.innerHTML = `
-    <button class="act" id="bSave">save icons.json</button>
+    <button class="act" id="bSave">save ${LIST}</button>
     <button class="act" id="bShoot">render this PNG</button>
     <button class="act go" id="bApply">apply to the game</button>
     <button class="act warn" id="bReset">reset this icon</button>`;
@@ -812,7 +818,7 @@ async function bake(force = false) {
     const out = await res.json();
     $('notes').textContent = out.log;
     if (out.ok) {
-      status('applied — path/src/ui/upgradeIcons.js written; a running dev server picks it up');
+      status(`applied — ${baker?.module ?? 'the icon module'} written; a running dev server picks it up`);
       return;
     }
     if (out.refused) {
@@ -822,8 +828,9 @@ async function bake(force = false) {
       // second click.
       status('refused — some icons have no PNG yet; see the notes. Click again to apply anyway.', true);
       $('bApply').textContent = 'apply anyway (drops the missing)';
+      const label = $('bApply').dataset.label ?? 'apply to the game';
       $('bApply').onclick = () => {
-        $('bApply').textContent = 'apply to the game';
+        $('bApply').textContent = label;
         $('bApply').onclick = () => apply();
         bake(true);
       };
@@ -836,6 +843,15 @@ async function bake(force = false) {
 }
 
 // --- boot -----------------------------------------------------------------
+// WHICH MODULE THIS SERVER'S APPLY BUTTON WRITES, asked for rather than
+// inferred from LIST. Three pickers now share this page and they bake into
+// different places — or, for the design one, nowhere at all — and a button
+// labelled "apply to the game" on a page that applies to nothing is the bug
+// this replaced. Not fatal if it fails: the button keeps its generic label and
+// the server still says what it did (or refused to do).
+let baker = null;
+try { baker = await (await fetch('/baker.json')).json(); } catch { /* generic label */ }
+
 // Same explicit error path as render.html, and for the same reason: a missing
 // spec file is the normal state of a fresh checkout, and .json() on the
 // server's `missing` body throws at module top level with nothing on screen.
@@ -847,11 +863,28 @@ try {
 } catch (err) {
   document.body.innerHTML =
     `<pre style="padding:20px;color:#e08a8a">CANNOT LOAD /${LIST}\n\n${err.message}\n\n` +
-    `generate it first:\n  node --import ./tools/vite-loader.mjs tools/upgrade-icons.mjs</pre>`;
+    `generate it first:\n  node --import ./tools/vite-loader.mjs tools/${GENERATOR}</pre>`;
   throw err;
 }
 
 buildPanel();
+// AFTER buildPanel, because the button does not exist until then — the whole
+// panel is built in JS.
+if (baker) {
+  const b = $('bApply');
+  if (baker.key === 'none') {
+    b.textContent = 'these shots do not go in the game';
+    b.classList.remove('go');
+    b.disabled = true;
+    b.title = 'this picker was started with --bake-with none';
+  } else {
+    b.textContent = `apply to ${baker.what}`;
+    // Kept on the element because the strict-refusal path swaps this text for
+    // "apply anyway" and has to put the right words back afterwards.
+    b.dataset.label = b.textContent;
+    b.title = `bakes ${baker.module}`;
+  }
+}
 if (specs.length) select(specs[0]);
 else document.body.innerHTML = '<pre style="padding:20px">the spec list is empty</pre>';
 </script>

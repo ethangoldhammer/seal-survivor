@@ -49,7 +49,7 @@ await import('./vite-loader.mjs');
 
 const THREE = await import('three');
 const {
-  initInput, updateInput, inputDevice, inputTokens, inputStatus, input,
+  initInput, updateInput, inputDevice, inputTokens, inputStatus, input, menuInput,
 } = await import('../path/src/input.js');
 const { DEVICES, defaultDevice, shoulderLabel } = await import('../path/src/devices.js');
 
@@ -263,6 +263,74 @@ section('what this pad calls its shoulder buttons');
   check('the tokens the frame loop hands out name the pad it is reading',
     inputTokens().bumper === 'L1 or R1', inputTokens().bumper);
   setPad(null);
+}
+
+// ---------------------------------------------------------------------------
+section('the shoulders are the dice');
+// ---------------------------------------------------------------------------
+// A name can no longer be typed on either screen that asks for one — the splash
+// takes no keystrokes and the score card's next-seal row is a readout — so the
+// four shoulders are a pad player's only say in what their seal is called. RB
+// and RT roll a new name, LB and LT go back to the one before it.
+//
+// Every failure here is silent and lands on the player rather than in a log: a
+// held bumper that re-edges rolls a name every frame, a trigger that counts at
+// rest rolls one when a hand settles, and a shoulder still inside `anyPress`
+// starts the run with the name it just rolled.
+{
+  // A pad with analog triggers, which padAt's digital buttons cannot express.
+  const padWithTriggers = (b = {}) => {
+    const pad = padAt();
+    for (const [i, v] of Object.entries(b)) {
+      pad.buttons[i] = { pressed: v > 0, value: v };
+    }
+    return pad;
+  };
+  const poll = (pad) => { setPad(pad); updateInput(camera, origin); };
+
+  poll(padWithTriggers());
+  check('nothing is rolling with the pad at rest', !menuInput.nameNext && !menuInput.namePrev);
+
+  poll(padWithTriggers({ 5: 1 }));
+  check('RB rolls a new name', menuInput.nameNext === true);
+  check('...and does not also start the run', menuInput.anyPress === false);
+  poll(padWithTriggers({ 5: 1 }));
+  check('...once per press, not once per frame it is held',
+    menuInput.nameNext === false);
+
+  // BOTH SHOULDERS ON A SIDE ARE ONE BUTTON. Squeezing RT while RB is still
+  // down is a hand tightening, not a second decision.
+  poll(padWithTriggers({ 5: 1, 7: 1 }));
+  check('...and a second right shoulder on top of the first rolls nothing more',
+    menuInput.nameNext === false);
+  poll(padWithTriggers());
+
+  poll(padWithTriggers({ 4: 1 }));
+  check('LB goes back', menuInput.namePrev === true && menuInput.nameNext === false);
+  poll(padWithTriggers());
+
+  // THE TRIGGER BREAK. `pressed` goes true low enough on some pads that a
+  // finger resting on the trigger would roll a name — see NAME_TRIGGER_BREAK.
+  poll(padWithTriggers({ 7: 0.2 }));
+  check('a trigger barely touched is not a press', menuInput.nameNext === false);
+  poll(padWithTriggers({ 7: 0.9 }));
+  check('...and a real pull is', menuInput.nameNext === true);
+  poll(padWithTriggers());
+
+  poll(padWithTriggers({ 6: 0.9 }));
+  check('LT goes back, like LB', menuInput.namePrev === true);
+  poll(padWithTriggers());
+
+  // PRESS ANYTHING TO START still means anything else. A face button is what a
+  // player reaches for, and it must not have been quietly excluded along with
+  // the shoulders.
+  const face = padAt(); face.buttons[0] = { pressed: true, value: 1 };
+  poll(face);
+  check('a face button still starts the run', menuInput.anyPress === true);
+  poll(padAt());
+
+  setPad(null);
+  updateInput(camera, origin);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall good');

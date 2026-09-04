@@ -4,31 +4,32 @@
 // tested on its own page before it's wired into the start menu.
 //
 // ---------------------------------------------------------------------------
-// HOW THE NAME GETS IN, and why there is a DOM input on top of the artboard.
+// HOW THE NAME GETS IN — THE DICE, AND ONLY THE DICE.
 //
-// Rive 2.39 cannot capture typing. It has Focus nodes and it handles Tab, and
-// that is the whole of its keyboard support — no characters, no caret, no IME.
-// So a real <input> sits over the canvas, owns focus, and its value is mirrored
-// into `strPlayerName` on every keystroke; the text run in the artboard is
-// purely the display of it.
+// There is no text field on this screen and no way to type into it. The name
+// is a value this module holds (`currentName`), rolled out of sealNames.csv,
+// mirrored into `strPlayerName` for the artboard to draw, and banked on the way
+// out. The player's whole vocabulary here is the dice button.
 //
-// That is not a workaround for the missing feature, it is the right shape
-// anyway: a real input is the ONLY thing that raises the on-screen keyboard on
-// a phone. A keydown listener on window — which is what a canvas-only version
-// would need — gets nothing on iOS, because nothing is focused and the keyboard
-// never comes up. Most of this game is played on a phone.
+// This used to be a real invisible <input> stretched over the canvas, because
+// Rive cannot capture typing and only a focused field raises a phone keyboard.
+// That machinery is gone with the typing: with nothing to type into there is
+// nothing to focus, so the keyboard never comes up on a phone, the page never
+// scrolls itself to reach a field, and a press on empty water is just a press.
 //
-// The input is invisible rather than off-screen. `opacity: 0` over the artboard
-// keeps it in the layout, which matters on iOS: the browser scrolls the focused
-// field into view, and a field parked at -9999px scrolls the whole page away
-// from the splash to reach it.
+// The name still goes through the same sanitiser and the same length limit
+// (systems/playerName.js), because the roll can only offer what the leaderboard
+// will accept and the artboard must show exactly what gets stored.
+//
+// The score card's "Next seal" row in ui/ui.js is the surface that still takes
+// a typed name; nothing here is the leaderboard's only door.
 //
 // ---------------------------------------------------------------------------
 // HOW THE RUN STARTS, and why it is no longer "any input at all".
 //
-// This used to dismiss on the first pointerup or keydown anywhere. With a text
-// field that is unusable — the first letter of your own name would start the
-// game — so the artboard decides now, by firing `tStart`, and the game listens.
+// This used to dismiss on the first pointerup or keydown anywhere, which the
+// old text field made unusable — the first letter of your own name would start
+// the game. The artboard decides now, by firing `tStart`, and the game listens.
 //
 // Rive -> JS works because Rive.advance() calls handleCallbacks() straight
 // after the artboard advances, so a trigger the state machine fires reaches an
@@ -41,20 +42,27 @@
 // round the field.
 //
 // The artboard fires `tRandomizeName`, the game rolls a name out of
-// sealNames.csv (systems/randomName.js), writes it into the hidden <input> and
-// mirrors it back through `strPlayerName`. So the artboard owns the button and
-// nothing else: it does not need the vocabulary, the length limit or the
-// leaderboard's sanitiser, all of which live on this side already because the
-// typed path needs them too.
+// sealNames.csv (systems/randomName.js), holds it and mirrors it back through
+// `strPlayerName`. So the artboard owns the button and nothing else: it does
+// not need the vocabulary, the length limit or the leaderboard's sanitiser,
+// all of which live on this side.
 //
-// It lands in the FIELD rather than beside it, which is what makes the roll a
-// suggestion: the name is now theirs to edit, clear, or roll again, and it is
-// banked on the way out exactly like a typed one.
+// Roll again and again as far as they like — nothing is written to storage per
+// press. Whatever is showing when the splash goes is what gets banked.
 //
-// The trigger is OPTIONAL, unlike `tStart`. An export without it is a splash
-// with no dice button, which is a splash — so a missing property here is one
-// line in the console and nothing else. That is what lets this land before the
-// button exists in the editor; see PENDING_BINDINGS in riveContract.js.
+// AND ONE STEP BACK, because the dice being the only control makes a roll
+// irreversible in a way it never was while a name could be typed back in.
+// `previousName` walks the history the rolls have built; the game binds it to
+// the pad's left shoulder and the right one to the dice (see updateMenuNav in
+// ui/ui.js). The artboard has no back button, so on a mouse or a phone the way
+// back is to keep rolling.
+//
+// The trigger is OPTIONAL, unlike `tStart`. An export without it still starts
+// a run — so a missing property here is one line in the console and nothing
+// else. It costs more than it used to, though: the dice is now the ONLY way to
+// change the name on this screen, so an export without the button is a screen
+// where a returning player's own name is all they can play as. See
+// PENDING_BINDINGS in riveContract.js.
 //
 // THE ARTBOARD OWNS THE POINTER. `Splash Responsive` (riveContract.js) has
 // working listeners on its dice and its Start button — hover, click and press
@@ -63,10 +71,9 @@
 // and this file carried hand-measured hit boxes for the dice and the field,
 // which pointed at empty water the moment anything moved in the editor. Gone.
 //
-// One thing the artboard cannot do is raise the phone keyboard: only a focus()
-// call inside a real gesture handler does that. So the wrapper's pointerup
-// still exists, and its whole job is to hand focus to the hidden field when the
-// press was not on a button — see onSplashPointer.
+// The wrapper's pointerup survives them both, but only to report the gesture
+// (see `onGesture`) and to work the fallback path. It used to hand focus to the
+// hidden field as well; there is no field to focus now — see onSplashPointer.
 //
 // ---------------------------------------------------------------------------
 // THERE IS STILL A WAY OUT WITHOUT THE TRIGGER, and it is not politeness. If a
@@ -87,13 +94,12 @@ import { Rive, Layout, Fit, Alignment } from '@rive-app/webgl2';
 // riveRuntimeGl.js.
 import './riveRuntimeGl.js';
 import { SPLASH_ARTBOARD, SPLASH_STATE_MACHINE, SPLASH_BINDINGS, SKY_FX_BINDINGS } from './riveContract.js';
-import { loadPlayerName, savePlayerName, sanitizeName, MAX_NAME_LEN } from '../systems/playerName.js';
+import { loadPlayerName, savePlayerName, sanitizeName } from '../systems/playerName.js';
 // What the dice button spends. Parsed once at module load, out of
 // sealNames.csv — see the note above and path/src/sealNameTable.js.
 import { randomPlayerName } from '../systems/randomName.js';
 // Death is permanent — see systems/nameLedger.js.
 import { isNameBuried } from '../systems/nameLedger.js';
-import { touchPrimary } from '../devices.js';
 // The tip jar, on the one screen a player is not busy. Dependency-free by
 // design, so importing it here does not cost this module the standalone
 // property the header above is built on — see ui/tipJar.js.
@@ -193,46 +199,6 @@ export function mountRiveSplash({
   canvas.style.cssText = 'display:block; width:100%; height:100%;';
   wrap.appendChild(canvas);
 
-  // THE FIELD THE PLAYER ACTUALLY TYPES INTO. Invisible, over the artboard, and
-  // real — see the note at the top for why it cannot be a keydown listener and
-  // why it must not be parked off-screen.
-  //
-  // maxlength is the board's own limit, so the field cannot accept a name the
-  // leaderboard would then silently cut. autocapitalize/autocorrect off because
-  // this is a handle, not prose, and a phone helpfully turning "sealboy" into
-  // "Sea lboy" is the kind of thing nobody reports and everybody notices.
-  const nameInput = document.createElement('input');
-  nameInput.type = 'text';
-  nameInput.maxLength = MAX_NAME_LEN;
-  nameInput.setAttribute('aria-label', 'Your name');
-  nameInput.autocomplete = 'off';
-  nameInput.autocapitalize = 'off';
-  nameInput.spellcheck = false;
-  nameInput.setAttribute('autocorrect', 'off');
-  // `enterkeyhint` puts "Go" on the phone keyboard's return key rather than
-  // "return", which is the only label on that key that describes what it does
-  // here. Enter starts the run — see onNameKey.
-  nameInput.setAttribute('enterkeyhint', 'go');
-  // POINTER-EVENTS OFF, and this is the whole reason the field can cover the
-  // artboard at all. It has to be full-size and in the layout (see above), and
-  // a full-size element that takes clicks would swallow every one of them —
-  // including the click on Rive's own Start button, which is hit-tested on the
-  // canvas underneath. The artboard would be unclickable and `tStart` could
-  // never fire, which looks exactly like a broken state machine.
-  //
-  // So the canvas keeps all the pointer events and focus is driven by hand,
-  // from the pointerup handler below. That is also the iOS-safe shape: calling
-  // focus() from inside a real gesture handler is what raises the keyboard,
-  // and it will not raise it from anywhere else.
-  //
-  // font-size 16px is not a look — it is invisible. Anything smaller and
-  // mobile Safari zooms the page when the field takes focus.
-  nameInput.style.cssText =
-    'position:absolute; inset:0; width:100%; height:100%; opacity:0; '
-    + 'pointer-events:none; border:0; outline:0; background:transparent; '
-    + 'color:transparent; caret-color:transparent; font-size:16px; text-align:center;';
-  wrap.appendChild(nameInput);
-
   // THE TIP JAR. A DOM element over the artboard rather than a button in it,
   // for the same reason the name field is one: the splash is a Rive export,
   // and a link that has to open a URL is a thing the .riv cannot do — it would
@@ -257,8 +223,8 @@ export function mountRiveSplash({
   let startTrigger = null;
   let onStartTrigger = null;
   // The dice button's trigger, held for the same reason: a Rive instance that
-  // outlived the splash with a live listener would be typing into a field that
-  // is no longer on the page.
+  // outlived the splash with a live listener would be rolling names into an
+  // artboard that is no longer on the page.
   let randomTrigger = null;
   let onRandomTrigger = null;
   // What the cursor currently says, so it is only rewritten on change.
@@ -273,12 +239,30 @@ export function mountRiveSplash({
   // compared on a slow clock. Eight number compares four times a second is
   // nothing; a rAF loop for it would not be.
   const SKY_POLL_MS = 250;
-  // The last name the dice put in the field. SPACE rolls a new name, but only
-  // while the field holds a rolled name or nothing — the moment the player has
-  // typed something of their own, space is a space again, because names have
-  // spaces in them ("Whiskered Lenny") and a key that eats them mid-word is a
-  // field that cannot be typed into.
-  let lastRolled = '';
+  // THE NAME, and the whole of the player's say in it. Rolled by the dice,
+  // seeded from storage on load, banked on the way out. A plain string rather
+  // than an input's `.value` because there is no input — see the note at the
+  // top. Sanitised at every write, so this is always something the leaderboard
+  // would accept verbatim.
+  let currentName = '';
+
+  // EVERY NAME THIS SCREEN HAS SHOWN, oldest first, with `historyAt` marking
+  // where the player is standing in it. It exists because the dice is the only
+  // control left: without a way back, a name somebody liked is gone the instant
+  // their thumb rolls once too often, and there is no field to type it into
+  // again. `previousName` walks back through this; the dice walks forward by
+  // rolling.
+  //
+  // Entry 0 is the name they ARRIVED with, when they had one — so the first
+  // press of back returns a returning player to their own seal rather than to
+  // the game's suggestion.
+  //
+  // Rolling from partway back TRUNCATES what was in front, the way a browser's
+  // history does: the alternative is a right shoulder that sometimes rolls and
+  // sometimes replays, which is a button whose meaning depends on something the
+  // player cannot see.
+  const history = [];
+  let historyAt = -1;
   // The artboard's own report of the row's width, subscribed so the centring
   // in fitEntryRowNow follows the pill while it interpolates to a new name.
   let widthProp = null;
@@ -326,34 +310,112 @@ export function mountRiveSplash({
   let entryScale = 1;
   let entrySettleTimer = 0;
 
-  // Rive draws at the canvas's backing-store size, not its CSS size, so a
-  // resize that only changes layout leaves the animation rendering at the old
-  // resolution until the drawing surface is resynced.
-  const onResize = () => { rive?.resizeDrawingSurfaceToCanvas(); fitEntryRow(); };
+  // ---------------------------------------------------------------------------
+  // ROTATING THE PHONE, which is the one resize that used to break this.
+  //
+  // Rive draws at the canvas's BACKING-STORE size, and `resizeDrawingSurfaceToCanvas`
+  // reads the element's CSS box AT CALL TIME — under Fit.Layout it also sets the
+  // artboard's width and height from that box, which is what makes the layout
+  // reflow. So the whole question is WHEN the box is right.
+  //
+  // A `resize` listener is not the answer on a phone. Both `resize` and
+  // `orientationchange` fire BEFORE the browser has reflowed to the new
+  // orientation, so the box read there is the old one: the artboard keeps its
+  // portrait dimensions, the backing store is the wrong shape, and the picture
+  // is stretched across the new screen. Nothing fires afterwards to correct it,
+  // which is why it stayed stretched until the splash was dismissed.
+  //
+  // A ResizeObserver is: it reports the element's box AFTER layout, once per
+  // change, and it sees changes the window never announces at all — the URL bar
+  // collapsing, a software keyboard opening under the name field, the pane the
+  // look page runs in. The window events stay as a belt-and-braces nudge for the
+  // rare browser whose observer misses a rotation, and cost nothing because the
+  // work below no-ops when the box has not moved.
+  // ---------------------------------------------------------------------------
+
+  // The box the drawing surface was last built for. Compared before rebuilding,
+  // because resizeDrawingSurfaceToCanvas reallocates the backing store and
+  // re-lays the artboard out — cheap once, wasteful sixty times a second.
+  let sizedW = 0;
+  let sizedH = 0;
+  let sizePending = 0;
+
+  /**
+   * Rebuild the drawing surface for the canvas's current CSS box, if it moved.
+   *
+   * A zero box is IGNORED rather than applied: an element that is display:none,
+   * or measured before its first layout, reports 0×0, and handing that to Rive
+   * sets a 0×0 backing store the canvas never recovers from on its own.
+   */
+  function applyCanvasSize(force = false) {
+    if (destroyed || !rive) return;
+    const w = Math.round(canvas.clientWidth);
+    const h = Math.round(canvas.clientHeight);
+    if (!(w > 0 && h > 0)) return;
+    if (!force && w === sizedW && h === sizedH) return;
+    sizedW = w;
+    sizedH = h;
+    rive.resizeDrawingSurfaceToCanvas();
+    // The row's scale is a function of the canvas width, so it has to be
+    // recomputed for the new one — see fitEntryRow.
+    fitEntryRow();
+  }
+
+  // Coalesce a burst of changes into one rebuild on the next frame. A rotation
+  // can deliver an observer callback, a resize event and an orientationchange
+  // within the same frame; all three want the same single rebuild.
+  function scheduleCanvasSize() {
+    if (destroyed || sizePending) return;
+    sizePending = requestAnimationFrame(() => {
+      sizePending = 0;
+      applyCanvasSize();
+    });
+  }
+
+  // WHAT THE WINDOW EVENTS ADD, given the observer already covers the box: a
+  // rotation on iOS settles over several frames, and the FIRST post-rotation
+  // layout is sometimes still the interim one. These re-check on a short ladder
+  // so a box that lands late is still caught; each pass is a no-op unless it
+  // actually moved.
+  const RESETTLE_MS = [0, 60, 180, 400];
+  let resettleTimers = [];
+  function resettleAfterRotation() {
+    for (const t of resettleTimers) clearTimeout(t);
+    resettleTimers = RESETTLE_MS.map((ms) => setTimeout(() => {
+      if (!destroyed) applyCanvasSize();
+    }, ms));
+  }
+  const onResize = () => { scheduleCanvasSize(); resettleAfterRotation(); };
+
+  // The observer is the primary signal — see the note above. Held so it can be
+  // disconnected: an observer outliving the splash keeps the canvas, the
+  // wrapper and this whole closure alive.
+  let sizeObserver = null;
 
   function destroy(reason = 'manual') {
     if (destroyed) return;
     destroyed = true;
 
     window.removeEventListener('resize', onResize);
+    window.removeEventListener('orientationchange', onResize);
+    sizeObserver?.disconnect();
+    sizeObserver = null;
+    if (sizePending) cancelAnimationFrame(sizePending);
+    sizePending = 0;
+    for (const t of resettleTimers) clearTimeout(t);
+    resettleTimers = [];
     clearTimeout(entrySettleTimer);
     clearInterval(skyTimer);
     for (const [target, type, fn] of inputListeners) target.removeEventListener(type, fn);
 
-    // THE NAME IS BANKED ON THE WAY OUT, whatever ended the splash. Not on
-    // every keystroke: savePlayerName writes to localStorage, and a synchronous
-    // storage write per character is the one thing that can make typing feel
-    // heavy on a slow phone. Not on submit-only either — that is how a player
-    // who typed a name and started with Enter ends up called Seal.
+    // THE NAME IS BANKED ON THE WAY OUT, whatever ended the splash. Not per
+    // roll: savePlayerName writes to localStorage, and a player thumbing the
+    // dice a dozen times would be a dozen synchronous storage writes for names
+    // they are in the middle of rejecting.
     //
-    // A blank is ignored by savePlayerName rather than clearing, so backing out
-    // of a field that was pre-filled does not erase the name they already had.
-    savePlayerName(nameInput.value);
-    // Off the DOM before the exit animation: the wrapper hangs around for the
-    // dissolve, and a focused input inside it keeps the phone keyboard up over
-    // the first second of the run.
-    nameInput.blur();
-    nameInput.remove();
+    // A blank is ignored by savePlayerName rather than clearing, so leaving the
+    // splash without touching the dice does not erase the name already on file.
+    savePlayerName(currentName);
     // Off with it. The wrapper hangs around for the dissolve and the canvas
     // keeps the last frame it painted — but the jar is DOM, so it would sit
     // there perfectly crisp while the art it belongs to breaks up.
@@ -404,46 +466,21 @@ export function mountRiveSplash({
   // keeps the whole gesture on the splash.
   const dismiss = (e) => { if (startFallback) destroy(e.type); };
 
-  // A tap anywhere on the splash hands the keyboard to the name field. The
-  // field takes no pointer events of its own (see its style above), so this is
-  // the only route to focus — and it has to be a real gesture handler, because
-  // that is the only place iOS will raise the on-screen keyboard from.
+  // WHAT A PRESS ON THE SPLASH MEANS: a gesture, and on the fallback path a
+  // dismiss. Nothing else. The artboard decides the buttons — its dice fires
+  // `tRandomizeName` on click, its Start fires `tStart` on pointer DOWN — and
+  // a press anywhere else is a press on empty water.
   //
-  // Runs BEFORE `dismiss` in the same listener rather than as a second one on
-  // the same event: on the fallback path that tap also ends the splash, and
-  // focusing a field inside a wrapper that is about to be removed would be a
-  // keyboard flashing up over the first frame of the run.
-  // WHAT A PRESS ON THE SPLASH MEANS. The artboard decides the buttons — its
-  // dice fires `tRandomizeName` on click, its Start fires `tStart` on pointer
-  // DOWN — and the one thing left to this side is focus:
+  // This handler used to hand focus to the hidden name field, which was the
+  // only way to raise a phone keyboard. With the typing gone that branch went
+  // with it, and so did its cost: a tap into open ocean no longer throws a
+  // keyboard up over the art.
   //
-  //   the field, or anywhere that is not a button   focus the name field
-  //
-  // Anywhere-that-is-not-a-button rather than the field's own rectangle,
-  // because the field's rectangle is a layout the runtime computes and does
-  // not expose, and a phone needs focus() inside THIS gesture handler to raise
-  // its keyboard. The cost is a keyboard on a tap into empty water, which is a
-  // player reaching for the field and missing.
-  //
-  // Start is on pointer DOWN in the artboard for exactly this handler's sake:
-  // `tStart` reaches `.on()` from inside Rive's next advance, one frame after
-  // the press, which is well before the release — so by the time this pointerup
-  // arrives destroy() has run and nothing here fires. A press on Start never
-  // focuses the field, and a phone never flashes its keyboard over the first
-  // frame of the run.
-  //
-  // A button is told apart by asking the artboard: its own enter listeners
-  // have set `bRandomHover` / `bStartHover` by the time the release arrives (a
-  // tap is a pointerdown over the button, which is an enter). A read of the
-  // view model is synchronous, so this is the same gesture and the same call
-  // stack.
+  // onGesture runs FIRST, before any branch below can end the splash — see the
+  // option's own note for why the gesture has to be reported from here.
   const onSplashPointer = (e) => {
-    // First, and before any branch below can end the splash — see onGesture.
     onGesture?.();
-    if (startFallback) { dismiss(e); return; }
-    if (destroyed) return;
-    if (overButton()) return;
-    if (document.activeElement !== nameInput) nameInput.focus();
+    if (startFallback) dismiss(e);
   };
 
   // Is the pointer over the dice or the Start button, as far as the ARTBOARD
@@ -470,57 +507,36 @@ export function mountRiveSplash({
     canvas.style.cursor = on ? 'pointer' : '';
   }
 
-  // Enter starts the run from the keyboard, on both paths. It is what the
-  // return key means in a form, it is what `enterkeyhint="go"` has promised the
-  // phone keyboard, and it costs a player who is already typing a reach for the
-  // mouse. Not a general keydown — only this one key, and only from the field.
-  const onNameKey = (e) => {
-    onGesture?.();
-    if (e.key === ' ' && spaceRolls()) {
+  // THE KEYBOARD, such as it is: two keys, neither of which enters a character.
+  //
+  //   space   roll a name, exactly as the artboard's dice does
+  //   enter   start the run, exactly as the artboard's Start button does
+  //
+  // Both are unconditional now. Space used to have to decide whether it was a
+  // dice or a space — names have spaces in them ("Whiskered Lenny") and a key
+  // that eats one mid-word is a field nobody can type into — and with no field
+  // there is no other thing space could mean.
+  //
+  // On window rather than on an element, because nothing on this screen holds
+  // focus. A text entry anywhere on the page is still respected: the tip sheet
+  // is DOM over the splash and could grow one.
+  const onWindowKey = (e) => {
+    if (destroyed || isTextEntry(e.target)) return;
+    if (e.key === ' ') {
       e.preventDefault();
+      onGesture?.();
       randomizeName();
       return;
     }
     if (e.key !== 'Enter') return;
     e.preventDefault();
+    onGesture?.();
     destroy('enter');
-  };
-
-  // Is space the dice right now? See `lastRolled`.
-  function spaceRolls() {
-    const v = nameInput.value;
-    return v === '' || v === lastRolled;
-  }
-
-  // SPACE FROM ANYWHERE ON THE PAGE. The field normally holds focus on a
-  // desktop, so this is for the moments it does not — the tip jar was clicked,
-  // the page was clicked outside the wrapper — and for the same rule.
-  const onWindowKey = (e) => {
-    if (e.key !== ' ' || e.target === nameInput || destroyed) return;
-    if (isTextEntry(e.target)) return;
-    if (!spaceRolls()) return;
-    e.preventDefault();
-    randomizeName();
   };
 
   function isTextEntry(el) {
     return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   }
-
-  // MIRRORED ON EVERY KEYSTROKE, through the same sanitiser the leaderboard
-  // uses. Sanitising HERE rather than on the way out is what makes the artboard
-  // honest: the text run shows exactly the characters that will be stored and
-  // posted, so a player typing something the board would strip watches it not
-  // appear instead of finding it missing from the board later.
-  //
-  // The field is rewritten only when the sanitiser actually changed something —
-  // assigning `.value` unconditionally moves the caret to the end, which turns
-  // editing the middle of a name into a fight.
-  const onNameInput = () => {
-    const clean = sanitizeName(nameInput.value);
-    if (clean !== nameInput.value) nameInput.value = clean;
-    writeName(clean);
-  };
 
   // MOUSE ONLY, and the filter is the important half. Forwarding a touchmove
   // here would leave a phone convinced it had a mouse — see feedMouse in
@@ -541,14 +557,12 @@ export function mountRiveSplash({
     [wrap, 'pointerup', onSplashPointer],
     [window, 'keydown', dismiss],
     [window, 'keydown', onWindowKey],
-    [nameInput, 'input', onNameInput],
-    [nameInput, 'keydown', onNameKey],
   ];
   for (const [target, type, fn] of inputListeners) target.addEventListener(type, fn);
 
   // Push the current text at the artboard. A no-op until the view model is
-  // bound, which is what makes it safe to call from the input handler before
-  // the file has finished loading — a fast typist beats a 1.7MB parse.
+  // bound, which is what makes it safe to call before the file has finished
+  // parsing — a dice press beats a 1.7MB load.
   // SHRINK THE ROW TO THE SCREEN. Written on every name change and every
   // resize, because both move the answer: the row is as wide as the name, and
   // the screen is as wide as the phone is being held. 1 on any screen that fits
@@ -573,7 +587,7 @@ export function mountRiveSplash({
       // layout has run.
       let rowW = 0;
       try { rowW = (vmi.number(SPLASH_BINDINGS.entryWidth)?.value ?? 0) / (entryScale || 1); } catch { rowW = 0; }
-      if (!(rowW > 0)) rowW = ENTRY_FIXED_W + (nameInput.value || placeholder).length * ENTRY_PER_CHAR;
+      if (!(rowW > 0)) rowW = ENTRY_FIXED_W + (currentName || placeholder).length * ENTRY_PER_CHAR;
       const avail = canvas.clientWidth - 2 * ENTRY_MARGIN;
       if (!(avail > 0)) return;
       const byWidth = avail / rowW;
@@ -655,31 +669,63 @@ export function mountRiveSplash({
     } catch (err) {
       // A missing property throws rather than returning null on some paths.
       // The splash still works — the name is stored either way, and the only
-      // loss is seeing it on the artboard while typing.
+      // loss is seeing the roll land on the artboard.
       console.warn(`[riveSplash] could not write ${SPLASH_BINDINGS.name} —`, err?.message ?? err);
     }
   }
 
-  // THE DICE. Rolls a name, puts it in the field, mirrors it to the artboard —
-  // and hands it back, so a caller driving this by hand can see what landed.
+  // THE DICE, and the only way a name changes on this screen. Rolls one, holds
+  // it, mirrors it to the artboard — and hands it back, so a caller driving
+  // this by hand can see what landed.
   //
   // The current value is passed as `avoid`: a randomise button that returns the
   // name already on screen reads as a button that did nothing, and with a
   // couple of dozen parts that happens often enough to notice.
   //
-  // NOT SAVED HERE. destroy() banks whatever is in the field on the way out,
-  // the same as a typed name — so rolling through six names and then typing
-  // your own leaves exactly one write to storage, and backing out of the
-  // splash never files you under a name you rejected.
+  // Sanitised even though the table is: sealNames.csv is checked on load
+  // (sealNameTable.js) but this is the one place a name reaches storage from,
+  // and a door that trusts its own side of the wall is a door that stops being
+  // checked. It also means `currentName` is what the leaderboard would keep,
+  // character for character, at every moment rather than only on the way out.
+  //
+  // NOT SAVED HERE. destroy() banks whatever is showing on the way out — so
+  // rolling through six names leaves exactly one write to storage, and backing
+  // out of the splash never files you under a name you rejected.
   function randomizeName() {
     if (destroyed) return '';
-    const name = randomPlayerName(nameInput.value);
-    // The old name has to be photographed before it is overwritten.
-    if (name !== nameInput.value) beginNameSwap();
-    nameInput.value = name;
-    lastRolled = name;
-    writeName(name);
+    const name = sanitizeName(randomPlayerName(currentName));
+    // Anything the player had walked back past is dropped here — see `history`.
+    history.length = historyAt + 1;
+    history.push(name);
+    historyAt = history.length - 1;
+    showName(name);
     return name;
+  }
+
+  /**
+   * BACK ONE NAME — the left shoulder's half of the dice.
+   *
+   * Nothing to go back to is a no-op rather than a wrap-around to the end: a
+   * button that silently jumps to the far end of a list the player cannot see
+   * is worse than one that does nothing, and the pill standing still says "that
+   * was the first one" clearly enough.
+   *
+   * Never rolls. This is the one thing on the screen that is guaranteed to hand
+   * back a name they have already seen, which is the whole reason it exists.
+   */
+  function previousName() {
+    if (destroyed || historyAt <= 0) return currentName;
+    historyAt -= 1;
+    showName(history[historyAt]);
+    return currentName;
+  }
+
+  // Put a name up: photograph the old one first (the dissolve reads the last
+  // drawn frame — see beginNameSwap), then hold it and mirror it.
+  function showName(name) {
+    if (name !== currentName) beginNameSwap();
+    currentName = name;
+    writeName(name);
   }
 
   // THE CONTEXT IS OURS FIRST. The WebGL2 runtime calls getContext('webgl2')
@@ -744,8 +790,15 @@ export function mountRiveSplash({
       // A splash that gets dismissed during the load would otherwise come back
       // on screen the moment loading finishes.
       if (destroyed) { rive?.cleanup(); rive = null; return; }
-      rive.resizeDrawingSurfaceToCanvas();
+      applyCanvasSize(true);
+      // See the note on rotation above: the observer is the one that fires
+      // AFTER layout, the window events are the nudge for what it misses.
+      if (typeof ResizeObserver === 'function') {
+        sizeObserver = new ResizeObserver(scheduleCanvasSize);
+        sizeObserver.observe(canvas);
+      }
       window.addEventListener('resize', onResize);
+      window.addEventListener('orientationchange', onResize);
 
       // THE RUN'S OWN START BUTTON. `.on()` fires when the property changed
       // during an advance, and the state machine firing it counts — see the
@@ -783,14 +836,13 @@ export function mountRiveSplash({
       } else {
         console.info(
           `[riveSplash] no "${SPLASH_BINDINGS.random}" trigger in this export — `
-          + 'the name field works, there is just no dice button to roll one.',
+          + 'the splash still starts a run, there is just no way to roll a name on it.',
         );
       }
 
-      // A returning player's name, into both the field and the artboard. Read
-      // here rather than at mount so it lands after the state machine has had
-      // its defaults — a write before the first advance is one the machine can
-      // still overwrite.
+      // A returning player's name, onto the artboard. Read here rather than at
+      // mount so it lands after the state machine has had its defaults — a
+      // write before the first advance is one the machine can still overwrite.
       // A RETURNING PLAYER MAY BE RETURNING AS A DEAD SEAL. The score card names
       // the next one on the way out of a run (see offerNextSeal in ui/ui.js),
       // but a player who closes the tab on the game-over screen never gets
@@ -799,12 +851,17 @@ export function mountRiveSplash({
       // splash is the last surface between that saved name and a run being
       // played by somebody the ledger says is buried.
       //
-      // Saved immediately, not left in the field. The field is the only thing
-      // that has changed otherwise, and a player who presses Play without
-      // touching it would start under the buried name again.
+      // Saved immediately rather than only held here, because a player who
+      // presses Play without touching the dice would otherwise start under the
+      // buried name again.
       const remembered = loadPlayerName();
       if (remembered && isNameBuried(remembered)) savePlayerName(randomPlayerName(remembered));
-      nameInput.value = loadPlayerName();
+      currentName = loadPlayerName();
+      // Entry 0 of the history, so a returning player can roll and still get
+      // back to their own seal. A player with no name on file starts with an
+      // empty history and nothing to go back TO, which is correct: the pill's
+      // placeholder is not a name they chose.
+      if (currentName) { history.push(currentName); historyAt = 0; }
       // The file's default for the name, before anything overwrites it — see
       // `placeholder` above. A file with no default shows an empty pill, which
       // is what it showed before.
@@ -815,20 +872,9 @@ export function mountRiveSplash({
         widthProp = rive.viewModelInstance?.number(SPLASH_BINDINGS.entryWidth) ?? null;
         if (widthProp) { onWidth = () => fitEntryRow(); widthProp.on(onWidth); }
       } catch { widthProp = null; }
-      writeName(nameInput.value);
+      writeName(currentName);
       syncSkyFx();
       if (skyFx) skyTimer = setInterval(syncSkyFx, SKY_POLL_MS);
-
-      // Focus so a keyboard player can type without clicking. Two exceptions:
-      //
-      //   touch     focusing throws the on-screen keyboard up over the splash
-      //             art before the player has asked for it. Same rule, and the
-      //             same reason, as the game-over name field in ui.js.
-      //   fallback  on that path any keydown starts the run, so handing the
-      //             field focus would invite typing that cannot survive its own
-      //             first letter. Better to leave the name to the game-over
-      //             screen than to eat it here.
-      if (!startFallback && !touchPrimary()) nameInput.focus();
 
       // Read the name off the file instead of hardcoding it, so re-exporting
       // from Rive with a renamed machine doesn't silently fall back to a
@@ -863,10 +909,17 @@ export function mountRiveSplash({
 
   return {
     destroy,
-    // Roll a name into the field, exactly as the artboard's dice button does.
-    // Exposed so the feature can be driven — and seen — from a test page or the
-    // console before the button exists in the .riv.
+    // Roll a name, exactly as the artboard's dice button does. Exposed so the
+    // feature can be driven — and seen — from a test page or the console before
+    // the button exists in the .riv.
     randomize: randomizeName,
+    // Back one name. The pad's left shoulder is the only thing that calls this
+    // in the game (see updateMenuNav in ui/ui.js) — the artboard has no back
+    // button, so this is the whole of the feature on any other device.
+    previous: previousName,
+    // What the pill is showing. For a harness, and for a caller that wants to
+    // know what it would be banking.
+    get name() { return currentName; },
     get isDestroyed() { return destroyed; },
     get isPlaying() { return !!rive?.isPlaying; },
     // Escape hatch for driving state-machine inputs from outside — e.g. feeding

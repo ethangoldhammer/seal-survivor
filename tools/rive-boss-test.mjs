@@ -391,7 +391,7 @@ section('THE BAR — a later boss is visibly longer');
 }
 
 // ---------------------------------------------------------------------------
-section('THE SPLASH — a name goes in, a trigger starts the run');
+section('THE SPLASH — a name is rolled, a trigger starts the run');
 // ---------------------------------------------------------------------------
 // EVERYTHING HERE FAILS SILENTLY IN A BROWSER, which is why it is worth a
 // harness. A missing autoBind, a trigger nobody subscribed to, a name written
@@ -408,7 +408,7 @@ section('THE SPLASH — a name goes in, a trigger starts the run');
   //
   // SCOPED TO THE WRAPPER THIS CALL CREATED, and that is not fussiness: the
   // artboard-naming check further up mounted a splash and never dismissed it,
-  // so a document-wide `.sv-riv input` finds THAT one and every assertion below
+  // so a document-wide `.sv-riv` query finds THAT one and every assertion below
   // silently measures the wrong splash. It read as five unrelated failures.
   const mount = (opts = {}) => {
     const before = riveLog.instances.length;
@@ -417,116 +417,158 @@ section('THE SPLASH — a name goes in, a trigger starts the run');
     const inst = riveLog.instances[before];
     const wraps = document.body.querySelectorAll('.sv-riv');
     const wrap = wraps[wraps.length - 1];
-    return { handle, inst, wrap, vmi: inst?.__vmi, input: wrap?.querySelector('input') };
+    return { handle, inst, wrap, vmi: inst?.__vmi };
   };
-  const typeInto = (input, text) => {
-    input.value = text;
-    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-  };
+  // What the artboard is currently showing as the name — the only readout there
+  // is now that the field is gone, and the one the player is looking at.
+  const shown = (vmi) => vmi?._s[SPLASH.name]?.value;
+  const press = (key) => document.body.dispatchEvent(
+    new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
 
   NAME.clearPlayerName();
   {
-    const { handle, inst, vmi, input, wrap } = mount();
+    const { handle, inst, vmi, wrap } = mount();
     check('the splash binds its view model, or every write is a silent no-op',
       inst?.opts?.autoBind === true, String(inst?.opts?.autoBind));
-    check('there is a real input for the player to type into', !!input);
-    check('...which takes no pointer events, or Rive never sees its own button',
-      input?.style.pointerEvents === 'none', input?.style.pointerEvents);
-    check('...and is capped at the length the leaderboard will accept',
-      input?.maxLength === NAME.MAX_NAME_LEN, String(input?.maxLength));
 
-    typeInto(input, 'Ethan');
-    check('typing reaches the artboard live',
-      vmi?._s[SPLASH.name]?.value === 'Ethan', vmi?._s[SPLASH.name]?.value);
+    // THE WHOLE POINT OF THIS SCREEN NOW: the dice is the only way in, so
+    // nothing on it may accept typing. A stray <input> is not a cosmetic
+    // regression — it is a focused field on a phone, which means a keyboard
+    // thrown up over the art.
+    check('there is nothing on the splash a player can type into',
+      !wrap.querySelector('input, textarea, [contenteditable]'));
+    check('...and no keyboard is asked for, because nothing takes focus',
+      wrap.contains(document.activeElement) === false);
 
-    // The sanitiser runs on the way IN, so the artboard shows exactly what will
-    // be stored — a player watching a character not appear learns immediately,
-    // where one who finds it missing from the board later just sees a bug.
-    // Sanitised on the way IN. The claim worth asserting is not which
-    // characters go — that is the sanitiser's own test — but that the artboard,
-    // the field and what would be stored are all the SAME string, so a player
-    // watching a character fail to appear learns it immediately rather than
-    // finding their name cut on the board later.
-    typeInto(input, 'Zo<b>e</b>');
-    check('...sanitised on the way in, so the artboard cannot promise a name the board would cut',
-      vmi?._s[SPLASH.name]?.value === input.value && !/[<>]/.test(input.value),
-      `artboard "${vmi?._s[SPLASH.name]?.value}" vs field "${input.value}"`);
+    // A KEY IS NOT A CHARACTER. Space is the dice; every letter is nothing at
+    // all, and that is what stops a name being assembled a keystroke at a time.
+    press(' ');
+    const rolled = shown(vmi);
+    check('space rolls a name, exactly as the dice does', !!rolled && rolled.length > 0,
+      `"${rolled}"`);
+    press('E');
+    check('...and a letter key changes nothing', shown(vmi) === rolled, shown(vmi));
 
     // THE RUN BEGINS BECAUSE THE ARTBOARD SAYS SO.
-    typeInto(input, 'Ethan');
     check('the splash subscribed to the start trigger',
       vmi?._t?.tStart?.listeners === 1, String(vmi?._t?.tStart?.listeners));
     vmi._t.tStart.fire();
     check('firing it from the artboard ends the splash', handle.isDestroyed);
-    check('...and banks the name that was typed', NAME.loadPlayerName() === 'Ethan',
-      NAME.loadPlayerName());
+    check('...and banks the name that was rolled', NAME.loadPlayerName() === rolled,
+      `${NAME.loadPlayerName()} vs ${rolled}`);
     check('...unsubscribing on the way out, so a second fire cannot start twice',
       vmi?._t?.tStart?.listeners === 0, String(vmi?._t?.tStart?.listeners));
-    check('...and takes the field off the DOM with it, so no keyboard over the run',
-      !wrap.querySelector('input'));
+    NAME.clearPlayerName();
   }
 
   {
-    // THE DICE BUTTON. Same handshake as tStart, pointed the other way round
-    // the field: the artboard fires, the game rolls, and the answer comes back
-    // through the SAME string property the typing does — so the artboard needs
-    // nothing about the vocabulary, and a rolled name is edited, banked and
-    // sanitised by exactly the code a typed one is.
-    //
-    // It lands IN THE FIELD rather than beside it, which is the claim worth
-    // asserting: a roll that only reached the artboard would look right and
-    // then be thrown away by the next keystroke, and banked as whatever was
-    // in the box before.
+    // ENTER STARTS THE RUN from the keyboard. It used to be the field's own key
+    // and the field is gone, so it is on the window now — the one thing left
+    // that lets a desktop player start without reaching for the mouse.
+    const { handle } = mount();
+    press('Enter');
+    check('Enter starts the run with no field to press it in', handle.isDestroyed);
+  }
+
+  {
+    // THE DICE BUTTON — now the only way a name changes on this screen. The
+    // artboard fires, the game rolls, and the answer comes back through
+    // `strPlayerName`, so the artboard needs nothing about the vocabulary, the
+    // length limit or the sanitiser.
     NAME.clearPlayerName();
-    const { handle, vmi, input } = mount();
+    const { handle, vmi } = mount();
     check('the splash subscribed to the randomise trigger',
       vmi?._t?.tRandomizeName?.listeners === 1, String(vmi?._t?.tRandomizeName?.listeners));
 
     vmi._t.tRandomizeName.fire();
-    const rolled = input.value;
-    check('firing it puts a name in the field', rolled.length > 0, `"${rolled}"`);
-    check('...one the field can actually hold', rolled.length <= NAME.MAX_NAME_LEN,
+    const rolled = shown(vmi);
+    check('firing it puts a name on the artboard', rolled.length > 0, `"${rolled}"`);
+    check('...one the leaderboard will accept whole', rolled.length <= NAME.MAX_NAME_LEN,
       `${rolled.length} chars`);
-    check('...unchanged by the sanitiser, so it cannot vanish on the next keystroke',
+    check('...and one the sanitiser leaves alone, so what is shown is what is stored',
       NAME.sanitizeName(rolled) === rolled, rolled);
-    check('...and mirrored to the artboard, like typing',
-      vmi?._s[SPLASH.name]?.value === rolled, vmi?._s[SPLASH.name]?.value);
 
     // PRESSED AGAIN. A button that hands back the name already on screen reads
-    // as a button that did nothing, so the roll is told what to avoid.
+    // as a button that did nothing, so the roll is told what to avoid. This is
+    // the only control the player has left, which makes a dud press worse than
+    // it was when they could just type over it.
     let same = 0;
     for (let i = 0; i < 40; i++) {
-      const was = input.value;
+      const was = shown(vmi);
       vmi._t.tRandomizeName.fire();
-      if (input.value === was) same++;
+      if (shown(vmi) === was) same++;
     }
-    check('...and pressing it again changes the name', same === 0, `${same}/40 repeats`);
+    check('...and pressing it again always changes the name', same === 0, `${same}/40 repeats`);
 
-    // NOT BANKED PER PRESS — banked on the way out, like a typed name. Forty
-    // rolls are forty writes to localStorage otherwise, for a name the player
-    // has not agreed to yet.
+    // NOT BANKED PER PRESS — banked on the way out. Forty rolls are forty
+    // writes to localStorage otherwise, for names the player is rejecting.
     check('rolling does not write to storage on its own', NAME.loadPlayerName() === '',
       NAME.loadPlayerName());
-    const last = input.value;
+    const last = shown(vmi);
     handle.destroy('test');
-    check('...it is banked when the splash goes, like anything else typed',
-      NAME.loadPlayerName() === last, `${NAME.loadPlayerName()} vs ${last}`);
-    check('...unsubscribing on the way out, so a dead splash cannot be typed into',
+    check('...it is banked when the splash goes', NAME.loadPlayerName() === last,
+      `${NAME.loadPlayerName()} vs ${last}`);
+    check('...unsubscribing on the way out, so a dead splash cannot be rolled',
       vmi?._t?.tRandomizeName?.listeners === 0, String(vmi?._t?.tRandomizeName?.listeners));
     NAME.clearPlayerName();
   }
 
   {
-    // A RETURNING PLAYER. Both the field and the artboard start from the name
-    // already on file — read after load, not at mount, or the state machine's
-    // own defaults land on top of it.
-    NAME.savePlayerName('Ada');
-    const { handle, vmi, input } = mount();
-    check('a remembered name pre-fills the field', input?.value === 'Ada', input?.value);
-    check('...and is on the artboard before a key is pressed',
-      vmi?._s[SPLASH.name]?.value === 'Ada', vmi?._s[SPLASH.name]?.value);
+    // ONE STEP BACK. The dice being the only control makes a roll
+    // irreversible in a way it never was while a name could be typed back in,
+    // so the splash keeps what it has shown. The pad's left shoulder walks it
+    // (updateMenuNav in ui/ui.js); this is the module's half.
+    NAME.clearPlayerName();
+    const { handle, vmi } = mount();
+    const rolled = [handle.randomize(), handle.randomize(), handle.randomize()];
+    check('back returns the name before this one', handle.previous() === rolled[1],
+      `${handle.name} vs ${rolled[1]}`);
+    check('...on the artboard as well as in the handle', shown(vmi) === rolled[1],
+      shown(vmi));
+    check('...and again', handle.previous() === rolled[0], handle.name);
+
+    // Nothing before the first roll for a player with no name on file. A wrap
+    // to the far end of a list nobody can see is worse than doing nothing.
+    check('back stops at the first name rather than wrapping',
+      handle.previous() === rolled[0] && handle.name === rolled[0], handle.name);
+
+    // TRUNCATES, the way a browser's history does — otherwise the right
+    // shoulder sometimes rolls and sometimes replays.
+    const fresh = handle.randomize();
+    check('rolling from partway back is a new name', !rolled.includes(fresh), fresh);
+    check('...and back from it lands on where the roll was made, not on what it replaced',
+      handle.previous() === rolled[0], handle.name);
+
     handle.destroy('test');
-    check('backing out without typing does not erase it', NAME.loadPlayerName() === 'Ada',
+    NAME.clearPlayerName();
+  }
+
+  {
+    // A RETURNING PLAYER GOES BACK TO THEMSELVES. Their own name is entry 0 of
+    // the history, so a roll they did not want is one press away from undone —
+    // which is the only way back to it, there being no field to retype it in.
+    NAME.savePlayerName('Ada');
+    const { handle } = mount();
+    handle.randomize();
+    check('back from a roll returns a returning player to their own seal',
+      handle.previous() === 'Ada', handle.name);
+    handle.destroy('test');
+    check('...and that is what gets banked', NAME.loadPlayerName() === 'Ada',
+      NAME.loadPlayerName());
+    NAME.clearPlayerName();
+  }
+
+  {
+    // A RETURNING PLAYER. The artboard starts from the name already on file —
+    // read after load, not at mount, or the state machine's own defaults land
+    // on top of it. With no field to pre-fill, this write IS the whole of
+    // showing them their own name.
+    NAME.savePlayerName('Ada');
+    const { handle, vmi } = mount();
+    check('a remembered name is on the artboard before anything is pressed',
+      shown(vmi) === 'Ada', shown(vmi));
+    handle.destroy('test');
+    check('leaving without rolling does not erase it', NAME.loadPlayerName() === 'Ada',
       NAME.loadPlayerName());
   }
 

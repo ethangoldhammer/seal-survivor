@@ -93,7 +93,10 @@
             color: var(--stop); touch-action: none; user-select: none; }
   #shipgo:disabled { color: var(--faint); border-color: var(--line); }
   #shipgo .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: #401b1b; }
-  #shipgo.holding .fill { width: 100%; transition: width 1.2s linear; }
+  /* Driven from the same constant as the timer — a fill that finishes early
+     tells you to let go before the ship has been sent, which is exactly the
+     gesture the hold exists to prevent. */
+  #shipgo.holding .fill { width: 100%; transition: width var(--hold, 1.2s) linear; }
   #shipgo .lbl { position: relative; }
 
   /* ---- cards ---- */
@@ -120,6 +123,14 @@
            border: 1px dashed var(--line); border-radius: 8px; }
 
   /* ---- output drawer ---- */
+  .skip { font-size: 11px; color: var(--dim); display: inline-flex; align-items: center; gap: 5px;
+          cursor: pointer; user-select: none; }
+  .skip input { accent-color: var(--stop); }
+  /* Armed, and it has to look like it. The same button now does a different
+     and worse thing, so the only thing carrying that is how it reads. */
+  #shipgo.unverified { color: var(--stop); border-color: #4a2222; }
+  #shipgo.unverified .fill { background: rgba(255,107,107,0.22); }
+
   #drawer { position: fixed; left: 0; right: 0; bottom: 0; height: 40vh; z-index: 30;
             background: #080a0f; border-top: 1px solid var(--line);
             display: flex; flex-direction: column; transition: transform .18s ease; }
@@ -158,6 +169,7 @@
       <div class="shiprow">
         <span id="shipstate"></span>
         <span class="acts">
+          <label class="skip" title="Ship without running the tests or the build. ship.mjs stamps the commit message so an unverified public build leaves evidence."><input type="checkbox" id="shipskip" /> skip tests</label>
           <button class="btn" id="shipdry" title="Runs every test and the production build, then stops. Commits nothing.">dry run</button>
           <button class="btn" id="shipgo"><span class="fill"></span><span class="lbl">hold to ship</span></button>
         </span>
@@ -249,14 +261,35 @@ function drawShip() {
 // The ship endpoint wants a header a cross-origin fetch cannot send without a
 // preflight the hub refuses. See fromTheWorkbench in hub.mjs.
 async function ship(dry) {
+  // Never both: a dry run IS the preflight, so skipping tests inside one asks
+  // for a command that does nothing and reports success. The server enforces
+  // the same order; this keeps the request honest as well.
+  const noVerify = !dry && $('#shipskip').checked;
   const r = await fetch('/api/ship', {
     method: 'POST',
     headers: { 'X-Workbench': 'ship' },
-    body: JSON.stringify({ message: $('#shipmsg').value, dry }),
+    body: JSON.stringify({ message: $('#shipmsg').value, dry, noVerify }),
   }).then((x) => x.json());
   if (r.error) { alert(r.error); return; }
+  // DISARMED ON USE. Leaving it ticked means the next ship is unverified
+  // because of a decision made about the last one.
+  $('#shipskip').checked = false;
+  drawSkip();
   watch(r.id);
   poll();
+}
+
+// The button says what it will do, and the hold is longer when what it will do
+// is worse. 1.2s is "I meant this"; 2.4s is "I meant this, without the tests,
+// onto the live site".
+const HOLD_MS = 1200;
+const HOLD_MS_UNVERIFIED = 2400;
+function drawSkip() {
+  const on = $('#shipskip').checked;
+  const go = $('#shipgo');
+  go.classList.toggle('unverified', on);
+  go.querySelector('.lbl').textContent = on ? 'hold to ship UNVERIFIED' : 'hold to ship';
+  go.style.setProperty('--hold', `${on ? HOLD_MS_UNVERIFIED : HOLD_MS}ms`);
 }
 
 // Hold, don't click. A stray click is a click; nobody holds a button down for
@@ -271,7 +304,7 @@ async function ship(dry) {
     if (go.disabled) return;
     e.preventDefault();
     go.classList.add('holding');
-    timer = setTimeout(() => { release(); ship(false); }, 1200);
+    timer = setTimeout(() => { release(); ship(false); }, $('#shipskip').checked ? HOLD_MS_UNVERIFIED : HOLD_MS);
   });
   for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) go.addEventListener(ev, release);
   // A keyboard has no hold. Space and Enter on a focused button would fire it
@@ -281,6 +314,8 @@ async function ship(dry) {
     if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); alert('Hold the button down to ship.'); }
   });
   $('#shipdry').onclick = () => { if (!$('#shipdry').disabled) ship(true); };
+  $('#shipskip').onchange = drawSkip;
+  drawSkip();
   $('#shipmsg').oninput = drawShip;
   // Enter in the message field must not ship. It is the most natural key to
   // press in a text field and the most expensive one to have bound.

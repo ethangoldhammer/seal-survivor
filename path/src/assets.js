@@ -512,6 +512,17 @@ export const ASSETS = {
         { name: 'right', bones: ['uparm_R_016', 'arm_R_017', 'hand_R_018'], tipLength: 0.26, muzzleLength: 0.185 },
       ],
       head: { bones: ['neck01_05', 'neck02_06', 'head_07'], tipLength: 0.19 },
+      // THE BONE THE UPPER BODY LEANS WITH when the head is asked to look out
+      // of the screen (the main menu's faced bust — see `faceOut` in
+      // systems/aimRig.js). chest_04 is the animal's see-saw — breathRig below
+      // measured +0.15 rad about its X as mouth −0.190, shoulders −0.052, tail
+      // +0.081 — and it is keyed by every locomotion clip, which is what lets
+      // an additive rotation on it be a plain delta. The same bone the breath
+      // uses, declared again here rather than borrowed, because the rig should
+      // not have to know the breather exists. NO AXIS: the lean is about the
+      // screen's horizontal, resolved into this bone's frame per frame, so it
+      // tips the animal at the camera at any turn rather than along its belly.
+      lean: { bone: 'chest_04' },
       // Not IK — this chain gets damped-spring lag so the tail trails the
       // body's turns instead of moving rigidly with the clip. `leg_L/R` are
       // deliberately left out: they're the rear flippers hanging off
@@ -601,6 +612,236 @@ export const ASSETS = {
     radius: 0.7,
     height: 1.6,
     color: 0x7ad7ff,
+    unlit: true,
+  },
+
+  // ---------------------------------------------------------------------------
+  // WHAT THE SEAL WEARS.
+  //
+  // An accessory is a small static mesh worn on one of the seal's bones — see
+  // systems/accessories.js, which parents it to the bone and reads its
+  // placement out of CONFIG.accessories every frame so the sliders move it
+  // live.
+  //
+  // `fit: 1` IS THE UNIT THE PLACEMENT SLIDERS ARE IN. It normalises the file's
+  // longest axis to one world unit whatever it was authored at, so the `size`
+  // slider reads as "world units across" rather than as a multiplier of
+  // whatever scale the artist happened to export — and a hat modelled in
+  // centimetres and one modelled in metres both arrive at the same size. The
+  // seal is 2.6 units long for scale.
+  //
+  // `forward`/`up` match the ship's, so an accessory authored facing the same
+  // way as the seal arrives roughly aligned with it and the rotation sliders
+  // are a trim rather than a rescue. See orientationQuaternion.
+  //
+  // The primitive block at the bottom of each is the STAND-IN, and it is the
+  // whole reason these entries can exist before the art does: createVisual
+  // falls back to it for a model that did not load, so the system is testable
+  // — and tunable — the moment it is wired up, with a shape unmistakable
+  // enough that nobody mistakes it for the real hat. It is NOT sized by `fit`
+  // (that only applies to a loaded file), so the `size` slider is a multiplier
+  // over these dimensions until the real mesh lands.
+  // ---------------------------------------------------------------------------
+  // THE RIM ON WHAT THE SEAL WEARS — and the reason every number below differs.
+  //
+  // WHY IT IS HERE AT ALL. There are three rim systems and none of the other
+  // two can reach an accessory. CONFIG.creatureOutline and
+  // CONFIG.companionOutline are keyed by what SPAWNS, and an accessory does not
+  // spawn; systems/outlines.js's attachPlayerOutline wraps the seal's body at
+  // the moment that body is built, which is before updateAccessories has
+  // parented anything to a bone in it — so the player's rim stops at the animal
+  // and a hat sits on it undrawn. `outline` on the ASSETS entry is the third
+  // system, the static one: createVisual builds the shells as it builds the
+  // model, so the rim is part of the accessory and arrives with it.
+  //
+  // IT IS ALSO WHAT UNLOCKS THE SHADER LAB. The lab's "own rim" panel is gated
+  // on hasOutline(key) and tools/apply-shaders.mjs refuses to CREATE an
+  // `outline: {` block — it only splices into one that exists. So an accessory
+  // without these three lines has no rim controls at all, and that is the whole
+  // reason they are seeded rather than left for the lab to add.
+  //
+  // WHY NO TWO ARE THE SAME NUMBER, which is the part that looks like a mistake
+  // and is not. `thickness` is a distance in the MODEL'S OWN UNITS — the vertex
+  // shader pushes along the normal before `fit` scales anything — and these
+  // eight files were authored at wildly different scales: the wire frames are
+  // 0.16 units long and the pixel shades are 139. One number copied across them
+  // spans a factor of 900 on screen, which is an invisible hairline on one and
+  // a black blob on the next. (The same trap the boats hit: see the note on
+  // their 0.02.)
+  //
+  // So each is 0.012 x that model's own bounding-sphere radius, MEASURED. 0.012
+  // is not a guess either — it is the outline the icon renderer draws these
+  // tiles with (tools/accessory-icons.mjs, `outline`, which iconRender applies
+  // as radius x that), at a size within a factor of two of what the game draws
+  // them at. Black for the same reason: it is the ink the tiles are drawn with.
+  //
+  //     asset                 radius    thickness
+  //     accessoryHat           7.749      0.093
+  //     accessoryGlasses      96.832      1.162
+  //     accessoryBowler        0.246      0.00295
+  //     accessoryTricorn       0.236      0.00283
+  //     accessoryFedora        1.887      0.0226
+  //     accessoryRounds        3.423      0.0411
+  //     accessoryAviators      9.504      0.114
+  //     accessoryWireFrames    0.108      0.00129
+  //
+  // Gathered here rather than one line above each block, and that is not
+  // tidiness: tools/apply-shaders.mjs looks three lines above a field it is
+  // about to splice and warns that the comment "argues for the value that was
+  // just replaced". A derivation sitting on top of a number the lab exists to
+  // change would print that on every record, forever.
+  //
+  // ALL OF IT IS A SEED. Open the lab, pick the accessory, and the own-rim
+  // section is there: `npm run looks:shaderlab`, then `record` writes back into
+  // these blocks.
+  // ---------------------------------------------------------------------------
+  accessoryHat: {
+    model: '/models/hat.glb',
+    fit: 1,
+    // MEASURED off captains_hat.glb rather than assumed: the crown sits at high
+    // +Y and the peak runs to -Z (the bottom quarter of the model spans z
+    // -6.29..-0.30, the top quarter +1.65..+4.48), so its forward is -Z. Get
+    // this wrong and the hat arrives on its side, which reads as the placement
+    // sliders being broken rather than as two letters in this entry.
+    forward: '-Z',
+    up: '+Y',
+    // Carries ONE EMBEDDED JPEG (material `UVChecker`), which is fine in a
+    // browser and a hang in Node: dom-stub has no ImageBitmapLoader and no
+    // canvas to decode into, so GLTFLoader's promise never settles — no error,
+    // no warning. A terminal harness that needs this model has to strip
+    // `images`/`textures` out of the JSON chunk first; tools/eye-socket-measure.mjs
+    // carries the recipe.
+    outline: { color: 0xffffff, thickness: 0.01953 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0xff5fa2,
+    unlit: true,
+  },
+  accessoryGlasses: {
+    model: '/models/sunglasses.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0xffffff, thickness: 1.162, glow: 2.15 },
+    shape: 'box',
+    size: [0.9, 0.12, 0.3],
+    color: 0x22e0ff,
+    unlit: true,
+  },
+
+  // ---------------------------------------------------------------------------
+  // THE REST OF THE WARDROBE — three hats and three pairs of glasses, imported
+  // by tools/optimize-accessories.mjs from the Sketchfab downloads in
+  // ~/Documents/_DesignSystems/SealSurvivor. Read that file's header before
+  // adding a seventh: the sources arrive at 8,500 to 55,000 triangles with four
+  // 1024-square maps apiece, and an accessory covers 65 pixels at cinecam's
+  // zoomMax. Everything below is between 1,500 and 2,700 triangles with one
+  // 256-square map, which is still more than the kill shot can resolve.
+  //
+  // `forward` IS MEASURED ON EACH ONE, not copied down the list. A hat is very
+  // nearly symmetric and the thing that says which way it faces is small: the
+  // bowler's goggles, the tricorn's single point, the fedora's crown pinch and
+  // the way its brim turns down at the front. Each was measured — the crown's
+  // width and the brim's lowest edge binned along z — and all three came out
+  // the same way, +Z, which is worth stating because the eye reads the fedora's
+  // top view the other way round. The glasses are unambiguous: lenses at +Z,
+  // temples running back to -Z.
+  //
+  // NOT `defer`, like the two above: only one accessory is worn at a time, but
+  // the drawer swaps them on a click and a deferred model shows its stand-in
+  // cone until the file lands. Six files is 502KB at boot for the whole pool.
+  // ---------------------------------------------------------------------------
+
+  // A bowler with goggles on the band. The heaviest of the three hats after
+  // decimation because the goggle rings are small round detail that the
+  // simplifier cannot collapse without losing them entirely.
+  accessoryBowler: {
+    model: '/models/bowlerhat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.00295 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0xc08b4a,
+    unlit: true,
+  },
+  // The pirate tricorn. Its `size` default is dialled to put its brim across
+  // the head at the same width as the captain's cap — see CONFIG.accessories.
+  accessoryTricorn: {
+    model: '/models/tricornhat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.00283 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x8f9aa6,
+    unlit: true,
+  },
+  // A brown fedora. HALF A SOURCE FILE: gangster_hats.glb holds the same hat
+  // twice, mirrored, differing only in its base map — brown and near-black. At
+  // 65 pixels in graded water those are one hat, so only the brown is imported.
+  accessoryFedora: {
+    model: '/models/fedorahat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.02254, glow: 0 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x4a3a30,
+    unlit: true,
+  },
+  // Round wooden frames. Its source set its EMISSIVE map to its base map, which
+  // Sketchfab does routinely and which here would have been a pair of reading
+  // glasses glowing through the bloom threshold on the seal's face. Dropped at
+  // import; there is nothing to do about it in this entry.
+  accessoryRounds: {
+    model: '/models/roundglasses.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.0411 },
+    shape: 'box',
+    size: [0.9, 0.12, 0.3],
+    color: 0x6b4a2a,
+    unlit: true,
+  },
+  // Aviators. No textures at all — five materials of pure factors, gold and
+  // silver wire around a tinted lens — so this is the cheapest thing in the
+  // pool on disk (53KB) despite arriving as the heaviest source (55,168
+  // triangles, 32,864 of them in the gold frame alone).
+  accessoryAviators: {
+    model: '/models/aviatorglasses.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.114 },
+    shape: 'box',
+    size: [0.9, 0.12, 0.3],
+    color: 0xd9a441,
+    unlit: true,
+  },
+  // Round gold wire frames. The one that arrived SKINNED — to the 273-joint
+  // humanoid armature of the character it was exported off, hair and fingers
+  // and holsters included. Every vertex weighted to a single joint, so the
+  // import baked it flat exactly rather than approximating a pose; nothing
+  // downstream sees a SkinnedMesh, which matters because that would have been
+  // a bone texture allocated per instance.
+  accessoryWireFrames: {
+    model: '/models/wireglasses.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.00129 },
+    shape: 'box',
+    size: [0.9, 0.12, 0.3],
+    color: 0xc9922e,
     unlit: true,
   },
 

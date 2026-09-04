@@ -87,6 +87,12 @@ export const ROLES = {
     start: 'npm run pick',
     why: 'Angles for model shots that go in documents: http://localhost:4601/picker.html?list=design-icons.json — writes the chosen angles and PNGs under design/, never the game.',
   },
+  accpick: {
+    need: 'none',
+    label: 'accessory picker — port 4602',
+    start: 'npm run accessories:pick',
+    why: 'Angles for the drawer tiles: http://localhost:4602/picker.html?list=accessory-icons.json — writes the chosen angles and, on apply, path/src/ui/accessoryIcons.js.',
+  },
   scratch: {
     need: 'none',
     label: 'agent scratchpad',
@@ -169,6 +175,7 @@ function classify(proc) {
   // server, started by design-pick.mjs, so the only thing telling the two
   // apart is the parent's command line (or the port it was told to take).
   if (/design-pick\.mjs/.test(text) || /--port\s+4601/.test(text)) return 'pick';
+  if (/accessory-pick\.mjs/.test(text) || /--port\s+4602/.test(text)) return 'accpick';
   if (/atlas-render[/\\]server\.mjs/.test(text)) return 'atlas';
   if (/vite\s+preview/.test(text)) return 'preview';
   if (/[/\s]vite($|\s)/.test(text)) return 'dev';

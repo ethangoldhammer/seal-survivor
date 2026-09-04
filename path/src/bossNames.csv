@@ -179,6 +179,14 @@ nickskipper,nickname,Skipper Evil Bakalar,,0.9,FALSE,bossBoat,,
 nickmarlow,solo,Young Elmo's Fire,,0.9,,bossBoat,,
 ron,solo,Jonald and Ronathan's Big Big Boat!,,,,bossBoat bossYacht,,
 swallow,epithet,Swallower of Men,,,,,,
+swallowCopy,epithet,the Sealer of Fates,,,,,,
+swallowCopy2,epithet,the Big Obby,,,,,,
+swallowCopy3,epithet,the Opp,,,,,,
+swallowCopy4,epithet,the Big Baddie,,,,,,
+swallowCopy5,epithet,the Big Boss,,,,,,
+swallowCopy6,epithet,the Wicked Pissah,,,,,,
+swallowCopy7,epithet,the Murderous,,,,,,
+swallowCopy8,epithet,the Dangerous,,,,,,
 gentle,epithet,The Gentle Shark,,,,bossShark,,
 bilgebash,epithet,the Bilge Basher,,,,,,
 master,epithet,the Master of Bait,,,,bossBoat,,
@@ -273,3 +281,6 @@ echopre,prefix,Ecco,,,,,echo,"PLACEHOLDER — a name for a boss that hands your 
 echoep,epithet,the Feedback Loop,,,,,echo,"PLACEHOLDER — a name for a boss that hands your own shots back as pairs that drift apart and come at you from two sides. 1-2 words for the prefix, 2-4 for the epithet. Slot: epithet. Seen on the boss banner and the death screen the moment that boss arrives."
 releasepre,prefix,Strange,,,,,release,"PLACEHOLDER — a name for a boss that draws its attack in the water first and then fires down the drawn line, very fast. 1-2 words for the prefix, 2-4 for the epithet. Slot: prefix. Seen on the boss banner and the death screen the moment that boss arrives."
 releaseep,epithet,the Released.,,,,,release,"PLACEHOLDER — a name for a boss that draws its attack in the water first and then fires down the drawn line, very fast. 1-2 words for the prefix, 2-4 for the epithet. Slot: epithet. Seen on the boss banner and the death screen the moment that boss arrives."
+bigticket,epithet,the Big Ticket,,,,,giant,
+bigticketCopy,epithet,the Giant,,,,,giant,
+bigticketCopy2,prefix,Mega,,,,,giant,

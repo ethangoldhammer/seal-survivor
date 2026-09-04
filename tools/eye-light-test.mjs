@@ -301,14 +301,29 @@ function runEyes(frames, opts) {
   // WORLD position, since the bead's own `position` is now an offset in its
   // bone's local space.
   const shownZ = worldOf(shown[0]).z;
+  // Its centre sits `beadSink` BEHIND the socket now, so "at the socket" is
+  // within the sink, not within a millimetre. Nearer-than-the-far-socket is
+  // the claim; the far socket is 0.4 world units back.
+  const farZ = Math.min(rig.anchors.eyeL.z, rig.anchors.eyeR.z);
   check('the visible eye is the near one',
-    Math.abs(shownZ - nearZ) < 1e-3,
-    `visible at z ${shownZ.toFixed(3)}, near socket at ${nearZ.toFixed(3)}`);
-  // Drawn over the face rather than depth-tested into it — the eyeball is
-  // flush with the skin and a wide halo would be sliced by the brow.
+    Math.abs(shownZ - nearZ) < (CONFIG.eyes.beadSink ?? 0) + 1e-3 && shownZ > farZ + 0.1,
+    `visible at z ${shownZ.toFixed(3)}, near socket at ${nearZ.toFixed(3)}, far at ${farZ.toFixed(3)}`);
+  // THE HALO is drawn over the face rather than depth-tested into it — the
+  // eyeball is flush with the skin and a wide halo would be sliced by the
+  // brow. THE BEAD IS THE OPPOSITE, on purpose: it is a sphere sunk into the
+  // skull, and the depth buffer is what clips it to a dome. A bead drawn over
+  // the face is a full disc however far back it is sunk, which is the marble
+  // glued to the head the sink exists to remove.
   const all = [...beads, ...haloes];
-  check('the eyes are drawn over the face', all.every((o) => o.material.depthTest === false));
+  check('the haloes are drawn over the face', haloes.every((o) => o.material.depthTest === false));
+  check('the beads are depth-tested, so the skull can bury them', beads.every((o) => o.material.depthTest === true));
   check('the eyes never write depth', all.every((o) => o.material.depthWrite === false));
+  // And the sink is a real number that leaves a dome: sunk past the radius
+  // there is no eye at all, and at 0 the whole sphere stands on the face.
+  const sink = CONFIG.eyes.beadSink ?? 0;
+  check('the bead is sunk, but not out of sight',
+    sink > 0 && sink < (CONFIG.eyes.radius ?? 0.08),
+    `sunk ${sink} of a ${CONFIG.eyes.radius} radius`);
   check('the halo is wide enough to bloom', (CONFIG.eyes.haloRadius ?? 0) >= 0.3,
     `${CONFIG.eyes.haloRadius}`);
 }
@@ -706,10 +721,22 @@ section('LOCKED TO THE BONE');
     return false;
   }) ?? beads[0];
 
+  // The bead's centre is `beadSink` back along the socket's normal, in the
+  // bone's own frame — the same construction updateEyeLights uses. Lock is
+  // measured against THAT point, so a sink of exactly the configured amount
+  // is zero drift and a bead that has slipped off the bone is not.
+  const normal = new THREE.Vector3().fromArray(def.normal);
+  const sinkLocal = () => {
+    const s = new THREE.Vector3();
+    bone.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), s);
+    const boneScale = (Math.abs(s.x) + Math.abs(s.y) + Math.abs(s.z)) / 3;
+    return (CONFIG.eyes.beadSink ?? 0) / (boneScale > 1e-6 ? boneScale : 1);
+  };
+
   /** Where the bone actually is once the renderer has updated everything. */
   const truth = () => {
     scene.updateMatrixWorld(true);
-    return bone.localToWorld(offset.clone());
+    return bone.localToWorld(offset.clone().addScaledVector(normal, -sinkLocal()));
   };
 
   check('the beads were re-parented onto a bone',

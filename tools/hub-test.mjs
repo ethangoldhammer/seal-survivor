@@ -138,6 +138,26 @@ check('ships with --yes, since a spawned run has no stdin to answer the prompt',
   args.includes('--yes') && !args.includes('--dry'));
 check('a dry run is --dry and never --yes',
   shipArgs('/tmp/msg.txt', true).includes('--dry') && !shipArgs('/tmp/msg.txt', true).includes('--yes'));
+
+// --no-verify skips the tests AND the build, so it is the one path from this
+// page to a public deploy that nothing has checked. ship.mjs stamps the commit
+// message when it sees the flag, which is what leaves the evidence.
+{
+  const nv = shipArgs('/tmp/msg.txt', false, true);
+  check('no-verify passes ship.mjs its own flag', nv.includes('--no-verify'), nv.join(' '));
+  check('...and still commits, rather than becoming a dry run',
+    nv.includes('--yes') && !nv.includes('--dry'), nv.join(' '));
+  check('a plain ship never carries it',
+    !shipArgs('/tmp/msg.txt').includes('--no-verify'));
+
+  // THE COMBINATION THAT MUST NOT EXIST. `--dry --no-verify` together is a
+  // command that runs neither the checks nor the commit and then reports
+  // success — a ship that did nothing and said it worked. A dry run is the
+  // preflight, so asking for both means the preflight wins.
+  const both = shipArgs('/tmp/msg.txt', true, true);
+  check('dry run wins over no-verify, never both on one line',
+    both.includes('--dry') && !both.includes('--no-verify'), both.join(' '));
+}
 // THE ONE THAT MATTERS. A message passed as a bare argument is a message that
 // becomes a flag the moment it starts with a dash, and loses everything after
 // the first newline. --file is the path ship.mjs already had for this.

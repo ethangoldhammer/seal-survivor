@@ -66,7 +66,7 @@ import { hdrInto, lumInto, glowSprite } from './beams.js';
 // eye needs to be occluded by a head that is only 0.4 units thick. One number
 // cannot do both.
 //
-// Instead the beads are drawn on top (`depthTest: false`) and the far one is
+// Instead the HALO is drawn on top (`depthTest: false`) and the far eye is
 // faded out by WHERE IT LOOKS: each anchor publishes its socket normal (see
 // the `normal` field in ASSETS.ship.aimRig.anchors), and an eye pointing away
 // from the camera is turned down. Side-on that is one eye at full and one at
@@ -74,6 +74,19 @@ import { hdrInto, lumInto, glowSprite } from './beams.js';
 // (CONFIG.head.craneAngle, up to 0.7 rad) the far eye's normal swings back
 // toward the lens and it comes up on its own — which is the real behaviour,
 // arrived at with a dot product instead of a depth buffer.
+//
+// THE BEAD IS THE ONE EXCEPTION, and it is depth-tested ON PURPOSE. It is a
+// solid sphere sunk into the skull (`beadSink`), and burying its back half is
+// exactly the thing a depth buffer is for: the skull is opaque, has already
+// written its depth, and clips the sphere to a dome for free. Drawn on top
+// instead, the sink does nothing at all — a sphere with no depth test is a
+// full disc from every angle however far back its centre sits, which is the
+// marble-on-the-face the sink exists to remove. The brow argument above does
+// not apply to it: the dome pokes 0.035 world units proud of a socket that is
+// itself 0.014 proud of the skin, against a skull that reaches 0.005 past the
+// eyeball within 0.1 of the axis. Nothing is there to slice it. The far eye
+// is still handled by the facing fade, not by the buffer — at side-on it is
+// invisible before the skull gets a say.
 //
 // ---------------------------------------------------------------------------
 // THE EYES ARE CHILDREN OF THE EYE BONES. NOT POSITIONED IN WORLD SPACE.
@@ -233,7 +246,10 @@ export function createEyeLights(pair = state) {
       transparent: true,
       opacity: 0,
       depthWrite: false,
-      depthTest: false,
+      // TESTED, unlike everything else in this file — see the header. The sink
+      // below pulls the sphere's centre into the head, and the skull's own
+      // depth is what turns the sphere into an eye.
+      depthTest: true,
       // The emissive below is pushed past 1 on its peak channel so the glow
       // reaches the bright pass; tone mapping would pull it back under.
       toneMapped: false,
@@ -258,7 +274,7 @@ export function createEyeLights(pair = state) {
     const halo = new THREE.Sprite(haloMat);
     bead.frustumCulled = false;
     halo.frustumCulled = false;
-    // The bead draws AFTER its halo. Both have depthTest off and sit at the
+    // The bead draws AFTER its halo. Neither writes depth and they sit at the
     // same point, so nothing about their positions can order them — three.js
     // would fall through its transparent sort to object id, which happens to
     // give the right answer today and would stop the moment either mesh was
@@ -270,8 +286,9 @@ export function createEyeLights(pair = state) {
     eyes.push({ name, bead, halo });
   }
   // Above the seal, and above the beams, so a lit eye is never sorted under
-  // the face it is set into. depthTest is off, so this ordering is the only
-  // thing deciding what covers what. On the GROUP, which is what three.js
+  // the face it is set into. The halo has no depth test, so for it this
+  // ordering is the only thing deciding what covers what; the bead is tested
+  // and the order only settles it against the halo. On the GROUP, which is what three.js
   // reads as the group order every descendant is sorted within — the per-mesh
   // renderOrder above then orders the pair inside that.
   group.renderOrder = 6;
@@ -567,7 +584,28 @@ export function updateEyeLights(dt, rig, { lit = 1, charge = 0, pair = state } =
     // ON THE BONE, in the bone's own space. Nothing here is a world position,
     // which is the whole point — see the note at the top of this file.
     attach(eye, socket.bone);
+    // THE BEAD IS SUNK INTO THE SKULL, and only its cap shows. The socket
+    // anchor sits a hair proud of the eyeball's surface (it has to — the beams
+    // leave from it), and a sphere of radius 0.08 centred there is a ball
+    // standing off the face: from the side it passes for an eye because you
+    // only see its outline, and the moment the bust turns to the camera it is
+    // a marble glued to the head. Pulling the centre back along the socket's
+    // own normal buries the back of it and leaves a dome — an eye rather than
+    // an eyeball — and the skull's own depth does the clipping for free.
+    //
+    // World units divided by the bone's scale, like the radius below. The
+    // HALO stays where it was: it is an additive billboard that is invisible
+    // at rest and is not a solid to be buried.
+    //
+    // ALONG THE SOCKET'S OWN NORMAL, IN THE BONE'S FRAME — `socket.normal`,
+    // not `n`. `n` is the same direction after the rig has carried it into
+    // WORLD space for the near/far fade below, and a world direction added to
+    // a bone-local position is a sink that points the right way only while the
+    // head happens to be at rest: measured 0.088 world units of drift on a
+    // turning seal, twice the sink, from exactly that mix-up.
+    const sink = (c.beadSink ?? 0) / boneScale(socket.bone);
     eye.bead.position.copy(socket.offset);
+    if (socket.normal && sink > 0) eye.bead.position.addScaledVector(socket.normal, -sink);
     eye.halo.position.copy(socket.offset);
 
     // The radii are WORLD units and the parent carries the model's fit scale,

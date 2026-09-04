@@ -1964,49 +1964,202 @@
           }
         }
       }
+    },
+    "accessoryFedora": {
+      "surface": "toon",
+      "layers": {
+        "noise": null,
+        "toon": "accessoryFedora",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "accessoryFedora",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "toonShade": {
+          "accessoryFedora": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 2.3,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0.12,
+            "range": 1
+          }
+        }
+      }
+    },
+    "accessoryGlasses": {
+      "surface": "toon",
+      "layers": {
+        "noise": null,
+        "toon": "accessoryGlasses",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "accessoryGlasses",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "toonShade": {
+          "accessoryGlasses": {
+            "strength": 1,
+            "steps": 2,
+            "gamma": 1.25,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 0.65
+          }
+        }
+      }
+    },
+    "accessoryHat": {
+      "surface": "toon",
+      "layers": {
+        "noise": null,
+        "toon": "accessoryHat",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "accessoryHat",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "toonShade": {
+          "accessoryHat": {
+            "strength": 1,
+            "steps": 2,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
+    },
+    "accessoryRounds": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "accessoryRounds"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "accessoryRounds",
+        "csvSkinColumn": "accessoryRounds"
+      },
+      "presets": {
+        "biolumSkin": {
+          "accessoryRounds": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.1,
+            "pattern": "blotches",
+            "colorA": 15201012,
+            "colorB": 16723634,
+            "colorC": 16765286,
+            "shellColor": 15509390
+          }
+        }
+      }
+    },
+    "accessoryTricorn": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "accessoryTricorn"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "accessoryTricorn",
+        "csvSkinColumn": "accessoryTricorn"
+      },
+      "presets": {
+        "biolumSkin": {
+          "accessoryTricorn": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 1,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.26,
+            "pattern": "blotches",
+            "colorA": 0,
+            "colorB": 6908265,
+            "colorC": 16777215,
+            "shellColor": 0
+          }
+        }
+      }
     }
   },
   "config": {
     "toonShade": {
-      "bossBoat": {
-        "low": 0.81,
-        "gamma": 2.15,
-        "steps": 3
+      "accessoryFedora": {
+        "steps": 3,
+        "soft": 0.12,
+        "gamma": 2.3
+      },
+      "accessoryGlasses": {
+        "steps": 2,
+        "gamma": 1.25,
+        "range": 0.65
+      },
+      "accessoryHat": {
+        "steps": 2
       }
     },
     "biolumSkin": {
-      "dumboOcto": {
+      "accessoryRounds": {
         "pigment": 1,
-        "colorA": 16774912,
-        "colorB": 16731438,
-        "colorC": 16776698,
-        "shellColor": 8789652,
-        "scale": 0.48,
-        "pattern": "blotches",
-        "flow": 1.32
+        "flow": 1.1,
+        "colorA": 15201012,
+        "colorB": 16723634,
+        "shellColor": 15509390,
+        "scale": 0.53,
+        "pigmentGlow": 0
       },
-      "bossBoat": {
-        "pattern": "billow",
-        "scale": 0.91,
-        "colorA": 12653845,
-        "contrast": 1.9,
-        "coverage": 0.28,
-        "strength": 1.02
-      }
-    },
-    "companionOutline": {
-      "__flat": {
-        "thickness": 0.005
-      },
-      "__on": {
-        "dumboOcto": true
+      "accessoryTricorn": {
+        "shellColor": 0,
+        "colorC": 16777215,
+        "colorB": 6908265,
+        "colorA": 0,
+        "scale": 1,
+        "flow": 1.26
       }
     },
     "assetOutline": {
-      "bossBoat": {
+      "accessoryFedora": {
+        "thickness": 0.02254,
+        "glow": 0
+      },
+      "accessoryGlasses": {
+        "color": 16777215,
+        "glow": 2.15
+      },
+      "accessoryHat": {
+        "thickness": 0.01953,
         "color": 16777215
       }
     }
   },
-  "recorded": "bossBoat"
+  "recorded": "accessoryTricorn"
 }

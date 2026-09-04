@@ -73,12 +73,19 @@ function tailCfgFor(cfg, limp) {
 // Scratch that stays here: the two aim directions this rig reasons about.
 const _aim = new THREE.Vector3();
 const _headAim = new THREE.Vector3();
+// A copy of CONFIG.head with the bend caps widened, for the faced bust — see the
+// faceOut block in the head solve. Held rather than built per frame.
+const _faceCfg = {};
+const _leanQ = new THREE.Quaternion();
+const _leanWorld = new THREE.Quaternion();
+const _leanAxis = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _peek = new THREE.Vector3();
 // The twitched aim. Its own scratch and never `_aim` itself: the two fins are
 // twitched by different amounts on the same frame, and the head reads `_aim`
 // after both of them.
 const _finAim = new THREE.Vector3();
+const _finFaceCfg = {};
 
 // --- THE SHOT TWITCH --------------------------------------------------------
 //
@@ -138,6 +145,21 @@ export function createAimRig(instance) {
     })
     .filter(Boolean);
   const head = def.head ? buildChain(instance, def.head, tipAxis, 'aimRig head chain') : null;
+  // The upper-body lean for a faced bust — see the `faceOut` block in update().
+  // Resolved here and base-tracked below exactly the way systems/breathe.js
+  // tracks the same bone, and for the same reason: the mixer skips its write on
+  // any frame the value did not change, so a delta added to "whatever is on the
+  // bone" compounds on the frames the bone was left holding our own output.
+  const leanBone = def.lean?.bone ? instance.getObjectByName(def.lean.bone) : null;
+  if (def.lean?.bone && !leanBone) {
+    console.warn(`[aimRig] lean wants bone "${def.lean.bone}", which this model doesn't have.`);
+  }
+  const lean = leanBone ? {
+    bone: leanBone,
+    base: leanBone.quaternion.clone(),
+    written: leanBone.quaternion.clone(),
+    fresh: true,
+  } : null;
   const tail = def.tail ? buildChain(instance, def.tail, tipAxis, 'aimRig tail chain') : null;
   // The tail isn't aimed at anything — it just lags. Same solver the
   // unanimated creatures use for their whole body; see systems/boneSpring.js.
@@ -251,7 +273,24 @@ export function createAimRig(instance) {
     // clip outright, which is what lets an authored one-shot (the roll, the
     // death) play exactly as it was animated. `charge` is 0..1 of a strike
     // being wound up, which shivers the look target — see below.
-    update(dt, aim, { engaged = false, suppressed = false, charge = 0, limp = false } = {}) {
+    /**
+     * @param faceOut  0..1, how far the head should look OUT OF THE SCREEN.
+     *   Left at 0 by everything in a run, where the animal is seen from the
+     *   side and a head craning at the lens would be looking away from the
+     *   thing it is aiming at. The main menu raises it as the bust turns to
+     *   face the camera — see the block by `faceOut` in the head solve.
+     */
+    /**
+     * @param finGate  per-fin multiplier on the fins' weight, 0..1 — an array
+     *   in fin order or an object by fin name (`left`/`right` on the seal).
+     *   Absent or 1 is the rig as it always was; 0 hands that one fin back to
+     *   the clip while the other keeps solving. The level-up seal points its
+     *   head and ONE flipper at a card (systems/levelUpSeal.js); nothing in a
+     *   run passes this.
+     */
+    update(dt, aim, {
+      engaged = false, suppressed = false, charge = 0, limp = false, faceOut = 0, finGate = null,
+    } = {}) {
       const finCfg = CONFIG.fins;
       const headCfg = CONFIG.head;
       const hasAim = aim && aim.lengthSq() > 1e-6;
@@ -259,6 +298,60 @@ export function createAimRig(instance) {
       if (hasAim) _aim.set(aim.x, aim.y, 0).normalize();
 
       finWeight = easeWeight(finWeight, { ...finCfg, enabled: finCfg.enabled && finCfg.ik }, engaged, suppressed, hasAim, dt);
+
+      // --- THE BODY LEANS IN, before ANY limb is solved ----------------------
+      //
+      // Half of "the seal is looking at you" is the neck; the other half is the
+      // chest coming forward under it. A neck alone doing the whole job tips
+      // the head down on a bolt-upright body, which reads as a nod; the animal
+      // leaning in reads as attention. This is the mid-section's share: an
+      // additive turn on the chest, in proportion to how far the head is being
+      // asked to look out of the screen.
+      //
+      // FIRST, AHEAD OF THE FINS AS WELL AS THE NECK, and that order was a bug
+      // before it was a rule. The flippers hang off this bone. Solved before it
+      // leaned, they aimed from where the chest WAS, the lean then carried them
+      // somewhere else, and the next frame's solve started from there against
+      // a chest the mixer had just put back — a limit cycle of 0.14 world units
+      // of fin tip a frame on the faced bust, which read as the flippers
+      // twitching. With the lean in first every chain solves against the chest
+      // it will actually be drawn on: 0.009 a frame, the idle clip's own
+      // motion. No fin-side fix (releasing the IK, pushing the target out of
+      // the screen) got under 0.03, because none of them touched the cause.
+      //
+      // BASE-TRACKED, not accumulated — see the note at `lean` in createAimRig.
+      // And it stops OWNING the bone the moment faceOut is 0, so a run's mixer
+      // pose is taken at face value rather than compared against a write from
+      // the menu seconds ago.
+      //
+      // ABOUT THE SCREEN'S HORIZONTAL, NOT THE BONE'S OWN AXIS. The chest's
+      // see-saw axis is the animal's lateral, and "toward the lens" is only the
+      // same direction as "ventral" when the animal is square to the camera. At
+      // the three-quarter turn a cap asks for, a ventral lean is half sideways:
+      // measured 0.45 world units of head off the waist, which read as the seal
+      // leaning over and put its head behind the name tag. So the axis is the
+      // screen's own x, carried into the bone's frame at its base pose each
+      // frame — the lean then tips the upper body at the camera whatever the
+      // body under it is doing, and a run (faceOut 0) never computes it.
+      if (lean) {
+        const want = faceOut * (headCfg.faceOutLean ?? 0);
+        if (want > 1e-5) {
+          const b = lean.bone;
+          if (lean.fresh || !b.quaternion.equals(lean.written)) lean.base.copy(b.quaternion);
+          // The bone's world orientation AT ITS BASE — parent's world times the
+          // mixer's pose — inverted onto world +x. Positive about +x sends the
+          // screen's up toward the lens, which is the upper body coming forward.
+          b.parent.getWorldQuaternion(_leanWorld).multiply(lean.base);
+          _leanAxis.set(1, 0, 0).applyQuaternion(_leanWorld.invert()).normalize();
+          b.quaternion.copy(lean.base).multiply(_leanQ.setFromAxisAngle(_leanAxis, want));
+          lean.written.copy(b.quaternion);
+          lean.fresh = false;
+          b.updateWorldMatrix(false, true);
+        } else {
+          lean.fresh = true;
+        }
+      }
+
 
       // THE FLICK. Suppressed along with the rest of the aim: while a one-shot
       // is playing the fins belong to the clip, and a shot fired mid-barrel-roll
@@ -293,7 +386,26 @@ export function createAimRig(instance) {
           tipMul *= 1 + (tc.reachPop ?? 0) * amount;
         }
 
-        applyChain(chain, dt, finCfg, finWeight, tipMul, target);
+        // WARM-STARTED WHILE THE BUST IS FACED. A three-bone limb reaching for
+        // a point beside its shoulder has two folds that reach it, and the cold
+        // CCD solve picks a different one every time the idle clip's breath
+        // leans the tip across the boundary — a flipper that twitched every
+        // 0.6 s at 25-50 degrees of body turn, with the target still. Solving
+        // from last frame's answer keeps the fold; see the note in
+        // systems/ikChain.js for why that is asked for here and not on by
+        // default. Copied into a held object: this is a per-frame path.
+        let finSolveCfg = finCfg;
+        if (faceOut > 0) {
+          Object.assign(_finFaceCfg, finCfg);
+          _finFaceCfg.warmStart = true;
+          finSolveCfg = _finFaceCfg;
+        }
+        let gate = 1;
+        if (finGate) {
+          const g = Array.isArray(finGate) ? finGate[i] : finGate[chain.name];
+          if (typeof g === 'number' && Number.isFinite(g)) gate = Math.max(0, Math.min(1, g));
+        }
+        applyChain(chain, dt, finSolveCfg, finWeight * gate, tipMul, target);
       }
 
       // ...and then the muzzles, off the same posed bones but at the asset's
@@ -360,12 +472,73 @@ export function createAimRig(instance) {
           }
         }
 
+        // --- LOOKING OUT OF THE SCREEN --------------------------------------
+        //
+        // WHY IT EXISTS. The aim is a direction in the SCREEN PLANE, so the
+        // head's target has always had z = 0 — which is right for an animal
+        // seen from the side, where the cursor and the seal share a plane. Turn
+        // the bust to face the camera and it stops being right: the seal stands
+        // upright, the cursor is above it, and a target with no depth is a head
+        // pointing at the sky. You get the top of a skull. The eyes, which are
+        // the whole reason to turn the animal round, are looking over you.
+        //
+        // So the target is pushed toward the lens by however much the body is
+        // faced. Physically it is the honest target too — the cursor is on the
+        // GLASS, in front of the animal, not in the water beside it — which is
+        // why the seal ends up tilting its face down and forward.
+        //
+        // AND IT IS NOT NORMALISED AFTERWARDS. That one line is the difference
+        // between this feature and a broken version of it. applyChain places
+        // the target at `dir * reach`, so a re-normalised direction has a
+        // SHORTER screen-plane component than the aim it was built from: the
+        // target creeps in toward the head, and the neck's on-screen travel
+        // between a cursor over the buttons and one down by the chest measured
+        // 11 degrees against 20 flat. Left long, the target sits at the same
+        // screen position it always did with the depth simply added in front of
+        // it, and the range is untouched — 20 against 20.
+        //
+        // LAST, after the tremble, for the same reason: that block normalises,
+        // and would undo this on any frame a strike is being wound up.
+        if (faceOut > 0) _headAim.z += faceOut * (headCfg.faceOutDepth ?? 1);
+
+        // ...AND THE NECK IS GIVEN MORE TRAVEL TO DO IT WITH, which is the half
+        // that is not obvious and the half without which the feature is a
+        // regression.
+        //
+        // `maxBend` is 0.4 radians per bone over a three-bone chain, and it is
+        // a budget: leaning the target out of the screen spends part of it on
+        // depth, so there is less left for the swing ACROSS the screen — the one
+        // the player is actually driving. Measured on the muzzle, sweeping the
+        // cursor over where the buttons sit, the head's travel fell from 43
+        // degrees to 24 the moment the lean came on. The head pointed at the
+        // camera beautifully and stopped following anything.
+        //
+        // A wider cap while faced buys all of it back and then some (48 degrees
+        // at 1.5x, with the eyes still on the lens), and it is honest rather
+        // than a fudge: the limit exists to stop a neck breaking in the side
+        // view a run is played in, and a bust turned square to the camera is a
+        // different pose with different headroom. It is menu-only by
+        // construction — `faceOut` is 0 everywhere else, so a run's neck is
+        // exactly as stiff as it was.
+        //
+        // Copied into a held object rather than spread into a new one: this is
+        // a per-frame path, and the alternative is an allocation for every
+        // frame of a screen whose whole job is to be smooth.
+        let solveCfg = headCfg;
+        if (faceOut > 0) {
+          Object.assign(_faceCfg, headCfg);
+          const mul = 1 + faceOut * ((headCfg.faceOutBend ?? 1.5) - 1);
+          _faceCfg.maxBend = (headCfg.maxBend ?? 0.4) * mul;
+          _faceCfg.maxFold = (headCfg.maxFold ?? 1.3) * mul;
+          solveCfg = _faceCfg;
+        }
+
         // ...and the weight doesn't fall all the way to zero any more, or
         // there'd be no pose left to put that glance into. It settles on
         // `glanceWeight` instead of 0.
         const effGate = gate + glance * (headCfg.glanceWeight ?? 0);
         headWeight = easeWeight(headWeight, headCfg, engaged, suppressed && headCfg.releaseOnOneShot, hasAim, dt, effGate);
-        applyChain(head, dt, headCfg, headWeight, 1, _headAim);
+        applyChain(head, dt, solveCfg, headWeight, 1, _headAim);
       }
 
       if (tail && tailSpring) {

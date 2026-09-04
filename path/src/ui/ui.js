@@ -97,6 +97,9 @@ import { primaryCause, threatLabel } from '../deathCauses.js';
 import { weaponName } from '../weaponName.js';
 import { playSfx, unlockAudio } from '../systems/audio.js';
 import { startCardRiser, stopCardRiser, stopAllCardRisers } from '../systems/cardRiser.js';
+// Which card is pointed at, announced on `document` for the seal that watches
+// the hand from under it (systems/levelUpSeal.js) — see ui/cardFocus.js.
+import { announceCardFocus } from './cardFocus.js';
 // The popups' arrival and departure curves, by name — the same shared table the
 // boss bar's fill and the camera moves read from (path/src/ease.js).
 import { ease, cssEase } from '../ease.js';
@@ -1635,6 +1638,14 @@ const STYLES = `
      three hexagons on it is now one lattice edge to edge with the cards sitting
      IN it. */
   .sv-comb { position: absolute; inset: 0; overflow: hidden; z-index: 0; pointer-events: none; }
+  /* THE SEAL UNDER THE HAND — a transparent canvas of its own, AFTER the comb
+     in the DOM and BEFORE the stage, which is the only place it can be: the
+     comb is a near-opaque scrim over the fight (restAlpha 0.9 at 0.75), so an
+     animal drawn into the game's canvas would be behind it, and the cards have
+     to stay in front of the animal. Sized and placed by systems/levelUpSeal.js
+     every frame; it is a column, not the whole screen, so the fill it costs is
+     the seal's and not the viewport's. */
+  .sv-levelup-seal { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; display: block; }
   /* THE COMB STAYS UP once the hand has landed, and settles back rather than
      leaving. The lattice the pulses built is the level-up screen — it is what
      the cards are sitting in — so taking it away the moment it finished
@@ -2274,12 +2285,6 @@ const STYLES = `
                    font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
                    color: rgba(232,236,243,0.5); }
   .sv-next-row { margin: 0; }
-  /* Warm rather than red. This is not an error — the player has done nothing
-     wrong by typing the name of a seal they were fond of — it is the game
-     telling them that seal is already buried, which is a fact about the world
-     and not a complaint about their input. */
-  .sv-next-warn { margin-top: 6px; text-align: center; font-size: 12px;
-                  letter-spacing: 0.02em; color: #ffc978; }
   /* THE WIDTH IS NOT WHAT MAKES A FULL NAME VISIBLE — fitNameField is. This
      was sized in pixels against 24 characters of Inter, which held right up
      until the font picker existed: 'Press Start 2P' is a full em per glyph and
@@ -2876,19 +2881,22 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
                commitNextSeal. -->
           <div class="sv-next-wrap" id="svNextRow">
             <label class="sv-next-label" for="svNextInput">Next seal</label>
+            <!-- A READOUT, NOT A FIELD. The name is rolled, never typed — the
+                 splash works the same way (ui/riveSplash.js) and this is the
+                 same question asked at the other end of a run, so the two
+                 screens cannot disagree about whether a seal is named or
+                 chosen. Still an <input> rather than a <div>, because
+                 fitNameField measures and shrinks it and .sv-name-row stacks
+                 around it; readonly is what takes the typing away.
+                 inputmode=none and tabindex=-1 are the other two halves of
+                 that: readonly alone still takes focus, and a focused field on
+                 a phone is a keyboard over the card. -->
             <div class="sv-name-row sv-next-row">
-              <input class="sv-name-input sv-next-input" id="svNextInput" type="text" maxlength="${MAX_NAME_LEN}"
-                     placeholder="Name" autocomplete="off" autocapitalize="off"
-                     spellcheck="false" autocorrect="off" aria-label="Name for your next seal" />
+              <input class="sv-name-input sv-next-input" id="svNextInput" type="text" readonly
+                     inputmode="none" tabindex="-1" aria-label="Name for your next seal" />
               <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svNextRoll" type="button"
                       aria-label="Roll a new name">Roll</button>
             </div>
-            <!-- Empty and hidden almost always. It says one thing: that the
-                 name typed above belongs to a seal already on the seabed.
-                 aria-live, because a sighted player sees it appear under their
-                 own cursor and a screen reader otherwise would not know the
-                 field had turned invalid. -->
-            <div class="sv-next-warn sv-hidden" id="svNextWarn" role="status" aria-live="polite"></div>
           </div>
           <!-- THE WAY OUT, LAST, and OUTSIDE both rows above it.
                The order is the order the questions are asked in: post the run
@@ -2950,7 +2958,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
     // the way back into the game. It was reached only through its click
     // binding until the pad needed to find it by name.
     'svGameOverTitle', 'svRestartBtn',
-    'svNextRow', 'svNextInput', 'svNextRoll', 'svNextWarn',
+    'svNextRow', 'svNextInput', 'svNextRoll',
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
     'svShotView', 'svShotImg', 'svShotShare', 'svShotSave', 'svShotStatus', 'svShotClose',
     'svHiveView', 'svHiveViewStage', 'svHiveViewClose', 'svStripLabel', 'svTrophyRow',
@@ -3032,45 +3040,10 @@ export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRes
   });
 
   // --- the next seal's name ------------------------------------------------
-  bindMenuSounds(el.svNextRoll).addEventListener('click', () => {
-    // The CURRENT field value is handed to the roller, not the saved name:
-    // randomPlayerName takes what to avoid repeating, and a player pressing
-    // Roll twice wants two different names. See systems/randomName.js.
-    el.svNextInput.value = randomPlayerName(el.svNextInput.value);
-    // randomPlayerName never returns one of the dead, so a roll is always a way
-    // OUT of the warning — which is most of why the button is beside the field
-    // rather than somewhere else on the card.
-    setNextSealWarning('');
-    fitNameField(el.svNextInput);
-  });
-  el.svNextInput.addEventListener('keydown', (e) => {
-    // Enter here is "yes, this one" and nothing more — it must not submit the
-    // leaderboard row, and it must not reach the splash's global handlers on
-    // window, which would read it as Start. Same guard as svNameInput's.
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      el.svNextInput.blur();
-    }
-  });
-  el.svNextInput.addEventListener('input', () => {
-    // Sanitised as it is typed, exactly as the leaderboard field is, so what
-    // the player sees is what the next run will actually be called. The caret
-    // is restored for the same reason it is there: a field that jumps to the
-    // end on every keystroke cannot be edited in the middle.
-    const clean = sanitizeName(el.svNextInput.value);
-    if (clean !== el.svNextInput.value) {
-      const caret = el.svNextInput.selectionStart;
-      el.svNextInput.value = clean;
-      el.svNextInput.setSelectionRange?.(caret - 1, caret - 1);
-    }
-    // Checked as they type rather than on submit. The alternative is a player
-    // who commits to a name, presses Try again, and finds themselves playing as
-    // somebody else — and by then the card is gone and there is nothing left on
-    // screen to explain it.
-    setNextSealWarning(isNameBuried(clean) ? `${clean} is already buried` : '');
-    fitNameField(el.svNextInput);
-  });
+  // ROLLED, NEVER TYPED. The field is a readonly readout (see the markup) and
+  // this button is the whole of the player's say in it, exactly as the dice is
+  // on the splash — so a name is chosen the same way at both ends of a run.
+  bindMenuSounds(el.svNextRoll).addEventListener('click', rollNextSeal);
 
   bindMenuSounds(el.svNameSubmit).addEventListener('click', submitPendingRun);
   el.svNameInput.addEventListener('keydown', (e) => {
@@ -3260,8 +3233,8 @@ export function showStartMenu() {
   // input; see unlockAudio.
   //
   // REDUCED MOTION LOSES THE NAME SCREEN, not the name: playerName() answers
-  // "Seal" for anybody who has never typed one, and the field is reachable
-  // again from the score card at the end of a run.
+  // "Seal" for anybody who has never had one, and the score card at the end of
+  // a run is where a name can still be typed.
   leaveSplash();
 }
 
@@ -4456,13 +4429,83 @@ function runExitWave(from, spots, finish) {
  * still of the title screen over a live game.
  */
 function revealSplashOut(wrap, done) {
-  runReveal('splash', {
-    target: wrap,
-    from: 1,
-    to: 0,
-    seconds: revealCfg('splash').outTime,
-    onDone: done,
-  });
+  const c = CONFIG.reveals?.splash?.curtain ?? {};
+  const lift = curtainSeconds(c);
+  // With the curtain off this is the dissolve it has always been. With it on,
+  // the dissolve is opt-in: the card coming apart where it stands and the card
+  // being pulled off the top are two answers to the same question, and playing
+  // both is one exit too many. See CONFIG.reveals.splash.curtain.
+  const dissolving = lift <= 0 || c.dissolve === true;
+
+  // The wrapper only goes when everything moving it has finished. runReveal
+  // calls onDone SYNCHRONOUSLY when it can't run at all (masks unsupported,
+  // reduced motion), so both counts are taken before either one starts.
+  let waiting = (lift > 0 ? 1 : 0) + (dissolving ? 1 : 0);
+  if (waiting === 0) {
+    done();
+    return;
+  }
+  const settle = () => { if (--waiting === 0) done(); };
+
+  if (lift > 0) liftSplashCurtain(wrap, lift, c, settle);
+  if (dissolving) {
+    runReveal('splash', {
+      target: wrap,
+      from: 1,
+      to: 0,
+      seconds: revealCfg('splash').outTime,
+      onDone: settle,
+    });
+  }
+}
+
+// How long the curtain has to travel, or 0 for "it doesn't". One function so
+// the caller's bookkeeping and the animation can never disagree about whether
+// there is going to be a move — a mismatch there is a wrapper that either
+// leaves mid-flight or never leaves at all.
+function curtainSeconds(c) {
+  if (c.enabled === false || prefersReducedMotion()) return 0;
+  if (!(c.distance ?? 1.02)) return 0;
+  return Math.max(0, c.seconds ?? 0.7);
+}
+
+// The frame in flight, so a second exit can't leave two rAFs writing the same
+// transform. The splash mounts once per page today; that is not a thing to rely
+// on for the price of one variable.
+let splashCurtainRaf = 0;
+
+// THE TITLE SCREEN GOING UP. A transform on the wrapper the artboard was drawn
+// into — the canvas keeps the last frame Rive painted (see destroy() in
+// ui/riveSplash.js, which cleans the runtime up before this runs), so what
+// slides away is a still of the title over a game that is already moving.
+//
+// translate3d in PERCENT: the wrapper is inset:0 inside .sv-ui, so 100% is
+// exactly one screen height and the move needs no measuring and no resize
+// handling. Percent of the ELEMENT, which is the screen, is the only reading of
+// `distance` that survives an orientation change mid-lift.
+function liftSplashCurtain(wrap, seconds, c, onDone) {
+  if (splashCurtainRaf) cancelAnimationFrame(splashCurtainRaf);
+  const distance = Math.max(0, c.distance ?? 1.02) * 100;
+  const curve = c.ease ?? 'inCubic';
+  // Promoted for the duration only. Left on, it would keep a full-screen layer
+  // on the compositor for the rest of the run — but the wrapper is removed the
+  // moment this finishes, so there is nothing to clean up afterwards.
+  wrap.style.willChange = 'transform';
+  const start = performance.now();
+  const frame = () => {
+    const t = Math.min(1, (performance.now() - start) / 1000 / seconds);
+    wrap.style.transform = `translate3d(0, ${-ease(curve, t) * distance}%, 0)`;
+    if (t >= 1) {
+      splashCurtainRaf = 0;
+      onDone();
+      return;
+    }
+    splashCurtainRaf = requestAnimationFrame(frame);
+  };
+  // Painted synchronously, like runReveal's first frame and for the same
+  // reason: the frame between the run starting and the first rAF landing is
+  // one the splash would otherwise spend sitting perfectly still.
+  frame();
 }
 
 // The score card arriving, in strands. Runs alongside the CSS rise — see
@@ -5338,8 +5381,12 @@ export function showLevelUp() {
       if (menuLocked) return;
       showCardEffect(card, card.dataset.effect);
       hoverPulse(card);
+      announceCardFocus(card);
     });
-    card.addEventListener('pointerleave', hideCardEffect);
+    card.addEventListener('pointerleave', () => {
+      hideCardEffect();
+      announceCardFocus(null);
+    });
     // AND THE SAME THING WITH A THUMB. pointerenter never fires on a phone, so
     // every card in the game was unreadable there: the only way to find out
     // what one did was to take it. A hold opens the tip and CANCELS the pick,
@@ -5351,9 +5398,10 @@ export function showLevelUp() {
         if (menuLocked) return;
         showCardEffect(card, card.dataset.effect);
         hoverPulse(card);
+        announceCardFocus(card);
       },
-      onHoldEnd: hideCardEffect,
-      onSlip: hideCardEffect,
+      onHoldEnd: () => { hideCardEffect(); announceCardFocus(null); },
+      onSlip: () => { hideCardEffect(); announceCardFocus(null); },
     });
 
     const pick = () => {
@@ -5492,6 +5540,8 @@ function selectCard(i) {
     // The pad and the keyboard get the comb's answer too — selecting IS
     // pointing, for anyone not using a mouse.
     hoverPulse(sel);
+    // ...and the seal's. Same fact, same reason.
+    announceCardFocus(sel);
   }
   // Move real focus along with it, so Enter/Space keep working on whatever the
   // pad is pointing at and the two input methods can't disagree about which
@@ -5652,6 +5702,19 @@ function updateGameOverNav() {
   const controls = gameOverControls();
   if (!controls.length) return true;
 
+  // THE SHOULDERS ARE THE DICE HERE TOO, and they work wherever the cursor is:
+  // the next seal's name is a readout now (see the markup), so a pad's only way
+  // to change it would otherwise be to walk the cursor onto Roll and confirm.
+  // Right rolls, left goes back — the same pair, and the same meaning, as on
+  // the splash. Not `return`ed on, because a roll is not a navigation and the
+  // cursor should keep working in the same frame.
+  //
+  // The roll goes through the BUTTON's own click so the pad takes the same path
+  // the mouse does, sound included; stepping back has no button of its own, so
+  // it voices the same click by hand.
+  if (menuInput.nameNext) el.svNextRoll?.click();
+  else if (menuInput.namePrev) { if (previousNextSeal()) feedback('uiClick'); }
+
   // Same rule as the cards: nothing is highlighted until the player asks, so
   // the card doesn't open with a button lit for a mouse user who will never
   // move it. Any menu direction or a confirm is the asking.
@@ -5676,18 +5739,30 @@ function updateGameOverNav() {
 // everything, the score card is the only thing up when a run has ended, and
 // the cards are the only thing up mid-run.
 export function updateMenuNav() {
-  // A PAD STILL PRESSES ANYTHING TO START, and it is now the only input that
-  // does. Keyboard and touch go through the artboard's own Start button (see
-  // riveSplash.js) because they can type a name into it, and "any input starts
-  // the run" would mean the first letter of that name did. A pad cannot type,
-  // so there is nothing for it to interrupt — it gets whatever name is
-  // remembered, or none.
+  // A PAD STILL PRESSES ANYTHING TO START, and it is the only input that does.
+  // Touch and mouse go through the artboard's own Start button, and the
+  // keyboard has exactly two keys on that screen — space rolls a name, Enter
+  // starts — because "any key starts the run" would take the dice away from
+  // anyone holding one. See riveSplash.js.
+  //
+  // THE PAD HAS A DICE TOO, and it is four buttons wide: either right shoulder
+  // rolls a new name, either left shoulder goes back to the one before it. The
+  // splash takes no typing, so without this a pad player is stuck with whatever
+  // the game rolled for them.
+  //
+  // Checked BEFORE the press-anything branch, and the shoulders are left out of
+  // `anyPress` for the same reason (see input.js): a button that rolls a name
+  // must not start the run with it in the same frame.
   //
   // A poll rather than a listener because the Gamepad API has no events.
   if (splash) {
     if (splash.isDestroyed) splash = null;
     else {
-      if (menuInput.anyPress) splash.destroy('gamepad');
+      // Optional calls: `?splash=spline` mounts the audition screen instead
+      // (ui/splineSplash.js), which has its own idea of what a handle carries.
+      if (menuInput.nameNext) splash.randomize?.();
+      else if (menuInput.namePrev) splash.previous?.();
+      else if (menuInput.anyPress) splash.destroy('gamepad');
       return;
     }
   }
@@ -9004,18 +9079,66 @@ let nameRuler = null;
  */
 function offerNextSeal() {
   if (!el.svNextInput) return;
-  el.svNextInput.value = randomPlayerName(loadPlayerName());
+  // A FRESH HISTORY PER CARD, and the first roll is entry 0 — there is nothing
+  // before it to go back to, because the name the player arrived with is the
+  // seal that just died and cannot be played again. See nextSealHistory.
+  nextSealHistory.length = 0;
+  nextSealAt = -1;
+  // Unhidden BEFORE the name lands: fitNameField cannot measure a field with no
+  // box, and it does nothing rather than fitting badly when it is handed one
+  // (see its own note), so a hidden row here means a name left at full size.
   el.svNextRow?.classList.remove('sv-hidden');
-  setNextSealWarning('');
-  fitNameField(el.svNextInput);
+  showNextSeal(randomPlayerName(loadPlayerName()), true);
 }
 
-/** The line under the field. Empty takes it away rather than leaving a blank
- *  row, so the card reserves no space for a message that is usually absent. */
-function setNextSealWarning(text) {
-  if (!el.svNextWarn) return;
-  el.svNextWarn.textContent = text;
-  el.svNextWarn.classList.toggle('sv-hidden', !text);
+// EVERY NAME THIS CARD HAS OFFERED, with `nextSealAt` marking where the player
+// is standing in it — the same shape, and for the same reason, as the splash's
+// own history (ui/riveSplash.js). The name cannot be typed any more, so a roll
+// past one they liked would otherwise be gone for good.
+//
+// Walked backwards by the pad's left shoulder and forwards by rolling; a roll
+// from partway back drops what was in front of it.
+const nextSealHistory = [];
+let nextSealAt = -1;
+
+/**
+ * Roll the next seal. The CURRENT value is handed to the roller, not the saved
+ * name: randomPlayerName takes what to avoid repeating, and a player pressing
+ * Roll twice wants two different names. See systems/randomName.js.
+ */
+function rollNextSeal() {
+  if (!nextSealOffered()) return '';
+  const name = randomPlayerName(el.svNextInput.value);
+  nextSealHistory.length = nextSealAt + 1;
+  nextSealHistory.push(name);
+  nextSealAt = nextSealHistory.length - 1;
+  showNextSeal(name);
+  return name;
+}
+
+/** Back one name, for the pad's left shoulder. Nothing to go back to does
+ *  nothing — see previousName in ui/riveSplash.js for why that beats a wrap. */
+function previousNextSeal() {
+  if (!nextSealOffered() || nextSealAt <= 0) return '';
+  nextSealAt -= 1;
+  showNextSeal(nextSealHistory[nextSealAt]);
+  return nextSealHistory[nextSealAt];
+}
+
+/** Is the row on screen and holding a name? The pad can reach these from
+ *  anywhere on the card, including the screens that hide the row — a preview,
+ *  and the moment before a death has offered anything. */
+function nextSealOffered() {
+  return !!el.svNextInput && !el.svNextRow?.classList.contains('sv-hidden');
+}
+
+/** Put a name in the readout and re-fit it. `seed` records it as the history's
+ *  first entry, which is what offerNextSeal's pre-roll is. */
+function showNextSeal(name, seed = false) {
+  if (!el.svNextInput) return;
+  el.svNextInput.value = name;
+  if (seed) { nextSealHistory.push(name); nextSealAt = 0; }
+  fitNameField(el.svNextInput);
 }
 
 /**

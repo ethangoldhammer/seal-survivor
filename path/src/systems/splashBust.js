@@ -45,6 +45,10 @@ const _skinned = new THREE.Vector3();
 const _want = new THREE.Matrix4();
 const _local = new THREE.Matrix4();
 const _inv = new THREE.Matrix4();
+// Scratch for a PARTIAL pin — see apply(weight).
+const _pinPos = new THREE.Vector3();
+const _pinQuat = new THREE.Quaternion();
+const _pinScale = new THREE.Vector3();
 
 /**
  * Build the pin for one seal instance.
@@ -127,8 +131,19 @@ export function createBustPin(instance, { pinFrom, holdRoot } = {}) {
      * so a pin applied before it would be overwritten by the lag it exists to
      * remove. Head and flipper chains contain none of these bones, so nothing
      * that IS meant to move is undone by running last.
+     *
+     * @param weight  0..1, how much of the way toward the authored pose the
+     *   held half is written. 1 (the default) is the pin as described above.
+     *   Anything less is a BLEND from wherever the mixer and the rig left the
+     *   bones this frame, which is what lets a swimming seal come to a stand
+     *   over a few frames instead of its tail snapping straight on one — the
+     *   level-up seal swims up, then plants (systems/levelUpSeal.js). At 0 it
+     *   writes nothing at all, so the caller can leave it in the loop.
      */
-    apply() {
+    apply(weight = 1) {
+      if (!(weight > 0)) return;
+      const w = Math.min(1, weight);
+      const partial = w < 1;
       // The root, back to where it sits in the model — expressed as the local
       // transform that puts it there given wherever its parent has wandered to
       // this frame. `updateWorldMatrix(true, false)` walks up from the parent
@@ -140,18 +155,34 @@ export function createBustPin(instance, { pinFrom, holdRoot } = {}) {
         instance.updateWorldMatrix(true, false);
         _want.multiplyMatrices(instance.matrixWorld, rootRest);
         _local.copy(parent.matrixWorld).invert().multiply(_want);
-        _local.decompose(pinRoot.position, pinRoot.quaternion, pinRoot.scale);
+        if (partial) {
+          _local.decompose(_pinPos, _pinQuat, _pinScale);
+          pinRoot.position.lerp(_pinPos, w);
+          pinRoot.quaternion.slerp(_pinQuat, w);
+          pinRoot.scale.lerp(_pinScale, w);
+        } else {
+          _local.decompose(pinRoot.position, pinRoot.quaternion, pinRoot.scale);
+        }
       }
 
       // ...and everything under it back to the authored pose, which is a local
       // question again: below the waist nothing is meant to move relative to
       // anything else.
       for (const p of pinned) {
-        p.bone.position.copy(p.position);
-        p.bone.quaternion.copy(p.quaternion);
-        p.bone.scale.copy(p.scale);
+        if (partial) {
+          p.bone.position.lerp(p.position, w);
+          p.bone.quaternion.slerp(p.quaternion, w);
+          p.bone.scale.lerp(p.scale, w);
+        } else {
+          p.bone.position.copy(p.position);
+          p.bone.quaternion.copy(p.quaternion);
+          p.bone.scale.copy(p.scale);
+        }
       }
-      if (hold) hold.position.copy(holdPos);
+      if (hold) {
+        if (partial) hold.position.lerp(holdPos, w);
+        else hold.position.copy(holdPos);
+      }
     },
 
     /**

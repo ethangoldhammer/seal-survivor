@@ -8,7 +8,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         window = UIWindow(windowScene: windowScene)
-        window?.rootViewController = CAPBridgeViewController()
+        // GameBridgeViewController, not CAPBridgeViewController: this line is what
+        // actually decides the class, and the storyboard's does not. Both were set
+        // and only this one took effect — Info.plist names Main as the scene's
+        // storyboard, but this delegate replaces its root controller outright.
+        window?.rootViewController = GameBridgeViewController()
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
