@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { createVisual, isAssetLoaded } from '../assets.js';
+import { unlockGranted } from './unlocks.js';
 
 // ---------------------------------------------------------------------------
 // WHAT THE SEAL WEARS — a hat, a pair of sunglasses, anything small enough to
@@ -98,7 +99,7 @@ export function updateAccessories(body) {
     // CONFIG.accessories.equipped. Everything not in the slot is taken off on
     // the same frame the new one goes on, which is what makes swapping a swap
     // rather than a stack.
-    const wanted = !!(cfg.enabled && cfg.equipped === key && body);
+    const wanted = !!(cfg.enabled && wornAccessory() === key && body);
 
     if (!wanted) {
       if (entry?.bone) detach(entry);
@@ -299,7 +300,7 @@ export function accessoryState() {
  */
 export function accessoryRoster(onlyUnlocked = false) {
   const items = CONFIG.accessories?.items ?? {};
-  return Object.keys(items).filter((k) => !onlyUnlocked || items[k].unlocked !== false);
+  return Object.keys(items).filter((k) => !onlyUnlocked || accessoryUnlocked(k));
 }
 
 /**
@@ -316,9 +317,27 @@ export function accessoryRoster(onlyUnlocked = false) {
  * meshes and not about progression; locking has to be something a file SAYS,
  * not something it forgets.
  */
+/**
+ * What is actually ON the seal: the slot, unless the slot holds something the
+ * player has not earned — in which case nothing. The slot's default is the
+ * glasses, written in config.js long before anything could be locked, and
+ * equipAccessory only guards a NEW equip; this is the guard on the one it
+ * inherited. The slot itself is left alone, so the moment the gate is met the
+ * seal is wearing what it always was.
+ */
+export function wornAccessory() {
+  const key = CONFIG.accessories?.equipped ?? '';
+  return key && accessoryUnlocked(key) ? key : '';
+}
+
 export function accessoryUnlocked(key) {
   const item = CONFIG.accessories?.items?.[key];
-  return !!item && item.unlocked !== false;
+  // Two locks, and both must be open. `unlocked: false` is the hand lock —
+  // config.js, or a tool, taking a thing out of the drawer outright. The
+  // second is the EARNED lock: a row in unlocks.csv naming this key, which
+  // holds until its stat is met and only while the gate switch is on (see
+  // systems/unlocks.js). A key with no row passes it untouched.
+  return !!item && item.unlocked !== false && unlockGranted('accessory', key);
 }
 
 // HOW THE ANIMAL IS STANDING while it wears the current thing — radians about

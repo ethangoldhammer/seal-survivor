@@ -42,6 +42,7 @@ import { initParticles, updateParticles, resetParticles, updateParticleScale, pa
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
+import { updateLungeTells, resetLungeTells } from './systems/lungeTell.js';
 import { initAudio, unlockAudio, prefetchSamples, applyAudioBusSettings, applyPlayerAudioSettings, updateBusDepth, resetRepetition, setSfxListener, audioBankBytes } from './systems/audio.js';
 import { initHaptics, stopHaptics } from './systems/haptics.js';
 import { createPost } from './systems/post.js';
@@ -63,7 +64,7 @@ import { createSardineSwirlVisual, updateSardineSwirl, resetSardineSwirl } from 
 import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, clubTrailMovers } from './systems/club.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -143,6 +144,10 @@ import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, rese
 // The seal that swims up under the cards and watches you pick — a second
 // animal on a canvas of its own over the comb. See systems/levelUpSeal.js.
 import { installLevelUpSeal, prepareLevelUpSeal, enterLevelUpSeal, leaveLevelUpSeal, updateLevelUpSeal, resetLevelUpSeal } from './systems/levelUpSeal.js';
+// The seal coming back once the cards have gone — a translucent copy of the
+// run's animal swimming in from the bottom to land in the pose the real one
+// is holding. It is also what holds that pose. See systems/levelUpGhost.js.
+import { installLevelUpGhost, prepareLevelUpGhost, startLevelUpGhost, updateLevelUpGhost, killLevelUpGhost, resetLevelUpGhost, recordPlayerTrail, holdPlayerPose, playerPoseHeld } from './systems/levelUpGhost.js';
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
 import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
@@ -151,7 +156,7 @@ import { resetBossDissolve } from './systems/bossDissolve.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
 import { initCrashLog, mark as crumb, noteError } from './systems/crashLog.js';
 import { guardFrame } from './systems/frameGuard.js';
-import { censusReport, censusLine } from './systems/memoryCensus.js';
+import { censusReport, censusLine, canvasBytes } from './systems/memoryCensus.js';
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { updateBubbleJet, updateJets, resetBubbleJet, setJetStats } from './systems/bubbleJet.js';
@@ -159,10 +164,11 @@ import { setJetBedsMuted } from './systems/jetBed.js';
 import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
 import { updateAccessories } from './systems/accessories.js';
+import { recordBoatDestroyed, recordBossDefeated, unlockStats, unlockGates, unlockProgress, unlockGateOn, setUnlockGate, resetUnlocks } from './systems/unlocks.js';
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { triggerClap, updateClap } from './systems/clap.js';
-import { captureBossShot, resetBossShot, bossShot } from './systems/bossShot.js';
+import { captureBossShot, resetBossShot, bossShot, bossShotBytes } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
 import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateTitleSeal } from './systems/titleSeal.js';
 // The screen between the name card and the run — see systems/mainMenu.js. It
@@ -188,7 +194,7 @@ import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip
 import { starfishLevelStats, multishotLevelStats, missileLevelStats,
          scallopLevelStats, bounceLevelStats } from './levelStats.js';
 import { startHiveReward, hiveRewardActive, updateHiveRewardNav, resetHiveReward, bossDividendStacks } from './ui/hiveReward.js';
-import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, pushCallout, CALLOUTS } from './systems/callouts.js';
+import { updateCallouts, resetCallouts, checkCallouts, clearCallout, resolveCalloutText, pushCallout, CALLOUTS, FIRED_BY_MAIN } from './systems/callouts.js';
 import { updateTutorial, resetTutorialRun, noteTutorialEvent, COACH_IDS, tutorialState } from './systems/tutorial.js';
 // THE HELLO at the top of a run, which is not a tip: it fires every run and
 // its words are rolled rather than written into callouts.csv. See
@@ -274,6 +280,7 @@ const post = createPost(world.renderer);
 // Told which renderer to match (pixel ratio, colour space) and nothing more:
 // the seal itself is built on the first level-up, during the ramp.
 installLevelUpSeal({ renderer: world.renderer });
+installLevelUpGhost({ scene: world.scene });
 initInput(world.renderer.domElement);
 initParticles(world.scene);
 initImpactFlashes(world.scene);
@@ -559,7 +566,13 @@ if (pendingResume) {
 boot();
 
 async function boot() {
-  const loading = showLoading();
+  // The bar says which of the two waits this is. Identical screen either way —
+  // one line under it when the run is coming back rather than starting. See
+  // .sv-load-cap in ui/loading.js: the whole hazard the net has left is that
+  // its best case still LOOKS like the app restarting itself, because the
+  // seconds a resumed player sits through are the same seconds a cold boot
+  // takes and nothing on screen distinguishes them.
+  const loading = showLoading({ resuming: !!pendingResume });
   // Assets are the first two thirds of the bar and the shader warm-up is the
   // last third. Not a measurement — the split is a judgement about which half
   // feels longer, and the warm-up's own share is smoothed inside that third.
@@ -736,6 +749,9 @@ async function boot() {
     onStart: startGame,
     onRestart: restartRun,
     onLevelChoice: applyLevelChoice,
+    // ...and the comb having drained after it, which is when the run is
+    // handed back — see onLevelUpCleared.
+    onLevelUpCleared,
     onResume: () => setPaused(false),
     // The phone's only way in. A keyboard has Escape and a pad has Start; a
     // thumb had neither, which meant Options, Resume and Restart were all
@@ -769,7 +785,7 @@ async function boot() {
   // is a coach rather than a warn because nothing has gone wrong in the water —
   // and because a coach outranks a warning, which is what lets it hold the band
   // through the greeting that would otherwise open the run over the top of it.
-  checkCallouts([...COACH_IDS, 'resumed']);
+  checkCallouts([...COACH_IDS, ...FIRED_BY_MAIN]);
   bindPauseKey();
   bindFullscreenKey();
   onSettingsChanged(handleSettingsChange);
@@ -826,6 +842,18 @@ async function boot() {
   // the clock: both are locals here, and handing over accessors keeps the panel
   // from importing the game loop's state.
   if (DEV_UI) initUpgradeDebug(() => gameState.time, () => ({ scene: world.scene, gameState }));
+  // THE LEDGER, FROM THE CONSOLE. No panel yet: `svUnlocks.stats()` is the
+  // lifetime counts, `svUnlocks.progress()` is every gate with have/need,
+  // `svUnlocks.gate(true)` flips the public-build switch for this page (or
+  // load with ?gate), and `svUnlocks.reset()` forgets everything earned.
+  if (DEV_UI) {
+    window.svUnlocks = {
+      stats: unlockStats,
+      progress: () => unlockGates().map((g) => unlockProgress(g.id)),
+      gate: (on) => { if (on !== undefined) setUnlockGate(on); return unlockGateOn(); },
+      reset: resetUnlocks,
+    };
+  }
   if (DEV_UI) initPlaytestOverlay();
   // Reads the animation state machine out; poses nothing. See ui/animDebug.js.
   if (DEV_UI) initAnimDebug();
@@ -1604,6 +1632,7 @@ function startGame(resume = null) {
   // next run come out quiet for no reason the player can see.
   resetRepetition();
   hideAllMenus();
+  resetLungeTells();
   resetEnemies(world.scene);
   // After resetEnemies, which is what actually clears the last run's boss out
   // of the water: this only drops the reference to it and rolls the level the
@@ -1680,6 +1709,10 @@ function startGame(resume = null) {
   // restart would hand this one a world running at half speed.
   resetLevelUpTime();
   resetLevelUpSeal();
+  // ...and the return swim, its trail and its hold on the pose — a run started
+  // from under the cards must not open with last run's seal swimming in.
+  resetLevelUpGhost();
+  returnPending = false;
   // The warm-up's ledger with it. Nothing is re-uploaded by this — the
   // templates and their GPU residency outlive a restart — it is only the record
   // of what this run has paid for starting out honest.
@@ -2551,6 +2584,14 @@ function openLevelUp() {
   // slow-motion beat rather than on the frame the cards arrive. A no-op from
   // the second level-up on, and when the feature is switched off.
   prepareLevelUpSeal();
+  // ...and the ghost that brings the seal back afterwards, for the same
+  // reason: its clone and its shells are a one-time cost, and the beat is
+  // where a one-time cost goes.
+  prepareLevelUpGhost();
+  // THE POSE HOLDS under the cards — once the salute has released, the seal's
+  // mixer and rig stand still (see the pause branch in animate, and
+  // playerPoseHeld) so the ghost has a frame to swim into. Let go on the merge.
+  holdPlayerPose(true);
   // Muffle the mix and queue the upgrade loop — it takes over at the next
   // loop boundary rather than cutting the current one off mid-phrase.
   duckForUpgrade();
@@ -2640,14 +2681,63 @@ function applyLevelChoice(choice) {
     // be the thing adding a step to one — a menu closed before the queue
     // drained picks with what it got, and the next level-up finishes the rest.
     cancelLevelUpWarmup();
-    gameState.paused = false;
-    sweepOpen(); // filter opens back up, main loop returns on the next boundary
-    // The run is live again from this frame, in slow motion, and the world
-    // accelerates back to full speed underneath it. Handing control back only
-    // once the ramp finished would mean half a second where the game looks
-    // playable and isn't.
-    endLevelUpTime();
+    // THE RUN STAYS HELD. It used to come back on this frame, at half speed,
+    // under a comb still draining — playable and not, for most of a second.
+    // Now the exit and the drain play out over a world still at `hold`, and
+    // the hand-back is onLevelUpCleared below, fired by the menu the frame the
+    // screen is clear. The one thing that must not wait is the cards' own
+    // exit, which ui.js is already running.
+    returnPending = true;
   }
+}
+
+// The pick has been taken and the screen is clear. Whether a return is owed —
+// applyLevelChoice sets it on the LAST card of a batch; a re-deal (a second
+// level in the same batch, or the dev key) hides the menu without one.
+let returnPending = false;
+
+/**
+ * THE HAND-BACK — the comb has drained, and the run comes back over the
+ * length of the clock's ramp to full speed.
+ *
+ * Two things start on this frame and end on the same one. The ramp
+ * (systems/levelUpTime.js) takes the world from `hold` to 1 over restoreTime,
+ * with the music and the filter coming back up under it; and the ghost
+ * (systems/levelUpGhost.js) swims the seal in from the bottom of the screen
+ * along the path it took before the level, reading its progress off that
+ * same ramp, to land in the pose the real seal has been holding. The pause
+ * lets go in the ramp's `done`, which is the frame the ghost merges — so the
+ * first live frame is the seal in the pose it was left in, at full speed,
+ * with nothing on top of it.
+ *
+ * With the ghost switched off the run still waits for the clear and the ramp
+ * — that is the sequence, and the ghost is what it was made for.
+ */
+function onLevelUpCleared() {
+  if (!returnPending) return;
+  returnPending = false;
+  // The menu can only clear while a run is live and paused for it; anything
+  // else (a restart from under the cards) has already reset the clock, and
+  // there is nothing to hand back.
+  if (!gameState.running || !levelUpState.active) {
+    gameState.paused = false;
+    holdPlayerPose(false);
+    return;
+  }
+  sweepOpen(); // filter opens back up, main loop returns on the next boundary
+  startLevelUpGhost(player, world.framedView());
+  const live = endLevelUpTime(() => {
+    // The ghost is done the frame the run is — it has landed, or it has run
+    // out of ramp. Killed outright rather than left to notice: the ramp
+    // resets its progress before this callback runs, so nothing else would.
+    killLevelUpGhost();
+    holdPlayerPose(false);
+    gameState.paused = false;
+  });
+  // Nothing dilated to come back from (the ramp is switched off): `done` has
+  // already run and the run is live; the ghost, with no ramp to read, is
+  // dropped rather than left swimming into a seal that has moved.
+  if (!live) resetLevelUpGhost();
 }
 
 // ---------------------------------------------------------------------------
@@ -2697,6 +2787,10 @@ function updateBossShot() {
   const gained = bossState.defeated > player.bossesDefeated;
   player.bossesDefeated = bossState.defeated;
   if (gained) crumb('boss:defeated', bossState.defeated);
+  // The lifetime ledger, on the same edge. `archetype` and `perk` are still
+  // the dead boss's — bossState clears them at the next spawn, not at the
+  // kill — which is what lets a gate wait on "a boss with the eyebeam perk".
+  if (gained) recordBossDefeated(bossState.archetype, bossState.perk?.id ?? null);
   recomputeStats();
   // The net, on the event rather than only on the next heartbeat. A boss kill
   // is the single most expensive thing in the game to lose — minutes of fight,
@@ -3486,7 +3580,14 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames =
  * around its middle fails there instead of biting with its tail.
  */
 function onPlayerBite(e) {
-  const dmg = e.biteDamage ?? 0;
+  // A bite that lands MID-RUN pays more. The lunge is the moment the whole
+  // pass was built to produce — you were told, you had a wind-up to read, and
+  // the jaws still closed on you — so it is the one that costs. Same gate,
+  // same head, same channel; only the number moves. CONFIG.lungeRules
+  // .strikeBiteMul, overridable on the def's lunge block.
+  const striking = e.lungeStage === 'strike' && e.def?.lunge;
+  const mul = striking ? (e.def.lunge.strikeBiteMul ?? CONFIG.lungeRules?.strikeBiteMul ?? 1) : 1;
+  const dmg = (e.biteDamage ?? 0) * mul;
   if (!(dmg > 0) || isInvulnerable()) return;
 
   const reach = (e.radius ?? 1) * (CONFIG.bite?.mouthReach ?? 0.55)
@@ -3603,6 +3704,16 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   // (it tracks size directly); hp folds in so a tanky small enemy still
   // lands heavier than a fragile one.
   const heft = Math.min(3, e.def.radius + (e.def.hp ?? 10) / 120);
+  // THE GOO IS THE SIZE OF THE BODY. `scale` below only adds lobes, so a shark
+  // used to leave a trout's splat with more blobs in it. e.radius rather than
+  // e.def.radius: the hitbox carries the asset's Size and the run's growth,
+  // so it is the body the player watched die (a sailfish is authored at 0.5
+  // and swims at 1.0; a shark at 1.2 swims at 3.2). Floored at 1 — small fish
+  // keep the authored splat — and capped, because the megalodon does not need
+  // to paint the arena. See CONFIG.fx.killGooBody.
+  const gk = CONFIG.fx?.killGooBody ?? {};
+  const gooBody = Math.min(gk.max ?? 4,
+    Math.max(1, (e.radius ?? e.def.radius) / Math.max(0.05, gk.pivot ?? 0.8)));
   feedback(killEvent ?? (frozen ? (big ? 'bigKillFrozen' : 'killFrozen') : (big ? 'bigKill' : 'kill')), {
     sfxOpts: { pitch: 1 / (0.75 + heft * 0.35), decayMul: 1 + heft * 0.35 },
     x: e.mesh.position.x,
@@ -3610,6 +3721,9 @@ function onEnemyKilledFeedback(e, killEvent = null) {
     vx: e.vx,
     vy: e.vy,
     scale: Math.min(2.2, 0.7 + e.def.radius + (schoolWipe ? 0.6 : 0)),
+    // Both, always — lobes and throw scale together or the mass changes shape.
+    gooSizeMul: gooBody,
+    gooSpeedMul: gooBody,
     // A DEATH IS THE CREATURE'S OWN COLOUR, always. A trout comes apart lime,
     // a barracuda purple, a reeffish magenta — that hue is what says which
     // thing just died, and it carries that on its own without the player
@@ -4181,6 +4295,81 @@ function onChumSwallowed(x, y) {
 // be because the gulp has to take exactly this path — the gate stops the meter
 // refilling for the length of a wind-up, and anything the gulp did differently
 // would be a resource that gate had quietly deleted.
+/**
+ * Every body inside `radius` of a blast is thrown AWAY from it. Falling off
+ * toward the rim, or a body at the edge of the blast leaves as fast as one
+ * standing on top of it and the whole thing reads as a circle of wind rather
+ * than a bang. Shared by the release burst and the pickup blast — one shape
+ * of detonation, two things that detonate.
+ */
+function knockOutward(bx, by, radius, knock) {
+  if (!(knock > 0) || !(radius > 0)) return;
+  for (const e of enemies) {
+    const dx = e.mesh.position.x - bx;
+    const dy = e.mesh.position.y - by;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > radius * radius) continue;
+    const falloff = 1 - Math.sqrt(d2) / radius;
+    applyKnockback(e, dx, dy, knock * falloff);
+  }
+}
+
+/**
+ * A PICKUP TAKEN BY A DASH GOES OFF. Called from every orb handler with the
+ * kind it was, AFTER the pickup has paid what it pays — the blast is on top of
+ * the reward, never instead of it. Nothing happens unless a dash is in flight
+ * (pickupBlast reads strikeState.active) or the kind is not on the list, so a
+ * pickup swum into at cruising speed is exactly what it was before.
+ *
+ * Queued through the splash path like the release burst, for the same three
+ * reasons: it hits wreckage and crew, it lands after the loops mid-iteration
+ * over `enemies`, and there is one copy of damage-in-a-circle in this file.
+ *
+ * @param kind   the pickup kind, as CONFIG.strike.pickupBlast.kinds keys it
+ * @param color  the tint the orb was wearing, so the blast is recognisably it
+ */
+function pickupStruck(x, y, kind, color = null) {
+  const kindMul = CONFIG.strike.pickupBlast?.kinds?.[kind] ?? 0;
+  const blast = pickupBlast(player.stats, kindMul);
+  if (!(blast.damage > 0) || !(blast.radius > 0)) return;
+  pendingSplashes.push({
+    x, y,
+    // Air time on the damage and not the radius, for the reason the release
+    // burst gives: reach is what the player aims with.
+    damage: blast.damage * airDamageMul(),
+    radius: blast.radius,
+    exclude: null,
+    source: 'pickupBlast',
+    // Its own event below, sized by power — not the queue's `bigKill`.
+    feedback: false,
+  });
+  knockOutward(x, y, blast.radius, blast.knock);
+  // THE LOOK — everything below wears the pickup's colour. See the `fx` block
+  // on CONFIG.strike.pickupBlast.
+  const fx = CONFIG.strike.pickupBlast?.fx ?? {};
+  const pw = Math.max(0, Math.min(1, strikeState.power));
+  const between = (pair, fallback = 1) => Array.isArray(pair) ? pair[0] + (pair[1] - pair[0]) * pw : fallback;
+  feedback('pickupBlast', {
+    x, y,
+    scale: 0.8 + pw * 1.2,
+    sizeMul: between(fx.spray?.sizeMul),
+    speedMul: between(fx.spray?.speedMul),
+    gooSizeMul: between(fx.goo?.sizeMul),
+    gooSpeedMul: between(fx.goo?.speedMul),
+    ...(color != null ? { color } : {}),
+  });
+  // The ring of light is the damage ring. Not a feedback channel, so fired
+  // here the way the mussel's is (missileImpactFeedback).
+  if (fx.flash !== false) {
+    spawnImpactFlash(x, y, {
+      ...(color != null ? { color } : {}),
+      radius: blast.radius * (fx.flash?.radiusMul ?? 1),
+      life: fx.flash?.life ?? 0.24,
+      glow: fx.flash?.glow ?? 3.6,
+    });
+  }
+}
+
 function collectChum(value, x, y, healMul = 1, fromFloor = false) {
   // The first-run "eat chum" tip is answered here rather than at any of the
   // three call sites above it, because this is the one funnel every route into
@@ -4891,6 +5080,10 @@ function launchClubThrow(power) {
 // the score and the noise.
 function onBoatDestroyed(boat, chum) {
   gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1));
+  // The lifetime ledger — "destroy 50 boats" is counted here, once per hull,
+  // whoever sank it. Nothing is done with what it returns yet: the ids of any
+  // gate this hull just opened are what an unlock toast will read.
+  recordBoatDestroyed(boat);
   // The explosion and the hull's death voice are NOT here: they moved into
   // damageBoat, so a boat sunk by an orca or by another boat goes up exactly as
   // loudly as one the player shot. What is left is what only main knows — the
@@ -5489,6 +5682,7 @@ function runFrame(now) {
       lastMemAt = stamp;
       try {
         const pool = visualPoolCount();
+        const shotBytes = bossShotBytes();
         crumb('mem', `${censusLine(censusReport({
           items: [world.scene, assetCensusItems()],
           audioBytes: audioBankBytes() + musicBankBytes() + ambientBankBytes(),
@@ -5496,7 +5690,25 @@ function runFrame(now) {
           // holding it. See the note over censusReport.
           audioParts: { sfx: audioBankBytes(), music: musicBankBytes(), ambient: ambientBankBytes() },
           targetBytes: post.targetBytes?.() ?? 0,
+          // THE TWO BLOCKS THE SCENE WALK CANNOT REACH, and the reason this
+          // line was reading a flat 366MB through three sessions that iOS
+          // killed at 2048MB. Canvas backing stores are WebKit's memory and
+          // not three's; the kill shots keep a PNG string and a Blob of the
+          // same frame per boss, and a Blob is not even on the JS heap.
+          canvas: canvasBytes(),
+          keptBytes: shotBytes.total,
         }))} pool${pool.bodies}/${pool.keys}`);
+        // THE TROPHIES, BROKEN OUT, on their own line rather than folded into
+        // `kept` above. Four copies of the same frame are kept per kill for
+        // four different consumers, and which of them is the expensive one
+        // decides what to do about it — a Blob that is never released and a
+        // data URL that is never released are different bugs with different
+        // fixes, and one total cannot tell them apart.
+        if (shotBytes.count) {
+          const mb = (n) => Math.round(n / 1048576);
+          crumb('shots', `${shotBytes.count} kept · url${mb(shotBytes.urls)} blob${mb(shotBytes.blobs)}`
+            + ` cv${mb(shotBytes.canvases)} sheet${mb(shotBytes.sheet)} = ${mb(shotBytes.total)}MB`);
+        }
       } catch (err) {
         crumb('mem', `census failed: ${err?.message ?? err}`);
       }
@@ -5904,6 +6116,10 @@ function runFrame(now) {
     player.chargeThrustMul = chargeThrustMul(player.stats);
 
     updatePlayer(dt, input);
+    // Where the seal ended the frame, for the ghost that retraces the last
+    // stretch of it after a level-up (systems/levelUpGhost.js). Gameplay dt,
+    // so the record is measured in the run's own seconds.
+    recordPlayerTrail(player.mesh.position.x, player.mesh.position.y, player.mesh.rotation.z, dt);
 
     // A BOSS WITH THE SEAL IN ITS MOUTH — see systems/bossGrab.js, and the note
     // at the top of that file for why it is here rather than inside
@@ -6497,20 +6713,7 @@ function runFrame(now) {
             // Bodies caught in it are thrown OUTWARD, which is the difference
             // between a detonation and damage happening in a circle. Separate
             // from the ram's shove, which runs along the dash instead.
-            const knock = (CONFIG.strike.burst.knock ?? 0) * strikeState.power;
-            if (knock > 0) {
-              for (const e of enemies) {
-                const dx = e.mesh.position.x - bx;
-                const dy = e.mesh.position.y - by;
-                const d2 = dx * dx + dy * dy;
-                if (d2 > burst.radius * burst.radius) continue;
-                // Falling off toward the rim, or a body at the edge of the
-                // blast leaves as fast as one standing on top of it and the
-                // whole thing reads as a circle of wind rather than a bang.
-                const falloff = 1 - Math.sqrt(d2) / burst.radius;
-                applyKnockback(e, dx, dy, knock * falloff);
-              }
-            }
+            knockOutward(bx, by, burst.radius, (CONFIG.strike.burst.knock ?? 0) * strikeState.power);
           }
         }
 
@@ -6934,6 +7137,9 @@ function runFrame(now) {
       feedback('bite', { x, y, vx: e.vx, vy: e.vy });
       onPlayerBite(e);
     });
+    // The tells on this frame's lunge stages — after the behaviour, so the
+    // ring draws the stage the body is actually in.
+    updateLungeTells(dt, world.scene);
     perfPhase('enemies', performance.now() - _tenemies);
 
     // THE PHYSICS FRAME. Everything that owns a body (the boats above, the sea
@@ -7790,6 +7996,7 @@ function runFrame(now) {
         // An orb fills the bar outright, so it crosses to full unless it
         // already was — same flash as the mouthful that tops it off.
         if (filled) chargeCrossed();
+        pickupStruck(x, y, 'strikeOrb', assetBaseColor('strikeOrb'));
       },
       (x, y) => {
         noteTutorialEvent('bubbleOrb');
@@ -7817,6 +8024,7 @@ function runFrame(now) {
           color: assetBaseColor('bubbleOrb'),
           sfxOpts: { pitch: 1.25 - 0.45 * need },
         });
+        pickupStruck(x, y, 'bubbleOrb', assetBaseColor('bubbleOrb'));
       },
       (x, y) => {
         noteTutorialEvent('rapidFireOrb');
@@ -7825,6 +8033,7 @@ function runFrame(now) {
         // because this orb is rarer.
         if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
         feedback('coralTaken', { x, y, scale: 1.1, color: assetBaseColor('rapidFireOrb') });
+        pickupStruck(x, y, 'rapidFireOrb', assetBaseColor('rapidFireOrb'));
       },
       // A CHUNK GOING DOWN. Health only, and this is the one pickup in the game
       // that pays no xp and no charge: it is already the largest single thing
@@ -7861,6 +8070,7 @@ function runFrame(now) {
             scale: 0.85 + 0.5 * chunk.t,
             color: chunk.base,
           });
+          pickupStruck(x, y, 'chumChunk', chunk.base);
           return;
         }
         // The tip is the HEALTH chunk's ("a real deal seal meal") and is spent
@@ -7876,6 +8086,7 @@ function runFrame(now) {
           // already been told which one this is by looking at it.
           sfxOpts: { pitch: 1.2 - 0.4 * chunk.t },
         });
+        pickupStruck(x, y, 'chumChunk', chunk.base);
       },
       {
         // WHAT THE BUBBLES ARE ALLOWED TO BUMP INTO. The live enemy list, so a
@@ -7914,6 +8125,7 @@ function runFrame(now) {
           // payout is the stack, and paying the meter as well would make the
           // rarest thing in the water also the best boost refill in it.
           if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
+          pickupStruck(x, y, 'levelOrb', levelOrbColor(orb?.mesh));
         },
         // A BREATH DESTROYED. Pays nothing — that is the risk the bubble now
         // carries, and the reason it is worth swimming for one early rather
@@ -8405,7 +8617,13 @@ function runFrame(now) {
     // advancing the springs here as well would integrate every one of them
     // twice a frame — a corpse that flops at double speed and settles at half
     // the damping it was tuned with. See updateRagdoll in systems/deathDive.js.
-    if (CONFIG.animation.enabled && !deathState.active) {
+    // THE HELD POSE. Under the upgrade cards, once the salute has released,
+    // neither the mixer nor the rig below runs: the seal stands on the frame
+    // it was left on so the ghost that brings it back (systems/levelUpGhost.js)
+    // has an exact pose to swim into, and the mixer resumes from that frame
+    // on the merge. Every other menu still idles as it always did.
+    const held = playerPoseHeld();
+    if (CONFIG.animation.enabled && !deathState.active && !held) {
       const idleState = stateForSpeed(0, player.aboveSurface);
       player.anim?.update(realDt, idleState, false);
     }
@@ -8424,7 +8642,7 @@ function runFrame(now) {
     // the one exception of the title card, where the whole shot IS the aim: at
     // `idleWeight` the flippers keep most of the swim clip and only gesture at
     // the cursor, which reads as the seal ignoring you. See systems/titleSeal.js.
-    updateAimRig(
+    if (!held) updateAimRig(
       realDt,
       // The MENU'S aim when it has one, which is the cursor remapped through
       // the bust's own spread — a seal stood upright has its neck cone pointing
@@ -8907,6 +9125,10 @@ function runFrame(now) {
   // The seal under the cards, on the wall clock: it is a screen element, not
   // a body in the dilated water, and it draws to its own canvas.
   updateLevelUpSeal(realDt);
+  // ...and the one swimming back in once the cards have gone: a body in the
+  // arena, so before the camera and the render, and on the wall clock with
+  // its progress read off the clock's ramp back to full speed.
+  updateLevelUpGhost(realDt, levelUpState.restore, { live: gameState.running && !gameState.paused });
   // The stage parks the shot on the seal, and records where it is so a staged
   // event fires ON the seal rather than at wherever the world origin happens
   // to be. Unconditional — the position has to be current the moment the panel
@@ -9061,9 +9283,10 @@ function runFrame(now) {
     // ocean is held until the print reaches the corner.
     if (captureBossShot(world.renderer.domElement, meta)) {
       // The kept shot rather than `meta`, because it carries the SQUARE crop
-      // as well as the numbers — and that is what decides which polaroid the
-      // player sees: with it, the Rive artboard draws the print; without it,
-      // the coded paper does. Everything else on it is the same run.
+      // as well as the numbers — and that is what decides whether there is a
+      // print at all: the artboard draws from the square, and since the coded
+      // paper was deleted there is nothing to fall back to. Everything else on
+      // it is the same run.
       const kept = bossShot();
       crumb('shot:kept');
       showSnapshotPrint(kept?.url, kept ?? meta);

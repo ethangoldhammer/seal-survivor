@@ -4674,6 +4674,50 @@ export const CONFIG = {
         // happening in a circle.
         knock: 0.55,
       },
+      // --- A PICKUP STRUCK IS A BOMB -------------------------------------------
+      // Dash INTO an orb — the blue one, a breath, the coral, the level blob,
+      // a chunk of chum — and it goes off where it was, on top of paying out
+      // whatever it normally pays. The blast is deliberately big: the release
+      // burst above is a pop, this is the reward for aiming a strike at a
+      // thing rather than at open water, and it has to clear what was around
+      // the pickup or there is no reason to line one up.
+      //
+      // Both axes ride the banked power the same way the release does — a
+      // flick pops around the orb, a full charge clears a wide ring — and the
+      // damage rides the strike stat, so it grows with the run and the strike
+      // cards rather than sitting at a flat number the water outgrows by level
+      // ten. No sweet-spot gate: the aim is the skill here, not the timing.
+      //
+      // Resolved in main.js (pickupStruck) through the same splash queue every
+      // blast uses, so it breaks wreckage and takes crew off decks too.
+      pickupBlast: {
+        enabled: true,
+        // Multiple of the strike damage stat, BEFORE the charge multiplier —
+        // so a flick is ~5x the release pop and a full charge ~14x it.
+        damageMul: 6,
+        radius: 4,          // world units at a flick, and Splash Zone widens it
+        radiusPowerMul: 2,  // a full-charge blast reaches this many times further
+        // Thrown outward like the release burst, as a share of the ram's own
+        // knockback speed. Scaled by power.
+        knock: 0.8,
+        // Which pickups go off, and how hard relative to `damageMul`. A kind
+        // at 0 (or missing) is collected as if this feature did not exist.
+        // Loose chum is not here on purpose: the release gulp hoovers dozens
+        // of orbs in one frame, and a bomb per mouthful would be the whole
+        // screen going off every strike.
+        kinds: { strikeOrb: 1, bubbleOrb: 1, rapidFireOrb: 1, levelOrb: 1, chumChunk: 1 },
+        // HOW IT LOOKS, all tinted by the pickup that went off. The flash is
+        // the honest part: an impact flash (systems/impactFlash.js) sized to
+        // the blast's real damage radius, so what the player sees light up is
+        // what got hit. The spray and the goo are the `pickupBlast` feedback
+        // event, and these pairs are the [flick, full charge] multipliers on
+        // their size so a big strike reads bigger.
+        fx: {
+          flash: { radiusMul: 1, life: 0.24, glow: 3.6 },
+          spray: { sizeMul: [1, 1.8], speedMul: [0.8, 1.3] },
+          goo: { sizeMul: [1.8, 3.2], speedMul: [1.2, 2] },
+        },
+      },
       // How much of the strike's damage a RAM still deals on contact, on top of
       // the shove. Zero: the strike hits once, where it was released. Kept as a
       // dial rather than deleted because "the dash also grazes what it passes
@@ -4750,6 +4794,23 @@ export const CONFIG = {
         enabled: true,
         share: 1,
         perfectMul: 2,
+        // A FLOOR IN FRACTIONS OF THE TARGET'S BAR, because `share` alone is
+        // flat and boss health is not. `strike.damage` is 40 and additive
+        // (+5 a card); boss hp compounds on the level axis, so the same
+        // perfect weak-spot ram that took 8% of the opening boss took 0.37%
+        // at level 20 and 0.07% at 30 — the game's highest-skill action
+        // decaying to nothing while players kept performing it. The playtest
+        // ledger showed exactly that: 1,668 strikes over 40 runs and Strike
+        // not in the top eight damage sources.
+        //
+        // Taken as a max() against the flat number rather than replacing it,
+        // so a build that has stacked strike cards never loses damage by
+        // aiming well — the same reason `share` is a max() at the call site.
+        // 0 turns this half off and leaves the flat behaviour exactly as it
+        // was. Read against the bar the player is looking at: 0.035 is a
+        // perfect ram taking about a twenty-eighth of a boss, doubled by
+        // perfectMul to a fourteenth, at every level of the game.
+        maxHpFrac: 0.035,
       },
       cardDamage: 5,   // strike damage added per strike-family card
       // BOOSTER PACK. Odd stacks add a pip CONTAINER to the bar (a pip's
@@ -10892,17 +10953,10 @@ export const CONFIG = {
           // sees eight of them. Anything here up to `hangMs` is free; past it,
           // every millisecond is one the shot did not have.
           writeOnMs: 800,
-          // The develop — the emulsion coming off the picture. THE CODED PAPER
-          // ONLY. The Rive print fades its own photograph in as part of the
-          // write-on, and a sheet of emulsion over that artboard would hide
-          // the animation it exists to play.
-          //
-          // It runs UNDER the eject and outlasts it, so the picture is still
-          // coming up as the paper settles — a print that has already
-          // developed by the time it stops moving looks like a screenshot
-          // being slid around.
-          developMs: 620,
-          developDelayMs: 120,
+          // `developMs` and `developDelayMs` went with them, and for the same
+          // reason: the develop was the coded paper's emulsion coming off the
+          // picture. The artboard fades its own photograph in as part of the
+          // write-on above, which `writeOnMs` is the knob for.
           // How big the print is in the middle of the screen: a share of the
           // window's width, floored and capped so it is a third of a phone
           // held sideways and not half a monitor.
@@ -10986,17 +11040,17 @@ export const CONFIG = {
             // mid-run it costs nothing at all — the Rive cards inside were
             // already paused as each print parked.
           },
-          // The paper itself. Cool white rather than warm — everything in this
-          // game is underwater, and a cream print reads as a different game's
-          // UI pasted over it.
-          paper: '#eef2f3',
-          ink: '#232b33',
-          // The blank emulsion the picture develops out from.
-          emulsion: '#e7ebec',
-          // Border as a share of the print's width. The chin (the wide bottom
-          // border that makes a print a print) is drawn from the same number.
-          paperPad: 0.038,
-          chinSize: 0.045,
+          // THE PAPER'S OWN LOOK IS NOT HERE ANY MORE. `paper`, `ink`,
+          // `emulsion`, `paperPad` and `chinSize` described the coded polaroid
+          // — a DOM print with a CSS chin and a sheet of emulsion over an
+          // <img> — and that print was deleted 2026-09-05 (see the note in
+          // ui/snapshotPrint.js). The artboard draws all five of those things
+          // itself now, in Rive, where they are edited.
+          //
+          // Deleted rather than left sitting here, because a tuning knob that
+          // writes a value nothing reads is worse than no knob: it is a
+          // control that appears to work. Stale copies of them survive in
+          // imported-tuning.json and are simply never looked up.
           // The angles: a print is never square to the frame. The eject leans
           // the other way from where it lands, so the settle is a rotation
           // rather than a stop.
@@ -12740,6 +12794,7 @@ export const CONFIG = {
         asset: 'enemyShark',
         behavior: 'hunt',
         faceMotion: true,
+        comeAbout: { time: 0.7, bank: 0.18 },
         radius: 1.2,
         hp: 60,
         hpPerDifficulty: 5,
@@ -12798,32 +12853,21 @@ export const CONFIG = {
           range: 12, minRange: 5, windup: 0.5, windSpeedMul: 0.5,
           speedMul: 2.6, strikeTime: 0.7, strikeTurnRate: 0.7,
           cooldown: 3.2, veerSwing: 0.85,
+          patterns: { pass: 1, double: 0, feint: 0 },
         },
         hunt: {
-        // CRUISE — how this body carries itself when it is not mid-bite. See
+        // CRUISE — how this body carries itself when it is not mid-lunge. See
         // the shark-cruise notes in entities/enemies.js for the mechanism; the
-        // short version is that vertical movement has to be earned by getting
-        // close, and the sinuous shape is carried by the HEAD (the look target
-        // this weaves) with the body trailing on the existing spring chain.
+        // short version is that the cruise is LATERAL — bounded to
+        // CONFIG.lateralCruise.cruisePitch at every range, with reversals as
+        // come-abouts rather than loops — and the sinuous shape is carried by
+        // the HEAD (the look target this weaves) with the body trailing on
+        // the existing spring chain. Vertical movement is the lunge's alone.
         //
         // On the sharks only. The dolphin and orca are deliberately left out:
         // they are cetaceans that surface to breathe, and `porpoise` and their
         // own arcs are built on being able to climb whenever they like.
         lateral: {
-          // Vertical authority ramps between these two HORIZONTAL distances to
-          // the thing being chased — see updateSwim for why horizontal and not
-          // straight-line. Outside `climbRange` a shark closes almost flat;
-          // inside `climbFull` it is directly enough beneath its target to come
-          // up into it.
-          climbRange: 15,
-          climbFull: 5.5,
-          // Never quite zero, or a shark could never correct its depth at all
-          // and would slowly settle onto whatever line it spawned on.
-          climbFloor: 0.12,
-          // Per-second easing of that gain. Low on purpose: this is the number
-          // that decides "not abrupt", and at 0.9 a shark takes a good second
-          // and a half to commit to a climb after the range opens it up.
-          climbEase: 0.9,
           // The idle weave. One full side-to-side sweep every `weavePeriod`
           // seconds, aimed `weaveLead` ahead of the nose and swinging
           // `weaveAmp` to each side of the path.
@@ -13132,6 +13176,7 @@ export const CONFIG = {
       greatWhite: {
         separates: true,
         asset: 'enemyGreatWhite', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 0.75, bank: 0.18 },
         radius: 1.4, hp: 85, hpPerDifficulty: 9, speed: 6, speedVariance: 1,
         contactDamage: 26, xp: 18, turnRate: 2.2,
         // The pass — see the long note on `shark.lunge`. Bigger and slower to
@@ -13142,11 +13187,12 @@ export const CONFIG = {
         // 6 x 2.8 x 0.75 = 12.6 units of run against a 12-unit gap.
         lunge: { range: 12, minRange: 5, windup: 0.55, windSpeedMul: 0.45,
                  speedMul: 2.8, strikeTime: 0.75, strikeTurnRate: 0.6,
-                 cooldown: 3.6, veerSwing: 0.85 },
+                 cooldown: 3.6, veerSwing: 0.85,
+                 patterns: { pass: 0.7, double: 0, feint: 0.3 } },
         contactDamage: 26, xp: 18, turnRate: 2.2,
         // Cruise shaping — see the `lateral` notes on `shark`.
         hunt: { preyRadius: 20, biteRange: 1.8, biteCooldown: 1.1, healPerMeal: 10, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2,
-                lateral: { climbRange: 15, climbFull: 5.5, climbFloor: 0.12, climbEase: 0.85, weavePeriod: 6.2, weaveLead: 7, weaveAmp: 2.6, weaveBody: 0.1, wanderPitch: 0.13 } },
+                lateral: { weavePeriod: 6.2, weaveLead: 7, weaveAmp: 2.6, weaveBody: 0.1, wanderPitch: 0.13 } },
         weight: 0.14, weightPerDifficulty: 0.035, maxWeight: 0.45, maxConcurrent: 4, minDifficulty: 1.5,
         spawnGroup: 'apex shark',
     },
@@ -13162,6 +13208,7 @@ export const CONFIG = {
       abyssShark: {
         separates: true,
         asset: 'enemyAbyssShark', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 0.7, bank: 0.18 },
         radius: 1.4, hp: 110, hpPerDifficulty: 10, speed: 6.4, speedVariance: 1,
         contactDamage: 30, xp: 26, turnRate: 2.2,
         // The pass — see the long note on `shark.lunge`. The great white's
@@ -13171,11 +13218,12 @@ export const CONFIG = {
         // 6.4 x 2.7 x 0.72 = 12.4 units of run against a 12-unit gap.
         lunge: { range: 12, minRange: 5, windup: 0.5, windSpeedMul: 0.45,
                  speedMul: 2.7, strikeTime: 0.72, strikeTurnRate: 0.7,
-                 cooldown: 3.2, veerSwing: 0.85 },
+                 cooldown: 3.2, veerSwing: 0.85,
+                 patterns: { pass: 0.6, double: 0.4, feint: 0 } },
         contactDamage: 30, xp: 26, turnRate: 2.2,
         // Cruise shaping — see the `lateral` notes on `shark`.
         hunt: { preyRadius: 24, biteRange: 1.8, biteCooldown: 1.0, healPerMeal: 12, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 2,
-                lateral: { climbRange: 16, climbFull: 6, climbFloor: 0.12, climbEase: 0.85, weavePeriod: 6, weaveLead: 7, weaveAmp: 2.6, weaveBody: 0.1, wanderPitch: 0.13 } },
+                lateral: { weavePeriod: 6, weaveLead: 7, weaveAmp: 2.6, weaveBody: 0.1, wanderPitch: 0.13 } },
         weight: 0.07, weightPerDifficulty: 0.02, maxWeight: 0.28, maxConcurrent: 2,
         minDifficulty: 3, minPlayerLevel: 5,
         spawnGroup: 'apex shark',
@@ -13195,6 +13243,7 @@ export const CONFIG = {
       hammerhead: {
         separates: true,
         asset: 'enemyHammerhead', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 0.6, bank: 0.22 },
         radius: 1.3, hp: 80, hpPerDifficulty: 6, speed: 7.5, speedVariance: 1,
         contactDamage: 25, xp: 17, turnRate: 3.4,
         // The pass — see the long note on `shark.lunge`, and this is the one
@@ -13212,11 +13261,12 @@ export const CONFIG = {
         // 7.5 x 2.5 x 0.7 = 13.1 units of run against a 13-unit gap.
         lunge: { range: 13, minRange: 4.5, windup: 0.42, windSpeedMul: 0.5,
                  speedMul: 2.5, strikeTime: 0.7, strikeTurnRate: 1.0,
-                 cooldown: 2.8, veerSwing: 0.9 },
+                 cooldown: 2.8, veerSwing: 0.9,
+                 patterns: { pass: 0.5, double: 0.5, feint: 0 } },
         contactDamage: 25, xp: 17, turnRate: 3.4,
         // Cruise shaping — see the `lateral` notes on `shark`.
         hunt: { preyRadius: 22, biteRange: 1.7, biteCooldown: 1.15, healPerMeal: 9, maxOverheal: 1.5, growPerMeal: 0.03, maxGrow: 1.35, wanderChange: 1.6,
-                lateral: { climbRange: 15, climbFull: 5, climbFloor: 0.14, climbEase: 1.05, weavePeriod: 4.6, weaveLead: 6, weaveAmp: 2.8, weaveBody: 0.13, wanderPitch: 0.16 } },
+                lateral: { weavePeriod: 4.6, weaveLead: 6, weaveAmp: 2.8, weaveBody: 0.13, wanderPitch: 0.16 } },
         weight: 0.13, weightPerDifficulty: 0.04, maxWeight: 0.45, maxConcurrent: 4, minDifficulty: 1,
         minPlayerLevel: 3,
         spawnGroup: 'apex shark',
@@ -13225,6 +13275,7 @@ export const CONFIG = {
       megalodon: {
         separates: true,
         asset: 'enemyMegalodon', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 1, bank: 0.12, pitchRate: 2.6 },
         radius: 2.2, hp: 220, hpPerDifficulty: 20, speed: 5.5, speedVariance: 0.8,
         contactDamage: 42, xp: 40, turnRate: 1.6,
         // The pass — see the long note on `shark.lunge`. Everything here is the
@@ -13239,11 +13290,12 @@ export const CONFIG = {
         // 5.5 x 3.0 x 0.9 = 14.9 units of run against a 14-unit gap.
         lunge: { range: 14, minRange: 7, windup: 0.7, windSpeedMul: 0.4,
                  speedMul: 3.0, strikeTime: 0.9, strikeTurnRate: 0.4,
-                 cooldown: 4.5, veerSwing: 0.7 },
+                 cooldown: 4.5, veerSwing: 0.7,
+                 patterns: { pass: 0.7, double: 0, feint: 0.3 } },
         contactDamage: 42, xp: 40, turnRate: 1.6,
         // Cruise shaping — see the `lateral` notes on `shark`.
         hunt: { preyRadius: 24, biteRange: 2.6, biteCooldown: 1.4, healPerMeal: 16, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.4,
-                lateral: { climbRange: 18, climbFull: 7, climbFloor: 0.1, climbEase: 0.6, weavePeriod: 8, weaveLead: 10, weaveAmp: 3.4, weaveBody: 0.08, wanderPitch: 0.11 } },
+                lateral: { weavePeriod: 8, weaveLead: 10, weaveAmp: 3.4, weaveBody: 0.08, wanderPitch: 0.11 } },
         weight: 0.05, weightPerDifficulty: 0.015, maxWeight: 0.18, maxConcurrent: 2, minDifficulty: 3,
         // THREE families, and `leviathan` is the one that binds — see CONFIG
         // .spawn.groupMaxAlive. It holds this and mightyMeg between them,
@@ -13255,6 +13307,7 @@ export const CONFIG = {
       mightyMeg: {
         separates: true,
         asset: 'enemyMightyMeg', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 0.95, bank: 0.12, pitchRate: 2.6 },
         radius: 2.0, hp: 190, hpPerDifficulty: 18, speed: 6, speedVariance: 0.9,
         contactDamage: 38, xp: 36, turnRate: 1.8,
         // The pass — the megalodon's, a shade quicker to wind up and a shade
@@ -13263,11 +13316,12 @@ export const CONFIG = {
         // 6 x 2.9 x 0.85 = 14.8 units of run against a 14-unit gap.
         lunge: { range: 14, minRange: 7, windup: 0.65, windSpeedMul: 0.4,
                  speedMul: 2.9, strikeTime: 0.85, strikeTurnRate: 0.45,
-                 cooldown: 4.2, veerSwing: 0.7 },
+                 cooldown: 4.2, veerSwing: 0.7,
+                 patterns: { pass: 0.6, double: 0.4, feint: 0 } },
         contactDamage: 38, xp: 36, turnRate: 1.8,
         // Cruise shaping — see the `lateral` notes on `shark`.
         hunt: { preyRadius: 22, biteRange: 2.4, biteCooldown: 1.3, healPerMeal: 15, maxOverheal: 1.4, growPerMeal: 0.02, maxGrow: 1.25, wanderChange: 2.2,
-                lateral: { climbRange: 17, climbFull: 6.5, climbFloor: 0.1, climbEase: 0.65, weavePeriod: 7.4, weaveLead: 9, weaveAmp: 3.2, weaveBody: 0.08, wanderPitch: 0.12 } },
+                lateral: { weavePeriod: 7.4, weaveLead: 9, weaveAmp: 3.2, weaveBody: 0.08, wanderPitch: 0.12 } },
         weight: 0.05, weightPerDifficulty: 0.015, maxWeight: 0.18, maxConcurrent: 2, minDifficulty: 2.6,
         // `leviathan` again — see megalodon, whose allowance this shares.
         spawnGroup: 'apex shark leviathan',
@@ -13297,6 +13351,7 @@ export const CONFIG = {
       bossShark: {
         separates: true,
         asset: 'enemyMegalodon', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 1.1, bank: 0.12, pitchRate: 2.4 },
         // THE HITBOX IS THE MESH. `radius` above still describes the animal
         // for everything that asks how big it is — spacing, knockback, the
         // crowd — but what you can shoot and what can touch you is fitted to
@@ -13330,7 +13385,8 @@ export const CONFIG = {
         // moving sideways works.
         lunge: { range: 20, minRange: 9, windup: 0.85, windSpeedMul: 0.35,
                  speedMul: 3.4, strikeTime: 1.1, strikeTurnRate: 0.35,
-                 cooldown: 5.0, veerSwing: 0.7 },
+                 cooldown: 5.0, veerSwing: 0.7,
+                 patterns: { pass: 0.4, double: 0.3, feint: 0.3 } },
         grab: true,        radius: 2.2, hp: 2400, hpPerDifficulty: 210, speed: 5.2,
         contactDamage: 44, xp: 120, turnRate: 1.4,
         // Slower to turn and wider-ranging than the megalodon it is built from:
@@ -13344,7 +13400,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.55, weavePeriod: 9, weaveLead: 11, weaveAmp: 3.6, weaveBody: 0.07, wanderPitch: 0.1, cruise: false } },
+                lateral: { weavePeriod: 9, weaveLead: 11, weaveAmp: 3.6, weaveBody: 0.07, wanderPitch: 0.1, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         spawnGroup: 'apex shark',
     },
@@ -13525,6 +13581,7 @@ export const CONFIG = {
       bossOrca: {
         separates: true,
         assets: ['enemyOrcaBull', 'enemyOrcaCow'], behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 0.9, bank: 0.16, pitchRate: 2.8 },
         // See bossShark. Worth knowing about this body specifically: its REST
         // pose is curled nearly into a C — a bounding box of 1.07 : 1, almost
         // square — and its swim clip straightens it to 2.27 : 1. A hitbox
@@ -13555,7 +13612,8 @@ export const CONFIG = {
         // 7 x 3.0 x 1.0 = 21 units of run against a 20-unit gap.
         lunge: { range: 20, minRange: 8, windup: 0.7, windSpeedMul: 0.4,
                  speedMul: 3.0, strikeTime: 1.0, strikeTurnRate: 0.55,
-                 cooldown: 4.4, veerSwing: 0.8 },
+                 cooldown: 4.4, veerSwing: 0.8,
+                 patterns: { pass: 0.3, double: 0.5, feint: 0.2 } },
         grab: true,        radius: 1.8, hp: 2100, hpPerDifficulty: 185, speed: 7,
         contactDamage: 40, xp: 120, turnRate: 2.4,
         // Tighter and busier than the shark's cruise: a shorter weave period
@@ -13568,7 +13626,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.7, weavePeriod: 6.5, weaveLead: 9, weaveAmp: 2.8, weaveBody: 0.09, wanderPitch: 0.13, cruise: false } },
+                lateral: { weavePeriod: 6.5, weaveLead: 9, weaveAmp: 2.8, weaveBody: 0.09, wanderPitch: 0.13, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex` and NOT `shark` — it holds an apex slot for the fight like
         // any other big body, but it is not one of the sharks and must not eat
@@ -13609,6 +13667,7 @@ export const CONFIG = {
       bossHammerhead: {
         separates: true,
         asset: 'enemyBossHammerhead', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 0.85, bank: 0.2, pitchRate: 2.8 },
         // The pass — see `bossShark.lunge`. The wildlife hammerhead's shape
         // scaled up: the shortest tell and the highest mid-run lean of the four
         // chasing bosses, because this is the one built to punish circling.
@@ -13621,7 +13680,8 @@ export const CONFIG = {
         // opposite verb. It throws; the other three hold.
         lunge: { range: 18, minRange: 8, windup: 0.6, windSpeedMul: 0.4,
                  speedMul: 3.0, strikeTime: 0.95, strikeTurnRate: 0.7,
-                 cooldown: 4.0, veerSwing: 0.85 },
+                 cooldown: 4.0, veerSwing: 0.85,
+                 patterns: { pass: 0.4, double: 0.4, feint: 0.2 } },
         // Same call as the shark and the kraken: this body is long and thin,
         // and a circle round it is either too fat or too short.
         hitShape: 'bones',
@@ -13661,7 +13721,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { climbRange: 20, climbFull: 8, climbFloor: 0.1, climbEase: 0.75, weavePeriod: 5.5, weaveLead: 8, weaveAmp: 2.4, weaveBody: 0.1, wanderPitch: 0.14, cruise: false } },
+                lateral: { weavePeriod: 5.5, weaveLead: 8, weaveAmp: 2.4, weaveBody: 0.1, wanderPitch: 0.14, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex shark` — unlike the orca and the mosasaur, this one genuinely
         // is a shark and belongs under the shark family's tighter ceiling.
@@ -13786,6 +13846,7 @@ export const CONFIG = {
       bossMosasaur: {
         separates: true,
         asset: 'enemyMosasaur', behavior: 'hunt', faceMotion: true,
+        comeAbout: { time: 1.2, bank: 0.1, pitchRate: 2.2 },
         hitShape: 'bones',
         // ITS WEAK SPOT IS THE TIP OF ITS TAIL, and it is the same one every
         // time. Every other boss rolls a place on its outline each arrival;
@@ -13830,7 +13891,8 @@ export const CONFIG = {
         // of the run now, and `grab` is what the pay-off can become.
         lunge: { range: 20, minRange: 9, windup: 0.9, windSpeedMul: 0.35,
                  speedMul: 3.4, strikeTime: 1.15, strikeTurnRate: 0.32,
-                 cooldown: 5.2, veerSwing: 0.7 },
+                 cooldown: 5.2, veerSwing: 0.7,
+                 patterns: { pass: 0.4, double: 0.2, feint: 0.4 } },
         grab: true,        radius: 2, hp: 1600, hpPerDifficulty: 205, speed: 5.4,
         contactDamage: 50, xp: 135, turnRate: 1.15,
         // The widest, laziest cruise in the roster: a long weave period and a
@@ -13844,7 +13906,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { climbRange: 22, climbFull: 9, climbFloor: 0.1, climbEase: 0.5, weavePeriod: 11, weaveLead: 13, weaveAmp: 4.2, weaveBody: 0.06, wanderPitch: 0.09, cruise: false } },
+                lateral: { weavePeriod: 11, weaveLead: 13, weaveAmp: 4.2, weaveBody: 0.06, wanderPitch: 0.09, cruise: false } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex` and not `apex shark` — it is an apex body holding an apex slot,
         // but a mosasaur is a reptile and must not eat the shark family's much
@@ -15217,6 +15279,18 @@ export const CONFIG = {
         count: 110, speed: [5, 34], size: [0.14, 0.5], life: [0.5, 1.3],
         colors: [0xff4d6d, 0xff7a3d, 0xffb347, 0xffffff], cone: 0, drag: 1.8,
         gravity: [0, -1.2], inherit: 0.15, glow: 3.5,
+    },
+      // A PICKUP DETONATED BY A DASH (CONFIG.strike.pickupBlast). The palette
+      // here is a placeholder: every firing passes the pickup's own tint as
+      // `color`, so a bubble goes off blue-white, the coral goes off coral and
+      // the level blob in whatever it was wearing. Bigger and slower-dying than
+      // `bigExplosion` on purpose — it is the strike's heaviest hit and has to
+      // read across the whole ring it clears. No gravity: it is a shockwave in
+      // water, not debris falling out of a fireball.
+      pickupBlast: {
+        count: 120, speed: [8, 40], size: [0.18, 0.6], life: [0.55, 1.3],
+        colors: [0xffffff, 0xdff6ff], cone: 0, drag: 2.0,
+        gravity: [0, 0], inherit: 0.1, glow: 3.4,
     },
       // THE GOO. Fired alongside `explosion` on a kill, not instead of it: the
       // spray is the event and this is what the event leaves in the water.
@@ -16977,6 +17051,16 @@ export const CONFIG = {
       // its teeth in YOU" meant nothing at all. Ambient feeding moved to
       // `preyEaten` below; this is fired from the player snap in main.js.
       bite:      { emit: 'bite',        shake: 0.10, hitstop: 0,     glow: 0.35, ripple: { strength: 1.6, radius: 7 },   sfx: 'bite',     haptic: [14] },
+      // THE LUNGE TELL, fired by systems/lungeTell.js on the stage edges of a
+      // shark's committed pass: `wind` when the gather starts, `strike` on
+      // every launch. Two pairs, because a wildlife shark winding up two
+      // screens away must not move the camera and a boss committing should.
+      // No sound on any of the four yet — the sfx bank is Ethan's, and a
+      // wind-up growl and a launch are the two sounds this system is missing.
+      lungeWind:       { emit: null, shake: 0,    hitstop: 0, glow: 0,    ripple: { strength: 1.2, radius: 6 },  sfx: null, haptic: null },
+      lungeStrike:     { emit: null, shake: 0,    hitstop: 0, glow: 0,    ripple: { strength: 2.0, radius: 8 },  sfx: null, haptic: null },
+      bossLungeWind:   { emit: null, shake: 0.05, hitstop: 0, glow: 0.2,  ripple: { strength: 2.0, radius: 11 }, sfx: null, haptic: [10] },
+      bossLungeStrike: { emit: null, shake: 0.18, hitstop: 0, glow: 0.35, ripple: { strength: 3.2, radius: 14 }, sfx: null, haptic: [{ duration: 40, magnitude: 0.6 }] },
       // A predator taking a fish, somewhere that is not you. SILENT and with no
       // shake and no haptic, on purpose: it happens constantly and none of it is
       // addressed to the player. What it keeps is everything you can SEE — the
@@ -17778,6 +17862,20 @@ export const CONFIG = {
       // same bang on itself. `scale` rides banked power at the call site.
       strikeBurst: { emit: 'explosion', shake: 0.12, hitstop: 0, glow: 0.55, ripple: { strength: 2.2, radius: 9 },
                      sfx: 'pearlBurst', haptic: [{ duration: 22, magnitude: 0.5 }], sfxMinGap: 0.06 },
+      // A PICKUP GOING OFF UNDER A DASH — see CONFIG.strike.pickupBlast. Bigger
+      // than the release pop on every channel, because it IS bigger: this is
+      // the strike's heaviest hit and the one the player had to aim for.
+      // `color` is passed by the caller (the orb's own tint) so the blast is
+      // recognisably the thing that was just swallowed.
+      // The colour and the size of the burst both come from the call site
+      // (pickupStruck in main.js): the tint is the pickup that went off, and
+      // `sizeMul`/`gooSizeMul` ride the banked power so a full-charge blast
+      // is visibly bigger than a flick. The goo is the same pickup splat every
+      // swallow makes, blown up — so the blast is recognisably THAT pickup,
+      // in its colour, going off rather than being eaten. A flash the size of
+      // the actual damage ring is fired beside this, see CONFIG.strike.pickupBlast.fx.
+      pickupBlast: { emit: 'pickupBlast', goo: 'pickupGoo', shake: 0.24, hitstop: 0.05, glow: 1.1, ripple: { strength: 3.6, radius: 14 },
+                     sfx: 'pearlBurst', haptic: [{ duration: 40, magnitude: 0.85 }], sfxMinGap: 0.06 },
       // THE RAM. A dash connecting with a body — which is now a shove rather
       // than a wound, and so needed a sound of its own: the hit feedback it
       // used to borrow was scaled by damage, and a strike that deals five
@@ -19021,7 +19119,7 @@ export const CONFIG = {
         // extending, the ram, and the burst where the button came up. The
         // charge's own tremble is a separate channel (addSustainedShake) and
         // is not gated by this list.
-        'strike', 'strikeChain', 'strikeRam', 'strikeBurst',
+        'strike', 'strikeChain', 'strikeRam', 'strikeBurst', 'pickupBlast',
         // And the fifth, which is a ram that found what it was aimed at. On
         // both guest lists — this one and `hitstopOnly` — and the only event in
         // the game that is on both.
@@ -19113,6 +19211,21 @@ export const CONFIG = {
       // fully saturated burst and the dark half of the roster stops reading as
       // dark at all — the point is a floor, not a normalise.
       deathTintMinPeak: 0.55,
+
+      // HOW MUCH GOO A BODY LEAVES, by the size of the body. `killGoo` is
+      // authored for a fish about `pivot` units across (e.radius — the spawned
+      // hitbox, which carries the asset's Size and the run's growth, so it is
+      // the body the player saw). A body bigger than that scales the lobes AND
+      // how far they are thrown by radius / pivot, together, which is the only
+      // way a goo mass gets bigger without changing shape — see the note on
+      // fx.goo.groups.gore. Smaller bodies are left at 1, never shrunk: a
+      // minnow's splat is already the smallest thing the pass can fuse.
+      //
+      // Before this, `scale` on the kill event was the only size term, and it
+      // reaches COUNT alone: a shark left 1.9x as many lobes of exactly a
+      // trout's size, which is a denser puddle, not a bigger one. `max` caps
+      // the megalodon; a boss's body is handled by systems/bossBoom.js anyway.
+      killGooBody: { pivot: 0.8, max: 4 },
 
       // How a number of damage becomes a hit you can feel. Read only by
       // systems/playerDamageFx.js — the long version of why any of this is
@@ -19529,6 +19642,22 @@ export const CONFIG = {
         // lifted onto the bed in slow motion instead of popping up a unit on
         // its first frame.
         floorGive: 12,
+        // THE SAND HOLDS THE LIMBS TOO. `sag` above is fed to the loose chains
+        // every frame for as long as the body is limp, and a chain has no idea
+        // where the seabed is: once the body was lying on the sand the
+        // flippers and the head hung straight through it — and because the
+        // body rests its LOWEST VERTEX on the line, the sand then stood the
+        // corpse up on its own dangling limbs, a beat after the bouncing
+        // stopped. So the loose chains get a floor of their own (see the floor
+        // note in systems/boneSpring.js): no bone tip may pass below the sand
+        // line, less `limbSink` — the bone runs down the middle of a limb and
+        // the flesh around it beds into the silt, so the tip sits a little
+        // under the line the flank rests on. `limbFriction` is how fast a limb
+        // lying on the sand stops sliding, e-folds per second of its velocity
+        // along the plane; 0 lets it skate.
+        limbFloor: true,
+        limbSink: 0.15,
+        limbFriction: 6,
       },
 
       // --- THE TURN ------------------------------------------------------------
@@ -26332,6 +26461,84 @@ export const CONFIG = {
   // `isBoss` is excluded outright; the dolphin and the orca declare no lateral
   // block and are untouched, as they are by the rest of the cruise shaping.
   // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // A SHARK SWIMS LEFT AND RIGHT. Shared bounds for every creature declaring
+  // `hunt.lateral` (the six apex sharks and the four chasing bosses); a species
+  // may override any key on its own `lateral` block. See shapeSwim and the
+  // come-about note in steerTo, entities/enemies.js.
+  //
+  // The cruise used to EARN vertical authority by closing in, and "closed in"
+  // is most of a fight, so the close fight was a body going up and down around
+  // the seal, and every reversal was an arc through pointing straight up. Now
+  // the cruise is bounded to `cruisePitch` at every range, and a reversal is a
+  // come-about — the heading mirrors in one frame and the body yaws through
+  // the camera (systems/fishTurn.js). The only vertical movement left is the
+  // lunge, which is the point: the lunge is the danger, and everything else a
+  // shark does is a pass.
+  //
+  // behaviour.csv owns these; the table is what makes them authoritative
+  // against a saved tuning snapshot.
+  // -------------------------------------------------------------------------
+  lateralCruise: {
+    cruisePitch: 0.42,   // rad off horizontal the cruise may swim at (~24°)
+    divePitch: 0.6,      // ...on a deliberate act on fixed food (~34°)
+    flipAngle: 2.0,      // rad of wanted turn past which it comes about instead
+    flipSpeedMul: 0.5,   // swim speed through the come-about
+    flipHold: 0.8,       // seconds after a come-about before it may do another
+  },
+
+  // -------------------------------------------------------------------------
+  // THE LUNGE IS THE DANGER. Shared rules for every def carrying a `lunge`
+  // block that also cruises laterally; the per-species numbers (range, wind-up,
+  // speed, cooldown) stay on the def and in behaviour.csv. See lungeChase,
+  // rollLungePlan and lungeLineOpen in entities/enemies.js.
+  //
+  //   maxPitch      the line to the seal must be within this of horizontal —
+  //                 no lunging straight up at a seal hovering overhead; get to
+  //                 its depth first, on passes.
+  //   commitCone    ...and within this of the current heading (~100°): wide
+  //                 enough that a boss holding the crowd ring side-on to you
+  //                 can still commit — the wind-up IS the turn onto the line —
+  //                 and narrow enough that a seal behind it is one it comes
+  //                 back for rather than one it spins round at.
+  //   standoffMul   a lunging boss holds the crowd ring outside minRange x
+  //                 this, so it can always open the gap it needs to commit.
+  //   cooldownJitter  fraction of the cooldown ADDED at random, never taken —
+  //                 the tuned cooldown is a floor the player can rely on.
+  //   veerTime      seconds a hunter carries level out of a run before the
+  //                 hunt takes the body back — the pass passing.
+  //   strikeBiteMul what the bite pays when the jaws close mid-run, as a
+  //                 multiple of biteDamage (main.js onPlayerBite).
+  //   reaimTime / secondStrikeMul / jabTime / jabSpeedMul — the shapes of the
+  //                 `double` and `feint` patterns; weights per species on
+  //                 `lunge.patterns`.
+  // -------------------------------------------------------------------------
+  lungeRules: {
+    maxPitch: 1.0,
+    commitCone: 1.75,
+    standoffMul: 1.2,
+    cooldownJitter: 0.35,
+    veerTime: 0.9,
+    strikeBiteMul: 2,
+    reaimTime: 0.45,
+    secondStrikeMul: 0.7,
+    jabTime: 0.3,
+    jabSpeedMul: 0.55,
+  },
+
+  // The tell drawn on a lunging body — see systems/lungeTell.js. Look only;
+  // switching it off changes nothing about the lunge.
+  lungeTell: {
+    enabled: true,
+    type: 'kinetic',      // CONFIG.fx.attackTypes dialect the ring speaks
+    ringScale: 1.7,       // ring radius as a multiple of a wildlife body's
+    bossRingScale: 1.35,  // ...and of a boss's, which is already big
+    thickness: 0.09,
+    glow: 2.2,
+    gapeWind: 0.75,       // how far the jaw opens by the end of the wind-up
+    gapeStrike: 1,        // ...and holds through the run
+  },
+
   cruiseHunt: {
     enabled: true,
     // Radians/sec of heading correction a cruising shark may spend on a target.
@@ -34671,7 +34878,15 @@ export const CONFIG = {
   levelUpSeal: {
     enabled: true,
     height: 0.34,     // bust height, as a fraction of the viewport height
-    gap: 28,          // px between the bottom of the card row and the crown
+    gap: 6,           // px between the lowest hexagon's bottom point and the crown
+    // THE IDLE BOB — treading water under the cards. Amplitude and sway are
+    // fractions of the bust's height; the cant is radians. See the note at
+    // "the idle bob" in systems/levelUpSeal.js for why this is procedural
+    // rather than the clip's own float.
+    bobAmp: 0.035,
+    bobPeriod: 2.8,
+    bobSway: 0.012,
+    bobTilt: 0.03,
     // Never less of the bust than this on a short screen. When the cards run
     // to the bottom, the seal comes up BEHIND them (it draws under the stage)
     // rather than staying off screen — a phone in portrait still gets a head.
@@ -34709,8 +34924,59 @@ export const CONFIG = {
     //   both / none
     // `finIdle` is what the OTHER flipper(s) keep of the rig — 0 hands them to
     // the clip, 1 aims them too (which is `both`).
-    fin: 'near',
+    // FREE, NOT PINNED. On, the seal never stands: it swims up to the row
+    // and then does what levelUpSealMotion.json says — one authored loop per
+    // hover state, crossfaded (systems/levelUpSealMotion.js), written in the
+    // level-up look page's Seal motion panel. Off is the bust: pinned at the
+    // waist on the crown line, pointing by `fin` below.
+    free: true,
+    // The BODY'S LENGTH on screen while free, as a fraction of the viewport
+    // height — the swimmer's size, and the unit a loop's y is measured in.
+    // (`height` above is the bust's, for the pinned mode.)
+    freeHeight: 0.28,
+    motion: {
+      // The per-second ease on the state weights — how fast a hover fades
+      // its loop in and an unhover fades it back out. 4 is about half a
+      // second to settle; there is no snap at any value, only a speed.
+      blendRate: 4,
+      // How fast the authored motion takes over once the seal has arrived
+      // under the row, and lets go on the pick — per second.
+      takeRate: 3,
+    },
+    // THE PULL — hovered, the seal SWIMS toward the card, on the run's own
+    // numbers (CONFIG.player thrust, friction, maxSpeed, turnLerp), and swims
+    // back to its loop when the hover ends. On top of the authored loop, not
+    // instead of it: the loop's path, look and flipper targets stand.
+    pull: {
+      enabled: true,
+      weight: 1,      // how much of the swim's displacement reaches the body
+      turnWeight: 0,  // ...and of its heading — 0: it floats, it does not turn after its velocity
+      speed: 1,       // scale on the run's numbers, if the screen wants a slower animal
+      standoff: 0.9,  // body lengths it holds off the card's centre
+      arrive: 0.45,   // body lengths over which it eases to a stop
+    },
+    fin: 'option',
     finIdle: 0,
+    // ...and for `option`, which flipper each card in the hand gets, in the
+    // animal's OWN sides: facing the viewer, its right flipper is on the
+    // viewer's left, so the first card is pointed at with the right, the
+    // middle with both, the last with the left. A card past the end of this
+    // list falls back to `near`.
+    optionFins: ['right', 'both', 'left'],
+    // THE FOLLOW — the body coming round after the cursor while a card is
+    // pointed at, as the run's body comes round after the aim. `followTurn`
+    // is the yaw about the spine at the far edge of the screen (radians),
+    // `followLean` the cant into the card at the same edge, and `followLerp`
+    // the per-second ease on both — half the run's turn rate, on purpose:
+    // this is a seal looking round, not steering. Folded into the bust pose,
+    // so the plant blends them out with the pin on the way off.
+    followTurn: 0.25,
+    followLean: 0.08,
+    followLerp: 3,
+    // How far out of the screen the head looks while a card is pointed at,
+    // 0..1 — the face and the eyes on the viewer while a flipper points.
+    // `faceOut` above is the same thing while nothing is pointed at.
+    pointFaceOut: 1,
     // THE EXIT SPIN — the barrel roll a full-power strike buys (CONFIG.strike.
     // roll), about the animal's own spine, over the exit. `spinTurns` whole
     // turns in `spinTime` of the exit (a fraction of outTime, from its start),
@@ -34721,6 +34987,40 @@ export const CONFIG = {
     spinEase: 'inOutCubic',
     outlinePx: 2,     // the rim, in screen pixels — the bust's outlinePx is the same idea
     inkPx: 1,
+  },
+
+  // THE SEAL COMING BACK — see systems/levelUpGhost.js. Once the comb has
+  // drained after a pick, a translucent copy of the run's seal swims in from
+  // the bottom of the screen, follows the last stretch the player swam before
+  // the level, and lands bone-for-bone in the pose the real seal has been
+  // holding under the cards. The run goes live on the frame it lands.
+  //
+  // IT HAS NO DURATION OF ITS OWN. The swim is exactly as long as the clock's
+  // ramp back to full speed (levelUp.restoreTime above) — the music and the
+  // water come back up underneath it — so retuning the ramp retunes the swim.
+  // Everything here is world units and fractions of that ramp.
+  levelUpGhost: {
+    enabled: true,
+    alpha: 0.45,       // how solid it is at full strength
+    fadeIn: 0.15,      // fraction of the swim spent coming in
+    fadeOut: 0.25,     // ...and thinning out as it merges
+    startBelow: 4,     // world units below the bottom of the screen it starts from
+    // How much of the entry sits under the PLAYER rather than under the middle
+    // of the screen, where the menu seal left from: 1 is straight below the
+    // seal, 0 is the centre line.
+    entryX: 0.8,
+    trailSeconds: 0.6, // how much of the run's path before the level it retraces
+    trailPoints: 8,    // ...thinned to this many points
+    minGap: 0.15,      // world units — closer samples than this are one point
+    ease: 'outCubic',  // the clock along the path: decelerating into the pose
+    // Where along the swim (0..1) the nose starts turning onto the held
+    // heading, and where the bones start blending into the held pose.
+    headingBlendAt: 0.6,
+    poseBlendAt: 0.7,
+    // The rim, in world units — the player's own thickness by default
+    // (CONFIG.playerOutline), read live.
+    outline: null,
+    ink: null,
   },
 
   // ---------------------------------------------------------------------------
@@ -34852,6 +35152,26 @@ export const CONFIG = {
       softness: 0.18,
       boilHz: 12,
       drift: 40,
+    },
+
+    // THE FIRST NAME, ARRIVING. A new player's pill does not ask for a name —
+    // there is nothing to type into — it flips the adjective and the nickname
+    // on two separate reels out of sealNames.csv, braking, the adjective
+    // settling first, and lands on the name they start as (see
+    // ui/nameScramble.js). `ticks` is how many times the nickname flips before
+    // it lands, `time` the whole run, `slowdown` how many times longer a
+    // reel's last flip holds than its first, `adjectiveStop` where in the run
+    // the front half settles. The landing flip gets the nameSwap dissolve; the
+    // rest are hard cuts. `always` runs the reels for a returning player too,
+    // landing on their own seal.
+    nameScramble: {
+      enabled: true,
+      ticks: 12,
+      time: 1.5,
+      slowdown: 10,
+      delay: 0,
+      adjectiveStop: 0.6,
+      always: false,
     },
   },
 
@@ -40215,8 +40535,29 @@ export const TUNER_SCHEMA = [
     section: 'Gameplay',
     items: [
       { path: 'levelUpSeal.enabled', type: 'bool', label: 'the seal swims up to watch you pick' },
+      // THE SWIMMER — free of the pin, on its authored loops (the Seal motion
+      // panel in npm run looks:levelup writes those). Off, it is the bust below.
+      { path: 'levelUpSeal.free', type: 'bool', label: 'swims free (off: pinned bust)' },
+      { path: 'levelUpSeal.freeHeight', min: 0.1, max: 0.6, step: 0.01, label: 'free: body length (of the screen)' },
+      { path: 'levelUpSeal.motion.blendRate', min: 0.5, max: 12, step: 0.1, label: 'free: hover blends loops at (per second)' },
+      { path: 'levelUpSeal.motion.takeRate', min: 0.5, max: 12, step: 0.1, label: 'free: loop takes the body at (per second)' },
+      { path: 'levelUpSeal.pull.enabled', type: 'bool', label: 'pull: swims toward the hovered card' },
+      { path: 'levelUpSeal.pull.weight', min: 0, max: 1, step: 0.02, label: 'pull: amount' },
+      { path: 'levelUpSeal.pull.speed', min: 0.1, max: 4, step: 0.05, label: 'pull: speed (x the run\'s)' },
+      { path: 'levelUpSeal.pull.standoff', min: 0, max: 2, step: 0.02, label: 'pull: holds off the card (body lengths)' },
+      { path: 'levelUpSeal.pull.arrive', min: 0.05, max: 2, step: 0.02, label: 'pull: eases to a stop over (body lengths)' },
+      { path: 'levelUpSeal.pull.turnWeight', min: 0, max: 1, step: 0.02, label: 'pull: turns after its swim (0: floats)' },
+      { path: 'levelUpSeal.followTurn', min: 0, max: 0.8, step: 0.01, label: 'cursor: body yaws toward it (rad at the edge)' },
+      { path: 'levelUpSeal.followLean', min: 0, max: 0.4, step: 0.01, label: 'cursor: body cants toward it (rad at the edge)' },
+      { path: 'levelUpSeal.followLerp', min: 0.5, max: 12, step: 0.1, label: 'cursor: body eases at (per second)' },
+      { path: 'levelUpSeal.pointFaceOut', min: 0, max: 1, step: 0.05, label: 'looks at you while a card is pointed at' },
+      // THE BUST — with `free` off.
       { path: 'levelUpSeal.height', min: 0.1, max: 0.8, step: 0.01, label: 'bust height (of the screen)' },
-      { path: 'levelUpSeal.gap', min: -120, max: 200, step: 2, label: 'crown sits this far under the cards (px)' },
+      { path: 'levelUpSeal.gap', min: -160, max: 200, step: 2, label: 'crown sits this far under the hexagons (px)' },
+      { path: 'levelUpSeal.bobAmp', min: 0, max: 0.2, step: 0.005, label: 'idle bob: height (of the bust)' },
+      { path: 'levelUpSeal.bobPeriod', min: 0.3, max: 8, step: 0.1, label: 'idle bob: period (s)' },
+      { path: 'levelUpSeal.bobSway', min: 0, max: 0.1, step: 0.002, label: 'idle bob: sideways (of the bust)' },
+      { path: 'levelUpSeal.bobTilt', min: 0, max: 0.3, step: 0.005, label: 'idle bob: cant (rad)' },
       { path: 'levelUpSeal.minVisible', min: 0, max: 1, step: 0.05, label: 'at least this much of it on a short screen' },
       { path: 'levelUpSeal.offsetX', min: -0.45, max: 0.45, step: 0.01, label: 'off centre (of the width)' },
       { path: 'levelUpSeal.lean', min: -0.5, max: 0.5, step: 0.01, label: 'cant (rad)' },
@@ -40229,7 +40570,7 @@ export const TUNER_SCHEMA = [
       { path: 'levelUpSeal.swimRig', type: 'bool', label: 'swims in and out as the run\'s seal (off: rises standing)' },
       { path: 'levelUpSeal.plantAt', min: 0, max: 1, step: 0.05, label: 'starts standing up this far through the rise' },
       { path: 'levelUpSeal.pinLerp', min: 0.5, max: 30, step: 0.5, label: 'waist plants / body stands at (per second)' },
-      { path: 'levelUpSeal.fin', type: 'choice', options: ['near', 'far', 'left', 'right', 'both', 'none'], label: 'which flipper points at the card' },
+      { path: 'levelUpSeal.fin', type: 'choice', options: ['option', 'near', 'far', 'left', 'right', 'both', 'none'], label: 'bust: which flipper points (option: right / both / left by card)' },
       { path: 'levelUpSeal.finIdle', min: 0, max: 1, step: 0.05, label: 'the other flipper keeps this much aim' },
       { path: 'levelUpSeal.outTime', min: 0.1, max: 3, step: 0.05, label: 'leaves over (s)' },
       { path: 'levelUpSeal.outEase', type: 'choice', options: EASINGS, label: 'leave curve' },
@@ -40239,6 +40580,21 @@ export const TUNER_SCHEMA = [
       { path: 'levelUpSeal.spinEase', type: 'choice', options: EASINGS, label: 'spin: curve' },
       { path: 'levelUpSeal.outlinePx', min: 0, max: 12, step: 0.5, label: 'rim (px)' },
       { path: 'levelUpSeal.inkPx', min: 0, max: 8, step: 0.5, label: 'ink line (px)' },
+    ],
+  },
+  {
+    group: 'Level-up: the seal comes back',
+    section: 'Gameplay',
+    items: [
+      { path: 'levelUpGhost.enabled', type: 'bool', label: 'a ghost swims the seal back into its pose after a pick' },
+      { path: 'levelUpGhost.alpha', min: 0, max: 1, step: 0.02, label: 'how solid it is' },
+      { path: 'levelUpGhost.fadeIn', min: 0.01, max: 0.6, step: 0.01, label: 'fades in over (of the swim)' },
+      { path: 'levelUpGhost.fadeOut', min: 0.01, max: 0.6, step: 0.01, label: 'thins out over (of the swim)' },
+      { path: 'levelUpGhost.startBelow', min: 0, max: 20, step: 0.5, label: 'starts this far under the screen (units)' },
+      { path: 'levelUpGhost.entryX', min: 0, max: 1, step: 0.05, label: 'enters under the seal (1) or the screen centre (0)' },
+      { path: 'levelUpGhost.trailSeconds', min: 0.1, max: 2, step: 0.05, label: 'retraces this much of the run\'s path (s)' },
+      { path: 'levelUpGhost.headingBlendAt', min: 0, max: 1, step: 0.05, label: 'nose turns onto the pose from (of the swim)' },
+      { path: 'levelUpGhost.poseBlendAt', min: 0, max: 1, step: 0.05, label: 'bones blend into the pose from (of the swim)' },
     ],
   },
   {
@@ -40288,6 +40644,13 @@ export const TUNER_SCHEMA = [
       { path: 'reveals.nameSwap.softness', min: 0, max: 1, step: 0.02, label: 'name swap: edge softness' },
       { path: 'reveals.nameSwap.boilHz', min: 0, max: 30, step: 1, label: 'name swap: boil rate (fps)' },
       { path: 'reveals.nameSwap.drift', min: 0, max: 200, step: 5, label: 'name swap: drift (px/s)' },
+      { path: 'reveals.nameScramble.enabled', type: 'bool', label: 'name reel: flip through names on arrival' },
+      { path: 'reveals.nameScramble.ticks', min: 0, max: 40, step: 1, label: 'name reel: nickname flips' },
+      { path: 'reveals.nameScramble.time', min: 0.2, max: 5, step: 0.1, label: 'name reel: lands after (s)' },
+      { path: 'reveals.nameScramble.slowdown', min: 1, max: 40, step: 1, label: 'name reel: last flip vs first (x)' },
+      { path: 'reveals.nameScramble.delay', min: 0, max: 2, step: 0.05, label: 'name reel: first name after (s)' },
+      { path: 'reveals.nameScramble.adjectiveStop', min: 0.1, max: 1, step: 0.05, label: 'name reel: adjective settles at (of the run)' },
+      { path: 'reveals.nameScramble.always', type: 'bool', label: 'name reel: returning players too' },
       { path: 'splashSky.bandDrift', min: -3, max: 3, step: 0.05, label: 'splash sky: scanline drift (rad/s)' },
       { path: 'splashSky.bandDensity', min: 0.2, max: 4, step: 0.05, label: 'splash sky: scanline density' },
       { path: 'splashSky.bandStrength', min: 0, max: 1, step: 0.02, label: 'splash sky: scanline strength' },
@@ -40643,6 +41006,10 @@ export const TUNER_SCHEMA = [
       // effectively invisible; at 1 every death burns at full saturation and
       // the dark half of the roster stops reading as dark.
       { path: 'fx.deathTintMinPeak', min: 0, max: 1, step: 0.05, label: 'death burst min brightness' },
+      // The body radius that leaves killGoo at its authored size; anything
+      // bigger scales lobes and throw together by radius / pivot, up to `max`.
+      { path: 'fx.killGooBody.pivot', min: 0.2, max: 4, step: 0.05, label: 'kill goo body pivot' },
+      { path: 'fx.killGooBody.max', min: 1, max: 8, step: 0.25, label: 'kill goo body max' },
       { path: 'feedback.kill.shake', min: 0, max: 2, step: 0.05, label: 'kill shake' },
       // A tenth the range and a fifth the step of the other shakes, because
       // this one is multiplied by a 0.35..2.0 scale before it lands and the
@@ -40959,6 +41326,9 @@ export const TUNER_SCHEMA = [
       { path: 'death.flop.sink', min: -0.5, max: 1, step: 0.02, label: 'bedded into the sand' },
       { path: 'death.flop.floorShare', min: 0, max: 0.2, step: 0.01, label: 'share of the body under the line' },
       { path: 'death.flop.floorGive', min: 1, max: 40, step: 0.5, label: 'sand push-out speed' },
+      { path: 'death.flop.limbFloor', type: 'bool', label: 'limbs stop at the sand' },
+      { path: 'death.flop.limbSink', min: -0.5, max: 1, step: 0.02, label: 'limbs bedded into the sand' },
+      { path: 'death.flop.limbFriction', min: 0, max: 30, step: 0.5, label: 'limbs stop sliding on the sand' },
       // ...and the body.
       { path: 'death.flop.spinMul', min: 0.5, max: 4, step: 0.1, label: 'tumble (x)' },
       { path: 'death.flop.rollMul', min: 0.5, max: 4, step: 0.1, label: 'barrel roll (x)' },
@@ -41854,7 +42224,12 @@ const PATH_TABLES = [
     // flinch — is deliberately left out. Adding a row is what makes a number
     // authoritative, so the ones here are only the ones being answered
     // together: how fast, how long, and how quick the lunge is against them.
-    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken', 'pace'],
+    // `lungeRules` and `lateralCruise` are here because every one of their
+    // numbers is a pacing decision read over a whole fight — how often a shark
+    // may commit, from where, how flat it swims between — and because the
+    // per-species lunge blocks they sit beside were ALREADY in every saved
+    // snapshot, so a retune in config.js could not reach them.
+    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken', 'pace', 'lungeRules', 'lateralCruise'],
     forbid: (id) => {
       if (id.startsWith('hotSpots.look.') || id.startsWith('hotSpots.chum.trail.')
         || id === 'hotSpots.chum.tint' || id === 'hotSpots.chum.flashMul'

@@ -336,6 +336,40 @@ export function strikeBurst(stats) {
 }
 
 /**
+ * A PICKUP STRUCK MID-DASH — what goes off where the orb was. See
+ * CONFIG.strike.pickupBlast for the design; this is the arithmetic, in one
+ * place, so the release in main.js and the harness measure the same thing.
+ *
+ * Reads the LIVE dash: zero unless a dash is in flight (a pickup swum into at
+ * cruising speed is just a pickup), and both axes ride `strikeState.power`
+ * the way the release burst does — damage through the charge curve, radius
+ * through its own. The damage rides the strike stat so it scales with the
+ * run; Splash Zone widens the radius and leaves the damage alone, as it does
+ * for every blast.
+ *
+ * NOT gated on the sweet spot. The release burst is a timing reward; this is
+ * an aiming reward, and a player who steered a dash into a bubble has already
+ * done the thing being rewarded.
+ *
+ * @param stats    the run's stat block
+ * @param kindMul  the pickup kind's own share (CONFIG.strike.pickupBlast.kinds)
+ * @returns {{damage: number, radius: number, knock: number}} all zero when
+ *   nothing should go off.
+ */
+export function pickupBlast(stats, kindMul = 1) {
+  const p = CONFIG.strike.pickupBlast ?? {};
+  const none = { damage: 0, radius: 0, knock: 0 };
+  if (p.enabled === false || !strikeState.active || !(kindMul > 0)) return none;
+  const damage = (stats?.strikeDamage ?? 0) * (p.damageMul ?? 0) * powerDamageMul() * kindMul;
+  const radius = (p.radius ?? 0)
+    * lerp(1, p.radiusPowerMul ?? 1, strikeState.power)
+    * (stats?.aoeMul ?? 1);
+  const knock = (p.knock ?? 0) * strikeState.power;
+  if (!(damage > 0) || !(radius > 0)) return none;
+  return { damage, radius, knock };
+}
+
+/**
  * HOW FAR A STRIKE CAN REACH, from where the seal is standing — the length of
  * the longest dash this stat block can buy, plus the body that does the hitting.
  *
@@ -2045,11 +2079,19 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks) {
       // specific last, or the accent arrives before the thing it is accenting.
       const weakRam = !!spot && strikeState.armingStrike && weak.enabled !== false;
       if (weakRam) {
+        const perfect = strikeState.perfectStrike ? (weak.perfectMul ?? 1) : 1;
         // max() rather than a replacement, so a run that HAS bought the ram a
         // contact share never loses damage by aiming well.
         dmg = Math.max(dmg, stats.strikeDamage * powerDamageMul() * mul
-          * (weak.share ?? 1)
-          * (strikeState.perfectStrike ? (weak.perfectMul ?? 1) : 1));
+          * (weak.share ?? 1) * perfect);
+        // ...and a second max() against a FRACTION OF THE BAR. The line above
+        // is flat and the bar it is aimed at is not: by level 20 the whole of
+        // it was a third of one percent of a boss. This is the half that keeps
+        // the spot worth hitting at every level — see CONFIG.strike.weakSpot.
+        // Guarded on maxHp rather than hp so a nearly-dead boss does not make
+        // the bite smaller than the flat number the player already earned.
+        const frac = weak.maxHpFrac ?? 0;
+        if (frac > 0 && e.maxHp > 0) dmg = Math.max(dmg, e.maxHp * frac * perfect);
       }
 
       // Before the subtraction, so everything downstream — the death check,

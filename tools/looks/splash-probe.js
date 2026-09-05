@@ -27,6 +27,7 @@
 import { mountRiveSplash } from '../../path/src/ui/riveSplash.js';
 import { SPLASH_BINDINGS } from '../../path/src/ui/riveContract.js';
 import { NAME_SWAP_DEFAULTS } from '../../path/src/ui/nameSwap.js';
+import { NAME_SCRAMBLE_DEFAULTS } from '../../path/src/ui/nameScramble.js';
 
 // The sky shader's knobs at the shipped values (CONFIG.splashSky). A plain
 // object rather than the config, so this page keeps the standalone property the
@@ -54,6 +55,9 @@ const handle = mountRiveSplash({
   parent: stage,
   // The dice's dissolve at its defaults, so the look can be seen here too.
   nameSwap: NAME_SWAP_DEFAULTS,
+  // The opening reel at its defaults. `always` so it runs here even with a
+  // name in storage — this page exists to look at the thing.
+  nameScramble: { ...NAME_SCRAMBLE_DEFAULTS, always: true },
   // The sky shader's knobs, through the same path the game uses — a mutable
   // object the module polls. `__skyFx` on the window is the handle for driving
   // them from the console: set a field and the sky follows within 250ms.

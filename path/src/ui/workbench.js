@@ -45,7 +45,7 @@ import { isLaser, laserReachSteps, latticeGenerations, childrenAt, latticeWorstC
 const RAIL_SECTIONS = [
   ['Your weapon', ['shoot', 'shootLaser', 'laserEyes', 'hit', 'bulletHit', 'latticeSplit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
   ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'clap', 'breach', 'surfacing', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'breathOut', 'bubblePop', 'oxygenWarn']],
-  ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'strikeRam', 'strikeMark', 'boostEmpty', 'foodChain']],
+  ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'pickupBlast', 'strikeRam', 'strikeMark', 'boostEmpty', 'foodChain']],
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'chumChunkEaten', 'chumFull', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],

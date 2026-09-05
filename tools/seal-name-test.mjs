@@ -40,8 +40,8 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  parseSealNameCsv, rollSealName, SEAL_SLOTS, SEAL_NAME_SLOTS,
-  FALLBACK_SEAL_NAME, DEFAULT_FULL_CHANCE,
+  parseSealNameCsv, rollSealName, rollSealPart, splitSealName, joinSealName,
+  SEAL_SLOTS, SEAL_NAME_SLOTS, FALLBACK_SEAL_NAME, DEFAULT_FULL_CHANCE,
 } from '../path/src/sealNameTable.js';
 import { sanitizeName, MAX_NAME_LEN } from '../path/src/systems/playerName.js';
 
@@ -254,6 +254,49 @@ section('THE SHIPPED FILE — mechanics only, never its contents');
   // several times in a row by anyone who presses it once, and a table that
   // could only answer a dozen ways would repeat itself immediately.
   check('the table can answer hundreds of ways', names.length > 200, `${names.length} distinct in 4000 rolls`);
+}
+
+// ===========================================================================
+section('THE HALVES — what the splash reel spins one at a time');
+{
+  const long = 'X'.repeat(MAX_NAME_LEN - 4);            // leaves room for a 3-letter adjective
+  const { parts } = table(
+    'a1,adjective,Fat,,,', 'a2,adjective,The One and Only,,,', 'a3,adjective,The,,,',
+    'n1,nickname,Tony,,,', 'n2,nickname,Osbourne,,,', `n3,nickname,${long},,,`,
+    'f1,full,Flip Flop,,,',
+  );
+  const adjectives = new Set();
+  const nicknames = new Set();
+  for (let i = 0; i < 400; i++) {
+    adjectives.add(rollSealPart(parts, 'adjective', {}, Math.random));
+    nicknames.add(rollSealPart(parts, 'nickname', {}, Math.random));
+  }
+  check('an adjective comes from the adjective hat', [...adjectives].every((a) => ['Fat', 'The One and Only', 'The'].includes(a)), [...adjectives].join(' / '));
+  check('a nickname comes from the nickname hat', [...nicknames].every((n) => ['Tony', 'Osbourne', long].includes(n)), [...nicknames].map((n) => n.slice(0, 8)).join(' / '));
+  check('...and both hats are actually drawn from', adjectives.size === 3 && nicknames.size === 3, `${adjectives.size} / ${nicknames.size}`);
+  const beside = new Set();
+  for (let i = 0; i < 200; i++) beside.add(rollSealPart(parts, 'adjective', { beside: long }, Math.random));
+  check('an adjective drawn beside a long nickname is one that fits', [...beside].every((a) => a === 'Fat' || a === 'The'), [...beside].join(' / '));
+  check('...and nothing fits beside a nickname that fills the field', rollSealPart(parts, 'adjective', { beside: 'Y'.repeat(MAX_NAME_LEN) }) === '');
+  check('an unknown slot is an empty half, not a throw', rollSealPart(parts, 'full') === '');
+
+  check('a built name splits into its halves', JSON.stringify(splitSealName(parts, 'Fat Tony')) === '{"adjective":"Fat","nickname":"Tony"}');
+  check('...longest adjective first', JSON.stringify(splitSealName(parts, 'The One and Only Osbourne')) === '{"adjective":"The One and Only","nickname":"Osbourne"}');
+  check('a written whole name is all nickname', JSON.stringify(splitSealName(parts, 'Flip Flop')) === '{"adjective":"","nickname":"Flip Flop"}');
+  check('a lineage is all nickname', JSON.stringify(splitSealName(parts, 'Fat Tony II')) === '{"adjective":"","nickname":"Fat Tony II"}');
+  check('a name from somewhere else is all nickname', JSON.stringify(splitSealName(parts, 'Ethan')) === '{"adjective":"","nickname":"Ethan"}');
+  check('a blank splits to nothing', JSON.stringify(splitSealName(parts, '')) === '{"adjective":"","nickname":""}');
+
+  check('halves join with a space', joinSealName('Fat', 'Tony') === 'Fat Tony');
+  check('no adjective is the nickname alone', joinSealName('', 'Tony') === 'Tony');
+  check('a pair that will not fit is the nickname alone', joinSealName('The One and Only', long) === long);
+  check('a join never exceeds the field', joinSealName('Fat', 'Z'.repeat(60)).length === MAX_NAME_LEN);
+  for (let i = 0; i < 300; i++) {
+    const name = rollSealName(parts, { fullChance: 0 }, Math.random);
+    const h = splitSealName(parts, name);
+    if (joinSealName(h.adjective, h.nickname) !== name) { check('every built name round-trips split → join', false, name); break; }
+    if (i === 299) check('every built name round-trips split → join', true);
+  }
 }
 
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');

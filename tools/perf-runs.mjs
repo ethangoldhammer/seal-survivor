@@ -167,6 +167,36 @@ for (const r of withPerf.slice(-want)) {
       + `${p.hitchGC != null ? ` · ${p.hitchGC} collection` : ''} · ${p.hitchNeither} none of those`);
     console.log(`  built this run: ${p.programsAdded} programs, ${p.texturesAdded} textures`
       + (p.heapPeakMB ? `  ·  heap peak ${p.heapPeakMB.toFixed(0)}MB, ${p.heapFreedMB.toFixed(0)}MB collected` : ''));
+    // WHOSE TEXTURES. `texturesAdded` on its own has never been able to say
+    // whether a run created three hundred textures because it is leaking or
+    // because it is a big game — noteTextures walks the scene every few
+    // seconds and groups what it finds, and this is the only place that
+    // reaches a person. It was collected and not printed until now, which is
+    // why three sessions' worth of the number sat in the record unread.
+    //
+    // READ IT AS A PAIR, in this order:
+    //   added vs peak     far apart is CHURN (made and freed); rising together
+    //                     is a LEAK (made and kept).
+    //   orphans           what the renderer holds that the scene cannot
+    //                     account for. Near zero means the roster below is the
+    //                     whole story; a large number is either a real leak or
+    //                     a binding the walk still cannot see, and the second
+    //                     of those has happened before — see the blind-spot
+    //                     block in systems/perfLog.js.
+    //
+    // Absent on runs recorded before the census existed, so guarded rather
+    // than assumed.
+    if (p.texturesReachablePeak !== undefined) {
+      const churn = p.texturesAdded - p.texturesPeak;
+      console.log(`  textures: ${p.texturesPeak} alive at peak · `
+        + `${p.texturesReachablePeak} the scene accounts for · `
+        + `${p.texturesOrphanPeak} unaccounted`
+        + `  (${churn > p.texturesPeak * 0.25 ? 'churn: made and freed' : 'made and kept'})`);
+      const groups = p.topTextures ?? [];
+      if (groups.length) {
+        console.log(`     ${groups.map((g) => `${g.source} x${g.peak}`).join(' · ')}`);
+      }
+    }
     // WHICH ONES, and it is a different list from the churn below. `rebuilt`
     // is a program being thrown away and relinked, which no warm-up can fix;
     // this is a program that was never warmed at all and linked on a frame the

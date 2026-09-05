@@ -1204,7 +1204,7 @@ const STYLES = `
 
   .sv-fan-sel, .sv-fan-sel:hover { transform: translateY(-5px) scale(1.05);
     filter: drop-shadow(0 10px 22px rgba(0,0,0,0.6)); }
-  .sv-fan-sel .sv-print-paper { outline: 2px solid #7ad7ff; outline-offset: 0; }
+  .sv-fan-sel .sv-print-frame-riv { outline: 2px solid #7ad7ff; outline-offset: 0; }
   .sv-trophy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
     justify-content: flex-end; margin-left: auto; }
   /* The two whole-run buttons read as secondary to the two that act on the
@@ -2661,8 +2661,8 @@ const STYLES = `
   .sv-touch .sv-next-row .sv-name-input, .sv-touch .sv-next-row .sv-btn { min-height: 48px; }
 `;
 
-export function initUI({ onStart, onRestart, onLevelChoice, onResume, onPauseRestart, onSplash, onMenu, onPause }) {
-  callbacks = { onStart, onRestart, onLevelChoice, onSplash, onMenu, onPause };
+export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, onResume, onPauseRestart, onSplash, onMenu, onPause }) {
+  callbacks = { onStart, onRestart, onLevelChoice, onLevelUpCleared, onSplash, onMenu, onPause };
 
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -3222,6 +3222,9 @@ export function showStartMenu() {
       // object itself, not a copy, so the tuner's sliders reach a splash that
       // is already up. See ui/nameSwap.js.
       nameSwap: CONFIG.reveals?.nameSwap,
+      // How a new player's first name arrives — a reel of them, landing on
+      // one. By reference for the same reason. See ui/nameScramble.js.
+      nameScramble: CONFIG.reveals?.nameScramble,
       // The sky shader's knobs, by reference — see CONFIG.splashSky.
       skyFx: CONFIG.splashSky,
     });
@@ -4329,6 +4332,12 @@ function revealUpgradesOut() {
     slotWatch?.disconnect();
     slotWatch = null;
     setMenuLocked(false);
+    // THE SCREEN IS CLEAR — and this is the moment the run is handed back,
+    // not the click. main.js holds the run through the exit and the drain
+    // and starts the world's ramp (and the seal's return swim) from here; see
+    // onLevelUpCleared there. Last, after the menu is hidden, so whatever it
+    // starts draws into an arena with nothing over it.
+    callbacks.onLevelUpCleared?.();
   };
   // Stays locked for the exit, so the cards on their way out can't take a
   // second click. If another level is pending, showLevelUp cancels this and
@@ -7967,7 +7976,12 @@ function showTrophy() {
     // print lifts and scales, and it has to lift OVER its neighbours.
     slot.style.zIndex = String(i + 1);
     slot.setAttribute('aria-label', shot.name ? `Kill shot: ${shot.name}` : `Kill shot ${i + 1}`);
-    slot.appendChild(buildPrintPaper(shot.url, shot, width));
+    // Null when the artboard did not load — see buildPrintPaper. The slot is
+    // still built and still selectable, because the fan is how a shot is
+    // CHOSEN for sharing and the underlying photograph exists either way; what
+    // is missing is only the paper it would have been drawn on.
+    const paper = buildPrintPaper(shot, width);
+    if (paper) slot.appendChild(paper);
     // A tap PICKS IT AND HOLDS IT UP. Picking alone was the whole gesture, and
     // on a phone it meant the answer to "is this the one?" was a print the
     // width of a thumb — so the two buttons under the fan were pressed on

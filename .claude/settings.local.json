@@ -50,7 +50,9 @@
       "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{d.trim\\(\\).split\\(\"\\\\n\"\\).forEach\\(l=>{const r=JSON.parse\\(l\\);console.log\\(r.meta?.build, r.meta?.at||r.at, \"t=\"+Math.round\\(r.time||r.duration||0\\)+\"s\", \"lvl=\"+\\(r.level||\"?\"\\)\\);}\\)}\\)')",
       "Bash(node --check /private/tmp/claude-501/-Users-ethangoldhammer-Projects-seal-survivor/f46b6819-be82-4c14-a4b9-4dd11fa83a26/scratchpad/atlas-script.mjs)",
       "Bash(python3 -m http.server 5192 --bind 127.0.0.1)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5192/atlas.html)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5192/atlas.html)",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"http.server 5192\")"
     ]
   }
 }

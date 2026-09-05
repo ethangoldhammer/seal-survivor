@@ -1,0 +1,254 @@
+{
+  "version": 1,
+  "notes": "Authored in the level-up look page (npm run looks:levelup, the Seal motion panel). x is a fraction of the viewport width, y is BODY LENGTHS below the row's crown line (0 = the centre on the line), heading and roll are radians (0 = nose up), t is seconds into the loop. A target is an anchor plus an offset in viewport fractions; `free` is an absolute point, `none` hands the limb to the clip.",
+  "states": {
+    "idle": {
+      "loop": 4,
+      "restart": false,
+      "keys": [
+        {
+          "t": 0,
+          "ease": "smoothstep",
+          "x": 0.5,
+          "y": 0.38,
+          "heading": 0,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 0.6
+          },
+          "fins": {
+            "left": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            },
+            "right": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            }
+          }
+        },
+        {
+          "t": 2,
+          "ease": "smoothstep",
+          "x": 0.5,
+          "y": 0.32,
+          "heading": 0.05,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 0.6
+          },
+          "fins": {
+            "left": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            },
+            "right": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            }
+          }
+        }
+      ]
+    },
+    "card1": {
+      "loop": 3,
+      "restart": false,
+      "keys": [
+        {
+          "t": 0,
+          "ease": "smoothstep",
+          "x": 0.47,
+          "y": 0.36,
+          "heading": 0.12,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 1
+          },
+          "fins": {
+            "left": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            },
+            "right": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            }
+          }
+        },
+        {
+          "t": 1.5,
+          "ease": "smoothstep",
+          "x": 0.375,
+          "y": 0.35,
+          "heading": 0.08,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0.0001998221039012739,
+            "out": 1
+          },
+          "fins": {
+            "left": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            },
+            "right": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            }
+          }
+        }
+      ]
+    },
+    "card2": {
+      "loop": 3,
+      "restart": false,
+      "keys": [
+        {
+          "t": 0,
+          "ease": "smoothstep",
+          "x": 0.5,
+          "y": 0.36,
+          "heading": 0,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 1
+          },
+          "fins": {
+            "left": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            },
+            "right": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            }
+          }
+        },
+        {
+          "t": 1.5,
+          "ease": "smoothstep",
+          "x": 0.5,
+          "y": 0.3,
+          "heading": 0,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 1
+          },
+          "fins": {
+            "left": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            },
+            "right": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            }
+          }
+        }
+      ]
+    },
+    "card3": {
+      "loop": 3,
+      "restart": false,
+      "keys": [
+        {
+          "t": 0,
+          "ease": "smoothstep",
+          "x": 0.675,
+          "y": 0.36,
+          "heading": -0.12,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 1
+          },
+          "fins": {
+            "left": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            },
+            "right": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            }
+          }
+        },
+        {
+          "t": 1.5,
+          "ease": "smoothstep",
+          "x": 0.53,
+          "y": 0.3,
+          "heading": -0.08,
+          "roll": 0,
+          "look": {
+            "anchor": "cursor",
+            "x": 0,
+            "y": 0,
+            "out": 1
+          },
+          "fins": {
+            "left": {
+              "anchor": "card",
+              "x": 0,
+              "y": 0,
+              "w": 1
+            },
+            "right": {
+              "anchor": "none",
+              "x": 0,
+              "y": 0,
+              "w": 0
+            }
+          }
+        }
+      ]
+    }
+  }
+}

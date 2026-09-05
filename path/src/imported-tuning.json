@@ -575,6 +575,17 @@
     "inEase": "outCubic",
     "outTime": 1.15,
     "outEase": "inOutCubic",
+    "nametag": {
+      "enabled": true,
+      "surface": 1024,
+      "height": 0.26,
+      "gap": 0.06,
+      "y": 0.62,
+      "flyTime": 0.55,
+      "flyEase": "inCubic",
+      "overshoot": 0.25,
+      "margin": 8
+    },
     "aimSpread": 0.45,
     "menu": {
       "latticeSpacing": 1,
@@ -1726,6 +1737,20 @@
       "radius": 3,
       "radiusPowerMul": 1.5,
       "knock": 0.55
+    },
+    "pickupBlast": {
+      "enabled": true,
+      "damageMul": 6,
+      "radius": 4,
+      "radiusPowerMul": 2,
+      "knock": 0.8,
+      "kinds": {
+        "strikeOrb": 1,
+        "bubbleOrb": 1,
+        "rapidFireOrb": 1,
+        "levelOrb": 1,
+        "chumChunk": 1
+      }
     },
     "contactShare": 0,
     "weakSpot": {
@@ -2977,8 +3002,6 @@
         "hangMs": 1050,
         "parkMs": 520,
         "writeOnMs": 800,
-        "developMs": 620,
-        "developDelayMs": 120,
         "widthVw": 34,
         "minWidth": 200,
         "maxWidth": 520,
@@ -3003,11 +3026,6 @@
           "showMs": 520,
           "showEase": "outCubic"
         },
-        "paper": "#eef2f3",
-        "ink": "#232b33",
-        "emulsion": "#e7ebec",
-        "paperPad": 0.038,
-        "chinSize": 0.045,
         "ejectTilt": 2.5,
         "ejectScale": 0.94,
         "tilt": -2
@@ -4929,13 +4947,13 @@
       "glow": 2.8
     },
     "explosion": {
-      "count": 55,
+      "count": 82,
       "speed": [
         1.5,
         16.5
       ],
       "size": [
-        0.1,
+        0.91,
         0.34
       ],
       "life": [
@@ -4943,13 +4961,13 @@
         0.9
       ],
       "colors": [
-        16731501,
-        16757575,
+        15597823,
+        16775495,
         16769126,
-        16777215
+        5106431
       ],
       "cone": 0,
-      "drag": 2.2,
+      "drag": 3.1,
       "gravity": [
         0,
         -1.4
@@ -9110,6 +9128,25 @@
       ],
       "sfxMinGap": 0.06
     },
+    "pickupBlast": {
+      "emit": "explosion",
+      "shake": 0.44,
+      "hitstop": 0,
+      "glow": 0.8,
+      "ripple": {
+        "strength": 3,
+        "radius": 16
+      },
+      "sfx": "pickupBlast",
+      "haptic": [
+        {
+          "duration": 36,
+          "magnitude": 0.8
+        }
+      ],
+      "sfxMinGap": 0.06,
+      "goo": "pickup"
+    },
     "strikeRam": {
       "emit": "bite",
       "shake": 0.16,
@@ -10451,6 +10488,10 @@
     "hitFlash": 0.12,
     "hitPop": 0.55,
     "deathTintMinPeak": 0.55,
+    "killGooBody": {
+      "pivot": 0.8,
+      "max": 4
+    },
     "playerDamage": {
       "minGap": 0.16,
       "minFraction": 0.012,
@@ -10547,7 +10588,10 @@
       "settleMax": 6,
       "sink": 0.12,
       "floorShare": 0.04,
-      "floorGive": 12
+      "floorGive": 12,
+      "limbFloor": true,
+      "limbSink": 0.15,
+      "limbFriction": 6
     },
     "flip": {
       "enabled": true,
@@ -11061,6 +11105,9 @@
     "backCone": 1.7,
     "cameraBias": 0.86,
     "peekKeepY": 0.36,
+    "faceOutDepth": 4,
+    "faceOutBend": 2.2,
+    "faceOutLean": 0.7,
     "glanceWeight": 0.46,
     "craneAngle": 0.7,
     "craneLerp": 5,
@@ -13123,10 +13170,10 @@
         2600
       ],
       "decay": 0.18,
-      "gain": 9.440608762859233,
+      "gain": 1.8836490894898006,
       "pitchVary": 0.16,
       "srcs": [
-        "/sfx/HG_FLY_Beach_003.mp3"
+        "/sfx/FF_AS_fish_splash_low_drop.mp3"
       ]
     },
     "octoGrab": {
@@ -13534,6 +13581,21 @@
       "filterVary": 0.22,
       "srcs": [
         "/sfx/EliDadSeal_51.mp3"
+      ]
+    },
+    "pickupBlast": {
+      "src": null,
+      "type": "blip",
+      "wave": "triangle",
+      "freq": [
+        1800,
+        2600
+      ],
+      "decay": 0.18,
+      "gain": 2.8183829312644537,
+      "pitchVary": 0.2,
+      "srcs": [
+        "/sfx/FF_AS_fish_splash_low_drop.mp3"
       ]
     }
   },
@@ -14736,6 +14798,23 @@
         "colorB": 16731438,
         "colorC": 16776698,
         "shellColor": 8789652
+      },
+      "accessoryRounds": {
+        "pigment": 1,
+        "pigmentGlow": 0,
+        "flow": 1.1,
+        "colorA": 15201012,
+        "colorB": 16723634,
+        "shellColor": 15509390
+      },
+      "accessoryTricorn": {
+        "pigmentGlow": 0,
+        "scale": 1,
+        "flow": 1.26,
+        "colorA": 0,
+        "colorB": 6908265,
+        "colorC": 16777215,
+        "shellColor": 0
       }
     }
   },
@@ -15937,6 +16016,7 @@
     "roughness": 0.12,
     "metalness": 0.1,
     "radius": 0.08,
+    "beadSink": 0.045,
     "haloRadius": 0.64,
     "haloFullAt": 3,
     "bloomLum": 3.6,
@@ -15961,6 +16041,146 @@
     "farEye": 0,
     "fadeIn": 9,
     "fadeOut": 5
+  },
+  "accessories": {
+    "enabled": true,
+    "equipped": "accessoryTricorn",
+    "turnLerp": 6,
+    "boneAlign": {
+      "head_07": [
+        -0.0233,
+        -1.5708,
+        0
+      ],
+      "neck02_06": [
+        -0.0827,
+        -1.5708,
+        0
+      ],
+      "mouth_08": [
+        -0.0788,
+        -1.5707,
+        0
+      ]
+    },
+    "items": {
+      "accessoryHat": {
+        "unlocked": true,
+        "showTurns": [
+          0,
+          -0.7854
+        ],
+        "bone": "head_07",
+        "snout": 0.33,
+        "lift": 0.505,
+        "depth": 0,
+        "pitch": -0.525,
+        "yaw": 3.15,
+        "roll": 0,
+        "size": 1.275
+      },
+      "accessoryGlasses": {
+        "unlocked": true,
+        "showTurns": [
+          -1.5708
+        ],
+        "bone": "head_07",
+        "snout": 0.524,
+        "lift": 0.194,
+        "depth": -0.006,
+        "pitch": -0.108,
+        "yaw": 0.059,
+        "roll": -0.019,
+        "size": 0.786
+      },
+      "accessoryBowler": {
+        "showTurns": [
+          0,
+          -0.7854
+        ],
+        "unlocked": true,
+        "bone": "head_07",
+        "snout": 0.46,
+        "lift": 0.474,
+        "depth": 0,
+        "pitch": -0.438,
+        "yaw": 0,
+        "roll": 0,
+        "size": 1.027
+      },
+      "accessoryTricorn": {
+        "showTurns": [
+          0,
+          -0.7854
+        ],
+        "unlocked": true,
+        "bone": "head_07",
+        "snout": 0.33,
+        "lift": 0.456,
+        "depth": 0,
+        "pitch": -0.336,
+        "yaw": 0,
+        "roll": 0,
+        "size": 1.025
+      },
+      "accessoryFedora": {
+        "showTurns": [
+          0,
+          -0.7854
+        ],
+        "unlocked": true,
+        "bone": "head_07",
+        "snout": 0.256,
+        "lift": 0.486,
+        "depth": -0.001,
+        "pitch": -0.343,
+        "yaw": 0,
+        "roll": 0,
+        "size": 1.171
+      },
+      "accessoryRounds": {
+        "showTurns": [
+          -1.5708
+        ],
+        "unlocked": true,
+        "bone": "head_07",
+        "snout": 0.719,
+        "lift": 0.202,
+        "depth": -0.006,
+        "pitch": -0.224,
+        "yaw": 0.059,
+        "roll": -0.019,
+        "size": 1.09
+      },
+      "accessoryAviators": {
+        "showTurns": [
+          -1.5708
+        ],
+        "unlocked": true,
+        "bone": "head_07",
+        "snout": 0.515,
+        "lift": 0.175,
+        "depth": -0.006,
+        "pitch": -0.108,
+        "yaw": 0.059,
+        "roll": -0.019,
+        "size": 0.811
+      },
+      "accessoryWireFrames": {
+        "showTurns": [
+          -1.5708
+        ],
+        "unlocked": true,
+        "bone": "head_07",
+        "snout": 0.524,
+        "lift": 0.183,
+        "depth": -0.006,
+        "pitch": -0.108,
+        "yaw": 0.059,
+        "roll": -0.019,
+        "size": 0.786
+      }
+    }
   },
   "laserEyes": {
     "eyeSide": 0.28,
@@ -16459,6 +16679,12 @@
       "waveColorNear": 16736210,
       "waveColorFar": 9059583
     }
+  },
+  "crashResume": {
+    "enabled": true,
+    "maxAgeMinutes": 15,
+    "minLevel": 2,
+    "maxResumes": 2
   },
   "oxygen": {
     "enabled": true,
@@ -17593,6 +17819,38 @@
       "glide": 0.6
     }
   },
+  "levelUpSeal": {
+    "enabled": true,
+    "height": 0.34,
+    "gap": 6,
+    "bobAmp": 0.035,
+    "bobPeriod": 2.8,
+    "bobSway": 0.012,
+    "bobTilt": 0.03,
+    "minVisible": 0.45,
+    "offsetX": 0,
+    "column": 2.4,
+    "lean": 0.05,
+    "aimSpread": 0.7,
+    "aimLerp": 7,
+    "faceOut": 0,
+    "delay": 0.1,
+    "inTime": 0.75,
+    "inEase": "outCubic",
+    "outTime": 0.45,
+    "outEase": "inCubic",
+    "swimRig": true,
+    "plantAt": 0.6,
+    "pinLerp": 6,
+    "fin": "near",
+    "finIdle": 0,
+    "spin": true,
+    "spinTurns": 2,
+    "spinTime": 1,
+    "spinEase": "inOutCubic",
+    "outlinePx": 2,
+    "inkPx": 1
+  },
   "reveals": {
     "enabled": true,
     "field": {
@@ -17611,7 +17869,14 @@
       "outTime": 0.85,
       "scale": 6,
       "softness": 0.3,
-      "curve": 1.4
+      "curve": 1.4,
+      "curtain": {
+        "enabled": true,
+        "seconds": 0.7,
+        "distance": 1.02,
+        "ease": "inCubic",
+        "dissolve": false
+      }
     },
     "scoreCard": {
       "style": "smooth",
@@ -17639,7 +17904,25 @@
       "softness": 0.42,
       "boilHz": 5,
       "drift": 90
+    },
+    "nameScramble": {
+      "enabled": true,
+      "ticks": 12,
+      "time": 1.5,
+      "slowdown": 10,
+      "delay": 0,
+      "always": false
     }
+  },
+  "splashSky": {
+    "bandDrift": 0.4,
+    "bandDensity": 1,
+    "bandStrength": 1,
+    "shimmer": 0.08,
+    "cloudSpeed": 1,
+    "cloudScale": 0.2,
+    "cloudAmount": 1,
+    "noiseDetail": 1
   },
   "finLights": {
     "enabled": true,
@@ -17930,6 +18213,33 @@
         "high": 1,
         "soft": 0.06,
         "range": 1
+      },
+      "accessoryFedora": {
+        "strength": 1,
+        "steps": 3,
+        "gamma": 2.3,
+        "low": 0.28,
+        "high": 1,
+        "soft": 0.12,
+        "range": 1
+      },
+      "accessoryGlasses": {
+        "strength": 1,
+        "steps": 2,
+        "gamma": 1.25,
+        "low": 0.28,
+        "high": 1,
+        "soft": 0,
+        "range": 0.65
+      },
+      "accessoryHat": {
+        "strength": 1,
+        "steps": 2,
+        "gamma": 1,
+        "low": 0.28,
+        "high": 1,
+        "soft": 0,
+        "range": 1
       }
     }
   },
@@ -18007,5 +18317,5 @@
       "msPerPx": 0.9
     }
   },
-  "_savedAt": 1788490473395
+  "_savedAt": 1788621639789
 }

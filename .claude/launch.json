@@ -7,7 +7,7 @@
     "configurations that each started a vite dev server (dev, dev-alt, dev-alt2,",
     "dev-auto, and rive-test, which was a bare `npx vite`). Every dev server",
     "carries the /__tuning writer from vite.config.js, so a second one is not a",
-    "duplicate — any tab still pointed at it can POST its boot-time snapshot over",
+    "duplicate \u2014 any tab still pointed at it can POST its boot-time snapshot over",
     "path/src/imported-tuning.json and silently revert hours of tuning. A picker",
     "with five ways to make that mistake is a trap.",
     "",
@@ -107,6 +107,20 @@
         "4713"
       ],
       "port": 4713,
+      "autoPort": false
+    },
+    {
+      "name": "splash-probe",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/looks/serve.mjs",
+        "dist-splash-probe",
+        "--out",
+        "dist-splash-probe/shots",
+        "--port",
+        "4655"
+      ],
+      "port": 4655,
       "autoPort": false
     }
   ]

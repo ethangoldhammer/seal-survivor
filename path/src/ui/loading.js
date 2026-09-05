@@ -18,6 +18,8 @@
 // here is 2D canvas and arithmetic, so it starts on the first frame of boot,
 // before three.js has parsed a single model.
 
+import { uiText } from '../uiTextTable.js';
+
 const STYLES = `
   .sv-load { position: fixed; inset: 0; z-index: 20; display: flex;
     align-items: center; justify-content: center;
@@ -28,6 +30,36 @@ const STYLES = `
      be a vortex rather than a row of dots. */
   .sv-load-lane { position: relative; width: min(340px, 62vw); height: 48px; }
   .sv-load-lane canvas { display: block; width: 100%; height: 100%; }
+
+  /* THE RESUME CAPTION — the only difference between coming back to a run and
+     starting the game, and the reason it exists at all.
+     
+     A WebContent kill reloads the page, so the wait a resumed player sits
+     through is the SAME wait as a cold boot: the same bar, the same seconds,
+     the same vortex. Without a word on it, the safety net's best case still
+     reads as the app restarting itself — the run does come back, but only
+     after the player has already concluded it didn't.
+     
+     Stacked UNDER the lane and absolutely positioned, so the bar stays exactly
+     where it is on both screens. A caption that pushed the vortex up would
+     make the two screens different compositions, and the point is that this is
+     the same screen with something to say. */
+  .sv-load-cap { position: absolute; left: 50%; top: calc(100% + 14px);
+    transform: translateX(-50%); white-space: nowrap;
+    font: 500 13px/1.4 Inter, system-ui, sans-serif; letter-spacing: 0.02em;
+    color: rgba(122,215,255, 0.72); text-align: center;
+    /* Fades in rather than appearing with the bar. The first moments of the
+       screen are identical to a normal boot on purpose — this arrives a beat
+       later, the way a line of explanation does. */
+    opacity: 0; animation: sv-load-cap-in 420ms ease-out 260ms forwards; }
+
+  @keyframes sv-load-cap-in { to { opacity: 1; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* No fade: the caption is information, and the one thing reduced motion
+       must never do is withhold it. */
+    .sv-load-cap { opacity: 1; animation: none; }
+  }
 `;
 
 // --- the scene, in CSS pixels ----------------------------------------------
@@ -76,15 +108,22 @@ function makeBubble(width, seeded) {
  * Put the loading screen up. Returns the handle boot() drives it with:
  *   setProgress(0..1)  how far along the bar the fill has reached
  *   remove()           take it down
+ *
+ * @param resuming  true when this boot is going straight back into a run the
+ *   process was killed underneath (see systems/runSnapshot.js). Adds one line
+ *   under the bar and changes nothing else — see .sv-load-cap for why the
+ *   composition deliberately stays identical.
  */
-export function showLoading() {
+export function showLoading({ resuming = false } = {}) {
   const style = document.createElement('style');
   style.textContent = STYLES;
   document.head.appendChild(style);
 
   const root = document.createElement('div');
   root.className = 'sv-load';
-  root.innerHTML = `<div class="sv-load-lane"><canvas></canvas></div>`;
+  root.innerHTML = `<div class="sv-load-lane"><canvas></canvas>${
+    resuming ? `<div class="sv-load-cap">${uiText('loadResuming')}</div>` : ''
+  }</div>`;
   document.body.appendChild(root);
 
   const lane = root.querySelector('.sv-load-lane');

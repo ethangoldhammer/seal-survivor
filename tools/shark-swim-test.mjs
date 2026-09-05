@@ -91,13 +91,13 @@ const HIGH = -6;   // near the surface, but under it
 // exactly where the burst begins.
 function run(type, {
   playerAt, seconds = 12, from = { x: 0, y: 0 }, warmup = 0,
-  chase = false, lunge = true, seed = 1,
+  chase = false, lunge = true, seed = 1, facing = null,
 }) {
   const rand = seeded(seed);
   const orig = Math.random;
   Math.random = rand;
   try {
-    return runInner(type, { playerAt, seconds, from, warmup, chase, lunge });
+    return runInner(type, { playerAt, seconds, from, warmup, chase, lunge, facing });
   } finally { Math.random = orig; }
 }
 
@@ -111,10 +111,22 @@ function seeded(seed) {
   };
 }
 
-function runInner(type, { playerAt, seconds, from, warmup, chase, lunge = true }) {
+function runInner(type, { playerAt, seconds, from, warmup, chase, lunge = true, facing = null }) {
   resetEnemies(scene);
   const e = spawnNamed(scene, type, 0, { x: from.x, y: from.y }, { ignoreCaps: true });
   if (!e) throw new Error(`could not spawn ${type}`);
+  if (facing != null) {
+    // +1 faces +x, -1 faces -x: level, so a test can put the seal behind it.
+    e.heading = facing > 0 ? 0 : Math.PI;
+    e.vx = Math.cos(e.heading) * e.speed;
+    e.vy = 0;
+    // One settled frame with something AHEAD of it, so the body's yaw
+    // (systems/fishTurn.js) has a facing to come about FROM. Its first frame
+    // adopts whatever the velocity already says, and a reversal on that
+    // frame would be adopted rather than performed.
+    player.position.set(from.x + facing * 80, from.y, 0);
+    updateEnemies(dt, scene, player.position, () => {}, () => {});
+  }
   player.position.set(playerAt.x, playerAt.y, 0);
   const path = [];
   const gains = [];
@@ -171,50 +183,76 @@ for (const type of SHARKS) {
     `vertical travel is ${(t.ratio * 100).toFixed(0)}% of horizontal, budget ${(budget * 100).toFixed(0)}%`);
 }
 
-// --- vertical authority is earned ------------------------------------------
-console.log('\nVERTICAL AUTHORITY IS EARNED, NOT GIVEN');
-for (const type of SHARKS) {
-  const cfg = CONFIG.enemies[type].hunt.lateral;
-  // Far: gain should sit at the floor. Near: it should open up.
-  const far = run(type, { playerAt: { x: 70, y: MID }, seconds: 6, from: { x: 0, y: MID }, chase: true });
-  const near = run(type, { playerAt: { x: 0, y: MID + 2 }, seconds: 6, from: { x: 0, y: MID }, chase: true });
-  const farGain = far.gains[far.gains.length - 1];
-  const nearGain = Math.max(...near.gains);
-  check(`${type}: stays flat at range`, farGain <= cfg.climbFloor + 0.02,
-    `gain ${farGain.toFixed(3)} vs floor ${cfg.climbFloor}`);
-  check(`${type}: opens up close in`, nearGain > 0.75,
-    `gain reached ${nearGain.toFixed(3)}`);
-}
-
-// --- and it opens GRADUALLY -------------------------------------------------
+// --- the cruise is flat at every range ---------------------------------------
 //
-// The whole point of easing the gain rather than switching it. Measured as the
-// largest single-frame jump: a step function would show 1.0 here.
-console.log('\nTHE CLIMB IS NOT ABRUPT');
-for (const type of SHARKS) {
-  const cfg = CONFIG.enemies[type].hunt.lateral;
-  const { gains } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true, lunge: false });
+// The cruise used to EARN vertical authority by closing in, which meant the
+// close fight — most of a fight — was a body going up and down around the
+// seal. Now the cruise is bounded to CONFIG.lateralCruise.cruisePitch at every
+// range, and the only vertical movement a shark has is its lunge. Measured on
+// the VELOCITY's pitch rather than on travel, because a come-about mirrors the
+// heading in one frame and the body's pitch is exactly what must not change
+// through it.
+console.log('\nTHE CRUISE IS FLAT AT EVERY RANGE');
+const pitchCap = (type) => {
+  const lat = CONFIG.enemies[type].hunt.lateral;
+  return lat.cruisePitch ?? CONFIG.lateralCruise.cruisePitch;
+};
+const deg = (rad) => (rad * 180 / Math.PI).toFixed(0) + '°';
+function worstPitch(path) {
   let worst = 0;
-  for (let i = 1; i < gains.length; i++) worst = Math.max(worst, Math.abs(gains[i] - gains[i - 1]));
-  // At 60fps an exponential ease of rate k moves at most k*dt per frame.
-  const bound = (cfg.climbEase * dt) * 1.5;
-  check(`${type}: gain never jumps`, worst <= bound,
-    `worst frame step ${worst.toFixed(5)} against a bound of ${bound.toFixed(5)}`);
-
-  // And the same for the path itself: no sudden vertical velocity changes.
-  const { path } = run(type, { playerAt: { x: 0, y: HIGH }, seconds: 8, from: { x: 0, y: -34 }, chase: true, lunge: false });
-  let worstAccel = 0;
-  for (let i = 2; i < path.length; i++) {
-    const v1 = (path[i].y - path[i - 1].y) / dt;
-    const v0 = (path[i - 1].y - path[i - 2].y) / dt;
-    worstAccel = Math.max(worstAccel, Math.abs(v1 - v0));
+  for (let i = 1; i < path.length; i++) {
+    const vx = path[i].x - path[i - 1].x;
+    const vy = path[i].y - path[i - 1].y;
+    if (Math.hypot(vx, vy) < 1e-4) continue;
+    worst = Math.max(worst, Math.abs(Math.atan2(vy, Math.abs(vx))));
   }
-  // A turn-limited body cannot change direction faster than its turnRate, so
-  // this is bounded by speed * turnRate with room for the spawn transient.
-  const lim = CONFIG.enemies[type].speed * (CONFIG.enemies[type].turnRate ?? 3) * 1.6;
-  check(`${type}: vertical speed changes smoothly`, worstAccel <= lim,
-    `worst ${worstAccel.toFixed(2)} u/s^2 against ${lim.toFixed(2)}`);
+  return worst;
 }
+for (const type of SHARKS) {
+  const cap = pitchCap(type) + Math.atan(CONFIG.enemies[type].hunt.lateral.weaveBody ?? 0) + 0.06;
+  // Directly overhead, close — the case the old model opened right up on.
+  const over = run(type, { playerAt: { x: 0, y: MID + 8 }, seconds: 10, from: { x: 0, y: MID }, chase: true, lunge: false, warmup: 0.3 });
+  check(`${type}: a seal straight overhead does not make it climb`, worstPitch(over.path) <= cap,
+    `steepest frame ${deg(worstPitch(over.path))} against a cap of ${deg(cap)}`);
+  // Far below, far away — the long approach.
+  const far = run(type, { playerAt: { x: 30, y: HIGH }, seconds: 12, from: { x: -30, y: -34 }, chase: true, lunge: false, warmup: 0.3 });
+  check(`${type}: the long approach is flat too`, worstPitch(far.path) <= cap,
+    `steepest frame ${deg(worstPitch(far.path))}`);
+}
+
+// --- a reversal is a come-about, not a loop ----------------------------------
+//
+// A turn-limited body arcing round to a target behind it passes through
+// pointing straight up (or down) and holds there for as long as the arc takes.
+// The come-about in steerTo mirrors the heading instead and lets
+// systems/fishTurn.js yaw the body through the camera. So: the seal is put
+// BEHIND the shark, the shark must end up going the other way, and no frame of
+// the path may be steeper than the cruise.
+console.log('\nA REVERSAL IS A COME-ABOUT, NOT A LOOP');
+for (const type of SHARKS) {
+  const cap = pitchCap(type) + Math.atan(CONFIG.enemies[type].hunt.lateral.weaveBody ?? 0) + 0.06;
+  // Spawned facing AWAY from the seal, so the only way to it is round.
+  const { path } = run(type, { playerAt: { x: -30, y: MID }, seconds: 3.5, from: { x: 0, y: MID }, chase: true, lunge: false, warmup: 0, facing: 1 });
+  const late = path.slice(-30);
+  const dx = late[late.length - 1].x - late[0].x;
+  check(`${type}: ends up going the seal's way`, dx < 0, `moved ${dx.toFixed(1)} in x over the last half second`);
+  // The heading mirrors in one frame; the BODY takes its come-about time to
+  // yaw round, and the swim throttles while it does (flipSpeedMul), so the
+  // manoeuvre reads as the animal slowing to turn rather than skidding.
+  const cruise = CONFIG.enemies[type].speed;
+  let slowest = Infinity;
+  for (let i = 1; i < 36 && i < path.length; i++) {
+    slowest = Math.min(slowest, Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y) / dt);
+  }
+  const mul = CONFIG.enemies[type].hunt.lateral.flipSpeedMul ?? CONFIG.lateralCruise.flipSpeedMul;
+  check(`${type}: slows through the come-about`, slowest <= cruise * mul * 1.15,
+    `${slowest.toFixed(1)} u/s at the slowest against a ${cruise} u/s cruise x ${mul}`);
+  check(`${type}: never points up or down to get there`, worstPitch(path) <= cap,
+    `steepest frame ${deg(worstPitch(path))} against ${deg(cap)}`);
+  check(`${type}: carries the come-about flag for the body`, !!CONFIG.enemies[type].comeAbout,
+    'fishTurn yaws it through the camera only if the def opts in');
+}
+
 
 // --- the head leads the body ------------------------------------------------
 console.log('\nTHE HEAD WEAVES, AND LEADS');
@@ -271,58 +309,36 @@ for (const type of ['dolphin']) {
 // coming up is the whole point.
 {
   const away = { playerAt: { x: 45, y: -4 }, seconds: 3, from: { x: -20, y: -34 }, warmup: 0.8, chase: true };
-  const shark = travel(run('shark', away).path);
-  const lc = CONFIG.enemies.shark.hunt.lateral;
-  const flat = lc.flatSlope ?? 0.35;
-  const free = lc.climbSlope ?? 8;
-  const cap = flat * Math.pow(free / flat, lc.climbFloor) * 1.35;
-  check('shark: runs in flat while still horizontally distant', shark.ratio < cap,
-    `${(shark.ratio * 100).toFixed(0)}% vertical, cap ${(cap * 100).toFixed(0)}%`);
+  const shark = run('shark', away).path;
+  const cap = pitchCap('shark') + 0.1;
+  check('shark: runs in flat while still horizontally distant', worstPitch(shark) <= cap,
+    `steepest ${deg(worstPitch(shark))}, cap ${deg(cap)}`);
+  // The dolphin's case is the seal straight overhead — the line a shark is
+  // now forbidden and a cetacean takes without thinking.
+  const over = { playerAt: { x: -18, y: -6 }, seconds: 3, from: { x: -20, y: -34 }, warmup: 0.8, chase: true };
   for (const type of ['dolphin']) {
-    const t = travel(run(type, away).path);
-    check(`${type}: climbs freely where a shark would flatten`, t.ratio > shark.ratio * 2,
-      `${(t.ratio * 100).toFixed(0)}% vertical against the shark's ${(shark.ratio * 100).toFixed(0)}%`);
+    const t = run(type, over).path;
+    check(`${type}: climbs freely where a shark would flatten`, worstPitch(t) > cap + 0.25,
+      `steepest ${deg(worstPitch(t))} against the shark's cap of ${deg(cap)}`);
   }
 }
 
-// --- the attack has a shape --------------------------------------------------
+// --- it still gets where it is going -----------------------------------------
 //
-// The point of gating on the horizontal gap rather than the straight-line one:
-// a shark should run in level and only rise once it is under its target. That
-// is a claim about the ORDER of the two, so it is measured as vertical travel
-// in the first half of an approach against the second.
-console.log('\nTHE ATTACK RUNS IN FLAT, THEN RISES');
+// Flat is not stuck. A shark a long way below the seal reaches its depth by
+// running at the cruise pitch, coming about, and running back — passes — and
+// the claim is that it gets there, not how fast.
+console.log('\nIT STILL GETS TO YOUR DEPTH');
 for (const type of SHARKS) {
-  // The window has to be long enough for THIS creature to actually cross the
-  // gap, or a slow one is still running in when the clock stops and looks like
-  // it never rises. Megalodon at speed 5.5 needs half again as long as a shark.
-  //
-  // ...AND SHORT ENOUGH, which is the same requirement from the other side and
-  // the one that bit. `def.speed` is the authored number, not the speed this
-  // animal swims at: CONFIG.pace.enemy multiplies it at spawn, so with the dial
-  // at 1.5 the megalodon crossed 15% sooner, spent the whole second half parked
-  // under the player, and reported 0% of its rise as "late" — a shark that
-  // arrives early reading identically to one that never climbs. Sized off the
-  // speed it is actually given, so the window tracks the dial in both
-  // directions.
-  const gap = 68;   // most of the arena, so the flat run-in is the bulk of the trip
-  const seconds = (gap / (CONFIG.enemies[type].speed * enemyPaceMul('speed'))) * 1.8 + 3;
   const { path } = run(type, {
-    playerAt: { x: gap / 2, y: -5 }, seconds, from: { x: -gap / 2, y: -34 },
+    playerAt: { x: 0, y: HIGH }, seconds: 24, from: { x: -20, y: -36 },
     warmup: 0.6, chase: true, lunge: false,
   });
-  const half = Math.floor(path.length / 2);
-  const early = travel(path.slice(0, half));
-  const late = travel(path.slice(half));
-  check(`${type}: rises later in the approach, not at the start`,
-    late.ratio > early.ratio,
-    `vertical share ${(early.ratio * 100).toFixed(0)}% early -> ${(late.ratio * 100).toFixed(0)}% late`);
-  // And it does get there: a shark that only ever ran flat would be no threat
-  // to anything above it.
   const climbed = Math.max(...path.map((p) => p.y)) - path[0].y;
-  check(`${type}: does eventually close the vertical gap`, climbed > 6,
-    `rose ${climbed.toFixed(1)} units`);
+  check(`${type}: does eventually close the vertical gap`, climbed > 14,
+    `rose ${climbed.toFixed(1)} units of a ${(HIGH + 36).toFixed(0)}-unit gap`);
 }
+
 
 // ---------------------------------------------------------------------------
 // A SHARK DOES NOT CHASE — CONFIG.cruiseHunt.

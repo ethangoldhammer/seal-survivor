@@ -705,13 +705,19 @@ export const ASSETS = {
     // sliders being broken rather than as two letters in this entry.
     forward: '-Z',
     up: '+Y',
+    outline: { color: 0xffffff, thickness: 0.01953 },
     // Carries ONE EMBEDDED JPEG (material `UVChecker`), which is fine in a
     // browser and a hang in Node: dom-stub has no ImageBitmapLoader and no
     // canvas to decode into, so GLTFLoader's promise never settles — no error,
     // no warning. A terminal harness that needs this model has to strip
     // `images`/`textures` out of the JSON chunk first; tools/eye-socket-measure.mjs
     // carries the recipe.
-    outline: { color: 0xffffff, thickness: 0.01953 },
+    //
+    // ABOVE the rim rather than below it, and that is not tidiness either:
+    // tools/apply-shaders.mjs looks three lines up from a field it is splicing
+    // and warns that the comment "argues for the value that was just replaced".
+    // Sat under this paragraph, the rim printed that on every record — twice,
+    // for two fields — about a comment that has nothing to do with it.
     shape: 'cone',
     radius: 0.35,
     height: 0.5,

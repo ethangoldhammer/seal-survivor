@@ -72,7 +72,12 @@ export function initFeedback(gridSystem) {
 
 /**
  * @param {string} event key in CONFIG.feedback
- * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, color, toastValue }
+ * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, sizeMul, speedMul,
+ *                         gooSizeMul, gooSpeedMul, color, toastValue }
+ *                       `scale` reaches COUNT alone; `sizeMul`/`speedMul` are
+ *                       the pair that makes a burst bigger, and they reach the
+ *                       spray and the goo alike. `gooSizeMul`/`gooSpeedMul`
+ *                       override that pair for the `goo` burst only.
  *                       `toastValue` is the number a `toast` channel prints
  *                       beside its label — what this proc was worth, which is
  *                       the one part of the line the table cannot author.
@@ -340,7 +345,20 @@ export function feedback(event, at = {}) {
   // NOTE the name is doing different work here than on an emitter: an EVENT's
   // `goo` names an emitter to fire, an EMITTER's `goo` names which surface in
   // CONFIG.fx.goo.groups its particles are thresholded against.
-  if (def.goo) emit(def.goo, x, y, at);
+  //
+  // `gooSizeMul` / `gooSpeedMul` size THIS burst alone, over whatever `sizeMul`
+  // / `speedMul` the spray got. A kill sizes its goo off the body that died
+  // (CONFIG.fx.killGooBody) and its spray off the event — `explosion` versus
+  // `bigExplosion` is already the spray's size step, and handing it a 4x
+  // multiplier as well would fill the screen with sprites on every shark.
+  // Always passed as the pair, because a goo mass scaled on one axis alone
+  // comes out as a slab or as loose dots — see the note on fx.goo.groups.gore.
+  if (def.goo) {
+    const gooAt = (at.gooSizeMul != null || at.gooSpeedMul != null)
+      ? { ...at, sizeMul: at.gooSizeMul ?? at.sizeMul, speedMul: at.gooSpeedMul ?? at.speedMul }
+      : at;
+    emit(def.goo, x, y, gooAt);
+  }
 
   if (def.ripple && grid) {
     grid.ripple(x, y, def.ripple.strength * scale, def.ripple.radius);

@@ -253,7 +253,47 @@ export function censusItems(items) {
 // everything at boot and releases none of it, music keeps a warm set of five
 // to seven loops, ambient runs a small bed. Which of those is holding the
 // surplus decides what to fix, and they are indistinguishable in one number.
-export function censusReport({ items = [], audioBytes = 0, audioParts = null, targetBytes = 0 } = {}) {
+/**
+ * THE BACKING STORES THE CENSUS ABOVE CANNOT SEE.
+ *
+ * Everything else in this file walks the three.js scene, which means it can
+ * only ever report three.js things — geometry, textures, bone matrices,
+ * userData, decoded audio, render targets. A `<canvas>` is none of those. Its
+ * backing store is `width * height * 4` bytes of WebKit's memory, plus an
+ * IOSurface and a compositing layer on iOS, and not one byte of it appears in
+ * `totalMB`.
+ *
+ * That gap is the reason this exists. Three sessions were killed by iOS at the
+ * 2GB WebContent limit while this census read a flat 366MB throughout — the
+ * number was not wrong, it was answering a smaller question than the one being
+ * asked, and every reading taken from it argued that memory was fine.
+ *
+ * ATTACHED ONLY, deliberately. `getElementsByTagName` on the document returns
+ * what is in the tree, so a detached scratch canvas is not counted — those are
+ * transient by construction and the ones that matter here are the ones
+ * something is holding on screen. A canvas that is retained but detached shows
+ * up in `keptBytes` instead, reported by whoever is retaining it.
+ *
+ * Returns zero where there is no document, which is every Node harness.
+ */
+export function canvasBytes() {
+  const list = globalThis.document?.getElementsByTagName?.('canvas');
+  if (!list) return { count: 0, bytes: 0, biggest: 0 };
+  let bytes = 0;
+  let biggest = 0;
+  for (const c of list) {
+    // The BACKING STORE, not the CSS box: a canvas laid out at 240px with a
+    // dpr-3 buffer is 720 wide in memory, and the css size says nothing about
+    // what it costs.
+    const b = (c.width || 0) * (c.height || 0) * 4;
+    bytes += b;
+    if (b > biggest) biggest = b;
+  }
+  return { count: list.length, bytes, biggest };
+}
+
+export function censusReport({ items = [], audioBytes = 0, audioParts = null, targetBytes = 0,
+  canvas = null, keptBytes = 0 } = {}) {
   const c = censusItems(items);
   const mb = (n) => Math.round(n / MB);
   return {
@@ -272,7 +312,19 @@ export function censusReport({ items = [], audioBytes = 0, audioParts = null, ta
       ? { sfxMB: mb(audioParts.sfx ?? 0), musicMB: mb(audioParts.music ?? 0), ambientMB: mb(audioParts.ambient ?? 0) }
       : null,
     targetMB: mb(targetBytes),
-    totalMB: mb(c.geo + c.tex + c.bones + c.userData + audioBytes + targetBytes),
+    // The two blocks the scene walk is blind to. Null rather than 0 when the
+    // caller could not measure them, for the same reason audioParts is: a
+    // harness with no document must not be made to report "no canvases" as a
+    // fact about the game.
+    canvasMB: canvas ? mb(canvas.bytes) : null,
+    canvasCount: canvas ? canvas.count : null,
+    canvasBiggestMB: canvas ? mb(canvas.biggest) : null,
+    // Whatever a system says it is holding outside the scene — today the boss
+    // kill shots, which keep a PNG data URL and a Blob of the same frame per
+    // kill. See bossShotBytes in systems/bossShot.js.
+    keptMB: mb(keptBytes),
+    totalMB: mb(c.geo + c.tex + c.bones + c.userData + audioBytes + targetBytes
+      + (canvas?.bytes ?? 0) + keptBytes),
     meshes: c.meshes,
     skeletons: c.skeletons,
   };
@@ -288,7 +340,13 @@ export function censusLine(r) {
   const a = r.audioParts
     ? `aud${r.audioMB}(sfx${r.audioParts.sfxMB} mus${r.audioParts.musicMB} amb${r.audioParts.ambientMB})`
     : `aud${r.audioMB}`;
-  return `geo${r.geoMB} tex${r.texMB} bone${r.boneMB} ud${r.udMB} ${a} rt${r.targetMB}`
+  // The canvas block reads `cv3(41MB max25)` — how many, what they cost, and
+  // the biggest single one, which is what says whether the cost is one huge
+  // surface or a drift of small ones.
+  const cv = r.canvasMB === null ? ''
+    : ` cv${r.canvasCount}(${r.canvasMB}MB max${r.canvasBiggestMB})`;
+  const kept = r.keptMB ? ` kept${r.keptMB}` : '';
+  return `geo${r.geoMB} tex${r.texMB} bone${r.boneMB} ud${r.udMB} ${a} rt${r.targetMB}${cv}${kept}`
     + ` = ${r.totalMB}MB · ${r.nodes} nodes ${r.skeletons} skel`
     + (r.heavyCount ? ` · ${r.heavyCount} heavy: ${top}` : '');
 }

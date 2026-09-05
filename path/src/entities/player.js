@@ -18,6 +18,7 @@ import { cancelDash, dashSteer, strikeState } from '../systems/strike.js';
 // dashSteer's per-frame result, reused so a dash frame allocates nothing.
 const steerStep = { heading: 0, speed: 0, breakOut: false };
 import { launchFor } from '../systems/airborne.js';
+import { unlockGranted } from '../systems/unlocks.js';
 
 // Scratch for the body transform, which composes the mirror, the barrel roll,
 // the crane and the wind-up shudder every frame.
@@ -666,6 +667,10 @@ export function availableUpgrades() {
     // `enabled: false` (set in the upgrade table) removes an upgrade from
     // the offer pool entirely, without deleting it from config.
     if (u.enabled === false) return false;
+    // Not earned yet. A row in unlocks.csv names this card and its stat has
+    // not reached its count — and the gate switch is on, which it is not in a
+    // dev build. See systems/unlocks.js; a card with no row is never asked.
+    if (!unlockGranted('upgrade', u.id)) return false;
     // Held the group already, and it was somebody else.
     if (u.exclusive && claimed.has(u.exclusive) && claimed.get(u.exclusive) !== u.id) return false;
     // The run's companion slots are full, and this would be a NEW one. One

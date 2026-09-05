@@ -881,4 +881,62 @@ section('PARTICLE RELIEF FOLLOWS THE ADAPTIVE CONTROLLER');
   resetParticles();
 }
 
+// ===========================================================================
+// THE GOO IS THE SIZE OF THE BODY
+// ===========================================================================
+// A kill's `scale` reaches COUNT alone, so for a long time a shark left a
+// trout's splat with more blobs in it. The kill now hands the goo burst a
+// multiplier off the body that died (CONFIG.fx.killGooBody), and it has to
+// arrive as the PAIR — lobes and throw together — or the mass changes shape
+// rather than size (see the note on fx.goo.groups.gore). Three things can
+// silently undo that: the kill stops passing one half of the pair, feedback()
+// stops routing the goo-only override onto the goo burst, or emit() stops
+// honouring one of the two. The first two are read off the source; the third
+// is measured.
+section('Kill goo: sized off the body, lobes and throw together');
+{
+  const FEEDBACK = fs.readFileSync(path.join(HERE, '../path/src/systems/feedback.js'), 'utf8');
+  check('the kill passes gooSizeMul and gooSpeedMul off one figure',
+    /gooSizeMul:\s*gooBody/.test(killCall) && /gooSpeedMul:\s*gooBody/.test(killCall));
+  check('...measured off the spawned body, not the authored radius',
+    /const gooBody[\s\S]{0,200}?e\.radius/.test(killCall));
+  check('...against CONFIG.fx.killGooBody', /fx\?\.killGooBody/.test(killCall));
+  check('feedback() routes the override onto the goo burst only',
+    /sizeMul:\s*at\.gooSizeMul \?\? at\.sizeMul/.test(FEEDBACK)
+    && /speedMul:\s*at\.gooSpeedMul \?\? at\.speedMul/.test(FEEDBACK)
+    && /emit\(def\.goo, x, y, gooAt\)/.test(FEEDBACK));
+
+  const gk = CONFIG.fx?.killGooBody ?? {};
+  check('the knob has a pivot and a cap', Number.isFinite(gk.pivot) && gk.pivot > 0 && Number.isFinite(gk.max) && gk.max >= 1,
+    JSON.stringify(gk));
+  // The rule the kill applies, run over two bodies: a trout-sized one must
+  // come out at exactly 1 (never shrunk) and a shark-sized one above it.
+  const mulFor = (r) => Math.min(gk.max, Math.max(1, r / gk.pivot));
+  check('a small body keeps the authored splat', mulFor(gk.pivot * 0.5) === 1);
+  check('a big body gets a bigger one', mulFor(gk.pivot * 4) > 1 && mulFor(gk.pivot * 4) <= gk.max);
+
+  // emit() honours both halves: the same seeded burst at 1x and at 3x must
+  // come out 3x in mean lobe size AND 3x in mean throw speed.
+  const realRandom = Math.random;
+  const seeded = (n) => () => (n = (n * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const sizesOf = (idx) => idx.map((i) => A.aSize.array[i]);
+  const speedsOf = (idx) => idx.map((i) => Math.hypot(A.aVelocity.array[i * 3], A.aVelocity.array[i * 3 + 1]));
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+  Math.random = seeded(0xC0FFEE);
+  resetParticles();
+  const one = burst('killGoo', 0, -2, { sizeMul: 1, speedMul: 1 });
+  const oneSize = mean(sizesOf(one)), oneSpeed = mean(speedsOf(one));
+  Math.random = seeded(0xC0FFEE);
+  resetParticles();
+  const three = burst('killGoo', 0, -2, { sizeMul: 3, speedMul: 3 });
+  const threeSize = mean(sizesOf(three)), threeSpeed = mean(speedsOf(three));
+  Math.random = realRandom;
+  check('emit() scales lobe size by sizeMul', Math.abs(threeSize / oneSize - 3) < 1e-3,
+    `${oneSize.toFixed(3)} → ${threeSize.toFixed(3)}`);
+  check('...and throw by speedMul', Math.abs(threeSpeed / oneSpeed - 3) < 1e-3,
+    `${oneSpeed.toFixed(3)} → ${threeSpeed.toFixed(3)}`);
+  check('...with the same number of lobes', one.length === three.length, `${one.length} vs ${three.length}`);
+  resetParticles();
+}
+
 process.exit(failures ? 1 : 0);

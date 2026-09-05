@@ -49,6 +49,26 @@ export const CALLOUTS = parseCalloutCsv(calloutsCsv);
 /** Every warning the game knows how to fire. The join to callouts.csv. */
 export const WARN_IDS = ['boss', 'health', 'oxygen', 'boost', 'strikeNow'];
 
+// COACH ROWS THAT ARE NOT TUTORIAL STEPS.
+//
+// Every other coach line in callouts.csv belongs to systems/tutorial.js, which
+// owns the ids, the conditions and the ledger — so `COACH_IDS` has always been
+// the complete list of coach rows the game can fire, and everything checking
+// the join has been written around that.
+//
+// `resumed` broke the assumption. It is a coach in voice (nothing has gone
+// wrong in the water) and it outranks a warning, which is what lets it hold the
+// band through the greeting — but it is fired by main.js on a run that came
+// back after the page was killed under it, and no tutorial step will ever
+// teach it. See systems/runSnapshot.js.
+//
+// HERE RATHER THAN INLINE AT THE CALL SITE, which is where it was for a day:
+// main.js passed `[...COACH_IDS, 'resumed']` to checkCallouts and
+// tools/callout-test.mjs knew nothing about it, so the suite reported the row
+// as unreachable and as a stray tip on the band. Two places that have to agree
+// about which ids exist is one place too many.
+export const FIRED_BY_MAIN = ['resumed'];
+
 // --- {token}s ---------------------------------------------------------------
 // A tip may name a control as `{strike}` or `{bumper}`, which becomes whatever
 // that control is called on the hardware in front of the player. Written into

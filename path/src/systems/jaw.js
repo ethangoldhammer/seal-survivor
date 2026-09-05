@@ -83,8 +83,18 @@ export function createJawDriver(instance) {
   const wrote = new THREE.Quaternion();
   const q = new THREE.Quaternion();
   let hasWritten = false;
+  // A HELD gape, 0..1, driven from outside — the lunge tell (systems/
+  // lungeTell.js) opens the mouth through the wind-up and holds it through the
+  // run, which no snap can express. It composes with the snap by MAX, so a
+  // bite fired mid-gape still closes on top of it and a gape never shuts a
+  // bite early. Cleared by whoever set it; nothing here times it out.
+  let gape = 0;
 
   return {
+    setGape(v) {
+      gape = Math.min(1, Math.max(0, v || 0));
+    },
+
     // Start a bite. Re-firing mid-bite restarts it rather than being ignored:
     // the caller already rate-limits this (see triggerBite in entities/
     // enemies.js), so a second call means a genuinely new snap.
@@ -100,17 +110,19 @@ export function createJawDriver(instance) {
       if (hasWritten && bone.quaternion.equals(wrote)) bone.quaternion.copy(given);
       given.copy(bone.quaternion);
 
-      let open = 0;
+      let open = gape;
       if (t >= 0) {
         const cfg = CONFIG.bite.jaw;
         t += dt;
         const openTime = Math.max(0.01, cfg.openTime);
         const holdEnd = openTime + cfg.holdTime;
         const shutEnd = holdEnd + Math.max(0.01, cfg.closeTime);
-        if (t < openTime) open = opening(t / openTime);
-        else if (t < holdEnd) open = 1;
-        else if (t < shutEnd) open = closing((t - holdEnd) / (shutEnd - holdEnd));
+        let snap = 0;
+        if (t < openTime) snap = opening(t / openTime);
+        else if (t < holdEnd) snap = 1;
+        else if (t < shutEnd) snap = closing((t - holdEnd) / (shutEnd - holdEnd));
         else t = -1;
+        open = Math.max(open, snap);
       }
 
       if (open > 0.001) {
@@ -129,6 +141,7 @@ export function createJawDriver(instance) {
     // pose, rather than restoring one that belonged to a different creature.
     reset() {
       t = -1;
+      gape = 0;
       hasWritten = false;
     },
   };

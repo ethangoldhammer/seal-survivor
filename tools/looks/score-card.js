@@ -96,14 +96,14 @@ function seedShots() {
 function open() {
   seedShots();
   showGameOver(RUN, { bosses: BOSSES.length });
-  say(`card open — polaroid: ${snapshotCardsLive() ? 'Rive' : 'coded paper'}`);
+  say(`card open — polaroid: ${snapshotCardsLive() ? 'Rive' : 'NONE (artboard not live — the fan will be empty)'}`);
 }
 
-// THE RIVE POLAROID, PARSED FIRST. main.js does this at boot; without it the
-// fan falls back to the coded paper, and the two papers are different objects —
-// one is an <img>, the other a live Rive canvas being drawn into inside a card
-// that is about to be rotated in 3D. Looking at the coded one here and calling
-// it the score screen is how the shipped screen goes unlooked-at.
+// THE RIVE POLAROID, PARSED FIRST. main.js does this at boot, and there is no
+// longer anything to fall back to: the coded paper was deleted 2026-09-05, so
+// a page that opens the card before this resolves shows a fan of empty slots.
+// The first open() below is exactly that — it is there so the page is not blank
+// while the file parses, and the second one, after init, is the real look.
 initSnapshotCards().finally(open);
 open();
 

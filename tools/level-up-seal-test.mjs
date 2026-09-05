@@ -67,6 +67,10 @@ installModel('ship', gltf.scene, gltf.animations);
 
 const CFG = CONFIG.levelUpSeal;
 CFG.enabled = true;
+// THE BUST, for the sections below: pinned on the crown line, pointing by
+// `fin`. The free swimmer (CONFIG.levelUpSeal.free, the game's default) is
+// its own section at the end, and tools/level-up-seal-motion-test.mjs.
+CFG.free = false;
 // Pinned for the arithmetic below, so a retune of the defaults moves the
 // game and not this file's expectations.
 CFG.height = 0.34;
@@ -83,10 +87,21 @@ CFG.swimRig = true;
 CFG.plantAt = 0.6;
 CFG.fin = 'near';
 CFG.finIdle = 0;
+CFG.optionFins = ['right', 'both', 'left'];
+CFG.followTurn = 0.25;
+CFG.followLean = 0.08;
+CFG.followLerp = 3;
+CFG.pointFaceOut = 1;
 CFG.spin = true;
 CFG.spinTurns = 2;
 CFG.spinTime = 1;
 CFG.spinEase = 'inOutCubic';
+// The bob is off for the placement arithmetic and switched on in its own
+// section, where it is what is being measured.
+CFG.bobAmp = 0;
+CFG.bobSway = 0;
+CFG.bobTilt = 0;
+CFG.bobPeriod = 2.8;
 
 const FRAME = { w: 1280, h: 720, crownLine: 480, centreX: 640, idle: { x: 640, y: 320 } };
 const bustPx = () => CFG.height * FRAME.h;
@@ -144,7 +159,7 @@ let held = null;
     `${(p.state.scale * p.bustH).toFixed(1)}px of ${bustPx().toFixed(1)}`);
   // The crown, measured off the placed holder rather than read back from the
   // state: this is the number the pixels actually come from.
-  const crownWorld = p.holder.position.y + p.bust.max.y * p.state.scale;
+  const crownWorld = p.holder.position.y + p.crownTop * p.state.scale;
   check('...and the holder puts the crown there', Math.abs(-crownWorld - FRAME.crownLine) < 0.5,
     `holder crown at ${(-crownWorld).toFixed(2)}px`);
   held = p;
@@ -275,6 +290,77 @@ section('ONE FLIPPER POINTS');
 }
 
 // ---------------------------------------------------------------------------
+section('EACH CARD HAS ITS OWN FLIPPER');
+{
+  const p = build();
+  p.enter();
+  run(p, 2);
+  const fins = p.rig.fins;
+  const li = fins.findIndex((f) => f.name === 'left');
+  const ri = fins.findIndex((f) => f.name === 'right');
+  const ones = (g) => (g ?? []).filter((v) => v === 1).length;
+  CFG.fin = 'option';
+  // The SAME screen position for all three, so the side of the screen can't
+  // be what decides it.
+  p.look({ x: 640, y: 300, option: 0 });
+  run(p, 0.5);
+  check('the first card: the animal\'s right flipper, alone', ones(p.state.finGate) === 1 && p.state.finGate?.[ri] === 1, JSON.stringify(p.state.finGate));
+  p.look({ x: 640, y: 300, option: 1 });
+  run(p, 0.5);
+  check('the middle card: both flippers point', ones(p.state.finGate) === 2, JSON.stringify(p.state.finGate));
+  p.look({ x: 640, y: 300, option: 2 });
+  run(p, 0.5);
+  check('the last card: the left, alone', ones(p.state.finGate) === 1 && p.state.finGate?.[li] === 1, JSON.stringify(p.state.finGate));
+  p.look({ x: 1100, y: 300, option: 3 });
+  run(p, 0.5);
+  const screenRight = p.screenLeftFin === 0 ? 1 : 0;
+  check('a fourth card falls back to the near flipper', ones(p.state.finGate) === 1 && p.state.finGate?.[screenRight] === 1, JSON.stringify(p.state.finGate));
+  p.look({ x: 1100, y: 300 });
+  run(p, 0.5);
+  check('...and so does a look with no card', ones(p.state.finGate) === 1 && p.state.finGate?.[screenRight] === 1);
+  CFG.fin = 'near';
+
+  // THE FACE is on the viewer while a card is pointed at, and lets go with
+  // the plant on the way off.
+  check('pointing: the head is asked to look out of the screen', p.state.faceOut >= 0.99, `faceOut ${p.state.faceOut.toFixed(2)}`);
+  p.look(null);
+  run(p, 0.5);
+  check('idle: back to the idle\'s own faceOut', p.state.faceOut <= (CFG.faceOut ?? 0) + Math.abs(Math.sin(p.state.followTurn)) + 1e-6, `faceOut ${p.state.faceOut.toFixed(2)}`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE BODY COMES ROUND AFTER THE CURSOR');
+{
+  const p = build();
+  p.enter();
+  run(p, 2);
+  check('held, nothing pointed at: no follow', Math.abs(p.state.followTurn) < 1e-6 && Math.abs(p.state.followLean) < 1e-6);
+  p.look({ x: 1200, y: 300, option: 2 });
+  p.update(DT);
+  const first = p.state.followTurn;
+  check('the first frame is a nudge, not a snap', first > 0 && first < CFG.followTurn * 0.15, `${first.toFixed(4)} of ${CFG.followTurn}`);
+  run(p, 2);
+  const settled = p.state.followTurn;
+  check('...settling toward the card\'s side', settled > CFG.followTurn * 0.7, `${settled.toFixed(3)} rad`);
+  check('...with the cant into it', p.state.followLean > CFG.followLean * 0.7, `${p.state.followLean.toFixed(3)} rad`);
+  check('the follow is in the body\'s pose', Math.abs(p.holder.rotation.y) > 0.1 || p.holder.quaternion.y !== 0);
+  p.look({ x: 80, y: 300, option: 0 });
+  run(p, 2);
+  check('the other side turns the other way', p.state.followTurn < -CFG.followTurn * 0.7 && p.state.followLean < 0, `${p.state.followTurn.toFixed(3)} rad`);
+  // Gentle throughout: no frame moves it more than the ease allows.
+  p.look({ x: 1200, y: 300, option: 2 });
+  let worst = 0; let prev = p.state.followTurn;
+  for (let i = 0; i < 120; i++) { p.update(DT); worst = Math.max(worst, Math.abs(p.state.followTurn - prev)); prev = p.state.followTurn; }
+  check('no frame jumps more than the ease allows', worst <= 2 * CFG.followTurn * (1 - Math.exp(-CFG.followLerp * DT)) + 1e-6, `worst step ${worst.toFixed(4)} rad`);
+
+  // THE PICK: the follow blends out with the plant, into the plain swim.
+  p.leave();
+  run(p, CFG.outTime * 0.9);
+  check('on the way off it lets go', Math.abs(p.state.followTurn) < 0.02 && Math.abs(p.state.followLean) < 0.01,
+    `turn ${p.state.followTurn.toFixed(3)}, lean ${p.state.followLean.toFixed(3)} at ${(CFG.outTime * 0.9).toFixed(2)}s`);
+}
+
+// ---------------------------------------------------------------------------
 section('THE EXIT IS THE STRIKE\'S BARREL ROLL');
 {
   const p = build();
@@ -301,6 +387,49 @@ section('THE EXIT IS THE STRIKE\'S BARREL ROLL');
   run(q, CFG.outTime / 2);
   check('spin off: no roll', q.state.roll === 0 && q.body.quaternion.angleTo(identity) < 1e-6);
   CFG.spin = true;
+}
+
+// ---------------------------------------------------------------------------
+section('IT TREADS WATER — the idle bob');
+{
+  const p = build();
+  p.enter();
+  run(p, 2);
+  const still = p.holder.position.y;
+  run(p, 1);
+  check('with the bob off, it holds still', Math.abs(p.holder.position.y - still) < 1e-6);
+
+  CFG.bobAmp = 0.05;
+  CFG.bobSway = 0.02;
+  CFG.bobTilt = 0.04;
+  let lo = Infinity, hi = -Infinity, xlo = Infinity, xhi = -Infinity;
+  const identity = new THREE.Quaternion();
+  let maxTilt = 0;
+  const bustQ = p.holder.quaternion.clone();
+  for (let t = 0; t < 2 * CFG.bobPeriod; t += DT) {
+    p.update(DT);
+    lo = Math.min(lo, p.holder.position.y);
+    hi = Math.max(hi, p.holder.position.y);
+    xlo = Math.min(xlo, p.holder.position.x);
+    xhi = Math.max(xhi, p.holder.position.x);
+    maxTilt = Math.max(maxTilt, p.holder.quaternion.angleTo(bustQ));
+  }
+  const swing = hi - lo;
+  const want = 2 * CFG.bobAmp * bustPx();
+  check('it bobs about the crown line', swing > want * 0.6 && swing <= want + 0.01,
+    `${swing.toFixed(1)}px of travel over two periods, ${want.toFixed(1)} allowed`);
+  check('...the crown line itself does not move', Math.abs(p.state.crownY - FRAME.crownLine) < 0.5);
+  check('...it sways', xhi - xlo > CFG.bobSway * bustPx() * 0.6, `${(xhi - xlo).toFixed(1)}px`);
+  check('...and cants', maxTilt > CFG.bobTilt * 0.5 && maxTilt <= CFG.bobTilt + 1e-3, `${maxTilt.toFixed(3)} rad`);
+
+  // Still while swimming — the bob is the planted animal's.
+  p.leave();
+  run(p, DT * 6);
+  check('it stops bobbing the moment it swims off', Math.abs(p.state.bob) < 1e-6 && p.state.tilt === 0,
+    `bob ${p.state.bob.toFixed(3)}`);
+  CFG.bobAmp = 0;
+  CFG.bobSway = 0;
+  CFG.bobTilt = 0;
 }
 
 // ---------------------------------------------------------------------------

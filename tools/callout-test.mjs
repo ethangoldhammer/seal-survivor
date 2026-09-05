@@ -97,7 +97,7 @@ const store = localStorage;
 
 const { CONFIG } = await import('../path/src/config.js');
 const {
-  CALLOUTS, WARN_IDS, bandState, bandStates, resetCallouts, updateCallouts, activeCallout,
+  CALLOUTS, WARN_IDS, FIRED_BY_MAIN, bandState, bandStates, resetCallouts, updateCallouts, activeCallout,
   pinCallout, calloutAge,
   pushCallout, clearCallout, holdFor, checkCalloutBindings,
 } = await import('../path/src/systems/callouts.js');
@@ -173,8 +173,15 @@ for (const id of COACH_IDS) {
   check(`coach "${id}" has an enabled row`, !!row && row.kind === 'coach');
 }
 {
+  // COACH IS NOT THE SAME SET AS TUTORIAL. Every coach row but one belongs to a
+  // tutorial step; `resumed` is fired by main.js on a run that came back after
+  // the page was killed under it. The list comes from systems/callouts.js
+  // rather than being written out again here — see FIRED_BY_MAIN, which exists
+  // because this check and main.js disagreeing about it is exactly how the row
+  // was reported unreachable while the game was firing it correctly.
+  const coachIds = [...COACH_IDS, ...FIRED_BY_MAIN];
   const stray = [...CALLOUTS.values()].filter(
-    (r) => !(r.kind === 'warn' ? WARN_IDS : COACH_IDS).includes(r.id),
+    (r) => !(r.kind === 'warn' ? WARN_IDS : coachIds).includes(r.id),
   );
   check('no row in the file is unreachable', stray.length === 0, stray.map((r) => r.id).join(', '));
 }
@@ -405,7 +412,13 @@ section('two surfaces: the band, and the line on the seal');
   // THE THIRD SURFACE. Every tip about something in the water stands beside it;
   // what is left on the band is the three control tips, which are about a stick
   // and a button and have nowhere in the ocean to be.
-  const banded = [...CALLOUTS.values()].filter((r) => r.kind === 'coach' && r.anchor === 'band');
+  //
+  // ...plus the rows that are not tips at all. `resumed` is a coach line about
+  // the APP — the page was killed and the run came back — so there is nothing
+  // in the ocean for it to stand beside and the band is the only place it can
+  // go. Excluded by the same list main.js fires it from, not by name.
+  const banded = [...CALLOUTS.values()].filter(
+    (r) => r.kind === 'coach' && r.anchor === 'band' && !FIRED_BY_MAIN.includes(r.id));
   check('the only tips left on the band are the control ones',
     banded.every((r) => ['swim', 'aim', 'strike'].includes(r.id)),
     banded.map((r) => r.id).join(','));

@@ -85,6 +85,9 @@ const _peek = new THREE.Vector3();
 // twitched by different amounts on the same frame, and the head reads `_aim`
 // after both of them.
 const _finAim = new THREE.Vector3();
+// One held vector per fin for a per-fin aim (see `finAims` in update) — four
+// is more flippers than any rig here has.
+const _finOwn = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
 const _finFaceCfg = {};
 
 // --- THE SHOT TWITCH --------------------------------------------------------
@@ -288,8 +291,15 @@ export function createAimRig(instance) {
      *   head and ONE flipper at a card (systems/levelUpSeal.js); nothing in a
      *   run passes this.
      */
+    /**
+     * @param finAims  a 2D aim PER FIN — an array in fin order of Vector2 (or
+     *   null for "the head's aim"), so each flipper can point at a place of
+     *   its own. The level-up seal's authored motion gives the two flippers
+     *   two targets (systems/levelUpSealMotion.js); nothing in a run passes
+     *   this, and absent it is the rig as it always was: one aim for all.
+     */
     update(dt, aim, {
-      engaged = false, suppressed = false, charge = 0, limp = false, faceOut = 0, finGate = null,
+      engaged = false, suppressed = false, charge = 0, limp = false, faceOut = 0, finGate = null, finAims = null,
     } = {}) {
       const finCfg = CONFIG.fins;
       const headCfg = CONFIG.head;
@@ -371,6 +381,13 @@ export function createAimRig(instance) {
         else { twitches[i].t = Number.POSITIVE_INFINITY; twitches[i].x = 0; twitches[i].v = 0; }
 
         let target = _aim;
+        // This fin's own aim, when it has one — normalised into the held
+        // per-fin vector, so the twitch below rotates the right base.
+        const own = finAims?.[i];
+        if (own && own.lengthSq() > 1e-6) {
+          _finOwn[i].set(own.x, own.y, 0).normalize();
+          target = _finOwn[i];
+        }
         if (amount !== 0) {
           const a = upSign * (tc.angle ?? 0) * amount;
           const c = Math.cos(a);
@@ -378,7 +395,7 @@ export function createAimRig(instance) {
           // An exact rotation about Z rather than an added perpendicular, so
           // `angle` is honestly the radians it says it is at every aim rather
           // than only for the small ones.
-          _finAim.set(_aim.x * c - _aim.y * sn, _aim.x * sn + _aim.y * c, 0);
+          _finAim.set(target.x * c - target.y * sn, target.x * sn + target.y * c, 0);
           target = _finAim;
           // ...and the reach opens with it, which is what turns a hinge at the
           // shoulder into a flick of the whole limb. Composed with the per-side

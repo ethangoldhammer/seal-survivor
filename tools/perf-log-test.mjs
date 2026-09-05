@@ -630,5 +630,77 @@ section('WHOSE TEXTURES — the census, and the orphan gap');
     perfSummary().topTextures.length === 0 && perfSummary().texturesOrphanPeak === 0);
 }
 
+// --- THE THREE PLACES THE WALK USED TO BE BLIND -----------------------------
+//
+// Each of these was reported as an ORPHAN before the walk learned to look —
+// which is how a phone run came back saying 2 textures reachable against 345
+// alive, i.e. "99% of this game's textures are leaked". They are not, and an
+// instrument that says so with a straight face is worse than none: the number
+// was specific, it was stable across runs, and it sent a whole afternoon after
+// the wrong thing.
+//
+// The assertion in each case is the same: a texture bound THIS way is counted
+// as reachable, and therefore does NOT show up in the orphan gap.
+{
+  section('WHOSE TEXTURES — the three bindings a slot list cannot see');
+  const THREE = await import('three');
+  const scene = new THREE.Scene();
+  const named = (n) => {
+    const t = new THREE.Texture();
+    t.source = { data: { src: `http://x/${n}` } };
+    return t;
+  };
+
+  // 1. A MAP BOUND THROUGH AN INJECTED SHADER. Half the materials in this game
+  //    are stock three materials with onBeforeCompile adding uniforms — the
+  //    caustics, the goo field, the threat rings — and none of those maps is in
+  //    a named slot.
+  const injected = new THREE.MeshBasicMaterial();
+  injected.uniforms = {
+    uCaustics: { value: named('caustics.png') },
+    uLayers: { value: [named('layerA.png'), named('layerB.png')] },
+    uStrength: { value: 0.5 },   // not a texture, and must not throw
+  };
+  const lit = new THREE.Mesh(new THREE.BufferGeometry(), injected);
+
+  // 2. A BONE TEXTURE. One per Skeleton, allocated inside the first render, and
+  //    the pool holds hundreds — comfortably the biggest group in a real run.
+  const skinned = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+  const boneTex = new THREE.Texture();
+  skinned.skeleton = { boneTexture: boneTex };
+  //    ...and a second mesh SHARING that skeleton, which is how a rigged animal
+  //    modelled in several parts arrives. Counting per mesh would multiply the
+  //    largest group by however many pieces the artist used.
+  const skinnedPart = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+  skinnedPart.skeleton = skinned.skeleton;
+
+  scene.add(lit, skinned, skinnedPart);
+  // 3. THE SCENE'S OWN. Not visited by traverse() at all.
+  scene.background = named('sky.png');
+  scene.environment = named('env.png');
+
+  perfRunStart(0, 0, 0, 0);
+  // Five distinct: caustics, layerA, layerB, the bone texture, sky, env = 6.
+  noteTextures(scene, 6, 0);
+  const t = perfSummary();
+  const groups = t.topTextures.map((x) => `${x.source} x${x.peak}`);
+
+  check('an injected uniform map is reachable',
+    t.topTextures.some((x) => x.source === 'caustics.png'), JSON.stringify(groups));
+  check('...including an array of them',
+    t.topTextures.some((x) => x.source === 'layerA.png')
+    && t.topTextures.some((x) => x.source === 'layerB.png'), JSON.stringify(groups));
+  check('a bone texture is counted, and named as one',
+    (t.topTextures.find((x) => x.source === 'bone texture') ?? {}).peak === 1,
+    `two meshes share one skeleton — ${JSON.stringify(groups)}`);
+  check('the scene background and environment are counted',
+    t.topTextures.some((x) => x.source === 'sky.png')
+    && t.topTextures.some((x) => x.source === 'env.png'), JSON.stringify(groups));
+  check('all six are reachable', t.texturesReachablePeak === 6,
+    `${t.texturesReachablePeak} of 6`);
+  check('...so none of them is booked as a leak', t.texturesOrphanPeak === 0,
+    `${t.texturesOrphanPeak} orphans, which is the bug this section exists for`);
+}
+
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
 process.exit(failures ? 1 : 0);

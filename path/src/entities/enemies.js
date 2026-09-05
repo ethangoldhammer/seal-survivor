@@ -667,6 +667,60 @@ function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1, turnLimit = nu
     let diff = want - e.heading;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
+    // THE COME-ABOUT. A lateral cruiser (anything declaring `hunt.lateral`)
+    // that wants to go the other way does not arc round: an arc at turnRate
+    // is a loop whose midpoint is the animal pointing straight up or straight
+    // down, held there for as long as the turn takes — on a boss at 1.05
+    // rad/s that is a 27-unit body hanging vertical for a second and a half,
+    // and it was most of what "sharks swim up and down" looked like. So the
+    // heading is MIRRORED about vertical instead: same pitch, opposite side,
+    // in one frame. systems/fishTurn.js (`comeAbout` on the def) then yaws the
+    // body through the camera over its own duration, and `flipSpeedMul`
+    // below throttles the swim while it does, so the manoeuvre reads as the
+    // animal slowing and turning rather than as a skid.
+    //
+    // Never mid wind-up: the wind-up is the tell, and the line it locks is
+    // the line it visibly turned onto. A player who gets behind a shark
+    // during its wind-up is a player who is missed.
+    const lat = e.def.hunt?.lateral;
+    const lc = CONFIG.lateralCruise ?? {};
+    // One come-about per `flipHold`. A body sitting on top of what it wants
+    // sees the wanted direction reverse every frame as it crosses it, and a
+    // mirror with no hold turned that into a shark vibrating in place at
+    // half speed with its yaw never finishing.
+    if (e.flipHold > 0) e.flipHold -= dt;
+    if (lat && e.lungeStage !== 'wind' && e.lungeStage !== 'reaim'
+      && Math.abs(diff) > (lat.flipAngle ?? lc.flipAngle ?? 2.0)) {
+      if (e.flipHold > 0) {
+        // Mid come-about and asked to reverse AGAIN: hold the line instead.
+        // Arcing toward it would be the loop through vertical this exists to
+        // prevent, and mirroring again would be the vibration the hold
+        // exists to prevent; going straight for the rest of the hold is the
+        // only one of the three that looks like an animal.
+        diff = 0;
+      } else {
+        let mirrored = Math.PI - e.heading;
+        while (mirrored > Math.PI) mirrored -= Math.PI * 2;
+        while (mirrored < -Math.PI) mirrored += Math.PI * 2;
+        let after = want - mirrored;
+        while (after > Math.PI) after -= Math.PI * 2;
+        while (after < -Math.PI) after += Math.PI * 2;
+        // Only if the mirror actually gets it most of the way there. A
+        // heading that is already near vertical mirrors onto itself, and
+        // flipping it every frame while the step below turns it back is a
+        // body that never turns at all — so a heading the mirror cannot help
+        // arcs like anything else, and the spawn (see spawnOne) makes sure a
+        // lateral cruiser never starts on one.
+        if (Math.abs(after) < Math.abs(diff) - 0.6) {
+          e.heading = mirrored;
+          diff = after;
+          e.flipHold = lat.flipHold ?? lc.flipHold ?? 0.8;
+        }
+      }
+    }
+    if (lat && e.__turnT != null && e.__turnT < 1) {
+      speedMul *= lat.flipSpeedMul ?? lc.flipSpeedMul ?? 0.5;
+    }
     const step = Math.min(Math.abs(diff), turnRate * dt) * Math.sign(diff);
     e.heading += step;
     // speedMul applies here too. It did NOT before, and nothing noticed:
@@ -768,86 +822,63 @@ function setLookTarget(e, x, y) {
 // into this camera and invisible.
 // ---------------------------------------------------------------------------
 
-// Hermite smoothstep between two distances, 1 when near and 0 when far.
-function closeness(dist, far, near) {
-  if (!(far > near)) return dist <= near ? 1 : 0;
-  const t = Math.min(1, Math.max(0, (far - dist) / (far - near)));
-  return t * t * (3 - 2 * t);
-}
-
-// Advances the per-creature cruise state. `gap` is the distance to whatever it
-// is pursuing; pass null when it is pursuing nothing, which holds vertical
-// authority at the floor.
+// Advances the per-creature cruise state: the weave phase.
 //
-// WHICH distance is per-branch, and the distinction matters more than it looks:
-//
-//   The PLAYER approach and the idle cruise pass the HORIZONTAL gap. Gating
-//   those on the straight-line distance deadlocks — a shark directly below the
-//   player is far away, so it is flattened, so it swims sideways, so it never
-//   closes, because the only direction that would close the gap is the one it
-//   is forbidden. Measured: a shark 36 units under the player circled at its
-//   own depth indefinitely. The horizontal gap makes the rule "come up once you
-//   are underneath", which is also the shape a real attack has — run in flat
-//   and level, get beneath, then rise into it.
-//
-//   Going after a specific piece of FOOD passes the straight-line distance, so
-//   the creature may commit to a dive as soon as it is near in any direction.
-//   These are deliberate acts on a fixed point rather than the drifting the
-//   flattening exists to stop, and gating them horizontally breaks them: chum
-//   sits on the seabed, so a shark that had to be almost directly above it
-//   before it could descend would overshoot on a turning circle wider than the
-//   window it had, circle, and try again. Measured as a 1-in-12 failure of
-//   tools/crab-crowd-test.mjs, where a shark abandoned 182 chases in 20s.
+// `gap` is no longer read. It used to drive a vertical-authority gain that let
+// a shark climb freely once it was close, and "close" is most of a fight, so
+// the close fight was a body going up and down. The cruise is flat now at
+// EVERY range — see shapeSwim — and the parameter stays so the five callers
+// keep their shape for whatever wants a distance next.
 function updateSwim(e, dt, gap, cfg) {
   if (!cfg) return;
-  const floor = cfg.climbFloor ?? 0.1;
-  const want = gap == null
-    ? floor
-    : Math.max(floor, closeness(gap, cfg.climbRange ?? 14, cfg.climbFull ?? 6));
-  // Exponential ease, written frame-rate independently — a plain lerp by
-  // `rate * dt` changes how abrupt this looks with the frame rate, and "not
-  // abrupt" is the entire requirement.
-  const k = 1 - Math.exp(-(cfg.climbEase ?? 0.9) * dt);
-  e.climbGain = (e.climbGain ?? floor) + (want - (e.climbGain ?? floor)) * k;
-
   const period = cfg.weavePeriod ?? 5.5;
   // Seeded per creature at spawn so a pack does not weave in lockstep.
   e.weavePhase = ((e.weavePhase ?? 0) + (dt / Math.max(0.05, period))) % 1;
 }
 
-// Flattens a desired direction against the current vertical authority.
-function shapeSwim(e, dx, dy, cfg) {
-  if (!cfg) return { x: dx, y: dy };
-  const gain = e.climbGain ?? 1;
-  let x = dx;
-  let y = dy * gain;
+// The pitch a lateral cruiser may swim at, in radians off horizontal. Per
+// species on the `lateral` block, shared defaults in CONFIG.lateralCruise.
+// `dive` picks the looser number for a deliberate act on a fixed piece of food.
+function cruisePitch(cfg, dive = false) {
+  const lc = CONFIG.lateralCruise ?? {};
+  return dive
+    ? (cfg.divePitch ?? lc.divePitch ?? 0.6)
+    : (cfg.cruisePitch ?? lc.cruisePitch ?? 0.42);
+}
 
-  // Scaling `dy` alone is not enough, and the case it misses is the common one.
-  // What "swims laterally" means is a bound on the SLOPE of the path, and a
-  // slope is a ratio — so a target almost directly overhead (`dx` small but not
-  // zero, which is most of the orbit around a player) still comes out near
-  // vertical no matter how far `dy` is scaled down. Measured before this: a
-  // shark approaching a player straight above it, well outside its climb range,
-  // still travelled 140% as far vertically as horizontally.
-  //
-  // So the gain buys SLOPE rather than scale. Flat at range, free up close, and
-  // any steeper request is answered by lengthening the horizontal run instead
-  // of by refusing to climb — which is what turns a dive into a pass.
-  const flat = cfg.flatSlope ?? 0.35;   // ~19 degrees off horizontal
-  const free = cfg.climbSlope ?? 8;     // effectively unconstrained
-  // GEOMETRIC between the two, not linear. A slope is a ratio, and interpolating
-  // a ratio linearly spends almost all of the range immediately: from 0.35 to 8,
-  // a gain of just 0.12 already buys 1.27 — a 52-degree climb, at the floor,
-  // which is the setting that is supposed to mean "flat". Geometrically the same
-  // 0.12 gives 0.50, and the curve stays gentle until the creature is genuinely
-  // close.
-  const slope = flat * Math.pow(free / flat, gain);
+// Bounds a desired direction to the cruise pitch.
+//
+// A SHARK SWIMS LEFT AND RIGHT. Vertical movement is not earned by closing in
+// any more; it is not available at all outside a lunge. What "swims laterally"
+// means is a bound on the SLOPE of the path — a ratio, which is why `dy` is not
+// simply scaled: a target almost directly overhead (`dx` small but not zero,
+// which is most of the close fight) comes out near vertical however far `dy`
+// is scaled down. So the horizontal run is LENGTHENED until the slope is legal,
+// and a request to go up becomes a request to go along and gently up. The
+// creature still reaches the depth it wants — at 24 degrees, a 15-unit climb
+// is a 34-unit run — and it gets there by making passes, which is the only way
+// a shark should get anywhere.
+//
+// The lunge (lungeChase) writes the velocity itself on the frames it owns and
+// never comes through here, which is what "unless it is lunging" means.
+function shapeSwim(e, dx, dy, cfg, dive = false) {
+  if (!cfg) return { x: dx, y: dy };
+  let x = dx;
+  let y = dy;
+  const slope = Math.tan(Math.min(1.5, Math.max(0.02, cruisePitch(cfg, dive))));
   const minX = Math.abs(y) / slope;
   if (Math.abs(x) < minX) {
-    // Keep whatever horizontal intent it had; falling back to the way it is
-    // already pointing when there is none, so it commits to a side rather than
-    // stalling head-on.
-    const dir = Math.abs(x) > 1e-6 ? Math.sign(x) : (Math.cos(e.heading ?? 0) >= 0 ? 1 : -1);
+    // Which way to lengthen the run. The request's own side when it has a
+    // real one; the way the body is ALREADY going when it does not. The
+    // threshold is deliberately coarse: a body held at the crowd ring wants
+    // to go tangentially — straight up — with a horizontal component that is
+    // only the ring error, a few hundredths flipping sign every frame, and
+    // honouring that sign had a boss dithering left-right-left on the spot.
+    // A request that is mostly vertical is answered by carrying on and
+    // climbing, which is what a pass is.
+    const dir = Math.abs(x) > 0.35 * Math.abs(y)
+      ? Math.sign(x)
+      : (Math.cos(e.heading ?? 0) >= 0 ? 1 : -1);
     x = dir * minX;
   }
   // The weave, at the fraction of it that reaches the body.
@@ -1047,6 +1078,10 @@ function crowdSelf(e) {
   // fast path, for at most `groupMaxAlive.apex` bodies.
   v.inCrowd = inSpawnGroup(e.def, 'apex')
     && !(cruiseHunter(e) && CONFIG.cruiseHunt?.standoffRing === false);
+  // A lunging body holds the ring even on its feeding turn — the turn is
+  // spent as a run instead. See approachVector and the commit gate in
+  // lungeChase.
+  v.holdsRing = e.def.lunge != null;
   v.x = e.mesh.position.x;
   v.y = e.mesh.position.y;
   v.radius = e.radius;
@@ -1142,8 +1177,144 @@ function refreshApexCrowd(dt, playerPos) {
 //
 // @param ownCruise  false to run as an overlay; see above.
 // @returns whether this call owns the creature's velocity this frame.
+// ---------------------------------------------------------------------------
+// PATTERNS. A pass used to be the only shape a lunge had, so a player who had
+// seen one had seen all of them: sidestep the wind-up, wait for the veer,
+// repeat. `lunge.patterns` on the def weights three shapes, rolled at the end
+// of the wind-up so the tell looks identical for all three — the difference is
+// what happens AFTER you have dodged:
+//
+//   pass    wind → strike → rest.             The original. Sidestep and it is
+//                                             gone.
+//   double  wind → strike → reaim → strike.   Comes back. The re-aim is short
+//                                             and throttled — a second, shorter
+//                                             tell — and the second run is
+//                                             shorter still. Punishes a dodge
+//                                             that stops moving.
+//   feint   wind → jab → reaim → strike.      Starts, and does not commit: a
+//                                             short slow jab, a re-aim, then the
+//                                             real run. Punishes a dodge that
+//                                             goes early.
+//
+// One cooldown per plan, whatever it held. `strike` is the stage name on every
+// committed step (systems/dodge.js reads it, main.js bills the bite on it);
+// `reaim` is new and is the only other stage that owns the velocity.
+// ---------------------------------------------------------------------------
+const PATTERN_KINDS = ['pass', 'double', 'feint'];
+
+function rollLungePlan(c) {
+  const rules = CONFIG.lungeRules ?? {};
+  const w = c.patterns ?? null;
+  let kind = 'pass';
+  if (w) {
+    let total = 0;
+    for (const k of PATTERN_KINDS) total += Math.max(0, w[k] ?? 0);
+    if (total > 0) {
+      let r = Math.random() * total;
+      for (const k of PATTERN_KINDS) {
+        r -= Math.max(0, w[k] ?? 0);
+        if (r <= 0) { kind = k; break; }
+      }
+    }
+  }
+  const strike = c.strikeTime ?? 0.8;
+  const burst = c.speedMul ?? 3.6;
+  const reaim = c.reaimTime ?? rules.reaimTime ?? 0.45;
+  if (kind === 'double') {
+    return [
+      { stage: 'strike', time: strike, speedMul: burst },
+      { stage: 'reaim', time: reaim },
+      { stage: 'strike', time: strike * (c.secondStrikeMul ?? rules.secondStrikeMul ?? 0.7), speedMul: burst },
+    ];
+  }
+  if (kind === 'feint') {
+    return [
+      { stage: 'strike', time: c.jabTime ?? rules.jabTime ?? 0.3,
+        speedMul: burst * (c.jabSpeedMul ?? rules.jabSpeedMul ?? 0.55) },
+      { stage: 'reaim', time: reaim },
+      { stage: 'strike', time: strike, speedMul: burst },
+    ];
+  }
+  return [{ stage: 'strike', time: strike, speedMul: burst }];
+}
+
+// Whether the line to the player is one a LATERAL cruiser may commit down.
+//
+// Two cones. `maxPitch` bounds the line's angle off horizontal, so a shark
+// never lunges straight up at a seal hovering over it — it has to get to your
+// depth first, by making passes, which is where a shark's threat is supposed
+// to come from. `commitCone` bounds the line's angle off the current heading,
+// so a lunge always comes out of a pass rather than out of a body that has to
+// turn round first; a seal behind the shark is one it comes back for.
+//
+// The sailfish and anything else that runs the lunge as its whole behaviour
+// (`ownCruise`) keeps the old gate: it is not a lateral animal.
+function lungeLineOpen(e, ctx, c) {
+  if (!e.def.hunt?.lateral) return true;
+  const rules = CONFIG.lungeRules ?? {};
+  const pitch = Math.abs(Math.atan2(ctx.dirY, Math.abs(ctx.dirX)));
+  if (pitch > (c.maxPitch ?? rules.maxPitch ?? 1.0)) return false;
+  let diff = Math.atan2(ctx.dirY, ctx.dirX) - (e.heading ?? 0);
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  // ...AND NO WIDER THAN THE WIND-UP CAN TURN. The wind-up steers onto the
+  // seal at the body's own turnRate and the line locks when the clock runs
+  // out, wherever the nose has got to — so a cone wider than turnRate x
+  // windup is a body launching mid-turn. On a boss at 1.05 rad/s that was a
+  // run that left the wind-up pointing eighty degrees UP, straight through the
+  // pitch gate above, and climbed twenty units. Four fifths of the budget,
+  // because the last of any turn is spent settling rather than sweeping.
+  const turnRate = e.turnRate ?? e.def.turnRate ?? 3;
+  const budget = turnRate * (c.windup ?? 0.45) * 0.8;
+  return Math.abs(diff) <= Math.min(c.commitCone ?? rules.commitCone ?? 1.75, budget);
+}
+
 function lungeChase(e, dt, ctx, ownCruise = true) {
   const c = e.def.lunge ?? {};
+  const rules = CONFIG.lungeRules ?? {};
+
+  // Enter the next step of the rolled plan.
+  const enterStep = () => {
+    const step = e.lungePlan[e.lungeStep];
+    // Spelled out rather than copied off the step: `strike` is the name two
+    // other systems read (dodge.js, main.js) and tools/boss-dodge-test.mjs
+    // greps this file for the assignment.
+    if (step.stage === 'strike') e.lungeStage = 'strike';
+    else e.lungeStage = 'reaim';
+    e.lungeClock = step.time;
+    e.lungeStageTime = step.time;
+    e.animState = step.stage === 'strike' ? 'boost' : 'swim';
+  };
+  // The plan is spent. Into the cooldown, veering off.
+  const finish = (diff) => {
+    e.lungeStage = 'rest';
+    // Jitter only ever LENGTHENS the gap, so a tuned cooldown is a floor a
+    // player can rely on and the rhythm is still not a metronome. The shared
+    // rule is for the lateral hunters; the sailfish and the barracuda keep
+    // the exact cadence (and the exact roll count — their harnesses are
+    // seeded) they shipped with unless their own block asks.
+    const jitter = c.cooldownJitter ?? (e.def.hunt?.lateral ? (rules.cooldownJitter ?? 0.35) : 0);
+    e.lungeClock = (c.cooldown ?? 3.2) * (1 + (jitter > 0 ? Math.random() * jitter : 0));
+    e.lungeStageTime = e.lungeClock;
+    e.lungePlan = null;
+    e.lungeStep = 0;
+    if (ownCruise) {
+      // Off the side the player is NOT on, so the pass opens a gap whether it
+      // connected or whiffed. Steered toward rather than snapped to — the arc
+      // out is as much of the shape as the arc in.
+      e.lungeVeer = e.heading - Math.sign(diff || 1) * (c.veerSwing ?? 0.9);
+      e.lungeVeerLeft = 0;
+    } else {
+      // A hunter LEVELS OUT and carries on the way it was going, for
+      // `veerTime`, before the hunt takes the body back. Without this the
+      // approach re-acquired the seal on the frame the run ended and the
+      // shark turned straight back into it — a pass that did not pass. Level,
+      // because the run may have been pitched up to `maxPitch` and the body
+      // that comes out of it has to be a lateral one again.
+      e.lungeVeer = Math.cos(e.heading) >= 0 ? 0 : Math.PI;
+      e.lungeVeerLeft = c.veerTime ?? rules.veerTime ?? 0.9;
+    }
+  };
 
   // --- NOT AT A CORPSE ------------------------------------------------------
   //
@@ -1176,6 +1347,8 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     // rolled on first update rather than at spawn.
     e.lungeStage = null;
     e.lungeVeer = null;
+    e.lungePlan = null;
+    e.lungeStep = 0;
     e.animState = null;
     if (!ownCruise) return false;
     steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
@@ -1199,6 +1372,8 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     // itself, which one fish's wind-up cannot be no matter how loud it is.
     e.lungeStage = 'rest';
     e.lungeClock = (c.cooldown ?? 3.2) * (c.stagger ?? 1) * Math.random();
+    e.lungeStageTime = e.lungeClock;
+    e.lungeVeerLeft = 0;
   }
   e.lungeClock = Math.max(0, (e.lungeClock ?? 0) - dt);
 
@@ -1210,6 +1385,7 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
   // field the CSV can blank.
   if (e.lungeStage === 'strike') {
     e.animState = 'boost';
+    const step = e.lungePlan?.[e.lungeStep] ?? { speedMul: c.speedMul ?? 3.6 };
     let diff = Math.atan2(ctx.dirY, ctx.dirX) - e.heading;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
@@ -1218,16 +1394,29 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     // e.heading, not just vx/vy: every steerTo the moment this ends re-derives
     // the velocity from it, so a heading left where the wind-up put it would
     // teleport the fish's course back a second into the past.
-    const speed = e.speed * (c.speedMul ?? 3.6);
+    const speed = e.speed * (step.speedMul ?? c.speedMul ?? 3.6);
     e.vx = Math.cos(e.heading) * speed;
     e.vy = Math.sin(e.heading) * speed;
     if (e.lungeClock <= 0) {
-      e.lungeStage = 'rest';
-      e.lungeClock = c.cooldown ?? 3.2;
-      // Off the side the player is NOT on, so the pass opens a gap whether it
-      // connected or whiffed. Steered toward rather than snapped to — the arc
-      // out is as much of the shape as the arc in.
-      e.lungeVeer = e.heading - Math.sign(diff || 1) * (c.veerSwing ?? 0.9);
+      e.lungeStep = (e.lungeStep ?? 0) + 1;
+      if (e.lungePlan && e.lungeStep < e.lungePlan.length) enterStep();
+      else finish(diff);
+    }
+    return true;
+  }
+
+  // --- RE-AIM ---------------------------------------------------------------
+  // Between two runs of a `double` or a `feint`: throttled back and turning
+  // onto the seal at full turn rate, exactly like the wind-up and for the same
+  // reason — it is the tell for the run that follows, shorter because the
+  // player has already been told once this cycle.
+  if (e.lungeStage === 'reaim') {
+    e.animState = 'swim';
+    steerTo(e, ctx.dirX, ctx.dirY, dt, 6, c.windSpeedMul ?? 0.4);
+    if (e.lungeClock <= 0) {
+      e.lungeStep = (e.lungeStep ?? 0) + 1;
+      if (e.lungePlan && e.lungeStep < e.lungePlan.length) enterStep();
+      else finish(0);
     }
     return true;
   }
@@ -1247,9 +1436,12 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     e.animState = 'swim';
     steerTo(e, ctx.dirX, ctx.dirY, dt, 6, c.windSpeedMul ?? 0.4);
     if (e.lungeClock <= 0) {
-      e.lungeStage = 'strike';
-      e.lungeClock = c.strikeTime ?? 0.8;
-      e.animState = 'boost';
+      // The pattern is rolled HERE, at the end of the tell, so every plan
+      // opens with the same wind-up and nothing about the gather says which
+      // one is coming.
+      e.lungePlan = rollLungePlan(c);
+      e.lungeStep = 0;
+      enterStep();
     }
     return true;
   }
@@ -1258,13 +1450,20 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
 
   // --- REST -----------------------------------------------------------------
   if (e.lungeStage === 'rest') {
-    // The peel-off is the sailfish's to steer and the hunter's to ignore: a
-    // shark coming out of a pass already has a cruise, a standoff and a crowd
-    // to swim around, and overriding all three with a fixed heading for three
-    // seconds would put the whole point of `hunt` on a timer.
+    // The peel-off is the sailfish's to steer for the whole rest. A hunter
+    // steers it only for `veerTime` — the level carry-through that makes the
+    // pass a pass — and then hands the body back: a shark coming out of a run
+    // already has a cruise, a standoff and a crowd to swim around, and
+    // overriding all three with a fixed heading for eight seconds would put
+    // the whole point of `hunt` on a timer.
     if (ownCruise) {
       if (e.lungeVeer != null) steerTo(e, Math.cos(e.lungeVeer), Math.sin(e.lungeVeer), dt, 6);
       else steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
+    } else if (e.lungeVeer != null && (e.lungeVeerLeft ?? 0) > 0) {
+      e.lungeVeerLeft -= dt;
+      steerTo(e, Math.cos(e.lungeVeer), Math.sin(e.lungeVeer), dt, 6);
+      if (e.lungeClock <= 0) { e.lungeStage = 'cruise'; e.lungeVeer = null; }
+      return true;
     }
     if (e.lungeClock <= 0) {
       e.lungeStage = 'cruise';
@@ -1293,9 +1492,20 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     return true;
   }
   if (ownCruise) steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
-  if (ctx.dist <= range) {
+  // A body in the crowd ring commits on ITS TURN: the feeding slot
+  // (systems/apexCrowd.js) used to be the right to leave the ring and go in,
+  // and for a lunging hunter it is the right to run. Two bosses' worth of apex
+  // bodies around the seal therefore run one or two at a time, never all at
+  // once. A single boss always holds a slot.
+  const myTurn = ownCruise || e.crowdView?.inCrowd !== true || e.feeding !== false;
+  // Never mid come-about (systems/fishTurn.js is still yawing the body):
+  // it turns, THEN it gathers. A wind-up that opened on the frame the heading
+  // mirrored had the ring drawing in on a body still facing the other way.
+  const settled = !(e.__turnT < 1);
+  if (myTurn && settled && ctx.dist <= range && lungeLineOpen(e, ctx, c)) {
     e.lungeStage = 'wind';
     e.lungeClock = c.windup ?? 0.45;
+    e.lungeStageTime = e.lungeClock;
   }
   // The wind-up starts on the NEXT frame either way. That matters to the
   // overlay: returning true here would hand back a frame in which nothing was
@@ -1762,8 +1972,12 @@ const BEHAVIORS = {
       // one thing in the game a hunter is supposed to abandon everything for,
       // and it only exists for a few seconds after a boat goes down.
       const turn = trackTurn(e, dx, dy, true);
+      // Shaped AFTER the crowd term is folded in, as the player branch does
+      // through approachVector: an avoidance added on top of a shaped vector
+      // is a vertical shove the cap never saw.
+      const go = shapeSwim(e, dx / d + avoid.x, dy / d + avoid.y, lat, true);
       if (turn === 0) cruiseOn(e, dt, h, lat, speedMul, { look: false, swim: false });
-      else steerTo(e, dx / d + avoid.x, dy / d + avoid.y, dt, 6, speedMul, turn);
+      else steerTo(e, go.x, go.y, dt, 6, speedMul, turn);
       return;
     }
     e.humanTarget = null;
@@ -1838,12 +2052,16 @@ const BEHAVIORS = {
       if (turn === 0) {
         cruiseOn(e, dt, h, lat, speedMul, { look: false, swim: false });
       } else {
-        steerTo(
+        // Pitch-bounded like everything else now (the dive pitch, since a fish
+        // is a fixed thing to go and get). A school overhead is reached by
+        // rising through it on a pass, and the pass eats what it goes through.
+        const go = shapeSwim(
           e,
           (target.mesh.position.x - px) / pd + avoid.x,
           (target.mesh.position.y - py) / pd + avoid.y,
-          dt, 6, speedMul, turn,
+          lat, true,
         );
+        steerTo(e, go.x, go.y, dt, 6, speedMul, turn);
       }
       return;
     }
@@ -1925,7 +2143,16 @@ const BEHAVIORS = {
         // it could cause was already bounded by `maxChase` and `cooldown`
         // above, which is a shark giving up on a scrap rather than a shark
         // circling one forever.
-        steerTo(e, ox - px, oy - py, dt, 6, speedMul);
+        //
+        // Pitch-bounded at the DIVE pitch since the cruise went flat. The
+        // overshoot the old note feared is answered by the come-about in
+        // steerTo now: a shark that runs past a scrap flips and comes back
+        // down onto it instead of circling at its turning radius, and
+        // tools/crab-crowd-test.mjs still holds "connects more often than it
+        // whiffs".
+        const cdd = cd || 1;
+        const go = shapeSwim(e, (ox - px) / cdd, (oy - py) / cdd, lat, true);
+        steerTo(e, go.x, go.y, dt, 6, speedMul);
         return;
       }
     }
@@ -1962,7 +2189,17 @@ const BEHAVIORS = {
 
       const look = weaveLook(e, px + ctx.dirX * ctx.dist, py + ctx.dirY * ctx.dist, lat);
       setLookTarget(e, look.x, look.y);
-      if (e.standoffDist == null) e.standoffDist = pickStandoff(CONFIG.apexCrowd);
+      if (e.standoffDist == null) {
+        e.standoffDist = pickStandoff(CONFIG.apexCrowd);
+        // A LUNGING hunter holds off OUTSIDE its own lunge floor. The crowd
+        // ring is 7 give or take; a boss's `minRange` is 8 or 9, and a body
+        // held inside the floor of its own tell is a body that can never open
+        // the gap it needs to commit — it circled at the ring and the lunge
+        // was a thing that happened when the seal moved away. Held out at the
+        // floor and a bit, every approach is a candidate for a run.
+        const floor = (e.def.lunge?.minRange ?? 0) * (CONFIG.lungeRules?.standoffMul ?? 1.2);
+        if (floor > e.standoffDist) e.standoffDist = floor;
+      }
       const want = approachVector(crowdSelf(e), ctx, ctx.apex, CONFIG.apexCrowd);
       const go = shapeSwim(e, want.x, want.y, lat);
       // Same budget as the fish branch, on the looser player numbers. Measured
@@ -2790,7 +3027,17 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     * difficultyRamp('speed', difficulty) * lateGameMul('speed', spawnLevel)
     * enemyPaceMul('speed')
     + Math.random() * (def.speedVariance ?? 0);
-  const heading = Math.random() * Math.PI * 2;
+  // A LATERAL CRUISER STARTS LEVEL. One draw either way, so the roll count a
+  // seeded harness sees does not change: the side from the top bit, the pitch
+  // within `wanderPitch` from the rest. A uniformly random heading put one
+  // shark in six into the water pointing straight up, and a turn-limited body
+  // takes a good second to come down from that — long enough to be the first
+  // thing the player saw it do.
+  const headRoll = Math.random();
+  const spawnLat = def.hunt?.lateral;
+  const heading = spawnLat
+    ? (headRoll < 0.5 ? 0 : Math.PI) + ((headRoll * 2) % 1 * 2 - 1) * (spawnLat.wanderPitch ?? 0.14)
+    : headRoll * Math.PI * 2;
 
   // The pressure side of the balance ledger: hp entering the arena. Recorded
   // at spawn rather than counted at death on purpose — the creatures a

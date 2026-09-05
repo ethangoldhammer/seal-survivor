@@ -417,6 +417,9 @@ export function createAnimationController(instance) {
   // springRest note above), and for a corpse the only honest target is the pose
   // it died in — not the bind pose, which is a shape the animal was never in.
   let limp = null;
+  // Whether the chains' flesh radii have been read off the skin — done once,
+  // the first time a floor is set. See setLimpFloor.
+  let radiiMeasured = false;
 
   // SPRING CHAINS SOMETHING ELSE HAS TAKEN OVER, by role. See muteSpring — and
   // it opens holding every `asleep` role, which is the state anything that
@@ -799,7 +802,7 @@ export function createAnimationController(instance) {
         for (let i = 0; i < springBones.length; i++) springBones[i].quaternion.copy(limp.pose[i]);
         const live = CONFIG.animation.spring;
         if (live.enabled) {
-          for (const { solver } of springs) solver.update(dt, limp.cfg, live.weight);
+          for (const { solver } of springs) solver.update(dt, limp.cfg, live.weight, limp.floor);
         }
         return;
       }
@@ -935,6 +938,31 @@ export function createAnimationController(instance) {
 
     isLimp() {
       return limp != null;
+    },
+
+    /**
+     * THE GROUND UNDER A LIMP BODY. A world-space plane the loose chains may
+     * not hang through — see the floor note in systems/boneSpring.js. Set by
+     * whoever is moving the corpse (systems/deathDive.js, once a frame, at the
+     * sand line), because the body's position is theirs and the solver only
+     * knows about directions. Null is open water. A no-op on a body that is
+     * not limp: the plane is part of the limp record, and it goes with it.
+     *
+     * @param floor { y, friction } held by the caller and read on every solve,
+     *        so it can be updated in place rather than re-passed — or null.
+     */
+    setLimpFloor(floor) {
+      if (!limp) return;
+      limp.floor = floor ?? null;
+      // The flesh on every sprung bone, read off the skin the first time a
+      // floor is asked for and never again: a plane that stops the bare bone
+      // stops nothing the player sees. See measureRadii in systems/boneSpring.js.
+      if (floor && !radiiMeasured) {
+        radiiMeasured = true;
+        const skinned = [];
+        instance.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+        for (const { solver } of springs) solver.measureRadii(skinned);
+      }
     },
 
     resetSpring() {

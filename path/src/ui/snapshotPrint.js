@@ -102,44 +102,25 @@ const STYLES = `
      lands on the next word.) */
   .sv-print { transform-origin: 50% 50%; will-change: transform; }
   .sv-print-flight { position: absolute; left: 50%; top: 50%; }
-  .sv-print-paper { background: var(--sv-paper); padding: var(--sv-pad) var(--sv-pad) 0;
-    box-shadow: 0 18px 46px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.4); }
-  .sv-print-frame { position: relative; overflow: hidden; background: #05070d; line-height: 0; }
-  .sv-print-photo { display: block; width: 100%; height: auto; }
 
-  /* THE UNDEVELOPED PRINT. A flat sheet of emulsion over the picture that
-     fades off it — the picture underneath is already there, which is what
-     makes this cost nothing. The tint drains at the same time, so the first
-     thing to arrive is a grey ghost and the colour comes up under it. */
-  /* Developed is the DEFAULT — a print that is not currently coming out of a
-     camera is a finished photograph, and an emulsion that had to be switched
-     off would cover every print on the score screen. */
-  .sv-print-dev { position: absolute; inset: 0; background: var(--sv-emulsion); opacity: 0;
-    transition: opacity var(--sv-develop) ease-out var(--sv-develop-delay); }
-  .sv-print-photo { transition: filter var(--sv-develop) ease-out var(--sv-develop-delay); }
-  .sv-print-wet .sv-print-dev { opacity: 1; }
-  .sv-print-wet .sv-print-photo { filter: saturate(0.1) contrast(0.75) brightness(1.15); }
-  .sv-print-dry .sv-print-dev { opacity: 0; }
-  .sv-print-dry .sv-print-photo { filter: none; }
+  /* THE PAPER. The artboard draws the whole print — paper, photograph, chin
+     and all — so there is no border and no chin to style here.
 
-  /* The chin: the wide bottom border that makes a print a print, with the
-     name written across it. */
-  .sv-print-chin { display: flex; justify-content: space-between; align-items: baseline;
-    gap: 10px; color: var(--sv-ink); padding: calc(var(--sv-pad) * 0.62) 2px calc(var(--sv-pad) * 1.5);
-    font-size: var(--sv-chin); letter-spacing: 0.02em; }
-  .sv-print-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; }
-  .sv-print-stat { font-weight: 600; opacity: 0.55; white-space: nowrap;
-    font-variant-numeric: tabular-nums; }
-
-  /* THE RIVE PAPER. The artboard draws the whole print — paper, photograph,
-     chin and all — so there is no border and no chin to style here.
+     THERE USED TO BE A SECOND ONE, drawn in DOM and CSS: a .sv-print-paper
+     with an <img> inside it, a flat sheet of emulsion fading off the picture,
+     and a chin with the boss's name laid across it. It was the original print
+     and it stayed on as the fallback for a run where Rive had not loaded.
+     Deleted 2026-09-05, on purpose and not as cleanup: two implementations of
+     one piece of paper drift the first time either is retuned, and the one
+     that drifts is the one nobody is looking at — which is the fallback, which
+     is exactly the one a player only ever sees when something has already gone
+     wrong. There is one polaroid in this game now.
 
      IT ALSO OWNS THE DEVELOP. The canvas used to carry .sv-print-photo so the
-     emulsion above applied to it too, one develop whichever renderer drew the
-     print. That is over: the artboard fades its photograph in itself as part
-     of tWriteOn, and a sheet of emulsion over the canvas would hide exactly
-     the animation the trigger exists to play. Nothing here fades a Rive print.
+     emulsion applied to it too, one develop whichever renderer drew the print.
+     That is over: the artboard fades its photograph in itself as part of
+     tWriteOn, and a sheet of emulsion over the canvas would hide exactly the
+     animation the trigger exists to play. Nothing here fades a print.
 
      drop-shadow rather than box-shadow, because the canvas is transparent
      around the paper and a box shadow would trace the CANVAS — a hard
@@ -152,7 +133,6 @@ const STYLES = `
      flourish, and it is the flourish that makes people ill. */
   @media (prefers-reduced-motion: reduce) {
     .sv-print { transition: none !important; }
-    .sv-print-dev, .sv-print-photo { transition: none !important; }
     .sv-print-flash { display: none; }
   }
 `;
@@ -403,40 +383,73 @@ function relayout() {
  * would drift apart the first time either is retuned, and the one that drifted
  * would be the one the player is asked to share.
  *
+ * The composited PNG used to be the first argument, for the <img> the coded
+ * paper put inside itself. That paper is gone and so is the parameter: the
+ * picture comes from `meta.square` now, which is the uncaptioned crop the
+ * artboard wants, and a `url` nothing read would have sat in this signature
+ * looking load-bearing.
+ *
  * @param width in pixels. The border, the chin and the type are all derived
  *              from it, so a print is one shape at any size.
+ * @returns the element, or null when no card could be built.
  */
-export function buildPrintPaper(url, meta = {}, width = 240) {
+// Whether the "no card" line above has been said. Session-scoped and never
+// reset — a run restart does not make the artboard load.
+let warnedNoCard = false;
+
+export function buildPrintPaper(meta = {}, width = 240) {
   mountStyles();
-  const c = cfg();
   const w = Math.max(80, Math.round(width));
 
-  // THE RIVE PAPER, when there is one. Two conditions, and the second is the
-  // one that matters: `meta.square` is the UNCAPTIONED square crop of the
-  // frame, and without it the only picture on hand is the composited one with
-  // a caption already burnt into it — which inside an artboard that draws its
-  // own chin would read as a print of a print. A run whose capture path has
-  // not handed one over falls through to the coded paper, which is a look the
-  // game already shipped rather than a broken one.
+  // TWO CONDITIONS, and the second is the one that matters: `meta.square` is
+  // the UNCAPTIONED square crop of the frame, and without it the only picture
+  // on hand is the composited one with a caption already burnt into it — which
+  // inside an artboard that draws its own chin would read as a print of a
+  // print.
+  //
+  // FAILING EITHER MEANS NO PRINT, and that is the change: there used to be a
+  // second polaroid here, drawn in DOM and CSS, which this fell through to.
+  // See the note in the styles above for why it is gone. The consequence is
+  // stated plainly rather than hidden — a run where the artboard did not load
+  // takes no trophy, where before it took a different-looking one. That is the
+  // better failure: a missing print is obviously missing, and a print in the
+  // wrong hand is a thing the player is invited to share.
   const card = (snapshotCardsLive() && meta.square)
     ? buildSnapshotCard({ photo: meta.square, meta: cardTextFor(meta), width: w })
     : null;
 
-  if (card) {
+  if (!card) {
+    // ONCE A SESSION, not once a print. Said at all because this is the one
+    // path that produces nothing, and a boss kill with no trophy and no line in
+    // the console is indistinguishable from the feature being switched off —
+    // but said once, because the condition is a property of the session (the
+    // artboard either loaded or it did not) and the score screen re-lays the
+    // whole fan every time it opens. Unthrottled, a run with eight kills wrote
+    // eight identical lines every time the card was shown.
+    if (!warnedNoCard) {
+      warnedNoCard = true;
+      console.warn('[snapshotPrint] no card — '
+        + (!snapshotCardsLive() ? 'the Rive artboard is not live' : 'the shot carried no square crop')
+        + '; this session takes no prints');
+    }
+    return null;
+  }
+
+  {
     const el = document.createElement('div');
     el.className = 'sv-print sv-print-riv';
     el.style.width = `${w}px`;
-    // NO EMULSION, AND NO DEVELOP FILTER, and that is the whole difference
-    // between the two papers now. The artboard fades its own photograph in as
-    // part of `tWriteOn` — a grey sheet over the canvas would cover the
-    // animation it exists to play, and a saturate/contrast filter on the
-    // canvas would be a second develop fighting the first.
+    // NO EMULSION AND NO DEVELOP FILTER. The artboard fades its own
+    // photograph in as part of `tWriteOn` — a grey sheet over the canvas would
+    // cover the animation it exists to play, and a saturate/contrast filter on
+    // the canvas would be a second develop fighting the first.
     //
-    // So the card carries neither `.sv-print-photo` nor a `.sv-print-dev`
-    // sibling, which leaves the `.sv-print-wet` / `.sv-print-dry` classes the
-    // flight still sets on it matching nothing. They are left on rather than
-    // branched around: they are how the flight describes its own state, and
-    // the coded paper below reads them exactly as it always did.
+    // So the card carries no `.sv-print-photo` and no `.sv-print-dev` sibling,
+    // which leaves the `.sv-print-wet` / `.sv-print-dry` classes the flight
+    // still sets on it matching nothing at all now that the coded paper that
+    // read them is gone. They are left on rather than branched around: they
+    // are how the flight describes its own state, and the pile and the score
+    // screen both test them.
     const frame = document.createElement('div');
     frame.className = 'sv-print-frame-riv';
     card.canvas.setAttribute('role', 'img');
@@ -451,34 +464,6 @@ export function buildPrintPaper(url, meta = {}, width = 240) {
     el._svCardReady = card.ready;
     return el;
   }
-
-  const el = document.createElement('div');
-  el.className = 'sv-print';
-  el.style.width = `${w}px`;
-  el.style.setProperty('--sv-paper', c.paper ?? '#eef2f3');
-  el.style.setProperty('--sv-ink', c.ink ?? '#232b33');
-  el.style.setProperty('--sv-emulsion', c.emulsion ?? '#e7ebec');
-  el.style.setProperty('--sv-pad', `${Math.max(4, Math.round(w * num(c.paperPad, 0.038)))}px`);
-  el.style.setProperty('--sv-chin', `${Math.max(9, Math.round(w * num(c.chinSize, 0.045)))}px`);
-  el.style.setProperty('--sv-develop', `${num(c.developMs, 620)}ms`);
-  el.style.setProperty('--sv-develop-delay', `${num(c.developDelayMs, 120)}ms`);
-  el.innerHTML = `
-    <div class="sv-print-paper">
-      <div class="sv-print-frame">
-        <img class="sv-print-photo" alt="" />
-        <div class="sv-print-dev"></div>
-      </div>
-      <div class="sv-print-chin">
-        <span class="sv-print-name"></span>
-        <span class="sv-print-stat"></span>
-      </div>
-    </div>`;
-  el.querySelector('.sv-print-photo').src = url;
-  el.querySelector('.sv-print-photo').alt = meta.name ? `You beat ${meta.name}` : 'Your boss kill';
-  el.querySelector('.sv-print-name').textContent = meta.name ?? '';
-  el.querySelector('.sv-print-stat').textContent =
-    `LV ${meta.level ?? 0} · ${formatTime(meta.time)}`;
-  return el;
 }
 
 /**
@@ -506,7 +491,11 @@ export function showSnapshotPrint(url, meta = {}) {
   }
 
   const w = printWidth();
-  const el = buildPrintPaper(url, meta, w);
+  const el = buildPrintPaper(meta, w);
+  // No artboard, no print. buildPrintPaper has already said why in the console;
+  // everything below this line positions and flies an element, and there is
+  // nothing to fly.
+  if (!el) return null;
   el.classList.add('sv-print-flight', 'sv-print-wet');
 
   // OUT OF THE BOTTOM OF THE FRAME. Placed there with no transition at all, so

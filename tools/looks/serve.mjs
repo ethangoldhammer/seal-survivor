@@ -227,6 +227,34 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // THE SEAL'S AUTHORED MOTION — the one look-page file that ships as it is
+  // saved. Unlike a /preset/, which is a human's to move into config.js, the
+  // level-up seal's loops are DATA the game imports directly
+  // (path/src/levelUpSealMotion.json, read by systems/levelUpSealMotion.js):
+  // a keyframe set is not a thing to paste. Exactly one file, by name, and it
+  // has to parse — the game would fail to build on a bad save.
+  if (req.method === 'POST' && url.pathname === '/motion/levelUpSealMotion.json') {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    let parsed;
+    try { parsed = JSON.parse(body.toString()); } catch (err) {
+      res.writeHead(400).end('not valid json: ' + err.message); return;
+    }
+    if (!parsed?.states || typeof parsed.states !== 'object') { res.writeHead(400).end('no states'); return; }
+    const target = join(PROJECT, 'path/src/levelUpSealMotion.json');
+    await writeFile(target, JSON.stringify(parsed, null, 2) + '\n');
+    console.log(`  wrote path/src/levelUpSealMotion.json (${body.length} bytes)`);
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ saved: true }));
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/motion/levelUpSealMotion.json') {
+    let body = '{}';
+    try { body = await readFile(join(PROJECT, 'path/src/levelUpSealMotion.json')); } catch { /* missing */ }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(body);
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname.startsWith('/preset/')) {
     const name = url.pathname.slice('/preset/'.length).replace(/[^\w.-]/g, '');
     if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }

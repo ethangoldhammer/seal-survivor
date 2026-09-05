@@ -81,6 +81,9 @@ export const COPY_COLUMNS = {
   // place they could be written was a source file and the editor's "needs your
   // words" chip could not see them. See path/src/uiTextTable.js.
   'uiText.csv': ['text'],
+  // The requirement line on a locked card or accessory — what the player has
+  // to do to earn it. Prose, read on a tile or a toast.
+  'unlocks.csv': ['label'],
 };
 
 // Is this column one a player reads? Accepts a bare name or a repo path.

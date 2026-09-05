@@ -64,6 +64,19 @@
 //                            under the line, and the real seal is checked to
 //                            end with its flank on the sand, not its fin.
 //
+//   THE LIMBS PROP IT UP     The loose chains are fed gravity every frame and
+//                            had no floor, so once the body lay down the neck
+//                            hung the HEAD through the sand — and the rest
+//                            above, which puts the lowest vertex on the line,
+//                            then lifted the whole corpse to stand on its
+//                            skull, a beat after the bouncing stopped. The
+//                            chains have a floor now, with the flesh on each
+//                            bone measured off the skin (a floor that stops
+//                            the bare bone tip changed nothing: the skull is a
+//                            unit of skin around a tip that sat clear of the
+//                            sand). Checked on the solver alone and on the real
+//                            seal, against a control run with the floor off.
+//
 // What it cannot tell you is whether any of it looks funny. It can tell you the
 // body bounces, that it stops, and that something is fired every time it lands.
 // ---------------------------------------------------------------------------
@@ -80,6 +93,7 @@ import {
 } from '../path/src/entities/player.js';
 import { ASSETS, installModel } from '../path/src/assets.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
+import { createBoneSpring } from '../path/src/systems/boneSpring.js';
 import { onFeedback } from '../path/src/systems/feedback.js';
 import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
 import {
@@ -224,6 +238,81 @@ section('THE LIVING SEAL — the chains sleep until something kills it');
   resetPlayer();
   resetDeathDive();
   check('the seal survives a reset with the ragdoll in place', player.anim != null);
+}
+
+// ---------------------------------------------------------------------------
+section('THE CHAIN FLOOR — a limp limb hangs to the sand and no further');
+{
+  // The solver alone, on a chain built here: two driven bones and an end
+  // reference, posed horizontal, fed the dive's gravity impulse every frame
+  // with nothing pulling it back but its own frozen pose. Without a floor it
+  // hangs; with one it lies. This is the mechanism the real-seal section at
+  // the bottom then checks on the actual skeleton.
+  const stub = new THREE.Object3D();
+  const root = new THREE.Bone();
+  const mid = new THREE.Bone();
+  const end = new THREE.Bone();
+  mid.position.set(0, 1, 0);
+  end.position.set(0, 1, 0);
+  stub.add(root);
+  root.add(mid);
+  mid.add(end);
+  // Lay it along +x: the solver measures each bone toward its child, which
+  // sits on local +y, so a quarter turn about z on the root points the whole
+  // chain sideways. The tip then starts at y = 0, two units out.
+  root.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2);
+  const spring = createBoneSpring([root, mid]);
+  const cfg = { stiffness: 7, damping: 2.6, tipLooseness: 0.9, maxLag: 1.7, softness: 0.5, snapAngle: 3 };
+  const home = [root.quaternion.clone(), mid.quaternion.clone()];
+  const tipY = () => { stub.updateMatrixWorld(true); return end.getWorldPosition(new THREE.Vector3()).y; };
+  const midY = () => { stub.updateMatrixWorld(true); return mid.getWorldPosition(new THREE.Vector3()).y; };
+  const down = new THREE.Vector3(0, -1, 0);
+  const hang = (floor, seconds = 3) => {
+    root.quaternion.copy(home[0]);
+    mid.quaternion.copy(home[1]);
+    spring.reset();
+    spring.update(1e-6, cfg, 1, floor);
+    let lowest = Infinity;
+    let lowestMid = Infinity;
+    let lastTip = tipY();
+    let stillFor = 0;
+    for (let t = 0; t < seconds; t += DT) {
+      // The frozen pose is the target every frame, exactly as the limp branch
+      // of the controller restores it before solving.
+      root.quaternion.copy(home[0]);
+      mid.quaternion.copy(home[1]);
+      spring.impulse(down, (F.sag ?? 16) * DT, F.sagBias ?? 0.3);
+      spring.update(DT, cfg, 1, floor);
+      const y = tipY();
+      lowest = Math.min(lowest, y);
+      lowestMid = Math.min(lowestMid, midY());
+      stillFor = Math.abs(y - lastTip) < 1e-4 ? stillFor + DT : 0;
+      lastTip = y;
+    }
+    return { lowest, lowestMid, tip: lastTip, stillFor };
+  };
+
+  const open = hang(null);
+  const sand = hang({ y: -0.5, friction: 6 });
+  note(`open water: tip hangs to ${open.lowest.toFixed(2)}   on sand at -0.5: tip ${sand.lowest.toFixed(2)}, still for the last ${sand.stillFor.toFixed(2)}s`);
+  check('with no floor the chain hangs well under the line — the control', open.lowest < -0.5 - 0.5,
+    `${open.lowest.toFixed(2)}`);
+  check('with a floor the tip never passes it', sand.lowest >= -0.5 - 1e-3, `${sand.lowest.toFixed(4)}`);
+  check('...nor does the joint between the bones', sand.lowestMid >= -0.5 - 1e-3, `${sand.lowestMid.toFixed(4)}`);
+  check('and it is lying ON it, not hovering above it', sand.tip <= -0.5 + 0.02, `${sand.tip.toFixed(4)}`);
+  // Gravity is an impulse every frame. If the clamp only fixed the position the
+  // velocity into the sand would pile up and the tip would jitter against the
+  // plane rather than rest on it.
+  check('and it comes to rest there', sand.stillFor > 1, `still for ${sand.stillFor.toFixed(2)}s`);
+  // A frozen pose pointing INTO the sand is the case that defeats a clamp
+  // applied only to the spring's state: `maxLag` measures from that pose and
+  // would hold the bone partway back under. Point the chain straight down and
+  // put the floor a unit under its root.
+  root.quaternion.copy(home[0]).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2));
+  home[0].copy(root.quaternion);
+  const into = hang({ y: -1, friction: 6 });
+  check('a pose that points into the sand is still held out of it', into.lowest >= -1 - 1e-3,
+    `${into.lowest.toFixed(4)} with the pose aimed at -2`);
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +751,95 @@ section('THE SKELETON — on the real seal, the limbs actually move');
         `${deg(tight)} deg at 1x, ${deg(loose)} deg at ${TAIL_LOOSE}x`);
       check('...and the looseness reaches nothing that is still swimming',
         Math.abs(alive - tight) < 1e-6, `alive ${deg(alive)} deg against ${deg(tight)} deg`);
+    }
+
+    // THE LIMBS LIE ON THE SAND. The complaint this answers: the body landed
+    // right, bounced right, and then — once it was lying still — rose up off
+    // the sand and hung there. The chains were being fed gravity forever with
+    // nothing under them, the flippers and head hung through the seabed, and
+    // restY (the body's lowest VERTEX on the line) stood the corpse up on
+    // them. A whole death each way, aim rig ticking as in the game, read at
+    // the frame the card would fade up over.
+    {
+      const chains = ASSETS.ship.rig.springChains.map((c) => c.bones.map((n) => player.body.getObjectByName(n)).filter(Boolean));
+      const _w = new THREE.Vector3();
+      const lie = (limbFloor) => {
+        CONFIG.death.flop.limbFloor = limbFloor;
+        reseed();
+        resetDeathDive();
+        resetPlayer();
+        player.mesh.position.set(0, bounds.frameTop - 2, 0);
+        player.velocity.set(6, 0);
+        let t = 0;
+        // The lowest the pivot got AFTER THE LAST CONTACT, against where it
+        // ends: a body that is down and then RISES is the bug. Each contact
+        // restarts the reading, so the bounces themselves do not count.
+        let lowestSince = Infinity;
+        const offContact = onFeedback((event) => {
+          if (event === 'seabedImpact' || event === 'seabedBounce') lowestSince = Infinity;
+        });
+        startDeathDive(() => {});
+        while (deathState.phase !== 'done' && t < 30) {
+          updateDeathDive(DT);
+          updateAimRig(DT, null, false, 0, true);
+          t += DT;
+          lowestSince = Math.min(lowestSince, player.mesh.position.y);
+        }
+        offContact();
+        player.mesh.updateMatrixWorld(true);
+        // Every joint and every tip, as the renderer would draw them — and the
+        // lowest SKIN vertex weighted to a chain bone, which is what the
+        // player sees and what the body's own rest line reads.
+        let lowest = Infinity;
+        const chainBones = new Set(chains.flat());
+        for (const chain of chains) {
+          for (const b of chain) lowest = Math.min(lowest, b.getWorldPosition(_w).y);
+          const last = chain[chain.length - 1];
+          const tip = last?.children.find((c) => c.isBone);
+          if (tip) { lowest = Math.min(lowest, tip.getWorldPosition(_w).y); chainBones.add(tip); }
+        }
+        let lowestSkin = Infinity;
+        for (const mesh of player.bodyProbe?.meshes ?? []) {
+          if (!mesh.isSkinnedMesh) continue;
+          const si = mesh.geometry.attributes.skinIndex;
+          const sw = mesh.geometry.attributes.skinWeight;
+          const count = mesh.geometry.attributes.position.count;
+          for (let k = 0; k < count; k++) {
+            let best = -1; let bw = 0;
+            for (let c = 0; c < 4; c++) { const w = sw.getComponent(k, c); if (w > bw) { bw = w; best = si.getComponent(k, c); } }
+            if (best < 0 || !chainBones.has(mesh.skeleton.bones[best])) continue;
+            mesh.getVertexPosition(k, _w).applyMatrix4(mesh.matrixWorld);
+            lowestSkin = Math.min(lowestSkin, _w.y);
+          }
+        }
+        return {
+          lowest,
+          lowestSkin,
+          floor: corpseSandY() - (CONFIG.death.flop.limbSink ?? 0.15),
+          sand: corpseSandY(),
+          above: player.mesh.position.y - corpseSandY(),
+          rise: player.mesh.position.y - lowestSince,
+          tumble: player.mesh.rotation.z,
+        };
+      };
+      const hung = lie(false);
+      const laid = lie(true);
+      CONFIG.death.flop.limbFloor = true;
+      note(`no floor: limb skin ${(hung.lowestSkin - hung.sand).toFixed(2)} vs the sand, pivot ${hung.above.toFixed(2)} above it, rose ${hung.rise.toFixed(2)} after its last contact`);
+      note(`floored:  limb skin ${(laid.lowestSkin - laid.sand).toFixed(2)} vs the sand, pivot ${laid.above.toFixed(2)} above it, rose ${laid.rise.toFixed(2)} after its last contact`);
+      check('without the floor a limb hangs through the sand — the control', hung.lowestSkin < hung.sand - 0.05,
+        `skin ${(hung.sand - hung.lowestSkin).toFixed(2)} under`);
+      check('with it, no bone of any chain is under the limb line', laid.lowest >= laid.floor - 0.05,
+        `${(laid.lowest - laid.floor).toFixed(3)} relative to the line`);
+      check('...nor the skin on it, past the bedding allowed', laid.lowestSkin >= laid.floor - 0.1,
+        `skin ${(laid.lowestSkin - laid.floor).toFixed(3)} relative to the limb line`);
+      check('...and the body lies lower for it — it is not standing on its limbs',
+        laid.above < hung.above - 0.1, `${laid.above.toFixed(2)} against ${hung.above.toFixed(2)} above the sand`);
+      check('a body that is down stays down', laid.rise < 0.4, `rose ${laid.rise.toFixed(2)} after its last contact`);
+      check('...which without the floor it did not — the control', hung.rise > 0.5, `rose ${hung.rise.toFixed(2)}`);
+      check('at the same angle, so it is the limbs and not the tumble',
+        Math.abs(Math.sin(laid.tumble) - Math.sin(hung.tumble)) < 0.05 && Math.abs(Math.cos(laid.tumble) - Math.cos(hung.tumble)) < 0.05,
+        `${laid.tumble.toFixed(2)} against ${hung.tumble.toFixed(2)} rad`);
     }
 
     // And it is handed back. A body left limp ignores the mixer for the whole

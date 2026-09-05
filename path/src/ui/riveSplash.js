@@ -6,6 +6,10 @@
 // ---------------------------------------------------------------------------
 // HOW THE NAME GETS IN — THE DICE, AND ONLY THE DICE.
 //
+// (And, on arrival, the dice rolling itself: a new player's pill flips through
+// a reel of names and lands on one rather than showing a placeholder that asks
+// for a name nothing here can take. See nameScramble.js and scrambleTo below.)
+//
 // There is no text field on this screen and no way to type into it. The name
 // is a value this module holds (`currentName`), rolled out of sealNames.csv,
 // mirrored into `strPlayerName` for the artboard to draw, and banked on the way
@@ -94,10 +98,14 @@ import { Rive, Layout, Fit, Alignment } from '@rive-app/webgl2';
 // riveRuntimeGl.js.
 import './riveRuntimeGl.js';
 import { SPLASH_ARTBOARD, SPLASH_STATE_MACHINE, SPLASH_BINDINGS, SKY_FX_BINDINGS } from './riveContract.js';
+// Where the column, the pill and the wordmark are, and how big the column may
+// be without sitting on the title. The one copy of the artboard's geometry —
+// see ui/splashLayout.js, which the layout checks read too.
+import { fitEntryScale, entryRects, estimateRowWidth } from './splashLayout.js';
 import { loadPlayerName, savePlayerName, sanitizeName } from '../systems/playerName.js';
 // What the dice button spends. Parsed once at module load, out of
 // sealNames.csv — see the note above and path/src/sealNameTable.js.
-import { randomPlayerName } from '../systems/randomName.js';
+import { randomPlayerName, randomNamePart, splitPlayerName, joinPlayerName } from '../systems/randomName.js';
 // Death is permanent — see systems/nameLedger.js.
 import { isNameBuried } from '../systems/nameLedger.js';
 // The tip jar, on the one screen a player is not busy. Dependency-free by
@@ -107,6 +115,9 @@ import { mountSplashTipJar } from './tipJar.js';
 import { mountBuildStamp } from './buildStamp.js';
 // The old name boiling out of the pill when the dice rolls — see nameSwap.js.
 import { swapWithNoise } from './nameSwap.js';
+// The reel of names the pill flips through before the first one lands — see
+// nameScramble.js.
+import { runNameScramble } from './nameScramble.js';
 import { parseTipCsv } from '../tipTable.js';
 import tipsCsv from '../tips.csv?raw';
 
@@ -181,6 +192,12 @@ export function mountRiveSplash({
   // land, and a dissolve per keystroke would be noise over the thing they are
   // looking at.
   nameSwap,
+  // How the FIRST name arrives: the pill flips through a run of combinations
+  // and settles on one, instead of showing the artboard's placeholder to a
+  // player who has no way to type into it. The settings object for
+  // ui/nameScramble.js (CONFIG.reveals.nameScramble in the game). Undefined or
+  // `enabled: false` puts the starting name up on the first frame.
+  nameScramble,
   // THE SKY SHADER'S KNOBS — CONFIG.splashSky in the game, by reference so the
   // tuner's sliders reach a splash that is already up. Each field is written to
   // the view-model number of the same name in SKY_FX_BINDINGS when it changes.
@@ -231,6 +248,9 @@ export function mountRiveSplash({
   let hoverOn = false;
   // The dissolve in flight, if any, so a second roll or the teardown can end it.
   let swap = null;
+  // The opening reel, while it runs — see scrambleTo. The dice, the back
+  // button and the teardown each cut it short.
+  let scramble = null;
   // What the sky shader was last told, per knob, so a slider is written only
   // when it moved; and the timer that watches CONFIG for that.
   const skyWritten = {};
@@ -273,31 +293,31 @@ export function mountRiveSplash({
   // not an empty box but an 80px stub with nothing in it — and the line that
   // belongs there is already in the file, in Ethan's words, as the instance
   // default. Read, never written here.
+  //
+  // Rarely seen now: a new player's name is rolled on load (see scrambleTo),
+  // so the only way to an empty name is a sealNames.csv with nothing usable
+  // in it. Kept because that is exactly when a line in Ethan's words beats an
+  // 80px stub.
   let placeholder = '';
 
   // THE ENTRY ROW, for fitEntryRow. The row hugs the name (see `entryScale` in
   // riveContract.js), so its width is a function of the text — and the
   // artboard reports that width back through `numEntryWidth`, measured by its
-  // own layout, so nothing here estimates a font. The fallback below is only
-  // for the frame before the first layout has run, when the number reads 0:
-  // Playfair Display SC at 84px is about 50px a character in small caps.
-  // The entry is a COLUMN now — dice above the pill, start below — so the
-  // only width that matters is the pill's: its text plus 40px of padding a
-  // side. The strip it is centred in is 324 tall (80 + 16 + 132 + 16 + 80) and
-  // anchored to the bottom of the screen, so a 16:9 window does not lose the
-  // start button off the bottom edge.
-  const ENTRY_FIXED_W = 2 * 40;                     // the pill's padding
-  const ENTRY_PER_CHAR = 52;
-  const ENTRY_STRIP_H = 324;                        // the strip's design height
-  const ENTRY_STRIP_BOTTOM = 72;                    // px between the strip and the bottom edge: room for the tip jar
-  // The column may not climb past this fraction of the screen's height, or on
-  // a phone held sideways it sits on the wordmark. Width alone fits the pill;
-  // height is what a 393px-tall screen runs out of.
-  const ENTRY_MAX_HEIGHT_FRAC = 0.42;
-  const ENTRY_PILL_H = 132;                         // the pill's design height
-  const ENTRY_PILL_TOP = 80 + 16;                   // dice and gap above the pill
+  // own layout, so nothing here estimates a font. The estimate in
+  // splashLayout.js is only for the frame before the first layout has run,
+  // when the number reads 0.
+  //
+  // The entry is a COLUMN — dice above the pill, start below — sat on the
+  // bottom edge of a strip 324 tall that hangs 72 off the bottom of the
+  // screen. Every number describing it lives in ui/splashLayout.js now, and
+  // so does the rule for how big it may be: as big as the pill's width allows,
+  // and never so tall that the dice reaches the wordmark. That second rule
+  // used to be "no more than 42% of the height", which is not where the
+  // wordmark ends: on a laptop at 1280x800, an iPad held sideways or a phone
+  // held sideways, the dice sat on the SURVIVOR. The wordmark's real edge is
+  // computed from the title slot's fit now, and the same computation is what
+  // `npm run test:splashlayout` and the layout audit check against.
   const ENTRY_MARGIN = 24;                          // breathing room at each screen edge
-  const ENTRY_MIN_SCALE = 0.3;
   // The row's width is re-read after every change the artboard reports, but
   // while the pill is INTERPOLATING to a new name the width is mid-way, and a
   // scale computed from a mid-way width is wrong twice — once on the way and
@@ -407,6 +427,10 @@ export function mountRiveSplash({
     clearTimeout(entrySettleTimer);
     clearInterval(skyTimer);
     for (const [target, type, fn] of inputListeners) target.removeEventListener(type, fn);
+    // A reel still spinning stops where it is: the name on screen is the one
+    // banked below, which is the one the player pressed Start over.
+    scramble?.cancel();
+    scramble = null;
 
     // THE NAME IS BANKED ON THE WAY OUT, whatever ended the splash. Not per
     // roll: savePlayerName writes to localStorage, and a player thumbing the
@@ -587,12 +611,11 @@ export function mountRiveSplash({
       // layout has run.
       let rowW = 0;
       try { rowW = (vmi.number(SPLASH_BINDINGS.entryWidth)?.value ?? 0) / (entryScale || 1); } catch { rowW = 0; }
-      if (!(rowW > 0)) rowW = ENTRY_FIXED_W + (currentName || placeholder).length * ENTRY_PER_CHAR;
-      const avail = canvas.clientWidth - 2 * ENTRY_MARGIN;
-      if (!(avail > 0)) return;
-      const byWidth = avail / rowW;
-      const byHeight = (canvas.clientHeight * ENTRY_MAX_HEIGHT_FRAC) / ENTRY_STRIP_H;
-      const s = Math.max(ENTRY_MIN_SCALE, Math.min(1, byWidth, byHeight));
+      if (!(rowW > 0)) rowW = estimateRowWidth(currentName || placeholder);
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      if (!(W > 2 * ENTRY_MARGIN) || !(H > 0)) return;
+      const s = fitEntryScale({ W, H, rowW, margin: ENTRY_MARGIN });
       // Written on a real change only: every write re-lays the row out, and the
       // layout engine would happily animate a 0.3% correction on every frame.
       if (Math.abs(s - entryScale) < 0.005) return;
@@ -619,11 +642,10 @@ export function mountRiveSplash({
   }
 
   // WHERE THE PILL IS, in CSS px of the canvas, from what the artboard reports
-  // (the pill's own width) and the entry's design: a column of dice, pill and
-  // start, centred both ways in a strip 324 tall whose top sits at 65% of the
-  // artboard, the pill 96 down from the column's top at scale 1. The one place
-  // those numbers are repeated outside the .riv; if the column is redesigned
-  // in the editor this is the line to revisit.
+  // (the pill's own width, the scale last written) and the column's geometry
+  // in ui/splashLayout.js — the same numbers the fit above and the layout
+  // checks use, so the dissolve and the overlap rule cannot disagree about
+  // where the pill is.
   function pillRect() {
     const vmi = rive?.viewModelInstance;
     if (!vmi) return null;
@@ -633,20 +655,9 @@ export function mountRiveSplash({
       s = vmi.number(SPLASH_BINDINGS.entryScale)?.value ?? 1;
     } catch { return null; }
     if (!(s > 0) || !(w > 2)) return null;
-    const W = canvas.clientWidth;
-    const H = canvas.clientHeight;
-    // The strip hangs a fixed 72px off the bottom of the artboard, so its top
-    // is the height less that gap less its own 324.
-    // The column sits on the strip's BOTTOM edge (not centred in it), so a
-    // shrunken column stays as low as it can and clear of the wordmark.
-    const stripBottom = H - ENTRY_STRIP_BOTTOM;
-    return {
-      x: (W - w) / 2,
-      y: stripBottom - ENTRY_STRIP_H * s + ENTRY_PILL_TOP * s,
-      w,
-      h: ENTRY_PILL_H * s,
-      radius: 29 * s,
-    };
+    const rects = entryRects(canvas.clientWidth, canvas.clientHeight, s, w);
+    const p = rects.pill;
+    return { x: p.left, y: p.top, w, h: p.bottom - p.top, radius: rects.pillRadius };
   }
 
   // Photograph the pill as it is and start it boiling away. Called by the dice
@@ -693,6 +704,10 @@ export function mountRiveSplash({
   // out of the splash never files you under a name you rejected.
   function randomizeName() {
     if (destroyed) return '';
+    // A press mid-reel is the player taking over: the reel stops and the dice
+    // rolls from whatever it was showing.
+    scramble?.cancel();
+    scramble = null;
     const name = sanitizeName(randomPlayerName(currentName));
     // Anything the player had walked back past is dropped here — see `history`.
     history.length = historyAt + 1;
@@ -715,6 +730,8 @@ export function mountRiveSplash({
    */
   function previousName() {
     if (destroyed || historyAt <= 0) return currentName;
+    scramble?.cancel();
+    scramble = null;
     historyAt -= 1;
     showName(history[historyAt]);
     return currentName;
@@ -726,6 +743,61 @@ export function mountRiveSplash({
     if (name !== currentName) beginNameSwap();
     currentName = name;
     writeName(name);
+  }
+
+  // THE OPENING REELS. Flips the pill's two halves — the adjective and the
+  // nickname, each out of its own hat — on their own clocks, the adjective
+  // settling first, and lands on `landing`; see nameScramble.js for the shape
+  // of it. Each interim flip is a hard cut and is HELD as currentName while it
+  // shows: a player who presses Start mid-reel starts as the seal they saw,
+  // not the one the reels were on their way to, and rolling the dice mid-reel
+  // rolls away from what is showing. The landing goes through showName so the
+  // last word gets the dissolve.
+  //
+  // The landing is split against the table so each reel knows its half. A
+  // hand-written whole name, or a bare nickname, has no adjective half: that
+  // reel flips through adjectives and settles on nothing, which reads as the
+  // front hat coming up empty — true, as it happens.
+  //
+  // The landing enters the history when it lands, and only if the history is
+  // empty: for a new player it is the first name they can go back to; for a
+  // returning player (`always`) entry 0 is already their own seal and the
+  // reel is landing on it.
+  function scrambleTo(landing) {
+    scramble?.cancel();
+    const halves = splitPlayerName(landing);
+    scramble = runNameScramble({
+      reels: [
+        {
+          landing: halves.adjective,
+          stop: nameScramble?.adjectiveStop,
+          // Drawn to fit beside whatever nickname is showing, so no interim
+          // pair is ever longer than the field.
+          roll: (_previous, values) => randomNamePart('adjective', { beside: values[1] }),
+        },
+        {
+          landing: halves.nickname,
+          stop: 1,
+          roll: () => randomNamePart('nickname'),
+        },
+      ],
+      join: ([adjective, nickname]) => sanitizeName(joinPlayerName(adjective, nickname)),
+      show: (name) => {
+        if (destroyed) return;
+        currentName = name;
+        writeName(name);
+      },
+      land: () => {
+        scramble = null;
+        if (destroyed) return;
+        // The landing as it was rolled, not as the halves re-join: a name
+        // that did not split (a written one, a lineage) round-trips anyway,
+        // and this is the string the leaderboard already accepted.
+        showName(landing);
+        if (!history.length) { history.push(landing); historyAt = 0; }
+      },
+      opts: nameScramble,
+    });
   }
 
   // THE CONTEXT IS OURS FIRST. The WebGL2 runtime calls getContext('webgl2')
@@ -859,9 +931,19 @@ export function mountRiveSplash({
       currentName = loadPlayerName();
       // Entry 0 of the history, so a returning player can roll and still get
       // back to their own seal. A player with no name on file starts with an
-      // empty history and nothing to go back TO, which is correct: the pill's
-      // placeholder is not a name they chose.
+      // empty history; the reel below fills entry 0 with the name it lands
+      // on, which is the first name they were actually given.
       if (currentName) { history.push(currentName); historyAt = 0; }
+      // A NEW PLAYER'S FIRST NAME IS ROLLED, NOT ASKED FOR. There is nothing
+      // on this screen to type into, so the placeholder that used to sit in
+      // the pill was a question with no way to answer it. The reel
+      // (scrambleTo, below) flips through the table and lands on this one; a
+      // returning player keeps what is on file and skips the reel unless
+      // `always` asks for it.
+      const arrived = !!currentName;
+      const landing = currentName || sanitizeName(randomPlayerName(''));
+      const reel = !!nameScramble && nameScramble.enabled !== false
+        && (!arrived || nameScramble.always === true);
       // The file's default for the name, before anything overwrites it — see
       // `placeholder` above. A file with no default shows an empty pill, which
       // is what it showed before.
@@ -872,7 +954,12 @@ export function mountRiveSplash({
         widthProp = rive.viewModelInstance?.number(SPLASH_BINDINGS.entryWidth) ?? null;
         if (widthProp) { onWidth = () => fitEntryRow(); widthProp.on(onWidth); }
       } catch { widthProp = null; }
-      writeName(currentName);
+      if (reel) scrambleTo(landing);
+      else {
+        currentName = landing;
+        if (!history.length) { history.push(landing); historyAt = 0; }
+        writeName(landing);
+      }
       syncSkyFx();
       if (skyFx) skyTimer = setInterval(syncSkyFx, SKY_POLL_MS);
 
@@ -920,6 +1007,9 @@ export function mountRiveSplash({
     // What the pill is showing. For a harness, and for a caller that wants to
     // know what it would be banking.
     get name() { return currentName; },
+    // Whether the opening reel is still flipping — for a harness that wants to
+    // wait for it to land before reading `name`.
+    get isScrambling() { return !!scramble; },
     get isDestroyed() { return destroyed; },
     get isPlaying() { return !!rive?.isPlaying; },
     // Escape hatch for driving state-machine inputs from outside — e.g. feeding

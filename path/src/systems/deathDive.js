@@ -41,6 +41,14 @@ import { setAmbientRateScale } from './ambient.js';
 //      into the limbs and the tail, and its own lighter piece of feedback every
 //      time it comes down. The score card waits for the body to be genuinely
 //      DOWN rather than for a fixed pause from the first contact.
+//
+//      AND THE SAND HOLDS THE LIMBS, not just the body. The loose chains are
+//      fed gravity every frame and know nothing about the seabed, so once the
+//      body lay on it the flippers and head hung straight through — and restY,
+//      which rests the body's lowest vertex on the line, then stood the corpse
+//      up on its own dangling limbs a beat after the bouncing stopped. The
+//      chains get a floor of their own now (updateRagdoll → setLimpFloor →
+//      the plane in systems/boneSpring.js), so a limb lies ON the sand.
 //   3. THE SOUND. The audio rate follows the time scale — the music drags down
 //      like a tape stop and one-shots play back long and low with it. Slow
 //      motion you can only see is half the effect.
@@ -56,6 +64,11 @@ import { setAmbientRateScale } from './ambient.js';
 
 const TAU = Math.PI * 2;
 const DOWN = new THREE.Vector3(0, -1, 0);
+// The plane the limp chains may not hang through — the sand, handed to the
+// animation controller once and updated in place every frame (see
+// setLimpFloor in systems/animation.js and the floor note in
+// systems/boneSpring.js). One held object, no per-frame allocation.
+const _limbFloor = { y: -Infinity, friction: 0 };
 const _tailDir = new THREE.Vector3();
 const _blow = new THREE.Vector3();
 const _flow = new THREE.Vector3();
@@ -735,6 +748,21 @@ function updateRagdoll(rawDt, dilatedDt) {
   }
 
   if (limpState === 'live') {
+    // THE SAND UNDER THE LIMBS. Gravity below is fed in forever and has no
+    // idea where the seabed is; without this the flippers and the head hang
+    // straight through the sand once the body is lying on it, and restY — which
+    // rests the body's LOWEST VERTEX on the line — then stands the corpse up
+    // on its own dangling limbs. Read off the same line the body rests on,
+    // less `limbSink`: the bone runs down the middle of a limb and the flesh
+    // around it beds into the silt. Set before the solve, every frame, because
+    // the line moves with the tuner and the body moves under the chains.
+    if (f.limbFloor !== false) {
+      _limbFloor.y = sandY() - (f.limbSink ?? 0.15);
+      _limbFloor.friction = f.limbFriction ?? 6;
+      anim.setLimpFloor?.(_limbFloor);
+    } else {
+      anim.setLimpFloor?.(null);
+    }
     // GRAVITY, every frame, as an impulse rather than as a force in the solver:
     // the spring only knows about velocities, and this is the whole of what a
     // hanging chain needs. Tips first — a chain that sags evenly reads as a

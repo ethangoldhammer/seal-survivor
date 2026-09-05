@@ -162,7 +162,12 @@ export function approachVector(self, toward, crowd, cfg) {
   // twice the ring cannot converge on the player anyway, so the ring only ever
   // added a second circle to something already circling. They still steer
   // around each other — crowdAvoid below is separate and unconditional.
-  if (cfg?.enabled && self.inCrowd === true && self.feeding === false) {
+  // A body with a feeding slot leaves the ring and goes in — unless it
+  // `holdsRing`, which a LUNGING hunter does (see crowdSelf in
+  // entities/enemies.js): its way in is the run, its slot is spent as the
+  // right to commit (lungeChase), and a body that also drove straight in
+  // parked on top of the seal inside its own lunge floor and never ran again.
+  if (cfg?.enabled && self.inCrowd === true && (self.feeding === false || self.holdsRing === true)) {
     const ring = self.standoffDist ?? cfg.standoff ?? 7;
     // How wrong the current distance is, as a signed fraction of the ring.
     // Clamped so a hunter arriving from across the arena doesn't approach at

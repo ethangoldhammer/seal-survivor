@@ -65,6 +65,9 @@ import {
   installLevelUpSeal, prepareLevelUpSeal, enterLevelUpSeal, leaveLevelUpSeal,
   updateLevelUpSeal, resetLevelUpSeal, levelUpSealState, levelUpSealLive,
 } from '../../path/src/systems/levelUpSeal.js';
+// THE SEAL MOTION PANEL — where the free swimmer's loops are written. See
+// seal-motion-panel.js; it mounts once the seal is built.
+import { mountSealMotionPanel } from './seal-motion-panel.js';
 
 const panel = document.getElementById('panel');
 const readEl = document.getElementById('read');
@@ -324,6 +327,7 @@ if (WANT_SEAL) {
     applyBiolumSkinSettings();
     prepareLevelUpSeal();
     sealReady = true;
+    mountSealMotionPanel({ panel, getLive: levelUpSealLive });
     // If a hand is already on the table, bring the seal up under it now.
     if (document.querySelector('#svCards .sv-card')) enterLevelUpSeal();
     sealLast = performance.now();
@@ -389,7 +393,7 @@ function scrubTo(seconds) {
 // WHAT THE FILE SAID BEFORE ANY SLIDER MOVED, so "what did I change" is a diff
 // rather than a memory. Taken at boot, from the same CONFIG the sliders write.
 const BASE = {};
-for (const group of ['upgradeSlam', 'upgradeComb', 'upgradeReel']) {
+for (const group of ['upgradeSlam', 'upgradeComb', 'upgradeReel', 'levelUpSeal']) {
   // Structured rather than spread: `upgradeSlam.riser` is a nested block, and a
   // shallow copy of it is the LIVE object — so every number inside it would
   // compare equal to itself forever and the readout would quietly omit the
@@ -421,6 +425,26 @@ const KNOBS = [
   ['upgradeComb', 'breatheSeconds', 0.5, 12, 0.1, 'at rest: breath (s)'],
   ['upgradeComb', 'drainTime', 0.05, 1.5, 0.02, 'exit: one cell (s)'],
   ['upgradeComb', 'drainStep', 0, 0.3, 0.005, 'exit: per column (s)'],
+  // THE SEAL under the hand — CONFIG.levelUpSeal, the swimmer's feel. These
+  // are LIVE: they write the number and the seal reads it on its next frame,
+  // with no re-deal (a re-deal would send the seal off and back for every
+  // notch). The loops themselves are the Seal motion panel below.
+  ['levelUpSeal', 'freeHeight', 0.1, 0.6, 0.01, 'seal: body length (of height)', true],
+  ['levelUpSeal', 'inTime', 0.2, 2, 0.05, 'seal: swim up (s)', true],
+  ['levelUpSeal', 'outTime', 0.1, 1.5, 0.05, 'seal: swim off (s)', true],
+  ['levelUpSeal.motion', 'blendRate', 0.5, 12, 0.1, 'seal: hover blend (/s)', true],
+  ['levelUpSeal.motion', 'takeRate', 0.5, 12, 0.1, 'seal: loop takes over (/s)', true],
+  ['levelUpSeal.pull', 'weight', 0, 1, 0.02, 'pull: amount', true],
+  ['levelUpSeal.pull', 'speed', 0.1, 4, 0.05, 'pull: speed (x run)', true],
+  ['levelUpSeal.pull', 'standoff', 0, 2, 0.02, 'pull: hold off card (lengths)', true],
+  ['levelUpSeal.pull', 'arrive', 0.05, 2, 0.02, 'pull: ease to stop (lengths)', true],
+  ['levelUpSeal.pull', 'turnWeight', 0, 1, 0.02, 'pull: turn after swim', true],
+  ['levelUpSeal', 'followTurn', 0, 0.8, 0.01, 'cursor: body yaw (rad)', true],
+  ['levelUpSeal', 'followLean', 0, 0.4, 0.01, 'cursor: body cant (rad)', true],
+  ['levelUpSeal', 'followLerp', 0.5, 12, 0.1, 'cursor: ease (/s)', true],
+  ['levelUpSeal', 'pointFaceOut', 0, 1, 0.02, 'head: face out while pointing', true],
+  ['levelUpSeal', 'aimLerp', 1, 20, 0.5, 'head: look ease (/s)', true],
+  ['levelUpSeal', 'aimSpread', 0, 1, 0.02, 'head: look spread', true],
 ];
 const knobs = document.getElementById('knobs');
 // A group may be a dotted path — upgradeHive.fly lives two deep — so the knob
@@ -428,17 +452,19 @@ const knobs = document.getElementById('knobs');
 // could not be reached from here at all.
 const at = (path) => path.split('.').reduce((o, k) => o?.[k], CONFIG);
 
-for (const [group, key, min, max, step, label] of KNOBS) {
+for (const [group, key, min, max, step, label, live] of KNOBS) {
   const row = document.createElement('div');
   row.className = 'row';
   const id = `k-${group.replace(/\./g, '-')}-${key}`;
+  const holder = at(group) ?? (at(group.split('.').slice(0, -1).join('.'))[group.split('.').pop()] = {});
   row.innerHTML = `<label for="${id}">${label}</label>`
-    + `<input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${at(group)[key]}" />`
-    + `<output>${at(group)[key]}</output>`;
+    + `<input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${holder[key] ?? min}" />`
+    + `<output>${holder[key] ?? min}</output>`;
   knobs.appendChild(row);
   row.querySelector('input').addEventListener('input', (e) => {
-    at(group)[key] = Number(e.target.value);
+    holder[key] = Number(e.target.value);
     row.querySelector('output').textContent = e.target.value;
+    if (live) return; // read on the seal's next frame; nothing to re-run
     syncTime();
     replay();
   });
@@ -522,7 +548,7 @@ window.addEventListener('click', (e) => {
         if (base[k] !== v) lines.push(`  ${group}.${prefix}${k}: ${JSON.stringify(v)},`);
       }
     };
-    for (const group of ['upgradeSlam', 'upgradeComb', 'upgradeReel']) {
+    for (const group of ['upgradeSlam', 'upgradeComb', 'upgradeReel', 'levelUpSeal']) {
       diff(group, BASE[group], CONFIG[group], '');
     }
     if (CONFIG.upgradeArrival !== BASE.upgradeArrival) {

@@ -1,0 +1,4 @@
+id,kind,target,stat,count,label,review,enabled,notes
+sailorHat,accessory,accessoryHat,boatsDestroyed,50,Hello Sailor!,,,
+laserEyes,upgrade,laserEyes,perk.eyebeam,1,Lasers Unlocked!,,,
+dealWithIt,accessory,accessoryGlasses,bossesDefeated,1,Deal with it!!!!,,,

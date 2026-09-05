@@ -17,7 +17,7 @@
 // answer a question the text layer never asks.
 
 import sealNamesCsv from '../sealNames.csv?raw';
-import { parseSealNameCsv, rollSealName } from '../sealNameTable.js';
+import { parseSealNameCsv, rollSealName, rollSealPart, splitSealName, joinSealName } from '../sealNameTable.js';
 import { MAX_NAME_LEN } from './playerName.js';
 import { isNameBuried } from './nameLedger.js';
 
@@ -84,4 +84,29 @@ const NUMERALS = ['II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X',
 /** The parsed table, for tools and tests that want to count what is in it. */
 export function sealNameParts() {
   return PARTS;
+}
+
+// ---------------------------------------------------------------------------
+// THE HALVES, for the splash's opening reel (ui/nameScramble.js), which flips
+// the adjective and the nickname on separate clocks so the player can see the
+// name being drawn from two hats. Thin wrappers over sealNameTable.js against
+// the one parsed table, like randomPlayerName above.
+//
+// Not buried-checked: a half is never a name, and the reel's landing is the
+// name that matters, which came through randomPlayerName.
+// ---------------------------------------------------------------------------
+
+/** One half. `beside` is the nickname an adjective has to fit next to. */
+export function randomNamePart(slot, { beside } = {}) {
+  return rollSealPart(PARTS, slot, { beside });
+}
+
+/** A name into its halves — see splitSealName. */
+export function splitPlayerName(name) {
+  return splitSealName(PARTS, name);
+}
+
+/** Halves into a name, under the length rule — see joinSealName. */
+export function joinPlayerName(adjective, nickname) {
+  return joinSealName(adjective, nickname);
 }

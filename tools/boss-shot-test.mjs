@@ -149,8 +149,35 @@ registerHooks({
   },
   load(url, ctx, next) {
     if (url === 'stub:rive') {
+      // ENOUGH OF THE RUNTIME TO BUILD A CARD, not just to import the module.
+      //
+      // `RiveFile` and `decodeImage` are new here, and they are what let
+      // initSnapshotCards() actually reach `ready`. Before the coded paper was
+      // deleted that did not matter — a harness with no artboard simply got the
+      // CSS print and every assertion below still ran. Now a harness that
+      // cannot load the artboard gets NO print, and the whole flight, the pile
+      // and the score screen's rail go untested with nothing failing to say so.
+      //
+      // THE INSTANCE LOADS, on a microtask, and it binds a view model.
+      // Both are load-bearing: composeRunSheet awaits every card's `ready`, so
+      // a constructor that never fires onLoad turns the run-sheet section into
+      // a top-level await that never settles — reported against a line with
+      // nothing to do with Rive — and a card whose vmi is missing tears itself
+      // down and warns, which is a different path from the one the game takes.
+      //
+      // What this does NOT test is the binding itself. Writing a string into a
+      // view model, decoding a photograph into an image slot and firing the
+      // write-on all need a real GL surface and the wasm; none of that is
+      // reachable from Node, and a stub that pretended otherwise would be
+      // asserting against itself.
       return { format: 'module', shortCircuit: true, source:
-        'export class Rive { constructor(){} on(){} play(){} pause(){} cleanup(){} resizeDrawingSurfaceToCanvas(){} }'
+        ' const prop = () => ({ value: null }); '
+        + 'export class Rive { constructor(o){ this.viewModelInstance = {'
+        + '   string: prop, number: prop, image: prop, boolean: prop, trigger: () => ({ trigger(){} }),'
+        + ' }; queueMicrotask(() => o?.onLoad?.()); }'
+        + ' on(){} play(){} pause(){} cleanup(){} resizeDrawingSurfaceToCanvas(){} }'
+        + ' export class RiveFile { constructor(o){ this.o = o; } init(){ this.o?.onLoad?.(); } getInstance(){ return {}; } }'
+        + ' export async function decodeImage(){ return { unref(){} }; }'
         + ' export const EventType = {}; export const Layout = class {}; export const Fit = {};'
         + ' export const Alignment = {}; export const RuntimeLoader = { setWasmUrl(){} };' };
     }
@@ -582,6 +609,28 @@ CONFIG.boss.kill.snapshot.enabled = true;
 // ---------------------------------------------------------------------------
 section('THE SCORE SCREEN — the whole run, fanned out');
 // ---------------------------------------------------------------------------
+// The .riv is stubbed to a string by the loader above, so the fetch inside
+// initSnapshotCards has to be stubbed too. It only ever wants an ArrayBuffer to
+// hand to RiveFile, and RiveFile above does not look at it.
+//
+// PUT BACK IMMEDIATELY AFTERWARDS. Left in place it swallowed the share
+// section further down, which does its own fetching — and the failure was an
+// unsettled top-level await pointing at a line that had nothing to do with it.
+const realFetch = globalThis.fetch;
+globalThis.fetch = async () => ({ arrayBuffer: async () => new ArrayBuffer(8) });
+const CARD = await import('../path/src/ui/snapshotCard.js');
+await CARD.initSnapshotCards();
+globalThis.fetch = realFetch;
+if (!CARD.snapshotCardsLive()) {
+  // Loud, and a failure rather than a skip. Everything about the print below
+  // is now conditional on the artboard being live, so a stub that quietly
+  // stopped satisfying initSnapshotCards would turn a dozen checks into
+  // no-ops that still print PASS for the ones around them.
+  console.error('FATAL: the Rive stub no longer satisfies initSnapshotCards — every print check below would be vacuous');
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
 // The last seam: trophies that exist but are never shown are the same as no
 // trophies at all, and a rack left holding the previous run's prints is worse
 // than either.
@@ -603,11 +652,20 @@ for (const [name, level] of [['Grimtide the Tidebreaker', 8], ['Old Bittermouth'
 UI.showGameOver(runState, { bosses: 3 });
 check('a run that beat three shows three prints', !trophy.classList.contains('sv-hidden') && fan.children.length === 3,
   `${fan.children.length} in the rack`);
+// THE ARTBOARD'S PAPER, and there is no other kind now — the coded DOM print
+// this used to assert (a .sv-print-paper wrapping an <img>) was deleted
+// 2026-09-05. What is left in the DOM is a canvas the artboard draws into, so
+// the paper, the photograph and the chin are all INSIDE it and none of them is
+// queryable from here. Which is worth stating rather than quietly asserting
+// less: this file can no longer see what a print says.
 check('...as the same paper the player watched come out of the camera',
-  fan.children[0].querySelector('.sv-print-paper') !== null
-  && fan.children[0].querySelector('.sv-print-photo').src.startsWith('data:image/png'));
-check('...each one named', fan.children[1].querySelector('.sv-print-name').textContent === 'Old Bittermouth',
-  fan.children[1].querySelector('.sv-print-name').textContent);
+  fan.children[0].querySelector('.sv-print-frame-riv > canvas') !== null
+  && fan.children[0].querySelector('.sv-print').classList.contains('sv-print-riv'));
+// The name is drawn by Rive, so the only place it survives in the DOM is the
+// label the canvas carries for a screen reader — which makes this check both
+// the naming check and the accessibility one.
+check('...each one named', fan.children[1].querySelector('canvas').getAttribute('aria-label') === 'You beat Old Bittermouth',
+  fan.children[1].querySelector('canvas')?.getAttribute('aria-label'));
 check('...developed, not still coming out of the camera',
   !fan.children[0].querySelector('.sv-print').classList.contains('sv-print-wet')
   && !fan.children[0].querySelector('.sv-print').classList.contains('sv-print-flight'));
@@ -628,6 +686,22 @@ check('...with the newest kill picked to start with',
   fan.children[2].classList.contains('sv-fan-sel'));
 
 // PICKING ONE is what the two "this one" buttons act on.
+// THE ARTBOARD GOES BACK OFF HERE, for everything below that is about the
+// IMAGE rather than the paper — saving one print, and composing the run sheet.
+//
+// Those paths read pixels back out of a card, and the stub's card is a canvas
+// nothing has ever drawn into: with it live they measure the stub instead of
+// the game (the sheet came out 1440x2003 with 53 cells drawn, both numbers
+// invented by an empty canvas). Off, they take the same route they always
+// have — the composited PNG that systems/bossShot.js kept — which is what
+// these checks were written about and is still exactly what the game does when
+// the artboard is unavailable.
+//
+// What is NOT covered either way: a run sheet composed from real Rive cards.
+// That needs a GL surface and the wasm, so it is a browser job — see
+// npm run looks:* for how the other GPU-drawn surfaces are looked at.
+CONFIG.boss.kill.print.rive = false;
+
 fan.children[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
 check('picking a print lifts it out of the fan', fan.children[0].classList.contains('sv-fan-sel')
   && !fan.children[2].classList.contains('sv-fan-sel'));
@@ -800,7 +874,19 @@ downloads = 0;
 // it awaits — is enough here because nothing in this harness actually renders
 // a card (snapshotCardsLive is false without a browser, so the sheet falls
 // back to thumbnails and never waits on a frame).
-const settleClick = () => new Promise((r) => setTimeout(r, 0));
+// TWO HOPS, not one. The comment above says two and the code said one, which
+// held only while the card runtime was never initialised in this harness — it
+// is now (the fan section loads it), and the extra microtask that costs pushed
+// the download past a single setTimeout. A poll rather than a bigger guess:
+// the same reasoning as waitFor further down.
+// Polls for the download this click is meant to produce rather than for a
+// fixed delay, and from a BASELINE rather than from zero — the second press
+// below happens with a download already counted, and a poll written as
+// `downloads === 0` would return instantly there and assert nothing.
+const settleClick = async () => {
+  const before = downloads;
+  for (let i = 0; i < 40 && downloads === before; i++) await new Promise((r) => setTimeout(r, 5));
+};
 document.getElementById('svSheetSave').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
 await settleClick();
 check('Save all saves the run, not a single kill',
@@ -1182,23 +1268,43 @@ check('an unprojectable point is ignored rather than believed',
 // ---------------------------------------------------------------------------
 section('THE PRINT — the photograph coming out of the camera');
 // ---------------------------------------------------------------------------
+// ...and back on: the flight below is about the paper again.
+CONFIG.boss.kill.print.rive = true;
 const PRINT = await import('../path/src/ui/snapshotPrint.js');
-const printMeta = { name: 'Grimtide the Tidebreaker', level: 12, time: 754 };
+// `square` IS THE PICTURE NOW, and its absence is the difference between a
+// print and no print at all. It used to be optional here — a meta without one
+// still produced the coded paper, which drew the composited `url` instead —
+// and that fallback is gone, so a shot that reaches this function without a
+// crop takes no trophy. Building one is the test acknowledging that.
+const printMeta = {
+  name: 'Grimtide the Tidebreaker', level: 12, time: 754,
+  square: document.createElement('canvas'),
+};
 
 PRINT.resetSnapshotPrints();
 const el = PRINT.showSnapshotPrint('data:image/png;base64,STUBBEDPNG', printMeta);
 check('a print appears', !!el && PRINT.snapshotPrintCount() === 1);
 check('...carrying the picture that was just taken',
-  String(el.querySelector('.sv-print-photo').src).startsWith('data:image/png'));
-check('...with the boss written on the chin',
-  el.querySelector('.sv-print-name').textContent === printMeta.name);
-check('...and the run, as a clock rather than a float',
-  el.querySelector('.sv-print-stat').textContent === 'LV 12 · 12:34',
-  el.querySelector('.sv-print-stat').textContent);
-check('...blank at first, so there is something to develop',
+  el.querySelector('.sv-print-frame-riv > canvas') !== null);
+// The name is inside the artboard now, so the chin cannot be read from the
+// DOM. The label the canvas carries is where it survives — and it is the only
+// thing a screen reader gets, which makes this worth asserting on its own
+// terms rather than as a stand-in for the chin.
+check('...with the boss named where a reader can reach it',
+  el.querySelector('canvas').getAttribute('aria-label') === `You beat ${printMeta.name}`,
+  el.querySelector('canvas').getAttribute('aria-label'));
+// `sv-print-wet` no longer drives an emulsion — the artboard fades its own
+// photograph in. It is still how the flight describes its state, and the
+// classes below are still what the pile and the score screen read.
+check('...marked as still coming out of the camera',
   el.classList.contains('sv-print-wet'));
 check('...starting below the bottom of the screen', /\+ \d+px\)/.test(el.style.transform),
   el.style.transform);
+// THE DELETED FALLBACK, asserted as a fact rather than left as an absence. A
+// shot with no square crop used to produce the coded paper; it now produces
+// nothing, and nothing is the intended answer.
+check('...and a shot with no crop takes no print at all',
+  PRINT.buildPrintPaper({ name: 'Nobody', level: 1, time: 0 }, 240) === null);
 
 // The flight, on the wall clock. Two rAFs to start it, then the timers.
 //

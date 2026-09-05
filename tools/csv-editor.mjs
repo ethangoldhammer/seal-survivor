@@ -394,6 +394,16 @@ const DOCS = {
     enabled: 'FALSE takes it out of rotation without deleting the row or the file. Blank means enabled.',
     notes: 'Working text. Nothing reads it.',
   },
+  'unlocks.csv': {
+    id: 'The gate\u2019s own name. Joins to nothing in code, but the progress ledger in a player\u2019s browser keys on it \u2014 so renaming one forgets who has earned it.',
+    kind: '`accessory` or `upgrade` \u2014 which roster `target` is looked up in. Anything else drops the row with a warning.',
+    target: 'The thing being gated: a key of CONFIG.accessories.items, or an upgrade id from upgrades.csv. A target that does not exist drops the row \u2014 a gate on a door that is not there would look like it gated something.',
+    stat: 'The lifetime counter that opens it. The names are listed in STATS in systems/unlocks.js (boatsDestroyed, trawlersDestroyed, bossesDefeated, boss.<archetype>, perk.<perk id>). A stat nothing counts is kept and warned about: a door that never opens is at least visible.',
+    count: 'How much of `stat`. Blank is 1 \u2014 do it once.',
+    label: 'What the player reads as the requirement. Copy: arrives as lorem and holds the ship until it is written. No screen shows it yet.',
+    enabled: 'FALSE switches the gate off \u2014 the thing is offered as if the row were not there. Blank means enabled. The gate SWITCH for the whole table is GATE_DEFAULT in systems/unlocks.js, not a column.',
+    notes: 'Working text. Nothing reads it.',
+  },
   'callouts.csv': {
     id: 'WHICH callout this is, and it joins to code — the condition that fires a warning, or the step that offers a tip. Renaming one takes it out of the game; rewording `text` does not. Adding a row does nothing on its own: something has to fire it.',
     kind: '`warn` for a state you must fix now (fires every run, forever) or `coach` for a first-run tip (fires ONCE EVER per device and then never again). Anything else is ignored, loudly.',
@@ -522,6 +532,7 @@ const BLANK_MEANS = {
   'uiText.csv': { group: 'ungrouped', notes: '\u2014' },
   'rarities.csv': { sfx: 'arrives silently', glow: '0 (no bloom)', statMul: '1 (no change)' },
   'flags.csv': { enabled: 'enabled', weight: '1', hulls: 'the general pool', notes: '\u2014' },
+  'unlocks.csv': { enabled: 'enabled', count: '1 (once)', notes: '\u2014' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', perkBias: 'rolls flat', perkBiasLevel: '0 (from the first)', perkBiasChance: '1 (always)', notes: '—' },
@@ -652,6 +663,12 @@ export const TABLES = [
     file: 'path/src/flags.csv',
     label: 'Flags',
     blurb: 'What flies off a masthead. One row per image in public/flags/, and the `id` joins to nothing \u2014 so a new flag is a file in that folder and a row here. `hulls` is the only column that decides anything: blank puts a flag in the pool every flag-flying boat draws from, and naming a hull makes the flag EXCLUSIVE to it \u2014 which is what keeps Bakalar\u2019s off the bosses and the bosses\u2019 off his.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/unlocks.csv',
+    label: 'Unlocks',
+    blurb: 'What has to be EARNED before it is offered \u2014 one row per gate, each in front of one card or one accessory, naming the lifetime stat that opens it and how much. A thing with no row is in the game from the first run. Only bites when the gate switch (GATE_DEFAULT in systems/unlocks.js) is on, which it is for a public build and not for this one.',
     addRows: true,
   },
   {

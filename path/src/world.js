@@ -919,5 +919,5 @@ export function createWorld(container) {
   // frame in world units, and that is a fact about this asymmetric frustum
   // that nothing outside this file can work out for itself. See applyFraming
   // in systems/bossKill.js, which frames the seal and the boss it just killed.
-  return { scene, camera, renderer, resize, applyRenderScale, tickAdaptiveScale, adaptiveScale, resetAdaptiveScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, updateSurface, updateColors, updateLighting, grid, constellations, wallRocks, rain, lightning, setLightningHandler };
+  return { scene, camera, renderer, resize, applyRenderScale, tickAdaptiveScale, adaptiveScale, resetAdaptiveScale, buildArena: buildBackdrop, updateCamera, punchCamera, focusCamera, halfExtents, framedView, updateSurface, updateColors, updateLighting, grid, constellations, wallRocks, rain, lightning, setLightningHandler };
 }

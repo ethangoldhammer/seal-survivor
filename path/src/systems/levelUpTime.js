@@ -62,6 +62,12 @@ export const levelUpState = {
   // back at 1/0 whenever nothing is claiming.
   camZoom: 1,
   camWeight: 0,
+  // THE RAMP BACK, 0..1 in wall time — 0 until the restore starts, 1 the frame
+  // it finishes. Published for the thing that has to arrive WITH full speed:
+  // the ghost that swims the seal back into its held pose (systems/
+  // levelUpGhost.js) reads its progress off this rather than off a copy of
+  // restoreTime, so the two can never be retuned apart.
+  restore: 0,
 };
 
 let clock = 0; // wall-clock into the current phase
@@ -244,9 +250,14 @@ export function updateLevelUpTime(rawDt) {
 
   if (levelUpState.phase === 'hold') return apply(hold);
 
-  // Restoring. Gameplay is already live again by now — this is only the world
-  // catching back up to full speed.
-  const t = smoothstep(clock / Math.max(0.01, c.restoreTime ?? 0.5));
+  // Restoring. The world catching back up to full speed. Whether gameplay is
+  // already live underneath it is the caller's decision: the boss dividend
+  // re-engages the run on the frame it closes, the level-up screen holds the
+  // run until the ghost has swum the seal back into its pose (see
+  // onLevelUpCleared in main.js) and lets go in `done`.
+  const restoreT = Math.max(0.01, c.restoreTime ?? 0.5);
+  levelUpState.restore = Math.min(1, clock / restoreT);
+  const t = smoothstep(clock / restoreT);
   const scale = apply(fromScale + (1 - fromScale) * t);
   if (t >= 1) {
     const done = onRestored;
@@ -276,6 +287,7 @@ export function endLevelUpTime(done) {
     return false;
   }
   levelUpState.phase = 'restore';
+  levelUpState.restore = 0;
   clock = 0;
   fromScale = levelUpState.timeScale;
   onRestored = done ?? null;
@@ -291,6 +303,7 @@ export function resetLevelUpTime() {
   levelUpState.elapsed = 0;
   levelUpState.camZoom = 1;
   levelUpState.camWeight = 0;
+  levelUpState.restore = 0;
   clock = 0;
   saluteClock = 0;
   saluting = false;

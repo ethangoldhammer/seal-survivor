@@ -64,6 +64,54 @@ export function bossShots() {
   return shots.map((s) => ({ ...s }));
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A TROPHY COSTS, AND WHY NOTHING ELSE COULD SAY.
+//
+// Each kill keeps the same frame FOUR times: a PNG data URL, a Blob of the
+// identical image, a thumbnail canvas and the square crop. That is deliberate
+// and each one is used — the URL feeds an <img> immediately, the Blob feeds the
+// share sheet a beat later, and the two canvases are handed to Rive without a
+// base64 round trip — but the total has never been visible anywhere.
+//
+// It is invisible in the worst possible way. `censusReport` walks the three.js
+// scene, so it reports geometry, textures, bones, audio and render targets and
+// none of this: a JS string, a Blob living in WebKit's blob store outside the
+// heap entirely, and two detached canvases the DOM walk does not reach either.
+// The trail from three killed sessions read a flat 366MB while the process was
+// being killed at 2048MB, and every one of those sessions had taken a kill shot
+// while the three that were NOT killed had taken none.
+//
+// Which is a correlation, not yet a verdict — the point of this function is to
+// turn it into a number the next crash can be read against.
+//
+// BYTES, NOT CHARACTERS, for the data URL. It is base64 ASCII, so the string's
+// length is its byte count on the wire — but a JS string is UTF-16 in memory,
+// so it costs twice that. Reporting `length` would halve the one figure most
+// likely to be the answer.
+export function bossShotBytes() {
+  const px = (c) => ((c?.width || 0) * (c?.height || 0) * 4);
+  let urls = 0;
+  let blobs = 0;
+  let canvases = 0;
+  for (const s of shots) {
+    urls += (s.url?.length ?? 0) * 2;
+    // Null until toBlob's callback lands, which is a real state and not a
+    // missing measurement — a shot taken two seconds ago genuinely has no blob
+    // yet, and counting it as zero is the truth at that moment.
+    blobs += s.blob?.size ?? 0;
+    canvases += px(s.thumb) + px(s.square);
+  }
+  const sheetBytes = (sheet.url?.length ?? 0) * 2 + (sheet.blob?.size ?? 0);
+  return {
+    count: shots.length,
+    urls,
+    blobs,
+    canvases,
+    sheet: sheetBytes,
+    total: urls + blobs + canvases + sheetBytes,
+  };
+}
+
 /** A new run starts with no trophies — the score screen must not show the last one's. */
 export function resetBossShot() {
   shots.length = 0;

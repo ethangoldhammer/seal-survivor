@@ -62,7 +62,9 @@ function cfg() {
   return CONFIG.boss?.kill?.print ?? {};
 }
 
-/** Is the Rive polaroid actually available? snapshotPrint.js draws CSS if not. */
+/** Is the Rive polaroid actually available? There is no other polaroid — the
+ *  coded paper snapshotPrint.js used to fall back to was deleted 2026-09-05 —
+ *  so false here means a boss kill takes no print at all. */
 export function snapshotCardsLive() {
   return !!(state.ready && !state.failed && cfg().rive !== false);
 }
@@ -105,10 +107,10 @@ export function initSnapshotCards() {
       // from it takes a reference (getInstance, +1) and every cleanup() gives
       // one back (-1) — and at zero the file RELEASES ITSELF and sets
       // `destroyed`. So the first card to be torn down takes the shared file
-      // with it, and every card after that fails to load: the score screen
-      // falls back to coded paper, the next boss's print does too, and the
-      // share button returns null. All of it silent, and all of it looking
-      // like an intermittent Rive bug rather than a refcount hitting zero.
+      // with it, and every card after that fails to load: the score screen's
+      // prints stop appearing, the next boss's does too, and the share button
+      // returns null. All of it silent, and all of it looking like an
+      // intermittent Rive bug rather than a refcount hitting zero.
       //
       // Holding one reference for the life of the session pins the count at 1
       // or above. Nothing releases it: the file is meant to outlive every card,
@@ -117,9 +119,11 @@ export function initSnapshotCards() {
       state.ready = true;
       return true;
     } catch (err) {
-      // Offline, a bad CDN day, a renamed artboard. The run carries on with
-      // the coded paper and nothing about this is worth a broken frame.
-      console.warn(`[snapshotCard] Rive polaroid unavailable, falling back to the coded paper — ${err}`);
+      // Offline, a bad CDN day, a renamed artboard. The run carries on
+      // WITHOUT trophies now rather than with a second-best paper — see the
+      // note in ui/snapshotPrint.js for why the fallback was deleted — and
+      // none of it is worth a broken frame.
+      console.warn(`[snapshotCard] Rive polaroid unavailable; this run takes no prints — ${err}`);
       state.failed = true;
       return false;
     }

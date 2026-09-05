@@ -66,7 +66,14 @@ const VIEWPORTS = [
 // two buttons from the main menu and three during a run, and it is the third
 // that ran off the side of the panel. A surface list holding only one of them
 // would have measured the route that fits.
-const SURFACES = ['HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card', 'settings', 'paused'];
+// 'splash' is the title card — the Rive artboard with the dice, the name pill
+// and the Start button. Those three are DRAWN, not DOM, so the sweep below
+// cannot see them; measureSplash() computes where they are from what the
+// artboard reports (its scale and the pill's width) and the geometry in
+// ui/splashLayout.js, and checks them against the wordmark and the DOM over
+// the card. It is here because the dice sat on the SURVIVOR on every wide
+// screen for as long as nothing measured it.
+const SURFACES = ['splash', 'HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card', 'settings', 'paused'];
 
 // THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
 // itself of, restated here ON PURPOSE rather than imported: this is the check,
@@ -323,6 +330,9 @@ function describe(f) {
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
   if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
   if (f.type === 'out-of-panel') return `${f.what} — ${f.by}px outside the menu panel it belongs to`;
+  if (f.type === 'splash-over-wordmark') return `${f.what} — sitting on the wordmark, ${f.by}px of overlap`;
+  if (f.type === 'splash-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
+  if (f.type === 'splash-unread') return `${f.what} — ${f.by}`;
   if (f.type === 'clipped-below') return `${f.what} — cut off at the bottom, content ${f.contentH}px in a ${f.boxH}px box`;
   return `${f.what} — ${f.type} by ${f.by}px`;
 }
@@ -409,6 +419,7 @@ async function runFrame(surface) {
     await settle(120);
 
     findings.push(...measure());
+    if (surface === 'splash') findings.push(...(await measureSplash()));
   } catch (err) {
     console.error(err);
     findings.push({ type: 'threw', what: String(err?.message ?? err) });
@@ -417,7 +428,34 @@ async function runFrame(surface) {
   parent.postMessage({ kind: 'sv-layout', findings }, '*');
 }
 
+// The title card's handle, for measureSplash. Module-level because the frame
+// builds one surface and then measures it, and the handle is the only way to
+// reach the artboard's numbers.
+let splashHandle = null;
+
 async function buildSurface(surface, ui, callout, callouts) {
+  if (surface === 'splash') {
+    // THE REAL CARD, the shipping module and the shipping .riv, mounted the
+    // way ui.js mounts it: inside the UI root so the tip jar and the build
+    // stamp it carries are swept by measure() like any other chrome. Nothing
+    // presses anything — the sweep is a still.
+    const { mountRiveSplash } = await import('../../path/src/ui/riveSplash.js');
+    await new Promise((ready, failed) => {
+      splashHandle = mountRiveSplash({
+        parent: ui.uiRoot(),
+        onReady: () => ready(),
+        onError: (err) => failed(err instanceof Error ? err : new Error(String(err))),
+        onDismiss: (why) => { if (why === 'error') failed(new Error('splash dismissed before it was measured')); },
+      });
+    });
+    // The entry fit lands a settle (120ms) after the artboard first reports
+    // the pill's width, and Rive re-lays the row out on the frame after the
+    // scale is written. Long enough for both, and for the measurement below
+    // to read a row that has stopped moving.
+    await settle(900);
+    return;
+  }
+
   // The numbers are a plausible mid-run: a four-figure score, a level in
   // double digits (which is wider than "1"), and health worth drawing.
   const gameState = { score: 128400, time: 421, level: 14, xp: 60, xpToNext: 100 };
@@ -525,9 +563,18 @@ async function buildSurface(surface, ui, callout, callouts) {
     // stretched to the frame is the same LAYOUT as a real print and none of
     // that. See the note at the head of this file about measuring the thing
     // the game builds rather than the stand-in.
-    const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    // A square crop rather than a data URL: the print is the Rive artboard now
+    // and the coded paper that drew a plain <img> is gone, so `square` is what
+    // decides whether there is a print at all. A bare canvas is enough — the
+    // audit measures where the paper SITS, never what is drawn on it.
+    //
+    // Null when the artboard has not loaded, which on a page that never called
+    // initSnapshotCards is always. Skipped rather than crashed: this pass is
+    // about the corner the pile parks in, and it has nothing to measure.
     for (let i = 0; i < 2; i++) {
-      const paper = print.buildPrintPaper(PIXEL, { name: 'Grimgullet', level: 14, time: 421 }, 132);
+      const paper = print.buildPrintPaper(
+        { name: 'Grimgullet', level: 14, time: 421, square: document.createElement('canvas') }, 132);
+      if (!paper) break;
       paper.style.cssText = 'position:absolute; left:16px; '
         + `top:${40 + i * 18}px; width:132px;`;
       ui.uiRoot().appendChild(paper);
@@ -746,6 +793,48 @@ function measure() {
 
   findings.push(...measureCalloutOverlap());
   return findings;
+}
+
+// THE DICE, THE PILL AND THE START BUTTON, which are not in the DOM.
+//
+// The splash is a Rive artboard fitted `Layout`, so artboard units are CSS
+// pixels and the column's position is a closed form of three numbers: the
+// canvas size, the scale the game wrote to `numEntryScale`, and the pill's
+// width the artboard laid out and bound back through `numEntryWidth`. The
+// closed form is ui/splashLayout.js — the same one the game fits with — and
+// what this adds over `npm run test:splashlayout` is the REAL pill width from
+// the real layout engine at this viewport, rather than an estimate, and the
+// real tip jar and build stamp rects rather than restated ones.
+//
+// A number that cannot be read is a finding, not a pass: an export that lost
+// `numEntryWidth` would otherwise measure a column of nothing.
+async function measureSplash() {
+  const out = [];
+  const { splashFindings } = await import('../../path/src/ui/splashLayout.js');
+  const { SPLASH_BINDINGS } = await import('../../path/src/ui/riveContract.js');
+  const vmi = splashHandle?.rive?.viewModelInstance;
+  let scale = null; let pillW = null;
+  try {
+    scale = vmi?.number(SPLASH_BINDINGS.entryScale)?.value ?? null;
+    pillW = vmi?.number(SPLASH_BINDINGS.entryWidth)?.value ?? null;
+  } catch { /* reported below */ }
+  if (!(scale > 0) || !(pillW > 0)) {
+    out.push({ type: 'splash-unread', what: 'splash entry column', by: `the artboard reported scale ${scale} and pill width ${pillW}; nothing could be measured` });
+    return out;
+  }
+  const others = [];
+  for (const sel of ['.sv-tip-splash', '.sv-build-stamp']) {
+    for (const node of document.querySelectorAll(sel)) {
+      const r = node.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      others.push({ what: path(node), rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } });
+    }
+  }
+  out.push(...splashFindings({
+    W: window.innerWidth, H: window.innerHeight, scale, pillW, others,
+    touch: params.get('touch') === '1', tapMin: TAP_MIN,
+  }));
+  return out;
 }
 
 // A CALLOUT SITTING ON THE HUD.

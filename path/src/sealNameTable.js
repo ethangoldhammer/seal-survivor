@@ -257,8 +257,74 @@ function drawSealName(parts, opts, random) {
   // Only the adjectives that still fit in the field beside this nickname. See
   // the length rule at the top of the file: the alternative is a name the
   // player watches get cut off as it arrives.
-  const room = MAX_NAME_LEN - nick.text.length - 1; // -1 for the space
-  const fits = room > 0 ? (parts?.adjective ?? []).filter((a) => a.text.length <= room) : [];
-  const adj = pick(fits, random);
+  const adj = pick(adjectivesBeside(parts, nick.text), random);
   return adj ? `${adj.text} ${nick.text}` : nick.text;
+}
+
+// The adjectives with room beside a nickname — the length rule at the top of
+// the file, as a pool. Empty when nothing fits, which is what makes the
+// nickname stand alone.
+function adjectivesBeside(parts, nickname) {
+  const room = MAX_NAME_LEN - String(nickname ?? '').length - 1; // -1 for the space
+  return room > 0 ? (parts?.adjective ?? []).filter((a) => a.text.length <= room) : [];
+}
+
+/**
+ * One HALF of a name, for a surface that builds names in front of the player
+ * rather than handing them one — the splash's opening reel flips the
+ * adjective and the nickname on separate clocks (ui/nameScramble.js), so it
+ * needs to draw from one hat at a time.
+ *
+ * `slot` is one of SEAL_SLOTS. For an adjective, `opts.beside` is the nickname
+ * it will sit next to, and only adjectives that fit beside it are drawn —
+ * the same length rule as rollSealName, applied to the half rather than the
+ * pair. Empty string when the hat has nothing usable, which for an adjective
+ * is a legitimate answer (the nickname stands alone) and for a nickname means
+ * the table is empty.
+ */
+export function rollSealPart(parts, slot, opts = {}, random = Math.random) {
+  if (slot === 'adjective') {
+    const pool = opts.beside != null ? adjectivesBeside(parts, opts.beside) : (parts?.adjective ?? []);
+    return pick(pool, random)?.text ?? '';
+  }
+  if (slot === 'nickname') return pick(parts?.nickname ?? [], random)?.text ?? '';
+  return '';
+}
+
+/**
+ * A name back into its halves, against the table it was built from. "Fat
+ * Tony" is `{ adjective: 'Fat', nickname: 'Tony' }` when Fat is an adjective
+ * row and Tony a nickname row; a hand-written `full` name, a bare nickname, a
+ * name the player brought from somewhere else, or a lineage ("Fat Tony II",
+ * see randomName.js) has no adjective half and is the whole of the nickname
+ * half. Longest adjective first, so "The One and Only Osbourne" splits at the
+ * four-word adjective and not at "The".
+ *
+ * Only ever used to decide what the reels LAND on; nothing here is stored.
+ */
+export function splitSealName(parts, name) {
+  const whole = String(name ?? '').trim();
+  const adjectives = [...(parts?.adjective ?? [])].sort((a, b) => b.text.length - a.text.length);
+  const nicknames = new Set((parts?.nickname ?? []).map((n) => n.text));
+  for (const a of adjectives) {
+    const head = `${a.text} `;
+    if (!whole.startsWith(head)) continue;
+    const rest = whole.slice(head.length);
+    if (nicknames.has(rest)) return { adjective: a.text, nickname: rest };
+  }
+  return { adjective: '', nickname: whole };
+}
+
+/**
+ * The halves back into a name, under the length rule: a pair that would not
+ * fit the field is the nickname alone, exactly as rollSealName would have
+ * drawn it. Never longer than MAX_NAME_LEN.
+ */
+export function joinSealName(adjective, nickname) {
+  const adj = String(adjective ?? '').trim();
+  const nick = String(nickname ?? '').trim();
+  if (!adj) return nick.slice(0, MAX_NAME_LEN);
+  if (!nick) return adj.slice(0, MAX_NAME_LEN);
+  const both = `${adj} ${nick}`;
+  return both.length <= MAX_NAME_LEN ? both : nick.slice(0, MAX_NAME_LEN);
 }

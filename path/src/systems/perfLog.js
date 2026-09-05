@@ -170,6 +170,49 @@ function texLabel(t) {
 const TEX_SLOTS = ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'roughnessMap',
   'metalnessMap', 'aoMap', 'bumpMap', 'lightMap', 'envMap', 'specularMap'];
 
+// --- THE THREE PLACES A TEXTURE HIDES FROM THE SLOT LIST --------------------
+//
+// The walk above was reporting 2 textures reachable on a phone run whose
+// renderer was holding 345, and 59 against 537 on the desktop. Read literally
+// that says 99% of this game's textures are leaked, and it was believed for
+// exactly as long as it took to check — the walk simply could not SEE most of
+// them, and every one it could not see was booked as an orphan. An instrument
+// that reports a leak because it is blind is worse than no instrument: the
+// number is specific, it is stable across runs, and it is wrong.
+//
+// The three blind spots, all of them things this game does everywhere:
+//
+//   UNIFORMS      Half the materials here are ordinary three materials with a
+//                 shader injected through onBeforeCompile, and the maps that
+//                 injection adds live in `uniforms`, not in a named slot.
+//                 Caustics, the goo field, the threat rings, biolum skin.
+//   BONE TEXTURES Every Skeleton allocates its own bone DataTexture on the
+//                 frame it is first drawn, and the pool holds ~500 bodies with
+//                 ~650 skeletons between them. That is 650 textures the
+//                 renderer legitimately holds and the slot list has never once
+//                 looked at — comfortably the largest single group, and the
+//                 whole of the "leak" that was being reported.
+//   BACKGROUND    scene.background and scene.environment are textures on the
+//                 scene itself rather than on anything traverse() visits.
+//
+// Bone textures are labelled as their own group rather than folded in with the
+// rest: they are ~4KB each where an albedo is megabytes, so a count that mixed
+// them would make "638 textures" read as a memory problem when the bytes say
+// it is not (the run census reads bone2MB against tex106MB). Two groups, so
+// the report can say which kind of number it is.
+function eachUniformTexture(material, visit) {
+  const u = material?.uniforms;
+  if (!u) return;
+  for (const key in u) {
+    const v = u[key]?.value;
+    if (v?.isTexture) visit(v);
+    // An array of maps is one uniform holding several textures — rare, but it
+    // is how a multi-layer effect binds, and missing it would put those back
+    // in the orphan column that this whole block exists to empty.
+    else if (Array.isArray(v)) for (const t of v) if (t?.isTexture) visit(t);
+  }
+}
+
 /**
  * Walk the scene and fold this moment's textures in. Cheap enough at one call
  * every few seconds; deliberately not called per frame.
@@ -192,16 +235,30 @@ export function noteTextures(scene, liveCount = 0, clock = lastStamp / 1000) {
   // counting it four times would invent a leak that is really sharing working.
   const seen = new Set();
   const here = new Map();
+  const take = (t, label) => {
+    if (!t?.isTexture || seen.has(t)) return;
+    seen.add(t);
+    const k = label ?? texLabel(t);
+    here.set(k, (here.get(k) ?? 0) + 1);
+  };
+  // The scene's own two, which traverse() never visits.
+  take(scene.background);
+  take(scene.environment);
   scene.traverse((o) => {
+    // One per Skeleton, not per SkinnedMesh: several meshes share a skeleton on
+    // a rigged body, and counting per mesh would multiply the largest group in
+    // the report by the number of parts an animal happens to be modelled in.
+    const bone = o.skeleton?.boneTexture;
+    if (bone && !seen.has(bone)) {
+      seen.add(bone);
+      here.set('bone texture', (here.get('bone texture') ?? 0) + 1);
+    }
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     for (const m of mats) {
-      for (const slot of TEX_SLOTS) {
-        const t = m?.[slot];
-        if (!t?.isTexture || seen.has(t)) continue;
-        seen.add(t);
-        const k = texLabel(t);
-        here.set(k, (here.get(k) ?? 0) + 1);
-      }
+      for (const slot of TEX_SLOTS) take(m?.[slot]);
+      // ...and the injected ones. AFTER the slots so a map bound in both places
+      // is labelled by its image rather than by the uniform that also holds it.
+      eachUniformTexture(m, (t) => take(t));
     }
   });
   for (const [k, n] of here) {
