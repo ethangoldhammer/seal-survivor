@@ -15390,21 +15390,17 @@ export const CONFIG = {
         //                 1.80 of this body's 0.95 radius.
         //   radius 1.25   half that span is 1.14, or 1.20 radii. A shade over,
         //                 because the filaments splay as well as hang.
-        //   offset -2.04  SCALED UP. The circle now runs from the crown itself
-        //                 down to a fifth of a field's length PAST the tips —
-        //                 6.04 world units of stinging water against a filament
-        //                 field 5.03 long. It ends below the animal on purpose:
-        //                 the strands trail, and a seal passing under one is in
-        //                 the gear whether or not a rendered filament happens to
-        //                 be at that spot this frame.
-        //   radius 1.44   sized so the TOP edge lands on the crown. That is the
-        //                 landmark, not the float's top — swimming into the
-        //                 float is still free, which is this animal's one safe
-        //                 approach and the whole reason the sting is split off
-        //                 the body at all. Any bigger and the circle eats the
-        //                 float's base and the safe approach quietly stops
-        //                 existing while every check still passes.
-        sting: { offset: -2.04, radius: 1.44, feedback: 'stingPoison' },
+        //   offset -1.85  NUDGED DOWN from 1.80, which is not a retune — it is
+        //                 the fix for a 0.11-unit overlap the original numbers
+        //                 had. At 1.80 the circle's top edge sat just ABOVE the
+        //                 crown and clipped the base of the float, so swimming
+        //                 into the bottom of the sail stung when it is supposed
+        //                 to be the one safe approach. The circle is the same
+        //                 SIZE; it just sits where the filaments do.
+        //   radius 1.25   half the field's span, a shade over because the
+        //                 filaments splay as well as hang. Top edge now lands
+        //                 on the crown, bottom edge past the tips.
+        sting: { offset: -1.85, radius: 1.25, feedback: 'stingPoison' },
         // IT LIVES ON THE WATERLINE, which is the whole animal. A man o' war
         // is a sail on the surface with its fishing gear hanging under it; it
         // has no muscle to swim with and it does not choose a depth.
@@ -15522,9 +15518,38 @@ export const CONFIG = {
         // anyone resizes it. 1.5 radii clears the float (2.47 above the origin
         // against a 1.98 radius at the old size); 0.5 below is inside the
         // filament field, which is exactly where "from underneath" begins.
+        // SCALED UP — this is what the boss TAKES, not what it deals. `above`
+        // is a multiplier on incoming damage, so 3 means a top hit is worth
+        // three of the same hit landed anywhere else, and the boss's effective
+        // health from overhead is a third of the number in enemies.csv.
+        //
+        //   below 0.35  from underneath, up through the stinging half. Raised
+        //               with the rest so the whole fight got faster rather
+        //               than only the good approach — but still far and away
+        //               the worst place to be, which is the point.
+        //   side  1.1   level with it, front or back. The ordinary exchange,
+        //               and now slightly better than an unmodified hit.
+        //   above 3     THE HEAD. Dropped on from overhead, which costs a
+        //               breach on a body that cannot chase you.
+        //
+        //   hotSpotAbove 2.6  a weak spot struck while airborne, on top of the
+        //               crit AND the band. With critMul 2.2 that is 17x a body
+        //               hit from below — deliberately enormous, because it is
+        //               the hardest thing to do to this boss and the only one
+        //               that asks the player to aim while they are in the air.
+        //               capBossDamage still binds the burst.
+        //
+        //   aboveGap 1.25  AND THE HEAD IS EASIER TO REACH. This was 1.5, which
+        //               on a 4.37 radius put the band a full unit ABOVE the top
+        //               of the float — the player had to clear the animal and
+        //               then keep climbing before a hit counted as a top hit.
+        //               1.25 lands the boundary exactly on the float's top, so
+        //               the bonus starts the moment they are over the head.
+        //               Measured, not chosen: 0.25 x span is the pivot, so the
+        //               float's top is 1.25 radii up on this body.
         damageZones: {
-          below: 0.12, side: 0.45, above: 1, hotSpotAbove: 1.6,
-          aboveGap: 1.5, belowGap: 0.5,
+          below: 0.35, side: 1.1, above: 3, hotSpotAbove: 2.6,
+          aboveGap: 1.25, belowGap: 0.5,
         },
         // Slower than the wave animal's, because it is 2.6x the body coming
         // about and a big thing that turns at a small thing's rate reads as
@@ -15545,14 +15570,11 @@ export const CONFIG = {
         //   offset -2.25  origin to crown 1.49, origin to tips 7.41, so the
         //                 field centres 4.45 below — 2.25 of this body's 1.98.
         //   radius 1.5    half the span is 2.96, or 1.50 radii.
-        //   offset -2.55  radius 1.8  — the same construction as the wave
-        //                 animal's and NOT the same numbers, for the reason the
-        //                 old pair carried: the two radii were sized against
-        //                 different things, so the multiples cannot match. On
-        //                 this body the circle runs 3.29 to 19.00 below the
-        //                 origin — 15.7 world units of stinging water, and the
-        //                 top edge is again exactly the crown.
-        sting: { offset: -2.55, radius: 1.8, feedback: 'stingPoison' },
+        //   offset -2.25  radius 1.5 — ITS OWN multiples, not the wave
+        //                 animal's: the two radii were sized against different
+        //                 things, so copying the pair across would put the
+        //                 sting inside the float.
+        sting: { offset: -2.25, radius: 1.5, feedback: 'stingPoison' },
       },
 
     },

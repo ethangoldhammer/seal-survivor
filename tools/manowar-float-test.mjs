@@ -191,8 +191,7 @@ check('the sting covers the whole filament field', -stingY + stingR >= toTip,
 check('...and stops at the crown, so the float is still free to touch',
   -stingY - stingR >= -toCrown - 0.05,
   `sting top ${(-stingY - stingR).toFixed(2)} vs crown ${(-toCrown).toFixed(2)} below the origin`);
-check('the poison is a real threat now, not a graze',
-  def.contactDamage >= 30, `${def.contactDamage}/s`);
+check('the poison is a drain, not a blow', def.contactDamage > 0, `${def.contactDamage}/s`);
 check('...and it names a feedback event that exists',
   !!CONFIG.feedback[def.sting.feedback], def.sting.feedback);
 

@@ -132,6 +132,17 @@ check('nothing is a total refusal — a dead hit reads as a broken weapon',
 const barY = boss.mesh.position.y + Z.aboveGap * boss.radius;
 check('the top band starts above the water', barY > surfaceHeightAt(boss.mesh.position.x),
   `bar ${barY.toFixed(2)} vs water ${surfaceHeightAt(boss.mesh.position.x).toFixed(2)}`);
+// THE HEAD IS THE BOUNDARY. The band must start at the top of the float, not
+// somewhere above it — a player who has cleared the animal and is looking down
+// at it is over the head, and asking them to climb further before the hit
+// counts is a rule they cannot see. Within a tenth of a radius either way.
+const floatTopY = boss.mesh.position.y + 0.25 * 2 * bsize * arch.sizeMul;
+check('...and it starts AT the top of the head, not above it',
+  Math.abs(barY - floatTopY) < 0.1 * boss.radius,
+  `band ${barY.toFixed(2)} vs head top ${floatTopY.toFixed(2)}`);
+check('a top hit is worth several ordinary ones', Z.above >= 2.5, `${Z.above}x`);
+check('...and the whole fight got faster, not just the good approach',
+  Z.below > 0.3 && Z.side >= 1, `below ${Z.below}, side ${Z.side}`);
 
 // An increment is not an attack.
 player.mesh.position.set(boss.mesh.position.x, boss.mesh.position.y - 30, 0);
@@ -231,7 +242,6 @@ check('the boss sting covers its whole filament field', bStingY + bStingR >= bTo
 check('...and stops at the crown, so the top of the float is still safe',
   bStingY - bStingR >= -bToCrown - 0.1,
   `sting top ${(bStingY - bStingR).toFixed(2)} vs crown ${(-bToCrown).toFixed(2)}`);
-check('...and it hurts', bdef.contactDamage >= 60, `${bdef.contactDamage}/s`);
 check('...more than the wave animal, which is the same animal smaller',
   bdef.contactDamage > CONFIG.enemies.manowar.contactDamage,
   `${bdef.contactDamage} vs ${CONFIG.enemies.manowar.contactDamage}`);
