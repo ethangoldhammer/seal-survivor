@@ -7,9 +7,15 @@ import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { CONFIG, registerSkinWearers } from './config.js';
 import { applyAssetTable } from './assetTable.js';
 import { attachNoiseShader, applyNoiseSettings } from './systems/noiseShader.js';
+// The project's one gradient-noise field, spliced into the chrome film's
+// fragment shader for its grain — see makeChromeMaterial. From the leaf module
+// rather than from noiseShader.js so this does not drag the seal's whole hide
+// system (mottling, wet film, glow layers) in behind it.
+import { NOISE_FIELD_GLSL } from './systems/noiseGlsl.js';
 import { attachToonShade, applyToonSettings } from './systems/toonShade.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, instantiateBiolumSkin, splitForEdges } from './systems/biolumSkin.js';
 import { attachGrassSway, applyGrassSettings } from './systems/grassSway.js';
+import { attachTentacleSway } from './systems/tentacleSway.js';
 import { makeOrganicRing } from './systems/organicRing.js';
 import { createRockGeometry, startTumble } from './systems/rocks.js';
 import { SEABED_PROPS, SEABED_VARIANTS } from './seabedProps.js';
@@ -684,6 +690,19 @@ export const ASSETS = {
   //     accessoryRounds        3.423      0.0411
   //     accessoryAviators      9.504      0.114
   //     accessoryWireFrames    0.108      0.00129
+  //     accessoryHardHat       1.587      0.01904
+  //     accessoryCowboy      114.165      1.36998
+  //     accessoryWizard        1.226      0.01471
+  //     accessorySharkHood     0.197      0.00236
+  //     accessoryNeonJelly     1.899      0.02279
+  //
+  // MEASURED BY `npm run acc:render`, which prints the radius and 0.012 x it
+  // under every model it draws. That tool reproduces the first eight rows above
+  // to three decimals — which is how it was checked, and also how a bug in it
+  // was caught: half the bounding-box diagonal, the obvious reading of
+  // "bounding sphere", overstates every one of these by 10-25% because a hat is
+  // a dome and no vertex is anywhere near the corner a diagonal measures to.
+  // The radius is the furthest VERTEX from the box centre.
   //
   // Gathered here rather than one line above each block, and that is not
   // tidiness: tools/apply-shaders.mjs looks three lines above a field it is
@@ -848,6 +867,141 @@ export const ASSETS = {
     shape: 'box',
     size: [0.9, 0.12, 0.3],
     color: 0xc9922e,
+    unlit: true,
+  },
+
+  // ---------------------------------------------------------------------------
+  // THE THIRD BATCH — three hats, a hood and a jellyfish, imported by the same
+  // tools/optimize-accessories.mjs from the same folder. Seven files came in;
+  // one was rejected outright (the reason is in that file's POOL, so it does
+  // not get re-imported) and one was optimized but not worn — see the note on
+  // accessoryNeonJelly below.
+  //
+  // `forward` IS READ OFF A PICTURE, not guessed. `npm run acc:render` draws
+  // any GLB from six orthographic angles with each panel labelled by the axis
+  // the camera looks down, so "the jaw is in the -X panel" settles a facing in
+  // one look instead of after a trip through the accessory lab. It exists
+  // because optimize-accessories.mjs's header asks for exactly this and there
+  // was nothing that did it.
+  //
+  // WHAT THAT PICTURE SAID, for each of the six:
+  //
+  //   hardhat     the visor overhangs 0.871 at +Z against 0.405 at -Z, and the
+  //               crown is pushed back to match. The same signature the tricorn
+  //               and the fedora have, which is what calibrated the reading.
+  //   cowboyhat   SYMMETRIC front to back — 60.889 against 60.890 — so this is
+  //               a free choice rather than a measurement. The brim rolls up
+  //               along X and runs long along Z, so Z is the front/back axis
+  //               and it joins the family at +Z.
+  //   wizardhat   the point hooks toward +Z (its tip reaches 0.978 there and
+  //               -0.070 the other way). Forward is the hook, not the brim:
+  //               worn the other way round the point curls back over the neck.
+  //   sharkhood   the jaw is face-on in the -X panel and the smooth back of the
+  //               skull is in +X, so this one faces +X and is the only thing in
+  //               the wardrobe that does. Do not "correct" it to +Z.
+  //   neonjelly   radially symmetric about Y, so forward is arbitrary and set
+  //               to +Z for the family. Only `up` carries any information here,
+  //               and it arrives bell-up already.
+  // ---------------------------------------------------------------------------
+
+  // An orange builder's hard hat, and the only file in three batches that
+  // arrived already inside the triangle budget — 562 of them. Nothing was
+  // decimated off it; the 892KB it came in at was three 1024-square maps, one
+  // of which was a 390-byte flat blue normal.
+  accessoryHardHat: {
+    model: '/models/hardhat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.01904 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0xff7a1a,
+    unlit: true,
+  },
+  // A brown wide-brim with the sides rolled up. The upturn is its whole read —
+  // it is what separates this silhouette from the fedora two entries up, and
+  // the reason it holds 1,498 triangles rather than the 1,000 a plain dome
+  // would need.
+  accessoryCowboy: {
+    model: '/models/cowboyhat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    // The biggest number in the rim table by three orders of magnitude, and it
+    // is not a typo: this file is authored at 176 x 64 x 222 units where the
+    // wire frames are 0.16 long. `thickness` is in the model's own units — see
+    // the note above the table.
+    outline: { color: 0x000000, thickness: 1.36998 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x5f4d34,
+    unlit: true,
+  },
+  // A floppy witch's hat with the point hooked forward. ITS CHAIN IS NOT HERE:
+  // the source wound a beaded chain round the crown that was 41,264 of its
+  // 45,710 triangles, and simplify() splits its budget per primitive — left in,
+  // it would have taken the whole allowance and left the hat itself at about
+  // 130 triangles. Dropped at import; see the row in optimize-accessories.mjs.
+  accessoryWizard: {
+    model: '/models/wizardhat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.01471 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x41403c,
+    unlit: true,
+  },
+  // A shark's head worn as a hood, jaw open, full set of teeth. THE ONE THAT
+  // FACES +X — see the block above; the -X panel is the one with the jaw in it.
+  //
+  // Half its source was an inverted-hull outline in flat black, the standard
+  // cel-shading trick. Dropped: the game draws its own rims (the `outline`
+  // block right here is the one that reaches an accessory), so a baked-in
+  // second hull would both cost double and fight the rim the game puts there.
+  accessorySharkHood: {
+    model: '/models/sharkhood.glb',
+    fit: 1,
+    forward: '+X',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.00236 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x477594,
+    unlit: true,
+  },
+  // A green jellyfish: a bell with four bulbed tentacles hanging and a thin
+  // stalk trailing below them. THE ONE OF THE TWO THAT IS WORN — the other came
+  // in on the same batch and went the other way entirely: it is `enemyJellyfish`
+  // below, a creature in the water. Bell-up with the filaments hanging is what
+  // reads as worn and this one does it; the other arches its filaments over the
+  // top, which reads as an animal swimming rather than as a hat.
+  //
+  // NO TEXTURES AT ALL — two materials of pure
+  // factors, which is why 2,588 triangles fit in 51KB.
+  //
+  // IT IS THE BRIGHTEST THING IN THE WARDROBE AND NOTHING HERE DIMMED IT. Its
+  // bell is 11% alpha over a FULL WHITE emissive factor and its tentacles carry
+  // 0x01ff7b; the import only ever touches emissive MAPS, and this file has
+  // none, so both factors are exactly as authored. On a seal's head that is a
+  // lamp. Left alone deliberately — turning down a colour somebody chose is a
+  // look decision and belongs in the shader lab, not in an importer.
+  accessoryNeonJelly: {
+    model: '/models/neonjelly.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.02279 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x84ffa2,
     unlit: true,
   },
 
@@ -1935,27 +2089,87 @@ export const ASSETS = {
     },
   },
 
-  // SARDINE SWIRL's body — the razor clam's shell, smaller and much shorter.
+  // SARDINE SWIRL's body — a sardine, and under it the razor clam's shell as
+  // the fallback it was drawn as before the art arrived.
   //
-  // A STAND-IN, and deliberately the razor clam's one: the swirl needs a body
-  // that reads as a small hard silver thing turning over in the water, the
-  // blade already is one, and `bladePools` is keyed per ASSET so a second
-  // `shape: 'blade'` entry gets its own pool of warps rather than sharing the
-  // clam's. Real sardine art replaces this row and nothing else.
+  // THE KEY IS STILL `sardineBlade` and that is deliberate. It names the row in
+  // assets.csv, the `key === 'sardineBlade'` reset in main.js, the tuner's
+  // saved blocks in imported-tuning.json and SARDINE_SWIRL_ASSETS — and a
+  // rename would have to land in all four at once or leave a body spawning at
+  // size 1 (see the note in memory about assets.csv rows). It is the swirl's
+  // body whatever it is drawn as; the shape below is what it USED to be.
   //
-  // THE ASPECT RATIO IS THE WHOLE DIFFERENCE. The clam is 0.17 x 1.1 — six and
-  // a half times as long as it is wide, which is a knife. A sardine is closer
-  // to three, so `length` comes most of the way down while `width` barely
-  // moves, and at assets.csv's 1.6 the drawn body is about 0.83 units long
-  // against the blade's 2.64. Eight of them orbiting the seal at the clam's
-  // proportions would be a bin of knives.
+  // THE MODEL. public/models/sardine.glb, built by tools/optimize-sardine.mjs
+  // from the Sketchfab download: 2,132 triangles and a 1024 map down to 420 and
+  // a 256, closed-manifold so it is single-sided, and flattened out of its
+  // Sketchfab node chain so the file measures as the fish. That budget is not
+  // stingy — the swirl draws eight to twenty-four of these at once and one body
+  // is about 26 pixels long at 1080p — and the tool's header records what was
+  // cut and what deliberately was not.
+  //
+  // `forward: '-Z', up: '+Y'` IS MEASURED, not guessed: the importer reads the
+  // nose off the geometry (the tail is the thin tall end, the snout is the fat
+  // one) and prints the pair, so a re-export that comes out turned says so in
+  // the console rather than in the game. Same pair the fishes.glb trio takes.
+  //
+  // WHY THIS ORIENTATION MATTERS MORE HERE THAN ON A CREATURE. The swirl writes
+  // BOTH of the body's angles itself (see systems/sardineSwirl.js): `rotation.z`
+  // noses it along the Lorenz flow, and `rotation.y` is the whip about its own
+  // long axis. The second one is only about the long axis because
+  // orientationQuaternion sends `forward` to entity +Y — get `forward` wrong and
+  // the school still swims correctly but every sardine cartwheels end over end.
+  //
+  // NO `pivot`. Every other swimmer in this file turns about a point near its
+  // skull, and this one must not: the swirl's hit test is taken at the mesh's
+  // ORIGIN (`group.position + mesh.position`), so a nose-ward pivot would put
+  // the bite circle on the snout and leave the rest of the fish trailing
+  // outside it. Balanced on its centre, the reach and the body agree — which is
+  // the invariant tools/sardine-swirl-test.mjs checks.
+  //
+  // `fit: 0.52` IS THE BLADE'S `length`, to the digit. That is what keeps the
+  // change art-only: the drawn body stays 0.52 x assets.csv's 2.4 = 1.25 units
+  // long, so sardineReach — CONFIG.sardineSwirl.radius times the same 2.4 — is
+  // still the circle it was tuned to be. Move one and move the other.
+  //
+  // THE SHELL BELOW IS THE FALLBACK and stays exactly as it was. `model` wins
+  // where it loads; every Node harness in the repo loads nothing and renders
+  // this instead (see createVisual), which is why its `length` has to keep
+  // agreeing with `fit` above. `chrome`/`unlit`/`color` reach only the
+  // primitive — a model's materials go through processMaterial, which honours
+  // `modelUnlit` and not `unlit`, and this fish brings its own painted silver.
+  //
+  // THE ASPECT RATIO IS THE WHOLE DIFFERENCE between the shell and the clam's.
+  // The clam is 0.17 x 1.1 — six and a half times as long as it is wide, which
+  // is a knife. A sardine is closer to three, so `length` comes most of the way
+  // down while `width` barely moves. Eight of them orbiting the seal at the
+  // clam's proportions would be a bin of knives.
   //
   // MORE TWIST AND MORE TAPER THAN THE CLAM, both for the same reason: this
   // body is a third the length, so the chrome's horizon (CONFIG.chromeBlade,
   // read off a view-space normal) has a third of the distance to sweep down
   // it. A shorter shell with the clam's twist shades nearly flat and the metal
   // never shows — see the note on `twist` in getBladeGeometry.
+  //
+  // AND IT IS POLISHED. `modelChrome` puts the razor clam's film over the
+  // model's own paint — see the block at that line in processMaterial — with
+  // the grain turned on, which is the difference between a swirl and a school:
+  // the blade SWEEPS one horizon down a long shell, and a sardine covered in
+  // facets TWINKLES, each scale crossing the key at its own moment as the body
+  // rolls. `chromeSardine` is its own CONFIG block for that reason and not a
+  // few numbers borrowed off the blade's; both are sliders under Chrome.
+  //
+  // `modelUnlit` IS PART OF THE FILM, not a separate opinion about lighting.
+  // The chrome is an invented environment, already carrying its own horizon,
+  // key lobe and rim; lit as well, all three would be multiplied by the scene
+  // key a second time and the flash would come out as a dull painted stripe.
+  // The fish's own shading is in its texture, which the film multiplies rather
+  // than replaces.
   sardineBlade: {
+    model: '/models/sardine.glb',
+    fit: 0.52,
+    forward: '-Z', up: '+Y',
+    modelUnlit: true,
+    modelChrome: 'chromeSardine',
     shape: 'blade', radius: 0.14, color: 0xdfe9f5, unlit: true, chrome: true,
     blade: {
       width: 0.19, length: 0.52, depth: 0.06,
@@ -4379,6 +4593,119 @@ export const ASSETS = {
     shape: 'cone', radius: 1.6, height: 4.2, color: 0x2a0f14, unlit: true,
   },
 
+  // A JELLYFISH, and the one creature in the roster that arrived through
+  // tools/optimize-accessories.mjs — it came in with a batch of hats and is not
+  // one. The note on its row in that file says why it kept the accessory
+  // pipeline rather than getting its own: 256-square maps are what the puffer,
+  // the tang and the cutesquid already carry, so nothing was compromised to
+  // make it fit.
+  //
+  // `forward: '-Y'` IS THE ONE THING HERE THAT LOOKS WRONG AND IS NOT, and
+  // what it buys is not what it looks like it buys. Every other swimmer in
+  // this file faces '+Z' because every other swimmer is a fish with a nose.
+  // A jellyfish has no nose: its axis is the bell's, which on this model is Y.
+  // Measured off the mesh rather than taken from the file's node names — 1,890
+  // of the 2,174 vertices sit in the low-Y half, in a rounded mass reaching
+  // 0.86 across, and the high-Y end is 77 vertices spread thin to a radius of
+  // 1.16. That is a bell at -Y and four filaments arching up and out from it.
+  //
+  // So -Y is the BELL, and CONFIG.enemies.jellyfish turns `faceMotion` OFF,
+  // which makes this axis mean "up" rather than "the way it is going": the
+  // entity's +Y is world up, so the bell rides on top and the filaments hang
+  // under it however the water pushes the animal around. Facing motion instead
+  // is what shipped first, and it aimed the bell down the drift — which with a
+  // wander as free vertically as horizontally meant a good part of its life
+  // upside down, filaments overhead, reading as a dead one floating.
+  //
+  // `up: '+Z'` is then a free choice, as it is for anything radially
+  // symmetric: it only decides which side of a round animal faces the camera.
+  // The axis the creature SPINS about is this `forward` one — `spinAxis: 'y'`
+  // on the def is a roll about the model's forward axis, which is the bell's,
+  // which is now the vertical. That is the only spin that leaves something
+  // dangling.
+  //
+  // NO CLIPS, and that is a loss worth knowing about rather than a shrug. The
+  // source carries a swim cycle; the accessory pipeline bakes skins off,
+  // because an accessory is a static thing bolted to a bone. So this one
+  // drifts. It suits a jellyfish better than it would suit anything else here,
+  // and the shared controller falls back the same way it does for the squid
+  // and the barracuda — but a pulsing bell needs a re-import that keeps the
+  // skin, not a flag anywhere in this entry.
+  //
+  // ITS GLOW IS A FACTOR, NOT A MAP. The import averaged the source's emissive
+  // image down to (0.135, 0.204, 0.232) — a dim blue-grey over the whole bell.
+  // That is deliberately a FLOOR: no creature in the roster carries an emissive
+  // map, because bioluminescence here is the `biolum` surface system in
+  // assets.csv, which paints a body properly and moves. This animal wants a
+  // preset there; until it has one, the factor keeps it from being flat.
+  enemyJellyfish: {
+    model: '/models/jellyfish.glb',
+    // Between the oyster's 1.8 and the stingray's 2.6. Most of the model's
+    // long axis is filament rather than bell, so `fit` buys less animal here
+    // than the number suggests: at 2.0 the bell comes out 1.43 across, which
+    // is the part that has to read.
+    fit: 2,
+    // Turn about the BELL, which is where a jellyfish's mass is and where the
+    // filaments hang from. The default centre of mass sits up among them.
+    pivot: 0.25,
+    forward: '-Y', up: '+Z',
+    shape: 'icosahedron', radius: 0.5, color: 0x9fd6e0, unlit: true,
+  },
+
+  // The man o' war, rigged by tools/rig-manowar.mjs. Present so the U panel's
+  // creature select can put it in the water and it can be LOOKED AT; its row
+  // in enemies.csv keeps it out of the natural pool. Every number here is a
+  // stand-in, and the two that matter are called out below.
+  enemyManOWar: {
+    model: '/models/manowar.glb',
+    // WHERE THE FILAMENTS START, in this model's own units — measured by
+    // tools/rig-manowar.mjs, which finds the crown by cutting the vertex graph
+    // and watching the component count plateau. The float runs from y 0.512 up
+    // to 2.81 and every tentacle hangs below that line, down to -2.93.
+    tentacles: { crown: 0.512, span: 3.44, scale: 1 },
+    // Cloned from the jellyfish rather than measured, because the number this
+    // should be is a judgement about how big this animal reads next to the
+    // seal and that is not a thing to derive. Same caveat as the jellyfish's
+    // own note: most of the long axis is filament, so `fit` buys less animal
+    // here than it looks — at 2 the FLOAT comes out about 1.15 across on a
+    // model whose full span is 5.73.
+    fit: 2,
+    // `forward` is the float, and this is the opposite sign to the jellyfish
+    // on purpose: that model carries its bell in the LOW-Y half, and this one
+    // carries its float in the HIGH-Y half — 1,687 of its 5,002 vertices sit
+    // above the crown at y 0.51, and every filament hangs below. With
+    // faceMotion off (see CONFIG.enemies.manowar) that is what puts the float
+    // up and the filaments under it.
+    forward: '+Y', up: '+Z',
+    // Measured from the forward end, so a quarter back from the float — inside
+    // it, which is where the animal's mass is and what it should turn about.
+    // The default centre of mass sits down among the filaments.
+    pivot: 0.25,
+    shape: 'icosahedron', radius: 0.5, color: 0x9fd6e0, unlit: true,
+  },
+
+  // THE BOSS. The same model and the same three orientation fields — it is the
+  // same animal, and the size comes from `sizeMul` in bosses.csv rather than
+  // from a second `fit` here, so the two can never drift apart into a boss
+  // shaped differently from the creature it is supposed to be a big one of.
+  //
+  // `fit` is the wave body's 2 for exactly that reason. bosses.csv multiplies
+  // it, which is how every other archetype is built (the megalodon is the
+  // shark's body at 1.6) and the only arrangement where "make the boss bigger"
+  // is one number in one table.
+  bossManOWar: {
+    model: '/models/manowar.glb',
+    // WHERE THE FILAMENTS START, in this model's own units — measured by
+    // tools/rig-manowar.mjs, which finds the crown by cutting the vertex graph
+    // and watching the component count plateau. The float runs from y 0.512 up
+    // to 2.81 and every tentacle hangs below that line, down to -2.93.
+    tentacles: { crown: 0.512, span: 3.44, scale: 1 },
+    fit: 2,
+    forward: '+Y', up: '+Z',
+    pivot: 0.25,
+    shape: 'icosahedron', radius: 0.5, color: 0x9fd6e0, unlit: true,
+  },
+
   enemyOyster: {
     model: '/models/oyster.glb',
     texture: { emissive: '/textures/emissive/oyster.jpg' },
@@ -5615,6 +5942,40 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       // that rebuilds a look — tint, glow and the emissive toggle all write
       // uniforms or colours, none of which disturb the injected shader.
       if (def.noiseShader) attachNoiseShader(m2, typeof def.noiseShader === 'string' ? def.noiseShader : null);
+      // THE CHROME FILM ON A MODEL. `modelChrome` and not `chrome`, on exactly
+      // the rule `modelUnlit` follows a few lines up: `chrome` belongs to the
+      // procedural shape fallback, and an asset carries both — the sardine's
+      // row declares a model AND the blade the Node harnesses render — so
+      // honouring the shape's flag here would put a film on whatever else in
+      // the file happens to have a chrome primitive under it.
+      //
+      // IT MULTIPLIES THE MODEL'S OWN ART rather than replacing it, which is
+      // the difference between this and the razor clam. The injection replaces
+      // the line that DECLARES diffuseColor, so <map_fragment> still runs on
+      // top: what comes out is the painted texture seen through an invented
+      // metal environment, not a bare chrome body with the painting thrown
+      // away. That is what makes it usable on a fish that has a real skin.
+      //
+      // PAIR IT WITH `modelUnlit`. The film is not lighting and does not want
+      // to be lit — on a MeshStandardMaterial the whole environment, horizon
+      // line and specular lobe included, would then be multiplied by the scene
+      // key a second time and read as a dull painted stripe. Not enforced,
+      // because a lit body with a faint film is a legitimate thing to try and
+      // a throw would be this file deciding a look; but it is the pairing.
+      //
+      // MUTUALLY EXCLUSIVE WITH THE OTHER INJECTIONS, on the same one-slot
+      // grounds makeShapeMaterial throws over: onBeforeCompile is a single
+      // property and makeChromeMaterial ASSIGNS it. `attachToonShade` below
+      // chains onto what it finds, so chrome has to go on first and a body
+      // asking for the pair gets both; noise and biolum do not chain, so
+      // whichever ran last would win with the other's uniforms still sitting
+      // in userData claiming to be attached.
+      if (def.modelChrome) {
+        if (def.noiseShader || def.biolumSkin) {
+          throw new Error(`asset '${label}': modelChrome cannot share onBeforeCompile with noiseShader/biolumSkin`);
+        }
+        makeChromeMaterial(m2, typeof def.modelChrome === 'string' ? def.modelChrome : 'chromeBlade');
+      }
       // Banded lighting (CONFIG.toonShade). ATTACHED AFTER the noise and BEFORE
       // the biolum skin, and the order is not arbitrary: attachToonShade chains
       // onto whatever onBeforeCompile is already there rather than assigning
@@ -5647,6 +6008,17 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
       // scale — the shader wants it there, both as the amplitude scale and as
       // the mask denominator on a stand-in with no UVs.
       if (def.sway) attachGrassSway(m2, size.y, { mask: def.swayMask, scale: def.swayScale });
+      // Filaments flowing under a float (CONFIG.tentacleSway). `crown` and
+      // `span` are MODEL-space y, like `size.y` above and for the same reason:
+      // the shader runs before `fit` reaches the node's scale, so it has to be
+      // told where this model's tentacles begin in the modeller's own units.
+      // Measured off the mesh by tools/rig-manowar.mjs, not guessed — a
+      // fraction-of-height default would put the crown somewhere plausible and
+      // wrong, and the failure is a float that ripples.
+      if (def.tentacles) {
+        attachTentacleSway(m2, def.tentacles.crown, def.tentacles.span,
+          { scale: def.tentacles.scale });
+      }
       m2.needsUpdate = true;
       return m2;
     };
@@ -8479,6 +8851,39 @@ const CHROME_FRAGMENT = `
   vec3 chromeN = normalize(vChromeN);
   vec3 chromeV = normalize(vChromeV);
 
+  // THE GRAIN — scales, and the reason a sardine glints where a razor clam
+  // sweeps. Off (0, and one uniform compare) on anything that does not ask.
+  //
+  // IT PERTURBS THE NORMAL THE ENVIRONMENT IS READ THROUGH, rather than being
+  // painted onto the result. That is the whole difference between metal that
+  // is noisy and a metal-coloured body with noise drawn on it: every feature
+  // below — the ramp, the line, the key lobe, the rim — is a function of this
+  // normal, so jittering it breaks all four into facets at once and they stay
+  // consistent with each other. A grain multiplied over the finished colour
+  // would instead be dirt sitting on top of a surface still shading as one
+  // smooth object.
+  //
+  // SAMPLED IN THE BODY'S OWN OBJECT SPACE, so a facet is a place ON the fish
+  // and not a place on the screen. This is what makes it a GLINT: each scale
+  // carries a fixed tilt, so as the body rolls they cross the key lobe at
+  // slightly different moments and the sheen breaks up into individual flashes
+  // travelling down the flank. Sampled in view space it would be a static film
+  // of noise the fish swam behind, which is the same instructions and none of
+  // the effect.
+  //
+  // ONE FIELD, THREE TAPS, one octave. noiseFbm's three octaves are for a
+  // metre of seal hide read at arm's length; this is a scale pattern on a body
+  // 26 pixels long, where the second octave is already past Nyquist and the
+  // third is nothing but shimmer. g.x is reused for the sparkle below rather
+  // than drawing a fourth sample for a number already in a register.
+  float chromeGrainLum = 0.0;
+  if (uChromeGrain > 0.0 || uChromeSparkle > 0.0) {
+    vec3 chromeGP = vChromeObj * uChromeGrainScale;
+    vec3 chromeG = vec3(perlin3(chromeGP), perlin3(chromeGP + 17.3), perlin3(chromeGP + 41.9));
+    chromeN = normalize(chromeN + chromeG * uChromeGrain);
+    chromeGrainLum = chromeG.x;
+  }
+
   // THE ENVIRONMENT. A vertical ramp read off the view-space normal: dark
   // water below, bright sky above, a horizon between them. The body turns,
   // the horizon does not, and that is the read.
@@ -8499,6 +8904,15 @@ const CHROME_FRAGMENT = `
   // Grazing angles. Bright, because this is metal and not film.
   float chromeFace = 1.0 - abs(dot(chromeN, chromeV));
   chromeEnv += pow(clamp(chromeFace, 0.0, 1.0), max(uChromePower, 0.01)) * uChromeRim;
+
+  // ...AND THE SAME FIELD AGAIN AS PLAIN BRIGHTNESS. The jitter above only
+  // shows where the environment has a gradient to break: a facet sitting in
+  // the flat middle of the dark half has nothing to be tilted INTO, so a fish
+  // caught side-on with the horizon off its body would go back to reading as
+  // one smooth silver tile. This is the mottle that keeps the metal noisy
+  // wherever it is standing — and it is signed, so it darkens as much as it
+  // lifts and the body's average brightness does not drift with the amount.
+  chromeEnv *= 1.0 + chromeGrainLum * uChromeSparkle;
 
   vec4 diffuseColor = vec4(diffuse * chromeEnv, opacity);
 `;
@@ -8524,24 +8938,50 @@ function makeChromeMaterial(mat, cfgKey = 'chromeBlade') {
     uChromeSpec: { value: 2.2 },
     uChromePower: { value: 2.4 },
     uChromeRim: { value: 0.9 },
+    // THE GRAIN, OFF BY DEFAULT AND NOT AS A COURTESY. The razor clam is the
+    // other wearer of this film and its look is signed off; a grain seeded at
+    // anything but zero here would silently re-surface a shipped weapon on the
+    // day a second asset wanted scales. Zero is one uniform compare and one
+    // branch not taken — see the block in CHROME_FRAGMENT.
+    uChromeGrain: { value: 0 },
+    uChromeGrainScale: { value: 30 },
+    uChromeSparkle: { value: 0 },
   };
 
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, mat.userData.__chrome);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vChromeN;\nvarying vec3 vChromeV;')
+      .replace('#include <common>',
+        '#include <common>\nvarying vec3 vChromeN;\nvarying vec3 vChromeV;\nvarying vec3 vChromeObj;')
       // AFTER project_vertex, where `mvPosition` is defined — it is a local of
       // that chunk's scope and not a varying, so this cannot be hoisted any
-      // earlier. `normalMatrix` and `normal` are default uniforms/attributes
-      // and exist on every material, lit or not.
+      // earlier. `normalMatrix`, `normal` and `position` are default
+      // uniforms/attributes and exist on every material, lit or not.
+      //
+      // `position`, THE RAW ATTRIBUTE, is what the grain is sampled at — not
+      // `transformed`, which by this point in the shader has been through
+      // morphing and skinning. That is the same call systems/noiseShader.js
+      // makes for the seal's mottling and for the same reason: a pattern
+      // sampled after the deformation swims across the skin instead of being
+      // painted on it. Nothing wearing this film is skinned today, so the two
+      // are equal — which is exactly when the wrong one gets written down.
       .replace('#include <project_vertex>',
-        '#include <project_vertex>\n\tvChromeN = normalize(normalMatrix * normal);\n\tvChromeV = normalize(-mvPosition.xyz);');
+        '#include <project_vertex>\n\tvChromeN = normalize(normalMatrix * normal);'
+        + '\n\tvChromeV = normalize(-mvPosition.xyz);\n\tvChromeObj = position;');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>',
         '#include <common>\nuniform vec3 uChromeDark;\nuniform vec3 uChromeLight;\nuniform float uChromeHorizon;'
         + '\nuniform float uChromeBlend;\nuniform float uChromeLineWidth;\nuniform float uChromeLine;'
         + '\nuniform vec3 uChromeKeyDir;\nuniform float uChromeGloss;\nuniform float uChromeSpec;'
-        + '\nuniform float uChromePower;\nuniform float uChromeRim;\nvarying vec3 vChromeN;\nvarying vec3 vChromeV;')
+        + '\nuniform float uChromePower;\nuniform float uChromeRim;'
+        + '\nuniform float uChromeGrain;\nuniform float uChromeGrainScale;\nuniform float uChromeSparkle;'
+        + '\nvarying vec3 vChromeN;\nvarying vec3 vChromeV;\nvarying vec3 vChromeObj;'
+        // The project's ONE gradient-noise field, imported rather than copied.
+        // It is safe to splice in here because chrome and `noiseShader` — the
+        // other place this GLSL lands — are mutually exclusive by a throw in
+        // makeShapeMaterial; two copies of perlin3 in one shader is a redefine
+        // error, which at least fails loudly rather than rendering nothing.
+        + '\n' + NOISE_FIELD_GLSL)
       // Replaces the line that DECLARES diffuseColor, so the map, the tint and
       // the alpha test downstream all still run on top of it — injecting after
       // <map_fragment> instead would throw away anything the Look panel put on
@@ -8575,5 +9015,16 @@ export function applyChromeSettings() {
     u.uChromeSpec.value = cfg.spec ?? 2.2;
     u.uChromePower.value = Math.max(0.01, cfg.rimPower ?? 2.4);
     u.uChromeRim.value = cfg.rim ?? 0.9;
+    // THE GRAIN, DEFAULTING TO ZERO rather than to the sardine's numbers — a
+    // block that says nothing about scales is smooth chrome, which is what
+    // every wearer before the sardine was signed off as.
+    u.uChromeGrain.value = Math.max(0, cfg.grain ?? 0);
+    // Facets per unit of the model's OWN space, which is not world space and
+    // not the same across two assets: `fit` normalises a model's longest axis,
+    // so the sardine's 0.14-unit file and the blade's procedural 1.1 would need
+    // scales an order of magnitude apart to draw the same size scale. Per
+    // block, never shared.
+    u.uChromeGrainScale.value = Math.max(0.01, cfg.grainScale ?? 30);
+    u.uChromeSparkle.value = Math.max(0, cfg.sparkle ?? 0);
   }
 }

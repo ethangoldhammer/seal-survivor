@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Man o' war — the rig, posed</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05070d; color: #cfe6ff;
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; }
+      /* The stage starts where the panel ends rather than running under it: a
+         full-bleed canvas centres the animal behind 260px of controls, and
+         orbiting it means dragging on whatever part of it the panel is not
+         covering. */
+      #stage { position: fixed; top: 0; right: 0; bottom: 0; left: 260px; }
+      #stage canvas { display: block; }
+      #panel { position: fixed; top: 0; left: 0; width: 260px; height: 100%;
+        overflow-y: auto; padding: 12px 14px 18px; background: rgba(5, 7, 13, .82);
+        border-right: 1px solid #16233a; backdrop-filter: blur(6px); }
+      h1 { font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+        color: #6f8fb8; margin: 0 0 2px; font-weight: 600; }
+      .note { color: #55708f; margin: 0 0 12px; font-size: 11px; }
+      .stat { display: flex; justify-content: space-between; color: #7f9dc4; }
+      .stat b { color: #cfe6ff; font-weight: 600; }
+      h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+        color: #4d6b8f; margin: 14px 0 6px; font-weight: 600; }
+      label { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
+      label input[type=checkbox] { accent-color: #6bb6ff; }
+      .slider { padding: 4px 0 2px; }
+      .slider span { display: flex; justify-content: space-between; color: #7f9dc4; }
+      input[type=range] { width: 100%; accent-color: #6bb6ff; }
+      select { width: 100%; background: #0b1220; color: #cfe6ff; border: 1px solid #22344f;
+        border-radius: 4px; padding: 4px 6px; font: inherit; }
+      #strands { max-height: 170px; overflow-y: auto; margin-top: 6px;
+        border-top: 1px solid #16233a; padding-top: 6px; }
+      #strands div { display: flex; justify-content: space-between; color: #6f8fb8; font-size: 11px; }
+      #strands div.solo { color: #ffd479; }
+      button { margin-top: 8px; width: 100%; background: #101a2c; color: #8fb2dc;
+        border: 1px solid #22344f; border-radius: 4px; padding: 5px; font: inherit;
+        cursor: pointer; }
+      button:hover { background: #16233a; color: #cfe6ff; }
+      kbd { background: #101a2c; border: 1px solid #22344f; border-radius: 3px;
+        padding: 0 4px; color: #8fb2dc; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <div id="panel">
+      <h1>Man o' war rig</h1>
+      <p class="note">
+        The drift below is a PROBE, not this animal's motion — nothing authors it yet.
+        It exists to make the skin visible. Drag to orbit, scroll to zoom.
+      </p>
+      <div id="stats"></div>
+      <h2>Show</h2>
+      <div id="toggles"></div>
+      <h2>Size</h2>
+      <div id="sizebox"></div>
+      <p class="note" id="sizeNote"></p>
+      <h2>Tentacle flow</h2>
+      <p class="note">The real shader — systems/tentacleSway.js, writing CONFIG.tentacleSway.</p>
+      <div id="sway"></div>
+      <h2>Bone drift (old)</h2>
+      <div id="sliders"></div>
+      <h2>Solo a strand</h2>
+      <select id="solo"></select>
+      <div id="strands"></div>
+    </div>
+    <script type="module" src="./manowar.js"></script>
+  </body>
+</html>

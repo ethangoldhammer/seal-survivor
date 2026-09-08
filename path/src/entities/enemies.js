@@ -3,7 +3,9 @@ import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
 import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul, bossDifficulty } from '../config.js';
 import { acquireVisual, releaseVisual, bodyPending } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
-import { bounds, clampBelowSurface, midWater, seabedTopY, SEABED_Z, WATER_FILL_Z } from '../arena.js';
+import {
+  bounds, clampBelowSurface, midWater, seabedTopY, surfaceHeightAt, SEABED_Z, WATER_FILL_Z,
+} from '../arena.js';
 import { shore, shoreOverscan } from '../systems/wallRocks.js';
 import { nearestFloorPickup, bestChumTarget, refreshChumPiles, pickupAlive, bitePickup } from './pickups.js';
 import { deathState } from '../systems/deathDive.js';
@@ -42,6 +44,7 @@ import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
 import { setOutlineVariant } from '../systems/outlines.js';
 import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
+import { feedback } from '../systems/feedback.js';
 
 export const enemies = [];
 
@@ -2306,7 +2309,85 @@ const BEHAVIORS = {
       e.wanderTimer = d.wanderChange ?? 4;
       e.wanderAngle = Math.random() * Math.PI * 2;
     }
-    steerTo(e, Math.cos(e.wanderAngle), Math.sin(e.wanderAngle) * 0.4, dt, 1.5);
+    // RIDING THE WATERLINE, for the one drifter that does not live in the
+    // column at all. A block on the DEF rather than a `behavior` of its own —
+    // the same call `lunge` makes on `chase`, and a sibling of `drift` for the
+    // same reason that one is a sibling of the chase settings: `behavior` is a
+    // string every saved tuning snapshot carries, so a body whose behaviour is
+    // `drift` today should stay `drift` and gain a block beside it.
+    //
+    // The man o' war does not swim. It is a sail on the surface with its
+    // fishing gear hanging under it, and where it goes is where the water
+    // takes it. So the horizontal wander stays and the VERTICAL one is
+    // replaced outright: `vertical` would have it sinking and rising through
+    // the very line it is supposed to be sitting on.
+    //
+    // It tracks `surfaceHeightAt` rather than `bounds.surfaceY` — the flat
+    // still-line — because the sea here has waves in it, and a float pinned to
+    // the mean rides straight through the crests and troughs like a post. See
+    // arena.js: the boats already ride the real geometry for the same reason.
+    const surf = e.def.surface;
+    if (surf) {
+      const line = surfaceHeightAt(e.mesh.position.x);
+
+      // KNOCKED OUT OF THE WATER. `canBreach` lifts the ceiling so this animal
+      // CAN be launched — a strike, a blast, a boss shove — and until now
+      // nothing brought it back except the pin, which is a spring: it would
+      // have hauled a 21-unit boss down through the air at a constant 3 units a
+      // second like a balloon on a string, which is the one thing a thing made
+      // of water must never look like.
+      //
+      // So above the line it is BALLISTIC. Real gravity — arena.gravity, the
+      // same 51.6 the seal's own breach is tuned against, so an animal thrown
+      // out of the water falls on the same clock the player already reads.
+      //
+      // MASS is `sinkMass`, and it is a multiplier on gravity rather than a
+      // number of kilograms, because nothing here is solving a force balance:
+      // what it buys is that the boss comes down harder than the wave animal
+      // for the same launch, which is what mass looks like from the outside.
+      // Horizontal velocity is untouched — it keeps whatever threw it.
+      const air = e.mesh.position.y - line;
+      if (air > (surf.airGap ?? 0.4)) {
+        e.vy -= (surf.gravity ?? CONFIG.arena?.gravity ?? 51.6) * (surf.sinkMass ?? 1) * dt;
+        return;
+      }
+
+      steerTo(e, Math.cos(e.wanderAngle), 0, dt, 1.5);
+      // `lift` is where the body's ORIGIN sits relative to the local water
+      // height, so it is negative for an animal whose origin is inside its own
+      // float: the pivot sits a quarter of the way down from the top (see
+      // assets.js) and the float has to end up ABOVE the line.
+      const want = line + (surf.lift ?? 0);
+      // A speed, not a position write. The integrator owns the position and
+      // the clamps run after it, so a body that set its own y here would be
+      // fighting both — and `rise` is what stops the correction becoming a
+      // snap when a wave passes under a slow animal.
+      //
+      // TWO CAPS, not one. `rise` is what a floating body does in its own
+      // right — a slow bob with a wave passing under it. A body that has just
+      // been thrown out of the water and splashed back in is not doing that:
+      // it is a mass with momentum, and holding its return to the bob speed
+      // makes the whole re-entry look like it is being winched. So while it is
+      // still carrying more speed than the bob would ever produce, that speed
+      // is DAMPED rather than clamped, and it eases into the bob instead of
+      // hitting a wall.
+      const rise = surf.rise ?? 3;
+      const settle = (want - e.mesh.position.y) * (surf.follow ?? 4);
+      if (Math.abs(e.vy) > rise) {
+        e.vy += (settle - e.vy) * Math.min(1, dt * (surf.splashDamping ?? 6));
+      } else {
+        e.vy = Math.max(-rise, Math.min(rise, settle));
+      }
+      return;
+    }
+
+    // `vertical` flattens the wander's up-and-down component, and 0.4 is the
+    // turtle's number rather than a law: it is an animal that belongs near the
+    // seabed and a wander as free vertically as it is across would have it
+    // climbing to the surface and back all run. A creature that lives in the
+    // whole water column (the jellyfish, at 1) wants none of that flattening —
+    // rising and sinking is most of what tells it apart from slow traffic.
+    steerTo(e, Math.cos(e.wanderAngle), Math.sin(e.wanderAngle) * (d.vertical ?? 0.4), dt, 1.5);
   },
 };
 
@@ -2720,6 +2801,21 @@ function edgeSpawnPoint(def = null) {
     };
   }
   const r = Math.random();
+  // A SURFACE BODY IS THE OTHER EXCEPTION, and the mirror of the crawler's.
+  // The generic point below picks a random DEPTH — right for a swimmer, and
+  // for a man o' war it means arriving somewhere in mid-water and then hauling
+  // itself up to the line at `rise` units a second. From the seabed that is a
+  // twelve-second climb the player watches, on an animal whose entire
+  // behaviour is that it does not swim.
+  //
+  // It arrives ON the line, at the same offset the pin will hold it at, so the
+  // entrance is horizontal and the pin has nothing to correct.
+  if (def?.surface) {
+    return {
+      x: (Math.random() < 0.5 ? -1 : 1) * (bounds.width / 2 + margin),
+      y: surfaceHeightAt(0) + (def.surface.lift ?? 0),
+    };
+  }
   const depth = bounds.bottom + margin + Math.random() * (bounds.surfaceY - bounds.bottom - margin * 2);
   const out = offscreenX();
   // ALWAYS FROM THE DEEP, for a creature whose whole proposition is that it
@@ -2933,8 +3029,17 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     container.position.x = at.side * Math.max(Math.abs(container.position.x), offscreenX(radius));
   }
   if (deep) container.position.y = Math.min(container.position.y, offscreenY(radius));
-  if (entering) clampVertical(container.position, radius);
-  else if (!deep) clampBelowSurface(container.position, radius);
+  // A SURFACE BODY IS EXEMPT FROM BOTH, and this is a SECOND place that has to
+  // say so — `enterClampY` above governs the per-frame clamp in updateEnemies
+  // and does not reach this one, which runs once at placement. Missing it put
+  // a man o' war in the water at exactly `surfaceY - radius` and the pin then
+  // spent the entrance hauling it back up; at the small size that was a tenth
+  // of a unit and invisible, and at 4.2 it is a two-metre climb from under the
+  // waterline every time one arrives.
+  if (!def.surface) {
+    if (entering) clampVertical(container.position, radius);
+    else if (!deep) clampBelowSurface(container.position, radius);
+  }
   // BEHIND THE SCENERY, for as long as the crossing takes. Two hiding places,
   // one per direction of travel: the rock face at the walls and the seabed
   // strip under the floor. Both are measured rather than typed — see `shore`
@@ -3240,6 +3345,15 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     heading,
     fireTimer: Math.random() * (def.shoot?.interval ?? 1),
     orbitDir: Math.random() < 0.5 ? -1 : 1,
+    // This individual's own turn, for a creature carrying `spin` — the rate
+    // jittered by `spinVariance` and the direction rolled, so a group of them
+    // is a group rather than one object drawn several times. See the spin
+    // branch in updateEnemies for why it is baked here and not read off the
+    // def every frame.
+    spinRate: def.spin
+      ? def.spin * (1 + (Math.random() * 2 - 1) * (def.spinVariance ?? 0))
+        * (Math.random() < 0.5 ? -1 : 1)
+      : 0,
     wanderTimer: Math.random() * 2,
     wanderAngle: heading,
     // How long this one is staying, and whether it has already turned for open
@@ -3475,7 +3589,14 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // for a body that is pinned somewhere by its own system — the boat boss
     // rides the waterline, and clampVertical would hold its hull a full radius
     // under it for the whole approach (see attachBossBoat).
-    enterClampY: true,
+    // ...and it is off from the start for a body that RIDES the waterline.
+    // The boat boss clears this in attachBossBoat because its station is set
+    // up by its own system; a `surface` creature is pinned by its def alone
+    // and has no system to do it in, so the def answers here. Without it the
+    // clamp holds the float a full radius under the line for the whole
+    // approach and the animal swims in submerged — the exact shape of a bug
+    // that looks like a design choice.
+    enterClampY: def.surface ? false : true,
     // Body-level knockback state (crab-vs-crab collisions). `tumble` is a
     // roll offset laid over the locked broadside heading; `tumbleVel` is its
     // angular velocity. Both spring back to zero — see the collision block.
@@ -3529,6 +3650,7 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   });
 
   if (def.invincible) makeInvincible(enemies[enemies.length - 1]);
+  if (def.damageFromAbove) armDamageFromAbove(enemies[enemies.length - 1]);
   if (def.rigidBody) attachRigidBody(enemies[enemies.length - 1], def.rigidBody);
 }
 
@@ -3554,6 +3676,64 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
  * never true; nothing dies. The property stays enumerable so anything that
  * spreads or serialises a creature still sees an ordinary number.
  */
+/**
+ * A creature that can only be hurt from ABOVE it.
+ *
+ * BY ABSORBING THE WRITE, exactly as makeInvincible does, and for the reason
+ * spelled out in the note over that function: there is no single place a hit
+ * goes through. Eighteen systems own the line `e.hp -= something` — combat, the
+ * club, beams, garlic, elements, shrimpRing, strike, the orca, calamari, the
+ * seal team, the eel, the seagull — and a direction test written into
+ * resolveCombat would gate the shots and nothing else. The player would surface
+ * the boss's armour with a bubble, then discover the club goes straight through
+ * it from below, and the mechanic would be dead without anything failing.
+ *
+ * The setter is the one interception every one of those paths already runs
+ * through, whatever it is called and whoever writes the nineteenth.
+ *
+ * A DECREMENT IS GATED AND AN INCREMENT IS NOT. Healing, the difficulty ramp
+ * re-resolving a boss's pool, anything that raises hp — none of that is an
+ * attack and none of it should have to be above the animal to happen.
+ */
+function armDamageFromAbove(e) {
+  const cfg = e.def.damageFromAbove ?? {};
+  // MEASURED IN THE BODY'S OWN RADII, never in world units, for the reason the
+  // jellyfish's sting is: the boss's size comes from `sizeMul` in bosses.csv
+  // and its radius follows it, so a height written in world units here is a
+  // number that stops describing this animal the day anyone resizes it —
+  // silently, which is how the crab's claw died (see pinchReach).
+  //
+  // READ AT THE HIT, NOT HERE. A boss's `sizeMul` is applied after the body is
+  // spawned, so `e.radius` at this moment is still the WAVE animal's — 2.6
+  // against the 6.76 it ends the frame at. Capturing it here put the bar at
+  // 38% of the height it was supposed to be, on a boss that then looked like
+  // it could be hurt from beside the float. It is a live read now, which also
+  // means nothing can resize this animal out from under the mechanic later.
+  const clearance = () => (cfg.above ?? 1) * e.radius;
+  let hp = e.hp;
+  Object.defineProperty(e, 'hp', {
+    get: () => hp,
+    set: (v) => {
+      if (v < hp && player?.mesh && player.mesh.position.y < e.mesh.position.y + clearance()) {
+        // Refused — and it has to SAY so. A hit that silently does nothing is
+        // indistinguishable from a weapon that has stopped working, and this
+        // is the only body in the game where a hit landing on the animal is
+        // not damage. See CONFIG.feedback.bossDeflect.
+        feedback('bossDeflect', { x: e.mesh.position.x, y: e.mesh.position.y });
+        return;
+      }
+      hp = v;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+  // A plain marker beside it, the way `invincible` is, so the damage ledger and
+  // anything else that should know can ask without probing the descriptor. A
+  // function for the same reason the gate reads one — the number is not known
+  // until the body has finished being sized.
+  e.damageFromAbove = clearance;
+}
+
 function makeInvincible(e) {
   const sealed = e.hp;
   Object.defineProperty(e, 'hp', {
@@ -4039,7 +4219,12 @@ export function spawnBaitBall(scene, difficulty, playerLevel, spec) {
     spawnOne(scene, key, def, difficulty, {
       x: at.x,
       y: at.y,
-    }, { schoolId: id, xpMul: c.xpMul ?? 1 });
+      // `docile` comes off the SPEC, and only the opening balls set it — a
+      // run's first balls are a handout like the opening shoal, so their fish
+      // carry no contact damage and never drift onto the seal, for the rest of
+      // the run rather than only while the formation holds. See spawnOne and
+      // CONFIG.baitBall.opening.
+    }, { schoolId: id, xpMul: c.xpMul ?? 1, docile: !!spec.docile });
     const fish = enemies[enemies.length - 1];
     if (!fish) continue;
     fish.baitBall = true;
@@ -5076,7 +5261,14 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // turn, the pitch and the bank all have to keep easing through the frames
     // where a fish has throttled back to nothing to wind up, which is exactly
     // when the gate below would hand the body back mid-manoeuvre.
-    } else if (e.def.faceMotion && !e.faceLocked && comesAbout(e.def)) {
+    //
+    // A FISH IN A BAIT BALL comes about too, whatever its def says, and it is
+    // the same argument arriving from the other end: a knot of fry flipping on
+    // their own spines fifteen at a time is the flip at its loudest. It is
+    // also the one case with a REAL third velocity to steer by, so the yaw
+    // there follows the actual orbit rather than a U-turn — see section 3 of
+    // systems/fishTurn.js. `comesAbout` is what knows all of that.
+    } else if (e.def.faceMotion && !e.faceLocked && comesAbout(e.def, e)) {
       turnFish(e, dt, launched);
     } else if (e.def.faceMotion && !e.faceLocked) {
       if (Math.hypot(e.vx, e.vy) > 0.05) {
@@ -5101,8 +5293,45 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
         // stops a creature hovering near zero horizontal speed from flickering.
         if (CONFIG.view === 'side' && !launched) faceSide(e.visual, e.vx, dt);
       }
-    } else if (e.def.spin) {
-      e.visual.rotation.z += dt * e.def.spin;
+    // IT SAILS, AND THEN IT COMES ABOUT. A body that does not face its motion
+    // — its forward axis is world up, so there is no heading to face — but
+    // which is still pointed one way along the screen and turns round when the
+    // water takes it the other way.
+    //
+    // This is the branch the man o' war wanted and `spin` was standing in for.
+    // A constant spin is the right answer for a jellyfish, which has no front
+    // and is turning on the spot because that is what a bell adrift does; it is
+    // the wrong one for a siphonophore, which is a SAIL, holds an attitude to
+    // the wind for as long as the wind holds, and swings its whole trailing rig
+    // round when it changes tack.
+    //
+    // `faceSide` writes `visual.rotation.y`, which on THIS body is the rotation
+    // about the vertical — the same channel `spinAxis: 'y'` was using, for the
+    // reason given in that block: once `faceMotion` is off, the model's forward
+    // axis IS the vertical. So the axis was never the problem and the constant
+    // was. It brings the deadzone with it, which is what stops a body drifting
+    // near zero horizontal speed from coming about over and over.
+    } else if (e.def.sail && !e.faceLocked) {
+      faceSide(e.visual, e.vx, dt, e.def.sail);
+    } else if (e.spinRate) {
+      // A creature that does not face its motion and turns on the spot
+      // instead. TWO AXES, and which one is not a detail: `visual.rotation.y`
+      // is a roll about the model's own FORWARD axis (see systems/fishTurn.js,
+      // which owns that channel for anything that comes about), while
+      // `rotation.z` is the cartwheel in the picture plane.
+      //
+      // For anything whose forward axis is also its up — the jellyfish, whose
+      // bell leads and therefore points at the sky once `faceMotion` is off —
+      // 'y' is the one that keeps the body upright and swings what hangs off
+      // it around. 'z' is the default because that is what the field meant
+      // before there was a second option, and because a tumbling prop is the
+      // commoner case.
+      //
+      // `e.spinRate` and not `e.def.spin`: the rate is rolled per individual
+      // at spawn, sign included. Reading the def here would turn every one of
+      // them at the identical rate in the identical direction, which is the
+      // failure `restLean`/`restYaw` were added to the crab for.
+      e.visual.rotation[e.def.spinAxis ?? 'z'] += dt * e.spinRate;
     }
 
     // Continuous idle/swim/boost state machine for anything that has one.
@@ -5434,7 +5663,32 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       let suck = null;
       if (hv) {
         mouthPoint(e, hv, _mouth);
-        suck = { x: _mouth.x, y: _mouth.y, z: e.mesh.position.z, rate: hv.pull ?? 6, dt };
+        // AND WHERE IT IS ALLOWED TO DISAPPEAR, which is not the same point.
+        //
+        // The chew is a TIMER: without this the orb was deleted when `eatTime`
+        // ran out, wherever it had got to — so a crab that was shoved, or a
+        // shark still closing, finished its meal on an orb visibly floating
+        // outside its head. The kill point is pulled back from the mouth toward
+        // the body's centre so it is unambiguously INSIDE the animal, and
+        // bitePickup will not remove the orb until it is there (and drags it
+        // the last stretch itself, so the gate cannot stall).
+        //
+        // Multiples of `radius`, like every other offset in this block: the
+        // radius already carries the asset's size multiplier and the run's
+        // growth, and a hand-typed world offset would be wrong by both.
+        const depth = hv.killDepth ?? 0.35;
+        suck = {
+          x: _mouth.x,
+          y: _mouth.y,
+          z: e.mesh.position.z,
+          rate: hv.pull ?? 6,
+          dt,
+          kill: {
+            x: _mouth.x + (e.mesh.position.x - _mouth.x) * depth,
+            y: _mouth.y + (e.mesh.position.y - _mouth.y) * depth,
+            r: e.radius * (hv.killRadius ?? 0.45),
+          },
+        };
       }
       const finished = bitePickup(scene, e.chumTarget, dt / eatTime, suck);
       if (hv && !finished) {

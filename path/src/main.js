@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG, loadTuningFromStorage, saveTuningToStorage, xpForNextLevel, chumHealRamp } from './config.js';
 import { preloadAssets, initModelTranscoder, restoreUploadedModels, applySavedAssetLooks, assetBaseColor, setEmissiveMapsEnabled, applyNoiseSettings, applyToonSettings, applyGrassSettings, applyBiolumSkinSettings, applyBubbleShellSettings, applyChromeSettings, clearVisualPool, getAssetSizeMultiplier, assetShapeRadius, assetCensusItems, visualPoolCount } from './assets.js';
 import { updateGrassSway } from './systems/grassSway.js';
+import { updateTentacleSway } from './systems/tentacleSway.js';
 import { updateBiolumSkin, setBiolumSkinVariant } from './systems/biolumSkin.js';
 import { updateEmissivePulse } from './systems/emissivePulse.js';
 import { pulseDemoFor, panDemoFor, resolvedGlow, describeGlow } from './systems/glowDebug.js';
@@ -24,7 +25,8 @@ import { updateFinLights, resetFinLights, finLightColor } from './systems/finLig
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
 import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal, spawnOpeningBaitBalls } from './entities/enemies.js';
-import { noteBaitLoss } from './systems/baitBall.js';
+import { noteBaitLoss, baitBallFor } from './systems/baitBall.js';
+import { inSpawnGroup } from './enemyTable.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
 import { updateAttractorStorm, resetAttractorStorm } from './systems/attractorStorm.js';
 import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.js';
@@ -39,6 +41,7 @@ import { stepBubbleSpawner, rollBubbleSpawnDelay } from './systems/oxygenBubble.
 import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
+import { setGooSuckTarget, updateGooSuck, resetGooSuck } from './systems/gooSuck.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -62,6 +65,7 @@ import { createGarlicVisual, updateGarlic, resetGarlic } from './systems/garlic.
 import { createShrimpRingVisual, updateShrimpRing, resetShrimpRing } from './systems/shrimpRing.js';
 import { createSardineSwirlVisual, updateSardineSwirl, resetSardineSwirl } from './systems/sardineSwirl.js';
 import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, clubTrailMovers } from './systems/club.js';
+import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
@@ -164,7 +168,8 @@ import { setJetBedsMuted } from './systems/jetBed.js';
 import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
 import { updateAccessories } from './systems/accessories.js';
-import { recordBoatDestroyed, recordBossDefeated, unlockStats, unlockGates, unlockProgress, unlockGateOn, setUnlockGate, resetUnlocks } from './systems/unlocks.js';
+import { recordBoatDestroyed, recordBossDefeated, recordCreatureEaten, recordHumanEaten, recordChumEaten, recordBubblePopped, recordBaitBallWiped, recordGraveVisited, recordPerfectDodge, recordUpgradeMaxed, recordLevelUp, recordRunEnded, recordFoodChain, recordRunPeaks, recordAirTime, recordUnlockStat, recordUnlockBest, flushUnlocks, commitUnlocks, pendingUnlocks, unlockStats, unlockGates, unlockProgress, unlockGateOn, setUnlockGate, resetUnlocks } from './systems/unlocks.js';
+import { mountUnlockToasts, showUnlockToast, clearUnlockToasts } from './ui/unlockToast.js';
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { triggerClap, updateClap } from './systems/clap.js';
@@ -188,7 +193,7 @@ const TIP_TIERS = parseTipCsv(tipsCsv);
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, hideHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
 import { starfishLevelStats, multishotLevelStats, missileLevelStats,
@@ -768,6 +773,30 @@ async function boot() {
       setPaused(false);
       startGame();
     },
+    // Main menu, from the pause panel. Straight there, for the reason the
+    // restart above gives: nothing is dilated or filtered, and the menu makes
+    // its own camera move on arrival. setPaused(false) first so the run is
+    // unpaused before it is torn down — leaving `paused` true would hand the
+    // menu a game that thinks it is mid-pause, and returnToMenu clears the
+    // flag itself only after the teardown.
+    onPauseMainMenu: () => {
+      setPaused(false);
+      returnToMenu();
+    },
+    // ...and from the score card, which is the route that DOES have something
+    // to come back from: the death left the clock dilated, the mix filtered and
+    // the lens pushed in on a corpse. Same cover, same glide and same landing
+    // as Try again — see restartRun — because the thing being hidden is the
+    // same thing, and only what happens on the far side of it differs.
+    onMainMenu: () => {
+      const seconds = CONFIG.death?.restart?.time ?? 0.9;
+      showRestartTransition(seconds);
+      unlockAudio();
+      beginRestartTransition(() => {
+        returnToMenu();
+        hideRestartTransition(seconds * 0.6);
+      });
+    },
   });
   // After initUI, which is what builds the root it appends to — and appended
   // last so the band sits over the menus (see ui/callout.js).
@@ -842,15 +871,33 @@ async function boot() {
   // the clock: both are locals here, and handing over accessors keeps the panel
   // from importing the game loop's state.
   if (DEV_UI) initUpgradeDebug(() => gameState.time, () => ({ scene: world.scene, gameState }));
+  mountUnlockToasts(uiRoot());
+  // THE LEDGER'S WRITE IS THROTTLED (see systems/unlocks.js), so a tab closed
+  // between two flushes would drop up to a second and a half of counting.
+  // `pagehide` rather than `beforeunload`: it is the one that fires on iOS,
+  // where a swipe away is the ordinary way a session ends.
+  globalThis.addEventListener?.('pagehide', flushUnlocks);
   // THE LEDGER, FROM THE CONSOLE. No panel yet: `svUnlocks.stats()` is the
   // lifetime counts, `svUnlocks.progress()` is every gate with have/need,
   // `svUnlocks.gate(true)` flips the public-build switch for this page (or
-  // load with ?gate), and `svUnlocks.reset()` forgets everything earned.
+  // load with ?gate), `svUnlocks.record('bossesDefeated')` fakes one count of
+  // a stat (see STATS there) and returns what it opened, and
+  // `svUnlocks.reset()` forgets everything earned.
   if (DEV_UI) {
     window.svUnlocks = {
       stats: unlockStats,
       progress: () => unlockGates().map((g) => unlockProgress(g.id)),
       gate: (on) => { if (on !== undefined) setUnlockGate(on); return unlockGateOn(); },
+      record: recordUnlockStat,
+      // The peak writer, for the gates that ask about one run — `svUnlocks
+      // .best('levelReached', 20)` opens the wire frames without playing to it.
+      best: recordUnlockBest,
+      flush: flushUnlocks,
+      // What is popped and waiting for the run to end, and the door itself.
+      pending: pendingUnlocks,
+      commit: commitUnlocks,
+      // Replay the toast for a gate id without touching the ledger.
+      toast: (id) => showUnlockToast(unlockProgress(id)),
       reset: resetUnlocks,
     };
   }
@@ -1350,7 +1397,13 @@ function handleTunerChange(path) {
   // spawn and cached forever after, so this is the only thing that moves those
   // uniforms once one has been in the water.
   if (path === '*' || path.startsWith('bubbleShell') || path.startsWith('oxygenBubbleShell')) applyBubbleShellSettings();
-  if (path === '*' || path.startsWith('chromeBlade')) applyChromeSettings();
+  // EVERY CHROME BLOCK, not just the blade's. `chrome`/`modelChrome` name their
+  // config block by string, so the film has more than one dialect — the blade's
+  // smooth shell and the sardine's grain — and applyChromeSettings re-reads
+  // whichever block each live material was built against. Matched on the prefix
+  // so a third wearer needs no line here; naming them one at a time is how the
+  // sardine's sliders would come out dead with nothing to say so.
+  if (path === '*' || path.startsWith('chrome')) applyChromeSettings();
   // Including the pattern dropdown — the pattern is a uniform, not a compile
   // switch, so switching it repaints every fish already swimming.
   if (path === '*' || path.startsWith('biolumSkin')) applyBiolumSkinSettings();
@@ -1506,6 +1559,57 @@ function showMainMenu() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// LEAVING A RUN FOR THE MENU — the door that did not exist.
+//
+// Until now every way out of a run led back into another one. The pause panel
+// offered Resume and Restart; the score card offered Try again. The main menu
+// is where the accessory drawer, the leaderboard and the settings live, and
+// the only route back to it was to reload the page — which also threw away the
+// run the crash net was holding, so the game would offer to restore the run
+// the player had just chosen to leave.
+//
+// It is the SAME teardown a restart does (resetArena) and then simply not
+// building a run on top of it. The alternative — a lighter-touch "just stop the
+// spawner and show the menu" — is the version that leaves the last run's
+// sharks swimming through the bust's crop, and every one of the two hundred
+// resets above is a thing somebody found out the hard way.
+function returnToMenu() {
+  crumb('run:menu');
+  // The bars go with the run. resetArena hides every MENU, but the HUD is not
+  // a menu — it is the run's own furniture, and the score card is what
+  // normally takes it down. Nothing takes it down on this route.
+  hideHud();
+  resetArena({ forMenu: true });
+  gameState.running = false;
+  gameState.paused = false;
+  // THE LEDGER TOO, and not because anything draws it: `canPause` reads
+  // `running`, the pause button's visibility is recomputed every frame from
+  // it, and the HUD is hidden — so nothing on screen would show a stale score.
+  // It is here because the menu is a place the game can SIT, for as long as
+  // the player likes, and leaving a finished run's numbers in the one object
+  // every system asks about the current run is how a later reader ends up
+  // believing there is one. buildRun sets all of these again on the way in.
+  gameState.time = 0;
+  gameState.difficulty = 0;
+  gameState.kills = 0;
+  gameState.score = 0;
+  gameState.level = 1;
+  gameState.xp = 0;
+  gameState.xpToNext = CONFIG.xp.first;
+  gameState.deathCauses = null;
+  gameState.deathSource = null;
+  lastDamageSource = null;
+  lastDamageBoss = null;
+  // The score goes back under the menu's lid on the way in — showMainMenu calls
+  // startMusicAtRest, which drops the tape to half speed and back to the level
+  // one loop. That matters more on this route than on the boot one it was
+  // written for: the run released the music into the fight, and a boss loop at
+  // full brightness under the bust is the one screen in the game that is
+  // supposed to sound like it is waiting.
+  showMainMenu();
+}
+
 /**
  * Hand the frame back to the run. Called from startGame, so it covers every
  * route in — the Play button, the start panel's own button, a restart,
@@ -1557,6 +1661,38 @@ function restartRun() {
  */
 function startGame(resume = null) {
   crumb(resume ? 'run:resume' : 'run:start');
+  resetArena({ resume });
+  buildRun(resume);
+}
+
+/**
+ * EMPTY THE WATER. Everything a run leaves behind, put back where a fresh one
+ * expects to find it — and nothing else: this function starts nothing, spawns
+ * nothing and plays nothing.
+ *
+ * Split out of startGame because there are now two things on the far side of a
+ * run rather than one. Play and Try again build a run on top of this; Main menu
+ * stops here, hands the frame to the bust and waits. Every line below was
+ * already a line startGame ran, in the order it ran them — the ordering
+ * comments are load-bearing and several of them say so — so this is the same
+ * teardown reached by two routes rather than a second copy that will drift.
+ *
+ * @param resume   the crash net's snapshot, when a killed run is being put
+ *                 back. Only read for its resume COUNT here; the snapshot
+ *                 itself is applied by buildRun, on top of a completed reset.
+ * @param forMenu  true when the player is leaving for the main menu rather
+ *                 than starting a run. Two things turn on it, and both are
+ *                 about not lying in the record: the run being abandoned is
+ *                 filed as a quit rather than a restart, and the frame-time
+ *                 recorder and the crash net are left DISARMED — there is no
+ *                 run to measure or to save, and a net armed over a menu would
+ *                 offer to restore a run nobody was playing.
+ */
+function resetArena({ resume = null, forMenu = false } = {}) {
+  // Anything popped last run is collected here, before the drawer or the
+  // offer pool asks — see EARNED IS NOT YET GRANTED in systems/unlocks.js.
+  commitUnlocks();
+  clearUnlockToasts();
   // Back to the resolution the player asked for. A run that ended on a machine
   // mid-struggle must not hand the next one a cut it never earned — and the
   // next run may be a different window size, a different scene, or simply the
@@ -1598,7 +1734,10 @@ function startGame(resume = null) {
   // A run abandoned by restarting still has data worth keeping — file it
   // before the new one clears the recorder, or the only runs ever recorded
   // are the ones that ended in death.
-  if (playtest.isRecording()) playtest.endRun('restart');
+  // 'quit' when the player walked away from it, 'restart' when they asked for
+  // another one immediately. The analysis splits on this field — see endRun —
+  // and the two are genuinely different verdicts on the run that just ended.
+  if (playtest.isRecording()) playtest.endRun(forMenu ? 'quit' : 'restart');
   disarmCrash();
   // ...and the run the net was holding, which by the time we are here is either
   // being restored on top of this reset (the caller has it in hand already) or
@@ -1615,14 +1754,19 @@ function startGame(resume = null) {
   // pulled in itself rather than everything the page has ever compiled — which
   // includes the whole warm-up, and would make every first run look like a
   // disaster and every later one look free.
-  perfRunStart(
-    performance.now(),
-    programsEverBuilt(),
-    world.renderer.info.memory.textures,
-    heapUsed(),
-    world.renderer.info.programs,
-  );
-  armCrash();
+  // ...and NOT when the water is being emptied for a menu: there is no run to
+  // record and none to save, so the recorder stays cleared and the net stays
+  // disarmed until Play arms them both.
+  if (!forMenu) {
+    perfRunStart(
+      performance.now(),
+      programsEverBuilt(),
+      world.renderer.info.memory.textures,
+      heapUsed(),
+      world.renderer.info.programs,
+    );
+    armCrash();
+  }
 
   unlockAudio(); // browsers need a gesture before any sound can play
   preloadDefaultTracks(); // fetches the built-in loops once; no-op after the first call
@@ -1699,6 +1843,8 @@ function startGame(resume = null) {
   // into is cleared — a column arriving over the menu is the whole reason a
   // scheduled effect needs a reset at all.
   resetReentrySplash();
+  // Before resetParticles(): the blobs hand their driven slots back first.
+  resetGooSuck();
   resetParticles();
   // Before resetPlayer, which puts the seal back at midwater: this hands the
   // clock and the mix back to full speed, so a run started from the score
@@ -1859,17 +2005,58 @@ function startGame(resume = null) {
   resetOrcaPod(world.scene, player.mesh.position);
   world.grid.reset();
   world.constellations.reset();
-  refreshTuner();
 
-  gameState.running = true;
-  gameState.paused = false;
+  // --- WHAT THE LAST RUN LEFT ON THE SCREEN ------------------------------
+  // Last, and together, because they are one idea: everything above empties
+  // the water, and these empty the glass in front of it. They lived at the
+  // bottom of the old startGame, which was fine while the only thing on the
+  // far side of a run was another run — the menu route is what made them
+  // teardown rather than setup, because a toast, a warning band or a grave
+  // caption from a dead run hanging over the bust is the last run refusing to
+  // end.
+  //
   // The tip box lives on document.body, so nothing else tears it down — a menu
-  // closing takes its own subtree and leaves this floating. Dropped rather than
-  // hidden: it is describing the LAST run's stacks and the last run's ledger,
-  // and a box carrying those over the new run's first level-up is a screen
+  // closing takes its own subtree and leaves this floating. Dropped rather
+  // than hidden: it is describing the LAST run's stacks and the last run's
+  // ledger, and a box carrying those over the next level-up is a screen
   // stating things that are no longer true.
   resetUpgradeTip();
   bindHiveTips(false);
+  // A shake or a hitstop caught mid-frame by the teardown. Both are read every
+  // frame whether a run is going or not, so one left standing is a menu whose
+  // camera is still being hit by something that no longer exists.
+  feedbackState.shake = 0;
+  feedbackState.hitstop = 0;
+  clearToasts(); // don't carry the last run's numbers into the next thing
+  // The band is per-run for the same reason: a warning from the run that just
+  // ended is not news. The TIP LEDGER is not reset here — which tips this
+  // browser has been shown outlives every run on it, and is the whole point of
+  // systems/tutorial.js. Only the tip currently talking is dropped.
+  resetCallouts();
+  resetTutorialRun();
+  clearCalloutUi();
+  // Same for the grave caption. Cut rather than faded: a caption fading out
+  // over the opening frames of whatever comes next is the last run leaking
+  // into it.
+  clearGraveLabel();
+  clearGraveBeam();
+  // ...and nothing left lit from the last run's tip. The subject is usually
+  // gone with the arena anyway; what this is really for is the material a
+  // 'paint' highlight swapped in, which belongs back on its object before
+  // anything else can be spawned wearing it.
+  clearTelegraph();
+
+  refreshTuner();
+}
+
+/**
+ * Build the run on top of a completed reset — the half of the old startGame
+ * that STARTS things. Called only by startGame; the menu route stops at
+ * resetArena above.
+ */
+function buildRun(resume = null) {
+  gameState.running = true;
+  gameState.paused = false;
   gameState.time = 0;
   gameState.difficulty = 0;
   // THE OPENING SHOAL. A few harmless fish already in the water, scattered
@@ -1896,6 +2083,21 @@ function startGame(resume = null) {
   gameState.kills = 0;
   gameState.score = 0;
   gameState.level = 1;
+  // THE BASELINES THE RUN'S PEAKS ARE MEASURED AGAINST — see noteStackTaken.
+  // Read from the stats block rather than from CONFIG so a run started with a
+  // saved or debug loadout measures its additions from what it actually began
+  // with. The burst window starts here too: a window carried over from the
+  // last run would credit this one with damage it did not deal.
+  gravesReadThisRun.clear();
+  runBaseHp = player.stats.maxHp;
+  runBaseO2 = player.stats.maxOxygen;
+  burstNow = 0;
+  burstPrev = 0;
+  burstEdge = 0;
+  // The clean-fight flag, for the same reason: a run that ended mid-fight
+  // must not hand the next boss a fight that was already dirty.
+  bossFightActive = false;
+  bossFightClean = false;
   // Must come AFTER level is reset to 1 — playMusic picks its opening loop
   // from the level it's handed, so running it first started every new run on
   // whatever loop the PREVIOUS run had climbed to.
@@ -1945,15 +2147,6 @@ function startGame(resume = null) {
   seagullCooldown = 0;
   whaleCrumbTimer = 0;
   simClock = 0;
-  feedbackState.shake = 0;
-  feedbackState.hitstop = 0;
-  clearToasts(); // don't carry the last run's numbers into this one
-  // The band is per-run for the same reason: a warning from the run that just
-  // ended is not news. The TIP LEDGER is not reset here — which tips this
-  // browser has been shown outlives every run on it, and is the whole point of
-  // systems/tutorial.js. Only the tip currently talking is dropped.
-  resetCallouts();
-  resetTutorialRun();
   // ...and this run's hello is rolled HERE, at the start, rather than when it
   // is spoken a second later: rolling it is also what banks this run as one
   // that happened, so a player who quits during the opening camera move is
@@ -1963,17 +2156,6 @@ function startGame(resume = null) {
   // returning-player record, since the line the player already got was rolled
   // when this run first started. See resetGreetingRun.
   if (!resume) resetGreetingRun();
-  clearCalloutUi();
-  // Same for the grave caption. Cut rather than faded: this is the run being
-  // built, and a caption fading out over the opening frames is the last run
-  // leaking into this one.
-  clearGraveLabel();
-  clearGraveBeam();
-  // ...and nothing left lit from the last run's tip. The subject is usually
-  // gone with the arena anyway; what this is really for is the material a
-  // 'paint' highlight swapped in, which belongs back on its object before
-  // anything else can be spawned wearing it.
-  clearTelegraph();
 
   // THE RUN THAT WAS KILLED, PUT BACK ON TOP OF THE RESET ABOVE.
   //
@@ -2255,6 +2437,14 @@ function graveImpact(x, y) {
 
 function killPlayer() {
   crumb('run:death');
+  // THE RUN'S OWN NUMBERS, banked here rather than at the score card: the dive
+  // and the gravestone are minutes away and the run ended HERE, which is the
+  // same reasoning `deathCauses` a few lines down is resolved on. The write is
+  // forced through immediately after — the ledger's ordinary save is throttled
+  // (see systems/unlocks.js), and a tab closed on the score card should not
+  // lose the run that just finished.
+  announceUnlocks(recordRunEnded(gameState.time));
+  flushUnlocks();
   player.anim?.trigger('death'); // clamps on its last frame, never hands back
   gameState.running = false;
   // Resolved here rather than inside showGameOver, which can be minutes away
@@ -2365,6 +2555,9 @@ function killPlayer() {
     // photographs are a feature that can be switched off, capped, or fail on a
     // tainted canvas. A scorecard that said "0 bosses" over four pictures of
     // dead bosses would be the tell that it was counting the wrong thing.
+    // The run is over, so what it popped is collected: by the time the seal
+    // is back at the menu the new thing is in the drawer.
+    commitUnlocks();
     showGameOver(gameState, { bosses: bossState.defeated });
   };
 
@@ -2473,6 +2666,10 @@ function gainXP(amount, spilled = false) {
   while (gameState.xp >= gameState.xpToNext) {
     gameState.xp -= gameState.xpToNext;
     gameState.level += 1;
+    // Both halves of the same event — the lifetime count of levels taken, and
+    // the deepest one run has ever got. See recordLevelUp for why those are
+    // two stats and not one.
+    announceUnlocks(recordLevelUp(gameState.level));
     // Mirror onto the player so recomputeStats can apply per-level weapon
     // growth, then re-derive immediately so the new level takes effect now
     // rather than on the next unrelated stat change.
@@ -2653,6 +2850,7 @@ function applyLevelChoice(choice) {
   // recomputeStats, which replays every held upgrade at the rarity it arrived
   // with rather than at whatever the ladder says today.
   addUpgrade(choice.id, choice.rarity);
+  noteStackTaken(choice.id);
   // The corner picks the new tile up here rather than on a timer. setHiveUpgrades
   // no-ops when the folded set has not changed, so calling it on every pick is
   // the cheap path, not a rebuild per level.
@@ -2782,7 +2980,28 @@ function onLevelUpCleared() {
 // shot or the cards the way the stacks do — there is no screen to queue for,
 // and a payout with no ceremony has nothing to be interrupted by.
 // ---------------------------------------------------------------------------
+// A FIGHT IS CLEAN UNTIL THE SEAL IS TOUCHED, and both halves of that are
+// tracked here rather than in systems/boss.js: the flag is a fact about the
+// PLAYER's run, boss.js is imported by harnesses with no player in them, and
+// the damage funnel that clears it (takeDamage) is already in this file.
+//
+// The window opens when a boss is actually in the water, which is a little
+// after the fight starts — the entrance hush has no `enemy` yet, so a hit
+// taken during the alarm does not count against the seal. That is the
+// forgiving reading and it is the deliberate one: nothing the boss does is
+// on screen yet.
+let bossFightActive = false;
+let bossFightClean = false;
+
 function updateBossShot() {
+  // The presence EDGE, read before the defeat check so it is still true on the
+  // frames of the fight and already false on the frame the kill is booked —
+  // which is what leaves `bossFightClean` holding the finished fight's answer
+  // when the line below asks for it.
+  const inFight = !!bossState.enemy;
+  if (inFight && !bossFightActive) bossFightClean = true;
+  bossFightActive = inFight;
+
   if (player.bossesDefeated === bossState.defeated) return;
   const gained = bossState.defeated > player.bossesDefeated;
   player.bossesDefeated = bossState.defeated;
@@ -2790,7 +3009,7 @@ function updateBossShot() {
   // The lifetime ledger, on the same edge. `archetype` and `perk` are still
   // the dead boss's — bossState clears them at the next spawn, not at the
   // kill — which is what lets a gate wait on "a boss with the eyebeam perk".
-  if (gained) recordBossDefeated(bossState.archetype, bossState.perk?.id ?? null);
+  if (gained) announceUnlocks(recordBossDefeated(bossState.archetype, bossState.perk?.id ?? null, bossFightClean));
   recomputeStats();
   // The net, on the event rather than only on the next heartbeat. A boss kill
   // is the single most expensive thing in the game to lose — minutes of fight,
@@ -2866,6 +3085,7 @@ function openBossDividend(stacks) {
         // level blob pays — see the note in levelableUpgrades. A stack dealt at
         // the floor would quietly dilute a Legendary.
         addUpgrade(entry.id, entry.rarity);
+        noteStackTaken(entry.id);
         setHiveUpgrades(player.upgrades);
         // Timestamped like a card pick, so the balance report charges the
         // ability for the time it actually held rather than treating a boss
@@ -2918,6 +3138,7 @@ function applyLevelOrb() {
   // At the best tier this card has already been taken at, not at the floor —
   // see the note in levelableUpgrades.
   addUpgrade(pick.id, pick.rarity);
+  noteStackTaken(pick.id);
   setHiveUpgrades(player.upgrades);
   // The same arrival beat a card flying into the corner ends on (see
   // flyCardToHive in ui/ui.js): the tile slams and the rest of the hive ripples
@@ -3062,6 +3283,7 @@ function clubAccent(x, y, { event = null, amount = 1, size = 1, speed = 1 } = {}
 function damageFrom(source) {
   return (e, dmg, x, y, dir, projectile, at) => {
     playtest.recordDamage(source, dmg, e);
+    noteDamageDealt(dmg);
     onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at);
   };
 }
@@ -3250,6 +3472,7 @@ function processPendingSplashes() {
       other.flash = CONFIG.fx.hitFlash;
       other.hitThisFrame = true;
       playtest.recordDamage(s.source ?? 'splash', dealt, other);
+      noteDamageDealt(dealt);
       onEnemyDamagedFeedback(other, dealt, other.mesh.position.x, other.mesh.position.y);
       if (other.hp <= 0) {
         const { schoolWipe } = onEnemyKilledFeedback(other);
@@ -3418,6 +3641,11 @@ function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames =
   }
   if (!(dmg > 0)) return 0;
   playtest.recordPlayerDamage(dmg, source);
+  // ...and the fight stops being clean. Any source, not just the boss's own:
+  // being chewed by a shark while the boss is up is still taking a hit during
+  // the fight, and a gate that ignored the adds would reward standing in the
+  // safest corner of a fight rather than fighting well.
+  bossFightClean = false;
   lastDamageSource = source;
   // AND WHO IT WAS, if it was a boss. Every boss source is either the
   // archetype key ('bossOrca') or one of its attacks ('boss:boatSalvo'), so the
@@ -3621,13 +3849,31 @@ function onPlayerBite(e) {
 
 function onEnemyKilledFeedback(e, killEvent = null) {
   gameState.kills += 1;
+  // The lifetime ledger's copy of the same event. Here rather than beside
+  // `gameState.kills` in some other funnel for the reason the comment below
+  // gives about the bait ball: this is every way a creature dies to the
+  // player, so it is the one place a lifetime tally can be honest. The shark
+  // subset is asked of the SPAWN GROUP rather than of a list of ids, so it
+  // follows enemies.csv instead of drifting from it.
+  announceUnlocks(recordCreatureEaten(e.def, inSpawnGroup));
   // ONE FOR YOUR SIDE, if it came off a bait ball. This funnel is every way a
   // creature dies to the player — shot, strike, element, companion, net — so
   // it is the one place the player's half of the exchange can be counted
   // without threading a flag through six ability systems. The predator's half
   // is booked in systems/predation.js; see baitBallLedger for what the two
   // become. A no-op on anything that was not in a ball.
-  if (e.baitBall) noteBaitLoss(e.schoolId, 'player');
+  if (e.baitBall) {
+    noteBaitLoss(e.schoolId, 'player');
+    // WIPED means the last fish, and it is asked AFTER the loss is booked so
+    // the headcount below is the one this kill produced. `count` is the live
+    // number updateBaitBalls refreshes off the school every frame, so a ball
+    // whose stragglers swam away is not a wipe — which is the honest reading.
+    const ball = baitBallFor(e.schoolId);
+    if (ball && !(ball.count > 0) && !ball.wipeBooked) {
+      ball.wipeBooked = true;
+      announceUnlocks(recordBaitBallWiped());
+    }
+  }
   // An infected host bursting. Queued inside elements.js rather than acted
   // on here, because this runs from inside combat.js's own loop over
   // `enemies` — the same reason `pendingSplashes` exists a few lines below.
@@ -3814,6 +4060,11 @@ function onChainHit(chain, source) {
   // food, a school emptied, a breach with Porpoising — and the tip is about
   // the chain rather than about any one way of extending it.
   noteTutorialEvent('chainLink');
+
+  // The deepest chain of any run, as a high-water mark. Every link calls this
+  // and all but the deepest are a no-op, which is why it can sit on the hot
+  // path — see recordUnlockBest.
+  announceUnlocks(recordFoodChain(chain));
 
   // FIRST, before the impact events below, and deliberately so: hit-stop is
   // rate-limited globally (see feedback.js) and whichever event asks first
@@ -4264,6 +4515,13 @@ function onChumSwallowed(x, y) {
   // The denominator for every chain rate in the report — links per strike means
   // nothing without knowing whether there was any food to be had.
   playtest.recordChum();
+  // MOUTHFULS, and this is the funnel every one of them comes through. Booked
+  // beside the playtest counter rather than inside feedChum: that function is
+  // about the meter, and a piece off a boss's weak spot deliberately fills the
+  // meter WITHOUT being a mouthful (see the `chunk.pips` branch in the hot spot
+  // collector). Counting there would make shooting the light the fastest way
+  // to a chum gate, which is the same mistake the food chain already avoids.
+  announceUnlocks(recordChumEaten());
   const filled = feedChum(player.stats);
 
   // THE FOOD CHAIN, SCORED HERE. A strike released in the sweet spot ARMS the
@@ -5078,12 +5336,83 @@ function launchClubThrow(power) {
 // a player kill — two copies of this would have drifted the first time one of
 // them was tuned. The chum itself is spawned inside damageBoat; this is only
 // the score and the noise.
+// A gate popping: the toast, with the row's own line. The ledger has already
+// parked the gate in `pending`; nothing is granted until the run ends.
+function announceUnlocks(ids) {
+  for (const id of ids) showUnlockToast(unlockProgress(id));
+}
+
+/**
+ * A stack was just taken. Books the card if that stack was its LAST one, and
+ * re-reads the run's stat peaks, which only move when something is taken.
+ *
+ * ON THE EDGE, not on the condition: `held === cap` books once, on the pick
+ * that filled the card, where `held >= cap` would book again on every later
+ * pick of anything (levelableUpgrades already refuses a maxed card, but a
+ * count that can only be right because something ELSE is careful is the kind
+ * that starts lying when that other thing is changed).
+ *
+ * A card with a BLANK maxStacks is unlimited and can never max, so it is
+ * skipped rather than treated as a cap of zero.
+ */
+function noteStackTaken(id) {
+  const cap = CONFIG.upgrades.find((x) => x.id === id)?.maxStacks;
+  if (cap > 0) {
+    let held = 0;
+    for (const pick of player.upgrades) if (pick.id === id) held += 1;
+    if (held === cap) announceUnlocks(recordUpgradeMaxed());
+  }
+  // MEASURED AS AN ADDITION over what this run started with, not as a total:
+  // a total moves the day CONFIG.player.maxHp is retuned, and a gate whose
+  // difficulty changes when a base number is nudged is a gate nobody can
+  // reason about. `runBaseHp` is banked at the start of the run below.
+  announceUnlocks(recordRunPeaks({
+    pips: pipCount(player.stats),
+    hpAdded: player.stats.maxHp - runBaseHp,
+    o2Added: player.stats.maxOxygen - runBaseO2,
+  }));
+}
+
+// What the run opened with, for the two "added" peaks above. Set in the run
+// reset beside the rest of gameState; the fallbacks are what a peak read
+// before the first run would measure against.
+let runBaseHp = 0;
+let runBaseO2 = 0;
+
+// The stones already counted this run — see the onRead hook handed to
+// updateGraveLabel.
+const gravesReadThisRun = new Set();
+
+// THE BURST WINDOW — the most damage dealt inside any ten seconds of a run.
+// A pair of buckets rather than a list of timestamped hits: the window slides
+// in half-window steps, so the answer is never worse than half a window stale
+// and the whole thing is two numbers instead of an array that grows with the
+// fire rate. Fed from every recordDamage site; see noteDamageDealt.
+const BURST_WINDOW = 10;
+let burstNow = 0;
+let burstPrev = 0;
+let burstEdge = 0;
+
+function noteDamageDealt(dmg) {
+  if (!(dmg > 0)) return;
+  const half = BURST_WINDOW / 2;
+  while (gameState.time - burstEdge >= half) {
+    burstPrev = burstNow;
+    burstNow = 0;
+    burstEdge += half;
+    // A run that jumped (a reset, a snapshot restore) would otherwise spin
+    // here; land the edge on the clock and start the window fresh.
+    if (gameState.time - burstEdge >= BURST_WINDOW) { burstEdge = gameState.time; burstPrev = 0; }
+  }
+  burstNow += dmg;
+  announceUnlocks(recordRunPeaks({ burst: burstPrev + burstNow }));
+}
+
 function onBoatDestroyed(boat, chum) {
   gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1));
   // The lifetime ledger — "destroy 50 boats" is counted here, once per hull,
-  // whoever sank it. Nothing is done with what it returns yet: the ids of any
-  // gate this hull just opened are what an unlock toast will read.
-  recordBoatDestroyed(boat);
+  // whoever sank it — and the toast for any gate this hull popped.
+  announceUnlocks(recordBoatDestroyed(boat));
   // The explosion and the hull's death voice are NOT here: they moved into
   // damageBoat, so a boat sunk by an orca or by another boat goes up exactly as
   // loudly as one the player shot. What is left is what only main knows — the
@@ -6116,6 +6445,12 @@ function runFrame(now) {
     player.chargeThrustMul = chargeThrustMul(player.stats);
 
     updatePlayer(dt, input);
+    // WHOLE SECONDS OUT OF THE WATER, accumulated across every run. Read off
+    // `aboveSurface` immediately after the seal has moved, and inside the run
+    // gate on purpose — that flag is not updated once the run is over, so
+    // anything reading it outside this block is reading a stale answer (the
+    // same trap breachTrail.js measures around by using the position).
+    if (player.aboveSurface) announceUnlocks(recordAirTime(dt));
     // Where the seal ended the frame, for the ghost that retraces the last
     // stretch of it after a level-up (systems/levelUpGhost.js). Gameplay dt,
     // so the record is measured in the run's own seconds.
@@ -7159,6 +7494,7 @@ function runFrame(now) {
         if (hit.a.kind === 'boat') dealt += impactBoat(world.scene, hit.a, hit, { onBoatDestroyed });
         if (hit.b.kind === 'boat') dealt += impactBoat(world.scene, hit.b, hit, { onBoatDestroyed });
         if (dealt > 0) playtest.recordDamage('impact', dealt, null);
+        noteDamageDealt(dealt);
         // Scaled by how hard it landed, so a turtle nudging a hull at drift
         // speed is a knock and one arriving off a full-charge punt is an
         // event. Capped, or a chain reaction stacks four screen shakes.
@@ -7176,6 +7512,7 @@ function runFrame(now) {
       // in elements.js's applyShock.
       onEnemyDamaged: (e, dmg, x, y, dir, projectile, at, source) => {
         playtest.recordDamage(source ?? projectile?.source ?? 'gun', dmg, e, finKey(projectile));
+        noteDamageDealt(dmg);
         onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at);
       },
       // The elemental half of a pellet. RECORDING ONLY — the pellet's own
@@ -7219,8 +7556,13 @@ function runFrame(now) {
       // club's is the quieter one, for the reasons on `clubZap` in
       // CONFIG.feedback.
       onArc: (fromX, fromY, toX, toY, strength = 1, source = null) => {
-        spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength);
         const club = source === 'clubZap';
+        // WHICH LEVEL DRIVES THE CRACKLE. Both chains draw the eel's bolt, but
+        // they are bought by different cards — so the stack that scales how
+        // violent this arc looks is the stack of the card that fired it, not
+        // whichever electric upgrade happens to be highest.
+        spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength,
+          club ? (player.stats.clubZapLevel ?? 0) : (player.stats.biolumLevel ?? 0));
         feedback(club ? 'clubZap' : 'elementArc', {
           x: toX, y: toY,
           scale: (club ? 0.5 : 0.55) + (club ? 0.5 : 0.45) * strength,
@@ -7297,7 +7639,13 @@ function runFrame(now) {
     // dozen Node harnesses with no renderer. `onDodge` already exists for the
     // ledger, so this is the one channel that has to reach out here anyway.
     updateDodge(dt, enemies, {
-      onDodge: () => world.punchCamera(CONFIG.boss?.dodge?.punch ?? 0.09),
+      onDodge: () => {
+        world.punchCamera(CONFIG.boss?.dodge?.punch ?? 0.09);
+        // The ledger rides the same hook, for the same reason the punch does:
+        // dodge.js fires the whole feedback event itself, and this is the one
+        // channel that already reaches back out to main.
+        announceUnlocks(recordPerfectDodge());
+      },
     });
 
     const _tabilities = performance.now();
@@ -7631,7 +7979,7 @@ function runFrame(now) {
       // inside the crowd the seal is swimming through, several hops at a time,
       // on a weapon that already lands several times a second.
       onArc: (fromX, fromY, toX, toY, strength = 1) => {
-        spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength);
+        spawnArcBolt(world.scene, fromX, fromY, toX, toY, strength, player.stats.clubZapLevel ?? 0);
         feedback('clubZap', { x: toX, y: toY, scale: 0.5 + 0.5 * strength });
       },
       // Cold Snap, but only the moment a body actually LOCKS. The per-hit
@@ -7911,6 +8259,10 @@ function runFrame(now) {
           // play rather than on a level-up, and a run without Maneater has no
           // reason to pay for that.
           player.humansEaten += 1;
+          // The lifetime half of the same bite. player.humansEaten is the RUN's
+          // count (it rides the pause snapshot); the fedora waits on the sum
+          // across every run, which only the ledger can answer.
+          announceUnlocks(recordHumanEaten());
           if (player.stats.maneaterLevel > 0) {
             recomputeStats();
             // The readout is MEASURED off the same function the damage
@@ -8014,6 +8366,9 @@ function runFrame(now) {
         const maxO2 = Math.max(1, player.stats.maxOxygen);
         const need = 1 - Math.max(0, Math.min(1, player.oxygen / maxO2));
         player.oxygen = Math.min(maxO2, player.oxygen + CONFIG.oxygen.bubbleRefillAmount);
+        // The lifetime tally, for the gate that waits on it. Booked here and
+        // not on the beluga's breath: those bubbles belong to the card this
+        // stat unlocks, and a gate a thing opens for itself is not a gate.
         // Bubbles and rapid-fire orbs deliberately DON'T feed the meter: they
         // already carry their own reward, and letting every floating thing in
         // the water sustain a combo would make the food chain about hoovering
@@ -8024,6 +8379,7 @@ function runFrame(now) {
           color: assetBaseColor('bubbleOrb'),
           sfxOpts: { pitch: 1.25 - 0.45 * need },
         });
+        announceUnlocks(recordBubblePopped());
         pickupStruck(x, y, 'bubbleOrb', assetBaseColor('bubbleOrb'));
       },
       (x, y) => {
@@ -8538,6 +8894,16 @@ function runFrame(now) {
     x: player.mesh.position.x,
     y: player.mesh.position.y,
     live: gameState.running,
+    // ONCE PER STONE PER RUN. The label re-fires every time the caption comes
+    // back up, so without the set a player parked beside one grave could farm
+    // the counter by swimming in and out of its radius. Cleared with the run,
+    // not with the page: reading the same headstone in a LATER run is a real
+    // second visit — the graveyard is persistent and so is the ledger.
+    onRead: (id) => {
+      if (gravesReadThisRun.has(id)) return;
+      gravesReadThisRun.add(id);
+      announceUnlocks(recordGraveVisited());
+    },
   });
   updateCalloutUi(realDt, {
     camera: world.camera,
@@ -8808,7 +9174,10 @@ function runFrame(now) {
   updateBossEyes(realDt, world.scene, enemies.filter((e) => e.isBoss), player.mesh.position);
   // The shots, and the clubs on the ring — which are not projectiles and get
   // the same ribbon anyway. See clubTrailMovers.
-  updateProjectileTrails(realDt, world.scene, projectiles, clubTrailMovers());
+  // ...and the chum on its way into a mouth, which wears the same ribbon as a
+  // shot for the same reason the clubs do: a trail only ever needed a position
+  // with a name and a heading. See systems/chumPull.js.
+  updateProjectileTrails(realDt, world.scene, projectiles, clubTrailMovers(), pullTrailMovers(realDt));
   // The RGB smear the seal drags through the air. Real time, like the trails
   // above and for the same reason: the cloud is weather, and a hit-stop that
   // froze it mid-billow would leave a kink in the paint. Outside the run gate
@@ -8977,6 +9346,10 @@ function runFrame(now) {
   // body in this game actually is — and unconditionally, so the corpse still
   // parts the weeds it sinks through.
   updateGrassSway(rawDt, player.mesh?.position ?? null);
+  // Beside the grass, and on the same WALL-CLOCK dt for the same reason: the
+  // current belongs to the world rather than to the run, so tentacles that
+  // freeze behind the upgrade screen or crawl through a hit-stop read as a bug.
+  updateTentacleSway(rawDt);
   // And the same again for the creatures that light themselves. Raw dt on
   // purpose: a lanternfish's own glow has no business stopping because the
   // game froze for 60ms on a hit.
@@ -9047,6 +9420,10 @@ function runFrame(now) {
   updateReentrySplash(realDt);
   const _tparticles = performance.now();
   updateParticles(realDt);
+  // The blast goo coming home, on the same clock as the particles it lives
+  // among. The target is the seal as drawn this frame. See systems/gooSuck.js.
+  setGooSuckTarget(player.mesh.position.x, player.mesh.position.y);
+  updateGooSuck(realDt);
   perfPhase('particles', performance.now() - _tparticles);
   // The camera is what turns a finger on the glass into a point in the water,
   // and the strike meter is what makes a charging finger grow — see updateTouch

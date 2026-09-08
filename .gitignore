@@ -5,8 +5,10 @@ dist
 # tools/looks/serve.mjs — generated, and only useful for the hour you look at
 # them. The PAGES are tracked; their output is not.
 dist-accessory-lab
+dist-accessory-shots
 dist-accessory-look
 dist-cash-look
+dist-manowar-look
 dist-seabed-look
 dist-yacht-look
 dist-note-look
@@ -81,6 +83,7 @@ dist-skins-look
 dist-shaderlab
 dist-skinlab
 dist-splash-probe
+dist-splash-hit
 dist-splinesplash-look
 dist-wet-look
 
@@ -88,6 +91,7 @@ dist-wet-look
 hive-look.html
 hive-stacks.html
 dist-razor-look
+dist-swirl-look
 dist-pickup-look
 dist-club-look
 
@@ -102,3 +106,4 @@ dist-desktop
 release
 dist-levelup-look
 dist-loading-look/
+dist-bolt-lab
