@@ -25926,6 +25926,45 @@ export const CONFIG = {
   // a slider for that reason: it is judged by eye while it moves. The sting
   // it appears to swing is a circle in combat.js and reads none of this, so
   // nothing here can change what the animal does to the player.
+  // FILAMENTS DRIVEN BY THEIR OWN BONES — systems/tentacleRig.js.
+  //
+  // THIS IS THE ONE THAT SHIPS. `tentacleSway` below is the vertex-shader
+  // version of the same idea and is no longer attached to either man o' war
+  // (see assets.js): two systems moving the same vertices would compound, and
+  // the bones are what was asked for. The shader is kept because it costs
+  // nothing sitting there and is the obvious LOD answer if a crowd of these
+  // ever turns up — a distant one does not need 93 bones.
+  //
+  // Every number here is a LOOK and belongs on a slider for that reason: it is
+  // judged by eye while it moves. The sting these appear to swing is a circle
+  // in combat.js and reads none of it, so nothing here can change what the
+  // animal does to the player.
+  tentacleRig: {
+    enabled: true,
+    // Radians per second of wave position. The whole animal's tempo.
+    rate: 1,
+    // Peak bend per bone, in radians, before the falloff below.
+    amplitude: 0.28,
+    // How far the phase lags between one bone and the next, DOWN the chain, so
+    // the curl arrives at the tip after the crown. This is the number that
+    // decides whether it reads as hanging in water or as a wire being rotated;
+    // at 0 the whole filament bends at once and it is the latter.
+    lag: 0.7,
+    // Phase offset between neighbouring strands. Deliberately not a round
+    // fraction of a turn: at 2*PI/18 all eighteen would come back into step
+    // once a cycle and the animal would pulse.
+    spread: 1.31,
+    // The second axis, as a fraction of `amplitude`. A filament sways and rolls
+    // at once; one axis alone is a windscreen wiper as soon as the animal comes
+    // about and shows you its other side.
+    roll: 0.5,
+    rollRate: 0.73,
+    // How much of the bend the CROWN keeps. 0 welds the top rigid, which reads
+    // as a rod in a socket; 1 swings the whole filament from the float like a
+    // pendulum. 0.35 anchors it and lets the end trail.
+    hold: 0.35,
+  },
+
   tentacleSway: {
   // TUNED BY ETHAN on the look page, 2026-09-07. Four of the seven moved:
   // slower (rate 0.22 -> 0.14, flutterRate 0.6 -> 0.22), looser at the crown

@@ -151,14 +151,21 @@ check('...replaced by a sail', !!def.sail, JSON.stringify(def.sail));
 // a constant spin changes it too, which is the exact thing being removed. So
 // this holds a heading, checks the yaw is STILL, then reverses the drift and
 // checks it moves.
-e.vx = 3; e.wanderAngle = 0; e.wanderTimer = 999;
-for (let i = 0; i < 60; i++) { e.vx = 3; updateEnemies(DT, scene, pp, () => {}, () => {}); }
+// LONGER THAN THE TURN TAKES, which is the whole reason this is spelled out.
+// `sail.time` is 2.4s and the first version of this settled for 1s, then
+// measured "is it holding still" while the body was still a third of the way
+// through coming about — and it passed for weeks only because the state it
+// happened to inherit from the section above left it pointing the right way.
+// Settle for twice the turn, so the reading cannot depend on what ran before.
+const settleFrames = Math.ceil((def.sail.time * 2) / DT);
+e.wanderAngle = 0; e.wanderTimer = 1e9;
+for (let i = 0; i < settleFrames; i++) { e.vx = 3; updateEnemies(DT, scene, pp, () => {}, () => {}); }
 const held = e.visual.rotation.y;
 for (let i = 0; i < 30; i++) { e.vx = 3; updateEnemies(DT, scene, pp, () => {}, () => {}); }
 const stillHeld = e.visual.rotation.y;
 check('holding a tack, the body does not turn', Math.abs(stillHeld - held) < 0.02,
   `${held.toFixed(3)} -> ${stillHeld.toFixed(3)} over half a second`);
-for (let i = 0; i < 60 * 4; i++) { e.vx = -3; updateEnemies(DT, scene, pp, () => {}, () => {}); }
+for (let i = 0; i < settleFrames; i++) { e.vx = -3; updateEnemies(DT, scene, pp, () => {}, () => {}); }
 const comeAbout = e.visual.rotation.y;
 check('...and reversing brings it about', Math.abs(comeAbout - stillHeld) > 2.5,
   `${stillHeld.toFixed(3)} -> ${comeAbout.toFixed(3)} (a half turn is ${Math.PI.toFixed(3)})`);

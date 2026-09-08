@@ -46,6 +46,7 @@ import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
 import { feedback } from '../systems/feedback.js';
 import { damageZoneMul } from '../systems/damageZones.js';
+import { createTentacleRig } from '../systems/tentacleRig.js';
 
 export const enemies = [];
 
@@ -3222,6 +3223,14 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   const look = def.behavior !== 'trap' ? rigs.look : null;
   look?.reset();
 
+  // Tentacle chains, for the one model that has them. `undefined` rather than
+  // a falsy test, the same contract the head-look uses: createTentacleRig
+  // returns null for every other body in the game and that null has to be
+  // CACHED, or every spawn of every creature re-traverses its skeleton looking
+  // for bones that were never there.
+  if (rigs.tentacles === undefined) rigs.tentacles = createTentacleRig(visual);
+  rigs.tentacles?.reset();
+
   // Procedural jaw, for the hunters whose file ships no bite clip — which is
   // all of them except megalodon. Skipped when the controller already has a
   // real `bite` action, so the authored clip owns the jaw rather than getting
@@ -3495,6 +3504,11 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     contactBiteTimer: 0,
     lungeTimer: 0,
     look,
+    tentacles: rigs.tentacles ?? null,
+    // A per-individual phase, so two man o' wars side by side never flow in
+    // step. Rolled at spawn like `spinRate` was and for the same reason: read
+    // from the def instead and every one of them moves identically.
+    tentaclePhase: Math.random() * Math.PI * 2,
     // What the head is pointed at this frame, or null for "nothing in mind".
     // Written by the behaviors via setLookTarget; `lookAt` is the reused
     // vector behind it.
@@ -5504,6 +5518,14 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     // Suppressed while a one-shot is playing for the same reason the seal's
     // neck is: a death animation should play as authored, not with the corpse
     // still tracking its lunch.
+    // THE FILAMENTS FLOW. Unconditional on anything the creature is doing —
+    // this is not a reaction, it is what hanging in water looks like, and a
+    // man o' war that stopped flowing while it was being shot would read as
+    // having died early. Wall-clock is deliberately NOT used here: unlike the
+    // sky, these belong to the animal, so they slow with a hit-stop along with
+    // everything else the player is looking at.
+    if (e.tentacles) e.tentacles.update(dt, e.tentaclePhase ?? 0);
+
     if (e.look) {
       // A BOSS LOOKS AT THE PLAYER, whatever it is steering at.
       //

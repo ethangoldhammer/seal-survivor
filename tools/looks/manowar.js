@@ -27,7 +27,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CONFIG } from '../../path/src/config.js';
-import { attachTentacleSway, updateTentacleSway } from '../../path/src/systems/tentacleSway.js';
+import { createTentacleRig } from '../../path/src/systems/tentacleRig.js';
 
 const stage = document.getElementById('stage');
 const gl = new THREE.WebGLRenderer({ antialias: true });
@@ -126,26 +126,13 @@ for (const b of bones) {
 const strandIds = [...chains.keys()].sort((a, b) => a - b);
 const restQ = bones.map((b) => b.quaternion.clone());
 
-// THE REAL SHADER, imported rather than reimplemented. That is the whole point
-// of running it here: systems/tentacleSway.js injects GLSL, and a GLSL error
-// renders NOTHING while throwing nothing — the Node suite exercises the
-// uniforms and passes cheerfully against a shader that never compiled. This
-// page is a real driver, so a mistake in that string shows up as a blank animal
-// and a line in the console instead of shipping.
-//
-// The crown and span are the model's own units, which is also what they are in
-// assets.js: `fit` lives on the node's scale, so object space here IS model
-// space and the same two numbers are correct in both places.
-const TENT = { crown: 0.512, span: 3.44 };
-const swayMaterials = [];
-model.traverse((o) => {
-  if (!o.isMesh || o === undefined) return;
-  for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-    if (!m) continue;
-    attachTentacleSway(m, TENT.crown, TENT.span);
-    swayMaterials.push(m);
-  }
-});
+// THE REAL DRIVER, imported rather than reimplemented. That is the whole point
+// of running it here: systems/tentacleRig.js is what poses the filaments in the
+// game, and tools/tentacle-rig-test.mjs can only test it against a skeleton
+// built by hand — no GLB loads in Node. This page is the only place the driver
+// meets the actual 93 bones it was written for.
+const rig = createTentacleRig(model);
+if (!rig) console.error('no tentacle chains found on this model');
 
 const skeleton = new THREE.SkeletonHelper(model);
 skeleton.visible = false;
@@ -164,7 +151,7 @@ wire.visible = false;
 model.add(wire);
 
 // --- panel -----------------------------------------------------------------
-const state = { drift: false, skeleton: false, wire: true, body: true, amp: 0.22, speed: 0.55, solo: -1, size: 1 };
+const state = { drift: true, skeleton: false, wire: true, body: true, amp: 0.22, speed: 0.55, solo: -1, size: 1 };
 
 let tris = 0;
 model.traverse((o) => { if (o.isMesh && o !== wire) tris += o.geometry.index.count / 3; });
@@ -226,13 +213,13 @@ toggles.appendChild(reset);
 // filaments appear to swing is a circle in combat.js and reads none of them.
 const swayWrap = document.getElementById('sway');
 const SWAY_ROWS = [
-  ['amplitude', 0, 0.6, 'how far the tips swing, as a fraction of each strand'],
-  ['stiffness', 0.4, 4, 'higher holds the crown still and lets the ends trail'],
-  ['flutter', 0, 0.2, 'tip chatter on top of the body sway'],
-  ['rate', 0, 1, 'sways per second'],
-  ['flutterRate', 0, 2, 'chatter per second'],
-  ['wavelength', 0, 1, 'how much of a wave fits across the water'],
-  ['direction', -3.15, 3.15, 'the current, in radians'],
+  ['rate', 0, 3, 'the whole animal\'s tempo'],
+  ['amplitude', 0, 0.8, 'peak bend per bone, in radians'],
+  ['lag', 0, 2, 'phase lag DOWN the chain — 0 bends the whole filament at once'],
+  ['spread', 0, 3.2, 'phase offset between neighbouring strands'],
+  ['roll', 0, 1.5, 'the second axis, as a fraction of amplitude'],
+  ['rollRate', 0, 2, 'how fast the roll runs against the sway'],
+  ['hold', 0, 1, 'how much bend the CROWN keeps — 0 welds it rigid'],
 ];
 for (const [key, min, max, hint] of SWAY_ROWS) {
   const wrap = document.createElement('div');
@@ -246,10 +233,10 @@ for (const [key, min, max, hint] of SWAY_ROWS) {
   // amplitude showing 0.501 against a CONFIG default of 0.18.
   r.autocomplete = 'off';
   r.type = 'range'; r.min = min; r.max = max; r.step = (max - min) / 200;
-  r.value = CONFIG.tentacleSway[key];
+  r.value = CONFIG.tentacleRig[key];
   r.title = hint;
   const draw = () => { cap.innerHTML = `<span title="${hint}">${key}</span><b>${Number(r.value).toFixed(3)}</b>`; };
-  r.oninput = () => { CONFIG.tentacleSway[key] = Number(r.value); draw(); };
+  r.oninput = () => { CONFIG.tentacleRig[key] = Number(r.value); draw(); };
   draw();
   wrap.append(cap, r);
   swayWrap.appendChild(wrap);
@@ -308,22 +295,18 @@ let last = performance.now();
 function frame(now = performance.now()) {
   t += Math.min((now - last) / 1000, 0.1) * state.speed; // clamped: a backgrounded tab returns a huge delta
   last = now;
-  for (const s of strandIds) {
-    const chain = chains.get(s);
-    const muted = state.solo >= 0 && state.solo !== s;
-    chain.forEach((b, k) => {
-      const i = bones.indexOf(b);
-      b.quaternion.copy(restQ[i]);
-      if (!state.drift || muted) return;
-      const phase = t * 2 - k * 0.7 + s * 1.31;
-      // Two axes, because a filament in a current sways and rolls at once, and
-      // a single-axis swing is a windscreen wiper the moment you orbit round it.
-      b.rotateX(Math.sin(phase) * state.amp);
-      b.rotateZ(Math.cos(phase * 0.73 + s) * state.amp * 0.5);
-    });
+  // The shipping driver, not a copy of it. `solo` still works because it is
+  // applied AFTER: the rig poses every strand and this puts the muted ones back
+  // on their rest quaternion, which is the only way to isolate one without
+  // teaching the driver about a debug control.
+  if (state.drift) rig?.update(Math.min((now - last + 0.0001) / 1000, 0.1), 0);
+  else rig?.reset();
+  if (state.solo >= 0) {
+    for (const s of strandIds) {
+      if (s === state.solo) continue;
+      chains.get(s).forEach((b) => { b.quaternion.copy(restQ[bones.indexOf(b)]); });
+    }
   }
-  // The real system's clock, on wall-clock dt exactly as main.js drives it.
-  updateTentacleSway(Math.min((now - last + 0.0001) / 1000, 0.1));
   clockEl.innerHTML = `<span>drift t</span><b>${t.toFixed(2)}</b>`;
   mesh.visible = state.body;
   wire.visible = state.wire;

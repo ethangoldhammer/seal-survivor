@@ -4658,11 +4658,13 @@ export const ASSETS = {
   // stand-in, and the two that matter are called out below.
   enemyManOWar: {
     model: '/models/manowar.glb',
-    // WHERE THE FILAMENTS START, in this model's own units — measured by
-    // tools/rig-manowar.mjs, which finds the crown by cutting the vertex graph
-    // and watching the component count plateau. The float runs from y 0.512 up
-    // to 2.81 and every tentacle hangs below that line, down to -2.93.
-    tentacles: { crown: 0.512, span: 3.44, scale: 1 },
+    // NO `tentacles` BLOCK, deliberately — that is the vertex-shader sway, and
+    // this model's filaments are driven by their own BONES instead (see
+    // systems/tentacleRig.js). Both attached at once would compound: the shader
+    // bends `transformed` before skinning, so the bones would then swing an
+    // already-bent strand and the tips would travel roughly twice as far as
+    // either system was tuned for. The crown and span it wanted are
+    // { crown: 0.512, span: 3.44 } if it is ever switched back for an LOD.
     // Cloned from the jellyfish rather than measured, because the number this
     // should be is a judgement about how big this animal reads next to the
     // seal and that is not a thing to derive. Same caveat as the jellyfish's
@@ -4695,11 +4697,13 @@ export const ASSETS = {
   // is one number in one table.
   bossManOWar: {
     model: '/models/manowar.glb',
-    // WHERE THE FILAMENTS START, in this model's own units — measured by
-    // tools/rig-manowar.mjs, which finds the crown by cutting the vertex graph
-    // and watching the component count plateau. The float runs from y 0.512 up
-    // to 2.81 and every tentacle hangs below that line, down to -2.93.
-    tentacles: { crown: 0.512, span: 3.44, scale: 1 },
+    // NO `tentacles` BLOCK, deliberately — that is the vertex-shader sway, and
+    // this model's filaments are driven by their own BONES instead (see
+    // systems/tentacleRig.js). Both attached at once would compound: the shader
+    // bends `transformed` before skinning, so the bones would then swing an
+    // already-bent strand and the tips would travel roughly twice as far as
+    // either system was tuned for. The crown and span it wanted are
+    // { crown: 0.512, span: 3.44 } if it is ever switched back for an LOD.
     fit: 2,
     forward: '+Y', up: '+Z',
     pivot: 0.25,

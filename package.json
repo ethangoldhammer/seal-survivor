@@ -284,6 +284,7 @@
     "test:manowar": "node tools/manowar-rig-test.mjs",
     "test:float": "node --import ./tools/vite-loader.mjs tools/manowar-float-test.mjs",
     "test:manowarboss": "node --import ./tools/vite-loader.mjs tools/manowar-boss-test.mjs",
+    "test:tentaclerig": "node --import ./tools/vite-loader.mjs tools/tentacle-rig-test.mjs",
     "test:club": "node --import ./tools/vite-loader.mjs tools/club-test.mjs",
     "test:calamari": "node --import ./tools/vite-loader.mjs tools/calamari-test.mjs",
     "test:blasts": "node --import ./tools/vite-loader.mjs tools/blast-stack-test.mjs",
