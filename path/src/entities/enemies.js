@@ -45,6 +45,7 @@ import { setOutlineVariant } from '../systems/outlines.js';
 import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
 import { feedback } from '../systems/feedback.js';
+import { damageZoneMul } from '../systems/damageZones.js';
 
 export const enemies = [];
 
@@ -2371,8 +2372,32 @@ const BEHAVIORS = {
       // still carrying more speed than the bob would ever produce, that speed
       // is DAMPED rather than clamped, and it eases into the bob instead of
       // hitting a wall.
+      //
+      // KNOCKED DOWNWARDS, IT FLOATS BACK UP. Pushed well under the line this
+      // is not a spring any more — a body of gas held under water is a real
+      // upward force, and the spring's `rise` cap would winch it home at a flat
+      // 3 units a second however deep it was put. So below `deepGap` it
+      // ACCELERATES upward and drag settles the speed, which means a shallow
+      // dunk barely registers and a hard one comes back fast and overshoots a
+      // little before the bob catches it. That overshoot is the point: it is
+      // what a float does, and it is the difference between buoyant and winched.
+      const under = want - e.mesh.position.y;
+      if (under > (surf.deepGap ?? 1)) {
+        e.vy += (surf.buoyancy ?? 26) * dt;
+        e.vy *= 1 - Math.min(1, (surf.waterDrag ?? 1.6) * dt);
+        return;
+      }
+      //
+      // TWO CAPS, not one. `rise` is what a floating body does in its own
+      // right — a slow bob with a wave passing under it. A body that has just
+      // been thrown out of the water and splashed back in, or shoved under and
+      // popped up, is not doing that: it is a mass with momentum, and holding
+      // its return to the bob speed makes the whole recovery look winched. So
+      // while it is still carrying more speed than the bob would ever produce,
+      // that speed is DAMPED rather than clamped, and it eases into the bob
+      // instead of hitting a wall.
       const rise = surf.rise ?? 3;
-      const settle = (want - e.mesh.position.y) * (surf.follow ?? 4);
+      const settle = under * (surf.follow ?? 4);
       if (Math.abs(e.vy) > rise) {
         e.vy += (settle - e.vy) * Math.min(1, dt * (surf.splashDamping ?? 6));
       } else {
@@ -3650,7 +3675,7 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   });
 
   if (def.invincible) makeInvincible(enemies[enemies.length - 1]);
-  if (def.damageFromAbove) armDamageFromAbove(enemies[enemies.length - 1]);
+  if (def.damageZones) armDamageZones(enemies[enemies.length - 1]);
   if (def.rigidBody) attachRigidBody(enemies[enemies.length - 1], def.rigidBody);
 }
 
@@ -3677,49 +3702,46 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
  * spreads or serialises a creature still sees an ordinary number.
  */
 /**
- * A creature that can only be hurt from ABOVE it.
+ * A creature worth a different amount depending on where you hit it from.
  *
- * BY ABSORBING THE WRITE, exactly as makeInvincible does, and for the reason
- * spelled out in the note over that function: there is no single place a hit
- * goes through. Eighteen systems own the line `e.hp -= something` — combat, the
+ * BY SCALING THE WRITE, in the place makeInvincible seals it, and for the
+ * reason spelled out over that function: there is no single place a hit goes
+ * through. Eighteen systems own the line `e.hp -= something` — combat, the
  * club, beams, garlic, elements, shrimpRing, strike, the orca, calamari, the
- * seal team, the eel, the seagull — and a direction test written into
- * resolveCombat would gate the shots and nothing else. The player would surface
- * the boss's armour with a bubble, then discover the club goes straight through
- * it from below, and the mechanic would be dead without anything failing.
+ * seal team, the eel, the seagull — so a direction test written into
+ * resolveCombat would grade the shots and nothing else. The player would learn
+ * the rule with a bubble and then find the club ignores it, and the mechanic
+ * would be dead without anything failing.
  *
  * The setter is the one interception every one of those paths already runs
  * through, whatever it is called and whoever writes the nineteenth.
  *
- * A DECREMENT IS GATED AND AN INCREMENT IS NOT. Healing, the difficulty ramp
+ * IT WAS A GATE AND IT IS NOW A GRADE. The first version refused the write
+ * outright below the bar. A hit that does literally nothing is the wrong
+ * teacher: the player cannot tell a rule from a broken weapon, and there is no
+ * gradient to climb — every approach that is not perfect is equally worthless,
+ * so there is nothing to get better AT. Minimal, medium and full says the same
+ * thing and leaves the player somewhere to go.
+ *
+ * A DECREMENT IS GRADED AND AN INCREMENT IS NOT. Healing, the difficulty ramp
  * re-resolving a boss's pool, anything that raises hp — none of that is an
- * attack and none of it should have to be above the animal to happen.
+ * attack and none of it should care where the player is standing.
  */
-function armDamageFromAbove(e) {
-  const cfg = e.def.damageFromAbove ?? {};
-  // MEASURED IN THE BODY'S OWN RADII, never in world units, for the reason the
-  // jellyfish's sting is: the boss's size comes from `sizeMul` in bosses.csv
-  // and its radius follows it, so a height written in world units here is a
-  // number that stops describing this animal the day anyone resizes it —
-  // silently, which is how the crab's claw died (see pinchReach).
-  //
-  // READ AT THE HIT, NOT HERE. A boss's `sizeMul` is applied after the body is
-  // spawned, so `e.radius` at this moment is still the WAVE animal's — 2.6
-  // against the 6.76 it ends the frame at. Capturing it here put the bar at
-  // 38% of the height it was supposed to be, on a boss that then looked like
-  // it could be hurt from beside the float. It is a live read now, which also
-  // means nothing can resize this animal out from under the mechanic later.
-  const clearance = () => (cfg.above ?? 1) * e.radius;
+function armDamageZones(e) {
   let hp = e.hp;
   Object.defineProperty(e, 'hp', {
     get: () => hp,
     set: (v) => {
-      if (v < hp && player?.mesh && player.mesh.position.y < e.mesh.position.y + clearance()) {
-        // Refused — and it has to SAY so. A hit that silently does nothing is
-        // indistinguishable from a weapon that has stopped working, and this
-        // is the only body in the game where a hit landing on the animal is
-        // not damage. See CONFIG.feedback.bossDeflect.
-        feedback('bossDeflect', { x: e.mesh.position.x, y: e.mesh.position.y });
+      if (v < hp) {
+        const mul = damageZoneMul(e);
+        // Only the WEAKEST band announces itself. Full and medium hits already
+        // report through every ordinary channel — numbers, flash, the health
+        // bar — and a toast on all three would be noise on two of them. The one
+        // that needs a voice is the one that feels broken.
+        if (mul <= (e.def.damageZones?.below ?? 0.15)) {
+          feedback('bossDeflect', { x: e.mesh.position.x, y: e.mesh.position.y });
+        }
+        hp -= (hp - v) * mul;
         return;
       }
       hp = v;
@@ -3728,10 +3750,8 @@ function armDamageFromAbove(e) {
     enumerable: true,
   });
   // A plain marker beside it, the way `invincible` is, so the damage ledger and
-  // anything else that should know can ask without probing the descriptor. A
-  // function for the same reason the gate reads one — the number is not known
-  // until the body has finished being sized.
-  e.damageFromAbove = clearance;
+  // anything else that should know can ask without probing the descriptor.
+  e.damageZones = true;
 }
 
 function makeInvincible(e) {

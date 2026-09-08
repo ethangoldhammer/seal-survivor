@@ -15428,6 +15428,12 @@ export const CONFIG = {
           // local water height counts as airborne — a shade over the bob, so a
           // wave crest passing under it does not read as a launch.
           airGap: 0.4, sinkMass: 1, splashDamping: 6,
+          // Shoved UNDER, it comes back up on its own. `buoyancy` is an upward
+          // acceleration and `waterDrag` is what settles the speed, so a deep
+          // dunk returns fast and overshoots slightly before the bob catches
+          // it — which is what a float does. `deepGap` is how far under counts
+          // as dunked rather than as riding a trough.
+          deepGap: 1, buoyancy: 26, waterDrag: 1.6,
         },
       },
 
@@ -15458,7 +15464,13 @@ export const CONFIG = {
         // multiplier on gravity, not kilograms — nothing here solves a force
         // balance, and the only thing it has to buy is that the big one falls
         // like the big one.
-        surface: { lift: -0.1, follow: 4, rise: 3, airGap: 0.6, sinkMass: 2.2, splashDamping: 6 },
+        surface: {
+          lift: -0.1, follow: 4, rise: 3, airGap: 0.6, sinkMass: 2.2, splashDamping: 6,
+          // Rises harder than the wave animal as well as falling harder — it is
+          // a bigger volume of gas, and a boss that took longer to come back up
+          // than the small one would read as waterlogged rather than as heavy.
+          deepGap: 1.4, buoyancy: 34, waterDrag: 1.4,
+        },
         drift: { wanderChange: 6 },
         // ABOVE THE ANIMAL, in its own radii — never world units, because the
         // radius follows `sizeMul` and a world number here would stop
@@ -15469,13 +15481,37 @@ export const CONFIG = {
         // float is out of the water that means clear of the water too. It is a
         // breach and not a hop, and it is measured off the thing the player can
         // see rather than off `bounds.surfaceY`, which is invisible.
-        // 1.5 radii, which is 2.93 world units above the origin against a
-        // float whose top is 2.47 above it — so the bar sits 0.46 clear of the
-        // animal itself, and comfortably clear of the water the float is
-        // standing out of. At 1 the bar was UNDER the top of the float and the
-        // boss could be hurt from alongside it, which is the mechanic
-        // evaporating while every check still passed.
-        damageFromAbove: { above: 1.5 },
+        // WHERE YOU HIT IT FROM IS WHAT IT IS WORTH — systems/damageZones.js.
+        // Three bands rather than a curve, because the player has to be able
+        // to tell which one they are in while they are deciding.
+        //
+        //   below 0.12  from underneath, which means coming up through the
+        //               stinging half. Not zero: a hit that does literally
+        //               nothing reads as a broken weapon rather than as a rule,
+        //               and it leaves nothing to get better at. This says "you
+        //               can do this, and you should not".
+        //   side  0.45  level with it, front or back. That IS the water surface
+        //               on this animal — it floats with its origin a hair under
+        //               the line — so no separate surface test is needed. The
+        //               ordinary exchange.
+        //   above 1     dropped on from overhead, which costs a breach on a
+        //               body that cannot chase you. Full price.
+        //
+        //   hotSpotAbove 1.6  a weak spot struck while airborne, ON TOP of the
+        //               crit and the band. The best thing the player can do to
+        //               this boss, and it is a separate number from `above` so
+        //               it can be tuned without moving what a plain top hit is
+        //               worth — two lessons, learned apart.
+        //
+        // THE GAPS ARE IN RADII, never world units: the radius follows sizeMul
+        // and an absolute number here stops describing the animal the day
+        // anyone resizes it. 1.5 radii clears the float (2.47 above the origin
+        // against a 1.98 radius at the old size); 0.5 below is inside the
+        // filament field, which is exactly where "from underneath" begins.
+        damageZones: {
+          below: 0.12, side: 0.45, above: 1, hotSpotAbove: 1.6,
+          aboveGap: 1.5, belowGap: 0.5,
+        },
         // Slower than the wave animal's, because it is 2.6x the body coming
         // about and a big thing that turns at a small thing's rate reads as
         // weightless — the same argument systems/facing.js opens with.

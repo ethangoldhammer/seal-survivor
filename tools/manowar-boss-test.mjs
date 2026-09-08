@@ -27,6 +27,7 @@ import { enemies, resetEnemies, updateEnemies } from '../path/src/entities/enemi
 import { resetBoss, bossState, forceBoss, bossArchetypes } from '../path/src/systems/boss.js';
 import { parseBossPerkCsv, rollBossPerk } from '../path/src/bossPerkTable.js';
 import { player } from '../path/src/entities/player.js';
+import { hotSpotZoneBonus } from '../path/src/systems/damageZones.js';
 import { bounds, surfaceHeightAt } from '../path/src/arena.js';
 import { readFileSync } from 'node:fs';
 
@@ -48,6 +49,7 @@ console.log('\nTHE ARCHETYPE');
 const arch = bossArchetypes().find((b) => b.id === 'bossManOWar');
 // Its assets.csv size, read rather than typed — every span below multiplies it.
 const bsize = Number(ASSET_ROWS.get('bossManOWar').size);
+function bdefEarly() { return CONFIG.enemies.bossManOWar; }
 check('bosses.csv carries the archetype', !!arch);
 check('...pointing at its own body', arch?.enemy === 'bossManOWar', arch?.enemy);
 check('...and it is NOT an opener', !arch?.opener,
@@ -94,47 +96,81 @@ check('...and the animal itself is far bigger than its hitbox suggests',
   bossSpan > waveSpan * 2.5,
   `${bossSpan.toFixed(1)} world units long vs the wave body's ${waveSpan.toFixed(1)}`);
 
-console.log('\nIT CAN ONLY BE HURT FROM ABOVE');
-// A FUNCTION, not a number — see armDamageFromAbove. The bar is a multiple of
-// the body's radius and the radius is not final until the boss has been sized,
-// so anything that reads it at spawn reads the wave animal's.
-const clearance = boss.damageFromAbove();
-check('the gate armed itself', clearance > 0, `${clearance.toFixed(2)} units of clearance`);
+console.log('\nWHERE YOU HIT IT FROM IS WHAT IT IS WORTH');
+const Z = bdefEarly().damageZones;
+check('the grade armed itself', boss.damageZones === true);
+
+// The grade reads `player.mesh`, and in a terminal nothing has built one — so
+// it has to be stood up here or every hit is ungraded (which is the right
+// default in the game, and useless as a test of a grade).
+player.mesh = player.mesh ?? new THREE.Object3D();
 
 // Written the way the eighteen systems write it, because that is the only
 // interception point and therefore the only honest way to test it.
-// The gate reads `player.mesh`, and in a terminal nothing has built one — so
-// it has to be stood up here or every hit fails OPEN (which is the right
-// default in the game, and useless as a test of a gate).
-player.mesh = player.mesh ?? new THREE.Object3D();
-
-function hitFrom(y, amount = 100) {
-  player.mesh.position.set(boss.mesh.position.x, y, 0);
+function hitFrom(dyRadii, amount = 1000) {
+  player.mesh.position.set(boss.mesh.position.x, boss.mesh.position.y + dyRadii * boss.radius, 0);
   const before = boss.hp;
   boss.hp -= amount;
-  return before - boss.hp;
+  return (before - boss.hp) / amount;
 }
-const deep = hitFrom(boss.mesh.position.y - 6);
-check('a hit from below does nothing', deep === 0, `took ${deep}`);
-const level = hitFrom(boss.mesh.position.y);
-check('...and so does one from alongside it', level === 0, `took ${level}`);
-const justUnder = hitFrom(boss.mesh.position.y + clearance - 0.2);
-check('...and one just under the bar', justUnder === 0, `took ${justUnder}`);
-const above = hitFrom(boss.mesh.position.y + clearance + 0.5);
-check('A HIT FROM ABOVE LANDS', above === 100, `took ${above}`);
+const atBelow = hitFrom(-3);
+const atLevel = hitFrom(0);
+const atAbove = hitFrom(3);
+console.log(`  from below ${(atBelow * 100).toFixed(0)}%   level ${(atLevel * 100).toFixed(0)}%   from above ${(atAbove * 100).toFixed(0)}%`);
+check('from underneath it is minimal', Math.abs(atBelow - Z.below) < 1e-6, `${atBelow}`);
+check('level with it — the water surface — is medium', Math.abs(atLevel - Z.side) < 1e-6, `${atLevel}`);
+check('from above is full', Math.abs(atAbove - Z.above) < 1e-6, `${atAbove}`);
+// THE ORDER IS THE MECHANIC. Checked as a chain rather than three constants so
+// a future retune cannot quietly invert it and still pass.
+check('...and the three are strictly ordered', atBelow < atLevel && atLevel < atAbove,
+  `${atBelow} < ${atLevel} < ${atAbove}`);
+check('nothing is a total refusal — a dead hit reads as a broken weapon',
+  atBelow > 0, `${atBelow}`);
 
-// The bar is above the WATERLINE, or "from above" is satisfiable without ever
-// leaving the water and the mechanic is decorative.
-const barY = boss.mesh.position.y + clearance;
-check('the bar sits above the water, so it is a real breach',
-  barY > surfaceHeightAt(boss.mesh.position.x),
+// The bands are in RADII, so the boundary must sit clear of the float or "from
+// above" is reachable without leaving the water and the mechanic is decorative.
+const barY = boss.mesh.position.y + Z.aboveGap * boss.radius;
+check('the top band starts above the water', barY > surfaceHeightAt(boss.mesh.position.x),
   `bar ${barY.toFixed(2)} vs water ${surfaceHeightAt(boss.mesh.position.x).toFixed(2)}`);
 
 // An increment is not an attack.
-player.mesh.position.set(boss.mesh.position.x, boss.mesh.position.y - 6, 0);
+player.mesh.position.set(boss.mesh.position.x, boss.mesh.position.y - 30, 0);
 const healFrom = boss.hp;
 boss.hp = healFrom + 50;
-check('healing is never gated', boss.hp === healFrom + 50, `${healFrom} -> ${boss.hp}`);
+check('healing is never graded', boss.hp === healFrom + 50, `${healFrom} -> ${boss.hp}`);
+
+console.log('\nA WEAK SPOT STRUCK FROM ABOVE PAYS MORE STILL');
+check('the bonus is its own number, not folded into `above`',
+  Z.hotSpotAbove > 1 && Z.hotSpotAbove !== Z.above, `${Z.hotSpotAbove}`);
+player.mesh.position.set(boss.mesh.position.x, boss.mesh.position.y + 3 * boss.radius, 0);
+check('...and it applies only from above', hotSpotZoneBonus(boss) === Z.hotSpotAbove,
+  `${hotSpotZoneBonus(boss)}`);
+player.mesh.position.set(boss.mesh.position.x, boss.mesh.position.y - 3 * boss.radius, 0);
+check('...and is 1 from anywhere else', hotSpotZoneBonus(boss) === 1, `${hotSpotZoneBonus(boss)}`);
+
+console.log('\nSHOVED UNDER, IT FLOATS BACK UP');
+player.mesh.position.set(0, -100, 0); // out of the way of the grade
+const line0 = surfaceHeightAt(boss.mesh.position.x);
+boss.mesh.position.y = line0 - 9;
+boss.vy = -4;
+let backUp = null;
+let overshoot = -Infinity;
+for (let i = 0; i < 60 * 10; i++) {
+  updateEnemies(DT, scene, below, () => {}, () => {});
+  const rel2 = boss.mesh.position.y - surfaceHeightAt(boss.mesh.position.x);
+  if (backUp == null && rel2 >= bdefEarly().surface.lift - 0.2) backUp = (i + 1) * DT;
+  if (backUp != null) overshoot = Math.max(overshoot, rel2);
+}
+console.log(`  dunked 9 units under: back at the line in ${backUp?.toFixed(2)}s, peaked ${overshoot.toFixed(2)}`);
+check('it comes back up on its own', backUp != null && backUp < 4, `${backUp?.toFixed(2)}s`);
+// FASTER THAN THE SPRING COULD, which is the whole reason buoyancy is not just
+// a bigger `rise`: winching 9 units at the bob speed would take 3s flat.
+check('...buoyantly, not winched at the bob speed',
+  backUp != null && backUp < 9 / bdefEarly().surface.rise,
+  `${backUp?.toFixed(2)}s vs ${(9 / bdefEarly().surface.rise).toFixed(2)}s winched`);
+check('...and settles back on the line',
+  Math.abs((boss.mesh.position.y - surfaceHeightAt(boss.mesh.position.x)) - bdefEarly().surface.lift) < 0.4,
+  `${(boss.mesh.position.y - surfaceHeightAt(boss.mesh.position.x)).toFixed(3)}`);
 
 console.log('\nTHE PERKS LEAN ON THE PROJECTILES');
 // The three that put something in the air between the boss and the player.

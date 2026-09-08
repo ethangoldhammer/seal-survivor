@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { hitShapeSpheres, worldToShapeLocal, shapeLocalToWorld } from './hitShape.js';
 import { feedback } from './feedback.js';
+import { hotSpotZoneBonus } from './damageZones.js';
 import { advanceCycles, phaseOffset } from './beatSync.js';
 import {
   makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
 } from './organicRing.js';
+import { retireMaterial } from './programPin.js';
 
 // ---------------------------------------------------------------------------
 // WEAK SPOTS ON A BOSS
@@ -647,7 +649,7 @@ function dropShells(owner) {
     // The GEOMETRY is the animal's and is emphatically not ours to dispose —
     // a generic teardown that frees it takes the boss's body with it. Only the
     // material was made here.
-    s.material.dispose();
+    retireMaterial(s.material);
   }
   owner.shells = [];
 }
@@ -1675,7 +1677,16 @@ export function hotSpotDamage(e, at, dmg, where = null) {
   if (!spot) return dmg;
 
   const c = cfg();
-  const mul = Math.max(1, c.critMul ?? 2.2);
+  // THE BAND'S OWN BONUS, on top of the crit. On a body that grades hits by
+  // where they came from (systems/damageZones.js — the man o' war), finding a
+  // weak spot while you are airborne over it is the best thing the player can
+  // do, and it should pay more than the two rewards multiplied would give on
+  // their own. Every other boss returns 1 here and the line costs nothing.
+  //
+  // The BAND multiplier itself is NOT applied here — it lands in the hp setter
+  // that every damage path already runs through, so applying it again would
+  // charge it twice. This is only the extra.
+  const mul = Math.max(1, c.critMul ?? 2.2) * hotSpotZoneBonus(e);
   const out = dmg * mul;
 
   // THE POOL TAKES THE CRIT DAMAGE, not the raw damage. Two reasons and they
