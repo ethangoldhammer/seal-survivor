@@ -222,11 +222,19 @@ const bStingY = -bdef.sting.offset * boss.radius;
 const bStingR = bdef.sting.radius * boss.radius;
 console.log(`  radius ${boss.radius.toFixed(2)}, filaments run ${(-bToCrown).toFixed(2)} to ${bToTip.toFixed(2)} below the origin`);
 console.log(`  sting: radius ${bStingR.toFixed(2)} centred ${bStingY.toFixed(2)} below it`);
-check('the boss sting reaches its own tips', bStingY + bStingR >= bToTip - 0.8,
+check('the boss sting covers its whole filament field', bStingY + bStingR >= bToTip,
   `reaches ${(bStingY + bStingR).toFixed(2)}, tips at ${bToTip.toFixed(2)}`);
-check('...and clears its own float', bStingY - bStingR > -bToFloatTop,
-  `${(bStingY - bStingR).toFixed(2)} vs float at ${(-bToFloatTop).toFixed(2)}`);
-check('...and it is a LOW drain for a boss', bdef.contactDamage <= 20, `${bdef.contactDamage}/s`);
+// The CROWN, not the float's top — same correction as the wave animal's test.
+// The safe approach on this boss is the one the whole fight is built on: you
+// come down onto the float. A sting that crept above the crown would take that
+// away with every check still green.
+check('...and stops at the crown, so the top of the float is still safe',
+  bStingY - bStingR >= -bToCrown - 0.1,
+  `sting top ${(bStingY - bStingR).toFixed(2)} vs crown ${(-bToCrown).toFixed(2)}`);
+check('...and it hurts', bdef.contactDamage >= 60, `${bdef.contactDamage}/s`);
+check('...more than the wave animal, which is the same animal smaller',
+  bdef.contactDamage > CONFIG.enemies.manowar.contactDamage,
+  `${bdef.contactDamage} vs ${CONFIG.enemies.manowar.contactDamage}`);
 // The channel matters more here than anywhere: capBossDamage keys its
 // per-second ceiling on the literal string 'contact', so a sting on a channel
 // of its own would escape the one cap that holds a boss's overlap down.

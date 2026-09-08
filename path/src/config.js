@@ -15390,7 +15390,21 @@ export const CONFIG = {
         //                 1.80 of this body's 0.95 radius.
         //   radius 1.25   half that span is 1.14, or 1.20 radii. A shade over,
         //                 because the filaments splay as well as hang.
-        sting: { offset: -1.8, radius: 1.25, feedback: 'stingPoison' },
+        //   offset -2.04  SCALED UP. The circle now runs from the crown itself
+        //                 down to a fifth of a field's length PAST the tips —
+        //                 6.04 world units of stinging water against a filament
+        //                 field 5.03 long. It ends below the animal on purpose:
+        //                 the strands trail, and a seal passing under one is in
+        //                 the gear whether or not a rendered filament happens to
+        //                 be at that spot this frame.
+        //   radius 1.44   sized so the TOP edge lands on the crown. That is the
+        //                 landmark, not the float's top — swimming into the
+        //                 float is still free, which is this animal's one safe
+        //                 approach and the whole reason the sting is split off
+        //                 the body at all. Any bigger and the circle eats the
+        //                 float's base and the safe approach quietly stops
+        //                 existing while every check still passes.
+        sting: { offset: -2.04, radius: 1.44, feedback: 'stingPoison' },
         // IT LIVES ON THE WATERLINE, which is the whole animal. A man o' war
         // is a sail on the surface with its fishing gear hanging under it; it
         // has no muscle to swim with and it does not choose a depth.
@@ -15531,7 +15545,14 @@ export const CONFIG = {
         //   offset -2.25  origin to crown 1.49, origin to tips 7.41, so the
         //                 field centres 4.45 below — 2.25 of this body's 1.98.
         //   radius 1.5    half the span is 2.96, or 1.50 radii.
-        sting: { offset: -2.25, radius: 1.5, feedback: 'stingPoison' },
+        //   offset -2.55  radius 1.8  — the same construction as the wave
+        //                 animal's and NOT the same numbers, for the reason the
+        //                 old pair carried: the two radii were sized against
+        //                 different things, so the multiples cannot match. On
+        //                 this body the circle runs 3.29 to 19.00 below the
+        //                 origin — 15.7 world units of stinging water, and the
+        //                 top edge is again exactly the crown.
+        sting: { offset: -2.55, radius: 1.8, feedback: 'stingPoison' },
       },
 
     },

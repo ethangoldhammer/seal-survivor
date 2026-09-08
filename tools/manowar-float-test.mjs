@@ -180,12 +180,19 @@ console.log(`  a circle of radius ${stingR.toFixed(2)} centred ${(-stingY).toFix
 console.log(`  the filaments run from ${(-toCrown).toFixed(2)} to ${toTip.toFixed(2)} below it`);
 // IT HAS TO COVER THE FILAMENTS AND MISS THE FLOAT — those are the two halves
 // of "swimming into the top of one is free", and either can be true alone.
-check('the sting reaches the filament tips', -stingY + stingR >= toTip - 0.3,
+check('the sting covers the whole filament field', -stingY + stingR >= toTip,
   `reaches ${(-stingY + stingR).toFixed(2)}, tips at ${toTip.toFixed(2)}`);
-check('...and does not reach the float', -stingY - stingR > -toFloatTop,
-  `top of the sting is ${(-stingY - stingR).toFixed(2)} below the origin, the float starts at ${(-toFloatTop).toFixed(2)}`);
-check('the poison is a LOW drain, well under the jellyfish\'s 30/s',
-  def.contactDamage > 0 && def.contactDamage <= 12, `${def.contactDamage}/s`);
+// THE CROWN IS THE LANDMARK, not the float's top. This read `-toFloatTop` and
+// was therefore asking whether the circle had swallowed the ENTIRE float —
+// which it never would — while the thing that actually matters is whether it
+// has crept above the crown and eaten the float's base. Swimming into the top
+// of this animal is meant to be free, and that safe approach can disappear
+// with the old assertion still green.
+check('...and stops at the crown, so the float is still free to touch',
+  -stingY - stingR >= -toCrown - 0.05,
+  `sting top ${(-stingY - stingR).toFixed(2)} vs crown ${(-toCrown).toFixed(2)} below the origin`);
+check('the poison is a real threat now, not a graze',
+  def.contactDamage >= 30, `${def.contactDamage}/s`);
 check('...and it names a feedback event that exists',
   !!CONFIG.feedback[def.sting.feedback], def.sting.feedback);
 
