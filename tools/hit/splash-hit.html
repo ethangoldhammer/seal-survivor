@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Seal Survivor — splash hitbox probe</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0b0e15; color: #dfe6f2; font: 13px/1.5 ui-monospace, Menlo, monospace; padding: 18px; }
+    h1 { font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+    .note { color: #7b8798; margin-bottom: 16px; max-width: 76ch; }
+    #summary { margin-bottom: 18px; white-space: pre-wrap; }
+    .ok { color: #4dd0a8; } .bad { color: #ff8b7a; } .warn { color: #ffc65a; }
+    .grid { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+    .cell { border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; overflow: hidden; background: #05060a; }
+    .cell h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; padding: 6px 8px;
+      background: rgba(255,255,255,0.05); color: #9fb2c8; }
+    /* The frame IS the device: the artboard is fitted `Layout`, so its whole
+       geometry — and with it every hitbox — is a function of this box. */
+    iframe { display: block; border: 0; background: #05060a; }
+    .findings { padding: 6px 8px; font-size: 11px; max-width: 100%; color: #7b8798; }
+    .findings div { color: #ff8b7a; }
+    .findings div.tap { color: #ffc65a; }
+    .findings div.ok { color: #4dd0a8; }
+  </style>
+<script>
+  // rAF IS NOT A RELIABLE CLOCK HERE, and this probe is nothing without one:
+  // Rive's whole render loop is requestAnimationFrame(this.draw), and a state
+  // machine that is not advancing reports every button as unhittable — which
+  // is indistinguishable from the bug being hunted. The Browser pane reports
+  // document.hidden and Chrome suspends rAF outright there; a hidden Electron
+  // window needs three command-line switches to keep it. setTimeout is not
+  // suspended the same way in either, so the loop runs on a timer and the
+  // answer does not depend on which host opened the page.
+  window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+  window.cancelAnimationFrame = (id) => clearTimeout(id);
+</script>
+</head>
+<body>
+  <h1>Splash hitbox probe</h1>
+  <p class="note">
+    Where the dice and the Start button actually respond, measured by walking synthetic
+    pointer events over the real artboard, against where ui/splashLayout.js says they are
+    drawn. Each tile is a live iframe sized to that device; the touch pass presses the dice
+    with real touch events, and the rotation pass measures how long the hitbox lags the
+    picture after the box changes. The whole report is POSTed back to the terminal.
+  </p>
+  <div id="summary">measuring…</div>
+  <div class="grid" id="grid"></div>
+  <script type="module" src="./splash-hit.js"></script>
+</body>
+</html>

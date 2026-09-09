@@ -24,7 +24,11 @@
 //            a row arrives as lorem and npm run test:copy holds the ship until
 //            the line is written.
 //   enabled  FALSE switches the gate off — the thing is offered as if the row
-//            were not there. Blank means enabled.
+//            were not there. Blank means enabled. Checked FIRST, before target
+//            and stat: a disabled row is skipped without being validated at
+//            all, which is what lets the stub rows at the bottom of the table
+//            park a stat against an accessory that does not exist yet without
+//            filling the console with warnings about it.
 //
 // A thing with NO row is never gated. That is the default on purpose: the
 // table lists what is EARNED, and everything else is in the game from the
@@ -91,7 +95,17 @@ export function buildUnlocks(rows, targets = {}, warn = console.warn, stats = nu
     // about, and "once" is the safe reading of a threshold nobody could read.
     if (count == null) count = 1;
 
-    out.push({ id, kind, target, stat, count, label: String(row.label ?? '').trim() });
+    // AN ENABLED ROW WITH NO LABEL is warned about and kept. The toast prints
+    // this line, so a blank one is a gate that pops with nothing to read —
+    // which is a copy problem rather than a data problem, and dropping the row
+    // would hide the unlock as well as the words. The stub rows at the bottom
+    // of the CSV have blank labels ON PURPOSE and are `enabled` FALSE, so they
+    // never reach here; this fires exactly when one is switched on before the
+    // line has been written.
+    const label = String(row.label ?? '').trim();
+    if (!label) warn(`[${LABEL}] "${id}" is on but has no label — it will pop with nothing to read.`);
+
+    out.push({ id, kind, target, stat, count, label });
   }
   return out;
 }

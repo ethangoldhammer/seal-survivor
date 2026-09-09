@@ -225,6 +225,16 @@ const specs = roster().map((key) => {
     // than an upgrade icon's 0.006 because these are small dark objects on a
     // dark tile and the rim is most of what separates them from it.
     toon: true,
+    // AND THE GLOW, WHERE THE ASSET DECLARES ONE. Read off ASSETS rather than
+    // written here, because assets.csv's `surface` column is already where an
+    // accessory says what it wears — `biolum:accessoryTricorn` and
+    // `biolum:accessoryRounds` are in there today, put there by the shader lab.
+    // A second list in this file would be a second thing to keep in step, and
+    // the first time they disagreed the tile would stop matching the seal.
+    //
+    // iconRender attaches the real biolumSkin for this, so retuning the preset
+    // in the lab changes the tile with nothing to copy across.
+    ...(ASSETS[key]?.biolumSkin ? { biolum: ASSETS[key].biolumSkin } : {}),
     bands: 4,
     bandLow: 70,
     bandHigh: 255,

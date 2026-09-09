@@ -892,9 +892,27 @@ section('SAVED SNAPSHOT');
   // The gate multiplies the spawn weight by 0 in daylight, so a glowing
   // creature is unreachable before dusk. Arriving at difficulty 0 would mean a
   // species that exists on paper and never once appears in a short run.
+  // ...AND THE RULE IS ABOUT THE WEIGHT CURVE, so it only reaches creatures
+  // that walk it. `minDifficulty` gates a species' entry into the spawn pool,
+  // and a `weight` of 0 means it never enters that pool at all — it is placed
+  // by a system of its own, the way emberCrab is summoned and the way every
+  // boss is scheduled. Asking those for a positive minDifficulty asks for a
+  // number that does nothing, and answering it would be a value invented to
+  // satisfy a check rather than to say anything about the run.
+  //
+  // The man o' war is the first glowing creature the game has had on either
+  // side of that line — the animal at weight 0 and its boss at weight 0 — which
+  // is why this had never come up. Both still have to be TAGGED (the check
+  // above), because that is the statement that they are night animals; what
+  // they do not need is a curve position on a curve they are not on.
+  const weighed = glowCreatures.filter((k) => (CONFIG.enemies[k].weight ?? 0) > 0);
+  const summoned = glowCreatures.filter((k) => !((CONFIG.enemies[k].weight ?? 0) > 0));
   check('and arrives late enough that its first night has come',
-    glowCreatures.every((k) => (CONFIG.enemies[k].minDifficulty ?? 0) > 0),
-    glowCreatures.map((k) => `${k}@${CONFIG.enemies[k].minDifficulty}`).join(', '));
+    weighed.every((k) => (CONFIG.enemies[k].minDifficulty ?? 0) > 0),
+    weighed.map((k) => `${k}@${CONFIG.enemies[k].minDifficulty}`).join(', '));
+  if (summoned.length) {
+    console.log(`        placed by their own systems rather than the spawn pool, so no curve position: ${summoned.join(', ')}`);
+  }
 }
 
 // --- per-instance variants --------------------------------------------------

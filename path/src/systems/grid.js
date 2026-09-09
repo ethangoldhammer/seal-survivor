@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { bounds, WAVE, sea } from '../arena.js';
 import { hexMetrics, hexCorners, hexCellsIn } from './hexLattice.js';
 import { touchSlots, TOUCH_SLOTS } from '../input.js';
+import { retireMaterial } from './programPin.js';
 
 // The backdrop grid. Every node is displaced in the vertex shader by a ring
 // buffer of ripples plus a constant pull from the ship's wake, so the whole
@@ -375,7 +376,7 @@ export function createGrid(scene) {
     if (!mesh) return;
     scene.remove(mesh);
     mesh.geometry.dispose();
-    mesh.material.dispose();
+    retireMaterial(mesh.material);
     mesh = null;
     material = null;
   }

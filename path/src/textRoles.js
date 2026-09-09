@@ -39,6 +39,36 @@ export const CASE_CSS = {
 // picker sitting alongside the real families.
 export const FONT_GLOBAL = 'global';
 
+// THE TWO TOOLTIPS DO NOT TAKE THE GLOBAL FAMILY, and this is why.
+//
+// Every other role is a voice — a title, a shout, a number flying off a kill —
+// and a display face is what those are FOR. The tooltips are the one surface
+// that is neither: they are a table of measurements the player reads at a
+// glance, mid-decision, at 11-13px, and on a phone that is the smallest type in
+// the game rendered on the least forgiving screen.
+//
+// With the family global they wore whatever the Text panel was set to, and a
+// pixel face is the case that breaks: 'Press Start 2P' at 13.5px has one-pixel
+// strokes, the card tooltip's `scan` mask cuts every third row of them, and the
+// role's own glow plus the retro CRT bloom fill in what is left. The box reads
+// as a lit smudge with no letters in it — measured at 375px wide, the shipped
+// tip was also 377px across, wider than the phone it was on, where the same
+// content in Inter is 205px.
+//
+// SO `ownFont` IS WHAT `global` MEANS ON THOSE TWO ROWS, rather than the two
+// styles below simply naming Inter. That difference is the whole design of the
+// fix. Their stored `font` stays the `global` sentinel it has always been, so
+// no saved snapshot is unsynced and nothing has to be edited out of
+// imported-tuning.json to make this reach an already-tuned game — see
+// tuning-file-edits-lose-the-race, and the note on `scanGlow` below. The Text
+// panel's picker is untouched: choose a real family for the tip rows and it
+// still wins here, exactly as it does everywhere else. Only the fallback moved.
+//
+// Written out rather than imported because this file has no imports (see the
+// header). It must stay character for character the `stack` of the Inter entry
+// in fonts.js, or the picker will not show it as the selected pill.
+const FONT_TIP = "'Inter', system-ui, sans-serif";
+
 // `scan` — THE SHADOW MASK, per role. 0 is off, and it is off everywhere but
 // the menu buttons.
 //
@@ -88,6 +118,9 @@ export const FONT_GLOBAL = 'global';
  * fit       true only for the upgrade cards: their type is additionally scaled
  *           per card by --sv-fit so a long name shrinks to fit the hex
  *           (ui.js, fitCardText). Multiplied in rather than replacing scale.
+ * ownFont   the family a role falls back to when its `font` is the `global`
+ *           sentinel, instead of CONFIG.typography.family. Only the two
+ *           tooltips carry one — see FONT_TIP above for why.
  * inlineColor  true where ui.js writes `style.color` per element and would win
  *           over any rule here anyway — the "STRIKE NOW!" prompt on the ring
  *           walks the chain's hue wheel, and the FOOD CHAIN! banner is pinned
@@ -208,9 +241,11 @@ export const TEXT_ROLES = [
   // all of them together. The row accents (the stack pip, the "next" value)
   // keep their own colour: they are the panel's blue, not the type's ink.
   { key: 'cardTip', label: 'Card tooltip', selector: '.sv-card-fx', section: 'Upgrade cards',
+    ownFont: FONT_TIP,
     sample: 'NEXT  +6 more orbiting shrimp',
     style: { font: FONT_GLOBAL, size: 13, weight: 400, tracking: 0, case: 'as typed', useInk: false, color: 0xcfeaff, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
   { key: 'hiveTip', label: 'Hive tooltip', selector: '.sv-uptip', section: 'Upgrade cards',
+    ownFont: FONT_TIP,
     sample: 'Barnacle Plating  ×3',
     style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0, case: 'as typed', useInk: false, color: 0xcfeaff, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
 

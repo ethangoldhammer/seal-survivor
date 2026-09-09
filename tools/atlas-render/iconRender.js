@@ -21,6 +21,15 @@ import {
   MOTTLE_VARYING_GLSL, MOTTLE_DEFAULTS,
   GLOW_UNIFORMS_GLSL, GLOW_LAYERS_GLSL, GLOW_DEFAULTS,
 } from '/src/systems/noiseGlsl.js';
+// THE GAME'S OWN GLOW, not an impression of it — the same reason the mottling
+// above comes from path/src rather than being reimplemented here.
+//
+// This one needs a BUILD to load: biolumSkin.js imports config.js and a `?raw`
+// CSV, neither of which the plain file server can hand a browser (see the
+// /src/ mount note in server.mjs). tools/looks/vite.picker.config.mjs is what
+// makes these pages loadable at all now, and it teaches vite the same `/src/`
+// spelling the file server uses so the imports did not have to change.
+import { attachBiolumSkin, applyBiolumSkinSettings } from '/src/systems/biolumSkin.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
@@ -715,6 +724,30 @@ async function prepareModel(spec) {
 // first would attach to a material that gets thrown away), and the outline
 // shells are flat black basic materials that must not be painted.
 // ---------------------------------------------------------------------------
+// A PRESET NAME, and the numbers come from the game rather than from the spec.
+//
+// `biolum: 'accessoryTricorn'` on a spec is all it takes: attachBiolumSkin bakes
+// the same attributes the game bakes (aBioPos/aBioAxis, off the model's own
+// bounds) and applyBiolumSkinSettings pushes CONFIG.biolumSkin over it, so a
+// tile wears the identical material the player sees. Retune the preset in the
+// shader lab and the icon changes with it, with nothing to copy across.
+//
+// AFTER toonify, deliberately. The game layers these in the same order — the
+// surface column spells it `noise:x+toon:y+biolum:z` — and toonify REPLACES
+// materials, so a biolum attached before it would be thrown away.
+//
+// Fails soft: a name with no preset behind it leaves the model as toonify left
+// it, which is the shading these icons had before any of this existed.
+function attachBiolum(root, preset) {
+  if (!preset) return;
+  try {
+    attachBiolumSkin(root, preset);
+    applyBiolumSkinSettings();
+  } catch (err) {
+    console.warn(`[iconRender] biolum "${preset}" did not attach — ${err?.message ?? err}`);
+  }
+}
+
 function attachMottle(root, noise) {
   const n = { ...MOTTLE_DEFAULTS, ...(noise ?? {}) };
   const seen = new Set();
@@ -862,6 +895,7 @@ export async function buildIcon(spec) {
   // black MeshBasicMaterial for a lit toon one and the outline would light up.
   if (spec.toon) toonify(root, spec, spec.flatColor);
   if (spec.noise) attachMottle(root, spec.noise);
+  if (spec.biolum) attachBiolum(root, spec.biolum);
 
   const scene = makeScene(!!spec.toon);
   const holder = new THREE.Group();
@@ -948,6 +982,9 @@ async function buildPart(part, spec, strays) {
   // Toon per part rather than once over the finished scene: `color` is the
   // per-part flat tone, and a single pass over the holder could only apply one.
   if (spec.toon) toonify(inner, spec, part.prim ? undefined : part.color);
+  // Per part, like the toon above and for the same reason: a composed scene's
+  // parts are different animals and only one of them may be the glowing one.
+  if (part.biolum ?? spec.biolum) attachBiolum(inner, part.biolum ?? spec.biolum);
 
   // Marked before the parts are merged, because addOutline runs once over the
   // finished scene and has no idea which part a mesh came from by then.

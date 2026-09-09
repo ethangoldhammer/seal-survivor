@@ -49,14 +49,18 @@ ok(rapid.length === 1 && rapid[0].stat === 'fireRate' && rapid[0].how === 'mul',
 // here is pinned to the card's apply(), which is the point of measuring it:
 // change the card and this fails rather than the printed text quietly lying.
 ok(Math.abs(rapid[0].ratio - 4 / 6) < 1e-9, `and the ratio measures 4/6 (got ${rapid[0]?.ratio})`);
-// PHRASED OFF THE INTERVAL, not off the rate. `lower: TRUE` in statText.csv
-// means a drop is an improvement, and the percentage reported is how much the
-// interval fell — so a rung that takes the gun from 4 shots a bar to 6 reads
-// "+33.3%" while the player gets +50% more shots. That convention predates the
-// shot grid and is the same on every cooldown card in the game; it is pinned
-// here so that changing it is a deliberate edit to statText.csv rather than a
-// surprise.
-ok(phraseAll(rapid) === '+33.3% fire rate', `phrased as "+33.3% fire rate" (got "${phraseAll(rapid)}")`);
+// PHRASED OFF THE RATE, which is what the label says. `lower: TRUE` in
+// statText.csv means the stat holds a DELAY that falls as the card improves, so
+// pct() inverts the ratio before it becomes a percentage: a rung taking the gun
+// from 4 shots a bar to 6 is "+50% fire rate", the same figure the tip's span
+// prints as "x1 -> x1.5".
+//
+// IT USED TO BE "+33.3%" — the share of the INTERVAL removed, printed under the
+// word "rate" and directly beside a span saying +50%. It also decayed across
+// the stacks of a card that adds a constant amount of rate, so Supa Dupa Seal
+// read as having diminishing returns it does not have. Pinned here so the
+// convention cannot drift back by accident.
+ok(phraseAll(rapid) === '+50% fire rate', `phrased as "+50% fire rate" (got "${phraseAll(rapid)}")`);
 
 const vit = measure(by('vitality'), 1);
 ok(vit[0].how === 'add' && vit[0].amount === 30, `vitality reads as +30 additive (${vit[0]?.how} ${vit[0]?.amount})`);
@@ -127,12 +131,12 @@ console.log('\n3. tokens — each resolves, and a bad one stays on the card');
 // ===========================================================================
 
 // Expected values are sentence-cased, because expandDesc is the last thing a
-// card's text goes through and it opens the string with a capital. "+33.3% fire
+// card's text goes through and it opens the string with a capital. "+50% fire
 // rate" is untouched — the rule only reaches a letter, so a measured number
 // still leads with the number it measured.
 const r = by('rapidFire');
 const cases = [
-  ['{effect}', '+33.3% fire rate'],
+  ['{effect}', '+50% fire rate'],
   ['{name}', r.name],
   ['{level}', '1'],
   ['{owned}', '0'],
@@ -146,8 +150,8 @@ for (const [input, want] of cases) {
 }
 
 // Stack 3 is bar/8 -> bar/12, another triplet step, so it reads the same as
-// stack 1 — the ladder alternates +33.3% and +25% as phrased.
-ok(expandDesc('a {effect:3} b', r, { owned: 0 }) === 'A +33.3% fire rate b', '{effect:3} resolves a specific stack');
+// stack 1 — the ladder alternates +50% and +33.3% as phrased.
+ok(expandDesc('a {effect:3} b', r, { owned: 0 }) === 'A +50% fire rate b', '{effect:3} resolves a specific stack');
 ok(expandDesc('{level}', r, { owned: 4 }) === '5', '{level} follows how many are already owned');
 
 const warned = [];
@@ -273,14 +277,16 @@ console.log('\n5. the wording table — statText.csv');
     try { return phrase(change); } finally { STAT_TEXT.fireRate = saved; }
   };
 
-  ok(withTpl('{label} up {n%}') === 'fire rate up +25%',
+  // 0.75 of the interval is 4/3 of the rate, so the inverted percentage is
+  // +33.3% — the same measurement the standard shape would have used.
+  ok(withTpl('{label} up {n%}') === 'fire rate up +33.3%',
      `a template rewrites the phrase and keeps the measurement ("${withTpl('{label} up {n%}')}")`);
   ok(withTpl('') === phrase(change), 'a blank template falls through to the standard shape');
   // A template of only unknown tokens renders to nothing, and a card with a
   // hole in it is worse than a card with the old wording.
   ok(withTpl('{nope}') === '{nope}' || withTpl('   ') === phrase(change),
      'a template that renders empty falls back rather than blanking the card');
-  ok(/25/.test(withTpl('{label} up {n%}')),
+  ok(/33\.3/.test(withTpl('{label} up {n%}')),
      'the number in an overridden phrase is still the measured one');
 }
 

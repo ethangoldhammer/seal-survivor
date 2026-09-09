@@ -11,10 +11,15 @@
 //      the same thing (a line of bodies that swims with you and peels off to
 //      hit what you are near), so a run holding both is one build twice.
 //   2. THREE COMPANIONS. CONFIG.maxCompanionCards caps how many DIFFERENT
-//      animals a run collects. Deepening the ones already held is untouched —
-//      the cap is on variety, never on depth — and Entourage and Big Rigz
-//      carry `companionMod` and are not counted, because they scale the
-//      bodies you have rather than adding one.
+//      animals a run collects. Entourage and Big Rigz carry `companionMod` and
+//      are not counted, because they scale the bodies you have rather than
+//      adding one.
+//
+// A THIRD RULE now sits over both of them: the level-up screen never deals a
+// card the run already holds. Depth is bought on the hive ceremony and the
+// level blob, which draw from levelableUpgrades() instead — so every check
+// below that used to read "...and it can still be deepened" reads
+// "...and it is gone from the offer, and levelable instead".
 //
 // Both are rules about an OFFER, which is what makes them worth a harness: a
 // broken exclusive group or a cap that counts the wrong cards still deals three
@@ -29,7 +34,15 @@
 
 import './dom-stub.mjs';
 import { CONFIG } from '../path/src/config.js';
-import { player, availableUpgrades, isCompanionCard } from '../path/src/entities/player.js';
+import { player, availableUpgrades, levelableUpgrades, isCompanionCard } from '../path/src/entities/player.js';
+
+// THE GATE IS OFF FOR THIS WHOLE FILE. GATE_DEFAULT is the public build now, so
+// anything with a row in unlocks.csv starts withheld — and this harness is
+// about the exclusive group the two squads share, not about who has earned what. Leaving the gate on would test
+// the gate here, in a file that would then fail every time a row was added to
+// the table. Gating is unlock-test's.
+import { setUnlockGate } from '../path/src/systems/unlocks.js';
+setUnlockGate(false);
 
 let failures = 0;
 function section(name) { console.log(`\n${name}`); }
@@ -40,6 +53,7 @@ function check(name, cond, detail = '') {
 
 const byId = (id) => CONFIG.upgrades.find((u) => u.id === id);
 const offered = () => availableUpgrades().map((u) => u.id);
+const levelable = () => levelableUpgrades().map((u) => u.id);
 const hold = (...ids) => { for (const id of ids) player.upgrades.push({ id, rarity: 'common' }); };
 const reset = () => { player.upgrades.length = 0; };
 
@@ -83,14 +97,16 @@ check('both squads are on offer to a run holding nothing',
 reset();
 hold('sealTeam');
 check('taking the escorts drops the pod', !offered().includes('orcaFamily'));
-check('...and the escorts can still be deepened', offered().includes('sealTeam'));
+check('...and the escorts themselves, which deepen off the hive instead',
+  !offered().includes('sealTeam') && levelable().includes('sealTeam'));
 
 // The other way round, because an exclusive group implemented as a one-way
 // check would pass every test above and still hand a pod run the escorts.
 reset();
 hold('orcaFamily');
 check('taking the pod drops the escorts', !offered().includes('sealTeam'));
-check('...and the pod can still be deepened', offered().includes('orcaFamily'));
+check('...and the pod itself, which deepens off the hive instead',
+  !offered().includes('orcaFamily') && levelable().includes('orcaFamily'));
 
 // The lock is on the GROUP and not on the pick count: a second stack of the
 // squad you hold must not re-open the one you don't.
@@ -118,18 +134,21 @@ const stillOffered = offered().filter((id) => isCompanionCard(byId(id)));
 check('at the cap, no companion the run does not already have is offered',
   stillOffered.every((id) => held.includes(id)),
   stillOffered.filter((id) => !held.includes(id)).join(', ') || 'none');
-check('...and every one it does have is still offered',
-  held.every((id) => stillOffered.includes(id)), stillOffered.join(', '));
+check('...nor is any one it does have',
+  stillOffered.length === 0, stillOffered.join(', ') || 'none');
+check('...and all three are levelable', held.every((id) => levelable().includes(id)),
+  held.join(', '));
 check('...and the two modifiers are unaffected',
   offered().includes('orbiterAmount') && offered().includes('companionSize'));
 
 // DEPTH IS NOT VARIETY. Six stacks of one companion is one companion — a cap
 // that counted picks rather than ids would close the run's other two slots on
-// a build that had taken a single card.
+// a build that had taken a single card. Beluga itself is out of the offer (it
+// is held), so the count is of the OTHER animals still on the table.
 reset();
 hold('beluga', 'beluga', 'beluga', 'beluga', 'beluga');
 check('stacking one companion does not spend the other slots',
-  offered().filter((id) => isCompanionCard(byId(id)) && id !== 'beluga').length > 0,
+  offered().filter((id) => isCompanionCard(byId(id))).length > 0,
   `${offered().filter((id) => isCompanionCard(byId(id))).length} companions on offer`);
 
 // The rest of the deck is untouched at the cap — the rule takes companions out

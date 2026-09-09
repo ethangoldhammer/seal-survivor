@@ -117,6 +117,12 @@ export const celebrationState = {
   // frame the player picked a card and clap seconds after the moment they were
   // supposed to be reacting to. See armCelebration.
   escorts: true,
+  // WHICH SEAL. Null is the player, as it always was. A driver built with a
+  // tag (createCelebrationDriver(instance, tag)) poses only when this names
+  // its tag, and the untagged player's driver sits out any celebration that
+  // names one — so a versus goal can be one seal's without the other joining
+  // in. See playCelebration's `only`.
+  only: null,
 };
 
 function cfg() {
@@ -176,6 +182,7 @@ function pickVariant(rng, weights = cfg().weights ?? {}) {
 export function playCelebration({
   variant = null, weights = null, peakAt = null,
   hold = null, release = null, escorts = true, rng = Math.random, at = null,
+  only = null,
 } = {}) {
   const c = cfg();
   if (c.enabled === false) return null;
@@ -190,6 +197,7 @@ export function playCelebration({
   celebrationState.peakAt = peak;
   celebrationState.release = release ?? c.release ?? 0.5;
   celebrationState.escorts = escorts;
+  celebrationState.only = only;
   celebrationState.duration = peak + (hold ?? c.hold ?? 0.35) + celebrationState.release;
 
   // The seal says something, and the water opens up behind it.
@@ -254,6 +262,7 @@ export function resetCelebration() {
   celebrationState.peakAt = 0;
   celebrationState.release = 0;
   celebrationState.escorts = true;
+  celebrationState.only = null;
 }
 
 /**
@@ -423,8 +432,10 @@ const POSES = {
  *
  * @returns radians about the body's local Z. 0 when nothing is flipping.
  */
-export function celebrationSpin() {
+export function celebrationSpin(tag = null) {
   if (!celebrationState.active || celebrationState.variant !== 'flip') return 0;
+  // The somersault is the celebrating seal's alone — see celebrationState.only.
+  if ((celebrationState.only ?? null) !== tag) return 0;
   const p = cfg().poses?.flip ?? {};
   // Over the attack AND the hold, so the seal is caught mid-turn by the
   // shutter (upside down, at roughly two-thirds round) rather than posed neatly
@@ -455,13 +466,15 @@ export const CELEBRATION_VARIANTS = Object.keys(POSES);
  * @returns null for a model with no aim rig, which every caller treats as
  *   "this creature doesn't celebrate".
  */
-export function createCelebrationDriver(instance) {
+export function createCelebrationDriver(instance, tag = null) {
   // The chains, the body's axes, the target maths and the anti-ratchet
   // snapshot all live in systems/poseRig.js, shared with the clap button —
   // see that file for why each of those is load-bearing. What stays here is
   // the celebration's own clock and its own shapes.
   const rig = createPoseRig(instance, 'celebrate');
   if (!rig) return null;
+  // Whether this celebration is this seal's — see celebrationState.only.
+  const mine = () => (celebrationState.only ?? null) === tag;
 
   const ctx = { fins: rig.fins, head: rig.head, tail: rig.tail, basis: rig.basis, phase: 0, solve: null };
   // Which celebration the entry snapshot belongs to. -1 is "we are not holding
@@ -481,7 +494,7 @@ export function createCelebrationDriver(instance) {
      * @param rawDt UNSCALED seconds.
      */
     update(rawDt) {
-      if (!celebrationState.active) {
+      if (!celebrationState.active || !mine()) {
         // The frame the performance ends, put the bones back exactly once.
         // Without this the seal keeps whatever fraction of the pose the last
         // live frame happened to leave in them — small, but it is never

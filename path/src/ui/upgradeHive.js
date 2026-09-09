@@ -30,6 +30,7 @@ import { onFeedback } from '../systems/feedback.js';
 import { narrowScreen, shortScreen } from '../devices.js';
 import { cssEase } from '../ease.js';
 import { pressableWithin } from './press.js';
+import { hoveredElement } from './hoverPoint.js';
 
 // Which upgrade a feedback event belongs to.
 //
@@ -1328,6 +1329,16 @@ export function setHiveTips(on, { onShow, onHide } = {}) {
   });
   tipHandlers = { over, out, unpress };
   state.root.dataset.tips = 'on';
+  // AND THE HEXAGON THE POINTER IS ALREADY ON.
+  //
+  // The corner is hoverable only while the run is stopped, and it sits in the
+  // corner the pointer crosses constantly while shooting — so pausing with the
+  // cursor on a hexagon is not an edge case, it is how you end up looking at
+  // one. The attribute above turns the pointer back on, which hands a pointer
+  // that has not moved no `pointerover` at all: the tile did not appear under
+  // it, it merely started accepting events. Asked here rather than waited for.
+  const at = hoveredElement('.sv-hive-tile');
+  if (at && state.host?.contains(at) && at.dataset.upgrade) onShow?.(at.dataset.upgrade, at);
   return true;
 }
 

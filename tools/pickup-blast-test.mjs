@@ -135,8 +135,15 @@ section('LOOK — its own burst, in the colour of what went off');
   const src = readFileSync(new URL('../path/src/config.js', import.meta.url), 'utf8');
   const def = src.match(/\n\s+pickupBlast: \{ emit: '(\w+)', goo: '(\w+)'/);
   check('the event has its own emitter by default', def?.[1] === 'pickupBlast' && !!CONFIG.emitters.pickupBlast);
-  check('...bigger than the release burst\'s', CONFIG.emitters.pickupBlast.count > CONFIG.emitters.explosion.count
-    && CONFIG.emitters.pickupBlast.size[1] > CONFIG.emitters.explosion.size[1]);
+  // Same rule as the event: the emitter is tuned in the F panel, so the
+  // AUTHORED numbers are the claim, read off the source.
+  const em = (name) => {
+    const m = src.match(new RegExp(`\\n\\s+${name}: \\{\\n\\s+count: (\\d+), speed: \\[[^\\]]+\\], size: \\[([\\d.]+), ([\\d.]+)\\]`));
+    return m ? { count: +m[1], size: [+m[2], +m[3]] } : null;
+  };
+  const blastEm = em('pickupBlast'); const explEm = em('explosion');
+  check('...bigger than the release burst\'s by default', !!blastEm && !!explEm && blastEm.count > explEm.count && blastEm.size[1] > explEm.size[1],
+    blastEm && explEm ? `${blastEm.count}x${blastEm.size[1]} vs ${explEm.count}x${explEm.size[1]}` : 'emitter not found in source');
   check('...and leaves the pickup splat behind it by default', def?.[2] === 'pickupGoo');
   check('the fx block scales up with power', p.fx.spray.sizeMul[1] > p.fx.spray.sizeMul[0]
     && p.fx.goo.sizeMul[1] > p.fx.goo.sizeMul[0]);

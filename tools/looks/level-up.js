@@ -68,6 +68,9 @@ import {
 // THE SEAL MOTION PANEL — where the free swimmer's loops are written. See
 // seal-motion-panel.js; it mounts once the seal is built.
 import { mountSealMotionPanel } from './seal-motion-panel.js';
+import * as motionModule from '../../path/src/systems/levelUpSealMotion.js';
+import { EASINGS } from '../../path/src/ease.js';
+import { previewCardTip, cardTipShowing, refreshCardTip } from '../../path/src/ui/ui.js';
 
 const panel = document.getElementById('panel');
 const readEl = document.getElementById('read');
@@ -113,6 +116,290 @@ if (new URLSearchParams(location.search).get('compare')) {
   });
   // Nothing below this runs: the two children are the page.
   throw new Error('compare mode — this document is the frame, not the screen');
+}
+
+// --- THE FRAME ----------------------------------------------------------------
+// THIS IS THE PAGE NOW: the shipped menu inside a frame at a real device's
+// size — phone, iPad, laptop, desktop, either way up — with the panel OUTSIDE
+// it driving the seal inside. `?frame=WxH` picks a size (`?portrait=1` still
+// means the phone); `?inline=1` is the old page, the screen filling the
+// window with the comb's own knobs, for tuning the arrival.
+//
+// A frame rather than a resized window for the reason the compare mode gives:
+// the comb tiles the VIEWPORT and the cards are laid out against it, so a
+// device has to be a viewport, and the agent's browser pane cannot even give
+// the top document a size. The child is `?bare=1&child=1` — its own panel
+// hidden, its motion module and CONFIG handed up through window.__sealLook —
+// and the panel here imports nothing from it that it can get from that
+// handle: an iframe is its own module graph, and the parent's copy of the
+// motion data is not the one the child's puppet reads.
+//
+// The seal's FEEL — blend time and curve, take rate, the arrival's times and
+// curves, the swim's numbers, the head's ease, the exit spin — is
+// CONFIG.levelUpSeal, and the card tooltip's place and arrival are
+// CONFIG.cardTip; both written live into the child's CONFIG by full path. Save feel keeps it in
+// tools/looks/level-up-seal-feel.json, which this page re-applies on load;
+// What I changed prints the config.js lines, which is what reaches the game.
+const PARAMS = new URLSearchParams(location.search);
+if (!PARAMS.get('inline') && !PARAMS.get('child')) {
+  const DEVICES = [
+    ['SE', 375, 667], ['15', 393, 852], ['15 Max', 430, 932], ['iPad mini', 744, 1133],
+    ['15 landscape', 852, 393], ['iPad landscape', 1024, 768], ['Laptop', 1280, 800], ['Desktop', 1920, 1080],
+  ];
+  const want = PARAMS.get('frame') ?? (PARAMS.get('portrait') ? (PARAMS.get('portrait') === '1' ? '393x852' : PARAMS.get('portrait')) : '1280x800');
+  const m = /^(\d+)x(\d+)$/.exec(want);
+  const size = m ? { w: Number(m[1]), h: Number(m[2]) } : { w: 1280, h: 800 };
+  document.body.style.cssText = 'margin:0;height:100vh;overflow:hidden;background:#050d15';
+  // The panel stays; everything in it but the heading goes.
+  for (const n of [...panel.children]) if (n.tagName !== 'H1') n.remove();
+  panel.querySelector('h1').firstChild.textContent = 'Level-up screen, in a frame';
+  const bar = document.createElement('div');
+  bar.className = 'btns';
+  bar.innerHTML = '<button id="pfRoll">Roll</button><button id="pfExit">Exit</button>'
+    + '<a href="./level-up.html?inline=1" style="color:#7ad7ff;align-self:center">inline (comb knobs) ↗</a>';
+  const sizes = document.createElement('div');
+  sizes.className = 'btns';
+  for (const [name, w, h] of DEVICES) {
+    const b = document.createElement('button');
+    b.textContent = `${name} ${w}×${h}`;
+    b.setAttribute('aria-pressed', String(w === size.w && h === size.h));
+    b.addEventListener('pointerup', () => { location.search = `?frame=${w}x${h}`; });
+    sizes.appendChild(b);
+  }
+  const note = document.createElement('p');
+  note.textContent = `${size.w}×${size.h}. The seal plays the set this shape asks for (portrait or landscape) and the panel edits that set. Hover a card in the frame to feel the blend (Live).`;
+  panel.append(bar, sizes, note);
+
+  // The frame, scaled to fit beside the panel, at its real CSS size inside.
+  const stage = document.createElement('div');
+  stage.style.cssText = 'position:fixed;left:320px;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center';
+  const shell = document.createElement('div');
+  const f = document.createElement('iframe');
+  const only = PARAMS.get('only');
+  f.src = `./level-up.html?bare=1&child=1${only ? `&only=${only}` : ''}`;
+  f.style.cssText = `width:${size.w}px;height:${size.h}px;border:0;display:block;transform-origin:0 0;`
+    + 'background:#000;box-shadow:0 0 0 6px #1b2a38, 0 0 0 7px rgba(122,215,255,.35), 0 20px 60px rgba(0,0,0,.6);border-radius:12px';
+  shell.appendChild(f);
+  stage.appendChild(shell);
+  document.body.appendChild(stage);
+  const fit = () => {
+    const k = Math.min(1, (window.innerWidth - 320 - 40) / size.w, (window.innerHeight - 40) / size.h);
+    f.style.transform = `scale(${k})`;
+    shell.style.width = `${size.w * k}px`;
+    shell.style.height = `${size.h * k}px`;
+  };
+  fit();
+  window.addEventListener('resize', fit);
+  bar.querySelector('#pfRoll').addEventListener('pointerup', () => f.contentWindow?.postMessage('roll', '*'));
+  bar.querySelector('#pfExit').addEventListener('pointerup', () => f.contentWindow?.postMessage('exit', '*'));
+
+  // --- THE FEEL: CONFIG in the child, live -----------------------------------
+  // [full CONFIG path, min, max, step, label] — or a list of names for a
+  // select. A row with null for min is a heading.
+  const S = 'levelUpSeal.';
+  const FEEL = [
+    ['blend', null],
+    [S + 'motion.blendTime', 0, 2, 0.02, 'blend: time (s) — 0 = rate'],
+    [S + 'motion.blendEase', EASINGS, null, null, 'blend: curve'],
+    [S + 'motion.blendRate', 0.5, 12, 0.1, 'blend: rate (/s), when time is 0'],
+    [S + 'motion.takeRate', 0.5, 12, 0.1, 'let go on the pick (/s)'],
+    [S + 'motion.turnEase', EASINGS, null, null, 'body turn: curve over the swim'],
+    [S + 'motion.turnSettle', 0.5, 20, 0.5, 'body turn: settle (/s)'],
+    ['arrival', null],
+    [S + 'delay', 0, 1, 0.02, 'wait after the cards land (s)'],
+    [S + 'inTime', 0.2, 2, 0.05, 'swim up (s)'],
+    [S + 'inEase', EASINGS, null, null, 'swim up: curve'],
+    [S + 'outTime', 0.1, 1.5, 0.05, 'swim off (s)'],
+    [S + 'outEase', EASINGS, null, null, 'swim off: curve'],
+    [S + 'freeHeight', 0.1, 0.6, 0.01, 'body length (of height)'],
+    ['the swim to a point', null],
+    [S + 'pull.speed', 0.1, 4, 0.05, 'speed (× the run)'],
+    [S + 'pull.arrive', 0.05, 2, 0.02, 'ease to a stop (lengths)'],
+    [S + 'pull.turnWeight', 0, 1, 0.02, 'body turns after the swim'],
+    [S + 'pull.steer', 0.5, 20, 0.5, 'retarget: banking turn (/s)'],
+    [S + 'clipSpeedLerp', 0, 20, 0.5, 'clip pick: speed smoothing (/s)'],
+    ['the head', null],
+    [S + 'aimLerp', 1, 20, 0.5, 'look ease (/s)'],
+    [S + 'aimSpread', 0, 1, 0.02, 'look spread'],
+    [S + 'pointFaceOut', 0, 1, 0.02, 'face out while pointing'],
+    [S + 'faceOut', 0, 1, 0.02, 'face out while idle'],
+    ['the body after the cursor', null],
+    [S + 'followTurn', 0, 0.8, 0.01, 'yaw (rad)'],
+    [S + 'followLean', 0, 0.4, 0.01, 'cant (rad)'],
+    [S + 'followLerp', 0.5, 12, 0.1, 'ease (/s)'],
+    ['bubbles', null],
+    [S + 'bubbles.sizeMul', 0.2, 3, 0.05, 'size (× the run\'s)'],
+    [S + 'bubbles.breath.moveRate', 0.1, 1, 0.05, 'breath: interval at full speed (×)'],
+    [S + 'bubbles.breath.pointRate', 0.1, 1, 0.05, 'breath: interval while pointing (×)'],
+    [S + 'bubbles.wake.perSecond', 0, 60, 1, 'wake: bursts/s at top speed'],
+    [S + 'bubbles.wake.minSpeed', 0, 10, 0.25, 'wake: from speed (u/s)'],
+    [S + 'bubbles.wake.curve', 0.2, 2, 0.05, 'wake: ramp shape'],
+    [S + 'bubbles.point.perSecond', 0, 12, 0.25, 'pointing: mouth trickle (bursts/s)'],
+    ['the jaw', null],
+    [S + 'jaw.openMul', 0, 2, 0.05, 'open angle (× the rig\'s)'],
+    [S + 'jaw.biteOnPick', 0, 1, 1, 'bite on the pick (0/1)'],
+    [S + 'jaw.openTime', 0.02, 0.6, 0.01, 'bite: open (s)'],
+    [S + 'jaw.holdTime', 0, 0.6, 0.01, 'bite: hold (s)'],
+    [S + 'jaw.closeTime', 0.02, 0.6, 0.01, 'bite: shut (s)'],
+    ['the exit', null],
+    [S + 'spinTurns', 0, 4, 0.5, 'barrel roll: turns'],
+    [S + 'spinTime', 0.1, 1, 0.05, 'barrel roll: share of the exit'],
+    [S + 'spinEase', EASINGS, null, null, 'barrel roll: curve'],
+    ['the card tooltip', null],
+    ['cardTip.side', ['auto', 'below', 'above', 'left', 'right'], null, null, 'side of the card'],
+    ['cardTip.gap', 0, 40, 1, 'gap off the hexagon (px)'],
+    ['cardTip.offsetX', -160, 160, 1, 'x (px)'],
+    ['cardTip.offsetY', -160, 160, 1, 'y (px)'],
+    ['cardTip.fadeIn', 0, 0.8, 0.01, 'in (s)'],
+    ['cardTip.fadeOut', 0, 0.8, 0.01, 'out (s)'],
+    ['cardTip.ease', ['linear', 'out', 'inOut', 'back'], null, null, 'curve'],
+    ['cardTip.rise', 0, 30, 1, 'slides in from (px)'],
+    ['cardTip.scaleFrom', 0.5, 1.2, 0.01, 'grows in from (scale)'],
+    ['the tooltip, per card (row)', null],
+    ...[0, 1, 2].flatMap((i) => [
+      [`cardTip.cards.${i}.side`, ['auto', 'below', 'above', 'left', 'right'], null, null, `card ${i + 1}: side`],
+      [`cardTip.cards.${i}.x`, -240, 240, 1, `card ${i + 1}: x (px)`],
+      [`cardTip.cards.${i}.y`, -240, 240, 1, `card ${i + 1}: y (px)`],
+    ]),
+    ['the tooltip, per card (stacked, portrait)', null],
+    ...[0, 1, 2].flatMap((i) => [
+      [`cardTip.portraitCards.${i}.side`, ['auto', 'below', 'above', 'left', 'right'], null, null, `card ${i + 1}: side`],
+      [`cardTip.portraitCards.${i}.x`, -240, 240, 1, `card ${i + 1}: x (px)`],
+      [`cardTip.portraitCards.${i}.y`, -240, 240, 1, `card ${i + 1}: y (px)`],
+    ]),
+  ];
+  // The roots a feel path may start with — a saved preset from before the
+  // tooltip joined carries seal paths with no root, and gets it back.
+  const ROOTS = ['levelUpSeal', 'cardTip'];
+  const rooted = (path) => (ROOTS.some((r) => path.startsWith(r + '.')) ? path : S + path);
+  const feel = document.createElement('div');
+  feel.innerHTML = '<hr><h2 style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9fdcff;margin:4px 0 6px">Seal feel</h2>'
+    + '<div class="btns"><button id="feelApply">Write to config.js</button><button id="feelSave">Save feel</button><button id="feelChanged">What I changed</button><button id="feelReset">Back to config.js</button></div>'
+    + '<div id="feelKnobs"></div><div id="feelRead" style="color:#ffe08a;white-space:pre-wrap;margin-top:6px"></div>';
+  panel.appendChild(feel);
+  const knobsEl = feel.querySelector('#feelKnobs');
+  const readEl2 = feel.querySelector('#feelRead');
+  let childCfg = null;   // the child's CONFIG
+  let base = null;       // ...the feel's roots as config.js had them, before any preset
+  const at = (path) => path.split('.').reduce((o, k) => o?.[k], childCfg);
+  const put = (path, v) => {
+    const parts = path.split('.');
+    let o = childCfg;
+    for (const k of parts.slice(0, -1)) o = (o[k] ??= {});
+    o[parts[parts.length - 1]] = v;
+  };
+  const FEEL_PATHS = FEEL.filter((r) => r[1] !== null).map((r) => r[0]);
+  // LIVE. The seal reads its numbers every frame; the tooltip is placed once
+  // when it goes up, so a tooltip knob re-places the box that is showing.
+  let tipHook = null;
+  const afterPut = (path) => { if (path.startsWith('cardTip.')) tipHook?.refresh?.(); };
+  function buildFeel() {
+    knobsEl.innerHTML = '';
+    for (const [path, a, b, step, label] of FEEL) {
+      if (a === null) {
+        const h = document.createElement('h3');
+        h.style.cssText = 'font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#7f9ab0;margin:8px 0 2px';
+        h.textContent = path;
+        knobsEl.appendChild(h);
+        continue;
+      }
+      const row = document.createElement('div');
+      row.className = 'row';
+      const l = document.createElement('label'); l.textContent = label;
+      row.appendChild(l);
+      if (Array.isArray(a)) {
+        const sel = document.createElement('select');
+        sel.style.cssText = 'font:inherit;color:#dff0ff;background:#0b1a27;border:1px solid rgba(122,215,255,0.35);border-radius:4px';
+        for (const n of a) { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
+        sel.value = at(path) ?? a[0];
+        sel.addEventListener('change', () => { put(path, sel.value); afterPut(path); });
+        row.appendChild(sel);
+      } else {
+        const r = document.createElement('input'); r.type = 'range'; r.min = a; r.max = b; r.step = step;
+        r.value = at(path) ?? a;
+        const o = document.createElement('output'); o.textContent = Number(r.value).toFixed(2);
+        r.addEventListener('input', () => { put(path, Number(r.value)); o.textContent = Number(r.value).toFixed(2); afterPut(path); });
+        row.append(r, o);
+      }
+      knobsEl.appendChild(row);
+    }
+  }
+  function preset() {
+    const out = {};
+    for (const path of FEEL_PATHS) out[path] = at(path);
+    return out;
+  }
+  function applyPreset(saved) {
+    for (const [k, v] of Object.entries(saved)) {
+      const path = rooted(k);
+      if (FEEL_PATHS.includes(path)) put(path, v);
+    }
+  }
+  function changed() {
+    const lines = [];
+    for (const path of FEEL_PATHS) {
+      const now = at(path);
+      const was = path.split('.').reduce((o, k) => o?.[k], base);
+      if (now !== was) lines.push(`  ${path}: ${JSON.stringify(now)},`);
+    }
+    return lines.length ? lines.join('\n') : 'nothing changed from config.js';
+  }
+  feel.querySelector('#feelSave').addEventListener('pointerup', async () => {
+    try {
+      const r = await fetch('/preset/level-up-seal-feel.json', { method: 'POST', body: JSON.stringify(preset(), null, 2) });
+      readEl2.textContent = r.ok ? `saved tools/looks/level-up-seal-feel.json — reloads keep it\n${changed()}` : `save failed (${r.status})`;
+    } catch (err) { readEl2.textContent = `save failed — ${err.message}`; }
+  });
+  // INTO THE GAME. Save feel keeps the numbers for this page; the game boots
+  // config.js, and the tuner's snapshot shadows the whole seal block on top
+  // of that. This writes them through both — see tools/apply-level-up-feel.mjs
+  // — and reports what moved, or that the game is up and the snapshot could
+  // not be cleared.
+  feel.querySelector('#feelApply').addEventListener('pointerup', async () => {
+    readEl2.textContent = 'writing…';
+    try {
+      const r = await fetch('/apply/level-up-feel', { method: 'POST', body: JSON.stringify(preset(), null, 2) });
+      const rep = await r.json();
+      if (rep.error) { readEl2.textContent = `write failed — ${rep.error}`; return; }
+      const lines = [rep.wrote ? 'wrote path/src/config.js' : 'config.js already matches', ...rep.notes];
+      readEl2.textContent = lines.join('\n');
+    } catch (err) { readEl2.textContent = `write failed — ${err.message}`; }
+  });
+  feel.querySelector('#feelChanged').addEventListener('pointerup', () => {
+    const text = changed();
+    readEl2.textContent = text;
+    navigator.clipboard?.writeText(text).catch(() => {});
+  });
+  feel.querySelector('#feelReset').addEventListener('pointerup', () => {
+    applyPreset(Object.fromEntries(FEEL_PATHS.map((p) => [p, p.split('.').reduce((o, k) => o?.[k], base)])));
+    buildFeel();
+    readEl2.textContent = 'back to config.js';
+  });
+
+  // The panels mount once the frame's seal is built.
+  f.addEventListener('load', () => {
+    const w = f.contentWindow;
+    const tick = setInterval(async () => {
+      if (!w.__sealReady?.() || !w.__sealLook) return;
+      clearInterval(tick);
+      childCfg = w.__sealLook.CONFIG;
+      tipHook = w.__sealLook.tip;
+      base = JSON.parse(JSON.stringify(Object.fromEntries(ROOTS.map((r) => [r, childCfg[r] ?? {}]))));
+      try {
+        const saved = await (await fetch('/preset/level-up-seal-feel.json')).json();
+        if (Object.keys(saved).length) { applyPreset(saved); readEl2.textContent = 'feel preset loaded from tools/looks/level-up-seal-feel.json'; }
+      } catch { /* none saved */ }
+      buildFeel();
+      mountSealMotionPanel({
+        panel, getLive: () => w.__seal(), doc: f.contentDocument, win: w, mod: w.__sealLook.mod,
+        getConfig: () => w.__sealLook.CONFIG, tip: w.__sealLook.tip,
+        // A tooltip handle dragged in the frame rewrites cardTip.cards — the
+        // feel sliders for it re-read the numbers.
+        onFeelChanged: () => { buildFeel(); readEl2.textContent = changed(); },
+      });
+    }, 100);
+  });
+  throw new Error('frame mode — this document is the frame, not the screen');
 }
 
 // Which arrival THIS document is showing. `?only=` is what the compare frames
@@ -247,9 +534,19 @@ if (new URLSearchParams(location.search).get('bare')) {
   panel.classList.add('shut');
   document.getElementById('shut').textContent = '+';
 }
+// Inside the phone the panel is not even a button: the parent's is the panel.
+const CHILD = !!new URLSearchParams(location.search).get('child');
+if (CHILD) panel.style.display = 'none';
 
-// A compare frame is driven from its parent, so both sides roll on one press.
-window.addEventListener('message', (e) => { if (e.data === 'roll') replay(); });
+// A compare frame is driven from its parent, so both sides roll on one press;
+// the phone's parent takes a card the way the Exit button here does.
+window.addEventListener('message', (e) => {
+  if (e.data === 'roll') replay();
+  if (e.data === 'exit') {
+    const cards = document.querySelectorAll('#svCards .sv-card');
+    cards[Math.floor(cards.length / 2)]?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }
+});
 
 // What has been picked so far, so the corner fills up the way it does in a run
 // and every flight after the first has a hive that has already made room.
@@ -327,7 +624,9 @@ if (WANT_SEAL) {
     applyBiolumSkinSettings();
     prepareLevelUpSeal();
     sealReady = true;
-    mountSealMotionPanel({ panel, getLive: levelUpSealLive });
+    // The phone's parent mounts the panel, with this document's own module.
+    if (CHILD) window.__sealLook = { mod: motionModule, CONFIG, tip: { show: previewCardTip, showing: cardTipShowing, refresh: refreshCardTip } };
+    else mountSealMotionPanel({ panel, getLive: levelUpSealLive, getConfig: () => CONFIG, tip: { show: previewCardTip, showing: cardTipShowing, refresh: refreshCardTip } });
     // If a hand is already on the table, bring the seal up under it now.
     if (document.querySelector('#svCards .sv-card')) enterLevelUpSeal();
     sealLast = performance.now();

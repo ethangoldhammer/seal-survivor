@@ -204,7 +204,14 @@ function roleCss(role, t) {
   if (!s) return '';
 
   const decls = [];
-  const font = s.font && s.font !== FONT_GLOBAL ? s.font : '';
+  // A ROLE MAY OWN THE FALLBACK. `global` normally means --sv-font, the family
+  // the Text panel is set to; a role with `ownFont` (the two upgrade tooltips,
+  // see FONT_TIP in textRoles.js) says the global family is not what this
+  // surface should wear when nobody has picked for it. A family picked in the
+  // panel still beats both, so the control is unchanged — only the default the
+  // stored `global` sentinel resolves to has moved.
+  const picked = s.font && s.font !== FONT_GLOBAL ? s.font : '';
+  const font = picked || role.ownFont || '';
   decls.push(`font-family: ${font || 'var(--sv-font)'}`);
   if (font) ensureFontLoaded(font);
 

@@ -63,9 +63,11 @@ const VIEWPORTS = [
 // version cannot stand in for the long one or the other way round.
 // 'settings' and 'paused' are the SAME PANEL on its two routes, and they are
 // both here because the routes differ in the one row that broke: the footer is
-// two buttons from the main menu and three during a run, and it is the third
-// that ran off the side of the panel. A surface list holding only one of them
-// would have measured the route that fits.
+// two buttons from the main menu and FOUR during a run — Resume, Restart run,
+// Main menu, Defaults — and it has broken twice, once by running off the side
+// of the panel and once by squeezing three of them to a third of their labels
+// and wrapping the text inside them. A surface list holding only one of these
+// two routes would have measured the one that fits.
 // 'splash' is the title card — the Rive artboard with the dice, the name pill
 // and the Start button. Those three are DRAWN, not DOM, so the sweep below
 // cannot see them; measureSplash() computes where they are from what the

@@ -247,13 +247,29 @@ export function openingBallSpecs(ctx) {
   const margin = c.margin ?? 6;
   const px = ctx.player?.x ?? 0;
   const py = ctx.player?.y ?? (b.bottom + b.surfaceY) * 0.5;
+  // HOW THIS ONE DIFFERS FROM THE CLOCK'S BALL — thicker, taller, more solid,
+  // and it barely runs. Carried on the spec rather than read from cfg() where
+  // they are used, because openBaitBall is the only place that knows which kind
+  // of ball it is opening: everything downstream (updateBaitBalls, baitFlock,
+  // baitSeed) sees a ball, not a spawn reason. See CONFIG.baitBall.opening.
+  const radiusMul = Math.max(0.1, o.radiusMul ?? 1);
+  const heightMul = Math.max(0.1, o.heightMul ?? 1);
+  const fleeMul = Math.max(0, o.fleeMul ?? 1);
+  const sizeMul = Math.max(0.1, o.sizeMul ?? 1);
   // Outside `flee.radius`, whatever the rows say: a ball placed inside its own
   // flee distance from the seal slides away on its first frame, which is the
-  // opening handing the player food and then pulling it back.
-  const near = Math.max(o.radiusMin ?? 14, (c.flee?.radius ?? 9) + (c.radius ?? 1.2) * 2);
+  // opening handing the player food and then pulling it back. Padded by THIS
+  // ball's shell rather than the nominal one — a thickened opening ball is
+  // wider than the row says, and the clearance has to follow it out.
+  const near = Math.max(o.radiusMin ?? 14, (c.flee?.radius ?? 9) + (c.radius ?? 1.2) * radiusMul * 2);
   const far = Math.max(near, o.radiusMax ?? 24);
-  const min = Math.max(1, Math.round(c.size?.min ?? 10));
-  const max = Math.max(min, Math.round(c.size?.max ?? 18));
+  // MORE FISH THAN THE CLOCK'S BALL, and that is what makes the column tall
+  // rather than `heightMul` — the vertical wall only pushes fish back down from
+  // above the half-height, so raising the ceiling over a flock that already
+  // fits underneath it changes nothing. See CONFIG.baitBall.opening.sizeMul for
+  // the measurement, and for what this costs in bodies on the first frame.
+  const min = Math.max(1, Math.round((c.size?.min ?? 10) * sizeMul));
+  const max = Math.max(min, Math.round((c.size?.max ?? 18) * sizeMul));
   const mid = (b.left + b.right) * 0.5;
 
   const specs = [];
@@ -277,6 +293,12 @@ export function openingBallSpecs(ctx) {
       side: x < mid ? -1 : 1,
       spin: rand() < 0.5 ? -1 : 1,
       shape: rollBaitShape(rand, c),
+      radiusMul,
+      heightMul,
+      fleeMul,
+      // The fish themselves, not the formation: harmless while they are in the
+      // ball and harmless after it disperses — see `docile` in spawnOne.
+      docile: o.docile !== false,
       // Placed, not arriving. The caller clears `arriving` on the ball and
       // `entering` on its fish — see spawnOpeningBaitBalls.
       opening: true,
@@ -285,10 +307,21 @@ export function openingBallSpecs(ctx) {
   return specs;
 }
 
-/** How many balls a run opens with, rolled once. `max` clamps `min`, so a max of 0 is off. */
+/**
+ * How many balls a run opens with, rolled once. `max` clamps `min`, so a max of
+ * 0 is off.
+ *
+ * AGAINST `opening.max` ALONE, not `maxBalls`. It was clamped to maxBalls, and
+ * that made one number answer two unrelated questions: how many balls a boss
+ * fight may hold at once, and how many a run is handed on its first frame. A
+ * fight wants few enough that contesting one is a choice; the opening wants
+ * enough of them that whichever way the first dash goes there is food at the
+ * end of it. maxBalls still binds everything AFTER the first frame — the clock
+ * counts live balls, so a run that opens with five gets nothing new until two
+ * of them are gone, which is the right way round.
+ */
 export function rollOpeningCount(rand = Math.random, c = cfg()) {
-  const cap = Math.max(0, Math.round(c.maxBalls ?? 1));
-  const max = Math.max(0, Math.min(cap, Math.round(c.opening?.max ?? 0)));
+  const max = Math.max(0, Math.round(c.opening?.max ?? 0));
   const min = Math.max(0, Math.min(max, Math.round(c.opening?.min ?? 0)));
   return min + Math.floor(rand() * (max - min + 1));
 }
@@ -337,11 +370,20 @@ export function openBaitBall(id, spec) {
     // spawned mid-run start part-way through its own rotation, which is
     // harmless, and two balls rotate in lockstep, which is not.
     age: 0,
+    // WHAT KIND OF BALL THIS IS, as three multipliers on the column's own rows
+    // and one on how hard it runs from the seal. All 1 for the clock's balls,
+    // which is every ball but a run's first ones — see openingBallSpecs. They
+    // live on the ball because nothing downstream of here knows where a ball
+    // came from, and a `spawnReason` flag read in four places would be the same
+    // fact spelled out four times.
+    radiusMul: Math.max(0.1, spec.radiusMul ?? 1),
+    heightMul: Math.max(0.1, spec.heightMul ?? 1),
+    fleeMul: Math.max(0, spec.fleeMul ?? 1),
     // How wide the shell is right now. Squeezes toward `tighten` while a
     // predator is on it and relaxes back out — the visible half of being
     // hunted, and the thing that tells the player from across the arena that
     // something is already eating.
-    shell: c.radius ?? 2.6,
+    shell: (c.radius ?? 2.6) * Math.max(0.1, spec.radiusMul ?? 1),
     threat: 0,
     // Seconds this ball has left before the survivors give up on the formation
     // and go back to being ordinary fish. The clock is what makes it an
@@ -462,7 +504,11 @@ export function updateBaitBalls(dt, ctx) {
       awayY += (dy / d) * press;
     };
     for (const p of ctx.predators ?? []) consider(p.x, p.y, 1);
-    if (ctx.player) consider(ctx.player.x, ctx.player.y, flee.playerWeight ?? 0.7);
+    // The SEAL's weight only, scaled by this ball's own `fleeMul` — an opening
+    // ball is meant to be caught by a player who has not learned the dash yet,
+    // and a shark that turns up still scatters it at full weight, because that
+    // is the moment the whole mechanic is.
+    if (ctx.player) consider(ctx.player.x, ctx.player.y, (flee.playerWeight ?? 0.7) * (ball.fleeMul ?? 1));
 
     // Smoothed rather than switched: a shell that snapped between two widths
     // reads as a rendering glitch, and the squeeze is meant to be legible from
@@ -483,7 +529,7 @@ export function updateBaitBalls(dt, ctx) {
     // gauge, and a knot that has gone from a crowd to a handful reads across
     // the arena.
     const tight = c.tighten ?? 0.55;
-    const full = c.radius ?? 1.7;
+    const full = (c.radius ?? 1.7) * (ball.radiusMul ?? 1);
     const nominal = Math.max(1, ((c.size?.min ?? 10) + (c.size?.max ?? 18)) * 0.5);
     const packed = full * Math.sqrt(Math.max(1, alive) / nominal);
     ball.shell = packed * (1 - ball.threat * (1 - tight));
@@ -776,6 +822,35 @@ export function attractorFlow(shape, ux, uy, uz, c = cfg()) {
 }
 
 /**
+ * HALF THE COLUMN'S HEIGHT for one ball, right now — the level the vertical
+ * wall pushes back down from, and the height baitSeed scatters through.
+ *
+ * `height` is authored at a NOMINAL ball, so the live figure follows the live
+ * shell: a ball eaten down to a handful shrinks as a SOLID rather than
+ * flattening into a disc, which is the one thing the shell/nominal ratio is
+ * doing here. THE RATIO IS AGAINST THIS BALL'S OWN NOMINAL WIDTH, not the row's
+ * — an opening ball is widened by `opening.radiusMul` and dividing by the
+ * unmultiplied row would read that widening as "this ball is fatter than
+ * nominal, so make it taller too", which is a thickened ball silently becoming
+ * a scaled copy of itself. Splitting them is what lets tall and thick be two
+ * decisions, and `heightMul` is the only thing here that raises the ceiling.
+ *
+ * WHICH IS NOT THE SAME AS MAKING THE BALL TALL. This is where the wall stops
+ * pushing down, not where the fish are: nothing pushes a fish UP, so a ceiling
+ * over a flock that already fits underneath it is not visible at all. What
+ * fills a column is headcount (`opening.sizeMul`, and the packing rule in
+ * updateBaitBalls) — the height and the bodies to stack into it are two rows
+ * and both are needed.
+ *
+ * @param R the shell to measure against; defaults to the ball's live one.
+ */
+export function baitHalfHeight(ball, c = cfg(), R = null) {
+  const shell = R ?? ball.shell ?? c.radius ?? 1.7;
+  const full = Math.max(0.01, (c.radius ?? 1.7) * (ball.radiusMul ?? 1));
+  return (c.height ?? 2.4) * 0.5 * (shell / full) * (ball.heightMul ?? 1);
+}
+
+/**
  * One fish's steering inside a bait ball: BOIDS IN THREE DIMENSIONS, plus a
  * vortex about the vertical and a soft wall holding it in.
  *
@@ -966,7 +1041,7 @@ export function baitFlock(self, mates, ball, c = cfg()) {
   }
   // Vertical: only outside the column's half-height, so the fish are free
   // inside it and the ball has a flat-ish top and bottom rather than a point.
-  const halfH = (c.height ?? 2.4) * 0.5 * (R / Math.max(0.01, c.radius ?? 1.7));
+  const halfH = baitHalfHeight(ball, c, R);
   const dy = self.y - ball.y;
   if (Math.abs(dy) > halfH) {
     const over = Math.min(1, (Math.abs(dy) - halfH) / Math.max(0.2, halfH));
@@ -1021,7 +1096,7 @@ export function baitSeed(index, count, ball, rand = Math.random, c = cfg()) {
   // because it has not started yet.
   const a = (index / Math.max(1, count)) * Math.PI * 2 + (rand() - 0.5) * 0.6;
   const rad = R * (0.45 + rand() * 0.55);
-  const halfH = (c.height ?? 2.4) * 0.5 * (R / Math.max(0.01, c.radius ?? 1.7));
+  const halfH = baitHalfHeight(ball, c, R);
   return {
     x: ball.x + Math.cos(a) * rad,
     y: ball.y + (rand() * 2 - 1) * halfH * 0.8,

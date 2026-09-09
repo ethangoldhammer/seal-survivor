@@ -8,6 +8,7 @@ import { startBossRagdoll, updateBossRagdoll, ragdollDelta, endBossRagdoll } fro
 import { fireBossBoom, bossBoomLead } from './bossBoom.js';
 import { fireBossLight, bossLightLead, dropBossLightSubject } from './bossLight.js';
 import { spawnBossDissolve } from './bossDissolve.js';
+import { bringToFront, sendBack } from './frontLayer.js';
 import { mark as crumb } from './crashLog.js';
 
 // ---------------------------------------------------------------------------
@@ -110,6 +111,13 @@ export function holdBossCorpse(e, scene) {
   crumb('corpse:hold');
   if (cfg().enabled === false || !e?.mesh || !scene) return false;
   e.corpseHeld = true;
+  // OVER THE SMOKE. The explosion, the dissolve and the sprites all land on
+  // this body during the hold, and every one of them would otherwise cover
+  // it: the goo is composited over the finished frame and the sprites ignore
+  // depth. The photograph is of the animal, so the animal is drawn last — see
+  // systems/frontLayer.js. Sent back in burst() and resetBossCorpses(), BEFORE
+  // the visual is pooled, or the next creature to wear it is invisible.
+  bringToFront(e.mesh);
   held.push({
     e,
     scene,
@@ -287,6 +295,7 @@ function burst(rec, index) {
   // stays and fades on its own clock; it is what is over the wreckage while the
   // print flies to the corner.
   dropBossLightSubject(e);
+  sendBack(e.mesh);
   releaseHitShape(e.hitShape);
   releaseVisual(e.visual);
   rec.scene.remove(e.mesh);
@@ -304,6 +313,7 @@ export function resetBossCorpses() {
     const rec = held[i];
     endBossRagdoll(rec.e);
     dropBossLightSubject(rec.e);
+    sendBack(rec.e.mesh);
     releaseHitShape(rec.e.hitShape);
     releaseVisual(rec.e.visual);
     rec.scene.remove(rec.e.mesh);

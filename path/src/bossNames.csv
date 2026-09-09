@@ -26,9 +26,10 @@ chompers,root,chompers,,,,bossShark bossOrca bossMosasaur,,
 penis,root,penis,,.4,,bossShark bossOrca,,
 scar,root,scar,,,,bossShark bossOrca bossSquid bossAnglerfish,,
 tide,root,tide,,,,bossShark bossOrca bossSquid bossCrab bossMosasaur bossHammerhead bossBoat bossYacht bossAnglerfish bossManOWar,,
-manowarRoot1,root,lorem,,,,bossManOWar,,"A ROOT NOUN for the man o war boss - the word a name is built around, as in ""Grim TIDE"". One or two syllables, lowercase here (the builder capitalises). Wants to evoke a thing that floats and stings from a distance: the sail, the drift, the trailing gear. Seen on the boss banner and the gravestone."
-manowarRoot2,root,lorem,,,,bossManOWar,,"A second root for the same slot, deliberately different in register from the first so two fights in one run do not rhyme. Same length and same constraints."
-manowarRoot3,root,lorem,,,,bossManOWar,,A third root. This one can lean on the WEAPON rather than the body - the filaments are the threat and they are the longest thing in the game.
+manowarRoot1,root,blob,,,,bossManOWar,,"A ROOT NOUN for the man o war boss - the word a name is built around, as in ""Grim TIDE"". One or two syllables, lowercase here (the builder capitalises). Wants to evoke a thing that floats and stings from a distance: the sail, the drift, the trailing gear. Seen on the boss banner and the gravestone."
+manowarRoot2,root,vini,,,,bossManOWar,,"A second root for the same slot, deliberately different in register from the first so two fights in one run do not rhyme. Same length and same constraints."
+manowarRoot3,prefix,Portugese,,,,bossManOWar,,A third root. This one can lean on the WEAPON rather than the body - the filaments are the threat and they are the longest thing in the game.
+manowarRoot3Copy,epithet,the Man O War,,,,bossManOWar,,A third root. This one can lean on the WEAPON rather than the body - the filaments are the threat and they are the longest thing in the game.
 fluke,root,fluke,,,,bossOrca,,
 ass,root,ass,,.5,,bossShark bossOrca bossSquid bossAnglerfish,,
 devourer,epithet,the Chumbucket Rumbler,,,,bossShark bossOrca,,

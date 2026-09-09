@@ -44,7 +44,7 @@ import { rollBiolumSkinVariant } from '../systems/biolumSkin.js';
 import { setOutlineVariant } from '../systems/outlines.js';
 import { tickDaze, dazeSpeedMul, dazeVeer } from '../systems/control.js';
 import { player } from './player.js';
-import { feedback } from '../systems/feedback.js';
+import { feedback, hitPopFor } from '../systems/feedback.js';
 import { damageZoneMul } from '../systems/damageZones.js';
 import { createTentacleRig } from '../systems/tentacleRig.js';
 
@@ -5803,7 +5803,10 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     if (e.flash > 0) {
       e.flash = Math.max(0, e.flash - dt);
       const t = e.flash / Math.max(CONFIG.fx.hitFlash, 0.0001);
-      e.visual.scale.setScalar(e.spawnScale * e.baseScale * e.depthScale * (1 + CONFIG.fx.hitPop * t));
+      // Damped by the size of the body it landed on, and by that creature's own
+      // `hitPopMul` — see CONFIG.fx.hitPopBody. A flat fraction here is a few
+      // pixels on a clownfish and half a body length on the man o' war.
+      e.visual.scale.setScalar(e.spawnScale * e.baseScale * e.depthScale * (1 + hitPopFor(e.radius, e.def?.hitPopMul) * t));
     } else if (e.depthScale !== 1 || e.__depthDirty) {
       // THE COLUMN'S DEPTH CUE. Written here, in the same place and off the
       // same three factors as the hit-pop above, because two systems each

@@ -8,7 +8,11 @@ import { createBustPin, measureBust, bustPlumb, bustAim } from './splashBust.js'
 import { createEyePair, createEyeLights, updateEyeLights } from './eyeLights.js';
 import { accessoryTurn, dressBody } from './accessories.js';
 import { CARD_FOCUS_EVENT } from '../ui/cardFocus.js';
-import { createMotionBlender } from './levelUpSealMotion.js';
+import { feedback } from './feedback.js';
+import { createMotionBlender, setFor as motionSetFor } from './levelUpSealMotion.js';
+import { createLevelUpBubbles } from './levelUpBubbles.js';
+import { createJawDriver } from './jaw.js';
+import { ASSETS } from '../assets.js';
 
 // ---------------------------------------------------------------------------
 // THE SEAL UNDER THE HAND.
@@ -71,6 +75,13 @@ function cfg() {
   return CONFIG.levelUpSeal ?? {};
 }
 
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
 /** The toggle. Read live — the tuner can flip it between two hands. */
 export function levelUpSealEnabled() {
   return cfg().enabled !== false;
@@ -107,6 +118,14 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
   const anim = createAnimationController(body);
   const rig = createAimRig(body);
   const pin = createBustPin(body);
+  // THE JAW, through the seal's own bite rig (ASSETS.ship.biteRig) — a held
+  // gape per state, crossfaded with the pose, and a snap on the pick. The
+  // angle is scaled live by CONFIG.levelUpSeal.jaw.openMul.
+  const jawRig = ASSETS.ship?.biteRig ? {
+    ...ASSETS.ship.biteRig,
+    get openAngle() { return (ASSETS.ship.biteRig.openAngle ?? 0.5) * (cfg().jaw?.openMul ?? 1); },
+  } : null;
+  const jaw = jawRig ? createJawDriver(body, { rig: jawRig, timing: () => cfg().jaw ?? CONFIG.bite?.jaw }) : null;
 
   // THE RIM. Two shells, as the player's has (systems/outlines.js
   // attachPlayerOutline) — the lit fringe and the ink line inside it — but NOT
@@ -133,6 +152,13 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
     idle: { x: 640, y: 300 }, // where to look when nothing is pointed at
     cards: [],            // each card's centre, in hand order — the motion's card1..3 anchors
     cursor: null,         // the pointer, when there is one — the motion's cursor anchor
+    // A SCREEN TALLER THAN WIDE, or a hand laid out as a column: the motion's
+    // portrait set plays (systems/levelUpSealMotion.js setFor) — loops that
+    // drift the side columns a stacked hand leaves empty, with y measured
+    // over the whole viewport rather than below the row's line, and an
+    // arrival that rises in a side column rather than up from under the
+    // cards.
+    portrait: false,
   };
 
   const state = {
@@ -153,6 +179,7 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
     sway: 0,       // ...and its sideways drift, px
     tilt: 0,       // ...and its cant, radians
     speed: 0,      // this frame's vertical speed, in model units per second
+    clipSpeed: 0,  // ...low-passed, for picking the clip — see `clipSpeedLerp`
     animState: 'idle',
     finGate: null, // what the rig was handed this frame — [left, right]
     faceOut: 0,    // ...and how far out of the screen the head was asked to look
@@ -184,7 +211,50 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
     // displacement from the authored loop's point. Screen px and px/s; the
     // heading is the swim's own, in the screen plane, added to the loop's.
     pull: { x: 0, y: 0, vx: 0, vy: 0, heading: 0, speed: 0 },
+    // THE LANDING POINT the swim is going to (screen px), when the wanted
+    // state is one — the pull's offset is measured from it, and a point
+    // that moves (a hover change, the row moving) shifts the offset the
+    // other way so the body's place on screen never jumps.
+    land: null,
+    velX: 0, velY: 0, // the centre's travel last frame, px/s — carried into the swim at arrival
+    // THE BODY'S TURN, TIED TO THE SWIM. The authored heading and roll are
+    // not reached on the blend's clock but on the LEG's: from where the body
+    // was when the point last moved, toward the state's pose, by how much of
+    // the swim is done (motion.turnEase over that fraction), settled at
+    // motion.turnSettle once there — so the body finishes turning as it
+    // arrives, never before. Radians in the screen plane.
+    bodyHeading: 0,
+    bodyRoll: 0,
+    jawOpen: 0,     // the gape handed to the jaw this frame, 0..1
+    leg: { fromH: 0, fromR: 0, dist0: 0 },
+    // The exit carries the swim's velocity out with it (px/s at the pick).
+    leaveVx: 0, leaveVy: 0,
+    // Whether a card has been hovered this visit. After one, the idle has
+    // no point to return to: a hover-off HOLDS the body where it is and
+    // lets the swim settle, rather than sending it back to the entry point.
+    visited: false,
+    hold: false,
+    legState: null, // which state the current leg was started for
   };
+
+  // THE POINT THE SWIM GOES TO, blended: every weighted state's landing
+  // point by the crossfade's own weights. A hover change mid-swim moves this
+  // smoothly from the old point to the new one, and the swim steers after
+  // it. A state whose anchor cannot be placed drops out; with nothing
+  // placeable the last point stands.
+  function landPoint(mo) {
+    const ws = mo.weights ?? {};
+    let sx = 0; let sy = 0; let sw = 0;
+    for (const name in ws) {
+      const w = ws[name];
+      if (!(w > 0)) continue;
+      const L = mo.lands?.[name];
+      if (!L?.on) continue;
+      sx += L.x * w; sy += L.y * w; sw += w;
+    }
+    if (sw > 1e-9) return { x: sx / sw, y: sy / sw, on: true };
+    return state.land ? { ...state.land, on: true } : (mo.land ?? { x: state.cx, y: state.cy, on: false });
+  }
   const motion = createMotionBlender();
   const _finAimVecs = [new THREE.Vector2(0, 1), new THREE.Vector2(0, 1)];
   const _finLook = new THREE.Vector3();
@@ -281,21 +351,32 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
 
   // AN ANCHOR IN SCREEN PIXELS, for the authored motion's targets. Null is
   // "cannot be placed this frame", which the evaluator reads as no target.
-  function resolveAnchor(name) {
+  function resolveAnchor(name, forState = null) {
     const look = state.look;
     const cards = frame.cards ?? [];
-    // With nothing hovered, "the card" is the wanted state's own slot — which
-    // is what the look page is scrubbing — and failing that the hand's middle.
+    // With nothing hovered, "the card" is the ASKING state's own slot — the
+    // loop being crossfaded out keeps its card, the one being scrubbed in
+    // the look page has its own — and the hand's middle for the idle.
     const own = () => {
-      const m = /^card([1-3])$/.exec(motion.pinned?.state ?? state.motionState);
+      const m = /^card([1-3])$/.exec(forState ?? motion.pinned?.state ?? state.motionState);
       return (m && cards[Number(m[1]) - 1]) || frame.idle;
     };
     switch (name) {
-      case 'card': return look ? { x: look.cx ?? look.x, y: look.cy ?? look.y } : own();
+      // A CARD STATE'S "card" IS ITS OWN CARD, hovered or not: card1's loop
+      // is card 1's, whatever is under the pointer now. Resolved to the
+      // hovered card instead, a card hovered mid-blend had the fading
+      // state's point leap to the new card too, and the glide between the
+      // two points became a jump. The idle's "card" is the hovered one.
+      case 'card': {
+        const m = /^card([1-3])$/.exec(forState ?? '');
+        if (m) return cards[Number(m[1]) - 1] ?? (look ? { x: look.cx ?? look.x, y: look.cy ?? look.y } : null);
+        return look ? { x: look.cx ?? look.x, y: look.cy ?? look.y } : own();
+      }
       case 'cursor': return look ? { x: look.x, y: look.y } : (frame.cursor ?? own());
       case 'card1': return cards[0] ?? null;
       case 'card2': return cards[1] ?? null;
       case 'card3': return cards[2] ?? null;
+      case 'row': return { x: frame.centreX + (cfg().offsetX ?? 0) * frame.w, y: crownTarget() };
       case 'self': return { x: state.cx, y: state.cy };
       case 'nose': {
         const m = rig?.anchors?.mouth;
@@ -405,7 +486,7 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
   }
 
   const puppet = {
-    holder, body, rig, anim, pin, eyeGroup, pair, worn,
+    holder, body, rig, anim, pin, jaw, eyeGroup, pair, worn,
     bust, bustH, bustW, crownTop, screenLeftFin, swimLen, swimW,
     state, frame, aim,
     get phase() { return state.phase; },
@@ -438,12 +519,18 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       // `unit` is what a loop's y is measured in and `centreOffset` is how far
       // below the crown line y = 0 puts the centre: half a bust for the bust
       // (its crown on the line), nothing for the swimmer (its centre on it).
+      // In the portrait set's viewport space the line is the top of the
+      // screen and the unit its height, so `crownLine + y * unit` is the
+      // same sum for either — the look page's overlay does that sum once.
       const isFree = free();
+      const set = motionSetFor(frame);
+      const viewport = isFree && set.space === 'viewport';
       return {
-        crownLine: crownTarget(),
-        unit: isFree ? freeLenPx() : heightPx(),
+        crownLine: viewport ? 0 : crownTarget(),
+        unit: viewport ? frame.h : (isFree ? freeLenPx() : heightPx()),
         centreOffset: isFree ? 0 : (bustH * state.scale) / 2,
         heightPx: heightPx(), scale: state.scale, bustH, bustW, swimLen, swimW, free: isFree,
+        set: set.key, space: isFree ? set.space : 'crown', entryX: set.entryX,
       };
     },
 
@@ -460,6 +547,8 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       if (state.phase !== 'none') return;
       state.phase = 'wait';
       state.t = 0;
+      state.visited = false;
+      state.hold = false;
       state.crownY = belowScreen();
       state.plant = cfg().swimRig === false ? 1 : 0;
       state.pinWeight = state.plant;
@@ -477,8 +566,18 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       state.fromY = state.crownY;
       state.toY = aboveScreen();
       state.roll = 0;
+      // FROM WHERE IT IS, AS IT IS MOVING. The centre (which already holds
+      // the swim's offset — zeroed here, or the exit would add it a second
+      // time and hop on its first frame) and the velocity it had, which the
+      // exit fades out under its own rise so the pick never starts from a
+      // dead stop mid-swim.
       state.leaveCx = state.cx;
       state.leaveCy = state.cy;
+      state.leaveVx = state.velX;
+      state.leaveVy = state.velY;
+      // THE SNAP: the pick is a bite.
+      if (cfg().jaw?.enabled !== false && cfg().jaw?.biteOnPick) jaw?.bite();
+      state.pull.x = 0; state.pull.y = 0; state.pull.vx = 0; state.pull.vy = 0;
       state.outK = 0;
     },
 
@@ -487,6 +586,13 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       state.t = 0;
       state.reenter = false;
       state.look = null;
+      state.land = null;
+      state.visited = false; state.hold = false; state.legState = null;
+      state.velX = 0; state.velY = 0;
+      state.bodyHeading = 0; state.bodyRoll = 0;
+      state.leg = { fromH: 0, fromR: 0, dist0: 0 };
+      state.jawOpen = 0;
+      jaw?.reset();
       state.plant = 1;
       state.pinWeight = 1;
       state.roll = 0;
@@ -577,6 +683,9 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
             state.motionOut = null;
             state.finAims = null;
             Object.assign(state.pull, { x: 0, y: 0, vx: 0, vy: 0, heading: 0, speed: 0 });
+            state.land = null;
+            state.legState = null;
+            state.bodyHeading = 0; state.bodyRoll = 0;
             motion.reset();
             body.quaternion.identity();
             if (state.reenter) {
@@ -604,10 +713,55 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       if (Math.abs(state.motionW - wantMotion) < 0.002) state.motionW = wantMotion;
       state.motionState = state.look?.option != null && state.look.option < 3 ? `card${state.look.option + 1}` : 'idle';
       let mo = null;
-      if (isFree && (state.motionW > 0 || state.phase === 'held')) {
-        mo = motion.evaluate(state.motionState, dt, resolveAnchor, frame, c.motion?.blendRate ?? 4);
+      // FROM THE FIRST FRAME OF THE SWIM UP, not from under the row: the
+      // wanted state's point takes the body as it sets off, so a card hovered
+      // while it is still rising is swum to directly, and the look and the
+      // flippers blend on the way up.
+      if (isFree && (state.motionW > 0 || state.phase === 'held' || state.phase === 'in')) {
+        mo = motion.evaluate(state.motionState, dt, resolveAnchor, frame, {
+          rate: c.motion?.blendRate ?? 4, time: c.motion?.blendTime ?? 0, ease: c.motion?.blendEase ?? 'smoothstep',
+        });
       }
       state.motionOut = mo;
+      // A LANDING POINT TAKES THE BODY AT ONCE, not over takeRate: the swim
+      // is what carries it from the arrival to the point, so the moment the
+      // seal is under the row the point owns it and the pull's offset is
+      // set to wherever the arrival left the body — the same place on
+      // screen, now measured from the point — with the arrival's own
+      // velocity carried in, so the rise flows into the swim.
+      const landing = !!(mo?.land && (state.phase === 'held' || state.phase === 'in'));
+      if (landing && state.motionState !== 'idle') state.visited = true;
+      // THE HOLD: idle wanted after a card — no point; the body stays.
+      state.hold = landing && state.motionState === 'idle' && state.visited;
+      if (landing && state.motionW < 1) {
+        state.motionW = 1;
+        const P = landPoint(mo);
+        // Where the body is now — below the screen, at the entry column,
+        // if this is the swim up — measured from the point.
+        state.pull.x = state.cx - P.x;
+        state.pull.y = state.cy - P.y;
+        if (state.phase === 'in') {
+          // THE ENTRY IS THE SWIM. It sets off toward the point at the
+          // most the thrust can shed over the distance (the brake law in
+          // the pull below), capped at the run's top speed — so it arrives
+          // without overshooting and without a scripted rise: the same
+          // physics that carries it between points carries it in.
+          const pc0 = c.pull ?? {};
+          const px0 = (pc0.speed ?? 1) * state.scale;
+          const thrust0 = ((CONFIG.player?.thrust ?? 19)) * px0;
+          const top0 = ((CONFIG.player?.maxSpeed ?? 34)) * px0;
+          const d0 = Math.hypot(state.pull.x, state.pull.y);
+          const v0 = Math.min(top0, Math.sqrt(2 * thrust0 * d0));
+          state.pull.vx = d0 > 1e-6 ? -state.pull.x / d0 * v0 : 0;
+          state.pull.vy = d0 > 1e-6 ? -state.pull.y / d0 * v0 : 0;
+        } else {
+          state.pull.vx = state.velX;
+          state.pull.vy = state.velY;
+        }
+        state.land = { x: P.x, y: P.y };
+        state.leg = { fromH: state.bodyHeading, fromR: state.bodyRoll, dist0: Math.hypot(state.pull.x, state.pull.y) };
+        state.legState = state.motionState;
+      }
       if (Math.abs(state.plant - wantPlant) < 0.002) state.plant = wantPlant;
       state.pinWeight = state.plant;
 
@@ -639,7 +793,13 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       // a bust below the crown. Free: the authored loop's point, by however
       // much of the body the motion owns — the rest is the same bust place,
       // so the arrival and the exit are the swim they always were.
-      const baseCx = frame.centreX + (c.offsetX ?? 0) * frame.w;
+      // ...OR THE SET'S OWN ENTRY COLUMN. A portrait set that names one
+      // rises there — a side column, beside the stacked hand — so the seal
+      // never has to come up from under the last card and look up at it.
+      const set = isFree ? motionSetFor(frame) : null;
+      const baseCx = set?.entryX != null
+        ? set.entryX * frame.w
+        : frame.centreX + (c.offsetX ?? 0) * frame.w;
       // The swimmer's centre rides half its length below the crown while it
       // arrives and leaves, so the crown-line arithmetic of the rise and the
       // exit still means "the head at the line"; under the row its own loop
@@ -653,19 +813,77 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       let motionRoll = 0;
       if (mo && state.motionW > 0) {
         const w = state.motionW;
-        cx += (mo.x + (c.offsetX ?? 0) * frame.w - cx) * w;
-        cy += (crownTarget() + mo.y * freeLenPx() - cy) * w;
-        motionHeading = mo.heading * w;
-        motionRoll = mo.roll * w;
+        if (mo.land && state.phase === 'out') {
+          // LEAVING: the point is no longer followed. The exit rises from
+          // where the body was (below), and the point — still gliding with
+          // the blend's weights — must not keep shifting the pull's offset,
+          // or every exit frame hops by the glide.
+        } else if (mo.land) {
+          // THE POINT MOVED (a hover change, the row shifting): the pull's
+          // offset takes the difference, so the body stays where it is and
+          // swims from there. An anchor that cannot be placed this frame
+          // holds the last point.
+          // Holding, the point is wherever the last one was: the idle's own
+          // point is only ever the entry's destination.
+          const P = state.hold ? (state.land ?? mo.land) : landPoint(mo);
+          if (state.land && (P.x !== state.land.x || P.y !== state.land.y)) {
+            state.pull.x -= P.x - state.land.x;
+            state.pull.y -= P.y - state.land.y;
+          }
+          // A NEW LEG when the wanted state changes: the turn starts over
+          // from where the body is toward the new pose. Within a leg the
+          // point may glide (the crossfade above, the row shifting) — the
+          // leg's length grows with it, so the turn waits for the swim
+          // rather than restarting on every hair's move.
+          const d = Math.hypot(state.pull.x, state.pull.y);
+          if (state.motionState !== state.legState) {
+            state.leg = { fromH: state.bodyHeading, fromR: state.bodyRoll, dist0: d };
+            state.legState = state.motionState;
+          } else if (d > state.leg.dist0) {
+            state.leg.dist0 = d;
+          }
+          state.land = { x: P.x, y: P.y };
+          cx += (P.x - cx) * w;
+          cy += (P.y - cy) * w;
+        } else {
+          cx += (mo.x + (c.offsetX ?? 0) * frame.w - cx) * w;
+          // The loop's y in its set's space: a fraction of the viewport's
+          // height for the portrait set, body lengths below the row's line
+          // for the row's.
+          const loopY = mo.space === 'viewport' ? mo.y * frame.h : crownTarget() + mo.y * freeLenPx();
+          cy += (loopY - cy) * w;
+        }
+        if (mo.land) {
+          // How far along the leg the swim is, 0..1, from the offset still
+          // to go against the leg's length; a leg of nothing is done.
+          const remain = Math.hypot(state.pull.x, state.pull.y);
+          const frac = state.leg.dist0 > 1 && !state.hold ? Math.max(0, Math.min(1, 1 - remain / state.leg.dist0)) : 1;
+          const prog = ease(c.motion?.turnEase ?? 'inOutCubic', frac);
+          const wantH = lerpAngle(state.leg.fromH, mo.heading, prog);
+          const wantR = lerpAngle(state.leg.fromR, mo.roll, prog);
+          const ks = 1 - Math.exp(-(c.motion?.turnSettle ?? 5) * dt);
+          state.bodyHeading = lerpAngle(state.bodyHeading, wantH, ks);
+          state.bodyRoll = lerpAngle(state.bodyRoll, wantR, ks);
+        } else {
+          state.bodyHeading = mo.heading;
+          state.bodyRoll = mo.roll;
+        }
+        motionHeading = state.bodyHeading * w;
+        motionRoll = state.bodyRoll * w;
       }
+      if (!landing && state.phase !== 'held') state.land = null;
       // THE FREE EXIT RISES FROM WHERE THE ANIMAL WAS, straight off the top:
       // the loop's point is wherever the loop had put it, and the bust's
       // crown-line arithmetic above would first drag it down to the line's
       // own resting place before rising. The heading and the roll still fade
       // with the motion's weight — the swim off is the plain swim.
       if (isFree && state.phase === 'out') {
-        cx = state.leaveCx;
-        cy = state.leaveCy + (-(freeLenPx() * 0.6) - state.leaveCy) * state.outK;
+        // ...with the velocity it had at the pick fading under the rise, so
+        // a seal taken mid-swim keeps going the way it was going for a beat
+        // and the rise takes over rather than starting from a stop.
+        const carry = (1 - state.outK) * state.t;
+        cx = state.leaveCx + state.leaveVx * carry;
+        cy = state.leaveCy + (-(freeLenPx() * 0.6) - state.leaveCy) * state.outK + state.leaveVy * carry;
       }
       // THE PULL. Hovered, the seal swims from the loop's point toward the
       // card and holds off it by `standoff`; unhovered, it swims back to the
@@ -677,7 +895,9 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       // and a heading beside them, faded with the motion's own weight.
       const pull = state.pull;
       const pc = c.pull ?? {};
-      const pullOn = isFree && pc.enabled !== false && state.phase === 'held';
+      // Landing: the swim IS the mover, whatever `pull.enabled` says of the
+      // loops' add-on.
+      const pullOn = isFree && ((state.phase === 'held' && (landing || pc.enabled !== false)) || (state.phase === 'in' && landing));
       if (pullOn) {
         const P = CONFIG.player ?? {};
         const px = (pc.speed ?? 1) * s;                 // world units -> px
@@ -688,15 +908,24 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
         // bust heights, on the card's side facing the loop's point (so it
         // comes at the card from where it lives), or the loop's point itself.
         let wx = 0; let wy = 0;
-        if (state.look) {
+        // Holding: it wants to be where it is, so the thrust only brakes and
+        // the swim glides to a stop wherever the hover-off caught it.
+        if (state.hold) { wx = pull.x; wy = pull.y; }
+        if (state.look && !landing) {
           const tx = state.look.cx ?? state.look.x;
           const ty = state.look.cy ?? state.look.y;
           let dx = cx - tx; let dy = cy - ty;
           const d = Math.hypot(dx, dy);
           if (d < 1e-6) { dx = 0; dy = 1; } else { dx /= d; dy /= d; }
-          const stand = Math.max(0, pc.standoff ?? 0.9) * freeLenPx();
+          const stand = Math.max(0, set?.pull?.standoff ?? pc.standoff ?? 0.9) * freeLenPx();
           wx = tx + dx * stand - cx;
           wy = ty + dy * stand - cy;
+          // ...AND NEVER OFF THE SCREEN. A standoff wider than the room
+          // beside the card (a phone's side column) would hold the seal
+          // off the edge; the point it wants is kept a half-body inside.
+          const edge = (swimW * s) / 2;
+          wx = Math.max(edge, Math.min(frame.w - edge, cx + wx)) - cx;
+          wy = Math.max(edge, Math.min(frame.h - edge, cy + wy)) - cy;
         }
         // A velocity to want — the top speed, easing to nothing over the
         // last `arrive` bust heights — and the run's thrust pushing the
@@ -704,16 +933,51 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
         // spot rather than sliding through it on the water's long drag.
         const ex = wx - pull.x; const ey = wy - pull.y;
         const dist = Math.hypot(ex, ey);
-        const arrive = Math.max(1, (pc.arrive ?? 0.45) * freeLenPx());
-        const wantSpeed = Math.min(top, top * (dist / arrive));
+        const arrive = Math.max(1, (set?.pull?.arrive ?? pc.arrive ?? 0.45) * freeLenPx());
+        // THE SPEED IT MAY STILL BE DOING at this distance and stop on the
+        // point: what the thrust alone can shed over what is left (drag
+        // sheds more, so this is the conservative side). `arrive` is an
+        // ease band on top, not the whole brake — on its own it asked a
+        // seal at full speed to lose everything over half a body, which
+        // the thrust cannot do, and the animal rang about the point three
+        // times before it settled.
+        const brake = Math.sqrt(2 * thrust * dist);
+        const wantSpeed = Math.min(top, brake, top * (dist / arrive));
         const dvx = (dist > 1e-6 ? ex / dist * wantSpeed : 0) - pull.vx;
         const dvy = (dist > 1e-6 ? ey / dist * wantSpeed : 0) - pull.vy;
         const dv = Math.hypot(dvx, dvy);
+        // THE STRAIGHT PUSH: the thrust shoving the velocity toward the
+        // wanted one. Alone, a point that moves behind the animal (a card
+        // hovered on the other side mid-swim) has it brake to a stop,
+        // reverse and set off again.
+        let nvx = pull.vx; let nvy = pull.vy;
         if (dv > 1e-6) {
           const push = Math.min(dv, thrust * dt);
-          pull.vx += dvx / dv * push;
-          pull.vy += dvy / dv * push;
+          nvx += dvx / dv * push;
+          nvy += dvy / dv * push;
         }
+        // THE STEER: the same speed kept and its direction turned toward
+        // the point at `steer` per second — a banking arc round to the new
+        // point rather than a stop. Landing only, and only while the point
+        // is further off than the arrive band: a turn-limited chase can
+        // orbit a point it cannot turn inside, so the last stretch is the
+        // straight push, which converges.
+        const sp0 = Math.hypot(pull.vx, pull.vy);
+        const steerW = landing && sp0 > 1e-3 && dist > 1e-6 ? Math.min(1, dist / arrive) : 0;
+        if (steerW > 0) {
+          const cur = Math.atan2(pull.vy, pull.vx);
+          const want = Math.atan2(ey, ex);
+          let d = want - cur;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          const ang = cur + d * (1 - Math.exp(-(set?.pull?.steer ?? pc.steer ?? 6) * dt));
+          const mag = sp0 + Math.max(-thrust * dt, Math.min(thrust * dt, wantSpeed - sp0));
+          const svx = Math.cos(ang) * mag; const svy = Math.sin(ang) * mag;
+          const w = steerW * steerW * (3 - 2 * steerW);
+          nvx = nvx + (svx - nvx) * w;
+          nvy = nvy + (svy - nvy) * w;
+        }
+        pull.vx = nvx; pull.vy = nvy;
         pull.vx *= Math.pow(friction, dt * 60);
         pull.vy *= Math.pow(friction, dt * 60);
         const sp = Math.hypot(pull.vx, pull.vy);
@@ -733,6 +997,10 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
           while (delta > Math.PI) delta -= Math.PI * 2;
           while (delta < -Math.PI) delta += Math.PI * 2;
           pull.heading += delta * (1 - Math.exp(-(P.turnLerp ?? 8) * dt));
+        } else if (landing) {
+          // Landed, or braking: the body settles onto the point's own
+          // authored heading, at the same turn rate it swam with.
+          pull.heading -= pull.heading * (1 - Math.exp(-(P.turnLerp ?? 8) * dt));
         }
       } else {
         // Not held: the offset and the turn ease away with the pin's rate,
@@ -745,7 +1013,9 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
         if (Math.abs(pull.heading) < 0.002) pull.heading = 0;
         pull.vx = 0; pull.vy = 0; pull.speed = 0;
       }
-      const pullW = (pc.weight ?? 1) * state.motionW;
+      // A landing's offset is the whole distance still to swim; `weight` is
+      // the loops' dial on their add-on and does not apply.
+      const pullW = (landing ? 1 : (pc.weight ?? 1)) * state.motionW;
       cx += pull.x * pullW;
       cy += pull.y * pullW;
       // The heading from the swim is OFF by default (turnWeight 0): under the
@@ -753,6 +1023,8 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       // and mirror after its velocity the way the run's seal does.
       const pullHeading = pull.heading * (pc.turnWeight ?? 0) * pullW;
       motionHeading += pullHeading;
+      state.velX = dt > 0 ? (cx - wasCx) / dt : 0;
+      state.velY = dt > 0 ? (cy - wasCy) / dt : 0;
       state.cx = cx;
       state.cy = cy;
       if (Math.abs(s - lastRimScale) > 1e-6) {
@@ -766,6 +1038,18 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       state.speed = dt > 0
         ? (isFree ? Math.hypot(state.cx - wasCx, state.cy - wasCy) : Math.abs(state.crownY - wasY)) / dt / s
         : 0;
+      // THE SPEED THE CLIP IS PICKED FROM IS SMOOTHED. Free, the centre's
+      // travel is the loops' crossfade as much as any swim, and a crossfade
+      // is fastest on its first frame: an unhover spiked it to 15 units a
+      // second for one frame, over the boost threshold and back under it the
+      // next — swim, boost, swim in two frames, and every clip flip kicks the
+      // neck. A run's speed is physics and never does this; here it is eased
+      // at `clipSpeedLerp` so a one-frame spike is a bump the thresholds
+      // never see. Reset with the phase so the exit still boosts at once.
+      const csl = c.clipSpeedLerp ?? 6;
+      state.clipSpeed = state.phase === 'held' && csl > 0
+        ? state.clipSpeed + (state.speed - state.clipSpeed) * (1 - Math.exp(-csl * dt))
+        : state.speed;
 
       // --- the look ----------------------------------------------------------
       const pointing = !!state.look;
@@ -794,8 +1078,17 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       // THE HEAD'S TARGET. Free: the authored look, when it has one, else the
       // card or the idle point as ever. The nose points where the body is
       // turned, so the aim is remapped through the body's heading.
-      const lookOn = !!(mo && mo.look.on && state.motionW > 0);
+      let lookOn = !!(mo && mo.look.on && state.motionW > 0);
       if (lookOn) _look.set(mo.look.x, -mo.look.y, 0);
+      // ON THE WAY OFF THE HEAD LOOKS WHERE IT IS GOING. The free exit shoots
+      // straight up past the card the seal was watching, and a head still
+      // on that card whips round as the mouth passes it — measured at seven
+      // degrees a frame on the skull, over the barrel roll. So the target
+      // is the way ahead, and the aim's own ease carries the head onto it.
+      if (isFree && state.phase === 'out') {
+        lookOn = false;
+        _look.set(state.cx, -(state.cy - frame.h * 2), 0);
+      }
       const forward = Math.PI / 2 + ((c.lean ?? 0.05) + state.followLean) * state.plant + motionHeading;
       bustAim(rig, _look, wantAim, forward, c.aimSpread ?? 0.7);
       aim.lerp(wantAim, 1 - Math.exp(-(c.aimLerp ?? 7) * dt));
@@ -805,7 +1098,7 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
       // The clip is the run's choice for this speed while swimming and the
       // idle once planted — a planted animal moving with the row must not
       // start paddling.
-      state.animState = state.plant >= 0.999 ? 'idle' : stateForSpeed(state.speed);
+      state.animState = state.plant >= 0.999 ? 'idle' : stateForSpeed(state.clipSpeed);
       anim?.update(dt, state.animState, false);
       // The pose: the swimmer's heading blended into the bust by the plant —
       // and, free, the authored heading on top: a turn in the screen plane
@@ -878,10 +1171,22 @@ export function createLevelUpPuppet(body, { eyes = true, outline = true, dress =
         // point — the rig eases its own weights in and out from there.
         faceOut = Math.max(turned, lookOn ? mo.look.s * state.motionW : 0);
         engaged = state.phase === 'held' && (lookOn || (gate?.some((g) => g > 0) ?? false));
+        // EASED, never cut. The pick turns the look from the card to the
+        // way ahead in one frame, and the face-out with it — which is the
+        // neck's depth target and its bend budget dropping at once. It
+        // follows the aim's own ease instead.
+        faceOut = state.faceOut + (faceOut - state.faceOut) * (1 - Math.exp(-(c.aimLerp ?? 7) * dt));
+        if (Math.abs(faceOut) < 1e-4) faceOut = 0;
       }
       state.faceOut = faceOut;
       rig?.update(dt, aim, { engaged, finGate: gate, faceOut, finAims });
       pin?.apply(state.pinWeight);
+      // THE JAW, last: additive over the clip the mixer wrote and under the
+      // head the rig just aimed (mouth_08 hangs off head_07). The gape is
+      // the states' crossfaded `jaw`, by the motion's weight.
+      const jc = c.jaw ?? {};
+      state.jawOpen = jc.enabled === false || !isFree ? 0 : Math.max(0, Math.min(1, (mo?.jaw ?? 0) * state.motionW));
+      if (jaw) { jaw.setGape(state.jawOpen); jaw.update(dt); }
       holder.updateMatrixWorld(true);
 
       if (pair) {
@@ -942,8 +1247,36 @@ let focusedCard = null;
 
 function onCardFocus(e) {
   focusedCard = e?.detail?.card ?? null;
-  lookLevelUpSeal(focusedCard);
 }
+
+// WHAT IS HIGHLIGHTED, read off the screen every frame — not off the enter
+// and leave events. Those are gated on the menu's arrival lock (a pointer
+// already resting on a card when the lock lifts never re-enters it), can be
+// missed across a relayout, and a hold re-announces while a slip retracts;
+// the seal was left pointing at a card the player had long left, or never
+// turning to the one they were on. The card under the pointer wins, then the
+// pad's or the keyboard's selection (`.sv-card-sel`), then whatever was last
+// announced. Null when nothing is highlighted, which lets the state go —
+// the seal is always free to leave a card for whatever is lit now.
+const _rectCards = [];
+function highlightedCard() {
+  const cards = document.querySelectorAll?.('#svCards .sv-card') ?? [];
+  let hov = null;
+  let sel = null;
+  for (const c of cards) {
+    if (!hov) { try { if (c.matches(':hover')) hov = c; } catch { /* no :hover here */ } }
+    if (!sel && c.classList.contains('sv-card-sel')) sel = c;
+  }
+  if (hov) return hov;
+  if (pointer.seen) {
+    for (const c of cards) {
+      const r = c.getBoundingClientRect();
+      if (r.width > 0 && pointer.x >= r.left && pointer.x <= r.right && pointer.y >= r.top && pointer.y <= r.bottom) return c;
+    }
+  }
+  return sel ?? (focusedCard?.isConnected ? focusedCard : null);
+}
+let litCard = null;
 
 /**
  * Build the seal, its scene and its canvas. Called at the top of the level-up
@@ -1005,10 +1338,14 @@ export function prepareLevelUpSeal() {
   scene.add(puppet.holder);
   if (puppet.eyeGroup) scene.add(puppet.eyeGroup);
 
+  // The bubbles, on this canvas — see systems/levelUpBubbles.js.
+  const bubbles = createLevelUpBubbles();
+  scene.add(bubbles.points);
+
   const camera = new THREE.OrthographicCamera(0, 1, 0, -1, -5000, 5000);
   camera.position.set(0, 0, 0);
 
-  live = { canvas, renderer, scene, camera, puppet, col: { left: 0, w: 0, h: 0 } };
+  live = { canvas, renderer, scene, camera, puppet, bubbles, col: { left: 0, w: 0, h: 0 } };
   levelUpSealState.built = true;
   document.addEventListener(CARD_FOCUS_EVENT, onCardFocus);
   document.addEventListener('pointermove', onPointerMove, { passive: true });
@@ -1028,12 +1365,20 @@ function pixelRatio() {
 export function enterLevelUpSeal() {
   if (!levelUpSealEnabled()) return;
   if (!live) prepareLevelUpSeal();
+  // Only when it is actually starting a climb — enter() is a no-op on a puppet
+  // that is already up (a second card in the same batch re-enters through the
+  // exit instead), and a voice on a call that moved nothing is a voice you
+  // cannot place.
+  const climbing = live && live.puppet.state.phase === 'none';
   live?.puppet.enter();
+  if (climbing) feedback('sealPeek');
 }
 
 /** A card was taken — off the top. */
 export function leaveLevelUpSeal() {
+  const leaving = live && live.puppet.state.phase !== 'none' && live.puppet.state.phase !== 'out';
   live?.puppet.leave();
+  if (leaving) feedback('sealBolt');
 }
 
 /**
@@ -1069,8 +1414,10 @@ export function lookLevelUpSeal(card) {
 
 export function resetLevelUpSeal() {
   focusedCard = null;
+  litCard = null;
   if (!live) return;
   live.puppet.reset();
+  live.bubbles?.reset();
   live.canvas.style.display = 'none';
   levelUpSealState.phase = 'none';
 }
@@ -1115,7 +1462,22 @@ function readFrame(frame) {
     idle: have ? { x: (left + right) / 2, y: (top + bottom) / 2 } : frame.idle,
     cards: centres,
     cursor: pointer.seen ? { x: pointer.x, y: pointer.y } : null,
+    portrait: isPortrait(w, h, centres),
   };
+}
+
+/**
+ * Whether the screen wants the motion's portrait set: taller than wide, or a
+ * hand laid out as one column (fitCards stacks it when three across will not
+ * fit — measured off the cards' centres rather than re-asked, so the seal and
+ * the comb can never disagree about which layout is up).
+ */
+export function isPortrait(w, h, centres = []) {
+  if (h > w) return true;
+  if (centres.length < 2) return false;
+  let lo = Infinity; let hi = -Infinity;
+  for (const p of centres) { lo = Math.min(lo, p.x); hi = Math.max(hi, p.x); }
+  return hi - lo < 1;
 }
 
 /**
@@ -1127,18 +1489,27 @@ export function updateLevelUpSeal(rawDt) {
   const { puppet, canvas, renderer, camera, scene, col } = live;
   if (!levelUpSealEnabled() && puppet.active) puppet.reset();
   levelUpSealState.phase = puppet.phase;
-  if (!puppet.active) {
+  if (!puppet.active && (live.bubbles?.alive() ?? 0) === 0) {
     if (canvas.style.display !== 'none') canvas.style.display = 'none';
     return;
   }
 
   const frame = readFrame(puppet.frame);
   puppet.setFrame(frame);
-  // The look is re-read every frame while a card is held: the cursor moves
-  // across it, and the row can move under it (a resize, the tip's layout).
-  if (focusedCard) lookLevelUpSeal(focusedCard);
+  // The look is re-read every frame from whatever is highlighted: the cursor
+  // moves across a card, the row can move under it (a resize, the tip's
+  // layout), and the card can change without an event saying so.
+  const lit = highlightedCard();
+  // THE ANIMAL NOTICING, on top of the card's own `uiHover`: once, on the
+  // change onto a card, while the seal is up.
+  if (lit && lit !== litCard && puppet.active) feedback('sealNose');
+  litCard = lit;
+  lookLevelUpSeal(lit);
   puppet.update(rawDt);
-  if (!puppet.active) {
+  // After the rig has solved, so the anchors are this frame's. Stepped while
+  // the seal is off screen too, so bubbles it left behind finish rising.
+  live.bubbles?.update(Math.min(0.05, Math.max(0, rawDt)), puppet, pixelRatio());
+  if (!puppet.active && (live.bubbles?.alive() ?? 0) === 0) {
     canvas.style.display = 'none';
     return;
   }

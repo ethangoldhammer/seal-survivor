@@ -157,6 +157,10 @@ const POOL = [
     // black one is not imported. It is one texture swap from being a second
     // colourway if it is ever wanted.
     keep: (mat) => mat === 'hat4',
+    // 2,416 -> 2,546 triangles when the prune moved ahead of the measurement:
+    // the ratio used to be taken against BOTH fedoras, so a third of this
+    // hat's budget was being spent on a hat that had already been dropped.
+    // The only file in the first batch whose output the fix changed.
     note: 'brown fedora (half of the pack)',
   },
   {
@@ -187,7 +191,150 @@ const POOL = [
     // The skinned one. See step 2.
     note: 'round wire frames',
   },
+
+  // -------------------------------------------------------------------------
+  // THE SECOND BATCH. Seven files came in; six are here — five worn, one a
+  // creature. What was cut and why is at the bottom of this list: a rejection
+  // is a finding and belongs beside the ones that passed, or the same file
+  // gets re-imported in a year.
+  // -------------------------------------------------------------------------
+
+  {
+    name: 'hardhat',
+    src: 'hard_hat.glb',
+    // 562 TRIANGLES IN THE SOURCE, which is under every other target here and
+    // the only file in either batch that arrives already inside the budget.
+    // The target is set above what it has so `ratio` clamps to 1 and simplify
+    // is a no-op: there is nothing to take off a hat this clean, and pushing
+    // it to 500 would round the dome for no gain anyone could see.
+    //
+    // All the weight is in three 1024 maps, one of which is a 390-byte flat
+    // blue normal (mean 127,128,255 — the unbaked default step 5 describes).
+    // 913KB of file for 562 triangles.
+    tris: 700,
+    note: 'orange hard hat',
+  },
+  {
+    name: 'cowboyhat',
+    src: 'hat.glb',
+    // A brown wide-brim with an upturned edge, and the upturn is the whole
+    // read — it is what separates this silhouette from the fedora already in
+    // the pool. Smooth all the way round, so it decimates like the other hats.
+    // Its normal map is 2.2MB, more than half the file, for a surface that is
+    // 65 pixels of felt.
+    tris: 1500,
+    note: 'brown cowboy hat',
+  },
+  {
+    name: 'wizardhat',
+    src: 'wizards_hat.glb',
+    // THE CHAIN GOES. See dropPrims for the full reasoning: 41,264 of this
+    // file's 45,710 triangles are a beaded chain wound round the crown, packed
+    // into volumes a third the hat's size, and simplify()'s per-primitive ratio
+    // would spend the entire budget on it and leave the hat at 130 triangles.
+    //
+    // The rule is "dense and small", not a node name — every primitive in the
+    // file is called `defaultMaterial`. The hat body is 3,358 triangles across
+    // 2.0 units and survives; the three chain pieces are 30,704 / 7,448 / 3,112
+    // across 1.42 / 0.43 / 0.31 and do not.
+    dropPrim: (p) => p.tris > 2000 && p.longest < 1.5,
+    // Higher than the other hats because the curl is not a smooth blob: the
+    // point folds forward and hooks, and that hook IS the hat. A brim can lose
+    // half its rings without anyone noticing and this cannot.
+    tris: 1900,
+    note: 'floppy witch hat (chain dropped)',
+  },
+  {
+    name: 'sharkhood',
+    src: 'gawr_gura_shark_hat.glb',
+    // HALF THE FILE IS AN OUTLINE HULL. `Outline` is an exact inverted copy of
+    // `Hood` in flat black — the standard cel-shading trick, and 3,316 of the
+    // 6,632 triangles. The game draws its own rims (see CONFIG.creatureOutline
+    // and the `outline` block in assets.js), so a baked-in second hull would
+    // both double the cost and fight the rim the game puts there.
+    keep: (mat) => mat === 'Hood',
+    // The teeth. An open jaw with a full set of them, each one two triangles
+    // across, and the read of the whole thing is a shark about to bite. This
+    // holds more than a hat for the same reason the wire frames do.
+    tris: 2200,
+    note: 'shark-head hood',
+  },
+  // -------------------------------------------------------------------------
+  // THE ONE THAT IS NOT AN ACCESSORY. It came in with the wardrobe batch and it
+  // is a CREATURE — `enemyJellyfish` in assets.js, a row in enemies.csv — not
+  // something the seal wears. It stays in this pool anyway, and that is a
+  // decision rather than an oversight:
+  //
+  //   THE SETTINGS HAPPEN TO BE RIGHT. The one thing that would make an
+  //   accessory build wrong for an enemy is the map size, because an enemy is
+  //   drawn far larger than an accessory's 65 pixels. Measured: puffer, tang
+  //   and cutesquid already ship 256-square maps and the squid ships 512, so
+  //   this pool's 256 is in family rather than a compromise. The triangle
+  //   budget lands it at 3,780, between the oyster's 2,248 and the puffer's
+  //   5,152. Nothing is being stretched to fit.
+  //
+  //   AND THE EMISSIVE TREATMENT IS RIGHT TWICE OVER. Averaging the map into a
+  //   factor is what this pool does to keep a glow without keeping the image;
+  //   for an enemy it is also what the game wants, because NO creature in the
+  //   roster carries an emissive map — bioluminescence is the `biolum` surface
+  //   system in assets.csv, which paints the body properly and animates. The
+  //   factor is a floor to build that preset on, not the final look.
+  //
+  // Splitting this into a tools/optimize-jellyfish.mjs alongside the other
+  // per-creature importers would be five hundred duplicated lines to say the
+  // same thing in a differently-named file. If a second creature ever needs
+  // this pipeline, split it then and take both.
+  // -------------------------------------------------------------------------
+  {
+    name: 'jellyfish',
+    src: 'jellyfish.glb',
+    // SKINNED ACROSS 25 JOINTS AND GENUINELY POSED — the rest-pose skinning
+    // matrices deviate from identity by 0.72, so the vertices as stored are
+    // not where this animal looks. The general linear-blend bake handles it;
+    // see bakeSkins.
+    //
+    // THE ANIMATION GOES WITH THE SKIN, and here that is a real loss rather
+    // than a formality: the source carries a swim cycle, and this pool bakes
+    // skins off because an accessory is a static thing bolted to a bone. A
+    // creature is not. enemyJellyfish drifts for now, which suits a jellyfish
+    // better than it would suit anything else in the roster — but if it ever
+    // needs to pulse, it has to be re-imported KEEPING the skin, and that is a
+    // different tool rather than a flag on this row.
+    emissive: 'bake',
+    // The filaments are swept tubes one or two pixels wide, which is the
+    // topology-bound case weldPositions exists for.
+    hardWeld: true,
+    // LANDS AT 3,780, not 2,000. It is error-bound, not ratio-bound — the
+    // simplifier reaches its 0.004 and stops rather than collapse tubes it
+    // cannot collapse cleanly, which is what the header asks for and not a
+    // target that needs raising. Recorded so the gap between the number and
+    // the result is not read as a bug next time.
+    tris: 2000,
+    note: 'a jellyfish — an ENEMY, not a hat; see the block above',
+  },
 ];
+
+// ---------------------------------------------------------------------------
+// REJECTED, and the reason, so the file is not re-imported next year.
+//
+//   sailor_hat.glb — 972,616 triangles in 30MB, and two thirds of that is
+//   STITCHING. Five primitives of ~112,000 triangles each, all called
+//   Stitch1_1/Stitch2_1, modelling the thread of the seams as individual
+//   tubes. It also ships the MANNEQUIN: one 830 x 1,817 x 307 node and one
+//   837 x 639 x 215 node — a head and shoulders the hat was posed on — which
+//   is why the file's bounding box is 1,829 units tall for a hat 100 units
+//   deep.
+//
+//   Isolating the hat is easy enough. What is not is the decimation: the hat
+//   alone is ~700,000 triangles against a budget of 1,500, a 470:1 reduction
+//   on geometry that is mostly thin thread, and thin thread is exactly what
+//   the simplifier turns into confetti (see the note on the wire frames).
+//   There is no version of this that ends up looking like a hat.
+//
+//   And it would be a second one anyway: `accessoryHat` is already a sailor's
+//   cap, gated on 50 hulls with "Hello Sailor!" on the toast. This file has
+//   nowhere to go even if it were free.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 
@@ -275,6 +422,8 @@ function isolate(doc, keep) {
  */
 function bakeSkins(doc) {
   const notes = [];
+  const scene = doc.getRoot().listScenes()[0];
+  const baked = [];
   for (const node of doc.getRoot().listNodes()) {
     const skin = node.getSkin();
     const mesh = node.getMesh();
@@ -295,8 +444,27 @@ function bakeSkins(doc) {
         for (let k = 0; k < 4; k++) if (wa[k] > 0) used.add(ja[k]);
       }
     }
+    // MORE THAN ONE JOINT: bake the skin the way the GPU would, per vertex.
+    //
+    // The single-matrix path below is exact and cheap and covers the glasses,
+    // which weight everything to one joint. The jellyfish do not: their bells
+    // and tentacles are weighted across 25 and 7 joints and their rest pose is
+    // genuinely POSED — the skinning matrices deviate from identity by 0.72 and
+    // 2.00, so the vertices as stored are NOT where the model looks. Ignoring
+    // the skin would import a jellyfish inside out.
+    //
+    // Linear blend skinning at rest is not an approximation of anything: it is
+    // the exact position the renderer would put every vertex at on frame zero,
+    // which is the only pose a static accessory ever has. What is lost is the
+    // ability to animate it later, which an accessory riding head_07 was never
+    // going to do.
     if (used.size !== 1) {
-      throw new Error(`${node.getName()}: skinned across ${used.size} joints — no single matrix to bake.`);
+      bakeLinearBlend(mesh, skin);
+      node.setSkin(null);
+      node.setMatrix([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+      baked.push(node);
+      notes.push(`baked ${joints.length}-joint skin by linear blend (weights on ${used.size} joints)`);
+      continue;
     }
     const ji = [...used][0];
     const joint = joints[ji];
@@ -324,9 +492,159 @@ function bakeSkins(doc) {
     }
     node.setSkin(null);
     node.setMatrix([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    baked.push(node);
     notes.push(`baked skin off ${joints.length} joints (all weights on "${joint.getName()}")`);
   }
+  // ...AND THE BAKED NODE GOES TO THE SCENE ROOT.
+  //
+  // A skin's joint world matrices already run all the way up to the scene, so
+  // a baked mesh's vertices are in SCENE space — while the node it hangs off
+  // still sits under whatever chain the exporter left, and glTF told the
+  // renderer to ignore that chain precisely because the skin superseded it.
+  // flattenTransforms, one step later, does not know that: it multiplies every
+  // mesh by its world matrix, and on a Sketchfab export that chain carries the
+  // quarter turn from Z-up. So a baked jellyfish came out upside down — bell
+  // below, tentacles arcing up — while the glasses, whose skinned node happens
+  // to sit directly under the scene, were unaffected and hid the bug for two
+  // imports.
+  for (const node of baked) {
+    node.getParentNode()?.removeChild(node);
+    scene.addChild(node);
+  }
   for (const skin of doc.getRoot().listSkins()) skin.dispose();
+  return notes;
+}
+
+/**
+ * Linear blend skinning, evaluated once and written onto the vertices.
+ *
+ * Positions blend by weight, which is the definition. NORMALS use the same
+ * weights against the inverse transpose of each joint matrix and are
+ * renormalised — correct for the rigid-plus-uniform-scale joints these files
+ * carry, and the alternative (leaving them) would light a re-posed mesh by the
+ * shading of a pose it is no longer in.
+ *
+ * Weights are renormalised per vertex rather than trusted: an exporter that
+ * writes 0.4999/0.4999 would otherwise shrink the model toward its origin by
+ * a fraction of a percent, which is invisible here and compounds through the
+ * `fit` normalisation downstream.
+ */
+function bakeLinearBlend(mesh, skin) {
+  const ibm = skin.getInverseBindMatrices();
+  const joints = skin.listJoints();
+  const mats = joints.map((j, i) => {
+    const b = [];
+    ibm.getElement(i, b);
+    const jw = j.getWorldMatrix();
+    const m = new Array(16).fill(0);
+    for (let c = 0; c < 4; c++) {
+      for (let r = 0; r < 4; r++) {
+        let acc = 0;
+        for (let k = 0; k < 4; k++) acc += jw[k * 4 + r] * b[c * 4 + k];
+        m[c * 4 + r] = acc;
+      }
+    }
+    return m;
+  });
+  const normalMats = mats.map(inverse3x3T);
+
+  const seen = new Set();
+  for (const prim of mesh.listPrimitives()) {
+    const pos = prim.getAttribute('POSITION');
+    const nrm = prim.getAttribute('NORMAL');
+    const J = prim.getAttribute('JOINTS_0');
+    const W = prim.getAttribute('WEIGHTS_0');
+    if (!pos || !J || !W || seen.has(pos)) continue;
+    seen.add(pos);
+
+    const v = [0, 0, 0];
+    const n = [0, 0, 0];
+    const ja = [0, 0, 0, 0];
+    const wa = [0, 0, 0, 0];
+    for (let i = 0; i < pos.getCount(); i++) {
+      pos.getElement(i, v);
+      J.getElement(i, ja);
+      W.getElement(i, wa);
+      let total = 0;
+      for (let k = 0; k < 4; k++) if (wa[k] > 0) total += wa[k];
+      // A vertex with no weight at all is left where it is rather than
+      // collapsed to the origin, which is what dividing by zero would do.
+      if (!(total > 0)) continue;
+
+      const op = [0, 0, 0];
+      const on = [0, 0, 0];
+      if (nrm) nrm.getElement(i, n);
+      for (let k = 0; k < 4; k++) {
+        const w = wa[k] / total;
+        if (!(w > 0)) continue;
+        const p = mulPoint(mats[ja[k]], v);
+        op[0] += p[0] * w; op[1] += p[1] * w; op[2] += p[2] * w;
+        if (!nrm) continue;
+        const m = normalMats[ja[k]];
+        on[0] += (m[0] * n[0] + m[4] * n[1] + m[8] * n[2]) * w;
+        on[1] += (m[1] * n[0] + m[5] * n[1] + m[9] * n[2]) * w;
+        on[2] += (m[2] * n[0] + m[6] * n[1] + m[10] * n[2]) * w;
+      }
+      pos.setElement(i, op);
+      if (nrm) {
+        const l = Math.hypot(on[0], on[1], on[2]) || 1;
+        nrm.setElement(i, [on[0] / l, on[1] / l, on[2] / l]);
+      }
+    }
+  }
+  for (const prim of mesh.listPrimitives()) {
+    for (const sem of ['JOINTS_0', 'WEIGHTS_0']) {
+      const acc = prim.getAttribute(sem);
+      if (acc) { prim.setAttribute(sem, null); acc.dispose(); }
+    }
+  }
+}
+
+/**
+ * Drop primitives a predicate rejects, by SHAPE rather than by material.
+ *
+ * The `keep` predicate above splits a pack whose halves are different
+ * materials. This is the other case: wizards_hat.glb is one material over six
+ * primitives, and three of them are a beaded chain wound round the crown —
+ * 41,264 of its 45,710 triangles, packed into volumes a third the size of the
+ * hat. At 65 pixels that chain is a smudge, and leaving it in is worse than
+ * cosmetic: simplify() applies its ratio PER PRIMITIVE, so a budget of 1,800
+ * over this file spends 1,700 of it on the chain and leaves the hat itself
+ * with 130 triangles. The dense decoration does not just fail to survive, it
+ * eats the thing it decorates.
+ *
+ * The predicate is handed { tris, size, longest } in world units, so a row can
+ * say "dense and small" without naming a node whose name is `defaultMaterial`.
+ */
+function dropPrims(doc, reject) {
+  const notes = [];
+  const scene = doc.getRoot().listScenes()[0];
+  scene.traverse((node) => {
+    const mesh = node.getMesh();
+    if (!mesh) return;
+    const wm = node.getWorldMatrix();
+    for (const prim of [...mesh.listPrimitives()]) {
+      const pos = prim.getAttribute('POSITION');
+      if (!pos) continue;
+      const lo = [1e9, 1e9, 1e9];
+      const hi = [-1e9, -1e9, -1e9];
+      const v = [0, 0, 0];
+      for (let i = 0; i < pos.getCount(); i++) {
+        pos.getElement(i, v);
+        const w = mulPoint(wm, v);
+        for (let k = 0; k < 3; k++) { if (w[k] < lo[k]) lo[k] = w[k]; if (w[k] > hi[k]) hi[k] = w[k]; }
+      }
+      const size = [0, 1, 2].map((k) => +(hi[k] - lo[k]).toFixed(4));
+      const idx = prim.getIndices();
+      const tris = Math.round((idx ? idx.getCount() : pos.getCount()) / 3);
+      const info = { tris, size, longest: Math.max(...size) };
+      if (!reject(info)) continue;
+      mesh.removePrimitive(prim);
+      prim.dispose();
+      notes.push(`dropped a ${tris}-tri primitive spanning ${size.join(' x ')}`);
+    }
+    if (mesh.listPrimitives().length === 0) { node.setMesh(null); mesh.dispose(); node.dispose(); }
+  });
   return notes;
 }
 
@@ -543,10 +861,33 @@ async function channelMeans(texture) {
  * Everything in steps 4-6: transmission off, the invisible maps averaged into
  * factors and dropped, what is left resized.
  */
-async function fixMaterials(doc) {
+async function fixMaterials(doc, spec = {}) {
   const notes = [];
   for (const mat of doc.getRoot().listMaterials()) {
     const label = mat.getName() || '(unnamed)';
+
+    // CLEARCOAT goes for the same reason transmission does, one step milder:
+    // it is the other property that promotes a material to MeshPhysicalMaterial
+    // in three.js, and a second specular lobe on an object 65 pixels tall is a
+    // per-pixel cost buying a highlight nothing can resolve.
+    // green_neon_jellyfish.glb declares it on both its materials.
+    const cc = mat.getExtension('KHR_materials_clearcoat');
+    if (cc) {
+      mat.setExtension('KHR_materials_clearcoat', null);
+      notes.push(`${label}: clearcoat dropped (it forced MeshPhysicalMaterial)`);
+    }
+
+    // UNLIT is the opposite problem and the same answer. gawr_gura_shark_hat
+    // .glb declares it, which in three.js means MeshBasicMaterial: the hood
+    // would ignore every light in the ocean and sit on the seal's head at a
+    // constant brightness while the animal under it shades with the water.
+    // The whole point of an accessory is that it looks like it belongs to the
+    // creature wearing it.
+    const unlit = mat.getExtension('KHR_materials_unlit');
+    if (unlit) {
+      mat.setExtension('KHR_materials_unlit', null);
+      notes.push(`${label}: unlit dropped (it would not shade with the seal)`);
+    }
 
     const tr = mat.getExtension('KHR_materials_transmission');
     if (tr) {
@@ -575,16 +916,36 @@ async function fixMaterials(doc) {
     if (mat.getNormalTexture()) { mat.setNormalTexture(null); notes.push(`${label}: normal map dropped`); }
     if (mat.getOcclusionTexture()) { mat.setOcclusionTexture(null); notes.push(`${label}: occlusion dropped`); }
     if (mat.getEmissiveTexture()) {
+      // TWO KINDS OF EMISSIVE MAP, and they are not the same mistake.
+      //
+      // The Sketchfab default is the base map wired into the emissive slot,
+      // which means a pair of reading glasses that clears the bloom threshold.
+      // That one is a bug and is zeroed — see step 5.
+      //
+      // jellyfish.glb's is real art: a DIFFERENT image from its base colour, on
+      // a translucent bell, on an animal whose whole read is that it glows. So
+      // a row can ask for the map to be AVERAGED into the factor instead —
+      // the same treatment metallicRoughness gets, and for the same reason.
+      // The glow survives, uniformly over the bell rather than patterned, and
+      // the 1.3MB image does not have to live in VRAM to deliver it.
+      if (spec.emissive === 'bake') {
+        const [r, g, b] = await channelMeans(mat.getEmissiveTexture());
+        const f = mat.getEmissiveFactor();
+        mat.setEmissiveFactor([+(f[0] * r).toFixed(3), +(f[1] * g).toFixed(3), +(f[2] * b).toFixed(3)]);
+        notes.push(`${label}: emissive map -> factor ${mat.getEmissiveFactor().join(', ')}`);
+      } else {
+        mat.setEmissiveFactor([0, 0, 0]);
+        notes.push(`${label}: EMISSIVE map dropped (it was the base map — see step 5)`);
+      }
       mat.setEmissiveTexture(null);
-      mat.setEmissiveFactor([0, 0, 0]);
-      notes.push(`${label}: EMISSIVE map dropped (it was the base map — see step 5)`);
     }
   }
 
   // Drop the extension itself, not just the per-material property, or the file
   // still declares a dependency the loader has to satisfy.
+  const DEAD = ['KHR_materials_transmission', 'KHR_materials_clearcoat', 'KHR_materials_unlit'];
   for (const ext of doc.getRoot().listExtensionsUsed()) {
-    if (ext.extensionName === 'KHR_materials_transmission') ext.dispose();
+    if (DEAD.includes(ext.extensionName)) ext.dispose();
   }
 
   for (const tex of doc.getRoot().listTextures()) {
@@ -617,14 +978,25 @@ for (const spec of POOL) {
   const before = { ...stats(doc), fileKB: Math.round(fs.statSync(src).size / 1024) };
 
   if (spec.keep) isolate(doc, spec.keep);
+  // Before the skin bake and the flatten, because the predicate is written
+  // against the file's own world units and both of those move them.
+  if (spec.dropPrim) for (const n of dropPrims(doc, spec.dropPrim)) console.log('  ' + n);
   for (const n of bakeSkins(doc)) console.log('  ' + n);
   flattenTransforms(doc);
   const dropped = trimAttributes(doc);
   if (dropped.length) console.log('  dropped attributes: ' + dropped.join(', '));
-  for (const n of await fixMaterials(doc)) console.log('  ' + n);
+  for (const n of await fixMaterials(doc, spec)) console.log('  ' + n);
 
   if (spec.hardWeld) for (const n of weldPositions(doc)) console.log('  ' + n);
 
+  // PRUNE BEFORE MEASURING. isolate() and dropPrims() detach nodes and
+  // primitives but do not delete the meshes behind them, and stats() walks the
+  // root's mesh list — so without this the ratio below is computed against
+  // geometry that is already gone. On the shark hood that meant dividing the
+  // budget by 6,632 when only 3,316 triangles were left, and the hood came out
+  // at 1,476 against a target of 2,200: a third of the teeth spent on an
+  // outline hull that was not in the file any more.
+  await doc.transform(prune());
   const mid = stats(doc);
   const target = trisOverride ?? spec.tris;
   const ratio = Math.min(1, target / mid.tris);

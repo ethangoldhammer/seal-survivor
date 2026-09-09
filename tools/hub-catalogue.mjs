@@ -116,7 +116,7 @@ const GROUP_BY_NAME = {
   bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', humpback: 'Assets', notes: 'Assets', takes: 'Assets',
   anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
   emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',
-  placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets', 'accessories:apply': 'Assets', 'accessories:import': 'Assets',
+  placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets', 'accessories:apply': 'Assets', 'ball:apply': 'Assets', 'imitate:train': 'Assets', 'accessories:import': 'Assets',
   test: 'Checks',
   // The chain trace is a CHECK that prints rather than asserts: it replays the
   // release path in main.js's own order and shows the log the in-game overlay
@@ -357,6 +357,15 @@ function titleOf(file) {
 const FIXED_PAGES = [
   { file: 'index.html', on: 'dev', path: '/', title: 'The game',
     blurb: 'Seal Survivor itself. Backtick opens the tuner, T the workbench.' },
+  // THE GAME'S MODES — the same page under a URL flag, one card each, so the
+  // flags are pinned somewhere findable rather than remembered. Every flag is
+  // read once at boot in path/src/main.js; the hub fills in the live port.
+  { file: 'index.html', on: 'dev', path: '/', title: 'Versus — two seals, one ball',
+    blurb: 'The ball game, under Seal sports on the main menu (it was a ?versus flag): goals in both walls, first to five. Two pads, or one pad as player 2 with the keyboard as player 1; no pad on player 2 and the bot plays it. Tune the ball in the ball lab (looks:ball).' },
+  { file: 'index.html', on: 'dev', path: '/?tune', title: 'The game, with the tuner',
+    blurb: 'The same run with the dev panels forced on — for a deployed or preview build, where they are otherwise hidden.' },
+  { file: 'index.html', on: 'dev', path: '/?title', title: 'The title shot',
+    blurb: 'Boots straight into the splash framing so the title seal can be looked at. See CONFIG.titleSeal.' },
   { file: 'tuner.html', on: 'dev', path: '/tuner.html', title: 'Standalone tuner',
     blurb: 'The tuning panels with no game behind them. Same writer as the in-game panel — use one or the other, never both.' },
   { file: 'model-inspector.html', on: 'dev', path: '/model-inspector.html', title: 'Model inspector',

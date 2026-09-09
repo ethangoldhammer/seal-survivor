@@ -17,7 +17,7 @@ import tipsCsv from '../tips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { parseTipCsv } from '../tipTable.js';
 import { uiText } from '../uiTextTable.js';
-import { availableUpgrades, player } from '../entities/player.js';
+import { availableUpgrades, levelableUpgrades, player } from '../entities/player.js';
 import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // The splash and the score card's turn are pure motion with no way to opt out
 // mid-play, so both honour the system setting by skipping entirely. The CSS
@@ -59,6 +59,7 @@ import {
   upgradeTipContent, renderTipInto, showUpgradeTip, hideUpgradeTip, compactDamage,
   tipVerbosity,
 } from './upgradeTip.js';
+import { hoveredElement } from './hoverPoint.js';
 import { pressable, pressableWithin, noClickThrough } from './press.js';
 import {
   BOARD_SIZE,
@@ -1490,6 +1491,12 @@ const STYLES = `
   .sv-sub { font-size: 13px; color: rgba(232,236,243,0.6); margin-bottom: 18px; line-height: 1.6; }
   .sv-btn { pointer-events: all; background: #7ad7ff; color: #0a0c12; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.02em; }
   .sv-btn:hover { background: #9fe3ff; }
+  /* Seal sports: a column of sports, each a button with room for a second
+     line under the name. Stacked, not a row: the names are one word each but
+     a stub carries its kicker inside the same button. */
+  .sv-sports-list { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 22px; min-width: 220px; }
+  .sv-sport { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 22px; }
+  .sv-sport-soon { font-size: 11px; font-weight: 500; opacity: 0.7; letter-spacing: 0.04em; }
   .sv-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   /* The pad's cursor on the score card. Same look as the focus ring, but as a
      class for the same reason the cards' selection is one: :focus-visible is
@@ -2125,6 +2132,10 @@ const STYLES = `
      line the readout gives up once rather than one the player has to scroll
      past every time. */
   .sv-ldg-go { display: block; width: 100%; margin-top: 12px; }
+  /* The way back to the menu, directly under it. A tighter gap than the one
+     above Try again because these two are one block — the questions the bar
+     asks are separated by 12px and the answers to the last one are not. */
+  .sv-ldg-menu { margin-top: 8px; }
 
   /* --- THE BREAKDOWN ROWS ---------------------------------------------------
      Weapons and threats are the same grid deliberately: they are the same
@@ -2339,6 +2350,25 @@ const STYLES = `
      pointer-events themselves, so switching it off on the container alone
      would leave the cards live under a mask full of holes. */
   .sv-menu-locked, .sv-menu-locked * { pointer-events: none !important; }
+  /* ...EXCEPT A CARD THAT HAS ALREADY LANDED, which may be READ but still not
+     chosen — .sv-lit is added to the slot on the frame its card hits (see
+     igniteStep), so this follows the arrival card by card.
+
+     The lock is about PICKING. It runs from the first card being thrown to the
+     last one landing, which at the tuned stagger is 2.1 SECONDS of a menu that
+     takes no pointer events at all — so a player who moved onto the hand and
+     started reading it got two seconds of hovers that did nothing, and the
+     tooltip appeared to need several tries before it "registered". The card
+     under the pointer was not half-drawn by then; it had been sitting still for
+     over a second waiting for two others to land.
+
+     Only the card itself: its overlay and content stay out of the pointer, so
+     the hit lands on .sv-card and pointerenter fires there. Clicking is still
+     refused — pick() and selectCard() gate on the menuLocked FLAG, which this
+     does not touch, and the slam's skip listener is a capture-phase one on the
+     window, so a click on a landed card cuts the arrival short exactly as a
+     click anywhere else does. */
+  .sv-menu-locked .sv-card-slot.sv-lit > .sv-card { pointer-events: auto !important; }
 
   @media (prefers-reduced-motion: reduce) {
     .sv-ui * { transition: none !important; animation: none !important; }
@@ -2661,8 +2691,8 @@ const STYLES = `
   .sv-touch .sv-next-row .sv-name-input, .sv-touch .sv-next-row .sv-btn { min-height: 48px; }
 `;
 
-export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, onResume, onPauseRestart, onSplash, onMenu, onPause }) {
-  callbacks = { onStart, onRestart, onLevelChoice, onLevelUpCleared, onSplash, onMenu, onPause };
+export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, onResume, onPauseRestart, onPauseMainMenu, onMainMenu, onSplash, onMenu, onPause }) {
+  callbacks = { onStart, onRestart, onLevelChoice, onLevelUpCleared, onSplash, onMenu, onPause, onMainMenu };
 
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -2787,9 +2817,11 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
            three cells of this same lattice, and the comb lighting up is the
            whole of this screen's arrival. See ui/upgradeComb.js. -->
       <div class="sv-comb" id="svComb"></div>
+      <!-- NO HEADLINE. This stage used to carry a title and a line under it;
+           three cards on a lit comb with a seal pointing at them say what the
+           screen is, and the two lines were noise over that. The stage is the
+           cards alone, so layOutCards's chrome sum is zero here. -->
       <div class="sv-comb-stage" id="svLevelUpBox">
-        <div class="sv-title">Level up</div>
-        <div class="sv-sub">Pick one</div>
         <div class="sv-cards" id="svCards"></div>
       </div>
     </div>
@@ -2909,6 +2941,16 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
                deleted the only way back into the water, on every device, with
                the button still in the DOM measuring nothing. -->
           <button class="sv-btn sv-ldg-go" id="svRestartBtn">Try again</button>
+          <!-- THE OTHER WAY OUT, and the quieter of the two on purpose.
+               A ghost under the full-width primary rather than beside it: the
+               question the bar is asking is "again?", and a second button of
+               equal weight beside Try again turns one obvious answer into a
+               choice between two. It is here at all because until now dying
+               was a one-way door — the only route back to the menu, the
+               accessory drawer and the leaderboard screen was to reload the
+               page. Same width so the column reads as a column, same label as
+               the pause panel's, because it is the same door. -->
+          <button class="sv-btn sv-btn-ghost sv-ldg-go sv-ldg-menu" id="svMenuBtn">${escapeHtml(uiText('mainMenuButton'))}</button>
           <div class="sv-tip-row" id="svTipRow"></div>
         </div>
 
@@ -2957,7 +2999,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
     // Try again is the one control on the score card that has to work — it is
     // the way back into the game. It was reached only through its click
     // binding until the pad needed to find it by name.
-    'svGameOverTitle', 'svRestartBtn',
+    'svGameOverTitle', 'svRestartBtn', 'svMenuBtn',
     'svNextRow', 'svNextInput', 'svNextRoll',
     'svTrophy', 'svTrophyShare', 'svTrophySave', 'svTrophyStatus',
     'svShotView', 'svShotImg', 'svShotShare', 'svShotSave', 'svShotStatus', 'svShotClose',
@@ -2987,7 +3029,7 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
   // dissolves like the other surfaces. AFTER the markup above is in the tree —
   // it appends its own overlay to `root`, and the order decides which sits on
   // top of which when two are somehow up at once.
-  initPauseMenu({ root, reveal: runReveal, revealSeconds, onResume, onRestart: onPauseRestart });
+  initPauseMenu({ root, reveal: runReveal, revealSeconds, onResume, onRestart: onPauseRestart, onMainMenu: onPauseMainMenu });
 
   // The hive goes into `root` rather than into .sv-hud — see the CSS for the
   // three separate reasons that flex row cannot hold it. main.js drives what it
@@ -3037,6 +3079,17 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
     commitNextSeal();
     hideAllMenus();
     callbacks.onRestart();
+  });
+
+  // ...and the one beside it. Same three steps in the same order and for the
+  // same reasons: the next seal's name is committed before the field holding
+  // it goes away, the card comes down, and main.js decides what the water does
+  // next. A player who rolled a name and then chose the menu over another run
+  // keeps the roll — the name belongs to them, not to the button they pressed.
+  bindMenuSounds(document.getElementById('svMenuBtn')).addEventListener('click', () => {
+    commitNextSeal();
+    hideAllMenus();
+    callbacks.onMainMenu?.();
   });
 
   // --- the next seal's name ------------------------------------------------
@@ -3333,6 +3386,94 @@ export function hideLeaderboard() {
   boardPanel?.classList.add('sv-hidden');
 }
 
+// --- Seal sports ------------------------------------------------------------
+// THE OTHER THINGS A SEAL CAN PLAY, behind the fifth hex on the main menu. A
+// list on the same surface the Leaderboard is (an .sv-center panel over the
+// canvas, under the menu's own z-index rules — see the note on labelLayer in
+// systems/mainMenu.js), because it is a menu of menus and not a place: pick a
+// sport and the panel goes with the rest of the main menu on the way into it.
+//
+// ONE SPORT WORKS. The ball game is systems/versus.js; it used to sit behind a
+// `?versus` URL flag, and what the button does with it is main.js's business
+// (`onBall`) — the mode has to be switched on BEFORE the run is built, because
+// the arena's width reads the flag when the walls are measured, and none of
+// that belongs in a DOM panel. The other two are stubs: a greyed button with
+// the name and "Coming soon" under it, so the list reads as a list and the
+// shape of the screen is settled before the games are.
+//
+// Every word on it is a row of uiText.csv, including the two stubs' names —
+// they are Ethan's from chat, and they carry review=TRUE until he has read them
+// in the table. The ball game's own name is a [DRAFT] row and fails the copy
+// gate until it is written.
+let sportsPanel = null;
+let sportsBall = null;
+
+function buildSealSportsPanel() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sv-center sv-hidden';
+  wrap.id = 'svSportsPanel';
+  wrap.innerHTML = `
+    <div class="sv-menu sv-sports">
+      <div class="sv-title"></div>
+      <div class="sv-sports-list"></div>
+      <button class="sv-btn" id="svSportsBack" type="button"></button>
+    </div>
+  `;
+  wrap.querySelector('.sv-title').textContent = uiText('sealSports');
+  const back = wrap.querySelector('#svSportsBack');
+  back.textContent = uiText('sealSportsBack');
+  const list = wrap.querySelector('.sv-sports-list');
+
+  // The name is passed in already read, with a literal id at each call: the
+  // table's test joins reads to rows by that literal, and a read through a
+  // variable inside the helper is one it cannot see.
+  const sport = (id, text, { soon = false } = {}) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sv-btn sv-sport';
+    b.dataset.sport = id;
+    const name = document.createElement('span');
+    name.className = 'sv-sport-name';
+    name.textContent = text;
+    b.appendChild(name);
+    if (soon) {
+      // disabled, not hidden: a sport that is coming is a promise the list
+      // makes on purpose, and a button that cannot be pressed is how a DOM
+      // says "not yet" without a word of its own.
+      b.disabled = true;
+      const kicker = document.createElement('span');
+      kicker.className = 'sv-sport-soon';
+      kicker.textContent = uiText('sportComingSoon');
+      b.appendChild(kicker);
+    }
+    list.appendChild(b);
+    return b;
+  };
+  sportsBall = bindMenuSounds(sport('sportBall', uiText('sportBall')));
+  sport('sportFinball', uiText('sportFinball'), { soon: true });
+  sport('sportSealitaire', uiText('sportSealitaire'), { soon: true });
+
+  root.appendChild(wrap);
+  bindMenuSounds(back).addEventListener('click', hideSealSports);
+  return wrap;
+}
+
+/**
+ * Open the list. `onBall` is what pressing the ball game does — it closes this
+ * panel itself on the way into the run (closeMainMenu in main.js hides every
+ * panel the menu opened), so this does not.
+ */
+export function showSealSports({ onBall } = {}) {
+  if (!root) return;
+  if (!sportsPanel) sportsPanel = buildSealSportsPanel();
+  sportsBall.onclick = typeof onBall === 'function' ? () => onBall() : null;
+  sportsPanel.classList.remove('sv-hidden');
+}
+
+export function hideSealSports() {
+  sportsPanel?.classList.add('sv-hidden');
+}
+
 // Called SYNCHRONOUSLY from the splash's dismiss handler, not deferred to the
 // next frame. startGame clears pending input edges itself, so the same keypress
 // doesn't also spend a boost charge on frame one.
@@ -3461,6 +3602,19 @@ export function setPauseButtonVisible(v) {
   if (!v) releasePauseHold();
 }
 
+/**
+ * Take the HUD off the screen without a run ending.
+ *
+ * The counterpart to showHud, and it exists for exactly one route: abandoning
+ * a run for the main menu. Every other way out of a run either ends it (the
+ * score card hides the HUD itself) or never showed it in the first place — so
+ * until the menu was reachable mid-run there was nothing to write here, and
+ * the bars would have carried the dead run's numbers into the menu's frame.
+ */
+export function hideHud() {
+  el.svHud.classList.add('sv-hidden');
+}
+
 export function showHud() {
   el.svHud.classList.remove('sv-hidden');
   // The seal's gauges are smoothed now, and smoothing carries state across the
@@ -3524,6 +3678,8 @@ export function hideAllMenus() {
   // is a 3D button on the canvas, and this panel is a DOM overlay), so a run
   // can begin with the table still up.
   hideLeaderboard();
+  // And the sports list, for the same reason.
+  hideSealSports();
   // Anything still rolling or still counting out the hand. A restart from a
   // menu opened over a live level-up would otherwise leave timers landing cards
   // that are about to be deleted.
@@ -3635,8 +3791,37 @@ function cancelReveal(name) {
 // must not be clickable, or a held fire button picks whatever the pointer
 // happens to be over before the menu has finished arriving.
 function setMenuLocked(locked) {
+  const was = menuLocked;
   menuLocked = locked;
   el.svLevelUpMenu?.classList.toggle('sv-menu-locked', locked);
+  // AND THE FIRST HOVER IS THE ONE THE LOCK ATE.
+  //
+  // `.sv-menu-locked` is `pointer-events: none` on the whole menu, so for the
+  // two thirds of a second the hand takes to slam in, the cards receive
+  // nothing. Turning the pointer back on does not hand a stationary cursor a
+  // `pointerenter` — the pointer did not enter anything, the card arrived under
+  // it — and the hand deals into the middle of the screen, which on a mouse is
+  // where the pointer already is, because it is the aim. So the tip did not
+  // appear until the player moved off a card and back onto it, and whether that
+  // happened at all was down to where they had last been aiming.
+  //
+  // Only on the falling edge: setMenuLocked(false) is called on paths that were
+  // never locked (see revealUpgradesIn's `!slamming` branch) and re-showing a
+  // tip that is already up would restart its fade.
+  if (was && !locked) hoverCardUnderPointer();
+}
+
+// The card the pointer is sitting on, entered as though it had just been
+// pointed at. See ui/hoverPoint.js for why this asks rather than being told.
+function hoverCardUnderPointer() {
+  const card = hoveredElement('.sv-card');
+  if (!card || !el.svCards?.contains(card)) return;
+  // ALREADY UP ON THIS ONE. Three cards land one after another and each asks,
+  // so without this the card under the pointer would have its box rebuilt and
+  // re-placed on every landing — and the unlock at the end would do it a fourth
+  // time, restarting a fade the player has been reading through.
+  if (cardFxCard === card && cardTipShowing()) return;
+  enterCard(card);
 }
 
 // A surface's settings: the shared field, then whatever that surface overrides.
@@ -3931,6 +4116,7 @@ function layOutCardsNow() {
     }
   }
   const laid = cardCells(slots.length, fit.box, fit.stacked);
+  handStacked = !!fit.stacked;
 
   lastBox = fit.box;
   watchSlotSize(slots[0]?.querySelector('.sv-card'));
@@ -4268,6 +4454,25 @@ function cellPoint(spot) {
   };
 }
 
+// POINTING AT A CARD, whatever put the pointer there.
+//
+// One body for the three things that mean "this card is the one being looked
+// at": a mouse entering it, a thumb holding it, and the menu unlocking under a
+// pointer that was already on it (see setMenuLocked). It was written out at the
+// first two call sites and the third had to be a third copy or this.
+function enterCard(card) {
+  if (!card) return;
+  // The lock is about picking, not about reading — and a card that has landed
+  // has stopped moving, so the box has something to anchor to. See the
+  // .sv-lit rule beside .sv-menu-locked in the stylesheet: the two have to
+  // agree about which cards are readable, and the class is the one fact both
+  // can ask.
+  if (menuLocked && !card.parentElement?.classList.contains('sv-lit')) return;
+  showCardEffect(card, card.dataset.effect);
+  hoverPulse(card);
+  announceCardFocus(card);
+}
+
 /**
  * POINTING AT A CARD — the comb answers from that card's own cell.
  *
@@ -4538,11 +4743,17 @@ function nextStack(choice) {
   return player.upgrades.filter((p) => p.id === choice.id).length + 1;
 }
 
-// An upgrade with `perLevelName` numbers its card: "Seal Team 1", "Seal Team
-// 2". Everything else shows its name unchanged, so this stays opt-in per
-// upgrade rather than turning every repeatable card into a counter. The base
-// name is still whatever the Upgrades tab has it set to — renaming Seal Team
-// there renames the numbered card too.
+// THE NUMBER IS GONE FROM THIS SURFACE. `perLevelName` used to number a card
+// by the stack it was offering — "Seal Team 1", "Seal Team 2" — which only ever
+// meant anything because the level-up screen could deal the same card twice. It
+// cannot any more (see availableUpgrades in entities/player.js: a card the run
+// holds is out of the pool), so every card here is a first stack and a "1"
+// after every repeatable name would be a counter that never counts.
+//
+// The flag itself is left alone rather than stripped out of the twenty-odd
+// rows that set it: the hive and the level blob are still where depth is
+// bought, and a surface that wants to say which stack it is handing over still
+// has the flag to read.
 function cardName(choice) {
   // The elements used to be ONE card that rolled which of the four it was
   // offering, and this named it after the roll. There are four cards now (see
@@ -4558,7 +4769,7 @@ function cardName(choice) {
     const suffix = choice.levelLabel(nextStack(choice));
     if (suffix) return `${choice.name} ${suffix}`;
   }
-  return choice.perLevelName ? `${choice.name} ${nextStack(choice)}` : choice.name;
+  return choice.name;
 }
 
 // `levelDescs` swaps the description at a specific stack, so a card that
@@ -4661,6 +4872,26 @@ function cardTipContent(choice, effectText) {
 // first run rather than at boot, so a session that never levels up never makes
 // one.
 let cardFx = null;
+// Whether the hand was last laid out as a column — layOutCards writes it,
+// showCardEffect reads it to pick the per-card tooltip offsets.
+let handStacked = false;
+
+// The curves CONFIG.cardTip.ease may name, as CSS timing functions — a
+// tooltip's arrival is a CSS transition, and the game's ease.js names have no
+// CSS spelling.
+const CARD_TIP_EASES = {
+  linear: 'linear',
+  out: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  inOut: 'cubic-bezier(0.65, 0, 0.35, 1)',
+  back: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+};
+function cardTipCfg() {
+  return CONFIG.cardTip ?? {};
+}
+// Which side the box sits, and the transform it arrives from — kept from the
+// show so the hide can leave the same way.
+let cardFxFrom = '';
+let cardFxCard = null; // the card the box is up on, for refreshCardTip
 
 function showCardEffect(card, text) {
   // OFF IS OFF, and this is the gate rather than cardTipContent's null. The
@@ -4703,26 +4934,101 @@ function showCardEffect(card, text) {
   cardFx.style.top = '0px';
   const h = cardFx.offsetHeight, w = cardFx.offsetWidth;
 
-  // Below by default; above when below would run off the bottom of the window,
-  // which is where the second row of a wrapped six-card hand ends up.
-  const below = drawnBottom + 8 + h <= window.innerHeight - 8;
-  const top = below ? drawnBottom + 8 - row.top
-                    : r.top + r.height * 0.104 - 8 - h - row.top;
+  // WHERE, off the hexagon: CONFIG.cardTip. Below by default; above when below
+  // would run off the bottom of the window, which is where the second row of a
+  // wrapped six-card hand ends up — or whichever side the config insists on.
+  const tc = cardTipCfg();
+  // ...AND PER CARD: this slot's own entry, from the stacked hand's list on a
+  // phone held upright and the row's otherwise, over the shared numbers.
+  const slot = [...el.svCards.querySelectorAll('.sv-card')].indexOf(card);
+  const stacked = handStacked || window.innerHeight > window.innerWidth;
+  const per = (stacked ? tc.portraitCards : tc.cards)?.[slot] ?? {};
+  const gap = tc.gap ?? 8;
+  // Offsets are SCREEN axes — x right, y down — whichever side the box is on,
+  // so a handle dragged in the look page writes them without a sign to think
+  // about. The gap is the one number that follows the side.
+  const offX = (tc.offsetX ?? 0) + (per.x ?? 0);
+  const offY = (tc.offsetY ?? 0) + (per.y ?? 0);
+  const want = per.side && per.side !== 'auto' ? per.side : tc.side;
+  // The hexagon's DRAWN extents, off the clip-path polygon: its side points
+  // sit at 5.7% and 93.9% of the box, its top and bottom points at 10.4% and
+  // 89.6%.
+  const drawnLeft = r.left + r.width * 0.057;
+  const drawnRight = r.left + r.width * 0.939;
+  const drawnTop = r.top + r.height * 0.104;
+  const fits = drawnBottom + gap + h <= window.innerHeight - 8;
+  const side = want === 'below' || want === 'above' || want === 'left' || want === 'right' ? want : (fits ? 'below' : 'above');
+  let top; let left;
+  if (side === 'left' || side === 'right') {
+    top = r.top + r.height / 2 - h / 2;
+    left = side === 'left' ? drawnLeft - gap - w : drawnRight + gap;
+  } else {
+    top = side === 'below' ? drawnBottom + gap : drawnTop - gap - h;
+    left = centre + row.left - w / 2;
+  }
+  top += offY - row.top;
+  left += offX - row.left;
 
   // Clamped to the window, so a card on the end of the row doesn't push the
   // tooltip off the side of the screen.
-  let left = centre - w / 2;
   const min = 8 - row.left, max = window.innerWidth - 8 - w - row.left;
   left = Math.max(min, Math.min(max, left));
+  const minY = 8 - row.top, maxY = window.innerHeight - 8 - h - row.top;
+  top = Math.max(minY, Math.min(maxY, top));
 
   cardFx.style.left = `${Math.round(left)}px`;
   cardFx.style.top = `${Math.round(top)}px`;
   cardFx.style.visibility = '';
+  cardFxCard = card;
+
+  // HOW IT ARRIVES: a fade, and a slide in toward the card from `rise` px with
+  // a grow from `scaleFrom`, over `fadeIn` on the named curve — from further
+  // off along the side it is on. The start pose is written with no transition
+  // and the box laid out on it, so the transition then runs from there rather
+  // than from wherever it last was.
+  const rise = tc.rise ?? 6;
+  const fromX = side === 'left' ? -rise : side === 'right' ? rise : 0;
+  const fromY = side === 'below' ? rise : side === 'above' ? -rise : 0;
+  cardFxFrom = `translate(${fromX}px, ${fromY}px) scale(${tc.scaleFrom ?? 0.96})`;
+  const easeCss = CARD_TIP_EASES[tc.ease] ?? CARD_TIP_EASES.out;
+  const wasOn = cardFx.classList.contains('sv-fx-on');
+  if (!wasOn) {
+    cardFx.style.transition = 'none';
+    cardFx.style.transform = cardFxFrom;
+    void cardFx.offsetWidth; // lay the start pose out
+  }
+  const tIn = Math.max(0, tc.fadeIn ?? 0.12);
+  cardFx.style.transition = `opacity ${tIn}s ${easeCss}, transform ${tIn}s ${easeCss}`;
+  cardFx.style.transform = 'translate(0px, 0px) scale(1)';
   cardFx.classList.add('sv-fx-on');
 }
 
+/**
+ * THE LOOK PAGE'S HOOK: put the tooltip up on a card as a hover would, or
+ * take it down, without a pointer — the level-up design tool pins the seal to
+ * a card's pose and wants the box that goes with it on screen while its
+ * offsets are dragged. Nothing in the game calls these.
+ */
+export function previewCardTip(card) {
+  if (!card) { hideCardEffect(); return; }
+  showCardEffect(card, card.dataset?.effect);
+}
+export function cardTipShowing() {
+  return !!cardFx?.classList.contains('sv-fx-on');
+}
+/** Re-place the box that is up, after CONFIG.cardTip changed under it. */
+export function refreshCardTip() {
+  if (cardTipShowing() && cardFxCard?.isConnected) showCardEffect(cardFxCard, cardFxCard.dataset?.effect);
+}
+
 function hideCardEffect() {
-  cardFx?.classList.remove('sv-fx-on');
+  if (!cardFx) return;
+  const tc = cardTipCfg();
+  const tOut = Math.max(0, tc.fadeOut ?? 0.12);
+  const easeCss = CARD_TIP_EASES[tc.ease] ?? CARD_TIP_EASES.out;
+  cardFx.style.transition = `opacity ${tOut}s ${easeCss}, transform ${tOut}s ${easeCss}`;
+  if (cardFxFrom) cardFx.style.transform = cardFxFrom;
+  cardFx.classList.remove('sv-fx-on');
 }
 
 // How far through the run the rarity odds have travelled, 0..1.
@@ -4881,6 +5187,13 @@ function igniteStep(card, step) {
   // slam and a switched-off slam both take, and neither of those should cost
   // the player the payoff.
   combLanding(card, step);
+
+  // AND IF IT LANDED UNDER THE POINTER, it is being pointed at. The pointer did
+  // not move — the card arrived beneath it — so no pointerenter is coming, the
+  // same reason setMenuLocked has to ask on its own. Per card rather than once
+  // at the end, because at the tuned stagger the first card lands a second and
+  // a half before the last one.
+  hoverCardUnderPointer();
 }
 
 // The read-out on a clock of its own — what happens when the slam is off
@@ -5281,8 +5594,38 @@ function flyCardToHive(id, card, from) {
   });
 }
 
+// The cards a run holds that could still take another stack, as upgrade
+// DEFINITIONS rather than the {id, count, rarity} entries levelableUpgrades
+// returns — the deal needs `weight`, `desc` and the rest of the row. The tier
+// is dropped on the way through on purpose: a card dealt on this screen rolls
+// its own, the way every other card here does, rather than arriving at the
+// best tier already held (which is the level blob's rule, in its own file).
+function deepenable() {
+  const out = [];
+  for (const entry of levelableUpgrades()) {
+    const def = CONFIG.upgrades.find((u) => u.id === entry.id);
+    if (def) out.push(def);
+  }
+  return out;
+}
+
 export function showLevelUp() {
-  const pool = availableUpgrades();
+  // WHAT THE RUN HAS NOT GOT YET. availableUpgrades() deals new cards only —
+  // a card already held is bought deeper on the hive and off the level blob,
+  // not here (see entities/player.js).
+  //
+  // ...AND THE FLOOR UNDER THAT. A run long enough to collect the whole deck
+  // used to be impossible to reach the end of, because a held card stayed in
+  // the pool until it capped; now the pool really can empty, and an empty
+  // level-up screen is a soft-lock — the game is paused behind a menu with
+  // nothing on it to click. drawUpgrades already says so in its own comment.
+  //
+  // So the last resort is the deepening pool: what a level blob would have
+  // paid out, dealt as cards. It is not the rule being quietly walked back —
+  // a stack is only ever offered here when there is nothing new left in the
+  // game to offer, which is a state most runs never see.
+  const fresh = availableUpgrades();
+  const pool = fresh.length ? fresh : deepenable();
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
 
   // WHAT THE REEL ROLLS THROUGH, when the reel is the arrival in use — the rest
@@ -5386,12 +5729,7 @@ export function showLevelUp() {
     // reason. On the element rather than in a closure so selectCard() — which
     // only ever has the element — shows the same box the mouse does.
     card._svTip = cardTipContent(choice, card.dataset.effect);
-    card.addEventListener('pointerenter', () => {
-      if (menuLocked) return;
-      showCardEffect(card, card.dataset.effect);
-      hoverPulse(card);
-      announceCardFocus(card);
-    });
+    card.addEventListener('pointerenter', () => enterCard(card));
     card.addEventListener('pointerleave', () => {
       hideCardEffect();
       announceCardFocus(null);
@@ -5403,12 +5741,7 @@ export function showLevelUp() {
     // pulling the thumb off cancels both. See ui/press.js for why a slipped
     // press needs its click eaten rather than merely ignored.
     pressable(card, {
-      onHold: () => {
-        if (menuLocked) return;
-        showCardEffect(card, card.dataset.effect);
-        hoverPulse(card);
-        announceCardFocus(card);
-      },
+      onHold: () => enterCard(card),
       onHoldEnd: () => { hideCardEffect(); announceCardFocus(null); },
       onSlip: () => { hideCardEffect(); announceCardFocus(null); },
     });
@@ -5637,7 +5970,7 @@ function resetGameOverNav() {
 // gameOverAll() is a list of elements, not a query.
 function gameOverAll() {
   return [el.svTrophyShare, el.svTrophySave, el.svSheetShare, el.svSheetSave,
-    el.svNameSubmit, el.svRestartBtn, el.svNextRoll, el.svTipJar,
+    el.svNameSubmit, el.svRestartBtn, el.svMenuBtn, el.svNextRoll, el.svTipJar,
     // The preview sheet's own three. In this list rather than beside it so the
     // highlight is cleaned up with everything else when the card goes away —
     // see the note above about working from the unfiltered list.
@@ -8127,6 +8460,12 @@ function openHiveView() {
   el.svHiveView.classList.remove('sv-hidden');
   wireHiveView();
   wireHiveEscape();
+  // The sheet opens UNDER the pointer that opened it, and a pointer that has
+  // not moved gets no `pointerover` from a stage that has just appeared beneath
+  // it. Same asking-rather-than-waiting as the corner hive and the level-up
+  // hand — see ui/hoverPoint.js.
+  const at = hoveredElement('.sv-hive-tile');
+  if (at && el.svHiveViewStage.contains(at)) finalTip(at);
   el.svHiveViewClose?.focus?.({ preventScroll: true });
 }
 

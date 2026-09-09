@@ -180,6 +180,21 @@ function addPair(rand = Math.random) {
 
 function addOne(state, rand = Math.random) {
   const mesh = createVisual(SARDINE_SWIRL_ASSETS[0]);
+  // ROLL AFTER HEADING, WHICH IS THE ORDER THREE DOES NOT DEFAULT TO. The loop
+  // below writes two angles on this object: `rotation.z` noses it along the
+  // flow and `rotation.y` is the whip. Under three's default 'XYZ' the matrix
+  // is Rx.Ry.Rz, so the heading is applied FIRST and the whip then turns the
+  // already-nosed body about the WORLD's y — which swings the nose out of the
+  // screen plane and reads as a fish cartwheeling rather than flashing. 'ZYX'
+  // puts the roll first, on a body still in its rest pose where +y IS its long
+  // axis, and lets the heading turn the rolled fish. entities/projectiles.js
+  // sets the same order on a rolling shot for the same reason; the swirl is
+  // built on systems/shrimpRing.js, which has no roll, and so never had it.
+  //
+  // SET BEFORE ANY ANGLE IS WRITTEN. Changing `order` re-interprets the euler
+  // that is already there rather than converting it, so a body that has been
+  // posed once and then reordered is posed differently.
+  mesh.rotation.order = 'ZYX';
   group.add(mesh);
   instances.push({
     mesh,
@@ -290,9 +305,18 @@ export function updateSardineSwirl(dt, scene, playerPos, level, stats, enemiesLi
     const vy = _deriv.z;
     if (vx * vx + vy * vy > 1e-9) inst.mesh.rotation.z = Math.atan2(vy, vx) - Math.PI / 2;
     // THE WHIP, about the body's own long axis. Not `rotation.z` — that is the
-    // angle above, and the second one to run would win. This is what makes the
-    // chrome: CONFIG.chromeBlade is a view-space horizon with one tight key
-    // lobe, an environment a body has to TURN THROUGH before it shows anything.
+    // angle above, and the second one to run would win. It is the LONG axis
+    // only because addOne set `rotation.order` to 'ZYX' and because
+    // orientationQuaternion sends the asset's `forward` to entity +y; get
+    // either wrong and the school still swims while every fish in it
+    // cartwheels. Both are asserted — the order in tools/looks/sardine-swirl.js,
+    // the axis pair in tools/sardine-swirl-test.mjs.
+    //
+    // On the blade fallback this is what makes the chrome: CONFIG.chromeBlade
+    // is a view-space horizon with one tight key lobe, an environment a body
+    // has to TURN THROUGH before it shows anything. On the model it is the
+    // flash of a baitfish turning its flank to the light, which is the same
+    // read arrived at by having the silver painted on rather than shaded in.
     inst.mesh.rotation.y += inst.roll * dt;
 
     // HOT WHILE IT IS BITING — stoked on contact below, carried to now and

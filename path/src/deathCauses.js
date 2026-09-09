@@ -3,8 +3,9 @@
 //
 // Every point of damage the player takes already arrives with a `source`: a
 // creature's own type key ('megalodon', 'walkingCrab'), a boss attack
-// ('boss:boatSalvo'), or one of the three things in the water that aren't
-// animals at all ('drowning', 'lightning', 'enemy shot'). That is thirty-odd
+// ('boss:boatSalvo'), the hull whose deck gun threw the fish ('boat',
+// 'trawler'), or one of the three things in the water that aren't animals at
+// all ('drowning', 'lightning', 'enemy shot'). That is thirty-odd
 // strings, which is the right vocabulary for the playtest ledger and exactly
 // the wrong one for quips.csv — nobody writing a game-over line thinks "this
 // one is for abyssShark, megalodon and mightyMeg".
@@ -70,7 +71,15 @@ export const DEATH_CAUSES = [
   // it fires the same three patterns, so its shells already arrived under this
   // cause through the prefix. Only a death against the HULL carried the bare
   // `bossYacht` key, which is the one that was landing nowhere.
-  { id: 'boat', label: 'the trawler or the yacht', threat: 'Boats', prefix: 'boss:boat', sources: ['bossBoat', 'bossYacht'] },
+  //
+  // `boat` and `trawler` are the ORDINARY hulls (systems/boats.js). They never
+  // touch the seal — a hull's contact damage is 0 — but their deck guns do, and
+  // every shot off a deck is signed with the hull's key rather than the
+  // ammunition's, so a fish, a mussel or a gull thrown from a trawler kills you
+  // as the trawler. Those shots used to arrive as `boat:fish`, `boat:mussel`
+  // and so on and filed under `shot` below, which told the player "something
+  // that shoots" when the thing was a boat in plain view.
+  { id: 'boat', label: 'a boat', threat: 'Boats', prefix: 'boss:boat', sources: ['bossBoat', 'bossYacht', 'boat', 'trawler'] },
   { id: 'barracuda', label: 'a barracuda', threat: 'Barracuda', sources: ['barracuda'] },
   // Its own cause rather than riding with the barracuda it shares a role with.
   // The two are interchangeable on the spawn table and not at all
@@ -87,6 +96,17 @@ export const DEATH_CAUSES = [
   // own food; the puffer is solitary mid-tier traffic in the ray's tier, and
   // the ray gets its own cause for exactly the same reason.
   { id: 'puffer', label: 'a pufferfish', threat: 'Pufferfish', sources: ['puffer'] },
+  // The jellyfish, and its own cause for the same reason the puffer and the ray
+  // above have theirs: it is a solitary mid-tier body in that tier, and it is
+  // the only death in the game the player brought entirely on themselves. It
+  // never once swam at them.
+  //
+  // BOTH STRINGS ARE LOREM — see design/COPY-TODO.md. `label` is read
+  // mid-sentence and lowercase; `threat` heads a row on the score screen's
+  // Threats tab. A cause nobody has written a quip for falls back to the
+  // general pool, which is a supported state, so this classifies the creature
+  // (which is what tools/quip-test.mjs asks for) without inventing its words.
+  { id: 'jellyfish', label: 'lorem ipsum dolor', threat: 'Lorem ipsum', sources: ['jellyfish'] },
   // Kept although the dolphin no longer spawns as wildlife (CONFIG.enemies
   // .dolphin is weight 0 — see the note there): the body is still in the game
   // as the companion stub, and a cause that exists costs nothing while a
@@ -105,10 +125,12 @@ export const DEATH_CAUSES = [
   { id: 'boss', label: 'a boss', threat: 'Boss attacks', prefix: 'boss:', sources: ['bossShark', 'bossOrca', 'bossSquid', 'bossCrab', 'bossMosasaur', 'bossHammerhead', 'bossBoat', 'bossYacht', 'bossAnglerfish'] },
   { id: 'drowning', label: 'running out of air', threat: 'Drowning', sources: ['drowning'] },
   { id: 'lightning', label: 'a lightning strike', threat: 'Lightning', sources: ['lightning'] },
-  // `boat:` is the deck guns on the ordinary boats and trawlers — the fish
-  // they throw and the artillery trawler's mussels and gulls (systems/boats.js).
-  // They file here rather than under `boat`, which is the two BOSS hulls.
-  { id: 'shot', label: 'something that shoots', threat: 'Enemy fire', prefix: 'boat:', sources: ['enemy shot'] },
+  // `enemy shot` is combat.js's fallback for an enemy projectile that carries
+  // no `source` at all — a shot nobody signed. Every gun in the game signs its
+  // shots now (the deck guns with their hull, a boss's ordnance with `boss:`),
+  // so this fires only when a new shooter forgets to, and it is kept as a
+  // cause so that death still has a name rather than none.
+  { id: 'shot', label: 'something that shoots', threat: 'Enemy fire', sources: ['enemy shot'] },
 ];
 
 export const DEATH_CAUSE_IDS = DEATH_CAUSES.map((c) => c.id);

@@ -396,8 +396,12 @@ S.resetSettings('controls');
 // ---------------------------------------------------------------------------
 section('The menu itself');
 const pause = await import('../path/src/ui/pauseMenu.js');
+// The button's label, read from the same table the menu reads it from — see
+// the note above the main-menu section.
+const { UI_TEXT } = await import('../path/src/uiTextTable.js');
 let resumed = 0;
 let restarted = 0;
+let toMenu = 0;
 // No reveal: the mask path is ui.js's and is covered by its own surfaces. What
 // matters here is that the menu works when the reveal cannot run at all, which
 // is a real configuration (reduced motion, no mask support).
@@ -407,6 +411,7 @@ pause.initPauseMenu({
   revealSeconds: () => 0,
   onResume: () => { resumed++; },
   onRestart: () => { restarted++; },
+  onMainMenu: () => { toMenu++; },
 });
 
 const wrap = document.getElementById('svPauseMenu');
@@ -617,6 +622,64 @@ pause.showPauseMenu();
 [...document.querySelectorAll('#svPauseFoot .sv-btn')].find((b) => b.textContent === 'Restart run').click();
 check('Restart calls back exactly once', restarted === 1, String(restarted));
 pause.hidePauseMenu();
+
+// ---------------------------------------------------------------------------
+// THE WAY OUT OF THE RUN ENTIRELY, which until now did not exist: every route
+// off this panel led back into the same run or into a new one, and the main
+// menu — where the accessory drawer, the leaderboard and the settings live —
+// could only be reached by reloading the page.
+//
+// The label is read out of uiText.csv rather than typed here, which is the
+// point of the table: a test that hard-codes the button's text is a test that
+// fails the day Ethan writes the line, and one that would then be "fixed" by
+// pasting his copy into a .mjs file where nothing can see it again.
+// ---------------------------------------------------------------------------
+section('The main menu is reachable from a paused run');
+const menuLabel = UI_TEXT.mainMenuButton;
+const footLabels = () => [...document.querySelectorAll('#svPauseFoot .sv-btn')].map((b) => b.textContent);
+pause.showPauseMenu();
+const menuBtn = [...document.querySelectorAll('#svPauseFoot .sv-btn')].find((b) => b.textContent === menuLabel);
+check('a paused run offers it', !!menuBtn, footLabels().join(' / '));
+// AFTER Restart, not before it. Resume is the button the thumb is already on
+// and has to stay first; the other two are the pair being chosen between, and
+// leaving a run is the further-reaching of them, so it is the later one.
+check('...after Restart run, not before it',
+  footLabels().indexOf(menuLabel) > footLabels().indexOf('Restart run'),
+  footLabels().join(' / '));
+menuBtn?.click();
+check('it calls back exactly once, and is not the restart', toMenu === 1 && restarted === 1,
+  `menu ${toMenu}, restart ${restarted}`);
+pause.hidePauseMenu();
+
+// A CONTROL THAT CANNOT HONESTLY DO ANYTHING IS WORSE THAN A MISSING ONE. The
+// standalone route IS the main menu — the panel was opened from it — so a
+// button leading there would either do nothing or take the player to the
+// screen they are standing on, and the only way to find out is to press it.
+// Dropped for exactly the reason Restart run is dropped on the same route.
+pause.showPauseMenu({ standalone: true });
+check('...and the main menu does not offer a route back to itself',
+  !footLabels().includes(menuLabel), footLabels().join(' / '));
+const wasMenu = toMenu;
+pause.hidePauseMenu();
+
+// EVERY BUTTON IN THE FOOTER IS A CURSOR STOP. The pad walks `rows`, which is
+// rebuilt from footEl's children on every tab switch — so a button appended to
+// the footer without that rebuild seeing it is a control a pad player can look
+// at and never reach. It is generated from the children today; this is what
+// notices the day it stops being.
+pause.showPauseMenu();
+{
+  const reached = new Set();
+  // Twice round the list, so a cursor that wraps has been everywhere it goes.
+  const rowsHere = document.querySelectorAll('#svPauseBody .sv-pm-row').length + 12;
+  for (let i = 0; i < rowsHere * 2; i++) { menuKey('ArrowDown'); for (const s of selected()) reached.add(s); }
+  const foot = [...document.querySelectorAll('#svPauseFoot .sv-btn')];
+  check('the cursor reaches every footer button, the new one included',
+    foot.every((b) => reached.has(b)),
+    foot.filter((b) => !reached.has(b)).map((b) => b.textContent).join(', ') || `all ${foot.length}`);
+}
+pause.hidePauseMenu();
+check('...and standalone left the counter alone', toMenu === wasMenu, String(toMenu - wasMenu));
 
 // A closed menu must be inert: its window listener is registered for the life
 // of the page, and arrow keys have to go back to steering the seal.

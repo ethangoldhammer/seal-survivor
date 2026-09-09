@@ -13,6 +13,7 @@ import { emit } from '../entities/particles.js';
 import {
   createBakalarNet, updateBakalarNet, setBakalarNetVisible, seatBakalarNet, kickBakalarNet,
 } from './bakalarNet.js';
+import { retireMaterial } from './programPin.js';
 
 // Bakalar's Boat — a friendly trawler that sails the surface on a timer,
 // dragging a net behind it. Anything the net sweeps through is caught, hauled
@@ -335,7 +336,7 @@ export function resetBakalar(scene = null) {
   // ...and their flames with them: the flame is a child of the bomb so removing
   // the bomb hides it, but its material is per bomb (own flicker phase) and
   // nothing else frees it.
-  for (const b of bombs) { b.flame?.material.dispose(); b.mesh.parent?.remove(b.mesh); }
+  for (const b of bombs) { retireMaterial(b.flame?.material); b.mesh.parent?.remove(b.mesh); }
   bombs.length = 0;
   if (boat) boat.visible = false;
   if (netMesh) netMesh.visible = false;
@@ -767,7 +768,7 @@ function updateBombs(dt, scene, enemiesList, hooks) {
     // ...and the wick goes with it. The flame is a child of the bomb mesh, so
     // scene.remove below takes it off screen — but the material is per bomb
     // (each flickers on its own phase) and nothing else will ever free it.
-    b.flame?.material.dispose();
+    retireMaterial(b.flame?.material);
     // The net is what the bomb went off INSIDE. Its own radius, not the
     // blast's: the shockwave reaches across the arena and the twine only has
     // the net's width to move in, so feeding it s.radius punched every node at
@@ -932,7 +933,7 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   const active = level > 0 && CONFIG.bakalar.enabled;
   if (!active) {
     if (sailing) { releaseAll(); sailing = false; boat.visible = false; netMesh.visible = false; setBakalarNetVisible(false); }
-    for (const b of bombs) { b.flame?.material.dispose(); scene.remove(b.mesh); }
+    for (const b of bombs) { retireMaterial(b.flame?.material); scene.remove(b.mesh); }
     bombs.length = 0;
     // Nothing is armed any more, and the blink writes a SHARED material — left
     // unpainted it would keep whatever half of the flash the last bomb died on

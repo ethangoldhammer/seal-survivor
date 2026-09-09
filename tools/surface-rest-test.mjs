@@ -254,7 +254,7 @@ console.log('\nphysics is untouched');
   // and the new band must not have moved it.
   const src = readFileSync(resolve(HERE, '../path/src/entities/player.js'), 'utf8');
   check('aboveSurface is still the bare waterline test',
-    src.includes('player.aboveSurface = pos.y > bounds.surfaceY;'));
+    src.includes('seal.aboveSurface = pos.y > bounds.surfaceY;') /* updatePlayer runs on `seal` (player 1 or 2) */);
   check('gravity still keys off that same line',
     src.includes('const airborne = pos.y > bounds.surfaceY;'));
   check('surfaceRest never feeds the physics',

@@ -376,10 +376,14 @@ export function equipAccessory(key) {
   // The bare seal stands the way the bust was composed. An accessory with no
   // list does too — a new one is a profile until somebody says otherwise, which
   // is the same shape every other optional field here has.
+  //
+  // THE FIRST ENTRY, ALWAYS. This used to be a coin over the whole list, so the
+  // same hat came up in a different pose each time it went on; putting one on
+  // is a choice, and a choice that answers differently every time reads as the
+  // screen not listening. The later entries stay in the list as the authored
+  // alternatives — a pose is changed by reordering them, not by clicking again.
   const turns = cfg.items?.[cfg.equipped]?.showTurns;
-  turn = Array.isArray(turns) && turns.length
-    ? turns[(Math.random() * turns.length) | 0]
-    : 0;
+  turn = Array.isArray(turns) && turns.length ? turns[0] : 0;
   return cfg.equipped;
 }
 

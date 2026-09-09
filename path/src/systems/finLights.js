@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { FLIPPER_SIDES } from '../flipperSide.js';
 import { finElements, activeElement, elementColor, elementGlow, levelOf } from './elements.js';
+import { retireMaterial } from './programPin.js';
 
 // ============================================================================
 // FIN LIGHTS — the colour a flipper wears once Flippers Up! has lit it.
@@ -163,7 +164,7 @@ export function finLightColor(side) {
 export function resetFinLights(scene) {
   for (const l of lights.values()) {
     scene?.remove(l.mesh);
-    l.mat.dispose();
+    retireMaterial(l.mat);
   }
   lights.clear();
   clock = 0;

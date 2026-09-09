@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { CONFIG, difficultyRamp, enemyPaceMul } from '../config.js';
 import { createVisual, hasModel } from '../assets.js';
+import { versusActive } from './versusFlag.js';
 import { bounds, seabedTopY } from '../arena.js';
 import { pickups, spawnXpOrb } from '../entities/pickups.js';
+import { magnetRadius, magnetSpeed, magnetDistance } from './chumMagnet.js';
 import { recordSpawn } from './playtest.js';
 import { primeBoatDebris, spawnBoatDebris, updateBoatDebris, resetBoatDebris, blastDebris } from './boatDebris.js';
 import { spawnCrewFor, updateCrew, resetCrew, releaseCrew, blastCrew, clearDeckCache } from './crew.js';
@@ -11,7 +13,7 @@ import { RigidBody, addBody, removeBody, blastBodies } from './rigidBody.js';
 import { updateHullWake } from './boatWake.js';
 import { emit } from '../entities/particles.js';
 import { createAttractiveClam, updateAttractiveClam, disposeAttractiveClam } from './attractiveClam.js';
-import { feedback, bossVoice } from './feedback.js';
+import { feedback, bossVoice, hitPopFor } from './feedback.js';
 import { fireBossShot } from './bossPerks.js';
 import { player } from '../entities/player.js';
 import { projectiles } from '../entities/projectiles.js';
@@ -193,6 +195,9 @@ function spawnBoat(scene, difficulty) {
     spawnScale,
     phase: Math.random() * Math.PI * 2,
     flash: 0,
+    // Whether the keel was clear of the water last frame — the edge the
+    // re-entry splash is fired on. See updateBoats.
+    wasClear: false,
     // The hull is a simulated body now — see systems/rigidBody.js. Its
     // position, its roll and its recoil all live in there, which is what lets
     // a turtle punted into it move it for real instead of playing a flinch at
@@ -358,8 +363,19 @@ function inRange(b, playerPos) {
  * `at`. A row with `turnRate` is a seeker and chases the seal; a row with
  * `blastRadius` is a shell and goes off on its fuse (bossPerks' ordnance list
  * handles the boom, exactly as it does for the boss boat's barrels).
+ *
+ * THE SHOT IS SIGNED BY THE HULL THAT FIRED IT. Every projectile carries the
+ * hull's `assetKey` ('boat' or 'trawler') as its damage `source`, never the
+ * name of the thing thrown: a seal killed by a trout off a trawler was killed
+ * by the trawler, and that is what the score screen, the headstone and the
+ * quip pool should say (deathCauses.js files both hulls under `boat`). The
+ * sources used to be `boat:fish`, `boat:mussel` and so on, which named the
+ * ammunition — a death that read "something that shoots" instead of "a boat".
+ * The playtest ledger loses the per-ammunition split; the tier is still on
+ * `b.gun.tier` and the harness tells the shots apart by `asset`.
  */
-function volley(scene, b, row, at, source) {
+function volley(scene, b, row, at) {
+  const source = b.assetKey;
   const from = muzzle(b);
   const heading = Math.atan2(at.y - from.y, at.x - from.x);
   const count = Math.max(1, row.count ?? 1);
@@ -422,7 +438,9 @@ function volley(scene, b, row, at, source) {
 export function updateBoatGun(dt, scene, b, playerPos) {
   const gun = b.gun;
   const g = CONFIG.boats.guns;
-  if (!gun || !g?.enabled) return 0;
+  // Unarmed in a versus match: the boats are there to be sunk for chum, and
+  // the deck gun is the only hostile thing about them.
+  if (!gun || !g?.enabled || versusActive()) return 0;
   const airborne = playerPos.y > bounds.surfaceY;
 
   gun.timer -= dt;
@@ -437,12 +455,12 @@ export function updateBoatGun(dt, scene, b, playerPos) {
     const which = gun.pending;
     gun.pending = null;
     if (which === 'fish') {
-      return volley(scene, b, gun.shot, aimAt(playerPos), `boat:${gun.tier}`);
+      return volley(scene, b, gun.shot, aimAt(playerPos));
     }
     const row = gun.artillery?.[which];
     if (!row) return 0;
     gun.aaNext = which === 'mussel' ? 'gull' : 'mussel';
-    return volley(scene, b, row, aimAt(playerPos), row.source ?? `boat:${which}`);
+    return volley(scene, b, row, aimAt(playerPos));
   }
 
   if (!inRange(b, playerPos)) return 0;
@@ -588,20 +606,82 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
   for (let i = boats.length - 1; i >= 0; i--) {
     const b = boats[i];
 
+    // BUOYANCY, AND WHAT TAKES OVER FROM IT IN THE AIR.
+    //
+    // The bob is the rest height, and the hull is sprung to it rather than
+    // pinned at it, so a boat driven down into the water surges back up
+    // through the line and rocks it off. Damped, or it never stops.
+    //
+    // That spring used to be the WHOLE vertical story, and it is only true
+    // while the hull is in the water. A ram from below sends a rowboat off the
+    // line at 21 u/s, and a spring reads that as displacement to be undone:
+    // the harder it was hit, the harder the water pulled it back down, so it
+    // rose barely past its own keel and snapped back inside a quarter of a
+    // second. A boat launched out of the sea is not on a spring, it is falling
+    // — and it fell at whatever the spring happened to be worth up there,
+    // which at three units of lift was more than twice gravity.
+    //
+    // So the hull's own box says how much of it is in the water, and the two
+    // forces are shared out by that:
+    //
+    //   `lift` is where it is, in hull half-heights off its float line: 0
+    //   floating, +1 with the keel clear of the water, -1 with the deck under.
+    //   Clamped at both ends, which is what stops each force running away.
+    //
+    //   `wet` is the share of the hull still in the water. 1 at the line and
+    //   anywhere below it, so NOTHING about a hull that is floating, bobbing
+    //   or being pushed under changes — this is the same spring it always was
+    //   until the keel actually breaks the surface.
+    //
+    // Buoyancy fades out over that lift and gravity fades in, so a hull clear
+    // of the water is in free fall at exactly CONFIG.arena.gravity — the same
+    // number the seal, the wreckage and the spilled chum fall at — and its
+    // MASS is already in the impulse that threw it (see applyImpulse), so a
+    // trawler leaves the water lower and slower than a rowboat for the same
+    // hit. Fully submerged the buoyant term saturates at about 1g of rise,
+    // which is what a half-submerged floater is worth and stops a hull driven
+    // deep from coming out like a cork.
+    const rest = bounds.surfaceY
+      + Math.sin(clock * CONFIG.boats.bobSpeed + b.phase) * CONFIG.boats.bobAmount;
+    const draft = Math.max(0.2, (b.halfHeight ?? 1) * (phys.draftMul ?? 1));
+    const lift = Math.max(-1, Math.min(1, (b.body.y - rest) / draft));
+    const wet = 1 - Math.max(0, lift);
+    const gravity = phys.gravity ?? CONFIG.arena?.gravity ?? 29.7;
+    b.body.addAcceleration(0,
+      -lift * draft * (phys.buoyancy ?? 30) * (lift > 0 ? wet : 1)
+      - gravity * Math.max(0, lift)
+      - b.body.vy * (phys.buoyancyDamping ?? 4.2) * wet);
+
     // THRUST. A hull under way is not on a rail any more: it holds its sailing
     // speed by accelerating toward it, so anything that shoves it costs it
     // real ground — a punted boat coasts backwards, slows, and gets back under
     // way — while a hull nothing has touched still crosses the arena at
     // exactly the speed it always did.
-    b.body.addAcceleration((b.dir * b.speed - b.body.vx) * (phys.thrust ?? 0.9), 0);
+    //
+    // Scaled by `wet` for the same reason gravity arrives with it: a screw out
+    // of the water has nothing to push against. A launched hull keeps the
+    // speed it left with, flies the arc it was given, and only starts driving
+    // again when it lands — which is most of what makes the arc read as a
+    // thrown object rather than as a boat sliding uphill.
+    b.body.addAcceleration((b.dir * b.speed - b.body.vx) * (phys.thrust ?? 0.9) * wet, 0);
 
-    // BUOYANCY. The bob is the rest height, and the hull is sprung to it
-    // rather than pinned at it, so a boat driven down into the water surges
-    // back up through the line and rocks it off. Damped, or it never stops.
-    const rest = bounds.surfaceY
-      + Math.sin(clock * CONFIG.boats.bobSpeed + b.phase) * CONFIG.boats.bobAmount;
-    b.body.addAcceleration(0, (rest - b.body.y) * (phys.buoyancy ?? 30)
-      - b.body.vy * (phys.buoyancyDamping ?? 4.2));
+    // COMING BACK DOWN. The keel breaking the surface on the way in is the
+    // beat that pays off the launch — without it a hull that was thrown ten
+    // units into the air simply stops at the water line. Edge-triggered on the
+    // keel rather than fired per frame while it is low, and scaled by how hard
+    // it arrived, so a hull that merely bobs its keel out is silent.
+    const clearOfWater = wet <= 0;
+    if (b.wasClear && !clearOfWater && b.body.vy < -(phys.splashSpeed ?? 4)) {
+      const splash = CONFIG.boats.splash ?? {};
+      emit('splash', b.body.x + (b.offsetX ?? 0), rest, {
+        dirX: 0,
+        dirY: 1,
+        scale: Math.min(splash.maxScale ?? 2.6,
+          (splash.scale ?? 0.5) * (b.halfLength ?? 1)
+          * Math.min(2, Math.abs(b.body.vy) / (phys.splashSpeed ?? 4))),
+      });
+    }
+    b.wasClear = clearOfWater;
 
     // The gentle roll of a boat on the water. This is the body's REST angle;
     // whatever the physics has done to it is laid on top by the step itself
@@ -611,9 +691,13 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     if (b.flash > 0) {
       b.flash = Math.max(0, b.flash - dt);
       const t = b.flash / Math.max(CONFIG.fx.hitFlash, 0.0001);
-      // Relative to the scale the hull was built at, so the pop reads the same
-      // on a rowboat and on a trawler and never resizes either one for good.
-      b.mesh.scale.setScalar(b.spawnScale * (1 + CONFIG.fx.hitPop * t));
+      // Relative to the scale the hull was built at, so the pop never resizes
+      // either one for good — but sized off `b.radius` so a trawler is not
+      // punched by a whole rowboat's worth of hull. See CONFIG.fx.hitPopBody;
+      // note this radius is the hull DIAGONAL, so a boat is damped a little
+      // harder than a creature of the same visible length, which is the right
+      // way round for a rigid steel thing that should barely give at all.
+      b.mesh.scale.setScalar(b.spawnScale * (1 + hitPopFor(b.radius) * t));
     }
 
     // THE WATER IT IS PUSHING. Off the body rather than off the course it was
@@ -623,7 +707,11 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     // `dir` stays the heading it is drawn at (the hull is spun to face it at
     // spawn and never turns again), which is what keeps the stern the stern
     // through a shove that has reversed its velocity.
-    updateHullWake(dt, b, {
+    // Not while it is out of the water at all: the churn has an idle share
+    // that never reaches zero (a hull sitting still still displaces), so
+    // fading it by `wet` alone would leave a launched boat trailing bubbles
+    // through the sky.
+    if (wet > 0) updateHullWake(dt, b, {
       // THE BOX CENTRE, not the mesh origin. prepareModel anchors a hull on its
       // centre of mass — about a third of the way up from the keel and not the
       // middle of the boat lengthwise either — so `offsetX` is the difference,
@@ -635,8 +723,12 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
       // The bottom of the hull, so the wake knows what "under the boat" means.
       keelY: b.body.y + (b.offsetY ?? 0) - (b.halfHeight ?? 0),
       dir: b.dir,
-      speed: Math.abs(b.body.vx),
-      vx: b.body.vx,
+      // WHAT IT IS WORKING ON. A hull in the air is not pushing any water, so
+      // the churn goes with `wet` — otherwise a launched boat trails a wake
+      // across the sky, and the idle share means it does that even at a
+      // standstill.
+      speed: Math.abs(b.body.vx) * wet,
+      vx: b.body.vx * wet,
     });
 
     updateHullSmoke(dt, b);
@@ -721,12 +813,48 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
       // as being held.
       o.mesh.rotation.z = Math.sin(o.mesh.position.y * 0.12) * 0.22;
 
+      // AND THE MAGNET REACHES IT, which it did not.
+      //
+      // This was the only pickup in the game with no magnet at all: it was
+      // taken by touching it and nothing else, at collectRadius + bodyRadius,
+      // about 2.2 units. Every orb in entities/pickups.js is claimed from
+      // nearly ten units mid-strike and dragged in from there, so the ONE
+      // pickup the coach line tells you to go and grab was the one you had to
+      // fly through the middle of — at 46 u/s, against a target a fifth the
+      // size of everything else's. Striking at it and nearly getting it was
+      // the normal outcome, and there was nothing on screen to explain why.
+      //
+      // The general magnet, not the food one: a clam is not what the chain is
+      // made of, and gating the most powerful pickup in the game on a live
+      // chain would make it hardest to collect exactly when it matters. It
+      // LATCHES for the reason everything else does — see updateFloatingOrb in
+      // entities/pickups.js — because the corridor that claims it lasts 0.22s
+      // and dropping it at the end of the dash is the same near miss again.
+      const speed = player.velocity?.length?.() ?? 0;
+      const reach = magnetDistance(
+        playerPos.x, playerPos.y, o.mesh.position.x, o.mesh.position.y, speed,
+      );
+      if (reach < magnetRadius(player.stats, speed)) o.magnetLatch = true;
+      let dx = playerPos.x - o.mesh.position.x;
+      let dy = playerPos.y - o.mesh.position.y;
+      if (o.magnetLatch) {
+        const d = Math.hypot(dx, dy) || 0.0001;
+        // Clamped to the gap, so the last step lands ON the seal rather than
+        // throwing the clam out the far side — the pull outruns a dash by
+        // design, and an overshoot bigger than the grab radius is a pickup
+        // that flicks through the mouth frame after frame without ever being
+        // measured close enough to take.
+        const step = Math.min(magnetSpeed(speed) * dt, d);
+        o.mesh.position.x += (dx / d) * step;
+        o.mesh.position.y += (dy / d) * step;
+        dx = playerPos.x - o.mesh.position.x;
+        dy = playerPos.y - o.mesh.position.y;
+      }
+
       // TAKEN BY TOUCHING ITS BODY, not its centre — the same rule the orbs in
       // entities/pickups.js collect by, and for the same reason: this thing is
       // `scale` units across, and a bare collectRadius would need the seal's
       // nose most of the way into the middle of it.
-      const dx = playerPos.x - o.mesh.position.x;
-      const dy = playerPos.y - o.mesh.position.y;
       if (Math.hypot(dx, dy) < (CONFIG.pickups?.collectRadius ?? 1) + o.bodyRadius) {
         o.taken = true;
         // The body is swallowed; the field is what is left. Hidden rather than

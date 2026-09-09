@@ -410,6 +410,17 @@ export const ASSETS = {
     up: '+Y',
     offset: [0, 0, 0],
     tint: null,
+    // THE JAW. mouth_08 is the lower jaw (24 skinned vertices under head_07's
+    // 401) and hinges about its own X: +0.5 rad drops its centroid 0.035
+    // down and opens the gap to the skull from 0.108 to 0.123, -X shuts it,
+    // Y and Z only skew it sideways — measured by skinning, the same method
+    // as the predators' entries. Every clip keys this bone, so a driver on it
+    // is additive over the clip (see systems/jaw.js). THREE THINGS DRIVE IT:
+    // the seal under the level-up cards (systems/levelUpSeal.js), the run
+    // itself on every mouthful the seal swallows (sealBite in
+    // entities/player.js, CONFIG.pickups.jaw), and nothing else — the enemy
+    // path builds its own drivers off each predator's own rig.
+    biteRig: { bone: 'mouth_08', axis: 'x', openAngle: 0.5 },
     material: { roughness: 0.55, metalness: 0.05, emissive: 0x0a2233, emissiveIntensity: 0.15 },
     // furseal.glb has UVs but no image, so without this the seal is one flat
     // colour. See systems/noiseShader.js and CONFIG.sealShader.
@@ -694,7 +705,6 @@ export const ASSETS = {
   //     accessoryCowboy      114.165      1.36998
   //     accessoryWizard        1.226      0.01471
   //     accessorySharkHood     0.197      0.00236
-  //     accessoryNeonJelly     1.899      0.02279
   //
   // MEASURED BY `npm run acc:render`, which prints the radius and 0.012 x it
   // under every model it draws. That tool reproduces the first eight rows above
@@ -871,11 +881,11 @@ export const ASSETS = {
   },
 
   // ---------------------------------------------------------------------------
-  // THE THIRD BATCH — three hats, a hood and a jellyfish, imported by the same
+  // THE THIRD BATCH — three hats and a hood, imported by the same
   // tools/optimize-accessories.mjs from the same folder. Seven files came in;
   // one was rejected outright (the reason is in that file's POOL, so it does
-  // not get re-imported) and one was optimized but not worn — see the note on
-  // accessoryNeonJelly below.
+  // not get re-imported) and two are gone: one was optimized but never worn,
+  // and the neon jellyfish was deleted outright on 2026-09-08.
   //
   // `forward` IS READ OFF A PICTURE, not guessed. `npm run acc:render` draws
   // any GLB from six orthographic angles with each panel labelled by the axis
@@ -899,9 +909,6 @@ export const ASSETS = {
   //   sharkhood   the jaw is face-on in the -X panel and the smooth back of the
   //               skull is in +X, so this one faces +X and is the only thing in
   //               the wardrobe that does. Do not "correct" it to +Z.
-  //   neonjelly   radially symmetric about Y, so forward is arbitrary and set
-  //               to +Z for the family. Only `up` carries any information here,
-  //               and it arrives bell-up already.
   // ---------------------------------------------------------------------------
 
   // An orange builder's hard hat, and the only file in three batches that
@@ -974,34 +981,6 @@ export const ASSETS = {
     radius: 0.35,
     height: 0.5,
     color: 0x477594,
-    unlit: true,
-  },
-  // A green jellyfish: a bell with four bulbed tentacles hanging and a thin
-  // stalk trailing below them. THE ONE OF THE TWO THAT IS WORN — the other came
-  // in on the same batch and went the other way entirely: it is `enemyJellyfish`
-  // below, a creature in the water. Bell-up with the filaments hanging is what
-  // reads as worn and this one does it; the other arches its filaments over the
-  // top, which reads as an animal swimming rather than as a hat.
-  //
-  // NO TEXTURES AT ALL — two materials of pure
-  // factors, which is why 2,588 triangles fit in 51KB.
-  //
-  // IT IS THE BRIGHTEST THING IN THE WARDROBE AND NOTHING HERE DIMMED IT. Its
-  // bell is 11% alpha over a FULL WHITE emissive factor and its tentacles carry
-  // 0x01ff7b; the import only ever touches emissive MAPS, and this file has
-  // none, so both factors are exactly as authored. On a seal's head that is a
-  // lamp. Left alone deliberately — turning down a colour somebody chose is a
-  // look decision and belongs in the shader lab, not in an importer.
-  accessoryNeonJelly: {
-    model: '/models/neonjelly.glb',
-    fit: 1,
-    forward: '+Z',
-    up: '+Y',
-    outline: { color: 0x000000, thickness: 0.02279 },
-    shape: 'cone',
-    radius: 0.35,
-    height: 0.5,
-    color: 0x84ffa2,
     unlit: true,
   },
 

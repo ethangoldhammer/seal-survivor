@@ -421,6 +421,98 @@ clearAll();
     `y ${boat.mesh.position.y.toFixed(2)}`);
 }
 
+// --------------------------------------------------------------------- launched
+//
+// A HULL KNOCKED OUT OF THE WATER. The vertical axis used to be one spring all
+// the way up, which meant the harder a boat was hit from below the harder the
+// water pulled it back: a full-charge ram lifted a rowboat barely past its own
+// keel and snapped it back inside a quarter of a second, and on the way down it
+// fell at whatever the spring was worth up there — over twice gravity.
+//
+// So this is a test about what happens ABOVE THE LINE, and every check here is
+// one a spring passes differently from a falling body:
+//
+//   CLEAR     that a ram from below actually gets the keel out of the water,
+//             and that the hull HANGS there. A rise with no hang time is the
+//             spring winning again.
+//   GRAVITY   that what brings it down is CONFIG.arena.gravity — the same
+//             number the seal and the wreckage fall at — measured off the
+//             hull's own velocity mid-flight rather than assumed.
+//   MASS      that a trawler answers the same ram with a fraction of the
+//             flight, because the mass is in the impulse and nowhere else.
+//   SETTLES   that it comes back to the water line and sails on. A hull left
+//             hanging, sinking, or ringing forever is the failure this whole
+//             block could introduce.
+clearAll();
+{
+  const boat = spawnBoatNow();
+  boat.body.place(0, bounds.surfaceY);
+  const floatY = boat.body.y;
+  jostleBoat(boat, 0, 1, 1, { x: boat.body.x, y: boat.body.y - boat.halfHeight });
+
+  let rise = 0;
+  let air = 0;
+  // Sampled only while the keel is clear of the water, which is the only
+  // stretch where gravity is the whole of the vertical force.
+  let fallFrom = null;
+  let fallTo = null;
+  let fallFrames = 0;
+  for (let i = 0; i < 60 * 3; i++) {
+    updateBoats(dt, scene, 0, playerPos, {});
+    stepBodies(dt);
+    boat.body.x = 0;
+    const lift = boat.body.y - floatY;
+    rise = Math.max(rise, lift);
+    if (lift > boat.halfHeight) {
+      air += dt;
+      if (fallFrom === null) fallFrom = boat.body.vy;
+      fallTo = boat.body.vy;
+      fallFrames++;
+    }
+  }
+  check('a ram from below throws the hull clear of the water',
+    rise > boat.halfHeight * 1.5, `${rise.toFixed(2)} units, keel clears at ${boat.halfHeight.toFixed(2)}`);
+  check('...and it hangs there rather than being snapped back',
+    air > 0.3, `${air.toFixed(2)}s with the keel out of the water`);
+  const measured = fallFrames > 2 ? (fallFrom - fallTo) / (fallFrames * dt) : 0;
+  const g = CONFIG.physics?.boat?.gravity ?? CONFIG.arena.gravity;
+  check('...falling at the arena\'s gravity, not at the buoyancy spring',
+    Math.abs(measured - g) < g * 0.1,
+    `${measured.toFixed(1)} u/s^2 vs gravity ${g}`);
+}
+
+clearAll();
+{
+  // The same ram, on a hull 2.4x the weight. Nothing here is a boat-type
+  // special case: the mass is in applyImpulse and the flight follows from it.
+  CONFIG.boats.trawlerChance = 1;
+  const trawler = spawnBoatNow();
+  CONFIG.boats.trawlerChance = 0;
+  trawler.body.place(0, bounds.surfaceY);
+  const floatY = trawler.body.y;
+  jostleBoat(trawler, 0, 1, 1, { x: trawler.body.x, y: trawler.body.y - trawler.halfHeight });
+  let rise = 0;
+  for (let i = 0; i < 60 * 3; i++) {
+    updateBoats(dt, scene, 0, playerPos, {});
+    stepBodies(dt);
+    trawler.body.x = 0;
+    rise = Math.max(rise, trawler.body.y - floatY);
+  }
+  check('a trawler barely comes out of the water for the same ram',
+    rise < trawler.halfHeight, `${rise.toFixed(2)} units, keel clears at ${trawler.halfHeight.toFixed(2)}`);
+  // Five more seconds: it must be back on its line and under way, not still
+  // ringing and not sitting in a hole.
+  for (let i = 0; i < 60 * 5; i++) {
+    updateBoats(dt, scene, 0, playerPos, {});
+    stepBodies(dt);
+    trawler.body.x = 0;
+  }
+  check('...and every hull is back on the water line afterwards',
+    Math.abs(trawler.body.y - bounds.surfaceY) < 0.6, `y ${(trawler.body.y - bounds.surfaceY).toFixed(2)} off the line`);
+  check('...and back under way', Math.abs(trawler.body.vx - trawler.dir * trawler.speed) < trawler.speed * 0.2,
+    `${trawler.body.vx.toFixed(2)} vs cruise ${(trawler.dir * trawler.speed).toFixed(2)}`);
+}
+
 // NO CAPSIZE, through the real spring rather than a copy of it in the test.
 clearAll();
 {

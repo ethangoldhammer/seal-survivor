@@ -251,16 +251,32 @@ export function beginRun(config = {}) {
  * denominator with the biggest fight in the run missing from it. Exactly the
  * failure the sea turtle caused, arriving from the other direction.
  *
- * 5e6, and it is pinned from both sides — this is not a round number because
- * there is no room left for one. The turtle's 1e9 has to stay a hundred times
- * clear of the line or the two populations are not separable at a glance,
- * which caps it just under 1e7; the heaviest real creature has to stay under
- * it for far longer than anybody plays, which floors it around 3e6 (bossBoat
- * reaches 1.36e6 at thirty minutes). test:ledger checks both ends and states
- * the upper one as a RUN LENGTH — nearly two hours of headroom — which is the
- * only form of that margin anybody can judge.
+ * ...AND THE POPULATION IT WAS DRAWN AGAINST IS GONE. The pinning argument
+ * above was real while the sea turtle declared 1e9: the line had to sit a
+ * hundred times under that and far above the biggest real animal, which left
+ * so little room that 5e6 was not even a round number.
+ *
+ * The turtle declares 250 hp now and carries `invincible: 1` instead, and
+ * nothing else in enemies.csv declares as much as 1e6. So the magnitude test
+ * has an EMPTY population — there is no longer anything for it to catch — and
+ * the flag does the classifying, at the two places that matter: `recordDamage`
+ * returns early on `target.invincible`, and enemies.js guards the spawn side
+ * with `if (!def.invincible && hp < SENTINEL_HP)`.
+ *
+ * What the number still had was a false positive. bossBoat's 260 a difficulty
+ * point took it through 5e6 at THIRTY-SEVEN MINUTES, at which point the ledger
+ * would have decided the biggest fight in the run was scenery — its damage
+ * unbooked, its spawn uncounted, every ability's share computed against a
+ * denominator missing it. Precisely the failure this constant exists to
+ * prevent, caused by the constant.
+ *
+ * So it is a BACKSTOP now rather than a classifier: the flag says which
+ * population a creature is in, and this catches a genuinely absurd number if
+ * somebody ever types one without the flag. 1e8 puts bossBoat's crossing at
+ * about thirteen hours, which is not a run anybody plays, and leaves a real
+ * placeholder — the kind people actually type, 1e9 and up — still caught.
  */
-export const SENTINEL_HP = 5e6;
+export const SENTINEL_HP = 1e8;
 
 /**
  * SOURCES THE LEDGER DOES NOT BOOK DAMAGE FOR — the sky's work, not the seal's.

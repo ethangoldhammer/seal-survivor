@@ -1,0 +1,6 @@
+{
+  "trained": false,
+  "note": "Written by `npm run imitate:train` from playtest/imitation.jsonl. Untrained, the versus bot plays its scripted game (systems/versusBot.js).",
+  "inputs": 14,
+  "layers": []
+}

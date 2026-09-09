@@ -55,6 +55,7 @@ import { bounds, sea, setWaveTime, surfaceHeightAt } from '../path/src/arena.js'
 import { assetBaseColor } from '../path/src/assets.js';
 import {
   initParticles,
+  particleRing,
   emit,
   updateParticles,
   resetParticles,
@@ -367,6 +368,14 @@ for (const file of srcFiles) {
     // `boltColor(b.finElement)` is the shared resolver every other element
     // effect reads, not a hex — held to the EVENT and the SOURCE like the rest.
     if (/^\s*'latticeSplit'/.test(args) && /\bcolor:\s*boltColor\(/.test(args)) continue;
+    // THE BLAST GOO ARRIVING AT THE SEAL (systems/gooSuck.js). The fleck a blob
+    // leaves when it is swallowed is the same argument as the pickup swallows
+    // above: the blob is wearing the pickup that went off, and a stock tint on
+    // its arrival would be the one part of the suck in a different colour from
+    // the goo it just was. `b.tint` is the tint the burst was fired with, so a
+    // hand-typed hex here is still a failure. Held to the SOURCE — the emitter
+    // is a config string (`captureEmit`), so the event half is the variable.
+    if (/^\s*captureEmit\b/.test(args) && /\bcolor:\s*b\.tint\b/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }
@@ -729,7 +738,11 @@ check('and the range is the burst, not the buffer',
 // happily uploads a short read there, and the particles that wrapped never get
 // their data.
 resetParticles();
-const capacity = A.aStart.count;
+// THE RING, not the buffer: the last slots of the buffer are the driven reserve
+// (see `ring` in particles.js) and the write head wraps before it reaches them.
+// Walking to the buffer's end would park the cursor inside the reserve, where
+// no burst ever writes, and the join would never be straddled.
+const capacity = particleRing();
 // Park the cursor a known distance from the end. emit() advances it by exactly
 // round(def.count * scale * spriteDensity) per call, so the walk is arithmetic
 // rather than a search — and `scale` is how the count is set, since both the

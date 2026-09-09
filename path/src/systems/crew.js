@@ -6,6 +6,7 @@ import { createVisual, hasModel, makeOutlineMaterial, ensureOutlineNormal } from
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { buildHumanoidRig, bindHumanoidRig, aimBone, anchorToHips } from './humanoidRig.js';
 import { spawnGore } from './gore.js';
+import { retireMaterial } from './programPin.js';
 
 // The man on the boat.
 //
@@ -829,14 +830,14 @@ function disposeFigure(scene, f) {
   f.body.group.removeFromParent();
   if (f.body.kind === 'boxes') {
     for (const g of f.body.geometries) g.dispose();
-    f.body.kit.body.dispose();
-    f.body.kit.shell?.dispose();
+    retireMaterial(f.body.kit.body);
+    retireMaterial(f.body.kit.shell);
     return;
   }
   f.body.mixer?.stopAllAction();
   // Only the copies made for this man's dissolve. The model's own materials
   // are shared with everybody else wearing it and are not ours to dispose.
-  for (const m of f.body.cloned ?? []) m.dispose();
+  for (const m of f.body.cloned ?? []) retireMaterial(m);
 }
 
 // ---------------------------------------------------------------------------

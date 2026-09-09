@@ -6,6 +6,7 @@ import {
   setOutlineThicknessOn,
   setSpawnDecorator,
 } from '../assets.js';
+import { retireMaterial } from './programPin.js';
 
 // Procedural rims around a silhouette, so what matters stays findable in a
 // crowded, dark, particle-heavy frame. Inverted-hull shells (assets.js
@@ -64,8 +65,8 @@ let playerInnerShells = [];
 // the previous set went away with the body that owned it, and its materials
 // are dropped here rather than left to leak on every T-menu size change.
 export function attachPlayerOutline(body) {
-  for (const shell of playerShells) shell.material?.dispose();
-  for (const shell of playerInnerShells) shell.material?.dispose();
+  for (const shell of playerShells) retireMaterial(shell.material);
+  for (const shell of playerInnerShells) retireMaterial(shell.material);
   playerShells = body ? addOutlineShells(body, { color: CONFIG.playerOutline?.color ?? 0xffffff }) : [];
   // The glow first, so a bare `find` for an outline in a harness still lands
   // on the rim everything else in this file is about.

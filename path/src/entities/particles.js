@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { surfaceHeightAt, waveTimeNow, sea, bounds, WAVE } from '../arena.js';
+import { retireMaterial } from '../systems/programPin.js';
 
 // One draw call for every particle in the game.
 //
@@ -208,6 +209,15 @@ let material = null;
 let geometry = null;
 let capacity = 0;
 let cursor = 0;
+// THE RING IS SHORTER THAN THE BUFFER. The last `capacity - ring` slots are
+// not part of the ring at all: they are DRIVEN slots, owned one at a time by a
+// system that writes a position into them every frame (systems/gooSuck.js is
+// the first). The ring wraps at `ring`, so no burst can ever overwrite one —
+// which is the whole reason for the split: a driven particle re-written each
+// frame cannot detect theft the way the bubble tracker does (see `tracked`),
+// because the thing it would compare against is the thing it just wrote.
+let ring = 0;
+const drivenFree = [];
 let clock = 0;
 
 // The goo layer. Its own Scene rather than a second object in the game's,
@@ -257,7 +267,28 @@ function gooSurface(name) {
   const g = gooSettings();
   if (!g) return null;
   const { groups, enabled, divisor, ...defaults } = g;
-  return { ...defaults, ...(groups[name] ?? {}) };
+  const live = gooOverrides.get(name);
+  return live ? { ...defaults, ...(groups[name] ?? {}), ...live } : { ...defaults, ...(groups[name] ?? {}) };
+}
+
+// LIVE OVERRIDES on a group's surface — a system that wants the isoline (or
+// anything else) to MOVE while its goo is in flight sets one here each frame
+// and clears it when done. Layered over the tuned values rather than written
+// into CONFIG, because CONFIG is what the tuner saves: a system that wrote its
+// animation into the config would ship one frame of it as the design.
+const gooOverrides = new Map();
+
+/** Set (or clear, with null) the live overrides on one goo group's surface. */
+export function setGooGroupOverride(name, partial) {
+  if (!name) return;
+  if (partial) gooOverrides.set(name, partial);
+  else gooOverrides.delete(name);
+}
+
+/** A goo group's INDEX by name — 0 when goo is off or the group does not exist. */
+export function gooGroupIndex(name) {
+  if (!name || !gooSettings()) return 0;
+  return gooGroupNames().indexOf(name) + 1;
 }
 
 /**
@@ -332,7 +363,7 @@ function markWhole(attr) {
 }
 
 function markRange(start, n) {
-  if (n >= capacity) {
+  if (n >= ring) {
     // Wrapped clean past itself, so every slot was touched. Written as an
     // explicit whole-buffer RANGE rather than by clearing the ranges: three
     // merges overlapping ranges before uploading, so this absorbs anything
@@ -344,9 +375,11 @@ function markRange(start, n) {
   }
   const end = start + n;
   // The ring buffer wraps, so a run can be one span or two.
-  const spans = end <= capacity
+  // Split at the RING's end, not the buffer's: past `ring` is the driven
+  // reserve, and a burst never writes there.
+  const spans = end <= ring
     ? [[start, n]]
-    : [[start, capacity - start], [0, end - capacity]];
+    : [[start, ring - start], [0, end - ring]];
   for (const attr of Object.values(attrs)) {
     const size = attr.itemSize;
     // Ranges are measured in ARRAY ELEMENTS, not in vertices — a vec3 slot
@@ -362,6 +395,13 @@ export function initParticles(scene) {
   disposeParticles(scene);
 
   capacity = Math.max(64, Math.floor(CONFIG.fx.maxParticles));
+  // The driven reserve comes OFF the top of the buffer, never on top of it: the
+  // ring gets what is left so the memory cap CONFIG.fx.maxParticles promises
+  // still holds. Clamped so a silly reserve cannot leave the ring with nothing.
+  const reserve = Math.max(0, Math.min(capacity - 64, Math.floor(CONFIG.fx.drivenParticles ?? 0)));
+  ring = capacity - reserve;
+  drivenFree.length = 0;
+  for (let i = capacity - 1; i >= ring; i--) drivenFree.push(i);
   geometry = new THREE.BufferGeometry();
 
   attrs.position = new THREE.Float32BufferAttribute(new Float32Array(capacity * 3), 3);
@@ -454,8 +494,8 @@ export function disposeParticles(scene) {
   if (!points) return;
   scene.remove(points);
   geometry.dispose();
-  material.dispose();
-  gooMat.dispose();
+  retireMaterial(material);
+  retireMaterial(gooMat);
   gooRoot = null;
   gooPoints = null;
   gooMat = null;
@@ -548,6 +588,130 @@ export function setParticleRelief(value) {
   relief = Math.max(0.05, Math.min(1, Number.isFinite(value) ? value : 1));
 }
 
+/**
+ * A caller's `color` as the tint a burst will actually wear, or null for "use
+ * the emitter's palette". Lifted to the death-tint floor (CONFIG.fx
+ * .deathTintMinPeak) so a near-black creature still leaves a visible mass. A
+ * pure black has no hue to preserve, so there is nothing to lift it by — it
+ * falls back to the palette instead of dividing by zero into NaN. Exported for
+ * the driven particles, which have to colour themselves the way emit() would.
+ */
+export function resolveTint(color) {
+  if (color == null) return null;
+  const tint = new THREE.Color(color);
+  const floor = CONFIG.fx?.deathTintMinPeak ?? 0;
+  const peak = Math.max(tint.r, tint.g, tint.b);
+  if (peak <= 0) return null;
+  if (peak < floor) tint.multiplyScalar(floor / peak);
+  return tint;
+}
+
+// ---------------------------------------------------------------------------
+// DRIVEN SLOTS — particles whose position is written from the CPU every frame.
+//
+// Everything above is a closed form: a particle is a spawn point, a velocity
+// and a drag, and the shader solves where it is. That cannot describe a thing
+// that STEERS — a blob being pulled through an attractor field toward the seal
+// has no closed form — so these slots run the shader's arithmetic backwards:
+// velocity zero, gravity zero, turbulence zero, and the spawn point IS the
+// position. `aStart` is set to `clock - age` each frame so the shader's fade
+// and size curves still run off a real age, and the goo pass still splats
+// them into whichever group they name. Nothing in the shaders knows the
+// difference, which is the point: one buffer, one goo pass, one look.
+//
+// The slots come from the reserve above the ring (see `ring`). A frame that
+// wants more than are free gets fewer — a burst that is a little thinner is
+// the right failure, and it is measured by `drivenCapacity()`.
+// ---------------------------------------------------------------------------
+
+/** Take up to `n` driven slots. Fewer come back when the reserve is short. */
+export function claimDriven(n) {
+  const out = [];
+  while (out.length < n && drivenFree.length) out.push(drivenFree.pop());
+  return out;
+}
+
+/** Give a driven slot back, and kill whatever it was drawing. */
+export function releaseDriven(idx) {
+  if (!geometry || idx < ring || idx >= capacity) return;
+  attrs.aStart.array[idx] = -1e9;
+  drivenFree.push(idx);
+}
+
+/**
+ * Write one driven slot for this frame. `rgb` is already glow-multiplied (see
+ * drivenColor), `group` is a goo group INDEX (0 for a plain sprite). Call
+ * flushDriven() once after the frame's writes.
+ */
+export function writeDriven(idx, x, y, age, life, size, rgb, group) {
+  if (!geometry) return;
+  const p3 = idx * 3;
+  const p2 = idx * 2;
+  const pos = attrs.position.array;
+  pos[p3] = x; pos[p3 + 1] = y; pos[p3 + 2] = 0;
+  const vel = attrs.aVelocity.array;
+  vel[p3] = 0; vel[p3 + 1] = 0; vel[p3 + 2] = 0;
+  const col = attrs.aColor.array;
+  col[p3] = rgb.r; col[p3 + 1] = rgb.g; col[p3 + 2] = rgb.b;
+  attrs.aGravity.array[p2] = 0;
+  attrs.aGravity.array[p2 + 1] = 0;
+  attrs.aStart.array[idx] = clock - age;
+  attrs.aLife.array[idx] = life;
+  attrs.aSize.array[idx] = size;
+  attrs.aDrag.array[idx] = 1;
+  attrs.aTurb.array[idx] = 0;
+  attrs.aClip.array[idx] = 0;
+  attrs.aGoo.array[idx] = group;
+}
+
+/** Upload the whole reserve. One range per attribute per frame, not one per slot. */
+export function flushDriven() {
+  if (!geometry || ring >= capacity) return;
+  const n = capacity - ring;
+  for (const attr of Object.values(attrs)) {
+    attr.addUpdateRange(ring * attr.itemSize, n * attr.itemSize);
+    attr.needsUpdate = true;
+  }
+}
+
+/** How many driven slots exist, and how many are free right now. */
+export function drivenCapacity() {
+  return { total: Math.max(0, capacity - ring), free: drivenFree.length, ring };
+}
+
+/**
+ * The goo group INDEX an emitter's particles would be flagged with, and the
+ * group's name — what a driven system needs to splat into the same field an
+ * emit() of that name would. 0 / null when goo is off or the emitter is a
+ * plain sprite.
+ */
+export function gooGroupFor(emitterName) {
+  const def = CONFIG.emitters[emitterName];
+  const wants = def?.goo && gooSettings() ? gooGroupName(def) : null;
+  const index = wants ? gooGroupNames().indexOf(wants) + 1 : 0;
+  return { index: wants && index > 0 ? index : 0, name: index > 0 ? wants : null };
+}
+
+/** Keep a goo group's pass running until `clock + seconds` — a driven blob's promise that it is still there. */
+export function keepGooAlive(groupName, seconds) {
+  if (!groupName) return;
+  gooUntil.set(groupName, Math.max(gooUntil.get(groupName) ?? -1, clock + seconds));
+}
+
+/** The colour a driven particle should carry: emit()'s glow arithmetic, in one place. */
+export function drivenColor(def, tint, out = new THREE.Color()) {
+  if (tint) out.copy(tint).multiplyScalar(0.65 + Math.random() * 0.7);
+  else out.set((def.colors ?? [0xffffff])[(Math.random() * (def.colors?.length ?? 1)) | 0]);
+  const glow = (def.glow ?? 1) * (CONFIG.bloom?.particleOverdrive ?? 1);
+  out.r *= glow; out.g *= glow; out.b *= glow;
+  return out;
+}
+
+/** The particle clock — what `aStart` is measured against. */
+export function particleClock() {
+  return clock;
+}
+
 export function emit(name, x, y, opts = {}) {
   const def = CONFIG.emitters[name];
   if (!def || !geometry) return;
@@ -618,23 +782,13 @@ export function emit(name, x, y, opts = {}) {
   // Resolved ONCE per burst rather than per particle: the lift is a property of
   // the creature, and doing it inside the loop would fight the per-particle
   // brightness scatter below for the same channels. See CONFIG.fx.deathTintMinPeak.
-  let tint = null;
-  if (opts.color != null) {
-    tint = new THREE.Color(opts.color);
-    const floor = CONFIG.fx?.deathTintMinPeak ?? 0;
-    const peak = Math.max(tint.r, tint.g, tint.b);
-    // A creature whose colour is pure black has no hue to preserve, so there is
-    // nothing to lift it by — it falls back to the emitter's palette instead of
-    // dividing by zero into NaN.
-    if (peak <= 0) tint = null;
-    else if (peak < floor) tint.multiplyScalar(floor / peak);
-  }
+  const tint = resolveTint(opts.color);
 
   // Where this burst's run of slots begins, for the upload range below.
-  const firstIdx = cursor % capacity;
+  const firstIdx = cursor % ring;
 
   for (let i = 0; i < count; i++) {
-    const idx = cursor % capacity;
+    const idx = cursor % ring;
     cursor += 1;
 
     const angle = cone > 0
@@ -788,9 +942,9 @@ export function emitCloud(name, cloud, opts = {}) {
   // silhouette, which is the whole of what this draws. The caller owns its own
   // count — see CONFIG.boss.dissolve.points, which is where to turn it down.
 
-  const firstIdx = cursor % capacity;
+  const firstIdx = cursor % ring;
   for (let i = 0; i < n; i++) {
-    const idx = cursor % capacity;
+    const idx = cursor % ring;
     cursor += 1;
     const p3 = idx * 3;
     const p2 = idx * 2;
@@ -929,6 +1083,8 @@ export function resetParticles() {
   cursor = 0;
   tracked.length = 0;
   gooUntil.clear();
+  drivenFree.length = 0;
+  for (let i = capacity - 1; i >= ring; i--) drivenFree.push(i);
 }
 
 // HOW MANY ARE ACTUALLY ALIVE — and it used to be how many slots had ever been
@@ -972,7 +1128,12 @@ export function particleCount(now = clock) {
   return alive;
 }
 
-/** The ring's own size, for anything that wants the ceiling rather than the load. */
+/** The buffer's size — ring AND driven reserve — for anything that wants the ceiling rather than the load. */
 export function particleCapacity() {
   return capacity;
+}
+
+/** Where the ring wraps. Below this a slot is a burst's; from here up it is driven. */
+export function particleRing() {
+  return ring;
 }

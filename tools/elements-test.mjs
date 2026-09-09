@@ -25,7 +25,7 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { baseStats, projectileCount, INTEGER_STATS } from '../path/src/stats.js';
-import { player, availableUpgrades } from '../path/src/entities/player.js';
+import { player, availableUpgrades, levelableUpgrades } from '../path/src/entities/player.js';
 import { skyLight } from '../path/src/systems/daylight.js';
 import { aoe, targeting, companionDamage } from '../path/src/systems/scaling.js';
 import { currentGarlicRadius } from '../path/src/systems/garlic.js';
@@ -136,13 +136,16 @@ section('FOUR CARDS, ONE ELEMENT');
   // beyond reach for the rest of the run — the roll's one-way door, moved
   // somewhere a player can see it.
   const offered = availableUpgrades().filter((u) => u.element).map((u) => u.element);
-  check('the other three leave the pool', offered.length === 1 && offered[0] === 'chill',
+  check('no element card is left in the pool once one is held', offered.length === 0,
     offered.join(', ') || 'none');
 
-  // ...and a second stack of the one you hold is still on offer, or the card
-  // could never deepen.
-  check('...while the one you hold can still be taken again',
-    availableUpgrades().some((u) => u.element === 'chill'));
+  // The one you hold is gone from the pool too, and that is the OTHER rule
+  // now: the level-up screen deals cards a run does not have, and depth is
+  // bought on the hive and the level blob (levelableUpgrades), where the
+  // element's own stacks still come from.
+  check('...including the one you hold, which deepens elsewhere',
+    !availableUpgrades().some((u) => u.element === 'chill')
+    && levelableUpgrades().some((u) => u.id === cards.find((c) => c.element === 'chill').id));
 
   player.upgrades.length = 0;
   resetElements(scene);

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import flagsCsv from '../flags.csv?raw';
 import { parseFlagCsv, buildFlags, pickFlag } from '../flagTable.js';
+import { retireMaterial } from './programPin.js';
 
 // FLAGS — the image flying off a hull's masthead.
 //
@@ -346,7 +347,7 @@ export function updateFlags(dt) {
     const f = live[i];
     if (f.group.parent) continue;
     f.mesh.geometry.dispose();
-    f.mesh.material.dispose();
+    retireMaterial(f.mesh.material);
     live.splice(i, 1);
   }
 }

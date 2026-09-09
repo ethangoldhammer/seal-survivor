@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { createInstancedPool } from './instancedPool.js';
+import { retireMaterial } from './programPin.js';
 
 // ===========================================================================
 // THE NOTE FIELD — every music note on screen, in eight draw calls.
@@ -520,7 +521,7 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
   function dispose() {
     pool.reset();
     notes.length = 0;
-    material.dispose();
+    retireMaterial(material);
   }
 
   return {

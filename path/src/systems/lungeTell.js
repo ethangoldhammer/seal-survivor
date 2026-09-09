@@ -55,6 +55,7 @@ function ringFor(scene, e) {
   if (t) return t;
   const c = cfg();
   const ring = makeOrganicRing({
+    role: 'tell',
     type: c.type ?? 'kinetic',
     thickness: c.thickness ?? 0.09,
     glow: c.glow ?? 2.2,

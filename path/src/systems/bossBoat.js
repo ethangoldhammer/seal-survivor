@@ -410,6 +410,7 @@ function ride(dt, e, playerPos) {
 // when, which on a 0.7-second warning is most of the information.
 function showTell(scene, x, y, radius, color, type = 'blast') {
   const ring = makeOrganicRing({
+    role: 'tell',
     type,
     color,
     thickness: 0.09, // the 0.82..1 band this used to be, as a half-width

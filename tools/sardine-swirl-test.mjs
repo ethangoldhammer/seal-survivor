@@ -216,20 +216,52 @@ player.x = 0;
 // ---------------------------------------------------------------------------
 section('4. the body and its reach');
 // ---------------------------------------------------------------------------
-// PAIRED MEASUREMENT. The drawn shell and the circle it bites with come from
+// PAIRED MEASUREMENT. The drawn body and the circle it bites with come from
 // one number by construction, and this is the check that they still do — a
 // reach retuned without the art (or the other way round) is an ability that
 // visibly passes through fish, and the only symptom is that it "feels off".
-const bladeLen = (ASSETS.sardineBlade?.blade?.length ?? 0) * sardineSize();
+//
+// MEASURED OFF `fit`, WHICH IS WHAT SHIPS. The swirl draws sardine.glb, and
+// `fit` normalises its longest axis, so `fit` x sardineSize() IS the drawn
+// length — exactly, and without loading a byte of it. Nothing in this harness
+// can: Node serves no models, so createVisual falls back to the `blade` shape
+// on every run here. Measuring the shape would be measuring the stand-in.
+const bodyLen = (ASSETS.sardineBlade?.fit ?? 0) * sardineSize();
 const reachDia = sardineReach() * 2;
 check('the hit circle is the size of the body drawn',
-  Math.abs(reachDia - bladeLen) < bladeLen * 0.15,
-  `${reachDia.toFixed(3)} across against a body ${bladeLen.toFixed(3)} long`);
-// SHORTER THAN THE RAZOR CLAM'S, which is the brief for the stand-in art.
+  Math.abs(reachDia - bodyLen) < bodyLen * 0.15,
+  `${reachDia.toFixed(3)} across against a body ${bodyLen.toFixed(3)} long`);
+// ...AND THE FALLBACK IS THE SAME LENGTH AS THE MODEL. This is the check that
+// keeps the line above meaningful for every OTHER harness in the repo: they all
+// render the blade, and a `fit` moved without its `length` would leave them
+// asserting against a body the game does not draw. See the note on the asset.
+const bladeLen = (ASSETS.sardineBlade?.blade?.length ?? 0) * sardineSize();
+check('...and the Node fallback shell is drawn the same length as the model',
+  Math.abs(bladeLen - bodyLen) < bodyLen * 0.02,
+  `shell ${bladeLen.toFixed(3)} against model ${bodyLen.toFixed(3)}`);
+// SHORTER THAN THE RAZOR CLAM'S, which was the brief the stand-in was cut to
+// and which the art has to keep: this is a baitfish, not a knife.
 const clamLen = (ASSETS.razorBlade?.blade?.length ?? 0) * 2.4;
-check('...and it is a smaller, shorter shell than the razor clam\'s',
-  bladeLen < clamLen * 0.5,
-  `${bladeLen.toFixed(2)} against the blade's ${clamLen.toFixed(2)}`);
+check('...and it is a smaller, shorter body than the razor clam\'s',
+  bodyLen < clamLen * 0.5,
+  `${bodyLen.toFixed(2)} against the blade's ${clamLen.toFixed(2)}`);
+
+// THE AXES THE SWIRL WRITES BY HAND. updateSardineSwirl sets `rotation.z` to
+// nose the body along the flow and spins `rotation.y` as the whip about its own
+// long axis, and both of those are only true while orientationQuaternion sends
+// the model's `forward` to entity +Y. A model declared with the wrong pair
+// still swims — it cartwheels while doing it — so the pair is asserted here
+// rather than left to be noticed. `-Z`/`+Y` is what tools/optimize-sardine.mjs
+// measures off the geometry; re-run it if a re-export moves them.
+check('the model is declared nose-forward on -Z, dorsal up on +Y',
+  ASSETS.sardineBlade?.forward === '-Z' && ASSETS.sardineBlade?.up === '+Y',
+  `forward ${ASSETS.sardineBlade?.forward}, up ${ASSETS.sardineBlade?.up}`);
+// NO `pivot`, and it is load-bearing: the bite is taken at the mesh ORIGIN, so
+// a nose-ward pivot would move the hit circle onto the snout and leave the body
+// trailing outside the thing it is supposed to be biting with.
+check('...and it balances on its centre, where the bite is taken',
+  ASSETS.sardineBlade?.pivot == null,
+  `pivot ${ASSETS.sardineBlade?.pivot}`);
 
 // ---------------------------------------------------------------------------
 section('5. the bite');

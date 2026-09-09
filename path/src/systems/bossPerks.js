@@ -117,9 +117,15 @@ function track(scene, obj) {
 // place. `outer` is 1 at every call site here — the outer edge of a tell IS the
 // reach it is telling you about — and is asserted rather than handled, because
 // an outer under 1 would silently move the boundary the player is reading.
-function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null) {
+function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null, role = null) {
   const thickness = (outer - inner) / 2;
   const mesh = makeOrganicRing({
+    // Which family this belongs to, for CONFIG.fx.organicRing.roles — see
+    // roleOn in systems/organicRing.js. Everything routed through tellRing is a
+    // WARNING and carries 'tell'; the teleport flashes and the barrel blast
+    // below go through here with no role, because they are the event happening
+    // rather than a note that it is about to.
+    role,
     type: type ?? 'kinetic',
     // A named type carries its own colour from the shared palette; an explicit
     // one wins, for the boat patterns that pick their own.
@@ -142,10 +148,11 @@ function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null) {
 // than an oversight: a tell whose colour was deliberately tuned away from its
 // type can keep it by clearing the column, and the fallback is what every perk
 // looked like before the palette existed.
-function tellRing(scene, perk, legacyColor, inner, outer, segments, fallbackType) {
+function tellRing(scene, perk, legacyColor, inner, outer, segments, fallbackType,
+  role = 'tell') {
   const atk = perk?.attack;
   return track(scene, makeRing(atk ? null : legacyColor, inner, outer, segments,
-    atk || fallbackType));
+    atk || fallbackType, role));
 }
 
 function disposeObj(obj) {
@@ -320,7 +327,13 @@ export function attachBossPerk(scene, enemy, perk, difficulty = 0) {
   } else if (perk.id === 'lunge') {
     active.flare = tellRing(scene, perk, fx.lunge?.flareColor ?? 0xffe07a, 0.7, 1, 64, 'kinetic');
   } else if (perk.id === 'electric') {
-    active.ring = tellRing(scene, perk, fx.electric?.color ?? 0x8fe6ff, 0.9, 1, 96, 'electric');
+    // 'aura' AND NOT 'tell'. This one is not an announcement: it is the live
+    // boundary of a field that is damaging the player right now, and it is on
+    // screen for the whole fight rather than for the second before something
+    // happens. Its own role so that quietening the warnings does not silently
+    // make a standing hazard invisible.
+    active.ring = tellRing(scene, perk, fx.electric?.color ?? 0x8fe6ff, 0.9, 1, 96, 'electric',
+      'aura');
     active.ring.visible = true;
     // The arcs: one LineSegments whose vertices are rewritten every frame.
     // A pool of meshes would be the obvious shape and is strictly worse —
@@ -357,8 +370,11 @@ export function attachBossPerk(scene, enemy, perk, difficulty = 0) {
     active.arcs.renderOrder = 6;
     active.arcs.frustumCulled = false; // the vertices move every frame
   } else if (perk.id === 'teleport') {
-    active.flashOut = tellRing(scene, perk, fx.teleport?.color ?? 0xc9a2ff, 0.6, 1, 64, 'void');
-    active.flashIn = tellRing(scene, perk, fx.teleport?.color ?? 0xc9a2ff, 0.6, 1, 64, 'void');
+    // No role: these two are the pop the boss leaves and the pop it arrives in.
+    // Nothing is being warned about — it has already happened, and a teleport
+    // with no flash is a boss that blinks across the arena unannounced.
+    active.flashOut = tellRing(scene, perk, fx.teleport?.color ?? 0xc9a2ff, 0.6, 1, 64, 'void', null);
+    active.flashIn = tellRing(scene, perk, fx.teleport?.color ?? 0xc9a2ff, 0.6, 1, 64, 'void', null);
     active.flashOutLife = 0;
     active.flashInLife = 0;
   } else if (perk.id === 'phase') {

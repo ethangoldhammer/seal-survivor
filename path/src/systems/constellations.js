@@ -6,6 +6,7 @@ import { advanceCycles, phaseOffset } from './beatSync.js';
 import { touchSlots, TOUCH_SLOTS } from '../input.js';
 import { starsIn, STAR_THRESHOLD } from './starField.js';
 import { chainReachAt } from './constellationReach.js';
+import { retireMaterial } from './programPin.js';
 
 // THE NIGHT SKY, as the backdrop grid's opposite number.
 //
@@ -735,7 +736,7 @@ export function createConstellations(scene) {
       if (!mesh) continue;
       group.remove(mesh);
       mesh.geometry.dispose();
-      mesh.material.dispose();
+      retireMaterial(mesh.material);
     }
     starMesh = null;
     linkMesh = null;

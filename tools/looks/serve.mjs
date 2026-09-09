@@ -17,6 +17,8 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyRecorded } from '../apply-shaders.mjs';
+import { applyFeel } from '../apply-level-up-feel.mjs';
+import { applyBall } from '../apply-ball-lab.mjs';
 import { applyPlacements } from '../apply-accessories.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -224,6 +226,52 @@ const server = http.createServer(async (req, res) => {
     await writeFile(join(HERE, name), body);
     console.log(`  wrote tools/looks/${name} (${body.length} bytes)`);
     res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ saved: true }));
+    return;
+  }
+
+  // THE LEVEL-UP FEEL, INTO THE GAME. The page's Write to config.js posts the
+  // preset here; the same code the CLI runs (tools/apply-level-up-feel.mjs)
+  // splices the numbers into config.js and clears the snapshot's copies —
+  // or says the game is up and could not. The preset file is written first,
+  // so the page's own reload keeps it either way.
+  if (req.method === 'POST' && url.pathname === '/apply/level-up-feel') {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    let preset;
+    try { preset = JSON.parse(body.toString()); } catch (err) { res.writeHead(400).end('not valid json: ' + err.message); return; }
+    await writeFile(join(HERE, 'level-up-seal-feel.json'), JSON.stringify(preset, null, 2));
+    try {
+      const report = await applyFeel(preset, { dry: false });
+      for (const n of report.notes) console.log(`  ${n}`);
+      console.log(report.wrote ? '  wrote path/src/config.js' : '  config.js already matches');
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(report));
+    } catch (err) {
+      console.log(`  feel apply failed: ${err.message}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // THE BALL LAB, INTO THE GAME — the level-up feel's route with the ball's
+  // roots; see tools/apply-ball-lab.mjs. The preset is written first so the
+  // page's own reload keeps it whether or not the splice went through.
+  if (req.method === 'POST' && url.pathname === '/apply/ball-lab') {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    let preset;
+    try { preset = JSON.parse(body.toString()); } catch (err) { res.writeHead(400).end('not valid json: ' + err.message); return; }
+    await writeFile(join(HERE, 'ball-lab.json'), JSON.stringify(preset, null, 2));
+    try {
+      const report = await applyBall(preset, { dry: false });
+      for (const n of report.notes) console.log(`  ${n}`);
+      console.log(report.wrote ? '  wrote path/src/config.js' : '  config.js already matches');
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(report));
+    } catch (err) {
+      console.log(`  ball apply failed: ${err.message}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: err.message }));
+    }
     return;
   }
 

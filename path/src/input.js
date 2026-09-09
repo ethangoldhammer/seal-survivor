@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { actionForKey, stickDeadzone } from './systems/settings.js';
 import { defaultDevice, shoulderLabel } from './devices.js';
+import { versusActive, captainPad } from './systems/versusFlag.js';
 
 // There is no `firing` here any more. The seal shoots on its own — see
 // CONFIG.weapon.autofire, which is now the only thing that decides whether the
@@ -31,6 +32,23 @@ export const input = {
   // thing reading it is the first-run coach, which does not teach aiming to a
   // mouse for that exact reason.
   aiming: false,
+  // Is the aim vector being WRITTEN this frame by a device that is actually
+  // pointing — as opposed to `aim`, which is a heading that is never off and
+  // holds the last direction anything gave it forever.
+  //
+  // The difference matters exactly once, and it is the reason this exists:
+  // the dash's mid-flight steering (dashSteer, via updatePlayer) reads both
+  // hands, and gating it on `aim` would mean a gamepad with an idle right
+  // stick dragging the seal toward whatever heading that stick last held.
+  // Gating it on `aiming` instead would lock the mouse out, because a mouse
+  // aims by existing and has no gesture to catch — which is precisely the
+  // player who was left with no mid-dash steering at all.
+  //
+  // TRUE FOR A MOUSE EVERY FRAME, on purpose. The heading is recomputed from
+  // the cursor's position relative to the SEAL, so it keeps changing as the
+  // animal flies past a pointer that never moved: it is a live steering input
+  // whether or not the hand on it is doing anything.
+  aimLive: false,
   // The clap button — edge-triggered, true for exactly one frame per press.
   // Edge and nothing else: there is no held state to keep, because the gesture
   // it starts re-enters itself rather than being sustained (see
@@ -825,7 +843,27 @@ function getGamepad() {
     }
   }
 
-  const pad = mostActive ?? sticky ?? firstConnected;
+  let pad = mostActive ?? sticky ?? firstConnected;
+  // TWO PLAYERS, TWO PADS. In a versus match the most-active rule above would
+  // hand this pad — player 1's — to whichever controller pushed harder, so
+  // player 1 is pinned to the lowest index and player 2 (systems/versus.js
+  // p2Pad) takes the next. With only ONE pad connected it is player 2's, and
+  // player 1 is on the keyboard: the pad is ignored here outright rather than
+  // shared, because two seals on one stick is a worse failure than a keyboard.
+  //
+  // THE TEAM SELECT DECIDES FIRST (versusSetup in systems/versusFlag.js): a
+  // pad index for the left captain is that pad, the keyboard or a CPU is no
+  // pad at all, and only a match nobody set up falls through to the rule
+  // above — the harness route, and the one the old `?versus` flag used.
+  if (versusActive()) {
+    const want = captainPad(0);
+    if (want === undefined) {
+      const connected = Array.from(pads).filter((p) => p?.connected).sort((a, b) => a.index - b.index);
+      pad = connected.length >= 2 ? connected[0] : null;
+    } else {
+      pad = want === null ? null : (Array.from(pads).find((p) => p?.connected && p.index === want) ?? null);
+    }
+  }
   activePad = pad;
   if (!pad) {
     // A pad that has never been touched is invisible to the browser by design,
@@ -1140,6 +1178,7 @@ export function updateInput(camera, playerPos) {
   let aimed = false;
   // Reset per frame, unlike `aim` itself: this is the gesture, not the heading.
   input.aiming = false;
+  input.aimLive = false;
 
   if (pad) {
     const rx = pad.axes[2] ?? 0;
@@ -1148,6 +1187,7 @@ export function updateInput(camera, playerPos) {
       input.aim.set(rx, -ry).normalize();
       aimed = true;
       input.aiming = true;
+      input.aimLive = true;
       lastAimDevice = 'gamepad';
     }
   }
@@ -1165,6 +1205,7 @@ export function updateInput(camera, playerPos) {
       input.aim.set(dx, dy).normalize();
       aimed = true;
       input.aiming = true;
+      input.aimLive = true;
       lastAimDevice = 'touch';
     }
   }
@@ -1175,13 +1216,17 @@ export function updateInput(camera, playerPos) {
   if (!aimed && moveMag && CONFIG.touch.aimFollowsMove && lastAimDevice === 'touch') {
     input.aim.copy(moveVec);
     aimed = true;
+    input.aimLive = true;
   }
 
   if (!aimed && hasMouse && lastAimDevice === 'mouse') {
     worldPoint.set(mouseNDC.x, mouseNDC.y, 0).unproject(camera);
     const dx = worldPoint.x - playerPos.x;
     const dy = worldPoint.y - playerPos.y;
-    if (Math.hypot(dx, dy) > 0.001) input.aim.set(dx, dy).normalize();
+    if (Math.hypot(dx, dy) > 0.001) {
+      input.aim.set(dx, dy).normalize();
+      input.aimLive = true;
+    }
   }
 
   // --- firing ---

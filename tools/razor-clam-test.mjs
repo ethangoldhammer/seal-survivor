@@ -156,6 +156,14 @@ console.log('\n6. the asset the blades are thrown as');
   ok(!!def, 'the blade has a trail entry keyed on its ASSET name');
   ok(CONFIG.emitPoints?.razorClam != null, 'the volley has an emit point');
   ok(!!CONFIG.chromeBlade, 'the chrome film has a config block');
+  // ...AND IT IS STILL THE SMOOTH ONE. The film gained a grain when the sardine
+  // swirl's body started wearing it (CONFIG.chromeSardine), and the grain lives
+  // on every chrome block rather than on that one — so the way this shell gets
+  // silently re-surfaced is somebody seeding a default here instead of there.
+  // At zero the shader takes a uniform compare and skips the whole branch, so
+  // the blade renders exactly what it rendered before the scales existed.
+  ok(!(CONFIG.chromeBlade.grain > 0) && !(CONFIG.chromeBlade.sparkle > 0),
+    `the blade's film is smooth — no grain (grain ${CONFIG.chromeBlade.grain ?? 0}, sparkle ${CONFIG.chromeBlade.sparkle ?? 0})`);
   ok(!!CONFIG.feedback?.razorClamLaunch?.sfx && !!CONFIG.sfx?.[CONFIG.feedback.razorClamLaunch.sfx],
     'the launch sound exists in the bank');
 }

@@ -197,6 +197,7 @@ function makeRings(scene, c) {
   dropRings();
   for (let i = 0; i < 4; i++) {
     const ring = makeOrganicRing({
+      role: 'tell',
       type: c.attack ?? 'kinetic',
       thickness: 0.2,
       renderOrder: 6,

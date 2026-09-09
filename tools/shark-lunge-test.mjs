@@ -84,6 +84,7 @@ function run(type, seed, {
       updateEnemies(dt, scene, player, () => {}, () => {});
       if (tells) updateLungeTells(dt, scene);
       if (!enemies.includes(e)) break;
+      if (process.env.DBG === "2" && e.lungeStage !== frames[frames.length - 1]?.stage) console.log(`      stage ${type} seed ${seed} t=${(i * dt).toFixed(2)} ${e.lungeStage} d=${Math.hypot(player.x - e.mesh.position.x, player.y - e.mesh.position.y).toFixed(1)} r=${e.radius.toFixed(2)} seal=(${player.x.toFixed(1)},${player.y.toFixed(1)}) shark=(${e.mesh.position.x.toFixed(1)},${e.mesh.position.y.toFixed(1)})`);
       const dx = player.x - e.mesh.position.x;
       const dy = player.y - e.mesh.position.y;
       frames.push({
@@ -327,13 +328,13 @@ console.log('\nA SEAL THAT MOVES IS MISSED; ONE THAT STANDS STILL IS NOT');
 // number that would actually have cost you.
 //
 // The dodge itself is described beside the bot below.
-function hits(type, seed, playerMove, patterns) {
+function hits(type, seed, playerMove, patterns, label = "") {
   const e0 = CONFIG.enemies[type];
   const { frames } = run(type, seed, { playerMove, patterns, seconds: 40 });
   const radius = frames[0]?.radius ?? e0.radius;
   const reach = radius * (CONFIG.bite.mouthReach ?? 0.55) + (CONFIG.player.hitRadius ?? 0.5);
   let n = 0;
-  for (const f of frames) if (f.stage === 'strike' && f.dist <= reach) { n++; if (process.env.DBG) console.log(`      hit ${type} seed ${seed} t=${f.t.toFixed(2)} d=${f.dist.toFixed(2)} reach=${reach.toFixed(2)} shark=(${f.x.toFixed(1)},${f.y.toFixed(1)}) sp=${f.speed.toFixed(1)}`); }
+  for (const f of frames) if (f.stage === 'strike' && f.dist <= reach) { n++; if (process.env.DBG) console.log(`      hit ${label} ${type} seed ${seed} t=${f.t.toFixed(2)} d=${f.dist.toFixed(2)} reach=${reach.toFixed(2)} shark=(${f.x.toFixed(1)},${f.y.toFixed(1)}) sp=${f.speed.toFixed(1)}`); }
   return { n, strikes: spans(frames, 'strike').length };
 }
 for (const type of ['shark', 'hammerhead', 'megalodon', 'bossShark', 'bossMosasaur']) {
@@ -342,28 +343,41 @@ for (const type of ['shark', 'hammerhead', 'megalodon', 'bossShark', 'bossMosasa
   for (const seed of SEEDS) {
     const s = hits(type, seed, () => ({ x: 0, y: MID }), { pass: 1 });
     still += s.n; stillStrikes += s.strikes;
-    // THE DODGE: swim ACROSS the shark's nose, always. The wind-up tracks the
-    // seal at the body's full turn rate and the line locks where the nose is
-    // when the clock runs out (see lungeChase), so what a moving seal is
-    // offered is not "have moved" but "be moving across the line while the
-    // run is happening". The bot does the simplest version of that: from the
-    // first tell on, it holds a course perpendicular to whatever the shark is
-    // pointing at right now, at its own cruise, keeping the same sense so it
-    // does not jitter, and turning back only for the surface or the floor.
+    // THE DODGE: swim ACROSS the shark's nose. The wind-up tracks the seal at
+    // the body's full turn rate and the line locks where the nose is when the
+    // clock runs out (see lungeChase), so what a moving seal is offered is not
+    // "have moved" but "be moving across the line while the run is
+    // happening". The bot does the simplest version of that: from the first
+    // tell on, it holds a course perpendicular to whatever the shark is
+    // pointing at right now, at its own cruise, on the side with more water
+    // in it. At the surface or the floor it slides along the edge rather
+    // than turning back — turning back is re-crossing the line — and between
+    // tells it eases back toward mid-water, because a player who lets a
+    // shark pin them to the seabed has lost the exchange before the run.
     let across = null; // +1 / -1: which perpendicular
     let hold = { x: 0, y: MID };
     const m = hits(type, seed, (t, e) => {
       const telling = e.lungeStage === 'wind' || e.lungeStage === 'strike' || e.lungeStage === 'reaim';
-      if (!telling) return hold;
+      if (!telling) {
+        across = null;
+        const dy = MID - hold.y;
+        hold = { x: hold.x, y: hold.y + Math.sign(dy) * Math.min(Math.abs(dy), 4 * dt) };
+        return hold;
+      }
       const hx = Math.cos(e.heading), hy = Math.sin(e.heading);
       let px = -hy, py = hx;
-      if (across == null) across = (hold.y + py * 6 > -4 || hold.y + py * 6 < -36) ? -1 : 1;
+      if (across == null) {
+        // The side whose 8-unit endpoint sits deeper in the water.
+        const room = (y) => Math.min(-3 - y, y + 37);
+        across = room(hold.y + py * 8) >= room(hold.y - py * 8) ? 1 : -1;
+      }
       px *= across; py *= across;
-      let ny = hold.y + py * 9 * dt;
-      if (ny > -3 || ny < -37) { across = -across; px = -px; py = -py; ny = hold.y + py * 9 * dt; }
-      hold = { x: Math.max(-38, Math.min(38, hold.x + px * 9 * dt)), y: ny };
+      hold = {
+        x: Math.max(-38, Math.min(38, hold.x + px * 9 * dt)),
+        y: Math.max(-37, Math.min(-3, hold.y + py * 9 * dt)),
+      };
       return hold;
-    }, { pass: 1 });
+    }, { pass: 1 }, "moving");
     moved += m.n; movedStrikes += m.strikes;
   }
   check(`${type}: a still seal is caught`, stillStrikes > 0 && still > 0, `${still} biting frames over ${stillStrikes} runs`);

@@ -15,7 +15,7 @@ import { midWater, bounds, seabedTopY } from './arena.js';
 import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
 } from './input.js';
-import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer } from './entities/player.js';
+import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer, sealBite } from './entities/player.js';
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
@@ -42,6 +42,7 @@ import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
 import { setGooSuckTarget, updateGooSuck, resetGooSuck } from './systems/gooSuck.js';
+import { enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir } from './systems/versus.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -68,6 +69,7 @@ import { createClubVisual, updateClub, resetClub, fireClubThrow, clubHitFx, club
 import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
+import { strikeEnglish } from './systems/strike.js';
 import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
@@ -118,7 +120,7 @@ import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/s
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
-import { play as playMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
+import { play as playMusic, stop as stopMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
 import { shotDue, resetShotGrid, tickInterval, finSplit, dealTick } from './systems/shotGrid.js';
 import { startAmbient, stopAmbient, preloadAmbient, ambientBankBytes } from './systems/ambient.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
@@ -155,6 +157,7 @@ import { installLevelUpGhost, prepareLevelUpGhost, startLevelUpGhost, updateLeve
 import { bossKillState, updateBossKill, resetBossKill, bossKillShotDue, setBossKillFraming } from './systems/bossKill.js';
 import { holdBossCorpse, updateBossCorpses, resetBossCorpses, bossCorpseFocus } from './systems/bossCorpse.js';
 import { fireBossBoom, updateBossBooms, resetBossBooms, initBossBooms } from './systems/bossBoom.js';
+import { updateGoalJets } from './systems/goalJet.js';
 import { initBossLight, updateBossLight, resetBossLight } from './systems/bossLight.js';
 import { resetBossDissolve } from './systems/bossDissolve.js';
 import { showSnapshotPrint, resetSnapshotPrints } from './ui/snapshotPrint.js';
@@ -193,7 +196,7 @@ const TIP_TIERS = parseTipCsv(tipsCsv);
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, hideHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, showSealSports, hideSealSports, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, hideHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
 import { starfishLevelStats, multishotLevelStats, missileLevelStats,
@@ -212,6 +215,7 @@ import { initGraveLabel, updateGraveLabel, clearGraveLabel } from './ui/graveLab
 import { initGraveBeam, updateGraveBeam, clearGraveBeam } from './systems/graveBeam.js';
 import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
+import { uiText } from './uiTextTable.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
 import { isTextEntry, isTypingTarget } from './ui/typing.js';
 import { initTuner, refreshTuner, setTunerMeta } from './ui/tuner.js';
@@ -278,6 +282,12 @@ if (priorCrash) {
 // but the plain link stays clean, which is the point.
 const DEV_UI = !!import.meta.env?.DEV
   || new URLSearchParams(window.location.search).has('tune');
+// The ball game (systems/versus.js) is a menu entry now — Seal sports on the
+// main menu, see `enterMode` below — and no longer a `?versus` URL flag. The
+// flag is switched at the press and the arena rebuilt under it, which is why
+// nothing reads the URL here.
+// Player 2's dash kills through the run's own kill path — see versusHooks.
+versusHooks.onKill = (e) => { onEnemyKilledFeedback(e); };
 
 const container = document.getElementById('root') ?? document.body;
 const world = createWorld(container);
@@ -883,6 +893,16 @@ async function boot() {
   // load with ?gate), `svUnlocks.record('bossesDefeated')` fakes one count of
   // a stat (see STATS there) and returns what it opened, and
   // `svUnlocks.reset()` forgets everything earned.
+  //
+  // THE LEDGER PERSISTS ON THE DEV SERVER exactly as it does anywhere else —
+  // it is localStorage and nothing branches on the build, so a dev session
+  // accumulates a real history and the gates open the way a player's would.
+  // Two doors out of it: `?unlocks=reset` on the URL, which wipes at import,
+  // before the menu builds the drawer; and `svUnlocks.reset()` here, which
+  // wipes mid-session and then RELOADS, because the menu, the drawer and the
+  // offer pool were all built off the ledger it just threw away and none of
+  // them would notice on their own. `svUnlocks.reset(false)` skips the reload,
+  // for when you only want it cleared before the next thing you type.
   if (DEV_UI) {
     window.svUnlocks = {
       stats: unlockStats,
@@ -898,7 +918,10 @@ async function boot() {
       commit: commitUnlocks,
       // Replay the toast for a gate id without touching the ledger.
       toast: (id) => showUnlockToast(unlockProgress(id)),
-      reset: resetUnlocks,
+      reset: (reload = true) => {
+        resetUnlocks();
+        if (reload) globalThis.location?.reload?.();
+      },
     };
   }
   if (DEV_UI) initPlaytestOverlay();
@@ -1367,6 +1390,12 @@ function handleTunerChange(path) {
   if (path === '*' || path.startsWith('grid')) world.grid.build();
   // The shore is geometry, not uniforms, so every knob on it needs a rebuild.
   if (path === '*' || path.startsWith('wallRocks')) world.wallRocks.build();
+  // The goal lights and the mouth they sit in (CONFIG.versus.goal, and the
+  // team colours they are lit in) are part of the shore: carved and lit at
+  // build, so a slider on them is a rebuild. Cheap — one merge of sixty
+  // boulders — and it is the one path that moves the ROCK as well as the
+  // light, which the F panel's live refresh cannot.
+  if (path.startsWith('versus.goal') || path.startsWith('versus.teams')) world.wallRocks.build();
   // The night sky's geometry IS its tuning — where the stars are, what is
   // joined to what, how far the fractal grows — so most of that panel needs a
   // rebuild rather than a uniform write. `star density` lives in the Sky panel
@@ -1498,20 +1527,19 @@ function showMainMenu() {
     world,
     seal: player,
     root: uiRoot(),
-    // WHAT THE BUTTONS DO lives here; how they feel lives in the menu. Three,
-    // because three is what the row was composed and tuned for
-    // (CONFIG.splashBust.menu) and a fourth would re-cut the frame.
+    // WHAT THE BUTTONS DO lives here; how they feel lives in the menu. Five:
+    // the diamond's four (CONFIG.splashBust.menu) and the fifth cell beside
+    // it, whose place is `fifthCell` in the same block. The order here is the
+    // order the diamond addresses them by — see diamondCells in hexMenu.
     items: [
       {
         label: 'Play',
         // The run starts NOW and the menu gets out of the way over the next
         // second — see the release. Both, in this order: startGame clears the
         // pending input edges, so the click that pressed this button cannot
-        // also spend a strike on frame one.
-        onPress: () => {
-          showHud();
-          startGame();
-        },
+        // also spend a strike on frame one. The ordinary run, so the ball
+        // game's flag is put down first if the last run was a match.
+        onPress: () => enterMode(false),
         // THE PRIMARY BUTTON, said out loud rather than inferred from being
         // first: bigger, with a heavier stroke on the glyphs, and a louder
         // halo and a hotter tile under the pointer. See `label` in
@@ -1555,8 +1583,49 @@ function showMainMenu() {
       // three call sites open anyway, and it is what quotes what a tip buys.
       // Stacked at its own space, for the same reason as the line above.
       { label: 'Tip jar', lines: ['Tip', 'jar'], onPress: () => openTipSheet({ tiers: TIP_TIERS }) },
+      // SEAL SPORTS — the other things a seal can play, on a panel of their
+      // own (ui/ui.js, showSealSports). The ball game is the one that works;
+      // the panel lists the rest as coming. The label is a uiText row rather
+      // than a literal like its four neighbours because it is new copy, and
+      // new copy lives in the table (CLAUDE.md); broken at its space for the
+      // same reason "Leaderboard" is.
+      {
+        label: uiText('sealSports'),
+        lines: uiText('sealSports').split(' '),
+        onPress: () => showSealSports({ onBall: () => enterMode(true) }),
+      },
     ],
   });
+}
+
+/**
+ * INTO A RUN, OF EITHER KIND. The two routes off the main menu — Play, and
+ * the ball game on the Seal sports panel — differ by one flag and everything
+ * that flag reaches: systems/versusFlag.js is read by the arena when its
+ * walls are measured (a match has its own pitch width), by the shore when it
+ * is built (the goal mouths are carved into it), and by buildRun, which
+ * places the second seal and the ball. So the flag has to be set BEFORE the
+ * run is built, and if it CHANGED the arena has to be rebuilt under it — the
+ * same rebuild the tuner does for an `arena` edit (handleTunerChange), with
+ * the same hand re-seating of everything standing on the seabed, because
+ * world.resize() does not fire the window event decor listens on.
+ *
+ * Nothing here writes CONFIG — see the note on why in versusFlag.js: the
+ * tuner snapshots whole sections, and a mode that wrote overrides would bake
+ * them into the tuning the ordinary game plays with.
+ *
+ * @param versus  true for the ball game, false for the ordinary run.
+ */
+function enterMode(versus) {
+  if (versusActive() !== !!versus) {
+    enableVersus(!!versus);
+    world.resize();
+    reseatDecor();
+    reseatSeabed(world.scene);
+    reseatGraves();
+  }
+  showHud();
+  startGame();
 }
 
 // ---------------------------------------------------------------------------
@@ -1623,6 +1692,7 @@ function returnToMenu() {
 function closeMainMenu() {
   if (!mainMenuActive()) return;
   hideLeaderboard();
+  hideSealSports();
   hidePauseMenu();
   // ...and the tip sheet, which is the fourth button's panel and the third
   // thing on this list for the same reason as the other two: it is a DOM
@@ -1845,6 +1915,8 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   resetReentrySplash();
   // Before resetParticles(): the blobs hand their driven slots back first.
   resetGooSuck();
+  // ...and the versus ball's, which are driven slots too.
+  resetVersus();
   resetParticles();
   // Before resetPlayer, which puts the seal back at midwater: this hands the
   // clock and the mix back to full speed, so a run started from the score
@@ -2074,6 +2146,9 @@ function buildRun(resume = null) {
   // ...and the balls beside it, under the same ordering rules. See
   // CONFIG.baitBall.opening.
   spawnOpeningBaitBalls(world.scene);
+  // A versus run: the second seal, the ball and the goals, after the seal and
+  // the opening food are placed and before anything reads the ball.
+  if (versusActive()) startVersus(world.scene);
   // Cleared with the rest of the run, or a seal that swims into a new run and
   // dies to something unclassified would be handed the LAST run's punchline.
   lastDamageSource = null;
@@ -2109,14 +2184,21 @@ function buildRun(resume = null) {
   // camera's opening move, and restarts the loop underneath only if what is
   // playing is not what this run opens on (see releaseMusicIntoRun — dying to
   // a boss leaves the fight's rotation up, where the menu never does).
-  if (!releaseMusicIntoRun(gameState.level)) playMusic(gameState.level);
+  // NOT IN VERSUS — no music (a match has none yet; it is Ethan's to add),
+  // and no opening shot: the match camera cuts straight to its own framing.
+  // See CONFIG.versus.drop for the list of what a match does without.
+  if (versusActive()) {
+    stopMusic();
+  } else {
+    if (!releaseMusicIntoRun(gameState.level)) playMusic(gameState.level);
+    // The opening shot: wide and barely tracking, easing into the normal follow
+    // over the state's blend-out. No-op with the cinematic camera off.
+    cineEvent('roundStart');
+  }
   // Picks the rotation up where the last run's fade-out left it rather than
   // restarting on clip one, so back-to-back runs don't all open on the same
-  // bed. See startAmbient.
+  // bed. See startAmbient. The sea's own sound, so a match keeps it.
   startAmbient();
-  // The opening shot: wide and barely tracking, easing into the normal follow
-  // over the state's blend-out. No-op with the cinematic camera off.
-  cineEvent('roundStart');
   sweepOpen(); // in case the last run ended on the level-up screen's ducked filter
   gameState.xp = 0;
   gameState.xpToNext = CONFIG.xp.first;
@@ -2167,7 +2249,9 @@ function buildRun(resume = null) {
   // Records the knobs this run was played under alongside the run itself: a
   // balance verdict only means anything next to the numbers that produced it,
   // and these are exactly the ones the T-panel can change between runs.
-  playtest.beginRun({
+  // A match is not a run for the ledger's purposes: nothing is filed, and
+  // every record* call below is a no-op with no run open.
+  if (!versusActive()) playtest.beginRun({
     difficultyPerSecond: CONFIG.spawn.difficultyPerSecond,
     ramp: { ...CONFIG.spawn.ramp },
     baseInterval: CONFIG.spawn.baseInterval,
@@ -2436,6 +2520,9 @@ function graveImpact(x, y) {
 }
 
 function killPlayer() {
+  // A match has no death: whatever took the last of the health, the seal
+  // bursts and respawns in its goal. No dive, no score card, no epitaph.
+  if (versusActive()) { versusOutOfAir(0); return; }
   crumb('run:death');
   // THE RUN'S OWN NUMBERS, banked here rather than at the score card: the dive
   // and the gravestone are minutes away and the run ended HERE, which is the
@@ -2644,6 +2731,9 @@ function gainXP(amount, spilled = false) {
   // hold still, which means the seal you are tuning against at the end is the
   // one you started with.
   if (isStaging()) return;
+  // Nor in a versus match: chum fills the strike meter (that path is separate,
+  // in onChumSwallowed) but never a level, so the cards never interrupt it.
+  if (versusActive()) return;
   // ONE MOUTHFUL, ONE CARD. A boss orb is worth several early levels on its own
   // and the whole `while` below used to fire on the frame it was swallowed, so
   // the run stopped for five upgrade screens back to back with no water between
@@ -3914,7 +4004,7 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   // `points` is already multiplied, so the toast shows what actually got
   // banked. The factor is still passed, but only to colour the toast as a
   // combo kill — it is no longer printed alongside the number.
-  spawnScoreToast(world.camera, e.mesh.position.x, e.mesh.position.y, points, combo);
+  if (!versusActive()) spawnScoreToast(world.camera, e.mesh.position.x, e.mesh.position.y, points, combo);
 
   // A BOSS COMES APART. Here rather than in systems/boss.js, which is where
   // every other part of the aftermath lives: that module finds out a boss died
@@ -4110,7 +4200,7 @@ function onChainHit(chain, source) {
     // the announcement goes. The two coordinates are still what the JUICE
     // above is fired at, which is a different question: the ripple and the
     // burst belong to the food, the banner belongs to the animal.
-    spawnChainToast(chain);
+    if (!versusActive()) spawnChainToast(chain);
     if (ceremony) {
       lastChainCeremony = gameState.time;
       world.punchCamera((fc.punch ?? 0.045) + (fc.punchPerChain ?? 0.012) * depth);
@@ -4635,6 +4725,12 @@ function collectChum(value, x, y, healMul = 1, fromFloor = false) {
   // attractor orb. A tip cleared by only one of those would stay on screen
   // through a player doing exactly what it asked.
   noteTutorialEvent('chum');
+  // THE MOUTH ACTUALLY SHUTS ON IT. Here rather than at the call sites for the
+  // reason the tip above is: this is the one funnel every route into eating
+  // shares, and a snap wired to only one of them would leave the gulp — which
+  // is when the seal is most obviously eating — swallowing with a closed mouth.
+  // The rate limit inside sealBite is what turns a hoovered pile into one bite.
+  sealBite('chum');
   // ...AND THE SEABED TIP IS ANSWERED BY THE SAME MOUTHFUL, when the orb is one
   // that had settled on the floor. `fromFloor` is the orb's own latch rather
   // than a test on `y` here: the magnet lifts a settled orb most of the way up
@@ -6327,12 +6423,14 @@ function runFrame(now) {
   // this call, on the raw clock, so "every half second" stays half a second
   // however far down the time slider is.
   const stageScale = updateStage(rawDt);
+  // The goal's shutter in a versus match, on the same wall clock. 1 otherwise.
+  const versusScale = updateVersusClock(rawDt);
   // All four multiplied together. The kill shot is the one gameplay stays LIVE
   // through — the seal can still swim, and the water it is swimming in is what
   // is being dilated — so it has to reach realDt like the rest rather than the
   // gameplay delta below, or the shot would be a slow-motion ocean with a
   // full-speed seal in the middle of it.
-  const realDt = rawDt * deathScale * levelScale * stageScale * killScale;
+  const realDt = rawDt * deathScale * levelScale * stageScale * killScale * versusScale;
 
   // Shake and hit-stop run on real time; gameplay runs on scaled time. Fed the
   // RAW delta, not the dilated one: a hit-stop is measured in wall-clock
@@ -6445,6 +6543,9 @@ function runFrame(now) {
     player.chargeThrustMul = chargeThrustMul(player.stats);
 
     updatePlayer(dt, input);
+    // The second seal and the ball, right behind the first seal's move so the
+    // contact test sees both bodies where they are this frame.
+    if (versusActive()) updateVersus(dt, null, input);
     // WHOLE SECONDS OUT OF THE WATER, accumulated across every run. Read off
     // `aboveSurface` immediately after the seal has moved, and inside the run
     // gate on purpose — that flag is not updated once the run is over, so
@@ -6673,7 +6774,10 @@ function runFrame(now) {
     // Oxygen hitting zero drains health instead of an instant death — the
     // deplete/refill itself already happened inside updatePlayer, alongside
     // the surface-breach check it already tracks.
-    if (CONFIG.oxygen.enabled && player.oxygen <= 0) {
+    // Out of air in a versus match: the seal bursts and comes back in its own
+    // goal a second later (systems/versus.js), instead of the run's drain.
+    if (versusActive() && CONFIG.oxygen.enabled && player.oxygen <= 0) versusOutOfAir(0);
+    if (CONFIG.oxygen.enabled && player.oxygen <= 0 && !versusActive()) {
       player.hp -= CONFIG.oxygen.drainDamagePerSec * dt;
       // Filed as a threat like any creature — a run lost to the surface being
       // too far away is a different balance problem from one lost to sharks,
@@ -6693,7 +6797,8 @@ function runFrame(now) {
     // is here is the count it reads (every bubble in the water, including the
     // ones a boat's hull shook loose) and the seabed it comes out of.
     {
-      const step = stepBubbleSpawner(dt, bubbleSpawnTimer, bubbleOrbs.length);
+      // A versus match keeps its own, fuller headcount — systems/versus.js.
+      const step = versusActive() ? { timer: bubbleSpawnTimer, spawn: false } : stepBubbleSpawner(dt, bubbleSpawnTimer, bubbleOrbs.length);
       bubbleSpawnTimer = step.timer;
       // OUT OF THE SEABED, not out of mid-water. Air comes from somewhere.
       // See bubbleBirthPoint in systems/oxygenBubble.js.
@@ -6719,8 +6824,10 @@ function runFrame(now) {
     }
     updateChumChunkSpawns(dt);
 
-    updateCrabSpawner(dt, world.scene, gameState.difficulty);
-    updateSeagulls(dt, world.scene, enemies, {
+    // Not in versus: chum on the seabed summons crabs, and a match makes chum.
+    if (!versusActive()) updateCrabSpawner(dt, world.scene, gameState.difficulty);
+    // No gulls in a versus match — see CONFIG.versus.drop.
+    if (!versusActive()) updateSeagulls(dt, world.scene, enemies, {
       onEnemyDamaged: (e, dmg, x, y) => damageFrom('seagull')(e, dmg, x, y),
       onEnemyKilled: onEnemyKilledFeedback,
       onSplash: (x, y) => feedback('breach', { x, y, scale: 0.9 }),
@@ -6745,7 +6852,7 @@ function runFrame(now) {
 
     // THE BOWHEAD SWEEP. The clock is fed the live population because the whale
     // is a pressure valve rather than a timer — see systems/whale.js.
-    if (updateWhaleClock(dt, enemies.length)) {
+    if (!versusActive() && updateWhaleClock(dt, enemies.length)) {
       const w = spawnWhale(world.scene);
       // Announced from the edge it entered at, not from the middle of the
       // screen: the whole value of the call is telling you which way it is
@@ -6812,7 +6919,9 @@ function runFrame(now) {
     // No trigger to pull any more — autofire is the whole answer. Kept as a
     // named flag rather than inlined because it still gates which weapons run,
     // and because turning it off in the tuner should silence all of them.
-    const wantsToFire = CONFIG.weapon.autofire;
+    // NO FINS IN A VERSUS MATCH: the strike is the only thing that turns a
+    // fish into chum there, so the fin gun holds its fire for the whole run.
+    const wantsToFire = CONFIG.weapon.autofire && !versusActive();
     // Asked every frame, firing or not: the idle path is what holds the lock on
     // the grid, so the shot after a recentred stick lands on a slot instead of
     // wherever the aim came back. See systems/shotGrid.js.
@@ -6926,7 +7035,9 @@ function runFrame(now) {
       // whole shell out the front as a single streak.
       const releaseVx = player.velocity.x;
       const releaseVy = player.velocity.y;
-      const fired = (dir.x !== 0 || dir.y !== 0) && tryStrike(dir, player.stats);
+      // ENGLISH: the swim across the aim, snapshotted onto the dash. Nothing
+      // in a run reads it; the versus ball spins off it (systems/versus.js).
+      const fired = (dir.x !== 0 || dir.y !== 0) && tryStrike(dir, player.stats, strikeEnglish(input.move, input.aim));
       if (fired) {
         // The first-run "hold to charge, release to strike" tip, answered. On
         // `fired` and not on the release: a release that had no direction or no
@@ -7299,11 +7410,12 @@ function runFrame(now) {
     // water keep swimming and breathing — freezing them would take the scene's
     // life away with its traffic, and the seal is what an effect is being
     // judged against, not an empty tank. Clear on the panel empties it.
-    if (!isStaging()) updateSpawning(dt, gameState, world.scene);
+    // A versus match drops its own docile bait balls instead (systems/versus.js).
+    if (!isStaging() && !versusActive()) updateSpawning(dt, gameState, world.scene);
     // Right after the ordinary spawner, and on the same terms: it is a spawn
     // trigger, it only fires while the run is actually running, and it stops
     // with everything else when the level-up cards are up.
-    updateBoss(dt, gameState, world.scene);
+    if (!versusActive()) updateBoss(dt, gameState, world.scene);
     // WHAT THAT KILL PAYS — the pellet now, the stacks once the shot is over.
     // Both immediately after updateBoss because that is the call that files a
     // death, and anywhere else in the frame is a payout one frame behind the
@@ -8336,6 +8448,7 @@ function runFrame(now) {
         // Look panel rather than carrying a second copy of the tint that goes
         // stale the first time anyone re-skins it.
         feedback('strikeOrbTaken', { x, y, scale: 0.85, color: assetBaseColor('strikeOrb') });
+        sealBite('orb');
         // One pickup, one mouthful — so it links exactly like a chum orb does
         // inside an armed chain. Without this the one pickup that hands over a
         // whole bar would be the one that could not extend the chain.
@@ -8358,7 +8471,10 @@ function runFrame(now) {
         // different game. The blue orb fills it outright (that is its whole
         // identity); the other two pay a FRACTION, so they are a top-up rather
         // than a substitute for eating. See CONFIG.strike.orbPipRefill.
-        if (addCharge(CONFIG.strike.orbPipRefill?.bubble ?? 0.25, player.stats)) chargeCrossed();
+        // ...a whole pip or more of it in a versus match, where air is the
+        // meter's second source — see CONFIG.versus.bubbles.
+        const bubblePay = versusActive() ? versusBubblePips() : (CONFIG.strike.orbPipRefill?.bubble ?? 0.25);
+        if (addCharge(bubblePay, player.stats)) chargeCrossed();
         // Pitched by how badly it was needed — a bubble grabbed while
         // suffocating pops low and fat, one grabbed on a full bar is a thin
         // little tick. Read BEFORE the refill, or every pop reports the bar
@@ -8380,6 +8496,7 @@ function runFrame(now) {
           sfxOpts: { pitch: 1.25 - 0.45 * need },
         });
         announceUnlocks(recordBubblePopped());
+        sealBite('orb');
         pickupStruck(x, y, 'bubbleOrb', assetBaseColor('bubbleOrb'));
       },
       (x, y) => {
@@ -8389,6 +8506,7 @@ function runFrame(now) {
         // because this orb is rarer.
         if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
         feedback('coralTaken', { x, y, scale: 1.1, color: assetBaseColor('rapidFireOrb') });
+        sealBite('orb');
         pickupStruck(x, y, 'rapidFireOrb', assetBaseColor('rapidFireOrb'));
       },
       // A CHUNK GOING DOWN. Health only, and this is the one pickup in the game
@@ -8399,6 +8517,10 @@ function runFrame(now) {
       (chunk) => {
         const x = chunk.mesh.position.x;
         const y = chunk.mesh.position.y;
+        // Before the branch: both kinds of chunk are the same lump of meat as
+        // far as the jaw is concerned, and it is the biggest thing the water
+        // hands over — see the per-kind widths in CONFIG.pickups.jaw.
+        sealBite('chunk');
         // A PIECE OFF A WEAK SPOT IS FUEL, NOT FOOD. Same entity in the water,
         // different currency: this one pays BOOST PIPS into the strike meter
         // and heals nothing, which is what the boost colour on it is promising
@@ -8461,6 +8583,7 @@ function runFrame(now) {
         // calls updatePickups with four handlers keeps working untouched.
         onLevelOrb: (x, y, orb) => {
           noteTutorialEvent('levelOrb');
+          sealBite('orb');
           const got = applyLevelOrb();
           feedback('levelOrbTaken', {
             x, y,
@@ -8741,7 +8864,7 @@ function runFrame(now) {
     //                moment, one surface at a time — see `strikeMoment` above.
     strikeNow: strikeMoment && !promptOnBanner,
     boost: boostDenied,
-  }, bandLive && !gameState.paused);
+  }, bandLive && !gameState.paused && !versusActive());
 
   // THE HELLO, before the coach and on the same liveness gate. It takes the
   // band first (CONFIG.greeting.priority is above every coach row), and the
@@ -8749,7 +8872,8 @@ function runFrame(now) {
   // so the tip arrives the moment the greeting has finished leaving. See the
   // note in systems/greeting.js about why that handover is a priority rather
   // than a delay in two places.
-  updateGreeting(realDt, bandLive && !gameState.paused);
+  // Neither the coach nor the hello in a versus match: no tutorial text there.
+  updateGreeting(realDt, bandLive && !gameState.paused && !versusActive());
 
   updateTutorial(realDt, {
     runTime: gameState.time,
@@ -8866,7 +8990,9 @@ function runFrame(now) {
     // cards is the thing being avoided — and crucially does NOT mark it done.
     // A tip interrupted by a level-up was never given its chance, so it comes
     // back and is taught properly once the water is on screen again.
-  }, bandLive && !gameState.paused);
+    // And never in a versus match: no tutorial text there, same as the
+    // coach's band and the hello above.
+  }, bandLive && !gameState.paused && !versusActive());
 
   // WHATEVER THE TIP IS ABOUT, LIT. Driven from the coach's own subject every
   // frame rather than from the five places a tip can start, so there is exactly
@@ -9298,6 +9424,9 @@ function runFrame(now) {
   // second this takes would otherwise leave a half-finished explosion parked
   // over the frame until it closed.
   updateBossBooms(rawDt);
+  // The versus goal's jet, on the same clock for the same reason: it fires
+  // into the goal shutter's freeze. systems/goalJet.js.
+  updateGoalJets(rawDt);
   // And the light it goes up in front of. The WALL clock again, and for the
   // same reason: the key has to be at full while the water is held at a tenth
   // speed, and a rise on the world's clock would be at a tenth brightness in
@@ -9424,6 +9553,8 @@ function runFrame(now) {
   // among. The target is the seal as drawn this frame. See systems/gooSuck.js.
   setGooSuckTarget(player.mesh.position.x, player.mesh.position.y);
   updateGooSuck(realDt);
+  // The versus ball, written into the goo pass beside the suck blobs.
+  if (versusActive()) renderVersus();
   perfPhase('particles', performance.now() - _tparticles);
   // The camera is what turns a finger on the glass into a point in the water,
   // and the strike meter is what makes a charging finger grow — see updateTouch
@@ -9513,6 +9644,11 @@ function runFrame(now) {
   // dive's claim so it wins the frame if both are somehow live, and before
   // updateCamera, which consumes the claim and clears it.
   parkStageCamera(world, player.mesh.position);
+  // A versus match frames the ball and the seals (CONFIG.versus.camera): a
+  // full-weight claim every frame, the same mechanism the stage uses to park
+  // the camera, on the real clock so the shot keeps moving through a goal's
+  // freeze.
+  if (versusActive() && gameState.running) updateVersusCamera(world, realDt);
   // The signals the cinematic rig picks its state from, and the motion it
   // frames off. Ignored entirely by the fixed camera — see world.updateCamera,
   // which doesn't read them unless CONFIG.cinecam.enabled.

@@ -25,6 +25,20 @@
 //                     card points both, the first only the right, and the
 //                     rig is handed one aim per fin.
 //   THE PICK          the motion lets go into the swim off the top.
+//   THE NECK          an unhover flips the clip (the loops' crossfade spikes
+//                     the speed for a frame) and a flipped clip used to snap
+//                     the skull: the clip speed is smoothed, a state that
+//                     flips straight back resumes from its weight, and no
+//                     frame of a hover change turns a neck bone more than a
+//                     couple of degrees.
+//   LANDING POINTS    what the file holds now: one point per state, the swim
+//                     rig carrying the body to it on the run's numbers —
+//                     never a lerp, never a jump on a hover change, and
+//                     the head still crossfading between its targets.
+//   PORTRAIT          a screen taller than wide plays the file's other set:
+//                     y a fraction of the viewport, the arrival up a side
+//                     column rather than from under the last card, and a
+//                     change of shape is a cut, not a blend across spaces.
 // ---------------------------------------------------------------------------
 
 import './dom-stub.mjs';
@@ -38,8 +52,9 @@ import { CONFIG } from '../path/src/config.js';
 import { installModel, createVisual } from '../path/src/assets.js';
 import { createLevelUpPuppet } from '../path/src/systems/levelUpSeal.js';
 import {
-  evaluateState, createMotionBlender, setMotionData, motionData, STATES,
+  evaluateState, createMotionBlender, setMotionData, motionData, STATES, setFor, statesFor, isLanding,
 } from '../path/src/systems/levelUpSealMotion.js';
+import authored from '../path/src/levelUpSealMotion.json' with { type: 'json' };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODEL = resolve(HERE, '../public/models/furseal.glb');
@@ -163,6 +178,87 @@ section('THE BLEND — no snap, in or out');
 }
 
 // ---------------------------------------------------------------------------
+section('THE TIMED BLEND — a curve over a time, restarted from where it is');
+{
+  const b = createMotionBlender();
+  const BL = { rate: 4, time: 0.5, ease: 'inOutCubic' };
+  let out = b.evaluate('idle', DT, resolver, FRAME, BL);
+  let frames = 0; let worst = 0; let prevW = b.weights.card1;
+  while (b.weights.card1 < 0.999 && frames++ < 120) {
+    out = b.evaluate('card1', DT, resolver, FRAME, BL);
+    worst = Math.max(worst, Math.abs(b.weights.card1 - prevW)); prevW = b.weights.card1;
+  }
+  check('a hover lands in the blend time', frames >= 28 && frames <= 32, `${frames} frames for 0.5s`);
+  check('...along the curve — the biggest step is mid-way, not at the start', worst < 0.1 && worst > 0.03, `worst step ${worst.toFixed(3)}`);
+  check('...on the card', Math.abs(out.x - 0.3 * FRAME.w) < 1);
+  // Change mid-blend: restarts from the current weight, no snap.
+  b.evaluate('idle', DT, resolver, FRAME, BL);
+  for (let i = 0; i < 8; i++) b.evaluate('idle', DT, resolver, FRAME, BL);
+  const at = b.weights.card1;
+  b.evaluate('card3', DT, resolver, FRAME, BL);
+  check('a change mid-blend starts from where it is', Math.abs(b.weights.card1 - at) < 0.05 && b.weights.card3 < 0.05, `card1 ${at.toFixed(2)} -> ${b.weights.card1.toFixed(2)}, card3 ${b.weights.card3.toFixed(3)}`);
+  for (let i = 0; i < 40; i++) out = b.evaluate('card3', DT, resolver, FRAME, BL);
+  check('...and lands on the new one', Math.abs(out.x - 0.7 * FRAME.w) < 1 && b.weights.card1 < 0.001);
+  check('a plain number is still the rate', (() => { const c = createMotionBlender(); c.evaluate('card1', DT, resolver, FRAME, 4); return Math.abs(c.weights.card1 - (1 - Math.exp(-4 * DT))) < 1e-9; })());
+}
+
+// ---------------------------------------------------------------------------
+section('PORTRAIT — the other set, in the other space');
+{
+  const PORT = { w: 390, h: 844, crownLine: 766, centreX: 195, idle: { x: 195, y: 450 },
+    cards: [{ x: 195, y: 250 }, { x: 195, y: 450 }, { x: 195, y: 650 }], cursor: null, portrait: true };
+  const pres = (name) => {
+    if (name === 'card' || name === 'cursor') return PORT.cards[1];
+    const m = /^card([1-3])$/.exec(name);
+    if (m) return PORT.cards[Number(m[1]) - 1];
+    return null;
+  };
+  setMotionData({ version: 2,
+    states: { idle: { loop: 2, keys: [K(0, 0.5, 0.1, 0, T('none', 0, 0, 0, 'out'))] } },
+    portrait: { space: 'viewport', entryX: 0.12, states: {
+      idle: { loop: 2, keys: [K(0, 0.12, 0.8, 0, T('none', 0, 0, 0, 'out'))] },
+      card1: { loop: 2, keys: [K(0, 0.12, 0.3, 0.1, T('card', 0, 0, 1, 'out'), T('card', 0, 0, 1))] },
+    } },
+  });
+  const land = setFor(FRAME);
+  const port = setFor(PORT);
+  check('a landscape frame plays the row\'s set in crown space', land.key === 'landscape' && land.space === 'crown' && land.entryX === null);
+  check('a portrait frame plays the portrait set in viewport space', port.key === 'portrait' && port.space === 'viewport' && port.entryX === 0.12);
+  check('...and the page edits that set', statesFor(PORT) === motionData().portrait.states && statesFor(FRAME) === motionData().states);
+  const noPort = setFor(PORT, { states: motionData().states });
+  check('a file with no portrait set falls back to the row\'s', noPort.key === 'landscape' && noPort.space === 'crown');
+
+  const b = createMotionBlender();
+  let out = b.evaluate('idle', DT, pres, PORT, 4);
+  check('the blend reports its set and space', out.set === 'portrait' && out.space === 'viewport');
+  check('...y is the authored fraction, not a crown-line unit', Math.abs(out.y - 0.8) < 1e-9 && Math.abs(out.x - 0.12 * PORT.w) < 1e-9, `${out.y}, ${out.x}px`);
+  // A state the portrait set does not have is the idle, not the row's copy.
+  out = b.evaluate('card2', DT, pres, PORT, 4);
+  check('a state missing from the set is its idle', b.wanted === 'idle');
+  for (let i = 0; i < 240; i++) out = b.evaluate('card1', DT, pres, PORT, 4);
+  check('a hover blends within the set', Math.abs(out.y - 0.3) < 0.01 && out.fins.left.s > 0.99, `y ${out.y.toFixed(3)}`);
+  // THE CUT. Turn the phone: the row's set, its idle, at once.
+  out = b.evaluate('card1', DT, resolver, FRAME, 4);
+  check('a change of shape cuts to the other set', out.set === 'landscape' && out.space === 'crown' && b.weights.idle === 1 && b.weights.card1 === 0,
+    `${out.set}, idle ${b.weights.idle.toFixed(2)}`);
+  check('...on the row\'s own point, no blend across the spaces', Math.abs(out.y - 0.1) < 1e-9 && Math.abs(out.x - 0.5 * FRAME.w) < 1e-9, `${out.y}, ${out.x}px`);
+  // Pinned, the pin reads the frame's set too.
+  b.pin({ state: 'card1', t: 0 });
+  out = b.evaluate('idle', DT, pres, PORT, 4);
+  check('a pin reads the frame\'s set', out.set === 'portrait' && Math.abs(out.y - 0.3) < 1e-9);
+  b.pin(null);
+
+  // THE SHIPPED FILE has both sets, whole.
+  const shipped = authored;
+  check('the shipped file carries a portrait set', !!shipped.portrait?.states && Number.isFinite(shipped.portrait.entryX));
+  check('...every state a landing point, in both sets', STATES.every((s) => isLanding(shipped.portrait.states?.[s]) && isLanding(shipped.states?.[s])));
+  check('...the portrait idle in a side column', shipped.portrait.states.idle.land.anchor === 'free' && (shipped.portrait.states.idle.land.x < 0.25 || shipped.portrait.states.idle.land.x > 0.75),
+    JSON.stringify(shipped.portrait.states.idle.land));
+  check('...the portrait cards met beside the hovered card', ['card1', 'card2', 'card3'].every((s) => shipped.portrait.states[s].land.anchor === 'card' && Math.abs(shipped.portrait.states[s].land.x) > 0.25));
+  check('...and the row\'s points hang off the row', STATES.every((s) => shipped.states[s].land.anchor === 'row'));
+}
+
+// ---------------------------------------------------------------------------
 section('THE FREE SWIMMER, on the real seal');
 if (!existsSync(MODEL)) {
   console.error(`\nmissing ${MODEL}`);
@@ -232,10 +328,284 @@ if (!existsSync(MODEL)) {
   check('unhover: back to the idle loop', Math.abs(p.state.cx - 0.5 * FRAME.w) < 1 && p.state.finGate[ri] < 0.01);
   check('...no frame further than the blend allows', worst <= maxStep * 1.05 && worstG <= (1 - Math.exp(-4 * DT)) * 1.05, `centre ${worst.toFixed(2)}px, fin ${worstG.toFixed(3)}`);
 
+  // THE NECK through a hover change. Every neck bone's LOCAL turn per frame,
+  // hover on, off and on again — the frame the clip flips is the one that
+  // used to kick five degrees (twenty-eight with the head rig off).
+  {
+    const neck = p.rig.head?.bones ?? [];
+    const prevQ = neck.map((b) => b.quaternion.clone());
+    let worst = 0; let at = '';
+    const watch = (label, frames) => {
+      for (let i = 0; i < frames; i++) {
+        p.update(DT);
+        neck.forEach((b, j) => {
+          const d = 2 * Math.acos(Math.min(1, Math.abs(b.quaternion.dot(prevQ[j]))));
+          if (d > worst) { worst = d; at = `${label}+${i} ${b.name} (${p.state.animState})`; }
+          prevQ[j].copy(b.quaternion);
+        });
+      }
+    };
+    watch('settle', 30);
+    p.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 }); watch('hover', 60);
+    p.look(null); watch('unhover', 60);
+    p.look({ x: 880, y: 300, cx: 880, cy: 300, option: 2 }); watch('hover again', 60);
+    p.look(null); watch('unhover again', 60);
+    const deg = worst * 180 / Math.PI;
+    check('no frame of a hover change kicks the neck', deg < 2.5, `worst ${deg.toFixed(2)}° at ${at}`);
+    check('...the clip speed is the smoothed one', Number.isFinite(p.state.clipSpeed) && p.state.clipSpeed <= Math.max(p.state.speed, p.state.clipSpeed));
+
+    // THE BOUNCE, on the controller alone: swim → boost → swim in two frames,
+    // which is what an unsmoothed speed did. fadeIn() schedules the returning
+    // clip's weight from zero, so on that frame the mixer fills nine tenths
+    // of the pose from what it saved when the binding woke — the skull
+    // turned 28 degrees. A state within one fade of leaving is faded back up
+    // from the weight it still has.
+    const anim = p.anim;
+    const skull = neck[neck.length - 1];
+    const stepAnim = (st) => { anim.update(DT, st, false); const d = 2 * Math.acos(Math.min(1, Math.abs(skull.quaternion.dot(prevQ[neck.length - 1])))); prevQ[neck.length - 1].copy(skull.quaternion); return d * 180 / Math.PI; };
+    for (let i = 0; i < 60; i++) stepAnim('swim');
+    let bounceWorst = 0;
+    bounceWorst = Math.max(bounceWorst, stepAnim('boost'));
+    bounceWorst = Math.max(bounceWorst, stepAnim('swim'));
+    for (let i = 0; i < 10; i++) bounceWorst = Math.max(bounceWorst, stepAnim('swim'));
+    check('a clip that flips away and straight back does not snap the skull', bounceWorst < 4, `worst ${bounceWorst.toFixed(2)}° a frame`);
+  }
+
   // THE PICK.
   p.look({ x: 880, y: 300, cx: 880, cy: 300, option: 2 });
   run(1);
   p.leave();
+  {
+    let n2 = 0;
+    while (p.phase === 'out' && n2++ < 600) p.update(DT);
+  }
+
+  // -------------------------------------------------------------------------
+  section('LANDING POINTS — the swim rig takes the body there');
+  {
+    const L = (anchor, x, y, heading = 0, look = T('card', 0, 0, 1, 'out'), left = T('none'), right = T('none')) => ({
+      land: { anchor, x, y }, heading, roll: 0, look, fins: { left, right },
+    });
+    setMotionData({ version: 3, states: {
+      idle: L('row', 0, 0.1, 0, T('cursor', 0, 0, 0.5, 'out')),
+      card1: L('card', -0.15, 0.25, 0.2, T('card', 0, 0, 1, 'out'), T('none'), T('card', 0, 0, 1)),
+      card2: L('card', 0, 0.3, 0),
+      card3: L('card', 0.15, 0.25, -0.2, T('card', 0, 0, 1, 'out'), T('card', 0, 0, 1), T('none')),
+    } });
+    CFG.pull = { enabled: false, weight: 0.5, turnWeight: 0, speed: 1, standoff: 0.9, arrive: 0.45 };
+    const P = CONFIG.player ?? {};
+    const q = createLevelUpPuppet(createVisual('ship'), { eyes: false, dress: false });
+    q.setFrame(FRAME);
+    q.enter();
+    // THE ENTRY IS THE SWIM: the point takes the body on the first frame it
+    // sets off from below, with no jump on screen, and it is swimming — the
+    // clip is the swim's — before it is anywhere near the row.
+    let n = 0; let jumpAtTake = 0; let prevX = 0; let prevY = 0;
+    while (q.phase !== 'in' && n++ < 600) { prevX = q.state.cx; prevY = q.state.cy; q.update(DT); }
+    check('the point takes the body as it sets off', q.state.motionW === 1 && q.state.land !== null && q.phase === 'in', `motionW ${q.state.motionW}, ${q.phase}`);
+    jumpAtTake = Math.hypot(q.state.cx - prevX, q.state.cy - prevY);
+    check('...with no jump on screen', jumpAtTake < (P.maxSpeed ?? 34) * q.state.scale * DT * 1.05, `${jumpAtTake.toFixed(1)}px on the first frame`);
+    check('...and swimming, from below the screen', q.state.cy > FRAME.h && q.state.pull.speed > 5, `y ${q.state.cy.toFixed(0)}, ${q.state.pull.speed.toFixed(1)} u/s`);
+    n = 0; while (q.phase !== 'held' && n++ < 600) q.update(DT);
+    check('it arrives held', q.phase === 'held');
+    const top = (P.maxSpeed ?? 34) * q.state.scale;
+    let fastest = 0; let worstStep = 0; prevX = q.state.cx; prevY = q.state.cy;
+    for (let t = 0; t < 3; t += DT) {
+      q.update(DT);
+      const d = Math.hypot(q.state.cx - prevX, q.state.cy - prevY); prevX = q.state.cx; prevY = q.state.cy;
+      worstStep = Math.max(worstStep, d); fastest = Math.max(fastest, d / DT);
+    }
+    const idlePt = { x: 640, y: FRAME.crownLine + 0.1 * FRAME.h };
+    check('it swims to the idle point and stops there', Math.hypot(q.state.cx - idlePt.x, q.state.cy - idlePt.y) < 3 && q.state.pull.speed < 0.5,
+      `${Math.hypot(q.state.cx - idlePt.x, q.state.cy - idlePt.y).toFixed(1)}px off, ${q.state.pull.speed.toFixed(2)} u/s`);
+    check('...never past the run\'s top speed', fastest <= top * 1.02, `${(fastest / q.state.scale).toFixed(1)} u/s vs ${P.maxSpeed}`);
+    check('...ignoring pull.enabled and pull.weight — the swim is the mover', true);
+
+    // THE ROW MOVES under it (the tip pushing the layout) before any hover:
+    // the idle point follows, the body swims after it rather than teleporting.
+    prevX = q.state.cx; prevY = q.state.cy;
+    q.setFrame({ ...FRAME, crownLine: 540, portrait: false });
+    q.update(DT);
+    const shift0 = Math.hypot(q.state.cx - prevX, q.state.cy - prevY);
+    check('a row that moves does not teleport the body', shift0 <= top * DT * 1.05, `${shift0.toFixed(2)}px on the frame`);
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+    check('...it swims to where the point went', Math.abs(q.state.cy - (540 + 0.1 * FRAME.h)) < 3, `${q.state.cy.toFixed(1)} vs ${(540 + 0.1 * FRAME.h).toFixed(1)}`);
+    q.setFrame({ ...FRAME, portrait: false });
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+
+    // HOVER card 1: the point moves, the body does not; it swims over.
+    q.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
+    const beforeX = q.state.cx; const beforeY = q.state.cy;
+    q.update(DT);
+    const hop = Math.hypot(q.state.cx - beforeX, q.state.cy - beforeY);
+    check('a hover moves the point, not the body', hop <= top * DT * 1.05, `${hop.toFixed(2)}px on the hover frame`);
+    let peak = 0; prevX = q.state.cx; prevY = q.state.cy;
+    for (let t = 0; t < 3; t += DT) {
+      q.update(DT);
+      const d = Math.hypot(q.state.cx - prevX, q.state.cy - prevY) / DT; prevX = q.state.cx; prevY = q.state.cy;
+      peak = Math.max(peak, d);
+    }
+    const c1 = { x: 400 - 0.15 * FRAME.w, y: 300 + 0.25 * FRAME.h };
+    check('it swims to the card\'s point', Math.hypot(q.state.cx - c1.x, q.state.cy - c1.y) < 3, `${Math.hypot(q.state.cx - c1.x, q.state.cy - c1.y).toFixed(1)}px off`);
+    check('...and actually swims — faster than a drift', peak > (P.thrust ?? 19) * q.state.scale * 0.2, `${(peak / q.state.scale).toFixed(1)} u/s`);
+    check('...pointing with the flipper the point says', q.state.finGate[ri] > 0.99 && q.state.finGate[li] < 0.01, JSON.stringify(q.state.finGate.map((g) => g.toFixed(2))));
+    for (let t = 0; t < 2; t += DT) q.update(DT);
+    check('...settled on the point\'s heading', Math.abs(q.state.motionOut.heading - 0.2) < 0.01 && Math.abs(q.state.pull.heading) < 0.05,
+      `loop ${q.state.motionOut.heading.toFixed(3)}, swim ${q.state.pull.heading.toFixed(3)}`);
+
+    // HOVER OFF HOLDS. The idle has no point once a card has been hovered:
+    // the body stays where the hover-off caught it and settles there.
+    q.look(null);
+    const hx = q.state.cx; const hy = q.state.cy;
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+    check('a hover-off does not send it back to the centre', Math.hypot(q.state.cx - hx, q.state.cy - hy) < 8 && Math.hypot(q.state.cx - idlePt.x, q.state.cy - idlePt.y) > 100,
+      `${Math.hypot(q.state.cx - hx, q.state.cy - hy).toFixed(1)}px from where it was, ${Math.hypot(q.state.cx - idlePt.x, q.state.cy - idlePt.y).toFixed(0)}px from the idle point`);
+    check('...settled', q.state.pull.speed < 0.5 && q.state.hold, `${q.state.pull.speed.toFixed(2)} u/s, hold ${q.state.hold}`);
+    check('...the flipper let go and the idle look blended in', q.state.finGate[ri] < 0.01 && q.state.motionOut.look.on);
+    // ...and a hover-off MID-SWIM glides to a stop rather than snapping.
+    q.look({ x: 880, y: 300, cx: 880, cy: 300, option: 2 });
+    for (let t = 0; t < 0.3; t += DT) q.update(DT);
+    const mv = Math.hypot(q.state.velX, q.state.velY) * DT;
+    q.look(null);
+    q.update(DT);
+    const mv2 = Math.hypot(q.state.velX, q.state.velY) * DT;
+    check('a hover-off mid-swim keeps its momentum for the frame', mv > 2 && mv2 > mv * 0.8, `${mv.toFixed(2)}px then ${mv2.toFixed(2)}px`);
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+    check('...and glides to a stop', q.state.pull.speed < 0.5);
+
+    // THE TURN IS ON THE SWIM'S CLOCK. To card 3's point (heading -0.2): the
+    // body's heading never runs ahead of the position, and only settles once
+    // the swim has.
+    q.look({ x: 880, y: 300, cx: 880, cy: 300, option: 2 });
+    const c3 = { x: 880 + 0.15 * FRAME.w, y: 300 + 0.25 * FRAME.h };
+    const leg0 = Math.hypot(q.state.cx - c3.x, q.state.cy - c3.y);
+    const h0 = q.state.bodyHeading;
+    let ahead = 0; let atArrival = null;
+    for (let t = 0; t < 4; t += DT) {
+      q.update(DT);
+      const posFrac = 1 - Math.hypot(q.state.cx - c3.x, q.state.cy - c3.y) / leg0;
+      const turnFrac = Math.abs(q.state.bodyHeading - h0) / Math.abs(-0.2 - h0);
+      ahead = Math.max(ahead, turnFrac - posFrac);
+      if (atArrival === null && posFrac > 0.97) atArrival = turnFrac;
+    }
+    check('the turn never runs ahead of the swim', ahead < 0.08, `at most ${ahead.toFixed(3)} ahead`);
+    check('...and is not done when the body first gets there', atArrival !== null && atArrival < 0.995, `${(atArrival ?? 0).toFixed(3)} of the turn at arrival`);
+    check('...but settles after', Math.abs(q.state.bodyHeading + 0.2) < 0.01, `${q.state.bodyHeading.toFixed(3)}`);
+
+    // A NEW CARD MID-SWIM: on the way to card 1, hover card 3 on the far
+    // side. The point glides across by the crossfade's weights and the swim
+    // banks round after it — never a stop, never a snap — and lands there.
+    q.look(null);
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+    q.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
+    for (let t = 0; t < 0.35; t += DT) q.update(DT);
+    const spAt = Math.hypot(q.state.velX, q.state.velY);
+    const ptAt = { ...q.state.land };
+    q.look({ x: 880, y: 300, cx: 880, cy: 300, option: 2 });
+    let slowest = Infinity; let strideJump = 0; let prevStride = spAt * DT; let ptJump = 0; let prevPt = ptAt;
+    let prevPos = { x: q.state.cx, y: q.state.cy };
+    for (let i = 0; i < 150; i++) {
+      q.update(DT);
+      const sp = Math.hypot(q.state.velX, q.state.velY);
+      // ...until it is on the last stretch to the point, where stopping is the job.
+      if (Math.hypot(q.state.cx - c3.x, q.state.cy - c3.y) > 0.45 * CFG.freeHeight * FRAME.h * 1.2) slowest = Math.min(slowest, sp);
+      const step = Math.hypot(q.state.cx - prevPos.x, q.state.cy - prevPos.y); prevPos = { x: q.state.cx, y: q.state.cy };
+      strideJump = Math.max(strideJump, Math.abs(step - prevStride)); prevStride = step;
+      ptJump = Math.max(ptJump, Math.hypot(q.state.land.x - prevPt.x, q.state.land.y - prevPt.y)); prevPt = { ...q.state.land };
+    }
+    check('a new card mid-swim: the point glides, it does not jump', ptJump < 0.12 * Math.hypot(c3.x - ptAt.x, c3.y - ptAt.y), `biggest move ${ptJump.toFixed(0)}px of ${Math.hypot(c3.x - ptAt.x, c3.y - ptAt.y).toFixed(0)}`);
+    check('...the swim never stops to turn round', slowest > spAt * 0.5, `slowest ${(slowest / q.state.scale).toFixed(1)} u/s against ${(spAt / q.state.scale).toFixed(1)} at the switch`);
+    check('...no frame changes its stride by more than the thrust allows', strideJump <= (P.thrust ?? 19) * q.state.scale * DT * DT * 1.5 + 0.3, `${strideJump.toFixed(2)}px`);
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+    check('...and it lands on the new card\'s point', Math.hypot(q.state.cx - c3.x, q.state.cy - c3.y) < 3, `${Math.hypot(q.state.cx - c3.x, q.state.cy - c3.y).toFixed(1)}px off`);
+
+    // THE JAW: a hovered state holds the mouth open by its `jaw`, crossfaded
+    // in; the hover-off lets it shut; the pick snaps it open and shut on top.
+    {
+      const jawState = q.state; const drv = q.jaw;
+      check('the seal has a jaw driver on mouth_08', !!drv && !!q.body.getObjectByName('mouth_08'));
+      const withJaw = (name, v) => { const st = statesFor(FRAME)[name]; st.jaw = v; };
+      withJaw('idle', 0); withJaw('card1', 0.6); withJaw('card2', 0); withJaw('card3', 0);
+      q.look(null);
+      for (let t = 0; t < 3; t += DT) q.update(DT);
+      const shut = drv.open;
+      q.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
+      let firstFrame = null;
+      for (let t = 0; t < 3; t += DT) { q.update(DT); if (firstFrame === null) firstFrame = drv.open; }
+      check('hovering opens the mouth to the state\'s jaw', Math.abs(jawState.jawOpen - 0.6) < 0.01 && drv.open > 0.2 && shut === 0,
+        `gape ${jawState.jawOpen.toFixed(2)}, ${drv.open.toFixed(3)} rad (shut ${shut})`);
+      check('...easing in with the blend, not snapping open', firstFrame < drv.open * 0.25, `${firstFrame.toFixed(3)} rad on the first frame of ${drv.open.toFixed(3)}`);
+      q.look(null);
+      for (let t = 0; t < 3; t += DT) q.update(DT);
+      check('a hover-off shuts it', jawState.jawOpen < 0.01 && drv.open === 0, `${drv.open.toFixed(3)} rad`);
+      q.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
+      for (let t = 0; t < 2; t += DT) q.update(DT);
+      q.leave();
+      let peak = 0; let biting = false; let n4 = 0;
+      while (q.phase === 'out' && n4++ < 600) { q.update(DT); peak = Math.max(peak, drv.open); if (drv.isBiting()) biting = true; }
+      check('the pick snaps the jaw wide', biting && peak > 0.45, `peak ${peak.toFixed(3)} rad`);
+      q.look(null); // the menu is gone with the pick; nothing is hovered on the next hand
+      q.enter(); n4 = 0; while (q.phase !== 'held' && n4++ < 600) q.update(DT);
+      for (let t = 0; t < 3; t += DT) q.update(DT);
+      check('...and it is shut again for the next hand', drv.open === 0 && !drv.isBiting());
+      withJaw('card1', 0.2);
+      q.look(null);
+      for (let t = 0; t < 2; t += DT) q.update(DT);
+    }
+
+    // THE PICK MID-SWIM is seamless: send it to card 1's point and take the
+    // card while it is still going. No hop on the first exit frame, the
+    // velocity carried, the face-out and the neck eased, not cut.
+    q.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
+    for (let t = 0; t < 0.35; t += DT) q.update(DT);
+    const neckBones = q.rig.head?.bones ?? [];
+    const nq = neckBones.map((b) => b.quaternion.clone());
+    const stepBefore = Math.hypot(q.state.velX, q.state.velY) * DT;
+    const faceBefore = q.state.faceOut;
+    check('...(it is mid-swim)', stepBefore > 1 && q.state.pull.speed > 3, `${q.state.pull.speed.toFixed(1)} u/s`);
+    const px0 = q.state.cx; const py0 = q.state.cy;
+    q.leave();
+    q.update(DT);
+    const hop2 = Math.hypot(q.state.cx - px0, q.state.cy - py0);
+    const faceStep = Math.abs(q.state.faceOut - faceBefore);
+    let neckStep = 0;
+    neckBones.forEach((b, j) => { neckStep = Math.max(neckStep, 2 * Math.acos(Math.min(1, Math.abs(b.quaternion.dot(nq[j])))) * 180 / Math.PI); });
+    check('a pick mid-swim: the first exit frame moves as the swim was moving', hop2 > stepBefore * 0.5 && hop2 < stepBefore * 1.6, `${hop2.toFixed(2)}px vs ${stepBefore.toFixed(2)}px the frame before`);
+    check('...the face-out eases rather than cuts', faceStep < 0.15, `${faceStep.toFixed(3)} in a frame from ${faceBefore.toFixed(2)}`);
+    check('...and the neck does not kick', neckStep < 3, `${neckStep.toFixed(2)}° on the pick frame`);
+    let n3 = 0; while (q.phase === 'out' && n3++ < 600) q.update(DT);
+    check('...and it still leaves', q.phase === 'none');
+    q.enter(); n3 = 0; while (q.phase !== 'held' && n3++ < 600) q.update(DT);
+    for (let t = 0; t < 3; t += DT) q.update(DT);
+
+    // A HOVER ON THE WAY UP: a fresh entry with card 1 hovered from the first
+    // frame swims straight to card 1's point (off to the left, so the straight
+    // line from below cannot pass the idle's), never via the idle's, with the
+    // flipper already blending in on the rise.
+    const r2 = createLevelUpPuppet(createVisual('ship'), { eyes: false, dress: false });
+    r2.setFrame(FRAME);
+    r2.enter();
+    r2.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
+    let nearestIdle = Infinity; let pointedOnRise = false;
+    n = 0;
+    while (r2.phase !== 'held' && n++ < 600) {
+      r2.update(DT);
+      nearestIdle = Math.min(nearestIdle, Math.hypot(r2.state.cx - idlePt.x, r2.state.cy - idlePt.y));
+      if (r2.phase === 'in' && r2.state.cy > FRAME.h * 0.9 && (r2.state.finGate?.some((g) => g > 0.3) ?? false)) pointedOnRise = true;
+    }
+    for (let t = 0; t < 3; t += DT) { r2.update(DT); nearestIdle = Math.min(nearestIdle, Math.hypot(r2.state.cx - idlePt.x, r2.state.cy - idlePt.y)); }
+    const c2 = { x: 400 - 0.15 * FRAME.w, y: 300 + 0.25 * FRAME.h };
+    check('hovered on the way up: it swims straight to the card\'s point', Math.hypot(r2.state.cx - c2.x, r2.state.cy - c2.y) < 3, `${Math.hypot(r2.state.cx - c2.x, r2.state.cy - c2.y).toFixed(1)}px off`);
+    check('...never via the idle point', nearestIdle > 40, `nearest ${nearestIdle.toFixed(0)}px`);
+    check('...with the flippers blending in while still low on the screen', pointedOnRise);
+
+    // THE PICK: off the top from wherever it is.
+    q.leave();
+    let sank = 0; let py = q.state.cy; n = 0;
+    while (q.phase === 'out' && n++ < 600) { q.update(DT); if (q.state.cy > py + 1e-6) sank++; py = q.state.cy; }
+    check('the pick sends it off the top', q.phase === 'none' && sank === 0 && q.state.land === null, `${sank} sinking frames`);
+    CFG.pull = { enabled: false };
+  }
   let sank = 0; let prevY = p.state.cy;
   n = 0;
   while (p.phase === 'out' && n++ < 600) { p.update(DT); if (p.state.cy > prevY + 1e-6) sank++; prevY = p.state.cy; }
@@ -245,8 +615,14 @@ if (!existsSync(MODEL)) {
   check('the authored file has all four states', STATES.every((s) => motionData().states?.[s] || true));
 
   // -------------------------------------------------------------------------
-  section('THE PULL — it swims to the card on the run\'s numbers');
+  section('THE PULL — it swims to the card on the run\'s numbers (the loops\' add-on)');
   {
+    setMotionData({ version: 1, states: {
+      idle: { loop: 2, keys: [K(0, 0.5, 0.1, 0, T('cursor', 0, 0, 0.5, 'out'))] },
+      card1: { loop: 2, keys: [K(0, 0.45, 0, 0.2, T('card', 0, 0, 1, 'out'), T('none'), T('card', 0, 0, 1))] },
+      card2: { loop: 2, keys: [K(0, 0.5, 0, 0, T('card', 0, 0, 1, 'out'), T('card', 0, 0, 1), T('card', 0, 0, 1))] },
+      card3: { loop: 2, keys: [K(0, 0.55, 0, -0.2, T('card', 0, 0, 1, 'out'), T('card', 0, 0, 1), T('none'))] },
+    } });
     CFG.pull = { enabled: true, weight: 1, turnWeight: 0, speed: 1, standoff: 0.9, arrive: 0.45 };
     const P = CONFIG.player;
     const q = createLevelUpPuppet(createVisual('ship'), { eyes: false, dress: false });
@@ -307,6 +683,92 @@ if (!existsSync(MODEL)) {
     r.look({ x: 400, y: 300, cx: 400, cy: 300, option: 0 });
     for (let t = 0; t < 3; t += DT) r.update(DT);
     check('off is off: the loop alone', Math.abs(r.state.cx - 0.45 * FRAME.w) < 1, `${(r.state.cx / FRAME.w).toFixed(3)}`);
+  }
+
+  // -------------------------------------------------------------------------
+  section('PORTRAIT, on the real seal — up the side column, never from under the cards');
+  {
+    const PORT = { w: 390, h: 844, crownLine: 766, centreX: 195, idle: { x: 195, y: 450 },
+      cards: [{ x: 195, y: 250 }, { x: 195, y: 450 }, { x: 195, y: 650 }], cursor: null, portrait: true };
+    setMotionData({ version: 2,
+      states: { idle: { loop: 2, keys: [K(0, 0.5, 0.1, 0, T('none', 0, 0, 0, 'out'))] } },
+      portrait: { space: 'viewport', entryX: 0.12, states: {
+        idle: { loop: 2, keys: [K(0, 0.12, 0.6, 0, T('none', 0, 0, 0, 'out'))] },
+        card1: { loop: 2, keys: [K(0, 0.12, 0.3, 0.1, T('card', 0, 0, 1, 'out'), T('card', 0, 0, 1))] },
+      } },
+    });
+    const u = createLevelUpPuppet(createVisual('ship'), { eyes: false, dress: false });
+    u.setFrame(PORT);
+    u.enter();
+    let n = 0; let offColumn = 0; let lowest = -Infinity;
+    while (u.phase !== 'held' && n++ < 600) {
+      u.update(DT);
+      if (u.phase === 'in' && Math.abs(u.state.cx - 0.12 * PORT.w) > 1) offColumn++;
+      lowest = Math.max(lowest, u.state.cy);
+    }
+    check('it arrives held', u.phase === 'held');
+    check('the rise is in the entry column, not up the middle', offColumn === 0, `${offColumn} frames off x ${(0.12 * PORT.w).toFixed(0)}`);
+    for (let t = 0; t < 3; t += DT) u.update(DT);
+    const m = u.metrics();
+    check('the metrics say which set and space', m.set === 'portrait' && m.space === 'viewport' && m.entryX === 0.12 && m.crownLine === 0 && m.unit === PORT.h);
+    check('the centre is the loop\'s point, y of the viewport', Math.abs(u.state.cx - 0.12 * PORT.w) < 1 && Math.abs(u.state.cy - 0.6 * PORT.h) < 1,
+      `(${u.state.cx.toFixed(1)}, ${u.state.cy.toFixed(1)}) vs (${(0.12 * PORT.w).toFixed(1)}, ${(0.6 * PORT.h).toFixed(1)})`);
+    check('...well above the row\'s line at the bottom', u.state.cy < PORT.crownLine - 100, `${u.state.cy.toFixed(0)} vs line ${PORT.crownLine}`);
+    check('...beside the hand, not under it', Math.abs(u.state.cx - PORT.centreX) > 60, `${(PORT.centreX - u.state.cx).toFixed(0)}px off the column`);
+    const li = u.rig.fins.findIndex((f) => f.name === 'left');
+    u.look({ x: 195, y: 250, cx: 195, cy: 250, option: 0 });
+    for (let t = 0; t < 2; t += DT) u.update(DT);
+    check('the top card: met at its own height from the column', Math.abs(u.state.cy - 0.3 * PORT.h) < 1 && u.state.finGate[li] > 0.99,
+      `y ${u.state.cy.toFixed(0)} of ${(0.3 * PORT.h).toFixed(0)}, left fin ${u.state.finGate[li].toFixed(2)}`);
+    // TURN THE PHONE mid-screen: the row's set, its point, at once.
+    u.setFrame({ ...FRAME, portrait: false });
+    u.look(null);
+    u.update(DT);
+    check('turned: the row\'s set on the next frame', u.state.motionOut.set === 'landscape' && u.metrics().space === 'crown');
+    for (let t = 0; t < 2; t += DT) u.update(DT);
+    check('...settled on the row\'s idle', Math.abs(u.state.cx - 0.5 * FRAME.w) < 1 && Math.abs(u.state.cy - (FRAME.crownLine + 0.1 * CFG.freeHeight * FRAME.h)) < 1,
+      `(${u.state.cx.toFixed(0)}, ${u.state.cy.toFixed(0)})`);
+    // THE PICK, portrait: off the top from the column.
+    u.setFrame(PORT);
+    for (let t = 0; t < 2; t += DT) u.update(DT);
+    u.leave();
+    let sank = 0; let prevY = u.state.cy; let strayed = 0;
+    n = 0;
+    while (u.phase === 'out' && n++ < 600) {
+      u.update(DT);
+      if (u.state.cy > prevY + 1e-6) sank++; prevY = u.state.cy;
+      if (Math.abs(u.state.cx - 0.12 * PORT.w) > 1) strayed++;
+    }
+    check('the pick sends it off the top of its column', u.phase === 'none' && sank === 0 && strayed === 0, `${sank} sinking, ${strayed} off-column frames`);
+
+    // THE PULL IN A COLUMN 47px WIDE. The row's standoff (0.9 lengths, 213px
+    // here) is wider than the side column; the set's own is used, and even
+    // a set without one keeps the seal on the screen.
+    CFG.pull = { enabled: true, weight: 1, turnWeight: 0, speed: 1, standoff: 0.9, arrive: 0.45 };
+    const v = createLevelUpPuppet(createVisual('ship'), { eyes: false, dress: false });
+    v.setFrame(PORT); v.enter();
+    n = 0; while (v.phase !== 'held' && n++ < 600) v.update(DT);
+    for (let t = 0; t < 2; t += DT) v.update(DT);
+    v.look({ x: 195, y: 250, cx: 195, cy: 250, option: 0 });
+    let leftmost = Infinity;
+    for (let t = 0; t < 4; t += DT) { v.update(DT); leftmost = Math.min(leftmost, v.state.cx); }
+    const halfW = (v.swimW * v.state.scale) / 2;
+    check('the pull never pushes the seal past the edge', leftmost >= Math.min(0.12 * PORT.w, halfW) - 1 && v.state.cx >= Math.min(0.12 * PORT.w, halfW) - 1,
+      `leftmost centre ${leftmost.toFixed(0)}px (the loop's own is ${(0.12 * PORT.w).toFixed(0)}, half a body ${halfW.toFixed(0)}); the row's standoff would want ${(195 - 0.9 * CFG.freeHeight * PORT.h).toFixed(0)}`);
+    const gapNoSet = Math.hypot(v.state.cx - 195, v.state.cy - 250);
+    setMotionData({ version: 2,
+      states: { idle: { loop: 2, keys: [K(0, 0.5, 0.1, 0, T('none', 0, 0, 0, 'out'))] } },
+      portrait: { space: 'viewport', entryX: 0.12, pull: { standoff: 0.4 }, states: {
+        idle: { loop: 2, keys: [K(0, 0.12, 0.6, 0, T('none', 0, 0, 0, 'out'))] },
+        card1: { loop: 2, keys: [K(0, 0.12, 0.3, 0.1, T('card', 0, 0, 1, 'out'), T('card', 0, 0, 1))] },
+      } },
+    });
+    for (let t = 0; t < 4; t += DT) v.update(DT);
+    const gapSet = Math.hypot(v.state.cx - 195, v.state.cy - 250);
+    check('the set\'s own standoff is the one used', Math.abs(gapSet - 0.4 * CFG.freeHeight * PORT.h) < 12 && gapSet < gapNoSet,
+      `${gapSet.toFixed(0)}px vs ${(0.4 * CFG.freeHeight * PORT.h).toFixed(0)}px (row's would be ${gapNoSet.toFixed(0)})`);
+    check('the shipped portrait set carries its own arrive', Number.isFinite(authored.portrait.pull?.arrive));
+    CFG.pull = { enabled: false };
   }
 }
 

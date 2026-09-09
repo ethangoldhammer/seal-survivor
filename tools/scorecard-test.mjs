@@ -145,6 +145,8 @@ const { initFeedback } = await import('../path/src/systems/feedback.js');
 initFeedback(null);
 
 const ui = await import('../path/src/ui/ui.js');
+// The label the two ways-out share, from the table rather than typed here.
+const { UI_TEXT } = await import('../path/src/uiTextTable.js');
 const playtest = await import('../path/src/systems/playtest.js');
 const shots = await import('../path/src/systems/bossShot.js');
 const { menuInput } = await import('../path/src/input.js');
@@ -158,7 +160,11 @@ const settle = async () => {
   return true;
 };
 
-ui.initUI({ onStart() {}, onRestart() {}, onLevelChoice() {}, onNameSubmit() {} });
+let wentToMenu = 0;
+ui.initUI({
+  onStart() {}, onRestart() {}, onLevelChoice() {}, onNameSubmit() {},
+  onMainMenu() { wentToMenu++; },
+});
 
 const $ = (id) => document.getElementById(id);
 const hidden = (node) => !node || node.classList.contains('sv-hidden');
@@ -279,6 +285,35 @@ check('the two name fields are still separate questions',
 // The card still rendered, the bar was still pinned, and npm run layout read
 // 64/64 clean, because a control that is display:none has no box to overflow.
 check('the way out is not inside the name row', !$('svNameRow').contains($('svRestartBtn')));
+
+// ---------------------------------------------------------------------------
+// THE OTHER WAY OUT. Dying used to be a one-way door: Try again was the only
+// control on this screen that went anywhere, so the main menu — the accessory
+// drawer, the leaderboard screen, the settings — could be reached only by
+// reloading the page, which also threw away the run the crash net was holding.
+//
+// Same three claims as Try again above, for the same three reasons, because
+// the failure that took Try again into #svNameRow would take this one there
+// too: it is in the bar, it is outside the name row, and posting a score does
+// not delete it.
+// ---------------------------------------------------------------------------
+check('the score card offers the main menu as well', !!$('svMenuBtn'));
+check('...in the bar, beside the way back into the water', bar.contains($('svMenuBtn')));
+check('...under Try again rather than beside it — one answer is the loud one',
+  $('svRestartBtn').compareDocumentPosition($('svMenuBtn')) & 4);
+check('...and outside the name row', !$('svNameRow').contains($('svMenuBtn')));
+// The label is the pause panel's, read from the table both surfaces read it
+// from — never typed here, or this fails the day the line gets written.
+check('...wearing the same label the pause panel does',
+  $('svMenuBtn').textContent === UI_TEXT.mainMenuButton, $('svMenuBtn').textContent);
+// PRESSING IT TAKES THE CARD DOWN — that is what the button is for, and it is
+// also why the card has to be put back up before anything below measures it.
+$('svMenuBtn').click();
+check('...and pressing it asks main.js for the menu, exactly once', wentToMenu === 1,
+  String(wentToMenu));
+check('...having taken the card down on the way', hidden($('svGameOverMenu')));
+ui.showGameOver(gameState);
+
 $('svNameRow').classList.add('sv-hidden');
 check('...so hiding the name row does not take it with it',
   !$('svRestartBtn').closest('.sv-hidden'));
@@ -416,13 +451,19 @@ const stops = padStops();
 check('the roll is really on this card', !hidden($('svTrophy')));
 check('the share buttons are stops', stops.includes('svTrophyShare'), stops.join(' → '));
 check('...as is the way out', stops.includes('svRestartBtn'), stops.join(' → '));
+// A CONTROL A PAD CANNOT REACH IS A CONTROL THAT IS NOT THERE on a pad, and
+// the cursor's list is hand-written in gameOverAll() — so a button added to
+// the markup and forgotten there looks completely correct to a mouse and does
+// not exist to everybody else.
+check('...and so is the way back to the menu', stops.includes('svMenuBtn'), stops.join(' → '));
 // AND AFTER A POST, when the name row is hidden and everything in it leaves
 // the cursor's list. The way out must not leave with them — see the note in
 // the first section about the build that put it inside that row.
 $('svNameRow').classList.add('sv-hidden');
 const posted = padStops();
 check('...including once the score has been posted and the name row is gone',
-  posted.includes('svRestartBtn') && !posted.includes('svNameSubmit'),
+  posted.includes('svRestartBtn') && posted.includes('svMenuBtn')
+  && !posted.includes('svNameSubmit'),
   posted.join(' → '));
 $('svNameRow').classList.remove('sv-hidden');
 check('...and the board it is posted to', stops.includes('svNameSubmit'), stops.join(' → '));

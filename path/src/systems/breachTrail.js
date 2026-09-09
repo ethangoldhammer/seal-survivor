@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { turbulenceAt, emit } from '../entities/particles.js';
+import { retireMaterial } from './programPin.js';
 
 // ============================================================================
 // THE BREACH TRAIL — the RGB-split exhaust the seal drags through the air.
@@ -413,7 +414,7 @@ function buildPlume(profile, plume, pts, channels) {
 function disposePlume(profile, plume) {
   for (const r of plume.ribbons) {
     r.geo.dispose();
-    r.mesh.material.dispose();
+    retireMaterial(r.mesh.material);
   }
   plume.ribbons = [];
   if (plume.group) {

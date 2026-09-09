@@ -6,7 +6,34 @@ import { suffocationCrt } from './oxygenFx.js';
 import { lowHealthVignette, lowHealthFxState } from './lowHealthFx.js';
 import { cineLens } from './cineCamera.js';
 import { gooLayer, activeGooGroups, gooGroupInfo, setGooDivisor } from '../entities/particles.js';
+import { renderFrontLayer } from './frontLayer.js';
 import { bounds, WAVE, sea, waveTimeNow } from '../arena.js';
+
+// THE OVERLAY — a scene drawn AFTER the goo has been laid over the picture and
+// BEFORE the bloom, in the scene camera. Anything that has to sit on top of a
+// goo body goes here: the goo pass composites over the whole scene, so a mesh
+// in the world scene that overlaps a goo surface is under it however its z or
+// renderOrder is set — the versus ball's spin streaks were drawn on every
+// frame and seen on none. Still ahead of the bright pass, so what is drawn
+// here blooms and takes the screen filter like everything else; a layer
+// after the composite would be a sticker on the finished picture. One scene
+// for every post instance: a page has one chain running, and a second chain
+// (the lab's) is the same picture.
+export const overlayScene = new THREE.Scene();
+overlayScene.name = 'postOverlay';
+
+// AND THE FRONT LAYER, at the same point in the chain and for the same reason,
+// but drawn out of the WORLD scene rather than this one: a body that has to
+// sit over the goo while still being lit and fogged like everything around it
+// — the dead boss during the kill shot. See systems/frontLayer.js.
+function renderOverlay(renderer, sceneToRender, sceneCamera) {
+  renderFrontLayer(renderer, sceneToRender, sceneCamera);
+  if (!overlayScene.children.length) return;
+  const ac = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.render(overlayScene, sceneCamera);
+  renderer.autoClear = ac;
+}
 
 // Three passes, no EffectComposer:
 //   1. render the scene at full res
@@ -636,6 +663,50 @@ const gooFragmentShader = /* glsl */ `
   uniform float uFogFalloff;
   uniform float uFog;       // 0 = the goo ignores the air
 
+  // --- the warp, and the tint -----------------------------------------------
+  // ONE NOISE LAYER THAT FEEDS ITSELF. The density field is sampled through an
+  // offset, and the offset comes from a noise whose own output displaces its
+  // second lookup — which is what turns a field of stacked static into
+  // something that curls. Two layers summed read as two things happening at
+  // once; one layer warping itself reads as one liquid moving, which is what a
+  // ball made of goo has to look like.
+  //
+  // Sampled in UV and scaled to texels, so the warp is the same size on screen
+  // whatever the group's world radius is. It displaces the LOOKUP, never the
+  // density: the isoline, the rim and the hit box all still agree, because the
+  // only thing that moved is where this pixel reads from.
+  //
+  // uWarp 0 is the shader exactly as it was, and every group but the ball
+  // leaves it there.
+  uniform float uWarp;        // texels of displacement at full amplitude
+  uniform float uWarpScale;   // noise cells across the screen
+  uniform float uWarpSpeed;   // how fast the field drifts
+  uniform float uWarpFeed;    // how hard the first sample bends the second
+
+  // The team's colour, mixed into the goo's own after the field has resolved.
+  // A mix and not a multiply: multiplying a red tint into an amber ball gives
+  // a muddy orange, and the whole point of possession colour is that it reads
+  // instantly across the pitch.
+  uniform vec3 uTint;
+  uniform float uTintMix;
+
+  // THE OUTLINE, AND ITS BOIL. A line drawn a fixed number of TEXELS inside
+  // the isoline — the density's gradient converts the field into a distance,
+  // so the line is the same width whatever the iso — in its own colour. The
+  // boil is the animator's kind: a noise field that RE-SEEDS at a low rate
+  // rather than drifting, so the line's width (and, by uBoilEdge, the
+  // silhouette itself) jitters like a hand-drawn line redrawn every few
+  // frames. uBoilSeed steps on the CPU at the group's boilHz. uOutline 0 is
+  // the shader exactly as it was; only the ball group moves these.
+  uniform float uOutline;       // 0..1, how much of the line shows
+  uniform float uOutlineWidth;  // texels inside the isoline
+  uniform float uOutlineSoft;   // texels of feather on the line's inner edge
+  uniform vec3 uOutlineColor;
+  uniform float uBoilAmp;       // texels the line wobbles by
+  uniform float uBoilScale;     // noise cells across the screen
+  uniform float uBoilSeed;      // stepped, not smooth — that is the boil
+  uniform float uBoilEdge;      // share of the boil the silhouette takes too
+
   // --- whitewater -----------------------------------------------------------
   uniform float uWhite;     // 0 = the plain surface above; 1 = aerated water
   uniform float uAer;       // density above the isoline that counts as PACKED
@@ -681,8 +752,35 @@ const gooFragmentShader = /* glsl */ `
   }
 
   void main() {
-    vec4 s = texture2D(tDiffuse, vUv);
+    // The warp, before anything reads the field. uWarp is in texels so the
+    // displacement is resolution-independent; at 0 this is bit-for-bit the
+    // plain lookup it replaced.
+    vec2 uv = vUv;
+    if (uWarp > 0.0) {
+      vec2 p = vUv * uWarpScale + uTime * uWarpSpeed;
+      // THE FEEDBACK. The first pair of samples displaces where the second
+      // pair is taken, so the field folds through itself instead of sliding.
+      // Without this the warp is a smooth wobble; with it, it curls.
+      vec2 q = p + vec2(vnoise(p), vnoise(p + 17.3)) * uWarpFeed;
+      vec2 off = vec2(vnoise(q) - 0.5, vnoise(q + 41.7) - 0.5);
+      uv += off * uWarp * uTexel;
+    }
+    vec4 s = texture2D(tDiffuse, uv);
     float dens = s.a;
+
+    // The gradient first: the outline needs it to turn density into texels,
+    // and the boil moves the silhouette through it before the alpha is cut.
+    float dl = texture2D(tDiffuse, uv - vec2(uTexel.x, 0.0)).a;
+    float dr = texture2D(tDiffuse, uv + vec2(uTexel.x, 0.0)).a;
+    float dd = texture2D(tDiffuse, uv - vec2(0.0, uTexel.y)).a;
+    float du = texture2D(tDiffuse, uv + vec2(0.0, uTexel.y)).a;
+    float grad = max(length(vec2(dr - dl, du - dd)) * 0.5, 1e-4); // density per texel
+    float boil = 0.0;
+    if (uOutline > 0.0 && uBoilAmp > 0.0) {
+      vec2 bp = vUv * uBoilScale + vec2(uBoilSeed * 7.31, uBoilSeed * 3.17);
+      boil = (vnoise(bp) - 0.5) * 2.0 * uBoilAmp;
+      dens += boil * grad * uBoilEdge;
+    }
     float a = smoothstep(uIso - uSoft, uIso + uSoft, dens);
     // The field is empty over most of the screen on most frames. Bailing here
     // is most of what makes this pass cheap.
@@ -692,6 +790,10 @@ const gooFragmentShader = /* glsl */ `
     // is a density-weighted average of their tints, so the weld between them
     // is a blend rather than whichever one drew last.
     vec3 col = s.rgb / max(dens, 1e-4);
+    // Possession, mixed in here — after the weld, before the lighting — so a
+    // tinted ball still takes the rim, the spec and the water exactly as an
+    // untinted one does.
+    col = mix(col, uTint, uTintMix);
 
     // WHERE THIS PIXEL IS IN THE WATER. Through the inverse view-projection
     // rather than by lerping the camera's frustum edges: the cinematic camera
@@ -702,10 +804,6 @@ const gooFragmentShader = /* glsl */ `
     vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 0.0, 1.0);
     vec2 worldPos = wp.xy / wp.w;
 
-    float dl = texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).a;
-    float dr = texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).a;
-    float dd = texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).a;
-    float du = texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).a;
     vec3 n = normalize(vec3(-(dr - dl) * uNormal, -(du - dd) * uNormal, 1.0));
     vec3 l = normalize(vec3(uLight, 0.8));
     float spec = pow(max(dot(n, l), 0.0), uSpecPower) * uSpec;
@@ -714,6 +812,14 @@ const gooFragmentShader = /* glsl */ `
     float rim = (1.0 - smoothstep(uIso, uIso + uRimWidth, dens)) * uRim;
 
     vec3 lit = col * (1.0 + rim) + spec * mix(vec3(1.0), col, 0.35);
+    if (uOutline > 0.0) {
+      // Texels inside the isoline, then the line: full to the width (plus
+      // the boil), feathered over the softness beyond it.
+      float distIn = (dens - uIso) / grad;
+      float w = max(0.0, uOutlineWidth + boil);
+      float line = 1.0 - smoothstep(w, w + max(uOutlineSoft, 0.01), distIn);
+      lit = mix(lit, uOutlineColor, line * uOutline);
+    }
     float alpha = a * uOpacity;
 
     // --- WHITEWATER -----------------------------------------------------------
@@ -980,6 +1086,23 @@ export function createPost(renderer) {
     uFogFalloff: { value: 3.2 },
     uFog: { value: 0 },
     // Whitewater.
+    // The warp and the tint. Zero and zero is the shader as it was; only the
+    // ball group moves them. See the note beside their declarations.
+    uWarp: { value: 0 },
+    uWarpScale: { value: 6 },
+    uWarpSpeed: { value: 0.15 },
+    uWarpFeed: { value: 1 },
+    uTint: { value: new THREE.Color(0xffffff) },
+    uTintMix: { value: 0 },
+    // The outline and its boil — off unless a group declares `outline`.
+    uOutline: { value: 0 },
+    uOutlineWidth: { value: 3 },
+    uOutlineSoft: { value: 1.5 },
+    uOutlineColor: { value: new THREE.Color(0x000000) },
+    uBoilAmp: { value: 0 },
+    uBoilScale: { value: 10 },
+    uBoilSeed: { value: 0 },
+    uBoilEdge: { value: 0.5 },
     uWhite: { value: 0 },
     uAer: { value: 0.6 },
     uBubble: { value: 0.6 },
@@ -1320,6 +1443,34 @@ export function createPost(renderer) {
     u.uSpec.value = g.spec ?? 0;
     u.uSpecPower.value = Math.max(1, g.specPower ?? 18);
     u.uNormal.value = g.normal ?? 6;
+    // THE WARP AND THE TINT ARE PER GROUP, and default to off. A group that
+    // says nothing gets uWarp 0, which is the plain lookup this shader had
+    // before either existed — so adding them cannot move blood, gore or foam.
+    //
+    // `look` is written live by systems/ballLook.js while a match is running;
+    // the static numbers under the group are what it starts from and what the
+    // shader lab edits.
+    const warp = g.warp ?? {};
+    u.uWarp.value = Math.max(0, warp.amount ?? 0);
+    u.uWarpScale.value = Math.max(0.01, warp.scale ?? 6);
+    u.uWarpSpeed.value = warp.speed ?? 0.15;
+    u.uWarpFeed.value = Math.max(0, warp.feed ?? 1);
+    u.uTint.value.set(g.tint ?? 0xffffff);
+    u.uTintMix.value = Math.min(1, Math.max(0, g.tintMix ?? 0));
+    const ol = g.outline ?? null;
+    u.uOutline.value = ol ? Math.min(1, Math.max(0, ol.strength ?? 1)) : 0;
+    if (ol) {
+      u.uOutlineWidth.value = Math.max(0, ol.width ?? 3);
+      u.uOutlineSoft.value = Math.max(0.01, ol.soft ?? 1.5);
+      u.uOutlineColor.value.set(ol.color ?? 0x000000);
+      u.uBoilAmp.value = Math.max(0, ol.boilAmp ?? 0);
+      u.uBoilScale.value = Math.max(0.01, ol.boilScale ?? 10);
+      u.uBoilEdge.value = Math.max(0, ol.boilEdge ?? 0.5);
+      // The boil is a STEP, not a drift: the seed only changes boilHz times
+      // a second, and between steps the line holds still.
+      const hz = Math.max(0, ol.boilHz ?? 8);
+      u.uBoilSeed.value = hz > 0 ? Math.floor(clock * hz) : 0;
+    }
     u.uLight.value.set(g.lightX ?? -0.5, g.lightY ?? 0.8);
     // Additive is the OTHER liquid: alpha reads as a thick opaque body that
     // hides the water behind it, additive as a glowing slick lying in it. Both
@@ -1521,6 +1672,7 @@ export function createPost(renderer) {
     if (!postActive) {
       renderer.setRenderTarget(null);
       renderer.render(sceneToRender, sceneCamera);
+      renderOverlay(renderer, sceneToRender, sceneCamera);
       return;
     }
 
@@ -1548,6 +1700,8 @@ export function createPost(renderer) {
     renderer.render(sceneToRender, sceneCamera);
 
     for (const group of goo) renderGooGroup(sceneCamera, group);
+    renderer.setRenderTarget(sceneTarget);
+    renderOverlay(renderer, sceneToRender, sceneCamera);
 
     // THE BLOOM BUFFER IS BUILT FOR TWO CUSTOMERS — the glow, and the flare
     // that samples ghosts out of it — and skipped when neither is live. The

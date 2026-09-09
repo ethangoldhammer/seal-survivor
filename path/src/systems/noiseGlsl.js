@@ -117,8 +117,21 @@ export function injectMottleVertex(vertexShader) {
  * <map_fragment>. Leaves `noiseN`, `noisePolarity` and `noiseLit` in scope at
  * the top level of main() — noiseShader.js's glow layers read `noiseLit` much
  * further down, so this may not be wrapped in a block.
+ *
+ * A TEMPLATE, rendered once with the default names below and once more by
+ * noiseShader.js with the UNDERSIDE set (`uSplit*`, `noiseUnder*`) for the
+ * sky/ocean split. One body of arithmetic, two sets of names — so the belly
+ * can never mottle by a different rule than the back, and a fix to the
+ * polarity test reaches both halves in one edit. Every identifier is a
+ * parameter rather than a prefix rule because `dst` is `diffuseColor.rgb` on
+ * the default pass and a local on the second, and neither is a prefix of
+ * anything.
  */
-export const MOTTLE_FRAGMENT_GLSL = `  float noiseN = clamp(noiseFbm(vNoisePos / max(0.0001, uNoiseSize)) * uNoiseContrast * 0.5 + 0.5, 0.0, 1.0);
+export function mottleGlsl({
+  size, strength, contrast, color, base, paint,
+  n, polarity, lit, dst,
+}) {
+  return `  float ${n} = clamp(noiseFbm(vNoisePos / max(0.0001, ${size})) * ${contrast} * 0.5 + 0.5, 0.0, 1.0);
   // THE PAINT COAT, BEFORE the mottling and before the polarity below. See the
   // note by uNoisePaint: this is the only line here that can take the model's
   // baked texture off, and the mottling then has a flat hide to work on.
@@ -134,16 +147,23 @@ export const MOTTLE_FRAGMENT_GLSL = `  float noiseN = clamp(noiseFbm(vNoisePos /
   // this coat — not the photograph underneath it. Derived from the map instead,
   // covering a pale texture with a dark coat would flip the mask and light the
   // wrong half of the markings.
-  diffuseColor.rgb = mix(diffuseColor.rgb, uNoiseBase * diffuse, clamp(uNoisePaint, 0.0, 1.0));
+  ${dst} = mix(${dst}, ${base} * diffuse, clamp(${paint}, 0.0, 1.0));
   // WHICH END OF THE FIELD IS THE BRIGHT ONE, derived rather than assumed.
   // The noise paints toward uNoiseColor, so where that colour is DARKER than
   // the body (which is what it is for — the seal ships no texture and this is
   // its mottling) a high n is a dark patch and the lit skin is 1-n. Tune the
   // noise colour lighter than the body and it flips, which is the only way
   // "the bright patches glow" stays true of whatever is on the sliders.
-  float noisePolarity = step(dot(uNoiseColor, NOISE_LUMA), dot(diffuseColor.rgb, NOISE_LUMA));
-  float noiseLit = mix(noiseN, 1.0 - noiseN, noisePolarity);
-  diffuseColor.rgb = mix(diffuseColor.rgb, uNoiseColor, uNoiseStrength * noiseN);`;
+  float ${polarity} = step(dot(${color}, NOISE_LUMA), dot(${dst}, NOISE_LUMA));
+  float ${lit} = mix(${n}, 1.0 - ${n}, ${polarity});
+  ${dst} = mix(${dst}, ${color}, ${strength} * ${n});`;
+}
+
+export const MOTTLE_FRAGMENT_GLSL = mottleGlsl({
+  size: 'uNoiseSize', strength: 'uNoiseStrength', contrast: 'uNoiseContrast',
+  color: 'uNoiseColor', base: 'uNoiseBase', paint: 'uNoisePaint',
+  n: 'noiseN', polarity: 'noisePolarity', lit: 'noiseLit', dst: 'diffuseColor.rgb',
+});
 
 /**
  * The seal's shipped values, as the renderer's starting point.

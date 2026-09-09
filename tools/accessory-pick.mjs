@@ -29,7 +29,7 @@
 // path/src/ui/accessoryIcons.js. It never runs the game and never loads the
 // tuning, so it cannot touch imported-tuning.json.
 // ============================================================================
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,12 +52,26 @@ gen.on('exit', (code) => {
     console.error('\nthe spec generator failed — not starting the server');
     process.exit(code ?? 1);
   }
+  // BUILT, not raw. The tiles wear the game's own biolumSkin now, and
+  // biolumSkin.js imports config.js and a `?raw` CSV — neither of which a file
+  // server can hand a browser. tools/looks/vite.picker.config.mjs bundles the
+  // picker for exactly this, and --built points the server at the result while
+  // leaving this directory mounted behind it so the spec list and the shots
+  // still answer on the URLs they always did.
+  const build = spawnSync('npx', [
+    'vite', 'build', '--config', 'tools/looks/vite.picker.config.mjs',
+  ], { cwd: ROOT, stdio: 'inherit' });
+  if (build.status !== 0) {
+    console.error('\nthe picker build failed — not starting the server');
+    process.exit(build.status ?? 1);
+  }
   const server = spawn(process.execPath, [
     'tools/atlas-render/server.mjs',
     '--port', String(PORT),
     '--out', SHOTS,
     '--list', LIST,
     '--bake-with', 'accessories',
+    '--built', 'dist-picker',
   ], { cwd: ROOT, stdio: 'inherit' });
   server.on('exit', (c) => process.exit(c ?? 0));
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.kill(sig));

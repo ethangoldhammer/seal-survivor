@@ -6,6 +6,11 @@ import { resolve, extname, basename, dirname } from 'node:path';
 const TUNING_FILE = resolve(import.meta.dirname, 'path/src/imported-tuning.json');
 const PUBLIC_DIR = resolve(import.meta.dirname, 'public');
 const PLAYTEST_FILE = resolve(import.meta.dirname, 'playtest/runs.jsonl');
+// What a versus player did, row by row, for the bot to learn from — see
+// path/src/systems/imitation.js and tools/imitate-train.mjs. Session data,
+// beside the runs ledger and gitignored with it.
+const IMITATION_ENDPOINT = '/__imitation';
+const IMITATION_FILE = resolve(import.meta.dirname, 'playtest/imitation.jsonl');
 const ENDPOINT = '/__tuning';
 const UPLOAD_ENDPOINT = '/__upload';
 const PLAYTEST_ENDPOINT = '/__playtest';
@@ -135,6 +140,33 @@ function tuningWriter() {
       // in-memory buffer that dies with the tab. The caller then points the
       // matching config entry at the returned URL, which is what makes the
       // choice persist through the normal tuning file.
+      server.middlewares.use(IMITATION_ENDPOINT, (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end('POST only');
+          return;
+        }
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+          if (body.length > 4_000_000) req.destroy();
+        });
+        req.on('end', async () => {
+          try {
+            const parsed = JSON.parse(body);
+            if (!Array.isArray(parsed.rows)) throw new Error('no rows');
+            await mkdir(dirname(IMITATION_FILE), { recursive: true });
+            await appendFile(IMITATION_FILE, `${JSON.stringify(parsed)}\n`);
+            res.statusCode = 204;
+            res.end();
+          } catch (err) {
+            server.config.logger.warn(`[imitation] rejected a batch — ${err?.message ?? err}`);
+            res.statusCode = 400;
+            res.end('invalid JSON');
+          }
+        });
+      });
+
       server.middlewares.use(UPLOAD_ENDPOINT, (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;

@@ -74,17 +74,25 @@ function spawnOne(difficulty, { trawler = false, artillery = false } = {}) {
   CONFIG.boats.spawnMin = CONFIG.boats.spawnMax = 0.01;
   CONFIG.boats.trawlerChance = trawler ? 1 : 0;
   g.artillery.chance = artillery ? 1 : 0;
-  resetBoats(scene);
+  resetBoats(scene); // arms the spawn timer from the 0.01s window above
+  // Pushed out BEFORE the spawning frame, not after it: the timer for the NEXT
+  // hull is rolled at the moment this one spawns, so setting it afterwards
+  // left a 0.01s fuse on a second boat that sailed in on the next frame,
+  // rolled against the RESTORED trawler chance. Every shot keyed by source
+  // used to hide it — both hulls threw fish — but a shot signed 'trawler' from
+  // a test that spawned a plain boat is exactly the thing this file checks.
+  CONFIG.boats.spawnMin = CONFIG.boats.spawnMax = 999; // no second hull mid-test
   updateBoats(0.05, scene, difficulty, { x: 0, y: -5 }, {});
-  CONFIG.boats.spawnMin = keep.spawnMin;
-  CONFIG.boats.spawnMax = keep.spawnMax;
   CONFIG.boats.trawlerChance = keep.trawlerChance;
   g.artillery.chance = keep.aaChance;
-  CONFIG.boats.spawnMin = CONFIG.boats.spawnMax = 999; // no second hull mid-test
+  if (boats.length !== 1) check(false, 'spawnOne spawned exactly one hull', String(boats.length));
   return boats[0];
 }
 
-// Run `seconds` with the seal parked at `pos`, returning the boat shots seen by source.
+// Run `seconds` with the seal parked at `pos`, returning the boat shots seen,
+// keyed by the ASSET thrown — every shot's `source` is the hull that fired it
+// ('boat' / 'trawler', see volley in systems/boats.js), so the ammunition is
+// only visible on the model it wears.
 function run(seconds, pos, difficulty = 0) {
   const seen = new Map();
   let first = null;
@@ -93,8 +101,8 @@ function run(seconds, pos, difficulty = 0) {
     updateBoats(DT, scene, difficulty, pos, {});
     for (let k = before; k < projectiles.length; k++) {
       const p = projectiles[k];
-      if (!p.source?.startsWith('boat:')) continue;
-      seen.set(p.source, (seen.get(p.source) ?? 0) + 1);
+      if (p.faction !== 'enemy') continue;
+      seen.set(p.asset, (seen.get(p.asset) ?? 0) + 1);
       if (!first) first = { p, at: i * DT };
     }
     updateProjectiles(DT, scene, [], () => {}, () => {}, () => {});
@@ -108,14 +116,15 @@ section('the fish gun');
   check(!!b && b.gun?.tier === 'fish', 'a difficulty-0 boat spawned with the fish tier', b?.gun?.tier);
   const under = { x: b.mesh.position.x + 6, y: -6 };
   const { seen, first } = run(12, under);
-  check((seen.get('boat:fish') ?? 0) > 0, 'it throws fish at a seal under the water', `${seen.get('boat:fish') ?? 0} in 12s`);
+  check((seen.get('enemyFish') ?? 0) > 0, 'it throws fish at a seal under the water', `${seen.get('enemyFish') ?? 0} in 12s`);
   const p = first?.p;
   check(p?.faction === 'enemy', 'the fish is an enemy shot', p?.faction);
+  check(p?.source === 'boat', '...signed by the hull that threw it, not the fish', p?.source);
   check(p?.asset === 'enemyFish', '...wearing the fish model', p?.asset);
   check(!!p && p.dir.y < 0, '...thrown DOWN into the water', p ? p.dir.y.toFixed(2) : '');
   check(!!p && !p.homing, '...and it does not home', String(p?.homing));
   check(first.at >= g.openingDelay, 'the first shot waits for the opening delay', `${first.at.toFixed(2)}s`);
-  check(![...seen.keys()].some((k) => k !== 'boat:fish'), 'nothing but fish from a plain boat', [...seen.keys()].join(', '));
+  check(![...seen.keys()].some((k) => k !== 'enemyFish'), 'nothing but fish from a plain boat', [...seen.keys()].join(', '));
 }
 {
   const b = spawnOne(0);
@@ -133,7 +142,7 @@ section('later tiers');
   const b = spawnOne(d);
   check(b.gun.tier === 'sailfish', 'a deep-run boat carries the sailfish', b.gun.tier);
   const { seen, first } = run(12, { x: b.mesh.position.x - 5, y: -7 }, d);
-  check((seen.get('boat:sailfish') ?? 0) > 0, 'it throws sailfish', [...seen.keys()].join(', '));
+  check((seen.get('enemySailfish') ?? 0) > 0, 'it throws sailfish', [...seen.keys()].join(', '));
   check(first?.p.asset === 'enemySailfish', '...wearing the sailfish model', first?.p.asset);
 }
 
@@ -148,20 +157,21 @@ section('the artillery trawler');
     `${armed.spawnScale.toFixed(2)} vs a plain trawler's ${plain.spawnScale.toFixed(2)}`);
   const air = { x: armed.mesh.position.x + 5, y: bounds.surfaceY + 4 };
   const { seen, first } = run(14, air, d);
-  check((seen.get('boat:mussel') ?? 0) > 0, 'it fires mussels at a seal in the air', `${seen.get('boat:mussel') ?? 0}`);
-  check((seen.get('boat:gull') ?? 0) > 0, '...and a gull', `${seen.get('boat:gull') ?? 0}`);
-  check(!seen.has('boat:trout') && !seen.has('boat:sailfish') && !seen.has('boat:fish'),
+  check((seen.get('missile') ?? 0) > 0, 'it fires mussels at a seal in the air', `${seen.get('missile') ?? 0}`);
+  check((seen.get('seagull') ?? 0) > 0, '...and a gull', `${seen.get('seagull') ?? 0}`);
+  check(!seen.has('enemyTrout') && !seen.has('enemySailfish') && !seen.has('enemyFish'),
     '...and no fish while the seal is up there', [...seen.keys()].join(', '));
   const p = first?.p;
   check(p?.homing === true && p?.chase === player, 'the mussel homes on the seal', `${p?.homing} chase=${p?.chase === player}`);
   check(p?.asset === 'missile', '...wearing the mussel', p?.asset);
+  check(p?.source === 'trawler', '...signed by the trawler, not the mussel', p?.source);
   check(p?.turnRate === g.artillery.mussel.turnRate, '...on the row\'s turn rate', String(p?.turnRate));
-  check(seen.get('boat:mussel') % g.artillery.mussel.count === 0, 'mussels come in the row\'s volleys', `${seen.get('boat:mussel')} / ${g.artillery.mussel.count}`);
+  check(seen.get('missile') % g.artillery.mussel.count === 0, 'mussels come in the row\'s volleys', `${seen.get('missile')} / ${g.artillery.mussel.count}`);
 
   const under = run(14, { x: armed.mesh.position.x + 5, y: -6 }, d);
-  const fishKey = `boat:${armed.gun.tier}`;
+  const fishKey = g.tiers.find((t) => t.id === armed.gun.tier).asset;
   check((under.seen.get(fishKey) ?? 0) > 0, 'underwater it throws its tier\'s fish like any boat', `${fishKey}: ${under.seen.get(fishKey) ?? 0}`);
-  check(!under.seen.has('boat:mussel') && !under.seen.has('boat:gull'), '...and no anti-air', [...under.seen.keys()].join(', '));
+  check(!under.seen.has('missile') && !under.seen.has('seagull'), '...and no anti-air', [...under.seen.keys()].join(', '));
 }
 {
   // A windup begun at an airborne seal is abandoned when it dives.
@@ -178,9 +188,14 @@ section('the artillery trawler');
 }
 
 section('death credit');
-check(causesOfDeath('boat:fish').has('shot') && !causesOfDeath('boat:fish').has('boat'),
-  'a thrown fish files under enemy fire, not under the boss hulls');
-check(primaryCause('boat:gull')?.id === 'shot', 'so does the gull', primaryCause('boat:gull')?.id);
+// A shot is the boat that fired it: the hull's key lands on the boat cause,
+// never on the generic 'shot' fallback and never as a boss.
+check(primaryCause('boat')?.id === 'boat', 'a shot off a plain boat is a boat death', primaryCause('boat')?.id);
+check(primaryCause('trawler')?.id === 'boat', 'a shot off a trawler is a boat death', primaryCause('trawler')?.id);
+check(!causesOfDeath('trawler').has('boss') && !causesOfDeath('trawler').has('shot'),
+  '...and neither a boss death nor unsigned enemy fire', [...causesOfDeath('trawler')].join(','));
+check(primaryCause('enemy shot')?.id === 'shot', 'an unsigned shot still has a cause to land in', primaryCause('enemy shot')?.id);
+check(!primaryCause('boat:fish'), 'nothing files the old ammunition keys any more', primaryCause('boat:fish')?.id);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

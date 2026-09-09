@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { turbulenceAt } from '../entities/particles.js';
+import { retireMaterial } from './programPin.js';
 
 // ============================================================================
 // THE INK TRAIL — what the giant squid leaves in the water behind it.
@@ -273,7 +274,7 @@ function buildCloud(scene, count) {
 function disposeCloud(scene) {
   if (cloud) {
     cloud.geometry.dispose();
-    cloud.material.dispose();
+    retireMaterial(cloud.material);
     cloud.dispose?.();
     cloud = null;
   }

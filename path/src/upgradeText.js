@@ -151,15 +151,37 @@ export function measureTotal(upgrade, stacks = 1) {
 // PHRASING
 // ---------------------------------------------------------------------------
 
-// Trim float noise without lying about a real decimal: 1.4000000000000001 is
-// 1.4, and 0.5 stays 0.5.
+// ONE DECIMAL PLACE, AT MOST. Trims float noise without lying about a real
+// decimal — 1.4000000000000001 is 1.4, and 0.5 stays 0.5 — and stops there:
+// a card and a tip are read at a glance, and "1.153" spends three digits of
+// attention on a distinction nobody is making at that glance. Cards and tips
+// share this formatter so the same stack cannot read two ways on two screens.
 function num(n) {
-  const r = Math.round(n * 1000) / 1000;
+  const r = Math.round(n * 10) / 10;
   return String(r);
 }
 
+// A RATIO AS A PERCENTAGE, in the direction the stat's own name points.
+//
+// `lower` stats hold a DELAY where the label names a RATE: `fireRate` is
+// seconds between shots, and the card that halves it is called Supa Dupa Seal.
+// So the ratio has to be inverted before it becomes a percentage, not merely
+// subtracted from one:
+//
+//   1 - ratio    the share of the DELAY removed. A delay cut to two thirds is
+//                "+33.3%", printed beside a span reading "x1 -> x1.5" — one row
+//                giving two numbers for one fact, and the smaller one under the
+//                word "rate". Worse, Supa Dupa Seal adds a constant amount of
+//                RATE per stack, so this shape decayed 33.3% -> 25% -> 20% and
+//                read as diminishing returns on a card that has none.
+//   1/ratio - 1  the share more SHOTS, which is what "fire rate" means and what
+//                effectiveSpan's `base / v` already prints. The two halves of
+//                the row now agree, and a flat card reads flat.
+//
+// A ratio of zero cannot be inverted — nothing in the game reaches a delay of
+// zero, but a tuned floor of 0 would divide here rather than in the caller.
 function pct(ratio, lower) {
-  const frac = lower ? 1 - ratio : ratio - 1;
+  const frac = lower ? (ratio === 0 ? 0 : (1 / ratio) - 1) : ratio - 1;
   const p = Math.round(Math.abs(frac) * 1000) / 10;
   return `${frac < 0 ? '-' : '+'}${num(p)}%`;
 }
@@ -257,7 +279,28 @@ export function phrase(change, stack = 1) {
   }
 
   // Compounding, or anything else the two probes disagreed about. Reporting
-  // the measured endpoints is honest and still useful: "chain damage 1.6 -> 1.78".
+  // the measured endpoints is honest and still useful: "chain damage 1.6 -> 1.8".
+  //
+  // UNLESS ONE DECIMAL CANNOT SEE THE STEP. strikeChainMul compounds in
+  // hundredths around 1, so a single stack is 1.11 -> 1.13 and both ends round
+  // to the same "1.1" — a row that says a number twice and reads as "this card
+  // does nothing". The ratio between the two measured endpoints is the same
+  // fact at a scale one decimal can hold, and it is the shape a `mul` change
+  // already uses, so nothing new is being worded here.
+  // THE RATIO, WHENEVER THERE IS ONE — not only when one decimal cannot see the
+  // step. The endpoint shape was the fallback's fallback and it fired whenever
+  // the two ends happened to round apart, so strikeChainMul rendered as
+  // "+1.8% chain damage" at zero stacks and "chain damage 1.1 -> 1.2" at one:
+  // two grammars for one stat on one card, and the second put an ARROW INSIDE
+  // the phrase, directly ahead of the tip's own span arrow. A percentage is the
+  // shape every other multiplied stat already uses, and it is the shape the
+  // reader can compare against the card beside it.
+  //
+  // The endpoints survive as the last resort for a change that started at zero,
+  // where there is no ratio to take.
+  if (Number.isFinite(change.from) && change.from !== 0) {
+    return `${pct(change.to / change.from, t.lower)} ${t.label}`;
+  }
   return `${t.label} ${num(change.from)} → ${num(change.to)}`;
 }
 
@@ -275,10 +318,59 @@ export function phraseAll(changes, stack = 1) {
     return c.from === 0 && STAT_TEXT[c.stat]?.unlock;
   });
   const use = keep.length ? keep : changes;
-  // Unlocks lead, whatever order the stat block happened to be in.
-  use.sort((a, b) => (b.from === 0 && STAT_TEXT[b.stat]?.kind === 'level' ? 1 : 0)
-                   - (a.from === 0 && STAT_TEXT[a.stat]?.kind === 'level' ? 1 : 0));
+  // Unlocks lead, whatever order the stat block happened to be in. Then the
+  // stat FEWEST OTHER CARDS GRANT — see grantCount.
+  const rank = (c) => [
+    c.from === 0 && STAT_TEXT[c.stat]?.kind === 'level' ? 0 : 1,
+    grantCount(c.stat),
+  ];
+  use.sort((a, b) => {
+    const [au, ag] = rank(a);
+    const [bu, bg] = rank(b);
+    return (au - bu) || (ag - bg);
+  });
   return use.map((c) => phrase(c, stack)).join(', ');
+}
+
+// ---------------------------------------------------------------------------
+// WHICH HALF OF A CARD IS THE CARD
+// ---------------------------------------------------------------------------
+//
+// Five cards on the strike family grant `+5 strike damage` alongside the one
+// thing each is actually for — the dash, the shrapnel, the boost pip, the
+// breach link. phraseAll used to lead with whatever order the stat block
+// happened to be in, which was the shared half every time, and the tip's lead
+// span is chosen off the phrase the sentence OPENS with (see leadChange). So
+// all five cards rendered the same span — "13.7 -> 18.9" — and the number in
+// the loudest position on the tip was the one number they had in common.
+//
+// So the sentence leads with the stat the fewest other upgrades touch. That is
+// measured, not declared: every enabled upgrade is replayed once and the stats
+// it moves are counted, so a card added tomorrow re-ranks the family it joins
+// without anybody remembering to. A stat only one card grants scores 1 and
+// leads; `strikeDamage`, granted by six, sorts to the back.
+//
+// MEMOISED, which is the one cache in this file. The others are refused because
+// a tuned number moves under them (see the note by readConfigPath) — but WHICH
+// stats a card touches is structure, not tuning, and the alternative is
+// replaying fifty upgrades on every hover.
+let GRANTS = null;
+function grantCount(stat) {
+  if (!GRANTS) {
+    GRANTS = new Map();
+    // Defensive: a card whose apply() throws is already swallowed by measure(),
+    // but this runs over the WHOLE roster and a hard failure here would take
+    // out every phrase in the game rather than one card's.
+    try {
+      for (const u of CONFIG.upgrades ?? []) {
+        if (u.enabled === false) continue;
+        for (const c of measure(u, 1)) {
+          GRANTS.set(c.stat, (GRANTS.get(c.stat) ?? 0) + 1);
+        }
+      }
+    } catch { /* an empty map ranks everything alike, which is the old order */ }
+  }
+  return GRANTS.get(stat) ?? 1;
 }
 
 // ---------------------------------------------------------------------------

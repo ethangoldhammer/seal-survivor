@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { fovScale } from './systems/settings.js';
+import { versusActive } from './systems/versusFlag.js';
 
 // How far below the seabed the frame may travel, in world units, and equally
 // how far the seabed strip is extended down to meet it. One constant for both
@@ -137,7 +138,11 @@ export function updateBounds(aspect) {
   // Vertical never had this problem: viewHeight is a constant, so the water
   // has always been 41.6 deep whichever way the phone was held.
   const ref = h * (CONFIG.arena.referenceAspect || 16 / 9);
-  const wide = Math.max(1, CONFIG.arena.widthScale ?? 1);
+  // A versus match has its own pitch width (CONFIG.versus.widthScale) — read
+  // as a gate rather than written into CONFIG, see systems/versusFlag.js.
+  const wide = versusActive()
+    ? Math.max(1, CONFIG.versus?.widthScale ?? 1)
+    : Math.max(1, CONFIG.arena.widthScale ?? 1);
   bounds.right = (ref * wide) / 2;
   bounds.left = -bounds.right;
   bounds.width = bounds.right - bounds.left;
@@ -239,11 +244,40 @@ export function surfaceHeightAt(x, waveT = waveTime, amp = sea.amp, chop = sea.c
     + Math.sin(x * WAVE.k3 + waveT * WAVE.w3) * amp * WAVE.amp3 * chop;
 }
 
+// A HOLE IN A WALL, for the one mode that has one. versus's goal mouths let a
+// seal swim a little way INTO each wall (see systems/versusGoal.js, which
+// installs the probe when a match starts and takes it back when it ends).
+// Registered rather than imported, so this file stays the leaf it is: the
+// probe answers, for a body at (x, y) of `radius`, the box its centre may
+// occupy instead of the wall's — or null, which is every body outside a
+// mouth and every frame of every mode that is not versus.
+export const arenaHoles = { probe: null };
+
 // Clamp a position into the arena and reflect velocity off whichever walls it
 // hit. Shared by the player and every enemy so nothing can leave the slice.
 export function clampToArena(pos, vel, radius, restitution) {
   let hit = false;
-  if (pos.x < bounds.left + radius) {
+  const hole = arenaHoles.probe?.(pos.x, pos.y, radius);
+  if (hole) {
+    // Inside a mouth: the tunnel's back and its two lips stand in for the
+    // wall. The floor and the ceiling are still checked below — a mouth is
+    // cut mid-water, so neither can bind here, but the code is not the place
+    // to assume that.
+    if (pos.x < hole.xMin) {
+      pos.x = hole.xMin;
+      if (vel && vel.x < 0) { vel.x = -vel.x * restitution; hit = true; }
+    } else if (pos.x > hole.xMax) {
+      pos.x = hole.xMax;
+      if (vel && vel.x > 0) { vel.x = -vel.x * restitution; hit = true; }
+    }
+    if (pos.y < hole.yMin) {
+      pos.y = hole.yMin;
+      if (vel && vel.y < 0) { vel.y = -vel.y * restitution; hit = true; }
+    } else if (pos.y > hole.yMax) {
+      pos.y = hole.yMax;
+      if (vel && vel.y > 0) { vel.y = -vel.y * restitution; hit = true; }
+    }
+  } else if (pos.x < bounds.left + radius) {
     pos.x = bounds.left + radius;
     if (vel && vel.x < 0) { vel.x = -vel.x * restitution; hit = true; }
   } else if (pos.x > bounds.right - radius) {

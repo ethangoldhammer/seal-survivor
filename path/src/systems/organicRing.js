@@ -127,6 +127,31 @@ function ringCfg() {
   return CONFIG.fx?.organicRing ?? {};
 }
 
+// ---------------------------------------------------------------------------
+// WHICH FAMILIES OF RING ARE DRAWN AT ALL.
+//
+// `role` says what job a ring is doing, and CONFIG.fx.organicRing.roles turns a
+// whole job off in one place. The alternative is an `enabled` flag invented
+// separately in marks.js, lungeTell.js, bossPerks.js, bossCrab.js, bossBoat.js
+// and bossAngler.js — six switches for one decision, five of which drift.
+//
+// A muted ring is still BUILT and still lives its normal life: its owner places
+// it, sweeps it, writes its alpha and disposes it exactly as before, so nothing
+// downstream has to learn about a null. It simply never reaches the screen.
+// That is why the mute is a uniform of its own rather than an opacity of zero —
+// bossPerks.js writes uOpacity directly every frame (ringAlpha), and a mute
+// living in the same number would be overwritten on the next tick.
+//
+// A ring with NO role is always drawn. Only the families that are COMMENTARY
+// carry one; a blast wave, a boss hot spot and a clam's ripple are the event
+// itself rather than a note about it, and switching those off would delete
+// something that happened rather than something that was announced.
+// ---------------------------------------------------------------------------
+function roleOn(role) {
+  if (!role) return true;
+  return (ringCfg().roles ?? {})[role] !== false;
+}
+
 /**
  * Resolve a threat type id to `{ color, edge }` — a THREE.Color-compatible hex
  * and an EDGE_KINDS index. Unknown ids fall back to `kinetic`, because the
@@ -184,6 +209,7 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uColor;
   uniform float uGlow;
   uniform float uOpacity;    // the pulse, and the master fade
+  uniform float uMute;       // 0 kills the whole family (see roleOn)
   uniform float uThickness;  // band HALF width, as a fraction of the radius
   uniform float uExtent;     // half the quad, in units where 1.0 is the radius
   uniform float uRadius;     // the ring's world radius, for world-unit amounts
@@ -454,7 +480,7 @@ const fragmentShader = /* glsl */ `
       if (arc <= 0.002) discard;
     }
 
-    float a = band * arc * sweep * uOpacity;
+    float a = band * arc * sweep * uOpacity * uMute;
     if (a <= 0.002) discard;
     vec3 col = uColor * (uGlow + lead * uLeadGlow);
     gl_FragColor = vec4(col * a, a);
@@ -494,6 +520,7 @@ function quadFor(extent) {
  */
 export function makeOrganicRing(opts = {}) {
   const c = ringCfg();
+  const drawn = roleOn(opts.role);
   const t = threatType(opts.type);
   const wobbleMax = opts.wobbleMax ?? c.wobbleMax ?? 0.18;
   const thickness = opts.thickness ?? c.thickness ?? 0.16;
@@ -517,6 +544,7 @@ export function makeOrganicRing(opts = {}) {
       uColor: { value: new THREE.Color(opts.color ?? t.color) },
       uGlow: { value: opts.glow ?? c.glow ?? 2.2 },
       uOpacity: { value: 1 },
+      uMute: { value: drawn ? 1 : 0 },
       uThickness: { value: thickness },
       uExtent: { value: extent },
       uRadius: { value: 1 },
@@ -563,6 +591,10 @@ export function makeOrganicRing(opts = {}) {
   // to explain to it that the ring might be somewhere else.
   mesh.frustumCulled = false;
   mesh.renderOrder = opts.renderOrder ?? 9;
+  // Belt as well as braces: uMute already makes every fragment discard, and
+  // this saves the draw call for the muted rings whose owners never touch
+  // `visible` at all. The ones that do set it true still draw nothing.
+  if (!drawn) mesh.visible = false;
   return mesh;
 }
 
