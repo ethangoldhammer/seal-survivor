@@ -51,6 +51,7 @@ teamCpu,CPU,,team select,"The chip that fills a side nobody has joined: the comp
 teamReady,Ready,,team select,"Stamped over a captain's chip once they have pressed A. One word, past tense, the kind of thing a fighting-game select says."
 teamLocked,Locked,,team select,"The three empty slots under each captain on the team select — four a side is coming and these are its shape. One or two words that say not yet without promising when."
 teamStart,Start,,team select,"The button at the foot of the team select once both sides have a ready captain. Also what a pad's Start button does. Two words."
+teamRoster,[DRAFT] Per side,,team select,"The label on the roster row of the Blubberball team select — the control that says how many seals each side puts on the pitch (1 to 4). Two or three words, sitting to the LEFT of a minus, a number and a plus. It names the quantity, not the action: the buttons do the acting."
 teamNoPads,Press a key/button.,,team select,"Shown in the middle of the team select when no controller has been seen yet; the browser only shows a pad after a button on it is pressed. One line telling the player to press a button on their pad."
 versusOverTitle,Again?,,versus,"Heading of the prompt after a Blubberball match ends (first to 5), over the frozen water under the winner's score. One or two words asking what next."
 versusRematch,Rematch,,versus,"The first button on that prompt: same sides, same colours, straight back to a kickoff. Your word from chat."

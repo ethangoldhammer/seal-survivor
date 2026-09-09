@@ -25,6 +25,18 @@
  * because those are noiseShader.js's alone.
  */
 export const MOTTLE_UNIFORMS_GLSL = `uniform float uNoiseSize;
+// WHERE IN THE FIELD THIS BODY IS CUT FROM. The mottling is a noise field
+// sampled at the BIND-POSE position, which is the right call — it is why the
+// markings stay painted on a swimming animal — and it has one consequence
+// nobody notices until there are two of the same animal on screen: they are
+// the same cut of the same field, so they are the same seal twice, freckle
+// for freckle. Four of them on a Blubberball pitch reads as a printing error.
+//
+// So the sample is OFFSET per body. Zero is exactly the field every wearer had
+// before this existed, and anything else is a different piece of the same
+// infinite pattern — the same hide, not a different one, which is the point:
+// they are all still seals.
+uniform vec3  uNoiseSeed;
 uniform float uNoiseStrength;
 uniform float uNoiseContrast;
 uniform vec3  uNoiseColor;
@@ -131,7 +143,7 @@ export function mottleGlsl({
   size, strength, contrast, color, base, paint,
   n, polarity, lit, dst,
 }) {
-  return `  float ${n} = clamp(noiseFbm(vNoisePos / max(0.0001, ${size})) * ${contrast} * 0.5 + 0.5, 0.0, 1.0);
+  return `  float ${n} = clamp(noiseFbm((vNoisePos + uNoiseSeed) / max(0.0001, ${size})) * ${contrast} * 0.5 + 0.5, 0.0, 1.0);
   // THE PAINT COAT, BEFORE the mottling and before the polarity below. See the
   // note by uNoisePaint: this is the only line here that can take the model's
   // baked texture off, and the mottling then has a flat hide to work on.

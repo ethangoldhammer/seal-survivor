@@ -359,6 +359,21 @@ export function feedback(event, at = {}) {
     return;
   }
 
+  // AN EVENT BEING PLAYED BACK, not one happening. `at.replay` is set by the
+  // Blubberball replay, which re-fires the events it recorded on its own clock
+  // so the shot LOOKS the way it looked (systems/versus.js). What it wants is
+  // the picture: the spray, the goo, the ripple in the lattice, the glow
+  // pulse — and nothing that would reach outside the frame it is showing. So a
+  // replayed event is silent, does not shake the camera the replay is
+  // directing, does not hit-stop a clock the replay owns, does not buzz the
+  // pad, and does not print a toast about a proc from a second ago.
+  //
+  // The listeners still SEE it, carrying the flag: an observer's job is to know
+  // what fired, and a channel that quietly drops half of them is a channel the
+  // sfx debugger and the harness cannot be trusted about. Whoever must not act
+  // on a playback reads the flag — the replay's own recorder does exactly that,
+  // which is what stops it recording its own playback.
+  const replay = !!at.replay;
   // Before the effects rather than after: an observer that wants to be in step
   // with the hit should not be waiting on a particle burst to finish being set
   // up first, and nothing below this depends on it having run.
@@ -404,7 +419,7 @@ export function feedback(event, at = {}) {
     grid.ripple(x, y, def.ripple.strength * scale, def.ripple.radius);
   }
 
-  if (def.shake && shakeAllowed(event)) {
+  if (def.shake && !replay && shakeAllowed(event)) {
     // Clamped, or a busy fight pins the camera at maximum rattle forever.
     feedbackState.shake = Math.min(CONFIG.fx.maxShake, feedbackState.shake + def.shake * scale);
   }
@@ -423,7 +438,7 @@ export function feedback(event, at = {}) {
   // and the scale below is read only by a stop that was allowed to begin. A
   // stop already running when the switch flips finishes — it is 90ms at the
   // very worst, and cutting it mid-freeze is itself a hitch.
-  if (def.hitstop && hitstopAllowed(event) && CONFIG.fx.hitstopEnabled && hitstopCooldown <= 0) {
+  if (def.hitstop && !replay && hitstopAllowed(event) && CONFIG.fx.hitstopEnabled && hitstopCooldown <= 0) {
     feedbackState.hitstop = Math.max(feedbackState.hitstop, def.hitstop);
     hitstopCooldown = CONFIG.fx.hitstopCooldown;
   }
@@ -436,7 +451,7 @@ export function feedback(event, at = {}) {
   // drops the copies piling up behind it — and the loudest scale seen during
   // the window wins, so the one sound that does play is the one the biggest
   // hit in the burst would have made.
-  if (def.sfx) {
+  if (def.sfx && !replay) {
     const gap = def.sfxMinGap ?? 0;
     // Where this one happened, so the mixer can rank it against everything else
     // sounding — and so the throttle below can tell a hit on top of the player
@@ -511,7 +526,7 @@ export function feedback(event, at = {}) {
   // actually levelled. `toastUpgrade` on the payload is that override, and it
   // resolves through the same lookup, so the line still reads whatever
   // upgrades.csv currently calls the card.
-  if (def.toast && toastSink) {
+  if (def.toast && !replay && toastSink) {
     const id = at.toastUpgrade ?? def.toast;
     const card = CONFIG.upgrades?.find((u) => u.id === id);
     toastSink({
@@ -535,7 +550,7 @@ export function feedback(event, at = {}) {
       wave: !!def.toastWave,
     });
   }
-  if (def.haptic) {
+  if (def.haptic && !replay) {
     // Controller rumble, phone buzz and the Taptic Engine are three pieces of
     // hardware reached through three unrelated APIs — send the same authored
     // pattern to all of them, and whichever the player actually has responds.

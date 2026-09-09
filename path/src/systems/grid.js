@@ -24,7 +24,20 @@ const MAX_RIPPLES = 24; // must match the shader's loop bound
 // whole grid, so every slot is paid for on every vertex whether it holds
 // anything or not. A source with zero strength contributes exactly nothing but
 // still costs its iteration.
-const MAX_WAKES = 6; // must match the shader's loop bound
+// Slot 0 is the seal holding the frame; 1..SEAL_WAKES-1 are the OTHER PLAYERS
+// on the pitch (Blubberball), and the rest are hulls. The two get separate
+// bands rather than sharing one queue because they fill on different clocks:
+// five boats sailing past would otherwise take every slot and the seals
+// swimming between them would stop denting the water, which is the one dent a
+// player is actually looking for.
+//
+// The seal band is three deep on top of slot 0 — four dents on the water — and
+// the hulls keep the five they always had. A roster bigger than that does not
+// get a slot each: the seals FURTHEST from player 1 take them (see
+// publishSealWakes in main.js), because a seal inside the player's own radius
+// is already inside the player's own dent.
+const MAX_WAKES = 9; // must match the shader's loop bound
+const SEAL_WAKES = 4;
 // Same contract, for the fingers. Read from input.js rather than retyped so the
 // shader loop and the slot registry cannot drift apart.
 const MAX_TOUCH = TOUCH_SLOTS;
@@ -36,7 +49,8 @@ const wakes = Array.from({ length: MAX_WAKES }, () => new THREE.Vector4(0, 0, 1,
 // update(). A boolean per slot rather than a count, because a hull destroyed
 // mid-frame must not leave the slot behind it holding its last position.
 const wakeClaims = new Array(MAX_WAKES).fill(false);
-let wakeCursor = 1; // slot 0 is the seal's and is never handed out
+let wakeCursor = SEAL_WAKES; // hulls start above the seals' band
+let sealCursor = 1;         // slot 0 is the frame's own seal and is never handed out
 
 // Cells something else has claimed and this must not move — see `pin` below.
 const MAX_PINS = 8;
@@ -565,7 +579,8 @@ export function createGrid(scene) {
       if (wakeClaims[i]) wakeClaims[i] = false;
       else wakes[i].w = 0;
     }
-    wakeCursor = 1;
+    wakeCursor = SEAL_WAKES;
+    sealCursor = 1;
 
     updateTouch(dt, view);
   }
@@ -594,12 +609,34 @@ export function createGrid(scene) {
     wakeClaims[i] = true;
   }
 
+  /**
+   * ANOTHER PLAYER DISPLACING WATER. Same contract as hullWake and dropped by
+   * the same sweep — published every frame by whoever owns the body, so a seal
+   * that bursts cannot leave a dent behind it until it respawns. Player 1 is
+   * not one of these: it is slot 0, handed to update() as the seal the frame
+   * belongs to.
+   *
+   * WHY IT HAS ITS OWN BAND. It is the same displacement a hull makes, and it
+   * competes with hulls for a fixed per-vertex loop — so if they shared a queue
+   * a busy shipping lane would silently switch the other players' dents off.
+   * Past the band the extra seals simply do not warp the field; publish the
+   * ones FURTHEST from player 1 first, since a seal swimming inside the
+   * player's own radius is already inside the player's own dent.
+   */
+  function sealWake(x, y, radius, strength) {
+    if (sealCursor >= SEAL_WAKES || !(radius > 0)) return;
+    const i = sealCursor++;
+    wakes[i].set(x, y, radius, strength);
+    wakeClaims[i] = true;
+  }
+
   function reset() {
     for (let i = 1; i < MAX_WAKES; i++) {
       wakes[i].set(0, 0, 1, 0);
       wakeClaims[i] = false;
     }
-    wakeCursor = 1;
+    wakeCursor = SEAL_WAKES;
+    sealCursor = 1;
     for (let i = 0; i < MAX_RIPPLES; i++) rippleParams[i].set(0, 1);
     cursor = 0;
     for (let i = 0; i < MAX_TOUCH; i++) {
@@ -612,5 +649,5 @@ export function createGrid(scene) {
   build();
   reset();
 
-  return { build, dispose, ripple, hullWake, pin, update, reset, setWaveTime };
+  return { build, dispose, ripple, hullWake, sealWake, pin, update, reset, setWaveTime };
 }

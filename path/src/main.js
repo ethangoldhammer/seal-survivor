@@ -42,7 +42,7 @@ import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
 import { setGooSuckTarget, updateGooSuck, resetGooSuck } from './systems/gooSuck.js';
-import { replayRenderCamera, enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir } from './systems/versus.js';
+import { replayRenderCamera, enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir, versusSeals } from './systems/versus.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -1406,7 +1406,7 @@ function handleTunerChange(path) {
   if (path.startsWith('versus.goal.tunnel') || path.startsWith('versus.camera.zoomMin')) world.resize();
   // The light's own numbers — glow, spill, feather, the noise — move on the
   // live quads without a rebuild of the shore.
-  else if (path.startsWith('versus.goal.noise') || path.startsWith('versus.goal.swim') || path.startsWith('versus.goal.scored') || path.startsWith('versus.goal.glow') || path.startsWith('versus.goal.spill') || path.startsWith('versus.goal.feather')) refreshGoalGlow();
+  else if (path.startsWith('versus.goal.noise') || path.startsWith('versus.goal.swim') || path.startsWith('versus.goal.scored') || path.startsWith('versus.goal.ball') || path.startsWith('versus.goal.tunnelFalloff') || path.startsWith('versus.goal.glow') || path.startsWith('versus.goal.spill') || path.startsWith('versus.goal.feather')) refreshGoalGlow();
   else if (path.startsWith('versus.goal') || path.startsWith('versus.teams')) world.wallRocks.build();
   // The night sky's geometry IS its tuning — where the stars are, what is
   // joined to what, how far the fractal grows — so most of that panel needs a
@@ -1739,6 +1739,30 @@ function returnToMenu() {
  * may have opened go immediately, because those are the only parts of it that
  * would be sitting in front of a live game.
  */
+// Scratch for publishSealWakes — this runs every frame and has no business
+// allocating.
+const _sealWakes = [];
+
+function publishSealWakes() {
+  const g = CONFIG.grid ?? {};
+  const radius = g.wakeRadius ?? 7;
+  const strength = g.wakeStrength ?? 0;
+  if (!(radius > 0) || strength === 0 || !player.mesh) return;
+  const seals = versusSeals();
+  if (!seals.length) return;
+  _sealWakes.length = 0;
+  // The player's OWN numbers, not a share of them: these are whole seals, the
+  // same animal as the one in slot 0, and half a dent would read as a smaller
+  // one rather than as a second player.
+  for (const b of seals) _sealWakes.push({ x: b.x, y: b.y, r: radius, s: strength });
+  if (_sealWakes.length > 1) {
+    const px = player.mesh.position.x;
+    const py = player.mesh.position.y;
+    _sealWakes.sort((a1, b1) => ((b1.x - px) ** 2 + (b1.y - py) ** 2) - ((a1.x - px) ** 2 + (a1.y - py) ** 2));
+  }
+  for (const w of _sealWakes) world.grid.sealWake(w.x, w.y, w.r, w.s);
+}
+
 function closeMainMenu() {
   if (!mainMenuActive()) return;
   hideLeaderboard();
@@ -9656,6 +9680,16 @@ function runFrame(now) {
   // and the strike meter is what makes a charging finger grow — see updateTouch
   // in systems/grid.js. Both are handed in rather than imported there.
   const _tcamera = performance.now();
+  // EVERY OTHER PLAYER DENTS THE WATER TOO. Player 1 is slot 0, handed to
+  // update() below as the seal the frame belongs to; this is everybody else on
+  // the pitch. Published every frame the way a hull is, so a seal that bursts
+  // cannot leave its dent behind it until it respawns.
+  //
+  // FURTHEST FROM PLAYER 1 FIRST. The band is small (systems/grid.js), and a
+  // seal swimming inside the player's own wake radius is already inside the
+  // player's own dent — spending a slot on it buys nothing, while the one that
+  // has broken away up the pitch is the one with a hole of its own to make.
+  publishSealWakes();
   world.grid.update(realDt, player.mesh.position, player.velocity, {
     camera: world.camera,
     charging: strikeState.charging,

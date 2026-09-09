@@ -628,7 +628,10 @@ const fragmentShader = /* glsl */ `
 // Sampled with explicit texel offsets rather than dFdx/dFdy: derivatives are an
 // extension in GLSL ES 1.00 and this shader has no business caring which one
 // it compiled under.
-const gooFragmentShader = /* glsl */ `
+// EXPORTED so it can be COMPILED. A GLSL error renders nothing at all and
+// throws nothing at all, and no Node harness can see one — see
+// tools/goo-shader-check.mjs, which puts this through a real webgl2 context.
+export const gooFragmentShader = /* glsl */ `
   uniform sampler2D tDiffuse;
   uniform vec2 uTexel;
   uniform float uIso;       // density at the surface
@@ -689,6 +692,53 @@ const gooFragmentShader = /* glsl */ `
   // instantly across the pitch.
   uniform vec3 uTint;
   uniform float uTintMix;
+
+  // ---------------------------------------------------------------------
+  // TWO TEAMS IN ONE BODY. Possession used to be a flag — the last seal to
+  // strike owned the ball outright, and the whole thing crossfaded to that
+  // team's colour. But a ball in play is rarely one team's: it is carrying a
+  // hard shot from one seal that the other has just half-turned, and the
+  // honest picture of that is BOTH colours in it, in the proportion each of
+  // them put into the momentum it is travelling on (systems/ballLook.js keeps
+  // that ledger).
+  //
+  // So the mix is a FIELD over the body rather than a single colour, and it is
+  // a SECOND METABALL FIELD inside the first — the same arithmetic that makes
+  // the ball a ball, running again a size down. uSeed is the direction the
+  // newest colour came in from (the contact) and uShare is how much of the
+  // body it has taken.
+  //
+  // IT GROWS, IT DOES NOT SWEEP. A wedge widening out of the contact is the
+  // obvious way to spend a share and it reads as a pie chart: the boundary is
+  // a spoke, the spoke is a straight line through a molten body, and no amount
+  // of noise on it stops it looking like a chart.
+  //
+  // So the colour arrives as THE BOOST METER'S DROP — the same construction as
+  // the core in systems/strikeRing.js, which is the thing in this game that
+  // already looks like what this wants to be: a blob with lobes riding a
+  // slowly rolling ring around it, each breathing on a rate that shares no
+  // factor with the roll, summed into one field and thresholded once. They
+  // grow, they spin, and they FUSE, because the welds between them are field
+  // rather than geometry — two lobes that have only just met join with a waist,
+  // the same way the ball's own splats make one body and not a bag of circles.
+  //
+  // Since uShare is lerped on the CPU, the growth IS the lerp: nothing here
+  // has a clock of its own, so a share that stops moving is a mass that stops
+  // spreading, and the two can never disagree about how much of the ball is
+  // whose.
+  uniform vec3 uTeamA;      // the colour that HELD the ball
+  uniform vec3 uTeamB;      // ...and the one marching in from the contact
+  uniform float uShare;     // how much of the body B has taken, 0..1
+  uniform float uSeed;      // the contact's world angle, radians
+  uniform float uLobes;     // satellites riding the mass, 0..7
+  uniform float uLobeSize;  // ...how big each is, x the mass's own kernel
+  uniform float uWobble;    // ...and how far out they are thrown
+  uniform float uSpin;      // how fast their ring rolls, rad/s
+  uniform float uBreathe;   // how hard each swells and shrinks on its own clock
+  uniform vec2 uDrift;      // the slosh: how far the mass is left behind, in ball radii
+  uniform vec2 uBallAt;     // the ball's centre, in this pass's uv
+  uniform float uBallR;     // ...and its radius, in uv
+  uniform float uBallAspect; // width / height, so the field is round on screen
 
   // THE OUTLINE, AND ITS BOIL. A line drawn a fixed number of TEXELS inside
   // the isoline — the density's gradient converts the field into a distance,
@@ -751,6 +801,31 @@ const gooFragmentShader = /* glsl */ `
     return vnoise(p) * 0.62 + vnoise(p * 3.7 + vec2(19.3, 7.1)) * 0.38;
   }
 
+  // ---------------------------------------------------------------------
+  // THE SKIN HOLDS THE CELLS IN. A point in the ball's own frame, walked back
+  // until it is inside the body — first by the nominal rim, then by the body
+  // AS IT ACTUALLY IS this frame, read out of the density field the pass is
+  // already sampling. So the mass is jostled by the soft body's sides: a dent
+  // punched into the ball pushes the cells in it out of the way, and nothing
+  // ever escapes through the skin.
+  //
+  // IT ONLY EVER READS. The possession field is a look on top of a body that
+  // has already been solved — the cells cannot move the ball, change its
+  // outline or touch where it is going, and this is the line that guarantees
+  // it: the traffic is one way, out of the density field and into a colour.
+  //
+  // One fetch per point and no branch. The correction is proportional to how
+  // far short of the isoline the body is there, so a shallow dent nudges and
+  // a deep one shoves, and a point already well inside is untouched.
+  vec2 hold(vec2 lp, float rim) {
+    float len = length(lp);
+    if (len > rim) lp *= rim / max(len, 1e-5);
+    vec2 uvAt = uBallAt + lp / vec2(uBallAspect, 1.0) * uBallR;
+    float body = texture2D(tDiffuse, uvAt).a;
+    float out_ = clamp((uIso - body) / max(uIso, 1e-4), 0.0, 1.0);
+    return mix(lp, lp * 0.55, out_);
+  }
+
   void main() {
     // The warp, before anything reads the field. uWarp is in texels so the
     // displacement is resolution-independent; at 0 this is bit-for-bit the
@@ -793,7 +868,78 @@ const gooFragmentShader = /* glsl */ `
     // Possession, mixed in here — after the weld, before the lighting — so a
     // tinted ball still takes the rim, the spec and the water exactly as an
     // untinted one does.
-    col = mix(col, uTint, uTintMix);
+    //
+    // TWO COLOURS when the group asks for it (uBallR > 0 — see the note on
+    // the uniforms above), one when it does not. The single-colour path is
+    // every other goo group in the game and is left exactly as it was.
+    if (uBallR > 0.0) {
+      // Ball-local, in radii: the centre is 0 and the drawn edge is about 1.
+      vec2 d = (vUv - uBallAt) * vec2(uBallAspect, 1.0) / max(uBallR, 1e-5);
+      // THE SAME DROP THE BOOST METER IS MADE OF (systems/strikeRing.js): one
+      // blob with lobes riding a slowly rolling ring around it, each breathing
+      // on a rate that shares no factor with the roll, the lot summed into one
+      // field and thresholded once. That is what makes them grow, spin and
+      // FUSE — the welds between the lobes and the core are field, not
+      // geometry, so two that have only just met join with a waist and the
+      // outline never settles into a repeating shape.
+      //
+      // WHERE IT STARTS AND WHERE IT ENDS. The mass is born ON THE RIM at the
+      // contact and walks in to the middle as it grows, so the colour arrives
+      // from the touch rather than blooming out of the centre; at a full share
+      // it is centred and big enough to have swallowed the body.
+      vec2 seedP = vec2(cos(uSeed), sin(uSeed));
+      float sh = clamp(uShare, 0.0, 1.0);
+      // ...AND IT IS SLOSHED BY THE FLIGHT. uDrift is the ball's velocity
+      // MINUS a lagged copy of it (systems/ballLook.js), in ball radii: when
+      // the ball is struck the mass is left behind and piles against the
+      // trailing skin, and it catches up as the lag does. The cells inherit
+      // the ball's motion; they do not have a motion of their own.
+      vec2 at = seedP * (1.0 - sh) + uDrift;
+      // The kernel radius that puts the SURFACE where it is wanted: a blob of
+      // kernel radius k has its isoline at about 0.55 k for this cubic, so the
+      // mass reaches the far rim at a share of 1 without the guard below
+      // having to paper over it.
+      float k = (0.35 + 1.9 * sh) * 0.9;
+      at = hold(at, 0.85);
+      float dens = 0.0;
+      {
+        vec2 q = d - at;
+        float u = dot(q, q) / max(k * k, 1e-6);
+        if (u < 1.0) { float f = 1.0 - u; dens += f * f * f; }
+      }
+      // THE LOBES ARE WHAT MAKE IT LIQUID. A circle grown from a point is a
+      // dial; a circle with things moving under its skin is a substance.
+      float roll = uTime * uSpin;
+      float thrown = k * uWobble;
+      for (int i = 0; i < 7; i++) {
+        if (float(i) >= uLobes) break;
+        // The even slot plus a fixed per-lobe offset, hashed off the index so
+        // the drop is the same drop every frame and every run. Without the
+        // offset the lobes sit on a perfect polygon, and an even spray is the
+        // one arrangement a liquid never makes.
+        float a = roll + 6.2831853 * float(i) / max(uLobes, 1.0)
+                + sin(float(i) * 12.9898) * 0.4;
+        float b = 1.0 + uBreathe * sin(uTime * 1.7 + float(i) * 2.399);
+        // TRAPPED BY THE SKIN. The lobe is walked back inside the body before
+        // it is drawn, so a dent in the ball is a dent in the mass and nothing
+        // ever pokes out through the rim.
+        vec2 lp = hold(at + vec2(sin(a), cos(a)) * (thrown * b), 0.95);
+        float lr = k * uLobeSize * b;
+        vec2 q = d - lp;
+        float u = dot(q, q) / max(lr * lr, 1e-6);
+        if (u < 1.0) { float f = 1.0 - u; dens += f * f * f; }
+      }
+      // One threshold over the summed field, the same shape the body above
+      // uses — which is why the two read as the same substance.
+      float kk = smoothstep(0.22, 0.5, dens);
+      // ...and the ends are absolute. Nothing of B at a share of 0, and ALL of
+      // it at 1: a ball one team owns outright has to be that team's colour
+      // and not a colour with a lobe missing out of it.
+      kk = mix(0.0, mix(kk, 1.0, smoothstep(0.9, 1.0, sh)), step(0.0001, sh));
+      col = mix(col, mix(uTeamA, uTeamB, kk), uTintMix);
+    } else {
+      col = mix(col, uTint, uTintMix);
+    }
 
     // WHERE THIS PIXEL IS IN THE WATER. Through the inverse view-projection
     // rather than by lerping the camera's frustum edges: the cinematic camera
@@ -1094,6 +1240,19 @@ export function createPost(renderer) {
     uWarpFeed: { value: 1 },
     uTint: { value: new THREE.Color(0xffffff) },
     uTintMix: { value: 0 },
+    uTeamA: { value: new THREE.Color(0xffffff) },
+    uTeamB: { value: new THREE.Color(0xffffff) },
+    uShare: { value: 0 },
+    uSeed: { value: 0 },
+    uLobes: { value: 5 },
+    uLobeSize: { value: 0.62 },
+    uWobble: { value: 0.7 },
+    uSpin: { value: 0.5 },
+    uBreathe: { value: 0.25 },
+    uDrift: { value: new THREE.Vector2(0, 0) },
+    uBallAt: { value: new THREE.Vector2(0.5, 0.5) },
+    uBallR: { value: 0 },
+    uBallAspect: { value: 1 },
     // The outline and its boil — off unless a group declares `outline`.
     uOutline: { value: 0 },
     uOutlineWidth: { value: 3 },
@@ -1428,6 +1587,12 @@ export function createPost(renderer) {
   // next group touches it, so the memory cost is one buffer no matter how many
   // substances the game grows, and the frame cost is only for the groups that
   // have something alive in them.
+  // Scratch for the ball's two-colour field — projected once per frame, and
+  // this runs on the hot path.
+  const _teamAt = new THREE.Vector3();
+  const _teamEdge = new THREE.Vector3();
+  const _teamSize = new THREE.Vector2();
+
   function renderGooGroup(sceneCamera, group) {
     const layer = gooLayer();
     if (!layer) return;
@@ -1459,6 +1624,39 @@ export function createPost(renderer) {
     u.uWarpFeed.value = Math.max(0, warp.feed ?? 1);
     u.uTint.value.set(g.tint ?? 0xffffff);
     u.uTintMix.value = Math.min(1, Math.max(0, g.tintMix ?? 0));
+    // THE TWO-COLOUR PATH, off unless the group hands over a `teams` block —
+    // which only the ball does (systems/ballLook.js). A radius of zero is the
+    // switch, and it is checked in the shader rather than compiled out because
+    // one group in a shared pass cannot have its own program.
+    const tm = g.teams;
+    if (tm && tm.wr > 0) {
+      u.uTeamA.value.set(tm.a ?? 0xffffff);
+      u.uTeamB.value.set(tm.b ?? 0xffffff);
+      u.uShare.value = Math.min(1, Math.max(0, tm.share ?? 0));
+      u.uSeed.value = tm.seed ?? 0;
+      u.uLobes.value = Math.max(0, Math.min(7, tm.lobes ?? 5));
+      u.uLobeSize.value = Math.max(0, tm.lobeSize ?? 0.62);
+      u.uWobble.value = Math.max(0, tm.wobble ?? 0.7);
+      u.uSpin.value = tm.spin ?? 0.5;
+      u.uBreathe.value = Math.max(0, tm.breathe ?? 0.25);
+      u.uDrift.value.set(tm.driftX ?? 0, tm.driftY ?? 0);
+      // WORLD IN, UV OUT. The group hands over where the ball IS and how big
+      // it is, in world units, and the projection is done here — this is the
+      // one place that has the camera the pass is being rendered through, and
+      // the cinematic camera's asymmetric frustum makes "project it yourself
+      // and pass uv" quietly wrong from anywhere else.
+      _teamAt.set(tm.wx ?? 0, tm.wy ?? 0, 0).project(sceneCamera);
+      _teamEdge.set((tm.wx ?? 0) + tm.wr, tm.wy ?? 0, 0).project(sceneCamera);
+      u.uBallAt.value.set((_teamAt.x + 1) * 0.5, (_teamAt.y + 1) * 0.5);
+      // The radius as a uv WIDTH, and the aspect that makes the field round on
+      // screen rather than an ellipse in whatever shape the window is.
+      const rx = Math.abs(_teamEdge.x - _teamAt.x) * 0.5;
+      const size = renderer.getSize(_teamSize);
+      u.uBallAspect.value = size.y > 0 ? size.x / size.y : 1;
+      u.uBallR.value = rx * u.uBallAspect.value;
+    } else {
+      u.uBallR.value = 0;
+    }
     const ol = g.outline ?? null;
     u.uOutline.value = ol ? Math.min(1, Math.max(0, ol.strength ?? 1)) : 0;
     if (ol) {

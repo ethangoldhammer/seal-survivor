@@ -78,6 +78,17 @@ const state = {
   speed01: 0,       // smoothed speed, 0..1
   charge01: 0,      // the winding-up seal's charge, 0..1
   mix: 0,           // smoothed tint mix, so possession fades in
+  // THE LEDGER — see noteBallMomentum. How much of the speed the ball is
+  // travelling at right now each team actually put there, in u/s.
+  credit: [0, 0],
+  newest: -1,       // whose colour is marching in
+  share: 0,         // ...and how much of the body it has taken, smoothed
+  seed: 0,          // the world angle it came in at
+  // Where the body is and how big, for the field — setBallBody.
+  bx: 0, by: 0, br: 0, speed: 0, vx: 0, vy: 0,
+  // A LAGGED COPY of the ball's velocity. The difference between it and the
+  // real one is the slosh: see the drift below.
+  lagVx: 0, lagVy: 0,
 };
 
 export function resetBallLook() {
@@ -86,6 +97,110 @@ export function resetBallLook() {
   state.speed01 = 0;
   state.charge01 = 0;
   state.mix = 0;
+  state.credit[0] = 0;
+  state.credit[1] = 0;
+  state.newest = -1;
+  state.share = 0;
+  state.seed = 0;
+  state.bx = 0;
+  state.by = 0;
+  state.br = 0;
+  state.speed = 0;
+  state.vx = 0;
+  state.vy = 0;
+  state.lagVx = 0;
+  state.lagVy = 0;
+}
+
+// ---------------------------------------------------------------------------
+// WHOSE BALL IS IT — as a proportion, not a flag.
+//
+// Possession used to be the last seal to strike, and the ball crossfaded
+// wholly to that team's colour. That is a fair description of a ball somebody
+// has just hammered upfield and a poor one of every other moment in a match:
+// most of the time the thing is carrying a hard shot from one seal that the
+// other has half-turned, and it belongs to both of them in the proportion
+// each of them put into the momentum it is actually travelling on.
+//
+// So the ledger is MOMENTUM, in u/s, and it is kept honest two ways:
+//
+//   A CONTACT credits whoever made it with the speed it ADDED — the length of
+//   the velocity change, which is the only part of the new heading that seal
+//   is responsible for — and scales what was already on the books by how much
+//   of the old momentum survived along the new line. A shot turned back the
+//   way it came leaves the seal that turned it owning nearly all of it; a
+//   nudge that barely bends the flight leaves the ledger nearly untouched.
+//
+//   EVERY FRAME the two are renormalised to sum to the ball's CURRENT speed,
+//   so what they hold is always a description of where the ball is going now
+//   rather than a running total of everything that ever hit it. Drag takes
+//   from both in proportion, which is right: the water does not take sides.
+//
+// What the look does with it is `share`: how far round the body the newest
+// colour has spread, out of the contact it came in at. It is lerped, so the
+// spread IS the lerp — see the note on the two-colour field in post.js.
+// ---------------------------------------------------------------------------
+
+/**
+ * A contact by `team` changed the ball's velocity from (v0x, v0y) to
+ * (v1x, v1y), at `angle` on the ball's rim (world radians, the side the
+ * contact was on). versus.js calls this from every path that moves the ball.
+ */
+export function noteBallMomentum(team, v0x, v0y, v1x, v1y, angle) {
+  if (team !== 0 && team !== 1) return;
+  const s0 = Math.hypot(v0x, v0y);
+  const s1 = Math.hypot(v1x, v1y);
+  const added = Math.hypot(v1x - v0x, v1y - v0y);
+  if (!(added > 1e-3)) return;
+  // How much of what was already there is still going the way the ball is now
+  // going. Projected rather than compared by length: a shot sent back the way
+  // it came kept its speed and none of its direction, and the seal that did
+  // that owns the new one.
+  const keep = s0 > 1e-4 && s1 > 1e-4
+    ? Math.max(0, (v0x * v1x + v0y * v1y) / (s0 * s1)) * Math.min(1, s0 / s1)
+    : 0;
+  state.credit[0] *= keep;
+  state.credit[1] *= keep;
+  state.credit[team] += added;
+  // A NEW TEAM MARCHING IN. The share is described from the newest colour's
+  // side, so when possession changes hands the SAME picture is re-read from
+  // the other end — 1 - share — and the lerp carries on from there. Setting
+  // it to zero instead would blink the ball back to one colour on the frame
+  // of every touch.
+  if (team !== state.newest) {
+    state.share = 1 - state.share;
+    state.newest = team;
+  }
+  state.seed = angle ?? state.seed;
+  state.owner = team;
+}
+
+/**
+ * A GOAL. The ball is dead and off the edge of the screen, so there is no
+ * momentum left to describe and nothing will call noteBallMomentum again —
+ * but this is the one moment the ball most obviously belongs to somebody. The
+ * books are handed wholly to `team` and the share marches to a full takeover
+ * from wherever the last touch was, so the thing that goes in fills with the
+ * scoring team's colour on its way.
+ */
+export function claimBall(team, angle = null) {
+  if (team !== 0 && team !== 1) return;
+  const other = team === 1 ? 0 : 1;
+  // A real magnitude rather than 1, so the renormalise below has something to
+  // scale and a frame where the speed is still non-zero cannot undo it.
+  state.credit[team] = Math.max(1, state.credit[team] + state.credit[other]);
+  state.credit[other] = 0;
+  if (team !== state.newest) {
+    state.share = 1 - state.share;
+    state.newest = team;
+  }
+  if (angle != null) state.seed = angle;
+  state.owner = team;
+}
+
+/** For the harness and the lab: what the ledger currently holds. */
+export function ballCredit() {
+  return { credit: [...state.credit], newest: state.newest, share: state.share, seed: state.seed };
 }
 
 /**
@@ -110,6 +225,21 @@ export function setBallDrive({ speed01 = 0, charge01 = 0, owner = null } = {}) {
   state.speed01 = Math.max(0, Math.min(1, speed01));
   state.charge01 = Math.max(0, Math.min(1, charge01));
   if (owner != null && owner >= 0) state.owner = owner;
+}
+
+/**
+ * WHERE THE BALL IS AND HOW BIG, for the two-colour field — world units, and
+ * the projection is done in the pass that has the camera (see post.js). The
+ * ball's own module pushes this every frame; without it the field has no
+ * radius and the shader falls back to the single tint it always had.
+ */
+export function setBallBody({ x = 0, y = 0, r = 0, speed = 0, vx = 0, vy = 0 } = {}) {
+  state.bx = x;
+  state.by = y;
+  state.br = r;
+  state.speed = speed;
+  state.vx = vx;
+  state.vy = vy;
 }
 
 /**
@@ -140,13 +270,82 @@ export function updateBallLook(dt) {
   const rate = Math.max(0.01, look.tintRate ?? 6);
   state.mix += (want - state.mix) * Math.min(1, rate * dt);
 
+  // THE LEDGER, RENORMALISED to the speed the ball is actually travelling at —
+  // see the note above noteBallMomentum. Drag has taken from the flight since
+  // the last contact and it took from both teams at once, so the two credits
+  // are scaled together and their PROPORTION is untouched by it.
+  //
+  // ...WHILE IT IS MOVING. A ball at rest is not owned by nobody: it is owned
+  // by whoever last moved it, and rescaling to a speed of zero would wipe the
+  // ledger to two zeroes and blank the body on the frame the thing stopped
+  // rolling. What the shares describe is a PROPORTION, and a proportion
+  // survives the ball coming to a stop — so at rest the books are simply left
+  // where they are. (It is also what keeps this honest in a harness or a lab
+  // that never pushes a speed at all.)
+  const speed = Math.max(0, state.speed ?? 0);
+  const total = state.credit[0] + state.credit[1];
+  if (total > 1e-6 && speed > 1e-3) {
+    const k = speed / total;
+    state.credit[0] *= k;
+    state.credit[1] *= k;
+  }
+  // ...and the share the newest colour is owed. Lerped, and that lerp IS the
+  // march: the colour spreads out of the contact over `shareRate` rather than
+  // arriving everywhere on the frame of the touch.
+  const owed = state.newest >= 0 && total > 1e-6
+    ? state.credit[state.newest] / (state.credit[0] + state.credit[1] || 1)
+    : 0;
+  const shareRate = Math.max(0.01, look.shareRate ?? 3.2);
+  state.share += (owed - state.share) * Math.min(1, shareRate * dt);
+
+  // THE SLOSH. A lagged copy of the ball's velocity chases the real one; the
+  // difference between them is how far the mass inside is left behind. Struck,
+  // the ball is gone and the cells pile against the trailing skin; a moment
+  // later the lag has caught up and they are centred again. They inherit the
+  // ball's motion and never have one of their own — nothing here is integrated
+  // and nothing here can move the ball.
+  const lagRate = Math.max(0.01, look.sloshLag ?? 5);
+  const lagK = Math.min(1, lagRate * dt);
+  state.lagVx += ((state.vx ?? 0) - state.lagVx) * lagK;
+  state.lagVy += ((state.vy ?? 0) - state.lagVy) * lagK;
+  const maxSpeed = Math.max(1, CONFIG.versus?.ball?.maxSpeed ?? 64);
+  const sloshMax = Math.max(0, look.sloshMax ?? 0.55);
+  const slosh = look.slosh ?? 1.4;
+  let dvx = ((state.lagVx - (state.vx ?? 0)) / maxSpeed) * slosh;
+  let dvy = ((state.lagVy - (state.vy ?? 0)) / maxSpeed) * slosh;
+  const dl = Math.hypot(dvx, dvy);
+  if (dl > sloshMax) { dvx *= sloshMax / dl; dvy *= sloshMax / dl; }
+
   group.warp = {
     ...(group.warp ?? {}),
     amount: Math.max(0, warp),
   };
   group.tint = state.owner >= 0 ? teamColor(state.owner) : 0xffffff;
   group.tintMix = state.mix;
-  return { warp, tint: group.tint, tintMix: state.mix, owner: state.owner };
+  // The two-colour field. A radius of zero is the switch that leaves every
+  // other group — and this one, before a ball exists — on the single tint.
+  const other = state.newest === 1 ? 0 : 1;
+  group.teams = {
+    a: state.newest >= 0 ? teamColor(other) : 0xffffff,
+    b: state.newest >= 0 ? teamColor(state.newest) : 0xffffff,
+    share: state.share,
+    seed: state.seed,
+    lobes: look.lobes ?? 5,
+    lobeSize: look.lobeSize ?? 0.62,
+    wobble: look.wobble ?? 0.7,
+    spin: look.spin ?? 0.5,
+    breathe: look.breathe ?? 0.25,
+    driftX: dvx,
+    driftY: dvy,
+    wx: state.bx ?? 0,
+    wy: state.by ?? 0,
+    wr: state.newest >= 0 ? (state.br ?? 0) : 0,
+  };
+  return {
+    warp, tint: group.tint, tintMix: state.mix, owner: state.owner,
+    share: state.share, newest: state.newest, seed: state.seed,
+    driftX: dvx, driftY: dvy,
+  };
 }
 
 /** For the shader lab and the tests — what the state machine currently holds. */

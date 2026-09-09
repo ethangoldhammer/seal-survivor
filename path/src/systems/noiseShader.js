@@ -202,6 +202,10 @@ export function attachNoiseShader(material, preset = null) {
 
   const u = {
     uNoiseSize: { value: 0.4 },
+    // Which piece of the field this body is cut from — see the note in
+    // noiseGlsl.js. Zero is the field every wearer had before it existed, and
+    // it stays zero unless something calls instanceNoise.
+    uNoiseSeed: { value: new THREE.Vector3(0, 0, 0) },
     uNoiseStrength: { value: 0.35 },
     uNoiseContrast: { value: 1.0 },
     uNoiseColor: { value: new THREE.Color(0x0a2233) },
@@ -577,6 +581,68 @@ export function applyNoiseSettings() {
     u.uSplitColor.value.set(p.splitColor ?? 0x0a2233);
     u.uSplitBase.value.set(p.splitBaseColor ?? 0xffffff);
   }
+}
+
+/**
+ * GIVE ONE BODY ITS OWN CUT OF THE MOTTLING. Two of the same animal share one
+ * material — a GLB clone shares its template's — so four seals on a pitch are
+ * the same seal four times, freckle for freckle.
+ *
+ * A CLONE PER BODY, and the two traps that come with it are the reason this is
+ * a function rather than four lines at the call site:
+ *
+ *   Material.clone() DROPS onBeforeCompile. It is a function and the copy
+ *   constructor does not carry functions across, so the injected shader would
+ *   silently stop running while userData still claimed it was attached — the
+ *   seal would render with no mottling at all and nothing would throw.
+ *
+ *   ...and carrying it over BY REFERENCE (which is what damageGlow does, and
+ *   is right for it) would not do here: the closure holds this material's
+ *   UNIFORM OBJECT, so every clone would share one seed and the whole exercise
+ *   would be a no-op that looks like it worked. So the guard is cleared and
+ *   the shader is attached AGAIN, which builds the clone a uniform block of
+ *   its own.
+ *
+ * `seed` is a vector in the model's own units; the caller decides how far
+ * apart two bodies should be cut from. A seed of null leaves the body sharing
+ * the template, which is what everything that never calls this does.
+ */
+export function instanceNoise(root, seed) {
+  if (!root || !seed) return 0;
+  let made = 0;
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material || o.userData?.__isOutline) return;
+    const swap = (mat) => {
+      if (!mat || mat.userData?.__isOutline) return mat;
+      // Already its own: re-seed rather than cloning a clone.
+      if (mat.userData.__noiseInstance) {
+        mat.userData.__noiseSeed?.set(seed.x, seed.y, seed.z);
+        return mat;
+      }
+      if (!mat.userData.__noiseAttached) return mat;
+      const copy = mat.clone();
+      const preset = mat.userData.__noisePreset ?? null;
+      // The clone came out of the copy constructor carrying the flag and none
+      // of the shader — see the note above. Clear it, attach afresh.
+      copy.userData.__noiseAttached = false;
+      copy.onBeforeCompile = undefined;
+      attachNoiseShader(copy, preset);
+      copy.userData.__noiseInstance = true;
+      const u = copy.userData.__noiseUniforms;
+      if (u?.uNoiseSeed) {
+        u.uNoiseSeed.value.set(seed.x, seed.y, seed.z);
+        copy.userData.__noiseSeed = u.uNoiseSeed.value;
+      }
+      copy.needsUpdate = true;
+      made++;
+      return copy;
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+  });
+  // The new materials have to be told what the sliders currently say — they
+  // were born after the last applyNoiseSettings.
+  if (made) applyNoiseSettings();
+  return made;
 }
 
 export function noiseShaderMaterialCount() {

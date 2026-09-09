@@ -1,0 +1,23 @@
+{
+  "versus.replay.cams.shots.6.fov": 74,
+  "versus.replay.cams.shots.6.push": 21,
+  "versus.replay.cams.shots.6.pitch": 70,
+  "versus.replay.cams.shots.6.targets.scorer": 1,
+  "versus.replay.cams.shots.6.targets.mouth": 0,
+  "versus.replay.cams.shots.2.push": 16,
+  "versus.replay.cams.shots.2.targets.ball": 2,
+  "versus.replay.cams.shots.3.targets.ball": 1.3,
+  "versus.replay.cams.shots.3.targets.mouth": 0.8,
+  "versus.replay.cams.shots.3.push": 29.5,
+  "versus.replay.cams.shots.3.pushTime": 2,
+  "versus.replay.cams.shots.2.pitch": -59,
+  "versus.replay.cams.shots.2.distance": 47.5,
+  "versus.replay.cams.shots.2.yaw": 11,
+  "versus.replay.cams.shots.0.pitch": -26,
+  "versus.replay.cams.shots.2.dolly": 7.5,
+  "versus.replay.cams.shots.2.targets.striker": 1.2,
+  "versus.replay.cams.shots.6.pushTime": 1.5,
+  "versus.replay.cams.shots.6.yaw": -77,
+  "versus.replay.cams.shots.6.targets.scorerFace": 1.8,
+  "__savedAt": "2026-09-09T17:40:49.660Z"
+}

@@ -50,9 +50,10 @@ import { buildSealBody, player } from '../../path/src/entities/player.js';
 import { initParticles, updateParticles, updateParticleScale } from '../../path/src/entities/particles.js';
 import {
   ball, p2, initBallAlone, renderBall, replayState, replayRenderCamera,
-  makeReplayFrame, stageReplay, stepStagedReplay, seekStagedReplay,
+  makeReplayFrame, stageReplay, stepStagedReplay, seekStagedReplay, ballContactReach,
 } from '../../path/src/systems/versus.js';
 import { poolState, resetPool } from '../../path/src/systems/replayCams.js';
+import { celebrationState } from '../../path/src/systems/celebrate.js';
 
 const q = new URLSearchParams(location.search);
 const shotListEl = document.getElementById('shotList');
@@ -136,7 +137,7 @@ const LENS_ROWS = [
   ['focusFeather', 'feather', 0.02, 1, 0.01],
 ];
 const POIS = ['ball', 'striker', 'strikerFace', 'scorer', 'scorerFace', 'defender', 'mouth', 'impact'];
-const BEATS = ['impact', 'wide', 'explosion'];
+const BEATS = ['impact', 'wide', 'explosion', 'celebration'];
 
 const POOL_ROWS = [
   ['pool.margin', 'keeps frame within', 0, 2, 0.01],
@@ -259,12 +260,13 @@ resize();
 // nothing in the camera pool can see it; staging one would be detail for its
 // own sake.
 const REC_HZ = 90;
-let staged = { touchT: 0, goalT: 0, span: 1 };
+let staged = { touchT: 0, goalT: 0, explode: 1.3, celebrateHold: 1.7, span: 1 };
 
 function stageGoal() {
   clearSolo();
   const side = lab.side;
-  const lead = CONFIG.versus.replay.lead ?? 0.9;
+  const r = CONFIG.versus.replay;
+  const lead = r.lead ?? 0.9;
   const touchT = Math.max(0.2, lead);
   const goalT = touchT + lab.flight;
   const gy = mouthY();
@@ -278,7 +280,7 @@ function stageGoal() {
   const py = clamp(gy - uy * lab.range, bounds.bottom + 6, (bounds.top ?? 10) - 4);
   const flightLen = Math.hypot(gx - px, gy - py);
   const flightSpeed = flightLen / Math.max(0.05, lab.flight);
-  const contact = (CONFIG.versus.ball.contactRadius ?? 2.2) + (ball.r ?? 2.4);
+  const contact = ballContactReach(0);
   const top = (bounds.top ?? 10);
 
   const frames = [];
@@ -322,7 +324,16 @@ function stageGoal() {
     s1.vis = true;
     frames.push(f);
   }
-  staged = { touchT, goalT, span: goalT + (CONFIG.versus.replay.explode ?? 1.3) };
+  // The scrub's axis is recorded seconds up to the goal and WALL seconds
+  // after it, because the last two beats have no recorded time left to spend —
+  // they hold on the goal's own frame. seekStagedReplay reads it back the same
+  // way round, so one slider covers all four beats.
+  staged = {
+    touchT, goalT,
+    explode: r.explode ?? 1.3,
+    celebrateHold: r.celebrateHold ?? 1.7,
+    span: goalT + (r.explode ?? 1.3) + (r.celebrateHold ?? 1.7),
+  };
   stageReplay({ frames, touchT, goalT, side, who: 0, scorer: 0, aspect: replayState.aspect });
   cuts.length = 0;
   lastShot = -1;
@@ -540,10 +551,12 @@ function paintBeats() {
   const { touchT, goalT, span } = staged;
   const hold = CONFIG.versus.replay.impactHold ?? 0.2;
   const startT = replayState.startT;
+  const bang = goalT + staged.explode;
   const bands = [
     ['impact', startT, Math.min(goalT, touchT + hold), '#7a4a2a'],
     ['wide', Math.min(goalT, touchT + hold), goalT, '#2a4a6a'],
-    ['explosion', goalT, span, '#6a2a3a'],
+    ['explosion', goalT, bang, '#6a2a3a'],
+    ['celebration', bang, span, '#3d6a2a'],
   ];
   beatsEl.innerHTML = '';
   for (const [name, from, to, color] of bands) {
@@ -573,9 +586,16 @@ function paintCuts() {
   }
 }
 
-/** Where the scrub sits: recorded time, or past the goal, into the hold. */
+/**
+ * Where the scrub sits. Before the goal that is the recorded time; after it
+ * the two held beats are laid end to end in their order, which is the same
+ * axis seekStagedReplay reads.
+ */
 function timelineT() {
-  return replayState.beat === 'explosion' ? staged.goalT + replayState.hold : replayState.t;
+  const rs = replayState;
+  if (rs.beat === 'explosion') return staged.goalT + rs.hold;
+  if (rs.beat === 'celebration') return staged.goalT + staged.explode + rs.hold;
+  return rs.t;
 }
 
 // --- the loop ----------------------------------------------------------------
@@ -784,6 +804,7 @@ requestAnimationFrame(tick);
 // --- the harness's handles ----------------------------------------------------
 window.__pool = poolState;
 window.__replay = replayState;
+window.__celebration = celebrationState;
 window.__world = world;
 window.__seals = [player, p2];
 window.__ball = ball;
@@ -816,7 +837,8 @@ if (q.has('shots')) {
     const beat = (all[i].beats ?? BEATS)[0];
     const at = beat === 'impact' ? staged.touchT + 0.05
       : beat === 'wide' ? (staged.touchT + staged.goalT) / 2
-        : staged.goalT + 0.3;
+        : beat === 'celebration' ? staged.goalT + staged.explode + staged.celebrateHold * 0.4
+          : staged.goalT + 0.3;
     for (let f = 0; f < 30; f++) step(1 / 60);
     seekStagedReplay(at, 1 / 60);
     for (let f = 0; f < 10; f++) step(1 / 60);

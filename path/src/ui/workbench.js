@@ -280,8 +280,12 @@ const STYLES = `
   .sv-wb-snd h3 { color: #ffb347; } .sv-wb-hap h3 { color: #7ad7ff; } .sv-wb-imp h3 { color: #ff8fb1; }
 
   .sv-wb-f { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
-  .sv-wb-f label { font-size: 10px; color: rgba(232,236,243,0.52); width: 76px; flex-shrink: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Wraps rather than ellipsising. A clipped label is a slider you cannot name
+     without hovering it, and half these names ('release', 'noise mix', 'filter
+     sweep') lose the word that distinguishes them. Two short lines cost a few
+     px of row height; a cut-off one costs the reading. */
+  .sv-wb-f label { font-size: 10px; color: rgba(232,236,243,0.52); width: 88px; flex-shrink: 0;
+    line-height: 1.25; overflow-wrap: anywhere; }
   .sv-wb-f input[type=range] { flex: 1; min-width: 0; height: 14px; }
   .sv-wb-snd input[type=range] { accent-color: #ffb347; }
   .sv-wb-hap input[type=range] { accent-color: #7ad7ff; }
@@ -2564,16 +2568,72 @@ function renderGoal() {
     title: 'World units the light reaches past the hole \u2014 into the water in front of the face and into the rock above and below.' });
   slider(light, 'feather', { min: 0.05, max: 1, step: 0.05, get: () => g.feather ?? 0.55, set: (v) => { g.feather = v; live(); },
     title: 'The share of the quad that is falloff. 1 fades from the centre; low holds a bright core the size of the hole and fades over the spill.' });
+  slider(light, 'throw down the tunnel', { min: 0.02, max: 1, step: 0.02, get: () => g.tunnelFalloff ?? 1, set: (v) => { g.tunnelFalloff = v; live(); },
+    title: 'The share of the source still there at the drawn face \u2014 exponential absorption on the way in, so the corridor reads as light coming from somewhere off the frame rather than as a lit surface. 1 is flat, as it was. Only the light throws; the slab behind it holds, or the corridor would be a window onto the seabed at the mouth.' });
   slider(light, 'mouth half height', { min: 3, max: 14, step: 0.5, dp: 1, get: () => g.halfHeight ?? 7, set: (v) => { g.halfHeight = v; live(); },
     title: 'The hole\u2019s half height. The light follows it now; the ROCK is carved on the next resize or match, and the ball\u2019s posts read it live.' });
+
+  // --- THE BALL IN IT ------------------------------------------------------------
+  const gb = g.ball ?? (g.ball = {});
+  const inIt = card(cols, 'sv-wb-imp', 'The ball in the light',
+    'Where the ball overlaps a mouth\u2019s light, that light blazes past its own overdrive and the noise under it churns hard \u2014 a ball arriving lights the goal up around it rather than passing in front of it as a shape. How much of the ball is in the light is measured off its NEAR edge, so it is already blazing as the ball crosses the face.');
+  toggle(inIt, 'the ball overdrives the light it is in', () => gb.enabled !== false, (v) => { gb.enabled = v; live(); });
+  slider(inIt, 'carries', { min: 0, max: 60, step: 1, dp: 0, get: () => gb.reach ?? 20, set: (v) => { gb.reach = v; },
+    title: 'World units round the ball. Squared falloff, like a seal\u2019s.' });
+  slider(inIt, 'blazes by', { min: 0, max: 8, step: 0.1, dp: 1, get: () => gb.overdrive ?? 2.2, set: (v) => { gb.overdrive = v; live(); },
+    title: 'Times the light\u2019s own overdrive, at the ball.' });
+  slider(inIt, 'boils by', { min: 0, max: 24, step: 0.5, dp: 1, get: () => gb.boil ?? 6, set: (v) => { gb.boil = v; live(); },
+    title: 'How far the field slides along its third axis under the ball \u2014 the pattern there churns while the rest of the mouth holds.' });
+
+  // --- WHOSE LIGHT IT IS ---------------------------------------------------------
+  const sc = g.scored ?? (g.scored = {});
+  const whose = card(cols, 'sv-wb-imp', 'Whose light it is',
+    'A goal goes into the light of the team that just conceded it. For a beat afterwards that light is the SCORER\u2019s instead \u2014 the corridor, the spill into the water and the bloom over all of it, because they are one quad. On the wall clock, so it plays out across the shutter\u2019s freeze and the replay.');
+  toggle(whose, 'a goal turns the mouth the scorer\u2019s colour', () => sc.enabled !== false, (v) => { sc.enabled = v; live(); });
+  slider(whose, 'takes it over in', { min: 0, max: 1, step: 0.01, get: () => sc.rise ?? 0.08, set: (v) => { sc.rise = v; } });
+  slider(whose, 'holds for', { min: 0, max: 5, step: 0.1, dp: 1, get: () => sc.hold ?? 1.7, set: (v) => { sc.hold = v; } });
+  slider(whose, 'hands it back over', { min: 0, max: 5, step: 0.1, dp: 1, get: () => sc.fall ?? 1.2, set: (v) => { sc.fall = v; } });
+  slider(whose, 'blazes by', { min: 1, max: 4, step: 0.05, get: () => sc.glow ?? 1.9, set: (v) => { sc.glow = v; },
+    title: 'Times the overdrive above, at the peak of the flash.' });
+  slider(whose, '...and the corridor\u2019s end by', { min: 1, max: 4, step: 0.05, get: () => sc.backShade ?? 1.5, set: (v) => { sc.backShade = v; } });
+
+  // --- THE SEALS IN IT -----------------------------------------------------------
+  const sw = g.swim ?? (g.swim = {});
+  const stir = card(cols, 'sv-wb-imp', 'The seals stir it',
+    'The noise that breaks the light up is sampled in world units, so a seal is already somewhere in it. Two things: a DISTORTION wherever a seal is, and an IMPULSE \u2014 a ring \u2014 thrown on the frame it bursts near a mouth. A seal in the goal it is ATTACKING also brings its own colour in with it.');
+  toggle(stir, 'the seals stir the noise', () => sw.enabled !== false, (v) => { sw.enabled = v; live(); });
+  slider(stir, 'a seal reaches', { min: 0, max: 60, step: 1, dp: 0, get: () => sw.reach ?? 28, set: (v) => { sw.reach = v; live(); },
+    title: 'World units. Squared falloff, so a seal at the far post barely touches the light.' });
+  slider(stir, 'shoves the field', { min: 0, max: 12, step: 0.1, dp: 1, get: () => sw.push ?? 3.4, set: (v) => { sw.push = v; live(); },
+    title: 'World units the sample point is pushed away from the seal at the centre of its reach.' });
+  slider(stir, '...turned by', { min: -3, max: 3, step: 0.05, get: () => sw.swirl ?? 1.2, set: (v) => { sw.swirl = v; live(); },
+    title: 'Radians. Straight out is a bulge; turned, a seal leaves a curl behind it.' });
+  slider(stir, 'smears along its velocity', { min: 0, max: 0.4, step: 0.005, get: () => sw.drag ?? 0.05, set: (v) => { sw.drag = v; live(); } });
+  slider(stir, 'boils under a moving seal', { min: 0, max: 8, step: 0.1, dp: 1, get: () => sw.churn ?? 1.8, set: (v) => { sw.churn = v; live(); },
+    title: 'How far the sample slides along the field\u2019s third axis under a seal at the burst speed \u2014 the pattern there churns while the rest of it holds.' });
+  slider(stir, 'an attacker takes the colour', { min: 0, max: 1, step: 0.02, get: () => sw.tint ?? 0.9, set: (v) => { sw.tint = v; live(); },
+    title: 'How far toward its own team\u2019s colour a seal can take the light it is attacking. Its own goal is already its colour, so a keeper stirs the field without repainting it.' });
+  slider(stir, '...bleeding in from', { min: 0, max: 30, step: 1, dp: 0, get: () => sw.tintLead ?? 5, set: (v) => { sw.tintLead = v; live(); },
+    title: 'World units short of the wall\u2019s line where the colour starts to come in. Full over by the depth a keeper may stand.' });
+  slider(stir, 'burst speed', { min: 10, max: 120, step: 1, dp: 0, get: () => sw.burst ?? 46, set: (v) => { sw.burst = v; live(); },
+    title: 'u/s a seal has to cross to throw a ring \u2014 an edge, so a dash throws one and not sixty a second.' });
+  slider(stir, '...within', { min: 0, max: 120, step: 1, dp: 0, get: () => sw.range ?? 46, set: (v) => { sw.range = v; },
+    title: 'World units of the drawn face. Further out there is no light for a ring to break up.' });
+  slider(stir, '...no oftener than', { min: 0, max: 2, step: 0.05, get: () => sw.cooldown ?? 0.3, set: (v) => { sw.cooldown = v; } });
+  slider(stir, 'the ring travels', { min: 0, max: 90, step: 1, dp: 0, get: () => sw.ringSpeed ?? 30, set: (v) => { sw.ringSpeed = v; live(); } });
+  slider(stir, '...lives', { min: 0.1, max: 4, step: 0.05, get: () => sw.ringLife ?? 1.2, set: (v) => { sw.ringLife = v; live(); } });
+  slider(stir, '...is thick', { min: 0.5, max: 20, step: 0.5, dp: 1, get: () => sw.ringWidth ?? 5, set: (v) => { sw.ringWidth = v; live(); } });
+  slider(stir, '...shoves as it passes', { min: 0, max: 20, step: 0.5, dp: 1, get: () => sw.ringPush ?? 5, set: (v) => { sw.ringPush = v; live(); } });
+  slider(stir, '...and brightens', { min: 0, max: 2, step: 0.05, get: () => sw.ringLight ?? 0.5, set: (v) => { sw.ringLight = v; live(); } });
 
   // --- THE JET ------------------------------------------------------------------
   const jet = card(cols, 'sv-wb-imp', 'The jet out of the corridor',
     'Born off screen inside the tunnel, driven at the water, bounced off the lips, squeezed out of the mouth and left to tumble. Driven goo in the ball\u2019s own group, in the ball\u2019s live colour.');
   slider(jet, 'lobes', { min: 4, max: 120, step: 1, dp: 0, get: () => j.count ?? 36, set: (v) => { j.count = Math.round(v); } });
-  slider(jet, 'born past the face', { min: 1, max: 14, step: 0.5, dp: 1, get: () => j.born?.[0] ?? 4, set: (v) => { j.born = [v, Math.max(v, j.born?.[1] ?? v)]; },
-    title: 'The nearest a lobe is born to the mouth, in world units past the drawn face. The screen\u2019s edge is about four units past it.' });
-  slider(jet, '...and deepest', { min: 1, max: 14, step: 0.5, dp: 1, get: () => j.born?.[1] ?? 11, set: (v) => { j.born = [Math.min(v, j.born?.[0] ?? v), v]; } });
+  slider(jet, 'born past the trigger', { min: 0, max: 14, step: 0.5, dp: 1, get: () => j.bornPast ?? 2, set: (v) => { j.bornPast = v; },
+    title: 'World units beyond whichever is further out, the goal line or the screen\u2019s edge \u2014 both of which move with the tuning, which is why this is measured off them rather than off the face. Clipped to the tunnel\u2019s back.' });
+  slider(jet, '...across a band', { min: 0, max: 14, step: 0.5, dp: 1, get: () => j.bornSpan ?? 5, set: (v) => { j.bornSpan = v; },
+    title: 'How deep the band it is born across is. 0 is a single plane and reads as a puff; a few units is a jet with a front and a back to it.' });
   slider(jet, 'released over', { min: 0, max: 1.5, step: 0.05, get: () => j.stagger ?? 0.3, set: (v) => { j.stagger = v; },
     title: 'Seconds. 0 is a puff; longer is a jet.' });
   slider(jet, 'launch speed', { min: 5, max: 160, step: 1, dp: 0, get: () => j.speed?.[0] ?? 45, set: (v) => { j.speed = [v, Math.max(v, j.speed?.[1] ?? v)]; } });
@@ -2598,9 +2658,26 @@ function renderGoal() {
   slider(jet, '...up to', { min: 0.1, max: 1.5, step: 0.02, get: () => j.size?.[1] ?? 0.55, set: (v) => { j.size = [Math.min(v, j.size?.[0] ?? v), v]; } });
   slider(jet, 'brightness', { min: 0, max: 4, step: 0.05, get: () => j.glow ?? 1, set: (v) => { j.glow = v; },
     title: 'Times the ball\u2019s own colour-at-glow.' });
+  // --- THE SQUEEZE --------------------------------------------------------------
+  const squeeze = card(cols, 'sv-wb-imp', 'Squeezing out of the opening',
+    'The cloud fired down the corridor is wider than the mouth it has to leave by. Left to itself it passes straight through itself and arrives as a thin stream \u2014 colliding the lobes makes the mass jam at the opening and squirt out of it.');
+  toggle(squeeze, 'the lobes collide with each other', () => j.collide !== false, (v) => { j.collide = v; });
+  slider(squeeze, 'how hard they push apart', { min: 0, max: 400, step: 5, dp: 0, get: () => j.collidePush ?? 90, set: (v) => { j.collidePush = v; },
+    title: 'u/s\u00b2 at full overlap, falling to nothing as they part.' });
+  slider(squeeze, 'body radius', { min: 0.2, max: 4, step: 0.05, get: () => j.bodyRadius ?? 1.35, set: (v) => { j.bodyRadius = v; },
+    title: 'What a lobe is worth as a body, in multiples of its own splat size. The drawn goo surface is wider than the splat that seeds it, so this is also what the LIPS hold it back by \u2014 what fits between two lobes is what fits between the rocks.' });
+  slider(squeeze, 'kick out of the mouth', { min: 0, max: 120, step: 1, dp: 0, get: () => j.burstOut ?? 26, set: (v) => { j.burstOut = v; },
+    title: 'u/s added along the way out, once, on the frame a lobe finally clears the face \u2014 so the jet leaves the opening with a bang rather than merely stopping being pushed.' });
   const status = document.createElement('div');
   status.className = 'sv-wb-none';
-  status.textContent = `${goalJetState.fired} fired this session`;
+  // WHERE IT WAS ACTUALLY BORN. Both birth sliders are requests the tunnel is
+  // allowed to refuse — past the goal line and off the screen come first, and
+  // what is left over is the band. Say so, because a slider that has silently
+  // stopped moving anything is worse than one that is not there.
+  const b = goalJetState.born;
+  status.textContent = b.to > 0
+    ? `${goalJetState.fired} fired this session — last born ${b.from.toFixed(1)}\u2013${b.to.toFixed(1)} past the face${b.squeezed ? `, squeezed: the tunnel had ${b.room.toFixed(1)} behind the screen's edge and the band asked for ${b.want.toFixed(1)}` : ''}`
+    : `${goalJetState.fired} fired this session`;
   jet.appendChild(status);
 
   // --- THE SURFACE ------------------------------------------------------------

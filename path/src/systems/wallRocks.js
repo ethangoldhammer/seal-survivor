@@ -157,6 +157,8 @@ function goalMouth() {
     glow: Math.max(0, g.glow ?? 3), spill: Math.max(0, g.spill ?? 6), feather: Math.max(0.05, Math.min(1, g.feather ?? 0.55)),
     noise: g.noise ?? {},
     swim: g.swim ?? {},
+    // The whole block, for the knobs read straight off it (applyGlowThrow).
+    cfg: g,
     scored: g.scored ?? {},
     colors: goalColors(),
     // THE CORRIDOR IS OPEN — see the tunnel block in build(). The band runs
@@ -204,6 +206,13 @@ function goalQuad(mouth, faceX, side) {
 function applyGoalShape(u, q, side, mouth) {
   u.uSide.value = side;
   u.uFaceX.value = q.faceX;
+  // THE SOURCE PLANE, for the light's throw: the tunnel's BACK, not the
+  // quad's far end. The quad runs a whole camera reach past the back so it
+  // has no visible edge, and anchoring the decay on that would spend most of
+  // it off the frame — the corridor you can actually see would be flat at
+  // some fraction, which is the thing the throw exists to stop. The slab has
+  // no throw and so has no uniform to write.
+  if (u.uThrowFrom) u.uThrowFrom.value = q.faceX + side * mouth.tunnel;
   u.uEndX.value = q.endX;
   u.uMidY.value = q.midY;
   u.uHalfH.value = q.halfH;
@@ -388,6 +397,17 @@ function scoredMix(mouth, side) {
   return Math.max(0, 1 - (t - rise - hold) / fall);
 }
 
+/**
+ * How lit a mouth's scored flash is right now, 0..1 — the same envelope the
+ * lights are painted from, for anything that needs to know rather than to
+ * draw. The replay reads it (systems/versus.js): the flash is cleared while
+ * the rewound footage plays and fired again at the beat the ball goes in, and
+ * "is it lit" is the only honest way to test that from outside.
+ */
+export function goalScoredMix(side) {
+  return scoredMix(goalMouth() ?? {}, side < 0 ? -1 : 1);
+}
+
 const _flashColor = new THREE.Color();
 
 /**
@@ -434,6 +454,7 @@ export function refreshGoalGlow() {
     fitGoalQuad(mesh, q);
     applyGlowNoise(u, mouth.noise);
     applyGlowSwim(u, mouth.swim);
+    applyGlowThrow(u, mouth.cfg);
   }
   paintGoalColors(mouth);
   return goalGlows.length;
@@ -447,6 +468,15 @@ function applyGlowNoise(u, n = {}) {
   u.uNoiseSpeed.value = n.speed ?? 0.35;
   u.uNoiseDrift.value.set(n.driftX ?? 0.6, n.driftY ?? 0.25);
   u.uNoiseContrast.value = Math.max(0.05, n.contrast ?? 1.4);
+}
+
+/** The throw down the tunnel, and what the ball does where it overlaps. */
+function applyGlowThrow(u, g = {}) {
+  const want = g.tunnelFalloff;
+  u.uThrow.value = want == null ? 1 : Math.max(0.001, Math.min(1, want));
+  const b = g.ball ?? {};
+  u.uBallOver.value = b.enabled === false ? 0 : Math.max(0, b.overdrive ?? 2.2);
+  u.uBallBoil.value = b.enabled === false ? 0 : Math.max(0, b.boil ?? 6);
 }
 
 /** ...and the seals' block — how hard a swimmer and a burst may stir it. */
@@ -477,32 +507,58 @@ function applyGlowSwim(u, s = {}) {
 // ---------------------------------------------------------------------------
 
 const SWIMMERS = 2;
+const _swimColor = new THREE.Color();
 const PULSES = 4;
-const swimmers = Array.from({ length: SWIMMERS }, () => ({ x: 0, y: 0, vx: 0, vy: 0, reach: 0, speed: 0 }));
+const swimmers = Array.from({ length: SWIMMERS }, () => ({ x: 0, y: 0, vx: 0, vy: 0, reach: 0, speed: 0, r: 0, g: 0, b: 0, tint: 0 }));
+// The ball, if it is in a light at all. `amount` is how much of it overlaps —
+// versus.js's business, because it is the only module that has a ball.
+const ballStir = { x: 0, y: 0, reach: 0, amount: 0 };
 const pulses = Array.from({ length: PULSES }, () => ({ x: 0, y: 0, t0: -1e9, strength: 0 }));
 let pulseNext = 0;
 
 /**
- * Where the seals are this frame — an array of up to two { x, y, vx, vy }, or
- * an empty one for none. `reach` per swimmer comes off the tuning; a null or
- * missing entry parks that slot at reach 0, which the shader skips.
+ * Where the seals are this frame — an array of up to two
+ * { x, y, vx, vy, color, tint }, or an empty one for none. `reach` per swimmer
+ * comes off the tuning; a null or missing entry parks that slot at reach 0,
+ * which the shader skips.
+ *
+ * `color` is that seal's team colour and `tint` how far it has taken the light
+ * over, 0..1 — the caller's business, because only versus.js knows whose goal
+ * a seal is standing in. See THE COLOUR CHANGES HANDS in the shader.
  */
 export function setGoalSwimmers(list = []) {
   const s = CONFIG.versus?.goal?.swim ?? {};
   const reach = s.enabled === false ? 0 : Math.max(0, s.reach ?? 28);
+  const tintCap = s.enabled === false ? 0 : Math.max(0, Math.min(1, s.tint ?? 0.9));
   for (let i = 0; i < SWIMMERS; i++) {
     const src = list[i];
     const w = swimmers[i];
-    if (!src) { w.reach = 0; w.speed = 0; continue; }
+    if (!src) { w.reach = 0; w.speed = 0; w.tint = 0; continue; }
     w.x = src.x ?? 0; w.y = src.y ?? 0;
     w.vx = src.vx ?? 0; w.vy = src.vy ?? 0;
     w.reach = reach;
+    if (src.color != null) { _swimColor.set(src.color); w.r = _swimColor.r; w.g = _swimColor.g; w.b = _swimColor.b; }
+    w.tint = Math.max(0, Math.min(1, src.tint ?? 0)) * tintCap;
     // Normalised on the burst threshold and capped at 1, so `churn` is a
     // number in the field's own units rather than one that has to be retuned
     // every time a seal's top speed moves.
     w.speed = Math.min(1, Math.hypot(w.vx, w.vy) / Math.max(1, s.burst ?? 46));
   }
   return swimmers;
+}
+
+/**
+ * The ball, where it overlaps a goal's light. `amount` 0..1 is how much of it
+ * is inside — pass 0 (or nothing) for a ball out in the water, which parks it.
+ * `reach` comes off the tuning.
+ */
+export function setGoalBall(ball = null) {
+  const b = CONFIG.versus?.goal?.ball ?? {};
+  const amount = ball ? Math.max(0, Math.min(1, ball.amount ?? 0)) : 0;
+  ballStir.amount = b.enabled === false ? 0 : amount;
+  ballStir.reach = ballStir.amount > 0 ? Math.max(0, b.reach ?? 20) : 0;
+  if (ball) { ballStir.x = ball.x ?? 0; ballStir.y = ball.y ?? 0; }
+  return ballStir;
 }
 
 /**
@@ -519,12 +575,13 @@ export function goalGlowImpulse(x, y, strength = 1) {
 }
 
 /** The live stir, for the harnesses and the F panel's readouts. */
-export const goalGlowState = { swimmers, pulses, scored: scoredFlash, get clock() { return glowClock; } };
+export const goalGlowState = { swimmers, pulses, ball: ballStir, scored: scoredFlash, get clock() { return glowClock; } };
 
 /** Everything the seals put in the field, gone — a match starting or ending. */
 export function resetGoalStir() {
-  for (const w of swimmers) { w.reach = 0; w.speed = 0; }
+  for (const w of swimmers) { w.reach = 0; w.speed = 0; w.tint = 0; }
   for (const p of pulses) { p.strength = 0; p.t0 = -1e9; }
+  ballStir.reach = 0; ballStir.amount = 0;
   pulseNext = 0;
   scoredFlash.team = -1;
   scoredFlash.t = 0;
@@ -546,11 +603,13 @@ export function tickGoalGlow(dt) {
       const w = swimmers[i];
       u.uSwim.value[i].set(w.x, w.y, w.reach, w.speed);
       u.uSwimVel.value[i].set(w.vx, w.vy);
+      u.uSwimTint.value[i].set(w.r, w.g, w.b, w.tint);
     }
     for (let i = 0; i < PULSES; i++) {
       const p = pulses[i];
       u.uPulse.value[i].set(p.x, p.y, p.t0, p.strength);
     }
+    u.uBall.value.set(ballStir.x, ballStir.y, ballStir.reach, ballStir.amount);
   }
   // The flash is a colour and an overdrive, and both move every frame it is
   // running — one repaint while it is, none at all when it is not.
@@ -647,6 +706,44 @@ export function goalBackMaterial(color, shade, side = 1) {
   });
 }
 
+// THE THROW DOWN THE TUNNEL — the light's own, and NOT the slab's.
+//
+// The corridor used to be flat: the same brightness at the tunnel's back as at
+// the mouth, which reads as a lit surface rather than as light coming from
+// somewhere. This is the somewhere — the far end of the quad, a camera reach
+// past the tunnel's back and therefore off any frame a match can put out
+// there — with ordinary exponential absorption on the way toward the water.
+//
+// PARAMETERISED ON WHAT SURVIVES, not on an absorption coefficient. `uThrow`
+// is the share of the source still there at the DRAWN FACE, so it means the
+// same thing when the tunnel is deepened or the camera's reach retuned; an
+// e-folding length in world units would mean a different picture every time
+// either moved. 1 is flat, which is exactly what shipped before this.
+//
+// It multiplies goalFalloff rather than living inside it, because the SLAB
+// behind the light shares that function and must not fade: it is the only
+// thing stopping the open corridor being a window onto the seabed and the
+// sky, and an exponential on its alpha would open that window at the mouth,
+// which is the one place the camera is pointed.
+const GOAL_THROW_GLSL = `
+  uniform float uThrow;
+  uniform float uThrowFrom;
+  float goalThrow(vec2 world) {
+    if (uThrow >= 0.999) return 1.0;
+    float span = abs(uThrowFrom - uFaceX);
+    if (span <= 1e-4) return 1.0;
+    // Zero at the source plane and one corridor's length by the face. Behind
+    // the source it is NEGATIVE and clamps to zero, so everything out beyond
+    // the tunnel's back — all of it off the frame — sits at full brightness:
+    // that is the light coming from somewhere rather than starting somewhere.
+    float d = (world.x - uThrowFrom) * (-uSide);
+    // Clamped half a corridor past the face so the spill into the water keeps
+    // dimming and then stops — pow of a big exponent is a denormal, and the
+    // rim is already faded to nothing by goalFalloff out there anyway.
+    return pow(max(1e-4, uThrow), clamp(d / span, 0.0, 1.5));
+  }
+`;
+
 export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swim = {}) {
   const mat = new THREE.ShaderMaterial({
     uniforms: {
@@ -667,6 +764,8 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uSwimOn: { value: 1 },
       uSwim: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector4()) },
       uSwimVel: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector2()) },
+      // rgb is that seal's team colour, w how far it has taken the light over.
+      uSwimTint: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector4()) },
       uSwimPush: { value: 3.4 },
       uSwimSwirl: { value: 1.2 },
       uSwimDrag: { value: 0.05 },
@@ -679,6 +778,13 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uPulseWidth: { value: 5 },
       uPulsePush: { value: 5 },
       uPulseLight: { value: 0.5 },
+      uThrow: { value: 1 },
+      uThrowFrom: { value: 0 },
+      // THE BALL IN THE LIGHT — xy where it is, z how far it reaches, w how
+      // much of it is actually inside the light (versus.js works that out).
+      uBall: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uBallOver: { value: 2.2 },
+      uBallBoil: { value: 6 },
     },
     vertexShader: `
       varying vec2 vUv;
@@ -704,6 +810,7 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uniform float uSwimOn;
       uniform vec4 uSwim[${SWIMMERS}];
       uniform vec2 uSwimVel[${SWIMMERS}];
+      uniform vec4 uSwimTint[${SWIMMERS}];
       uniform float uSwimPush;
       uniform float uSwimSwirl;
       uniform float uSwimDrag;
@@ -714,9 +821,13 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uniform float uPulseWidth;
       uniform float uPulsePush;
       uniform float uPulseLight;
+      uniform vec4 uBall;
+      uniform float uBallOver;
+      uniform float uBallBoil;
       varying vec2 vUv;
       varying vec2 vWorld;
       ${GOAL_FALLOFF_GLSL}
+      ${GOAL_THROW_GLSL}
       ${NOISE_FIELD_GLSL}
       void main() {
         // See GOAL_FALLOFF_GLSL: 1 across the mouth and the corridor, falling
@@ -724,67 +835,95 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
         // so the tail that bleeds into the water is the softer half of it.
         float a = goalFalloff(vWorld);
         a *= a;
-        // THE NOISE — see CONFIG.versus.goal.noise. Three octaves over world
-        // units, sliding by the drift and churning along the third axis by
-        // the speed, each side on its own patch of the field. Brought to
-        // 0..1, given its contrast about the middle, and mixed in by amount:
-        // a trough at amount 1 is dark, a crest is the smooth light.
-        if (uNoiseOn > 0.5) {
-          // THE SEALS AND THEIR BURSTS — see CONFIG.versus.goal.swim. Three
-          // things come out of this block and each goes somewhere different:
-          // warp displaces where the field is sampled (the distortion),
-          // stir slides the sample along the field's third axis so the
-          // pattern under a swimmer boils while the rest of it holds, and
-          // lift adds light where a ring is passing.
-          //
-          // stir is an OFFSET, never a multiplier on uTime: a churn scaled
-          // by the clock would grow its own spatial gradient without bound
-          // and, an hour into a match, alias the field into hash next to a
-          // seal. An offset that rides with the swimmer churns because the
-          // swimmer moves, which is the thing being described anyway.
-          vec2 warp = vec2(0.0);
-          float stir = 0.0;
-          float lift = 0.0;
-          if (uSwimOn > 0.5) {
-            for (int i = 0; i < ${SWIMMERS}; i++) {
-              float reach = uSwim[i].z;
-              if (reach <= 0.0) continue;
-              vec2 d = vWorld - uSwim[i].xy;
-              float r = length(d);
-              float f = 1.0 - smoothstep(0.0, reach, r);
-              if (f <= 0.0) continue;
-              f *= f;
-              vec2 dir = r > 1e-4 ? d / r : vec2(1.0, 0.0);
-              // The shove is TURNED as it goes: straight out is a bulge, and
-              // a seal leaves a curl behind it rather than a bubble.
-              float ang = uSwimSwirl * f;
-              float cs = cos(ang); float sn = sin(ang);
-              warp += vec2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs) * uSwimPush * f;
-              warp -= uSwimVel[i] * uSwimDrag * f;
-              stir += uSwimChurn * f * uSwim[i].w;
-            }
-            for (int i = 0; i < ${PULSES}; i++) {
-              if (uPulse[i].w <= 0.0) continue;
-              float age = uTime - uPulse[i].z;
-              if (age < 0.0 || age > uPulseLife) continue;
-              vec2 d = vWorld - uPulse[i].xy;
-              float r = length(d);
-              // A gaussian band at the ring's radius, thinning out over its
-              // life: the front is where the field is shoved and lit.
-              float band = (r - age * uPulseSpeed) / uPulseWidth;
-              float k = exp(-band * band) * uPulse[i].w * (1.0 - age / uPulseLife);
-              warp += (r > 1e-4 ? d / r : vec2(1.0, 0.0)) * uPulsePush * k;
-              lift += uPulseLight * k;
-            }
+        // THE SEALS AND THEIR BURSTS — see CONFIG.versus.goal.swim. Four
+        // things come out of this block and each goes somewhere different:
+        // warp displaces where the field is sampled (the distortion), stir
+        // slides the sample along the field's third axis so the pattern under
+        // a swimmer boils while the rest of it holds, lift adds light where a
+        // ring is passing, and tint is the colour the seal is bringing with
+        // it. The first three are the noise's business and do nothing with it
+        // switched off; the tint is the LIGHT'S colour, so it is worked out
+        // here, outside that gate, and still lands on a smooth light.
+        //
+        // stir is an OFFSET, never a multiplier on uTime: a churn scaled by
+        // the clock would grow its own spatial gradient without bound and, an
+        // hour into a match, alias the field into hash next to a seal. An
+        // offset that rides with the swimmer churns because the swimmer
+        // moves, which is the thing being described anyway.
+        vec2 warp = vec2(0.0);
+        float stir = 0.0;
+        float lift = 0.0;
+        vec3 tintSum = vec3(0.0);
+        float tintW = 0.0;
+        // THE BALL IN THE LIGHT. Not a swimmer: it brings no colour and it
+        // does not curl the field. What it does is OVERDRIVE and BOIL — the
+        // light blazes past its own overdrive where the ball is and the
+        // pattern there churns hard, so a ball arriving in the mouth is the
+        // goal lighting up around it rather than a shape passing in front of
+        // it. Squared falloff like a seal's, times how much of the ball is
+        // actually inside the light at all (uBall.w, worked out in versus.js
+        // — this module has never heard of a ball).
+        float ballF = 0.0;
+        if (uBall.z > 0.0 && uBall.w > 0.0) {
+          ballF = 1.0 - smoothstep(0.0, uBall.z, length(vWorld - uBall.xy));
+          ballF *= ballF * uBall.w;
+        }
+        if (uSwimOn > 0.5) {
+          for (int i = 0; i < ${SWIMMERS}; i++) {
+            float reach = uSwim[i].z;
+            if (reach <= 0.0) continue;
+            vec2 d = vWorld - uSwim[i].xy;
+            float r = length(d);
+            float f = 1.0 - smoothstep(0.0, reach, r);
+            if (f <= 0.0) continue;
+            f *= f;
+            vec2 dir = r > 1e-4 ? d / r : vec2(1.0, 0.0);
+            // The shove is TURNED as it goes: straight out is a bulge, and
+            // a seal leaves a curl behind it rather than a bubble.
+            float ang = uSwimSwirl * f;
+            float cs = cos(ang); float sn = sin(ang);
+            warp += vec2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs) * uSwimPush * f;
+            warp -= uSwimVel[i] * uSwimDrag * f;
+            stir += uSwimChurn * f * uSwim[i].w;
+            // THE COLOUR CHANGES HANDS. A seal in the goal it is attacking
+            // brings its own team's colour in with it, strongest where the
+            // seal is and deeper the further in it swims (versus.js works out
+            // how far — it is the only module that knows whose goal this is).
+            // A weighted mean rather than a sum, so two seals in one mouth
+            // meet in the middle instead of stacking past white.
+            float tw = uSwimTint[i].a * f;
+            tintSum += uSwimTint[i].rgb * tw;
+            tintW += tw;
           }
+          for (int i = 0; i < ${PULSES}; i++) {
+            if (uPulse[i].w <= 0.0) continue;
+            float age = uTime - uPulse[i].z;
+            if (age < 0.0 || age > uPulseLife) continue;
+            vec2 d = vWorld - uPulse[i].xy;
+            float r = length(d);
+            // A gaussian band at the ring's radius, thinning out over its
+            // life: the front is where the field is shoved and lit.
+            float band = (r - age * uPulseSpeed) / uPulseWidth;
+            float k = exp(-band * band) * uPulse[i].w * (1.0 - age / uPulseLife);
+            warp += (r > 1e-4 ? d / r : vec2(1.0, 0.0)) * uPulsePush * k;
+            lift += uPulseLight * k;
+          }
+        }
+        if (uNoiseOn > 0.5) {
           vec2 q = (vWorld + warp + uNoiseDrift * uTime) / uNoiseScale;
-          float n = noiseFbm(vec3(q, uTime * uNoiseSpeed + stir + uSide * 17.3));
+          float n = noiseFbm(vec3(q, uTime * uNoiseSpeed + stir + uBallBoil * ballF + uSide * 17.3));
           n = clamp(n * 0.5 + 0.5, 0.0, 1.0);
           n = clamp(0.5 + (n - 0.5) * uNoiseContrast, 0.0, 1.0);
           n = clamp(n + lift, 0.0, 1.0);
           a *= mix(1.0, n, uNoiseAmount);
         }
-        gl_FragColor = vec4(uColor * uGlow * a, a);
+        vec3 col = uColor;
+        if (tintW > 0.0) col = mix(uColor, tintSum / tintW, min(1.0, tintW));
+        // ...and the throw: the source is the far end, off the frame, and
+        // this is what is left of it here. On the COLOUR and not on the
+        // alpha, so the light dims down the corridor without the quad
+        // becoming a hole — see GOAL_THROW_GLSL.
+        gl_FragColor = vec4(col * uGlow * (1.0 + uBallOver * ballF) * goalThrow(vWorld) * a, a);
       }
     `,
     transparent: true,
@@ -795,6 +934,7 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
   });
   applyGlowNoise(mat.uniforms, noise);
   applyGlowSwim(mat.uniforms, swim);
+  applyGlowThrow(mat.uniforms, CONFIG.versus?.goal ?? {});
   mat.uniforms.uFeather.value = feather;
   mat.uniforms.uTime.value = glowClock;
   return mat;
@@ -1111,10 +1251,21 @@ export function createWallRocks(scene) {
         // sorts by renderOrder BEFORE depth — so at -2 this drew first and
         // the water fill (renderOrder 0, alpha 1 below the wave) painted
         // straight over it: no light anywhere water was, which was
-        // everywhere. Ordered with the water, the depth sort puts the fill
-        // (-5.4) under the light (-3.5); the boulders are opaque and wrote
-        // depth already, so they still occlude it above and below the lips.
-        plane.renderOrder = 0;
+        // everywhere. The boulders are opaque and wrote depth already, so
+        // they still occlude it above and below the lips.
+        //
+        // AND IT IS ABOVE THE WATER, not level with it. Sharing renderOrder 0
+        // with the fill left the two of them to three's depth sort, which is
+        // by distance FROM THE CAMERA — and that is only a stable answer while
+        // the camera is the flat one. The replay's camera swings off the plane
+        // and around the pitch: from the far side of the arena the mouth is
+        // further away than the middle of the fill, so the light was drawn
+        // first and the water painted over it, and the goal lights went out
+        // for exactly the shots that are pointed at the goal. At 1 the order
+        // is the same from anywhere. It costs nothing to be sure of: the light
+        // is ADDITIVE, so drawing it last cannot hide anything — it only adds
+        // its own glow to whatever is already there.
+        plane.renderOrder = 1;
         group.add(plane);
         holes.push(plane);
         goalGlows.push({ mesh: plane, side });

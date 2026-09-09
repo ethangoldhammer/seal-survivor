@@ -32,15 +32,24 @@ import { updateStrike } from '../path/src/systems/strike.js';
 import { versusHooks } from '../path/src/systems/versus.js';
 import {
   versusState, ball, p2, startVersus, resetVersus, updateVersus, updateVersusClock, stirGoalLights,
-  renderVersus, resetBall, dentBall, sealContact, p2Pad, readP2Input, versusFocus, rimRadius,
+  renderVersus, resetBall, dentBall, sealContact, p2Pad, readP2Input, versusFocus, rimRadius, rimAngle, solveBallSurface,
   versusCameraGoal, updateVersusCamera, strikeBallFrom, impactDent, versusBubblePips, driveOutline,
   versusOutOfAir, sealVulnerable,
   kickoffSpot, enterKickoff,
-  ballHitRadius, updatePinch, creditGoal, formatClock, jostle, rimRadiusAt,
+  ballHitRadius, ballHitRadiusAt, ballContactReach, ballRestRadius, versusSeals, updatePinch,
+  matchSeals, sealAt, seatOf, sealPos, setMatchRoster, matchRoster, bodyCheck, creditGoal, formatClock, jostle, rimRadiusAt,
   contestMargin, contestMass, returnCap, returnFloor, ballSpeedCap, sealCollide,
   replayState, anyButtonHeld, versusCameraState, replayRenderCamera, cameraRecentred,
 } from '../path/src/systems/versus.js';
+import { readFileSync } from 'node:fs';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { ASSETS } from '../path/src/assets.js';
+import { ASSET_ROWS } from '../path/src/assetTable.js';
 import { poolState, targetsInFrame } from '../path/src/systems/replayCams.js';
+import { goalScoredMix } from '../path/src/systems/wallRocks.js';
+import { teamOfSeat, sameTeam, seatIsCpu } from '../path/src/systems/sealRoster.js';
+import { goalColors } from '../path/src/systems/ballLook.js';
+import { ballSplats, gooDensity } from '../path/src/systems/ballShape.js';
 import { cineLens } from '../path/src/systems/cineCamera.js';
 import { screenEdgeX, mouthHalfHeight, tunnelDepth, goalHolesInstalled, rockX, mouthY, goalLineX, goalLineDepth, cameraReach } from '../path/src/systems/versusGoal.js';
 import { clampToArena } from '../path/src/arena.js';
@@ -54,11 +63,11 @@ import { updateBot, botState, resetBot, intoOwnGoal } from '../path/src/systems/
 import { fireGoalJet, updateGoalJets, resetGoalJets, goalJetState, goalJets } from '../path/src/systems/goalJet.js';
 import { drivenCapacity as drivenCap } from '../path/src/entities/particles.js';
 import { celebrationState, celebrationSpin, resetCelebration } from '../path/src/systems/celebrate.js';
-import { onFeedback } from '../path/src/systems/feedback.js';
+import { onFeedback, feedbackState } from '../path/src/systems/feedback.js';
 import { bubbleOrbs, spawnBubbleOrb } from '../path/src/entities/pickups.js';
 import { pipValue, pipCount } from '../path/src/systems/strike.js';
 import { uiText } from '../path/src/uiTextTable.js';
-import { ballTint, ballLookState } from '../path/src/systems/ballLook.js';
+import { ballTint, ballLookState, ballCredit, resetBallLook, setBallBody, updateBallLook } from '../path/src/systems/ballLook.js';
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -101,7 +110,35 @@ function pad(index, { lx = 0, ly = 0, rx = 0, ry = 0, strike = false } = {}) {
 
 // Step the whole frame the way main.js does: the shutter on the wall clock,
 // gameplay on the scaled one.
+// A SEAL IN THE WATER IS POINTED WHERE IT IS GOING, and the ball's contact
+// asks the body which way its nose is (sealHeading, off mesh.rotation.z). In
+// the game entities/player.js's poseBody writes that every frame; here
+// nothing does, so a harness seal sat at rotation 0 — which the art's +Y
+// forward makes NOSE-UP — and every head-on test in this file measured a
+// flank. Same convention as poseBody: forward is +Y, so subtract a quarter
+// turn from the heading.
+function poseFromSwim(seal) {
+  const v = seal?.velocity;
+  if (!seal?.mesh || !v) return;
+  if (Math.hypot(v.x, v.y) < 1e-4) return;
+  seal.mesh.rotation.z = Math.atan2(v.y, v.x) - Math.PI / 2;
+}
+
+// HOW FAR OFF THE BALL A SEAL FIRST TOUCHES IT, asked for at the moment of
+// each placement rather than cached at the top of a block. It MOVES during a
+// test now: the drawn edge is the hitbox and the edge dents where it was last
+// struck, so a rest-value reach put the second press of a sequence just out
+// of contact. Default angle is the ball's left, the side most of this file
+// swims in from.
+// ...RE-SOLVED FIRST. The drawn edge is only recomputed inside a frame, so a
+// test that has just set ball.vx by hand is still holding the surface of the
+// ball as it was MOVING — the velocity stretch is part of the silhouette, and
+// a stopped ball measured off a stale solve reads a unit and a half too wide.
+const ballReach = (angle = Math.PI) => { solveBallSurface(); return ballContactReach(angle); };
+
 function frame(pads = noPads, raw = dt) {
+  poseFromSwim(player);
+  poseFromSwim(p2);
   const scale = updateVersusClock(raw, pads);
   updateVersus(raw * scale, pads);
   return scale;
@@ -221,8 +258,7 @@ section('The kickoff: a count on the wall clock, everyone held, then the whistle
 section('A dash shoves the ball once, along the dash');
 {
   resetBall();
-  const reach = ball.r + V.ball.contactRadius;
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   player.velocity.set(20, 0);
   strikeState.active = true;
   strikeState.dashDir.x = 1;
@@ -234,14 +270,26 @@ section('A dash shoves the ball once, along the dash');
   check('at full power it is the max impulse plus the carry, under the cap', v1 >= Math.min(V.ball.strikeImpulseMax * 0.9, V.ball.maxSpeed) - 0.05 && v1 <= V.ball.maxSpeed + 0.05, `vx=${v1.toFixed(1)} (cap ${V.ball.maxSpeed})`);
   check('it did not go sideways', Math.abs(ball.vy) < 1, `vy=${ball.vy.toFixed(2)}`);
   // Keep the seal on it, still dashing: no second shove.
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   frame();
   check('the same dash does not shove twice', ball.vx <= v1, `vx ${v1.toFixed(1)} → ${ball.vx.toFixed(1)}`);
   strikeState.active = false;
-  frame();
+  // OFF IT AND LET THE RIM RING DOWN before the next press. The drawn edge is
+  // the hitbox, so a body still wobbling from the last strike is half a unit
+  // narrower on the side the seal is placed against — and a placement
+  // measured off a rest radius then lands just outside contact.
+  player.mesh.position.set(-30, midWater(), 0);
+  player.velocity.set(0, 0);
+  settle(0.6);
   strikeState.active = true;
+  // ...and swimming its dash again. The strike above recoiled the seal to
+  // -40 u/s and a dash is what its velocity SAYS it is: the body points where
+  // it is going (poseBody), so a seal left travelling backwards would meet the
+  // ball tail-first — a real answer to an unreal state.
+  player.velocity.set(20, 0);
   ball.vx = 0; // still, so the ball is where the seal is put on the frame of contact
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  ball.vy = 0;
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   const before = ball.vx;
   frame();
   check('a new dash shoves again', ball.vx > before + 30, `vx ${before.toFixed(1)} → ${ball.vx.toFixed(1)}`);
@@ -297,8 +345,7 @@ section('The rim dents where it is hit, ripples round, and rings down');
 section('A swimming seal nudges it; a wall bounces it; the mouth lets it through');
 {
   resetBall();
-  const reach = ball.r + V.ball.contactRadius;
-  sealContact(1, { x: ball.x - reach + 0.3, y: ball.y }, { x: 12, y: 0 }, false, null, 0);
+  sealContact(1, { x: ball.x - ballReach() + 0.3, y: ball.y }, { x: 12, y: 0 }, false, null, 0);
   check('a bump moves the ball along the closing speed', ball.vx > 5 && ball.vx < 30, `vx=${ball.vx.toFixed(1)}`);
   check('the ball is pushed out of the seal', ball.x > 0.2, `x=${ball.x.toFixed(2)}`);
 
@@ -394,9 +441,9 @@ section('A swimming seal nudges it; a wall bounces it; the mouth lets it through
   check('the ball is taken out of play', !ball.live);
   check('crossing the wall\'s line was NOT yet the goal', atWall && atWall.live && atWall.phase === 'play');
   const line = goalLineX(-1);
-  check('the goal was called once the ball\'s near side was past the line', versusState.lastGoal && versusState.lastGoal.x + ball.r <= line + 1e-6, `x=${versusState.lastGoal?.x.toFixed(2)}, near side ${(versusState.lastGoal?.x + ball.r).toFixed(2)} vs line ${line.toFixed(2)}`);
-  check('...and not before it', versusState.lastGoal && versusState.lastGoal.x + ball.r > line - ball.r, `near side ${(versusState.lastGoal?.x + ball.r).toFixed(2)} vs line ${line.toFixed(2)}`);
-  check('the line is ON SCREEN: inside the camera\'s reach into the goal', goalLineDepth() + ball.r < cameraReach() && cameraReach() <= tunnelDepth(), `line ${goalLineDepth().toFixed(1)} + ball ${ball.r} vs reach ${cameraReach().toFixed(1)} of tunnel ${tunnelDepth()}`);
+  check('the goal was called once the ball\'s near side was past the line', versusState.lastGoal && versusState.lastGoal.x + ballRestRadius() <= line + 1e-6, `x=${versusState.lastGoal?.x.toFixed(2)}, near side ${(versusState.lastGoal?.x + ballRestRadius()).toFixed(2)} vs line ${line.toFixed(2)}`);
+  check('...and not before it', versusState.lastGoal && versusState.lastGoal.x + ballRestRadius() > line - ballRestRadius(), `near side ${(versusState.lastGoal?.x + ballRestRadius()).toFixed(2)} vs line ${line.toFixed(2)}`);
+  check('the line is ON SCREEN: inside the camera\'s reach into the goal', goalLineDepth() + ballRestRadius() < cameraReach() && cameraReach() <= tunnelDepth(), `line ${goalLineDepth().toFixed(1)} + ball ${ballRestRadius().toFixed(2)} vs reach ${cameraReach().toFixed(1)} of tunnel ${tunnelDepth()}`);
   check('the whole ball fits between the line and the tunnel\'s back', goalLineDepth() + ball.r * 2 < tunnelDepth(), `line ${goalLineDepth().toFixed(1)} + ${(ball.r * 2).toFixed(1)} vs tunnel ${tunnelDepth()}`);
   check('the goal fired its impact and its cheer, at the mouth', firedCount('versusGoal') === 1 && firedCount('versusGoalCheer') === 1);
 }
@@ -611,8 +658,7 @@ section('Player 2 IS player 1: the same body, strike, ring and pose code on a se
 section('P2 rams the ball too, and the ball stays in the arena');
 {
   resetBall();
-  const reach = ball.r + V.ball.contactRadius;
-  p2.pos.set(ball.x + reach - 0.4, ball.y, 0);
+  p2.pos.set(ball.x + ballReach() - 0.4, ball.y, 0);
   p2.vel.set(-20, 0);
   p2.active = true; p2.dashTimer = 0.3; p2.dashTimeLeft = 0.3; p2.power = 0.5;
   p2.dashDir.x = -1; p2.dashDir.y = 0;
@@ -672,15 +718,35 @@ section('Pinched against the rock, the ball squeezes and squirts along it');
   // On the floor, a seal above it pressing down and a little to the right:
   // rock under it, seal on top. (The floor rather than a wall so the squirt
   // has nowhere to fall — a wall's squirt runs the ball down into the mouth.)
-  ball.x = 0; ball.y = bounds.bottom + ball.r + 0.1; ball.vx = 0; ball.vy = -4;
-  const reach = ball.r + V.ball.contactRadius;
-  const press = () => { player.mesh.position.set(ball.x + (reach - 0.7) * 0.34, ball.y + (reach - 0.7) * 0.94, 0); player.velocity.set(-5, -14); };
+  const rest = ballRestRadius();
+  ball.x = 0; ball.y = bounds.bottom + rest + 0.1; ball.vx = 0; ball.vy = -4;
+  const press = () => {
+    // Down and a little to the right, on the ball's own drawn edge in that
+    // direction — the reach is not one number any more.
+    const r = ballContactReach(Math.atan2(0.94, 0.34)) - 0.7;
+    player.mesh.position.set(ball.x + r * 0.34, ball.y + r * 0.94, 0);
+    player.velocity.set(-5, -14);
+  };
   strikeState.active = false;
   const x0 = ball.x;
-  for (let i = 0; i < 40; i++) { press(); frame(); }
-  const n4 = Math.round(ball.rim.length / 4);
+  // TWENTY FRAMES, NOT FORTY. The squeeze is at its max inside ten (rate 5/s
+  // to a cap of 0.5) and the ball is squirting along the floor the whole
+  // time. It used to shrink out of the seal's reach and stop being bumped;
+  // now it FLATTENS instead, stays in contact, and is still being shoved —
+  // so by forty frames it has crossed the arena and bounced off the far
+  // wall, and every measurement below is of a ball on the rebound.
+  for (let i = 0; i < 20; i++) { press(); frame(); }
   check('the squeeze builds under the pinch', ball.squeeze > 0.3, `squeeze ${ball.squeeze.toFixed(2)} (max ${P.max})`);
-  check('...and the ball collides SMALLER than it is drawn', ballHitRadius() < ball.r * 0.75 && ball.y < bounds.bottom + ball.r * 0.8, `hit radius ${ballHitRadius().toFixed(2)} of ${ball.r}, y ${ball.y.toFixed(2)} vs floor ${bounds.bottom.toFixed(2)} (a round ball sits at ${(bounds.bottom + ball.r).toFixed(2)})`);
+  // IT FLATTENS RATHER THAN SHRINKING, and it collides as the shape it draws:
+  // the pinch's squash is a cos(2θ) mode, so the body gives along the axis it
+  // is squeezed on and swells across it. The hitbox is the drawn edge, so
+  // this is one measurement of one shape rather than a look and a radius that
+  // have to be checked against each other.
+  const hitUp = ballHitRadiusAt(Math.PI / 2);
+  const hitAcross = ballHitRadiusAt(0);
+  check('...and it collides FLATTER, not smaller — the drawn shape exactly',
+    hitUp < rest - 0.5 && hitAcross > rest + 0.3 && ball.y < bounds.bottom + rest * 0.9,
+    `hit up ${hitUp.toFixed(2)}, across ${hitAcross.toFixed(2)}, rest ${rest.toFixed(2)}; y ${ball.y.toFixed(2)} vs floor ${bounds.bottom.toFixed(2)} (a round ball sits at ${(bounds.bottom + rest).toFixed(2)})`);
   // By WORLD angle: the rim's samples ride round with the spin the seal's
   // friction put on it, so sample n/4 is not the top.
   const up = rimRadiusAt(Math.PI / 2); const across = rimRadiusAt(0);
@@ -688,13 +754,21 @@ section('Pinched against the rock, the ball squeezes and squirts along it');
   check('...and it squirts along the rock, away from the side the seal is on', ball.x < x0 - 2 && ball.vx < -3, `x ${x0.toFixed(1)} → ${ball.x.toFixed(1)}, vx ${ball.vx.toFixed(1)}`);
   // Let go: the seal away, the ball fills back out.
   player.mesh.position.set(-30, gy, 0); player.velocity.set(0, 0);
-  settle(0.6);
-  check('released, it is round again', ball.squeeze === 0 && ballHitRadius() === ball.r, `squeeze ${ball.squeeze.toFixed(3)}`);
+  // AND STOPPED. The drawn edge carries the velocity stretch as well as the
+  // pinch, so a ball still squirting at speed is an ellipse for an honest
+  // reason and would answer this question about the wrong thing.
+  ball.x = 0; ball.y = gy; ball.vx = 0; ball.vy = 0; ball.spin = 0;
+  settle(1.2);
+  check('released, it is round again',
+    ball.squeeze === 0
+      && Math.abs(ballHitRadiusAt(Math.PI / 2) - rest) < rest * 0.06
+      && Math.abs(ballHitRadiusAt(0) - rest) < rest * 0.06,
+    `squeeze ${ball.squeeze.toFixed(3)}, up ${ballHitRadiusAt(Math.PI / 2).toFixed(2)} vs across ${ballHitRadiusAt(0).toFixed(2)} (rest ${rest.toFixed(2)})`);
   // A seal alone, or rock alone, is not a pinch.
   resetBall(); ball.x = 0; ball.y = gy;
   press(); frame(); press(); frame();
   check('a seal alone does not squeeze it', ball.squeeze === 0);
-  resetBall(); ball.x = 0; ball.y = bounds.bottom + ball.r + 0.5; ball.vy = -30;
+  resetBall(); ball.x = 0; ball.y = bounds.bottom + rest + 0.5; ball.vy = -30;
   settle(0.3);
   check('the rock alone does not squeeze it', ball.squeeze === 0);
   player.mesh.position.set(-30, gy, 0);
@@ -798,7 +872,7 @@ section('Where it is hit, and how hard');
   // frame here runs on the shutter's 4% clock.
   versusState.phase = 'play'; versusState.phaseT = 0;
   const im = V.ball.impact;
-  const R = ball.r + V.ball.contactRadius - 0.3;
+  const R = ballContactReach(Math.PI) - 0.3;
   const hitFrom = (angle, dir, speed, power) => {
     resetBall();
     ball.vx = ball.vy = 0;
@@ -884,7 +958,7 @@ section('Every hit squirts goo from the contact point, scaled by how hard');
 {
   versusState.phase = 'play'; versusState.phaseT = 0;
   const F = V.ball.fx;
-  const R = ball.r + V.ball.contactRadius - 0.3;
+  const R = ballContactReach(Math.PI) - 0.3;
   const hitFrom = (speed, power) => {
     resetBall(); ball.vx = ball.vy = 0;
     fired.clear(); versusState.lastImpact = null;
@@ -893,7 +967,7 @@ section('Every hit squirts goo from the contact point, scaled by how hard');
   };
   const soft = hitFrom(8, 0.05);
   check('a strike fires the ball\'s hit event', soft && soft.event === 'versusBallHit' && firedCount('versusBallHit') === 1, soft?.event);
-  check('...from the rim on the side it was struck', soft && Math.abs(soft.x - (ball.x - ball.r)) < 1.5 && Math.abs(soft.y - ball.y) < 0.5, soft ? `at (${soft.x.toFixed(1)},${soft.y.toFixed(1)}), ball (${ball.x.toFixed(1)},${ball.y.toFixed(1)})` : '');
+  check('...from the rim on the side it was struck', soft && Math.abs(soft.x - (ball.x - ballHitRadiusAt(Math.PI))) < 1.5 && Math.abs(soft.y - ball.y) < 0.5, soft ? `at (${soft.x.toFixed(1)},${soft.y.toFixed(1)}), ball (${ball.x.toFixed(1)},${ball.y.toFixed(1)})` : '');
   check('...along the line the ball leaves on', soft && soft.dirX > 0.99 && Math.abs(soft.dirY) < 0.05, soft ? `dir (${soft.dirX.toFixed(2)},${soft.dirY.toFixed(2)})` : '');
   check('...carrying the ball\'s velocity', soft && soft.vx === ball.vx && soft.vy === ball.vy);
   const hard = hitFrom(70, 1);
@@ -912,21 +986,20 @@ section('Every hit squirts goo from the contact point, scaled by how hard');
   player.mesh.position.set(-30, midWater(), 0); p2.pos.set(30, midWater(), 0);
   settle(F.bumpGap + 0.1);
   resetBall(); ball.vx = ball.vy = 0; fired.clear(); versusState.lastImpact = null;
-  const reach = ball.r + V.ball.contactRadius;
-  sealContact(1, { x: ball.x - reach + 0.3, y: ball.y }, { x: 12, y: 0 }, false, null, 0);
+  sealContact(1, { x: ball.x - ballReach() + 0.3, y: ball.y }, { x: 12, y: 0 }, false, null, 0);
   const bump = versusState.lastImpact;
   check('a swimming nudge is a small hit', bump && bump.event === 'versusBallHit' && bump.scale < hard.scale * 0.5, bump ? `scale ${bump.scale.toFixed(2)}` : 'no event');
   resetBall(); ball.vx = ball.vy = 0; fired.clear();
-  sealContact(1, { x: ball.x - reach + 0.3, y: ball.y }, { x: 0.5, y: 0 }, false, null, 0);
+  sealContact(1, { x: ball.x - ballReach() + 0.3, y: ball.y }, { x: 0.5, y: 0 }, false, null, 0);
   check('...and a seal resting against it fires nothing', firedCount('versusBallHit') === 0);
   // ...and a seal DRIBBLING it is one splash every bumpGap, not one a frame.
   resetBall(); fired.clear();
-  for (let i = 0; i < 120; i++) { player.mesh.position.set(ball.x - reach + 0.5, ball.y, 0); player.velocity.set(12, 0); frame(); }
+  for (let i = 0; i < 120; i++) { player.mesh.position.set(ball.x - ballReach() + 0.5, ball.y, 0); player.velocity.set(12, 0); frame(); }
   player.mesh.position.set(-30, midWater(), 0); player.velocity.set(0, 0);
   check('a seal dribbling the ball for two seconds splashes a few times, not a hundred', firedCount('versusBallHit') >= 1 && firedCount('versusBallHit') <= Math.ceil(2 / F.bumpGap) + 1, `${firedCount('versusBallHit')} in 2s (gap ${F.bumpGap}s)`);
   // A ball settling onto the floor under its own buoyancy makes no splash.
   resetBall(); fired.clear();
-  ball.y = bounds.bottom + ball.r + 0.01; ball.vy = -1; ball.vx = 0;
+  ball.y = bounds.bottom + ballRestRadius() + 0.01; ball.vy = -1; ball.vx = 0;
   settle(2);
   check('a ball settling on the floor is silent', firedCount('versusBallWall') === 0, `${firedCount('versusBallWall')} wall events`);
 
@@ -1109,7 +1182,7 @@ section('A cannonball: heavy, pulled down hard out of the water, slow to float')
   check('driven down, it keeps going down', ball.vy < -25, `vy=${ball.vy.toFixed(1)} after 0.3s`);
   let turned = -1;
   for (let t = 0; t < 12; t += dt) { frame(idle); if (ball.vy > 0) { turned = t; break; } if (ball.y <= bounds.bottom + ball.r + 0.01) break; }
-  check('...and only turns up once drag has taken the pace off (or it hits the floor)', turned > 0.8 || ball.y <= bounds.bottom + ball.r + 0.01, `turned at ${turned.toFixed(2)}s`);
+  check('...and only turns up once drag has taken the pace off (or it hits the floor)', turned > 0.8 || ball.y <= bounds.bottom + ballHitRadiusAt(-Math.PI / 2) + 0.01, `turned at ${turned.toFixed(2)}s`);
   // Buoyancy off = no drift.
   const savedLift = V.ball.water.buoyancy;
   V.ball.water.buoyancy = 0;
@@ -1137,8 +1210,7 @@ section('A cannonball: heavy, pulled down hard out of the water, slow to float')
   // contest (the ball was still), so nothing shoves it back. See the contest
   // section for the ball winning.
   resetBall();
-  const reach = ball.r + V.ball.contactRadius;
-  p2.pos.set(ball.x - reach + 0.3, ball.y, 0);
+  p2.pos.set(ball.x - ballReach() + 0.3, ball.y, 0);
   p2.vel.set(12, 0);
   p2.knockX = p2.knockY = 0;
   frame(idle);
@@ -1149,7 +1221,7 @@ section('A cannonball: heavy, pulled down hard out of the water, slow to float')
 
   // Recoil: a full strike throws the striker off the ball and ends its dash.
   resetBall();
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   player.velocity.set(46, 0);
   player.knockX = player.knockY = 0;
   strikeState.active = true; strikeState.power = 1;
@@ -1377,8 +1449,26 @@ section('The goal\'s jet: born off screen, squeezed out of the corridor, tumblin
   const before = drivenCap();
   const jet = fireGoalJet(-1, gy + 2);
   check('a jet fires and claims driven slots', !!jet && jet.parts.length === J.count && drivenCap().free < before.free, `${jet?.parts.length} lobes, reserve ${JSON.stringify(drivenCap())}`);
-  check('every lobe is born inside the tunnel, behind the face', jet.parts.every((p) => p.x <= face - J.born[0] + 1e-6 && p.x >= face - tunnelDepth() - 1e-6), `x from ${Math.max(...jet.parts.map((p) => p.x)).toFixed(1)} to ${Math.min(...jet.parts.map((p) => p.x)).toFixed(1)} (screen edge ${edge.toFixed(1)}, face ${face.toFixed(1)})`);
-  check('...inside the corridor\'s height', jet.parts.every((p) => p.y - p.size >= gy - h - 1e-6 && p.y + p.size <= gy + h + 1e-6));
+  // BORN BEHIND BOTH LINES — the goal line, so no goo is in the corridor
+  // before the ball has scored, and the screen's edge, so no lobe pops into
+  // view. Both derived: neither can be left behind by a retune.
+  const trigger = goalLineX(-1);
+  const nearest = Math.max(...jet.parts.map((p) => p.x));
+  const deepest = Math.min(...jet.parts.map((p) => p.x));
+  const where = `x from ${nearest.toFixed(1)} to ${deepest.toFixed(1)} (line ${trigger.toFixed(1)}, screen edge ${edge.toFixed(1)}, face ${face.toFixed(1)}, back ${(face - tunnelDepth()).toFixed(1)})`;
+  check('every lobe is born past the goal line AND off the screen', nearest <= trigger + 1e-6 && nearest <= edge + 1e-6, where);
+  check('...and none of them inside the tunnel\'s back wall', deepest >= face - tunnelDepth() - 1e-6, where);
+  // The band is as deep as it was asked for, or as deep as the tunnel had
+  // room for — and it says which, so a slider that has stopped moving
+  // anything is visible rather than merely disappointing.
+  const bandWant = Math.min(J.bornSpan, goalJetState.born.room);
+  check('...across the band the tunnel had room for', nearest - deepest > bandWant * 0.6 - 1e-6,
+    `${(nearest - deepest).toFixed(1)} deep; asked for ${J.bornSpan}, the tunnel had ${goalJetState.born.room.toFixed(1)}${goalJetState.born.squeezed ? ' (squeezed)' : ''}`);
+  // A LOBE'S RADIUS IS NOT `size`. `size` is a multiple of the ball goo
+  // group's splat radius, so a lobe of 0.4 is a couple of world units across
+  // — measure the corridor against the body, the way the lips do.
+  const lobeR = (q) => Math.min(h * 0.9, q.size * (CONFIG.fx.goo.groups.ball.radius ?? CONFIG.fx.goo.radius) * (J.bodyRadius ?? 1));
+  check('...inside the corridor\'s height, as bodies and not as splat centres', jet.parts.every((p) => p.y - lobeR(p) >= gy - h - 1e-6 && p.y + lobeR(p) <= gy + h + 1e-6), `widest lobe ${Math.max(...jet.parts.map(lobeR)).toFixed(2)} units in a ${h} half-height`);
   check('...aimed at the water', jet.parts.every((p) => p.vx > 0));
   check('...and released over the stagger, not at once', jet.parts.some((p) => p.age < -0.05) && jet.parts.every((p) => p.age > -J.stagger - 1e-6));
   // Step it on the wall clock and watch every lobe come out of the mouth.
@@ -1397,6 +1487,77 @@ section('The goal\'s jet: born off screen, squeezed out of the corridor, tumblin
   check('every lobe comes out of the mouth', outAt.size === jet.parts.length, `${outAt.size} of ${jet.parts.length}`);
   const exitSpeeds = [...outAt.values()].map((o) => o.speed);
   check('...at speed', Math.min(...exitSpeeds) > 20 && fastest > 40, `exit ${Math.min(...exitSpeeds).toFixed(0)}–${Math.max(...exitSpeeds).toFixed(0)} u/s, fastest ${fastest.toFixed(0)}`);
+  // THE SQUEEZE. Colliding the lobes is what makes the mass jam at the
+  // opening rather than passing through itself — so with it on the cloud is
+  // measurably more spread as it arrives than with it off. Same seed, same
+  // jet, one knob.
+  // THE SQUEEZE. What "collide" buys is that the lobes stop occupying each
+  // other: a cloud fired down a corridor narrower than itself has to sort
+  // itself out to get through the opening. Measured as OVERLAP — pairs
+  // nearer than their two bodies allow — because that is the thing the knob
+  // does; the width of what comes out is downstream of it and moves with the
+  // nozzle and the lips as well.
+  //
+  // THE SAME DRAWS BOTH TIMES. The harness's Math.random is seeded, so two
+  // runs back to back get different birth points and different speeds and
+  // the comparison is between two jets rather than between two settings.
+  // Reset the seed and the only difference left is the knob.
+  const overlapAt = (collide) => {
+    resetGoalJets();
+    seed = 0x5ea1ba11;
+    J.collide = collide;
+    const g2 = fireGoalJet(-1, gy);
+    // The INTEGRAL, not the peak. The worst single frame is the one a batch
+    // is released on, where nothing has had time to push anything anywhere —
+    // it barely moves with the knob and reads as the knob not working. How
+    // long they spend inside each other is the thing colliding them buys.
+    let overFrames = 0;
+    for (let k = 0; k < 240 && goalJets().length; k++) {
+      updateGoalJets(dt);
+      let over = 0;
+      const on = g2.parts.filter((q) => q.slot >= 0 && q.age >= 0);
+      for (let x = 0; x < on.length; x++) {
+        for (let y = x + 1; y < on.length; y++) {
+          const rr = lobeR(on[x]) + lobeR(on[y]);
+          if (Math.hypot(on[x].x - on[y].x, on[x].y - on[y].y) < rr) over++;
+        }
+      }
+      overFrames += over;
+    }
+    resetGoalJets();
+    return overFrames;
+  };
+  const parted = overlapAt(true);
+  const through = overlapAt(false);
+  J.collide = true;
+  seed = 0x5ea1ba11;
+  check('colliding the lobes stops them occupying each other', parted < through * 0.75, `${parted} overlapping pair-frames with them colliding vs ${through} passing through each other`);
+  // ...and the lips hold the lobe's BODY back, not its splat centre: the goo
+  // drawn round a splat is wider than the splat, and a clamp on the centre
+  // lets the picture through the rock.
+  {
+    resetGoalJets();
+    const g3 = fireGoalJet(-1, gy);
+    let bodyBreach = 0;
+    for (let k = 0; k < 300 && goalJets().length; k++) {
+      updateGoalJets(dt);
+      for (const q of g3.parts) {
+        if (q.slot < 0 || q.age < 0 || q.x >= face) continue;
+        const rad = lobeR(q);
+        if (q.y + rad > gy + h + 1e-6 || q.y - rad < gy - h - 1e-6) bodyBreach++;
+      }
+    }
+    check('...and the lips hold the lobe\'s whole body, not its centre', bodyBreach === 0, `${bodyBreach} body breach(es); a lobe is up to ${Math.max(...g3.parts.map(lobeR)).toFixed(2)} units, its splat number ${Math.max(...g3.parts.map((q) => q.size)).toFixed(2)}`);
+    resetGoalJets();
+  }
+  // THE KICK OUT OF THE MOUTH is an edge: once per lobe, on the crossing.
+  {
+    resetGoalJets();
+    const g4 = fireGoalJet(-1, gy);
+    for (let k = 0; k < 300 && goalJets().length; k++) updateGoalJets(dt);
+    check('every lobe was kicked on its way out, once', g4.parts.every((q) => q.kicked === true), `${g4.parts.filter((q) => q.kicked).length} of ${g4.parts.length}`);
+    resetGoalJets();
+  }
   check('...within a second of firing', Math.max(...[...outAt.values()].map((o) => o.t)) < 1, `last out at ${Math.max(...[...outAt.values()].map((o) => o.t)).toFixed(2)}s`);
   check('the jet lives and dies on the wall clock', goalJets().length === 0 && t <= J.life[1] + J.stagger + 0.1, `gone at ${t.toFixed(2)}s`);
   check('...and hands every slot back', drivenCap().free === before.free, JSON.stringify(drivenCap()));
@@ -1428,12 +1589,11 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
   resetBall();
   ball.x = bounds.right - 30; ball.y = midWater();
   p2.pos.set(bounds.left + 10, midWater() - 15, 0); p2.vel.set(0, 0);
-  const reach = ball.r + V.ball.contactRadius;
-  const restX = ball.x - reach - 12;
+  const restX = ball.x - ballReach() - 12;
   player.mesh.position.set(restX, ball.y, 0);
   player.velocity.set(0, 0);
   settle(R.lead + 0.5); // history before the touch, so the lead has frames of THIS setup
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   player.velocity.set(40, 0);
   strikeState.active = true; strikeState.dashDir.x = 1; strikeState.dashDir.y = 0; strikeState.power = 1;
   ball.dashHit[0] = false;
@@ -1522,6 +1682,11 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
   let wall = 0;
   let celebrateSeqAt = celebrationState.seq;
   let celebratedOn = null;
+  let noCelebrationBefore = true;
+  // The flat camera's hard cuts BEFORE the celebration beat. The celebration
+  // is entered on a deliberate cut of its own (advanceBeats), so a bare total
+  // no longer says anything about how the wide shot was opened out.
+  let cutsBeforeCelebration = -1;
   // The pool through the replay: shots on their beats, targets in frame,
   // switches, the push-in, the defocus.
   const shotsUsed = new Set([poolState.shotName]);
@@ -1567,6 +1732,8 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
     }
     if (jetAt < 0 && goalJetState.fired > jetsBefore) jetAt = b;
     if (!celebratedOn && celebrationState.seq !== celebrateSeqAt) celebratedOn = b;
+    if (b !== 'celebration' && celebrationState.active) noCelebrationBefore = false;
+    if (b === 'celebration' && cutsBeforeCelebration < 0) cutsBeforeCelebration = (replayState.cuts ?? 0) - 1;
     // The pool this frame.
     const pc = replayRenderCamera();
     if (pc && poolState.shot >= 0) {
@@ -1622,15 +1789,23 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
   check('a shot pushes in slowly while it holds', (RC.shots[firstShot].push ?? 99) >= (RC.shots[firstShot].fov ?? 0) || (pushT > 0 && pushedFov < fov0 - 0.5), `fov ${fov0.toFixed(1)} → ${pushedFov.toFixed(1)} after ${pushT.toFixed(2)}s on ${RC.shots[firstShot].name}`);
   check('the defocus comes up round the target', maxDefocus > 0.2, `max ${maxDefocus.toFixed(2)}`);
   check('after the replay the world\'s own camera and lens are back', replayRenderCamera() === null && !cineLens.forced && cineLens.defocus === 0 && !poolState.active, `camera ${replayRenderCamera() === null ? 'world' : 'pool'}, forced ${cineLens.forced}, defocus ${cineLens.defocus}, pool ${poolState.active}, phase ${versusState.phase}`);
-  check('the beats run impact → wide → explosion', beats.join(',') === 'impact,wide,explosion', beats.join(','));
+  check('the beats run impact → wide → explosion → celebration', beats.join(',') === 'impact,wide,explosion,celebration', beats.join(','));
   check('the impact shot tightens to its ceiling as the two collide', impactMaxZoom >= Math.min(R.impact.zoom, 4) - 1e-6, `tightest ${impactMaxZoom.toFixed(2)} (ceiling ${R.impact.zoom})`);
   check('the wide shot holds the mouth, the ball and the scorer, all of it', wideHoldsAll && wideCapped, `all in ${wideHoldsAll}, capped ${wideCapped}`);
-  check('...opened out as a BLEND from the impact shot, no second cut', replayState.cuts === 1 && wideZoomMonotone, `cuts ${replayState.cuts}, monotone ${wideZoomMonotone}`);
+  check('...opened out as a BLEND from the impact shot, no second cut', cutsBeforeCelebration === 1 && wideZoomMonotone, `cuts before the celebration ${cutsBeforeCelebration}, monotone ${wideZoomMonotone}`);
+  check('...and the celebration beat is entered on a CUT', (replayState.cuts ?? 0) === cutsBeforeCelebration + 1, `${replayState.cuts} cut(s) in all, ${cutsBeforeCelebration} before the celebration`);
   check('the replay carries the ball all the way to the line', Math.abs(maxBallX - goalX) < 0.5, `${maxBallX.toFixed(1)} vs ${goalX.toFixed(1)}`);
   check('the jet fires on the explosion beat, with the goal\'s own event', jetAt === 'explosion' && firedCount('versusGoal') === 2, `jet at ${jetAt}, versusGoal x${firedCount('versusGoal')}`);
-  check('...and the scorer celebrates again, in frame', celebratedOn === 'explosion', `celebrated on ${celebratedOn}`);
+  // THE POSE IS THE LAST BEAT'S, AND ONLY THE LAST BEAT'S. It used to fire
+  // twice — once at the live goal and again at the explosion — and the first
+  // of those ran on the wall clock right through the shutter's freeze and the
+  // replay's lead-up, so the replay opened on a seal celebrating a goal it had
+  // not scored yet. `noCelebrationBefore` is the assertion that would have
+  // caught it: nothing may start one until the beat named after it.
+  check('...and the scorer celebrates on the CELEBRATION beat, not before', celebratedOn === 'celebration', `celebrated on ${celebratedOn}`);
+  check('...with nothing celebrating over the lead-up', noCelebrationBefore, 'a pose was running before the celebration beat');
   check('played slow', replayState.speed >= R.speed - 1e-9 && replayState.speed <= 1, `speed ${replayState.speed.toFixed(2)}`);
-  check('...and no longer than maxWall plus the explosion', wall <= R.maxWall + R.explode + 0.2, `${wall.toFixed(2)}s`);
+  check('...and no longer than maxWall plus the two held beats', wall <= R.maxWall + R.explode + (R.celebrateHold ?? 1.7) + 0.2, `${wall.toFixed(2)}s`);
   check('then the shutter resumes where it was parked', versusState.phase === 'scored' && Math.abs(versusState.phaseT - parkedT) < dt * 2 && !replayState.active, `phase ${versusState.phase}, phaseT ${versusState.phaseT.toFixed(2)} (parked ${parkedT.toFixed(2)})`);
   check('...and into a kickoff', toPlay(), versusState.phase);
 
@@ -1638,7 +1813,7 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
   resetBall();
   ball.x = bounds.right - 30; ball.y = midWater();
   p2.pos.set(bounds.left + 10, midWater() - 15, 0); p2.vel.set(0, 0);
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   player.velocity.set(40, 0);
   strikeState.active = true; strikeState.power = 1; strikeState.dashDir.x = 1; strikeState.dashDir.y = 0;
   ball.dashHit[0] = false;
@@ -1681,7 +1856,7 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
   resetBall();
   ball.x = bounds.right - 20; ball.y = midWater();
   p2.pos.set(bounds.left + 10, midWater() - 15, 0); p2.vel.set(0, 0);
-  player.mesh.position.set(ball.x - reach + 0.4, ball.y, 0);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
   player.velocity.set(40, 0);
   strikeState.active = true; strikeState.power = 1; strikeState.dashDir.x = 1; strikeState.dashDir.y = 0;
   ball.dashHit[0] = false;
@@ -1759,7 +1934,35 @@ section('The ball goes through fish and bounces off boats');
   for (let i = 0; i < 60 && enemies.includes(f); i++) frame();
   check('...and a fast ball kills it outright', !enemies.includes(f) && kills.includes(f), `${kills.length} kill(s) reported`);
   check('the kill goes through the run\'s own path, which is what drops the chum', kills.length === 1);
-  check('the ball went THROUGH — it is still travelling the way it was', ball.vx > 0 && ball.vx < before, `vx ${before} → ${ball.vx.toFixed(1)}`);
+  check('the ball went THROUGH — it is still travelling the way it was', ball.vx > 0, `vx ${before} → ${ball.vx.toFixed(1)}`);
+
+  // AND IT TEARS THROUGH A SCHOOL WITHOUT SLOWING. Against a CONTROL RUN down
+  // an empty lane over the same frames, because the ball is under the water's
+  // own drag the whole way and a bare "it is still fast" would pass while the
+  // fish quietly took a third of it. A `hit.drag` here once spent a SHARE of
+  // the ball's speed per body while carrying the 0.994 of a per-frame
+  // multiplier, so one minnow left the ball with 0.6% of its shot: it did not
+  // arrive slower, it stopped dead in the water.
+  const lane = (fish) => {
+    resetEnemies(scene);
+    resetBall();
+    ball.x = -40; ball.y = midWater(); ball.vx = 60; ball.vy = 0;
+    const school = [];
+    for (let i = 0; i < fish; i++) {
+      school.push(spawnNamed(scene, 'fish', 0, { x: -24 + i * 5, y: midWater() }, { docile: true }));
+    }
+    kills.length = 0;
+    for (let i = 0; i < 90; i++) { ball.vy = 0; ball.y = midWater(); frame(); }
+    return { speed: ball.vx, dead: school.filter((e) => !enemies.includes(e)).length, fed: kills.length };
+  };
+  const clear = lane(0);
+  const school = lane(8);
+  check('a shot through a school kills every fish in the lane', school.dead === 8, `${school.dead} of 8`);
+  check('...and every one of them goes through the chum path', school.fed === school.dead, `${school.fed} kill(s) reported for ${school.dead} dead`);
+  check('...and the ball arrives no slower than it would down an empty lane',
+    school.speed > clear.speed * 0.98,
+    `${school.speed.toFixed(1)} through eight fish vs ${clear.speed.toFixed(1)} down a clear lane`);
+  resetEnemies(scene);
   versusHooks.onKill = savedKill;
 
   // A hull in the lane: the ball bounces off it and hurts it.
@@ -1887,7 +2090,7 @@ section('The bot never puts the ball in the goal it defends');
       ball.x = bounds.right - 12 - rnd() * 10;
       ball.y = gyy + (rnd() * 2 - 1) * mouthHalfHeight() * 0.6;
       ball.vx = 2 + rnd() * 4; ball.vy = (rnd() * 2 - 1) * 3; ball.spin = 0;
-      p2.pos.set(ball.x - (ball.r + (V.ball.contactRadius ?? 2.2)) * 0.9, ball.y + (rnd() * 2 - 1) * 1.5, 0);
+      p2.pos.set(ball.x - ballContactReach(Math.PI) * 0.9, ball.y + (rnd() * 2 - 1) * 1.5, 0);
       p2.vel.set(0, 0);
       p2.strike.charge = 1; p2.strike.pending = 0; p2.strike.active = false;
       player.mesh.position.set(bounds.left + 10, gyy, 0);
@@ -1924,7 +2127,7 @@ section('The bot never puts the ball in the goal it defends');
     resetBall();
     const gyy = mouthY();
     ball.x = bounds.right - 16; ball.y = gyy; ball.vx = 3; ball.vy = 0;
-    me.pos.set(ball.x - (ball.r + (V.ball.contactRadius ?? 2.2)) * 0.9, gyy, 0);
+    me.pos.set(ball.x - ballContactReach(Math.PI) * 0.9, gyy, 0);
     me.charge = 1; me.pending = 0; me.active = false;
     let pushed = 0;
     for (let i = 0; i < 120; i++) {
@@ -2077,7 +2280,8 @@ section('The shore is carved to the same mouth the ball scores through');
     ball.x = bounds.left + 10; ball.y = gy + h - ball.r * 0.4; ball.vx = -40; ball.vy = 0;
     versusState.lastPost = null;
     for (let i = 0; i < 30 && !versusState.lastPost; i++) frame();
-    return !!versusState.lastPost && versusState.lastPost.x + ball.r > rockX(-1) - 1e-6 && versusState.lastPost.x - ball.r < bounds.left;
+    const R = ballRestRadius();
+    return !!versusState.lastPost && versusState.lastPost.x + R > rockX(-1) - 1e-6 && versusState.lastPost.x - R < bounds.left;
   })(), versusState.lastPost ? `hit at x=${versusState.lastPost.x.toFixed(2)}, rock ${rockX(-1).toFixed(2)}, wall ${bounds.left.toFixed(2)}` : 'no post hit');
   resetBall();
   // The F panel moves the light in place.
@@ -2150,6 +2354,89 @@ section('The shore is carved to the same mouth the ball scores through');
   check('...a dead seal stops stirring it', uSwim(0).z === 0, `reach ${uSwim(0).z}`);
   versusState.dead[0] = false;
 
+  // THE BALL IN THE LIGHT. Not a swimmer: it brings no colour and curls
+  // nothing — it overdrives and boils where it overlaps, and how much it
+  // overlaps is measured off its NEAR edge so the goal is already lighting up
+  // as the ball crosses the face rather than once its centre has.
+  const uBall = (side = -1) => lightOn(side).material.uniforms.uBall.value;
+  const savedBallX = ball.x; const savedBallY = ball.y;
+  ball.x = 0; ball.y = gy;
+  stirGoalLights(dt); tickGoalGlow(dt);
+  check('a ball out in the water leaves the lights alone', uBall(-1).w === 0 && uBall(-1).z === 0, `amount ${uBall(-1).w}`);
+  ball.x = rockX(-1) - 3; ball.y = gy;
+  stirGoalLights(dt); tickGoalGlow(dt);
+  check('a ball through the mouth overdrives the light it is in',
+    uBall(-1).w > 0.95 && uBall(-1).z === V.goal.ball.reach && Math.abs(uBall(-1).x - ball.x) < 1e-6,
+    `amount ${uBall(-1).w.toFixed(2)}, reach ${uBall(-1).z} at x ${uBall(-1).x.toFixed(1)}`);
+  // ...and it comes on across the spill in front of the face, not all at once.
+  // Placed by the ball's NEAR EDGE, because that is what the measurement
+  // reads — its centre is most of a ball further out than that.
+  const ballR = ballHitRadius();
+  const edgeAt = (out) => { ball.x = rockX(-1) + out + ballR; stirGoalLights(dt); tickGoalGlow(dt); return uBall(-1).w; };
+  const arriving = edgeAt(V.goal.spill * 0.6);
+  check('...coming on as it arrives, over the light\'s own spill', arriving > 0 && arriving < 1, `amount ${arriving.toFixed(2)} with its near edge ${(V.goal.spill * 0.6).toFixed(1)} short of the face`);
+  check('...further in is further on', edgeAt(V.goal.spill * 0.2) > arriving + 0.2, `${edgeAt(V.goal.spill * 0.2).toFixed(2)} at 0.2 spill vs ${arriving.toFixed(2)} at 0.6`);
+  // THE BALL'S RADIUS IS IN IT: the same centre counts for more than a point
+  // would, because what should light the goal up is the ball ARRIVING.
+  ball.x = rockX(-1) + V.goal.spill * 0.6 + ballR;
+  stirGoalLights(dt); tickGoalGlow(dt);
+  // The same centre as a POINT: its own x is that much out in the water, so
+  // the light's spill has to reach the whole way to it.
+  const asPoint = Math.max(0, Math.min(1, (V.goal.spill - (V.goal.spill * 0.6 + ballR)) / V.goal.spill));
+  check('...measured off the ball\'s near edge, not its centre', uBall(-1).w > asPoint + 0.1 && ballR > 1,
+    `amount ${uBall(-1).w.toFixed(2)} vs ${asPoint.toFixed(2)} for a point at the same place (ball radius ${ballR.toFixed(1)})`);
+  // ...and a ball level with the rock above the lip is outside the band.
+  ball.x = rockX(-1) - 3; ball.y = gy + h + V.goal.spill + 1;
+  stirGoalLights(dt); tickGoalGlow(dt);
+  check('...and nothing for a ball buried in the rock past the lip', uBall(-1).w === 0, `amount ${uBall(-1).w}`);
+  ball.x = savedBallX; ball.y = savedBallY;
+  stirGoalLights(dt); tickGoalGlow(dt);
+
+  // THE THROW DOWN THE TUNNEL is the LIGHT'S and not the slab's: the slab is
+  // the only thing stopping the open corridor being a window onto the seabed,
+  // and an exponential on its alpha would open that window at the mouth.
+  check('the light throws down the tunnel from a source behind the mouth',
+    holes.every((p) => /goalThrow/.test(p.material.fragmentShader)
+      && Math.abs(p.material.uniforms.uThrowFrom.value - (rockX(p.position.x < 0 ? -1 : 1) + (p.position.x < 0 ? -1 : 1) * tunnelDepth())) < 1e-6),
+    holes.map((p) => `source at ${p.material.uniforms.uThrowFrom.value.toFixed(1)}`).join('; '));
+  check('...and the slab behind it does not, so the corridor stays closed',
+    backs.every((p) => !/goalThrow/.test(p.material.fragmentShader) && !p.material.uniforms.uThrow));
+  // The source is the tunnel's BACK, not the quad's far end — spend the decay
+  // over the quad and most of it happens off the frame.
+  check('...anchored on the corridor, not on the quad that runs past it',
+    holes.every((p) => Math.abs(p.material.uniforms.uThrowFrom.value) < Math.abs(p.material.uniforms.uEndX.value)),
+    holes.map((p) => `source ${p.material.uniforms.uThrowFrom.value.toFixed(1)} vs quad end ${p.material.uniforms.uEndX.value.toFixed(1)}`).join('; '));
+
+  // THE COLOUR CHANGES HANDS as an attacker swims in. Seal 0 attacks the
+  // RIGHT mouth; the light there is seal 1's team colour until seal 0 is in it.
+  const uTint = (i, side = -1) => lightOn(side).material.uniforms.uSwimTint.value[i];
+  const hexOf = (v) => new THREE.Color(v.x, v.y, v.z).getHexString();
+  const deep = V.goal.keeperReach;
+  player.velocity.set(0, 0); p2.velocity.set(0, 0);
+  player.mesh.position.set(bounds.right + deep, gy, 0);
+  p2.pos.set(0, gy, 0);
+  stirGoalLights(dt); tickGoalGlow(dt);
+  check('a seal deep in the goal it attacks brings its own colour in',
+    uTint(0, 1).w > 0.8 * V.goal.swim.tint && hexOf(uTint(0, 1)) === new THREE.Color(V.teams[0].color).getHexString(),
+    `tint ${uTint(0, 1).w.toFixed(2)} of ceiling ${V.goal.swim.tint}, colour ${hexOf(uTint(0, 1))}`);
+  // ...and it comes on as it swims in, rather than the moment it is near.
+  player.mesh.position.set(bounds.right - V.goal.swim.tintLead * 0.5, gy, 0);
+  stirGoalLights(dt); tickGoalGlow(dt);
+  const shallow = uTint(0, 1).w;
+  check('...part way in, part way over', shallow > 0 && shallow < V.goal.swim.tint * 0.8, `tint ${shallow.toFixed(2)} short of the line`);
+  // ITS OWN GOAL IS ALREADY ITS COLOUR — a keeper stirs the field without
+  // repainting it, or standing in your own net would look like scoring.
+  player.mesh.position.set(bounds.left - deep, gy, 0);
+  stirGoalLights(dt); tickGoalGlow(dt);
+  check('...but a keeper in its own goal changes no colour at all',
+    uTint(0, -1).w === 0 && uSwim(0).z === V.goal.swim.reach,
+    `tint ${uTint(0, -1).w}, still stirring at reach ${uSwim(0).z}`);
+  // ...and out in open water there is nothing to take over.
+  player.mesh.position.set(0, gy, 0);
+  stirGoalLights(dt); tickGoalGlow(dt);
+  check('...and none out in the water', uTint(0, 1).w === 0, `tint ${uTint(0, 1).w}`);
+  player.velocity.set(0, 0);
+
   // THE BURST IS AN EDGE. A seal crossing the threshold near a mouth throws
   // ONE ring; held above it, it throws no more until the cooldown is up.
   resetGoalStir();
@@ -2202,7 +2489,6 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
 {
   const K = V.ball.contest;
   const dash = CONFIG.strike.dashSpeed;
-  const reach = ball.r + V.ball.contactRadius;
   const still = () => { p2.vel.set(0, 0); p2.knockX = p2.knockY = 0; p2.active = false; p2.dashTimer = 0; p2.power = 0; };
   // The contest is the ball against a SEAL. Empty water for it: the ball goes
   // through fish now too (ballHits), and a bait ball left in its lane would
@@ -2211,7 +2497,7 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   // The ball flying +x at 40 into player 2 sitting in its path.
   resetBall();
   ball.vx = 40;
-  p2.pos.set(ball.x + reach - 0.3, ball.y, 0);
+  p2.pos.set(ball.x + ballReach() - 0.3, ball.y, 0);
   still();
   const m = contestMargin(-1, 0, { x: 0, y: 0 }, false, 0);
   check('a still seal loses to a moving ball by the ball\'s whole speed', Math.abs(m - 40 * K.ballWeight) < 1e-9, `margin ${m.toFixed(1)}`);
@@ -2225,19 +2511,22 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   // launched by a fresh knock every frame it is still inside it.
   resetBall();
   ball.vx = ballSpeedCap();
-  p2.pos.set(ball.x + reach - 0.3, ball.y, 0);
+  p2.pos.set(ball.x + ballReach() - 0.3, ball.y, 0);
   still();
   let worstKnock = 0;
-  for (let i = 0; i < 12; i++) { frame(); worstKnock = Math.max(worstKnock, p2.knockX); }
+  // Sixteen frames, not twelve: a ball at the cap is STRETCHED along its
+  // flight, so its trailing edge is half as long again as at rest and it
+  // takes a few more frames to be clear of the seal it went through.
+  for (let i = 0; i < 16; i++) { frame(); worstKnock = Math.max(worstKnock, p2.knockX); }
   check('the knock is paid once per pass, never a frame at a time', worstKnock <= K.knockMax + 1e-6, `peak knockX ${worstKnock.toFixed(1)} (cap ${K.knockMax})`);
   check('...and the ball keeps most of its speed through the seal', ball.vx > ballSpeedCap() * 0.5, `vx ${ball.vx.toFixed(1)}`);
-  check('it went THROUGH — the ball is past the seal and the pass is over', ball.x - p2.pos.x > reach && ball.pierced[1] === false, `ball ${ball.x.toFixed(1)}, seal ${p2.pos.x.toFixed(1)}`);
+  check('it went THROUGH — the ball is past the seal and the pass is over', ball.x - p2.pos.x > ballReach() && ball.pierced[1] === false, `ball ${ball.x.toFixed(1)}, seal ${p2.pos.x.toFixed(1)}`);
 
   // A well struck shot through a slow defender: a seal drifting toward it
   // at a swim, the ball at a strike's speed.
   resetBall();
   ball.vx = -V.ball.maxSpeed;
-  p2.pos.set(ball.x - reach + 0.3, ball.y, 0);
+  p2.pos.set(ball.x - ballReach() + 0.3, ball.y, 0);
   still();
   p2.vel.set(10, 0);
   sealContact(1, p2.pos, p2.vel, false, null, 0);
@@ -2246,7 +2535,7 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   // Equal and opposite: the seal holds its ground and the ball is stopped.
   resetBall();
   ball.vx = -20;
-  p2.pos.set(ball.x - reach + 0.3, ball.y, 0);
+  p2.pos.set(ball.x - ballReach() + 0.3, ball.y, 0);
   still();
   p2.vel.set(20 / K.ballWeight, 0);
   const m0 = contestMargin(1, 0, p2.vel, false, 0);
@@ -2258,7 +2547,7 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   // The seal faster than the ball: it wins, the ball is pushed, no knock.
   resetBall();
   ball.vx = -10;
-  p2.pos.set(ball.x - reach + 0.3, ball.y, 0);
+  p2.pos.set(ball.x - ballReach() + 0.3, ball.y, 0);
   still();
   p2.vel.set(30, 0);
   sealContact(1, p2.pos, p2.vel, false, null, 0);
@@ -2269,7 +2558,7 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   // sends it back FASTER than maxSpeed — up to returnMax x what came in.
   resetBall();
   ball.vx = V.ball.maxSpeed;
-  p2.pos.set(ball.x + reach - 0.3, ball.y, 0);
+  p2.pos.set(ball.x + ballReach() - 0.3, ball.y, 0);
   still();
   p2.vel.set(-dash, 0);
   p2.active = true; p2.dashTimer = 0.3; p2.dashTimeLeft = 0.3; p2.power = 1;
@@ -2288,7 +2577,7 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   // keeps coming.
   resetBall();
   ball.vx = V.ball.maxSpeed;
-  p2.pos.set(ball.x + reach - 0.3, ball.y, 0);
+  p2.pos.set(ball.x + ballReach() - 0.3, ball.y, 0);
   still();
   p2.vel.set(-dash, 0);
   p2.active = true; p2.dashTimer = 0.3; p2.dashTimeLeft = 0.3; p2.power = 0;
@@ -2311,7 +2600,17 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
   const swing = (who, dir, power = 1) => {
     const pos = who === 0 ? player.mesh.position : p2.pos;
     const vel = who === 0 ? player.velocity : p2.vel;
-    pos.set(ball.x - dir * (reach - 0.3), ball.y, 0);
+    // A CLEAN SKIN EACH SWING. This drives sealContact directly with no frame
+    // between the swings, so stepSoftBody never runs and each strike's dent
+    // lands on the last one's: ten of them and the rim is pinned at maxDeform
+    // all the way round, which through the goo isoline is a ball half again
+    // as wide as it should be. What is being measured here is the CONTEST —
+    // who moves whom — so the body is put back to a sphere and the placement
+    // below means what it says. The velocity stretch is left alone: that one
+    // is honest at any moment.
+    ball.rim.fill(0);
+    ball.rimV.fill(0);
+    pos.set(ball.x - dir * (ballReach() - 0.3), ball.y, 0);
     vel.set(dir * dash, 0);
     ball.dashHit[who] = false;
     if (who === 0) { strikeState.active = true; strikeState.power = power; strikeState.dashDir.x = dir; strikeState.dashDir.y = 0; player.knockX = player.knockY = 0; }
@@ -2541,6 +2840,524 @@ section('A match shows no run HUD and no tutorial text');
   check('the tutorial is gated off in a match', tutGate.includes('!versusActive()'), tutGate || 'no gate found');
   const callouts = main.slice(main.indexOf('updateCallouts(realDt'), main.indexOf('updateGreeting(realDt'));
   check('...as the coach\'s band and the hello already are', callouts.includes('!versusActive()') && main.slice(main.indexOf('updateGreeting(realDt'), main.indexOf('updateGreeting(realDt') + 200).includes('!versusActive()'));
+}
+
+// ---------------------------------------------------------------------------
+// THE TWO SHAPES A CONTACT IS MADE OF, against the things they claim to be:
+// the ball's against its own drawing, the seal's against the shipped model.
+// Both used to be numbers typed beside a picture nobody re-measured.
+// ---------------------------------------------------------------------------
+// The replay was a silent diagram: it posed the bodies and the ball's skin and
+// re-fired nothing, so the one thing a player actually watches during a strike
+// — the spray off the contact, the goo out of the ball, the breach at the
+// water line — had happened live, seconds earlier, and was gone. And the goal
+// light had already blazed and run out on the wall clock before the replay
+// reached the goal.
+// ---------------------------------------------------------------------------
+section('The ball carries both colours, in the proportion each team owns it');
+{
+  toPlay();
+  resetEnemies(scene);
+  resetBall();
+  resetBallLook();
+  const L = V.ball.look;
+  const dash = CONFIG.strike.dashSpeed ?? 46;
+  const hit = (who, dir, power = 1) => {
+    const pos = who === 0 ? player.mesh.position : p2.pos;
+    const vel = who === 0 ? player.velocity : p2.vel;
+    ball.rim.fill(0); ball.rimV.fill(0);
+    pos.set(ball.x - dir * (ballReach() - 0.3), ball.y, 0);
+    vel.set(dir * dash, 0);
+    ball.dashHit[who] = false;
+    if (who === 0) { strikeState.active = true; strikeState.power = power; strikeState.dashDir.x = dir; strikeState.dashDir.y = 0; }
+    else { p2.active = true; p2.dashTimeLeft = 0.3; p2.power = power; p2.dashDir.x = dir; p2.dashDir.y = 0; }
+    sealContact(who, pos, vel, true, who === 0 ? strikeState.dashDir : p2.dashDir, power);
+    if (who === 0) strikeState.active = false; else p2.active = false;
+  };
+  // The ball's own module pushes this every frame in a match; here the section
+  // drives updateBallLook by hand, so it has to hand over the same thing.
+  const pushBody = () => setBallBody({ x: ball.x, y: ball.y, r: ballHitRadius(), speed: Math.hypot(ball.vx, ball.vy) });
+  const settleLook = (secs) => { for (let i = 0; i < Math.round(secs * 60); i++) { pushBody(); updateBallLook(1 / 60); } };
+
+  check('an untouched ball belongs to nobody', ballCredit().newest === -1 && ballCredit().share === 0);
+  // ONE SEAL, ONE COLOUR. A shot into a still ball is entirely that seal's.
+  ball.vx = 0; ball.vy = 0;
+  hit(0, 1);
+  const one = ballCredit();
+  check('a strike into a still ball is wholly the striker\'s', one.newest === 0 && one.credit[0] > 10 && one.credit[1] === 0, `credit ${one.credit.map((c) => c.toFixed(1)).join(' / ')}`);
+  settleLook(3);
+  const solid = ballLookState();
+  check('...and its colour takes the whole body', solid.share > 0.95, `share ${solid.share.toFixed(3)}`);
+  check('...marching there rather than arriving — the share is lerped', L.shareRate > 0 && L.shareRate < 60, `shareRate ${L.shareRate}/s`);
+  // TWO SEALS, TWO COLOURS. The other seal swims into its flank rather than
+  // meeting it head on: the shot it was carrying is still most of where it is
+  // going, and what P2 put in is the bend. Both own it, in that proportion.
+  const p2At = { x: ball.x, y: ball.y - ballContactReach(-Math.PI / 2) + 0.4 };
+  p2.pos.set(p2At.x, p2At.y, 0);
+  p2.vel.set(0, 26);
+  sealContact(1, p2.pos, p2.vel, false, null, 0);
+  settleLook(3);
+  const two = ballCredit();
+  const both = two.credit[0] > 0.5 && two.credit[1] > 0.5;
+  check('a ball bent by the other seal is owned by both', both, `credit ${two.credit.map((c) => c.toFixed(1)).join(' / ')}`);
+  check('...with the bend the smaller share of it, because that is what it added',
+    two.newest === 1 && ballLookState().share > 0.02 && ballLookState().share < 0.5,
+    `share ${ballLookState().share.toFixed(3)} to team ${two.newest}`);
+  // ...AND A HEAD-ON TURNAROUND HANDS THE WHOLE THING OVER, because none of
+  // the momentum it was carrying survives the reversal. This is the case the
+  // ledger has to get right or a counter-strike reads as a shared ball.
+  ball.vx = 60; ball.vy = 0;
+  hit(1, -1, 1);
+  settleLook(3);
+  const back = ballCredit();
+  check('a shot sent back the way it came belongs wholly to whoever turned it',
+    back.newest === 1 && back.credit[0] < 0.5 && ballLookState().share > 0.95,
+    `credit ${back.credit.map((c) => c.toFixed(1)).join(' / ')}, share ${ballLookState().share.toFixed(3)}`);
+  // THE LEDGER IS ABOUT THE CURRENT VELOCITY, so it sums to the speed the ball
+  // is actually travelling at rather than to everything that ever hit it.
+  pushBody();
+  updateBallLook(1 / 60);
+  const total = ballCredit().credit[0] + ballCredit().credit[1];
+  check('...and the two of them add up to the speed it is going at now',
+    Math.abs(total - Math.hypot(ball.vx, ball.vy)) < 0.5,
+    `${total.toFixed(1)} on the books vs ${Math.hypot(ball.vx, ball.vy).toFixed(1)} u/s`);
+  // The field the shader reads: both colours, the seed, and a radius that is
+  // the DRAWN ball rather than the collision circle it used to be.
+  setBallBody({ x: ball.x, y: ball.y, r: ballHitRadius(), speed: Math.hypot(ball.vx, ball.vy) });
+  updateBallLook(1 / 60);
+  const tm = CONFIG.fx.goo.groups.ball.teams;
+  check('the goo group is handed both team colours and where to seed them',
+    tm && tm.a !== tm.b && tm.wr > ball.r && Number.isFinite(tm.seed),
+    tm ? `a ${tm.a.toString(16)}, b ${tm.b.toString(16)}, r ${tm.wr.toFixed(1)}, seed ${tm.seed.toFixed(2)}` : 'no teams block');
+  check('...as the boost meter\'s drop: lobes on a rolling ring that grow and fuse',
+    (tm?.lobes ?? 0) >= 1 && (tm?.lobeSize ?? 0) > 0 && (tm?.wobble ?? -1) >= 0 && Number.isFinite(tm?.spin),
+    `${tm?.lobes} lobes at ${tm?.lobeSize}x, thrown ${tm?.wobble}, ring rolling ${tm?.spin} rad/s`);
+  // A ball nobody has touched hands the shader a radius of zero, which is the
+  // switch back to the single tint every other goo group uses.
+  resetBallLook();
+  setBallBody({ x: 0, y: 0, r: 0, speed: 0 });
+  updateBallLook(1 / 60);
+  check('an unowned ball switches the two-colour field off outright', CONFIG.fx.goo.groups.ball.teams.wr === 0);
+  strikeState.active = false; p2.active = false;
+  player.mesh.position.set(-30, midWater(), 0); player.velocity.set(0, 0);
+  p2.pos.set(30, midWater(), 0); p2.vel.set(0, 0);
+  resetBall();
+  resetBallLook();
+  toPlay(20);
+}
+
+// ---------------------------------------------------------------------------
+// Blubberball was two seals, and every rule was written as a pair. "Player 2"
+// was a seat, a side, a colour and the far end of a collision all at once, and
+// those are four things that only look like one number while there are two of
+// them. This is the roster the pair became.
+// ---------------------------------------------------------------------------
+section('A roster, not a pair: teammates and opponents under the same rules');
+{
+  const before = matchRoster();
+  // TWO A SIDE: the human, a CPU teammate, and two CPU opponents.
+  check('the roster is a live control, not a constant', setMatchRoster(2) === 2, `${matchRoster()} a side`);
+  resetVersus();
+  resetPlayer();
+  startVersus(scene);
+  toPlay();
+  // A PICK SURVIVES THE MATCH STARTING. startVersus opens on the roster, and
+  // "open on the default" undid the team select's row on the way in — the row
+  // moved, the number on it moved, and the match was a 1v1 anyway.
+  check('the roster the team select picked is the one the match opens on', matchRoster() === 2, `${matchRoster()} a side after startVersus`);
+  const seals = matchSeals();
+  check('four seals are in the water', seals.length === 4, `${seals.length} bodies`);
+  check('...and every one of them has a body of its own', seals.every((s2) => s2.mesh && s2.mesh !== seals[0].mesh || s2 === seals[0]));
+  // SIDES ALTERNATE, so the first two seats are still the two captains and a
+  // 1v1 is this match with two seats empty rather than a different mode.
+  const teams = seals.map((s2) => teamOfSeat(seatOf(s2)));
+  check('sides alternate, so seats 0 and 1 are still the two captains', teams.join(',') === '0,1,0,1', teams.join(','));
+  check('...which puts two on each side', teams.filter((t) => t === 0).length === 2 && teams.filter((t) => t === 1).length === 2);
+  check('the human is seat 0 and nothing else is', !seals.some((s2, i) => i > 0 && seatOf(s2) === 0));
+  check('every seat past the human is the computer\'s, since nobody sat in it',
+    [1, 2, 3].every((i) => seatIsCpu(i)) && !seatIsCpu(0));
+
+  // THEY START AS A FORMATION, not a queue: a side's captain on its own line
+  // and the rest bracketed off the middle of the water.
+  const spots = [0, 1, 2, 3].map((i) => ({ ...kickoffSpot(i, { x: 0, y: 0 }) }));
+  check('each side starts in its own half', spots[0].x < 0 && spots[2].x < 0 && spots[1].x > 0 && spots[3].x > 0,
+    spots.map((p) => p.x.toFixed(0)).join(' '));
+  check('...and no two seals start on the same spot',
+    new Set(spots.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)).size === 4,
+    spots.map((p) => `(${p.x.toFixed(0)},${p.y.toFixed(0)})`).join(' '));
+
+  // EVERY SEAL PLAYS THE BALL, under the one contact path. The whole point of
+  // "same rules for everything" is that this is a loop and not four branches.
+  resetBall();
+  ball.vx = 0; ball.vy = 0;
+  let touched = 0;
+  for (let i = 0; i < 4; i++) {
+    const seal = sealAt(i);
+    resetBall();
+    ball.vx = 0; ball.vy = 0;
+    const at = { x: ball.x - ballReach() + 0.4, y: ball.y };
+    if (sealContact(i, at, { x: 14, y: 0 }, false, null, 0, 0, 0)) touched++;
+  }
+  check('every seat can play the ball, through the one contact path', touched === 4, `${touched} of 4`);
+
+  // TEAMMATES COLLIDE. Two seals on the same side cannot stand inside each
+  // other, and a dash into one shoves it — there is no friendly-fire switch,
+  // because a crowd in front of a goal only reads as a crowd if being in one
+  // is dangerous.
+  const mate = sealAt(2);
+  const me = sealAt(0);
+  check('seats 0 and 2 are teammates', sameTeam(0, 2));
+  me.mesh.position.set(0, midWater(), 0);
+  me.velocity.set(0, 0);
+  sealPos(mate).set(0.5, midWater(), 0);
+  mate.velocity.set(0, 0);
+  const gap0 = Math.abs(sealPos(mate).x - me.mesh.position.x);
+  sealCollide(false);
+  const gap1 = Math.abs(sealPos(mate).x - me.mesh.position.x);
+  check('...and they are pushed apart rather than standing inside each other', gap1 > gap0 + 0.5, `${gap0.toFixed(2)} → ${gap1.toFixed(2)} apart`);
+  // ...and a dash into a teammate lands the same shove an opponent's does.
+  me.mesh.position.set(0, midWater(), 0);
+  sealPos(mate).set(2.0, midWater(), 0);
+  me.velocity.set(30, 0);
+  mate.velocity.set(0, 0);
+  strikeState.active = true; strikeState.power = 1;
+  versusState.checked.fill(false);
+  versusState.lastCheck = null;
+  bodyCheck();
+  strikeState.active = false;
+  check('a dash into a TEAMMATE lands, exactly as one into an opponent does',
+    !!versusState.lastCheck && versusState.lastCheck.push > 0,
+    versusState.lastCheck ? `shove ${versusState.lastCheck.push.toFixed(1)}` : 'nothing landed');
+
+  // EACH SEAL WEARS ITS SIDE. Four identical animals in a dark frame is four
+  // identical animals; the rim is what says which of them is yours before you
+  // have worked out which of them is yours.
+  const colors = goalColors();
+  const rims = [0, 1, 2, 3].map((i) => {
+    const body = sealAt(i)?.body;
+    const found = [];
+    body?.traverse((o) => { if (o.userData?.__isOutline && o.material?.color) found.push(o.material.color.getHex()); });
+    return found;
+  });
+  check('every seal is outlined', rims.every((r) => r.length > 0), rims.map((r) => r.length).join(','));
+  // The shells carry colour x glow, so the TEST is which team's colour it is
+  // nearest — not an equality against a hex the glow has already scaled.
+  const nearest = (hex) => {
+    const c = new THREE.Color(hex);
+    let best = -1; let bestD = Infinity;
+    colors.forEach((tc, t) => {
+      const q = new THREE.Color(tc);
+      const d = (c.r / Math.max(c.r + c.g + c.b, 1e-6) - q.r / Math.max(q.r + q.g + q.b, 1e-6)) ** 2
+        + (c.g / Math.max(c.r + c.g + c.b, 1e-6) - q.g / Math.max(q.r + q.g + q.b, 1e-6)) ** 2;
+      if (d < bestD) { bestD = d; best = t; }
+    });
+    return best;
+  };
+  const sides = rims.map((r) => nearest(r[0]));
+  check('...in its own side\'s colour, not the run\'s white rim',
+    sides.every((t, i) => t === teamOfSeat(i)), `seats read as teams ${sides.join(',')}`);
+
+  // ...AND EACH IS ITS OWN ANIMAL. A GLB clone shares its template's material,
+  // so without a per-body cut of the noise field the roster is one seal drawn
+  // four times, freckle for freckle.
+  const seeds = [0, 1, 2, 3].map((i) => {
+    let v = null;
+    sealAt(i)?.body?.traverse((o) => {
+      if (v || !o.isMesh || o.userData?.__isOutline) return;
+      const m = Array.isArray(o.material) ? o.material[0] : o.material;
+      v = m?.userData?.__noiseUniforms?.uNoiseSeed?.value ?? null;
+    });
+    return v;
+  });
+  check('every seal has its own material, not the template\'s',
+    new Set(seeds).size === 4 && seeds.every(Boolean), `${new Set(seeds).size} distinct`);
+  check('...cut from a different piece of the mottling',
+    new Set(seeds.map((v) => `${v.x.toFixed(3)},${v.y.toFixed(3)},${v.z.toFixed(3)}`)).size === 4,
+    seeds.map((v) => `${v.x.toFixed(1)},${v.y.toFixed(1)}`).join(' | '));
+  // A CLONE DROPS onBeforeCompile — silently, with userData still claiming the
+  // shader is attached — so this is the check that the hide is still SHADED
+  // rather than merely instanced.
+  const shaded = [0, 1, 2, 3].every((i) => {
+    let ok = false;
+    sealAt(i)?.body?.traverse((o) => {
+      if (!o.isMesh || o.userData?.__isOutline) return;
+      const m = Array.isArray(o.material) ? o.material[0] : o.material;
+      if (typeof m?.onBeforeCompile === 'function') ok = true;
+    });
+    return ok;
+  });
+  check('...and every one of them still has its shader injected', shaded);
+
+  // Back to a pair, so everything after this section is the match it was.
+  setMatchRoster(before);
+  resetVersus();
+  resetPlayer();
+  startVersus(scene);
+  toPlay();
+  check('and it goes back to a pair on request', matchSeals().length === 2, `${matchSeals().length} bodies`);
+}
+
+// ---------------------------------------------------------------------------
+section('Every player on the pitch is a body in the water');
+{
+  // The lattice bulges around a seal in it (systems/grid.js), and the only
+  // body that counted was the one holding the frame — so on the one screen
+  // with two seals on it, the other one swam through a flat grid. main.js
+  // publishes a wake for each of these; this is the list it reads.
+  toPlay();
+  const seals = versusSeals();
+  check('the match names its other players as bodies in the water', seals.length === 1, `${seals.length} besides player 1`);
+  check('...at player 2\'s own position, not a stale copy of it',
+    Math.abs(seals[0].x - p2.pos.x) < 1e-9 && Math.abs(seals[0].y - p2.pos.y) < 1e-9,
+    `(${seals[0]?.x.toFixed(1)}, ${seals[0]?.y.toFixed(1)}) vs (${p2.pos.x.toFixed(1)}, ${p2.pos.y.toFixed(1)})`);
+  check('...and player 1 is NOT in it — that one is the frame\'s own seal, slot 0',
+    !seals.some((b) => b.who === 0));
+  // A burst seal is out of the water until it respawns; a body left in the list
+  // would hold its dent open at the spot it died.
+  const wasDead = versusState.dead[1];
+  versusState.dead[1] = 2;
+  check('a burst seal stops denting the water', versusSeals().length === 0);
+  versusState.dead[1] = wasDead;
+  check('...and dents it again when it is back', versusSeals().length === 1);
+  // Off-mode there is nobody but the player, so a run pays nothing for this.
+  const wasActive = versusState.active;
+  versusState.active = false;
+  check('a run has no other players, and no slots are spent on them', versusSeals().length === 0);
+  versusState.active = wasActive;
+}
+
+// ---------------------------------------------------------------------------
+section('A goal is the scorer\'s colour — the ball, the blow and the jet');
+{
+  const R = V.replay;
+  const wasReplay = R.enabled;
+  R.enabled = false;   // the live path: no replay holding the jet back
+  toPlay();
+  resetEnemies(scene);
+  resetBall();
+  resetBallLook();
+  fired.clear();
+  const jets0 = goalJetState.fired;
+  // The goal's own blow is a plain feedback() call rather than one of the
+  // ball's impacts, so versusState.lastImpact never sees it — the payload has
+  // to be caught off the channel.
+  let blow = null;
+  const stopBlow = onFeedback((name, at) => { if (name === 'versusGoal') blow = { ...at }; });
+  // Into the RIGHT goal, which is player 1's point.
+  ball.x = bounds.right - 6; ball.y = midWater(); ball.vx = 70; ball.vy = 0;
+  for (let i = 0; i < 240 && versusState.phase === 'play'; i++) frame();
+  stopBlow();
+  check('the goal is called', versusState.phase === 'scored' && versusState.scorer === 0, `phase ${versusState.phase}, scorer ${versusState.scorer}`);
+  const scorer = versusState.scorer;
+  // THE BALL FILLS WITH IT. The ball is dead and off the edge of the screen by
+  // now, so nothing will credit it again — claimBall is what hands the books
+  // over, and the share marches to a full takeover on its own clock.
+  const claimed = ballCredit();
+  check('the ball is handed wholly to the scorer as it goes in',
+    claimed.newest === scorer && claimed.credit[scorer] > 0 && claimed.credit[scorer === 1 ? 0 : 1] === 0,
+    `credit ${claimed.credit.map((c) => c.toFixed(1)).join(' / ')} to team ${claimed.newest}`);
+  for (let i = 0; i < 120; i++) { setBallBody({ x: ball.x, y: ball.y, r: 5, speed: 0 }); updateBallLook(1 / 60); }
+  check('...and fills with that colour outright, not part of the way',
+    ballLookState().share > 0.95 && CONFIG.fx.goo.groups.ball.teams.b === V.teams[scorer].color,
+    `share ${ballLookState().share.toFixed(3)}, colour ${CONFIG.fx.goo.groups.ball.teams.b.toString(16)}`);
+  // THE BLOW OUT OF THE MOUTH takes it too — it used to come out in the ball's
+  // own colour, which is the one moment the ball is most obviously owned.
+  check('the goal\'s own blow is the scorer\'s colour, not the ball\'s',
+    !!blow && blow.color === V.teams[scorer].color && blow.color !== ballTint().getHex(),
+    `versusGoal in ${(blow?.color ?? 0).toString(16)} (team ${(V.teams[scorer].color).toString(16)}, ball ${ballTint().getHex().toString(16)})`);
+  check('...and the jet out of the corridor fired with it', goalJetState.fired > jets0, `${goalJetState.fired - jets0} jet(s)`);
+  R.enabled = wasReplay;
+  resetBall();
+  resetBallLook();
+  toPlay(20);
+}
+
+// ---------------------------------------------------------------------------
+section('The replay plays the effects back, not just the poses');
+{
+  const R = V.replay;
+  R.enabled = true;
+  R.onlyWinner = false;
+  toPlay();
+  resetEnemies(scene);
+  // A shot into the right goal, with the contact and the flight both inside
+  // the replay's lead, so the track has real events in it.
+  resetBall();
+  ball.x = bounds.right - 52; ball.y = midWater();
+  // Three fish in the lane, so the shot leaves a trail of bursts behind it and
+  // the track under test is a track rather than a single entry. Spaced twelve
+  // apart, which at the speed a full strike leaves at is comfortably more than
+  // the impact fx's own `fxGap` — closer together and the throttle collapses
+  // the three of them into one burst, which is what it is for.
+  for (let i = 0; i < 3; i++) spawnNamed(scene, 'fish', 0, { x: ball.x + 12 + i * 12, y: midWater() }, { docile: true });
+  p2.pos.set(bounds.left + 10, midWater() - 15, 0); p2.vel.set(0, 0);
+  player.mesh.position.set(ball.x - ballReach() - 14, ball.y, 0);
+  player.velocity.set(0, 0);
+  settle(R.lead + 0.5);
+  player.mesh.position.set(ball.x - ballReach() + 0.4, ball.y, 0);
+  player.velocity.set(40, 0);
+  strikeState.active = true; strikeState.dashDir.x = 1; strikeState.dashDir.y = 0; strikeState.power = 1;
+  ball.dashHit[0] = false;
+  frame();
+  strikeState.active = false;
+  // Every event fired from here on, with the flag it carried — the listener
+  // sees playbacks too, which is how a replayed effect can be told from a
+  // live one at all.
+  const seen = [];
+  const stop = onFeedback((name, at) => seen.push({ name, replay: !!at?.replay }));
+  let frames = 0;
+  while (versusState.phase === 'play' && frames < 400) { frame(); frames++; }
+  check('the ball goes in', versusState.phase === 'scored', `phase ${versusState.phase}`);
+  const live = seen.length;
+  check('the shot itself fired effects, live', live > 0 && seen.every((e) => !e.replay), `${live} event(s)`);
+  // Into the replay.
+  for (let i = 0; i < 200 && versusState.phase !== 'replay'; i++) frame();
+  check('the replay opens', versusState.phase === 'replay', versusState.phase);
+  // Fewer than the shot fired, and both differences are on purpose: the goal's
+  // own frame belongs to explodeReplay, and CONFIG.versus.ball.fx.gap collapses
+  // a run of impacts into one burst whether they are being recorded or not.
+  check('...and the track it will play has the shot\'s own effects on it', replayState.events.length >= 2, `${replayState.events.length} event(s) recorded over the replayed span, of ${live} fired`);
+  check('...in time order, and none of them the goal\'s own frame', replayState.events.every((e, i) => (i === 0 || e.t >= replayState.events[i - 1].t) && e.t < replayState.goalT));
+  // THE MOUTH IS NOT LIT YET: the goal has not happened in the footage being
+  // shown, so the light it blazed live is put back to its own team's colour.
+  check('the goal light is handed back for the rewound footage', goalScoredMix(replayState.side) === 0, `mix ${goalScoredMix(replayState.side).toFixed(2)}`);
+  const played = [];
+  const stopPlay = onFeedback((name, at) => { if (at?.replay) played.push(name); });
+  const wanted = replayState.events.length;
+  let lit = 0;
+  for (let i = 0; i < 900 && versusState.phase === 'replay'; i++) {
+    frame();
+    lit = Math.max(lit, goalScoredMix(replayState.side));
+  }
+  stop();
+  stopPlay();
+  check('every effect on the track is played back', played.length === wanted, `${played.length} of ${wanted}`);
+  check('...once each, in the order they happened', played.length === wanted);
+  check('...and marked as a playback, so nothing records it a second time', seen.filter((e) => e.replay).length === played.length);
+  check('...and none of them shook the camera or stopped the clock', feedbackState.hitstop === 0, `hitstop ${feedbackState.hitstop}`);
+  // ...and the mouth blazes when the replay says the ball went in.
+  check('the goal light lights up again at the explosion beat', lit > 0.5, `peak mix ${lit.toFixed(2)}`);
+  resetEnemies(scene);
+  toPlay(20);
+}
+
+// ---------------------------------------------------------------------------
+section('The hitbox IS the drawing, and the seal IS the animal');
+{
+  toPlay();
+  resetBall();
+  settle(0.5);
+  const B = V.ball;
+  const rest = ballRestRadius();
+
+  // --- the ball: the solve and the splats renderBall writes are one thing ---
+  // Sum the goo field at the solved edge and a hair inside it: the isoline
+  // has to be exactly where the density crosses the group's own iso, or the
+  // hitbox is agreeing with an arrangement the renderer is not drawing.
+  const splats = ballSplats(ball, rimRadius, rimAngle);
+  const iso = CONFIG.fx.goo.groups.ball.iso;
+  // AT A SAMPLE, not at an interpolated angle: solveBallSurface answers
+  // exactly on the rim's own directions and reads between them the way
+  // rimRadiusAt does, so this asks it where it actually solved.
+  const a0 = rimAngle(0);
+  const edge0 = ballHitRadiusAt(a0);
+  const onEdge = gooDensity(splats, edge0 * Math.cos(a0), edge0 * Math.sin(a0));
+  const inside = gooDensity(splats, edge0 * 0.9 * Math.cos(a0), edge0 * 0.9 * Math.sin(a0));
+  check('the drawn edge is where the goo pass puts its isoline', Math.abs(onEdge - iso) < iso * 0.02 && inside > iso, `density ${onEdge.toFixed(4)} at the edge vs iso ${iso}, ${inside.toFixed(3)} inside it`);
+  check('...and it is a good deal wider than the soft body\'s own radius', rest > ball.r * 1.5, `${rest.toFixed(2)} drawn vs ${ball.r} rest radius`);
+
+  // A dent moves the drawn edge, and the hitbox with it — one number, so it
+  // cannot do one and not the other. This is what the old arrangement could
+  // not do: a centre splat wider than the surface held the outline rigid.
+  const before = ballHitRadiusAt(Math.PI);
+  dentBall(Math.PI, 0.35);
+  solveBallSurface();
+  const after = ballHitRadiusAt(Math.PI);
+  check('a dent takes the hitbox in with the picture', after < before - 0.5, `${before.toFixed(2)} → ${after.toFixed(2)} on the dented side`);
+  check('...and only on the side it was dented', Math.abs(ballHitRadiusAt(0) - before) < 0.15, `far side ${ballHitRadiusAt(0).toFixed(2)} vs ${before.toFixed(2)}`);
+  resetBall(); settle(0.6);
+
+  // --- the seal: the capsule against the model it is drawn from ------------
+  //
+  // MEASURED, NOT COPIED. These three numbers describe furseal.glb through
+  // assets.js's `fit` and assets.csv's size, and nothing in the file itself
+  // stops them drifting the day either of those is retuned — so the model is
+  // opened and re-measured here, exactly as prepareModel places it: the
+  // area-weighted centroid it re-centres on, the bbox for the extents, and
+  // the same axis map (forward +Z, and in the side view the model's UP is the
+  // screen's in-plane perpendicular, so the thickness is dorsal-ventral and
+  // the flipper span points at the lens).
+  {
+    const buf = readFileSync(new URL('../public/models/furseal.glb', import.meta.url));
+    const gltf = await new Promise((res, rej) => new GLTFLoader().parse(
+      buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '', res, rej));
+    const root = gltf.scene;
+    root.updateMatrixWorld(true);
+    const meshes = [];
+    root.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
+    const box = new THREE.Box3().setFromObject(root);
+    const size = box.getSize(new THREE.Vector3());
+    const va = new THREE.Vector3(); const vb = new THREE.Vector3(); const vc = new THREE.Vector3();
+    const tc = new THREE.Vector3(); const sum = new THREE.Vector3();
+    let area = 0;
+    for (const m of meshes) {
+      const pos = m.geometry.attributes.position; const idx = m.geometry.index;
+      const count = idx ? idx.count : pos.count;
+      for (let i = 0; i < count; i += 3) {
+        const ia = idx ? idx.getX(i) : i; const ib = idx ? idx.getX(i + 1) : i + 1; const ic = idx ? idx.getX(i + 2) : i + 2;
+        va.fromBufferAttribute(pos, ia).applyMatrix4(m.matrixWorld);
+        vb.fromBufferAttribute(pos, ib).applyMatrix4(m.matrixWorld);
+        vc.fromBufferAttribute(pos, ic).applyMatrix4(m.matrixWorld);
+        const w = new THREE.Vector3().subVectors(vb, va).cross(new THREE.Vector3().subVectors(vc, va)).length() * 0.5;
+        if (w < 1e-12) continue;
+        tc.copy(va).add(vb).add(vc).divideScalar(3);
+        sum.addScaledVector(tc, w); area += w;
+      }
+    }
+    const ctr = sum.divideScalar(area);
+    const def = ASSETS.ship;
+    const scale = (def.fit / Math.max(size.x, size.y, size.z)) * Number(ASSET_ROWS.get('ship').size);
+    const nose = (box.max.z - ctr.z) * scale;
+    const tail = (ctr.z - box.min.z) * scale;
+    const thick = (size.y / 2) * scale;
+    const near = (a, b) => Math.abs(a - b) < 0.06;
+    check('the seal\'s body is the shipped model\'s, still',
+      near(B.body.nose, nose) && near(B.body.tail, tail) && near(B.body.thickness, thick),
+      `config ${B.body.nose}/${B.body.tail}/${B.body.thickness} vs furseal.glb ${nose.toFixed(2)}/${tail.toFixed(2)}/${thick.toFixed(2)} (nose/tail/half-thickness)`);
+  }
+
+  const body = B.body;
+  check('the seal reaches further nose-on than flank-on, as an animal does', body.nose > body.thickness * 3, `nose ${body.nose}, thickness ${body.thickness}`);
+  const noseOn = ballContactReach(Math.PI);
+  const flank = rest + body.thickness;
+  check('...so the contact distance is not one number', noseOn > flank + 2, `nose-on ${noseOn.toFixed(2)} vs flank ${flank.toFixed(2)}`);
+
+  // THE NOSE STARTS IT. A seal swimming at the ball, walked in a step at a
+  // time: nothing happens while the nose is clear of the drawn edge, and the
+  // first frame it crosses is the frame the ball is shoved AND dented.
+  resetBall(); settle(0.4);
+  ball.vx = 0; ball.vy = 0;
+  const edge = ballHitRadiusAt(Math.PI);
+  const gap = (d) => {
+    // The seal's nose `d` past the ball's drawn edge, swimming at it.
+    resetBall();
+    ball.x = 0; ball.y = midWater(); ball.vx = 0; ball.vy = 0;
+    solveBallSurface();
+    player.mesh.position.set(ball.x - ballHitRadiusAt(Math.PI) - body.nose + d, ball.y, 0);
+    player.mesh.rotation.z = -Math.PI / 2; // nose at +x, the way it swims
+    player.velocity.set(14, 0);
+    strikeState.active = false;
+    const rim0 = ball.rim[0];
+    sealContact(0, player.mesh.position, player.velocity, false, null, 0, 0, 0);
+    return { vx: ball.vx, dent: ball.rim.reduce((a, r) => a + Math.abs(r), 0) };
+  };
+  const clear = gap(-0.4);
+  const touching = gap(0.3);
+  check('a nose short of the drawn edge does nothing at all', clear.vx === 0 && clear.dent === 0, `vx ${clear.vx.toFixed(2)}, |rim| ${clear.dent.toFixed(3)}`);
+  check('...and the frame it crosses is the shove AND the dent', touching.vx > 1 && touching.dent > 0.05, `vx ${touching.vx.toFixed(2)}, |rim| ${touching.dent.toFixed(3)}`);
+  resetBall();
+  player.mesh.position.set(-30, midWater(), 0);
+  player.velocity.set(0, 0);
 }
 
 // ---------------------------------------------------------------------------

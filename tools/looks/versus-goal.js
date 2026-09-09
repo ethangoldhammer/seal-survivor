@@ -21,7 +21,7 @@ import { enableVersus } from '../../path/src/systems/versusFlag.js';
 import { bounds, midWater } from '../../path/src/arena.js';
 import {
   shore, shoreOverscan, refreshGoalGlow, tickGoalGlow, flashGoalScored, clearGoalScored,
-  setGoalSwimmers, goalGlowImpulse, resetGoalStir, goalGlowState,
+  setGoalSwimmers, setGoalBall, goalGlowImpulse, resetGoalStir, goalGlowState,
 } from '../../path/src/systems/wallRocks.js';
 import { mouthHalfHeight, tunnelDepth, rockX, goalLineX, cameraReach } from '../../path/src/systems/versusGoal.js';
 
@@ -345,6 +345,102 @@ check('...and a tuning change moves it', hot < base - 0.05, `${(hot * 100).toFix
   check('...and only where the seal is', diffPct(stirred, clean, farRegion) < stirMoved * 0.5,
     `${diffPct(stirred, clean, farRegion).toFixed(1)}% away from them vs ${stirMoved.toFixed(1)}% at them`);
   setGoalSwimmers([]);
+  push();
+
+  // THE COLOUR CHANGES HANDS as an attacker swims in. This is the LEFT mouth,
+  // which is team 0's goal — so it is team 1, the red one, that takes it over
+  // by swimming in. At the tuned glow, because that is where the colour is
+  // the whole read.
+  CONFIG.versus.goal.glow = tuned.glow; CONFIG.versus.goal.spill = tuned.spill;
+  refreshGoalGlow();
+  push();
+  const attackFrom = await shot('left mouth, no attacker in it', 'the mouth in the colour of the team that defends it');
+  setGoalSwimmers([{ x: rockX(-1) - 4, y: gy, vx: -20, vy: 0, color: CONFIG.versus.teams[1].color, tint: 1 }]);
+  push();
+  const taken = await shot('left mouth, an attacker deep in it', "swimming in brings the attacker's colour with it");
+  const tookRed = redShare(taken, ...mouthRegion);
+  check('an attacker in the goal it is attacking takes the colour over',
+    tookRed > redShare(attackFrom, ...mouthRegion) + 0.08,
+    `red ${(redShare(attackFrom, ...mouthRegion) * 100).toFixed(1)}% → ${(tookRed * 100).toFixed(1)}% with a seal in the mouth`);
+  // ...and it is the SEAL that carries it: half a pitch away, nothing.
+  setGoalSwimmers([{ x: 0, y: gy, vx: 0, vy: 0, color: CONFIG.versus.teams[1].color, tint: 1 }]);
+  push();
+  const far = await shot('left mouth, the attacker out in the water', 'the same tint on a seal that is nowhere near it');
+  check('...and the colour travels with the seal, not with the tint', redShare(far, ...mouthRegion) < tookRed * 0.25,
+    `${(redShare(far, ...mouthRegion) * 100).toFixed(1)}% with the seal at centre vs ${(tookRed * 100).toFixed(1)}% with it in the mouth`);
+  setGoalSwimmers([]);
+  CONFIG.versus.goal.glow = 1.2; CONFIG.versus.goal.spill = 8;
+  refreshGoalGlow();
+  push();
+
+  // THE BALL IN THE LIGHT — it overdrives and boils where it overlaps, and
+  // the pair is at the same clock so only the ball is different. In the mouth
+  // where the light is brightest, which is the hardest place to show a
+  // brightening: if it reads there it reads anywhere.
+  CONFIG.versus.goal.glow = tuned.glow; CONFIG.versus.goal.spill = tuned.spill;
+  refreshGoalGlow();
+  resetGoalStir();
+  push();
+  const noBall = await shot('left mouth, no ball in it', 'the mouth at the tuned glow, nothing in it');
+  const litRegion = [Math.max(0, px(rockX(-1) - 12)), 200, Math.max(1, px(rockX(-1) + 2)), 520];
+  const meanOf = (canvas, r) => {
+    const d = canvas.getContext('2d').getImageData(r[0], r[1], r[2] - r[0], r[3] - r[1]).data;
+    let sum = 0; let n = 0;
+    for (let i = 0; i < d.length; i += 4) { n++; sum += Math.max(d[i], d[i + 1], d[i + 2]); }
+    return sum / Math.max(1, n);
+  };
+  setGoalBall({ x: rockX(-1) - 4, y: gy, amount: 1 });
+  push();
+  const withBall = await shot('left mouth, the ball arriving in it', 'the same frame, same clock — the light blazing and boiling round the ball');
+  const ballMoved = diffPct(withBall, noBall, litRegion);
+  check('the ball overdrives and boils the light it is in', ballMoved > 3, `${ballMoved.toFixed(1)}% of the lit mouth changed with the ball in it (mean ${meanOf(noBall, litRegion).toFixed(0)} → ${meanOf(withBall, litRegion).toFixed(0)})`);
+  // ...and a ball out in the water does nothing: the amount is versus.js's
+  // to decide and 0 has to park it, or every frame of open play would blaze.
+  setGoalBall(null);
+  push();
+  const parked = await shot('left mouth, the ball parked', 'the ball out in the water: nothing');
+  check('...and a ball out in the water leaves it alone', diffPct(parked, noBall, litRegion) < ballMoved * 0.4,
+    `${diffPct(parked, noBall, litRegion).toFixed(1)}% vs ${ballMoved.toFixed(1)}% with it in the mouth`);
+
+  // THE THROW: flat versus the tuned absorption, looking down the corridor.
+  // Measured as a GRADIENT — how much dimmer the mouth is than the far end —
+  // because a flat light and a thrown one can have the same mean and the
+  // whole point is that they do not have the same profile.
+  // INSIDE THE FRAME. The camera reaches `reach` past the wall and no
+  // further, so the corridor it can see runs from bounds.left - reach to the
+  // drawn face — about ten units. Boxes at the tunnel's back would be off the
+  // left of the picture, clamped to column 0, and both would then measure the
+  // same strip of nothing: the first version of this check did exactly that
+  // and reported the gradient running the wrong way.
+  const frameLeft = bounds.left - reach;
+  const deepBox = [Math.max(0, px(frameLeft + 0.5)), 140, Math.max(2, px(frameLeft + 3.5)), 580];
+  const mouthBox = [Math.max(0, px(rockX(-1) - 3)), 140, Math.max(2, px(rockX(-1))), 580];
+  // EACH BOX AGAINST ITSELF, thrown over flat — never one box against the
+  // other. The deep box is full of the corridor's roof and floor and the
+  // mouth box is not, so the two are not comparable however bright the light
+  // in them is; the first version of this compared them and reported the
+  // gradient running the wrong way up a picture that was perfectly correct.
+  // What a throw means is that the mouth loses MORE of itself than the deep
+  // corridor does, and that is a pair of ratios each measured in one place.
+  const savedThrow = CONFIG.versus.goal.tunnelFalloff;
+  CONFIG.versus.goal.tunnelFalloff = 1; refreshGoalGlow(); push();
+  const flat = await shot('left goal, no throw', 'tunnelFalloff 1: the corridor as flat as it always was');
+  CONFIG.versus.goal.tunnelFalloff = savedThrow; refreshGoalGlow(); push();
+  const thrown = await shot('left goal, thrown down the tunnel', `tunnelFalloff ${savedThrow}: the source is the tunnel's back, off the frame, and this is what reaches the mouth`);
+  const keptDeep = meanOf(thrown, deepBox) / Math.max(1, meanOf(flat, deepBox));
+  const keptMouth = meanOf(thrown, mouthBox) / Math.max(1, meanOf(flat, mouthBox));
+  check('the light falls off down the tunnel toward the water', keptMouth < keptDeep - 0.05,
+    `the mouth keeps ${(keptMouth * 100).toFixed(0)}% of its flat brightness, the deep corridor ${(keptDeep * 100).toFixed(0)}%`);
+  // ...and the SLAB does not throw with it, or the corridor would turn into a
+  // window onto the seabed exactly where the camera is pointed.
+  {
+    const backs = world.scene.children.flatMap((c) => c.children ?? []).filter((m) => m.userData?.goalPart === 'back');
+    check('...but the slab behind it does not, so the corridor stays closed',
+      backs.length === 2 && backs.every((m) => !/goalThrow/.test(m.material.fragmentShader)),
+      `${backs.length} slab(s)`);
+  }
+  CONFIG.versus.goal.glow = 1.2; CONFIG.versus.goal.spill = 8;
+  refreshGoalGlow();
   push();
 
   // AND THE IMPULSE — a ring thrown into the field, photographed mid-flight

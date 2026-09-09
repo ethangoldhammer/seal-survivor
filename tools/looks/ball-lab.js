@@ -35,12 +35,14 @@ import { CONFIG } from '../../path/src/config.js';
 import { bounds, updateBounds, midWater } from '../../path/src/arena.js';
 import { enableVersus } from '../../path/src/systems/versusFlag.js';
 import { createPost } from '../../path/src/systems/post.js';
-import { ballEvent, setBallDrive, updateBallLook, resetBallLook, teamColor } from '../../path/src/systems/ballLook.js';
+import { ballEvent, setBallDrive, updateBallLook, resetBallLook, teamColor, ballCredit } from '../../path/src/systems/ballLook.js';
+import { updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit } from '../../path/src/systems/ballTrail.js';
 import {
   initParticles, updateParticles, updateParticleScale,
 } from '../../path/src/entities/particles.js';
 import {
   ball, initBallAlone, stepBallAlone, strikeBallFrom, renderBall, resetBall, rimRadius, rimAngle, driveOutline,
+  ballContactReach, ballHitRadiusAt,
 } from '../../path/src/systems/versus.js';
 import { ballSpinState } from '../../path/src/systems/ballSpin.js';
 
@@ -95,7 +97,9 @@ const CONFIG_SLIDERS = [
   ['versus.ball.maxSpeed', 'max speed', 20, 120, 1],
   ['versus.ball.drag', 'water drag /frame', 0.97, 1, 0.001],
   ['versus.ball.restitution', 'wall bounce', 0, 1.2, 0.02],
-  ['versus.ball.contactRadius', 'seal contact radius', 0.5, 5, 0.1],
+  ['versus.ball.body.nose', 'seal nose reach', 0.5, 6, 0.05],
+  ['versus.ball.body.tail', 'seal tail reach', 0.5, 6, 0.05],
+  ['versus.ball.body.thickness', 'seal half-thickness', 0.2, 3, 0.05],
   ['heavy: mass, air, water', null],
   ['versus.ball.mass', 'mass (seals)', 0.2, 10, 0.1],
   ['versus.ball.air.gravityMul', 'air gravity x', 0, 5, 0.1],
@@ -159,11 +163,14 @@ const CONFIG_SLIDERS = [
   ['the look (splats)', null],
   ['versus.ball.look.color', 'colour', 'color'],
   ['versus.ball.look.glow', 'glow', 0, 4, 0.05],
-  ['versus.ball.look.rimSize', 'rim splat size', 0.1, 2, 0.02],
-  ['versus.ball.look.innerSize', 'inner splat size', 0.1, 2.5, 0.02],
-  ['versus.ball.look.coreSize', 'core splat size', 0.1, 3, 0.02],
-  ['versus.ball.look.innerAt', 'inner ring at', 0, 1, 0.02],
-  ['versus.ball.look.inset', 'rim ring at', 0.3, 1.2, 0.01],
+  // The body's own build — and the HITBOX with it, since the goo isoline
+  // through these splats is what everything collides against (ballShape.js).
+  // All five are shares of the ball's radius, so `radius` scales the lot.
+  ['versus.ball.splats.rim', 'rim splat size (x radius)', 0.2, 2, 0.01],
+  ['versus.ball.splats.inner', 'inner splat size (x radius)', 0.2, 2.5, 0.01],
+  ['versus.ball.splats.core', 'core splat size (x radius)', 0.2, 3, 0.01],
+  ['versus.ball.splats.innerAt', 'inner ring at (x radius)', 0, 1.4, 0.01],
+  ['versus.ball.splats.ring', 'rim ring at (x soft body)', 0.3, 1.6, 0.01],
   ['the surface (goo group)', null],
   ['fx.goo.groups.ball.radius', 'splat radius', 1, 8, 0.1],
   ['fx.goo.groups.ball.iso', 'iso', 0.05, 1.5, 0.01],
@@ -229,6 +236,95 @@ const CONFIG_SLIDERS = [
   ['possession', null],
   ['versus.ball.look.tintMax', 'how far toward the team colour', 0, 1, 0.02],
   ['versus.ball.look.tintRate', 'how fast it changes hands /s', 0.5, 20, 0.5],
+  // The two-colour field — see CONFIG.versus.ball.look.shareRate.
+  ['versus.ball.look.shareRate', 'how fast a colour marches round /s', 0.2, 12, 0.1],
+  ['versus.ball.look.lobes', 'lobes riding the mass', 0, 7, 1],
+  ['versus.ball.look.lobeSize', 'lobe size (x the mass)', 0, 1.4, 0.02],
+  ['versus.ball.look.wobble', 'how far they are thrown', 0, 1.6, 0.02],
+  ['versus.ball.look.spin', 'how fast their ring rolls rad/s', -3, 3, 0.05],
+  ['versus.ball.look.breathe', 'how hard each one breathes', 0, 1, 0.02],
+  ['versus.ball.look.slosh', 'how far a hit throws the mass', 0, 4, 0.05],
+  ['versus.ball.look.sloshLag', 'how fast it catches back up /s', 0.5, 20, 0.5],
+  ['versus.ball.look.sloshMax', 'ceiling on the throw (x radius)', 0, 1, 0.02],
+
+  // THE TRAIL — systems/ballTrail.js, which is the seal's trail (breachTrail)
+  // running on the shared engine in systems/ribbonTrail.js. Two profiles, air
+  // and water, and the water block below only names what differs; anything it
+  // does not name is inherited from the air one directly above it, so a knob
+  // dragged up here moves BOTH unless the water row for it exists.
+  //
+  // The colours are not in this panel and cannot be: they are the two teams',
+  // live off the possession ledger. Use the 1 / 2 buttons to hand the ball
+  // over and watch the split march.
+  ['the trail: where and when', null],
+  ['versus.ball.trail.sources', 'shed points', 1, 2, 1],
+  ['versus.ball.trail.shoulder', 'thrown apart (rad)', 0, 1.6, 0.02],
+  ['versus.ball.trail.atRadius', 'on the edge (x radius)', 0.2, 1.4, 0.02],
+  ['versus.ball.trail.minSpeed', 'nothing under u/s', 0, 30, 0.5],
+  ['versus.ball.trail.fullSpeed', 'full at u/s', 5, 100, 1],
+  ['the trail: the cloud', null],
+  ['versus.ball.trail.emitPerSecond', 'particles /s', 5, 200, 1],
+  ['versus.ball.trail.life', 'lifetime s (= its length)', 0.1, 3, 0.02],
+  ['versus.ball.trail.lifeVary', 'lifetime spread', 0, 0.9, 0.02],
+  ['versus.ball.trail.maxNodes', 'particle ceiling', 10, 400, 5],
+  ['versus.ball.trail.samples', 'curve samples (smoothness)', 16, 400, 4],
+  ['versus.ball.trail.curveSmooth', 'smoothing passes', 0, 8, 1],
+  ['the trail: the band', null],
+  ['versus.ball.trail.width', 'width', 0.05, 3, 0.01],
+  ['versus.ball.trail.growth', 'opens up x by death', 0, 5, 0.05],
+  ['versus.ball.trail.fade', 'brightness falloff', 0.2, 4, 0.05],
+  ['versus.ball.trail.glow', 'glow (over bloom)', 0, 5, 0.05],
+  ['versus.ball.trail.minIntensity', 'floor under the ramp', 0, 1, 0.02],
+  ['versus.ball.trail.coreWidth', 'core half-width (share)', 0.01, 0.5, 0.01],
+  ['versus.ball.trail.coreGain', 'core brightness', 0, 3, 0.05],
+  ['versus.ball.trail.haloGain', 'halo brightness', 0, 3, 0.05],
+  ['versus.ball.trail.softness', 'halo shape (2 = gaussian)', 0.5, 5, 0.1],
+  ['versus.ball.trail.headTaper', 'head taper (share)', 0, 0.5, 0.01],
+  ['versus.ball.trail.tailTaper', 'tail taper (share)', 0, 0.5, 0.01],
+  ['versus.ball.trail.z', 'depth', -0.4, 0.4, 0.01],
+  // THE POSSESSION SPLIT. `trail` and `spread` are how far the two colours are
+  // pulled apart at parity; `throw` and `bias` are how much winning changes it.
+  // Both of the latter are centred on an even ball, so at 50/50 they do nothing
+  // and what you are looking at is the pair above.
+  ['the trail: the colour split', null],
+  ['versus.ball.trail.channelTrail', 'split along the path (x width)', 0, 0.8, 0.005],
+  ['versus.ball.trail.channelSpread', 'split sideways (x width)', 0, 0.8, 0.005],
+  ['versus.ball.trail.splitThrow', 'losing colour thrown clear', 0, 2, 0.05],
+  ['versus.ball.trail.splitBias', 'winning colour burns brighter', 0, 1.5, 0.05],
+  ['the trail: how it moves', null],
+  ['versus.ball.trail.turbulence', 'turbulence u/s²', 0, 12, 0.1],
+  ['versus.ball.trail.turbFreq', 'field cells (lower = broader)', 0.05, 1.5, 0.01],
+  ['versus.ball.trail.turbSpeed', 'field churn /s', 0, 3, 0.05],
+  ['versus.ball.trail.blowOut', 'thrown off the line u/s', 0, 6, 0.05],
+  ['versus.ball.trail.blowWave', 'how fast that side swings', 0.01, 1, 0.01],
+  ['versus.ball.trail.inherit', 'keeps ball velocity', 0, 1, 0.02],
+  ['versus.ball.trail.drag', 'gives it up /s', 0, 8, 0.05],
+  ['versus.ball.trail.foldSafety', 'fold guard', 0.2, 1, 0.01],
+  ['the trail: underwater (overrides)', null],
+  ['versus.ball.trail.water.width', 'width', 0.05, 3, 0.01],
+  ['versus.ball.trail.water.growth', 'opens up x by death', 0, 5, 0.05],
+  ['versus.ball.trail.water.glow', 'glow', 0, 5, 0.05],
+  ['versus.ball.trail.water.emitPerSecond', 'particles /s', 5, 200, 1],
+  ['versus.ball.trail.water.life', 'lifetime s', 0.1, 3, 0.02],
+  ['versus.ball.trail.water.maxNodes', 'particle ceiling', 10, 400, 5],
+  ['versus.ball.trail.water.samples', 'curve samples', 16, 400, 4],
+  ['versus.ball.trail.water.coreWidth', 'core half-width', 0.01, 0.5, 0.01],
+  ['versus.ball.trail.water.coreGain', 'core brightness', 0, 3, 0.05],
+  ['versus.ball.trail.water.haloGain', 'halo brightness', 0, 3, 0.05],
+  ['versus.ball.trail.water.blowOut', 'thrown off the line u/s', 0, 6, 0.05],
+  ['versus.ball.trail.water.turbulence', 'turbulence u/s²', 0, 12, 0.1],
+  ['versus.ball.trail.water.turbSpeed', 'field churn /s', 0, 3, 0.05],
+  ['versus.ball.trail.water.drag', 'gives it up /s', 0, 8, 0.05],
+  ['versus.ball.trail.water.inherit', 'keeps ball velocity', 0, 1, 0.02],
+  ['versus.ball.trail.water.minIntensity', 'floor under the ramp', 0, 1, 0.02],
+  ['versus.ball.trail.water.z', 'depth', -0.4, 0.4, 0.01],
+  ['the trail: bubbles (underwater)', null],
+  ['versus.ball.trail.water.bubbles.perSecond', 'bubbles /s', 0, 60, 1],
+  ['versus.ball.trail.water.bubbles.scale', 'per burst x', 0.2, 4, 0.1],
+  ['versus.ball.trail.water.bubbles.sizeMul', 'size x', 0.2, 4, 0.1],
+  ['versus.ball.trail.water.bubbles.speedMul', 'thrown x', 0.2, 4, 0.1],
+  ['versus.ball.trail.water.bubbles.tint', 'tinted by who owns it', 0, 1, 0.02],
+  ['versus.ball.trail.water.bubbles.color', 'bubble colour', 'color'],
 
   ['the pitch', null],
   ['versus.widthScale', 'pitch width x frame', 1, 3, 0.05],
@@ -499,7 +595,7 @@ function updateOverlay() {
   }
   rimGeo.setDrawRange(0, n + 1);
   pos.needsUpdate = true;
-  const cr = ball.r + (CONFIG.versus.ball.contactRadius ?? 2.2);
+  const cr = ballContactReach(0);
   contactRing.position.x = ball.x;
   contactRing.position.y = ball.y;
   contactRing.scale.setScalar(cr);
@@ -557,11 +653,11 @@ stage.addEventListener('pointerup', (ev) => {
 let lastStrike = null;
 function strikeAt(at, dir, power, english = lab.english) {
   const before = { spin: ball.spin };
-  const hit = strikeBallFrom(at, dir, lab.sealSpeed, power, english);
+  const hit = strikeBallFrom(at, dir, lab.sealSpeed, power, english, labOwner >= 0 ? labOwner : 0);
   lastStrike = { at, dir, power, hit, dSpin: ball.spin - before.spin, t: 0 };
   sealMark.position.x = at.x;
   sealMark.position.y = at.y;
-  sealMark.scale.setScalar(CONFIG.versus.ball.contactRadius ?? 2.2);
+  sealMark.scale.setScalar(CONFIG.versus.ball.body?.thickness ?? 0.69);
   markFade = 1;
   window.__strikes = (window.__strikes ?? 0) + 1;
   // The match fires this from strikeBall with the striking seal's index. Here
@@ -572,7 +668,7 @@ function strikeAt(at, dir, power, english = lab.english) {
 // A strike from a random point on the ball, in toward it with a random glance.
 function randomStrike() {
   const a = Math.random() * Math.PI * 2;
-  const R = ball.r + (CONFIG.versus.ball.contactRadius ?? 2.2) + 2;
+  const R = ballContactReach(0) + 2;
   const at = { x: ball.x + Math.cos(a) * R, y: ball.y + Math.sin(a) * R };
   const glance = (Math.random() * 2 - 1) * 0.9;
   const dir = { x: Math.cos(a + Math.PI + glance), y: Math.sin(a + Math.PI + glance) };
@@ -594,6 +690,25 @@ function readout() {
     `speed ${Math.hypot(ball.vx, ball.vy).toFixed(1)}   spin ${ball.spin.toFixed(2)} rad/s ${ball.spin > 0.01 ? '↺' : ball.spin < -0.01 ? '↻' : ''}   deform ${(worst / ball.r * 100).toFixed(0)}%`,
     `at ${ball.x.toFixed(1)}, ${ball.y.toFixed(1)}   ${ball.y > 0 ? 'AIR' : 'water'}   colour ${hex(CONFIG.versus.ball.look.color)}   strokes ${ss.streaks.length}${ss.streaks.length ? ` arc ${(ss.streaks[0].arc).toFixed(2)} rad` : ''}`,
   ];
+  // POSSESSION, as the ledger and the field actually hold it — the two colours
+  // and how much of the body each has. Without it the only way to tell a share
+  // of 0.2 from a share of 1.0 is to look at the ball, which is the thing being
+  // judged.
+  {
+    const c = ballCredit();
+    const tm = CONFIG.fx?.goo?.groups?.ball?.teams;
+    lines.push(`possession: credit ${c.credit[0].toFixed(1)} / ${c.credit[1].toFixed(1)}   newest ${c.newest}   share ${c.share.toFixed(3)}   seed ${c.seed.toFixed(2)} rad`);
+    if (tm) lines.push(`  field: A ${hex(tm.a)} → B ${hex(tm.b)}   ${tm.lobes} lobes   thrown ${tm.wobble.toFixed(2)}   spin ${tm.spin.toFixed(2)}   r ${tm.wr.toFixed(1)}`);
+    // THE TRAIL'S SPLIT, as numbers. Which channel is which colour, where each
+    // one sits across the band and how bright it is — the three things the
+    // ledger decides, and the only way to tell a lean of 0.9 from one of 0.6
+    // without measuring pixels.
+    const sp = ballTrailSplit();
+    const air = ballTrailStats('air');
+    const wat = ballTrailStats('water');
+    lines.push(`  trail: ${sp.colors.map((c, i) => `${hex(c)} lean ${sp.lean[i].toFixed(2)} x${sp.gain[i].toFixed(2)}`).join('   ')}`);
+    lines.push(`  cloud: ${wat.count} under / ${air.count} over   ${wat.plumes} plume(s)`);
+  }
   if (lastStrike?.hit) {
     const h = lastStrike.hit;
     lines.push(`last strike: power ${lastStrike.power.toFixed(2)}  impulse ${h.imp?.toFixed(1)}  glance ${h.off?.toFixed(2)}  english ${(h.english ?? 0).toFixed(2)}  slip ${(h.slip ?? 0).toFixed(1)}  +spin ${lastStrike.dSpin.toFixed(2)}`);
@@ -613,7 +728,7 @@ b('bStrike').addEventListener('click', randomStrike);
 b('bThrow').addEventListener('click', throwBall);
 b('bAuto').addEventListener('click', () => { auto = !auto; b('bAuto').classList.toggle('on', auto); });
 b('bFreeze').addEventListener('click', () => { frozen = !frozen; b('bFreeze').classList.toggle('on', frozen); });
-b('bReset').addEventListener('click', () => resetBall());
+b('bReset').addEventListener('click', () => { resetBall(); clearBallTrail(scene); });
 b('bOverlay').addEventListener('click', () => { overlay = !overlay; b('bOverlay').classList.toggle('on', overlay); });
 b('bOverlay').classList.toggle('on', overlay);
 b('bSave').addEventListener('click', () => writePreset());
@@ -634,7 +749,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') throwBall();
   if (e.key === 'a' || e.key === 'A') b('bAuto').click();
   if (e.key === 'f' || e.key === 'F') b('bFreeze').click();
-  if (e.key === 'r' || e.key === 'R') resetBall();
+  if (e.key === 'r' || e.key === 'R') { resetBall(); clearBallTrail(scene); }
   if (e.key === 'o' || e.key === 'O') b('bOverlay').click();
   if (e.key === 'W') writePreset();
   if (e.key === '[') ball.spin -= lab.spinNudge;
@@ -697,6 +812,11 @@ function step(dt) {
     if (autoClock >= every) { autoClock -= every; randomStrike(); }
   }
   stepBallAlone(dt);
+  // THE TRAIL, exactly as updateVersusClock drives it: the shipping module, the
+  // shipping wall clock, the ball's own drawn edge. It is the only place the
+  // two-colour split can be judged, because what it splits into is a possession
+  // ledger and the lab is the only place that hands the ball over on a button.
+  updateBallTrail(dt, scene, ball, { radiusAt: ballHitRadiusAt });
   if (trace) traceStep();
   updateParticles(dt);
   if (markFade > 0) {

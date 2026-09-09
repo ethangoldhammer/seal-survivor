@@ -343,6 +343,23 @@ section('Seal sports is a panel of one working game and two promises');
   check('Blubberball opens the team select, and Start is what enters the mode',
     /showTeamSelect\(\{[\s\S]{0,200}onStart: \(\) => enterMode\(true\)/.test(main));
   check('the team select is polled every frame beside the pause menu', /updatePauseNav\(\);[\s\S]{0,300}updateTeamSelect\(\);/.test(main));
+
+  // A MATCH CUTS, so the menu does not glide out over it. updateVersusCamera
+  // claims the lens at full weight on the first frame of a match: the buttons'
+  // own fade then runs for a third of a second over a live pitch, with the
+  // labels re-projected through the MATCH camera every frame — menu type
+  // sitting on top of the kickoff. The release has to drop it outright there,
+  // and the drop has to come BEFORE the phase is set to 'out' or the glide has
+  // already started. Source-read like everything else in this block: the 3D
+  // menu wants a GL context and the loaded seal.
+  const menuSrc = readFileSync(new URL('../path/src/systems/mainMenu.js', import.meta.url), 'utf8');
+  const rel = menuSrc.slice(menuSrc.indexOf('    release() {'));
+  const cut = rel.slice(0, rel.indexOf("state.phase = 'out'"));
+  check('a match cuts: the menu is dropped outright rather than eased out over it',
+    /versusActive\(\)[\s\S]{0,400}tidy\(\);[\s\S]{0,40}return;/.test(cut),
+    cut.length < 1200 ? 'no versus branch before the glide starts' : 'release() has no early cut');
+  check('...and it is the same teardown the no-glide route already used',
+    /versusActive\(\)[\s\S]{0,200}pin\?\.release\(\);[\s\S]{0,120}fitRim\(0,/.test(cut));
 }
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}`);

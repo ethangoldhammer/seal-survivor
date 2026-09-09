@@ -250,14 +250,15 @@ const STYLES = `
      so it reads as belonging to them rather than as another field. */
   .sv-sfx-variations { margin: 4px 0 2px 50px; display: flex; flex-direction: column; gap: 3px; }
   .sv-sfx-variation { display: flex; align-items: center; gap: 5px; }
-  .sv-sfx-variation-name { flex: 1; font-size: 9px; color: rgba(232,236,243,0.55);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sv-sfx-variation-name { flex: 1; min-width: 0; font-size: 9px; color: rgba(232,236,243,0.55);
+    line-height: 1.3; overflow-wrap: anywhere; }
   .sv-sfx-variation .sv-tex-btn { padding: 1px 6px; font-size: 10px; line-height: 1.4; }
   /* Wide enough for the longest field names ('noise mix', 'pitch var',
-     'filt var') at this font size. Ellipsis rather than a hard clip so
-     anything longer still degrades readably, with the full text on hover. */
-  .sv-sfx-field label { font-size: 9px; color: rgba(232,236,243,0.5); width: 62px; flex-shrink: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+     'filt var') at this font size, and anything longer WRAPS rather than
+     ellipsising — a truncated slider name has to be hovered to be read, which
+     is the one thing you never want to do while dragging the one next to it. */
+  .sv-sfx-field label { font-size: 9px; color: rgba(232,236,243,0.5); width: 72px; flex-shrink: 0;
+    line-height: 1.25; overflow-wrap: anywhere; }
   .sv-sfx-field input[type=range] { flex: 1; accent-color: #ffb347; height: 14px; }
   .sv-sfx-field select { flex: 1; background: rgba(255,255,255,0.06); color: #e8ecf3; font-family: inherit;
     border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 4px 6px; font-size: 10px; }

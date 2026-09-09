@@ -101,8 +101,22 @@ export function attachPlayerOutline(body) {
 // Colour, glow, width and opacity, pushed onto the live materials. Disabling
 // hides the shells rather than tearing them down, so the toggle costs nothing
 // and can't get out of step with the body currently on screen.
+// A COLOUR THE MODE ASKS FOR, over the one CONFIG carries. Blubberball outlines
+// every seal in its side's colour, and player 1 is a seal on a side like any
+// other — but a match must never WRITE CONFIG (see the note in versusFlag.js:
+// the tuner snapshots whole sections, so a mode that wrote its colours there
+// would ship them as the game's). So the override lives here and the match
+// hands it back on the way out.
+let playerTint = null;
+
+export function setPlayerOutlineTint(color = null) {
+  playerTint = color;
+  applyPlayerOutline();
+}
+
 export function applyPlayerOutline() {
-  const cfg = CONFIG.playerOutline ?? {};
+  const base = CONFIG.playerOutline ?? {};
+  const cfg = playerTint == null ? base : { ...base, color: playerTint };
   for (const shell of playerShells) {
     shell.visible = cfg.enabled !== false;
     if (shell.material) applyLook(shell.material, cfg, accumulatedScale(shell));
@@ -174,6 +188,41 @@ const hurtTarget = new THREE.Color();
  * @param power the banked power it launched with, 0..1 — a flick pops, a full
  *   commitment detonates.
  */
+// ---------------------------------------------------------------------------
+// A RIM PER SEAL — Blubberball, where there is more than one of them.
+//
+// The player's rim above is a SINGLETON on purpose: there is one seal in a
+// run, and keeping one set of shells is what lets the wind-up throb, the
+// release flare and the damage flash all be module state. A match has four or
+// eight seals and each wants its own colour, so these are separate: built with
+// the body, coloured once, and dropped with it. They take none of the player
+// rim's animation, which is the honest split — that animation is about what
+// the person at the controls is doing, and nobody is at the controls of a bot.
+// ---------------------------------------------------------------------------
+
+/**
+ * Give one seal's body a rim in `color`. Returns the shells so the caller can
+ * drop them; safe on a null body.
+ */
+export function attachSealOutline(body, color) {
+  if (!body) return [];
+  const cfg = CONFIG.playerOutline ?? {};
+  const shells = addOutlineShells(body, { color });
+  for (const shell of shells) {
+    shell.visible = cfg.enabled !== false;
+    if (shell.material) applyLook(shell.material, { ...cfg, color }, accumulatedScale(shell));
+  }
+  return shells;
+}
+
+/** ...and take it off again, dropping the materials with it. */
+export function releaseSealOutline(shells) {
+  for (const shell of shells ?? []) {
+    retireMaterial(shell.material);
+    shell.parent?.remove(shell);
+  }
+}
+
 export function flarePlayerOutline(power = 1) {
   flare = Math.max(flare, Math.min(1, Math.max(0, power)));
 }

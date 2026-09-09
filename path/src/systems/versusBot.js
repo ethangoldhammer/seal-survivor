@@ -26,24 +26,52 @@
 
 import { CONFIG } from '../config.js';
 import { captainIsCpu } from './versusFlag.js';
+import { seatIsCpu, teamOfSeat } from './sealRoster.js';
 import { bounds, midWater } from '../arena.js';
 import { mouthY, mouthHalfHeight } from './versusGoal.js';
+// The distance at which a seal actually touches the ball — the contact's own
+// answer, not a second copy of it. See ballShape.js.
+import { ballContactReach } from './ballShape.js';
 
-// The wall player 2 defends. +1 is the right; the bot is always the second
-// seal, and the second seal's own goal is the right mouth (spawnPoint and
-// kickoffSpot in systems/versus.js put it there, and goal() scores a ball in
-// the LEFT mouth for it).
-const OWN_SIDE = 1;
 import { pickups } from '../entities/pickups.js';
 import { features, policyAction, policyUsable } from './imitation.js';
 import policyJson from '../versusPolicy.json';
 
 const cfg = () => CONFIG.versus?.bot ?? {};
 
+// WHICH MOUTH A SEAT DEFENDS, as a sign: -1 the left wall, +1 the right. It
+// was the constant OWN_SIDE = 1, and that is true of exactly one seat — the
+// bot was always player 2, and player 2 defends the right. A CPU TEAMMATE
+// defends the LEFT, and every rule the bot has about its own goal is the
+// wrong way round for it until this is asked rather than assumed.
+const ownSideOf = (seat) => (teamOfSeat(seat) === 0 ? -1 : 1);
+
 let policy = policyJson;
 /** Swap the policy in (the harness trains one and hands it over). */
 export function setBotPolicy(model) { policy = model; }
 export function botPolicy() { return policy; }
+
+// ONE MEMORY PER SEAT. The bot's state was a module singleton because there
+// was one bot; with a CPU teammate and CPU opponents on the pitch a shared
+// jitter, a shared decision clock and a shared strike hold would make every
+// bot the same seal in three places. `botState` is still the LIVE one — the
+// last bot to run — because that is what the readout and the harness have
+// always read, and updateBot swaps each seat's memory through it.
+const brains = new Map();
+
+function brainFor(seat) {
+  let b = brains.get(seat);
+  if (!b) {
+    b = { ...botState, target: { x: 0, y: 0 }, jx: 0, jy: 0 };
+    brains.set(seat, b);
+  }
+  return b;
+}
+
+/** A fresh match: nobody remembers the last one. */
+export function resetBotBrains() {
+  brains.clear();
+}
 
 export const botState = {
   driving: false,     // the bot filled player 2's input this frame
@@ -62,10 +90,13 @@ export const botState = {
 };
 
 /** Whether the bot should be driving: on, off, or only when no pad is on P2. */
-export function botWanted(padConnected) {
+export function botWanted(padConnected, seat = 1) {
   const on = cfg().enabled ?? 'auto';
   if (on === true) return true;
   if (on === false) return false;
+  // A seat past the two captains is only ever a person's if the team select
+  // put one there — see seatIsCpu. Nothing guesses a pad for it.
+  if (seat > 1) return seatIsCpu(seat);
   // A side the team select gave to the computer is the bot whatever is
   // plugged in; a side it gave to a person is the bot only if their pad has
   // gone — the same "nobody on the stick" rule as a match with no setup.
@@ -92,7 +123,15 @@ const _act = { moveX: 0, moveY: 0, aimX: 1, aimY: 0, strike: 0 };
  * ({ pos, vel, charge, pending, active }), `ball` the ball, `opp` player 1's
  * position and velocity.
  */
-export function updateBot(dt, me, ball, opp, out) {
+export function updateBot(dt, me, ball, opp, out, seat = 1) {
+  // This seat's memory in, and back out at the end — see brainFor. `target` is
+  // copied by VALUE rather than by reference, or every bot would be steering
+  // for the same point through one shared object.
+  const mem = brainFor(seat);
+  Object.assign(botState, mem);
+  botState.target.x = mem.target.x;
+  botState.target.y = mem.target.y;
+  botState.seat = seat;
   const c = cfg();
   const brain = c.brain ?? 'scripted';
   const useModel = (brain === 'policy' || brain === 'auto') && policyUsable(policy);
@@ -109,13 +148,16 @@ export function updateBot(dt, me, ball, opp, out) {
   out.strikeRelease = botState.heldPrev && !held;
   botState.heldPrev = held;
   out.connected = false;
+  Object.assign(mem, botState);
+  mem.target = { x: botState.target.x, y: botState.target.y };
   return out;
 }
 
 // --- the one thing it may never do -------------------------------------------
 //
-// THE OWN-GOAL VETO. Player 2 defends the RIGHT mouth, and nothing it does may
-// send the ball into it. This is a rule about the ACTION, not about either way
+// THE OWN-GOAL VETO. A seat defends one mouth — the right for team 1, the left
+// for team 0 (ownSideOf) — and nothing it does may send the ball into it.
+// This is a rule about the ACTION, not about either way
 // of choosing one, so it sits in updateBot after both of them: the script's
 // alignment test is a test on the frame it decides, and a wind-up started on a
 // good line is released some tenths of a second later on whatever line the ball
@@ -171,9 +213,13 @@ export function intoOwnGoal(ball, dx, dy, ownSide = 1) {
   return Math.abs(y - mouthY()) <= half;
 }
 
-/** How close the bot has to be to be PUSHING the ball rather than near it. */
-function contactReach(ball) {
-  return (ball.r ?? 2.8) + (CONFIG.versus?.ball?.contactRadius ?? 2.2);
+/**
+ * How close the bot has to be to be PUSHING the ball rather than near it —
+ * the same two shapes sealContact uses, through versus.js's own answer, so a
+ * bot never steers to a distance the contact does not agree is a touch.
+ */
+function contactReach(ballOf) {
+  return ballContactReach(ballOf, 0);
 }
 
 /**
@@ -190,14 +236,15 @@ function vetoOwnGoal(me, ball, out, held) {
   if (!(bl > 1e-6) || bl > (c.vetoRange ?? 14)) return held;
   const dx = bx / bl;
   const dy = by / bl;
-  const onward = dx * OWN_SIDE;
+  const own = ownSideOf(botState.seat ?? 1);
+  const onward = dx * own;
   // 1. The shot: the line a strike would send it on.
-  let bad = intoOwnGoal(ball, dx, dy);
+  let bad = intoOwnGoal(ball, dx, dy, own);
   // 2. The deflection: where the ball is already going, if it is going
   //    anywhere — a direction read off a ball at rest means nothing.
   if (!bad) {
     const sp = Math.hypot(ball.vx, ball.vy);
-    if (sp > (c.vetoBallSpeed ?? 4) && intoOwnGoal(ball, ball.vx / sp, ball.vy / sp)) bad = true;
+    if (sp > (c.vetoBallSpeed ?? 4) && intoOwnGoal(ball, ball.vx / sp, ball.vy / sp, own)) bad = true;
   }
   // 3. The dribble: touching it at all from the side that pushes it home. No
   //    ray — see the note. This is the clause that was scoring.
@@ -227,7 +274,9 @@ function vetoOwnGoal(me, ball, out, held) {
 function scriptStep(dt, me, ball, opp, out) {
   const c = cfg();
   const reaction = c.reaction ?? 0.12;
-  const goalOppX = bounds.left;            // player 2 attacks the LEFT goal
+  // The mouth this seat is shooting at: the one it does NOT defend.
+  const own = ownSideOf(botState.seat ?? 1);
+  const goalOppX = own < 0 ? bounds.right : bounds.left;
   const goalY = midWater();
 
   botState.decideT -= dt;
@@ -273,7 +322,7 @@ function scriptStep(dt, me, ball, opp, out) {
     if (botState.intent !== 'strike') {
       const along = bx * ux + by * uy;
       const across = bx * uy - by * ux; // > 0: the ball lies to the right of the line
-      const clear = (ball.r ?? 2.8) + (CONFIG.versus?.ball?.contactRadius ?? 2.2) + 0.5;
+      const clear = ballContactReach(ball, 0) + 0.5;
       // Ahead of me by more than half a reach (beside it, the way past is
       // straight on) and by less than a few — a ball far down the line is
       // not in the way yet, and a bot that sidestepped it from fifty units
@@ -321,7 +370,8 @@ function scriptStep(dt, me, ball, opp, out) {
 function decide(me, ball, opp, goalOppX, goalY) {
   const c = cfg();
   const lead = c.lead ?? 0.35;
-  const standoff = c.standoff ?? 4.5;
+  // Just inside the distance at which a touch lands — see CONFIG.versus.bot.standAt.
+  const standoff = ballContactReach(ball, 0) * (c.standAt ?? 0.9);
   const jitter = c.jitter ?? 1.2;
   botState.jx = (Math.random() * 2 - 1) * jitter;
   botState.jy = (Math.random() * 2 - 1) * jitter;
@@ -379,7 +429,9 @@ function decide(me, ball, opp, goalOppX, goalY) {
   const tgy = goalY - me.pos.y;
   const tl = Math.hypot(tgx, tgy) || 1;
   const align = (ax * tgx + ay * tgy) / (al * tl);
-  if (dBall < (c.strikeRange ?? 7) && align > (c.strikeAlign ?? 0.75)) {
+  // Inside the reach plus its slack — see CONFIG.versus.bot.strikeSlack.
+  const strikeAt = ballContactReach(ball, Math.atan2(-ay, -ax)) + (c.strikeSlack ?? 1.5);
+  if (dBall < strikeAt && align > (c.strikeAlign ?? 0.75)) {
     botState.intent = 'strike';
   } else {
     botState.intent = 'chase';
@@ -396,12 +448,19 @@ function policyStep(dt, me, ball, opp, out) {
     { x: opp.x, y: opp.y, vx: opp.vx, vy: opp.vy },
     ball,
     { charge: me.charge, pending: me.pending, dashing: me.active },
-    true, // player 2 is mirrored: its goal is really on the right
+    // MIRRORED PER SEAT. Every imitation row was logged with the seal's own
+    // goal on the LEFT, which is player 1's frame — so a seat that really
+    // defends the right is mirrored into it and one that defends the left is
+    // already in it. It was a hardcoded `true` because the only bot was
+    // player 2.
+    ownSideOf(botState.seat ?? 1) > 0,
     pitch, CONFIG.versus?.ball?.maxSpeed ?? 64, CONFIG.player?.maxSpeed ?? 34, _feat,
   );
   policyAction(policy, _feat, _act);
-  // Back out of the mirror.
-  out.move.set(-_act.moveX, _act.moveY);
+  // Back out of the mirror — the same flip that went in, or a seat that was
+  // never mirrored comes out swimming the wrong way.
+  const mir = ownSideOf(botState.seat ?? 1) > 0 ? -1 : 1;
+  out.move.set(mir * _act.moveX, _act.moveY);
   // A DIRECTION, NOT A MAGNITUDE. The player this learned from pushes the
   // stick all the way or not at all (every decile of his moving rows is
   // 1.00), and a network fitted by squared error to that answers a state it
@@ -412,7 +471,7 @@ function policyStep(dt, me, ball, opp, out) {
   const ml = out.move.length();
   if (ml >= (c.policyStickAt ?? 0.3)) out.move.divideScalar(ml);
   else out.move.set(0, 0);
-  const ax = -_act.aimX;
+  const ax = mir * _act.aimX;
   const ay = _act.aimY;
   const al = Math.hypot(ax, ay);
   if (al > 0.2) out.aim.set(ax / al, ay / al);

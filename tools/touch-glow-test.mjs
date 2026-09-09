@@ -172,6 +172,59 @@ const uni = () => scene.children.find((c) => c.isLineSegments).material.uniforms
 check(`the shader loops over exactly ${TOUCH_SLOTS} fingers, the same number input.js hands out`,
   uni().uTouch.value.length === TOUCH_SLOTS && uni().uTouchColor.value.length === TOUCH_SLOTS);
 
+// ---------------------------------------------------------------------------
+section('WAKE — every seal dents the water, and hulls cannot crowd them out');
+// ---------------------------------------------------------------------------
+// The lattice bulges around a body in it, and until now the only body that
+// counted was the seal holding the frame. On a Blubberball pitch the other
+// players swam through a flat grid — the one place two seals are on screen at
+// once is the one place it was most obviously missing.
+//
+// The seals and the hulls get separate bands on purpose. They share a fixed
+// per-vertex loop, and on one queue a busy shipping lane takes every slot: the
+// dent a player is actually looking for would switch itself off whenever the
+// water got interesting.
+{
+  const wake = () => uni().uWake.value;
+  const live = () => wake().filter((w) => w.w !== 0);
+  at.set(0, 0, 0);
+  step();
+  check('the seal holding the frame is slot 0, always',
+    wake()[0].w !== 0 && wake()[0].x === at.x && wake()[0].y === at.y,
+    `slot 0 at (${wake()[0].x}, ${wake()[0].y}) strength ${wake()[0].w.toFixed(2)}`);
+  check('...and it is the only body in the water until somebody says otherwise', live().length === 1);
+
+  // Another player, published the frame before the update the way main.js does.
+  grid.sealWake(30, -10, 7, -0.55);
+  grid.sealWake(-25, 5, 7, -0.55);
+  step();
+  const seals = live();
+  check('another player dents it too', seals.length === 3, `${seals.length} bodies`);
+  check('...in the seals\' own band, above slot 0 and below the hulls',
+    wake()[1].w !== 0 && wake()[2].w !== 0,
+    wake().map((w) => w.w.toFixed(2)).join(' '));
+
+  // Stop publishing: the dent goes with the seal rather than being left behind.
+  step();
+  check('a seal that stops publishing leaves no dent behind it', live().length === 1,
+    `${live().length} bodies still denting`);
+
+  // A SHIPPING LANE. Every hull slot filled, and the seals still get theirs —
+  // the failure this band exists to prevent.
+  for (let i = 0; i < 12; i++) grid.hullWake(60 + i, 0, 12, -0.4);
+  grid.sealWake(30, -10, 7, -0.55);
+  step();
+  const busy = live();
+  const sealsLive = busy.filter((w) => Math.abs(w.z - 7) < 1e-6).length;
+  check('a full shipping lane cannot take the players\' slots', sealsLive === 2,
+    `${sealsLive} seal-sized dents of ${busy.length} bodies`);
+  check('...and the hulls fill what is left rather than overflowing',
+    busy.length <= uni().uWake.value.length, `${busy.length} of ${uni().uWake.value.length} slots`);
+  grid.reset();
+  step();
+  check('a reset clears every body but the frame\'s own seal', live().length === 1);
+}
+
 step();
 check('no fingers down, no glow', uni().uTouch.value.every((u) => u.w === 0));
 

@@ -15692,6 +15692,17 @@ export const CONFIG = {
       wakeRadius: 7,
       wakeStrength: -0.55, // negative = grid sucks inward toward the ship
       wakeSpeedGain: 0.02, // extra pull proportional to ship speed
+      // EVERY PLAYER DENTS IT, not just the one holding the frame. Player 1
+      // is slot 0 and takes the two numbers above; the other seals on a
+      // Blubberball pitch take exactly the same ones, because they are the
+      // same animal and a smaller dent would read as a smaller seal rather
+      // than as a second player. See publishSealWakes in main.js.
+      //
+      // They publish into a band of their own (systems/grid.js) so a busy
+      // shipping lane cannot take every slot, and each slot is a per-vertex
+      // loop iteration over the whole lattice whether it holds anything or
+      // not — which is why the band is small and the seals FURTHEST from
+      // player 1 get the slots first.
 
       // TOUCH GLOW — what the player's fingers do to the lattice on a phone.
       // Every contact on the canvas gets a slot (see TOUCH_SLOTS in input.js),
@@ -16797,6 +16808,28 @@ export const CONFIG = {
         colors: [0x9fe8ff, 0xdff6ff, 0xffffff], cone: 0.6, drag: 1.6,
         gravity: [0, 3.2], inherit: 0.3, glow: 0.9, surfacePop: 'bubbleBurst',
     },
+      // WHAT THE BLUBBERBALL BOILS OFF UNDERWATER — the other half of its
+      // trail (systems/ballTrail.js), shed from the same two points astern of
+      // the body at the same speed ramp.
+      //
+      // Its own emitter rather than `wakeBubbles` with a scale on it, and the
+      // reason is the CONE plus the throw. The seal's wake is a small animal
+      // cavitating off four flipper tips; this is a heavy body ploughing
+      // through the water, so the bubbles are bigger, thrown harder and kept in
+      // a narrow cone straight astern — a wide cone throws them across the
+      // ball's own line, where they draw as a haze around it rather than as a
+      // wake behind it.
+      //
+      // TINTED FROM THE CALL SITE toward whoever is winning the ball, which is
+      // the one thing about this burst that is information rather than water.
+      // `surfacePop` for the same reason every rising bubble has one: the ball
+      // spends half a match near the line, and a bubble that reaches it should
+      // break rather than sail on into the sky.
+      ballWake: {
+        count: 2, speed: [1.2, 4.2], size: [0.09, 0.26], life: [0.7, 1.6],
+        colors: [0xdff6ff, 0xbfefff, 0xffffff], cone: 0.35, drag: 1.5,
+        gravity: [0, 3.4], inherit: 0.22, glow: 1.0, surfacePop: 'bubbleBurst',
+      },
       // A HULL PUSHING WATER. Every boat in the game sheds this through the one
       // system that owns it, systems/boatWake.js: the rowboat and the trawler
       // that sail past (systems/boats.js), and both boat bosses holding station
@@ -20065,7 +20098,7 @@ export const CONFIG = {
           ball: {
             radius: 5.5,
             iso: 0.17,
-            soft: 0.23,
+            soft: 0.16,
             opacity: 1,
             additive: false,
             rim: -0.4,
@@ -20087,7 +20120,7 @@ export const CONFIG = {
             // Every other goo group leaves this absent, which the shader reads
             // as zero — the plain lookup it has always done.
             warp: {
-              amount: 1.3436637098003905,   // texels of displacement at rest
+              amount: 0.87833590575886,   // texels of displacement at rest
               scale: 7,      // noise cells across the screen
               speed: 0.86,    // how fast the field drifts
               feed: 3,     // how hard the first sample bends the second
@@ -20107,11 +20140,11 @@ export const CONFIG = {
             outline: {
               strength: 0.36,
               width: 1.75,       // texels
-              soft: 0.16,      // texels of feather inside the line
+              soft: 1.3,      // texels of feather inside the line
               color: 0xffffff,
-              boilAmp: 1.107182487628926,   // texels, at rest
+              boilAmp: 0.6812628923588725,   // texels, at rest
               boilScale: 46,  // noise cells across the screen
-              boilHz: 10.937104603878442,      // re-seeds a second, at rest
+              boilHz: 9.228531476209184,      // re-seeds a second, at rest
               boilEdge: 0.25,  // share of the wobble the silhouette takes too
             },
           },
@@ -37490,7 +37523,30 @@ export const CONFIG = {
       keep: 0.25,         // share of the ball's own velocity that survives a strike
       carry: 0.44,        // share of the seal's velocity that comes along with any contact
       bumpGain: 1.3,      // a swimming (not dashing) seal pushes the ball at this x closing speed
-      contactRadius: 2.2, // the seal's body against the ball; hitRadius (1) is far too tight
+      // THE SEAL'S BODY, measured off furseal.glb rather than stood in for by
+      // a circle. `fit: 2.6` (assets.js) times the 2.36 in assets.csv makes
+      // the animal 6.14 world units nose to tail, and the area-weighted
+      // centroid createVisual re-centres it on sits 3.31 of that ahead of the
+      // tail's 2.82. In the side view orientationQuaternion puts the model's
+      // UP on the screen's in-plane perpendicular, so the thickness the ball
+      // meets is its dorsal-ventral half-height, 0.69 — the flipper span
+      // points at the camera and is not in the picture the collision is about.
+      //
+      // sealContact treats these as a CAPSULE down the spine: the segment is
+      // shortened by `thickness` at each end so the capsule's own extent is
+      // exactly the animal. A nose arriving head-on therefore reaches 3.31
+      // from the seal's origin and a flank 0.69, which is the difference the
+      // old single `contactRadius: 2.2` could not express in either direction.
+      //
+      // RENAMED, not retuned: `contactRadius` is still in the saved tuning at
+      // 2.2 and saved tuning beats config.js, so a block under the old name
+      // would have shipped the old circle however this file read. `npm run
+      // test:versus` re-measures the model and fails if these drift from it.
+      body: {
+        nose: 3.31,
+        tail: 2.82,
+        thickness: 0.69,
+      },
       // A CANNONBALL. `mass` is in seal masses and it is what makes the ball
       // heavy: a swimming seal moves it by 2/(1+mass) of the closing speed
       // and is shoved BACK by the rest, and a strike that lands throws the
@@ -37577,6 +37633,14 @@ export const CONFIG = {
       // through, shoved and killed, and a kill drops chum through the run's
       // own kill path. Everything is priced off how fast the ball was going,
       // as a share of impact.speedRef below.
+      //
+      // A FISH COSTS THE BALL NOTHING. It is `mass` seals heavy and a baitfish
+      // is a few pounds of it, so a shot through a school arrives at the same
+      // speed a shot down a clear lane does — it tears through, and what it
+      // leaves behind is a lane of chum. There is no `drag` key here any more:
+      // it read as a SHARE of the ball's speed per body while carrying the
+      // 0.994 of a per-frame multiplier, so one minnow took 99.4% of the
+      // shot. A ball is only slowed by a HULL, and that is a bounce.
       hit: {
         enabled: true,
         minSpeed: 8,      // slower than this the ball just drifts past
@@ -37584,7 +37648,6 @@ export const CONFIG = {
         fxGap: 0.12,      // ...and before the splash fires again
         damage: 40,       // to a creature, at speedRef
         power: 1.1,       // the shove, fed to applyKnockback (1 is a full ram)
-        drag: 0.994,       // share of the ball's speed spent per body gone through
         boatDamage: 55,   // to a hull, at speedRef
         boatPower: 1.2,   // the jostle, as a share of a full-charge ram
         restitution: 0.85, // how much of the closing speed it leaves a hull with
@@ -37615,7 +37678,7 @@ export const CONFIG = {
         // a curve nobody could see. `curve` at 0.09 with a spin cap of 28
         // and full english hooks a shot by a third of its flight inside a
         // second — exaggerated on purpose; it is the read.
-        curve: 0.09,
+        curve: 0.065,
         curveAir: 0.3,
         // The walls, the floor, the posts: the same friction, against rock.
         // The slip at the contact is the ball's tangential speed less its
@@ -37659,7 +37722,7 @@ export const CONFIG = {
         // spin, so reaching the cap of 28 rad/s on a 2.8 ball takes ~110 of
         // slide — this is the number that decides how much english a player
         // CAN put on, and it is meant to be a lot.
-        slip: 110,
+        slip: 118,
         sweep: 28,
       },
       // SPIN STROKES — the read. A spinning ball shows its spin as curved
@@ -37740,17 +37803,17 @@ export const CONFIG = {
       soft: {
         points: 24,
         spring: 357,       // pulls each rim point back to rest
-        damping: 6.8,
+        damping: 13.2,
         // Neighbour coupling — THE ripple; 0 is a ball that only dents. The
         // wave runs at sqrt(couple) points per second, so 600 carries a dent
         // a quarter of the way round in a quarter second. Stepped at 240Hz
         // inside versus.js, which is what lets it be this stiff.
-        couple: 1000,
+        couple: 480,
         dentDepth: 0.64,  // share of the radius a full-power dash pushes in
         dentWidth: 0.4,   // radians, the gaussian's sigma around the contact
         wallDent: 0.94,    // share of the radius a wall bounce dents, at maxSpeed
-        stretch: 0.47,    // share of the radius the ball elongates along its velocity at maxSpeed
-        maxDeform: 0.5,  // |rim offset| never exceeds this share of the radius
+        stretch: 0.09,    // share of the radius the ball elongates along its velocity at maxSpeed
+        maxDeform: 0.39,  // |rim offset| never exceeds this share of the radius
       },
       // EVERY HIT THE BALL TAKES fires goo out of the contact point, scaled
       // by how hard: `scale` (the burst's count and the voice's gain), the
@@ -37772,14 +37835,47 @@ export const CONFIG = {
         gap: 0.12,
         bumpGap: 0.35,
       },
+      // HOW THE BODY IS BUILT OUT OF SPLATS — and it is the HITBOX as well as
+      // the picture, because systems/ballShape.js solves the goo isoline
+      // through exactly this arrangement and everything collides against
+      // that. Every number is a SHARE OF THE BALL'S OWN RADIUS, so `radius`
+      // above scales the drawn body and the hitbox together, and the goo
+      // group's `radius` uniform (a splat diameter in units of `size`) no
+      // longer resizes the ball behind your back.
+      //
+      // THE RIM OWNS THE EDGE, and that is the whole point of these numbers.
+      // The old arrangement had a centre splat 2.56 wide — 1.68 ball radii —
+      // which on its own held the isoline at 1.68 whatever the soft body was
+      // doing: a full-depth dent moved the drawn edge by 3% of the radius and
+      // a full pinch by less. Every deformation this file tunes below (dent,
+      // squash, stretch, wallDent, pinch.squash) was being drawn by a rigid
+      // circle. Now the core and the inner ring both stop SHORT of the
+      // surface — their density is exactly zero out there, by construction —
+      // so the isoline is set by the rim ring alone and follows it at about
+      // 85%. They are still there to keep the inside solid; they are simply
+      // no longer allowed to have an opinion about the outline.
+      //
+      // The rest size is unchanged: this arrangement puts the isoline at
+      // 1.738 radii, which is exactly where the old one put it (4.87 world
+      // units at radius 2.8), so the ball is the size it has always been.
+      // `ring` sits outside 1 because a splat is smaller than the body it is
+      // drawing: the centres have to stand further out than the surface they
+      // sum to.
+      //
+      // A NEW BLOCK RATHER THAN THE OLD KEYS RETUNED: rimSize/innerSize/
+      // coreSize/innerAt/inset are all in the saved tuning, and saved tuning
+      // beats config.js — the old circle would have shipped however this file
+      // read. See the same move on `spinStrokes` and `english.slip`.
+      splats: {
+        core: 1.5,        // the centre splat's radius, x the ball's
+        inner: 1.1,       // ...each of the inner ring's
+        innerAt: 0.5,     // where the inner ring sits, x the ball's radius
+        rim: 0.826,       // ...each of the 24 rim splats'
+        ring: 1.15,       // where they sit, x the SOFT BODY's radius at that sample
+      },
       look: {
         color: 0xe6e3db,
         glow: 1.4,        // multiplies the splat colour, as drivenColor would
-        rimSize: 1.02,    // splat `size` for the 24 rim points
-        innerSize: 1.12,   // ...for the inner ring
-        coreSize: 2.56,    // ...for the centre splat
-        innerAt: 0.5,    // inner ring radius, as a share of the ball's
-        inset: 0.88,      // rim ring radius, as a share — the splats' own width makes up the rest
 
         // --- WHAT THE BALL DOES TO ITSELF ---------------------------------
         // Driven every frame by systems/ballLook.js and written onto
@@ -37811,6 +37907,250 @@ export const CONFIG = {
         // becomes the team colour outright stops reading as a ball.
         tintMax: 0.55,
         tintRate: 4,        // how fast it fades to a new owner, per second
+
+        // ...AND IT IS TWO COLOURS, not one. Possession is a PROPORTION — how
+        // much of the momentum the ball is travelling on each team actually
+        // put there (systems/ballLook.js keeps that ledger) — and the body
+        // carries both of them in that proportion, the newest one spreading
+        // out of the contact it arrived at. All from one seal and that seal's
+        // colour takes the whole ball; a shot half-turned and the two run into
+        // each other along a seam.
+        //
+        // `shareRate` is the MARCH: the share is lerped toward what the ledger
+        // owes at this many per second, and that lerp is the spread — the
+        // colour crawls round out of the contact point rather than appearing
+        // everywhere on the frame of the touch. Slow enough to read as a
+        // substance moving, fast enough to have finished before the next touch.
+        shareRate: 3.2,
+        // ...AND IT ARRIVES AS THE BOOST METER'S DROP, not as a widening
+        // wedge. A wedge is the obvious way to spend a share and it reads as a
+        // pie chart whatever is done to its boundary. The core of the boost
+        // meter (CONFIG.strike.ring.core, systems/strikeRing.js) is already
+        // the thing this wants to be — blobs that grow, spin and fuse — so the
+        // incoming colour is built the same way: one mass born ON THE RIM at
+        // the contact, walking in to the middle as it grows, with `lobes`
+        // satellites riding a ring around it that rolls at `spin` and breathe
+        // by `breathe`. Summed into one field and thresholded once, which is
+        // what welds them.
+        //
+        // `wobble` is how far the lobes are thrown out of the mass and
+        // `lobeSize` how big each is against it — the pair that decides
+        // whether this reads as one wobbling drop or as a handful of beads
+        // running together. Seven is the ceiling, as it is on the meter.
+        lobes: 5,
+        lobeSize: 0.62,
+        wobble: 0.35,
+        spin: 0.5,
+        breathe: 0.25,
+        // THE SKIN HOLDS THEM IN, AND THE FLIGHT THROWS THEM ABOUT. The cells
+        // are walked back inside the body before they are drawn — read out of
+        // the density field the pass has already sampled, so a dent punched
+        // into the ball pushes the cells in it out of the way and nothing
+        // escapes through the rim. It is one way: this is a look on top of a
+        // body that is already solved, and no cell can move the ball, change
+        // its outline or touch where it is going.
+        //
+        // `slosh` is how hard the mass is left behind when the ball is struck,
+        // as a share of the radius at a full-speed change; `sloshLag` how fast
+        // it catches back up, per second; `sloshMax` the ceiling, so a volley
+        // at the speed cap cannot fling the mass out of its own body.
+        slosh: 1.4,
+        sloshLag: 5,
+        sloshMax: 0.55,
+        cells: 4.2,
+      },
+
+      // ---------------------------------------------------------------------
+      // THE TRAIL — the seal's, dragged behind the ball, in the two colours
+      // that are fighting over it. systems/ballTrail.js draws it; the engine
+      // under both is systems/ribbonTrail.js, so every knob in this block
+      // means exactly what the identically named one in CONFIG.breachTrail
+      // means, and reading the two side by side is the fastest way to
+      // understand either.
+      //
+      // TWO PROFILES, above and below the water line, exactly as the seal has:
+      // this block is the AIR one and `water` below is an OVERRIDE that names
+      // only what differs. What differs is what differs for the seal — water
+      // holds a cloud in place, does not throw it far, and its currents are
+      // broader and slower — plus the bubbles, which only water can have.
+      //
+      // WHAT IS NOT THE SEAL'S. The air trail does not split into R/G/B. It
+      // splits into THE TWO TEAM COLOURS, and the ledger in ballLook.js
+      // decides how: the dominant colour is pulled onto the spine and burns
+      // brighter, the losing one is thrown clear as a thin fringe. Nothing is
+      // written here about which colours those are — they come from the teams,
+      // live, and a ball nobody has touched draws one ribbon in the ball's own
+      // colour instead.
+      //
+      // Tuned live in the ball lab: `npm run looks:ball`, the last four
+      // sections of the panel.
+      trail: {
+        enabled: true,
+
+        // --- where it comes out of ------------------------------------------
+        // Astern of the heading, on the DRAWN edge — the same solved surface
+        // the hitbox uses, so the trail leaves the skin a player can see even
+        // when a strike has flattened one side of it.
+        //
+        // TWO shed points rather than one, thrown `shoulder` radians either
+        // side of dead astern. Two independent clouds braiding around each
+        // other read as a body turning over, which is what the ball is doing;
+        // one cloud reads as a comet. Set `sources` to 1 for the comet.
+        sources: 2,
+        shoulder: 0.62,
+        atRadius: 0.92,
+
+        // --- the gate -------------------------------------------------------
+        // A ball at a dead roll leaves nothing; from `minSpeed` the trail ramps
+        // in and reaches full at `fullSpeed`. The ramp drives the emission rate
+        // AND the brightness together, the way the swim trail's does, so the
+        // thing gets denser and hotter at once rather than switching on.
+        //
+        // The air profile is ramped the same way, and that is the one place it
+        // parts company with the seal's: a breaching seal has already earned
+        // its trail by being airborne at all, while a ball is in the air
+        // whenever somebody lobbed it, including gently.
+        minSpeed: 7,
+        fullSpeed: 52,
+
+        // --- the cloud ------------------------------------------------------
+        // Rate times life is how many particles are alive at once, which is
+        // exactly how many ribs the geometry is built for. `maxNodes` is the
+        // ceiling whatever the two of them ask for.
+        emitPerSecond: 74,
+        life: 0.85,
+        lifeVary: 0.35,
+        maxNodes: 150,
+        // How finely the curve THROUGH those particles is sampled — the
+        // smoothness knob, and nothing to do with how many particles there are.
+        samples: 180,
+
+        // --- the band -------------------------------------------------------
+        // Wider than the seal's 0.72: this is a two-and-a-half unit body, and a
+        // filament behind it reads as a scratch rather than as a wake.
+        width: 1.05,
+        growth: 1.9,   // how much wider a particle's band is at death
+        fade: 1.2,     // brightness falloff over a particle's own life
+        z: -0.06,      // behind the ball, in front of the water
+        // The cross-section, evaluated per pixel — a tight core the eye tracks
+        // and a wide soft halo for the bloom to grab. See the long note in
+        // CONFIG.breachTrail.
+        coreWidth: 0.09,
+        coreGain: 1.2,
+        haloGain: 0.8,
+        softness: 1.6,
+        // Over the bloom threshold, so the trail reads as emitted rather than
+        // drawn — but under the breach trail's 2.6. The loudest bright thing on
+        // the pitch is the ball itself.
+        glow: 2.0,
+        // The floor under the speed ramp's dimming, so a trail at half pace is
+        // still a trail rather than a hint of one.
+        minIntensity: 0.5,
+
+        // --- the split ------------------------------------------------------
+        // Fractions of the band's WIDTH, and the same arithmetic as the seal's
+        // RGB split: comfortably wider than the core, comfortably narrower than
+        // the halo, so the two colours separate into distinct filaments while
+        // their halos still overlap and the middle stays hot. Push the pair
+        // past about 0.5 between them and there is no overlap left — two
+        // coloured ribbons side by side rather than one two-coloured trail.
+        channelTrail: 0.16,
+        channelSpread: 0.19,
+        // HOW HARD DOMINANCE SHOWS, and these two are the whole point of the
+        // effect. `splitThrow` is how far the losing colour is thrown off the
+        // spine as it loses — at 0 the two colours sit in a fixed fringe
+        // whoever is winning, at 1 the winner ends up on the spine with the
+        // loser a full band-width clear of it. `splitBias` is the same story in
+        // brightness: the winner burns up to (1 + bias) and the loser down to
+        // (1 - bias). Both are centred, so a ball held 50/50 draws exactly the
+        // even split and neither knob does anything until somebody is ahead.
+        splitThrow: 1,
+        splitBias: 0.6,
+
+        // --- how it moves ---------------------------------------------------
+        // The same divergence-free field the sprites and the seal's trail ride,
+        // pushed into each particle's VELOCITY rather than its position, so the
+        // cloud keeps what the field gave it until drag takes it away.
+        turbulence: 3.4,
+        turbFreq: 0.42,
+        turbSpeed: 0.7,
+        curveSmooth: 3,   // passes of smoothing over the DRAWN curve
+        // Speed a particle is thrown off the path at birth, along the local
+        // normal with a sign that swings smoothly (`blowWave` is that swing's
+        // rate). Smooth rather than random per particle: independent randomness
+        // makes the spine a sawtooth and no amount of splining fixes data that
+        // doubles back on itself.
+        blowOut: 1.6,
+        blowWave: 0.12,
+        inherit: 0.14,    // how much of the ball's own velocity a particle keeps
+        drag: 2.2,
+        foldSafety: 0.85,
+
+        // --- the two ends ---------------------------------------------------
+        headTaper: 0.06,
+        tailTaper: 0.16,
+        sealTaperMul: 5,
+        // NO WIPE. The seal's re-entry erase is an ENDING for a jump; the ball
+        // crosses the surface and stops and starts constantly, and a front
+        // eating the trail every time would be an event announcing nothing.
+        erase: { enabled: false },
+
+        // --- the bubbles ----------------------------------------------------
+        // Water only — the block below turns them on. Left here so the air
+        // profile has the key to inherit and switch off in one place.
+        bubbles: { enabled: false },
+
+        // ---------------------------------------------------------------------
+        // UNDERWATER — the override. Same trail, heavier medium.
+        water: {
+          enabled: true,
+          // Thinner, dimmer, shorter and less thrown about, exactly the way the
+          // swim trail is against the breach trail. The pitch below the line is
+          // a crowded frame and the trail's job there is to say where the ball
+          // has just been, not to stay.
+          width: 0.78,
+          growth: 1.6,
+          glow: 1.5,
+          coreWidth: 0.11,
+          coreGain: 1.15,
+          haloGain: 0.66,
+          emitPerSecond: 58,
+          life: 0.6,
+          maxNodes: 110,
+          samples: 140,
+          // Water holds it (drag), does not throw it far (blowOut), and moves
+          // in broader slower currents (turbulence, turbSpeed).
+          blowOut: 1.1,
+          turbulence: 2.4,
+          turbSpeed: 0.5,
+          drag: 3.0,
+          inherit: 0.1,
+          // In front of the air trail's plane, so a trail laid just before a
+          // lob does not fight the one laid just after it.
+          z: -0.05,
+          minIntensity: 0.55,
+
+          // THE BUBBLES. A filament alone is a thin thing to leave behind
+          // something with this much mass, so the water profile sheds bubbles
+          // from the same two points at the same drive — the trail's other
+          // half rather than a second effect beside it.
+          //
+          // `tint` is a MIX toward whichever team is currently winning the
+          // body, not a replacement: at 0 they are plain water, at 1 they are
+          // coloured water. A little of it says whose ball it is while they
+          // stay bubbles. The colour taken is the DOMINANT one — an average of
+          // the two teams is grey.
+          bubbles: {
+            enabled: true,
+            emitter: 'ballWake',
+            perSecond: 16,
+            scale: 1,
+            sizeMul: 1,
+            speedMul: 1,
+            color: 0xdff6ff,
+            tint: 0.35,
+          },
+        },
       },
     },
     // THE GOALS ARE HOLES IN THE ROCK — see systems/versusGoal.js for the
@@ -37854,6 +38194,40 @@ export const CONFIG = {
       glow: 3,
       spill: 6,
       feather: 0.55,
+      // THE THROW DOWN THE TUNNEL. The corridor used to be flat — the same
+      // brightness at the tunnel's back as at the mouth, which reads as a lit
+      // surface rather than as light coming from somewhere. The somewhere is
+      // the far end of the quad, a whole camera reach past the tunnel's back
+      // and off any frame a match can put out there, and this is ordinary
+      // exponential absorption on the way in toward the water.
+      //
+      // The number is WHAT SURVIVES at the drawn face, as a share of the
+      // source — so it means the same thing when the tunnel is deepened or
+      // the camera's reach retuned, which an absorption coefficient in world
+      // units would not. 1 is flat, exactly as it was before this existed.
+      //
+      // Measured over the CORRIDOR — the tunnel's back to the face — and not
+      // over the quad, which runs a camera reach further out so that it has
+      // no visible edge. Spent over the quad, most of the decay happens off
+      // the frame and the corridor you can see is flat at some fraction of
+      // itself, which is the one thing this is for.
+      // Only the LIGHT throws; the slab behind it holds its alpha, or the
+      // corridor would become a window onto the seabed at the mouth.
+      tunnelFalloff: 0.4,
+      // THE BALL IN THE LIGHT. Where the ball overlaps a mouth's light, that
+      // light blazes past its own overdrive and the noise under it churns
+      // hard — a ball arriving in the goal lights the goal up around it,
+      // rather than passing in front of it as a shape. `reach` is how far
+      // that carries in world units, `overdrive` how many times the light's
+      // own glow it reaches at the ball, `boil` how far the field slides
+      // along its third axis there (the hard churn). How much of the ball is
+      // in the light at all is measured in versus.js — see ballInLight.
+      ball: {
+        enabled: true,
+        reach: 20,
+        overdrive: 2.2,
+        boil: 6,
+      },
       // THE CORRIDOR IS OPEN. The tunnel block used to slide any boulder that
       // landed in the band at the far end onto a BACK WALL, so the goal
       // dead-ended in rock — from the front a cave with a lid on it, and from
@@ -37925,6 +38299,16 @@ export const CONFIG = {
         swirl: 1.2,
         drag: 0.05,
         churn: 1.8,
+        // THE COLOUR CHANGES HANDS TOO. A seal in the goal it is ATTACKING
+        // brings its own team's colour into the light with it: nothing out in
+        // the water, bleeding in over the last `tintLead` units before the
+        // wall's line, and up to `tint` of the way to its own colour by the
+        // time it is as deep as a keeper may stand. Its own goal does nothing
+        // — the light is already its colour — so a seal keeping goal stirs the
+        // field without changing what colour it is. `tint: 0` leaves the
+        // distortion alone and the colour to whoever's goal it is.
+        tint: 0.9,
+        tintLead: 5,
         burst: 46,
         cooldown: 0.3,
         range: 46,
@@ -37956,7 +38340,19 @@ export const CONFIG = {
     goalJet: {
       enabled: true,
       count: 36,
-      born: [4, 11],
+      // WHERE IT IS BORN — a depth past the drawn face, DERIVED rather than
+      // typed (see bornBand in systems/goalJet.js). Two lines have to be
+      // behind the emitter and both of them move: the goal LINE, because goo
+      // in the corridor before the ball has crossed is the bang arriving
+      // early, and the SCREEN'S EDGE, because a lobe born on camera pops into
+      // view and the whole effect is that the explosion happens where you
+      // cannot see it. `bornPast` is how far beyond the further of the two,
+      // `bornSpan` the depth of the band it is born across; both are clipped
+      // to the tunnel's back so nothing is born inside the rock. This
+      // replaces a hand-typed `born: [4, 11]` that every one of those three
+      // numbers had since been retuned past.
+      bornPast: 2,
+      bornSpan: 5,
       spread: 0.9,
       stagger: 0.3,
       speed: [45, 80],
@@ -37971,6 +38367,24 @@ export const CONFIG = {
       life: [0.8, 1.4],
       size: [0.28, 0.55],
       glow: 1,
+      // THE SQUEEZE OUT OF THE OPENING. The cloud fired down the corridor is
+      // wider than the mouth it has to leave by, and left to itself it passes
+      // straight through itself and arrives as a thin stream. `collide` makes
+      // the lobes push each other apart at `collidePush` u/s² so the mass
+      // JAMS at the opening and has to squeeze through it.
+      //
+      // `bodyRadius` is what a lobe is worth as a body, in multiples of its
+      // own splat size — the goo surface the pass draws is wider than the
+      // splat that seeds it, so this is also what the LIPS hold it back by:
+      // what fits between two lobes is what fits between the rocks.
+      //
+      // `burstOut` is the kick along the way out on the frame a lobe finally
+      // clears the face, so the jet leaves the mouth with a bang rather than
+      // merely stopping being pushed.
+      collide: true,
+      collidePush: 260,
+      bodyRadius: 1,
+      burstOut: 26,
     },
     // THE KICKOFF — on a match's first frame and after every goal. Both seals
     // to their own end, a full wheel each, bait balls dropped in each seal's
@@ -38036,6 +38450,13 @@ export const CONFIG = {
       speed: 0.45,
       maxWall: 5,
       explode: 1.3,
+      // ...and then the CELEBRATION beat, which is a cut to the scorer with
+      // its pose starting on that cut. Long enough for the whole performance:
+      // versus.celebrate is peakAt + hold + release = 1.7 seconds, and a beat
+      // shorter than that ends the replay mid-somersault. The pose used to be
+      // fired at the explosion above and spent 1.3 of its 1.7 seconds behind a
+      // frame pointed at the mouth.
+      celebrateHold: 1.7,
       // HOW LONG THE HOLD IS. Longer than it was: the bar under the prompt is
       // the whole readout, and at 0.45s it filled and fired before the eye had
       // found it. The hold does not start counting until every button has been
@@ -38058,7 +38479,7 @@ export const CONFIG = {
       // rest, so a long shot is a wider frame than a tap-in.
       impact: { pad: 2.2, zoom: 4.5, cut: true, lerp: 9, zoomLerp: 7 },
       wide: { pad: 6, zoom: 1.6, cut: false, lerp: 2.2, zoomLerp: 1.8 },
-      celebrate: true,    // the scorer's victory pose again, on the explosion beat
+      celebrate: true,    // the scorer's victory pose again, on the celebration beat
       // THE CAMERA POOL — see systems/replayCams.js. On, the replay is filmed
       // by these perspective shots instead of the flat frame above (which
       // stays as the fallback, and as what the camera comes back to). Each
@@ -38087,6 +38508,14 @@ export const CONFIG = {
         pitchAtWall: 0.25,
         pastFace: 2.5,
         fovMin: 12,
+        // A SHOT HOLDS WHAT IT IS OF. poseShot stands the camera further off
+        // — along the shot's own direction, so it is the same shot from
+        // further away — until every target at or above `keepAbove` is inside
+        // the frame. BACK rather than WIDER because the fov is the push: it
+        // is the shot's own movement over seconds, and opening it to hold a
+        // subject cancels exactly that. `keepDolly` of 1 switches it off.
+        keepAbove: 0.5,
+        keepDolly: 1.6,   // the most it may back off, as a multiple of the shot's distance
         lens: { defocus: 0.55, focusRadius: 0.22, focusFeather: 0.35, flare: 0, vignette: 0.25 },
         pool: {
           margin: 0.35,     // a shot keeps the frame while within this of the best
@@ -38100,28 +38529,64 @@ export const CONFIG = {
           edgePenalty: 2,   // per weighted target out of frame
           lensFade: 0.4,    // seconds the defocus eases in after a switch
         },
+        // THIS ARRAY IS THE POOL, and for a long time it was not. deepMerge
+        // REPLACES arrays rather than merging them, so a `shots` key in
+        // imported-tuning.json was the whole pool and everything written here
+        // was dead text — two shots edited in this file never ran at all, and
+        // a beat added here could not reach the game. The snapshot's copy has
+        // been dropped and the numbers it was carrying are folded in below, so
+        // this file owns the pool again. Tune it in the replay lab
+        // (`npm run looks:replaylab`), which writes back here and clears the
+        // snapshot as it goes; a value set in the game's ` tuner will shadow
+        // all of this again the moment the game saves.
         shots: [
           { name: 'impactLow', beats: ['impact'], targets: { ball: 1, striker: 0.9 },
-            yaw: 35, pitch: -18, distance: 16, fov: 42, push: 34, pushTime: 2.5, hold: [0.5, 2.5],
+            yaw: 35, pitch: -26, distance: 16, fov: 42, push: 34, pushTime: 2.5, hold: [0.5, 2.5],
             lens: { defocus: 0.5, focusRadius: 0.3, focusFeather: 0.35 } },
           { name: 'strikerFace', beats: ['impact'], targets: { strikerFace: 1, ball: 0.25 },
             yaw: 40, pitch: 6, distance: 9, fov: 36, push: 26, pushTime: 2.2, hold: [0.6, 1.6], priority: 0.3,
             lens: { defocus: 0.75, focusRadius: 0.16, focusFeather: 0.3 } },
-          { name: 'impactHigh', beats: ['impact'], targets: { ball: 1, striker: 0.8, impact: 0.4 },
-            yaw: -20, pitch: 30, distance: 22, fov: 40, push: 36, pushTime: 3, hold: [0.5, 2] },
-          { name: 'ballChase', beats: ['wide'], targets: { ball: 1, mouth: 0.6 },
-            yaw: -45, pitch: 8, distance: 26, dolly: -2, fov: 48, push: 42, pushTime: 4, hold: [0.6, 3] },
+          { name: 'impactHigh', beats: ['impact'], targets: { ball: 2, striker: 1.2, impact: 0.4 },
+            yaw: 11, pitch: -59, distance: 47.5, fov: 40, push: 16, pushTime: 3, hold: [0.5, 2],
+            dolly: 7.5, },
+          { name: 'ballChase', beats: ['wide'], targets: { ball: 1.3, mouth: 0.8 },
+            yaw: -45, pitch: 8, distance: 26, dolly: -2, fov: 48, push: 29.5, pushTime: 2, hold: [0.6, 3] },
           // The mouth shots look at the hole square: the angle is in the pitch
           // and the push, and the walls' rule flattens even that as it closes.
-          { name: 'goalWide', beats: ['wide', 'explosion'], targets: { mouth: 1, ball: 0.9, scorer: 0.5 },
-            yaw: -8, pitch: 6, distance: 55, fov: 44, push: 40, pushTime: 5, hold: [0.8, 4] },
+          { name: 'goalWide', beats: ['wide', 'explosion', 'celebration'], targets: { mouth: 1, ball: 0.9, scorer: 0.5 },
+            yaw: -15, pitch: 12, distance: 60, fov: 44, push: 40, pushTime: 5, hold: [0.8, 4] },
           { name: 'mouthLow', beats: ['explosion'], targets: { mouth: 1, ball: 0.4 },
-            yaw: -10, pitch: -6, distance: 22, fov: 42, push: 34, pushTime: 2, hold: [0.6, 2.5], priority: 0.2 },
-          { name: 'scorerFace', beats: ['explosion'], targets: { scorerFace: 1, mouth: 0.15 },
-            yaw: 35, pitch: 4, distance: 8, fov: 34, push: 24, pushTime: 2.5, hold: [0.7, 2.5], priority: 0.4,
+            yaw: -45, pitch: -12, distance: 20, fov: 46, push: 38, pushTime: 2, hold: [0.6, 2.5], priority: 0.2 },
+          // THE CELEBRATION'S OWN SHOT, and the reason that beat exists: a hard
+          // cut off the mouth onto the seal that scored. `cut` rather than
+          // leaving it to cutAngle, because the pose and the bang are two
+          // different subjects and a blend between them is a camera drifting
+          // off the climax.
+          { name: 'scorerFace', beats: ['celebration'], cut: true, targets: { scorerFace: 1.8, mouth: 0, scorer: 1 },
+            yaw: -77, pitch: 70, distance: 8, fov: 74, push: 21, pushTime: 1.5, hold: [0.7, 2.5], priority: 0.4,
             lens: { defocus: 0.8, focusRadius: 0.15, focusFeather: 0.3 } },
         ],
       },
+    },
+    // HOW MANY SEALS ARE ON THE PITCH — see systems/sealRoster.js. Seats
+    // alternate sides, so the first two are the two captains and a 1v1 is a
+    // four-a-side match with six empty seats rather than a different mode.
+    //
+    // THIS IS THE DEFAULT THE TEAM SELECT OPENS ON, not a constant. Whether
+    // eight seals on a pitch tuned for two is a scramble or a mess is not a
+    // question that can be answered by reading anything — the kickoff spots,
+    // the arena's width and the ball's own contest were all tuned against one
+    // seal a side — so the roster row on the team select changes it live and
+    // this is only where it starts.
+    //
+    // `rowStep` is how far back each rank starts from its own goal, as a share
+    // of the half-pitch, and `laneStep` how far off the middle of the water
+    // they fan — alternating above and below, so a side lines up as a
+    // formation rather than as a queue.
+    roster: {
+      perSide: 1,
+      rowStep: 0.16,
+      laneStep: 0.34,
     },
     // Food. The ordinary spawner is off; docile bait balls are dropped on this
     // clock instead, and the boats sail unarmed.
@@ -38208,10 +38673,24 @@ export const CONFIG = {
       brain: 'scripted',
       reaction: 0.12,     // seconds between decisions
       lead: 0.35,         // seconds of ball velocity it aims ahead by
-      standoff: 4.5,      // how far behind the ball it stands
+      // HOW FAR BEHIND THE BALL IT STANDS, as a share of the distance at which
+      // a touch happens — so it lines up just inside contact and its dash
+      // arrives with the ball already on its nose. `standoff: 4.5` was that
+      // share of the old contact reach of 5.0; the reach is the seal's nose
+      // against the drawn edge now and this keeps the same relationship to
+      // it. Renamed to drop the saved 4.5 from the snapshot.
+      standAt: 0.9,
       slowWithin: 3,      // eases off inside this distance of its target
       jitter: 1.2,        // world units of noise on its target
-      strikeRange: 7,     // no closer than this and the line is on: wind up
+      // WHERE THE WIND-UP STARTS, measured off the distance at which a touch
+      // actually happens rather than as a bare number. `strikeRange: 7` was
+      // that bare number, and it was a hair inside the old contact reach of
+      // 5.0; the contact is the seal's NOSE against the ball's DRAWN edge
+      // now, which is 8.2 — so a bot standing on the ball was permanently
+      // outside its own strike range and wound up never. This is units of
+      // slack ON TOP of the reach, so it moves with the ball and the animal.
+      // Renamed to drop the saved 7 from the snapshot.
+      strikeSlack: 1.5,
       strikeAlign: 0.75,  // cos of the angle me→ball vs me→goal it needs
       windUp: 0.55,       // seconds it holds at most
       releaseAt: 0.6,     // ...or lets go when this much is banked
@@ -44360,6 +44839,11 @@ export const TUNER_SCHEMA = [
       { path: 'versus.goal.glow', min: 0, max: 12, step: 0.1, label: 'overdrive (x colour, for the bloom)' },
       { path: 'versus.goal.spill', min: 0, max: 20, step: 0.5, label: 'light spills past the hole' },
       { path: 'versus.goal.feather', min: 0.05, max: 1, step: 0.05, label: 'soft edge (share of the light)' },
+      { path: 'versus.goal.tunnelFalloff', min: 0.02, max: 1, step: 0.02, label: 'throw: share of the source left at the face' },
+      { path: 'versus.goal.ball.enabled', type: 'bool', label: 'the ball overdrives the light it is in' },
+      { path: 'versus.goal.ball.reach', min: 0, max: 60, step: 1, label: 'ball: how far that carries (units)' },
+      { path: 'versus.goal.ball.overdrive', min: 0, max: 8, step: 0.1, label: 'ball: times the light\'s own overdrive' },
+      { path: 'versus.goal.ball.boil', min: 0, max: 24, step: 0.5, label: 'ball: how hard the noise boils under it' },
       { path: 'versus.goal.halfHeight', min: 3, max: 14, step: 0.5, label: 'mouth half height' },
       { path: 'versus.goal.tunnel', min: 6, max: 24, step: 0.5, label: 'tunnel depth' },
       { path: 'versus.goal.noise.enabled', type: 'bool', label: 'break the light up with noise' },
@@ -44381,6 +44865,8 @@ export const TUNER_SCHEMA = [
       { path: 'versus.goal.swim.swirl', min: -3, max: 3, step: 0.05, label: 'swim: turn on that shove (rad)' },
       { path: 'versus.goal.swim.drag', min: 0, max: 0.4, step: 0.005, label: 'swim: smear along the seal\'s velocity' },
       { path: 'versus.goal.swim.churn', min: 0, max: 8, step: 0.1, label: 'swim: boil under a moving seal' },
+      { path: 'versus.goal.swim.tint', min: 0, max: 1, step: 0.02, label: 'swim: an attacker takes the colour over' },
+      { path: 'versus.goal.swim.tintLead', min: 0, max: 30, step: 1, label: 'swim: colour bleeds in this far out (units)' },
       { path: 'versus.goal.swim.burst', min: 10, max: 120, step: 1, label: 'burst: speed that throws a ring (u/s)' },
       { path: 'versus.goal.swim.cooldown', min: 0, max: 2, step: 0.05, label: 'burst: wait between rings (s)' },
       { path: 'versus.goal.swim.range', min: 0, max: 120, step: 1, label: 'burst: how near the face to bother (units)' },

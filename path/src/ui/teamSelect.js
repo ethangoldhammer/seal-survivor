@@ -41,6 +41,8 @@ import { uiText } from '../uiTextTable.js';
 import { feedback } from '../systems/feedback.js';
 import { versusSetup, resetVersusSetup, KEYBOARD, MAX_PER_SIDE } from '../systems/versusFlag.js';
 import { pollPads } from './padPoll.js';
+// The roster is the match's, not the screen's — see systems/sealRoster.js.
+import { rosterPerSide as matchRoster, setRosterSize as setMatchRoster, MAX_PER_SIDE as ROSTER_MAX } from '../systems/sealRoster.js';
 
 const POOL = -1;
 
@@ -77,6 +79,13 @@ const STYLE = `
 .sv-teams-swatch.sv-teams-picked { transform: scale(1.5); border-color: #fff; box-shadow: 0 0 10px currentColor; }
 .sv-teams-swatch.sv-teams-taken { opacity: .25; cursor: default; }
 .sv-teams-foot { display: flex; gap: 12px; margin-top: 4px; }
+/* The roster row sits between the board and the buttons: it is a setting for
+   the match rather than a way out of the screen, so it reads with the sides it
+   changes and not with Back and Start. */
+.sv-teams-roster { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; opacity: .75; letter-spacing: .04em; }
+.sv-teams-roster .sv-btn { min-width: 28px; padding: 2px 8px; }
+.sv-teams-roster .sv-btn:disabled { opacity: .3; }
+.sv-teams-roster-n { min-width: 1.5ch; text-align: center; font-variant-numeric: tabular-nums; }
 `;
 
 function cssColor(n) { return '#' + (n >>> 0).toString(16).padStart(6, '0'); }
@@ -126,6 +135,12 @@ function build(parent) {
         <div class="sv-teams-pool"></div>
         <div class="sv-teams-side" data-side="1"></div>
       </div>
+      <div class="sv-teams-roster">
+        <span class="sv-teams-roster-label"></span>
+        <button class="sv-btn sv-teams-roster-less" type="button">&minus;</button>
+        <span class="sv-teams-roster-n"></span>
+        <button class="sv-btn sv-teams-roster-more" type="button">+</button>
+      </div>
       <div class="sv-teams-foot">
         <button class="sv-btn" id="svTeamBack" type="button"></button>
         <button class="sv-btn" id="svTeamStart" type="button"></button>
@@ -139,13 +154,24 @@ function build(parent) {
     pool: root.querySelector('.sv-teams-pool'),
     back: root.querySelector('#svTeamBack'),
     start: root.querySelector('#svTeamStart'),
+    rosterLabel: root.querySelector('.sv-teams-roster-label'),
+    rosterN: root.querySelector('.sv-teams-roster-n'),
+    rosterLess: root.querySelector('.sv-teams-roster-less'),
+    rosterMore: root.querySelector('.sv-teams-roster-more'),
   };
   el.title.textContent = uiText('sportBall');
   el.hint.textContent = uiText('teamSelectHint');
   el.back.textContent = uiText('sealSportsBack');
   el.start.textContent = uiText('teamStart');
+  el.rosterLabel.textContent = uiText('teamRoster');
   el.back.addEventListener('click', () => leave());
   el.start.addEventListener('click', () => tryStart());
+  // HOW MANY SEALS EACH SIDE PUTS ON THE PITCH. A control rather than a
+  // constant: whether four a side on a pitch tuned for one is a scramble or a
+  // mess is a question you answer by playing it, and a rebuild between each try is
+  // how a question like that stops being asked. See systems/sealRoster.js.
+  el.rosterLess.addEventListener('click', () => stepRoster(-1));
+  el.rosterMore.addEventListener('click', () => stepRoster(1));
   // A click on a column is the keyboard-and-mouse player joining it — the
   // one device with no d-pad. It walks the keyboard chip there (left only,
   // see the header), or readies it if it is already there.
@@ -187,6 +213,18 @@ function toggleReady(d) {
 }
 
 /** Step side `side`'s colour round the wheel, skipping the other side's. */
+/**
+ * Grow or shrink the roster. Clamped by sealRoster (1..MAX_PER_SIDE), and the
+ * screen re-reads what it actually became rather than what it asked for — a
+ * request the cap refused has to be visibly refused.
+ */
+function stepRoster(dir) {
+  const was = matchRoster();
+  const now = setMatchRoster(was + dir);
+  if (now !== was) feedback('uiClick');
+  render();
+}
+
 function stepColor(side, dir) {
   const n = palette().length;
   let i = picks[side];
@@ -308,6 +346,10 @@ function onKey(e) {
 
 function render() {
   if (!el) return;
+  const n = matchRoster();
+  el.rosterN.textContent = String(n);
+  el.rosterLess.disabled = n <= 1;
+  el.rosterMore.disabled = n >= ROSTER_MAX;
   const wheel = palette();
   for (let side = 0; side < 2; side++) {
     const node = el.sides[side];

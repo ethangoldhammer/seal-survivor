@@ -69,14 +69,14 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds, midWater, clampToArena } from '../arena.js';
 import { createVisual } from '../assets.js';
-import { playCelebration, celebrationSpin } from './celebrate.js';
+import { playCelebration, celebrationSpin, resetCelebration, updateCelebration } from './celebrate.js';
 import { cineLens } from './cineCamera.js';
 import { poolState, resetPool, stopPool, updatePool } from './replayCams.js';
 import {
   player, snarePlayer, updatePlayer, createSealState, buildSealBody, disposeSealBody, resetSealBody,
   joltSeal, weighSeal,
 } from '../entities/player.js';
-import { tickGoalGlow, setGoalSwimmers, goalGlowImpulse, flashGoalScored, resetGoalStir } from './wallRocks.js';
+import { tickGoalGlow, setGoalSwimmers, setGoalBall, goalGlowImpulse, flashGoalScored, clearGoalScored, resetGoalStir } from './wallRocks.js';
 import { randomPlayerName } from './randomName.js';
 import {
   strikeState, restoreCharge, addCharge, pipValue, cancelDash, strikeEnglish,
@@ -95,13 +95,28 @@ import { baitBalls } from './baitBall.js';
 import {
   claimDriven, releaseDriven, writeDriven, flushDriven, gooGroupIndex, keepGooAlive,
 } from '../entities/particles.js';
-import { feedback } from './feedback.js';
+import { feedback, onFeedback } from './feedback.js';
 import { uiText } from '../uiTextTable.js';
 import { pollPads } from '../ui/padPoll.js';
 import { versusActive, captainPad } from './versusFlag.js';
-import { updateBot, botWanted, botState, resetBot } from './versusBot.js';
+import { updateBot, botWanted, botState, resetBot, resetBotBrains } from './versusBot.js';
+// The ball's drawn edge and the seal's body — THE two shapes a contact is
+// made of. See the header of ballShape.js for why they live outside this file.
+import {
+  solveBallSurface as solveSurface,
+  ballHitRadiusAt as hitRadiusAt,
+  ballHitRadius as hitRadiusMax,
+  ballContactReach as contactReachAt,
+  sealSpine, contactHeading, sealHeading, ballSplats, splatSize,
+} from './ballShape.js';
 import { features, actions, recordImitation, flushImitation, resetImitation, imitationState } from './imitation.js';
-import { goalColors, ballEvent, setBallDrive, updateBallLook, resetBallLook, ballLookState, ballTint } from './ballLook.js';
+// Each seal's rim in its side's colour, and its own cut of the mottling — see
+// the notes at buildSeat.
+import { attachSealOutline, releaseSealOutline, setPlayerOutlineTint } from './outlines.js';
+import { instanceNoise } from './noiseShader.js';
+import { rosterSize, teamOfSeat, sameTeam, seatIsCpu, seatPad, seatFormation, resetRoster, setRosterSize, rosterPerSide, MAX_PER_SIDE } from './sealRoster.js';
+import { goalColors, ballEvent, setBallDrive, setBallBody, noteBallMomentum, claimBall, teamColor, updateBallLook, resetBallLook, ballLookState, ballTint } from './ballLook.js';
+import { updateBallTrail, clearBallTrail } from './ballTrail.js';
 import { fireGoalJet, resetGoalJets } from './goalJet.js';
 import {
   installGoalHoles, nearestOnBlocks, tunnelDepth, goalLineX, cameraReach, rockX, mouthY, mouthHalfHeight,
@@ -150,6 +165,9 @@ export const versusState = {
   flown: false,           // the big number has left for the HUD this phase
   respawned: false,       // the ball is back for this phase
   chumTimer: 0,
+  // PER SEAT, and grown to the roster at startVersus — see growSeatState. They
+  // are indexed by SEAT, which stopped being the same number as the team the
+  // moment a side had two of them in it.
   regenT: [0, 0],         // seconds until each seal's next free pip
   bubbleT: 0,             // seconds until the next bubble
   checked: [false, false], // this dash of seal i has already body-checked
@@ -203,35 +221,141 @@ export const ball = {
 // the vocabulary the rest of this file, the bot, the imitation logger and the
 // harness already speak (pos, vel, charge, active, power...) — one object,
 // two names for each thing, and the strike-state ones write through.
-export const p2 = createSealState();
-p2.strike = createStrikeState();
-p2.ring = null;
-p2.input = {
-  move: new THREE.Vector2(), aim: new THREE.Vector2(1, 0), aimLive: false,
-  strike: false, strikeHeld: false, strikeRelease: false, connected: false,
-};
-p2.heldPrev = false;
-p2.pressPrev = false;
-p2.hapticT = 0;
-const _p2Parked = new THREE.Vector3();
-Object.defineProperties(p2, {
-  // The run's stats — the same block player 1 swims on. No upgrades in a match.
-  stats: { get: () => player.stats, set() {} },
-  pos: { get: () => (p2.mesh ? p2.mesh.position : _p2Parked) },
-  vel: { get: () => p2.velocity },
-  root: { get: () => p2.mesh },
-  visual: { get: () => p2.body },
-  culled: { get: () => p2.strike.hits },
-  charge: { get: () => p2.strike.charge, set: (v) => { p2.strike.charge = v; } },
-  pending: { get: () => p2.strike.pending, set: (v) => { p2.strike.pending = v; } },
-  charging: { get: () => p2.strike.charging, set: (v) => { p2.strike.charging = v; } },
-  active: { get: () => p2.strike.active, set: (v) => { p2.strike.active = v; } },
-  power: { get: () => p2.strike.power, set: (v) => { p2.strike.power = v; } },
-  english: { get: () => p2.strike.english, set: (v) => { p2.strike.english = v; } },
-  dashDir: { get: () => p2.strike.dashDir, set: (v) => { p2.strike.dashDir = v; } },
-  dashTimeLeft: { get: () => p2.strike.dashTimeLeft, set: (v) => { p2.strike.dashTimeLeft = v; } },
-  dashDuration: { get: () => p2.strike.dashDuration, set: (v) => { p2.strike.dashDuration = v; } },
-});
+/**
+ * A SEAT'S BODY. createSealState() is the per-body half of `player`
+ * (entities/player.js); `strike` is its own strike state, `ring` its own
+ * circle HUD, `input` the shape input.js fills for player 1. The getters are
+ * the vocabulary the rest of this file, the bot, the imitation logger and the
+ * harness already speak (pos, vel, charge, active, power...) — one object, two
+ * names for each thing, and the strike-state ones write through.
+ *
+ * A FACTORY rather than one object, because a match is a roster now (see
+ * systems/sealRoster.js). Seat 0 is `player` and every other seat is one of
+ * these, built and driven identically — which is the whole point: "player 2"
+ * was an index, a team, a colour and the other end of a collision all at once,
+ * and none of those had to be the same number.
+ */
+function makeSeal(seat) {
+  const s = createSealState();
+  s.seat = seat;
+  s.strike = createStrikeState();
+  s.ring = null;
+  s.input = {
+    move: new THREE.Vector2(), aim: new THREE.Vector2(1, 0), aimLive: false,
+    strike: false, strikeHeld: false, strikeRelease: false, connected: false,
+  };
+  s.heldPrev = false;
+  s.pressPrev = false;
+  s.hapticT = 0;
+  const parked = new THREE.Vector3();
+  Object.defineProperties(s, {
+    // The run's stats — the same block player 1 swims on. No upgrades in a match.
+    stats: { get: () => player.stats, set() {} },
+    pos: { get: () => (s.mesh ? s.mesh.position : parked) },
+    vel: { get: () => s.velocity },
+    root: { get: () => s.mesh },
+    visual: { get: () => s.body },
+    culled: { get: () => s.strike.hits },
+    charge: { get: () => s.strike.charge, set: (v) => { s.strike.charge = v; } },
+    pending: { get: () => s.strike.pending, set: (v) => { s.strike.pending = v; } },
+    charging: { get: () => s.strike.charging, set: (v) => { s.strike.charging = v; } },
+    active: { get: () => s.strike.active, set: (v) => { s.strike.active = v; } },
+    power: { get: () => s.strike.power, set: (v) => { s.strike.power = v; } },
+    english: { get: () => s.strike.english, set: (v) => { s.strike.english = v; } },
+    dashDir: { get: () => s.strike.dashDir, set: (v) => { s.strike.dashDir = v; } },
+    dashTimeLeft: { get: () => s.strike.dashTimeLeft, set: (v) => { s.strike.dashTimeLeft = v; } },
+    dashDuration: { get: () => s.strike.dashDuration, set: (v) => { s.strike.dashDuration = v; } },
+  });
+  return s;
+}
+
+// SEAT 1, and still called p2 everywhere — it is the second captain, the one
+// this mode was built around, and renaming it would be a hundred and seventy
+// edits that say nothing. The seats past it are `extraSeals`.
+export const p2 = makeSeal(1);
+
+// Seats 2..n, built by the same factory and driven by the same loops. Empty in
+// a 1v1, which is every match until the roster row is turned up.
+const extraSeals = [];
+
+/**
+ * EVERY SEAL ON THE PITCH, in seat order: player 1 first, then p2, then the
+ * rest. THE list — every rule in this file loops it rather than naming the two
+ * bodies it used to be able to name, which is what makes "same rules for
+ * everything" a fact about the code and not a promise in a comment.
+ *
+ * Rebuilt in place: this is read several times a frame and has no business
+ * allocating. Seats past the ones that exist are simply not in it, so a roster
+ * of four with two bodies built is a two-seal match rather than a crash.
+ */
+const _seals = [];
+export function matchSeals() {
+  _seals.length = 0;
+  if (player.mesh) _seals.push(player);
+  if (p2.mesh) _seals.push(p2);
+  for (const s of extraSeals) if (s.mesh) _seals.push(s);
+  return _seals;
+}
+
+/**
+ * WHERE A SEAL IS, whichever kind it is. `player` is the run's own body and
+ * carries its position on the mesh; every seat this file builds has a `pos`
+ * getter for exactly that reason. One accessor, so a loop over the roster does
+ * not have to keep asking which of the two it is holding.
+ */
+export function sealPos(seal) {
+  return seal.pos ?? seal.mesh.position;
+}
+
+/** The seal in seat `i`, or null when that seat has no body. */
+export function sealAt(i) {
+  if (i === 0) return player.mesh ? player : null;
+  if (i === 1) return p2.mesh ? p2 : null;
+  const s = extraSeals[i - 2];
+  return s && s.mesh ? s : null;
+}
+
+/**
+ * CHANGE THE ROSTER MID-SESSION. The count is a live control (the team select's
+ * roster row) rather than a constant, because whether eight seals on a pitch
+ * tuned for two is a scramble or a mess cannot be answered by reading
+ * anything — see the note in systems/sealRoster.js.
+ *
+ * Takes effect on the next match: bodies are built at startVersus, and growing
+ * a roster mid-play would drop seals into the water in the middle of a rally.
+ * Returns what the roster actually became.
+ */
+export function setMatchRoster(perSide) {
+  return setRosterSize(perSide);
+}
+
+export function matchRoster() {
+  return rosterPerSide();
+}
+
+/** Which seat a seal object is in — the index every per-seal array is keyed on. */
+export function seatOf(seal) {
+  return seal === player ? 0 : (seal?.seat ?? -1);
+}
+
+/**
+ * The per-seat arrays, sized to the roster. They opened as pairs because the
+ * match was a pair; every one of them is indexed by SEAT, so growing the
+ * roster grows them and nothing else has to know they used to be two long.
+ * Extra entries are cleared rather than left, or a seat that existed in the
+ * last match arrives dead in this one.
+ */
+function growSeatState() {
+  const n = rosterSize();
+  const st = versusState;
+  for (const key of ['regenT', 'dead', 'invuln']) {
+    while (st[key].length < n) st[key].push(0);
+    for (let i = 0; i < st[key].length; i++) st[key][i] = 0;
+  }
+  while (st.checked.length < n) st.checked.push(false);
+  for (let i = 0; i < st.checked.length; i++) st.checked[i] = false;
+  while (st.names.length < n) st.names.push('');
+}
 
 let scene = null;
 // What main.js lends the match: the run's own kill path, so a fish player 2
@@ -258,6 +382,11 @@ export function startVersus(worldScene) {
   // scene and not in the world — see overlayScene in systems/post.js.
   initBallSpin(overlayScene);
   versusState.active = true;
+  // The roster as the team select left it, or CONFIG's default on a fresh
+  // session — resetRoster only re-reads CONFIG when nothing has chosen.
+  resetRoster();
+  growSeatState();
+  resetBotBrains();
   versusState.scores[0] = 0;
   versusState.scores[1] = 0;
   versusState.phase = 'play';
@@ -285,6 +414,7 @@ export function startVersus(worldScene) {
   versusState.replayPending = false;
   versusState.replays = 0;
   resetRecorder();
+  startRecordingEvents();
   endReplay(false);
   installSkipListeners();
   versusState.lastPierce = null;
@@ -315,7 +445,7 @@ export function startVersus(worldScene) {
   }
   restoreCharge(player.stats);
 
-  buildP2(side, y);
+  buildRoster();
   buildBall();
   // The mouths, for the seals: arena.clampToArena reads them from here on.
   installGoalHoles(true);
@@ -329,17 +459,18 @@ export function resetVersus() {
   flushImitation('reset');
   endReplay(false);
   removeSkipListeners();
+  stopRecordingEvents();
   versusState.active = false;
   versusState.phase = 'play';
   versusState.timeScale = 1;
   resetBallLook();
+  if (scene) clearBallTrail(scene);
   resetGoalJets();
   disposeBallSpin();
   for (const s of ball.slots) releaseDriven(s);
   ball.slots.length = 0;
   ball.live = false;
-  if (p2.ring) { scene?.remove(p2.ring.mesh); p2.ring.dispose(); p2.ring = null; }
-  disposeSealBody(p2, scene);
+  disposeRoster();
   installGoalHoles(false);
   resetGoalStir();
   for (const b of _burst) { b.was = false; b.cool = 0; }
@@ -348,42 +479,107 @@ export function resetVersus() {
   hideUi();
 }
 
-function buildP2(side, y) {
-  // The body, exactly as initPlayer builds player 1's (less the outline —
-  // see buildSealBody), its own strike state and its own ring.
-  buildSealBody(p2, scene, { name: 'player2', celebrateTag: 'p2' });
-  resetSealBody(p2);
-  resetStrike(p2.strike);
-  p2.mesh.position.set(side, y, 0);
-  p2.mesh.rotation.z = Math.PI / 2; // facing in: the art's forward is +Y, a quarter turn from -x
-  p2.strike.charge = 1;
-  p2.hp = player.stats?.maxHp ?? p2.hp;
-  p2.oxygen = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100);
-  p2.input.aim.set(-1, 0);
-  p2.input.move.set(0, 0);
-  p2.input.aimLive = false;
-  p2.input.strike = false;
-  p2.input.strikeHeld = false;
-  p2.input.strikeRelease = false;
-  p2.heldPrev = false;
-  p2.pressPrev = false;
-  p2.hapticT = 0;
-  p2.ring = createStrikeRingInstance();
-  scene.add(p2.ring.mesh);
+/**
+ * ONE SEAT'S BODY, built exactly as initPlayer builds player 1's (less the
+ * outline — see buildSealBody), with its own strike state and its own ring.
+ * Every seat past 0 comes through here, so a teammate and an opponent are the
+ * same animal built the same way and differ only in where they start and which
+ * colour their marker is.
+ */
+function buildSeat(seal, x, y, facing) {
+  const seat = seal.seat;
+  buildSealBody(seal, scene, { name: `seal${seat}`, celebrateTag: seat === 1 ? 'p2' : `seal${seat}` });
+  resetSealBody(seal);
+  resetStrike(seal.strike);
+  seal.mesh.position.set(x, y, 0);
+  // Facing in: the art's forward is +Y, a quarter turn from the axis.
+  seal.mesh.rotation.z = facing < 0 ? -Math.PI / 2 : Math.PI / 2;
+  seal.strike.charge = 1;
+  seal.hp = player.stats?.maxHp ?? seal.hp;
+  seal.oxygen = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100);
+  seal.input.aim.set(facing, 0);
+  seal.input.move.set(0, 0);
+  seal.input.aimLive = false;
+  seal.input.strike = false;
+  seal.input.strikeHeld = false;
+  seal.input.strikeRelease = false;
+  seal.heldPrev = false;
+  seal.pressPrev = false;
+  seal.hapticT = 0;
+  seal.ring = createStrikeRingInstance();
+  scene.add(seal.ring.mesh);
+  // ITS SIDE'S COLOUR, ROUND ITS OWN BODY. Four seals in a dark frame are four
+  // identical animals; the rim is what says which of them is yours before you
+  // have worked out which of them is yours.
+  releaseSealOutline(seal.outline);
+  seal.outline = attachSealOutline(seal.body, goalColors()[teamOfSeat(seat)]);
+  // ...AND ITS OWN CUT OF THE MOTTLING. A GLB clone shares its template's
+  // material, so without this the roster is one seal drawn four times, freckle
+  // for freckle. Seeded off the SEAT rather than at random, so a seal looks
+  // the same every time you play it and a screenshot is reproducible.
+  instanceNoise(seal.body, sealNoiseSeed(seat));
+}
 
-  // A ring under each seal in that seal's goal colour — the two rigs are the
-  // same animal and the water is wide.
+// Where in the noise field a seat's hide is cut from. Hashed off the seat so
+// it is stable across matches and across runs — the alternative is a seal that
+// is a different animal every kickoff, which reads as a bug rather than as
+// variety. The numbers are model units and deliberately not round: a seed on a
+// lattice would put two seats on the same feature of the field.
+const _seedVec = new THREE.Vector3();
+function sealNoiseSeed(seat) {
+  const n = seat + 1;
+  return _seedVec.set(
+    Math.sin(n * 12.9898) * 43.758 % 17.3,
+    Math.sin(n * 78.233) * 12.9898 % 13.7,
+    Math.sin(n * 39.425) * 27.183 % 19.1,
+  );
+}
+
+/**
+ * THE WHOLE ROSTER. Seat 0 is `player`, already in the water; every other seat
+ * gets a body here, and a marker ring under each in its own side's colour —
+ * the rigs are all the same animal and the water is wide.
+ */
+function buildRoster() {
+  const spot = _start[0] ?? { x: 0, y: midWater() };
+  for (let i = extraSeals.length; i < MAX_PER_SIDE * 2; i++) extraSeals.push(makeSeal(i + 2));
+  const n = rosterSize();
+  for (let i = 1; i < n; i++) {
+    const seal = i === 1 ? p2 : extraSeals[i - 2];
+    kickoffSpot(i, spot);
+    // Facing the middle: a seat defending the left looks right and back.
+    buildSeat(seal, spot.x, spot.y, teamOfSeat(i) === 0 ? 1 : -1);
+  }
+  // PLAYER 1 IS ON A SIDE TOO. Its rim is the run's singleton (systems/
+  // outlines.js keeps one, because the wind-up throb and the damage flash all
+  // live on it), so the mode tints that rather than building a second one —
+  // and hands it back at disposeRoster.
+  setPlayerOutlineTint(goalColors()[teamOfSeat(0)]);
+  instanceNoise(player.body, sealNoiseSeed(0));
+  // One marker per seal in that seal's side's colour.
   const colors = goalColors();
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < n; i++) {
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(2.7, 3.1, 40),
-      new THREE.MeshBasicMaterial({ color: colors[i], transparent: true, opacity: 0.55, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: colors[teamOfSeat(i)], transparent: true, opacity: 0.55, depthWrite: false }),
     );
     ring.position.z = -2.5;
     ring.renderOrder = 1;
     scene.add(ring);
     markers.push(ring);
   }
+}
+
+/** Take every seat past 0 back out of the water. */
+function disposeRoster() {
+  for (const seal of [p2, ...extraSeals]) {
+    if (seal.ring) { scene?.remove(seal.ring.mesh); seal.ring.dispose(); seal.ring = null; }
+    releaseSealOutline(seal.outline);
+    seal.outline = null;
+    if (seal.root) disposeSealBody(seal, scene);
+  }
+  // Player 1's rim back to the one CONFIG carries — a run is not a side.
+  setPlayerOutlineTint(null);
 }
 
 function buildBall() {
@@ -428,211 +624,35 @@ export function resetBall() {
 }
 
 // ---------------------------------------------------------------------------
-// THE DRAWN EDGE IS THE HITBOX
-//
-// The ball collided as a circle of `radius` and DREW as a goo isosurface, and
-// the two were never the same thing: measured on the shipped numbers the goo
-// body's edge sits at 4.87 world units and the circle at 2.8, so two units of
-// visible ball were not there to be hit. A seal's nose crossed the ball, went
-// on crossing it for most of a body length, and only then did anything happen
-// — which is the bug, and it is a bug that no amount of tuning either number
-// could fix, because they were tuned in different files against different
-// pictures.
-//
-// So there is ONE description of the ball's body now, and it is the one the
-// renderer uses: `ballSplats` says where the splats go, `renderBall` writes
-// exactly those into the driven slots, and `solveBallSurface` finds where the
-// goo pass's isoline falls through exactly those. The hitbox is that isoline.
-// Retune the look and the hitbox follows on the next frame; there is no
-// second number to keep in step, because there is no second number.
-//
-// WHY THE FIELD CAN BE SOLVED ON THE CPU AT ALL. The splat is a closed form —
-// entities/particles.js's gooFragmentShader is (1 - d)^3 over d = (r/R)^2,
-// zero past R — and a driven slot is written at age 0 with life 1, so its
-// `vAlpha` is exactly 1 and its point size exactly `size * uGooRadius`. There
-// is nothing in the shader's answer that is not in these few lines, which is
-// why this is a mirror rather than an approximation of one.
-//
-// WHAT IT DOES NOT INCLUDE: the screen-space warp and the outline's boil.
-// Both are measured in TEXELS and both displace where a pixel reads the field
-// rather than moving the field — see the uniform notes in systems/post.js.
-// They wobble the drawn line by a pixel or two around this isoline, which is
-// the whole point of them, and a hitbox that chased a per-pixel wobble would
-// be a hitbox that changed with the window size.
+// THE BALL'S SHAPE — systems/ballShape.js does the arithmetic; these are the
+// match's own bindings of it, so every call site here reads one argument
+// shorter. The long note on why the drawn edge IS the hitbox is over there.
 // ---------------------------------------------------------------------------
 
-// The splat set, in the BALL'S OWN FRAME (renderBall adds ball.x/ball.y).
-// Rebuilt in place: this is read once a frame on the hot path and has no
-// business allocating.
-const _splats = [];
-
-/** The goo group's splat diameter multiplier — the shader's `uGooRadius`. */
-function gooSplatMul() {
-  const goo = CONFIG.fx?.goo ?? {};
-  return goo.groups?.ball?.radius ?? goo.radius ?? 3.4;
-}
-
-/** Where the ball's splats go this frame. THE description of the drawn body. */
-function ballSplats(out = _splats) {
-  const look = cfg().ball?.look ?? {};
-  const n = ball.rim.length;
-  const inner = Math.max(4, Math.round(n / 3));
-  const mul = gooSplatMul() * 0.5; // `size` is a DIAMETER multiplier
-  out.length = 0;
-  out.push({ x: 0, y: 0, r: (look.coreSize ?? 1.0) * mul });
-  const innerAt = look.innerAt ?? 0.42;
-  for (let i = 0; i < inner; i++) {
-    const j = Math.round((i / inner) * n) % n;
-    const a = rimAngle(j);
-    const rad = (rimRadius(j) - ball.r) * 0.5 + ball.r * innerAt;
-    out.push({ x: Math.cos(a) * rad, y: Math.sin(a) * rad, r: (look.innerSize ?? 0.8) * mul });
-  }
-  const inset = look.inset ?? 0.72;
-  for (let i = 0; i < n; i++) {
-    const a = rimAngle(i);
-    const rad = rimRadius(i) * inset;
-    out.push({ x: Math.cos(a) * rad, y: Math.sin(a) * rad, r: (look.rimSize ?? 0.62) * mul });
-  }
-  return out;
-}
-
-/** The accumulated density at a point in the ball's frame — the goo shader's splat, summed. */
-function gooDensity(splats, x, y) {
-  let s = 0;
-  for (let i = 0; i < splats.length; i++) {
-    const p = splats[i];
-    const dx = x - p.x;
-    const dy = y - p.y;
-    const d = (dx * dx + dy * dy) / (p.r * p.r);
-    if (d >= 1) continue;
-    const f = 1 - d;
-    s += f * f * f;
-  }
-  return s;
-}
-
-/**
- * Where the isoline crosses the ray leaving the centre at `angle`, by
- * bisection. `hi` starts outside every splat, so the bracket is always valid:
- * the density there is zero by construction, not by hope.
- */
-function isolineAlong(splats, angle, iso, hi) {
-  const ax = Math.cos(angle);
-  const ay = Math.sin(angle);
-  let lo = 0;
-  for (let i = 0; i < 20; i++) {
-    const m = (lo + hi) * 0.5;
-    if (gooDensity(splats, ax * m, ay * m) > iso) lo = m;
-    else hi = m;
-  }
-  return lo;
-}
-
-/**
- * Re-solve the drawn surface at every rim sample. Called once a frame, right
- * after the soft body has stepped and before anything collides — so what the
- * frame hits is exactly the silhouette the frame draws, not last frame's.
- */
+/** Re-solve the drawn edge at every rim sample. Once a frame, before anything collides. */
 export function solveBallSurface() {
-  const n = ball.surf.length;
-  if (!n) return ball.surf;
-  const splats = ballSplats();
-  const iso = CONFIG.fx?.goo?.groups?.ball?.iso ?? CONFIG.fx?.goo?.iso ?? 0.9;
-  let hi = 0;
-  for (const p of splats) hi = Math.max(hi, Math.hypot(p.x, p.y) + p.r);
-  hi *= 1.01;
-  for (let i = 0; i < n; i++) ball.surf[i] = isolineAlong(splats, rimAngle(i), iso, hi);
-  return ball.surf;
+  return solveSurface(ball, rimRadius, rimAngle);
 }
 
-/**
- * THE RADIUS THE BALL COLLIDES AT, toward a WORLD angle: the drawn edge, in
- * that direction. Between samples exactly as rimRadiusAt interpolates the
- * rim, and for the same reason — a contact does not land on a sample.
- *
- * The pinch is in here for free and must NOT be applied on top: rimRadius
- * already flattens the body along the pinch's axis, so the squeezed ball
- * collides as the ELLIPSE it is drawn as rather than as a shrinking circle.
- * That is the shape that gets through a gap narrower than the ball, which is
- * what the pinch was for.
- */
+/** The radius the ball collides at toward a WORLD angle — the drawn edge, that way. */
 export function ballHitRadiusAt(angle) {
-  const n = ball.surf.length;
-  if (!n) return ball.r;
-  const TAU = Math.PI * 2;
-  let u = ((angle - ball.angle) / TAU) * n;
-  u = ((u % n) + n) % n;
-  const i0 = Math.floor(u);
-  const i1 = (i0 + 1) % n;
-  const f = u - i0;
-  return ball.surf[i0] * (1 - f) + ball.surf[i1] * f;
+  return hitRadiusAt(ball, angle);
 }
 
-/** The widest the drawn body reaches, for a broad phase and for anything that wants one number. */
+/** The widest the drawn body reaches, for a broad phase. */
 export function ballHitRadius() {
-  const n = ball.surf.length;
-  if (!n) return ball.r;
-  let max = 0;
-  for (let i = 0; i < n; i++) if (ball.surf[i] > max) max = ball.surf[i];
-  return max;
+  return hitRadiusMax(ball);
 }
 
-// ---------------------------------------------------------------------------
-// THE SEAL'S BODY — see CONFIG.versus.ball.body.
-// ---------------------------------------------------------------------------
-
-/** Which way a seal's nose points, in world radians. The art's forward is +Y. */
-export function sealHeading(seal) {
-  const rz = seal?.mesh?.rotation?.z;
-  return typeof rz === 'number' ? rz + Math.PI / 2 : null;
+/** How far from the ball's centre a seal arriving along `angle` first touches it. */
+export function ballContactReach(angle = 0) {
+  return contactReachAt(ball, angle);
 }
 
-/**
- * How far the seal's body reaches from its own origin toward `angle`, and
- * where on its spine that reach is measured from. The animal is a CAPSULE:
- * a segment from tail to nose with the body's own half-thickness around it,
- * which is what makes a nose-first arrival reach further than a flank.
- */
-function sealSpine(pos, heading, toX, toY, out) {
-  const b = cfg().ball?.body ?? {};
-  const thick = Math.max(0.01, b.thickness ?? 0.69);
-  let hx = 0;
-  let hy = 0;
-  if (heading != null) { hx = Math.cos(heading); hy = Math.sin(heading); }
-  const nose = Math.max(0, (b.nose ?? 3.31) - thick);
-  const tail = Math.max(0, (b.tail ?? 2.82) - thick);
-  let t = hx * (toX - pos.x) + hy * (toY - pos.y);
-  t = Math.max(-tail, Math.min(nose, t));
-  out.x = pos.x + hx * t;
-  out.y = pos.y + hy * t;
-  out.r = thick;
-  return out;
-}
+/** The drawn edge of an undented, unstretched ball — its size at rest, in world units. */
+export { ballRestRadius, ballMaxRadius } from './ballShape.js';
 
 const _spine = { x: 0, y: 0, r: 0 };
-
-/**
- * The heading sealContact will use for `who`. The mesh when there is one; a
- * seal with no body (a harness, the ball lab's invented striker) is taken to
- * be pointed the way it is swimming, and a stationary one at the ball — the
- * two readings that make a bare {x,y} striker behave like a seal arriving
- * rather than like a sphere.
- */
-function contactHeading(pos, vel, heading) {
-  if (heading != null) return heading;
-  if (vel && (Math.abs(vel.x) > 1e-3 || Math.abs(vel.y) > 1e-3)) return Math.atan2(vel.y, vel.x);
-  return Math.atan2(ball.y - pos.y, ball.x - pos.x);
-}
-
-/**
- * How far from the ball's CENTRE a seal arriving along `angle` first touches
- * it, nose-on. What the bot steers to and what the labs draw — one answer,
- * from the same two shapes the contact itself uses.
- */
-export function ballContactReach(angle = 0) {
-  const b = cfg().ball?.body ?? {};
-  return ballHitRadiusAt(angle) + Math.max(b.nose ?? 3.31, b.thickness ?? 0.69);
-}
 
 /** The world angle of rim sample i, with the ball's turn included. */
 export function rimAngle(i) {
@@ -891,7 +911,10 @@ const _blocks = [{ qx: 0, qy: 0 }, { qx: 0, qy: 0 }];
  * ball that clips it leaves at an angle. One test, three answers.
  */
 function collideMouth(side, rest) {
-  const r = ballHitRadius();
+  // The broad phase only. Every answer below is re-measured toward the
+  // contact it is actually about, because a body that is not round has a
+  // different radius for the post than for the lip beside it.
+  const rMax = ballHitRadius();
   // The drawn face, not the wall's line — see rockX.
   const wallX = rockX(side);
   nearestOnBlocks(side, ball.x, ball.y, _blocks);
@@ -899,7 +922,7 @@ function collideMouth(side, rest) {
     let dx = ball.x - b.qx;
     let dy = ball.y - b.qy;
     let d = Math.hypot(dx, dy);
-    if (d >= r) continue;
+    if (d >= rMax) continue;
     if (d < 1e-6) {
       // The centre is inside the rock (a fast frame through a corner): out
       // along the wall's own normal, into the water.
@@ -907,6 +930,10 @@ function collideMouth(side, rest) {
     }
     const nx = dx / d;
     const ny = dy / d;
+    // The drawn edge on the side facing this block, which is where the rock
+    // is actually touching it.
+    const r = ballHitRadiusAt(Math.atan2(-ny, -nx));
+    if (d >= r) continue;
     ball.x = b.qx + nx * r;
     ball.y = b.qy + ny * r;
     notePinchWall(nx, ny);
@@ -926,14 +953,17 @@ function collideMouth(side, rest) {
   // this only ever binds in a harness with no shore — but a live ball must
   // never leave the world.
   const backX = wallX + side * tunnelDepth();
-  if (side < 0 ? ball.x - r < backX : ball.x + r > backX) {
-    ball.x = backX - side * r;
+  const rBack = ballHitRadiusAt(side < 0 ? Math.PI : 0);
+  if (side < 0 ? ball.x - rBack < backX : ball.x + rBack > backX) {
+    ball.x = backX - side * rBack;
     if (side < 0 ? ball.vx < 0 : ball.vx > 0) { const v = Math.abs(ball.vx); ball.vx = -side * v * rest; bounce(-side, 0, v, rest, true); }
   }
   // THE LINE: the ball's near side past goal.line, inside the tunnel and on
   // screen — see versusGoal.goalLineX.
   const line = goalLineX(side);
-  if (side < 0 ? ball.x + r < line : ball.x - r > line) { goal(side < 0 ? 'left' : 'right'); return true; }
+  // The ball's NEAR side to the line, which is its trailing edge going in.
+  const rLine = ballHitRadiusAt(side < 0 ? 0 : Math.PI);
+  if (side < 0 ? ball.x + rLine < line : ball.x - rLine > line) { goal(side < 0 ? 'left' : 'right'); return true; }
   return false;
 }
 
@@ -1047,9 +1077,13 @@ function ballImpactFx(event, nx, ny, t, extra = null, gap = null, origin = null)
   const last = fxLast.get(event);
   if (last != null && now - last < minGap) return null;
   fxLast.set(event, now);
+  // ON THE SURFACE, which is the drawn edge and not `radius`: a splash from
+  // the rigid circle fired two units inside the visible body, so a bounce off
+  // the floor threw its goo from the middle of the ball.
+  const edge = ballHitRadiusAt(Math.atan2(-ny, -nx));
   const at = {
-    x: origin ? origin.x : ball.x - nx * ball.r,
-    y: origin ? origin.y : ball.y - ny * ball.r,
+    x: origin ? origin.x : ball.x - nx * edge,
+    y: origin ? origin.y : ball.y - ny * edge,
     dirX: nx, dirY: ny,
     vx: ball.vx, vy: ball.vy,
     scale: lerp(f.scaleMin ?? 0.35, f.scaleMax ?? 1.6, k),
@@ -1121,20 +1155,39 @@ function bounce(nx, ny, closing, rest, post = false) {
  * `dashDir`/`power` is the strike in flight, and a dash shoves the ball ONCE,
  * like hitThisDash — a dash that stayed in contact for its whole length would
  * otherwise keep re-striking a ball it is already carrying.
+ *
+ * TWO SHAPES, BOTH MEASURED. The ball is its drawn edge (ballHitRadiusAt) and
+ * the seal is its own body — a capsule down the spine from tail to nose, see
+ * CONFIG.versus.ball.body — so the touch is the two silhouettes meeting. It
+ * used to be a circle of `contactRadius` around the seal's middle against a
+ * circle of `radius` around the ball's, and both circles were wrong in the
+ * same direction: a nose arriving head-on had to travel most of a body
+ * length INTO the drawn ball before either circle noticed.
+ *
+ * `heading` is which way the nose points, in world radians — sealHeading(seal)
+ * off the mesh. Null falls back to the way it is swimming; see contactHeading.
  */
-export function sealContact(who, pos, vel, dashing, dashDir, power, english = 0) {
+export function sealContact(who, pos, vel, dashing, dashDir, power, english = 0, heading = null) {
   const c = cfg().ball ?? {};
-  const cr = c.contactRadius ?? 2.2;
-  const dx = ball.x - pos.x;
-  const dy = ball.y - pos.y;
+  // The point on the seal's spine nearest the ball, and the half-thickness
+  // around it — the animal, not a circle standing in for one.
+  sealSpine(pos, contactHeading(ball, pos, vel, heading), ball.x, ball.y, _spine);
+  const dx = ball.x - _spine.x;
+  const dy = ball.y - _spine.y;
   const dist = Math.hypot(dx, dy) || 0.0001;
-  const minD = ballHitRadius() + cr;
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const minD = ballHitRadiusAt(Math.atan2(-ny, -nx)) + _spine.r;
   if (!dashing) ball.dashHit[who] = false;
   if (dist >= minD) { ball.pierced[who] = false; return false; }
 
-  const nx = dx / dist;
-  const ny = dy / dist;
   const push = minD - dist;
+  // The velocity this touch is about to change, for the possession ledger —
+  // see noteBallMomentum. Taken here, once, so every branch below (a pierce, a
+  // strike, a swimming nudge) is booked the same way and none of them has to
+  // remember to.
+  const v0x = ball.vx;
+  const v0y = ball.vy;
   notePinchSeal(nx, ny, who);
   // A ball already going through this seal: THROUGH — no separation, no
   // second knock, nothing more until they have come apart. The knock was
@@ -1160,6 +1213,7 @@ export function sealContact(who, pos, vel, dashing, dashDir, power, english = 0)
     // margin. A dash that met it is a strike that failed: broken on the
     // spot, and this dash does not get another go.
     pierceSeal(who, nx, ny, contactAngle, closing, margin, dashing, vel);
+    noteBallMomentum(who, v0x, v0y, ball.vx, ball.vy, contactAngle);
     return true;
   }
   // Out of the seal, whatever else happens: the seal held, so the ball gives.
@@ -1171,7 +1225,9 @@ export function sealContact(who, pos, vel, dashing, dashDir, power, english = 0)
     // The strike's report (impulse, glance, spin, dent) — truthy, for callers
     // that only ask whether it landed. The cap it may leave at rises with
     // the speed it came in at: the counter-strike's return.
-    return strikeBall(nx, ny, contactAngle, closing, vel, dashDir, power, who, english, speedIn);
+    const hit = strikeBall(nx, ny, contactAngle, closing, vel, dashDir, power, who, english, speedIn);
+    noteBallMomentum(who, v0x, v0y, ball.vx, ball.vy, contactAngle);
+    return hit;
   }
 
   // A swimming seal nudges it: only the closing speed along the normal, and
@@ -1193,6 +1249,7 @@ export function sealContact(who, pos, vel, dashing, dashDir, power, english = 0)
     const sp = Math.hypot(ball.vx, ball.vy);
     if (sp > max) { ball.vx *= max / sp; ball.vy *= max / sp; }
     impactDent(contactAngle, 0.14 * Math.min(1, closing / 20), closing);
+    noteBallMomentum(who, v0x, v0y, ball.vx, ball.vy, contactAngle);
   noteTouch(who, 'bump');
     // A nudge is a hit too, a small one — but a seal resting against the
     // ball closes at nothing and must not squirt goo every frame it touches.
@@ -1249,7 +1306,9 @@ function ballHits() {
   const force = Math.min(1, speed / ref);
   const nx = ball.vx / speed;
   const ny = ball.vy / speed;
-  const r = ballHitRadius();
+  // The broad phase: the widest the drawn body reaches. Each contact below
+  // re-measures the edge toward the body it is actually touching.
+  const rMax = ballHitRadius();
   const gap = Math.max(0, h.gap ?? 0.3);
   const now = versusState.clock;
   let landed = 0;
@@ -1260,12 +1319,7 @@ function ballHits() {
     // A hull already at zero is on its way out of the list; hitting it again
     // would sink it twice.
     if (!b?.mesh || !(b.hp > 0)) continue;
-    if (!hitsBoat(b, ball.x, ball.y, r)) continue;
-    // `now >= ` too: the match clock restarts, and a hull object reused from
-    // an earlier match with a stamp in the future would be skipped forever.
-    if (b.ballHitT != null && now >= b.ballHitT && now - b.ballHitT < gap) continue;
-    b.ballHitT = now;
-    landed++;
+    if (!hitsBoat(b, ball.x, ball.y, rMax)) continue;
     // The nearest point on the hull's box, which is the contact and the normal
     // both — the same box hitsBoat just tested against.
     const hx = b.mesh.position.x + (b.offsetX ?? 0);
@@ -1282,6 +1336,17 @@ function ballHits() {
     if (d < 1e-6) { ox = -nx; oy = -ny; d = 1; }
     const ux = ox / d;
     const uy = oy / d;
+    // The narrow phase: the DRAWN edge on the side facing this hull, which is
+    // shorter than the broad phase's max wherever the body is dented. Before
+    // the stamp and the count, or a pass that only grazed the box would spend
+    // the hull's `gap` on a hit that never happened.
+    const r = ballHitRadiusAt(Math.atan2(-uy, -ux));
+    if (d >= r) continue;
+    // `now >= ` too: the match clock restarts, and a hull object reused from
+    // an earlier match with a stamp in the future would be skipped forever.
+    if (b.ballHitT != null && now >= b.ballHitT && now - b.ballHitT < gap) continue;
+    b.ballHitT = now;
+    landed++;
     const closing = -(ball.vx * ux + ball.vy * uy);
     jostleBoat(b, nx, ny, Math.min(1, force * (h.boatPower ?? 1.2)), { x: qx, y: qy });
     // `recoil: false` — the jostle above IS the shove, and letting damageBoat
@@ -1310,8 +1375,15 @@ function ballHits() {
     if (!e?.mesh || !(e.hp > 0)) continue;
     const ex = e.mesh.position.x;
     const ey = e.mesh.position.y;
-    const reach = r + (e.radius ?? e.def?.radius ?? 0.5);
-    if ((ex - ball.x) ** 2 + (ey - ball.y) ** 2 > reach * reach) continue;
+    const gx = ex - ball.x;
+    const gy = ey - ball.y;
+    const gap2 = gx * gx + gy * gy;
+    const own = e.radius ?? e.def?.radius ?? 0.5;
+    if (gap2 > (rMax + own) ** 2) continue;
+    // The drawn edge toward THIS body, so a fish sitting in a dent is not
+    // ploughed by a rim that has been pushed away from it.
+    const reach = ballHitRadiusAt(Math.atan2(gy, gx)) + own;
+    if (gap2 > reach * reach) continue;
     if (e.ballHitT != null && now >= e.ballHitT && now - e.ballHitT < gap) continue;
     e.ballHitT = now;
     landed++;
@@ -1328,11 +1400,20 @@ function ballHits() {
       versusHooks.onKill?.(e);
       removeEnemy(scene, i);
     }
-    // A body costs the ball speed whether it died or not — a shot that went
-    // through a school arrives slower than one that had a clear lane.
-    const keep = Math.max(0, 1 - (h.drag ?? 0.06));
-    ball.vx *= keep;
-    ball.vy *= keep;
+    // AND IT DOES NOT SLOW DOWN. A shot through a school is a shot through a
+    // school: the ball is `mass` seals heavy and a baitfish is a few pounds of
+    // it, so a body it goes through costs it nothing worth modelling. What the
+    // pass costs the FISH is its life, and what it leaves behind is the chum
+    // the kill path drops (versusHooks.onKill, above).
+    //
+    // There used to be a `hit.drag` here, and it was a units bug rather than a
+    // taste: the code spent it as a SHARE of the ball's speed per body, the
+    // block above it in config.js was `drag: 0.994` meaning a per-frame
+    // MULTIPLIER, and the same number got typed under the same name into this
+    // one. `keep = 1 - 0.994` is 0.6%, so a ball that so much as clipped one
+    // minnow did not arrive slower — it stopped dead, in the water, on the
+    // spot. Deleted rather than zeroed, so the stale 0.994 goes out of the
+    // saved snapshot with it.
   }
   if (landed) ballEvent('bounce', { force });
   return landed;
@@ -1622,22 +1703,45 @@ export function p2Pad(pads) {
   return connected.length >= 2 ? connected[1] : connected[0];
 }
 
-export function readP2Input(pads = null, out = p2.input) {
+/**
+ * ONE SEAT'S PAD, or none. Seat 1 keeps the old by-index fallback for a match
+ * nobody set up; every seat past it is only ever driven by a pad the team
+ * select actually put there, and is the computer's otherwise — a seat with a
+ * pad guessed for it would steal the stick out of somebody else's hands.
+ */
+export function readSeatInput(seat, pads = null, out = p2.input) {
+  if (seat === 1) return readP2Input(pads, out);
+  const want = seatPad(seat);
+  if (want === null || want === undefined) {
+    out.connected = false;
+    out.move.set(0, 0);
+    out.strike = false;
+    out.strikeHeld = false;
+    out.strikeRelease = false;
+    out.aimLive = false;
+    return out;
+  }
+  return readP2Input(pads, out, want);
+}
+
+export function readP2Input(pads = null, out = p2.input, forcePad = undefined) {
   const dz = cfg().p2?.deadzone ?? 0.18;
   let list = pads;
   if (!list) {
     try { list = navigator.getGamepads?.() ?? []; } catch { list = []; }
   }
-  const pad = p2Pad(list);
+  const pad = forcePad === undefined
+    ? p2Pad(list)
+    : ((list ?? []).find((p) => p?.connected && p.index === forcePad) ?? null);
   out.strikeRelease = false;
   out.strike = false;
   out.aimLive = false;
   if (!pad) {
     out.connected = false;
     out.move.set(0, 0);
-    if (p2.heldPrev) { out.strikeRelease = true; }
+    if (out.heldPrev) { out.strikeRelease = true; }
     out.strikeHeld = false;
-    p2.heldPrev = false;
+    out.heldPrev = false;
     return out;
   }
   out.connected = true;
@@ -1729,29 +1833,29 @@ export function releaseP2(dir, english = 0) {
  * the release, then the dash's hits. Every number is read off the same
  * CONFIG and the same stats player 1 reads.
  */
-function stepP2(dt) {
-  const inp = p2.input;
-  const s = p2.strike;
+function stepSeat(seal, dt) {
+  const inp = seal.input;
+  const s = seal.strike;
   const stats = player.stats;
-  const pos = p2.mesh.position;
+  const pos = seal.mesh.position;
 
-  updatePlayer(dt, inp, p2, s);
-  p2.celebrate?.update(dt);
+  updatePlayer(dt, inp, seal, s);
+  seal.celebrate?.update(dt);
 
   // The wind-up: burn fuel into power (updateCharge), the coil pose, the
   // sealed mouth, the tremble's rumble and the perfect charge's pop — as
   // main.js does for player 1, line for line.
   updateCharge(dt, inp.strikeHeld, stats, s);
-  p2.chargePose = s.charging ? s.pending : 0;
-  p2.chumSealed = CONFIG.strike.enabled && inp.strikeHeld && CONFIG.strike.charge.gulp?.blockEating !== false;
+  seal.chargePose = s.charging ? s.pending : 0;
+  seal.chumSealed = CONFIG.strike.enabled && inp.strikeHeld && CONFIG.strike.charge.gulp?.blockEating !== false;
   if (s.charging) {
-    p2.hapticT -= dt;
-    if (p2.hapticT <= 0) {
-      p2.hapticT = CONFIG.strike.charge.hapticInterval;
+    seal.hapticT -= dt;
+    if (seal.hapticT <= 0) {
+      seal.hapticT = CONFIG.strike.charge.hapticInterval;
       feedback('strikeCharging', { x: pos.x, y: pos.y, scale: 0.35 + s.pending * 1.1 });
     }
   } else {
-    p2.hapticT = 0;
+    seal.hapticT = 0;
   }
   if (perfectCrossed(s)) feedback('strikePerfect', { x: pos.x, y: pos.y });
 
@@ -1771,12 +1875,12 @@ function stepP2(dt) {
   updateStrike(dt, scene, pos, stats, enemies, p2Hooks, s);
 
   // Air: updatePlayer spent or refilled it; empty is a burst.
-  if (CONFIG.oxygen?.enabled !== false && p2.oxygen <= 0) versusOutOfAir(1);
+  if (CONFIG.oxygen?.enabled !== false && seal.oxygen <= 0) versusOutOfAir(seatOf(p2));
 
   // Chum. The pickup system's magnet belongs to the player; P2 just eats what
   // its mouth is over, a pip a mouthful, the same rate as P1's bar — and not
   // while a wind-up has the mouth sealed, as P1's is.
-  if (scene && !p2.chumSealed) {
+  if (scene && !seal.chumSealed) {
     const reach = cfg().p2?.reach ?? 3;
     const pip = CONFIG.strike.charge?.chumRefill ?? 0.2;
     gulpPickups(scene, pos.x, pos.y, reach, () => { addCharge(pip, stats, s); });
@@ -1814,7 +1918,16 @@ export function driveOutline(look = ballLookState()) {
 /** Where seal `who` comes back: its own goal mouth, `inset` in from the wall. */
 function spawnPoint(who) {
   const inset = cfg().respawn?.inset ?? 8;
-  return { x: who === 0 ? bounds.left + inset : bounds.right - inset, y: midWater() };
+  // ITS OWN GOAL, whichever side that is — a seat's side, not its number.
+  const team = teamOfSeat(who);
+  const f = seatFormation(who);
+  const half = (bounds.top - bounds.bottom) * 0.5;
+  return {
+    x: team === 0 ? bounds.left + inset : bounds.right - inset,
+    // Spread down the mouth so a side respawning together does not come back
+    // stacked on one point.
+    y: midWater() + f.lane * half * 0.35,
+  };
 }
 
 /**
@@ -1856,17 +1969,13 @@ function respawn(who) {
   const r = cfg().respawn ?? {};
   const at = spawnPoint(who);
   const maxO2 = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100);
-  if (who === 0) {
-    if (player.mesh) { player.mesh.position.set(at.x, at.y, 0); player.mesh.visible = true; }
-    player.velocity.set(0, 0);
-    player.oxygen = maxO2;
-    player.hp = player.stats?.maxHp ?? player.hp;
-  } else {
-    p2.pos.set(at.x, at.y, 0);
-    p2.velocity.set(0, 0);
-    p2.oxygen = maxO2;
-    p2.hp = player.stats?.maxHp ?? p2.hp;
-    if (p2.mesh) p2.mesh.visible = true;
+  const seal = sealAt(who);
+  if (seal) {
+    sealPos(seal).set(at.x, at.y, 0);
+    seal.velocity.set(0, 0);
+    seal.oxygen = maxO2;
+    seal.hp = player.stats?.maxHp ?? seal.hp;
+    if (seal.mesh) seal.mesh.visible = true;
   }
   versusState.invuln[who] = r.invuln ?? 0.8;
   feedback('bubblePop', { x: at.x, y: at.y, scale: 1.4 });
@@ -1874,14 +1983,18 @@ function respawn(who) {
 
 /** The clocks: the wait, then the grace. A dead seal is parked on its spawn point meanwhile. */
 function updateRespawns(dt) {
-  for (let who = 0; who < 2; who++) {
+  for (let who = 0; who < rosterSize(); who++) {
     if (versusState.invuln[who] > 0) versusState.invuln[who] = Math.max(0, versusState.invuln[who] - dt);
     if (!versusState.dead[who]) continue;
     // Parked out of play while gone — anything that reads the position finds
     // it in the goal, nowhere near the ball.
     const at = spawnPoint(who);
-    if (who === 0 && player.mesh) { player.mesh.position.set(at.x, at.y, 0); player.velocity.set(0, 0); player.mesh.visible = false; }
-    if (who === 1) { p2.pos.set(at.x, at.y, 0); p2.vel.set(0, 0); }
+    const seal = sealAt(who);
+    if (seal) {
+      sealPos(seal).set(at.x, at.y, 0);
+      seal.velocity.set(0, 0);
+      if (who === 0 && seal.mesh) seal.mesh.visible = false;
+    }
     versusState.dead[who] = Math.max(0, versusState.dead[who] - dt);
     if (versusState.dead[who] === 0) respawn(who);
   }
@@ -1913,21 +2026,36 @@ export function updateVersus(dt, pads = null, humanInput = null) {
   const ref = Math.max(1, cfg().ball?.impact?.speedRef ?? 30);
   setBallDrive({
     speed01: Math.hypot(ball.vx, ball.vy) / ref,
-    charge01: Math.max(p2.strike.charging ? p2.strike.pending : 0, humanInput?.charge ?? 0),
+    // The hardest wind-up ON THE PITCH, not player 2's — with four seals in
+    // the water the one that is charging is usually not the one this line
+    // used to name.
+    charge01: matchSeals().reduce(
+      (m, seal) => Math.max(m, seal !== player && seal.strike.charging ? seal.strike.pending : 0),
+      humanInput?.charge ?? 0,
+    ),
   });
-  readP2Input(pads);
-  // Nobody on player 2's pad: the bot fills the same input the pad would.
-  if (botWanted(p2.input.connected)) {
-    updateBot(dt, p2, ball, opponentOf(1), p2.input);
-    // The bot's aim is always a hand on the stick, so its dashes steer.
-    p2.input.aimLive = true;
-    p2.input.strike = p2.input.strikeHeld && !p2.pressPrev;
-  } else {
-    botState.driving = false;
+  // EVERY SEAT PAST 0, driven identically: read its pad, or let a bot fill the
+  // same input the pad would, then step it. Seat 0 is the person holding the
+  // frame and main.js drives that one.
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    if (seat <= 0) continue;
+    readSeatInput(seat, pads, seal.input);
+    if (botWanted(seal.input.connected, seat)) {
+      updateBot(dt, seal, ball, opponentOf(seat), seal.input, seat);
+      // The bot's aim is always a hand on the stick, so its dashes steer.
+      seal.input.aimLive = true;
+      seal.input.strike = seal.input.strikeHeld && !seal.pressPrev;
+    } else if (seat === 1) {
+      botState.driving = false;
+    }
+    seal.pressPrev = seal.input.strikeHeld;
   }
-  p2.pressPrev = p2.input.strikeHeld;
   updateRespawns(dt);
-  if (!versusState.dead[1] && p2.mesh) stepP2(dt);
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    if (seat > 0 && !versusState.dead[seat]) stepSeat(seal, dt);
+  }
   logImitation(dt, humanInput);
   // The countdown: everyone stays put, with a full wheel, until the whistle.
   // The world is at freezeScale under this (updateVersusClock), so nothing
@@ -1938,8 +2066,11 @@ export function updateVersus(dt, pads = null, humanInput = null) {
   if (versusState.phase === 'play') {
     regenPips(dt);
     keepBubbles(dt);
-    if (!versusState.dead[1]) eatBubblesP2();
-    if (!versusState.dead[0] && !versusState.dead[1]) sealCollide(bodyCheck());
+    for (const seal of matchSeals()) {
+      const seat = seatOf(seal);
+      if (seat > 0 && !versusState.dead[seat]) eatBubbles(seal);
+    }
+    sealCollide(bodyCheck());
   }
 
   if (ball.live) {
@@ -1957,11 +2088,21 @@ export function updateVersus(dt, pads = null, humanInput = null) {
     // and the fish it goes through. Before the seals' own contact, so a ball
     // deflected off a hull meets a seal on the heading it actually leaves on.
     ballHits();
-    if (player.mesh && !versusState.dead[0]) {
-      sealContact(0, player.mesh.position, player.velocity,
-        !!strikeState.active, strikeState.dashDir, strikeState.power ?? 0, strikeState.english ?? 0);
+    // EVERY SEAL AGAINST THE BALL, same call, same rules — a teammate's touch
+    // is an opponent's touch and the contest does not ask whose side anybody
+    // is on. Seat 0's strike lives in main.js's own state; the rest carry
+    // theirs on the seal.
+    for (const seal of matchSeals()) {
+      const seat = seatOf(seal);
+      if (versusState.dead[seat]) continue;
+      if (seat === 0) {
+        sealContact(0, player.mesh.position, player.velocity,
+          !!strikeState.active, strikeState.dashDir, strikeState.power ?? 0, strikeState.english ?? 0,
+          sealHeading(player));
+      } else {
+        sealContact(seat, sealPos(seal), seal.velocity, seal.active, seal.dashDir, seal.power, seal.english, sealHeading(seal));
+      }
     }
-    sealContact(1, p2.pos, p2.vel, p2.active, p2.dashDir, p2.power, p2.english);
     updatePinch(dt);
   } else {
     updateBallSpin(0, dt);
@@ -1996,14 +2137,25 @@ export function updateVersus(dt, pads = null, humanInput = null) {
 const _opp = { x: 0, y: 0, vx: 0, vy: 0 };
 /** The OTHER seal's position and velocity, as seen by seal `who`. */
 function opponentOf(who) {
-  if (who === 1) {
-    const p = player.mesh?.position;
-    _opp.x = p?.x ?? 0; _opp.y = p?.y ?? 0;
-    _opp.vx = player.velocity?.x ?? 0; _opp.vy = player.velocity?.y ?? 0;
-  } else {
-    _opp.x = p2.pos.x; _opp.y = p2.pos.y;
-    _opp.vx = p2.vel.x; _opp.vy = p2.vel.y;
+  // THE NEAREST SEAL ON THE OTHER SIDE. It was "the other one", which is the
+  // same thing while there are two — with four in the water the bot has to
+  // steer against somebody in particular, and the one closest to it is the one
+  // it is actually contesting.
+  let best = null;
+  let bestD = Infinity;
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    if (seat === who || sameTeam(seat, who) || versusState.dead[seat]) continue;
+    const me = sealAt(who);
+    const mine = me ? sealPos(me) : null;
+    const dx = sealPos(seal).x - (mine?.x ?? 0);
+    const dy = sealPos(seal).y - (mine?.y ?? 0);
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = seal; }
   }
+  if (!best) { _opp.x = 0; _opp.y = 0; _opp.vx = 0; _opp.vy = 0; return _opp; }
+  _opp.x = sealPos(best).x; _opp.y = sealPos(best).y;
+  _opp.vx = best.velocity.x; _opp.vy = best.velocity.y;
   return _opp;
 }
 
@@ -2090,16 +2242,16 @@ function keepBubbles(dt) {
 }
 
 /** Player 2 takes a bubble by touching its skin, as player 1 does; it pays the meter. */
-function eatBubblesP2() {
-  if (!scene) return;
+function eatBubbles(seal) {
+  if (!scene || !seal?.mesh) return;
   const reach = (cfg().bubbles?.reach ?? 3);
   for (let i = bubbleOrbs.length - 1; i >= 0; i--) {
     const orb = bubbleOrbs[i];
     const r = orb.assetRadius ?? 0.5;
-    const d = Math.hypot(orb.mesh.position.x - p2.pos.x, orb.mesh.position.y - p2.pos.y);
+    const d = Math.hypot(orb.mesh.position.x - sealPos(seal).x, orb.mesh.position.y - sealPos(seal).y);
     if (d >= reach + r) continue;
-    p2.charge = Math.min(1, p2.charge + versusBubblePips());
-    p2.oxygen = Math.min(Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100), p2.oxygen + (CONFIG.oxygen?.bubbleRefillAmount ?? 30));
+    seal.charge = Math.min(1, seal.charge + versusBubblePips());
+    seal.oxygen = Math.min(Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100), seal.oxygen + (CONFIG.oxygen?.bubbleRefillAmount ?? 30));
     feedback('bubblePop', { x: orb.mesh.position.x, y: orb.mesh.position.y, scale: 0.9 });
     scene.remove(orb.mesh);
     bubbleOrbs.splice(i, 1);
@@ -2116,23 +2268,36 @@ function eatBubblesP2() {
  * is the shove's speed against the range the block declares, so the burst,
  * the shake, the ripple and the voice all grow with it.
  */
-function bodyCheck() {
+/**
+ * A DASH INTO ANOTHER SEAL, for ONE PAIR of seats. It was written for the only
+ * pair there was — player 1 and player 2 — and every "1" and "2" in it was
+ * doing double duty as a seat, a side and an end of the collision. `a` and `b`
+ * are seats now and nothing here asks whose side either is on: a teammate
+ * shoves you exactly as an opponent does, which is what makes a scramble in
+ * front of the goal a scramble.
+ */
+function bodyCheckPair(a, b) {
   const c = cfg().bodyCheck ?? {};
-  if (c.enabled === false || !player.mesh) return false;
-  const p1 = player.mesh.position;
-  const dx = p2.pos.x - p1.x;
-  const dy = p2.pos.y - p1.y;
+  const sa = sealAt(a);
+  const sb = sealAt(b);
+  if (!sa || !sb || versusState.dead[a] || versusState.dead[b]) return false;
+  const p1 = sealPos(sa);
+  const pb = sealPos(sb);
+  const dx = pb.x - p1.x;
+  const dy = pb.y - p1.y;
   const dist = Math.hypot(dx, dy) || 0.0001;
   const cr = c.contactRadius ?? 2.2;
-  const d1 = !!strikeState.active;
-  const d2 = !!p2.active;
-  if (!d1) versusState.checked[0] = false;
-  if (!d2) versusState.checked[1] = false;
+  const strikeA = a === 0 ? strikeState : sa.strike;
+  const strikeB = b === 0 ? strikeState : sb.strike;
+  const d1 = !!strikeA.active;
+  const d2 = !!strikeB.active;
+  if (!d1) versusState.checked[a] = false;
+  if (!d2) versusState.checked[b] = false;
   if (dist >= cr * 2) return false;
   const nx = dx / dist; // from P1 toward P2
   const ny = dy / dist;
-  const can1 = d1 && !versusState.checked[0];
-  const can2 = d2 && !versusState.checked[1];
+  const can1 = d1 && !versusState.checked[a];
+  const can2 = d2 && !versusState.checked[b];
   if (!can1 && !can2) return false;
   const both = can1 && can2;
   const share = both ? (c.both ?? 0.6) : 1;
@@ -2143,40 +2308,42 @@ function bodyCheck() {
   // other times mass. Positive is player 1. A dasher into a swimmer wins it
   // unless the swimmer is coming the other way faster than the dash counts
   // for; head-on it is whoever committed more.
-  const u1 = Math.max(0, player.velocity.x * nx + player.velocity.y * ny);
-  const u2 = Math.max(0, -(p2.vel.x * nx + p2.vel.y * ny));
-  const margin = u1 * contestMass(d1, strikeState.power ?? 0) - u2 * contestMass(d2, p2.power);
+  const u1 = Math.max(0, sa.velocity.x * nx + sa.velocity.y * ny);
+  const u2 = Math.max(0, -(sb.velocity.x * nx + sb.velocity.y * ny));
+  const margin = u1 * contestMass(d1, strikeA.power ?? 0) - u2 * contestMass(d2, strikeB.power ?? 0);
   let strongest = 0;
+  const breakA = () => { if (a === 0) cancelDash(); else { cancelDash(sa.strike); sa.dashTimer = 0; } };
+  const breakB = () => { if (b === 0) cancelDash(); else { cancelDash(sb.strike); sb.dashTimer = 0; } };
   if (can1) {
-    versusState.checked[0] = true;
-    const closing = Math.max(0, (player.velocity.x - p2.vel.x) * nx + (player.velocity.y - p2.vel.y) * ny);
-    strongest = Math.max(strongest, (lerp(knock, knockMax, clamp01(strikeState.power ?? 0)) + closing * carry) * share);
-    if (c.breakDash !== false && d2 && !both) { cancelDash(p2.strike); p2.dashTimer = 0; }
+    versusState.checked[a] = true;
+    const closing = Math.max(0, (sa.velocity.x - sb.velocity.x) * nx + (sa.velocity.y - sb.velocity.y) * ny);
+    strongest = Math.max(strongest, (lerp(knock, knockMax, clamp01(strikeA.power ?? 0)) + closing * carry) * share);
+    if (c.breakDash !== false && d2 && !both) breakB();
   }
   if (can2) {
-    versusState.checked[1] = true;
-    const closing = Math.max(0, (p2.vel.x - player.velocity.x) * -nx + (p2.vel.y - player.velocity.y) * -ny);
-    strongest = Math.max(strongest, (lerp(knock, knockMax, clamp01(p2.power)) + closing * carry) * share);
-    if (c.breakDash !== false && d1 && !both) cancelDash();
+    versusState.checked[b] = true;
+    const closing = Math.max(0, (sb.velocity.x - sa.velocity.x) * -nx + (sb.velocity.y - sa.velocity.y) * -ny);
+    strongest = Math.max(strongest, (lerp(knock, knockMax, clamp01(strikeB.power ?? 0)) + closing * carry) * share);
+    if (c.breakDash !== false && d1 && !both) breakA();
   }
-  if (both && c.breakDash !== false) { cancelDash(); cancelDash(p2.strike); p2.dashTimer = 0; }
+  if (both && c.breakDash !== false) { breakA(); breakB(); }
   // The loser takes the shove away from the winner; the winner takes its
   // recoil. A dead heat (both to the frame) is split as two losers.
-  const loser = Math.abs(margin) < 1e-6 ? -1 : (margin > 0 ? 1 : 0);
+  const loser = Math.abs(margin) < 1e-6 ? -1 : (margin > 0 ? b : a);
   if (loser === -1) {
-    jostle(1, nx, ny, strongest, 1);
-    jostle(0, -nx, -ny, strongest, 1);
+    jostle(b, nx, ny, strongest, 1);
+    jostle(a, -nx, -ny, strongest, 1);
   } else {
-    const sgn = loser === 1 ? 1 : -1;
+    const sgn = loser === b ? 1 : -1;
     jostle(loser, nx * sgn, ny * sgn, strongest, 1);
-    jostle(1 - loser, -nx * sgn, -ny * sgn, strongest, c.winnerShare ?? 0.3);
+    jostle(loser === b ? a : b, -nx * sgn, -ny * sgn, strongest, c.winnerShare ?? 0.3);
   }
   // The event, scaled by the shove: a tap at the low end, a full-power ram
   // into a seal closing head-on at the top.
   const t = clamp01((strongest - knock * 0.5) / Math.max(1, knockMax * 1.3 - knock * 0.5));
   const scale = lerp(c.scaleMin ?? 0.5, c.scaleMax ?? 1.8, t);
-  const mx = (p1.x + p2.pos.x) * 0.5;
-  const my = (p1.y + p2.pos.y) * 0.5;
+  const mx = (p1.x + pb.x) * 0.5;
+  const my = (p1.y + pb.y) * 0.5;
   // The goo goes out along the shove (dirX/dirY): from the striker through
   // the seal it hit. Both dashing is a head-on, and it goes both ways.
   const sgn = can1 ? 1 : -1;
@@ -2192,6 +2359,23 @@ function bodyCheck() {
 }
 
 /**
+ * EVERY PAIR ON THE PITCH, teammates included. A dash is a dash whoever it
+ * lands on — there is no "friendly fire" switch here on purpose, because the
+ * thing that makes a crowd in front of a goal read as a crowd is that being in
+ * one is dangerous. Returns true if any pair checked this frame, which is what
+ * sealCollide reads to know a shove has already been paid.
+ */
+export function bodyCheck() {
+  if ((cfg().bodyCheck ?? {}).enabled === false || !player.mesh) return false;
+  const n = rosterSize();
+  let any = false;
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) if (bodyCheckPair(a, b)) any = true;
+  }
+  return any;
+}
+
+/**
  * SEAL AGAINST SEAL — two bodies that cannot overlap. Every frame they are
  * pressed together they are pushed apart, half each; on the frame they MEET
  * the ball's contest is run between them (contestMass: 1 swimming, dashMass
@@ -2204,43 +2388,60 @@ function bodyCheck() {
  * dashes and would otherwise read here as two swimmers meeting. See
  * CONFIG.versus.sealCollide.
  */
-export function sealCollide(checked = false) {
+/**
+ * TWO SEALS CANNOT OVERLAP, for one pair of seats — and this one is deliberate
+ * about teammates too. A side that could stand inside itself would let two
+ * seals share a hitbox in front of the goal, which is a way of defending the
+ * mouth that no rule in this file would ever have to answer.
+ *
+ * `touching` is per PAIR now (it was one flag when there was one pair): the
+ * "met this frame" edge is what pays the shove, and one shared flag would let
+ * a pair that had been touching for a second cancel a fresh meeting somewhere
+ * else on the pitch.
+ */
+function sealCollidePair(a, b, checked = false) {
   const c = cfg().sealCollide ?? {};
-  if (c.enabled === false || !player.mesh) { versusState.touching = false; return null; }
+  const sa = sealAt(a);
+  const sb = sealAt(b);
+  if (!sa || !sb || versusState.dead[a] || versusState.dead[b]) return null;
   const cr = cfg().bodyCheck?.contactRadius ?? 2.2;
-  const p1 = player.mesh.position;
-  const dx = p2.pos.x - p1.x;
-  const dy = p2.pos.y - p1.y;
+  const p1 = sealPos(sa);
+  const pb = sealPos(sb);
+  const dx = pb.x - p1.x;
+  const dy = pb.y - p1.y;
   const dist = Math.hypot(dx, dy) || 0.0001;
   const minD = cr * 2;
-  if (dist >= minD) { versusState.touching = false; return null; }
+  const key = a * 16 + b;
+  if (dist >= minD) { touchingPairs.delete(key); return null; }
   const nx = dx / dist; // from P1 toward P2
   const ny = dy / dist;
   // Apart, half each.
   const push = (minD - dist) * 0.5;
   p1.x -= nx * push; p1.y -= ny * push;
-  p2.pos.x += nx * push; p2.pos.y += ny * push;
-  const met = !versusState.touching;
-  versusState.touching = true;
-  const d1 = !!strikeState.active;
-  const d2 = !!p2.active;
-  const u1 = Math.max(0, player.velocity.x * nx + player.velocity.y * ny);
-  const u2 = Math.max(0, -(p2.vel.x * nx + p2.vel.y * ny));
-  const m1 = contestMass(d1, strikeState.power ?? 0);
-  const m2 = contestMass(d2, p2.power);
+  pb.x += nx * push; pb.y += ny * push;
+  const met = !touchingPairs.has(key);
+  touchingPairs.add(key);
+  const strikeA = a === 0 ? strikeState : sa.strike;
+  const strikeB = b === 0 ? strikeState : sb.strike;
+  const d1 = !!strikeA.active;
+  const d2 = !!strikeB.active;
+  const u1 = Math.max(0, sa.velocity.x * nx + sa.velocity.y * ny);
+  const u2 = Math.max(0, -(sb.velocity.x * nx + sb.velocity.y * ny));
+  const m1 = contestMass(d1, strikeA.power ?? 0);
+  const m2 = contestMass(d2, strikeB.power ?? 0);
   const margin = u1 * m1 - u2 * m2; // positive: P1 wins
   let knock = 0;
   let loser = -1;
   if (met && !checked && !d1 && !d2 && Math.abs(margin) > 0.01) {
-    loser = margin > 0 ? 1 : 0;
+    loser = margin > 0 ? b : a;
     if (sealVulnerable(loser)) {
       knock = Math.min(c.knockMax ?? 60, (c.knockGain ?? 1.2) * Math.abs(margin));
-      const sgn = loser === 1 ? 1 : -1;
+      const sgn = loser === b ? 1 : -1;
       jostle(loser, nx * sgn, ny * sgn, knock, 1);
-      jostle(1 - loser, -nx * sgn, -ny * sgn, knock, cfg().bodyCheck?.winnerShare ?? 0.3);
+      jostle(loser === b ? a : b, -nx * sgn, -ny * sgn, knock, cfg().bodyCheck?.winnerShare ?? 0.3);
       if (knock > 0.5) {
         feedback('bodyCheck', {
-          x: (p1.x + p2.pos.x) * 0.5, y: (p1.y + p2.pos.y) * 0.5,
+          x: (p1.x + pb.x) * 0.5, y: (p1.y + pb.y) * 0.5,
           scale: 0.5 + 0.6 * clamp01(knock / (c.knockMax ?? 60)),
           dirX: nx * sgn, dirY: ny * sgn, vx: nx * sgn * knock, vy: ny * sgn * knock,
           sizeMul: 0.6, speedMul: 0.6, headOn: false,
@@ -2248,8 +2449,33 @@ export function sealCollide(checked = false) {
       }
     }
   }
-  versusState.lastCollide = { met, margin, loser, knock, push };
+  versusState.lastCollide = { met, margin, loser, knock, push, a, b };
   return versusState.lastCollide;
+}
+
+// Which pairs are pressed together right now, keyed a*16+b. See the note on
+// `met` above: the EDGE is what pays the shove.
+const touchingPairs = new Set();
+
+/** Every pair on the pitch, teammates included. */
+export function sealCollide(checked = false) {
+  if ((cfg().sealCollide ?? {}).enabled === false || !player.mesh) {
+    touchingPairs.clear();
+    versusState.touching = false;
+    return null;
+  }
+  const n = rosterSize();
+  let last = null;
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      const r = sealCollidePair(a, b, checked);
+      if (r) last = r;
+    }
+  }
+  // The old single flag, kept for the readout and the harness: is ANY pair
+  // pressed together this frame.
+  versusState.touching = touchingPairs.size > 0;
+  return last;
 }
 
 /**
@@ -2284,8 +2510,8 @@ export function sealCollide(checked = false) {
 // ---------------------------------------------------------------------------
 
 const _stir = [
-  { x: 0, y: 0, vx: 0, vy: 0 },
-  { x: 0, y: 0, vx: 0, vy: 0 },
+  { x: 0, y: 0, vx: 0, vy: 0, color: 0, tint: 0 },
+  { x: 0, y: 0, vx: 0, vy: 0, color: 0, tint: 0 },
 ];
 // Per seal: was it above the burst threshold last frame, and how long until it
 // may throw another ring. Reset with the match.
@@ -2308,6 +2534,20 @@ export function stirGoalLights(dt) {
     const v = seal.velocity;
     const e = _stir[i];
     e.x = pos.x; e.y = pos.y; e.vx = v?.x ?? 0; e.vy = v?.y ?? 0;
+    // THE COLOUR IT BRINGS WITH IT. Seal 0 attacks the RIGHT mouth and seal 1
+    // the left (a ball in the left goal is seal 1's point — see goal()), and
+    // the mix is only ever on the goal a seal is ATTACKING: its own is
+    // already its colour, so tinting that would do nothing you could see and
+    // would make a keeper look like it was scoring. Ramped on how deep it is
+    // past its opponent's wall — bleeding in over `tintLead` before the line
+    // and full by the depth a keeper may reach — so swimming in is what
+    // takes the light over rather than merely being near it.
+    e.color = teamColor(i);
+    const attackX = i === 0 ? bounds.right : bounds.left;
+    const depth = i === 0 ? e.x - attackX : attackX - e.x;
+    const lead = Math.max(0, s.tintLead ?? 5);
+    const full = Math.max(0.5, (cfg().goal?.keeperReach ?? 7) + lead);
+    e.tint = Math.max(0, Math.min(1, (depth + lead) / full));
     live[i] = e;
     const speed = Math.hypot(e.vx, e.vy);
     const over = speed >= Math.max(1, s.burst ?? 46);
@@ -2323,7 +2563,42 @@ export function stirGoalLights(dt) {
     b.was = over;
   }
   setGoalSwimmers(live);
+  setGoalBall(ballInLight());
   return fired;
+}
+
+const _ballStir = { x: 0, y: 0, amount: 0 };
+
+/**
+ * HOW MUCH OF THE BALL IS IN A GOAL'S LIGHT — 0 out in the water, 1 once it
+ * is through the mouth. The same shape the light itself is drawn with (see
+ * GOAL_FALLOFF_GLSL in wallRocks.js): the light reaches `spill` in front of
+ * the drawn face and `spill` past each lip, and the ball is inside it by
+ * however far it is into that.
+ *
+ * Worked out HERE rather than in the shader, which has the same numbers,
+ * because the ball's own RADIUS belongs in it: what should light the goal up
+ * is the ball ARRIVING, and a ball whose near edge is over the face is
+ * already in the mouth whatever its centre says. The shader gets one number
+ * and never has to know what a ball is.
+ */
+function ballInLight() {
+  const g = cfg().goal ?? {};
+  if ((g.ball?.enabled ?? true) === false) return null;
+  const spill = Math.max(0.001, g.spill ?? 6);
+  const side = ball.x < 0 ? -1 : 1;
+  const r = ballHitRadius();
+  // Past the drawn face, measured off the ball's NEAR edge.
+  const inward = (ball.x + side * r - rockX(side)) * side;
+  const along = Math.max(0, Math.min(1, (inward + spill) / spill));
+  if (along <= 0) return null;
+  // ...and inside the band, fading over the same spill past each lip.
+  const pastLip = Math.max(0, Math.abs(ball.y - mouthY()) - mouthHalfHeight());
+  const across = Math.max(0, Math.min(1, 1 - pastLip / spill));
+  _ballStir.x = ball.x;
+  _ballStir.y = ball.y;
+  _ballStir.amount = along * across;
+  return _ballStir.amount > 0 ? _ballStir : null;
 }
 
 export function updateVersusClock(rawDt, pads = null) {
@@ -2338,6 +2613,11 @@ export function updateVersusClock(rawDt, pads = null) {
   // most looked at. A warp advanced on the dilated clock would freeze there
   // and read as the effect having broken.
   updateBallLook(rawDt);
+  // THE TRAIL IS ON THE WALL CLOCK TOO, and for the same reason plus one more:
+  // the cloud is weather. It belongs to the water it was left in rather than to
+  // the ball that left it, so it has to keep drifting and dying through a goal
+  // shutter, a kickoff freeze and a hit-stop — all of which stop the ball.
+  updateBallTrail(rawDt, scene, ball, { radiusAt: ballHitRadiusAt });
   driveOutline();
   // The goal lights' noise churns on the wall clock too (wallRocks.js) — and
   // the seals stir it, which is what stirGoalLights hands over first so the
@@ -2535,7 +2815,13 @@ function goal(side) {
   // in the F panel's Versus section.
   const mouthX = side === 'left' ? bounds.left : bounds.right;
   const out = side === 'left' ? 1 : -1;
-  const at = { x: mouthX, y: ball.y, dirX: out, dirY: 0, vx: out * 20, vy: 0, scale: 1, color: ballTint().getHex() };
+  // THE SCORER'S COLOUR, on all of it. The ball fills with it on the way in
+  // (claimBall — the share marches to a full takeover from the last touch),
+  // and the blow out of the mouth is the same colour rather than the ball's
+  // own: a goal is scored BY somebody, and this is the moment that reads
+  // loudest. The jet below and the replay's own explosion take it too.
+  claimBall(scorer, Math.atan2(0, out));
+  const at = { x: mouthX, y: ball.y, dirX: out, dirY: 0, vx: out * 20, vy: 0, scale: 1, color: teamColor(scorer) };
   // THE MOUTH CHANGES HANDS. A goal goes into the light of the team that just
   // conceded it, so for the length of the envelope (CONFIG.versus.goal.scored)
   // that light is the SCORER'S colour instead — and the corridor, the spill
@@ -2553,14 +2839,22 @@ function goal(side) {
   const toWin = cfg().toWin ?? 5;
   const won = st.scores[scorer] >= toWin;
   st.replayPending = replayWanted(won);
-  if (!st.replayPending) fireGoalJet(side === 'left' ? -1 : 1, ball.y);
+  if (!st.replayPending) fireGoalJet(side === 'left' ? -1 : 1, ball.y, scorer);
   // POSSESSION SURVIVES THE GOAL, all the way to the kickoff. This used to
   // clear the ball's look here — and the replay that opens a beat later then
   // played the whole shot back with a white ball, because the tint had already
   // decayed off the goo group. The ball is not back at centre yet; the thing
   // that puts it there is enterKickoff, and that is where it stops belonging
   // to the seal that scored (it calls resetBallLook itself).
-  celebrateGoal(scorer);
+  // ...AND THE POSE WAITS FOR THE REPLAY TOO. The same gate as the jet above,
+  // for a stronger reason: a celebration runs on the WALL clock — main.js
+  // ticks updateCelebration and player.celebrate every frame whatever the
+  // phase is — so one started here was already most of the way through by the
+  // time the replay opened, and what the replay opened on was the scorer
+  // mid-somersault over footage from a second BEFORE the goal. The replay
+  // stages its own on the celebration beat, which is the frame the replay says
+  // the goal happened.
+  if (!st.replayPending) celebrateGoal(scorer);
   flushImitation('goal');
   if (won) {
     st.phase = 'won';
@@ -2579,14 +2873,37 @@ function goal(side) {
 // count. See CONFIG.versus.kickoff.
 // ---------------------------------------------------------------------------
 
-const _start = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
+const _start = Array.from({ length: MAX_PER_SIDE * 2 }, () => ({ x: 0, y: 0 }));
 
 /** Where seal `who` stands for a kickoff: `inset` of the pitch in from its own wall, at midwater. */
-export function kickoffSpot(who, out = _start[who]) {
+export function kickoffSpot(who, out = _start[who] ?? { x: 0, y: 0 }) {
   const ko = cfg().kickoff ?? {};
-  const inset = clamp01(ko.inset ?? 0.16) * (bounds.right - bounds.left);
-  out.x = who === 0 ? bounds.left + inset : bounds.right - inset;
-  out.y = midWater();
+  const width = bounds.right - bounds.left;
+  const inset = clamp01(ko.inset ?? 0.16) * width;
+  const team = teamOfSeat(who);
+  // A SIDE IS A FORMATION, not a queue. The captain of each side stands where
+  // it always did; the seats behind it start further back from the middle and
+  // fan above and below the water's centre — see seatFormation, which returns
+  // shares because the arena is rebuilt at a different width for a match and
+  // this is the only place holding the bounds.
+  const f = seatFormation(who);
+  const inward = team === 0 ? 1 : -1;
+  const line = team === 0 ? bounds.left + inset : bounds.right - inset;
+  // UP THE PITCH, not back down it. The captain is already most of the way
+  // into its own half — `inset` is a sixth of the width from the wall — so the
+  // room a formation has is in FRONT of it, toward the middle. Fanning the
+  // other way put the fourth seat of a full roster inside the rock.
+  //
+  // Halfway is the ceiling: a seat may line up level with the ball at a push
+  // and never in the other side's half, which is not a rule about fairness but
+  // about the kickoff reading as two sides facing each other.
+  const mid = (bounds.left + bounds.right) * 0.5;
+  const forward = line + inward * f.back * width * 0.5;
+  out.x = team === 0 ? Math.min(forward, mid - 1) : Math.max(forward, mid + 1);
+  const half = (bounds.top - bounds.bottom) * 0.5;
+  const lane = midWater() + f.lane * half * 0.5;
+  // ...and inside the water, whatever the lane asked for.
+  out.y = Math.max(bounds.bottom + 4, Math.min(bounds.surfaceY - 4, lane));
   return out;
 }
 
@@ -2606,18 +2923,26 @@ export function enterKickoff() {
   st.settled = (cfg().kickoff?.settle ?? true) === false;
   st.settleT = 0;
   st.kickoffs += 1;
-  st.checked[0] = st.checked[1] = false;
+  for (let i = 0; i < st.checked.length; i++) st.checked[i] = false;
   resetBall();
   ballEvent('reset');
   resetBallLook();
-  kickoffSpot(0);
-  kickoffSpot(1);
+  // The trail goes with it. The ball teleports from the back of a goal to the
+  // centre spot, and a cloud that survived that would be joined to the new one
+  // by a ribbon drawn straight across the pitch.
+  if (scene) clearBallTrail(scene);
+  for (let i = 0; i < rosterSize(); i++) kickoffSpot(i);
   holdKickoff();
   // Facing in, and the mirror resolved afresh from that facing (poseBody).
-  if (p2.mesh) p2.mesh.rotation.z = Math.PI / 2;
-  p2.mirrored = null;
-  p2.strike.dashDir.x = -1; p2.strike.dashDir.y = 0;
-  p2.input.aim.set(-1, 0);
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    if (seat <= 0) continue;
+    const inward = teamOfSeat(seat) === 0 ? 1 : -1;
+    if (seal.mesh) seal.mesh.rotation.z = inward > 0 ? -Math.PI / 2 : Math.PI / 2;
+    seal.mirrored = null;
+    seal.strike.dashDir.x = inward; seal.strike.dashDir.y = 0;
+    seal.input.aim.set(inward, 0);
+  }
   if (ko.enabled === false) {
     // No count: straight to play, the way the mode ran before it had one.
     st.phase = 'play';
@@ -2629,20 +2954,23 @@ export function enterKickoff() {
 
 /** Hold both seals on their spots with a full wheel, and the ball at centre. Every frame of the count. */
 function holdKickoff() {
-  if (player.mesh) {
-    player.mesh.position.set(_start[0].x, _start[0].y, 0);
-    player.velocity.set(0, 0);
-    player.knockX = player.knockY = 0;
-    if (strikeState.active) { cancelDash(); player.dashTimer = 0; }
-    strikeState.charge = 1;
-    strikeState.pending = 0;
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    const spot = _start[seat] ?? _start[0];
+    if (seat === 0) {
+      player.mesh.position.set(spot.x, spot.y, 0);
+      if (strikeState.active) { cancelDash(); player.dashTimer = 0; }
+      strikeState.charge = 1;
+      strikeState.pending = 0;
+    } else {
+      sealPos(seal).set(spot.x, spot.y, 0);
+      if (seal.strike.active) { cancelDash(seal.strike); seal.dashTimer = 0; }
+      seal.strike.charge = 1;
+      seal.strike.pending = 0;
+    }
+    seal.velocity.set(0, 0);
+    seal.knockX = seal.knockY = 0;
   }
-  p2.pos.set(_start[1].x, _start[1].y, 0);
-  p2.velocity.set(0, 0);
-  p2.knockX = p2.knockY = 0;
-  if (p2.strike.active) { cancelDash(p2.strike); p2.dashTimer = 0; }
-  p2.strike.charge = 1;
-  p2.strike.pending = 0;
   ball.x = (bounds.left + bounds.right) * 0.5;
   ball.y = midWater();
   ball.vx = ball.vy = 0;
@@ -2669,8 +2997,8 @@ function dropKickoffBait() {
   const to = Math.max(from, clamp01(b.to ?? 0.75));
   const spread = Math.max(0, b.spread ?? 5);
   const cx = (bounds.left + bounds.right) * 0.5;
-  for (let who = 0; who < 2; who++) {
-    const sx = _start[who].x;
+  for (let who = 0; who < rosterSize(); who++) {
+    const sx = (_start[who] ?? _start[0]).x;
     for (let i = 0; i < per; i++) {
       if (baitBalls.size >= cap) return;
       const t = per === 1 ? (from + to) * 0.5 : from + ((to - from) * i) / (per - 1);
@@ -2708,19 +3036,25 @@ function whistle() {
 // seals' transforms written outright, after updatePlayer has run so nothing
 // re-poses them), at `speed` x real time, while the water stays frozen.
 //
-// TWO SHOTS, THREE BEATS (replayCameraGoal, and the cut in updateVersusCamera):
+// TWO SHOTS, FOUR BEATS (replayCameraGoal, and the cut in updateVersusCamera):
 //   impact     a HARD CUT to a frame as tight as it goes on the ball and the
 //              seal about to hit it, from `lead` before the touch until
 //              `impactHold` after it — the collision, filling the screen.
 //   wide       the frame opens out (a blend at the wide shot's own slower
 //              rates, or a cut) to hold the mouth the ball is heading for,
 //              the ball and the scorer, and follows the ball in.
-//   explosion  the same wide frame. The goal's jet was NOT fired at the live
-//              goal when a replay was coming (see goal()); it fires here,
-//              with the goal's own event, and the scorer's celebration runs
-//              again in frame. Held `explode` wall seconds, then the shutter
-//              resumes where it was parked (endReplay): the number flies and
-//              the kickoff comes.
+//   explosion  the same wide frame. Neither the goal's jet nor the scorer's
+//              pose was fired at the live goal when a replay was coming (see
+//              goal()); the jet fires here, with the goal's own event and the
+//              mouth changing hands. Held `explode` wall seconds.
+//   celebration a CUT to the scorer, and the pose starts on that cut — not at
+//              the explosion, where it spent most of its 1.7 seconds behind a
+//              frame pointed at the mouth. Held `celebrateHold` wall seconds,
+//              then the shutter resumes where it was parked (endReplay): the
+//              number flies and the kickoff comes.
+//
+// The order lives in ONE place, advanceBeats, which a match and the replay lab
+// both run. See tools/looks/replay-lab.js.
 //
 // HOLD ANY BUTTON TO SKIP — a key, a pointer or any button on any pad, held
 // for `skipSeconds` (anyButtonHeld). A hold rather than a press: the
@@ -2738,7 +3072,7 @@ export const replayState = {
   goalT: 0,
   side: -1,            // which mouth the ball went into
   who: -1,             // the striker
-  beat: 'impact',      // 'impact' | 'wide' | 'explosion'
+  beat: 'impact',      // 'impact' | 'wide' | 'explosion' | 'celebration'
   cutPending: false,   // the next camera frame is a CUT onto the goal frame, not a blend
   speed: 0.45,
   hold: 0,             // wall seconds into the explosion
@@ -2747,6 +3081,10 @@ export const replayState = {
   wall: 0,             // wall seconds of this replay so far
   forceHold: false,    // the harness's finger on a button
   frames: [],          // the buffer in time order, taken at startReplay
+  // THE EVENT TRACK for this replay, and how far through it the clock is —
+  // see the note above the recorder. Fired by playEvents as `t` passes them.
+  events: [],
+  eventAt: 0,
   // The striker's pose and the ball's recorded velocity this frame, for the camera.
   strikerX: 0, strikerY: 0,
   ballVx: 0, ballVy: 0,
@@ -2763,21 +3101,77 @@ export const replayState = {
 // The ring. Frames are reused objects, so recording allocates nothing after
 // the first `buffer` seconds. 720 frames is `buffer` 8s at 90fps.
 const REC_CAP = 720;
-const rec = { frames: [], head: 0, count: 0 };
+const rec = { frames: [], head: 0, count: 0, events: [] };
+
+// ---------------------------------------------------------------------------
+// THE EVENT TRACK — every effect the match fired, with the second it fired on.
+//
+// The recorder above stores TRANSFORMS: where the ball and the two seals were,
+// and what shape the ball's skin was in. That is enough to pose the shot and
+// it is not enough to SHOW it, because none of what a player actually watches
+// during a strike is a transform. The spray off the contact, the goo thrown
+// out of the ball, the ripple through the lattice, the breach at the water
+// line, the burst off a fish the shot went through — all of it fired live,
+// once, seconds before the replay opens, and by the time the camera cut back
+// to the moment there was nothing there. The replay was a silent diagram of a
+// hit rather than the hit.
+//
+// So every positioned event is kept with its timestamp, and the replay fires
+// them again as its own clock passes them (`playEvents`). They come back
+// through feedback() with `replay: true`, which is the picture without the
+// sound, the shake, the hit-stop or the rumble — see the note there.
+//
+// POSITIONED ONLY, and that is the filter that keeps the UI out of it. A
+// countdown numeral, a menu click and an unlock toast are all feedback events
+// with no place in the water; re-firing them a second later would put a
+// three-two-one over the replay. An event that says WHERE it happened is one
+// that happened in the arena.
+// ---------------------------------------------------------------------------
+
+const EVENT_CAP = 512;
+let recording = null;
+
+/** Start keeping the event track. Idempotent; dropped by stopRecordingEvents. */
+function startRecordingEvents() {
+  if (recording) return;
+  rec.events.length = 0;
+  recording = onFeedback((name, at) => {
+    // Not a playback, and not a frame of one: the replay fires the track back
+    // through feedback() and the listeners see it like anything else, so the
+    // flag is what stops the track recording itself.
+    if (at?.replay || !versusState.active || replayState.active) return;
+    // No position, no place in the water — see the note above.
+    if (at?.x == null || at?.y == null) return;
+    // A shallow copy: the callers reuse their `at` objects between firings
+    // (ballImpactFx has one, so does the strike), so keeping the reference
+    // would leave the whole track pointing at whatever the last event was.
+    rec.events.push({ t: versusState.clock, name, at: { ...at } });
+    if (rec.events.length > EVENT_CAP) rec.events.splice(0, rec.events.length - EVENT_CAP);
+  });
+}
+
+function stopRecordingEvents() {
+  recording?.();
+  recording = null;
+  rec.events.length = 0;
+}
 
 function makeFrame() {
   return {
     t: 0, bx: 0, by: 0, bvx: 0, bvy: 0, bang: 0, bspin: 0, rim: new Float32Array(64),
-    seals: [
-      { x: 0, y: 0, rz: 0, q: new THREE.Quaternion(), vis: true },
-      { x: 0, y: 0, rz: 0, q: new THREE.Quaternion(), vis: true },
-    ],
+    // ONE PER SEAT, at the roster's ceiling rather than at the roster — a
+    // frame recorded before the roster grew would otherwise be short two
+    // bodies and the replay would pose them at the origin.
+    seals: Array.from({ length: MAX_PER_SIDE * 2 }, () => (
+      { x: 0, y: 0, rz: 0, q: new THREE.Quaternion(), vis: true }
+    )),
   };
 }
 
 function resetRecorder() {
   rec.head = 0;
   rec.count = 0;
+  rec.events.length = 0;
 }
 
 function recordFrame() {
@@ -2790,11 +3184,10 @@ function recordFrame() {
   f.bang = ball.angle; f.bspin = ball.spin;
   const n = Math.min(ball.rim.length, f.rim.length);
   for (let i = 0; i < n; i++) f.rim[i] = ball.rim[i];
-  const bodies = [player, p2];
-  for (let i = 0; i < 2; i++) {
-    const b = bodies[i];
+  for (let i = 0; i < f.seals.length; i++) {
+    const b = sealAt(i);
     const o = f.seals[i];
-    if (!b.mesh) { o.vis = false; continue; }
+    if (!b?.mesh) { o.vis = false; continue; }
     o.x = b.mesh.position.x; o.y = b.mesh.position.y;
     o.rz = b.mesh.rotation.z;
     if (b.body) o.q.copy(b.body.quaternion);
@@ -2804,6 +3197,11 @@ function recordFrame() {
   // that many seconds and no more whatever the frame rate.
   const keep = cfg().replay?.buffer ?? 8;
   while (rec.count > 2 && versusState.clock - recordedFrom() > keep) rec.count--;
+  // The event track ages out on the same clock as the frames it belongs to.
+  const cutoff = versusState.clock - keep;
+  let drop = 0;
+  while (drop < rec.events.length && rec.events[drop].t < cutoff) drop++;
+  if (drop) rec.events.splice(0, drop);
 }
 
 /** The oldest recorded time, or Infinity with nothing recorded. */
@@ -2823,8 +3221,37 @@ function noteTouch(who, kind) {
   else { hist.push(touch); if (hist.length > 12) hist.shift(); }
 }
 
+/**
+ * EVERY SEAL IN THE MATCH THAT IS NOT PLAYER 1 — the bodies in the water, for
+ * anything that treats a player as a thing displacing the ocean rather than as
+ * an input. The grid's wake is the first caller (systems/grid.js): player 1 is
+ * the seal the frame belongs to and holds slot 0, and these are the rest.
+ *
+ * A LIST rather than a p2 accessor, because "the rest" is the part that grows.
+ * A third and fourth seal on the pitch is a change to what this returns and to
+ * nothing that reads it.
+ *
+ * Read-only and allocation-free: the array and its entries are reused, so a
+ * caller has to spend them before the next frame.
+ */
+const _bodies = [];
+export function versusSeals() {
+  _bodies.length = 0;
+  if (!versusState.active) return _bodies;
+  // Dead seals are out of the water until they respawn — a body left in the
+  // list would hold its dent open at the spot it burst.
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    if (seat <= 0 || versusState.dead[seat]) continue;
+    _bodies.push({ x: sealPos(seal).x, y: sealPos(seal).y, who: seat });
+  }
+  return _bodies;
+}
+
 /** Which team seal `who` plays for: its own side, in a two-seal match. */
-function teamOf(who) { return who; }
+// A seat's side. It WAS the seat's own number, which is true of exactly the
+// first two seats — see teamOfSeat in systems/sealRoster.js.
+function teamOf(who) { return teamOfSeat(who); }
 
 /**
  * WHO THE GOAL CARD NAMES — read off the touch history when the goal is
@@ -2895,6 +3322,30 @@ function startReplay(then) {
   rs.side = st.lastGoal.side === 'left' ? -1 : 1;
   rs.startT = Math.max(rs.frames[0].t, rs.touchT - (r.lead ?? 0.9));
   rs.t = rs.startT;
+  // The effects that fired over the span being replayed, in time order, and
+  // the cursor parked before the first of them. Copied rather than referenced:
+  // the match goes on recording into rec.events the moment the replay ends.
+  // UP TO the goal, not including it: everything that fires ON the goal's own
+  // frame belongs to explodeReplay, which stages that beat deliberately — the
+  // event at the mouth, the jet, the mouth changing hands and the scorer's
+  // pose. Taking the goal's frame into the track as well fired the same
+  // explosion twice, a frame apart.
+  rs.events = rec.events.filter((e) => e.t >= rs.startT && e.t < rs.goalT);
+  rs.eventAt = 0;
+  // THE MOUTH IS NOT LIT YET. goal() flashed it the instant the ball crossed,
+  // and that envelope has been running on the wall clock through the shutter's
+  // freeze ever since — so the replay opened with the goal light already
+  // blazing over footage from a second BEFORE the goal, and had run out by the
+  // time the ball actually went in. It is put back to its own team's colour
+  // here and flashed again at the explosion beat, which is where the replay
+  // says the goal happens.
+  clearGoalScored();
+  // ...AND NOBODY IS CELEBRATING YET, for the same reason. goal() no longer
+  // starts one when a replay is coming, but a kill or a level-up from the
+  // seconds before the goal can still be running, and its clock is the wall
+  // clock this replay is about to spend five seconds of. The pose belongs to
+  // the celebration beat and to nothing earlier.
+  resetCelebration();
   // Slow, but never so slow the whole thing outlasts `maxWall`.
   const span = Math.max(0.01, rs.goalT - rs.startT);
   rs.speed = Math.min(1, Math.max(r.speed ?? 0.45, span / Math.max(0.5, r.maxWall ?? 5)));
@@ -2938,28 +3389,65 @@ function updateReplay(rawDt, pads) {
   paintSkip(rs.skipT / skipHold);
   if (rs.skipT >= skipHold) { endReplay(true); return; }
 
-  if (rs.beat !== 'explosion') {
-    rs.t += rawDt * rs.speed;
-    if (rs.t >= rs.goalT) {
-      rs.t = rs.goalT;
-      rs.beat = 'explosion';
-      rs.hold = 0;
-      explodeReplay();
-    } else {
-      const beat = beatAt(rs.t);
-      // Opening out: a cut if the wide shot asks for one, else the blend at
-      // its own rates (updateVersusCamera reads the beat).
-      if (beat !== rs.beat && beat === 'wide' && r.wide?.cut) rs.cutPending = true;
-      rs.beat = beat;
-    }
-  } else {
-    rs.hold += rawDt;
-    if (rs.hold >= (r.explode ?? 1.3)) endReplay(true);
-  }
+  if (!advanceBeats(rawDt)) { endReplay(true); return; }
   // Player 2's celebration driver ticks in stepP2, which a replay does not
   // run; the wall clock is what a celebration wants anyway (main.js ticks
   // player 1's on rawDt).
   p2.celebrate?.update(rawDt);
+}
+
+/**
+ * THE BEATS, IN ORDER, on one wall frame. The ONE copy of that order: a match
+ * runs it from updateReplay above, the lab from stepStagedReplay, and there is
+ * nothing for the two to drift apart on.
+ *
+ *   impact → wide   on the RECORDED clock at `speed`, up to the goal's frame
+ *   explosion       the goal's frame, held `explode` wall seconds — the jet,
+ *                   the event at the mouth, the mouth changing hands
+ *   celebration     held `celebrateHold` wall seconds — the scorer's pose,
+ *                   started HERE and nowhere earlier
+ *
+ * The explosion and the celebration are two beats and not one because they
+ * want two different frames: the bang belongs at the mouth and the pose
+ * belongs on the seal, and a single beat can only be filmed one way. It is
+ * also the only way to make the order true — a celebration fired at the
+ * explosion is already ending by the time a camera could cut to it.
+ *
+ * Returns false when the last beat has been held its time and the replay is
+ * over. `fire` off stages the beats without their effects, for a diagram.
+ */
+function advanceBeats(rawDt, { fire = true } = {}) {
+  const rs = replayState;
+  const r = cfg().replay ?? {};
+  if (rs.beat === 'explosion') {
+    rs.hold += rawDt;
+    if (rs.hold < (r.explode ?? 1.3)) return true;
+    rs.beat = 'celebration';
+    rs.hold = 0;
+    // A CUT, not a blend. The pose is on the seal and the bang was at the
+    // mouth; easing between them is a camera wandering off the climax.
+    rs.cutPending = true;
+    if (fire) celebrateReplay();
+    return true;
+  }
+  if (rs.beat === 'celebration') {
+    rs.hold += rawDt;
+    return rs.hold < (r.celebrateHold ?? 1.7);
+  }
+  rs.t += rawDt * rs.speed;
+  if (rs.t >= rs.goalT) {
+    rs.t = rs.goalT;
+    rs.beat = 'explosion';
+    rs.hold = 0;
+    if (fire) explodeReplay();
+    return true;
+  }
+  const beat = beatAt(rs.t);
+  // Opening out: a cut if the wide shot asks for one, else the blend at its
+  // own rates (updateVersusCamera reads the beat).
+  if (beat !== rs.beat && beat === 'wide' && r.wide?.cut) rs.cutPending = true;
+  rs.beat = beat;
+  return true;
 }
 
 /** The explosion beat: the jet and the goal's own event, at the mouth, now. */
@@ -2971,11 +3459,35 @@ function explodeReplay() {
   const out = -rs.side;
   // The same payload goal() fires, the ball's live colour on it — see the
   // note there and on CONFIG.feedback.versusGoal.
-  const at = { x: mouthX, y: g.y, dirX: out, dirY: 0, vx: out * 20, vy: 0, scale: 1, color: ballTint().getHex() };
+  // The scorer's colour, as the live goal fires it — and the ball fills with
+  // it here too, so the replay's own climax matches the one it is replaying.
+  claimBall(g.scorer, Math.atan2(0, out));
+  const at = { x: mouthX, y: g.y, dirX: out, dirY: 0, vx: out * 20, vy: 0, scale: 1, color: teamColor(g.scorer) };
   feedback('versusGoal', at);
-  fireGoalJet(rs.side, g.y);
-  // ...and the scorer's victory pose again, in the wide frame this time.
-  if ((cfg().replay?.celebrate ?? true) !== false) celebrateGoal(g.scorer);
+  // THE MOUTH CHANGES HANDS, again and on this clock. startReplay put the
+  // light back to its own team's colour so the rewound footage was honest;
+  // this is the frame the replay says the ball went in, so this is where it
+  // blazes. Without it the replay's climax was the one moment in the whole
+  // sequence with no goal light at all.
+  flashGoalScored(rs.side, g.scorer);
+  fireGoalJet(rs.side, g.y, g.scorer);
+}
+
+/**
+ * The celebration beat: the scorer's victory pose, started HERE — a beat after
+ * the bang, on the frame the camera cuts to the seal.
+ *
+ * It used to fire from explodeReplay, which put it a whole `explode` too early:
+ * the pose runs 1.7 seconds and the explosion holds 1.3 of them, so by the time
+ * anything framed the scorer it was easing back into the swim cycle. Worse, the
+ * live goal fired one as well (see goal()), so what the replay's lead-up
+ * actually showed was a seal celebrating a goal it had not scored yet.
+ */
+function celebrateReplay() {
+  const g = versusState.lastGoal;
+  if (!g) return;
+  if ((cfg().replay?.celebrate ?? true) === false) return;
+  celebrateGoal(g.scorer);
 }
 
 /** Close the replay and hand the shutter back where it was parked. */
@@ -3003,10 +3515,38 @@ const _spinQ = new THREE.Quaternion();
 const _zAxis = new THREE.Vector3(0, 0, 1);
 
 /** Pose the ball and both seals from the buffer at recorded time `t`. */
+/**
+ * Fire every recorded effect the replay's clock has now reached. `at.replay`
+ * is what makes it the picture and nothing else — no sound over a shot that
+ * already happened, no shake on the camera the replay is directing, no
+ * hit-stop on a clock the replay owns. See feedback().
+ *
+ * A CURSOR, not a window. The replay's clock runs at `speed` and a frame of it
+ * covers a fraction of a second of the match, so a "fired in the last dt" test
+ * would drop any event that landed between two samples; walking a sorted list
+ * fires each one exactly once and never loses one to the arithmetic.
+ */
+function playEvents(t) {
+  const rs = replayState;
+  while (rs.eventAt < rs.events.length && rs.events[rs.eventAt].t <= t) {
+    const e = rs.events[rs.eventAt++];
+    feedback(e.name, { ...e.at, replay: true });
+  }
+}
+
+/** Back to the top of the track — a rewind, or a replay being staged fresh. */
+function rewindEvents(t) {
+  const rs = replayState;
+  let i = 0;
+  while (i < rs.events.length && rs.events[i].t < t) i++;
+  rs.eventAt = i;
+}
+
 function poseReplay(t) {
   const rs = replayState;
   const F = rs.frames;
   if (F.length < 2) return;
+  playEvents(t);
   // The frame pair round `t` (the frames are in time order).
   let i = 1;
   while (i < F.length - 1 && F[i].t < t) i++;
@@ -3023,9 +3563,9 @@ function poseReplay(t) {
   const n = ball.rim.length;
   for (let k = 0; k < n; k++) ball.rim[k] = lerp(a.rim[k], b.rim[k], u);
   ball.rimV.fill(0);
-  const bodies = [player, p2];
-  for (let k = 0; k < 2; k++) {
-    const body = bodies[k];
+  for (let k = 0; k < a.seals.length; k++) {
+    const body = sealAt(k);
+    if (!body) continue;
     const pa = a.seals[k];
     const pb = b.seals[k];
     if (!body.mesh) continue;
@@ -3040,7 +3580,7 @@ function poseReplay(t) {
       // on the end of it the way poseBody composes it — so a victory pose
       // re-run in the replay turns the body the record never saw turn.
       body.body.quaternion.copy(_qa.slerpQuaternions(pa.q, pb.q, u));
-      const spin = celebrationSpin(k === 1 ? 'p2' : null);
+      const spin = celebrationSpin(k === 0 ? null : (k === 1 ? 'p2' : `seal${k}`));
       if (spin) body.body.quaternion.multiply(_spinQ.setFromAxisAngle(_zAxis, spin));
     }
     body.mesh.visible = pa.vis;
@@ -3208,7 +3748,7 @@ export function makeReplayFrame() {
  * it, when, which mouth it went into — and is what gatherPois and the beat
  * machine need. Poses the first frame and starts the pool directing.
  */
-export function stageReplay({ frames, touchT, goalT, side = -1, who = 0, scorer = who, aspect = 16 / 9 }) {
+export function stageReplay({ frames, touchT, goalT, side = -1, who = 0, scorer = who, aspect = 16 / 9, events = [] }) {
   const rs = replayState;
   const st = versusState;
   const r = cfg().replay ?? {};
@@ -3221,6 +3761,17 @@ export function stageReplay({ frames, touchT, goalT, side = -1, who = 0, scorer 
   rs.who = who;
   rs.startT = Math.max(frames[0].t, touchT - (r.lead ?? 0.9));
   rs.t = rs.startT;
+  // A staged replay's effects are whatever the lab hands over — an empty
+  // track is a silent diagram, which is what this was before there was one.
+  rs.events = [...events].sort((a1, b1) => a1.t - b1.t);
+  rs.eventAt = 0;
+  clearGoalScored();
+  // A RESTAGE STARTS CLEAN. The lab loops this, and without these the last
+  // pass's bang and the last pass's pose were still running over the next
+  // pass's lead-up — which is what "it plays continuously" looks like from
+  // the outside.
+  resetCelebration();
+  resetGoalJets();
   // The same rule startReplay uses: slow, but never so slow the whole thing
   // outlasts `maxWall`.
   const span = Math.max(0.01, goalT - rs.startT);
@@ -3245,57 +3796,66 @@ export function stageReplay({ frames, touchT, goalT, side = -1, who = 0, scorer 
 }
 
 /**
- * One wall frame of a staged replay — the beat machine of updateReplay with
- * its skip and its phase hand-back left out, since a lab has neither. Returns
- * false once the explosion has been held its `explode` seconds, which is where
- * a match would have ended the replay and a lab loops.
+ * One wall frame of a staged replay — advanceBeats, the same one a match runs,
+ * with the skip and the phase hand-back left out since a lab has neither.
+ * Returns false once the last beat has been held its time, which is where a
+ * match would end the replay and a lab loops.
+ *
+ * `explode` off stages the beats with none of their effects fired.
  */
 export function stepStagedReplay(rawDt, { explode = true } = {}) {
   const rs = replayState;
-  const r = cfg().replay ?? {};
   if (!rs.active) return false;
   rs.wall += rawDt;
   rs.wallDt = rawDt;
-  let alive = true;
-  if (rs.beat !== 'explosion') {
-    rs.t += rawDt * rs.speed;
-    if (rs.t >= rs.goalT) {
-      rs.t = rs.goalT;
-      rs.beat = 'explosion';
-      rs.hold = 0;
-      if (explode) explodeReplay();
-    } else {
-      rs.beat = beatAt(rs.t);
-    }
-  } else {
-    rs.hold += rawDt;
-    if (rs.hold >= (r.explode ?? 1.3)) alive = false;
-  }
+  const alive = advanceBeats(rawDt, { fire: explode });
   poseReplay(rs.t);
   updateReplayCams();
+  // BOTH DRIVERS, AND THE CLOCK, because a lab has no main.js. In a match the
+  // celebration's own clock and player 1's driver are ticked by main.js every
+  // frame whatever the phase, and only player 2's is versus.js's to tick — see
+  // updateReplay. Off that loop, nothing advanced updateCelebration at all, so
+  // a staged celebration never reached its duration, never reset, and posed
+  // the seal for ever: it was still going in the next pass's lead-up, which
+  // looked exactly like the camera bug it was mistaken for.
+  //
+  // AFTER poseReplay, never before. poseReplay runs the animation controller,
+  // which writes an absolute pose every frame — a driver run first is simply
+  // overwritten and appears to do nothing.
+  updateCelebration(rawDt);
+  player.celebrate?.update(rawDt);
   p2.celebrate?.update(rawDt);
   return alive;
 }
 
 /**
- * Jump a staged replay to recorded time `t` — the scrub. Past the goal it
- * sits `t - goalT` wall seconds into the explosion's hold instead, so one
- * slider covers the whole thing. The pool is stepped by `wallDt` at the new
- * position rather than reset, so scrubbing shows the director choosing.
+ * Jump a staged replay to recorded time `t` — the scrub. Past the goal there
+ * is no recorded time left, so `t - goalT` is read as wall seconds into the
+ * two held beats in their order — the explosion's `explode`, then the
+ * celebration's `celebrateHold` — and one slider covers the whole thing.
+ * The pool is stepped by `wallDt` at the new position rather than reset, so
+ * scrubbing shows the director choosing.
  */
 export function seekStagedReplay(t, wallDt = 1 / 60) {
   const rs = replayState;
+  const r = cfg().replay ?? {};
   if (!rs.active) return;
   rs.wallDt = wallDt;
-  if (t >= rs.goalT) {
+  const past = t - rs.goalT;
+  if (past >= 0) {
     rs.t = rs.goalT;
-    rs.hold = t - rs.goalT;
-    rs.beat = 'explosion';
+    const ex = r.explode ?? 1.3;
+    if (past < ex) { rs.beat = 'explosion'; rs.hold = past; }
+    else { rs.beat = 'celebration'; rs.hold = past - ex; }
   } else {
     rs.t = Math.max(rs.startT, t);
     rs.hold = 0;
     rs.beat = beatAt(rs.t);
   }
+  // A SCRUB GOES BACKWARDS. The event cursor only ever walks forward, so
+  // dragging the lab's timeline back would otherwise leave it parked past the
+  // effects being scrubbed over and the second pass would be silent.
+  rewindEvents(rs.t);
   poseReplay(rs.t);
   updateReplayCams();
 }
@@ -3617,8 +4177,6 @@ export function renderVersus() {
 export function renderBall() {
   if (!ball.slots.length) return;
   const look = cfg().ball?.look ?? {};
-  const n = ball.rim.length;
-  const inner = Math.max(4, Math.round(n / 3));
   _rgb.set(look.color ?? 0xffd166).multiplyScalar(look.glow ?? 1.5);
   const group = ball.group;
   let k = 0;
@@ -3631,26 +4189,31 @@ export function renderBall() {
     renderBallSpin(ball, rimRadiusAt);
     return;
   }
-  // The centre.
-  if (k < slots.length) writeDriven(slots[k++], ball.x, ball.y, 0, 1, look.coreSize ?? 1.0, _rgb, group);
-  // The inner ring, riding the rim's offsets at a fraction so a dent reads
-  // through the body rather than only on the skin. In the ball's frame like
-  // the rim, so it turns with the spin.
-  const innerAt = (look.innerAt ?? 0.42);
-  for (let i = 0; i < inner && k < slots.length; i++) {
-    const j = Math.round((i / inner) * n) % n;
-    const a = rimAngle(j);
-    const rad = (rimRadius(j) - ball.r) * 0.5 + ball.r * innerAt;
-    writeDriven(slots[k++], ball.x + Math.cos(a) * rad, ball.y + Math.sin(a) * rad, 0, 1, look.innerSize ?? 0.8, _rgb, group);
-  }
-  // The rim.
-  const inset = look.inset ?? 0.72;
-  for (let i = 0; i < n && k < slots.length; i++) {
-    const a = rimAngle(i);
-    const rad = rimRadius(i) * inset;
-    writeDriven(slots[k++], ball.x + Math.cos(a) * rad, ball.y + Math.sin(a) * rad, 0, 1, look.rimSize ?? 0.62, _rgb, group);
+  // THE SAME ARRANGEMENT THE HITBOX IS SOLVED THROUGH — ballSplats is the one
+  // description of this body, and this loop is the half of it that draws.
+  // Centre, then the inner ring (which rides the rim's offsets at a fraction,
+  // so a dent reads through the body rather than only on the skin), then the
+  // rim itself; all in the ball's frame, so they turn with the spin.
+  const splats = ballSplats(ball, rimRadius, rimAngle);
+  for (let i = 0; i < splats.length && k < slots.length; i++) {
+    const p = splats[i];
+    writeDriven(slots[k++], ball.x + p.x, ball.y + p.y, 0, 1, splatSize(p.r), _rgb, group);
   }
   flushDriven();
+  // WHERE THE BODY IS, for the two-colour possession field — in world units,
+  // because the goo pass is the thing holding the camera it will be rendered
+  // through and it does the projection itself (see post.js). The radius is the
+  // DRAWN one, so the field covers the ball a player can see.
+  //
+  // HERE rather than in updateVersus, and that is the whole reason it works
+  // outside a match: this function is what every path that draws the ball goes
+  // through — the match, the ball lab, the replay lab — and a field pushed
+  // from the match loop alone would be switched off in both labs, which is
+  // where it is actually tuned.
+  setBallBody({
+    x: ball.x, y: ball.y, r: ballHitRadius(),
+    speed: Math.hypot(ball.vx, ball.vy), vx: ball.vx, vy: ball.vy,
+  });
   keepGooAlive('ball', 0.25);
   // The spin, as strokes round the rim — see systems/ballSpin.js.
   renderBallSpin(ball, rimRadiusAt);
@@ -3683,31 +4246,55 @@ export function stepBallAlone(dt) {
  * The striker is moved onto the ball's contact circle along its own line
  * first, so any press near the ball lands a hit.
  */
-export function strikeBallFrom(at, dir, speed, power, english = 0) {
-  const c = cfg().ball ?? {};
-  const cr = c.contactRadius ?? 2.2;
+export function strikeBallFrom(at, dir, speed, power, english = 0, who = 0) {
+  const body = cfg().ball?.body ?? {};
+  const thick = Math.max(0.01, body.thickness ?? 0.69);
+  const noseSeg = Math.max(0, (body.nose ?? 3.31) - thick);
   const dl = Math.hypot(dir.x, dir.y) || 1;
   const dx = dir.x / dl;
   const dy = dir.y / dl;
-  // The striker's line from `at` meets the contact circle where?
+  // WHERE THE NOSE HAS TO BE, not where a circle round the seal's middle
+  // would have to be: the striker is a capsule pointed along its own dash,
+  // so the thing that meets the ball is the end of it. The body is then hung
+  // back off that point along the dash.
   const ox = at.x - ball.x;
   const oy = at.y - ball.y;
-  const R = ball.r + cr - 0.3;
-  const b = ox * dx + oy * dy;
-  const cc = ox * ox + oy * oy - R * R;
-  const disc = b * b - cc;
-  let sx; let sy;
-  if (cc <= 0) { sx = at.x; sy = at.y; } // already inside the circle
-  else if (disc >= 0) { const t = -b - Math.sqrt(disc); sx = at.x + dx * t; sy = at.y + dy * t; }
-  else {
-    // The line misses: put the striker on the circle's nearest point to `at`.
+  // The ball, in the dash line's own frame: `perp` is how far off the line it
+  // sits, and perpX/perpY is the closest the line ever comes to it.
+  const along = ox * dx + oy * dy;
+  const perpX = ox - dx * along;
+  const perpY = oy - dy * along;
+  const perp = Math.hypot(perpX, perpY);
+  // The drawn edge on the side the press is coming from, plus the body's own
+  // half-thickness, a shade inside so the press always lands rather than
+  // sitting exactly on the edge.
+  const side = perp > 1e-6 ? Math.atan2(perpY, perpX) : Math.atan2(oy, ox);
+  const minD = Math.max(0.1, ballHitRadiusAt(side) + thick - 0.3);
+  let nx;
+  let ny;
+  if (perp < minD) {
+    // The line does run through the body: the nose stops the moment it
+    // crosses, which is `back` short of the ball's closest point on the line.
+    const back = Math.sqrt(minD * minD - perp * perp);
+    nx = ball.x + perpX - dx * back;
+    ny = ball.y + perpY - dy * back;
+  } else {
+    // The line misses it outright: the nose on the edge nearest `at`, which
+    // is the closest this press could ever have come.
     const ol = Math.hypot(ox, oy) || 1;
-    sx = ball.x + (ox / ol) * R;
-    sy = ball.y + (oy / ol) * R;
+    nx = ball.x + (ox / ol) * minD;
+    ny = ball.y + (oy / ol) * minD;
   }
+  const sx = nx - dx * noseSeg;
+  const sy = ny - dy * noseSeg;
   const vel = { x: dx * speed, y: dy * speed };
-  ball.dashHit[0] = false;
-  return sealContact(0, { x: sx, y: sy }, vel, true, { x: dx, y: dy }, power, english);
+  // WHICH SEAL IS SWINGING, and it is not always player 1. It was hard-wired
+  // to 0, which is invisible until possession stops being decoration: the ball
+  // lab's P1/P2 buttons set the colour an EVENT fires in, so both of them
+  // struck as player 1 and the two-colour field could not be driven from the
+  // one page it is meant to be tuned on.
+  ball.dashHit[who] = false;
+  return sealContact(who, { x: sx, y: sy }, vel, true, { x: dx, y: dy }, power, english, Math.atan2(dy, dx));
 }
 
 /** Release the ball's splats. */

@@ -165,6 +165,9 @@ function poseShot(shot, pois, side, held, bounds, out, aspect = 16 / 9) {
   const dist = Math.max(1, (shot.distance ?? 30) + (shot.dolly ?? 0) * held);
   _off.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist);
   out.pos.copy(out.at).add(_off);
+  // How far the keep-in-frame dolly below has already stood back, so its cap
+  // is on the total rather than on each step of it.
+  let dollied = 1;
   // In the water, whatever was asked.
   const inset = c.wallInset ?? 3;
   if (bounds) {
@@ -177,6 +180,51 @@ function poseShot(shot, pois, side, held, bounds, out, aspect = 16 / 9) {
   const pt = Math.max(0.05, shot.pushTime ?? 3);
   const k = 1 - Math.exp(-held / pt);
   out.fov = lerp(fov, push, k);
+  // A SHOT IS OF ITS TARGETS, and the push spends seconds closing the frame on
+  // them while they move. A subject that has drifted since the shot was chosen
+  // — a striker standing further off the ball, a mouth the push has walked
+  // past — slides out of a frame that still claims to be of it.
+  //
+  // SO THE CAMERA STANDS BACK, along the shot's own direction: it is the same
+  // shot from further away. Not a wider fov, because the fov IS the push —
+  // opening it to hold a subject cancels the shot's one movement exactly, and
+  // a push-in that never pushes is worse than a subject at the edge of frame.
+  // Capped at `keepDolly` of the shot's authored distance; the wall rules
+  // below still get the last word on where the camera may stand.
+  const keepAbove = c.keepAbove ?? 0.5;
+  const keepDolly = c.keepDolly ?? 1.6;
+  for (let n = 0; n < 3 && keepDolly > 1; n++) {
+    _cam.fov = out.fov; _cam.aspect = aspect; _cam.near = 0.5; _cam.far = 600;
+    _cam.position.copy(out.pos); _cam.up.set(0, 1, 0); _cam.lookAt(out.at);
+    _cam.updateMatrixWorld(); _cam.updateProjectionMatrix();
+    let worst = 1;
+    for (const [name, w] of Object.entries(shot.targets ?? {})) {
+      if (!(w >= keepAbove)) continue;
+      const p = pois[name];
+      if (!p) continue;
+      _q.set(p.x, p.y, p.z ?? 0).project(_cam);
+      // Behind the camera: no framing holds it, and framingScore's penalty is
+      // what picks a different shot.
+      if (!(_q.z < 1)) continue;
+      worst = Math.max(worst, Math.abs(_q.x), Math.abs(_q.y));
+    }
+    if (worst <= 1.001) break;
+    // BACK, NOT WIDER. The fov is the PUSH — it is the shot's own movement,
+    // eased over seconds, and opening it to hold a subject cancels exactly
+    // that. Standing further off holds the subject and leaves the push to
+    // read as authored. `_off` is the shot's own direction from its look-at,
+    // so this is the same shot from further away; capped at `keepDolly`, and
+    // the wall rules below still get the last word on where it may stand.
+    const grow = Math.min(worst * 1.02, keepDolly / Math.max(1, dollied));
+    if (!(grow > 1.001)) break;
+    dollied *= grow;
+    _off.multiplyScalar(grow);
+    out.pos.copy(out.at).add(_off);
+    if (bounds) {
+      out.pos.x = Math.max(bounds.left + inset, Math.min(bounds.right - inset, out.pos.x));
+      out.pos.y = Math.max(bounds.bottom + (c.floorInset ?? 2), out.pos.y);
+    }
+  }
   // THE FRAME STOPS AT THE MOUTH — by sliding, not shrinking. On the plane
   // the action is on the frame is ~2 d tan(fov/2) tall and `aspect` times as
   // wide about the look-at. Slide the look-at (and the camera with it, the
@@ -209,18 +257,37 @@ function poseShot(shot, pois, side, held, bounds, out, aspect = 16 / 9) {
     out.pos.x = Math.max(bounds.left + inset, Math.min(bounds.right - inset, out.pos.x));
     out.pos.y = Math.max(bounds.bottom + (c.floorInset ?? 2), out.pos.y);
     // The safety net: an angled frame is not the rectangle above. Project the
-    // two faces (a little past `pastFace`) and shrink until both are out.
-    for (let n = 0; n < 6; n++) {
+    // two faces (a little past `pastFace`) and get them out of shot.
+    //
+    // SLIDE BEFORE SHRINKING, for the same reason the block above slides: a
+    // shot near a wall is usually a shot OF the mouth, and shrinking the fov
+    // about a look-at that is already beside the face is the one move that
+    // can lose the mouth. Pulling the look-at back off the face takes the
+    // seam out of frame and gives up none of the frame — and the seam sits
+    // several units OUTSIDE the mouth, so there is a slide that holds one and
+    // hides the other. The fov only gives once the slide has run out of room.
+    let slid = 0;
+    const slideMax = c.seamSlide ?? 12;
+    for (let n = 0; n < 14; n++) {
       _cam.fov = out.fov; _cam.aspect = aspect; _cam.near = 0.5; _cam.far = 600;
       _cam.position.copy(out.pos); _cam.up.set(0, 1, 0); _cam.lookAt(out.at);
       _cam.updateMatrixWorld(); _cam.updateProjectionMatrix();
-      let seam = false;
+      let seamSide = 0;
       for (const sd of [-1, 1]) {
         const fx = (sd < 0 ? bounds.left : bounds.right) + sd * (past + 1);
         _q.set(fx, out.at.y, 0).project(_cam);
-        if (_q.z < 1 && Math.abs(_q.x) <= 1 && Math.abs(_q.y) <= 1) seam = true;
+        if (_q.z < 1 && Math.abs(_q.x) <= 1 && Math.abs(_q.y) <= 1) seamSide = sd;
       }
-      if (!seam || out.fov <= (c.fovMin ?? 12)) break;
+      if (!seamSide) break;
+      if (slid < slideMax) {
+        const step = Math.min(1.5, slideMax - slid);
+        slid += step;
+        out.at.x -= seamSide * step;
+        out.pos.x -= seamSide * step;
+        out.pos.x = Math.max(bounds.left + inset, Math.min(bounds.right - inset, out.pos.x));
+        continue;
+      }
+      if (out.fov <= (c.fovMin ?? 12)) break;
       out.fov = Math.max(c.fovMin ?? 12, out.fov * 0.85);
     }
   }

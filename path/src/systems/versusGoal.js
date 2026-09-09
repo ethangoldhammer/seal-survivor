@@ -31,6 +31,7 @@
 // ---------------------------------------------------------------------------
 
 import { CONFIG } from '../config.js';
+import { ballMaxRadius } from './ballShape.js';
 import { bounds, midWater, arenaHoles } from '../arena.js';
 import { versusActive } from './versusFlag.js';
 import { shoreOverscan, shore } from './wallRocks.js';
@@ -80,7 +81,13 @@ export function goalLineDepth() {
   // The WHOLE ball has to fit between the line and the tunnel's back, or it
   // bounces off the back with its near side still short of the line and the
   // goal can never be called.
-  const ballR = Math.max(0, CONFIG.versus?.ball?.radius ?? 2.8);
+  //
+  // THE DRAWN BALL, not `radius`. `radius` is the soft body's rest radius and
+  // the thing that actually arrives is the goo surface around it, which is
+  // most of twice as wide and wider still at speed — see ballShape.js. Read
+  // off `radius` this clamp let a line be authored that the ball could only
+  // bounce off the back short of, which is a goal that never gets called.
+  const ballR = Math.max(0, ballMaxRadius());
   return Math.max(0, Math.min(want, tunnelDepth() - ballR * 2 - 0.25));
 }
 
