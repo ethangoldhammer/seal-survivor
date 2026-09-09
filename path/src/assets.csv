@@ -61,7 +61,7 @@ orcaFriendCow,1,,biolum:orcaFriendCow,"Orca Family, slot 1."
 plaque,1,,,the small slanted run marker. See headstone.
 rapidFireOrb,2.4,,,
 razorBlade,2.4,,,
-sardineBlade,2.4,,noise:sardineBlade+toon:sardineBlade+biolum:sardineBlade,"Sardine Swirl's body — sardine.glb now, the razor clam's shell before it and still the Node fallback. The model's fit is 0.52, the same number the shell's length was, so 0.52 x 2.4 is about 1.25 units drawn against the blade's 2.64 and the seal's 2.6. Raised from 1.6: sardineReach is CONFIG.sardineSwirl.radius TIMES this, so this row is the one place the drawn body and what it can hit move together."
+sardineBlade,2.4,,,"Sardine Swirl's body — sardine.glb now, the razor clam's shell before it and still the Node fallback. The model's fit is 0.52, the same number the shell's length was, so 0.52 x 2.4 is about 1.25 units drawn against the blade's 2.64 and the seal's 2.6. Raised from 1.6: sardineReach is CONFIG.sardineSwirl.radius TIMES this, so this row is the one place the drawn body and what it can hit move together."
 seagull,9.54,,biolum:seagull,"Surface added, look NOT designed. Flat 0x969696 with no map that resolves, tinted white in assets.js. Newly listed in companionOutline.on — it had no key at all, so no rim was reachable. Three variants in skins.csv; the roll happens in systems/seagull.js, not spawnOne. Renders ORANGE until the `seagull` preset is designed."
 sealTeam,2.72,,noise:sealTeam+toon:sealTeam,
 ship,2.36,,noise:ship+toon:ship,

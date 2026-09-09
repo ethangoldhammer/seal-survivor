@@ -101,6 +101,7 @@ const GROUP_BY_NAME = {
   dev: 'Servers', csv: 'Servers', preview: 'Servers', hub: 'Servers', servers: 'Servers',
   atlas: 'Servers', 'icons:pick': 'Servers', 'accessories:pick': 'Servers',
   'accessories:icons': 'Assets', pick: 'Servers',
+  'acc:render': 'Assets', 'feel:apply': 'Assets', 'rig:manowar': 'Assets',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   notex: 'Audits',

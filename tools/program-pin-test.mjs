@@ -2,6 +2,8 @@
 // ---------------------------------------------------------------------------
 // npm run test:pin
 //
+// Guards systems/programPin.js, which keeps one material per shader family alive so its compiled program is never thrown away and re-linked mid-run.
+//
 // three refcounts compiled programs and DELETES one the moment the last
 // material using it is disposed, so a family of materials that all die together
 // takes its shader with it and the next one of that kind re-links on the frame

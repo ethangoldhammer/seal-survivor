@@ -107,6 +107,10 @@ export const DEATH_CAUSES = [
   // general pool, which is a supported state, so this classifies the creature
   // (which is what tools/quip-test.mjs asks for) without inventing its words.
   { id: 'jellyfish', label: 'lorem ipsum dolor', threat: 'Lorem ipsum', sources: ['jellyfish'] },
+  // The man o' war and its boss: the same kind of death as the jellyfish's
+  // (a sting you swam into), kept as its own row so the two can read
+  // differently. Words staged as lorem — see design/COPY-TODO.md.
+  { id: 'manowar', label: 'lorem ipsum dolor', threat: 'Lorem ipsum', sources: ['manowar', 'bossManOWar'] },
   // Kept although the dolphin no longer spawns as wildlife (CONFIG.enemies
   // .dolphin is weight 0 — see the note there): the body is still in the game
   // as the companion stub, and a cause that exists costs nothing while a

@@ -38288,6 +38288,12 @@ const SYNCED_FX = [
   // notices; see the note on the row above.
   ['accessory — tricorn', () => resolveBiolumCfg('biolumSkin.presets.accessoryTricorn'), ['pulseSync', 'flickerSync']],
   ['accessory — rounds', () => resolveBiolumCfg('biolumSkin.presets.accessoryRounds'), ['pulseSync', 'flickerSync']],
+  ['accessory — cowboy hat', () => resolveBiolumCfg('biolumSkin.presets.accessoryCowboy'), ['pulseSync', 'flickerSync']],
+  ['accessory — hat', () => resolveBiolumCfg('biolumSkin.presets.accessoryHat'), ['pulseSync', 'flickerSync']],
+  ['accessory — shark hood', () => resolveBiolumCfg('biolumSkin.presets.accessorySharkHood'), ['pulseSync', 'flickerSync']],
+  ['accessory — wire frames', () => resolveBiolumCfg('biolumSkin.presets.accessoryWireFrames'), ['pulseSync', 'flickerSync']],
+  ['accessory — wizard hat', () => resolveBiolumCfg('biolumSkin.presets.accessoryWizard'), ['pulseSync', 'flickerSync']],
+  ['sardine', () => resolveBiolumCfg('biolumSkin.presets.sardineBlade'), ['pulseSync', 'flickerSync']],
   ['hammerhead', () => resolveBiolumCfg('biolumSkin.presets.hammerhead'), ['pulseSync', 'flickerSync']],
   ['boss yacht — hull', () => resolveBiolumCfg('biolumSkin.presets.bossYacht'), ['pulseSync', 'flickerSync']],
   ['orca escort — cow', () => resolveBiolumCfg('biolumSkin.presets.orcaFriendCow'), ['pulseSync', 'flickerSync']],

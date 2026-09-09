@@ -366,7 +366,8 @@ bug. Each row's `notes` column carries its own brief; briefly, one wants the
 float, one wants a different register so two fights in a run do not rhyme, and
 one can lean on the filaments.
 
-Not staged: a **death cause**. `path/src/deathCauses.js` falls back to the raw
-source name, so a player killed by this boss currently sees `bossManOWar` on the
-gravestone. It wants a row beside the jellyfish's — whose own `label` is still
-lorem, so the two are worth writing together.
+**A death cause** — the `manowar` row in `path/src/deathCauses.js`, staged as
+lorem beside the jellyfish's (whose own `label` is still lorem, so the two are
+worth writing together). It covers the surface creature and the boss. Same
+shape as the jellyfish brief above: `label` a lowercase noun phrase with its
+article, `threat` a title-case plural for the score screen's Threats tab.

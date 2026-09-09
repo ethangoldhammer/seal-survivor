@@ -2,6 +2,8 @@
 // ---------------------------------------------------------------------------
 // npm run test:spin
 //
+// Checks the versus ball's spin headless: how it is put on, how it curves, how the walls take it off, and the streaks that draw it.
+//
 // The versus ball's SPIN, headless: english off the two sticks disagreeing
 // (strike.js strikeEnglish), the contact friction that turns the slide into
 // spin and a sideways kick (versus.js strikeBall), the Magnus curve at right
