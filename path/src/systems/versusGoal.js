@@ -20,13 +20,14 @@
 // one, and a ball clipping the post leaves at an angle instead of straight
 // back.
 //
-// THE LINE. A goal is called when the ball is clear of the EDGE OF THE
-// SCREEN, not the wall's line — so the ball is seen to go all the way in, and
-// a ball rattling in the entrance is not yet a goal. The screen's edge is not
-// a written number: the camera may drift `shoreOverscan()` past the wall and
-// no further (clampFocus in world.js), so the furthest the frame can ever
-// reach is the wall less that, and a ball whose near side is past THAT is off
-// every screen the camera can produce, whatever it is doing this frame.
+// THE LINE. A goal is called when the ball's near side is `goal.line` units
+// past the drawn face — INSIDE the tunnel and ON SCREEN, because in a match
+// the camera may reach `camera.reach` past the wall (cameraReach below,
+// spent by clampFocus in world.js), which is wider than the line. So the
+// ball is seen to cross it, a ball rattling short of it is still in play,
+// and a keeper standing in front of it (keeperReach) can shove it back out.
+// It used to be the edge of the screen, which was wherever the shore's one
+// boulder of cover happened to stop.
 // ---------------------------------------------------------------------------
 
 import { CONFIG } from '../config.js';
@@ -52,13 +53,43 @@ export function mouthY() {
 }
 
 /**
- * The x past which the ball's near edge must be for a goal on `side` (-1 the
- * left wall, +1 the right): the furthest the frame can reach, less nothing —
- * the caller adds the ball's own radius. See THE LINE above.
+ * How far past each wall the frame may reach in a match — into the goal, by
+ * CONFIG.versus.camera.reach, and never past the tunnel's back. Outside a
+ * match it is the shore's own overscan, as it always was. world.js's
+ * focusLimits spends it; screenEdgeX below is the same number as an x.
+ */
+export function cameraReach() {
+  if (!versusActive()) return shoreOverscan();
+  const want = Math.max(0, CONFIG.versus?.camera?.reach ?? 12);
+  return Math.min(want, tunnelDepth() - 0.5);
+}
+
+/**
+ * The furthest x the frame can reach past the wall on `side` (-1 the left
+ * wall, +1 the right). The goal jet is born beyond it and the spawner treats
+ * it as "off screen".
  */
 export function screenEdgeX(side) {
-  const over = shoreOverscan();
+  const over = cameraReach();
   return side < 0 ? bounds.left - over : bounds.right + over;
+}
+
+/** How far past the drawn face the goal line sits — inside the tunnel, on screen. */
+export function goalLineDepth() {
+  const want = Math.max(0, cfg().line ?? 8);
+  // The WHOLE ball has to fit between the line and the tunnel's back, or it
+  // bounces off the back with its near side still short of the line and the
+  // goal can never be called.
+  const ballR = Math.max(0, CONFIG.versus?.ball?.radius ?? 2.8);
+  return Math.max(0, Math.min(want, tunnelDepth() - ballR * 2 - 0.25));
+}
+
+/**
+ * THE LINE, as an x: a goal on `side` is called when the ball's near edge is
+ * past it. See THE LINE above — the caller adds the ball's own radius.
+ */
+export function goalLineX(side) {
+  return rockX(side) + side * goalLineDepth();
 }
 
 /**
@@ -101,10 +132,9 @@ export function inMouthBand(y, r) {
 // ---------------------------------------------------------------------------
 // THE SEALS' HOLE — what arena.clampToArena asks.
 //
-// A seal is allowed into the mouth, `keeperDepth` past the wall and no
-// further, and inside it the lips hold it the way the walls do. Goalkeeping
-// in the entrance is the whole point; a seal that could swim to the goal
-// line would be a seal off screen, and the depth is capped for that.
+// A seal is allowed into the mouth, `keeperReach` past the wall and no
+// further — always short of the goal line — and inside it the lips hold it
+// the way the walls do. Goalkeeping inside the mouth is the whole point.
 // ---------------------------------------------------------------------------
 
 const _hole = { xMin: -Infinity, xMax: Infinity, yMin: 0, yMax: 0 };
@@ -123,7 +153,8 @@ function probe(x, y, radius) {
   const inside = x < bounds.left || x > bounds.right;
   if (!inside && !inMouthBand(y, radius)) return null;
   if (inside && Math.abs(y - gy) > h + radius) return null;
-  const depth = Math.max(0, c.keeperDepth ?? 2.5);
+  // A keeper may stand in front of the line, never on it.
+  const depth = Math.max(0, Math.min(c.keeperReach ?? 7, goalLineDepth() - 0.5));
   if (x < bounds.left + radius) {
     _hole.xMin = bounds.left - depth;
     _hole.xMax = Infinity;

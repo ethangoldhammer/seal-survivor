@@ -180,9 +180,38 @@ export function mlpForward(model, x, out = null) {
   return a;
 }
 
+/**
+ * THE INPUTS A MODEL REFUSES TO SEE — `model.mask`, feature names zeroed
+ * before the forward pass, in the trainer and here alike. Written for
+ * `pending`: the wind-up banked is a CONSEQUENCE of holding the strike, so a
+ * network shown it learns "held ⇔ something banked" — 93% of a human's held
+ * rows have it — and then, driving a seal whose wind-up is empty because it
+ * has not started holding, never starts. The seal's own velocity is masked
+ * for the same reason one step removed — it is the last push of the stick,
+ * and a network shown it learns to keep doing whatever it was doing. Masked,
+ * the policy has to read the stick and the strike off the geometry, which is
+ * the thing it was supposed to learn. The list is the trainer's MASK.
+ */
+export function maskedInput(model, feat, out = _masked) {
+  const mask = model?.maskIdx;
+  if (!mask?.length) return feat;
+  for (let i = 0; i < feat.length; i++) out[i] = feat[i];
+  for (const i of mask) out[i] = 0;
+  return out;
+}
+const _masked = new Float32Array(N_FEATURES);
+
+/** Resolve a model's `mask` (names) to indices, once. */
+export function prepareModel(model) {
+  if (model && Array.isArray(model.mask) && !model.maskIdx) {
+    model.maskIdx = model.mask.map((n) => FEATURE_NAMES.indexOf(n)).filter((i) => i >= 0);
+  }
+  return model;
+}
+
 /** The network's raw output as an input: stick and aim through tanh, strike through a sigmoid. */
 export function policyAction(model, feat, out = { moveX: 0, moveY: 0, aimX: 1, aimY: 0, strike: 0 }) {
-  const y = mlpForward(model, feat);
+  const y = mlpForward(model, maskedInput(prepareModel(model), feat));
   out.moveX = Math.tanh(y[0]);
   out.moveY = Math.tanh(y[1]);
   out.aimX = Math.tanh(y[2]);

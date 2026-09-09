@@ -177,6 +177,11 @@ export const player = {
   // thrust, the speed ceiling AND the dash turn rate together, so a combo is
   // uniformly more agile rather than fast-but-unsteerable.
   comboSpeedMul: 1,
+  // The jolt and the heavy fall — see createSealState below; the run's own
+  // seal takes them in a match like the other one.
+  jolt: { spin: 0, spinV: 0, roll: 0, rollV: 0 },
+  heavyT: 0,
+  heavyMul: 1,
   // Thrust multiplier from the boost meter's current fuel, pushed in by main.js
   // each frame (same reason again). Scales ORDINARY SWIMMING ACCELERATION only
   // — not the ceiling, not the dash — so a full bar gets the seal moving sooner
@@ -469,7 +474,35 @@ export function createSealState() {
     dashTimer: 0,
     comboSpeedMul: 1,
     chargeThrustMul: 1,
+    // THE JOLT — a rotation impulse on the body (a shove in a match, see
+    // joltSeal): a tumble in the screen plane and a roll about the spine,
+    // each a spring back to true. Angles and their rates.
+    jolt: { spin: 0, spinV: 0, roll: 0, rollV: 0 },
+    // Seconds of heavier gravity left after a knock, and how much heavier.
+    heavyT: 0,
+    heavyMul: 1,
   };
+}
+
+/**
+ * THROW THE BODY ABOUT: `spin` radians per second of tumble in the screen
+ * plane and `roll` about the seal's own spine, added to the jolt's rates.
+ * Composed in poseBody and sprung back by CONFIG.player.jolt. The hitbox
+ * and the heading are untouched — this is the skeleton being jostled, not
+ * the animal being turned.
+ */
+export function joltSeal(seal, spin = 0, roll = 0) {
+  const j = seal.jolt;
+  if (!j) return;
+  j.spinV += spin;
+  j.rollV += roll;
+}
+
+/** Heavier gravity for `seconds` after a knock — the fall out of the air. */
+export function weighSeal(seal, mul, seconds) {
+  if (!(seconds > 0) || !(mul > 0)) return;
+  seal.heavyT = Math.max(seal.heavyT ?? 0, seconds);
+  seal.heavyMul = Math.max(seal.heavyMul ?? 1, mul);
 }
 
 /**
@@ -528,6 +561,8 @@ export function resetSealBody(seal) {
   seal.chumSealed = false;
   seal.chargePose = 0;
   seal.snareTimer = 0; seal.snareMul = 1;
+  if (seal.jolt) { seal.jolt.spin = seal.jolt.spinV = seal.jolt.roll = seal.jolt.rollV = 0; }
+  seal.heavyT = 0; seal.heavyMul = 1;
   seal.anim?.reset();
   seal.aimRig?.reset();
   seal.celebrate?.reset();
@@ -1148,7 +1183,14 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   // (CONFIG.arena.gravity — see the note there for where 29.7 comes from).
   const airborne = pos.y > bounds.surfaceY;
   if (airborne && CONFIG.arena.gravity > 0) {
-    seal.velocity.y -= CONFIG.arena.gravity * dt;
+    // ...heavier for a while after a knock (weighSeal): a seal shoved out of
+    // the water comes down hard.
+    const heavy = (seal.heavyT ?? 0) > 0 ? (seal.heavyMul ?? 1) : 1;
+    seal.velocity.y -= CONFIG.arena.gravity * heavy * dt;
+  }
+  if ((seal.heavyT ?? 0) > 0) {
+    seal.heavyT = Math.max(0, seal.heavyT - dt);
+    if (seal.heavyT === 0) seal.heavyMul = 1;
   }
 
   // The strike dash gets its own, higher ceiling for the length of the dash.
@@ -1651,9 +1693,33 @@ export function poseBody(...args) {
   // angle asked for on demand (a pure function of the celebration clock), so
   // there is no ordering to get wrong and nothing to accumulate on a frame
   // where this function doesn't run.
-  _rollQ.setFromAxisAngle(_yAxis, seal.mirrorAngle + seal.rollAngle + rattle);
+  // THE JOLT (joltSeal): two damped springs back to true, stepped here on
+  // the frame's dt. The tumble rides the somersault's axis and the roll the
+  // barrel roll's, so both compose with what is already there and neither
+  // touches the heading the hitbox and the aim read.
+  let joltSpin = 0;
+  let joltRoll = 0;
+  const j = seal.jolt;
+  if (j && (j.spin || j.spinV || j.roll || j.rollV)) {
+    const jc = CONFIG.player?.jolt ?? {};
+    const k = jc.spring ?? 60;
+    const c = jc.damping ?? 5.5;
+    const cap = jc.max ?? 2.6;
+    // Semi-implicit Euler, stable at the game's frame cap for these rates.
+    j.spinV += (-k * j.spin - c * j.spinV) * dt;
+    j.spin += j.spinV * dt;
+    j.rollV += (-k * j.roll - c * j.rollV) * dt;
+    j.roll += j.rollV * dt;
+    if (j.spin > cap) { j.spin = cap; if (j.spinV > 0) j.spinV = 0; } else if (j.spin < -cap) { j.spin = -cap; if (j.spinV < 0) j.spinV = 0; }
+    if (j.roll > cap) { j.roll = cap; if (j.rollV > 0) j.rollV = 0; } else if (j.roll < -cap) { j.roll = -cap; if (j.rollV < 0) j.rollV = 0; }
+    if (Math.abs(j.spin) < 1e-4 && Math.abs(j.spinV) < 1e-3) { j.spin = 0; j.spinV = 0; }
+    if (Math.abs(j.roll) < 1e-4 && Math.abs(j.rollV) < 1e-3) { j.roll = 0; j.rollV = 0; }
+    joltSpin = j.spin;
+    joltRoll = j.roll;
+  }
+  _rollQ.setFromAxisAngle(_yAxis, seal.mirrorAngle + seal.rollAngle + rattle + joltRoll);
   _craneQ.setFromAxisAngle(_xAxis, seal.craneAngle + shudder);
-  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin(seal.celebrateTag ?? null));
+  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin(seal.celebrateTag ?? null) + joltSpin);
   seal.body.quaternion.copy(_craneQ).multiply(_rollQ).multiply(_spinQ);
 }
 

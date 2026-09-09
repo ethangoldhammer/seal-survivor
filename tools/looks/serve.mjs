@@ -303,6 +303,30 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // THE REPLAY LAB'S WRITE. The same splice as the level-up feel above, told
+  // that its paths live under CONFIG.versus — the lab saves full paths already
+  // (`versus.replay.cams.shots.3.yaw`), and applyFeel walks `shots.3` as the
+  // fourth element of the array. Only rows the lab says were MOVED are in the
+  // body; see the header of tools/looks/replay-lab.js for why.
+  if (req.method === 'POST' && url.pathname === '/apply/replay-lab') {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = Buffer.concat(chunks);
+    let preset;
+    try { preset = JSON.parse(body.toString()); } catch (err) { res.writeHead(400).end('not valid json: ' + err.message); return; }
+    await writeFile(join(HERE, 'replay-lab.json'), JSON.stringify(preset, null, 2));
+    try {
+      const report = await applyFeel(preset, { dry: false, roots: ['versus'] });
+      for (const n of report.notes) console.log(`  ${n}`);
+      console.log(report.wrote ? '  wrote path/src/config.js' : '  config.js already matches');
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(report));
+    } catch (err) {
+      console.log(`  apply failed: ${err.message}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ saved: true, error: err.message }));
+    }
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname.startsWith('/preset/')) {
     const name = url.pathname.slice('/preset/'.length).replace(/[^\w.-]/g, '');
     if (!name.endsWith('.json')) { res.writeHead(400).end('json only'); return; }

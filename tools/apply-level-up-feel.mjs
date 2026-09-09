@@ -124,7 +124,11 @@ export async function applyFeel(preset, { dry = false, configPath = CONFIG_JS, t
     if (k.startsWith('__')) continue;
     const path = rootedIn(roots, k);
     if (!roots.some((r) => path.startsWith(r + '.'))) { notes.push(`? ${k}: not a ${roots.join('/')} path — skipped`); continue; }
-    if (v === null || v === undefined || (typeof v === 'object')) { notes.push(`? ${path}: not a number, string or boolean — skipped`); continue; }
+    // ...or a flat LIST of those — `beats: ['wide', 'explosion']`, which the
+    // replay lab writes. A list of anything else, or any other object, is a
+    // block rather than a field and this tool splices fields.
+    const flatList = Array.isArray(v) && v.every((one) => one !== null && typeof one !== 'object');
+    if (v === null || v === undefined || (typeof v === 'object' && !flatList)) { notes.push(`? ${path}: not a number, string, boolean or flat list — skipped`); continue; }
     const segs = path.split('.');
     const leaf = segs.pop();
     const key = segs.join('.');

@@ -119,5 +119,57 @@ fire('pagehide');
 check('and closing the tab afterwards adds nothing', stored().length === afterDeath,
   'the run already ended; a second record would be the same run twice');
 
+console.log('\nAND THEIR FRAME TIMES — the extras hook\n');
+
+// The gap this closes: `extra` is an ARGUMENT, so only the ending with a caller
+// ever carried frame times. 21 of the last 30 runs on disk had no `perf` block,
+// and every one of them was a quit or a reload — which is to say the runs
+// somebody cut short on purpose to go and look at something.
+//
+// 'interrupted' is the case that cannot be fixed by passing an argument: it
+// fires from a pagehide handler inside playtest.js, which has no renderer. So
+// main.js leaves a function behind instead.
+store.clear();
+playtest.setRunExtras(() => ({ perf: { frames: 1234 }, render: { draws: 7 } }));
+
+playtest.beginRun({ playerMaxHp: 100 });
+play(10);
+fire('pagehide');
+check('a reloaded run files its frame times', stored().at(-1)?.perf?.frames === 1234,
+  'the ending with no caller is the one the argument could never reach');
+check('...and the rest of the record with them', stored().at(-1)?.render?.draws === 7);
+
+playtest.beginRun({ playerMaxHp: 100 });
+play(10);
+playtest.endRun('quit');
+check('so does a run walked away from', stored().at(-1)?.perf?.frames === 1234);
+
+// The death path builds its own record and passes it. It was the one ending that
+// already worked, and this must not have changed it.
+playtest.beginRun({ playerMaxHp: 100 });
+play(10);
+playtest.endRun('death', { perf: { frames: 99 } });
+check('an explicit record still wins', stored().at(-1)?.perf?.frames === 99,
+  'the caller knows more than the hook; the hook is the fallback');
+
+// It runs during page teardown, where anything may already be half gone. A
+// throw there must cost the frame times and NOT the run.
+playtest.setRunExtras(() => { throw new Error('renderer is gone'); });
+playtest.beginRun({ playerMaxHp: 100 });
+play(10);
+const before = stored().length;
+fire('pagehide');
+check('a source that throws still files the run', stored().length === before + 1,
+  'losing the whole row would be worse than the gap this closes');
+check('...just without the extras', stored().at(-1)?.perf === undefined);
+
+// And a Node harness registers nothing at all, which is every other tool here.
+playtest.setRunExtras(null);
+playtest.beginRun({ playerMaxHp: 100 });
+play(10);
+playtest.endRun('quit');
+check('no source registered is harmless', stored().at(-1)?.endReason === 'quit'
+  && stored().at(-1)?.perf === undefined);
+
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');
 process.exit(failures ? 1 : 0);

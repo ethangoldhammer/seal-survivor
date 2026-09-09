@@ -873,8 +873,48 @@ function markLift() {
 //
 // `programRebuilds` was right throughout: it counts on the FULL key, before
 // this slice. Only the human-readable list was lying.
-const KEY_CHARS = 220;
+//
+// RAISING THE LIMIT DOES NOT FIX IT, and 220 is the proof: the 9/8 level-18 run
+// printed `rebuilt 34x`, `17x`, `17x` and `10x` as four byte-identical strings,
+// which is the same wrong report one paragraph longer. The cheap flags are not
+// 90 characters of prefix, they are however many boolean columns that material
+// type happens to have, and no head length is past all of them.
+//
+// SO KEEP BOTH ENDS AND A HASH OF THE WHOLE THING. The tail is where the parts
+// that differ live — the light counts, and `customProgramCacheKey`, which is
+// the only part a system of ours writes by hand and therefore the only part
+// that ever names a system. The hash is the guarantee: it is over the FULL key,
+// so two rows that print the same string are the same program, and two programs
+// can never print the same row. That is the property the length limit was
+// silently failing to provide.
+const KEY_HEAD = 130;
+const KEY_TAIL = 90;
 const TOP_KEPT = 6;
+
+/** Cheap 32-bit FNV-1a, so a full key can be identified in a few characters. */
+function keyHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * A cache key short enough to log and specific enough to act on: head, tail,
+ * and a hash of the whole.
+ *
+ * A key that fits is returned UNCHANGED, hash and all. The hash is not a label,
+ * it is a repair — it restores the identity that cutting the middle out took
+ * away — so a key that was never cut has nothing to repair and printing `#3fx1a`
+ * after it would be noise on the rows that need it least.
+ */
+function shortKey(key) {
+  const k = String(key);
+  if (k.length <= KEY_HEAD + KEY_TAIL + 1) return k;
+  return `${k.slice(0, KEY_HEAD)}…${k.slice(-KEY_TAIL)} #${keyHash(k)}`;
+}
 
 // The warm-up's work list: keys that linked on a frame the player felt, worst
 // first. Ranked on the TIME of those frames rather than on the count, because
@@ -884,7 +924,7 @@ function missedPrograms() {
   return [...hitchPrograms.entries()]
     .sort((a, b) => b[1].ms - a[1].ms)
     .slice(0, TOP_KEPT)
-    .map(([key, v]) => ({ builds: v.builds, ms: v.ms, key: key.slice(0, KEY_CHARS) }));
+    .map(([key, v]) => ({ builds: v.builds, ms: v.ms, key: shortKey(key) }));
 }
 
 function topPrograms() {
@@ -892,7 +932,7 @@ function topPrograms() {
     .filter(([, n]) => n > 1)
     .sort((a, b) => b[1] - a[1])
     .slice(0, TOP_KEPT)
-    .map(([key, builds]) => ({ builds, key: key.slice(0, KEY_CHARS) }));
+    .map(([key, builds]) => ({ builds, key: shortKey(key) }));
 }
 
 function clock(seconds) {

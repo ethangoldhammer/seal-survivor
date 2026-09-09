@@ -81,5 +81,38 @@ check('the snapshot let go of the written paths', tun.levelUpSeal.motion.blendTi
 check('...and kept everything else', tun.levelUpSeal.motion.blendRate === 9 && tun.other === 1);
 const again = await applyFeel(preset, { dry: true, configPath: cfgPath, tuningPath: tunPath, guard: false });
 check('a second run has nothing to do', again.changes.length === 0, again.changes.join(' | '));
+
+// --- A FLAT LIST IS A FIELD -------------------------------------------------
+//
+// `hold: [0.6, 1.6]` and `beats: ['impact']` on a replay-lab camera shot. The
+// scan used to jump every `[`-opened field as if it were a block, so writing
+// one found no span, took the ADDITION path, and left the key declared twice
+// in the same object. Last-wins meant the game still read the new value, which
+// is how it would have stayed. The list of BLOCKS (`shots: [ {...}, ... ]`) is
+// still jumped, or every shot's fields would be recorded under bare names.
+console.log('\nFLAT LISTS');
+await writeFile(cfgPath, src);
+await writeFile(tunPath, JSON.stringify({ other: 1 }, null, 2));
+const listPreset = {
+  'versus.replay.cams.shots.1.hold': [0.7, 1.9],
+  'versus.replay.cams.shots.3.beats': ['wide', 'explosion'],
+};
+const lr = await applyFeel(listPreset, { dry: false, configPath: cfgPath, tuningPath: tunPath, guard: false, roots: ['versus'] });
+const lout = await readFile(cfgPath, 'utf8');
+check('both lists are reported as REPLACED, not added',
+  lr.changes.length === 2 && !lr.changes.some((c) => String(c).includes('(absent)')), lr.changes.join(' | '));
+const shot1 = lout.slice(...locateBlock(maskCode(lout), ['versus', 'replay', 'cams', 'shots', '1'], lout.length));
+const shot3 = lout.slice(...locateBlock(maskCode(lout), ['versus', 'replay', 'cams', 'shots', '3'], lout.length));
+check('the new numbers are in the element', /hold:\s*\[0\.7, 1\.9\]/.test(shot1), shot1.replace(/\s+/g, ' '));
+check('...and the key is declared ONCE', (shot1.match(/\bhold:/g) ?? []).length === 1);
+check('a list of strings too', /beats:\s*\['wide', 'explosion'\]/.test(shot3), shot3.replace(/\s+/g, ' '));
+check('...once', (shot3.match(/\bbeats:/g) ?? []).length === 1);
+check('a neighbouring shot is untouched',
+  /beats:\s*\['impact'\]/.test(lout.slice(...locateBlock(maskCode(lout), ['versus', 'replay', 'cams', 'shots', '0'], lout.length))));
+check('the shots array itself is still an array of blocks, not a field',
+  !lr.changes.some((c) => String(c).startsWith('versus.replay.cams.shots:')));
+check('re-running has nothing to do',
+  (await applyFeel(listPreset, { dry: true, configPath: cfgPath, tuningPath: tunPath, guard: false, roots: ['versus'] })).changes.length === 0);
+
 console.log(failures ? `\n${failures} FAILED\n` : '\nall passed\n');
 process.exit(failures ? 1 : 0);

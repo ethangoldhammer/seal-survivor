@@ -42,7 +42,7 @@ import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
 import { setGooSuckTarget, updateGooSuck, resetGooSuck } from './systems/gooSuck.js';
-import { enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir } from './systems/versus.js';
+import { replayRenderCamera, enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir } from './systems/versus.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -216,6 +216,9 @@ import { initGraveBeam, updateGraveBeam, clearGraveBeam } from './systems/graveB
 import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
 import { uiText } from './uiTextTable.js';
+// The goal lights' live refresh, for the F panel (systems/wallRocks.js).
+import { refreshGoalGlow } from './systems/wallRocks.js';
+import { showTeamSelect, hideTeamSelect, updateTeamSelect } from './ui/teamSelect.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
 import { isTextEntry, isTypingTarget } from './ui/typing.js';
 import { initTuner, refreshTuner, setTunerMeta } from './ui/tuner.js';
@@ -288,6 +291,9 @@ const DEV_UI = !!import.meta.env?.DEV
 // nothing reads the URL here.
 // Player 2's dash kills through the run's own kill path — see versusHooks.
 versusHooks.onKill = (e) => { onEnemyKilledFeedback(e); };
+// ...and a hull sunk by the BALL, which scores and rings the grid like one
+// sunk by anything else. Same hook damageBoat takes from updateBoats below.
+versusHooks.onBoatDestroyed = (b, chum) => onBoatDestroyed(b, chum);
 
 const container = document.getElementById('root') ?? document.body;
 const world = createWorld(container);
@@ -742,6 +748,12 @@ async function boot() {
   // card builds its body on the first live frame after the pick, which is the
   // one frame the player is waiting on.
   installLevelUpWarmup({ post, scene: world.scene, camera: world.camera });
+  // AND THE FRAME TIMES FOR EVERY WAY A RUN CAN END, not just the one with a
+  // caller. See setRunExtras in systems/playtest.js: the death path builds this
+  // record itself, and 'quit', 'restart' and 'interrupted' had nothing — the
+  // last of those fires from a pagehide handler inside playtest.js, which has no
+  // renderer to read. Registered here because this is where the renderer is.
+  playtest.setRunExtras(buildPerfRecord);
   loading.setProgress(1);
   loading.remove();
 
@@ -798,16 +810,10 @@ async function boot() {
     // the lens pushed in on a corpse. Same cover, same glide and same landing
     // as Try again — see restartRun — because the thing being hidden is the
     // same thing, and only what happens on the far side of it differs.
-    onMainMenu: () => {
-      const seconds = CONFIG.death?.restart?.time ?? 0.9;
-      showRestartTransition(seconds);
-      unlockAudio();
-      beginRestartTransition(() => {
-        returnToMenu();
-        hideRestartTransition(seconds * 0.6);
-      });
-    },
+    onMainMenu: leaveForMenu,
   });
+  // The prompt after a Blubberball match has the same button (systems/versus.js).
+  versusHooks.onMainMenu = leaveForMenu;
   // After initUI, which is what builds the root it appends to — and appended
   // last so the band sits over the menus (see ui/callout.js).
   initCallouts(uiRoot());
@@ -1395,7 +1401,13 @@ function handleTunerChange(path) {
   // build, so a slider on them is a rebuild. Cheap — one merge of sixty
   // boulders — and it is the one path that moves the ROCK as well as the
   // light, which the F panel's live refresh cannot.
-  if (path.startsWith('versus.goal') || path.startsWith('versus.teams')) world.wallRocks.build();
+  // The tunnel's depth and the frame's zoom floor size the BACKDROP as well
+  // as the shore, so those go through the arena's whole rebuild.
+  if (path.startsWith('versus.goal.tunnel') || path.startsWith('versus.camera.zoomMin')) world.resize();
+  // The light's own numbers — glow, spill, feather, the noise — move on the
+  // live quads without a rebuild of the shore.
+  else if (path.startsWith('versus.goal.noise') || path.startsWith('versus.goal.swim') || path.startsWith('versus.goal.scored') || path.startsWith('versus.goal.glow') || path.startsWith('versus.goal.spill') || path.startsWith('versus.goal.feather')) refreshGoalGlow();
+  else if (path.startsWith('versus.goal') || path.startsWith('versus.teams')) world.wallRocks.build();
   // The night sky's geometry IS its tuning — where the stars are, what is
   // joined to what, how far the fractal grows — so most of that panel needs a
   // rebuild rather than a uniform write. `star density` lives in the Sky panel
@@ -1592,9 +1604,27 @@ function showMainMenu() {
       {
         label: uiText('sealSports'),
         lines: uiText('sealSports').split(' '),
-        onPress: () => showSealSports({ onBall: () => enterMode(true) }),
+        // Blubberball goes through its team select first (ui/teamSelect.js):
+        // sides, pads and colours are written to versusSetup there, and
+        // Start is what builds the match. Back reopens this list.
+        onPress: () => openSealSports(),
       },
     ],
+  });
+}
+
+/** The Seal sports list, with Blubberball wired to its team select and the
+ *  team select's Back wired back to the list. */
+function openSealSports() {
+  showSealSports({
+    onBall: () => {
+      hideSealSports();
+      showTeamSelect({
+        parent: uiRoot(),
+        onStart: () => enterMode(true),
+        onBack: openSealSports,
+      });
+    },
   });
 }
 
@@ -1623,6 +1653,11 @@ function enterMode(versus) {
     reseatDecor();
     reseatSeabed(world.scene);
     reseatGraves();
+  } else if (versus) {
+    // Same mode as last time, but the goal lights are lit at build in the
+    // colours the captains picked (goalColors → versusSetup), and this match
+    // may have picked differently. One merge of the shore; cheap.
+    world.wallRocks.build();
   }
   showHud();
   startGame();
@@ -1643,6 +1678,21 @@ function enterMode(versus) {
 // spawner and show the menu" — is the version that leaves the last run's
 // sharks swimming through the bust's crop, and every one of the two hundred
 // resets above is a thing somebody found out the hard way.
+/**
+ * The score card's Main menu button, and the match prompt's: under the same
+ * cover Try again uses, because both arrive from a frozen, pushed-in shot
+ * that must not snap to a bust on one frame.
+ */
+function leaveForMenu() {
+  const seconds = CONFIG.death?.restart?.time ?? 0.9;
+  showRestartTransition(seconds);
+  unlockAudio();
+  beginRestartTransition(() => {
+    returnToMenu();
+    hideRestartTransition(seconds * 0.6);
+  });
+}
+
 function returnToMenu() {
   crumb('run:menu');
   // The bars go with the run. resetArena hides every MENU, but the HUD is not
@@ -1693,6 +1743,7 @@ function closeMainMenu() {
   if (!mainMenuActive()) return;
   hideLeaderboard();
   hideSealSports();
+  hideTeamSelect();
   hidePauseMenu();
   // ...and the tip sheet, which is the fourth button's panel and the third
   // thing on this list for the same reason as the other two: it is a DOM
@@ -1828,6 +1879,10 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // record and none to save, so the recorder stays cleared and the net stays
   // disarmed until Play arms them both.
   if (!forMenu) {
+    // The cards cannot be up on the frame a run starts, and a run ABANDONED with
+    // them up would otherwise leave the latch set and spend this run's first
+    // frame — the heaviest one there is — labelled `resume`.
+    cardsUpLastFrame = false;
     perfRunStart(
       performance.now(),
       programsEverBuilt(),
@@ -2576,20 +2631,7 @@ function killPlayer() {
   // the water and how big the window was — and reading it next to the kills
   // and the level is what turns "it stuttered" into "it stuttered while the
   // trawler was breaking up".
-  const perfRecord = {
-    perf: perfSummary(),
-    render: {
-      draws: drawsLastFrame,
-      mpix: +((world.renderer.domElement.width * world.renderer.domElement.height) / 1e6).toFixed(2),
-      scale: +world.renderer.getPixelRatio().toFixed(2),
-      // What the adaptive controller settled on. A run that spent its life at
-      // 0.6 is a machine that could not hold the frame rate at any point, and
-      // that is a different reading of the same frame times than a run that
-      // never dropped at all.
-      autoScale: +world.adaptiveScale().toFixed(2),
-      enemies: enemies.length,
-    },
-  };
+  const perfRecord = buildPerfRecord();
   disarmCrash();
   // The run ended the way runs are supposed to. Nothing is coming back for it.
   clearRun();
@@ -6025,6 +6067,36 @@ function updateChumChunkSpawns(dt) {
   });
 }
 
+/**
+ * The frame-time record that rides along with a run, wherever the run ended.
+ *
+ * A function rather than the inline literal it used to be because three of the
+ * four endings could not reach it — see setRunExtras in systems/playtest.js. It
+ * reads only live state, so it is correct at whatever moment it is called, and
+ * that is the whole reason it is safe on the pagehide path: the numbers describe
+ * the run up to now, which on an interrupted run is exactly what happened.
+ *
+ * THE CONTEXT LINE MATTERS AS MUCH AS THE PERCENTILES. A run is slow either
+ * because of what was in the frame (draws) or because of how big the window was
+ * (Mpix), and a record without both cannot tell those apart a week later.
+ */
+function buildPerfRecord() {
+  return {
+    perf: perfSummary(),
+    render: {
+      draws: drawsLastFrame,
+      mpix: +((world.renderer.domElement.width * world.renderer.domElement.height) / 1e6).toFixed(2),
+      scale: +world.renderer.getPixelRatio().toFixed(2),
+      // What the adaptive controller settled on. A run that spent its life at
+      // 0.6 is a machine that could not hold the frame rate at any point, and
+      // that is a different reading of the same frame times than a run that
+      // never dropped at all.
+      autoScale: +world.adaptiveScale().toFixed(2),
+      enemies: enemies.length,
+    },
+  };
+}
+
 // WHEN THE WATER COUNTS AS FULL, and when the screen counts as busy. Both are
 // set at roughly the point the recorded runs start losing frame rate rather
 // than at a round number: `spawn.maxAlive` is 220 and the per-bucket curve is
@@ -6032,6 +6104,25 @@ function updateChumChunkSpawns(dt) {
 // would sit cold through most of the decline it exists to catch.
 const CROWD_MARK = 100;
 const SWARM_MARK = 60;
+
+// WERE THE CARDS UP LAST FRAME. The `cards` mark below covers the level-up
+// screen while it is ON, and the recorded runs are unanimous that those frames
+// are FINE — 0.5x the run's hitch rate over 15,467 of them in the 9/8 level-18
+// run, which is to say a frozen game with three cards on it is the cheapest
+// thing this engine ever draws.
+//
+// The frame that hurts is the one AFTER, and `cards` cannot see it: the level-up
+// warm-up's own note says every companion ring sizes itself inside the gameplay
+// tick, which is skipped while paused, so the clone, the per-instance materials
+// and the first upload of that asset all land on the first LIVE frame. Fifteen
+// thousand quiet frames and seventeen expensive ones share one bucket, and the
+// average of those is quiet — the mark reported the menu and hid the pick.
+//
+// So this latches the EDGE. One perfMark on the first frame the cards are gone,
+// and MARK_LINGER carries it across the 0.4s the construction lands in, which
+// puts a few hundred frames a run in a bucket of their own instead of drowning
+// them in the menu's.
+let cardsUpLastFrame = false;
 
 // The whole of last frame's draw calls, summed across every pass post.js
 // made. Read at the top of the frame before anything resets it.
@@ -6311,6 +6402,8 @@ function runFrame(now) {
   // correlation across runs into an attribution within one.
   if (gameState.running) {
     if (levelUpState.active) perfMark('cards');
+    else if (cardsUpLastFrame) perfMark('resume');
+    cardsUpLastFrame = levelUpState.active;
     if (deathState.active) perfMark('dying');
     if (bossState.arriving) perfMark('boss-arrive');
     else if (bossState.enemy) perfMark('boss');
@@ -6482,6 +6575,9 @@ function runFrame(now) {
   if (!updateHiveRewardNav()) updateMenuNav();
   // The pause menu's own cursor, on the same poll and for the same reason.
   updatePauseNav();
+  // The team select reads EVERY pad, not the one input.js chose — each
+  // controller is a person on that screen. No-op unless it is up.
+  updateTeamSelect();
 
   // Refill the seal before anything can hurt it, not after. `player.hp <= 0`
   // is tested inline at three points INSIDE this block — the damage handler,
@@ -9710,7 +9806,10 @@ function runFrame(now) {
   // outside the pause gate too.
   flushProjectileInstances(world.scene);
 
-  updateParticleScale(world.camera, world.renderer);
+  // A versus replay films through its own perspective camera (the pool in
+  // systems/replayCams.js); the world's camera keeps its place underneath.
+  const renderCamera = replayRenderCamera() ?? world.camera;
+  updateParticleScale(renderCamera, world.renderer);
   post.resize();
 
   // Draws and pixels, alongside the gameplay counts. Read BEFORE post.render,
@@ -9737,7 +9836,7 @@ function runFrame(now) {
     `${Math.round(1 / Math.max(realDt, 0.0001))} fps · worst ${pw.worstMs.toFixed(0)}ms · ${pw.hitches} drops · ${info.calls} draws · ${mpix.toFixed(1)} Mpix${world.adaptiveScale() < 1 ? ` (auto ${world.adaptiveScale().toFixed(1)}x)` : ''} · ${enemies.length} enemies · ${projectiles.length} shots · ${particleCount()} bits · ${flightVoiceCount()} voices`
   );
   const _trender = performance.now();
-  post.render(world.scene, world.camera, realDt);
+  post.render(world.scene, renderCamera, realDt);
   perfPhase('render', performance.now() - _trender);
 
   // THE TROPHY, and it has to be here — on the line after the draw, inside the

@@ -1274,7 +1274,9 @@ export function createPost(renderer) {
   function applyCineLens() {
     const u = finalUniforms;
     const c = CONFIG.cinecam ?? {};
-    if (!c.enabled || !cineLens.active) {
+    // `forced` is the replay's camera pool claiming the lens with the cinematic
+    // camera itself switched off — see replayRenderCamera in systems/versus.js.
+    if (!(c.enabled || cineLens.forced) || !cineLens.active) {
       u.uDefocus.value = 0;
       u.uFlare.value = 0;
       u.uDrops.value = 0;
@@ -1649,7 +1651,7 @@ export function createPost(renderer) {
     // A fourth reason to run, and the cinematic camera's lens is the only
     // thing that can claim it — with that camera off, `cineLens.active` is
     // false and this whole clause is a boolean read.
-    const cine = CONFIG.cinecam?.enabled && cineLens.active
+    const cine = (CONFIG.cinecam?.enabled || cineLens.forced) && cineLens.active
       && (cineLens.defocus > 0 || cineLens.flare > 0 || cineLens.droplets > 0
           || cineLens.vignette > 0 || cineLens.pathVignette > 0);
     // ...and a fifth: goo in the water. The sprite layer hands those particles

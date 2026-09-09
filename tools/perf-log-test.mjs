@@ -278,6 +278,36 @@ check('a dropped frame still reports its build',
   `${s.frames} frames, ${s.programRebuilds} rebuilt`);
 
 // ---------------------------------------------------------------------------
+// AND THE NAME MUST DISTINGUISH THEM, which is the check the report went two
+// rounds without.
+//
+// A three cache key is parameter soup with the cheap boolean flags at the FRONT
+// and the distinguishing parts — the light counts, and customProgramCacheKey,
+// the only part any of our own code writes — at the BACK. So a head-only
+// truncation prints different programs as one string, and reading that report
+// produced a confident diagnosis of one program relinking 34 times when it was
+// four programs sharing a prefix. Raising the limit did not fix it: at 220
+// characters the four still printed identically.
+//
+// The keys below are the real shape of that: a long identical prefix, differing
+// only in the tail. Two things must hold — the rows must not collide, and each
+// must still carry enough of its own tail to be recognisable.
+const soup = `basic,highp,srgb-linear,false,,${'false,'.repeat(60)}`;
+perfRunStart(0, 0, 0, 0, []);
+t = 0;
+gl(16, [prog(0, `${soup}2,0,0,0,1,0,0,strikeRing`), prog(1, `${soup}2,0,0,0,1,0,0,threatCircle`)]);
+gl(16, [prog(2, `${soup}2,0,0,0,1,0,0,strikeRing`), prog(3, `${soup}2,0,0,0,1,0,0,threatCircle`)]);
+s = perfSummary();
+const named = s.topPrograms.map((p) => p.key);
+check('two keys sharing a long prefix are named apart',
+  named.length === 2 && named[0] !== named[1], named.join(' | ') || '(none named)');
+check('...and each is named by the tail that differs',
+  named.some((k) => k.includes('strikeRing')) && named.some((k) => k.includes('threatCircle')),
+  named.join(' | '));
+check('...without printing the whole soup',
+  named.every((k) => k.length < soup.length), named.map((k) => k.length).join(','));
+
+// ---------------------------------------------------------------------------
 // AND WHICH OF THEM ACTUALLY COST ANYTHING.
 //
 // Every check above is about REBUILDS, and a rebuild is the rarer of the two

@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Replay lab — the goal camera pool</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #04101a;
+        color: #dff0ff; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #stage { position: fixed; inset: 0; display: block; z-index: 1; }
+      #panel { position: fixed; left: 12px; top: 10px; z-index: 3; width: 316px;
+        background: rgba(4, 14, 24, 0.88); border: 1px solid rgba(160, 210, 255, 0.18);
+        border-radius: 8px; padding: 10px 12px; max-height: calc(100vh - 20px); overflow-y: auto; }
+      #panel h1 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+        margin: 0 0 8px; color: #ffe98a; font-weight: 600; }
+      #panel h2 { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+        margin: 12px 0 4px; color: #7fb8d8; font-weight: 600;
+        border-top: 1px solid rgba(160,210,255,.12); padding-top: 7px; }
+      .row { display: grid; grid-template-columns: 118px 1fr 46px; gap: 6px; align-items: center; margin: 2px 0; }
+      .row label { color: #b9d6ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row input[type=range] { width: 100%; }
+      .row output { color: #ffe08a; text-align: right; }
+      .row.moved label { color: #ffe08a; }
+      .row.moved label::after { content: ' •'; color: #7fe6a0; }
+      .btns { display: flex; gap: 5px; flex-wrap: wrap; margin: 6px 0; }
+      button { background: #1d4763; color: #fff; border: 1px solid rgba(160,210,255,.3);
+        border-radius: 5px; padding: 4px 9px; font: inherit; cursor: pointer; }
+      button.on { background: #4f9ad0; }
+      button.warn { background: #6a3d1d; }
+      button.live { background: #2f7a4a; }
+      #shotList button { text-align: left; }
+      #vals { white-space: pre; color: #ffe08a; margin-top: 8px; font-size: 11px; }
+      #note { color: #7fe6a0; margin-top: 6px; min-height: 1.5em; white-space: pre-wrap; }
+      /* THE TIMELINE, fixed at the bottom rather than in the scrolling panel:
+         scrubbing while reading the frame is the whole loop of this page, and a
+         scrub bar that scrolls out of reach when you open the director's
+         section is a scrub bar you stop using. */
+      #time { position: fixed; left: 364px; right: 12px; bottom: 34px; z-index: 3;
+        background: rgba(4, 14, 24, 0.88); border: 1px solid rgba(160, 210, 255, 0.18);
+        border-radius: 8px; padding: 8px 12px 10px; }
+      #time .head { display: flex; gap: 8px; align-items: center; margin-bottom: 5px; }
+      #time .head .grow { flex: 1; }
+      #scrub { width: 100%; }
+      #beats { position: relative; height: 16px; border-radius: 3px; overflow: hidden;
+        background: #0a1d2c; margin-bottom: 4px; }
+      #beats span { position: absolute; top: 0; bottom: 0; font-size: 9px; letter-spacing: .1em;
+        text-transform: uppercase; color: rgba(255,255,255,.72); padding-left: 5px;
+        border-right: 1px solid rgba(4,16,26,.9); }
+      #cutmarks { position: relative; height: 9px; margin-top: 2px; }
+      #cutmarks i { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffe08a; }
+      #cutmarks i.blend { background: #6fb7ff; }
+      #hint { position: fixed; left: 364px; bottom: 8px; right: 12px; z-index: 3; color: #b9d6ee;
+        text-shadow: 0 1px 3px rgba(0,0,0,.55); pointer-events: none; font-size: 11px; }
+      #hint b { color: #fff; }
+    </style>
+    <!-- THE PANE SUSPENDS rAF. See splash-bust.html; `?raf=native` opts a real
+         browser back out. -->
+    <script>
+      if (!/[?&]raf=native/.test(location.search)) {
+        window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+        window.cancelAnimationFrame = (id) => clearTimeout(id);
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="panel">
+      <h1>Replay lab</h1>
+      <div class="btns">
+        <button id="bPlay">play</button>
+        <button id="bLoop">loop</button>
+        <button id="bSolo">solo shot</button>
+        <button id="bSide">goal: left</button>
+        <button id="bRestage">restage (R)</button>
+      </div>
+      <div class="btns">
+        <button id="bSave">save (W)</button>
+        <button id="bApply" class="warn">write to config.js</button>
+        <button id="bDefaults">defaults</button>
+      </div>
+      <h2>the shots</h2>
+      <div class="btns" id="shotList"></div>
+      <div id="shotPanel"></div>
+      <div id="rest"></div>
+      <div id="vals"></div>
+      <div id="note"></div>
+    </div>
+    <div id="time">
+      <div class="head">
+        <span id="clock">0.00s</span>
+        <span class="grow" id="live"></span>
+      </div>
+      <div id="beats"></div>
+      <input id="scrub" type="range" min="0" max="1" step="0.001" value="0" />
+      <div id="cutmarks"></div>
+    </div>
+    <div id="hint"><b>drag the scrub</b> to move through the goal · <b>space</b> play/pause · <b>[</b>/<b>]</b> step a frame · <b>R</b> restage · <b>1</b>–<b>9</b> pick a shot · <b>S</b> solo it (it plays the whole replay, every beat) · <b>D</b> the goal at the other end · a <b>•</b> beside a row means you moved it and <b>write to config.js</b> will write it — nothing else is written</div>
+    <script type="module" src="./replay-lab.js"></script>
+  </body>
+</html>

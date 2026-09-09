@@ -77,8 +77,8 @@ function squareHit(english, power = 1, speed = 46) {
 section('the old knobs are gone');
 check('impact.spin (rad/s per u/s) no longer exists', im.spin === undefined);
 check('impact.spinKick no longer exists', im.spinKick === undefined);
-check('impact.friction, squirt, spinMax, spinDecayAir, magnusAir, wallFriction do',
-  ['friction', 'squirt', 'spinMax', 'spinDecayAir', 'magnusAir', 'wallFriction'].every((k) => typeof im[k] === 'number'));
+check('impact.friction, squirt, spinCap, spinDecayAir, curveAir, wallFriction do',
+  ['friction', 'squirt', 'spinCap', 'spinDecayAir', 'curveAir', 'wallFriction'].every((k) => typeof im[k] === 'number'));
 
 // ---------------------------------------------------------------------------
 section('english is the sticks disagreeing');
@@ -136,7 +136,7 @@ r = squareHit(-1);
 check('english -1 mirrors: anticlockwise spin, the other kick', ball.spin > 1 && Math.abs(ball.spin + spinPos) < 0.05 && ball.vy < -0.5, `spin=${f2(ball.spin)} vy=${f2(ball.vy)}`);
 r = squareHit(0.5);
 check('half the english is less spin, same sign', ball.spin < 0 && Math.abs(ball.spin) < Math.abs(spinPos), `spin=${f2(ball.spin)}`);
-check('never past the cap', Math.abs(spinPos) <= im.spinMax + 1e-9, `cap ${im.spinMax}`);
+check('never past the cap', Math.abs(spinPos) <= im.spinCap + 1e-9, `cap ${im.spinCap}`);
 
 // The Coulomb cap: friction scales the most the face can grab.
 const savedMu = im.friction;
@@ -153,10 +153,10 @@ im.squirt = 0;
 r = squareHit(1);
 check('squirt 0: all the spin, none of the kick', ball.spin < -1 && Math.abs(ball.vy) < 1e-6, `spin=${f2(ball.spin)} vy=${f2(ball.vy)}`);
 im.squirt = savedSq;
-E.sweep = 0;
+E.slip = 0;
 r = squareHit(1);
-check('sweep 0: english does nothing, a square hit is square', Math.abs(ball.spin) < 0.05);
-E.sweep = 28;
+check('slip 0: english does nothing, a square hit is square', Math.abs(ball.spin) < 0.05);
+E.slip = 44;
 
 // Glancing hits spin the ball from their own geometry, no english needed.
 still();
@@ -183,14 +183,14 @@ function fly(spin, seconds, airborne = false) {
 // shadows config.js), so the checks are about SHAPE — sign, symmetry,
 // linearity in the coefficient — not a number.
 const ccw = fly(8, 0.5);
-check('anticlockwise spin on a +x flight lifts it (w x v)', ccw.dy > 0.3, `dy=${f2(ccw.dy)} over dx=${f2(ccw.dx)} at magnus ${im.magnus}`);
+check('anticlockwise spin on a +x flight lifts it (w x v)', ccw.dy > 0.3, `dy=${f2(ccw.dy)} over dx=${f2(ccw.dx)} at curve ${im.curve}`);
 const cw = fly(-8, 0.5);
 check('clockwise bends it down by the same amount', cw.dy < -0.3 && Math.abs(cw.dy + ccw.dy) < 0.05, `dy=${f2(cw.dy)}`);
 {
-  const saved = im.magnus;
-  im.magnus = saved * 2;
+  const saved = im.curve;
+  im.curve = saved * 2;
   const twice = fly(8, 0.5);
-  im.magnus = saved;
+  im.curve = saved;
   check('twice the coefficient is (about) twice the curve', twice.dy / ccw.dy > 1.8 && twice.dy / ccw.dy < 2.2, `x${f2(twice.dy / ccw.dy)}`);
 }
 const none = fly(0, 0.5);
@@ -202,11 +202,11 @@ const expWater = 8 * Math.exp(-im.spinDecay * 0.5);
 check('water bleeds spin on impact.spinDecay', Math.abs(ccw.spin - expWater) < 0.1, `${f2(ccw.spin)} vs ${f2(expWater)}`);
 const expAir = 8 * Math.exp(-im.spinDecayAir * 0.5);
 check('air on impact.spinDecayAir', Math.abs(air.spin - expAir) < 0.1, `${f2(air.spin)} vs ${f2(expAir)}`);
-const savedMag = im.magnus;
-im.magnus = 0;
+const savedMag = im.curve;
+im.curve = 0;
 const flat = fly(8, 0.5);
 check('magnus 0 is a straight ball however it spins', Math.abs(flat.dy) < 1e-6);
-im.magnus = savedMag;
+im.curve = savedMag;
 
 // ---------------------------------------------------------------------------
 section('the walls: friction against the rock');
@@ -217,10 +217,10 @@ function drop(spin, vx = 0, vy = -30) {
   ball.vx = vx;
   ball.vy = vy;
   ball.spin = spin;
-  const saved = im.magnus;
-  im.magnus = 0;
+  const saved = im.curve;
+  im.curve = 0;
   for (let i = 0; i < 4; i++) stepBallAlone(dt);
-  im.magnus = saved;
+  im.curve = saved;
   return { vx: ball.vx, vy: ball.vy, spin: ball.spin };
 }
 const rollL = drop(10);
@@ -248,10 +248,10 @@ im.wallFriction = savedWmu;
   ball.vy = -30;
   ball.spin = w;
   const vx0 = ball.vx;
-  const savedM = im.magnus;
-  im.magnus = 0;
+  const savedM = im.curve;
+  im.curve = 0;
   for (let i = 0; i < 4; i++) stepBallAlone(dt);
-  im.magnus = savedM;
+  im.curve = savedM;
   const dvx = ball.vx - vx0 * Math.pow(B.drag, 4);
   check('a ball rolling true bounces with no sideways kick', Math.abs(dvx) < 0.3, `dvx=${f2(dvx)}`);
 }
