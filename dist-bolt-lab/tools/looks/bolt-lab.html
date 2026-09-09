@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Bolt lab — the chain lightning</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #04101a;
+        color: #dff0ff; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #stage { position: fixed; inset: 0; display: block; z-index: 1; }
+      #panel { position: fixed; left: 12px; top: 10px; z-index: 3; width: 300px;
+        background: rgba(4, 14, 24, 0.84); border: 1px solid rgba(160, 210, 255, 0.18);
+        border-radius: 8px; padding: 10px 12px; max-height: calc(100vh - 20px); overflow-y: auto; }
+      #panel h1 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+        margin: 0 0 8px; color: #ffe98a; font-weight: 600; }
+      #panel h2 { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+        margin: 12px 0 4px; color: #7fb8d8; font-weight: 600;
+        border-top: 1px solid rgba(160,210,255,.12); padding-top: 7px; }
+      .row { display: grid; grid-template-columns: 116px 1fr 46px; gap: 6px; align-items: center; margin: 2px 0; }
+      .row label { color: #b9d6ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row input[type=range] { width: 100%; }
+      .row output { color: #ffe08a; text-align: right; }
+      .btns { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+      button { background: #1d4763; color: #fff; border: 1px solid rgba(160,210,255,.3);
+        border-radius: 5px; padding: 4px 9px; font: inherit; cursor: pointer; }
+      button.on { background: #4f9ad0; }
+      #vals { white-space: pre; color: #ffe08a; margin-top: 8px; font-size: 11px; }
+      #note { color: #7fe6a0; margin-top: 6px; min-height: 1.5em; }
+      #hint { position: fixed; left: 336px; bottom: 10px; right: 10px; z-index: 3; color: #b9d6ee;
+        text-shadow: 0 1px 3px rgba(0,0,0,.55); pointer-events: none; }
+      #hint b { color: #fff; }
+      #ladderLabels div.lvl { position: fixed; z-index: 2; pointer-events: none;
+        transform: translateX(-50%); color: #9fdcff; letter-spacing: .12em;
+        text-transform: uppercase; font-size: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      .cap { position: fixed; z-index: 2; pointer-events: none; color: #9fdcff;
+        letter-spacing: .1em; text-transform: uppercase; font-size: 10px;
+        text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+    </style>
+    <!-- THE PANE SUSPENDS rAF. See splash-bust.html; `?raf=native` opts a real
+         browser back out. -->
+    <script>
+      if (!/[?&]raf=native/.test(location.search)) {
+        window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
+        window.cancelAnimationFrame = (id) => clearTimeout(id);
+      }
+    </script>
+    <script type="module" crossorigin src="../../assets/bolt-lab-duH5DJTb.js"></script>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="panel">
+      <h1>Bolt lab</h1>
+      <div class="btns">
+        <button id="bFire">fire (space)</button>
+        <button id="bAuto">auto</button>
+        <button id="bLadder">ladder 1→max</button>
+        <button id="bFreeze">freeze</button>
+        <button id="bSave">save (W)</button>
+        <button id="bReset">defaults</button>
+      </div>
+      <div id="sliders"></div>
+      <div id="vals"></div>
+      <div id="note"></div>
+    </div>
+    <div id="hint"><b>space</b> fire · <b>A</b> auto · <b>L</b> ladder · <b>F</b> freeze the frame · <b>W</b> save to tools/looks/bolt-lab.json · ladder draws one bolt per level so growth is a comparison, not a memory</div>
+  </body>
+</html>

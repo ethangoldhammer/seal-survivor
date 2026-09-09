@@ -1,0 +1,52 @@
+# Cloudflare Pages reads this file from the root of the deployed directory and
+# applies it to matching paths. It is copied there verbatim by Vite along with
+# everything else in public/, and Pages serves it as configuration rather than
+# as a file.
+#
+# WHY THIS EXISTS. Pages defaults every response to
+#
+#   cache-control: public, max-age=0, must-revalidate
+#
+# which means the browser makes a conditional request for every asset on every
+# single boot. For the sample bank that is 63 mp3s revalidated each time the
+# page loads, and until the ones a sound needs come back it plays its synth
+# fallback instead — see the long note above preloadSamples in
+# systems/audio.js. Parallelising the bank fixed the first-visit case; this is
+# what stops a returning player paying for it again on every load.
+
+# Vite content-hashes everything in here, so the filename changes whenever the
+# contents do. That makes `immutable` exactly true and the year safe: a new
+# build is a new URL and can never be masked by a cached old one.
+/assets/*
+  cache-control: public, max-age=31536000, immutable
+
+# The media directories are NOT content-hashed — the workbench's upload writes
+# public/sfx/<name>.mp3 in place, so the same URL genuinely can serve a
+# different sound after a deploy. That rules out `immutable`, which would leave
+# anyone who had already visited hearing the old sound for a year with no way
+# to clear it short of a hard refresh.
+#
+# So: a day of no network at all, then `stale-while-revalidate` — the file is
+# served instantly from cache while a fresh copy is fetched in the background,
+# and the new one is in place for the next load. A replaced asset reaches
+# returning players within a load or two, and a boot never waits on a
+# revalidation either way.
+/sfx/*
+  cache-control: public, max-age=86400, stale-while-revalidate=604800
+
+/music/*
+  cache-control: public, max-age=86400, stale-while-revalidate=604800
+
+/models/*
+  cache-control: public, max-age=86400, stale-while-revalidate=604800
+
+/textures/*
+  cache-control: public, max-age=86400, stale-while-revalidate=604800
+
+/sprites/*
+  cache-control: public, max-age=86400, stale-while-revalidate=604800
+
+# index.html is deliberately absent: it must stay on the default
+# revalidate-every-time policy, or a deploy would not reach anyone who had
+# loaded the game before. It is the one file that points at all the hashed
+# ones, so it is the only one that has to be checked.

@@ -35,3 +35,25 @@ accessoryRoundsName,Spectacles,,accessory drawer,"Round spectacles in thick wood
 accessoryAviatorsName,Aviators,,accessory drawer,"Gold-wire aviators with a green tint. Same tile, two words at most."
 accessoryWireFramesName,Cute Glasses,,accessory drawer,"Small round gold wire frames with near-black lenses. Same tile. Two or three words, and it has to be distinguishable from the aviators, which are also gold wire — the difference the player sees is round versus teardrop, and small versus wide."
 loadResuming,Resuming,,loading,
+<<<<<<< Updated upstream
+=======
+mainMenuButton,Main Menu,,pause menu,
+versusWinner,Champion!,,versus,"Centre-screen line under the winning score at the end of a two-player match, first to 5 goals. Two or three words at most, read for about three seconds while the water is frozen; the number above it says who won, so this only has to feel like a whistle."
+versusGo,Go!,,versus,"The whistle: the line that pops at centre screen when the kickoff countdown (3, 2, 1) reaches zero and the two seals are released to race for the ball. One or two words, read for about half a second, in the same big type as the numerals it follows. Play is already live under it."
+sealSports,Seal sports,TRUE,main menu,"The fifth hex on the main menu, and the heading of the panel it opens — a list of the other things a seal can play. Your words from chat, typed in by Claude: read once. Two short words, one per line in the hexagon."
+sportBall,Blubberball,TRUE,seal sports,"The name of the two-seal ball game (systems/versus.js) as a button in the Seal sports panel, and the heading of its team select. Your word from chat."
+sportFinball,Finball,TRUE,seal sports,"A stubbed sport in the Seal sports panel; the button is greyed and reads Coming soon under it. Your word from chat."
+sportSealitaire,Sealitaire,TRUE,seal sports,"A stubbed sport in the Seal sports panel; the button is greyed and reads Coming soon under it. Your word from chat."
+sportComingSoon,Coming soon,TRUE,seal sports,"The small line under a greyed sport that is not built yet. Your phrase from chat. Two words; it sits inside the button under the name."
+sealSportsBack,Back,TRUE,seal sports,"The way out of the Seal sports panel, same job as Back on the Leaderboard. One word."
+teamSelectHint,Select Team,,team select,"The one line of instruction under the Blubberball team select heading, read by everyone holding a pad: push left or right to join a side, A to ready up, B to leave. One sentence, and it has to fit one line on a phone held sideways."
+teamKeyboard,Keyboard,,team select,"The chip for the person on the keyboard and mouse on the team select. One word. It can only sit on the left side (that is player 1's seat)."
+teamPad,Gamepad,,team select,"The chip for a controller on the team select; its number (1, 2, 3, 4) is appended after it as a numeral. One short word."
+teamCpu,CPU,,team select,"The chip that fills a side nobody has joined: the computer plays that side. One to three letters or one word; sits in the captain's slot of an empty side."
+teamReady,Ready,,team select,"Stamped over a captain's chip once they have pressed A. One word, past tense, the kind of thing a fighting-game select says."
+teamLocked,Locked,,team select,"The three empty slots under each captain on the team select — four a side is coming and these are its shape. One or two words that say not yet without promising when."
+teamStart,Start,,team select,"The button at the foot of the team select once both sides have a ready captain. Also what a pad's Start button does. Two words."
+teamNoPads,Press a key/button.,,team select,"Shown in the middle of the team select when no controller has been seen yet; the browser only shows a pad after a button on it is pressed. One line telling the player to press a button on their pad."
+versusOverTitle,now what?,,versus,"Heading of the prompt after a Blubberball match ends (first to 5), over the frozen water under the winner's score. One or two words asking what next."
+versusRematch,Rematch,TRUE,versus,"The first button on that prompt: same sides, same colours, straight back to a kickoff. Your word from chat."
+>>>>>>> Stashed changes
