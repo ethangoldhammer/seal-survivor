@@ -618,6 +618,49 @@ function closeBucket(now) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// WHAT ONLY THE CALLER CAN KNOW, ON THE PATHS THAT HAVE NO CALLER
+//
+// `extra` below is how a run's frame times get into its record, and for a year
+// it worked on exactly one of the four ways a run can end. The death path builds
+// the record and passes it; 'quit', 'restart' and 'interrupted' passed nothing,
+// so 21 of the last 30 runs on disk carry no `perf` block at all — and those are
+// the TUNING runs, the ones cut short on purpose, which is to say the runs
+// somebody was actively trying to learn something from. A 476-second level-17
+// run went in with no frame times because it ended in a reload.
+//
+// 'interrupted' cannot be fixed by passing an argument, because it has no
+// caller: it fires from the pagehide handler at the bottom of this file, inside
+// this module, which has no renderer, no post pipeline and no business importing
+// one. That is what this hook is for — main.js leaves a function here at boot
+// and every ending reads it, including the one nobody calls.
+//
+// IT MUST NOT BE ABLE TO BREAK AN ENDING. It runs during page teardown on the
+// interrupted path, where anything may already be half gone, and a throw there
+// would lose the whole run record rather than just its frame times — which is
+// strictly worse than the gap it exists to close. So it is wrapped, and a
+// source that fails files the run without the extras and says so once.
+let extrasSource = null;
+
+/**
+ * Register what to file alongside a run when the caller does not pass it.
+ * Called once from main.js with a closure over the renderer; left null in every
+ * Node harness, which is what keeps this module loadable without a GL context.
+ */
+export function setRunExtras(fn) {
+  extrasSource = typeof fn === 'function' ? fn : null;
+}
+
+function runExtras() {
+  if (!extrasSource) return null;
+  try {
+    return extrasSource();
+  } catch (err) {
+    console.warn('[playtest] run extras failed —', err?.message ?? err);
+    return null;
+  }
+}
+
 /**
  * Finish and file the run. Returns it, so the caller can hand it straight to
  * the overlay. `reason` is 'death' | 'quit' | 'restart' | 'interrupted'.
@@ -651,7 +694,13 @@ export function endRun(reason = 'death', extra = null) {
   // It also makes the numbers READABLE without a browser: runs.jsonl is on
   // disk, so a frame-time report can be looked at from a terminal instead of
   // being trapped in a console someone has to be sitting in front of.
-  if (extra) Object.assign(run, extra);
+  //
+  // `extra` from the caller wins; otherwise the registered source is asked. The
+  // death path passes its own record explicitly and is unchanged by this — it
+  // was the one path that already worked, and the fallback exists for the three
+  // that did not.
+  const extras = extra ?? runExtras();
+  if (extras) Object.assign(run, extras);
   last = run;
   const finished = run;
   run = null;

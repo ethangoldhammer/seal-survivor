@@ -15,7 +15,9 @@ import { createClouds } from './systems/clouds.js';
 import { createRain, weatherState } from './systems/weather.js';
 import { createLightning } from './systems/lightning.js';
 import { createHorizonGlow } from './systems/horizon.js';
-import { createWallRocks, shoreOverscan } from './systems/wallRocks.js';
+import { createWallRocks } from './systems/wallRocks.js';
+import { cameraReach, tunnelDepth } from './systems/versusGoal.js';
+import { versusActive } from './systems/versusFlag.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
 import { mark as crashMark } from './systems/crashLog.js';
@@ -264,9 +266,27 @@ export function createWorld(container) {
     return m;
   }
 
+  /**
+   * How much further than a run the backdrop has to reach in a MATCH, per
+   * side: sideways into each goal's tunnel, and up and down for a frame that
+   * may zoom out below 1 to hold both seals (CONFIG.versus.camera.zoomMin) —
+   * at zoomMin the frame is 1/zoomMin of the arena tall, and the half of that
+   * past the arena's own height is what would otherwise be bare background.
+   */
+  function matchMargins() {
+    if (!versusActive()) return { side: 0, vertical: 0 };
+    const zoomMin = Math.max(0.1, Math.min(1, CONFIG.versus?.camera?.zoomMin ?? 1));
+    const arenaH = bounds.top - bounds.bottom;
+    return {
+      side: tunnelDepth() + 2,
+      vertical: Math.max(0, (arenaH / zoomMin - arenaH) / 2) + 2,
+    };
+  }
+
   function buildBackdrop() {
     disposeBackdrop();
-    const w = bounds.width * 1.2; // overscan so nothing pops at the edges
+    const margins = matchMargins();
+    const w = bounds.width * 1.2 + margins.side * 2; // overscan so nothing pops at the edges
     const airH = bounds.top - bounds.surfaceY;
     const seaH = bounds.surfaceY - bounds.bottom;
 
@@ -281,8 +301,9 @@ export function createWorld(container) {
     skyMat.uniforms.uCenter.value.set(0, sky.centerY);
     skyMat.uniforms.uSurfaceY.value = bounds.surfaceY;
     skyMat.uniforms.uAirH.value = sky.gradientAirH;
-    skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, sky.height), skyMat);
-    skyMesh.position.set(0, sky.centerY, -6);
+    // ...and taller in a match, for the frame's zoom-out (matchMargins).
+    skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, sky.height + margins.vertical), skyMat);
+    skyMesh.position.set(0, sky.centerY + margins.vertical / 2, -6);
     backdrop.add(skyMesh);
 
     // The fill runs WAVE_HEADROOM above the still-water line and its shader
@@ -337,7 +358,8 @@ export function createWorld(container) {
     // scene background under the seabed.
     // Two units deeper than the camera is ever allowed to go, so the bottom
     // edge of the frame lands on seabed rather than on the seam.
-    const skirt = FLOOR_OVERSCAN + 2;
+    // ...and deeper in a match, for the frame's zoom-out (matchMargins).
+    const skirt = FLOOR_OVERSCAN + 2 + margins.vertical;
     seabedMesh = plane(w, SEABED_HEIGHT + skirt, CONFIG.colors.seabed, bounds.bottom + SEABED_HEIGHT / 2 - skirt / 2, SEABED_Z);
     backdrop.add(seabedMesh);
 
@@ -742,7 +764,9 @@ export function createWorld(container) {
   // frame that could actually reach a little further is pop-in with extra
   // steps. One function, two readers, no chance of the two disagreeing.
   function sideOverscan() {
-    return shoreOverscan();
+    // The shore's cover in a run; in a match, the reach into the goal — see
+    // cameraReach in systems/versusGoal.js.
+    return cameraReach();
   }
 
   // Where a focus point is allowed to be: a half-frame in from each wall, less

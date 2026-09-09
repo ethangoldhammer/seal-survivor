@@ -2350,6 +2350,11 @@ export const CONFIG = {
       // the "animation has to finish before the input counts" feel. Short, but
       // never instant: the snap is exactly as ugly during a dash.
       turnAroundDashDuration: 0.12,
+      // THE JOLT'S SPRING — how a body thrown about by a shove (versus
+      // bodyCheck.jolt) rights itself: stiffness and damping of the tumble
+      // and the roll, per second. Underdamped, so a hit reads as a wobble
+      // that settles, not a snap.
+      jolt: { spring: 60, damping: 5.5, max: 2.6 },
       invulnAfterHit: 0.0,
 
       // ---------------------------------------------------------------------
@@ -18839,6 +18844,13 @@ export const CONFIG = {
       // channel rides the hit's strength (CONFIG.versus.ball.fx). The gap is
       // short because a scramble between two seals is several hits a second
       // and each one is a different splash — only the sound piles up.
+      // THE BALL THROUGH THE SURFACE, both ways — the seal's breach and
+      // re-entry, in the ball's colour and on the ball's own scale: the
+      // splash and the foam the seal makes, the same two voices pitched up,
+      // and a smaller shake. Strength is the vertical speed against the
+      // impact model's speedRef (systems/versus.js, stepBall).
+      versusBallBreach:  { emit: 'splash',  goo: 'ballGoo', shake: 0.08, hitstop: 0, glow: 0.25, ripple: { strength: 1.8, radius: 8 },  sfx: 'breach',  haptic: [8],  sfxMinGap: 0.2 },
+      versusBallReentry: { emit: 'reentry', goo: 'ballGoo', shake: 0.2,  hitstop: 0, glow: 0.45, ripple: { strength: 3.0, radius: 12 }, sfx: 'reentry', haptic: [14], sfxMinGap: 0.2 },
       versusBallHit: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.08, hitstop: 0, glow: 0.3, ripple: { strength: 1.4, radius: 7 }, sfx: 'versusBallHit',
                      haptic: [{ duration: 22, magnitude: 0.5 }], sfxMinGap: 0.05 },
       // THE BALL OFF A WALL, the floor or the ceiling — the same splash out of
@@ -20053,14 +20065,14 @@ export const CONFIG = {
           ball: {
             radius: 5.5,
             iso: 0.17,
-            soft: 0.16,
+            soft: 0.23,
             opacity: 1,
             additive: false,
             rim: -0.4,
-            rimWidth: 0.21,
-            spec: 2,
-            specPower: 22,
-            normal: 1.3,
+            rimWidth: 0.65,
+            spec: 1.8,
+            specPower: 20,
+            normal: 2,
 
             // THE WARP — one noise layer that feeds itself, sampled in screen
             // space and displacing where this pixel READS the density field.
@@ -20075,10 +20087,10 @@ export const CONFIG = {
             // Every other goo group leaves this absent, which the shader reads
             // as zero — the plain lookup it has always done.
             warp: {
-              amount: 1.580225173007154,   // texels of displacement at rest
+              amount: 1.3436637098003905,   // texels of displacement at rest
               scale: 7,      // noise cells across the screen
               speed: 0.86,    // how fast the field drifts
-              feed: 0,     // how hard the first sample bends the second
+              feed: 3,     // how hard the first sample bends the second
             },
             // Possession, written live by ballLook.js. White at mix 0 is the
             // ball's own colour untouched.
@@ -20093,13 +20105,13 @@ export const CONFIG = {
             // them off impact, speed, spin and charge (CONFIG.versus.ball
             // .outline), so what you set here is the calm the hits build on.
             outline: {
-              strength: 0.3,
-              width: 5.75,       // texels
-              soft: 1.36,      // texels of feather inside the line
-              color: 0x1a0f0a,
-              boilAmp: 8.5213925493996,   // texels, at rest
-              boilScale: 60,  // noise cells across the screen
-              boilHz: 19.421958039767656,      // re-seeds a second, at rest
+              strength: 0.36,
+              width: 1.75,       // texels
+              soft: 0.16,      // texels of feather inside the line
+              color: 0xffffff,
+              boilAmp: 1.107182487628926,   // texels, at rest
+              boilScale: 46,  // noise cells across the screen
+              boilHz: 10.937104603878442,      // re-seeds a second, at rest
               boilEdge: 0.25,  // share of the wobble the silhouette takes too
             },
           },
@@ -37445,6 +37457,15 @@ export const CONFIG = {
       lead: 0.22,         // seconds of ball velocity the centre looks ahead by
       lerp: 5,            // per-second rate the centre chases its goal
       zoomLerp: 3,        // ...and the zoom
+      // BOTH SEALS AND THE BALL, ALWAYS. The zoom may go UNDER 1 to hold the
+      // box — down to this — and the backdrop is built deep and tall enough
+      // in a match that the frame at zoomMin still lands on sky above and
+      // seabed below (world.js). 0.55 holds the whole 1.55-frame pitch.
+      zoomMin: 0.55,
+      // How far past each wall the frame may reach in a match — into the
+      // goal, so the line and a keeper in front of it are seen. Capped by
+      // the tunnel's depth; the ordinary run keeps the shore's own overscan.
+      reach: 12,
       // THE GOAL IN FRAME. With the ball inside `goalZone` units of a wall,
       // the box takes in that wall's mouth as well — its face and `mouthShow`
       // units of the tunnel behind it (no more than the camera may drift
@@ -37455,7 +37476,7 @@ export const CONFIG = {
       // seen against the goal it is about.
       goalZone: 24,
       goalZoneBlend: 8,
-      mouthShow: 4,
+      mouthShow: 10,      // ...to the goal line and a little past, at the shipped reach
     },
     ball: {
       radius: 2.8,        // world units — the seal is ~6 long nose to tail
@@ -37535,22 +37556,39 @@ export const CONFIG = {
       // `charge01` the winding-up seal's meter. A calm ball barely shimmers; a
       // struck one boils.
       outline: {
-        ampRest: 8,
-        ampByPulse: 5,
-        ampBySpeed: 2.2,
-        ampBySpin: 3.7,
+        ampRest: 0.2,
+        ampByPulse: 4.4,
+        ampBySpeed: 4.7,
+        ampBySpin: 1.4,
         ampByCharge: 1,
-        ampMax: 9,
-        hzRest: 18,
-        hzByPulse: 10,
-        hzBySpeed: 6,
-        hzMax: 24,
+        ampMax: 4.5,
+        hzRest: 8,
+        hzByPulse: 2.5,
+        hzBySpeed: 15.5,
+        hzMax: 16,
       },
       // WHERE IT IS HIT, AND HOW HARD. A ram square through the centre sends
       // the ball straight along the dash; a glancing one sends it more along
       // the contact normal and puts SPIN on it, and a fast one dents it
       // deeper and narrower and flattens the whole body for a moment. Every
       // number here is live in the ball lab (npm run looks:ball).
+      // WHAT THE BALL DOES TO EVERYTHING THAT IS NOT A SEAL — see ballHits in
+      // systems/versus.js. Boats are bounced off and damaged; fish are gone
+      // through, shoved and killed, and a kill drops chum through the run's
+      // own kill path. Everything is priced off how fast the ball was going,
+      // as a share of impact.speedRef below.
+      hit: {
+        enabled: true,
+        minSpeed: 8,      // slower than this the ball just drifts past
+        gap: 0.3,         // seconds before the same body can be hit again
+        fxGap: 0.12,      // ...and before the splash fires again
+        damage: 40,       // to a creature, at speedRef
+        power: 1.1,       // the shove, fed to applyKnockback (1 is a full ram)
+        drag: 0.994,       // share of the ball's speed spent per body gone through
+        boatDamage: 55,   // to a hull, at speedRef
+        boatPower: 1.2,   // the jostle, as a share of a full-charge ram
+        restitution: 0.85, // how much of the closing speed it leaves a hull with
+      },
       impact: {
         grip: 0.35,       // 0 = a frictionless ball (leaves along the normal); 1 = it takes the dash's line
         // SPIN IS FRICTION. The striker's flank slides across the ball's face
@@ -37564,7 +37602,7 @@ export const CONFIG = {
         // more than it deflects, which is the one the aim tutorial can teach).
         friction: 0.6,
         squirt: 0.5,
-        spinMax: 18,      // rad/s, the most the ball can be made to turn
+        spinCap: 28,      // rad/s, the most the ball can be made to turn (was spinMax 18)
         // The bleed, per second, exponential — viscous torque. Water is thick
         // and air is not, so a ball lofted out of the water keeps its spin
         // for the whole flight and skids on the way back in.
@@ -37573,8 +37611,12 @@ export const CONFIG = {
         // THE CURVE: a = magnus x spin x speed, at right angles to the flight
         // (F = S w x v). In water. Air is eight hundred times thinner, so the
         // same spin barely bends an airborne ball — `magnusAir` is its share.
-        magnus: 0.05,
-        magnusAir: 0.15,
+        // Renamed from magnus/magnusAir: the tuner's snapshot held 0.018,
+        // a curve nobody could see. `curve` at 0.09 with a spin cap of 28
+        // and full english hooks a shot by a third of its flight inside a
+        // second — exaggerated on purpose; it is the read.
+        curve: 0.09,
+        curveAir: 0.3,
         // The walls, the floor, the posts: the same friction, against rock.
         // The slip at the contact is the ball's tangential speed less its
         // surface speed (v_t - w r); the impulse that kills it splits 1 : 2.5
@@ -37593,6 +37635,9 @@ export const CONFIG = {
         recoil: 0.35,
         recoilMax: 40,    // u/s, the most a seal is thrown back
         stopDash: true,
+        spinMax: 18,
+        magnus: 0.05,
+        magnusAir: 0.15,
       },
       // ENGLISH — spin the player MEANT. The strike launches between the swim
       // and the aim (strike.aimBlend); the two disagreeing is the seal's body
@@ -37609,6 +37654,12 @@ export const CONFIG = {
       english: {
         enabled: true,
         deadzone: 0.2,
+        // u/s of slide across the face at full english (was `sweep` 28;
+        // renamed to drop the snapshot). Friction turns 2/7 of the slide into
+        // spin, so reaching the cap of 28 rad/s on a 2.8 ball takes ~110 of
+        // slide — this is the number that decides how much english a player
+        // CAN put on, and it is meant to be a lot.
+        slip: 110,
         sweep: 28,
       },
       // SPIN STROKES — the read. A spinning ball shows its spin as curved
@@ -37635,33 +37686,56 @@ export const CONFIG = {
       // rename drops the stale block from the snapshot on the next load.
       spinStrokes: {
         enabled: true,
-        count: 3,
+        count: 4,
         spinMin: 2.5,
-        spinFull: 14,
+        spinFull: 14.5,
         // Three strokes at arcMax fill three quarters of the circle: any
         // longer and they close into a ring, which reads as an outline and
         // not as motion.
-        arcMin: 0.3,
-        arcMax: 1.5,
-        travel: 1.35,
+        arcMin: 0.2,
+        arcMax: 3,
+        travel: 3.1,
         // The goo body draws about 1.75x the physics radius (the splats'
         // own width, tuned in the ball lab), so the strokes sit just clear of
         // the drawn edge, not the rigid circle's.
-        hug: 1.92,
-        lift: 0.12,
-        width: 0.9,
-        head: 0.22,
+        hug: 1.47,
+        lift: 0.11,
+        width: 0.57,
+        head: 0.72,
         tail: 0.55,
         // The tail lifts away from the ball by this share of the radius — a
         // comma, not an arc. The stroke is shed off the surface behind the
         // turn, which is the shape that says which way it is going.
-        flare: 0.22,
+        flare: 0.07,
         trimRate: 6,      // per second, how fast the arc chases its target length
         fadeIn: 0.12,
         fadeOut: 0.25,
         segments: 28,
-        color: 0xfff1b8,
+        color: 0xffffff,
         glow: 1.7,
+      },
+      // PINCHED against a wall or a post by a seal, the ball SQUEEZES. Two
+      // opposing contacts in one frame (a seal on one side, rock on the
+      // other) ramp `squeeze` toward `max` at `rate` per second; the
+      // collision radius shrinks by that share — against the rock AND the
+      // seal — so a ball caught in a gap narrower than itself gets through,
+      // and it SQUIRTS along the wall at `squirt` u/s on the side the seal
+      // is pushing toward. The body flattens along the pinch (`squash`, a
+      // share of the radius per unit of squeeze) so the look says what the
+      // hitbox is doing. Released at `release` per second once the pinch
+      // is off.
+      pinch: {
+        enabled: true,
+        max: 0.5,
+        rate: 5,
+        release: 6,
+        // A pinch HOLDS for this long after the two contacts last met: the
+        // moment the ball has squeezed small enough to clear the seal it
+        // stops touching it, and without a hold the squeeze let go and
+        // re-caught on alternate frames, never building.
+        hold: 0.15,
+        squash: 1.1,
+        squirt: 16,
       },
       soft: {
         points: 24,
@@ -37671,11 +37745,11 @@ export const CONFIG = {
         // wave runs at sqrt(couple) points per second, so 600 carries a dent
         // a quarter of the way round in a quarter second. Stepped at 240Hz
         // inside versus.js, which is what lets it be this stiff.
-        couple: 100,
+        couple: 1000,
         dentDepth: 0.64,  // share of the radius a full-power dash pushes in
         dentWidth: 0.4,   // radians, the gaussian's sigma around the contact
-        wallDent: 0.2,    // share of the radius a wall bounce dents, at maxSpeed
-        stretch: 0.26,    // share of the radius the ball elongates along its velocity at maxSpeed
+        wallDent: 0.94,    // share of the radius a wall bounce dents, at maxSpeed
+        stretch: 0.47,    // share of the radius the ball elongates along its velocity at maxSpeed
         maxDeform: 0.5,  // |rim offset| never exceeds this share of the radius
       },
       // EVERY HIT THE BALL TAKES fires goo out of the contact point, scaled
@@ -37699,12 +37773,12 @@ export const CONFIG = {
         bumpGap: 0.35,
       },
       look: {
-        color: 0xffd166,
-        glow: 0.45,        // multiplies the splat colour, as drivenColor would
+        color: 0xe6e3db,
+        glow: 1.4,        // multiplies the splat colour, as drivenColor would
         rimSize: 1.02,    // splat `size` for the 24 rim points
         innerSize: 1.12,   // ...for the inner ring
         coreSize: 2.56,    // ...for the centre splat
-        innerAt: 0.38,    // inner ring radius, as a share of the ball's
+        innerAt: 0.5,    // inner ring radius, as a share of the ball's
         inset: 0.88,      // rim ring radius, as a share — the splats' own width makes up the rest
 
         // --- WHAT THE BALL DOES TO ITSELF ---------------------------------
@@ -37736,7 +37810,7 @@ export const CONFIG = {
         // colour the goo is pulled — not all the way, because a ball that
         // becomes the team colour outright stops reading as a ball.
         tintMax: 0.55,
-        tintRate: 6,        // how fast it fades to a new owner, per second
+        tintRate: 4,        // how fast it fades to a new owner, per second
       },
     },
     // THE GOALS ARE HOLES IN THE ROCK — see systems/versusGoal.js for the
@@ -37746,21 +37820,121 @@ export const CONFIG = {
     // less the camera's overscan (shoreOverscan), measured off the built shore.
     goal: {
       halfHeight: 7,      // the mouth runs goalY ± this; the ball is 5.6 across
-      tunnel: 14,         // how deep the hole is cut past the wall — well past the screen's edge
-      keeperDepth: 2.5,   // how far past the wall a SEAL may swim into the mouth
+      // THE TUNNEL IS BUILT, not just cut: rock along both lips from the face
+      // to `tunnel` deep, and a back wall there, so a camera looking into the
+      // goal sees a cave in the cliff and not the bare background (the shore
+      // is one boulder deep; systems/wallRocks.js adds the block). The
+      // backdrop's water and seabed run into it too (world.js).
+      tunnel: 14,
+      // THE LINE. A goal is called when the ball's near side is `line` units
+      // past the drawn face — inside the tunnel, ON SCREEN (camera.reach is
+      // wider), so the ball is seen to cross it and a ball rattling short of
+      // it is still in play. It used to be the edge of the screen, which was
+      // whatever the shore's one boulder happened to cover.
+      line: 8,            // never nearer the back wall than the ball's own width (goalLineDepth)
+      // How far past the wall a SEAL may swim into the mouth: a keeper can
+      // stand in front of the line and shove the ball back out. Renamed from
+      // keeperDepth so a tuning snapshot holding the old 2.5 is dropped.
+      keeperReach: 7,
       // THE HOLE IS A LIGHT in the team's colour (left is team 0's, right
       // team 1's — `colors` below overrides): an additive quad behind the
-      // boulders with a soft elliptical falloff, no edge anywhere, overdriven
-      // by `glow` so the bloom takes it (the composite thresholds on
-      // luminance, and red needs more of this than green to bloom alike).
-      // `spill` is how far past the hole the light bleeds — into the water
-      // in front of the face and into the rock above and below — and
-      // `feather` the share of the quad's half-extent that is falloff (1 is
-      // a light that starts fading at its centre; 0.55 holds a bright core
-      // the size of the hole and fades over the spill).
+      // boulders, no edge anywhere, overdriven by `glow` so the bloom takes it
+      // (the composite thresholds on luminance, and red needs more of this
+      // than green to bloom alike).
+      //
+      // It is FLAT across the whole mouth and all the way down the corridor,
+      // and past the corridor by a whole camera reach — so pushed into the
+      // goal the frame never contains the end of it. The only falloff a camera
+      // can see is `spill`: how far past the mouth the light bleeds, out into
+      // the water in front of the face and up and down past the lips into the
+      // rock. `feather` is the share of that spill which fades (1 fades the
+      // whole of it; 0.55 holds for the first 45% and fades over the rest).
+      // Both are measured off the MOUTH, never off the quad, which is what
+      // lets the quad be lengthened without changing how any of it looks.
       glow: 3,
       spill: 6,
       feather: 0.55,
+      // THE CORRIDOR IS OPEN. The tunnel block used to slide any boulder that
+      // landed in the band at the far end onto a BACK WALL, so the goal
+      // dead-ended in rock — from the front a cave with a lid on it, and from
+      // a replay's angle the light shut away behind it. Nothing crosses the
+      // band now: it runs clear from the face to the back, and what closes it
+      // off is `backShade` of the team's colour on the light's own rectangle,
+      // with the same falloff and the glow blazing on top of it: solid through
+      // the band and down the corridor, faded to nothing by the time it
+      // reaches the water, so the pair cannot end in two different places and
+      // leave a step. `openBack: false` puts the rock cap back.
+      openBack: true,
+      backShade: 0.22,    // the corridor's far end, this share of the colour
+      // THE LIGHT IS BROKEN UP with procedural noise — three octaves of
+      // Perlin over WORLD units (so it does not stretch with the quad),
+      // drifting and evolving on the wall clock. `amount` is how far the
+      // noise may pull the light down (0 is the smooth ellipse, 1 lets a
+      // trough go to black); `scale` is world units per feature; `speed` is
+      // how fast the pattern churns in place, `driftX/Y` how fast it slides,
+      // in units per second; `contrast` sharpens the pattern above 1 and
+      // softens it below. Live in the F panel (refreshGoalGlow).
+      noise: {
+        enabled: true,
+        amount: 0.55,
+        scale: 6,
+        speed: 0.35,
+        driftX: 0.6,
+        driftY: 0.25,
+        contrast: 1.4,
+      },
+      // THE SCORE'S OWN COLOUR. A goal is put into the mouth lit in the
+      // CONCEDING team's colour, and for a beat after the ball crosses the
+      // line that light belongs to whoever put it there: the mouth takes the
+      // scorer's colour, blazes at `glow` times its usual overdrive, holds,
+      // and hands the colour back. On the WALL clock (tickGoalGlow), so the
+      // whole envelope runs through the shutter's freeze and the replay
+      // rather than stalling with the water. `enabled: false` leaves each
+      // mouth its own team's colour, as it was.
+      scored: {
+        enabled: true,
+        rise: 0.08,       // wall seconds to take the colour over
+        hold: 1.7,        // ...to hold it
+        fall: 1.2,        // ...and to hand it back
+        glow: 1.9,        // the overdrive at the peak, times goal.glow
+        backShade: 1.5,   // ...and the corridor's far end swells by this
+      },
+      // THE SEALS STIR THE NOISE. The field that breaks the light up is in
+      // WORLD units, which means a seal swimming through the mouth is
+      // somewhere in it — so it gets to push it about. Two things, and they
+      // are different things:
+      //
+      // A DISTORTION, continuous, wherever a seal is: the sample point is
+      // shoved `push` units away from the seal, turned by `swirl` radians as
+      // it goes (a wake curls rather than bulging), smeared by the seal's own
+      // velocity at `drag` units per unit/s, and slid `churn` along the
+      // field's third axis — so the pattern under a moving seal is boiling
+      // while the pattern either side of it is not. All of it inside `reach`
+      // and squared, so a seal at the far post barely touches the light.
+      //
+      // An IMPULSE, discrete: a seal crossing `burst` units/s within `range`
+      // of a mouth throws a RING into the field at its own position, which
+      // travels out at `ringSpeed`, is `ringWidth` thick, shoves the field
+      // `ringPush` as it passes and brightens it by `ringLight`, and is gone
+      // in `ringLife`. `cooldown` is how long that seal waits before it may
+      // throw another. Four rings live at once; a fifth replaces the oldest.
+      swim: {
+        enabled: true,
+        reach: 28,
+        push: 3.4,
+        swirl: 1.2,
+        drag: 0.05,
+        churn: 1.8,
+        burst: 46,
+        cooldown: 0.3,
+        range: 46,
+        strength: 1,
+        ringSpeed: 30,
+        ringLife: 1.2,
+        ringWidth: 5,
+        ringPush: 5,
+        ringLight: 0.5,
+      },
       holes: true,        // false: solid walls, no mouths (the seals stop at the wall as before)
       // NULL MEANS "ASK THE TEAM", which is what it should almost always say.
       // Left, then right — P1's then P2's. Setting them here overrides the team
@@ -37808,6 +37982,14 @@ export const CONFIG = {
       tick: 0.8,          // wall seconds per numeral
       goHold: 0.6,        // the whistle's line stays this long, over live play
       inset: 0.16,        // seals start this share of the pitch width in from their own wall
+      // THE RECENTRE BEFORE THE COUNT — see versusState.settled. The frame
+      // comes back from the goal it was punched into first, and only then
+      // does "3" go up. `settle: false` starts the count on the frame the
+      // kickoff is called, which is how it used to read.
+      settle: true,
+      settleMax: 1.6,     // wall seconds the recentre may take before the count starts anyway
+      settleTol: 1.5,     // world units the shot may still be short of its frame
+      settleZoomTol: 0.03, // ...and the share of the zoom it may still be off by
       bait: {
         perSide: 2,       // bait balls between each seal and the ball
         maxAlive: 8,      // no more dropped while this many balls are already in the water
@@ -37830,6 +38012,116 @@ export const CONFIG = {
       fly: 1.45,          // the big number leaves for the HUD (after play has resumed)
       flyTime: 0.6,
       wonHold: 3.5,       // the end state holds this long, then the rematch prompt comes up
+    },
+    // THE INSTANT REPLAY — the shot that scored, played back slow after the
+    // goal's freeze. Three beats: the wind-up, framed on the ball and the
+    // seal about to hit it (from `lead` recorded seconds before the last
+    // touch, staying on both for `impactHold` after it); the flight, framed
+    // on the ball alone until it crosses the line; and the explosion, framed
+    // on the mouth for `explode` wall seconds — the goal's jet is fired HERE
+    // rather than at the live goal, so the bang lands where the eye is.
+    // Played at `speed` x real time, raised (never past 1) until the whole
+    // thing fits in `maxWall` seconds, so a long cross-pitch shot does not
+    // become a minute of slow motion. The world stays frozen under it and
+    // the goal's own shutter resumes where it left off when the replay ends.
+    // HOLD ANY BUTTON for `skipSeconds` to skip — a hold, not a press,
+    // so a button still down from the shot cannot skip it by accident.
+    // `buffer` is how many seconds of play are remembered; a touch older
+    // than that has no replay.
+    replay: {
+      enabled: true,
+      onlyWinner: false,  // true: only the goal that wins the match is replayed
+      lead: 0.9,
+      impactHold: 0.2,
+      speed: 0.45,
+      maxWall: 5,
+      explode: 1.3,
+      // HOW LONG THE HOLD IS. Longer than it was: the bar under the prompt is
+      // the whole readout, and at 0.45s it filled and fired before the eye had
+      // found it. The hold does not start counting until every button has been
+      // released once — see updateReplay — so this is a deliberate second of
+      // holding, not the tail of the press that scored.
+      //
+      // Renamed from `skipHold` so a tuning snapshot holding the old 0.45 is
+      // dropped rather than quietly shadowing this — the same reason
+      // goal.keeperReach was renamed from keeperDepth.
+      skipSeconds: 1,
+      buffer: 8,
+      // TWO SHOTS. The IMPACT: a hard cut to a frame as tight as `zoom`
+      // allows on the ball and the seal about to hit it, tracking both
+      // through the collision (the camera chases at `lerp`/`zoomLerp` inside
+      // the shot). Then the WIDE: from `impactHold` after the touch, the
+      // frame opens out — a blend at its own slower rates, or a cut — to hold
+      // the mouth the ball is heading for, the ball and the scorer, and stays
+      // on that through the flight, the explosion and the celebration.
+      // `zoom` is each shot's ceiling; the box (subjects + `pad`) decides the
+      // rest, so a long shot is a wider frame than a tap-in.
+      impact: { pad: 2.2, zoom: 4.5, cut: true, lerp: 9, zoomLerp: 7 },
+      wide: { pad: 6, zoom: 1.6, cut: false, lerp: 2.2, zoomLerp: 1.8 },
+      celebrate: true,    // the scorer's victory pose again, on the explosion beat
+      // THE CAMERA POOL — see systems/replayCams.js. On, the replay is filmed
+      // by these perspective shots instead of the flat frame above (which
+      // stays as the fallback, and as what the camera comes back to). Each
+      // shot: its targets and their weights, where it sits round them (yaw
+      // toward the goal the ball is heading for, pitch above, distance), its
+      // lens (fov, a slow push-in toward `push` over pushTime, the defocus's
+      // sharp region round the primary target), which beats it may serve,
+      // and how long it may hold. The director scores them all every frame
+      // and cuts or blends to the best angle on the action.
+      cams: {
+        enabled: true,
+        noseLength: 2.2,    // world units from a seal's centre to its face, for the face targets
+        // NO SEAMS: the shore is a carved mesh and the goal a tunnel, and both
+        // show their inner faces from any angle but square-on. A shot's yaw
+        // and pitch flatten to nothing (pitch to `pitchAtWall` of itself) as
+        // its look-at closes from `nearWall` to `nearWallMin` units of a
+        // wall; and the frame is slid off the wall each frame so its edge on
+        // the action's plane reaches no more than `pastFace` past a goal's
+        // face (or past the sand or the top of the water) — the fov is only
+        // capped, never below `fovMin`, when the frame is wider than the
+        // pitch. See systems/replayCams.js.
+        wallInset: 1,       // the camera stays this far inside the walls (the rock is beyond them)...
+        floorInset: 2,      // ...and above the sand
+        nearWall: 26,
+        nearWallMin: 8,
+        pitchAtWall: 0.25,
+        pastFace: 2.5,
+        fovMin: 12,
+        lens: { defocus: 0.55, focusRadius: 0.22, focusFeather: 0.35, flare: 0, vignette: 0.25 },
+        pool: {
+          margin: 0.35,     // a shot keeps the frame while within this of the best
+          offBeat: 3,       // the cost of a shot outside its beats
+          fatigue: 0.6,     // per second past hold max
+          cooldown: 3,      // seconds before a shot just left is fresh again
+          recentPenalty: 1,
+          cutAngle: 25,     // degrees of yaw/pitch difference that makes a switch a cut
+          cutDistance: 25,  // ...or of distance
+          blend: 0.45,      // seconds a blend takes
+          edgePenalty: 2,   // per weighted target out of frame
+          lensFade: 0.4,    // seconds the defocus eases in after a switch
+        },
+        shots: [
+          { name: 'impactLow', beats: ['impact'], targets: { ball: 1, striker: 0.9 },
+            yaw: 35, pitch: -18, distance: 16, fov: 42, push: 34, pushTime: 2.5, hold: [0.5, 2.5],
+            lens: { defocus: 0.5, focusRadius: 0.3, focusFeather: 0.35 } },
+          { name: 'strikerFace', beats: ['impact'], targets: { strikerFace: 1, ball: 0.25 },
+            yaw: 40, pitch: 6, distance: 9, fov: 36, push: 26, pushTime: 2.2, hold: [0.6, 1.6], priority: 0.3,
+            lens: { defocus: 0.75, focusRadius: 0.16, focusFeather: 0.3 } },
+          { name: 'impactHigh', beats: ['impact'], targets: { ball: 1, striker: 0.8, impact: 0.4 },
+            yaw: -20, pitch: 30, distance: 22, fov: 40, push: 36, pushTime: 3, hold: [0.5, 2] },
+          { name: 'ballChase', beats: ['wide'], targets: { ball: 1, mouth: 0.6 },
+            yaw: -45, pitch: 8, distance: 26, dolly: -2, fov: 48, push: 42, pushTime: 4, hold: [0.6, 3] },
+          // The mouth shots look at the hole square: the angle is in the pitch
+          // and the push, and the walls' rule flattens even that as it closes.
+          { name: 'goalWide', beats: ['wide', 'explosion'], targets: { mouth: 1, ball: 0.9, scorer: 0.5 },
+            yaw: -8, pitch: 6, distance: 55, fov: 44, push: 40, pushTime: 5, hold: [0.8, 4] },
+          { name: 'mouthLow', beats: ['explosion'], targets: { mouth: 1, ball: 0.4 },
+            yaw: -10, pitch: -6, distance: 22, fov: 42, push: 34, pushTime: 2, hold: [0.6, 2.5], priority: 0.2 },
+          { name: 'scorerFace', beats: ['explosion'], targets: { scorerFace: 1, mouth: 0.15 },
+            yaw: 35, pitch: 4, distance: 8, fov: 34, push: 24, pushTime: 2.5, hold: [0.7, 2.5], priority: 0.4,
+            lens: { defocus: 0.8, focusRadius: 0.15, focusFeather: 0.3 } },
+        ],
+      },
     },
     // Food. The ordinary spawner is off; docile bait balls are dropped on this
     // clock instead, and the boats sail unarmed.
@@ -37859,6 +38151,25 @@ export const CONFIG = {
       carry: 0.4,         // share of the striker's closing speed added on
       both: 0.6,          // each side's shove when both were dashing
       breakDash: true,
+      // WHO WINS decides who is moved. The ball's contest, run between the
+      // seals: each one's speed toward the other times its mass (1 swimming,
+      // ball.contest.dashMass dashing). The loser takes the whole shove; the
+      // winner takes `winnerShare` of it as recoil. Both are delivered as
+      // `velShare` of REAL velocity — which gravity acts on, so a seal
+      // knocked over the surface goes up and comes down — and the rest as
+      // the decaying position offset every shove in the game uses.
+      velShare: 0.55,
+      winnerShare: 0.3,
+      // ...AND IT FALLS HARD. For `heavyFor` seconds after a knock the seal's
+      // gravity is `fallMul` x the arena's while it is out of the water.
+      fallMul: 2.4,
+      heavyFor: 1.4,
+      // THE JOLT — the skeleton thrown about. A rotation impulse on the
+      // body, in the screen plane (`spin`, a tumble) and about the seal's
+      // own spine (`roll`), in radians per second per u/s of shove, brought
+      // back to true by a spring (CONFIG.player.jolt). The loser gets the
+      // full impulse, the winner `winnerShare` of it.
+      jolt: { spin: 0.09, roll: 0.14 },
       // How the event scales: `scale` on the feedback runs from scaleMin at a
       // limp tap to scaleMax at a full shove into a seal closing head-on.
       scaleMin: 0.5,
@@ -37881,7 +38192,20 @@ export const CONFIG = {
     // THE BOT — player 2 when no second pad is held. See systems/versusBot.js.
     bot: {
       enabled: 'auto',    // true: always the bot; false: never; 'auto': when no pad is on P2
-      mode: 'auto',       // 'scripted' | 'policy' | 'auto' (the trained policy if versusPolicy.json has one)
+      // WHICH BRAIN. 'scripted' | 'policy' | 'auto' (the trained policy when
+      // versusPolicy.json has one, else the script).
+      //
+      // THE SCRIPT, and it is not close. Over 200 loose balls dropped in the
+      // bot's own half (tools/versus-test.mjs), the script clears 132 of them
+      // upfield and leaves 68 rattling around; the shipped policy clears 57
+      // and leaves 143. It was also the only one of the two that ever put the
+      // ball in its own net — see vetoOwnGoal, which now stops both.
+      //
+      // Renamed from `mode` so the saved snapshot's 'auto' is dropped rather
+      // than shadowing this: the tuner writes whole sections, so that value
+      // was pinned in imported-tuning.json and a default here could not be
+      // seen. Set `brain: 'policy'` to drive the trained file again.
+      brain: 'scripted',
       reaction: 0.12,     // seconds between decisions
       lead: 0.35,         // seconds of ball velocity it aims ahead by
       standoff: 4.5,      // how far behind the ball it stands
@@ -37894,7 +38218,26 @@ export const CONFIG = {
       cooldown: 0.5,      // seconds after a strike before the next
       chumBelow: 0.35,    // meter below which it goes to eat
       chumReach: 40,      // how far it will swim for a mouthful
-      policyStrikeAt: 0.5, // the policy's strike output counts as held above this
+      // The policy's strike output counts as held above this. 0.35, not the
+      // 0.5 a calibrated probability would suggest: the logged player taps
+      // the dash constantly (a hold is three ticks at the median, half a
+      // start a second), and against the geometry a bot actually meets the
+      // output sits lower than it does on his own rows. Measured over
+      // five-minute matches (tools/versus-bot-test.mjs): 0.5 strikes once a
+      // minute and 0.35 once every five seconds, which is the closer copy.
+      policyStrikeAt: 0.35,
+      policyStickAt: 0.3,  // ...and its stick is a full push above this length, still below it (see policyStep)
+      // THE OWN-GOAL VETO — see vetoOwnGoal in systems/versusBot.js. The bot
+      // may never put the ball in the mouth it defends, and that is enforced
+      // on the INPUT, after whichever brain filled it: the script's alignment
+      // test reads the frame it decides on and the release comes tenths of a
+      // second later, and the policy has no notion of a goal at all.
+      ownGoalVeto: true,
+      vetoRange: 14,      // only within this of the ball; further out there is nothing to push
+      vetoOnward: 0.15,   // the shove must lean this much toward its own wall to count
+      vetoMargin: 2,      // world units added to the mouth's band and the ball's width
+      vetoBallSpeed: 4,   // below this the ball's own direction means nothing
+      vetoCooldown: 0.25, // seconds before it may wind up again after one
     },
     // WHAT A PLAYER DOES, ROW BY ROW — see systems/imitation.js.
     imitation: {
@@ -44019,8 +44362,58 @@ export const TUNER_SCHEMA = [
       { path: 'versus.goal.feather', min: 0.05, max: 1, step: 0.05, label: 'soft edge (share of the light)' },
       { path: 'versus.goal.halfHeight', min: 3, max: 14, step: 0.5, label: 'mouth half height' },
       { path: 'versus.goal.tunnel', min: 6, max: 24, step: 0.5, label: 'tunnel depth' },
+      { path: 'versus.goal.noise.enabled', type: 'bool', label: 'break the light up with noise' },
+      { path: 'versus.goal.noise.amount', min: 0, max: 1, step: 0.02, label: 'noise: how deep it cuts' },
+      { path: 'versus.goal.noise.scale', min: 1, max: 30, step: 0.5, label: 'noise: feature size (units)' },
+      { path: 'versus.goal.noise.speed', min: 0, max: 3, step: 0.05, label: 'noise: churn (per s)' },
+      { path: 'versus.goal.noise.driftX', min: -6, max: 6, step: 0.1, label: 'noise: drift x (units/s)' },
+      { path: 'versus.goal.noise.driftY', min: -6, max: 6, step: 0.1, label: 'noise: drift y (units/s)' },
+      { path: 'versus.goal.noise.contrast', min: 0.3, max: 4, step: 0.05, label: 'noise: contrast' },
+      { path: 'versus.goal.scored.enabled', type: 'bool', label: 'a goal turns the mouth the scorer\'s colour' },
+      { path: 'versus.goal.scored.rise', min: 0, max: 1, step: 0.01, label: 'scored: take the colour over (s)' },
+      { path: 'versus.goal.scored.hold', min: 0, max: 5, step: 0.1, label: 'scored: hold it (s)' },
+      { path: 'versus.goal.scored.fall', min: 0, max: 5, step: 0.1, label: 'scored: hand it back over (s)' },
+      { path: 'versus.goal.scored.glow', min: 1, max: 4, step: 0.05, label: 'scored: overdrive at the peak (x)' },
+      { path: 'versus.goal.scored.backShade', min: 1, max: 4, step: 0.05, label: 'scored: the corridor\'s end too (x)' },
+      { path: 'versus.goal.swim.enabled', type: 'bool', label: 'the seals stir the noise' },
+      { path: 'versus.goal.swim.reach', min: 0, max: 60, step: 1, label: 'swim: how far a seal reaches (units)' },
+      { path: 'versus.goal.swim.push', min: 0, max: 12, step: 0.1, label: 'swim: shove away from the seal (units)' },
+      { path: 'versus.goal.swim.swirl', min: -3, max: 3, step: 0.05, label: 'swim: turn on that shove (rad)' },
+      { path: 'versus.goal.swim.drag', min: 0, max: 0.4, step: 0.005, label: 'swim: smear along the seal\'s velocity' },
+      { path: 'versus.goal.swim.churn', min: 0, max: 8, step: 0.1, label: 'swim: boil under a moving seal' },
+      { path: 'versus.goal.swim.burst', min: 10, max: 120, step: 1, label: 'burst: speed that throws a ring (u/s)' },
+      { path: 'versus.goal.swim.cooldown', min: 0, max: 2, step: 0.05, label: 'burst: wait between rings (s)' },
+      { path: 'versus.goal.swim.range', min: 0, max: 120, step: 1, label: 'burst: how near the face to bother (units)' },
+      { path: 'versus.goal.swim.strength', min: 0, max: 3, step: 0.05, label: 'burst: strength' },
+      { path: 'versus.goal.swim.ringSpeed', min: 0, max: 90, step: 1, label: 'burst: ring travels (u/s)' },
+      { path: 'versus.goal.swim.ringLife', min: 0.1, max: 4, step: 0.05, label: 'burst: ring lives (s)' },
+      { path: 'versus.goal.swim.ringWidth', min: 0.5, max: 20, step: 0.5, label: 'burst: ring thickness (units)' },
+      { path: 'versus.goal.swim.ringPush', min: 0, max: 20, step: 0.5, label: 'burst: shove as it passes (units)' },
+      { path: 'versus.goal.swim.ringLight', min: 0, max: 2, step: 0.05, label: 'burst: brightens as it passes' },
       { path: 'versus.teams.0.color', type: 'color', label: 'left goal / team 1' },
       { path: 'versus.teams.1.color', type: 'color', label: 'right goal / team 2' },
+    ],
+  },
+  {
+    // THE BALL'S SPIN — the curve a shot takes and the english a player can
+    // put on it. Gameplay numbers, in the tuner at Ethan's ask: they are
+    // felt, not measured, and the ball lab (npm run looks:ball) has the same
+    // rows. Read live by systems/versus.js every frame; nothing to rebuild.
+    // Only matters in a ball-game match (Seal sports).
+    group: 'Ball spin',
+    section: 'Gameplay',
+    items: [
+      { path: 'versus.ball.impact.curve', min: 0, max: 0.3, step: 0.005, label: 'curve: sideways pull per rad/s x u/s, in water' },
+      { path: 'versus.ball.impact.curveAir', min: 0, max: 1, step: 0.02, label: 'curve in the air (share of the water\'s)' },
+      { path: 'versus.ball.impact.spinCap', min: 4, max: 60, step: 1, label: 'spin cap (rad/s)' },
+      { path: 'versus.ball.impact.spinDecay', min: 0, max: 4, step: 0.05, label: 'spin bleeds off per second, in water' },
+      { path: 'versus.ball.impact.spinDecayAir', min: 0, max: 2, step: 0.02, label: '...and in the air' },
+      { path: 'versus.ball.impact.friction', min: 0, max: 2, step: 0.02, label: 'friction: how much of a glance becomes spin' },
+      { path: 'versus.ball.impact.squirt', min: 0, max: 1, step: 0.02, label: 'squirt: sideways kick with the spin (1 = the physics)' },
+      { path: 'versus.ball.impact.grip', min: 0, max: 1, step: 0.02, label: 'grip: 0 leaves along the normal, 1 takes the dash\'s line' },
+      { path: 'versus.ball.english.enabled', type: 'bool', label: 'english (swim across the aim to spin it)' },
+      { path: 'versus.ball.english.slip', min: 0, max: 200, step: 2, label: 'english: slide across the face at full (u/s)' },
+      { path: 'versus.ball.english.deadzone', min: 0, max: 0.8, step: 0.02, label: 'english: how far the sticks must disagree' },
     ],
   },
   {

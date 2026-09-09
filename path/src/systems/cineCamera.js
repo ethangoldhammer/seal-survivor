@@ -92,6 +92,7 @@ const BLEND_KEYS = [
 // other's internals.
 export const cineLens = {
   active: false,
+  forced: false, // a replay's camera pool has the lens, cinecam.enabled or not (systems/versus.js)
   focusX: 0.5,   // where the sharp region is centred, in uv
   focusY: 0.5,
   defocus: 0,

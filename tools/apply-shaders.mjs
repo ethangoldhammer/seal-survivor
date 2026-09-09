@@ -250,6 +250,11 @@ function fieldLiteral(key, v) {
   // as a change on every run — `pattern: 'spots' -> "spots"` — which is noise
   // in a report whose whole job is to say what actually moved.
   if (typeof v === 'string') return `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  // A LIST OF SCALARS, one line — `beats: ['wide', 'explosion']`, `hold: [0.6, 2.2]`.
+  // String(v) on an array renders `wide,explosion`, which is a syntax error in
+  // the file rather than a wrong value, so this had to be spelled out before
+  // anything could write one.
+  if (Array.isArray(v)) return `[${v.map((one) => fieldLiteral(key, one)).join(', ')}]`;
   return String(v);
 }
 
@@ -446,6 +451,18 @@ function presetBlock(masked, root, name, limit) {
 // Every `key: value` in one block, as key -> [valueStart, valueEnd). Fields
 // share lines here (`pulseAmp: 0, flickerAmp: 0, flow: 0,` is one line in
 // `hide`), so this is offset work rather than line work.
+/** One past the `}`/`]` that closes the value opening at `start`. */
+function closeOf(masked, start, limit) {
+  const open = masked[start];
+  const shut = open === '{' ? '}' : ']';
+  let depth = 0;
+  for (let i = start; i < limit; i++) {
+    if (masked[i] === open) depth++;
+    else if (masked[i] === shut) { depth--; if (!depth) return i + 1; }
+  }
+  return limit;                             // unbalanced: stop scanning
+}
+
 function fieldSpans(masked, [open, close]) {
   const spans = new Map();
   const re = /(^|[\s,{])([A-Za-z_$][\w$]*)\s*:\s*/g;
@@ -453,7 +470,29 @@ function fieldSpans(masked, [open, close]) {
   let m;
   while ((m = re.exec(masked)) && m.index < close) {
     const start = m.index + m[0].length;
-    if (masked[start] === '{' || masked[start] === '[') continue;   // nested: not ours
+    if (masked[start] === '{' || masked[start] === '[') {
+      // NESTED, AND THE SCAN HAS TO JUMP THE WHOLE THING. `continue` alone only
+      // skipped the nested key: the loop walked straight on into that block's
+      // own fields and recorded them under their BARE names. The Map keeps the
+      // last write, so a leaf sharing a name with a direct field resolved to
+      // the nested line — `fx.goo.groups.ball.soft` found `outline.soft` and
+      // the splice wrote 0.23 over the outline's 1.3 while the field it was
+      // asked to set stayed where it was. Silent, and plausible in the diff.
+      const end = closeOf(masked, start, close);
+      // ...UNLESS IT IS A FLAT LIST, which is a field and not a block —
+      // `hold: [0.6, 2.2]`, `beats: ['wide', 'explosion']`. Jumping those made
+      // them invisible to the splice, so writing one took the addition path
+      // and config.js came back with the key declared TWICE in the same
+      // object. Last-wins meant it even worked, which is how it would have
+      // stayed. A list holding a block of its own (the camera pool's `shots`)
+      // is still jumped: its elements' fields must not be recorded under their
+      // bare names, and locateBlock is what walks into those.
+      if (masked[start] === '[' && !/[[{]/.test(masked.slice(start + 1, end - 1))) {
+        spans.set(m[2], [start, end]);
+      }
+      re.lastIndex = end;
+      continue;
+    }
     let end = start;
     while (end < close && masked[end] !== ',' && masked[end] !== '\n' && masked[end] !== '}') end++;
     // BACK OFF THE TRAILING WHITESPACE, and this is not tidiness — it is what

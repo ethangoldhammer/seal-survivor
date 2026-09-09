@@ -25,11 +25,11 @@ import { strikeState, resetStrike } from '../path/src/systems/strike.js';
 import { initParticles } from '../path/src/entities/particles.js';
 import { spawnXpOrb, resetPickups } from '../path/src/entities/pickups.js';
 import {
-  versusState, ball, p2, startVersus, updateVersus, updateVersusClock, resetBall,
+  versusState, ball, p2, startVersus, updateVersus, updateVersusClock, resetBall, resetVersus, rematch,
 } from '../path/src/systems/versus.js';
 import { botState, botWanted, setBotPolicy, botPolicy } from '../path/src/systems/versusBot.js';
 import {
-  features, actions, recordImitation, imitationState, resetImitation, N_FEATURES, N_ACTIONS, policyUsable,
+  features, actions, recordImitation, imitationState, resetImitation, N_FEATURES, N_ACTIONS, policyUsable, policyAction,
 } from '../path/src/systems/imitation.js';
 import { train, evaluate, clearsFloors } from './imitate-train.mjs';
 
@@ -75,8 +75,8 @@ initParticles(scene);
 resetPlayer();
 resetStrike();
 const B = CONFIG.versus.bot;
-const savedMode = B.mode;
-B.mode = 'scripted';
+const savedMode = B.brain;
+B.brain = 'scripted';
 CONFIG.celebrate.enabled = false;
 
 // ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ section('The script plays, the trainer learns it, the policy plays it back');
 
   // Now the policy drives player 2.
   setBotPolicy(model);
-  B.mode = 'policy';
+  B.brain = 'policy';
   resetBall();
   versusState.phase = 'play';
   p2.pos.set(bounds.right - 12, midWater() - 10, 0);
@@ -242,8 +242,69 @@ section('The script plays, the trainer learns it, the policy plays it back');
   }
   check('the learned seal swims', moved > 5, `top speed ${moved.toFixed(1)}`);
   check('...toward the ball, like the script it watched', closest < d0 * 0.6, `${d0.toFixed(1)} → ${closest.toFixed(1)}`);
-  B.mode = savedMode;
+  B.brain = savedMode;
   setBotPolicy(botPolicy());
+}
+
+// ---------------------------------------------------------------------------
+section('A masked input is invisible to the policy, in the game and in the trainer alike');
+{
+  // The trainer zeroes the masked columns in the data and writes their names
+  // into the model; policyAction zeroes the same ones before the forward
+  // pass. If either side forgot, the network would be answering a `pending`
+  // it was never trained on, or trained on one it never sees.
+  // Four hundred made-up rows: what they say does not matter, only that a
+  // model comes out with the mask written into it.
+  let seed = 11;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 * 2 - 1; };
+  const fake = Array.from({ length: 400 }, () => Array.from({ length: N_FEATURES + N_ACTIONS }, (_, i) => (i === N_FEATURES + 4 ? (rnd() > 0 ? 1 : 0) : rnd())));
+  const { model } = train(fake, { epochs: 2, hidden: 8, seed: 1, mask: ['pending', 'charge'] });
+  check('the model carries its mask', JSON.stringify(model.mask) === JSON.stringify(['pending', 'charge']), JSON.stringify(model.mask));
+  const a = new Float32Array(N_FEATURES).fill(0.3);
+  const b = Float32Array.from(a);
+  b[6] = 0.9; b[7] = 0.9; // charge, pending
+  const ya = policyAction(model, a);
+  const yb = policyAction(model, b);
+  check('changing a masked input changes nothing', Math.abs(ya.moveX - yb.moveX) < 1e-7 && Math.abs(ya.strike - yb.strike) < 1e-7);
+  b[0] = -0.3;
+  const yc = policyAction(model, b);
+  check('...while an unmasked one still does', Math.abs(ya.moveX - yc.moveX) > 1e-4);
+}
+
+// ---------------------------------------------------------------------------
+section('The SHIPPED policy plays: it swims, it strikes, it scores');
+// The held-out score cannot see a policy that has learned to sit still —
+// the first one trained on real rows scored 96.8% on it and then never left
+// the kickoff line, because every leak in MASK makes the row after a held
+// row easy. So the file the game ships is driven here, for three minutes
+// against a parked seal, and has to do the three things a player does.
+// Skipped, not failed, when nothing has been trained: the script plays then.
+{
+  const shipped = botPolicy();
+  if (!policyUsable(shipped)) {
+    console.log('  (no trained policy in versusPolicy.json — the script plays; nothing to measure)');
+  } else {
+    B.brain = 'policy';
+    resetVersus(); resetPlayer(); startVersus(scene);
+    let t = 0; let play = 0; let starts = 0; let prevHeld = false; let goals = 0; let own = 0; let top = 0;
+    const seconds = 180;
+    while (t < seconds) {
+      frame(); t += dt;
+      if (versusState.phase === 'over') { goals += versusState.scores[1]; own += versusState.scores[0]; rematch(); }
+      if (versusState.phase !== 'play') continue;
+      play += dt;
+      top = Math.max(top, p2.vel.length());
+      if (p2.input.strikeHeld && !prevHeld) starts++;
+      prevHeld = p2.input.strikeHeld;
+    }
+    goals += versusState.scores[1]; own += versusState.scores[0];
+    check('it is on the policy', botState.mode === 'policy', botState.mode);
+    check('the learned seal swims at speed', top > 10, `top ${top.toFixed(1)}`);
+    check('it strikes, as the player it watched does', starts >= 5, `${starts} hold starts in ${play.toFixed(0)}s of play`);
+    check('it scores against a seal that does nothing', goals >= 1, `${goals} goals, ${own} own goals`);
+    check('...and not into its own goal more than the other', own <= goals, `${own} own vs ${goals}`);
+    B.brain = savedMode;
+  }
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');

@@ -8,6 +8,7 @@ dist-accessory-lab
 dist-accessory-shots
 dist-accessory-look
 dist-cash-look
+dist-versus-look
 dist-manowar-look
 dist-seabed-look
 dist-yacht-look
@@ -108,3 +109,4 @@ dist-levelup-look
 dist-loading-look/
 dist-bolt-lab
 dist-ball-lab/
+dist-replay-lab/

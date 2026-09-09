@@ -6,6 +6,7 @@ import { ASSETS, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, seabedTopY, maxWaveExcursion, midWater } from '../arena.js';
 import { versusActive } from './versusFlag.js';
 import { goalColors } from './ballLook.js';
+import { NOISE_FIELD_GLSL } from './noiseGlsl.js';
 
 // The walls, made visible.
 //
@@ -154,8 +155,70 @@ function goalMouth() {
   return {
     lo: gy - h, hi: gy + h, tunnel: Math.max(1, g.tunnel ?? 14),
     glow: Math.max(0, g.glow ?? 3), spill: Math.max(0, g.spill ?? 6), feather: Math.max(0.05, Math.min(1, g.feather ?? 0.55)),
+    noise: g.noise ?? {},
+    swim: g.swim ?? {},
+    scored: g.scored ?? {},
     colors: goalColors(),
+    // THE CORRIDOR IS OPEN — see the tunnel block in build(). The band runs
+    // clear from the face to the back with nothing across it, and what closes
+    // it off is LIGHT rather than rock: `backShade` of the colour as a solid
+    // plane so the scene background can never show through, and the glow on
+    // top of it.
+    open: (g.openBack ?? true) !== false,
+    backShade: Math.max(0, g.backShade ?? 0.22),
+    // HOW FAR PAST THE TUNNEL'S BACK the light and its slab keep going — one
+    // camera reach, so the far end where they finally fade is beyond the
+    // furthest frame edge a match (or a replay) can put out there. See
+    // goalQuad. Read off CONFIG rather than versusGoal.cameraReach() because
+    // that module imports this one.
+    reach: Math.max(0, CONFIG.versus?.camera?.reach ?? 12),
   };
+}
+
+/**
+ * THE LIGHT'S RECTANGLE for one mouth — shared by the glow quad and the slab
+ * behind it, so the two can never end in different places and show a seam
+ * where one stops.
+ *
+ * It runs from `spill` in front of the drawn face to a whole camera reach past
+ * the tunnel's BACK, and `spill` past each lip. Every one of those four rims
+ * is where the falloff (goalFalloff in the shader) has already reached zero,
+ * so the quad has no edge anywhere — including the far end, which is off the
+ * frame besides.
+ */
+function goalQuad(mouth, faceX, side) {
+  const midY = (mouth.lo + mouth.hi) * 0.5;
+  const halfH = (mouth.hi - mouth.lo) * 0.5;
+  const inner = faceX - side * mouth.spill;
+  const end = faceX + side * (mouth.tunnel + mouth.reach + mouth.spill);
+  return {
+    w: Math.abs(end - inner),
+    h: (halfH + mouth.spill) * 2,
+    cx: (inner + end) * 0.5,
+    cy: midY,
+    faceX, endX: end, midY, halfH,
+  };
+}
+
+/** goalQuad's numbers onto a light's or a slab's uniforms. */
+function applyGoalShape(u, q, side, mouth) {
+  u.uSide.value = side;
+  u.uFaceX.value = q.faceX;
+  u.uEndX.value = q.endX;
+  u.uMidY.value = q.midY;
+  u.uHalfH.value = q.halfH;
+  u.uSpill.value = Math.max(1e-3, mouth.spill);
+  u.uFeather.value = mouth.feather;
+}
+
+/** Resize a quad in place to the span goalQuad describes. */
+function fitGoalQuad(mesh, q) {
+  if (mesh.geometry.parameters.width !== q.w || mesh.geometry.parameters.height !== q.h) {
+    mesh.geometry.dispose();
+    mesh.geometry = new THREE.PlaneGeometry(q.w, q.h);
+  }
+  mesh.position.x = q.cx;
+  mesh.position.y = q.cy;
 }
 
 function measureShore(geo, mouth = null) {
@@ -252,66 +315,475 @@ function measureShore(geo, mouth = null) {
 }
 
 /**
- * The goal's light: an unlit additive quad whose alpha is a soft elliptical
- * falloff from its centre — 1 inside (1 - feather) of the half extents,
- * feathering to 0 at the edge — in `color` times `glow`. `glow` is the
- * overdrive: the composite's bloom thresholds on luminance, and the light has
- * to clear it comfortably to bloom the way a goal should, so this is meant to
- * sit well above 1. toneMapped off, because the overdrive IS the look and tone
- * mapping would fold it back toward 1.
+ * The goal's light: an unlit additive quad in `color` times `glow`, shaped by
+ * goalFalloff below — flat across the whole mouth and all the way down the
+ * corridor, fading to nothing only over the `spill` past the face and past the
+ * lips. `glow` is the overdrive: the composite's bloom thresholds on
+ * luminance, and the light has to clear it comfortably to bloom the way a goal
+ * should, so this is meant to sit well above 1. toneMapped off, because the
+ * overdrive IS the look and tone mapping would fold it back toward 1.
+ *
+ * It used to be one ELLIPSE over the quad, which meant the light's shape was
+ * the quad's shape: it could not be lengthened without changing how it looked,
+ * and pushed into the goal the camera saw the ellipse's own far rim. The
+ * falloff is measured off the MOUTH now — the face, the two lips — so the quad
+ * can run a camera reach past the tunnel's back and take its far end off the
+ * frame entirely.
  */
 // The live glow quads, for the F panel: a slider on CONFIG.versus.goal moves
 // these in place (refreshGoalGlow) rather than waiting for the next resize
 // to rebuild the shore.
 const goalGlows = [];
+// ...and the slab behind each of them, which the same sliders size. It is the
+// same rectangle as the light and carries the same falloff, so it is solid
+// wherever the corridor would otherwise be a window onto the backdrop and has
+// faded out wherever the light has — the two cannot end in different places
+// and leave a step in the water. It used to be an OPAQUE rectangle stopping
+// dead at the drawn face, and that hard vertical edge was the seam you saw
+// looking into the goal.
+const goalBacks = [];
+
+// THE SCORE'S COLOUR — see CONFIG.versus.goal.scored. `side` is the mouth the
+// ball went into, `team` the index whose colour it takes for a beat; `t` is
+// wall seconds since the goal, running rise → hold → fall. team -1 is nobody,
+// which is what every mouth is in ordinary play.
+const scoredFlash = { side: 0, team: -1, t: 0 };
+
+/**
+ * A goal went in on `side` (-1 the left mouth, +1 the right) and `team` put it
+ * there: that mouth takes the scorer's colour and blazes, then hands it back.
+ * versus.js's goal() calls this. Idempotent — a second goal restarts the
+ * envelope rather than stacking on it.
+ */
+export function flashGoalScored(side, team) {
+  scoredFlash.side = side < 0 ? -1 : 1;
+  scoredFlash.team = team === 1 ? 1 : 0;
+  scoredFlash.t = 0;
+  paintGoalColors();
+  return scoredFlash;
+}
+
+/** No mouth is anybody's but its own again — a kickoff, a reset, a match ending. */
+export function clearGoalScored() {
+  scoredFlash.team = -1;
+  scoredFlash.t = 0;
+  paintGoalColors();
+}
+
+/**
+ * How far the flash has taken `side`, 0..1 — the envelope, not a colour. Zero
+ * for the mouth that was not scored in and for every mouth once it has run.
+ */
+function scoredMix(mouth, side) {
+  if (scoredFlash.team < 0 || side !== scoredFlash.side) return 0;
+  const s = mouth.scored ?? {};
+  if (s.enabled === false) return 0;
+  const rise = Math.max(0, s.rise ?? 0.08);
+  const hold = Math.max(0, s.hold ?? 1.7);
+  const fall = Math.max(0, s.fall ?? 1.2);
+  const t = scoredFlash.t;
+  if (t <= rise) return rise > 0 ? t / rise : 1;
+  if (t <= rise + hold) return 1;
+  if (fall <= 0) return 0;
+  return Math.max(0, 1 - (t - rise - hold) / fall);
+}
+
+const _flashColor = new THREE.Color();
+
+/**
+ * Every light's colour and overdrive, from the mouth's own team plus whatever
+ * the flash is doing to it. Called by refreshGoalGlow (a slider moved) and by
+ * tickGoalGlow (the envelope moved), so the two can never disagree about what
+ * colour a mouth is — which is what a flash written in only one of them would
+ * have arranged the first time the F panel was touched during a goal.
+ */
+function paintGoalColors(mouth = goalMouth()) {
+  if (!mouth) return 0;
+  const s = mouth.scored ?? {};
+  let painted = 0;
+  for (const { mesh, side } of goalBacks) {
+    const k = scoredMix(mouth, side);
+    const own = mouth.colors[side < 0 ? 0 : 1];
+    _flashColor.set(k > 0 ? mouth.colors[scoredFlash.team] : own);
+    mesh.material.uniforms.uColor.value.set(own).lerp(_flashColor, k)
+      .multiplyScalar(mouth.backShade * (1 + k * ((s.backShade ?? 1.5) - 1)));
+  }
+  for (const { mesh, side } of goalGlows) {
+    const k = scoredMix(mouth, side);
+    const own = mouth.colors[side < 0 ? 0 : 1];
+    _flashColor.set(k > 0 ? mouth.colors[scoredFlash.team] : own);
+    mesh.material.uniforms.uColor.value.set(own).lerp(_flashColor, k);
+    mesh.material.uniforms.uGlow.value = mouth.glow * (1 + k * ((s.glow ?? 1.9) - 1));
+    painted++;
+  }
+  return painted;
+}
 
 export function refreshGoalGlow() {
   const mouth = goalMouth();
   if (!mouth) return 0;
+  for (const { mesh, side } of goalBacks) {
+    const q = goalQuad(mouth, mesh.userData.faceX, side);
+    applyGoalShape(mesh.material.uniforms, q, side, mouth);
+    fitGoalQuad(mesh, q);
+  }
   for (const { mesh, side } of goalGlows) {
     const u = mesh.material.uniforms;
-    u.uColor.value.set(mouth.colors[side < 0 ? 0 : 1]);
-    u.uGlow.value = mouth.glow;
-    u.uFeather.value = mouth.feather;
-    const w = mouth.tunnel + mouth.spill * 2;
-    const h = (mouth.hi - mouth.lo) + mouth.spill * 2;
-    if (mesh.geometry.parameters.width !== w || mesh.geometry.parameters.height !== h) {
-      mesh.geometry.dispose();
-      mesh.geometry = new THREE.PlaneGeometry(w, h);
-    }
-    mesh.position.x = mesh.userData.faceX + side * mouth.tunnel * 0.5;
-    mesh.position.y = (mouth.lo + mouth.hi) * 0.5;
+    const q = goalQuad(mouth, mesh.userData.faceX, side);
+    applyGoalShape(u, q, side, mouth);
+    fitGoalQuad(mesh, q);
+    applyGlowNoise(u, mouth.noise);
+    applyGlowSwim(u, mouth.swim);
   }
+  paintGoalColors(mouth);
   return goalGlows.length;
 }
 
-export function goalGlowMaterial(color, glow, feather) {
+/** The noise block of CONFIG.versus.goal onto a light's uniforms. */
+function applyGlowNoise(u, n = {}) {
+  u.uNoiseOn.value = n.enabled === false ? 0 : 1;
+  u.uNoiseAmount.value = Math.max(0, Math.min(1, n.amount ?? 0.55));
+  u.uNoiseScale.value = Math.max(0.1, n.scale ?? 6);
+  u.uNoiseSpeed.value = n.speed ?? 0.35;
+  u.uNoiseDrift.value.set(n.driftX ?? 0.6, n.driftY ?? 0.25);
+  u.uNoiseContrast.value = Math.max(0.05, n.contrast ?? 1.4);
+}
+
+/** ...and the seals' block — how hard a swimmer and a burst may stir it. */
+function applyGlowSwim(u, s = {}) {
+  u.uSwimOn.value = s.enabled === false ? 0 : 1;
+  u.uSwimPush.value = s.push ?? 3.4;
+  u.uSwimSwirl.value = s.swirl ?? 1.2;
+  u.uSwimDrag.value = s.drag ?? 0.05;
+  u.uSwimChurn.value = s.churn ?? 1.8;
+  u.uPulseSpeed.value = Math.max(0, s.ringSpeed ?? 30);
+  u.uPulseLife.value = Math.max(1e-3, s.ringLife ?? 1.2);
+  u.uPulseWidth.value = Math.max(0.1, s.ringWidth ?? 5);
+  u.uPulsePush.value = s.ringPush ?? 5;
+  u.uPulseLight.value = s.ringLight ?? 0.5;
+}
+
+// ---------------------------------------------------------------------------
+// THE SEALS IN THE FIELD — see CONFIG.versus.goal.swim.
+//
+// Two swimmers and four rings, held here as plain numbers and written onto
+// every light's uniforms once a frame by tickGoalGlow. versus.js is what
+// knows where the seals are and hands them over (setGoalSwimmers); nothing in
+// this module reaches for the player, which is what keeps the shore a leaf.
+//
+// A ring carries its BIRTH TIME rather than its age, so the shader ages it
+// off the same uTime the noise churns on and a frame that skips the tick
+// cannot leave one hanging. Strength 0 is a dead slot.
+// ---------------------------------------------------------------------------
+
+const SWIMMERS = 2;
+const PULSES = 4;
+const swimmers = Array.from({ length: SWIMMERS }, () => ({ x: 0, y: 0, vx: 0, vy: 0, reach: 0, speed: 0 }));
+const pulses = Array.from({ length: PULSES }, () => ({ x: 0, y: 0, t0: -1e9, strength: 0 }));
+let pulseNext = 0;
+
+/**
+ * Where the seals are this frame — an array of up to two { x, y, vx, vy }, or
+ * an empty one for none. `reach` per swimmer comes off the tuning; a null or
+ * missing entry parks that slot at reach 0, which the shader skips.
+ */
+export function setGoalSwimmers(list = []) {
+  const s = CONFIG.versus?.goal?.swim ?? {};
+  const reach = s.enabled === false ? 0 : Math.max(0, s.reach ?? 28);
+  for (let i = 0; i < SWIMMERS; i++) {
+    const src = list[i];
+    const w = swimmers[i];
+    if (!src) { w.reach = 0; w.speed = 0; continue; }
+    w.x = src.x ?? 0; w.y = src.y ?? 0;
+    w.vx = src.vx ?? 0; w.vy = src.vy ?? 0;
+    w.reach = reach;
+    // Normalised on the burst threshold and capped at 1, so `churn` is a
+    // number in the field's own units rather than one that has to be retuned
+    // every time a seal's top speed moves.
+    w.speed = Math.min(1, Math.hypot(w.vx, w.vy) / Math.max(1, s.burst ?? 46));
+  }
+  return swimmers;
+}
+
+/**
+ * Throw a ring into the field at (x, y). `strength` scales how hard it shoves
+ * and how brightly it passes. Round-robin over four slots: a fifth ring takes
+ * the oldest one's place rather than being dropped, so the newest burst is
+ * always the one you can see.
+ */
+export function goalGlowImpulse(x, y, strength = 1) {
+  const p = pulses[pulseNext];
+  pulseNext = (pulseNext + 1) % PULSES;
+  p.x = x; p.y = y; p.t0 = glowClock; p.strength = Math.max(0, strength);
+  return p;
+}
+
+/** The live stir, for the harnesses and the F panel's readouts. */
+export const goalGlowState = { swimmers, pulses, scored: scoredFlash, get clock() { return glowClock; } };
+
+/** Everything the seals put in the field, gone — a match starting or ending. */
+export function resetGoalStir() {
+  for (const w of swimmers) { w.reach = 0; w.speed = 0; }
+  for (const p of pulses) { p.strength = 0; p.t0 = -1e9; }
+  pulseNext = 0;
+  scoredFlash.team = -1;
+  scoredFlash.t = 0;
+}
+
+// THE LIGHT'S CLOCK — wall seconds, advanced by whoever owns the wall clock
+// (systems/versus.js's updateVersusClock), so the noise keeps churning
+// through the goal's freeze and the replay rather than stopping with the
+// water. One clock for both lights; the two are offset in the shader by side.
+let glowClock = 0;
+export function tickGoalGlow(dt) {
+  if (!(dt > 0)) return glowClock;
+  glowClock += dt;
+  if (scoredFlash.team >= 0) scoredFlash.t += dt;
+  for (const { mesh } of goalGlows) {
+    const u = mesh.material.uniforms;
+    u.uTime.value = glowClock;
+    for (let i = 0; i < SWIMMERS; i++) {
+      const w = swimmers[i];
+      u.uSwim.value[i].set(w.x, w.y, w.reach, w.speed);
+      u.uSwimVel.value[i].set(w.vx, w.vy);
+    }
+    for (let i = 0; i < PULSES; i++) {
+      const p = pulses[i];
+      u.uPulse.value[i].set(p.x, p.y, p.t0, p.strength);
+    }
+  }
+  // The flash is a colour and an overdrive, and both move every frame it is
+  // running — one repaint while it is, none at all when it is not.
+  if (scoredFlash.team >= 0) {
+    const mouth = goalMouth();
+    paintGoalColors(mouth);
+    // Run out: hand the mouth back before the next frame asks, so nothing
+    // downstream has to know the envelope's shape to know whose light it is.
+    if (mouth && scoredMix(mouth, scoredFlash.side) <= 0
+        && scoredFlash.t > (mouth.scored?.rise ?? 0.08)) scoredFlash.team = -1;
+  }
+  return glowClock;
+}
+
+// THE MOUTH'S SHAPE, in world units — shared verbatim by the light and the
+// slab behind it so the two fade out together and there is no step where one
+// of them stops. Every distance is measured off the mouth (the drawn face, the
+// two lips) and none off the quad, which is what lets the quad be as long as
+// it likes: lengthening it moves only `uEndX`, a whole camera reach past the
+// tunnel's back and therefore off the frame.
+//
+// Flat at 1 across the whole mouth and the whole corridor, then `uSpill` units
+// of falloff on each side — `uFeather` of that spill is the fade and the rest
+// holds. The three edges are: out into the water in front of the face, up and
+// down past the lips into the rock, and the far end down the corridor.
+const GOAL_FALLOFF_GLSL = `
+  uniform float uFeather;
+  uniform float uSide;
+  uniform float uFaceX;
+  uniform float uEndX;
+  uniform float uMidY;
+  uniform float uHalfH;
+  uniform float uSpill;
+  float goalFalloff(vec2 world) {
+    float hold = uSpill * (1.0 - uFeather);
+    float inward = max(0.0, (uFaceX - world.x) * uSide);
+    float pastLip = max(0.0, abs(world.y - uMidY) - uHalfH);
+    float toEnd = max(0.0, (uEndX - world.x) * uSide);
+    float a = 1.0 - smoothstep(hold, uSpill, inward);
+    a *= 1.0 - smoothstep(hold, uSpill, pastLip);
+    a *= smoothstep(0.0, uSpill, toEnd);
+    return a;
+  }
+`;
+
+/** The uniforms GOAL_FALLOFF_GLSL declares, at their defaults. */
+function goalShapeUniforms(side) {
+  return {
+    uFeather: { value: 0.55 },
+    uSide: { value: side },
+    uFaceX: { value: 0 },
+    uEndX: { value: 0 },
+    uMidY: { value: 0 },
+    uHalfH: { value: 1 },
+    uSpill: { value: 6 },
+  };
+}
+
+/**
+ * THE CORRIDOR'S FAR END, and the only thing in the mouth that is not
+ * additive: the team's colour at `backShade`, drawn over the same rectangle as
+ * the light and with the same falloff. Solid through the band and down the
+ * corridor, so the open corridor is never a window onto the backdrop; faded to
+ * nothing by the time it reaches the water in front of the face, so it is not
+ * a dark rectangle standing in the open either. Not squared, unlike the light:
+ * it has to hold its opacity right out to the lips.
+ */
+export function goalBackMaterial(color, shade, side = 1) {
   return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(color).multiplyScalar(shade) },
+      ...goalShapeUniforms(side),
+    },
+    vertexShader: `
+      varying vec2 vWorld;
+      void main() {
+        vWorld = (modelMatrix * vec4(position, 1.0)).xy;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying vec2 vWorld;
+      ${GOAL_FALLOFF_GLSL}
+      void main() {
+        float a = goalFalloff(vWorld);
+        gl_FragColor = vec4(uColor, a);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    toneMapped: false,
+  });
+}
+
+export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swim = {}) {
+  const mat = new THREE.ShaderMaterial({
     uniforms: {
       uColor: { value: new THREE.Color(color) },
       uGlow: { value: glow },
-      uFeather: { value: feather },
+      uTime: { value: 0 },
+      ...goalShapeUniforms(side),
+      uNoiseOn: { value: 1 },
+      uNoiseAmount: { value: 0.55 },
+      uNoiseScale: { value: 6 },
+      uNoiseSpeed: { value: 0.35 },
+      uNoiseDrift: { value: new THREE.Vector2(0.6, 0.25) },
+      uNoiseContrast: { value: 1.4 },
+      // THE SEALS — see setGoalSwimmers. xy is where the seal is in world
+      // units, z its reach (0 parks the slot), w its speed over the burst
+      // threshold. Fresh vectors per material: two lights sharing one array
+      // would be one light, and a uniform array is not cloned.
+      uSwimOn: { value: 1 },
+      uSwim: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector4()) },
+      uSwimVel: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector2()) },
+      uSwimPush: { value: 3.4 },
+      uSwimSwirl: { value: 1.2 },
+      uSwimDrag: { value: 0.05 },
+      uSwimChurn: { value: 1.8 },
+      // ...and their bursts: xy where the ring was thrown, z the wall second
+      // it was thrown on, w its strength (0 is a dead slot).
+      uPulse: { value: Array.from({ length: PULSES }, () => new THREE.Vector4(0, 0, -1e9, 0)) },
+      uPulseSpeed: { value: 30 },
+      uPulseLife: { value: 1.2 },
+      uPulseWidth: { value: 5 },
+      uPulsePush: { value: 5 },
+      uPulseLight: { value: 0.5 },
     },
     vertexShader: `
       varying vec2 vUv;
+      varying vec2 vWorld;
       void main() {
         vUv = uv;
+        // World XY, so the noise is in world units and the same size on a
+        // wide light and a narrow one (the quad's own UV would stretch it).
+        vWorld = (modelMatrix * vec4(position, 1.0)).xy;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: `
       uniform vec3 uColor;
       uniform float uGlow;
-      uniform float uFeather;
+      uniform float uTime;
+      uniform float uNoiseOn;
+      uniform float uNoiseAmount;
+      uniform float uNoiseScale;
+      uniform float uNoiseSpeed;
+      uniform vec2 uNoiseDrift;
+      uniform float uNoiseContrast;
+      uniform float uSwimOn;
+      uniform vec4 uSwim[${SWIMMERS}];
+      uniform vec2 uSwimVel[${SWIMMERS}];
+      uniform float uSwimPush;
+      uniform float uSwimSwirl;
+      uniform float uSwimDrag;
+      uniform float uSwimChurn;
+      uniform vec4 uPulse[${PULSES}];
+      uniform float uPulseSpeed;
+      uniform float uPulseLife;
+      uniform float uPulseWidth;
+      uniform float uPulsePush;
+      uniform float uPulseLight;
       varying vec2 vUv;
+      varying vec2 vWorld;
+      ${GOAL_FALLOFF_GLSL}
+      ${NOISE_FIELD_GLSL}
       void main() {
-        // Elliptical distance from the centre, 0 at the middle, 1 at the rim.
-        vec2 p = (vUv - 0.5) * 2.0;
-        float d = length(p);
-        // Flat at 1 to (1 - feather), then a smooth fall to 0 at the rim: no
-        // edge anywhere the quad ends, and the tail of it is what bleeds.
-        float a = 1.0 - smoothstep(1.0 - uFeather, 1.0, d);
+        // See GOAL_FALLOFF_GLSL: 1 across the mouth and the corridor, falling
+        // to 0 over the spill in front of the face and past the lips. Squared,
+        // so the tail that bleeds into the water is the softer half of it.
+        float a = goalFalloff(vWorld);
         a *= a;
+        // THE NOISE — see CONFIG.versus.goal.noise. Three octaves over world
+        // units, sliding by the drift and churning along the third axis by
+        // the speed, each side on its own patch of the field. Brought to
+        // 0..1, given its contrast about the middle, and mixed in by amount:
+        // a trough at amount 1 is dark, a crest is the smooth light.
+        if (uNoiseOn > 0.5) {
+          // THE SEALS AND THEIR BURSTS — see CONFIG.versus.goal.swim. Three
+          // things come out of this block and each goes somewhere different:
+          // warp displaces where the field is sampled (the distortion),
+          // stir slides the sample along the field's third axis so the
+          // pattern under a swimmer boils while the rest of it holds, and
+          // lift adds light where a ring is passing.
+          //
+          // stir is an OFFSET, never a multiplier on uTime: a churn scaled
+          // by the clock would grow its own spatial gradient without bound
+          // and, an hour into a match, alias the field into hash next to a
+          // seal. An offset that rides with the swimmer churns because the
+          // swimmer moves, which is the thing being described anyway.
+          vec2 warp = vec2(0.0);
+          float stir = 0.0;
+          float lift = 0.0;
+          if (uSwimOn > 0.5) {
+            for (int i = 0; i < ${SWIMMERS}; i++) {
+              float reach = uSwim[i].z;
+              if (reach <= 0.0) continue;
+              vec2 d = vWorld - uSwim[i].xy;
+              float r = length(d);
+              float f = 1.0 - smoothstep(0.0, reach, r);
+              if (f <= 0.0) continue;
+              f *= f;
+              vec2 dir = r > 1e-4 ? d / r : vec2(1.0, 0.0);
+              // The shove is TURNED as it goes: straight out is a bulge, and
+              // a seal leaves a curl behind it rather than a bubble.
+              float ang = uSwimSwirl * f;
+              float cs = cos(ang); float sn = sin(ang);
+              warp += vec2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs) * uSwimPush * f;
+              warp -= uSwimVel[i] * uSwimDrag * f;
+              stir += uSwimChurn * f * uSwim[i].w;
+            }
+            for (int i = 0; i < ${PULSES}; i++) {
+              if (uPulse[i].w <= 0.0) continue;
+              float age = uTime - uPulse[i].z;
+              if (age < 0.0 || age > uPulseLife) continue;
+              vec2 d = vWorld - uPulse[i].xy;
+              float r = length(d);
+              // A gaussian band at the ring's radius, thinning out over its
+              // life: the front is where the field is shoved and lit.
+              float band = (r - age * uPulseSpeed) / uPulseWidth;
+              float k = exp(-band * band) * uPulse[i].w * (1.0 - age / uPulseLife);
+              warp += (r > 1e-4 ? d / r : vec2(1.0, 0.0)) * uPulsePush * k;
+              lift += uPulseLight * k;
+            }
+          }
+          vec2 q = (vWorld + warp + uNoiseDrift * uTime) / uNoiseScale;
+          float n = noiseFbm(vec3(q, uTime * uNoiseSpeed + stir + uSide * 17.3));
+          n = clamp(n * 0.5 + 0.5, 0.0, 1.0);
+          n = clamp(0.5 + (n - 0.5) * uNoiseContrast, 0.0, 1.0);
+          n = clamp(n + lift, 0.0, 1.0);
+          a *= mix(1.0, n, uNoiseAmount);
+        }
         gl_FragColor = vec4(uColor * uGlow * a, a);
       }
     `,
@@ -321,6 +793,11 @@ export function goalGlowMaterial(color, glow, feather) {
     blending: THREE.AdditiveBlending,
     toneMapped: false,
   });
+  applyGlowNoise(mat.uniforms, noise);
+  applyGlowSwim(mat.uniforms, swim);
+  mat.uniforms.uFeather.value = feather;
+  mat.uniforms.uTime.value = glowClock;
+  return mat;
 }
 
 export function createWallRocks(scene) {
@@ -347,6 +824,7 @@ export function createWallRocks(scene) {
     for (const h of holes) { group.remove(h); h.geometry.dispose(); h.material.dispose(); }
     holes.length = 0;
     goalGlows.length = 0;
+    goalBacks.length = 0;
     if (!mesh) return;
     group.remove(mesh);
     mesh.geometry.dispose();
@@ -472,6 +950,74 @@ export function createWallRocks(scene) {
       }
     }
 
+    // THE TUNNEL, in a match: the shore is one boulder deep, and a camera
+    // that may look `camera.reach` into the goal (versusGoal.cameraReach)
+    // would otherwise see the mouth open onto bare background. So each mouth
+    // gets a BLOCK of rock past the face — a grid of boulders from the face
+    // to `tunnel` deep plus a back wall, floor to head — with the band cut
+    // out of it exactly as the face has it cut: a boulder that would sit in
+    // the band is slid out of it onto a lip, and one that would sit in the
+    // corridor at the back is slid back onto the back wall. The lips are
+    // then exact along the whole tunnel, the same lines the ball's collider
+    // (systems/versusGoal.js) and the seals' hole read.
+    if (mouth) {
+      const backW = rMax;                        // one boulder of back wall
+      const step = Math.max(1.5, rMax * 0.8);    // spacing, so the grid has no gaps
+      const depth = mouth.tunnel + backW;
+      const cols = Math.ceil(depth / step) + 1;
+      const rows = Math.ceil(span / step) + 1;
+      const backX = nose + mouth.tunnel;         // the back wall's inner face, past the wall
+      for (const side of [-1, 1]) {
+        for (let ci = 0; ci < cols; ci++) {
+          for (let ri = 0; ri < rows; ri++) {
+            const r = (rMin + rMax) * 0.5 + rand() * (rMax - rMin) * 0.5;
+            const rad = r * (1 - (cfg.taper ?? 0.35) * (ri / rows) * 0.5);
+            e.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+            q.setFromEuler(e);
+            scl.set(rad, rad * (0.62 + rand() * 0.4), rad * (0.8 + rand() * 0.4));
+            const x = nose + (ci + 0.5) * step + (rand() - 0.5) * step * 0.4;
+            const y = footY + (ri + 0.5) * step + (rand() - 0.5) * step * 0.4;
+            const z = (cfg.z ?? -2.2) + (rand() - 0.5) * 1.6;
+            const g = shapes[(ci * 7 + ri * 3 + (side > 0 ? 1 : 0)) % shapes.length].clone();
+            at.set(0, y, z);
+            m.compose(at, q, scl);
+            g.applyMatrix4(m);
+            g.computeBoundingBox();
+            const bb = g.boundingBox;
+            // Into place past the wall, by the box, like the face's boulders.
+            const cx = (bb.min.x + bb.max.x) * 0.5;
+            g.translate(side * x - cx, 0, 0);
+            g.computeBoundingBox();
+            const inBand = bb.max.y > mouth.lo && bb.min.y < mouth.hi;
+            // Inside the corridor: out of the band onto a lip. NOT closed off
+            // at the back — a boulder slid to the tunnel's end used to cap the
+            // corridor with rock, which from the front is a goal that dead-ends
+            // in the cliff and from a replay's angle is the light hidden behind
+            // a wall. The corridor runs clear now and the light plane below is
+            // what fills its far end. `openBack: false` puts the cap back.
+            const inCorridor = side > 0 ? bb.min.x < backX : bb.max.x > -backX;
+            if (inBand && (inCorridor || mouth.open)) {
+              const nearBack = side > 0 ? bb.max.x > backX - step : bb.min.x < -backX + step;
+              if (nearBack && !mouth.open) {
+                g.translate(side > 0 ? backX - bb.min.x : -backX - bb.max.x, 0, 0);
+              } else {
+                const above = y >= (mouth.lo + mouth.hi) * 0.5;
+                g.translate(0, above ? mouth.hi - bb.min.y : mouth.lo - bb.max.y, 0);
+              }
+            }
+            // Never in front of the face: the tunnel starts where the shore's
+            // own boulders end, and a block boulder poking into the water
+            // would be a wall in the wrong place.
+            g.computeBoundingBox();
+            if (side > 0 ? bb.min.x < nose : bb.max.x > -nose) {
+              g.translate(side > 0 ? nose - bb.min.x : -nose - bb.max.x, 0, 0);
+            }
+            parts.push(g);
+          }
+        }
+      }
+    }
+
     const merged = mergeGeometries(parts, false);
     for (const g of parts) g.dispose();
     for (const g of shapes) g.dispose();
@@ -507,29 +1053,68 @@ export function createWallRocks(scene) {
 
     // The inside of each mouth GLOWS in its team's colour (left is team 0's
     // goal, right team 1's — see CONFIG.versus.goal): a LIGHT, not a slab.
-    // A quad centred on the mouth's face, `spill` units wider and taller than
-    // the hole so the light bleeds out of it into the water and the rock,
-    // drawn additive with a soft elliptical falloff (goalGlowMaterial) so it
-    // has no edge anywhere — the rock in front of it is what gives the hole
+    // One rectangle per mouth (goalQuad), running from `spill` in front of the
+    // drawn face to a whole camera reach past the tunnel's back and `spill`
+    // past each lip, drawn additive with the falloff in GOAL_FALLOFF_GLSL so
+    // it has no edge anywhere — the rock in front of it is what gives the hole
     // its shape — and overdriven past 1 so the bloom takes it. Behind the
     // boulders (their z jitter reaches -3), in front of the seabed plane at
     // -4; the boulders occlude it above and below the lips, and where it
     // spills past the face into the water there is nothing in front of it,
     // which is the point.
+    //
+    // THE FAR END IS OFF THE FRAME. The light used to stop `spill` past the
+    // tunnel's back, which is inside the reach a match camera has — so pushed
+    // into the goal the picture showed the light run out, and the slab behind
+    // it ended at the face in a hard vertical line. Both run past the reach
+    // now, and both fade over the same spill, so neither has an edge a camera
+    // can be pointed at.
     if (mouth) {
       for (const side of [-1, 1]) {
-        const w = mouth.tunnel + mouth.spill * 2;
-        const h = (mouth.hi - mouth.lo) + mouth.spill * 2;
-        const plane = new THREE.Mesh(
-          new THREE.PlaneGeometry(w, h),
-          goalGlowMaterial(mouth.colors[side < 0 ? 0 : 1], mouth.glow, mouth.feather),
-        );
+        const color = mouth.colors[side < 0 ? 0 : 1];
         const faceX = side > 0 ? nose : -nose;
-        // Centred a little INTO the tunnel, so the brightest point is inside
-        // the hole and the spill into the water is the falloff's tail.
-        plane.position.set(faceX + side * mouth.tunnel * 0.5, (mouth.lo + mouth.hi) * 0.5, (cfg.z ?? -2.2) - 1.3);
+        const q = goalQuad(mouth, faceX, side);
+        // THE CORRIDOR'S FAR END, and the only thing in the mouth that is not
+        // additive. With the band left open (goalMouth().open) there is no
+        // rock across it any more, so without this the goal is a window onto
+        // the seabed plane and the sky. The team's colour at `backShade` over
+        // the light's own rectangle and with the light's own falloff: solid
+        // through the band and down the corridor, gone by the time it reaches
+        // the water in front of the face. Behind the light, in front of the
+        // seabed backdrop at -4.4.
+        if (mouth.open && mouth.backShade > 0) {
+          const back = new THREE.Mesh(
+            new THREE.PlaneGeometry(q.w, q.h),
+            goalBackMaterial(color, mouth.backShade, side),
+          );
+          applyGoalShape(back.material.uniforms, q, side, mouth);
+          back.position.set(q.cx, q.cy, (cfg.z ?? -2.2) - 1.6);
+          back.userData.faceX = faceX;
+          back.userData.goalPart = 'back';
+          // With the light, not before it: it is transparent now, and in
+          // three's transparent list renderOrder beats depth — ahead of the
+          // water fill it would be painted over exactly as the light was.
+          back.renderOrder = 0;
+          group.add(back);
+          holes.push(back);
+          goalBacks.push({ mesh: back, side });
+        }
+        const plane = new THREE.Mesh(
+          new THREE.PlaneGeometry(q.w, q.h),
+          goalGlowMaterial(color, mouth.glow, mouth.feather, mouth.noise, side, mouth.swim),
+        );
+        applyGoalShape(plane.material.uniforms, q, side, mouth);
+        plane.position.set(q.cx, q.cy, (cfg.z ?? -2.2) - 1.3);
         plane.userData.faceX = faceX;
-        plane.renderOrder = -2;
+        plane.userData.goalPart = 'light';
+        // NOT behind the water. Both are in three's transparent list, which
+        // sorts by renderOrder BEFORE depth — so at -2 this drew first and
+        // the water fill (renderOrder 0, alpha 1 below the wave) painted
+        // straight over it: no light anywhere water was, which was
+        // everywhere. Ordered with the water, the depth sort puts the fill
+        // (-5.4) under the light (-3.5); the boulders are opaque and wrote
+        // depth already, so they still occlude it above and below the lips.
+        plane.renderOrder = 0;
         group.add(plane);
         holes.push(plane);
         goalGlows.push({ mesh: plane, side });

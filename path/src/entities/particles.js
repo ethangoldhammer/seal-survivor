@@ -527,7 +527,17 @@ export function updateParticleScale(camera, renderer) {
   // Divided by `zoom`, or a camera punch-in (see world.js) leaves the sprites
   // at their un-zoomed pixel size while everything drawn as geometry around
   // them grows — particles visibly shrinking on the frame the screen punches.
-  const viewHeight = (camera.top - camera.bottom) / (camera.zoom || 1);
+  // A PERSPECTIVE camera (the replay's pool, systems/replayCams.js) has no
+  // fixed world-per-pixel; it is taken at the plane the action is on — the
+  // distance from the lens to what it is looking at, which the pool writes
+  // on the camera. Every particle in a match lives on that plane.
+  let viewHeight;
+  if (camera.isPerspectiveCamera) {
+    const d = camera.userData?.focusDistance ?? Math.abs(camera.position.z) ?? 40;
+    viewHeight = 2 * Math.max(0.1, d) * Math.tan((camera.fov * Math.PI) / 360);
+  } else {
+    viewHeight = (camera.top - camera.bottom) / (camera.zoom || 1);
+  }
   if (viewHeight <= 0) return;
   pixelScale = renderer.domElement.height / viewHeight;
   material.uniforms.uScale.value = pixelScale;

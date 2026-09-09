@@ -81,6 +81,7 @@ import { cineEnabled, cineMenu } from './cineCamera.js';
 import { createHexMenu, fitScale } from './hexMenu.js';
 import { createGrid } from './grid.js';
 import { setCausticsPunch } from './water.js';
+import { versusActive } from './versusFlag.js';
 import { stateForSpeed } from './animation.js';
 import { menuInput, touchSlots } from '../input.js';
 import { feedback } from './feedback.js';
@@ -1498,9 +1499,19 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       // material on the NEXT frame's colour pass — one frame of lag on an eased
       // value, which is invisible, and the alternative is threading a menu's
       // number through world.updateSurface. See setCausticsPunch.
+      // ...and NOT through a match's release. `w` describes this shot, and
+      // through the glide it is also what the frame is doing — except in
+      // Blubberball, where updateVersusCamera claims world.focusCamera at
+      // full weight on the first frame of the match: the camera CUTS to the
+      // pitch and never opens out. Easing the punch over the second after
+      // that is a second of the light in the water zooming out under a
+      // camera that is standing still, which is what it looked like. The
+      // held menu still gets its punch — versusActive() is already true
+      // while the team select is up — so this is only the release.
+      const cw = state.phase === 'out' && versusActive() ? 0 : w;
       setCausticsPunch(
-        1 + ((menuCfg.causticsGain ?? 1) - 1) * w,
-        1 + ((menuCfg.causticsScale ?? 1) - 1) * w,
+        1 + ((menuCfg.causticsGain ?? 1) - 1) * cw,
+        1 + ((menuCfg.causticsScale ?? 1) - 1) * cw,
       );
       fitScrim(w);
       placeLabels(w);

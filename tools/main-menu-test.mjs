@@ -290,11 +290,14 @@ section('Leaving a run for the menu, as main.js wires it');
   // The score card's route goes under the same cover Try again uses: the death
   // left the clock dilated and the lens pushed in on a corpse, and cutting
   // straight to a menu from there snaps all of it back on one frame.
-  const at = main.indexOf('onMainMenu:');
+  // The score card and the Blubberball prompt share one function for it.
+  const at = main.indexOf('function leaveForMenu');
   const route = at < 0 ? '' : main.slice(at, at + 700);
   check('the score card\'s goes through the death transition, as Try again does',
-    /showRestartTransition\(/.test(route) && /beginRestartTransition\(/.test(route)
+    /onMainMenu: leaveForMenu/.test(main)
+    && /showRestartTransition\(/.test(route) && /beginRestartTransition\(/.test(route)
     && /returnToMenu\(\)/.test(route));
+  check('...and the match prompt takes the same route', /versusHooks\.onMainMenu = leaveForMenu/.test(main));
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +339,10 @@ section('Seal sports is a panel of one working game and two promises');
     /function enterMode\(versus\)[\s\S]{0,600}enableVersus\([\s\S]{0,200}world\.resize\(\)[\s\S]{0,400}startGame\(\)/.test(main));
   check('...and the menu no longer reads a ?versus URL flag', !/has\('versus'\)/.test(main));
   check('closeMainMenu hides the sports panel with the board', /function closeMainMenu[\s\S]{0,300}hideSealSports\(\)/.test(main));
+  check('...and the team select', /function closeMainMenu[\s\S]{0,300}hideTeamSelect\(\)/.test(main));
+  check('Blubberball opens the team select, and Start is what enters the mode',
+    /showTeamSelect\(\{[\s\S]{0,200}onStart: \(\) => enterMode\(true\)/.test(main));
+  check('the team select is polled every frame beside the pause menu', /updatePauseNav\(\);[\s\S]{0,300}updateTeamSelect\(\);/.test(main));
 }
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}`);
