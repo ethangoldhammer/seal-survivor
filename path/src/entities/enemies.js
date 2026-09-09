@@ -2836,10 +2836,17 @@ function edgeSpawnPoint(def = null) {
   //
   // It arrives ON the line, at the same offset the pin will hold it at, so the
   // entrance is horizontal and the pin has nothing to correct.
+  // It carries `side` like any other wing entrance, and that is not decoration:
+  // spawnOne pushes a body out to offscreenX(radius) and hides it behind the
+  // rock face only for a spawn that DECLARED a side. Without it a man o' war
+  // was placed at half the arena width — no shore overscan, no radius — and
+  // left at z 0, so it faded up on camera at the edge of frame.
   if (def?.surface) {
+    const side = Math.random() < 0.5 ? -1 : 1;
     return {
-      x: (Math.random() < 0.5 ? -1 : 1) * (bounds.width / 2 + margin),
+      x: side * offscreenX(),
       y: surfaceHeightAt(0) + (def.surface.lift ?? 0),
+      side,
     };
   }
   const depth = bounds.bottom + margin + Math.random() * (bounds.surfaceY - bounds.bottom - margin * 2);
