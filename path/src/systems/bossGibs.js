@@ -4,6 +4,7 @@ import { bounds } from '../arena.js';
 import { emit } from '../entities/particles.js';
 import { assetBaseColor } from '../assets.js';
 import { hitShapeSpheres } from './hitShape.js';
+import { retireMaterial } from './programPin.js';
 
 // ---------------------------------------------------------------------------
 // WHAT IS LEFT OF A BOSS
@@ -122,7 +123,7 @@ export function disposeBossGibs(scene) {
   scene?.remove(mesh);
   mesh.dispose();
   geometry.dispose();
-  material.dispose();
+  retireMaterial(material);
   mesh = null;
   geometry = null;
   material = null;

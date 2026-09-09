@@ -135,6 +135,11 @@ check('a boss ATTACK still counts as a boss death',
 // the difference between the boat line firing on a ram and firing on a shot.
 check('the trawler\'s shells count as the trawler',
   ['boss:boatRain', 'boss:boatSalvo', 'boss:boatSpread'].every((s) => causesOfDeath(s).has('boat')));
+// The ordinary hulls' deck guns sign every shot with the hull's key, so a fish
+// thrown off a trawler is the trawler killing you — a boat, not a boss.
+check('a deck-gun shot is the boat that fired it',
+  ['boat', 'trawler'].every((s) => [...causesOfDeath(s)].join(',') === 'boat'),
+  ['boat', 'trawler'].map((s) => [...causesOfDeath(s)].join(',')).join(' / '));
 check('a boss PERK is a boss death and nothing narrower',
   [...causesOfDeath('boss:electricAura')].join(',') === 'boss');
 check('the three non-animal deaths classify',

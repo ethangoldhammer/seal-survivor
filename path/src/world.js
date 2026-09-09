@@ -19,6 +19,7 @@ import { createWallRocks, shoreOverscan } from './systems/wallRocks.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
 import { mark as crashMark } from './systems/crashLog.js';
+import { retireMaterial } from './systems/programPin.js';
 
 // FLOOR_OVERSCAN moved to arena.js — updateBounds clamps the field-of-view
 // setting against it and cannot import this file. Only the death dive's framing
@@ -172,6 +173,13 @@ export function createWorld(container) {
   key.position.fromArray(CONFIG.lighting.keyPosition);
   const hemi = new THREE.HemisphereLight(0x9fd8ff, 0x08131c, CONFIG.lighting.hemiIntensity);
   scene.add(ambient, key, hemi);
+  // Every layer, not just the world's. three gathers a light only when it
+  // passes the camera's mask like any other object, and the front pass
+  // (systems/frontLayer.js) draws the dead boss through a mask that is not
+  // layer 0 — on lights left at the default it would come out unlit.
+  ambient.layers.enableAll();
+  key.layers.enableAll();
+  hemi.layers.enableAll();
 
   function updateLighting() {
     ambient.intensity = CONFIG.lighting.ambient;
@@ -238,7 +246,7 @@ export function createWorld(container) {
     for (const child of [...backdrop.children]) {
       backdrop.remove(child);
       child.geometry?.dispose();
-      child.material?.dispose();
+      retireMaterial(child.material);
     }
     surfaceLine = null;
     skyMesh = null;

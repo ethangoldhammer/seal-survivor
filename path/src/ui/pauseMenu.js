@@ -31,6 +31,7 @@ import { menuInput, resetMenuInput } from '../input.js';
 import { isTextEntry } from './typing.js';
 import { tipJarLink } from './tipJar.js';
 import { parseTipCsv } from '../tipTable.js';
+import { uiText } from '../uiTextTable.js';
 import tipsCsv from '../tips.csv?raw';
 
 // What a tip buys — the same tiers the score card's jar shows.
@@ -184,7 +185,25 @@ const STYLES = `
      here is invisible at any width where the row fits and is the difference
      between fitting and not at the width where it didn't: measured in the
      shipped font, the three labels cleared the row by 6px. */
-  .sv-pm-foot .sv-btn { flex: 1; padding-left: 12px; padding-right: 12px; }
+  /* ...AND THEY DO NOT SHRINK BELOW THEIR OWN LABEL. A flex of 1 is a basis of
+     ZERO, which means every button on a line is handed the same width and the
+     ones whose labels do not fit it wrap INSIDE the button. Three fitted; the
+     fourth (Main menu) did not, and the row came out three 101px buttons three
+     lines tall with Defaults alone underneath — measured at 393px by
+     npm run layout. A row of buttons where the text wraps is not a squeeze
+     that costs a few pixels, it is a row that has stopped looking like a row.
+     A flex of "1 0 auto" says the three things that matter in order: basis is the
+     LABEL, so line breaking measures what is actually there; shrink is off, so
+     nothing is ever squeezed below it and no label can wrap while it has a
+     line to itself; grow is on, so whatever ends up sharing a line still fills
+     the panel and the row reads as one block rather than as buttons trailing
+     off to the left.
+     max-width is the floor under the whole thing — a label longer than the
+     panel is wider than any line it could be given, and without this it would
+     hang off the edge rather than wrapping. It should never fire; it is what
+     stops the one case this arrangement cannot otherwise answer. */
+  .sv-pm-foot .sv-btn { flex: 1 0 auto; max-width: 100%;
+    padding-left: 12px; padding-right: 12px; }
   /* THUMBS. The 44px rule in ui.js names .sv-btn and .sv-name-input, so none of
      this panel's own controls were covered by it: the tabs came out 30px, the
      choice and rebind buttons 26px, and the sliders were a FOUR pixel hit
@@ -217,10 +236,11 @@ let headEl = null;  // its heading row — the title and hint change per route
 let tabsEl = null;
 let bodyEl = null;
 let footEl = null;
-// The tip jar's own line, under the buttons. Its own row rather than a fourth
-// button in the footer: those three are flex:1 and a fourth squeezes "Restart
-// run" onto two lines on a phone — and asking for money is not a peer of the
-// button that gets you back into the game.
+// The tip jar's own line, under the buttons. Its own row rather than a fifth
+// button in the footer, and the reason is not width — the footer wraps onto a
+// second line on a phone and would simply take another one. Asking for money
+// is not a peer of the button that gets you back into the game, or of the one
+// that leaves the run entirely.
 let tipEl = null;
 
 let open = false;
@@ -255,7 +275,7 @@ let standalone = false;
  */
 export function initPauseMenu(opts) {
   ({ reveal, revealSeconds } = opts);
-  callbacks = { onResume: opts.onResume, onRestart: opts.onRestart };
+  callbacks = { onResume: opts.onResume, onRestart: opts.onRestart, onMainMenu: opts.onMainMenu };
 
   const style = document.createElement('style');
   style.textContent = STYLES;
@@ -416,6 +436,16 @@ function buildFooter() {
   // said so would either do nothing or silently start one.
   if (!standalone) {
     footEl.appendChild(button('Restart run', 'sv-btn sv-btn-ghost', () => callbacks.onRestart?.()));
+    // THE WAY OUT OF THE RUN, not out of the panel. Beside Restart rather than
+    // beside Resume because those two are the pair a player is choosing
+    // between — one starts this seal's day again, the other abandons it — and
+    // Resume is the button that has to stay where the thumb already went.
+    //
+    // Standalone only ever means the main menu opened this, so the button
+    // would lead to the screen it was opened from. Dropped for the same reason
+    // Restart is: a control that cannot honestly do anything is worse than a
+    // missing one, because the player has to press it to find out.
+    footEl.appendChild(button(uiText('mainMenuButton'), 'sv-btn sv-btn-ghost', () => callbacks.onMainMenu?.()));
   }
   footEl.appendChild(button('Defaults', 'sv-btn sv-btn-ghost', () => {
     // This tab only. A single button that wiped all three would be the one

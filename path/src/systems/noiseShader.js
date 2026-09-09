@@ -6,7 +6,7 @@ import { CAUSTICS_GLSL } from './causticsGlsl.js';
 // lives in a leaf module because the icon renderer paints the same hide onto
 // the stills that go in documents. See the header of that file.
 import {
-  MOTTLE_UNIFORMS_GLSL, NOISE_FIELD_GLSL, MOTTLE_FRAGMENT_GLSL,
+  MOTTLE_UNIFORMS_GLSL, NOISE_FIELD_GLSL, MOTTLE_FRAGMENT_GLSL, mottleGlsl,
   GLOW_UNIFORMS_GLSL, GLOW_LAYERS_GLSL,
 } from './noiseGlsl.js';
 
@@ -66,7 +66,31 @@ uniform float uWetTint;
 uniform vec4  uWetSea;      // x scale, y phase, z depth falloff, w day/night
 uniform vec3  uWetSeaColor;
 uniform vec2  uWetSeaSpan;  // still-water line, seabed
+// THE SKY/OCEAN SPLIT (CONFIG.sealShader.split*). A SECOND SET of the six
+// mottle numbers for the side of the body facing the seabed, blended into the
+// first across a band of the normal — countershading, which is what nearly
+// every animal in this ocean actually wears: a dark back seen from above
+// against the deep, a pale belly seen from below against the sky. uSplit is
+// the master and ships at 0, where the second set is never sampled and the
+// fragment is bit-for-bit what it was. See the block after the mottle below.
+uniform float uSplit;
+uniform float uSplitLine;
+uniform float uSplitSoft;
+uniform float uSplitPaint;
+uniform float uSplitStrength;
+uniform float uSplitSize;
+uniform float uSplitContrast;
+uniform vec3  uSplitColor;
+uniform vec3  uSplitBase;
 varying vec3  vNoisePos;
+// HOW MUCH THIS FRAGMENT FACES THE SKY: the posed normal against world +Y, -1
+// at a belly to 1 at a back. Taken in the vertex shader off transformedNormal
+// (after skinning, so a rolling animal's split rolls with it) and interpolated,
+// rather than in the fragment off the fragment normal, which does not exist yet at
+// <map_fragment>, where the mottle has to run, and does not exist at all on an
+// unlit material. Dotted in VIEW space: a rotation preserves the dot, and the
+// view-space normal is the one three hands out for free.
+varying float vNoiseUp;
 // THE ANIMATED WORLD POSITION, and the exact opposite decision from vNoisePos
 // directly above it — which is deliberately bind-pose so the markings stay
 // painted on. The caustics are not on the animal, they are in the WATER: the
@@ -80,6 +104,47 @@ varying vec3  vNoiseWorld;
 ${NOISE_FIELD_GLSL}
 ${CAUSTICS_GLSL}
 `;
+
+// ---------------------------------------------------------------------------
+// THE SKY/OCEAN SPLIT — the mottle run a second time with the underside set,
+// and the two blended across a band of the normal.
+//
+// WHY TWO PASSES AND NOT ONE WITH BLENDED NUMBERS. Mixing the uniforms first
+// and sampling once is cheaper, but `size` is a frequency: blending it across
+// the seam SLIDES the field, so the markings in the crossover band would be
+// neither the back's nor the belly's but a smeared third pattern between them.
+// Two honest samples and a mix of the RESULTS keeps both patterns where they
+// were painted and only crossfades the colour. The second fbm is inside a
+// uniform branch, so a body with no split pays one comparison.
+//
+// THE SEAM. uSplitLine is where on the normal the belly begins (0 is the
+// lateral line, positive climbs the flanks) and uSplitSoft is half the width of
+// the crossfade in the same units — never a zero-width smoothstep, which is
+// undefined in GLSL and means a different answer on every driver; at 0 it is a
+// hard cut, on purpose. splitW is the UNDERSIDE's share, scaled by the master so
+// the slider fades the whole effect rather than only its edge.
+//
+// noiseLit and noisePolarity are blended too, not just the colour: the glow
+// layers and the wet film read them further down, so a belly that mottles at a
+// different size has to glow and bead by its own markings or the light comes
+// out in the back's pattern over the belly's paint.
+// ---------------------------------------------------------------------------
+const SPLIT_FRAGMENT_GLSL = `
+  if (uSplit > 0.0) {
+    vec3 noiseUnderRgb = noisePre;
+${mottleGlsl({
+    size: 'uSplitSize', strength: 'uSplitStrength', contrast: 'uSplitContrast',
+    color: 'uSplitColor', base: 'uSplitBase', paint: 'uSplitPaint',
+    n: 'noiseUnderN', polarity: 'noiseUnderPolarity', lit: 'noiseUnderLit', dst: 'noiseUnderRgb',
+  })}
+    float splitBelly = uSplitSoft > 1e-4
+      ? 1.0 - smoothstep(uSplitLine - uSplitSoft, uSplitLine + uSplitSoft, vNoiseUp)
+      : step(vNoiseUp, uSplitLine);
+    float splitW = splitBelly * clamp(uSplit, 0.0, 1.0);
+    diffuseColor.rgb = mix(diffuseColor.rgb, noiseUnderRgb, splitW);
+    noiseLit = mix(noiseLit, noiseUnderLit, splitW);
+    noisePolarity = mix(noisePolarity, noiseUnderPolarity, splitW);
+  }`;
 
 // Every material this has been attached to, so a tuner change can push new
 // uniform values without rebuilding anything.
@@ -191,6 +256,19 @@ export function attachNoiseShader(material, preset = null) {
     uWetCausticUp: { value: 0.75 },
     uWetGlow: { value: 1 },
     uWetTint: { value: 0.5 },
+    // THE SKY/OCEAN SPLIT. Master 0 is no split — the underside set below is
+    // never sampled — so every material that ever wore this shader is exactly
+    // what it was. The rest mirror the top set's own defaults, so raising the
+    // master on its own changes nothing until an underside number moves.
+    uSplit: { value: 0 },
+    uSplitLine: { value: 0 },
+    uSplitSoft: { value: 0.25 },
+    uSplitPaint: { value: 0 },
+    uSplitStrength: { value: 0.35 },
+    uSplitSize: { value: 0.4 },
+    uSplitContrast: { value: 1 },
+    uSplitColor: { value: new THREE.Color(0x0a2233) },
+    uSplitBase: { value: new THREE.Color(0xffffff) },
   };
   material.userData.__noiseUniforms = u;
 
@@ -201,10 +279,26 @@ export function attachNoiseShader(material, preset = null) {
     // would silently stop reaching any of them.
     Object.assign(shader.uniforms, u, wetSea);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vNoisePos;\nvarying vec3 vNoiseWorld;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vNoisePos;\nvarying vec3 vNoiseWorld;\nvarying float vNoiseUp;')
       // Straight after <begin_vertex>, where `transformed` is still the
       // bind-pose position — see the note at the top of this file.
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvNoisePos = transformed;')
+      //
+      // vNoiseUp IS WRITTEN TWICE, and the first write is the fallback. The
+      // honest normal is `transformedNormal`, which only exists after
+      // <defaultnormal_vertex> — and MeshBasicMaterial's vertex shader only
+      // includes that chunk when it is skinned or has an envmap. An unlit,
+      // unskinned body (the procedural shapes wear this shader too) would leave
+      // the varying unwritten, which is not zero, it is UNDEFINED: one driver
+      // draws a belly, another draws a back. So it is seeded here off the raw
+      // attribute, which is the right answer on exactly the bodies that have
+      // no skinning to move it, and overwritten below wherever the chunk runs.
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+\tvNoisePos = transformed;
+\tvNoiseUp = dot(normalize(normalMatrix * normal), normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));`)
+      // ...and the posed normal, after skinning, morphs and the model's own
+      // flip, wherever the lit and skinned materials compute one.
+      .replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
+\tvNoiseUp = dot(normalize(transformedNormal), normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));`)
       // ...and straight BEFORE <project_vertex>, which is the last moment
       // `transformed` is still a position rather than a clip-space vertex — and
       // by then it has been through the morph, skin and displacement chunks, so
@@ -222,7 +316,11 @@ export function attachNoiseShader(material, preset = null) {
       // <dithering_fragment> below, and both chunks sit at the top level of
       // main() so a plain local reaches from one to the other.
       .replace('#include <map_fragment>', `#include <map_fragment>
-${MOTTLE_FRAGMENT_GLSL}`)
+  // What the body was before any of this — the underside pass below starts
+  // from the same photograph the top pass did, not from the top's result.
+  vec3 noisePre = diffuseColor.rgb;
+${MOTTLE_FRAGMENT_GLSL}
+${SPLIT_FRAGMENT_GLSL}`)
       // THE PHOTOGRAPH'S OTHER HALF. Covering the colour map is not enough on
       // the creatures that most need covering, and this is the line that makes
       // "cover the photo map" mean it.
@@ -461,6 +559,23 @@ export function applyNoiseSettings() {
     u.uWetCausticUp.value = p.wetCausticUp ?? 0.75;
     u.uWetGlow.value = p.wetGlow ?? 1;
     u.uWetTint.value = p.wetTint ?? 0.5;
+
+    // THE SKY/OCEAN SPLIT. Flat keys for the same reason the film's are. The
+    // master folds `enabled` in like everything else on this root, and each
+    // underside number falls back to the TOP set's own default rather than to
+    // the top set's value — so a preset that names `split: 1` and nothing else
+    // is showing you the base mottle on the belly, which is what the slider in
+    // the lab reads, rather than silently copying whatever the back is wearing.
+    u.uSplit.value = (cfg.enabled === false || p.enabled === false)
+      ? 0 : Math.max(0, Math.min(1, p.split ?? 0));
+    u.uSplitLine.value = Math.max(-1, Math.min(1, p.splitLine ?? 0));
+    u.uSplitSoft.value = Math.max(0, p.splitSoft ?? 0.25);
+    u.uSplitPaint.value = Math.max(0, Math.min(1, p.splitPaint ?? 0));
+    u.uSplitStrength.value = p.splitStrength ?? 0.35;
+    u.uSplitSize.value = p.splitSize ?? 0.4;
+    u.uSplitContrast.value = p.splitContrast ?? 1;
+    u.uSplitColor.value.set(p.splitColor ?? 0x0a2233);
+    u.uSplitBase.value.set(p.splitBaseColor ?? 0xffffff);
   }
 }
 

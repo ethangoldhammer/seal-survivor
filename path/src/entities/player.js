@@ -4,7 +4,7 @@ import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, apply
 import { rollLoadout, laserReachMul, DEFAULT_LOADOUT } from '../loadout.js';
 import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
 import { flipperSideForStack, finElementsIn, otherSide } from '../flipperSide.js';
-import { createVisual, getAssetSizeMultiplier } from '../assets.js';
+import { ASSETS, createVisual, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
@@ -12,8 +12,9 @@ import { createAimRig } from '../systems/aimRig.js';
 import { createCelebrationDriver, resetCelebration, celebrationSpin } from '../systems/celebrate.js';
 import { createClapDriver, resetClap } from '../systems/clap.js';
 import { createBreathDriver } from '../systems/breathe.js';
+import { createJawDriver } from '../systems/jaw.js';
 import { attachPlayerOutline } from '../systems/outlines.js';
-import { cancelDash, dashSteer, strikeState } from '../systems/strike.js';
+import { cancelDash, dashSteer, steerFollow, strikeState } from '../systems/strike.js';
 
 // dashSteer's per-frame result, reused so a dash frame allocates nothing.
 const steerStep = { heading: 0, speed: 0, breakOut: false };
@@ -354,6 +355,54 @@ export function bodyLowest(share = 0) {
   return player.mesh.position.y - line;
 }
 
+// THE SEAL'S OWN JAW, on a swallow — see CONFIG.pickups.jaw.
+//
+// The rig is ASSETS.ship.biteRig with a live `openAngle`: the driver reads it
+// every frame, so `openMul` moves under the tuner mid-bite and one mouthful can
+// open the mouth wider than another without a second driver. `_biteMul` is that
+// mouthful's own share, set by sealBite below.
+let _biteMul = 1;
+// Seconds until the jaw may snap again. See `minGap` — a gulp swallows a whole
+// pile in one frame.
+let _biteGap = 0;
+
+function createSealJaw(body) {
+  const base = ASSETS.ship?.biteRig;
+  if (!base) return null;
+  const rig = {
+    ...base,
+    get openAngle() {
+      return (base.openAngle ?? 0.5) * (CONFIG.pickups.jaw?.openMul ?? 1) * _biteMul;
+    },
+  };
+  return createJawDriver(body, { rig, timing: () => CONFIG.pickups.jaw ?? CONFIG.bite.jaw });
+}
+
+/**
+ * ONE MOUTHFUL GOING DOWN. Called from every swallow in the game — chum
+ * (through collectChum, which is the funnel all three routes into eating share),
+ * a chunk of meat, and each of the four orbs.
+ *
+ * @param kind  which of CONFIG.pickups.jaw's per-kind widths this is —
+ *   'chum' | 'chunk' | 'orb'. An unknown one opens at the full angle.
+ */
+export function sealBite(kind = 'orb') {
+  const cfg = CONFIG.pickups.jaw;
+  if (!cfg?.enabled || !player.jaw) return;
+  const mul = cfg[kind] ?? 1;
+  // Inside the rate-limit window the mouthfuls MERGE rather than queue: a gulp
+  // that takes a chunk and nine orbs together is one snap, opened by the chunk.
+  // Raising it mid-bite widens the gape live, because openAngle is read per
+  // frame.
+  if (_biteGap > 0) {
+    _biteMul = Math.max(_biteMul, mul);
+    return;
+  }
+  _biteMul = mul;
+  _biteGap = cfg.minGap ?? 0;
+  player.jaw.bite();
+}
+
 export function initPlayer(scene) {
   const group = new THREE.Group();
   group.name = 'player';
@@ -373,8 +422,127 @@ export function initPlayer(scene) {
   player.celebrate = createCelebrationDriver(body);
   player.clap = createClapDriver(body);
   player.breathe = createBreathDriver(body);
+  player.jaw = createSealJaw(body);
   scene.add(group);
   recomputeStats();
+}
+
+// ---------------------------------------------------------------------------
+// A SECOND SEAL. Everything above is written against `player`, a module
+// singleton — and every function below that moves or poses the animal takes
+// the seal as a trailing argument that defaults to it, so the run reads as it
+// always did and a second body (systems/versus.js's player 2) runs the SAME
+// code: the same thrust, ceiling, dash steering and follow-through, the same
+// facing, mirror, barrel roll, crane and tremble, the same clip state machine,
+// breath, jaw and aim rig. Two seals, one updatePlayer.
+//
+// createSealState() is the per-body subset of `player` — the fields
+// updatePlayer/poseBody read and write on the animal. The run-only fields
+// (upgrades, stats, level, humansEaten, bossesDefeated, loadout) stay on
+// `player`; a second seal shares the run's stats through its own `stats`.
+// KEEP THIS LIST IN STEP with the literal above: a field added to `player`
+// that updatePlayer reads must be seeded here too, or player 2 reads undefined
+// where player 1 reads a number.
+// ---------------------------------------------------------------------------
+export function createSealState() {
+  return {
+    mesh: null, body: null, aimRig: null, celebrate: null, clap: null, breathe: null, jaw: null,
+    bodyBox: null, bodyProbe: null,
+    celebrateTag: null,     // the tag its celebration driver was made with (celebrationSpin)
+    velocity: new THREE.Vector2(0, 0),
+    knockX: 0, knockY: 0,
+    hp: 100, invuln: 0,
+    stats: {},
+    aboveSurface: false,
+    surfaceRest: 0, surfaceRestTimer: 0,
+    breachDir: 0,
+    airTime: 0, airJumps: 0, airPeak: 0,
+    mirrorAngle: 0,
+    rollAngle: 0, rollFrom: 0, rollTo: 0, rollElapsed: 0, rollDuration: 0,
+    chargePose: 0, chumSealed: false,
+    snareTimer: 0, snareMul: 1, snareThaw: 0.3,
+    craneAngle: 0, chargeClock: 0, shudderAmp: 0,
+    oxygen: CONFIG.oxygen.max,
+    mirrored: null, mirrorFrom: 0, mirrorTo: 0, mirrorT: 1, mirrorDuration: 0,
+    anim: null,
+    hitThisFrame: false,
+    dashTimer: 0,
+    comboSpeedMul: 1,
+    chargeThrustMul: 1,
+  };
+}
+
+/**
+ * Give a seal a body: the same build as initPlayer's, minus the outline
+ * (systems/outlines.js keeps ONE player outline and retires the last on every
+ * attach — a second call would strip player 1's). `celebrateTag` is what the
+ * celebration system addresses this body by (see playCelebration's `only`).
+ */
+export function buildSealBody(seal, scene, { name = 'seal', celebrateTag = null } = {}) {
+  const group = new THREE.Group();
+  group.name = name;
+  const body = createVisual('ship');
+  group.add(body);
+  seal.mesh = group;
+  seal.body = body;
+  seal.bodyBox = measureBody(body);
+  seal.bodyProbe = probeBody(body);
+  seal.anim = createAnimationController(body);
+  seal.aimRig = createAimRig(body);
+  seal.celebrate = createCelebrationDriver(body, celebrateTag);
+  seal.celebrateTag = celebrateTag;
+  seal.breathe = createBreathDriver(body);
+  seal.jaw = createSealJaw(body);
+  scene.add(group);
+  return seal;
+}
+
+/**
+ * Put a seal's BODY state back where a fresh run starts it — the per-body
+ * half of resetPlayer, for a seal that is not the run's. Position is the
+ * caller's; stats, hp and air are too.
+ */
+export function resetSealBody(seal) {
+  if (seal.mesh) seal.mesh.rotation.z = 0;
+  seal.mirrorAngle = 0;
+  seal.craneAngle = 0;
+  seal.chargeClock = 0;
+  seal.shudderAmp = 0;
+  if (seal.body) {
+    seal.body.rotation.y = 0;
+    seal.body.quaternion.identity();
+    seal.body.position.set(0, 0, 0);
+  }
+  seal.rollAngle = 0; seal.rollElapsed = 0; seal.rollDuration = 0; seal.rollFrom = 0; seal.rollTo = 0;
+  seal.velocity.set(0, 0);
+  seal.knockX = 0; seal.knockY = 0;
+  seal.aboveSurface = false;
+  seal.breachDir = 0;
+  seal.airTime = 0; seal.airJumps = 0; seal.airPeak = 0;
+  seal.mirrored = null;
+  seal.mirrorFrom = 0; seal.mirrorTo = 0; seal.mirrorT = 1; seal.mirrorDuration = 0;
+  seal.invuln = 0;
+  seal.dashTimer = 0;
+  seal.comboSpeedMul = 1;
+  seal.chargeThrustMul = 1;
+  seal.chumSealed = false;
+  seal.chargePose = 0;
+  seal.snareTimer = 0; seal.snareMul = 1;
+  seal.anim?.reset();
+  seal.aimRig?.reset();
+  seal.celebrate?.reset();
+  seal.breathe?.reset();
+  seal.jaw?.reset();
+  seal.surfaceRest = 0;
+  seal.surfaceRestTimer = 0;
+  seal.hitThisFrame = false;
+}
+
+/** Take a seal's body out of the scene and drop the drivers that hold its bones. */
+export function disposeSealBody(seal, scene) {
+  if (seal.mesh) scene?.remove(seal.mesh);
+  seal.mesh = seal.body = seal.anim = seal.aimRig = seal.celebrate = seal.breathe = seal.jaw = null;
+  seal.bodyBox = seal.bodyProbe = null;
 }
 
 // player.body is a singleton created once above, not repeatedly cloned like
@@ -407,6 +575,9 @@ export function rebuildShipBody() {
   player.celebrate = createCelebrationDriver(body);
   player.clap = createClapDriver(body);
   player.breathe = createBreathDriver(body);
+  // Bones are per-instance, as above — the old driver holds a bone that just
+  // left the scene, and its anti-ratchet reference pose belongs to it too.
+  player.jaw = createSealJaw(body);
 }
 
 /**
@@ -586,10 +757,10 @@ export function addUpgrade(id, rarity = null, random = Math.random) {
  * are properties of the BUILD and this file is where the build lives:
  *
  *   at the cap        `maxStacks` is a real ceiling, and a pickup that ignored
- *                     it would be the one route in the game past a limit every
- *                     card in the level-up menu respects (see availableUpgrades
- *                     below, which drops a maxed card from the offer pool for
- *                     exactly the same reason).
+ *                     it would be the one route in the game past it. THIS is
+ *                     where the cap is enforced now: availableUpgrades below
+ *                     never offers a held card at all, so the level-up screen
+ *                     cannot reach a second stack of anything.
  *   switched off      an upgrade turned off in upgrades.csv is out of the game.
  *                     A run that is still holding one from before the row was
  *                     disabled must not be able to deepen it.
@@ -655,7 +826,12 @@ export function availableUpgrades() {
   // run may collect (see the note there). A Set of ids, so six escorts count
   // once — the cap is on variety, never on depth.
   const companions = new Set();
+  // EVERY CARD THE RUN ALREADY HOLDS, at any depth. A level-up screen offers
+  // NEW upgrades only (see the filter below), so this is the whole test — the
+  // count no longer matters, only whether it is there at all.
+  const held = new Set();
   for (const pick of player.upgrades) {
+    held.add(pick.id);
     const u = CONFIG.upgrades.find((x) => x.id === pick.id);
     if (!u) continue;
     if (u.exclusive && !claimed.has(u.exclusive)) claimed.set(u.exclusive, u.id);
@@ -673,13 +849,19 @@ export function availableUpgrades() {
     if (!unlockGranted('upgrade', u.id)) return false;
     // Held the group already, and it was somebody else.
     if (u.exclusive && claimed.has(u.exclusive) && claimed.get(u.exclusive) !== u.id) return false;
-    // The run's companion slots are full, and this would be a NEW one. One
-    // already held is always still offered: the cap is on how many different
-    // animals a run collects, not on how deep any of them goes.
+    // The run's companion slots are full. Every card reaching here is one the
+    // run does not hold, so a companion offered now is always a NEW animal —
+    // the cap is on how many different animals a run collects, and depth is not
+    // bought here at all any more.
     if (companionCap != null && isCompanionCard(u)
-      && !companions.has(u.id) && companions.size >= companionCap) return false;
-    if (u.maxStacks == null) return true;
-    return player.upgrades.filter((p) => p.id === u.id).length < u.maxStacks;
+      && companions.size >= companionCap) return false;
+    // ONE CARD, ONCE. The level-up screen is where a run picks up something it
+    // does not have; DEPTH is bought on the two surfaces built for it — the
+    // post-boss hive ceremony and the level blob, both of which draw from
+    // levelableUpgrades() above and both of which respect `maxStacks` there.
+    // Offering a card the player already holds spends one of three slots on a
+    // choice they have already made, and hid the cards they had not seen yet.
+    return !held.has(u.id);
   });
 }
 
@@ -757,6 +939,10 @@ export function resetPlayer() {
   // A new run starts on a fresh breath, not mid-exhale, and never still
   // relaxed from where the last seal came to rest.
   player.breathe?.reset();
+  // Shut, and holding no reference pose from the last run's last mouthful.
+  player.jaw?.reset();
+  _biteMul = 1;
+  _biteGap = 0;
   player.surfaceRest = 0;
   player.surfaceRestTimer = 0;
   recomputeStats();
@@ -790,19 +976,19 @@ export function resetPlayer() {
 // STRONGEST AND LONGEST WIN rather than the newest. Two overlapping sources
 // would otherwise let the weaker one, arriving second, cancel the stronger —
 // and the shape that produces is a freeze that a glancing second hit undoes.
-export function snarePlayer(seconds, mul = 0, thaw = 0.3) {
+export function snarePlayer(seconds, mul = 0, thaw = 0.3, seal = player) {
   if (!(seconds > 0)) return;
   // Expired: start from free rather than from whatever the last one left, or a
   // long-dead weak snare would floor every later one at its own multiplier.
-  if (player.snareTimer <= 0) player.snareMul = 1;
-  player.snareTimer = Math.max(player.snareTimer, seconds);
-  player.snareMul = Math.min(player.snareMul, Math.max(0, mul));
-  player.snareThaw = Math.max(0, thaw);
+  if (seal.snareTimer <= 0) seal.snareMul = 1;
+  seal.snareTimer = Math.max(seal.snareTimer, seconds);
+  seal.snareMul = Math.min(seal.snareMul, Math.max(0, mul));
+  seal.snareThaw = Math.max(0, thaw);
 }
 
 /** Is the seal held right now? For the readouts and the harness. */
-export function playerSnared() {
-  return player.snareTimer > 0;
+export function playerSnared(seal = player) {
+  return seal.snareTimer > 0;
 }
 
 // What fraction of its own swimming the seal has this frame, and the only
@@ -815,37 +1001,78 @@ export function playerSnared() {
 // itself is still exactly as long as it was asked to be; the thaw is spent
 // inside it, which is why a snare shorter than its own thaw is simply a shove
 // that fades rather than an error.
-function snareFactor(dt) {
-  if (player.snareTimer <= 0) return 1;
-  player.snareTimer -= dt;
-  if (player.snareTimer <= 0) {
-    player.snareTimer = 0;
-    player.snareMul = 1;
+function snareFactor(dt, seal = player) {
+  if (seal.snareTimer <= 0) return 1;
+  seal.snareTimer -= dt;
+  if (seal.snareTimer <= 0) {
+    seal.snareTimer = 0;
+    seal.snareMul = 1;
     return 1;
   }
-  const thaw = player.snareThaw ?? 0;
-  const out = thaw > 0 && player.snareTimer < thaw ? 1 - player.snareTimer / thaw : 0;
-  return player.snareMul + (1 - player.snareMul) * out;
+  const thaw = seal.snareThaw ?? 0;
+  const out = thaw > 0 && seal.snareTimer < thaw ? 1 - seal.snareTimer / thaw : 0;
+  return seal.snareMul + (1 - seal.snareMul) * out;
 }
 
-export function updatePlayer(dt, input) {
-  const s = player.stats;
-  const pos = player.mesh.position;
+export function updatePlayer(dt, input, seal = player, st = strikeState) {
+  const s = seal.stats;
+  const pos = seal.mesh.position;
 
   // Decremented up here rather than down by the clamp: everything below wants
   // to know whether this frame is a dash frame, not just the clamp.
-  if (player.dashTimer > 0) player.dashTimer -= dt;
-  const dashing = player.dashTimer > 0;
-  const combo = player.comboSpeedMul || 1;
+  if (seal.dashTimer > 0) seal.dashTimer -= dt;
+  const dashing = seal.dashTimer > 0;
+  const combo = seal.comboSpeedMul || 1;
   // Thrust only — the ceiling and the dash below read `combo` alone.
-  const boost = player.chargeThrustMul || 1;
+  const boost = seal.chargeThrustMul || 1;
   // Advanced exactly once a frame, here, because it is a clock as well as a
   // multiplier — reading it twice would run the hold out at double speed.
-  const snare = snareFactor(dt);
+  const snare = snareFactor(dt, seal);
+
+  // --- THE RECOVERY ---------------------------------------------------------
+  //
+  // How much of the dash's own handling the seal still has, now that the dash
+  // is over: 1 on the frame it ends, fading to nothing across
+  // CONFIG.strike.dashControl.followThrough. See steerFollow(st) in
+  // systems/strike.js.
+  //
+  // 1 FOR ANY LIVE DASH, and that includes the ones that are not strikes: the
+  // breach impulse borrows `dashTimer` for its ceiling and has always steered
+  // at full authority. Reading steerFollow(st) alone would hand it a 0 and take
+  // its steering away entirely, which is the sort of regression that shows up
+  // as "jumping feels wrong" three features away from anything that mentions a
+  // strike. `st.active` is in the test as well because dashTimer is
+  // decremented in this function and dashTimeLeft in updateStrike, which runs
+  // later in the frame — so there is one frame where the strike is live and
+  // the timer here has already expired.
+  const inDash = dashing || st.active;
+  const follow = inDash ? 1 : steerFollow(st);
+  // ...and the same number as "how much of the recovery is left", which is 0
+  // WHILE the dash is running. The two are separated because everything the
+  // recovery buys — the thrust, the ceiling — must not be handed to a dash as
+  // well: a strike's velocity is overwritten outright by dashSteer, so a boost
+  // there would do nothing at all for a strike and quietly double a breach.
+  const recover = inDash ? 0 : follow;
 
   if (CONFIG.player.thrustEnabled) {
-    player.velocity.x += input.move.x * s.thrust * combo * boost * snare * dt;
-    player.velocity.y += input.move.y * s.thrust * combo * boost * snare * dt;
+    // THE THRUST, AND THE PUSH OUT OF A STRIKE.
+    //
+    // Ordinary swimming is 19 u/s^2 against a body the dash left doing 34, and
+    // the turn that buys is a_perp/v — about 22 degrees a second, against the
+    // dash's 688. So the moment a strike ended the seal became the least agile
+    // thing on screen, at exactly the speed that most needed steering, and the
+    // charge thrust bonus (chargeThrustMul) was gone too because the wind-up
+    // had just spent the bar it reads. Both of the things that make the animal
+    // feel quick switched off on the same frame.
+    //
+    // `followThrust` is the answer and it is deliberately on the SAME window as
+    // the steering above rather than a second timer: they are one thing to the
+    // player — the seal is still moving like it was mid-strike, and then it
+    // isn't. Multiplies with the charge bonus rather than replacing it, so a
+    // seal that has already refilled keeps what refilling bought.
+    const push = 1 + ((CONFIG.strike.dashControl?.followThrust ?? 1) - 1) * recover;
+    seal.velocity.x += input.move.x * s.thrust * combo * boost * push * snare * dt;
+    seal.velocity.y += input.move.y * s.thrust * combo * boost * push * snare * dt;
   }
 
   // Steering mid-dash. A strike used to be a straight line you waited out —
@@ -868,27 +1095,50 @@ export function updatePlayer(dt, input) {
   // break-out — because the lens corridor forecasts a dash by running the
   // same function ahead of time, and a copy here would be a corridor that
   // lies the first time one of them is retuned.
-  if (dashing && input.move.lengthSq() > 0.001) {
-    const v = player.velocity.length();
+  //
+  // WHAT COUNTS AS A HAND ON THE WHEEL, and it used to be one hand only.
+  //
+  // The gate was `input.move.lengthSq() > 0.001` — the movement stick, and
+  // nothing else. But the thing being steered TOWARD is strikeDirection(move,
+  // aim), the angular halfway point between BOTH hands, and the aim was a full
+  // participant in it. So a player aiming with the mouse and not holding WASD
+  // could swing the cursor through ninety degrees mid-dash and turn the seal
+  // exactly zero: the aim decided where the dash went for one frame at the
+  // launch and then had no vote for the rest of it. Measured, before this: 90
+  // degrees of cursor bought 0.0 degrees of seal.
+  //
+  // `aimLive` and not `aim`, because `aim` is never off — it holds the last
+  // direction anything gave it, forever, which is the right answer for the
+  // guns and the wrong one here. A gamepad with an idle right stick would
+  // otherwise steer the dash toward a heading nobody is asking for. See the
+  // note on it in input.js.
+  //
+  // AND IT OUTLIVES THE DASH. `steerFollow(st)` is 1 while the dash is live and
+  // fades to nothing over dashControl.followThrough afterwards — the exit from
+  // the manoeuvre, rather than the hands being cut off on the frame the timer
+  // runs out. See steerFollow(st) in systems/strike.js.
+  const handOn = input.move.lengthSq() > 0.001 || input.aimLive;
+  if ((dashing || follow > 0) && handOn) {
+    const v = seal.velocity.length();
     if (v > 0.001) {
-      const cur = Math.atan2(player.velocity.y, player.velocity.x);
+      const cur = Math.atan2(seal.velocity.y, seal.velocity.x);
       // How far through the strike this is, for the takeover curve. A dash
       // that is not a strike (the breach impulse borrows dashTimer for its
       // ceiling) has no launch to be committed to, and steers at full
       // authority as it always did.
-      const strike = strikeState.active && strikeState.dashDuration > 0;
-      const progress = strike ? 1 - strikeState.dashTimeLeft / strikeState.dashDuration : 1;
+      const strike = st.active && st.dashDuration > 0;
+      const progress = strike ? 1 - st.dashTimeLeft / st.dashDuration : 1;
       // ...and what it was bought with: a one-pip dash does not steer at all.
-      const power = strike ? strikeState.power : 1;
-      dashSteer(cur, v, input.move.x, input.move.y, input.aim.x, input.aim.y, combo, dt, s, progress, power, steerStep);
+      const power = strike ? st.power : 1;
+      dashSteer(cur, v, input.move.x, input.move.y, input.aim.x, input.aim.y, combo, dt, s, progress, power, steerStep, follow);
       if (steerStep.breakOut) {
         // BREAK OUT. Steering hard AGAINST the dash ends it on the spot and
         // hands back ordinary swimming, at the cost of the reach not yet
         // spent.
-        player.dashTimer = 0;
-        cancelDash();
+        seal.dashTimer = 0;
+        cancelDash(st);
       } else {
-        player.velocity.set(Math.cos(steerStep.heading) * steerStep.speed, Math.sin(steerStep.heading) * steerStep.speed);
+        seal.velocity.set(Math.cos(steerStep.heading) * steerStep.speed, Math.sin(steerStep.heading) * steerStep.speed);
       }
     }
   }
@@ -898,7 +1148,7 @@ export function updatePlayer(dt, input) {
   // (CONFIG.arena.gravity — see the note there for where 29.7 comes from).
   const airborne = pos.y > bounds.surfaceY;
   if (airborne && CONFIG.arena.gravity > 0) {
-    player.velocity.y -= CONFIG.arena.gravity * dt;
+    seal.velocity.y -= CONFIG.arena.gravity * dt;
   }
 
   // The strike dash gets its own, higher ceiling for the length of the dash.
@@ -914,9 +1164,19 @@ export function updatePlayer(dt, input) {
   // the clamp runs every frame, so a ceiling cut to a twelfth takes the
   // momentum out on the frame the snare lands rather than waiting for drag to
   // bleed it off over the second the hold was supposed to last.
-  const ceiling = (dashing ? Math.max(s.maxSpeed, s.strikeDashSpeed) : s.maxSpeed) * combo * snare;
-  const speed = player.velocity.length();
-  if (speed > ceiling) player.velocity.multiplyScalar(ceiling / speed);
+  //
+  // AND IT IS LET DOWN RATHER THAN DROPPED. A dash ends carrying about 42 u/s
+  // and the ordinary ceiling is 34, so the frame the timer ran out took a
+  // fifth of the seal's speed away in one step — a stumble at the end of every
+  // strike, and the half of "it doesn't feel smooth" that no amount of turning
+  // fixes. Over the recovery the ceiling walks back down to the ordinary one,
+  // so the momentum is spent rather than confiscated. `followCeiling: false`
+  // restores the snap.
+  const dashCeiling = Math.max(s.maxSpeed, s.strikeDashSpeed);
+  const eased = CONFIG.strike.dashControl?.followCeiling === false ? 0 : recover;
+  const ceiling = (dashing ? dashCeiling : s.maxSpeed + (dashCeiling - s.maxSpeed) * eased) * combo * snare;
+  const speed = seal.velocity.length();
+  if (speed > ceiling) seal.velocity.multiplyScalar(ceiling / speed);
 
   // Drag, and WHICH drag depends on what the seal is in. `friction` is the
   // water's — 0.98 per frame, i.e. 70% of your speed gone every second, which
@@ -926,10 +1186,10 @@ export function updatePlayer(dt, input) {
   // and dropped nearly straight back in, so the jump read as short no matter
   // what gravity was set to. Air is nearly frictionless by comparison, so the
   // arc up there is now the ballistic curve gravity alone describes.
-  player.velocity.multiplyScalar(Math.pow(airborne ? CONFIG.arena.airDrag : s.friction, dt * 60));
+  seal.velocity.multiplyScalar(Math.pow(airborne ? CONFIG.arena.airDrag : s.friction, dt * 60));
 
-  pos.x += player.velocity.x * dt;
-  pos.y += player.velocity.y * dt;
+  pos.x += seal.velocity.x * dt;
+  pos.y += seal.velocity.y * dt;
 
   // BEING SHOVED, integrated on top of whatever the seal's own swimming asked
   // for and decaying exponentially back to nothing. See applyPlayerKnockback
@@ -941,25 +1201,56 @@ export function updatePlayer(dt, input) {
   // weaker the better the player's movement upgrades were, which is the wrong
   // way round; and bleeding it through the water's friction as well as its own
   // decay would double-count the same slowing.
-  if (player.knockX || player.knockY) {
-    pos.x += player.knockX * dt;
-    pos.y += player.knockY * dt;
+  if (seal.knockX || seal.knockY) {
+    pos.x += seal.knockX * dt;
+    pos.y += seal.knockY * dt;
     const drop = Math.exp(-(CONFIG.playerKnockback?.decay ?? 9) * dt);
-    player.knockX *= drop;
-    player.knockY *= drop;
-    if (Math.abs(player.knockX) < 0.01) player.knockX = 0;
-    if (Math.abs(player.knockY) < 0.01) player.knockY = 0;
+    seal.knockX *= drop;
+    seal.knockY *= drop;
+    if (Math.abs(seal.knockX) < 0.01) seal.knockX = 0;
+    if (Math.abs(seal.knockY) < 0.01) seal.knockY = 0;
   }
 
-  const wasAbove = player.aboveSurface;
-  const hitWall = clampToArena(pos, player.velocity, s.hitRadius, CONFIG.arena.wallRestitution);
+  const wasAbove = seal.aboveSurface;
+  const hitWall = clampToArena(pos, seal.velocity, s.hitRadius, CONFIG.arena.wallRestitution);
   if (hitWall) {
-    feedback('bounce', { x: pos.x, y: pos.y, vx: player.velocity.x, vy: player.velocity.y });
+    feedback('bounce', { x: pos.x, y: pos.y, vx: seal.velocity.x, vy: seal.velocity.y });
+  }
+
+  // WHICH WAY THE STRIKE IS ACTUALLY GOING.
+  //
+  // `st.dashDir` is written once, at the release, and ten things read
+  // it every frame of the dash as though it were the current heading: the
+  // magnet's corridor (magnetDistance in systems/chumMagnet.js), the shove a
+  // rammed creature takes, the direction a boat is jostled and damaged from,
+  // the whale's ram, the camera's lead and the aim indicator. But a dash is
+  // STEERED — dashSteer above swings it up to 79 degrees at the shipped
+  // tuning — so every one of them was describing the line the player let go
+  // on rather than the line the seal is flying.
+  //
+  // The magnet is the one you can see. Its corridor is a capsule swept down
+  // `dashDir`, ten units back and three forward, and while the seal curves out
+  // of that lane the capsule stays behind on the launch line: the food comes
+  // in from a direction the player did not go, and the chum they steered INTO
+  // is out of the lane and left in the water. A strike into a crowded pool
+  // reads as a set path through it, which is exactly what the corridor still
+  // thought it was.
+  //
+  // Taken from the VELOCITY rather than from dashSteer's result, and after the
+  // wall clamp rather than before it, so the one other thing that can turn a
+  // dash — bouncing off the arena edge — is in it too. A dash reversed by a
+  // wall was the same staleness with the sign flipped.
+  if (st.active) {
+    const dv = seal.velocity.length();
+    if (dv > 1e-4) {
+      st.dashDir.x = seal.velocity.x / dv;
+      st.dashDir.y = seal.velocity.y / dv;
+    }
   }
 
   // Breaching the surface throws up a splash, in either direction.
-  player.aboveSurface = pos.y > bounds.surfaceY;
-  player.breachDir = player.aboveSurface === wasAbove ? 0 : (player.aboveSurface ? 1 : -1);
+  seal.aboveSurface = pos.y > bounds.surfaceY;
+  seal.breachDir = seal.aboveSurface === wasAbove ? 0 : (seal.aboveSurface ? 1 : -1);
 
   // --- resting at the surface ---------------------------------------------
   // A second, gentler reading of the same position, for the ANIMATION only.
@@ -970,19 +1261,19 @@ export function updatePlayer(dt, input) {
   {
     const rest = CONFIG.surfaceRest ?? {};
     const atSurface = pos.y > bounds.surfaceY - (rest.band ?? 1.3);
-    const settled = player.velocity.length() < (rest.speed ?? 2.4);
+    const settled = seal.velocity.length() < (rest.speed ?? 2.4);
     if (rest.enabled !== false && atSurface && settled) {
-      player.surfaceRestTimer += dt;
+      seal.surfaceRestTimer += dt;
     } else {
-      player.surfaceRestTimer = 0;
+      seal.surfaceRestTimer = 0;
     }
     // Ease IN over settleTime once it has held still that long, and OUT over
     // the much shorter releaseTime. Asymmetric on purpose — relaxing is a
     // decision the animal takes its time over, moving is not.
-    const want = player.surfaceRestTimer >= (rest.settleTime ?? 0.7) ? 1 : 0;
-    const tau = want > player.surfaceRest ? (rest.settleTime ?? 0.7) : (rest.releaseTime ?? 0.16);
-    player.surfaceRest += (want - player.surfaceRest) * (1 - Math.exp(-dt / Math.max(0.01, tau)));
-    if (player.surfaceRest < 0.001) player.surfaceRest = 0;
+    const want = seal.surfaceRestTimer >= (rest.settleTime ?? 0.7) ? 1 : 0;
+    const tau = want > seal.surfaceRest ? (rest.settleTime ?? 0.7) : (rest.releaseTime ?? 0.16);
+    seal.surfaceRest += (want - seal.surfaceRest) * (1 - Math.exp(-dt / Math.max(0.01, tau)));
+    if (seal.surfaceRest < 0.001) seal.surfaceRest = 0;
   }
 
   // THE ARC'S CLOCK. Zeroed on the way UP and left alone on the way down —
@@ -995,12 +1286,12 @@ export function updatePlayer(dt, input) {
   // the usual reason — but they are reset on the upward crossing alongside the
   // clock, because "a new breach starts" is one event and splitting it across
   // two files is how one of the three ends up not being reset.
-  if (player.breachDir > 0) {
-    player.airTime = 0;
-    player.airJumps = 0;
-    player.airPeak = 0;
-  } else if (player.aboveSurface) {
-    player.airTime += dt;
+  if (seal.breachDir > 0) {
+    seal.airTime = 0;
+    seal.airJumps = 0;
+    seal.airPeak = 0;
+  } else if (seal.aboveSurface) {
+    seal.airTime += dt;
   }
 
   // LEAVING the water only. This used to fire in both directions, which meant
@@ -1009,7 +1300,7 @@ export function updatePlayer(dt, input) {
   // The way down is now its own event, fired from main.js, because what it is
   // worth depends on the air that was banked and entities/ has no business
   // knowing about that. See CONFIG.feedback.reentry and systems/airborne.js.
-  if (player.breachDir > 0) {
+  if (seal.breachDir > 0) {
     // TWO KINDS OF CROSSING, and they are not the same moment. A head lifted
     // for a breath and an animal clearing the sea shared one event — one
     // sound, one shake, one cloud of foam — which meant the quietest thing the
@@ -1020,15 +1311,15 @@ export function updatePlayer(dt, input) {
     // systems/airborne.js rather than here, so the launch and the landing are
     // decided by one file in one language. `null` is the split switched off:
     // every crossing is a breach, exactly as before.
-    const up = Math.abs(player.velocity.y);
-    const launch = launchFor(player, up);
+    const up = Math.abs(seal.velocity.y);
+    const launch = launchFor(seal, up);
     const flying = !launch || launch.flying;
     const at = {
       x: pos.x,
       y: bounds.surfaceY,
       dirX: 0,
       dirY: 1,
-      vx: player.velocity.x,
+      vx: seal.velocity.x,
       vy: up,
       scale: launch ? launch.scale : Math.min(2, 0.5 + up / 14),
     };
@@ -1058,14 +1349,14 @@ export function updatePlayer(dt, input) {
     // Surfacing for air is the moment a seal vocalizes; barking as you dive
     // back under reads as a hiccup. Lowest one-shot priority, so a hit or
     // death cuts it off cleanly.
-    player.anim?.trigger('bark');
+    seal.anim?.trigger('bark');
   }
 
   if (CONFIG.oxygen.enabled) {
-    if (player.aboveSurface) {
-      player.oxygen = Math.min(s.maxOxygen, player.oxygen + s.oxygenRefillRate * dt);
+    if (seal.aboveSurface) {
+      seal.oxygen = Math.min(s.maxOxygen, seal.oxygen + s.oxygenRefillRate * dt);
     } else {
-      player.oxygen = Math.max(0, player.oxygen - CONFIG.oxygen.depleteRate * dt);
+      seal.oxygen = Math.max(0, seal.oxygen - CONFIG.oxygen.depleteRate * dt);
     }
   }
 
@@ -1075,7 +1366,7 @@ export function updatePlayer(dt, input) {
   // a level-up, not once a frame. applyIronLung re-derives four numbers from
   // the stash applyDamageScaling left, so a run without the card pays one
   // property lookup for it. See stats.js.
-  applyIronLung(s, player.oxygen);
+  if (seal === player) applyIronLung(s, seal.oxygen);
 
   // --- facing, mirror, roll, crane and the body transform -------------------
   // The whole block moved into poseBody below, so the title screen can pose the
@@ -1088,9 +1379,10 @@ export function updatePlayer(dt, input) {
   // is still selectable via CONFIG.player.faceMode.
   const useVelocity = CONFIG.player.faceMode !== 'aim';
   poseBody(
+    seal,
     dt,
-    useVelocity ? player.velocity.x : input.aim.x,
-    useVelocity ? player.velocity.y : input.aim.y,
+    useVelocity ? seal.velocity.x : input.aim.x,
+    useVelocity ? seal.velocity.y : input.aim.y,
     {
       // Velocity spends most of a drift near zero, so it needs a floor or the
       // seal spins on rounding noise. An aim vector is always a unit direction
@@ -1111,23 +1403,31 @@ export function updatePlayer(dt, input) {
     },
   );
 
-  if (player.invuln > 0) player.invuln -= dt;
+  if (seal.invuln > 0) seal.invuln -= dt;
 
-  if (player.hp < s.maxHp) {
-    player.hp = Math.min(s.maxHp, player.hp + s.regenPerSec * dt);
+  if (seal.hp < s.maxHp) {
+    seal.hp = Math.min(s.maxHp, seal.hp + s.regenPerSec * dt);
   }
 
-  if (CONFIG.animation.enabled && player.anim) {
+  if (CONFIG.animation.enabled && seal.anim) {
     // aboveSurface picks the land clips (idle/walk) over the water ones —
     // a seal that's breached shouldn't be swim-cycling through the air.
-    const state = stateForSpeed(player.velocity.length(), player.aboveSurface, player.surfaceRest);
-    player.anim.update(dt, state, player.hitThisFrame);
+    const state = stateForSpeed(seal.velocity.length(), seal.aboveSurface, seal.surfaceRest);
+    seal.anim.update(dt, state, seal.hitThisFrame);
     // Straight after the controller, so the breath lands on top of the pose the
     // mixer just wrote rather than under it. Both bones it drives are keyed by
     // every locomotion clip, so this needs no restore of its own — see
     // systems/breathe.js.
-    player.breathe?.update(dt, player.surfaceRest);
+    seal.breathe?.update(dt, seal.surfaceRest);
   }
+
+  // THE JAW, outside the animation gate for the reason the aim rig below is:
+  // it is a reaction the player caused, not a performance, and turning creature
+  // animation off should not stop the seal closing its mouth on its food. After
+  // the mixer either way, so the snap composes over the clip that keys the same
+  // bone rather than being overwritten by it — see systems/jaw.js.
+  if (_biteGap > 0) _biteGap -= dt;
+  seal.jaw?.update(dt);
 
   // Fin and head IK run AFTER the mixer, deliberately: they overwrite the
   // flipper and neck bones the clip just posed, and nothing else. Outside the
@@ -1136,9 +1436,9 @@ export function updatePlayer(dt, input) {
   // performance. This is also the last thing to touch the skeleton before the
   // frame renders, which is what makes the muzzles and bubble anchors it
   // publishes current rather than one frame stale.
-  updateAimRig(dt, input.aim, CONFIG.weapon.autofire, player.chargePose);
+  updateAimRig(dt, input.aim, CONFIG.weapon.autofire, seal.chargePose, false, 0, seal);
 
-  player.hitThisFrame = false;
+  seal.hitThisFrame = false;
 }
 
 /**
@@ -1167,7 +1467,9 @@ export function updatePlayer(dt, input) {
  * @param {number} opts.turnDuration seconds the half-roll takes when the seal
  *   crosses from facing one way to the other
  */
-export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnDuration = 0.35 } = {}) {
+export function poseBody(...args) {
+  const seal = typeof args[0] === 'object' && args[0] !== null ? args.shift() : player;
+  const [dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnDuration = 0.35 } = {}] = args;
   // --- facing -------------------------------------------------------------
   const dirLen = Math.hypot(dirX, dirY);
 
@@ -1179,11 +1481,11 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
     // Smooth toward the target the SHORT way around, so crossing the
     // -pi/pi seam doesn't send it spinning the long way. Frame-rate
     // independent, so the feel doesn't change with framerate.
-    let delta = target - player.mesh.rotation.z;
+    let delta = target - seal.mesh.rotation.z;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
     const t = 1 - Math.exp(-lerpRate * dt);
-    player.mesh.rotation.z += delta * t;
+    seal.mesh.rotation.z += delta * t;
 
     // In side view a full turn would leave the animal belly-up, so the model
     // is mirrored about its own forward axis instead of rolling over.
@@ -1195,15 +1497,15 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
     // uses, so easing the angle across IS the turnaround, and there is no
     // moment where anything jumps. The clip is gone.
     if (CONFIG.view === 'side') {
-      const facingX = Math.cos(player.mesh.rotation.z + Math.PI / 2);
+      const facingX = Math.cos(seal.mesh.rotation.z + Math.PI / 2);
       const wantMirror = facingX < 0;
 
-      if (player.mirrored == null) {
+      if (seal.mirrored == null) {
         // First resolve of the run — there is no previous facing to ease from.
-        player.mirrored = wantMirror;
-        player.mirrorAngle = wantMirror ? Math.PI : 0;
-        player.mirrorT = 1;
-      } else if (wantMirror !== player.mirrored) {
+        seal.mirrored = wantMirror;
+        seal.mirrorAngle = wantMirror ? Math.PI : 0;
+        seal.mirrorT = 1;
+      } else if (wantMirror !== seal.mirrored) {
         // Always rolls the same way rather than unwinding the way it came, so
         // reversing twice reads as one continuous corkscrew instead of a
         // wobble. Started from the CURRENT angle, so a reversal that arrives
@@ -1228,31 +1530,31 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
         const wantParity = wantMirror ? 1 : 0;
         // The next half turn strictly ahead of here, walked on until it is one
         // that leaves the seal upright the new way round.
-        let half = Math.floor(player.mirrorAngle / HALF) + 1;
+        let half = Math.floor(seal.mirrorAngle / HALF) + 1;
         if (((half % 2) + 2) % 2 !== wantParity) half += 1;
-        player.mirrored = wantMirror;
-        player.mirrorFrom = player.mirrorAngle;
-        player.mirrorTo = half * HALF;
-        player.mirrorT = 0;
-        player.mirrorDuration = turnDuration * ((player.mirrorTo - player.mirrorFrom) / HALF);
+        seal.mirrored = wantMirror;
+        seal.mirrorFrom = seal.mirrorAngle;
+        seal.mirrorTo = half * HALF;
+        seal.mirrorT = 0;
+        seal.mirrorDuration = turnDuration * ((seal.mirrorTo - seal.mirrorFrom) / HALF);
       }
     }
   }
 
   // Ease the mirror across. Smoothstep, like the barrel roll — a linear sweep
   // starts and stops abruptly, which is the same pop in a different costume.
-  if (player.mirrorT < 1) {
-    player.mirrorT = Math.min(1, player.mirrorT + dt / Math.max(0.01, player.mirrorDuration));
-    const e = player.mirrorT * player.mirrorT * (3 - 2 * player.mirrorT);
-    player.mirrorAngle = player.mirrorFrom + (player.mirrorTo - player.mirrorFrom) * e;
-    if (player.mirrorT >= 1) {
+  if (seal.mirrorT < 1) {
+    seal.mirrorT = Math.min(1, seal.mirrorT + dt / Math.max(0.01, seal.mirrorDuration));
+    const e = seal.mirrorT * seal.mirrorT * (3 - 2 * seal.mirrorT);
+    seal.mirrorAngle = seal.mirrorFrom + (seal.mirrorTo - seal.mirrorFrom) * e;
+    if (seal.mirrorT >= 1) {
       // Snapped to the pose it was rolling AT, rather than wrapped off the raw
       // sum: it keeps a long run of reversals from walking the angle up
       // forever and bleeding float precision into everything added to it, and
       // it makes the settled angle exactly one of the two poses — which is
       // what the rounding above divides by, and what main.js reads to decide
       // which way a barrel roll spins.
-      player.mirrorAngle = player.mirrored ? Math.PI : 0;
+      seal.mirrorAngle = seal.mirrored ? Math.PI : 0;
     }
   }
 
@@ -1261,22 +1563,22 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
   // stomp the other. Whole extra turns, bought with how hard the strike was
   // charged. (The state machine no longer rolls at all — see the note on the
   // mirror above; this is the only thing rolling the seal now.)
-  if (player.rollDuration > 0) {
-    player.rollElapsed += dt;
-    const t = Math.min(1, player.rollElapsed / player.rollDuration);
+  if (seal.rollDuration > 0) {
+    seal.rollElapsed += dt;
+    const t = Math.min(1, seal.rollElapsed / seal.rollDuration);
     // Smoothstep rather than a linear sweep or an ease-out: a roll that starts
     // and stops abruptly reads as a snap, and one that decelerates into the
     // finish reads as running out of steam halfway through the manoeuvre.
-    player.rollAngle = player.rollFrom + (player.rollTo - player.rollFrom) * (t * t * (3 - 2 * t));
+    seal.rollAngle = seal.rollFrom + (seal.rollTo - seal.rollFrom) * (t * t * (3 - 2 * t));
     if (t >= 1) {
       // Zeroed rather than left at rollTo. Both ends are whole turns, so the
       // two are the same pose, but letting the raw angle accumulate across a
       // run would bleed float precision into the mirror it's added to.
-      player.rollDuration = 0;
-      player.rollElapsed = 0;
-      player.rollFrom = 0;
-      player.rollTo = 0;
-      player.rollAngle = 0;
+      seal.rollDuration = 0;
+      seal.rollElapsed = 0;
+      seal.rollFrom = 0;
+      seal.rollTo = 0;
+      seal.rollAngle = 0;
     }
   }
   // --- body crane -----------------------------------------------------------
@@ -1291,8 +1593,8 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
   // frame's value would need the rig to run first and then re-pose the body
   // it had already solved against. The value is heavily eased anyway, so a
   // frame of lag is invisible.
-  const wantCrane = (player.aimRig?.glance ?? 0) * (CONFIG.head.craneAngle ?? 0);
-  player.craneAngle += (wantCrane - player.craneAngle) * (1 - Math.exp(-(CONFIG.head.craneLerp ?? 5) * dt));
+  const wantCrane = (seal.aimRig?.glance ?? 0) * (CONFIG.head.craneAngle ?? 0);
+  seal.craneAngle += (wantCrane - seal.craneAngle) * (1 - Math.exp(-(CONFIG.head.craneLerp ?? 5) * dt));
 
   // Wind-up tremble on the body, the companion to the head's (aimRig.js).
   //
@@ -1306,31 +1608,31 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
   // oscillation at any amplitude reads as the seal nodding; three that never
   // line up read as an animal straining against something. See
   // CONFIG.strike.charge.tremble for what each is allowed to be worth.
-  const wantShudder = player.chargePose;
-  player.shudderAmp += (wantShudder - player.shudderAmp) * (1 - Math.exp(-18 * dt));
-  if (player.shudderAmp < 0.001) player.shudderAmp = 0;
+  const wantShudder = seal.chargePose;
+  seal.shudderAmp += (wantShudder - seal.shudderAmp) * (1 - Math.exp(-18 * dt));
+  if (seal.shudderAmp < 0.001) seal.shudderAmp = 0;
   let shudder = 0;
   let rattle = 0;
-  if (player.shudderAmp > 0) {
+  if (seal.shudderAmp > 0) {
     const vib = CONFIG.strike.charge.tremble ?? {};
-    player.chargeClock += dt;
-    const w = player.chargeClock * (vib.hz ?? 22) * Math.PI * 2;
-    shudder = player.shudderAmp * (vib.body ?? 0) * Math.sin(w);
+    seal.chargeClock += dt;
+    const w = seal.chargeClock * (vib.hz ?? 22) * Math.PI * 2;
+    shudder = seal.shudderAmp * (vib.body ?? 0) * Math.sin(w);
     // About the seal's own spine, folded into the barrel roll's axis below.
-    rattle = player.shudderAmp * (vib.roll ?? 0) * Math.sin(w * 1.37 + 2.1);
+    rattle = seal.shudderAmp * (vib.roll ?? 0) * Math.sin(w * 1.37 + 2.1);
     // ...and the one that actually MOVES the animal. Written to the visual
-    // root, not to player.mesh — the container carries the position the whole
+    // root, not to seal.mesh — the container carries the position the whole
     // game collides and aims against, and vibrating that would vibrate the
     // hitbox. createVisual hands back a wrapper Group whose position nothing
     // else touches (the model's own fit and offset live on its children), so
     // this owns the field outright and can write it absolutely.
-    const sh = player.shudderAmp * (vib.shiver ?? 0);
-    player.body.position.set(sh * Math.sin(w * 1.61 + 0.7), sh * Math.sin(w * 0.83 + 3.4), 0);
+    const sh = seal.shudderAmp * (vib.shiver ?? 0);
+    seal.body.position.set(sh * Math.sin(w * 1.61 + 0.7), sh * Math.sin(w * 0.83 + 3.4), 0);
   } else {
-    player.chargeClock = 0;
+    seal.chargeClock = 0;
     // Only when there is something to clear — this runs every frame of every
     // run, and the seal is not winding up for nearly all of them.
-    if (player.body.position.lengthSq() !== 0) player.body.position.set(0, 0, 0);
+    if (seal.body.position.lengthSq() !== 0) seal.body.position.set(0, 0, 0);
   }
 
   // One composition for all five. They are separate axes of the same
@@ -1349,10 +1651,10 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
   // angle asked for on demand (a pure function of the celebration clock), so
   // there is no ordering to get wrong and nothing to accumulate on a frame
   // where this function doesn't run.
-  _rollQ.setFromAxisAngle(_yAxis, player.mirrorAngle + player.rollAngle + rattle);
-  _craneQ.setFromAxisAngle(_xAxis, player.craneAngle + shudder);
-  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin());
-  player.body.quaternion.copy(_craneQ).multiply(_rollQ).multiply(_spinQ);
+  _rollQ.setFromAxisAngle(_yAxis, seal.mirrorAngle + seal.rollAngle + rattle);
+  _craneQ.setFromAxisAngle(_xAxis, seal.craneAngle + shudder);
+  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin(seal.celebrateTag ?? null));
+  seal.body.quaternion.copy(_craneQ).multiply(_rollQ).multiply(_spinQ);
 }
 
 /**
@@ -1381,7 +1683,7 @@ export function poseBody(dt, dirX, dirY, { minTurn = 0.0001, lerpRate = 6, turnD
  * @param dirX,dirY  direction to shove along; need not be normalised
  * @param speed      world units/sec imparted, before decay
  */
-export function applyPlayerKnockback(dirX, dirY, speed) {
+export function applyPlayerKnockback(dirX, dirY, speed, seal = player) {
   if (CONFIG.playerKnockback?.enabled === false || !(speed > 0)) return 0;
   const len = Math.hypot(dirX, dirY);
   if (len < 1e-6) return 0;
@@ -1390,8 +1692,8 @@ export function applyPlayerKnockback(dirX, dirY, speed) {
   // leaving the screen. Per-hit, not cumulative: two shoves in the same moment
   // are meant to stack, a single mistuned one is not meant to be survivable.
   const push = Math.min(speed, CONFIG.playerKnockback?.maxSpeed ?? 60);
-  player.knockX += (dirX / len) * push;
-  player.knockY += (dirY / len) * push;
+  seal.knockX += (dirX / len) * push;
+  seal.knockY += (dirY / len) * push;
   return push;
 }
 
@@ -1414,8 +1716,8 @@ export function applyRecoil(dir, share = 1) {
 // the tail spring's weight eases to zero and the corpse sinks with a tail as
 // stiff as a board. The fins and head still go slack, but they do that on
 // their own, because the dive stops feeding the rig an aim to point at.
-export function updateAimRig(dt, aim, engaged, charge = 0, limp = false, faceOut = 0) {
-  player.aimRig?.update(dt, aim, {
+export function updateAimRig(dt, aim, engaged, charge = 0, limp = false, faceOut = 0, seal = player) {
+  seal.aimRig?.update(dt, aim, {
     engaged,
     // How far the head leans OUT OF THE SCREEN — 0 in a run, raised by the main
     // menu as the bust turns to face the camera. Handed down as an argument
@@ -1433,6 +1735,6 @@ export function updateAimRig(dt, aim, engaged, charge = 0, limp = false, faceOut
     // One `suppressed` flag for both chains — the fins and the head read it
     // through their own releaseOnOneShot toggles, so either can opt out of
     // handing control back to an authored performance.
-    suppressed: !limp && (player.anim?.isPlayingOneShot() ?? false),
+    suppressed: !limp && (seal.anim?.isPlayingOneShot() ?? false),
   });
 }

@@ -122,6 +122,54 @@
       ],
       "port": 4655,
       "autoPort": false
+    },
+    {
+      "name": "bolt-lab",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/looks/serve.mjs",
+        "dist-bolt-lab",
+        "--out",
+        "dist-bolt-lab/shots",
+        "--port",
+        "4715"
+      ],
+      "port": 4715,
+      "autoPort": false
+    },
+    {
+      "name": "levelup-look",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/looks/serve.mjs",
+        "dist-levelup-look",
+        "--out",
+        "dist-levelup-look/shots",
+        "--port",
+        "4666"
+      ],
+      "url": "http://localhost:4666",
+      "port": 4666,
+      "autoPort": false,
+      "_comment": "The built level-up look page (npm run looks:levelup builds dist-levelup-look first). A render server: writes its own shots dir and the seal motion file on Save only; it cannot touch tuning."
+    },
+    {
+      "name": "ball-lab",
+      "url": "http://localhost:4716",
+      "port": 4716,
+      "_comment": "ATTACHES to a ball lab that is already up (url, no command). A localhost url here must be the ORIGIN only, so the page itself is at /tools/looks/ball-lab.html \u2014 navigate there after attaching; / is a 404. Use ball-lab-start when nothing is listening."
+    },
+    {
+      "name": "ball-lab-start",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "looks:ball"
+      ],
+      "url": "http://localhost:4716",
+      "port": 4716,
+      "autoPort": false,
+      "_comment": "The built ball lab (npm run looks:ball builds dist-ball-lab first). A render server: writes its own shots dir, the lab's preset, and \u2014 only on the page's own 'write to config.js' \u2014 splices config.js via tools/apply-ball-lab.mjs. It never touches imported-tuning.json except to CLEAR values the splice replaced."
     }
   ]
 }

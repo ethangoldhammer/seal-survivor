@@ -357,19 +357,39 @@ function trefoilCells(anchor, n, dir) {
  * lattice left over.
  *
  * The order it returns is the order it was ASKED for, top / left / right /
- * bottom, and not the lowest-first rule the other shapes share. On a list, the
+ * bottom, then the fifth cell (see below), and not the lowest-first rule the
+ * other shapes share. On a list, the
  * first item wants to be nearest the thumb; on a compass, it wants to be the
  * one at the top, and which item is where is the whole point of a compass.
  */
-function diamondCells(anchor, n) {
+function diamondCells(anchor, n, fifth = null) {
   const y0 = yOfCell(anchor.col, anchor.row);
   const c = anchor.col;
-  return [
+  const cells = [
     { col: c, y: y0 + 1 },      // Play
     { col: c - 1, y: y0 + 0.5 }, // Options
     { col: c + 1, y: y0 + 0.5 }, // Leaderboard
     { col: c, y: y0 },           // the tip jar
-  ].slice(0, n);
+  ];
+  // THE FIFTH CELL IS A CHOICE, NOT A FIGURE. A rhombus has four cells and
+  // no hole, so a fifth button has to sit on one of the six empty cells
+  // around it — and which one is a composition decision, made by eye against
+  // the bust, not something the lattice can answer. So it is addressed from
+  // CONFIG.splashBust.menu.fifthCell as an offset from the anchor: columns
+  // across, and height in rowSteps (halves are a column of the other parity,
+  // exactly as the two sides are). The shipped default is above the
+  // right-hand side, which reads as the compass growing a point rather than a
+  // list getting longer. Any cell the four already own is refused, because a
+  // fifth tile laid over the jar is a menu with a button nobody can reach.
+  if (n > 4) {
+    const dc = Math.round(fifth?.col ?? 1);
+    const dy = fifth?.y ?? 1.5;
+    const want = { col: c + dc, y: y0 + dy };
+    const taken = cells.some((k) => k.col === want.col && Math.abs(k.y - want.y) < 1e-9);
+    if (taken) console.warn('[hexMenu] fifthCell lands on one of the diamond\'s own cells — using the default above Leaderboard.');
+    cells.push(taken ? { col: c + 1, y: y0 + 1.5 } : want);
+  }
+  return cells.slice(0, n);
 }
 
 /**
@@ -383,7 +403,7 @@ function diamondCells(anchor, n) {
  *
  * THE DIAMOND IS NOT A LIST and orders itself — see the note on it above.
  */
-function cellsFor(shape, anchor, n, step) {
+function cellsFor(shape, anchor, n, step, fifth = null) {
   const y0 = yOfCell(anchor.col, anchor.row);
   let cells;
   switch (shape) {
@@ -403,7 +423,7 @@ function cellsFor(shape, anchor, n, step) {
       cells = trefoilCells(anchor, n, -1);
       break;
     case 'diamond':
-      cells = diamondCells(anchor, n);
+      cells = diamondCells(anchor, n, fifth);
       break;
     default: {
       // The row, centred on the anchor: three buttons at a step of 2 are
@@ -754,7 +774,7 @@ export function createHexMenu(items, cfg = CONFIG.splashBust?.menu ?? {}) {
         return this;
       }
       this.shape = opts.shape ?? this.wantsShape();
-      const cells = cellsFor(this.shape, anchor, count, step);
+      const cells = cellsFor(this.shape, anchor, count, step, cfg.fifthCell);
       const centres = cells.map((c) => hexCenter(c.col, c.row, m));
       // THE QUAD IS SIZED FROM THE CENTRES, not from the row's arithmetic. The
       // construction-time `spanX` assumes one row and would leave a triangle's

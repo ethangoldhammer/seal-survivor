@@ -83,10 +83,58 @@ import { ease } from '../ease.js';
 //
 // A PACK WINDING UP TOGETHER IS THE SWARM TELL, and that is `lunge.stagger`
 // rather than anything here: see the note on it in config.js.
+//
+// ---------------------------------------------------------------------------
+// 3. A FISH IN A BAIT BALL TURNS THROUGH ITS OWN ORBIT.
+// ---------------------------------------------------------------------------
+// The second way into this file, and the only one that is not a `comeAbout` on
+// a def. A ball's fish were on the shared path — `mesh.rotation.z` for the
+// heading and faceSide rolling the body upright — and that pair is the flip
+// section 1 is about, happening fifteen times over in one knot of fish. On a
+// column of sardines it does not read as a school changing direction, it reads
+// as a handful of bodies rotating on their own spines, which is exactly what
+// it is: `visual.rotation.y` is a roll about the model's forward axis.
+//
+// The fix is not merely to route them through the come-about above, because a
+// bait ball is the one place in this game where THE DEPTH IS REAL. Every other
+// creature swims in a plane and its `vz` is a lane it is easing into; a ball's
+// fish orbit a standing column in x/z and systems/baitBall.js integrates a
+// genuine third velocity for each one (see the `baitBall` branch in
+// updateEnemies). So the yaw does not have to be inferred from which way the
+// fish is drifting across the screen — it is known:
+//
+//   yaw = atan2(-vz, vx)      the fish's actual heading about world up
+//
+// and it is taken UNWRAPPED and rate-limited rather than eased between two
+// endpoints. That difference is the whole feature: a fish going round the
+// column rotates continuously through a full turn, near half sweeping through
+// the camera and far half through the back wall, because that is what the
+// orbit IS. Section 1's two-endpoint ease cannot express it — it can only
+// arrive at +X or -X — and forcing every turn through the lens would be a
+// second lie on top of the first.
+//
+// `depthHurry` is the one cheat, and it is the camera's fault. Orthographic:
+// a fish at the left or right edge of the column is swimming straight at or
+// away from the lens and is drawn as a sliver. It IS edge-on — nothing here
+// can make it otherwise without bending the geometry — but the yaw is passed
+// through `t - k*sin(2t)`, which is monotone and leaves both broadside poses
+// exactly where they were while moving faster through the two edge-on
+// quarters. The fish still goes fully edge-on; it spends less of its orbit
+// there, which is the difference between a column of fish and a column of
+// fish with holes flickering in it.
+//
+// AND IT KEEPS THE BODY WHEN THE BALL ENDS. A survivor hands back to section
+// 1's two-sided ease — its yaw shifted by a whole number of turns, which is
+// the same pose to the frame — rather than back to faceSide, which would be
+// two writers with two decompositions again, the exact bug the anglerfish note
+// above is about. So a fish that has been in a ball comes about for the rest
+// of its life. That is a nicer animal than the one it was, and the alternative
+// is a handover that has to snap.
 // ---------------------------------------------------------------------------
 
 const RIGHT = 0;
 const LEFT = -Math.PI;
+const TWO_PI = Math.PI * 2;
 
 function cfg() {
   return CONFIG.fishTurn ?? {};
@@ -99,6 +147,47 @@ function cfg() {
 function num(def, c, key, fallback) {
   const own = typeof def.comeAbout === 'object' ? def.comeAbout?.[key] : undefined;
   return own ?? c[key] ?? fallback;
+}
+
+/**
+ * The yaw that points a body along a real 3D heading, shaped by `hurry`.
+ *
+ * `atan2(-dz, dx)` and not `atan2(dz, dx)`: rotating by y maps model forward
+ * +X to (cos y, 0, -sin y), so a heading with a POSITIVE z — toward the camera
+ * — is a NEGATIVE yaw. That sign is what puts the near half of an orbit in the
+ * same [-PI, 0] interval section 1 sweeps its U-turns through, so the two
+ * modes agree about what the number on the object means.
+ *
+ * The shaping is `t - k*sin(2t)`: periodic-compatible (sin(2t) has period PI,
+ * so f(t + 2PI) = f(t) + 2PI and an unwrapped angle stays unwrapped), monotone
+ * for k < 0.5, and fixed at every multiple of PI/2 — so both broadside poses
+ * and both edge-on poses are exactly where they would be and only the time
+ * spent getting between them moves.
+ */
+function orbitYaw(dx, dz, hurry) {
+  const t = Math.atan2(-dz, dx);
+  const k = Math.max(0, Math.min(0.45, hurry));
+  return k > 0 ? t - k * Math.sin(2 * t) : t;
+}
+
+/**
+ * Out of the orbit and back onto the two-sided ease, without moving the body.
+ *
+ * The orbit yaw is unwrapped and can be anywhere; section 1 works in [-PI, 0]
+ * and compares its target against the LEFT/RIGHT constants by value. So the
+ * yaw is shifted onto the nearest broadside pose's own turn — and because
+ * `home - half*PI` is always a whole number of turns for either parity, the
+ * shift is a multiple of 2PI and the rendered pose is identical on the frame
+ * it happens. The ease is then opened from there, so the fish finishes coming
+ * level instead of arriving level.
+ */
+function handBack(e) {
+  const half = Math.round(e.__turnYaw / Math.PI);
+  const home = (half % 2 === 0) ? RIGHT : LEFT;
+  e.__turnYaw += home - half * Math.PI;
+  e.__turnFrom = e.__turnYaw;
+  e.__turnTo = home;
+  e.__turnT = 0;
 }
 
 /**
@@ -157,7 +246,12 @@ export function turnFish(e, dt, launched = false) {
   const aim = e.turnAim;
   const ax = aim ? aim.x : e.vx;
   const ay = aim ? aim.y : e.vy;
-  const speed = Math.hypot(ax, ay);
+  // ORBITING, rather than crossing the screen — see section 3. An aimer names
+  // a point in the picture and has no depth to give, so it wins: a fish being
+  // pointed at something is not swimming its own heading by definition.
+  const orbit = !!e.baitBall && !aim;
+  const az = orbit ? (e.vz ?? 0) : 0;
+  const speed = Math.hypot(ax, ay, az);
 
   // 'YXZ' is what makes `rotation.y` a world yaw rather than a third rotation
   // stacked inside the heading. Set once, on the frame this creature is first
@@ -166,11 +260,17 @@ export function turnFish(e, dt, launched = false) {
   // Euler's order every frame dirties the matrix for nothing.
   if (e.__turnYaw == null) {
     e.mesh.rotation.order = 'YXZ';
-    e.__turnYaw = ax < 0 ? LEFT : RIGHT;
+    e.__turnYaw = orbit
+      ? orbitYaw(ax, az, num(def, c, 'depthHurry', 0.3))
+      : (ax < 0 ? LEFT : RIGHT);
     e.__turnFrom = e.__turnYaw;
     e.__turnTo = e.__turnYaw;
     e.__turnT = 1;
-    e.__turnPitch = speed > dead ? Math.atan2(ay, Math.abs(ax)) : 0;
+    // Off the FULL heading, so a fish seeded into a ball on a mostly-depth
+    // course does not open its life pitched at the climb it is not making.
+    // Identical to the old `Math.abs(ax)` everywhere else, since `az` is 0
+    // outside the orbit.
+    e.__turnPitch = speed > dead ? Math.atan2(ay, Math.hypot(ax, az)) : 0;
     e.__turnBank = 0;
     e.__wigglePhase = Math.random() * Math.PI * 2;
   }
@@ -182,19 +282,38 @@ export function turnFish(e, dt, launched = false) {
   // watch happen.
   const time = Math.max(0.001, aim?.time ?? num(def, c, 'time', 0.55));
   const curve = num(def, c, 'curve', 'inOutCubic');
-  const want = ax < -dead ? LEFT : (ax > dead ? RIGHT : e.__turnTo);
-  if (want !== e.__turnTo) {
-    // From where the body actually is, so a turn reversed halfway through
-    // continues from here instead of snapping back to begin the new one.
-    e.__turnFrom = e.__turnYaw;
-    e.__turnTo = want;
-    e.__turnT = 0;
-  }
   const yawPrev = e.__turnYaw;
-  if (e.__turnT < 1) {
-    e.__turnT = Math.min(1, e.__turnT + dt / time);
-    e.__turnYaw = e.__turnFrom + (e.__turnTo - e.__turnFrom) * ease(curve, e.__turnT);
+  if (orbit) {
+    // THE ORBIT. Rate-limited and unwrapped rather than eased to an endpoint:
+    // the target moves every frame and it goes all the way round, so a
+    // duration ease would restart forever and could only ever arrive at one of
+    // two poses anyway. `Math.round` on the turn count takes the short way, so
+    // a fish never spins the long way to a heading it is already nearly on.
+    const flat = Math.hypot(ax, az);
+    if (flat > dead) {
+      let want = orbitYaw(ax, az, num(def, c, 'depthHurry', 0.3));
+      want += TWO_PI * Math.round((e.__turnYaw - want) / TWO_PI);
+      const rate = Math.max(0.01, num(def, c, 'depthRate', 5)) * dt;
+      e.__turnYaw += Math.max(-rate, Math.min(rate, want - e.__turnYaw));
+    }
+  } else {
+    // The ball ended under this fish. Give the yaw back to the two-sided ease
+    // at the same pose it is already in — see handBack.
+    if (e.__turnOrbit) handBack(e);
+    const want = ax < -dead ? LEFT : (ax > dead ? RIGHT : e.__turnTo);
+    if (want !== e.__turnTo) {
+      // From where the body actually is, so a turn reversed halfway through
+      // continues from here instead of snapping back to begin the new one.
+      e.__turnFrom = e.__turnYaw;
+      e.__turnTo = want;
+      e.__turnT = 0;
+    }
+    if (e.__turnT < 1) {
+      e.__turnT = Math.min(1, e.__turnT + dt / time);
+      e.__turnYaw = e.__turnFrom + (e.__turnTo - e.__turnFrom) * ease(curve, e.__turnT);
+    }
   }
+  e.__turnOrbit = orbit;
 
   // --- THE PITCH -----------------------------------------------------------
   // Rate-limited rather than eased: this one chases a target that moves every
@@ -203,7 +322,11 @@ export function turnFish(e, dt, launched = false) {
   // it in (-PI/2, PI/2) whichever side the yaw has settled on.
   const pitchRate = Math.max(0.01, aim?.rate ?? num(def, c, 'pitchRate', 4));
   if (speed > dead) {
-    const wantPitch = Math.atan2(ay, Math.abs(ax));
+    // Against the whole horizontal heading, which is `Math.abs(ax)` for
+    // anything not orbiting. In a ball it is the difference between a fish
+    // that is climbing and one that is merely swimming away from the camera:
+    // with `az` left out, a heading of (0, 0.1, 3) reads as a 90-degree climb.
+    const wantPitch = Math.atan2(ay, Math.hypot(ax, az));
     const step = Math.max(-pitchRate * dt, Math.min(pitchRate * dt, wantPitch - e.__turnPitch));
     e.__turnPitch += step;
   }
@@ -256,6 +379,13 @@ export function turnFish(e, dt, launched = false) {
  * Whether this creature steers itself with the above. Kept here rather than
  * spelled out at the call site so the flag is defined in one place.
  */
-export function comesAbout(def) {
-  return CONFIG.view === 'side' && !!def?.comeAbout;
+export function comesAbout(def, e) {
+  if (CONFIG.view !== 'side') return false;
+  // Three ways in, and the third is the one that looks odd. A fish this file
+  // has already claimed keeps it for good — `__turnYaw` is only ever set here
+  // — because handing a body back to faceSide means two writers holding two
+  // different decompositions of one pose, and the handover can only be a snap.
+  // In practice it is the survivor of a bait ball, which goes on turning like
+  // an animal instead of reverting to a flip halfway through a run.
+  return !!def?.comeAbout || !!e?.baitBall || e?.__turnYaw != null;
 }

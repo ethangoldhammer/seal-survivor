@@ -21,6 +21,31 @@
 //            vector-lerp would have collapsed the shape through zero length.
 //            Every intermediate frame has to be BETWEEN the two headings.
 //
+//   LANE     ...and the OTHER corridor — the magnet's — sweeps the line the
+//            seal actually flew. `strikeState.dashDir` is written once, at the
+//            release, and read every frame by the capsule in chumMagnet.js,
+//            by the shove a rammed creature takes, by the boat jostle, by the
+//            whale's ram and by the camera's lead. A dash steers up to ninety
+//            degrees off its launch, so all of them were describing the line
+//            the player let go on rather than the one the seal is on: the food
+//            came in from a direction nobody went, and the pile the player
+//            curved INTO was out of the lane. updatePlayer keeps it current.
+//
+//   HANDS    both of them steer, and the steering does not stop dead. The gate
+//            on the mid-dash steer was the MOVEMENT stick alone, while the
+//            thing being steered toward is the halfway point between the move
+//            and the aim — so a mouse player could swing the cursor ninety
+//            degrees mid-dash and turn the seal zero. And the takeover curve
+//            hands over the whole turn rate on the dash's LAST frame, after
+//            which nothing called dashSteer at all: measured at zero degrees
+//            of turn for the seven tenths of a second the momentum takes to
+//            bleed off. dashControl.followThrough is the exit from that, and
+//            it carries the other two halves of the same handover: the thrust
+//            out of a strike (19 u/s^2 against a body doing 34 turns at about
+//            22 degrees a second, and the charge bonus is gone because the
+//            wind-up just spent the bar) and the speed CEILING, which used to
+//            take a fifth of the seal's momentum away in a single frame.
+//
 //   WIRING   the shader tapers and frays (the uniforms exist and the mask
 //            reads them), world.js converts the smoothed world-unit reach to
 //            uv with the same divide the focal point uses, and no length
@@ -36,7 +61,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
 import { bounds } from '../path/src/arena.js';
-import { predictDash, strikeDirection, dashSteer, steerAuthority, minFire, pipCount } from '../path/src/systems/strike.js';
+import { predictDash, strikeDirection, dashSteer, steerAuthority, minFire, pipCount,
+  strikeState, tryStrike, resetStrike, addCharge, updateStrike, steerFollow } from '../path/src/systems/strike.js';
+import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entities/player.js';
+import { magnetDistance, magnetRadius } from '../path/src/systems/chumMagnet.js';
+import * as THREE from 'three';
 import { ease } from '../path/src/ease.js';
 import { updateCineCamera, resetCineCamera, cineLens } from '../path/src/systems/cineCamera.js';
 
@@ -188,9 +217,9 @@ section('FORECAST — the cone ends where the dash would, stick and all');
 
   // WIRING. The seal runs the same step, and has no steering of its own left.
   const playerSrc = read('entities/player.js');
-  check('player.js steers through dashSteer, with both hands and the dash\'s progress', /dashSteer\(cur, v, input\.move\.x, input\.move\.y, input\.aim\.x, input\.aim\.y, combo, dt, s, progress, power, steerStep\)/.test(playerSrc));
-  check('...progress read off the strike itself', /1 - strikeState\.dashTimeLeft \/ strikeState\.dashDuration/.test(playerSrc));
-  check('...and the power it was bought with', /const power = strike \? strikeState\.power : 1;/.test(playerSrc) && /dt, s, progress, power, steerStep\)/.test(playerSrc));
+  check('player.js steers through dashSteer, with both hands and the dash\'s progress', /dashSteer\(cur, v, input\.move\.x, input\.move\.y, input\.aim\.x, input\.aim\.y, combo, dt, s, progress, power, steerStep, follow\)/.test(playerSrc));
+  check('...progress read off the strike itself', /1 - st\.dashTimeLeft \/ st\.dashDuration/.test(playerSrc) /* `st` is the seal's strike state — player 1's or player 2's */);
+  check('...and the power it was bought with', /const power = strike \? st\.power : 1;/.test(playerSrc) && /dt, s, progress, power, steerStep, follow\)/.test(playerSrc));
   check('no reader of the old bar-fraction gate is left', !/charge\.minFire\b/.test(read('main.js')) && !/charge\.minFire\b/.test(read('systems/strike.js')) && !/charge\.minFire\b/.test(read('systems/strikeRing.js')));
   check('the forecast flies the same takeover', /1 - left \/ duration, t, forecastStep\)/.test(read('systems/strike.js')));
   check('...and keeps no copy of the rule', !/dashTurnRate/.test(playerSrc) && !/breakOutAngle/.test(playerSrc) && !/throttleLerp/.test(playerSrc));
@@ -203,7 +232,7 @@ section('FORECAST — the cone ends where the dash would, stick and all');
   const strike = read('systems/strike.js');
   const release = strike.slice(strike.indexOf('export function tryStrike'));
   check('the release multiplies the same reach curve the forecast flies',
-    /lerp\(c\.reachMulMin, c\.reachMulMax, strikeState\.power\)/.test(release));
+    /lerp\(c\.reachMulMin, c\.reachMulMax, s\.power\)/.test(release) /* `s` is the strike state tryStrike was handed — player 1's or player 2's */);
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +398,324 @@ section('WIRING — the cone, the fray, the uv conversion');
     check(`cinecam.lens.path.${k} is tunable`, new RegExp(`path: 'cinecam\\.lens\\.path\\.${k}'`).test(config));
   }
   check('the takeover is tunable: floor and curve', /path: 'strike\.dashControl\.steerFrom'/.test(config) && /path: 'strike\.dashControl\.steerEase', type: 'choice', options: EASINGS/.test(config));
+}
+
+section('LANE — the magnet corridor follows the dash, not the launch');
+{
+  // The animation controller has no clips in Node and warns for every state.
+  const realWarn = console.warn;
+  console.warn = (m, ...r) => {
+    if (typeof m === 'string' && m.startsWith('[animation]')) return;
+    realWarn(m, ...r);
+  };
+  const scene = new THREE.Scene();
+  const dt = 1 / 60;
+  initPlayer(scene);
+  resetPlayer();
+  resetStrike();
+  player.mesh.position.set(0, -8, 0);
+  player.velocity.set(0, 0, 0);
+
+  // A full-power release to the RIGHT, with both hands then asking for UP —
+  // the ordinary "strike, then curve into the pile beside you".
+  addCharge(1, player.stats);
+  strikeState.pending = 1;
+  strikeState.winding = true;
+  // A perfect charge is what arms a chain (see tryStrike); the sweet spot is
+  // a tenth of a second wide and not a thing a harness should be timing.
+  strikeState.perfect = true;
+  tryStrike({ x: 1, y: 0 }, player.stats);
+  // The impulse, exactly as main.js applies it on a release.
+  const launchSpeed = player.stats.strikeDashSpeed * (player.comboSpeedMul || 1);
+  player.velocity.set(strikeState.dashDir.x * launchSpeed, strikeState.dashDir.y * launchSpeed, 0);
+  player.dashTimer = strikeState.dashDuration;
+
+  const launch = { x: strikeState.dashDir.x, y: strikeState.dashDir.y };
+  const input = { move: new THREE.Vector2(0, 1), aim: new THREE.Vector2(0, 1) };
+
+  // The capsule, spelled out against an arbitrary heading, so the case can ask
+  // what the OLD frozen dashDir would have reported without reaching for a
+  // second copy of the game.
+  function corridorAlong(dir, px, py, ox, oy) {
+    const c = CONFIG.pickups.magnet?.striking ?? {};
+    const dx = ox - px;
+    const dy = oy - py;
+    const t = Math.max(-(c.corridorBack ?? 0), Math.min(c.corridorAhead ?? 0, dx * dir.x + dy * dir.y));
+    return Math.hypot(dx - dir.x * t, dy - dir.y * t);
+  }
+
+  let worstDrift = 0;
+  let behindNow = 0;
+  let behindFrozen = 0;
+  let turned = 0;
+  for (let t = 0; t < strikeState.dashDuration; t += dt) {
+    if (strikeState.dashTimeLeft > 0) strikeState.dashTimeLeft -= dt;
+    else strikeState.active = false;
+    updatePlayer(dt, input);
+    if (!strikeState.active) break;
+    const p = player.mesh.position;
+    const heading = Math.atan2(player.velocity.y, player.velocity.x);
+    const dd = Math.atan2(strikeState.dashDir.y, strikeState.dashDir.x);
+    worstDrift = Math.max(worstDrift, Math.abs(wrapDeg((heading - dd) * DEG)));
+    turned = Math.abs(wrapDeg((heading - Math.atan2(launch.y, launch.x)) * DEG));
+    // An orb eight units BACK down the line the seal has actually flown —
+    // the case the corridor exists for, since the capsule reaches ten units
+    // behind and three ahead.
+    const ox = p.x - Math.cos(heading) * 8;
+    const oy = p.y - Math.sin(heading) * 8;
+    behindNow = magnetDistance(p.x, p.y, ox, oy, player.velocity.length());
+    behindFrozen = corridorAlong(launch, p.x, p.y, ox, oy);
+  }
+  console.warn = realWarn;
+
+  // The dash has to have STEERED, or every check below passes for the wrong
+  // reason: a dash that never left its launch heading has no staleness in it.
+  check('the dash steers well off its launch heading', turned > 45,
+    `${turned.toFixed(0)} degrees by the end`);
+  check('dashDir tracks the heading the seal is actually on', worstDrift < 1,
+    `worst ${worstDrift.toFixed(2)} degrees out`);
+
+  const reach = magnetRadius(player.stats, player.velocity.length());
+  check('an orb down the flown lane is dead centre of the corridor',
+    behindNow < 0.5, `${behindNow.toFixed(2)} units off the spine, reach ${reach.toFixed(2)}`);
+  check('...and the frozen launch heading had it out at the rim',
+    behindFrozen > behindNow + 4,
+    `${behindFrozen.toFixed(2)} units off a lane the seal left, against ${behindNow.toFixed(2)}`);
+}
+
+section('HANDS — both of them steer, and they are handed back rather than cut off');
+{
+  const realWarn = console.warn;
+  console.warn = (m, ...r) => {
+    if (typeof m === 'string' && m.startsWith('[animation]')) return;
+    realWarn(m, ...r);
+  };
+  const scene = new THREE.Scene();
+  const dt = 1 / 60;
+  initPlayer(scene);
+
+  // PINNED IN PLACE, every frame, and every case below relies on it.
+  //
+  // What is being measured here is the VELOCITY — where it points and how big
+  // it is — and the arena is the enemy of that: a seal flying flat out covers
+  // forty units in a second, so it reaches the side wall and bounces (which
+  // reads as a 16 u/s "speed drop" and a 180-degree "turn"), or it swims up
+  // through the waterline and everything after that is a ballistic arc rather
+  // than a manoeuvre. Holding the position still leaves the velocity dynamics
+  // exactly as they are and takes both of those out.
+  const HOME = new THREE.Vector3(0, -12, 0);
+  const pin = () => player.mesh.position.copy(HOME);
+
+  // A full-power release to the RIGHT. `hands` is what the player is doing
+  // with the two of them for the rest of the flight; `after` swaps in once the
+  // dash itself has ended, which is how the follow-through gets measured on
+  // its own rather than on whatever the dash had already turned.
+  function strike(hands, after = null, seconds = 1.0) {
+    resetPlayer();
+    resetStrike();
+    player.mesh.position.copy(HOME);
+    player.velocity.set(0, 0, 0);
+    addCharge(1, player.stats);
+    strikeState.pending = 1;
+    strikeState.winding = true;
+    strikeState.perfect = true;
+    tryStrike({ x: 1, y: 0 }, player.stats);
+    const sp = player.stats.strikeDashSpeed * (player.comboSpeedMul || 1);
+    player.velocity.set(strikeState.dashDir.x * sp, strikeState.dashDir.y * sp, 0);
+    player.dashTimer = strikeState.dashDuration;
+
+    let atEnd = null;
+    let peakSpeed = 0;
+    for (let t = 0; t < seconds; t += dt) {
+      // BOTH clocks, not just the strike's. `player.dashTimer` is what the
+      // steer branch in updatePlayer gates on and it outlives strikeState by a
+      // frame or two — measuring from the strike's end alone would credit the
+      // follow-through with the tail of the dash itself, which is exactly what
+      // it did the first time this was written.
+      const over = !strikeState.active && player.dashTimer <= 0 && t > 0.05;
+      if (over && atEnd === null) atEnd = Math.atan2(player.velocity.y, player.velocity.x) * DEG;
+      const h = (over && after) ? after : hands;
+      // updateStrike owns the dash clock AND the follow-through window, so the
+      // real tick order is the only one that measures the real thing.
+      updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
+      updatePlayer(dt, h);
+      pin();
+      if (strikeState.active) peakSpeed = Math.max(peakSpeed, player.velocity.length());
+    }
+    return {
+      heading: Math.atan2(player.velocity.y, player.velocity.x) * DEG,
+      atEnd: atEnd ?? 0,
+      peakSpeed,
+    };
+  }
+  const still = new THREE.Vector2(0, 0);
+  const up = new THREE.Vector2(0, 1);
+  const right = new THREE.Vector2(1, 0);
+
+  // THE MOUSE. `aimLive` is what input.js raises on any frame a real device
+  // wrote the aim — true every frame for a pointer, which is the case that had
+  // no steering at all.
+  const mouse = strike({ move: still, aim: up, aimLive: true });
+  check('the aim alone steers the dash', Math.abs(wrapDeg(mouse.heading)) > 45,
+    `${mouse.heading.toFixed(0)} degrees off a launch at 0`);
+
+  // ...AND DOES NOT BRAKE IT. `stick` is the throttle, so a hand nobody is
+  // touching used to read as a demand for minSpeedMul the moment the aim was
+  // allowed through the gate.
+  const floor = player.stats.strikeDashSpeed * (CONFIG.strike.dashControl.minSpeedMul ?? 0.45);
+  check('...without the untouched movement stick braking it',
+    mouse.peakSpeed > floor + 8,
+    `peaked at ${mouse.peakSpeed.toFixed(1)} u/s, floor is ${floor.toFixed(1)}`);
+
+  // A dash that is not steered at all still has to go where it was pointed.
+  const straight = strike({ move: right, aim: right, aimLive: true });
+  check('both hands on the launch line leaves it straight',
+    Math.abs(wrapDeg(straight.heading)) < 2, `${straight.heading.toFixed(1)} degrees`);
+
+  // THE EXIT. Flown along the launch, then both hands swung ninety degrees on
+  // the frame the dash ends — so every degree below is bought by the window.
+  const exitHands = [{ move: right, aim: right, aimLive: true }, { move: up, aim: up, aimLive: true }];
+  const exit = strike(exitHands[0], exitHands[1]);
+  const bought = Math.abs(wrapDeg(exit.heading - exit.atEnd));
+  // AGAINST THE SAME STRIKE WITH THE WINDOW SHUT, because ordinary swimming is
+  // not nothing: thrust alone bends a 34 u/s exit by about twenty degrees over
+  // the half second it takes to bleed off, so a bare "did it turn" threshold
+  // passes with the feature switched off. What is being measured is the
+  // DIFFERENCE the window makes.
+  const wasFollow = CONFIG.strike.dashControl.followThrough;
+  CONFIG.strike.dashControl.followThrough = 0;
+  const shut = strike(exitHands[0], exitHands[1]);
+  CONFIG.strike.dashControl.followThrough = wasFollow;
+  const withoutIt = Math.abs(wrapDeg(shut.heading - shut.atEnd));
+  check('the follow-through still turns the seal after the dash has ended',
+    bought > withoutIt * 2.5,
+    `${bought.toFixed(0)} degrees bought, against ${withoutIt.toFixed(0)} on thrust alone`);
+  check('...and then lets go', steerFollow() === 0,
+    `follow ${steerFollow().toFixed(2)} once the window has run out`);
+  check('the window is tunable', /path: 'strike\.dashControl\.followThrough'/.test(read('config.js')));
+
+  // A RELEASED STICK IS NOT AN INSTRUCTION. strikeDirection hands the whole
+  // heading to whichever hand is still giving one, which is the only sane
+  // answer at the LAUNCH — a strike from a standstill has to go somewhere and
+  // the cursor is the only thing pointing — and the wrong one mid-flight: it
+  // made letting go of the stick swing the dash onto the cursor, which reads
+  // as a lurch and, at aimBlend 0, contradicts the whole point of the setting.
+  // dashSteer stands the seal's own heading in for the missing hand instead,
+  // so the target is unchanged at 0 and eases rather than jumping above it.
+  const wasBlend = CONFIG.strike.aimBlend;
+  CONFIG.strike.aimBlend = 0;
+  const swimOnlyHeld = strike({ move: right, aim: up, aimLive: true });
+  const swimOnlyLet = strike({ move: right, aim: up, aimLive: true },
+    { move: still, aim: up, aimLive: true });
+  CONFIG.strike.aimBlend = wasBlend;
+  check('aimBlend 0 keeps the dash on the movement stick',
+    Math.abs(wrapDeg(swimOnlyHeld.heading)) < 2,
+    `${swimOnlyHeld.heading.toFixed(1)} degrees with the cursor 90 off`);
+  check('...and letting the stick go does not hand the dash to the cursor',
+    Math.abs(wrapDeg(swimOnlyLet.heading)) < 2,
+    `${swimOnlyLet.heading.toFixed(1)} degrees after the stick was released`);
+  // ...while a standstill strike must still fire, at every blend: with no
+  // movement at all the cursor is the only direction there is.
+  for (const b of [0, 0.5, 1]) {
+    CONFIG.strike.aimBlend = b;
+    const d = strikeDirection({ x: 0, y: 0 }, { x: 0, y: 1 });
+    check(`a standstill strike still has a heading at aimBlend ${b}`,
+      Math.abs(d.y - 1) < 1e-6 && Math.abs(d.x) < 1e-6);
+  }
+  CONFIG.strike.aimBlend = wasBlend;
+
+  // THE CEILING, LET DOWN RATHER THAN DROPPED. The dash ends carrying about
+  // 42 u/s into an ordinary ceiling of 34, and the clamp took the difference
+  // in one frame — a stumble at the end of every strike that no amount of
+  // steering fixes. Measured on the transition frame itself, which is the one
+  // a probe that starts counting "after the dash" never sees.
+  function worstDropOverTheEnd() {
+    resetPlayer();
+    resetStrike();
+    player.mesh.position.copy(HOME);
+    player.velocity.set(0, 0, 0);
+    addCharge(1, player.stats);
+    strikeState.pending = 1;
+    strikeState.winding = true;
+    strikeState.perfect = true;
+    tryStrike({ x: 1, y: 0 }, player.stats);
+    const sp = player.stats.strikeDashSpeed * (player.comboSpeedMul || 1);
+    player.velocity.set(strikeState.dashDir.x * sp, strikeState.dashDir.y * sp, 0);
+    player.dashTimer = strikeState.dashDuration;
+    let prev = player.velocity.length();
+    let worst = 0;
+    for (let t = 0; t < 1.2; t += dt) {
+      updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
+      updatePlayer(dt, { move: right, aim: right, aimLive: true });
+      pin();
+      const now = player.velocity.length();
+      worst = Math.max(worst, prev - now);
+      prev = now;
+    }
+    return worst;
+  }
+  const smoothed = worstDropOverTheEnd();
+  const wasCeil = CONFIG.strike.dashControl.followCeiling;
+  CONFIG.strike.dashControl.followCeiling = false;
+  const snapped = worstDropOverTheEnd();
+  CONFIG.strike.dashControl.followCeiling = wasCeil;
+  check('the speed ceiling is let down rather than dropped',
+    smoothed < snapped * 0.4,
+    `worst one-frame loss ${smoothed.toFixed(2)} u/s, against ${snapped.toFixed(2)} with the snap`);
+
+  // AND THE PUSH. Measured as speed carried a fixed time into the recovery,
+  // against the same strike with the multiplier at 1 — the boost is on
+  // acceleration, so what it buys is how much of the exit has been rebuilt.
+  function speedInto(seconds) {
+    resetPlayer();
+    resetStrike();
+    player.mesh.position.copy(HOME);
+    player.velocity.set(0, 0, 0);
+    addCharge(1, player.stats);
+    strikeState.pending = 1;
+    strikeState.winding = true;
+    strikeState.perfect = true;
+    tryStrike({ x: 1, y: 0 }, player.stats);
+    const sp = player.stats.strikeDashSpeed * (player.comboSpeedMul || 1);
+    player.velocity.set(strikeState.dashDir.x * sp, strikeState.dashDir.y * sp, 0);
+    player.dashTimer = strikeState.dashDuration;
+    let over = -1;
+    for (let t = 0; t < 2; t += dt) {
+      const ended = !strikeState.active && player.dashTimer <= 0 && t > 0.05;
+      if (ended && over < 0) over = t;
+      updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
+      updatePlayer(dt, { move: up, aim: up, aimLive: true });
+      pin();
+      if (over >= 0 && t - over >= seconds) break;
+    }
+    return player.velocity.length();
+  }
+  // SAMPLED INSIDE THE WINDOW. The boost eases to 1 across `followThrough`, so
+  // by half a second out both runs have been on ordinary thrust for a while
+  // and have converged on the same terminal speed — a sample taken there says
+  // "no difference" about a feature that is working perfectly.
+  //
+  // ...AND WITH THE EASED CEILING OUT OF THE WAY, which is the other half of
+  // the same window. Early in the recovery the seal is riding a ceiling still
+  // walking down from dash speed, so BOTH runs are pinned to it and the sample
+  // reads "no difference" no matter what the thrust is doing. The two features
+  // are independent; measuring one means holding the other still.
+  const wasThrust = CONFIG.strike.dashControl.followThrust;
+  const wasCeilForThrust = CONFIG.strike.dashControl.followCeiling;
+  CONFIG.strike.dashControl.followCeiling = false;
+  const within = Math.max(0.05, (CONFIG.strike.dashControl.followThrough ?? 0) * 0.6);
+  const pushed = speedInto(within);
+  CONFIG.strike.dashControl.followThrust = 1;
+  const unpushed = speedInto(within);
+  CONFIG.strike.dashControl.followThrust = wasThrust;
+  CONFIG.strike.dashControl.followCeiling = wasCeilForThrust;
+  check('the thrust out of a strike rebuilds speed faster',
+    pushed > unpushed * 1.05,
+    `${pushed.toFixed(1)} u/s ${within.toFixed(2)}s out, against ${unpushed.toFixed(1)} at x1`);
+  check('both are tunable',
+    /path: 'strike\.dashControl\.followThrust'/.test(read('config.js'))
+    && /path: 'strike\.dashControl\.followCeiling'/.test(read('config.js')));
+  console.warn = realWarn;
 }
 
 console.log(failures === 0 ? '\nAll corridor checks passed.' : `\n${failures} check(s) failed.`);

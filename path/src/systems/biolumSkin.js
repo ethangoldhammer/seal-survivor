@@ -125,6 +125,12 @@ uniform float uBioPulseAmp;
 uniform float uBioHueScale;
 uniform float uBioHueSpread;
 uniform float uBioTailBias;
+// THE SAME BIAS ON THE NORMAL. Positive gathers the pattern onto surfaces
+// facing the sky, negative onto the belly, 0 is even — and 0 is bit-for-bit
+// what shipped. vBioUp is the posed normal against world +Y, so a rolling
+// animal's bias rolls with it; see the sky/ocean split in noiseShader.js,
+// which reads the same quantity and explains why it is a varying.
+uniform float uBioUpBias;
 uniform float uBioHueBias;
 uniform float uBioWarp;
 uniform float uBioFlickerAmp;
@@ -186,6 +192,7 @@ uniform float uBioSchoolT;     // how far the field has travelled, in world unit
 varying vec3  vBioWorld;
 varying vec3  vBioPos;
 varying float vBioAxis;
+varying float vBioUp;
 varying float vEyeGlow;
 varying vec3  vBioEdge;
 uniform vec3 uEyeColor;
@@ -686,6 +693,11 @@ const FRAG_SURFACE = `
     // negative toward the head; 0 leaves it even. Deep-sea animals are almost
     // never lit uniformly, and this is the cheapest way to say so.
     bioMaskV *= clamp(1.0 + uBioTailBias * (vBioAxis - 0.5) * 2.0, 0.0, 2.0);
+    // ...and the sky/seabed bias, same idiom on the normal instead of the
+    // axis. Reaches the pigment as well as the glow, because both read
+    // bioMaskV — an animal painted brighter on its back is countershaded by
+    // one number.
+    bioMaskV *= clamp(1.0 + uBioUpBias * vBioUp, 0.0, 2.0);
 
     // ...and the same bias applied to COLOUR rather than to brightness, which
     // is a different statement about the animal. tailBias says "the light
@@ -1031,6 +1043,7 @@ function freshUniforms() {
     uBioHueScale: { value: 1.2 },
     uBioHueSpread: { value: 1.0 },
     uBioTailBias: { value: 0.2 },
+    uBioUpBias: { value: 0 },
     uBioHueBias: { value: 0 },
     uBioWarp: { value: 0.8 },
     uBioFlickerAmp: { value: 0 },
@@ -1108,6 +1121,7 @@ attribute float aEyeGlow;
 attribute vec3 aBioEdge;
 varying vec3 vBioPos;
 varying float vBioAxis;
+varying float vBioUp;
 varying float vEyeGlow;
 varying vec3 vBioWorld;
 varying vec3 vBioEdge;`)
@@ -1129,7 +1143,14 @@ varying vec3 vBioEdge;`)
   // and reading it here costs one matrix multiply instead of chasing the
   // skinning chunks that rewrite the transformed position further down.
   // (No backticks in this string, ever — see the note in FRAG_BODY.)
-  vBioWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
+  vBioWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  // How much this vertex faces the sky, seeded off the raw attribute here and
+  // overwritten off the posed normal below wherever <defaultnormal_vertex>
+  // runs — which MeshBasicMaterial skips unless skinned, and an unwritten
+  // varying is undefined rather than zero. Same two writes as noiseShader.js.
+  vBioUp = dot(normalize(normalMatrix * normal), normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));`)
+      .replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
+  vBioUp = dot(normalize(transformedNormal), normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));`);
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${GLSL}`)
@@ -1657,6 +1678,7 @@ export function applyBiolumSkinSettings(only = null) {
     u.uBioHueScale.value = cfg.hueScale ?? 1.2;
     u.uBioHueSpread.value = cfg.hueSpread ?? 1.0;
     u.uBioTailBias.value = cfg.tailBias ?? 0.2;
+    u.uBioUpBias.value = Math.max(-1, Math.min(1, cfg.upBias ?? 0));
     u.uBioHueBias.value = cfg.hueBias ?? 0;
     u.uBioWarp.value = cfg.warp ?? 0.8;
     u.uBioColorA.value.set(cfg.colorA ?? 0x00e5ff);

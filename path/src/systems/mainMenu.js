@@ -86,7 +86,7 @@ import { menuInput, touchSlots } from '../input.js';
 import { feedback } from './feedback.js';
 import { mountBuildStamp } from '../ui/buildStamp.js';
 import { mountNameTag } from '../ui/nameTag.js';
-import { cycleAccessory, accessoryTurn } from './accessories.js';
+import { accessoryTurn } from './accessories.js';
 import { mountAccessoryDrawer } from '../ui/accessoryDrawer.js';
 import { playerName } from './playerName.js';
 
@@ -594,7 +594,7 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   // the one `remove()` that takes the buttons away takes it too.
   //
   // It is handed `sealScreen` rather than measuring the animal itself — the
-  // press that cycles and the drop that equips have to agree about where the
+  // drop that equips and the menu's own framing have to agree about where the
   // seal is, and two projections of the same box is two things to keep in step
   // with a resize.
   //
@@ -1064,24 +1064,13 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     if (mouse) pointerInside = true;
     pointTo(e.clientX, e.clientY, { look: mouse });
     if (hovered < 0) {
-      // THE SEAL ITSELF. A press on the animal cycles what it is wearing, and
-      // the bare seal is a position in that cycle — see cycleAccessory. This is
-      // the whole of "try things on" for a player who never opens the drawer,
-      // and it is checked BEFORE the water knock because the animal is a target
-      // and the water is what is left.
+      // THE SEAL ITSELF takes no press of its own. It used to: a click on the
+      // animal stepped the slot through the roster, which meant a stray press
+      // while reaching for a button, or a poke to see the water move, changed
+      // what the seal was wearing. What it wears is chosen in the drawer and
+      // nowhere else — one gesture per decision, and the seal is a thing to
+      // look at, not a control. A press on it is just a press on the water.
       //
-      // The knock still fires. The press did happen on the water's surface as
-      // far as the lattice is concerned, and swallowing it would make the one
-      // part of this screen that answers everywhere stop answering on the one
-      // thing you most want to poke.
-      const rect = sealScreen();
-      if (Math.hypot(e.clientX - rect.x, e.clientY - rect.y) <= rect.r) {
-        cycleAccessory(1);
-        drawer?.refresh();
-        feedback('uiClick');
-        waterKnock(cursorWorld.x, cursorWorld.y);
-        return;
-      }
       // OPEN WATER. The lattice does not care what was over it — a screen that
       // only answers on three small targets teaches you not to touch it — so a
       // press anywhere puts a knock in the water under the pointer.

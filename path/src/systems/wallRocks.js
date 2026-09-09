@@ -3,7 +3,9 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { ImprovedNoise } from 'three/examples/jsm/math/ImprovedNoise.js';
 import { CONFIG } from '../config.js';
 import { ASSETS, getAssetSizeMultiplier } from '../assets.js';
-import { bounds, seabedTopY, maxWaveExcursion } from '../arena.js';
+import { bounds, seabedTopY, maxWaveExcursion, midWater } from '../arena.js';
+import { versusActive } from './versusFlag.js';
+import { goalColors } from './ballLook.js';
 
 // The walls, made visible.
 //
@@ -121,6 +123,12 @@ export const shore = {
   // entrance is built on — a creature spawned back here is behind the cliff,
   // and easing forward into its swimming lane afterwards is invisible.
   hideZ: 0,
+  // How far PAST the wall's line the drawn face sits, in world units — the
+  // seal's nose past its hit circle (see `nose` in build). The wall the seal
+  // stops at and the rock it stops against are two units apart on purpose,
+  // and anything that has to touch the ROCK rather than the wall — the
+  // versus ball off the goal's posts — wants this, not bounds.left.
+  face: 0,
 };
 
 // How far past the wall the frame may drift, which is the smaller of what the
@@ -132,7 +140,25 @@ export function shoreOverscan() {
   return Math.max(0, Math.min(CONFIG.camera?.edgeDrift ?? 0, shore.cover));
 }
 
-function measureShore(geo) {
+// THE GOAL MOUTHS — a versus match cuts a hole in each wall. The band is
+// read off the same two numbers systems/versusGoal.js publishes (goal.halfHeight
+// about midwater); it is not imported from there because that module reads
+// shoreOverscan() from this one, and the shore is built before a match starts.
+// Null in every other mode, so nothing below changes for the ordinary game.
+function goalMouth() {
+  if (!versusActive()) return null;
+  const g = CONFIG.versus?.goal ?? {};
+  if (g.holes === false) return null;
+  const h = g.halfHeight ?? 7;
+  const gy = midWater();
+  return {
+    lo: gy - h, hi: gy + h, tunnel: Math.max(1, g.tunnel ?? 14),
+    glow: Math.max(0, g.glow ?? 3), spill: Math.max(0, g.spill ?? 6), feather: Math.max(0.05, Math.min(1, g.feather ?? 0.55)),
+    colors: goalColors(),
+  };
+}
+
+function measureShore(geo, mouth = null) {
   // The band that has to stay hidden: from the top of the seabed (below it the
   // floor strip is opaque and overscans the arena on its own) up to the
   // highest the water ever reaches. Above that line there is nothing behind
@@ -198,12 +224,19 @@ function measureShore(geo) {
   }
 
   let worst = Infinity;
+  // The mouth's scanlines are a hole ON PURPOSE, and they are left out of both
+  // figures below: folded in, `cover` would read zero and the camera would
+  // stop dead on the wall in a match — the one mode where a frame that can
+  // drift into the hole is the whole point of there being a hole.
+  const skipLo = mouth ? Math.max(0, Math.ceil((mouth.lo - lo) / COVER_STEP)) : 1;
+  const skipHi = mouth ? Math.min(n - 1, Math.floor((mouth.hi - lo) / COVER_STEP)) : 0;
   // The SHALLOWEST covering face over the whole band. A body behind this one
   // number is behind the rock at every height, so the entrance needs a single
   // depth rather than a lookup — and the height a creature enters at is rolled
   // long before anything asks how deep the wall is there.
   let front = Infinity;
   for (let i = 0; i < n; i++) {
+    if (i >= skipLo && i <= skipHi) continue;
     worst = Math.min(worst, Math.max(0, right[i] === -Infinity ? 0 : right[i]));
     worst = Math.min(worst, Math.max(0, left[i] === -Infinity ? 0 : left[i]));
     // A scanline with no face on it is a hole, and `worst` has already gone to
@@ -218,12 +251,87 @@ function measureShore(geo) {
   };
 }
 
+/**
+ * The goal's light: an unlit additive quad whose alpha is a soft elliptical
+ * falloff from its centre — 1 inside (1 - feather) of the half extents,
+ * feathering to 0 at the edge — in `color` times `glow`. `glow` is the
+ * overdrive: the composite's bloom thresholds on luminance, and the light has
+ * to clear it comfortably to bloom the way a goal should, so this is meant to
+ * sit well above 1. toneMapped off, because the overdrive IS the look and tone
+ * mapping would fold it back toward 1.
+ */
+// The live glow quads, for the F panel: a slider on CONFIG.versus.goal moves
+// these in place (refreshGoalGlow) rather than waiting for the next resize
+// to rebuild the shore.
+const goalGlows = [];
+
+export function refreshGoalGlow() {
+  const mouth = goalMouth();
+  if (!mouth) return 0;
+  for (const { mesh, side } of goalGlows) {
+    const u = mesh.material.uniforms;
+    u.uColor.value.set(mouth.colors[side < 0 ? 0 : 1]);
+    u.uGlow.value = mouth.glow;
+    u.uFeather.value = mouth.feather;
+    const w = mouth.tunnel + mouth.spill * 2;
+    const h = (mouth.hi - mouth.lo) + mouth.spill * 2;
+    if (mesh.geometry.parameters.width !== w || mesh.geometry.parameters.height !== h) {
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.PlaneGeometry(w, h);
+    }
+    mesh.position.x = mesh.userData.faceX + side * mouth.tunnel * 0.5;
+    mesh.position.y = (mouth.lo + mouth.hi) * 0.5;
+  }
+  return goalGlows.length;
+}
+
+export function goalGlowMaterial(color, glow, feather) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uGlow: { value: glow },
+      uFeather: { value: feather },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uGlow;
+      uniform float uFeather;
+      varying vec2 vUv;
+      void main() {
+        // Elliptical distance from the centre, 0 at the middle, 1 at the rim.
+        vec2 p = (vUv - 0.5) * 2.0;
+        float d = length(p);
+        // Flat at 1 to (1 - feather), then a smooth fall to 0 at the rim: no
+        // edge anywhere the quad ends, and the tail of it is what bleeds.
+        float a = 1.0 - smoothstep(1.0 - uFeather, 1.0, d);
+        a *= a;
+        gl_FragColor = vec4(uColor * uGlow * a, a);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+}
+
 export function createWallRocks(scene) {
   const group = new THREE.Group();
   scene.add(group);
 
   let mesh = null;
   let material = null;
+  // The dark of each goal mouth — a plane behind the hole, so the tunnel reads
+  // as a cave into the cliff rather than a window onto the scene background.
+  const holes = [];
   // Units of face past each wall that the frame may safely drift into. Zero
   // until the stack is built, and zero again the moment it is disposed or
   // turned off — with no shore drawn there is nothing to hide behind, so the
@@ -234,7 +342,11 @@ export function createWallRocks(scene) {
     cover = 0;
     shore.cover = 0;
     shore.hideZ = 0;
+    shore.face = 0;
     shore.built = false;
+    for (const h of holes) { group.remove(h); h.geometry.dispose(); h.material.dispose(); }
+    holes.length = 0;
+    goalGlows.length = 0;
     if (!mesh) return;
     group.remove(mesh);
     mesh.geometry.dispose();
@@ -302,7 +414,9 @@ export function createWallRocks(scene) {
     // ...and never INSIDE the old line: an asset table that has lost its fit
     // would otherwise pull the whole shore in on top of the seal, which is a
     // worse failure than the one this fixes.
-    const nose = bounds.right + Math.max(0, sealReach - (CONFIG.player?.hitRadius ?? 1));
+    const faceInset = Math.max(0, sealReach - (CONFIG.player?.hitRadius ?? 1));
+    const nose = bounds.right + faceInset;
+    const mouth = goalMouth();
 
     for (const side of [-1, 1]) {
       for (let i = 0; i < count; i++) {
@@ -342,6 +456,18 @@ export function createWallRocks(scene) {
         const faceX = nose - rand() * reach;
         const bb = g.boundingBox;
         g.translate(side > 0 ? faceX - bb.min.x : -faceX - bb.max.x, 0, 0);
+        // THE MOUTH. A boulder that would sit across the goal's band is slid
+        // OUT of it — up if its centre is above the mouth, down if below — so
+        // its face lands on the lip the same way its inner face landed on
+        // the wall: measured off the box, not guessed off the radius. Slid
+        // rather than dropped, because the boulders above the lip are what
+        // the top of the hole is made of, and a stack with a gap in it is a
+        // stack you can see the sky through. The lip is then exact, and the
+        // ball's collider (systems/versusGoal.js) is the same line.
+        if (mouth && bb.max.y > mouth.lo && bb.min.y < mouth.hi) {
+          const above = y >= (mouth.lo + mouth.hi) * 0.5;
+          g.translate(0, above ? mouth.hi - bb.min.y : mouth.lo - bb.max.y, 0);
+        }
         parts.push(g);
       }
     }
@@ -360,7 +486,7 @@ export function createWallRocks(scene) {
     }
     material.color.set(cfg.color ?? 0x0d2230);
 
-    const measured = measureShore(merged);
+    const measured = measureShore(merged, mouth);
     cover = measured.cover;
     shore.cover = measured.cover;
     // A margin past the frontmost face, so a body whose own thickness carries
@@ -370,6 +496,7 @@ export function createWallRocks(scene) {
     // hider pushed past those would be occluded by the sky instead, and would
     // then pop into existence the moment it eased forward again.
     shore.hideZ = measured.front - (cfg.hideMargin ?? 0.6);
+    shore.face = faceInset;
     shore.built = true;
 
     mesh = new THREE.Mesh(merged, material);
@@ -377,6 +504,37 @@ export function createWallRocks(scene) {
     // creatures pass in front of the cliff and the cliff in front of the floor.
     mesh.renderOrder = -1;
     group.add(mesh);
+
+    // The inside of each mouth GLOWS in its team's colour (left is team 0's
+    // goal, right team 1's — see CONFIG.versus.goal): a LIGHT, not a slab.
+    // A quad centred on the mouth's face, `spill` units wider and taller than
+    // the hole so the light bleeds out of it into the water and the rock,
+    // drawn additive with a soft elliptical falloff (goalGlowMaterial) so it
+    // has no edge anywhere — the rock in front of it is what gives the hole
+    // its shape — and overdriven past 1 so the bloom takes it. Behind the
+    // boulders (their z jitter reaches -3), in front of the seabed plane at
+    // -4; the boulders occlude it above and below the lips, and where it
+    // spills past the face into the water there is nothing in front of it,
+    // which is the point.
+    if (mouth) {
+      for (const side of [-1, 1]) {
+        const w = mouth.tunnel + mouth.spill * 2;
+        const h = (mouth.hi - mouth.lo) + mouth.spill * 2;
+        const plane = new THREE.Mesh(
+          new THREE.PlaneGeometry(w, h),
+          goalGlowMaterial(mouth.colors[side < 0 ? 0 : 1], mouth.glow, mouth.feather),
+        );
+        const faceX = side > 0 ? nose : -nose;
+        // Centred a little INTO the tunnel, so the brightest point is inside
+        // the hole and the spill into the water is the falloff's tail.
+        plane.position.set(faceX + side * mouth.tunnel * 0.5, (mouth.lo + mouth.hi) * 0.5, (cfg.z ?? -2.2) - 1.3);
+        plane.userData.faceX = faceX;
+        plane.renderOrder = -2;
+        group.add(plane);
+        holes.push(plane);
+        goalGlows.push({ mesh: plane, side });
+      }
+    }
   }
 
   function stats() {

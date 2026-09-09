@@ -17,6 +17,7 @@ the handful that still has nowhere else to live.
 | where | what the line has to do |
 | --- | --- |
 | `upgrades.csv` biolumShock / biolumVenom / biolumChill / biolumInfection `.name` | The four element cards, which used to be one card ("Glow Up!!") that rolled which element it was offering. Now you pick the element by picking the card, and taking one locks the other three out of the run. The element LABELS are already yours — Voltaic, Venom, Chill, Infected, in `CONFIG.biolum.elements` — and each card's desc is that element's own desc, so this is four card names and nothing else. They sit next to each other in a hand of three, so they want to read as one family with four members. `perLevelName` is on, so the stack number is appended: whatever you write becomes "<name> 2" at two stacks. |
+| `deathCauses.js` jellyfish `.label` and `.threat` | Two lines for the new jellyfish, staged as lorem. `label` is the cause as a noun phrase **with its article and lowercase** — it sits mid-sentence beside "a shark", "the small fry", "running out of air" — and it is what the `{cause}` chip becomes in a returning hello. `threat` heads a row on the score screen's Threats tab and is a plural noun in title case, beside "Sharks", "Pufferfish", "Rays". What separates this death from every other one: the jellyfish never swims at you, so swimming into it is entirely the player's own doing. |
 | `upgrades.csv` projectileLife.weaponName | The gun's rename while André 3000 is held, in place of "Fin Pebbles". The card no longer pierces anything — it makes every projectile stay in the water longer — so "Piercing Pebbles" is now false and is staged as `[DRAFT] Piercing Pebbles`. Same shape as the others in that column ("Rapid Pebbles", "Swift Pebbles"): one adjective plus "Pebbles". |
 
 ## Moved into `path/src/uiText.csv`
@@ -339,3 +340,33 @@ the id has to be a literal in the call or `npm run test:uitext` cannot check it.
 Deliberately NOT staged as lorem: six more failing gate lines for accessories
 somebody else is still importing would bury the five above, which are the ones
 the drawer cannot work without.
+
+## The man o' war boss
+
+**Four lines, and one of them is a mechanic rather than flavour.** A new
+archetype arrived with `bossManOWar` — the boss that rides the surface and can
+only be hurt from above, so the fight is a rhythm of breaching over it.
+
+**The deflect toast** — `CONFIG.feedback.bossDeflect`, `path/src/config.js`.
+This is the load-bearing one. It fires when a hit lands on the boss from below
+and does nothing, and it is the only thing that tells the player *why*. Without
+a line here the mechanic reads as a broken weapon: the player shoots, the boss
+is unharmed, and the conclusion is that the game is buggy rather than that they
+are in the wrong place. It has to teach "get above it" in about four words, and
+it repeats — `toastMinGap` is 2.5s — so it cannot be a joke that wears out on
+the third reading.
+
+**Three root nouns** — `manowarRoot1/2/3` in `bossNames.csv`. The root is the
+word a boss name is built around ("Grim **Tide**"), and the man o' war has
+exactly one today: it shares `tide` with the other nine archetypes, because
+every other root in that table is specific to an animal and choosing which of
+yours suit a siphonophore is not a call to make on your behalf. Until these are
+written, every man o' war is "<Prefix> Lorem" — which is the gate working, not a
+bug. Each row's `notes` column carries its own brief; briefly, one wants the
+float, one wants a different register so two fights in a run do not rhyme, and
+one can lean on the filaments.
+
+Not staged: a **death cause**. `path/src/deathCauses.js` falls back to the raw
+source name, so a player killed by this boss currently sees `bossManOWar` on the
+gravestone. It wants a row beside the jellyfish's — whose own `label` is still
+lorem, so the two are worth writing together.

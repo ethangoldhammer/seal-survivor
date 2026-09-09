@@ -79,6 +79,18 @@ if (!probe.vertexShader.includes('vChromeN = normalize')) {
   console.error('the chrome vertex injection did not land — three\'s <project_vertex> hook has moved.');
   process.exit(1);
 }
+// THE GRAIN'S NOISE FIELD, which arrives from systems/noiseGlsl.js rather than
+// from a string in assets.js. An import that silently resolved to undefined
+// splices "undefined" into the shader — which fails to compile, and would fail
+// below anyway; what this catches is the other direction, a refactor that stops
+// splicing it at all while the grain block still calls perlin3. That is a
+// link-time undefined-function error on a real driver and nothing at all in
+// Node, so it is asserted here rather than trusted to the page.
+if (!probe.fragmentShader.includes('float perlin3(') || !probe.fragmentShader.includes('vChromeObj')) {
+  console.error('the grain field is not in the fragment shader — the scale facets call'
+    + '\nperlin3 and sample vChromeObj, and neither is declared.');
+  process.exit(1);
+}
 
 const split = (src, what) => {
   const i = src.indexOf(MARK);
@@ -174,10 +186,14 @@ if (!gl) {
     gl.attachShader(p, f);
     gl.linkProgram(p);
     if (gl.getProgramParameter(p, gl.LINK_STATUS)) {
-      lines.push('ok   the two halves link — vChromeN and vChromeV agree');
+      lines.push('ok   the two halves link — vChromeN, vChromeV and vChromeObj agree');
       lines.push('');
-      lines.push('     the razor clam is the only asset wearing this film,');
-      lines.push('     so this is the whole of it.');
+      lines.push('     two assets wear this film — the razor clam and the sardine');
+      lines.push('     swirl\\'s body — and they compile the SAME text: what differs');
+      lines.push('     between them is which CONFIG block fills the uniforms, and a');
+      lines.push('     uniform value cannot fail to compile. So the clam\\'s material');
+      lines.push('     is the whole of it, and it has to be: the sardine is a MODEL,');
+      lines.push('     and no model loads in Node.');
     } else {
       bad++;
       lines.push('FAIL the two halves do NOT link');

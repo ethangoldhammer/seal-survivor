@@ -5,6 +5,7 @@ import { emit } from '../entities/particles.js';
 import { makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb } from '../entities/pickups.js';
+import { retireMaterial } from './programPin.js';
 
 // What's left of a hull that lost. A destroyed boat used to be removed from
 // the scene on the frame it died, so the biggest target in the game vanished
@@ -421,8 +422,8 @@ function dispose(scene, d) {
   // The materials outlive the individual chunk — they belong to the whole
   // wreck — so they go only with the last chunk of it.
   if (--d.kit.refs <= 0) {
-    d.kit.body.dispose();
-    d.kit.shell?.dispose();
+    retireMaterial(d.kit.body);
+    retireMaterial(d.kit.shell);
   }
 }
 

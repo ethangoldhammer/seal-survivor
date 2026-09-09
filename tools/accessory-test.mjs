@@ -51,6 +51,14 @@ import {
   updateAccessories, resetAccessories, accessoryState,
   equipAccessory, cycleAccessory, accessoryRoster, accessoryTurn,
 } from '../path/src/systems/accessories.js';
+
+// THE GATE IS OFF FOR THIS WHOLE FILE. GATE_DEFAULT is the public build now, so
+// every accessory with a row in unlocks.csv starts withheld — and this harness
+// is about what the drawer DOES with an accessory, not about who has earned
+// one. Leaving the gate on would test the gate here, in the file that would
+// then fail every time a row was added to the table. Gating is unlock-test's.
+import { setUnlockGate } from '../path/src/systems/unlocks.js';
+setUnlockGate(false);
 import { createAimRig } from '../path/src/systems/aimRig.js';
 import { bustAim, bustPlumb, createBustPin } from '../path/src/systems/splashBust.js';
 import { createAnimationController, stateForSpeed } from '../path/src/systems/animation.js';
@@ -363,22 +371,23 @@ equipAccessory('accessoryGlasses');
 check('the glasses ask to be faced', Math.abs(accessoryTurn() + Math.PI / 2) < 0.01,
   `${(accessoryTurn() * 180 / Math.PI).toFixed(0)}deg`);
 
-// THE COIN. A cap declares two poses; put it on enough times and both have to
-// come up, or the "random" is a constant nobody would notice.
+// NO COIN. A cap declares two poses and the FIRST one is the pose — putting it
+// on sixty times is the same portrait sixty times. This was a roll once, and a
+// wardrobe that answered a click with a different angle each time read as the
+// screen ignoring you rather than as variety.
 const rolls = new Set();
 for (let i = 0; i < 60; i++) { equipAccessory(''); equipAccessory('accessoryHat'); rolls.add(accessoryTurn()); }
-const want = new Set(CONFIG.accessories.items.accessoryHat.showTurns);
-check('the cap rolls every pose it declares', rolls.size === want.size
-  && [...rolls].every((r) => want.has(r)),
+check('the cap wears the same pose every time it goes on', rolls.size === 1,
   [...rolls].map((r) => `${(r * 180 / Math.PI).toFixed(0)}deg`).join(', '));
-check('...and one of them is the profile it had before', rolls.has(0));
+check('...and it is the first pose it declares',
+  rolls.has(CONFIG.accessories.items.accessoryHat.showTurns[0]));
 
-// The roll happens ONCE, on the way on. A turn that re-rolled per read is a
+// The turn is decided ONCE, on the way on. A turn that re-derived per read is a
 // seal spinning on the spot, and it would give the menu and this test different
 // answers on the same frame.
 equipAccessory('accessoryHat');
 const held = accessoryTurn();
-check('the roll is held, not re-rolled on every read',
+check('the turn is held, not recomputed on every read',
   accessoryTurn() === held && accessoryTurn() === held);
 
 // --- WHICH WAY IS THE FRONT ------------------------------------------------

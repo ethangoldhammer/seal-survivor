@@ -66,6 +66,14 @@ await import('./vite-loader.mjs');
 const { CONFIG } = await import('../path/src/config.js');
 const { ASSETS } = await import('../path/src/assets.js');
 const { ACCESSORY_ICONS } = await import('../path/src/ui/accessoryIcons.js');
+
+// THE GATE IS OFF FOR THIS WHOLE FILE. GATE_DEFAULT is the public build now, so
+// anything with a row in unlocks.csv starts withheld — and this harness is
+// about whether each accessory has a baked render behind it, not about who has earned what. Leaving the gate on would test
+// the gate here, in a file that would then fail every time a row was added to
+// the table. Gating is unlock-test's.
+const { setUnlockGate } = await import('../path/src/systems/unlocks.js');
+setUnlockGate(false);
 const { mountAccessoryDrawer } = await import('../path/src/ui/accessoryDrawer.js');
 
 const roster = Object.keys(CONFIG.accessories.items);

@@ -42,6 +42,7 @@ import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { ICON_FORMATS, ICON_EXTS, isIconFile } from './icon-formats.mjs';
+import { existsSync } from 'node:fs';
 
 const run = promisify(execFile);
 
@@ -52,6 +53,24 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT = resolve(HERE, '../..');
 const outArg = process.argv.indexOf('--out');
 const SHOTS = outArg > -1 ? resolve(process.argv[outArg + 1]) : join(HERE, 'shots');
+// WHERE THE PAGES COME FROM. Raw from this directory by default, which is what
+// they were and what still works for anything not needing the game's modules —
+// or from a vite build, which is the only way a page here can import
+// biolumSkin.js (config.js and a `?raw` CSV cannot be handed to a browser by a
+// file server; see the /src/ mount note below).
+//
+// BOTH PICKERS PASS --built, and they have to. iconRender.js is shared by all
+// three pages here and it imports biolumSkin.js at the top, so the raw path
+// cannot load ANY of them any more: the browser asks the file server for
+// config.js, gets application/octet-stream, and refuses the module. That is not
+// a fallback to plain toon — it is a blank page.
+//
+// The flag stays rather than becoming the only mode because the raw mounts are
+// still what serve the spec lists, the models and the shots, and because a page
+// added here later that needs none of the game's modules should not have to
+// build to be looked at.
+const builtArg = process.argv.indexOf('--built');
+const BUILT = builtArg > -1 ? resolve(process.argv[builtArg + 1]) : null;
 const portArg = process.argv.indexOf('--port');
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 4599;
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
@@ -127,6 +146,10 @@ const MOUNTS = [
   // The hex card art, for the design hex picker (hexpick.html). Read-only like
   // every other mount here.
   ['/hexart/', join(PROJECT, 'design/assets')],
+  // The built pages take precedence over the raw ones when --built is given,
+  // and the raw directory stays mounted behind it so the spec lists and shots
+  // that live beside this file are still reachable by the same URLs.
+  ...(BUILT ? [['/', join(BUILT, 'tools/atlas-render')], ['/', BUILT]] : []),
   ['/', HERE],
 ];
 
@@ -136,15 +159,30 @@ const MOUNTS = [
 const CUSTOM = join(HERE, 'custom');
 await mkdir(CUSTOM, { recursive: true });
 
+// FIRST MOUNT THAT ACTUALLY HAS THE FILE, not first mount whose prefix matches.
+//
+// With --built there are three mounts on `/` — the built pages, the build root,
+// and this directory — and the whole point is that they overlay: a page comes
+// from the build, while the spec lists and shot folders beside this file are
+// still reachable at the same URLs they always were. Returning on the first
+// prefix match would let the built directory shadow every one of them and
+// 404 the spec list the picker opens with.
+//
+// The traversal guard stays per candidate, so falling through can never widen
+// what is reachable — each mount still only serves from inside itself.
 function resolveSafe(urlPath) {
+  let last = null;
   for (const [prefix, dir] of MOUNTS) {
     if (!urlPath.startsWith(prefix)) continue;
     const rel = urlPath.slice(prefix.length) || 'render.html';
     const full = normalize(join(dir, rel));
-    if (!full.startsWith(dir)) return null;
-    return full;
+    if (!full.startsWith(dir)) continue;
+    if (existsSync(full)) return full;
+    last ??= full;
   }
-  return null;
+  // Nothing existed: hand back the first candidate so the 404 below still
+  // reports a path from inside a mount rather than null.
+  return last;
 }
 
 const server = http.createServer(async (req, res) => {

@@ -13,6 +13,10 @@ import {
   magnetRadius, magnetSpeed, magnetDistance,
   foodReach, foodPull, foodDistance,
 } from '../systems/chumMagnet.js';
+// The curl on the way into a mouth, and the streak behind it — shared by every
+// eater in the game so that a new one gets both by virtue of pulling chum. See
+// systems/chumPull.js.
+import { strangePull, decayPull, releasePull, resetChumPull } from '../systems/chumPull.js';
 import { telegraphMul } from '../systems/telegraph.js';
 import { initBubble, updateBubblePhysics, bubbleRadius, bubbleBirthPoint, growthOf } from '../systems/oxygenBubble.js';
 import { createCoralOrb, updateCoralOrb, disposeCoralOrb } from '../systems/coralOrb.js';
@@ -96,6 +100,9 @@ export const chumChunks = [];
 
 export function resetPickups(scene) {
   orbPool?.reset();
+  // The pull registry holds entries from the run that just ended, and their
+  // ribbons with them — nothing in it may outlive the orbs it points at.
+  resetChumPull();
   pickups.length = 0;
   orbClock = 0;
   runDifficulty = 0;
@@ -239,6 +246,7 @@ export function spawnXpOrb(scene, pos, value, sourceRadius = 0.5, vel = null) {
     let k = pickups.findIndex((p) => !p.magnetLatch);
     if (k === -1) k = 0;
     const [oldest] = pickups.splice(k, 1);
+    releasePull(oldest);
     orbPool?.release(oldest.mesh);
   }
 }
@@ -478,6 +486,7 @@ export function spawnChumChunk(scene, pos, opts = {}) {
 }
 
 function removeChunk(scene, chunk) {
+  releasePull(chunk);
   scene.remove(chunk.mesh);
   // The clone above is this chunk's alone, so nothing else is still drawing
   // with it. Cloned materials share their compiled program, so this frees the
@@ -561,12 +570,17 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     const step = Math.min(foodPull(speed) * dt, dist);
     chunk.mesh.position.x += (dx / dist) * step;
     chunk.mesh.position.y += (dy / dist) * step;
+    // The same corkscrew the orbs get, and the same offset-not-force contract:
+    // `gap` below is measured off the step above, not off the swing. See
+    // systems/chumPull.js.
+    strangePull(chunk, dt, player.mesh.position.x, player.mesh.position.y);
     // And the swallow is tested on where it landed, not on where it started
     // the frame — `dist` predates this step and postdates the seal's own, so a
     // chunk parked on the mouth by the clamp still reads a frame of seal travel
     // out. See the same subtraction on chum in updatePickups.
     gap = dist - step;
   } else if (chunk.vx || chunk.vy) {
+    decayPull(chunk, dt);
     // Kicked out of something. The same toss model chum spilling from a hull
     // uses — drag below the water line, gravity above it — so a chunk thrown
     // clear of a boss travels like every other piece of catch in the game.
@@ -580,6 +594,7 @@ function updateChunk(dt, scene, player, chunk, onCollect) {
     chunk.mesh.position.y += chunk.vy * dt;
     if (chunk.vx * chunk.vx + chunk.vy * chunk.vy < 0.09) { chunk.vx = 0; chunk.vy = 0; }
   } else {
+    decayPull(chunk, dt);
     chunk.mesh.position.y -= (CONFIG.chumChunk?.sinkSpeed ?? 0.9) * dt;
   }
 
@@ -677,7 +692,17 @@ function updateFloatingOrb(dt, player, orb, driftSpeed, onCollect, tick, rawDt) 
     orb.mesh.position.x, orb.mesh.position.y, speed,
   );
   let gap = dist;
-  if (reach < magnetRadius(player.stats, speed)) {
+  // ONCE CLAIMED, ALWAYS CLAIMED — the same latch chum has had, for the same
+  // reason and on the same evidence. The widest reach in the game is the DASH
+  // CORRIDOR (ten units behind the seal, see magnetDistance), and it lasts
+  // 0.22s: an orb claimed by it is abandoned in mid water the frame the dash
+  // ends, still several units short, because the state has dropped back to
+  // `boosting` and the radial radius behind the seal no longer covers it.
+  // That is precisely the "I struck into it and nearly got it" the player
+  // sees, and it was true of every pickup here — the strike orb, the
+  // rapid-fire morsel and the level blob — while chum was immune to it.
+  if (reach < magnetRadius(player.stats, speed)) orb.magnetLatch = true;
+  if (orb.magnetLatch) {
     // CLAMPED TO THE GAP, and the collect test below measures what is left of
     // it — both for the reason the chum magnet is (see updatePickups). An
     // unclamped pull that outruns the seal overshoots by more than the collect
@@ -755,8 +780,22 @@ function updateBubbleOrbs(dt, scene, player, onCollect, opts) {
       player.mesh.position.x, player.mesh.position.y,
       orb.mesh.position.x, orb.mesh.position.y, speed,
     );
-    if ((orb.grow ?? 1) >= 1 && reach < magnetRadius(player.stats, speed)) {
-      const pull = magnetSpeed(speed);
+    // AND IT LATCHES, like everything else the magnet claims — see the note in
+    // updateFloatingOrb. The swell gate is on the CLAIM only: a bubble still
+    // attached to the floor is not loose in the water yet, but one that has
+    // been claimed and is on its way keeps coming whatever the reach does
+    // behind it. A drowning seal that has to go back for a bubble it already
+    // had is the worst version of this bug in the game.
+    if ((orb.grow ?? 1) >= 1 && reach < magnetRadius(player.stats, speed)) orb.magnetLatch = true;
+    if (orb.magnetLatch) {
+      // CAPPED AT THE GAP PER FRAME, which the latch makes necessary. The pull
+      // outruns a dash by design (107 u/s against 46), and a bubble asked for
+      // 107 while it is one unit from the mouth is asked to cross it and come
+      // out the far side — 1.8 units a frame against a 1.85-unit collect skin,
+      // so it flicks through without ever being measured close enough to take.
+      // While the reach was the hold that self-corrected: the bubble left the
+      // radius and the pull stopped. A latched one would have orbited forever.
+      const pull = Math.min(magnetSpeed(speed), dist / Math.max(dt, 1e-4));
       orb.vx += ((dx / dist) * pull - orb.vx) * Math.min(1, 6 * dt);
       orb.vy += ((dy / dist) * pull - orb.vy) * Math.min(1, 6 * dt);
       // Tells the physics to stand down for this frame — see the note on
@@ -896,6 +935,11 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // — but it does not go back to sinking either: the claim outlives the
       // wind-up, and the pull picks up again the moment the mouth opens, if
       // the release's own gulp has not already taken it.
+      //
+      // The curl is FROZEN rather than unwound. Nothing advances it — the orb
+      // is not being pulled and must not be swung about — but taking the offset
+      // off would move it, and "held" means held: the shiver below is this
+      // state's telegraph and it is measured from where the orb actually is.
     } else if (claimed) {
       // The magnet outranks any throw still in flight, and cancels it — an orb
       // the player swam away from should go back to sinking, not pick its old
@@ -929,6 +973,11 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // Subtracted rather than re-measured: the step is clamped to `dist` and
       // aimed straight at the seal, so what is left is exactly the difference.
       gap = dist - step;
+      // AND IT CORKSCREWS IN. An offset off the line above, never a change to
+      // it — `gap` is still what the swallow is tested on, and the swing is a
+      // fraction of what is left, so it is under a tenth of a unit by the time
+      // the orb is at the mouth. See systems/chumPull.js.
+      strangePull(p, dt, player.mesh.position.x, player.mesh.position.y);
     } else if (p.hoover) {
       // IN A MOUTH: already moved this frame by whatever is eating it (see
       // bitePickup), and neither sinking nor drifting on its own until it lets
@@ -936,6 +985,10 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       // crab's dinner takes it, which is the same precedence the crab's own
       // aggro already uses when it drops the food to come for you.
     } else if (p.vx || p.vy) {
+      // Nothing has hold of it: the curl unwinds and the streak retires. Eased
+      // rather than dropped — see decayPull — and before the throw, so the toss
+      // integrates from a position that is settling rather than one that jumped.
+      decayPull(p, dt);
       // Still carrying a throw (boat chum, spilling out of a hull). Gravity
       // only applies in the air — below the water line it's drag alone, which
       // is what hands the orb over to the ordinary sink below within about a
@@ -962,6 +1015,7 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       }
       if (p.vx * p.vx + p.vy * p.vy < 0.09) { p.vx = 0; p.vy = 0; }
     } else {
+      decayPull(p, dt);
       // Out of magnet range — or held out of it by a wind-up — orbs sink
       // through the water and settle on the seabed.
       p.mesh.position.y -= CONFIG.pickups.sinkSpeed * dt;
@@ -986,6 +1040,11 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     // instead (see gulpPickups and CONFIG.strike.charge.gulp).
     if (!sealed && gap < CONFIG.pickups.collectRadius) {
       onCollect(p.value, p.mesh.position.x, p.mesh.position.y, p.healMul, p.sank);
+      // BEFORE THE MESH GOES BACK TO THE POOL. The pull registry holds a trail
+      // mover pointing AT this mesh, and the pool hands the same mesh to the
+      // next orb that spawns — a mover left behind would draw the swallowed
+      // orb's ribbon across the arena to wherever that orb turned up next.
+      releasePull(p);
       orbPool?.release(p.mesh);
       pickups.splice(i, 1);
       continue;
@@ -1459,6 +1518,23 @@ export function pickupAlive(p) {
 // and "that crab took it". The pull is exponential on dt, so it is the same
 // motion at any framerate and never overshoots the mouth.
 //
+// AND IT DOES NOT VANISH UNTIL IT IS INSIDE THE THING EATING IT. `suck.kill`
+// is { x, y, r } — a point in the eater's BODY and how close the orb has to be
+// to it — and the removal below is gated on reaching it. Without that gate the
+// orb is deleted by a chew TIMER wherever it happens to be floating, which is
+// the same "it just disappeared" this hoover exists to fix, one step further
+// in: the travel is drawn, and then the last of it pops in mid water anyway
+// because the timer ran out before the pull finished.
+//
+// THE GATE CANNOT STALL, and that is the reason for the extra pull below it
+// rather than a "close enough" fudge. An eater whose own `rate` is gentle
+// (the crab's is 5.5, and the note there says it never quite arrives, which is
+// the point) would otherwise chew forever at something hanging at its lips. So
+// once the chewing is done the last stretch closes at a guaranteed
+// CONFIG.pickups.pull.swallowPull on top of whatever the animal's own suction
+// is doing — an orb that has been eaten is going in, it is only a question of
+// the half-second it takes to be seen going in.
+//
 // It also raises `p.hoover` for the frame, which updatePickups reads as "not
 // yours to sink" — otherwise the orb's own settle would drag it straight back
 // down out of a shark's jaw on the same frame it was pulled up into it.
@@ -1473,6 +1549,21 @@ export function bitePickup(scene, p, amount, suck = null) {
   // left for a claimed orb to fail to arrive. The animal keeps mouthing at it
   // until the seal takes it, which is a fraction of a second at magnet speed.
   if (p.magnetLatch) return false;
+  const kill = suck?.kill ?? null;
+  // Chewed through, but not yet where it is allowed to disappear. The chew is
+  // held a hair under 1 so the shrink sits at its smallest rather than
+  // resetting, and the last stretch is closed at a floor that does not depend
+  // on how hard this particular animal sucks.
+  //
+  // LATCHED, because `p.eaten` is held at 0.999 while the gate is open and the
+  // amount for later frames is often 0 (the whale spends its chew at the lips
+  // and nothing outside them) — recomputing "has it finished chewing" from
+  // those two would answer NO on every frame after the first, and the extra
+  // pull that makes this gate self-resolving would never run again. That reads
+  // as an orb frozen an inch outside a mouth forever, which is worse than the
+  // pop this replaced.
+  if (kill && (p.eaten ?? 0) + amount >= 1) p.swallowing = true;
+  const swallowing = !!kill && !!p.swallowing;
   if (suck) {
     const k = 1 - Math.exp(-(suck.rate ?? 6) * suck.dt);
     p.mesh.position.x += (suck.x - p.mesh.position.x) * k;
@@ -1488,8 +1579,41 @@ export function bitePickup(scene, p, amount, suck = null) {
     // the pull and drag the orb back out of the mouth. Being eaten ends it.
     p.vx = 0;
     p.vy = 0;
+    if (swallowing) {
+      // Straight at the kill point now, at a guaranteed closing speed. Clamped
+      // to what is left, for the reason the magnet's step is: an unclamped
+      // overshoot flicks the orb through the throat frame after frame without
+      // ever being measured inside it.
+      const gx = kill.x - p.mesh.position.x;
+      const gy = kill.y - p.mesh.position.y;
+      const gd = Math.hypot(gx, gy) || 1e-4;
+      const step = Math.min((CONFIG.pickups.pull?.swallowPull ?? 7) * suck.dt, gd);
+      p.mesh.position.x += (gx / gd) * step;
+      p.mesh.position.y += (gy / gd) * step;
+    }
+    // The corkscrew, for the same reason the seal's magnet has one: an orb
+    // sliding into a mouth in a straight line at a constant rate does not read
+    // as being eaten by anything. Aimed at the kill point once there is one,
+    // so the curl dies where the orb actually goes rather than at the lips.
+    strangePull(p, suck.dt, kill?.x ?? suck.x, kill?.y ?? suck.y);
   }
   p.eaten = (p.eaten ?? 0) + amount;
+  if (swallowing) {
+    const dx = kill.x - p.mesh.position.x;
+    const dy = kill.y - p.mesh.position.y;
+    if (dx * dx + dy * dy > (kill.r ?? 0) * (kill.r ?? 0)) {
+      // Still outside the body. Hold the chew at its last frame and keep
+      // travelling — see the note above about why this cannot stall.
+      p.eaten = 0.999;
+      p.mesh.scale.setScalar((p.baseScale ??= p.mesh.scale.x) * (1 - 0.999 * 0.66));
+      return false;
+    }
+    // Inside. The chew was finished frames ago — what was left was the travel,
+    // and it is done. Written rather than accumulated because the amount for
+    // these frames is usually 0 (the whale spends its chew at the lips), so
+    // waiting for `p.eaten` to climb past 1 on its own is waiting forever.
+    p.eaten = 1;
+  }
   if (p.eaten < 1) {
     // Shrink toward a third of its size rather than to nothing — an orb that
     // dwindles to a speck before it pops is hard to see coming.
@@ -1497,6 +1621,7 @@ export function bitePickup(scene, p, amount, suck = null) {
     p.mesh.scale.setScalar((p.baseScale ??= p.mesh.scale.x) * t);
     return false;
   }
+  releasePull(p);
   orbPool?.release(p.mesh);
   pickups.splice(i, 1);
   return true;

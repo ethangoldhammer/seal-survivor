@@ -57,6 +57,11 @@ let group = null;
 // edge dialect. One glance answers both questions instead of one.
 const makeRing = () => makeOrganicRing({
   arcs: 4,
+  // The reticle is a READOUT, not the mark. Muting the 'mark' role in
+  // CONFIG.fx.organicRing.roles takes the circle off the water and leaves
+  // everything below untouched — the timer, the homing pull, markWeight and
+  // every targeting system that asks isMarked all carry on exactly as before.
+  role: 'mark',
   type: 'kinetic',
   color: CONFIG.strike?.mark?.ring?.color ?? 0xffc65a,
   thickness: CONFIG.strike?.mark?.ring?.thickness ?? 0.16,

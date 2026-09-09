@@ -9,6 +9,10 @@ import {
 import { uploadAsset } from '../systems/assetUpload.js';
 import { stageState, onStageChanged, stageAnchor } from '../systems/stage.js';
 import { fireBossBoom, resetBossBooms } from '../systems/bossBoom.js';
+import { fireGoalJet, resetGoalJets, goalJetState } from '../systems/goalJet.js';
+import { refreshGoalGlow } from '../systems/wallRocks.js';
+import { bounds, midWater } from '../arena.js';
+import { rockX } from '../systems/versusGoal.js';
 import { startCardRiser, stopCardRiser, stopAllCardRisers, cardRiserCount } from '../systems/cardRiser.js';
 import { stageJet, stopStagedJet, stagedJetOpen, jetStats, bubbleJetState } from '../systems/bubbleJet.js';
 import { jetBedCount } from '../systems/jetBed.js';
@@ -49,6 +53,10 @@ const RAIL_SECTIONS = [
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'chumChunkEaten', 'chumFull', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
+  // THE BALL GAME, in the order a rally goes: a seal into a seal, the ball
+  // off the post, the goal (its impact, then its cheer — two events for one
+  // moment, like a boss blow), then the count and the whistle that restart.
+  ['Versus', ['bodyCheck', 'versusBallHit', 'versusBallWall', 'versusPost', 'versusGoal', 'versusGoalCheer', 'versusCountdown', 'versusKickoff']],
   ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
   ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],
   // THE LEVEL-UP SCREEN, in the order it happens: the comb powering on, then
@@ -64,9 +72,17 @@ const RAIL_SECTIONS = [
   // cannot sit in this ordered list at all. It used to be a CONFIG.sfx voice
   // fired straight from ui.js, which meant the one sound on this screen with no
   // row anywhere — not here, not in the ` tuner, not in the old Sound tab.
+  // THE SEAL IS AT THE END OF IT, in its own three: it swims up while the comb
+  // is powering on, noses at whatever is pointed at through the whole hand, and
+  // bolts on the pick. Listed after the comb rather than interleaved with it
+  // because the question about these is never "how does this sit against
+  // cardLand" — it is whether the animal is far enough UNDER the card's own
+  // uiHover/uiClick, which is a level judged against a sound in a different
+  // section entirely (see the note in CONFIG.feedback).
   ['The level-up screen', ['combIgnite', 'cardPop', 'cardLand',
     'rarityCommon', 'rarityUncommon', 'rarityRare', 'rarityEpic', 'rarityLegendary',
-    'combFlood', 'combDrain']],
+    'combFlood', 'combDrain',
+    'sealPeek', 'sealNose', 'sealBolt']],
   // The boss's own voices, which had no home here at all until the
   // explosion needed one. THE EXPLOSION ITSELF IS NOT IN THIS LIST: it is
   // not a feedback event (see BOOM_ROW), and the rail adds it to the top of
@@ -197,6 +213,15 @@ const LASER_TERMS = 'laser fin laser bolt beam light shot pebble loadout lattice
 // named things somebody can find beat a category nobody looks in, and if a
 // third loop voice ever exists it wants to be named here too.
 const LOOP_ROWS = { '*jetbedloop': 'jetBed', '*jetbedwiggleloop': 'jetBedWiggle' };
+
+// THE GOAL, on the same terms as the boom and for the same reason: it is a
+// PLACE with a light in it and a jet that comes out of it, not a moment. The
+// two feedback events a goal fires (`versusGoal`, `versusGoalCheer`) are rows
+// in the Versus section like any others and carry the spray and the sound;
+// this row is the hole's glow (CONFIG.versus.goal) and the corridor jet
+// (CONFIG.versus.goalJet), and its Fire button scores one on the empty ocean.
+const GOAL_ROW = '*goal';
+const GOAL_TERMS = 'goal hole mouth corridor tunnel jet glow bloom team versus ball score net post';
 const LOOP_TERMS = 'loop bed jet bubble beam wiggle sample layer stream jetbed';
 
 const STYLES = `
@@ -597,11 +622,22 @@ function renderRail() {
     // ...and the bed's two loop voices under the stream they belong to. See
     // LOOP_ROWS — they are voices, not events, so nothing else would list them.
     const loopsHere = title === 'Your weapon' && (!filter || LOOP_TERMS.includes(filter));
-    if (!hits.length && !boomHere && !lightHere && !riserHere && !jetHere && !laserHere && !loopsHere) continue;
+    // ...and the goal at the top of the ball game's section. See GOAL_ROW.
+    const goalHere = title === 'Versus' && (!filter || GOAL_TERMS.includes(filter));
+    if (!hits.length && !boomHere && !lightHere && !riserHere && !jetHere && !laserHere && !loopsHere && !goalHere) continue;
     const h = document.createElement('div');
     h.className = 'sv-wb-sec';
     h.textContent = title;
     list.appendChild(h);
+    if (goalHere) {
+      const g = document.createElement('div');
+      g.className = 'sv-wb-ev' + (current === GOAL_ROW ? ' sv-wb-on-row' : '');
+      g.innerHTML = '<span class="nm" style="font-weight:600">\u25ce The goal</span>';
+      g.title = 'The hole in the rock: its light, and the jet that fires back out of the corridor when the ball goes in.';
+      g.addEventListener('click', () => { current = GOAL_ROW; render(); });
+      list.appendChild(g);
+      shown++;
+    }
     if (boomHere) {
       const b = document.createElement('div');
       b.className = 'sv-wb-ev' + (current === BOOM_ROW ? ' sv-wb-on-row' : '');
@@ -687,6 +723,7 @@ function render() {
   if (current === '*global') return renderGlobal();
   if (current === GOO_ROW) return renderGoo();
   if (current === BOOM_ROW) return renderBoom();
+  if (current === GOAL_ROW) return renderGoal();
   if (current === LIGHT_ROW) return renderKillLight();
   if (current === RISER_ROW) return renderCardRiser();
   if (current === JET_ROW) return renderBubbleJet();
@@ -2474,6 +2511,106 @@ function renderCardRiser() {
     ? `${cardRiserCount()} sounding right now`
     : 'nothing sounding — one per card in the air, up to the hand';
   shape.appendChild(live);
+}
+
+let goalTestSide = -1;
+
+function renderGoal() {
+  const g = CONFIG.versus?.goal;
+  const j = CONFIG.versus?.goalJet;
+  els.name.textContent = 'The goal';
+  els.via.textContent = 'CONFIG.versus.goal  \u2192  CONFIG.versus.goalJet  \u2192  CONFIG.fx.goo.groups.ball';
+  els.chips.replaceChildren();
+  const cols = els.cols;
+  cols.replaceChildren();
+  if (!g || !j) {
+    card(cols, 'sv-wb-imp wide', 'Not in this build', 'CONFIG.versus.goal or CONFIG.versus.goalJet is missing, so there is nothing to tune.');
+    return;
+  }
+  const live = () => { refreshGoalGlow(); };
+
+  // --- FIRING IT --------------------------------------------------------------
+  const when = card(cols, 'sv-wb-imp', 'Score one',
+    'Fires the whole goal on the empty ocean: the jet out of the corridor, then the spray and the cheer at the mouth (the two Versus rows below this one). The hole itself only exists in a ball-game match (Seal sports on the main menu) \u2014 outside one the jet fires from where the mouth would be, off the left or right wall at midwater.');
+  const fireRow = document.createElement('div');
+  fireRow.className = 'sv-wb-f';
+  const fireLab = document.createElement('label');
+  fireLab.textContent = 'try it';
+  const fireBtn = document.createElement('button');
+  fireBtn.className = 'sv-wb-btn sv-stage-fire';
+  fireBtn.textContent = '\u25b6 Score a goal';
+  fireBtn.addEventListener('click', () => {
+    resetGoalJets();
+    const side = goalTestSide;
+    const y = midWater();
+    fireGoalJet(side, y);
+    const mouthX = rockX(side);
+    const at = { x: mouthX, y, dirX: -side, dirY: 0, vx: -side * 20, vy: 0, scale: stageState.scale };
+    feedback('versusGoal', at);
+    feedback('versusGoalCheer', at);
+  });
+  fireRow.append(fireLab, fireBtn);
+  when.appendChild(fireRow);
+  toggle(when, 'the right-hand goal', () => goalTestSide > 0, (v) => { goalTestSide = v ? 1 : -1; },
+    'Which wall to score in. Not saved \u2014 a staging knob.');
+  toggle(when, 'the jet fires at all', () => j.enabled !== false, (v) => { j.enabled = v; });
+
+  // --- THE LIGHT ----------------------------------------------------------------
+  const light = card(cols, 'sv-wb-imp', 'The light in the hole',
+    'An additive quad behind the rock in the team\u2019s colour, soft to nothing at its rim. Live: these move the built shore in place. The colours are the teams\u2019 (CONFIG.versus.teams).');
+  slider(light, 'overdrive', { min: 0, max: 12, step: 0.1, dp: 1, get: () => g.glow ?? 3, set: (v) => { g.glow = v; live(); },
+    title: 'The colour times this. The bloom thresholds on LUMINANCE, so red needs more of it than green to bloom alike \u2014 and the bloom\u2019s own reach is fx.bloom in the ` tuner.' });
+  slider(light, 'spill', { min: 0, max: 20, step: 0.5, dp: 1, get: () => g.spill ?? 6, set: (v) => { g.spill = v; live(); },
+    title: 'World units the light reaches past the hole \u2014 into the water in front of the face and into the rock above and below.' });
+  slider(light, 'feather', { min: 0.05, max: 1, step: 0.05, get: () => g.feather ?? 0.55, set: (v) => { g.feather = v; live(); },
+    title: 'The share of the quad that is falloff. 1 fades from the centre; low holds a bright core the size of the hole and fades over the spill.' });
+  slider(light, 'mouth half height', { min: 3, max: 14, step: 0.5, dp: 1, get: () => g.halfHeight ?? 7, set: (v) => { g.halfHeight = v; live(); },
+    title: 'The hole\u2019s half height. The light follows it now; the ROCK is carved on the next resize or match, and the ball\u2019s posts read it live.' });
+
+  // --- THE JET ------------------------------------------------------------------
+  const jet = card(cols, 'sv-wb-imp', 'The jet out of the corridor',
+    'Born off screen inside the tunnel, driven at the water, bounced off the lips, squeezed out of the mouth and left to tumble. Driven goo in the ball\u2019s own group, in the ball\u2019s live colour.');
+  slider(jet, 'lobes', { min: 4, max: 120, step: 1, dp: 0, get: () => j.count ?? 36, set: (v) => { j.count = Math.round(v); } });
+  slider(jet, 'born past the face', { min: 1, max: 14, step: 0.5, dp: 1, get: () => j.born?.[0] ?? 4, set: (v) => { j.born = [v, Math.max(v, j.born?.[1] ?? v)]; },
+    title: 'The nearest a lobe is born to the mouth, in world units past the drawn face. The screen\u2019s edge is about four units past it.' });
+  slider(jet, '...and deepest', { min: 1, max: 14, step: 0.5, dp: 1, get: () => j.born?.[1] ?? 11, set: (v) => { j.born = [Math.min(v, j.born?.[0] ?? v), v]; } });
+  slider(jet, 'released over', { min: 0, max: 1.5, step: 0.05, get: () => j.stagger ?? 0.3, set: (v) => { j.stagger = v; },
+    title: 'Seconds. 0 is a puff; longer is a jet.' });
+  slider(jet, 'launch speed', { min: 5, max: 160, step: 1, dp: 0, get: () => j.speed?.[0] ?? 45, set: (v) => { j.speed = [v, Math.max(v, j.speed?.[1] ?? v)]; } });
+  slider(jet, '...up to', { min: 5, max: 160, step: 1, dp: 0, get: () => j.speed?.[1] ?? 80, set: (v) => { j.speed = [Math.min(v, j.speed?.[0] ?? v), v]; } });
+  slider(jet, 'aim scatter', { min: 0, max: 1.5, step: 0.05, get: () => j.scatter ?? 0.6, set: (v) => { j.scatter = v; },
+    title: 'Radians either side of straight out. What the lips fold back in.' });
+  slider(jet, 'push down the corridor', { min: 0, max: 400, step: 5, dp: 0, get: () => j.push ?? 120, set: (v) => { j.push = v; },
+    title: 'u/s\u00b2 toward the water while a lobe is still inside the rock.' });
+  slider(jet, 'nozzle', { min: 0, max: 20, step: 0.5, dp: 1, get: () => j.nozzle ?? 4, set: (v) => { j.nozzle = v; },
+    title: 'Pull toward the corridor\u2019s centre line, per second. The squeeze.' });
+  slider(jet, 'lip bounce', { min: 0, max: 1, step: 0.05, get: () => j.restitution ?? 0.55, set: (v) => { j.restitution = v; } });
+  slider(jet, 'turbulence', { min: 0, max: 300, step: 5, dp: 0, get: () => j.turbulence ?? 60, set: (v) => { j.turbulence = v; },
+    title: 'u/s\u00b2 of random walk on each lobe once it is clear of the rock.' });
+  slider(jet, '...inside the rock', { min: 0, max: 1, step: 0.05, get: () => j.turbulenceInside ?? 0.35, set: (v) => { j.turbulenceInside = v; },
+    title: 'The share of the turbulence a lobe gets while still in the corridor.' });
+  slider(jet, 'drag', { min: 0, max: 8, step: 0.1, dp: 1, get: () => j.drag ?? 1.6, set: (v) => { j.drag = v; } });
+  slider(jet, 'sinks', { min: -20, max: 20, step: 0.5, dp: 1, get: () => j.gravity ?? -3, set: (v) => { j.gravity = v; } });
+  slider(jet, 'lives', { min: 0.2, max: 4, step: 0.05, get: () => j.life?.[0] ?? 0.8, set: (v) => { j.life = [v, Math.max(v, j.life?.[1] ?? v)]; } });
+  slider(jet, '...up to', { min: 0.2, max: 4, step: 0.05, get: () => j.life?.[1] ?? 1.4, set: (v) => { j.life = [Math.min(v, j.life?.[0] ?? v), v]; } });
+  slider(jet, 'lobe size', { min: 0.1, max: 1.5, step: 0.02, get: () => j.size?.[0] ?? 0.28, set: (v) => { j.size = [v, Math.max(v, j.size?.[1] ?? v)]; },
+    title: 'Density radii, times the ball group\u2019s splat radius \u2014 the same units as the ball\u2019s own splats.' });
+  slider(jet, '...up to', { min: 0.1, max: 1.5, step: 0.02, get: () => j.size?.[1] ?? 0.55, set: (v) => { j.size = [Math.min(v, j.size?.[0] ?? v), v]; } });
+  slider(jet, 'brightness', { min: 0, max: 4, step: 0.05, get: () => j.glow ?? 1, set: (v) => { j.glow = v; },
+    title: 'Times the ball\u2019s own colour-at-glow.' });
+  const status = document.createElement('div');
+  status.className = 'sv-wb-none';
+  status.textContent = `${goalJetState.fired} fired this session`;
+  jet.appendChild(status);
+
+  // --- THE SURFACE ------------------------------------------------------------
+  const goo = CONFIG.fx?.goo?.groups?.ball;
+  if (goo) {
+    surfaceCard(cols, goo, {
+      shared: CONFIG.fx.goo,
+      sub: 'The ball\u2019s goo group (CONFIG.fx.goo.groups.ball), which the jet is written into \u2014 the same surface the ball itself and every hit on it use. Tune it on the ball lab (npm run looks:ball) if the ball is what you are judging.',
+    });
+  }
 }
 
 function renderBoom() {

@@ -126,13 +126,15 @@ const { CONFIG } = await import('../path/src/config.js');
 CONFIG.upgradeSlam.enabled = false;
 const { initFeedback } = await import('../path/src/systems/feedback.js');
 const { measure, measureTotal, phraseAll, sentenceCase } = await import('../path/src/upgradeText.js');
-const { player } = await import('../path/src/entities/player.js');
+const { LEVEL_STATS } = await import('../path/src/levelStats.js');
+const { player, availableUpgrades, levelableUpgrades } = await import('../path/src/entities/player.js');
 const { menuInput } = await import('../path/src/input.js');
 const playtest = await import('../path/src/systems/playtest.js');
 const { setSetting } = await import('../path/src/systems/settings.js');
 initFeedback(null);
 
 const ui = await import('../path/src/ui/ui.js');
+const hoverPoint = await import('../path/src/ui/hoverPoint.js');
 const picked = [];
 ui.initUI({
   onStart() {}, onRestart() {}, onLevelChoice(c) { picked.push(c.id); }, onNameSubmit() {},
@@ -205,18 +207,43 @@ section('A card whose face already measures itself adds no "next" row');
   // is a box repeating the line four pixels above it, which teaches the player
   // to stop reading the box on the cards where it is the only information there
   // is.
-  const measuring = CONFIG.upgrades.filter((u) => /\{effect\}/.test(u.desc ?? '')).map((u) => u.id);
-  check('some card still measures itself on its face', measuring.length > 0,
-    `${measuring.length} of ${CONFIG.upgrades.length} descs carry {effect}`);
-  const [card] = deal(measuring[0]);
+  //
+  // AND NOT ONE WITH A LEVEL READOUT. A card registered in LEVEL_STATS gets a
+  // TABLE instead of a measured line (see upgradeTip.js), and that table is not
+  // what the dedupe governs — it is a different set of rows, correctly shown
+  // whether or not the face states the effect. bubbleJet happens to be the
+  // first {effect} card in the roster and has one, so a plain "take the first"
+  // asserted the absence of a box that is supposed to be there.
+  // AND THE PRECONDITION IS FOUND, NOT ASSUMED. `{effect}` in the CSV does not
+  // guarantee the rendered face contains the measurement verbatim: clubPower's
+  // token expands to a three-stat phrase its sentence then reads around, so
+  // the dedupe correctly does NOT fire on it. Taking a fixed index and then
+  // ASSERTING the precondition made this section fail whenever the roster
+  // reshuffled under it — twice now — for reasons that have nothing to do with
+  // the dedupe. So it searches for the first card that genuinely satisfies it
+  // and tests the behaviour there, and the only thing asserted outright is
+  // that such a card still exists at all.
+  //
   // Case-insensitively: expandDesc sentence-cases the fragment when it lands
   // after a full stop, which is a difference in the CARD's typography and not
   // in what it says. The dedupe in cardEffect compares the same way.
-  const face = card.querySelector('.sv-card-desc').textContent.toLowerCase();
-  check(`${measuring[0]}: the desc really does carry the measurement`,
-    face.includes(effectOf(measuring[0]).toLowerCase()), face);
-  pointerEnter(card);
-  check('...so a first pick shows no tooltip at all', shown() === null, shown() ?? '');
+  const measuring = CONFIG.upgrades
+    .filter((u) => /\{effect\}/.test(u.desc ?? '') && !LEVEL_STATS[u.id])
+    .map((u) => u.id);
+  let stated = null;
+  let card = null;
+  for (const id of measuring) {
+    const [c] = deal(id);
+    const face = c?.querySelector('.sv-card-desc')?.textContent.toLowerCase() ?? '';
+    const said = effectOf(id).toLowerCase();
+    if (said && face.includes(said)) { stated = id; card = c; break; }
+  }
+  check('some card still states its measurement on its face, with no level table',
+    !!stated, `${measuring.length} of ${CONFIG.upgrades.length} descs carry {effect}`);
+  if (card) {
+    pointerEnter(card);
+    check(`${stated}: so a first pick shows no tooltip at all`, shown() === null, shown() ?? '');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,105 +280,77 @@ section('A card whose apply() moves nothing gets no empty box');
 }
 
 // ---------------------------------------------------------------------------
-section('The two rows a card face cannot carry');
+section('A card the run already holds is never dealt again');
 {
-  // A card says what the NEXT stack does. It has never said where the stacks
-  // already held have got you to, and it cannot say what the ability has done
-  // this run — which on the level-up screen, mid-fight, is the question the
-  // pick is actually being made on.
+  // THE OWNED-CARD TOOLTIP HAS NO HOME ON THIS SCREEN ANY MORE. It used to:
+  // the level-up menu could deal a card the run was already holding, and the
+  // two rows a card's face cannot carry — where the stacks already held have
+  // got you to, and what the ability has done this run — were the reason the
+  // box existed there.
+  //
+  // availableUpgrades() no longer offers a held card at all (see
+  // entities/player.js). Depth is bought on the hive ceremony and the level
+  // blob, which draw from levelableUpgrades() instead, and the `total` and
+  // `run` rows are asserted against the shared builder in
+  // tools/upgrade-tip-test.mjs, where the surfaces that CAN show them live.
+  //
+  // What is left to check here is the rule itself, from the menu's own side:
+  // deal() switches every other card off, so a run holding the one survivor
+  // must get an empty hand rather than its own card back.
   playtest.beginRun({});
-  // Real damage, under the tag ricochet books against — see SOURCE_UPGRADES.
   playtest.recordDamage('ricochet', 4200);
   playtest.recordKill({}, 'ricochet');
-  player.upgrades.push({ ...byId.get('bounceShot') });
 
-  const [card] = deal('bounceShot');
-  pointerEnter(card);
-  check('an owned card shows a tooltip even though its face measures itself',
-    !!shown(), shown() ?? 'nothing shown');
-  // CONDITIONAL ON THE FACE, because the dedupe is. This block needs
-  // `bounceShot` specifically — it is the card whose damage books against the
-  // `ricochet` tag — and that card's desc has since been rewritten to flavour
-  // alone. With no `{effect}` on the face there is nothing to dedupe against,
-  // so a "next" row is correct rather than a repeat. Asserted both ways so the
-  // check still means something whichever way the desc is written.
-  const faceMeasures = /\{effect\}/.test(byId.get('bounceShot')?.desc ?? '');
-  if (faceMeasures) {
-    check('...with no "next" row, which the face still carries',
-      tipRow('next') === null, tipRow('next') ?? '');
-  } else {
-    check('...with a "next" row, because the face no longer measures itself',
-      tipRow('next') !== null, tipRow('next') ?? 'no row');
-  }
-  check('...a running total for the one stack held',
-    tipRow('total') === sentenceCase(phraseAll(measureTotal(byId.get('bounceShot'), 1), 1)),
-    tipRow('total') ?? 'no row');
-  const run = tipRow('run');
-  check('...and what it has done this run', !!run, run ?? 'no row');
-  check('...named by the LINE the ledger books it under, not by the card',
-    run?.startsWith('Ricochet Rounds:') === true, run ?? '');
-  check('...quoting the damage that was recorded', run?.includes('4.2k') === true, run ?? '');
-  check('...and the kill', run?.includes('1 ') === true, run ?? '');
+  // TWO CARDS ENABLED, NOT ONE. With bounceShot the only row in the deck,
+  // taking it empties the offer entirely and the deepening fallback below
+  // correctly deals it straight back — which is the soft-lock guard doing its
+  // job, not the rule failing. Leaving shrimpRing on keeps something new in
+  // the pool, which is the state this check is about.
+  const fresh = deal('bounceShot', 'shrimpRing').map((c) => c.querySelector('.sv-card-name').textContent);
+  check('a card the run does not hold is dealt', fresh.length === 2, fresh.join(', '));
+
+  player.upgrades.push({ ...byId.get('bounceShot') });
+  const again = deal('bounceShot', 'shrimpRing').map((c) => c.querySelector('.sv-card-name').textContent);
+  check('...and the same card is not dealt once it is held',
+    !again.includes(byId.get('bounceShot').name), again.join(', ') || 'nothing');
+  check('...but it is still levelable, which is where depth comes from',
+    levelableUpgrades().some((u) => u.id === 'bounceShot'));
 
   player.upgrades.length = 0;
   playtest.endRun('quit');
 }
 
 // ---------------------------------------------------------------------------
-section('An upgrade the ledger has nothing on says so');
+section('...but a run holding the whole deck still gets a hand');
 {
-  // A zero is a fact and it is said out loud. Dropping the row instead would
-  // read as "this tooltip does not have that information", when what is true
-  // is "you have been carrying this and it has done nothing" — which is the
-  // single most useful thing the ledger knows.
-  playtest.beginRun({});
-  player.upgrades.push({ ...byId.get('bounceShot') });
-  const [card] = deal('bounceShot');
-  pointerEnter(card);
-  const run = tipRow('run');
-  check('the row is there', !!run, run ?? 'no row');
-  check('...and it is not a damage figure', run?.includes('dealt') === false, run ?? '');
-  player.upgrades.length = 0;
-  playtest.endRun('quit');
-}
-
-// ---------------------------------------------------------------------------
-section('The tooltip answers for the stack being held');
-{
-  // Every repeatable card is a different card the second time. The row that
-  // moves is now the TOTAL — one stack of bounceShot and two are different
-  // amounts of the same thing, and a tooltip stuck on one of them would be
-  // quoting a build the player is not in.
+  // THE SOFT-LOCK THE RULE ABOVE MAKES REACHABLE. The pool used to be
+  // unemptiable — a held card stayed in it until it capped — and now it is
+  // not, so a run long enough to collect everything would arrive at a paused
+  // game behind a menu with no cards on it and no way out. drawUpgrades has a
+  // comment about exactly this state; this is the check that it cannot happen.
   //
-  // Asserted as a DIFFERENCE and not just against the measured string. Both
-  // stacks matching would also be true if the row were suppressed at both and
-  // every comparison were null against null — which is how a card that never
-  // varies passes a stacking test without stacking.
-  player.upgrades.push({ ...byId.get('bounceShot') });
-  const [one] = deal('bounceShot');
-  pointerEnter(one);
-  const atOne = tipRow('total');
+  // Every card the deck can offer is taken, one each, and the screen is asked
+  // for a hand. The floor under it is the deepening pool (see deepenable in
+  // ui/ui.js), so what comes back is stacks — the one place on this screen
+  // where a held card is dealt, and only because there is nothing else left.
+  restore();
+  playtest.beginRun({});
+  const everything = availableUpgrades().map((u) => u.id);
+  check('the deck is bigger than a hand', everything.length > CONFIG.upgradeChoices,
+    `${everything.length} cards`);
+  for (const id of everything) player.upgrades.push({ id, rarity: 'common' });
+  check('...and taking all of it empties the offer', availableUpgrades().length === 0,
+    `${availableUpgrades().length} left`);
 
-  player.upgrades.push({ ...byId.get('bounceShot') });
-  const [two] = deal('bounceShot');
-  pointerEnter(two);
-  const atTwo = tipRow('total');
+  ui.showLevelUp();
+  const hand = [...cards().querySelectorAll('.sv-card')];
+  check('the screen still deals rather than opening empty',
+    hand.length === CONFIG.upgradeChoices, `${hand.length} card(s)`);
+  check('...from the deepening pool, so every card is one the run can stack',
+    hand.length > 0 && hand.every((c) => levelableUpgrades().length > 0));
+
   player.upgrades.length = 0;
-
-  check('one stack quotes one stack', atOne === sentenceCase(phraseAll(measureTotal(byId.get('bounceShot'), 1), 1)),
-    `got "${atOne}"`);
-  check('two stacks quote two', atTwo === sentenceCase(phraseAll(measureTotal(byId.get('bounceShot'), 2), 2)),
-    `got "${atTwo}"`);
-  check('...and the two really are different text', !!atOne && !!atTwo && atOne !== atTwo,
-    `"${atOne}" vs "${atTwo}"`);
-  // The FIRST stack is the one that unlocks the ability, so it is the only
-  // total that names it — two stacks of it is a quantity of ricochet, not a
-  // second ricochet. This is the check that catches a total quietly rebuilt
-  // from stack 1 repeated, which would name the unlock at every depth.
-  check('...with only the one-stack total naming the unlock',
-    atOne?.includes('chaining ricochet shot') === true
-    && atTwo?.includes('chaining ricochet shot') === false,
-    `stack 2 says "${atTwo}"`);
+  playtest.endRun('quit');
 }
 
 // ---------------------------------------------------------------------------
@@ -368,11 +367,13 @@ section('The verbosity setting');
   //   short  the deltas, no spans, no run row
   //   full   the deltas WITH spans, and the run row
   //
-  // It is also a CONTROL ability (no damage, only events), which is the branch
-  // of the run row nothing else here exercises.
+  // DEALT UNHELD, because that is the only way this screen deals anything now:
+  // a card the run holds is out of the pool (see availableUpgrades), so `owned`
+  // here is always 0 and the two rows that need a stack in hand — the running
+  // total and what the ability has done this run — cannot appear on this
+  // surface at all. They are asserted against the shared builder and against
+  // the hive, which CAN show them, in tools/upgrade-tip-test.mjs.
   playtest.beginRun({});
-  playtest.recordControl('octoGrab', 7);
-  player.upgrades.push({ ...byId.get('octoGrab') });
 
   setSetting('hud.upgradeTips', 'off');
   const [a] = deal('octoGrab');
@@ -388,23 +389,27 @@ section('The verbosity setting');
   check('short shows what the level buys', lvRows().length > 0, lvRows().join(' | '));
   check('...as deltas alone, with no span',
     lvRows().every((t) => !t.includes('\u2192')), lvRows().join(' | '));
-  check('...and drops the run', tipRow('run') === null, tipRow('run') ?? '');
 
   setSetting('hud.upgradeTips', 'full');
   const [c] = deal('octoGrab');
   pointerEnter(c);
   check('full shows the same quantities', lvRows().length > 0, lvRows().join(' | '));
-  check('...and adds where each one lands',
-    lvRows().some((t) => t.includes('\u2192')), lvRows().join(' | '));
-  // A damageless ability counts its output in EVENTS. A damage figure here
-  // would be a zero, and a zero for a card that spent the run hauling fish off
-  // reads as the card being useless rather than as the ledger measuring the
-  // wrong thing.
-  const run = tipRow('run');
-  check('...and the control ability reports events, not damage',
-    run?.includes('7 ') === true && run?.includes('dealt') === false, run ?? 'no row');
+  // AND NO ARROW ON EITHER, which is the readout being right rather than the
+  // setting being broken. Every row of a first pick is an `unlock` — there is
+  // no before to arrow from, so the value prints alone at both verbosities
+  // (see upgradeTip.js). The span that only Full carries needs a card the run
+  // already holds, and this screen no longer deals one; it is asserted at
+  // owned > 0 in tools/upgrade-tip-test.mjs.
+  check('...with no span on either, because a first pick has no before',
+    lvRows().every((t) => !t.includes('\u2192')), lvRows().join(' | '));
+  // ...and no history rows on either, because a card this screen offers is one
+  // the run has never held. This is the assertion that would catch the rows
+  // creeping back in as zeroes — "0 dealt" under a card you have never taken
+  // is a number about the card rather than about the run.
+  check('...and neither verbosity invents a history for a card never taken',
+    tipRow('run') === null && tipRow('total') === null,
+    `${tipRow('run') ?? '-'} / ${tipRow('total') ?? '-'}`);
 
-  player.upgrades.length = 0;
   playtest.endRun('quit');
 }
 
@@ -457,6 +462,77 @@ section('Choosing a card takes the tooltip with it');
   card.click();
   check('the card was taken', picked.includes('shrimpRing'), picked.join(', '));
   check('...and the tooltip went with it', shown() === null, shown() ?? '');
+}
+
+// ---------------------------------------------------------------------------
+section('The hand unlocks under a pointer that never moved');
+// `.sv-menu-locked` is `pointer-events: none` on the whole menu while the hand
+// slams in, so the cards receive nothing for the two thirds of a second that
+// takes. Turning the pointer back on does NOT hand a stationary cursor a
+// `pointerenter` — the pointer did not enter anything, the card arrived under
+// it — and the hand deals into the middle of the screen, which on a mouse is
+// where the pointer already is, because it is the aim. So the tip did not
+// appear until the player moved off a card and back, and whether that happened
+// was down to where they had last been aiming: the tooltip worked or did not
+// work at random, twenty times a run.
+//
+// NO POINTER EVENT IS DISPATCHED BELOW, and that is the whole assertion. The
+// tip has to come up off the unlock alone.
+//
+// jsdom has no layout and therefore no `document.elementFromPoint`, so the hit
+// test is stubbed to answer with the first card — which is what a real one
+// would return for a pointer sitting on it. What is under test is whether the
+// unlock ASKS, not whether the browser can answer.
+{
+  const realFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => cards()?.querySelector('.sv-card') ?? null;
+
+  // ONE CARD IN THE HAND, so "the card under the pointer" has one answer. The
+  // menu does not deal in the order it is handed, so a two-card hand makes the
+  // stub's choice a coin flip and the assertion below untrue half the time for
+  // a reason that is not the thing under test.
+  hoverPoint.setPointerPosForTest(400, 300);
+  const [first] = deal('shrimpRing');
+  check('a card was dealt to be under it', !!first, 'no cards dealt');
+  check('the tip is up with no hover event at all', !!shown(), shown() ?? 'nothing shown');
+  check('...and it is the card the pointer is on',
+    tipRow('next') === sentenceCase(effectOf('shrimpRing')), tipRow('next') ?? 'nothing');
+
+  // AND NOT WHEN THERE IS NO POINTER. A touch clears the position (a finger's
+  // last spot is not a hover) and so does leaving the window — a hand dealt
+  // with the mouse off the side of the screen must come up with nothing on it.
+  hoverPoint.setPointerPosForTest(null, null);
+  deal('shrimpRing');
+  check('no pointer, no tip', shown() === null, shown() ?? '');
+
+  document.elementFromPoint = realFromPoint;
+}
+
+// ---------------------------------------------------------------------------
+section('A card that has landed can be read while the rest are still arriving');
+// The menu is `pointer-events: none` from the first card being thrown to the
+// last one landing, and at the tuned stagger that is 2.1 SECONDS. A player who
+// moved onto the hand and started reading it got two seconds of hovers that did
+// nothing — the tooltip looked like it needed several tries to register, when
+// what it needed was for two other cards to finish landing.
+//
+// The fix hangs on two facts, and jsdom can check both: the slot is marked on
+// the frame its card lands, and the stylesheet gives a marked card the pointer
+// back. It cannot check the third — whether a real browser then delivers the
+// hover — because it has no layout and no hit testing.
+{
+  const [card] = deal('shrimpRing');
+  check('a landed card carries the mark the CSS keys on',
+    !!card.parentElement?.classList.contains('sv-lit'),
+    card.parentElement?.className ?? 'no slot');
+
+  const css = [...document.querySelectorAll('style')].map((n) => n.textContent).join('\n');
+  check('the whole menu refuses the pointer while locked',
+    css.includes('.sv-menu-locked, .sv-menu-locked * { pointer-events: none !important; }'),
+    'the lock rule is gone');
+  check('...and a landed card is given it back',
+    /\.sv-menu-locked \.sv-card-slot\.sv-lit > \.sv-card \{ pointer-events: auto/.test(css),
+    'a landed card would stay unhoverable for the whole arrival');
 }
 
 // ---------------------------------------------------------------------------

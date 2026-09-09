@@ -66,6 +66,7 @@ import { parseAttractorStormCsv } from '../attractorStormTable.js';
 import stormsCsv from '../attractorStorms.csv?raw';
 import { bounds } from '../arena.js';
 import { ASSETS } from '../assets.js';
+import { retireMaterial } from './programPin.js';
 
 // Parsed once at module load. The file cannot change while the page is up, and
 // six rows is not work worth repeating on the frame a storm is staged.
@@ -346,7 +347,7 @@ function disposeScaffold(scene, s) {
   for (const line of s.lines) {
     (line.parent ?? scene)?.remove(line);
     line.geometry.dispose();
-    line.material.dispose();
+    retireMaterial(line.material);
   }
   s.lines.length = 0;
 }

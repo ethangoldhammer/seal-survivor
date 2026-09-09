@@ -32,16 +32,20 @@ const check = (name, cond, detail = '') => {
   if (!cond) failures++;
 };
 
-// THE SHIPPED FOUR, in main.js's own order. The order matters more than the
+// THE SHIPPED FIVE, in main.js's own order. The order matters more than the
 // labels here: the diamond is addressed by POSITION — Play on top, Options
-// left, Leaderboard right, the tip jar below — and the only thing that ties an
-// item to a position is its index in this list.
+// left, Leaderboard right, the tip jar below, Seal sports on the cell
+// `fifthCell` names — and the only thing that ties an item to a position is
+// its index in this list.
 const ITEMS = [
   { label: 'Play' }, { label: 'Options' }, { label: 'Leaderboard' }, { label: 'Tip jar' },
+  { label: 'Seal sports' },
 ];
 // The three-cell figures were the menu before the tip jar joined it and are
-// still the right answer for three buttons, so they are measured with three.
+// still the right answer for three buttons, so they are measured with three;
+// the diamond proper is four, and the fifth is measured against it below.
 const THREE = ITEMS.slice(0, 3);
+const FOUR = ITEMS.slice(0, 4);
 // A stand-in for the measured bust: the numbers do not matter, only that the
 // box is real, because everything here is relative to the anchor cell it snaps
 // to. Deliberately off-centre so a shape that is accidentally centred on the
@@ -177,6 +181,43 @@ section('The diamond is a compass, and the compass points where it was told');
     [options, board].every((s) => near(s, play) && near(s, jar)));
   check('...and Play touches the jar through the middle', near(play, jar),
     Math.hypot(play.x - jar.x, play.y - jar.y).toFixed(3));
+
+  // THE FIFTH CELL is addressed from config, not by the figure — see
+  // diamondCells. The shipped offset (+1 column, +1.5 rows) is the cell above
+  // Leaderboard: it touches Leaderboard AND Play, so the compass grows a point
+  // rather than a list growing a tail, and it lands on a real cell of the
+  // lattice (the parity rule: an odd column offset reaches the half-steps).
+  const fifth = L.at[4];
+  check('the fifth button exists on the diamond', !!fifth && Number.isFinite(fifth.x));
+  check('the shipped fifth cell is above Leaderboard and touches it and Play',
+    fifth.x > play.x && fifth.y > board.y && near(fifth, board) && near(fifth, play),
+    `at ${fifth.x.toFixed(2)},${fifth.y.toFixed(2)}`);
+  check('...and is none of the four', [play, options, board, jar]
+    .every((c) => Math.hypot(c.x - fifth.x, c.y - fifth.y) > 1e-6));
+  check('the four do not move when the fifth joins', (() => {
+    const four = laid('diamond', FOUR).at;
+    return four.every((c, i) => Math.abs(c.x - L.at[i].x) < 1e-9 && Math.abs(c.y - L.at[i].y) < 1e-9);
+  })());
+  // The offset really is read: move it to the cell above Options and the
+  // button follows. Laid out with a cfg copy, so nothing else here sees it.
+  {
+    const moved = createHexMenu(ITEMS, { ...cfg, fifthCell: { col: -1, y: 1.5 } });
+    moved.layout(BOX, { shape: 'diamond' });
+    const f = moved.items[4].world;
+    check('fifthCell {col:-1, y:1.5} puts it above Options instead',
+      f.x < play.x && near(f, options) && near(f, play), `at ${f.x.toFixed(2)},${f.y.toFixed(2)}`);
+  }
+  // ...and one that names a cell the figure owns is refused, not stacked.
+  {
+    const bad = createHexMenu(ITEMS, { ...cfg, fifthCell: { col: 0, y: 0 } });
+    const warn = console.warn;
+    let said = '';
+    console.warn = (m) => { said = String(m); };
+    try { bad.layout(BOX, { shape: 'diamond' }); } finally { console.warn = warn; }
+    const f = bad.items[4].world;
+    check('a fifthCell on the jar is refused and warned about',
+      /fifthCell/.test(said) && Math.hypot(f.x - jar.x, f.y - jar.y) > 1e-6, said || 'no warning');
+  }
 }
 
 // --- the triangles are triangles -------------------------------------------
@@ -273,9 +314,14 @@ check('the shipped default is the diamond', cfg.portraitShape === 'diamond',
 // arithmetic is the thing that would be wrong.
 {
   const three = spanOf(laid('diamond', THREE));
-  const four = spanOf(laid('diamond', ITEMS));
+  const four = spanOf(laid('diamond', FOUR));
   check('the diamond is no wider with four buttons than with three',
     four <= three + 1e-9, `${four.toFixed(2)} vs ${three.toFixed(2)}`);
+  // And the shipped fifth cell sits in the column Leaderboard already uses, so
+  // it costs the figure no width either — a cell out past the side would.
+  const five = spanOf(laid('diamond', ITEMS));
+  check('...nor with the fifth on its shipped cell',
+    five <= four + 1e-9, `${five.toFixed(2)} vs ${four.toFixed(2)}`);
   const rowThree = spanOf(laid('row', THREE));
   check('a row of four, by contrast, grows by a full cell',
     rowSpan > rowThree + m.colStep * 1.9, `${rowSpan.toFixed(2)} vs ${rowThree.toFixed(2)}`);

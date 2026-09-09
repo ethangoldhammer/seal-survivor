@@ -512,6 +512,20 @@ export function createAnimationController(instance) {
   // touching the action — so the caller's fresh timeLeft holds locomotion
   // hostage while the underlying LoopOnce action runs to its end and disables
   // itself, freezing the model. See trigger().
+  // On which update() each action was last faded out, for the bounce test.
+  // Counted in FRAMES rather than mixer time: a harness that steps the
+  // mixer with dt 0 sixty times has let no time pass and is still not
+  // bouncing, and a real bounce is one or two frames. A fade's worth of
+  // frames at 60 a second is the window.
+  const leftAt = new Map();
+  let updates = 0;
+  function bounce(action) {
+    const at = leftAt.get(action);
+    if (at == null || !mixer) return false;
+    const window = Math.ceil(fadeDuration(currentState) * 60);
+    return updates - at <= window && action.isRunning() && action.getEffectiveWeight() > 0.001;
+  }
+
   function switchTo(state, restart = false) {
     if (state === currentState && !restart) return;
     const action = stateAction[state];
@@ -522,12 +536,41 @@ export function createAnimationController(instance) {
         // Same action already in front: restart it in place. Crossfading an
         // action with itself would fade it out and back in simultaneously.
         action.reset().setEffectiveWeight(1).play();
+        alignToBeat(state, action);
+      } else if (bounce(action)) {
+        // A BOUNCE — the state flipped away and straight back (swim → boost →
+        // swim in two frames, which a speed hovering on a threshold does), so
+        // this action is still fading OUT from a moment ago. fadeIn() would
+        // schedule its weight from ZERO, dropping it from wherever it was to
+        // nothing on this one frame, and reset() would restart the clip at
+        // time 0 under that: the mixer fills the missing weight with the pose
+        // it saved when the binding woke, and the neck snapped 28 degrees on
+        // the skull. So the clip keeps its time and its weight and is only
+        // faded back up from where it is, over what is left of the fade —
+        // _scheduleFading is exactly fadeIn() with a chosen starting weight.
+        // Only within one fade of leaving: a state coming back later is a
+        // fresh entry, restarted and put in phase with the beat as ever.
+        const w = action.getEffectiveWeight();
+        action.stopFading();
+        action._scheduleFading(fade * (1 - w), w, 1);
+        // ...and the state being left is only a frame or two INTO its own
+        // fade-in. fadeOut() schedules from weight 1 regardless, which would
+        // put it at nine tenths next frame on top of the returning clip —
+        // nearly two full poses summed, and the fresh one, reset to time 0,
+        // the louder. It goes down from where it is, over that share of a
+        // fade.
+        if (prev) {
+          const pw = prev.getEffectiveWeight();
+          prev.stopFading();
+          prev._scheduleFading(fade * pw, pw, 0);
+        }
       } else {
         action.reset().setEffectiveWeight(1).fadeIn(fade).play();
         if (prev) prev.fadeOut(fade);
+        // After reset(), which zeroes the clip time this is offsetting.
+        alignToBeat(state, action);
       }
-      // After reset(), which zeroes the clip time this is offsetting.
-      alignToBeat(state, action);
+      if (prev) leftAt.set(prev, updates);
       current = action;
     }
     currentState = state;
@@ -793,6 +836,7 @@ export function createAnimationController(instance) {
     },
 
     update(dt, state, hitThisFrame) {
+      updates++;
       // CUT LOOSE. No mixer, no sine, no rest pose — the pose it died in is
       // restored instead and the springs are all that move it. `state` and
       // `hitThisFrame` are ignored rather than rejected, so the caller that was

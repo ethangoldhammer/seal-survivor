@@ -28,10 +28,26 @@
 //                   serve's /motion/ route — the file the game imports, so
 //                   what is on this screen is what ships. Reload reads it
 //                   back; Reset discards to what was loaded.
+//   WHICH SET       the one the screen is playing, and there is no toggle:
+//                   a portrait screen edits the portrait set (y a fraction
+//                   of the viewport height, the side columns beside a
+//                   stacked hand) and a landscape one the row's (y in body
+//                   lengths below the crown line). The panel says which at
+//                   the top. To write the portrait set, put the page in a
+//                   phone — level-up.html?portrait=1 — where this panel is
+//                   mounted OUTSIDE the phone and drives the seal inside it:
+//                   `doc`/`win` are the phone's document and window, `mod`
+//                   the phone's own copy of the motion module (an iframe
+//                   has its own module graph, so the parent's import is a
+//                   different `data` from the one the puppet reads).
 // ---------------------------------------------------------------------------
-import {
-  motionData, setMotionData, clone, evaluateState, STATES, ANCHORS, EASES,
-} from '../../path/src/systems/levelUpSealMotion.js';
+import * as ownMod from '../../path/src/systems/levelUpSealMotion.js';
+// A LANDING POINT PER STATE is what the file holds now (see the header of
+// systems/levelUpSealMotion.js): one pose, and the swim takes the body to
+// its point. The panel then has no timeline — the tab is the state, the
+// centre handle is the point (dragged: its offset from its anchor), and the
+// fields are the pose. The loop controls appear only for a state that is
+// still a loop.
 
 const LABEL = { idle: 'idle', card1: 'card 1', card2: 'card 2', card3: 'card 3' };
 
@@ -42,18 +58,39 @@ const LABEL = { idle: 'idle', card1: 'card 1', card2: 'card 2', card3: 'card 3' 
 // that follows a pointerup is — so a button here fires once and skips nothing.
 const PRESS = 'pointerup';
 
-export function mountSealMotionPanel({ panel, getLive }) {
+//   THE TOOLTIP     a card tab pins the seal to that card's pose, and the
+//                   card's tooltip goes up with it — as a hover would put it
+//                   — with a handle (T) on the box. Drag the handle and the
+//                   box follows: that writes CONFIG.cardTip.cards[n] (or
+//                   portraitCards[n] for a stacked hand), the per-card
+//                   offsets the game reads, so the seal and the box are set
+//                   against each other on the screen they share. `tip` is
+//                   the page's hook into ui.js (previewCardTip), `getConfig`
+//                   the CONFIG the frame's game reads, `onFeelChanged` tells
+//                   the feel panel its sliders are stale.
+export function mountSealMotionPanel({
+  panel, getLive, doc = document, win = window, mod = ownMod, getConfig = null, tip = null, onFeelChanged = null,
+}) {
+  const { motionData, setMotionData, clone, evaluateState, STATES, ANCHORS, EASES, setFor, isLanding, LAND_ANCHORS } = mod;
   let state = 'idle';
   let sel = 0;          // selected key index
   let t = 0;            // scrub time, seconds into the loop
-  let live = false;     // true: the pin is released and real hovers drive it
+  let live = true;      // true: the pin is released and real hovers drive it — the default, so the page opens on the real thing
   let playing = false;
   let loaded = clone(motionData());
 
   const puppet = () => getLive()?.puppet ?? null;
-  const st = () => motionData().states[state];
-  const key = () => st()?.keys?.[sel] ?? null;
+  // THE SET IS THE SCREEN'S. Read off the puppet's frame every time, so a
+  // window dragged from wide to tall switches what is being edited with
+  // what is being played.
+  const frameOf = () => puppet()?.frame ?? { w: win.innerWidth, h: win.innerHeight, portrait: win.innerHeight > win.innerWidth };
+  const set = () => setFor(frameOf());
+  const st = () => set().states[state];
+  const landing = () => isLanding(st());
+  // The pose being edited: the landing state itself, or the selected key.
+  const key = () => (landing() ? st() : st()?.keys?.[sel] ?? null);
   const loopLen = () => Math.max(0.05, st()?.loop ?? 1);
+  const viewportY = () => set().space === 'viewport';
 
   // --- the panel -------------------------------------------------------------
   const root = document.createElement('div');
@@ -61,15 +98,18 @@ export function mountSealMotionPanel({ panel, getLive }) {
   root.innerHTML = `
     <hr>
     <h2>Seal motion</h2>
+    <div id="smSet"></div>
     <div class="btns" id="smTabs"></div>
     <div class="btns">
       <button id="smLive" aria-pressed="false">Live</button>
-      <button id="smPlay" aria-pressed="false">Play</button>
-      <label class="sm-inline">loop <input id="smLoop" type="number" min="0.1" step="0.1" style="width:56px"> s</label>
-      <label class="sm-inline"><input id="smRestart" type="checkbox"> restart on hover</label>
+      <span id="smLoopUi" style="display:contents">
+        <button id="smPlay" aria-pressed="false">Play</button>
+        <label class="sm-inline">loop <input id="smLoop" type="number" min="0.1" step="0.1" style="width:56px"> s</label>
+        <label class="sm-inline"><input id="smRestart" type="checkbox"> restart on hover</label>
+      </span>
     </div>
     <div id="smStrip" title="click: add a key here · drag a diamond: move it"></div>
-    <div class="row"><label>time</label><input id="smT" type="range" min="0" max="1" step="0.001"><output id="smTOut"></output></div>
+    <div class="row" id="smTimeRow"><label>time</label><input id="smT" type="range" min="0" max="1" step="0.001"><output id="smTOut"></output></div>
     <div class="btns">
       <button id="smDup">Duplicate key</button>
       <button id="smDel">Delete key</button>
@@ -88,8 +128,21 @@ export function mountSealMotionPanel({ panel, getLive }) {
   const tOut = $('smTOut');
   const keyBox = $('smKey');
   const note = $('smNote');
+  const setEl = $('smSet');
 
   function say(msg) { note.textContent = msg; }
+  let shownSet = null;
+  function showSet() {
+    const s = set();
+    if (s.key === shownSet) return;
+    shownSet = s.key;
+    setEl.textContent = s.key === 'portrait'
+      ? `editing the PORTRAIT set — landing points; the arrival rises at x ${s.entryX ?? 'centre'}`
+      : 'editing the LANDSCAPE set — landing points (?portrait=1 for the phone\'s)';
+    // A different set is a different loop under the same tab: re-read it.
+    sel = 0; t = 0;
+    buildTabs(); refreshStrip(); buildKeyBox();
+  }
 
   // --- tabs ------------------------------------------------------------------
   function buildTabs() {
@@ -137,6 +190,7 @@ export function mountSealMotionPanel({ panel, getLive }) {
     strip.appendChild(head);
   }
   strip.addEventListener('pointerdown', (e) => {
+    if (landing()) return;
     const r = strip.getBoundingClientRect();
     const u = Math.max(0, Math.min(0.999, (e.clientX - r.left) / r.width));
     addKeyAt(Math.round(u * loopLen() * 100) / 100);
@@ -157,9 +211,9 @@ export function mountSealMotionPanel({ panel, getLive }) {
     if (!s) return;
     const keys = s.keys;
     const p = puppet();
-    const frame = p?.frame ?? { w: innerWidth, h: innerHeight };
+    const frame = frameOf();
     const resolve = p?.resolveAnchor ?? (() => null);
-    const ev = keys.length ? evaluateState(s, at, resolve, frame) : null;
+    const ev = keys.length ? evaluateState(s, at, resolve, frame, state) : null;
     // The targets are copied from the key before this time (a resolved
     // point cannot be turned back into an anchor + offset).
     let before = keys.length - 1;
@@ -176,7 +230,7 @@ export function mountSealMotionPanel({ panel, getLive }) {
   }
   function blankKey() {
     return {
-      t: 0, ease: 'smoothstep', x: 0.5, y: 0.05, heading: 0, roll: 0,
+      t: 0, ease: 'smoothstep', x: viewportY() ? 0.12 : 0.5, y: viewportY() ? 0.5 : 0.05, heading: 0, roll: 0,
       look: { anchor: 'cursor', x: 0, y: 0, out: 1 },
       fins: { left: { anchor: 'none', x: 0, y: 0, w: 0 }, right: { anchor: 'none', x: 0, y: 0, w: 0 } },
     };
@@ -189,7 +243,9 @@ export function mountSealMotionPanel({ panel, getLive }) {
     const l = document.createElement('label'); l.textContent = label;
     const r = document.createElement('input'); r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = get();
     const o = document.createElement('output'); o.textContent = Number(get()).toFixed(2);
-    r.addEventListener('input', () => { set(Number(r.value)); o.textContent = Number(r.value).toFixed(2); drawOverlay(); refreshStrip(); });
+    // Rounded: a range whose min is -PI steps on a grid anchored at -PI, so
+    // a heading dragged to "-0.12" reads -0.1215926535 in the saved file.
+    r.addEventListener('input', () => { set(Math.round(Number(r.value) * 1000) / 1000); o.textContent = Number(r.value).toFixed(2); drawOverlay(); refreshStrip(); });
     row.append(l, r, o);
     return row;
   }
@@ -223,14 +279,34 @@ export function mountSealMotionPanel({ panel, getLive }) {
     k.fins.left ??= { anchor: 'none', x: 0, y: 0, w: 0 };
     k.fins.right ??= { anchor: 'none', x: 0, y: 0, w: 0 };
     const h = document.createElement('h3');
+    if (landing()) {
+      const land = k.land;
+      h.textContent = `landing point — the swim takes the body here`;
+      keyBox.append(
+        h,
+        select('anchored to', LAND_ANCHORS, () => land.anchor, (v) => { land.anchor = v; }),
+        slider('offset x (of width)', () => land.x ?? 0, (v) => { land.x = v; }, land.anchor === 'free' ? 0 : -0.6, land.anchor === 'free' ? 1 : 0.6, 0.005),
+        slider('offset y (of height)', () => land.y ?? 0, (v) => { land.y = v; }, land.anchor === 'free' ? 0 : -0.6, land.anchor === 'free' ? 1 : 0.6, 0.005),
+        slider('heading', () => k.heading ?? 0, (v) => { k.heading = v; }, -Math.PI, Math.PI, 0.01),
+        slider('roll', () => k.roll ?? 0, (v) => { k.roll = v; }, -Math.PI, Math.PI, 0.01),
+        slider('jaw (open)', () => k.jaw ?? 0, (v) => { k.jaw = v; }, 0, 1, 0.01),
+        ...targetRows('look', k.look, 'out'),
+        ...targetRows('left flipper', k.fins.left, 'w'),
+        ...targetRows('right flipper', k.fins.right, 'w'),
+      );
+      return;
+    }
     h.textContent = `key ${sel + 1} of ${st().keys.length} — ${k.t.toFixed(2)}s`;
     keyBox.append(
       h,
       select('ease to next', EASES, () => k.ease ?? 'smoothstep', (v) => { k.ease = v; }),
       slider('x (of width)', () => k.x, (v) => { k.x = v; }, 0, 1, 0.005),
-      slider('y (lengths below row)', () => k.y, (v) => { k.y = v; }, -1.5, 1.5, 0.01),
+      viewportY()
+        ? slider('y (of height)', () => k.y, (v) => { k.y = v; }, -0.2, 1.2, 0.005)
+        : slider('y (lengths below row)', () => k.y, (v) => { k.y = v; }, -1.5, 1.5, 0.01),
       slider('heading', () => k.heading ?? 0, (v) => { k.heading = v; }, -Math.PI, Math.PI, 0.01),
       slider('roll', () => k.roll ?? 0, (v) => { k.roll = v; }, -Math.PI, Math.PI, 0.01),
+      slider('jaw (open)', () => k.jaw ?? 0, (v) => { k.jaw = v; }, 0, 1, 0.01),
       ...targetRows('look', k.look, 'out'),
       ...targetRows('left flipper', k.fins.left, 'w'),
       ...targetRows('right flipper', k.fins.right, 'w'),
@@ -238,19 +314,22 @@ export function mountSealMotionPanel({ panel, getLive }) {
   }
 
   // --- the overlay -----------------------------------------------------------
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  // In the phone's document, when there is one: the handles sit over the
+  // seal they move, and the phone's own stylesheet (it is this same page)
+  // styles them.
+  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.id = 'smOverlay';
-  document.body.appendChild(svg);
+  doc.body.appendChild(svg);
   const handles = {};
   function handle(name, text) {
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const g = doc.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.classList.add('sm-handle');
-    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const c = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
     c.setAttribute('r', name === 'centre' ? 14 : 10);
-    const l = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    const l = doc.createElementNS('http://www.w3.org/2000/svg', 'text');
     l.textContent = text;
     l.setAttribute('text-anchor', 'middle'); l.setAttribute('dy', '4');
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    const line = doc.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.classList.add('sm-line');
     svg.append(line, g);
     g.append(c, l);
@@ -265,6 +344,37 @@ export function mountSealMotionPanel({ panel, getLive }) {
   handle('look', '👁');
   handle('left', 'L');
   handle('right', 'R');
+  handle('tip', 'T');
+
+  // --- the tooltip that goes with a card tab ------------------------------
+  const cardEl = (i) => doc.querySelectorAll('#svCards .sv-card')[i] ?? null;
+  const tabCard = () => { const m = /^card([1-3])$/.exec(state); return m ? Number(m[1]) - 1 : -1; };
+  let tipShownFor = -1;
+  function syncTip() {
+    if (!tip) return;
+    const want = live ? -1 : tabCard();
+    const card = want >= 0 ? cardEl(want) : null;
+    if (!card) {
+      if (tipShownFor >= 0) { tip.show(null); tipShownFor = -1; }
+      return;
+    }
+    // Re-put whenever it is down: the frame's own pointerleave (the mouse
+    // passing over the card on its way to a handle) takes it away.
+    if (tipShownFor !== want || !tip.showing()) { tip.show(card); tipShownFor = want; }
+  }
+  function tipBox() {
+    const fx = doc.querySelector('.sv-card-fx.sv-fx-on');
+    return fx ? fx.getBoundingClientRect() : null;
+  }
+  // The per-card entry the handle writes: the stacked hand's list on a
+  // portrait frame, the row's otherwise.
+  function perCard() {
+    const cfg = getConfig?.();
+    const i = tabCard();
+    if (!cfg?.cardTip || i < 0) return null;
+    const list = frameOf().portrait ? (cfg.cardTip.portraitCards ??= []) : (cfg.cardTip.cards ??= []);
+    return (list[i] ??= { x: 0, y: 0, side: 'auto' });
+  }
 
   function place(name, x, y, fromX, fromY, on = true) {
     const h = handles[name];
@@ -286,22 +396,30 @@ export function mountSealMotionPanel({ panel, getLive }) {
     if (!p || !k || live) { for (const n in handles) place(n, 0, 0, null, null, false); return; }
     const frame = p.frame;
     const m = p.metrics();
-    const cx = k.x * frame.w;
-    const cy = m.crownLine + k.y * m.unit + m.centreOffset;
-    place('centre', cx, cy, null, null, true);
     const targ = (tg) => {
       if (!tg || tg.anchor === 'none') return null;
       const dx = (tg.x ?? 0) * frame.w; const dy = (tg.y ?? 0) * frame.h;
       if (tg.anchor === 'free') return { x: dx, y: dy };
-      const a = p.resolveAnchor(tg.anchor);
+      const a = p.resolveAnchor(tg.anchor, state);
       return a ? { x: a.x + dx, y: a.y + dy } : null;
     };
+    let cx; let cy;
+    if (landing()) {
+      const pt = targ(k.land) ?? { x: frame.w / 2, y: frame.h / 2 };
+      cx = pt.x; cy = pt.y;
+    } else {
+      cx = k.x * frame.w;
+      cy = m.crownLine + k.y * m.unit + m.centreOffset;
+    }
+    place('centre', cx, cy, null, null, true);
     const lk = targ(k.look);
     place('look', lk?.x ?? 0, lk?.y ?? 0, cx, cy, !!lk);
     const lf = targ(k.fins?.left);
     place('left', lf?.x ?? 0, lf?.y ?? 0, cx, cy, !!lf);
     const rf = targ(k.fins?.right);
     place('right', rf?.x ?? 0, rf?.y ?? 0, cx, cy, !!rf);
+    const tb = tipBox();
+    place('tip', tb ? tb.left + tb.width / 2 : 0, tb ? tb.top + tb.height / 2 : 0, null, null, !!tb && tabCard() >= 0);
   }
 
   function dragHandle(name, px, py) {
@@ -310,14 +428,34 @@ export function mountSealMotionPanel({ panel, getLive }) {
     if (!p || !k) return;
     const frame = p.frame;
     const m = p.metrics();
-    if (name === 'centre') {
+    if (name === 'tip') {
+      // The box follows the pointer: the difference between where it is and
+      // where the pointer is goes into this card's offsets, screen axes both.
+      const tb = tipBox();
+      const per = perCard();
+      const card = cardEl(tabCard());
+      if (!tb || !per || !card) return;
+      per.x = Math.round((per.x ?? 0) + (px - (tb.left + tb.width / 2)));
+      per.y = Math.round((per.y ?? 0) + (py - (tb.top + tb.height / 2)));
+      tip?.show(card);
+      onFeelChanged?.();
+      drawOverlay();
+      return;
+    }
+    if (name === 'centre' && landing()) {
+      const land = k.land;
+      if (land.anchor === 'free') { land.x = px / frame.w; land.y = py / frame.h; } else {
+        const a = p.resolveAnchor(land.anchor, state);
+        if (a) { land.x = (px - a.x) / frame.w; land.y = (py - a.y) / frame.h; }
+      }
+    } else if (name === 'centre') {
       k.x = Math.max(0, Math.min(1, px / frame.w));
       k.y = (py - m.crownLine - m.centreOffset) / m.unit;
     } else {
       const tg = name === 'look' ? k.look : k.fins[name];
       if (tg.anchor === 'none') { tg.anchor = 'free'; if (name === 'look') tg.out ??= 1; else tg.w ??= 1; }
       if (tg.anchor === 'free') { tg.x = px / frame.w; tg.y = py / frame.h; } else {
-        const a = p.resolveAnchor(tg.anchor);
+        const a = p.resolveAnchor(tg.anchor, state);
         if (a) { tg.x = (px - a.x) / frame.w; tg.y = (py - a.y) / frame.h; }
       }
     }
@@ -333,6 +471,8 @@ export function mountSealMotionPanel({ panel, getLive }) {
     last = now;
     const p = puppet();
     if (!p) return;
+    showSet();
+    syncTip();
     if (live) { p.motion.pin(null); return; }
     if (playing) { t = (t + dt) % loopLen(); refreshStrip(); }
     p.motion.pin({ state, t });
@@ -346,11 +486,13 @@ export function mountSealMotionPanel({ panel, getLive }) {
   $('smRestart').addEventListener('change', (e) => { st().restart = e.target.checked; });
   tSlider.addEventListener('input', () => { t = Number(tSlider.value) * loopLen(); playing = false; $('smPlay').setAttribute('aria-pressed', 'false'); refreshStrip(); });
   $('smDup').addEventListener(PRESS, () => {
+    if (landing()) { say('a landing point is one pose — drag it, or set its fields'); return; }
     const k = key(); if (!k) return;
     const c = clone(k); c.t = Math.min(loopLen() - 0.01, k.t + 0.25);
     st().keys.push(c); st().keys.sort((a, b) => a.t - b.t); sel = st().keys.indexOf(c); t = c.t; sync();
   });
   $('smDel').addEventListener(PRESS, () => {
+    if (landing()) { say('a landing point cannot be deleted — a state always lands somewhere'); return; }
     const keys = st().keys; if (keys.length <= 1) { say('a loop keeps at least one key'); return; }
     keys.splice(sel, 1); sel = Math.max(0, sel - 1); sync();
   });
@@ -377,6 +519,9 @@ export function mountSealMotionPanel({ panel, getLive }) {
     buildStrip();
   }
   function sync() {
+    shownSet = null; showSet();
+    const loop = !landing();
+    for (const id of ['smLoopUi', 'smStrip', 'smTimeRow', 'smDup', 'smDel']) $(id).style.display = loop ? '' : 'none';
     buildTabs();
     $('smLive').setAttribute('aria-pressed', String(live));
     $('smLoop').value = loopLen();
@@ -387,6 +532,6 @@ export function mountSealMotionPanel({ panel, getLive }) {
     drawOverlay();
   }
   sync();
-  say('pinned to a loop — Live to feel the blend');
+  say('live — hover a card in the frame; pick a state tab to pin its pose and drag its handles');
   return { sync };
 }

@@ -6,6 +6,7 @@ import { createVisual } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { weatherState } from './weather.js';
 import { aoe, targeting } from './scaling.js';
+import { hdrInto } from './beams.js';
 import { player } from '../entities/player.js';
 import { eelLevelStats } from '../levelStats.js';
 
@@ -54,6 +55,74 @@ export function eelCfg() {
     boltColor: new THREE.Color(c.boltColor)
       .lerp(new THREE.Color(st.color ?? c.boltColor), (st.colorMix ?? 0) * k)
       .getHex(),
+  };
+}
+
+// THE CRACKLE, resolved for one bolt.
+//
+// Takes the storm snapshot eelCfg() already made and folds in the two things it
+// does not know about: the LEVEL of whatever ability fired this bolt, and the
+// per-bolt roll that keeps two bolts from being the same picture.
+//
+// A SNAPSHOT for the same reason eelCfg() is one — a bolt's brightness, shape
+// rate and flicker are read every frame of its life, and a level-up or a tuner
+// nudge halfway through a fade would be a bolt that changes character while you
+// are looking at it.
+//
+// THE CLAMP IS THE POINT OF THE `ramp` BLOCK. One gain is derived from the
+// level, clamped to `max`, and every axis takes a share of that one number — so
+// there is no path by which a stack of eight, a storm, and a maxed slider
+// multiply into a white screen. Exported for tools/looks/bolt-lab.js, which
+// draws the ramp as a curve so the ceiling is something you can see rather than
+// something you have to trust.
+export function crackleCfg(cfg = eelCfg(), level = 0) {
+  const c = CONFIG.eel?.crackle ?? {};
+  const r = c.ramp ?? {};
+
+  // The one gain. `perLevel` per level PAST THE FIRST, so level 1 — the level
+  // every one of these abilities is bought at — is the tuning above as typed.
+  const per = r.enabled === false ? 0 : (r.perLevel ?? 0);
+  const ceiling = Math.max(1, r.max ?? 1);
+  const g = 1 + Math.min(Math.max(0, (level || 0) - 1) * per, ceiling - 1);
+  const axis = (w) => 1 + (g - 1) * (w ?? 0);
+
+  const off = c.enabled === false;
+  const vary = c.vary ?? {};
+  // ±share, rolled once. Never below zero however wide the share is set.
+  const roll = (v) => Math.max(0, 1 + (Math.random() * 2 - 1) * (off ? 0 : (v ?? 0)));
+
+  const flickerRate = Math.max(0, cfg.flickerSpeed * roll(vary.flicker) * axis(r.flicker));
+
+  return {
+    gain: g,
+    // Brightness. `boltGlow` is still the number that reaches the bright pass;
+    // these two are multipliers on it, one for the core and one for the halo.
+    overdrive: off ? 1 : (c.overdrive ?? 1) * axis(r.overdrive),
+    bloom: off ? 1 : (c.bloom ?? 1) * axis(r.bloom),
+    flash: off ? 1 : Math.max(1, (c.flash ?? 1) * axis(r.flash)),
+    flashDecay: Math.max(0.001, c.flashDecay ?? 0.05),
+    // Shape.
+    amplitude: roll(vary.amplitude) * axis(r.noise),
+    // Gentler than the amplitude on purpose: contrast is an exponent, and
+    // ramping it as hard as the displacement turns the arc into a square wave.
+    contrast: 1 + (axis(r.noise) - 1) * 0.4,
+    branches: axis(r.branches),
+    width: roll(vary.width) * axis(r.width),
+    life: roll(vary.life),
+    // Flicker. Depth is a share and is clamped as one — an axis weight and a
+    // maxed slider must not take it past "goes fully dark every crest".
+    flickerDepth: off ? 0 : Math.min(1, (c.flickerDepth ?? 0) * axis(r.flicker)),
+    flickerRate,
+    flickerOctaves: off ? 1 : Math.max(1, Math.min(6, Math.round(c.flickerOctaves ?? 1))),
+    flickerSpread: Math.max(1.05, c.flickerSpread ?? 2),
+    // Reshape.
+    reseedHz: off ? 0 : Math.max(0, (c.reseedHz ?? 0) * axis(r.flicker)),
+    reseedJitter: Math.max(0, Math.min(1, c.reseedJitter ?? 0)),
+    variants: off ? 1 : Math.max(1, Math.min(6, Math.round(c.variants ?? 1))),
+    // Where in the noise field this bolt lives. Two bolts drawn between the
+    // same two bodies on the same frame — which a Voltaic chain does — would
+    // otherwise be the same line twice.
+    seed: Math.random() * 997,
   };
 }
 
@@ -255,12 +324,16 @@ function ribbonFromPoints(pts, width, taperEnds) {
   return geo;
 }
 
-function buildBoltGeometry(points, t, cfg) {
+function buildBoltGeometry(points, t, cfg, seedBase = 0) {
   const mainRuns = [];
   const branchRuns = [];
 
   for (let i = 0; i < points.length - 1; i++) {
-    const seed = i * 17.3 + points.length * 3.1;
+    // seedBase is what makes one bolt's silhouette different from another's,
+    // and what makes this bolt's several VARIANTS different from each other —
+    // every hash below hangs off it, so the forks move too rather than the
+    // trunk wobbling under a fixed set of branches.
+    const seed = seedBase + i * 17.3 + points.length * 3.1;
     const { pts, perp, len } = hopPoints(points[i], points[i + 1], seed, t, cfg);
     mainRuns.push(pts);
 
@@ -291,42 +364,132 @@ function buildBoltGeometry(points, t, cfg) {
 // before it. The eel's own chain never passes it and is unchanged. Clamped
 // well off zero at the bottom: a bolt is the only thing that says the chain
 // reached this far, and one drawn at 3% is a bolt that did not happen.
-function spawnBolt(scene, points, strength = 1) {
+//
+// `level` is the stack of whatever fired it — the eel's, Voltaic's, the zappy
+// club's — and drives the whole crackle ramp. It is a PARAMETER rather than a
+// reach into player.stats because the three callers each know a different
+// number and only they can say which one is driving; see spawnArcBolt.
+//
+// WHAT IS BUILT HERE AND WHAT IS ANIMATED. Geometry is expensive and colour is
+// free, so the bolt builds every silhouette it will ever wear at spawn and the
+// per-frame loop in updateEel only ever swaps which one is visible and writes
+// four material colours. Nothing allocates while a bolt is alive.
+function spawnBolt(scene, points, strength = 1, level = 0) {
   const cfg = eelCfg();
-  const t = performance.now() / 1000;
-  const { mainRuns, branchRuns } = buildBoltGeometry(points, t, cfg);
-  const group = new THREE.Group();
-  const colour = new THREE.Color(cfg.boltColor);
+  const fx = crackleCfg(cfg, level);
+  const t0 = performance.now() / 1000;
 
-  const addRibbons = (runs, width, opacity, glowMul) => {
-    if (!runs.length) return;
-    const mat = new THREE.MeshBasicMaterial({
-      color: colour.clone().multiplyScalar(cfg.boltGlow * glowMul),
+  // The shape numbers, after the level ramp and this bolt's own roll. Passed to
+  // the geometry builder as a cfg-shaped object so buildBoltGeometry stays the
+  // one place that knows how a bolt is drawn.
+  const shape = {
+    ...cfg,
+    noiseAmplitude: cfg.noiseAmplitude * fx.amplitude,
+    noiseContrast: cfg.noiseContrast * fx.contrast,
+    branchChance: Math.min(1, cfg.branchChance * fx.branches),
+    branchesPerHop: cfg.branchesPerHop * fx.branches,
+  };
+
+  const group = new THREE.Group();
+  const k = Math.max(0.3, Math.min(1, strength));
+  const base = new THREE.Color(cfg.boltColor);
+
+  // ONE MATERIAL PER ROLE, SHARED BY EVERY VARIANT. Four materials for the
+  // whole bolt however many silhouettes it holds — which is what makes the
+  // flicker a four-write-per-frame job rather than one per ribbon, and what
+  // lets the variants be swapped by visibility alone.
+  //
+  // THE COLOUR IS PEAK-CHANNEL NORMALISED (hdrInto, from systems/beams.js).
+  // The bright pass thresholds on LUMINANCE, where blue is worth 7% and green
+  // 72%, so the same `overdrive` on a cold bolt and a yellow one would bloom
+  // nothing like alike — and this bolt's colour is a slider. See npm run glow.
+  const materials = [];
+  const roleMat = (opacity, glowMul) => {
+    const m = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    mat.userData.baseOpacity = opacity;
-    for (const pts of runs) group.add(new THREE.Mesh(ribbonFromPoints(pts, width, true), mat));
+    m.userData.baseOpacity = opacity;
+    m.userData.hdrColor = hdrInto(new THREE.Color(), base, cfg.boltGlow * glowMul);
+    m.color.copy(m.userData.hdrColor);
+    materials.push(m);
+    return m;
   };
+  const mainGlow = roleMat(cfg.glowOpacity * k, 0.4 * fx.bloom);
+  const mainCore = roleMat(k, 1);
+  const branchGlow = roleMat(cfg.glowOpacity * cfg.branchTaper * k, 0.35 * fx.bloom);
+  const branchCore = roleMat(cfg.branchTaper * k, 0.8 * fx.bloom);
 
-  // Wide soft halo behind a bright thin core — both real geometry now, so
-  // the width sliders genuinely change the arc's thickness.
-  const k = Math.max(0.3, Math.min(1, strength));
-  addRibbons(mainRuns, cfg.glowWidth * k, cfg.glowOpacity * k, 0.4);
-  addRibbons(mainRuns, cfg.coreWidth * k, k, 1);
-  addRibbons(branchRuns, cfg.glowWidth * 0.5 * k, cfg.glowOpacity * cfg.branchTaper * k, 0.35);
-  addRibbons(branchRuns, cfg.coreWidth * 0.6 * k, cfg.branchTaper * k, 0.8);
+  // THE SILHOUETTES. Each is built from a different seed AND at a different
+  // point along the scrolling noise, so the set is a walk through the field
+  // rather than unrelated randomness — cutting between them reads as one arc
+  // hunting for a path instead of as several different bolts.
+  const widthK = k * fx.width;
+  const step = fx.reseedHz > 0 ? 1 / fx.reseedHz : 0.04;
+  const variants = [];
+  for (let v = 0; v < fx.variants; v++) {
+    const vg = new THREE.Group();
+    const { mainRuns, branchRuns } = buildBoltGeometry(points, t0 + v * step, shape, fx.seed + v * 53.7);
+    const add = (runs, width, mat) => {
+      for (const pts of runs) vg.add(new THREE.Mesh(ribbonFromPoints(pts, width, true), mat));
+    };
+    // Wide soft halo behind a bright thin core — both real geometry, so the
+    // width sliders genuinely change the arc's thickness.
+    add(mainRuns, cfg.glowWidth * widthK, mainGlow);
+    add(mainRuns, cfg.coreWidth * widthK, mainCore);
+    add(branchRuns, cfg.glowWidth * 0.5 * widthK, branchGlow);
+    add(branchRuns, cfg.coreWidth * 0.6 * widthK, branchCore);
+    vg.visible = v === 0;
+    group.add(vg);
+    variants.push(vg);
+  }
+
+  // THE FLICKER RATES, rolled per bolt. Random phases are what stop a chain of
+  // six hops pulsing in unison, and the spread is deliberately not an integer
+  // so the octaves never share a period.
+  const flicker = [];
+  for (let o = 0; o < fx.flickerOctaves; o++) {
+    flicker.push({
+      rate: fx.flickerRate * Math.pow(fx.flickerSpread, o),
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
 
   group.position.z = 0.12;
   scene.add(group);
-  // flickerSpeed rides along on the bolt rather than being read from CONFIG
-  // during the fade, for the same reason the rest of the snapshot exists: the
-  // storm can ease out while a bolt is still fading, and a bolt that changes
-  // its crackle rate halfway through its own fade reads as a stutter.
-  activeBolts.push({ mesh: group, life: cfg.boltLife, maxLife: cfg.boltLife, flickerSpeed: cfg.flickerSpeed });
+  // Everything the fade needs rides along on the bolt rather than being read
+  // from CONFIG during it, for the same reason the storm snapshot exists: the
+  // storm eases out and the tuner moves while a bolt is still alive, and a bolt
+  // that changes its crackle rate halfway through its own fade is a stutter.
+  const life = cfg.boltLife * fx.life;
+  activeBolts.push({
+    mesh: group,
+    materials,
+    variants,
+    shown: 0,
+    life,
+    maxLife: life,
+    age: 0,
+    flicker,
+    flickerDepth: fx.flickerDepth,
+    flash: fx.flash,
+    flashDecay: fx.flashDecay,
+    swapEvery: fx.reseedHz > 0 ? 1 / fx.reseedHz : Infinity,
+    swapJitter: fx.reseedJitter,
+    swapIn: fx.reseedHz > 0 ? 1 / fx.reseedHz : Infinity,
+  });
+}
+
+// Scene teardown for one bolt. A bolt is a group of groups now, so the old
+// one-level walk over `mesh.children` would free the variant groups' own
+// (nonexistent) geometry and leak every ribbon under them.
+function disposeBolt(scene, b) {
+  scene.remove(b.mesh);
+  b.mesh.traverse((o) => o.geometry?.dispose());
+  for (const m of b.materials ?? []) m.dispose();
 }
 
 // hooks: { onEnemyDamaged(e, dmg), onEnemyKilled(e),
@@ -343,19 +506,57 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
   for (let i = activeBolts.length - 1; i >= 0; i--) {
     const b = activeBolts[i];
     b.life -= dt;
+    b.age += dt;
     const f = Math.max(0, b.life / b.maxLife);
-    // Flicker on top of the fade so it crackles out rather than dimming
-    // smoothly like a fading line.
-    const flick = 0.65 + 0.35 * Math.sin(b.life * (b.flickerSpeed ?? CONFIG.eel.flickerSpeed));
-    for (const child of b.mesh.children) {
-      child.material.opacity = f * flick * (child.material.userData.baseOpacity ?? 1);
-    }
-    if (b.life <= 0) {
-      scene.remove(b.mesh);
-      for (const child of b.mesh.children) {
-        child.geometry.dispose();
-        child.material.dispose();
+
+    // RESHAPE. Cut to another of the silhouettes built at spawn. A CUT and not
+    // a blend: electricity does not travel between two paths, it stops being
+    // one and starts being the other. The interval is jittered because a fixed
+    // one is a visible tick at the rates this runs at.
+    if (b.variants.length > 1 && b.swapIn !== Infinity) {
+      b.swapIn -= dt;
+      if (b.swapIn <= 0) {
+        b.variants[b.shown].visible = false;
+        // Never the one already showing — a re-roll that lands on it is a
+        // dropped beat, and at three variants that is one cut in three.
+        b.shown = (b.shown + 1 + Math.floor(Math.random() * (b.variants.length - 1))) % b.variants.length;
+        b.variants[b.shown].visible = true;
+        b.swapIn = Math.max(1e-3, b.swapEvery * (1 + (Math.random() * 2 - 1) * b.swapJitter));
       }
+    }
+
+    // FLICKER, several rates at once. Summed with each octave worth less than
+    // the last and normalised back to 0..1, then read as a DIP from full
+    // brightness — so `flickerDepth` is "how far down it is allowed to go" and
+    // 0 is the steady bolt the effect had before.
+    let sum = 0;
+    let amp = 1;
+    let total = 0;
+    for (const o of b.flicker) {
+      sum += (0.5 + 0.5 * Math.sin(b.age * o.rate + o.phase)) * amp;
+      total += amp;
+      amp *= 0.6;
+    }
+    const crackle = 1 - b.flickerDepth * (1 - (total > 0 ? sum / total : 1));
+
+    // IGNITION. Exponential decay to 1, on the bolt's own age rather than on
+    // its remaining life, so a short bolt and a long one flash identically and
+    // only the hold after it differs.
+    const flash = 1 + (b.flash - 1) * Math.exp(-b.age / b.flashDecay);
+
+    // BRIGHTNESS ON THE COLOUR, FADE ON THE OPACITY. The material is additive,
+    // so the two multiply to the same pixel — but only the colour may go past
+    // 1, and past 1 is the entire reason any of this blooms. Driving the
+    // crackle through opacity, as this used to, caps the brightest moment of a
+    // bolt at exactly the threshold it needs to cross.
+    const gain = Math.max(0, crackle * flash);
+    for (const m of b.materials) {
+      m.color.copy(m.userData.hdrColor).multiplyScalar(gain);
+      m.opacity = f * (m.userData.baseOpacity ?? 1);
+    }
+
+    if (b.life <= 0) {
+      disposeBolt(scene, b);
       activeBolts.splice(i, 1);
     }
   }
@@ -416,7 +617,7 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
   }
 
   if (points.length > 1) {
-    spawnBolt(scene, points);
+    spawnBolt(scene, points, 1, level);
     // At the eel, not the player — the arc originates from the companion, and
     // the sound coming from anywhere else is the one thing that would give
     // away that the eel is decorative.
@@ -437,15 +638,28 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
  * loop above, which runs every frame whether or not the eel upgrade was ever
  * taken — that unconditional pass is what makes lending the renderer safe.
  */
-export function spawnArcBolt(scene, x1, y1, x2, y2, strength = 1) {
-  spawnBolt(scene, [new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)], strength);
+export function spawnArcBolt(scene, x1, y1, x2, y2, strength = 1, level = 0) {
+  spawnBolt(scene, [new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)], strength, level);
+}
+
+/**
+ * The eel's own multi-hop chain, on demand.
+ *
+ * For tools/looks/bolt-lab.js. The lab has to draw the SHIPPED bolt or it is
+ * tuning a different effect — and a chain redrawn there as N separate arcs is a
+ * different effect: one bolt through five points shares a noise field along its
+ * whole length and reshapes as a single object, where five arcs each reseed on
+ * their own clock and read as five bolts that happen to touch.
+ */
+export function spawnChainBolt(scene, points, strength = 1, level = 0) {
+  if (!points || points.length < 2) return;
+  spawnBolt(scene, points.map((p) => new THREE.Vector3(p.x, p.y, 0)), strength, level);
 }
 
 export function resetEelBolts(scene) {
-  for (const b of activeBolts) {
-    scene.remove(b.mesh);
-    b.mesh.geometry.dispose();
-    b.mesh.material.dispose();
-  }
+  // A bolt has never had a geometry or a material of its own — it is a group —
+  // so the old body here freed nothing and threw nothing, and every ribbon of
+  // every bolt alive at a reset leaked. disposeBolt walks it properly.
+  for (const b of activeBolts) disposeBolt(scene, b);
   activeBolts.length = 0;
 }

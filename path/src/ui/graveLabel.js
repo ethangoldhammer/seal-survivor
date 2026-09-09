@@ -181,6 +181,11 @@ export function clearGraveLabel() {
  *           blinks off the instant they do is a flicker in the corner of the
  *           eye during the one moment the player is reading something else.
  */
+/*
+ * `ctx.onRead(id)` — optional, called once each time a caption COMES UP on a
+ * stone. See the call site below for what "read" means and why the once-per-run
+ * question is the caller's.
+ */
 export function updateGraveLabel(dt, ctx = {}) {
   if (!box) return;
   const c = cfg();
@@ -216,6 +221,13 @@ export function updateGraveLabel(dt, ctx = {}) {
   else if (near && shown === null) {
     shown = near.id;
     fading = false;
+    // A STONE HAS BEEN READ. Fired on the frame the caption comes up, which is
+    // the same edge the words appear on — so "visited" means the player got
+    // close enough, low enough and pointed the camera at it, rather than
+    // merely swimming past. The caller dedupes: this fires again if the seal
+    // leaves and comes back to the same grave, and whether that is one visit
+    // or two is a question about the RUN, which this module knows nothing of.
+    ctx.onRead?.(near.id);
     nameEl.textContent = near.name;
     // Both, and the second is not optional in practice: the beam rakes from the
     // height it is given, so a sweep handed no base is displaced sideways by

@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
+import { spawnSuckGoo } from './gooSuck.js';
 import { playSfx, vibrate, noteSfx, sfxBand } from './audio.js';
 import { playHaptic } from './haptics.js';
 import { taptic } from './taptic.js';
@@ -31,6 +32,39 @@ export const feedbackState = {
 export function addSustainedShake(amount) {
   if (!(amount > 0)) return;
   feedbackState.sustainShake = Math.min(CONFIG.fx.maxShake, Math.max(feedbackState.sustainShake, amount));
+}
+
+/**
+ * THE SCALE PUNCH A HIT PUTS ON A BODY, damped by how big that body is — see
+ * CONFIG.fx.hitPopBody for the curve and for why it is a curve at all. Returns
+ * the fraction to ADD to the resting scale, so a caller writes
+ * `rest * (1 + hitPopFor(r) * t)` and nothing else changes.
+ *
+ * Shared rather than inlined at each site because the two callers are a
+ * creature and a boat, they are in different files, and a hit landing on one
+ * has to feel like a hit landing on the other. It lives here beside the shake
+ * and the glow for the same reason: this is where "what a hit feels like"
+ * already is, and it is the one fx module every harness can import.
+ *
+ * @param radius the body's size in world units — `e.radius` for a creature.
+ * @param mul    that creature's own `hitPopMul`, for the handful whose radius
+ *               is measuring something other than their silhouette, or whose
+ *               body should not inflate at all.
+ */
+export function hitPopFor(radius, mul = 1) {
+  const c = CONFIG.fx?.hitPopBody ?? {};
+  const pop = c.pop ?? 0.25;
+  const pivot = Math.max(0.05, c.pivot ?? 1);
+  const floor = Math.min(1, Math.max(0, c.min ?? 0.15));
+  // A body with no usable radius takes the undamped pop rather than a NaN one:
+  // every scale write downstream is `1 + pop * t`, and one NaN there removes
+  // the creature from the screen for good.
+  const r = radius > 0 ? radius : pivot;
+  const damp = Math.min(1, Math.max(floor, pivot / r));
+  // An absent value is 1, not 0 — but an explicit 0 is honoured, because "this
+  // one does not pop" is a real answer for a body that should never inflate.
+  const m = Number.isFinite(mul) && mul >= 0 ? mul : 1;
+  return pop * damp * m;
 }
 
 let grid = null;
@@ -357,7 +391,13 @@ export function feedback(event, at = {}) {
     const gooAt = (at.gooSizeMul != null || at.gooSpeedMul != null)
       ? { ...at, sizeMul: at.gooSizeMul ?? at.sizeMul, speedMul: at.gooSpeedMul ?? at.speedMul }
       : at;
-    emit(def.goo, x, y, gooAt);
+    // A SUCK BURST instead of a ballistic one, when the event (or this firing)
+    // asks for it — the goo bursts, stalls, and is drawn back into the seal
+    // through an attractor field. See systems/gooSuck.js. It hands back false
+    // when it cannot (feature off, reserve empty), and the goo then falls
+    // through to the ordinary burst rather than going missing.
+    const suck = (def.gooSuck || at.gooSuck) && spawnSuckGoo(def.goo, x, y, gooAt);
+    if (!suck) emit(def.goo, x, y, gooAt);
   }
 
   if (def.ripple && grid) {

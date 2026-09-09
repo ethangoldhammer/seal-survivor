@@ -54,6 +54,7 @@ import {
   baitBalls, resetBaitBalls, updateBaitBallClock, openBaitBall, baitBallFor, openingBallSpecs,
   updateBaitBalls, baitFlock, baitSeed, baitMealHeal, noteBaitLoss,
   baitBallLedger, baitNoise, attractorFlow, rollBaitShape, STRANGE_SHAPES,
+  baitHalfHeight,
 } from '../path/src/systems/baitBall.js';
 import {
   attachBaitShimmer, updateBaitShimmer, resetBaitShimmer,
@@ -207,9 +208,12 @@ section('THE OPENING BALLS — placed round the seal on the first frame');
 // water, and in different directions from one another.
 {
   const O = C.opening;
-  check('the opening is configured — 1 to 3 balls',
-    O && O.min >= 1 && O.max >= O.min && O.max <= C.maxBalls,
-    O ? `${O.min}-${O.max} of maxBalls ${C.maxBalls}` : 'no opening block');
+  // Its own cap, not `maxBalls` — the fight's cap and the first frame's are
+  // two questions (see rollOpeningCount), so this asserts the opening block is
+  // a real range rather than that it fits inside the clock's.
+  check('the opening is configured — a range of balls, rolled per run',
+    O && O.min >= 1 && O.max >= O.min,
+    O ? `${O.min}-${O.max}, clock cap ${C.maxBalls}` : 'no opening block');
   const seal = { x: 4, y: -18 };
   const counts = [];
   let tooClose = 0;
@@ -423,11 +427,15 @@ section('IT IS A FLOCK — what emerges, and whether they run into each other');
 function flock(n = 14, opts = {}) {
   const {
     seconds = 20, dt = 1 / 60, spin = 1, seed = 11, shell = C.radius,
-    over = null, shape = 'vortex',
+    over = null, shape = 'vortex', ball: ballOver = null,
   } = opts;
   const rand = mulberry32(seed);
   const cfg = over ? { ...C, ...over } : C;
-  const ball = { x: 0, y: -15, shell, spin, age: 0, vx: 0, vy: 0, shape };
+  // `ballOver` is the per-ball half of the parametrisation — the multipliers an
+  // opening ball carries (see openBaitBall). Merged onto the ball rather than
+  // into `over`, because that is where they live in the game: `over` is the
+  // config the whole feature reads, this is what one ball is.
+  const ball = { x: 0, y: -15, shell, spin, age: 0, vx: 0, vy: 0, shape, ...(ballOver ?? {}) };
   const fish = [];
   for (let i = 0; i < n; i++) {
     const at = baitSeed(i, n, ball, rand, cfg);
@@ -1073,7 +1081,14 @@ function wiringRun(seed) {
       arriving: balls.filter((b) => b.arriving).length,
       entering: fish.filter((e) => e.entering).length,
       flagged: fish.length,
+      // Every way one of these fish could act on the seal — see `docile` in
+      // spawnOne, which zeroes four fields together. Counted rather than
+      // spot-checked on one of them: three of the four going to zero is a
+      // handout that still chips you, and only from the field that was missed.
+      armed: fish.filter((e) => (e.contactDamage ?? 0) > 0 || (e.biteDamage ?? 0) > 0
+        || (e.shotDamage ?? 0) > 0 || (e.towardPlayer ?? 0) > 0).length,
       dist: balls.map((b) => Math.hypot(b.x - seal.x, b.y - seal.y)),
+      mul: balls.map((b) => [b.radiusMul, b.heightMul, b.fleeMul]),
     });
     Math.random = orig;
   }
@@ -1089,6 +1104,147 @@ function wiringRun(seed) {
   const within = Math.max(...out.flatMap((r) => r.dist));
   check('...within `opening.radiusMax` of the seal the spawner itself reads',
     within <= O.radiusMax + 1e-6, `furthest ${within.toFixed(1)}`);
+  check('...carrying the opening\'s own shape, not the clock ball\'s',
+    out.every((r) => r.mul.every(([rm, hm, fm]) => Math.abs(rm - (O.radiusMul ?? 1)) < 1e-9
+      && Math.abs(hm - (O.heightMul ?? 1)) < 1e-9 && Math.abs(fm - (O.fleeMul ?? 1)) < 1e-9)),
+    out[0].mul[0]?.join(' / ') ?? 'no balls');
+  check('...and more fish in each of them than the clock\'s ball holds',
+    out.every((r) => r.flagged >= r.made * C.size.min * (O.sizeMul ?? 1) * 0.9),
+    `${out.map((r) => (r.flagged / r.made).toFixed(0)).join(', ')} fish a ball, against ${C.size.min}-${C.size.max} mid-run`);
+  check('...and fish that cannot hurt the seal they were handed to',
+    O.docile === false ? out.every((r) => r.armed > 0) : out.every((r) => r.armed === 0),
+    `${out.reduce((a, r) => a + r.armed, 0)} armed fish across ${out.length} runs`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE OPENING BALL IS A DIFFERENT SOLID — bigger, and no thinner for it');
+// ---------------------------------------------------------------------------
+// The clock's ball is a contest. The opening's is the same formation with the
+// contest taken out: a tall thick calm column a seal that has not learned the
+// dash yet can line up and strike straight through. Every claim here is
+// MEASURED off a settled flock rather than read back off the multipliers,
+// because the three of them interact and each interaction has a plausible
+// wrong version. Half-height is derived from the live shell, so a widened ball
+// is taller for free unless the height is divided by the ball's OWN nominal
+// width. And the height is a CEILING, not a stack: nothing pushes a fish up, so
+// `heightMul` on its own raises a roof the flock never reaches, and both wrong
+// versions still produce a bigger ball than the clock's.
+//
+// Averaged over seeds. A settled flock's extent moves several percent from one
+// seed to the next, which is wider than some of the differences being claimed.
+{
+  const O = C.opening;
+  const NOMINAL = (C.size.min + C.size.max) * 0.5;
+  const SEEDS = [3, 5, 7, 11, 13];
+  // The shell an opening ball actually gets: `radius`, its own multiplier, and
+  // the packing rule off its headcount — exactly what updateBaitBalls computes.
+  // Getting this wrong here would measure a ball the game never makes.
+  const settle = (n, muls) => {
+    let wide = 0;
+    let tall = 0;
+    let corridor = 0;
+    for (const seed of SEEDS) {
+      const shell = C.radius * (muls.radiusMul ?? 1) * Math.sqrt(n / NOMINAL);
+      const { fish, ball } = flock(n, { seconds: 25, seed, shell, ball: muls });
+      let w = 0;
+      let t = 0;
+      for (const f of fish) {
+        w = Math.max(w, Math.hypot(f.x - ball.x, f.z));
+        t = Math.max(t, Math.abs(f.y - ball.y));
+      }
+      // WHAT A DASH THROUGH IT COLLECTS, sampled across the silhouette rather
+      // than through the middle: the seal aims at the ball, not at its centre.
+      // IN X/Y ONLY — every hit test in the game is 2D (the camera is
+      // orthographic and `z` is a draw-order lane), so a ball that is wide in
+      // depth is not thereby harder to strike, and counting a z corridor here
+      // would measure a rule the game does not have.
+      const REACH = 1.2;
+      for (let k = 0; k < 41; k++) {
+        const y = ball.y - t + 2 * t * (k / 40);
+        let hit = 0;
+        for (const f of fish) if (Math.abs(f.y - y) < REACH) hit += 1;
+        corridor += hit / 41;
+      }
+      wide += w * 2;
+      tall += t * 2;
+    }
+    return {
+      wide: wide / SEEDS.length,
+      tall: tall / SEEDS.length,
+      corridor: corridor / SEEDS.length,
+    };
+  };
+
+  const MULS = { radiusMul: O.radiusMul, heightMul: O.heightMul };
+  const openN = Math.round(NOMINAL * (O.sizeMul ?? 1));
+  const plain = settle(Math.round(NOMINAL), {});
+  const open = settle(openN, MULS);
+  const wideRatio = open.wide / plain.wide;
+  const tallRatio = open.tall / plain.tall;
+  check('an opening ball is thicker than the clock\'s',
+    wideRatio > 1.3, `${open.wide.toFixed(1)} wide against ${plain.wide.toFixed(1)}, ${wideRatio.toFixed(2)}x`);
+  check('...and taller',
+    tallRatio > 1.3, `${open.tall.toFixed(1)} tall against ${plain.tall.toFixed(1)}, ${tallRatio.toFixed(2)}x`);
+  check('...which is a much bigger thing to aim at',
+    (open.wide * open.tall) / (plain.wide * plain.tall) > 1.8,
+    `silhouette ${(open.wide * open.tall).toFixed(0)} against ${(plain.wide * plain.tall).toFixed(0)}`);
+  // THE ROOF WITH NOTHING UNDER IT. `heightMul` at the clock ball's headcount
+  // is the version that reads as done and is not: the ceiling moves, the fish
+  // do not, and the ball comes out a squat disc wearing a taller wall.
+  const roofOnly = settle(Math.round(NOMINAL), MULS);
+  check('...and it is the FISH that fill it — the same shape at the clock\'s headcount is short',
+    open.tall > roofOnly.tall * 1.3,
+    `${open.tall.toFixed(1)} at ${openN} fish against ${roofOnly.tall.toFixed(1)} at ${Math.round(NOMINAL)}`);
+  // THE DOUBLE-COUNT, as an identity rather than a measurement: half-height
+  // divided by the ROW rather than by this ball's own nominal width would come
+  // back at radiusMul x heightMul, which is a taller ball and would pass every
+  // check above.
+  const nominalBall = { shell: C.radius * (O.radiusMul ?? 1), radiusMul: O.radiusMul, heightMul: O.heightMul };
+  const half = baitHalfHeight(nominalBall, C);
+  check('...and thickening alone raises the ceiling by nothing',
+    Math.abs(half - C.height * 0.5 * (O.heightMul ?? 1)) < 1e-9,
+    `${half.toFixed(2)} against ${(C.height * 0.5 * (O.heightMul ?? 1)).toFixed(2)}, and the double count would be ${(C.height * 0.5 * (O.heightMul ?? 1) * (O.radiusMul ?? 1)).toFixed(2)}`);
+  // AND IT DID NOT GET THINNER, which is the claim that carries the whole
+  // point of the block and the one growing a ball breaks by default: the shell
+  // scales by the SQUARE ROOT of the headcount, so a ball with more fish in it
+  // is a bigger volume per fish — twice the target and half the food in any one
+  // pass through it. `sizeMul` against `heightMul` is what holds the density,
+  // and nothing else here would notice if it stopped.
+  check('...and a dash through it still collects as much as the clock\'s ball',
+    open.corridor >= plain.corridor,
+    `${open.corridor.toFixed(1)} fish a pass against ${plain.corridor.toFixed(1)}`);
+}
+
+// ---------------------------------------------------------------------------
+section('...AND IT BARELY RUNS FROM THE SEAL');
+// ---------------------------------------------------------------------------
+// `fleeMul` is the low-aggression half. The seal's weight only: a shark still
+// scatters an opening ball at full strength, because that is the moment the
+// whole mechanic is, and a ball that ignored predators would be a decoration.
+{
+  const station = { x: -18, y: -18 };
+  const chase = { ...SPEC, x: station.x, y: station.y, stationX: station.x, stationY: station.y };
+  const seal = { x: station.x + C.flee.radius * 0.3, y: station.y };
+  const ranAt = (over) => {
+    const { ball } = driveBall({ ...chase, ...over }, { seconds: 8, player: seal });
+    return Math.hypot(ball.x - station.x, ball.y - station.y);
+  };
+  const ordinary = ranAt({});
+  const opening = ranAt({ radiusMul: C.opening.radiusMul, fleeMul: C.opening.fleeMul });
+  check('a seal on top of an ordinary ball drives it off its station',
+    ordinary > 1, `${ordinary.toFixed(1)} units in 8s`);
+  check('...and the same seal on an opening ball barely moves it',
+    opening < ordinary * 0.6, `${opening.toFixed(1)} against ${ordinary.toFixed(1)}`);
+  // The predator half is untouched, and that is the claim `fleeMul` could
+  // quietly break by being applied to `consider` rather than to the seal.
+  const shark = [{ x: station.x + C.flee.radius * 0.3, y: station.y }];
+  const { ball: hunted } = driveBall(
+    { ...chase, radiusMul: C.opening.radiusMul, fleeMul: C.opening.fleeMul },
+    { seconds: 8, predators: shark },
+  );
+  const fled = Math.hypot(hunted.x - station.x, hunted.y - station.y);
+  check('...but a predator still scatters it, at full weight',
+    fled > opening * 2, `${fled.toFixed(1)} from a shark against ${opening.toFixed(1)} from the seal`);
 }
 
 {
@@ -1490,6 +1646,158 @@ section('THE SHIMMER — the shader half');
   updateBaitShimmer([{ x: 0, y: 0, z: 0, shell: 2 }], 1 / 60);
   CONFIG.baitBall.shimmer.enabled = was;
   check('shimmer.enabled off means off', u.uBaitStrength.value === 0);
+}
+
+// ---------------------------------------------------------------------------
+section('THE FISH TURN LIKE FISH — the orbit, not a flip');
+// ---------------------------------------------------------------------------
+// A ball's fish used to be on the shared facing path: `mesh.rotation.z` for the
+// heading and faceSide easing `visual.rotation.y` from 0 to PI to change ends.
+// The second of those is a rotation about the model's own FORWARD axis, so what
+// it does to a fish is roll it over on its spine — and a bait ball is fifteen
+// of them doing it at once, which is the loudest place in the game for a
+// mistake that is merely quiet everywhere else.
+//
+// The fish come about through systems/fishTurn.js now, and because a ball is
+// the one formation with a REAL depth velocity the yaw is the heading the fish
+// is actually swimming (`atan2(-vz, vx)`) rather than a choice between two
+// sides. Which means all of this is measurable off the composed matrix.
+//
+// THE DETECTOR IS THE OLD PATH, still shipping. A loose fish of the same
+// species is steered by exactly the code the ball's fish left behind, and it
+// pins `fwd.z` to zero for its whole life — the legacy composition puts the
+// nose in the screen plane by construction and no amount of swimming can take
+// it out. So the same measurement is run on one of those, and it has to come
+// back as a flat zero, or what is being measured here is not the change.
+const FWD = new THREE.Vector3(0, 1, 0);
+const DORSAL = new THREE.Vector3(-1, 0, 0);
+function axesOf(e) {
+  const m = new THREE.Matrix4()
+    .makeRotationFromEuler(e.mesh.rotation)
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(e.visual.rotation));
+  return {
+    fwd: FWD.clone().applyMatrix4(m),
+    dorsal: DORSAL.clone().applyMatrix4(m),
+  };
+}
+
+function turnRun(seed) {
+  const scene = new THREE.Scene();
+  const orig = Math.random;
+  Math.random = mulberry32(seed);
+  resetEnemies(scene);
+  resetWaves(0);
+  const pp = player.mesh?.position ?? new THREE.Vector3(0, 0, 0);
+  const ball = spawnBaitBall(scene, 6, 10, devBaitBallSpec());
+  if (!ball) { Math.random = orig; return null; }
+  ball.arriving = false;
+  for (const e of enemies) if (e.schoolId === ball.id) e.entering = false;
+  // THE CONTROL, on the old path: same species, same water, not in the ball.
+  const loose = spawnNamed(scene, enemies[0].type, 6,
+    { x: ball.x + 14, y: ball.y + 3 }, { ignoreCaps: true, overfill: true });
+  if (loose) loose.entering = false;
+
+  const dt = 1 / 60;
+  const out = {
+    dorsalMin: 1, noseZ: 0, agree: 0, agreeN: 0, swing: 0,
+    yaw: new Map(), travel: 0, looseZ: 0, handback: 0,
+  };
+  const prevFwd = new Map();
+  const track = (e, into) => {
+    const a = axesOf(e);
+    if (a.dorsal.y < out.dorsalMin) out.dorsalMin = a.dorsal.y;
+    const p = prevFwd.get(e);
+    // The frame-to-frame swing of the nose, in radians. A flip that has been
+    // hidden in an ease is still a flip if it lands in one frame, and this is
+    // the only measurement that can see one.
+    if (p) {
+      const swing = Math.acos(Math.max(-1, Math.min(1, p.dot(a.fwd))));
+      if (swing > out[into]) out[into] = swing;
+    }
+    prevFwd.set(e, a.fwd.clone());
+    return a;
+  };
+
+  let t = 0;
+  for (; t < 14; t += dt) {
+    updateEnemies(dt, scene, pp, () => {}, () => {}, () => {});
+    if (!baitBalls.size) break;
+    if (t < 2) continue;                       // let the ball settle first
+    for (const e of enemies) {
+      if (!e.baitBall) continue;
+      const a = track(e, 'swing');
+      if (Math.abs(a.fwd.z) > out.noseZ) out.noseZ = Math.abs(a.fwd.z);
+      // DOES THE NOSE AGREE WITH THE TRAVEL. Only sampled where the fish is
+      // genuinely moving through depth: near the near and far faces of the
+      // column `vz` passes through zero, and the sign of a number that is
+      // about to change sign says nothing about anything.
+      if (Math.abs(e.vz) > 1) {
+        out.agreeN += 1;
+        if (Math.sign(a.fwd.z) === Math.sign(e.vz)) out.agree += 1;
+      }
+      // HOW FAR ROUND IT GETS, unwrapped. The claim the whole change rests on:
+      // a fish orbiting a column rotates continuously, where the flip it
+      // replaced could only ever arrive at one of two poses.
+      const yaw = Math.atan2(-a.fwd.z, a.fwd.x);
+      const was = out.yaw.get(e);
+      if (was != null) {
+        let d = yaw - was.at;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        was.at = yaw;
+        was.sum += d;
+        if (Math.abs(was.sum) > out.travel) out.travel = Math.abs(was.sum);
+      } else out.yaw.set(e, { at: yaw, sum: 0 });
+    }
+    if (loose && enemies.includes(loose)) {
+      const a = axesOf(loose);
+      if (Math.abs(a.fwd.z) > out.looseZ) out.looseZ = Math.abs(a.fwd.z);
+    }
+  }
+
+  // AND THE HANDBACK. The ball is ended under its own fish by taking them
+  // below `disperseAt`, and the survivors have to keep the pose they are in —
+  // fishTurn shifts an unwrapped orbit yaw by a whole number of turns to get
+  // back onto the two-sided ease, and a mistake there is a body snapping round
+  // on one frame, months later, in the second nobody is looking at it.
+  const ball2 = [...baitBalls.values()][0];
+  if (ball2) {
+    let left = enemies.filter((e) => e.schoolId === ball2.id).length;
+    for (let i = enemies.length - 1; i >= 0 && left > (C.disperseAt ?? 3); i--) {
+      if (enemies[i].schoolId === ball2.id) { enemies.splice(i, 1); left -= 1; }
+    }
+    for (let u = 0; u < 2; u += dt) {
+      updateEnemies(dt, scene, pp, () => {}, () => {}, () => {});
+      for (const e of enemies) {
+        if (e.schoolId !== ball2.id) continue;
+        track(e, 'handback');
+      }
+    }
+  }
+  Math.random = orig;
+  return out;
+}
+
+{
+  const runs = [1, 2, 3, 4].map(turnRun).filter(Boolean);
+  const worst = (k) => Math.min(...runs.map((r) => r[k]));
+  const best = (k) => Math.max(...runs.map((r) => r[k]));
+  const agree = runs.reduce((a, r) => a + r.agree, 0) / Math.max(1, runs.reduce((a, r) => a + r.agreeN, 0));
+  check('a ball still forms to be looked at', runs.length === 4, `${runs.length} of 4 seeds`);
+  check('the nose leaves the screen plane at all',
+    best('noseZ') > 0.6, `deepest ${best('noseZ').toFixed(2)} of a unit vector`);
+  check('...and the loose fish beside it never does (the detector working)',
+    best('looseZ') < 1e-9, `${best('looseZ').toExponential(1)} over the same water`);
+  check('the nose points the way the fish is swimming in depth',
+    agree > 0.9, `${(agree * 100).toFixed(0)}% of frames with real depth travel`);
+  check('a fish gets all the way round its own orbit',
+    best('travel') > Math.PI * 2, `${(best('travel') / (Math.PI * 2)).toFixed(1)} turns in 12s`);
+  check('nothing rolls onto its back',
+    worst('dorsalMin') > 0, `dorsal y bottoms out at ${worst('dorsalMin').toFixed(3)}`);
+  check('and the turn is a turn, never a snap',
+    best('swing') < 0.3, `worst single frame ${best('swing').toFixed(3)} rad`);
+  check('...including the frame its ball ends under it',
+    best('handback') < 0.3, `worst single frame ${best('handback').toFixed(3)} rad`);
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);

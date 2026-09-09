@@ -180,8 +180,17 @@ const TIMES = '\u00d7';
 // facts with, so one tip has one way of saying "and".
 const SPAN_SEP = '\u00b7';
 
-function fmt(n) {
-  const r = Math.round(n * 100) / 100;
+// ONE DECIMAL PLACE, AT MOST — the same ceiling upgradeText.js's num() holds,
+// because a tip's span sits directly under a phrase that file wrote and two
+// precisions in one box read as two different measurements of one stack.
+//
+// EXPORTED so a test can ask what the tip WOULD print rather than comparing a
+// row against a raw measurement it never shows. tools/upgrade-tip-test.mjs
+// checks the boat's bomb-damage row against bakalarLevelStats(), and with a
+// private formatter that check was asserting the raw 64.05 appeared in a row
+// the tip renders as "64.1" — the row was right and the test failed.
+export function fmt(n) {
+  const r = Math.round(n * 10) / 10;
   return String(r);
 }
 
@@ -198,13 +207,20 @@ export function effectiveSpan(change, now, after) {
   const a = now?.[key];
   const b = after?.[key];
   if (!Number.isFinite(a) || !Number.isFinite(b)) return '';
-  // Nothing moved. A span with the same number on both sides is not a fact
-  // about the pick, it is a row saying "no change" in the loudest position on
-  // the tip — which happens on a stat another card has already capped.
-  if (fmt(a) === fmt(b)) return '';
+
+  // NOTHING ARROWS FROM ZERO. On a first pick the left side is the state the
+  // player was in before the ability existed, which is not a fact about the
+  // pick — "+3 orbiting shrimps . 0 -> 3" says three twice, and the second one
+  // is dressed as a reading. The phrase beside it already carries the whole
+  // value, because from zero the delta IS the total.
+  if (a === 0) return '';
 
   const t = STAT_TEXT[key] ?? {};
   const ratioed = t.lower === true || change.how === 'mul';
+  // The two sides, in whatever scale this stat is READ in. Built before the
+  // no-change test below, because that test has to be asked about the printed
+  // number and not about the block's own.
+  let from, to;
   if (ratioed) {
     const base = baseStats()[key];
     if (!Number.isFinite(base) || base === 0) return '';
@@ -213,10 +229,29 @@ export function effectiveSpan(change, now, after) {
     // phrase this sits beside, so the two halves of the row agree about which
     // direction is up.
     const mul = (v) => (t.lower ? base / v : v / base);
-    return `${TIMES}${fmt(mul(a))} ${ARROW} ${TIMES}${fmt(mul(b))}`;
+    from = `${TIMES}${fmt(mul(a))}`;
+    to = `${TIMES}${fmt(mul(b))}`;
+  } else {
+    const unit = t.unit ?? '';
+    from = `${fmt(a)}${unit}`;
+    to = `${fmt(b)}${unit}`;
   }
-  const unit = t.unit ?? '';
-  return `${fmt(a)}${unit} ${ARROW} ${fmt(b)}${unit}`;
+
+  // Nothing moved. A span with the same number on both sides is not a fact
+  // about the pick, it is a row saying "no change" in the loudest position on
+  // the tip — which happens on a stat another card has already capped.
+  //
+  // ASKED OF THE PRINTED SIDES, not of the raw block, and the difference is not
+  // academic: a `lower` stat holds a DELAY and prints a MULTIPLE of the base,
+  // which are different scales by a factor of the base. Supa Dupa Seal's fifth
+  // pick takes the interval 0.1416s -> 0.0944s — one decimal rounds both to
+  // "0.1", so the guard fired and the span vanished — while the row it was
+  // about to print read "x4 -> x6", a span with nothing wrong with it. Rapid
+  // Fire and Bouncing Baby Guppies each lost their span on three of their
+  // stacks this way, and the disappearance read exactly like a capped stat.
+  if (from === to) return '';
+
+  return `${from} ${ARROW} ${to}`;
 }
 
 /**
@@ -408,7 +443,9 @@ export function upgradeTipContent(upgrade, {
       let delta = '';
       // `none` has nothing to say and `unlock` has no before to subtract from;
       // both are span-only rows.
-      if (c.how !== 'none' && c.how !== 'unlock' && c.how !== 'held') {
+      // `from === 0` joins them: the step and the total are the same number, so
+      // a delta beside the value would print it twice ("+18 . 18").
+      if (c.how !== 'none' && c.how !== 'unlock' && c.how !== 'held' && c.from !== 0) {
         const said = phrase(c, next);
         const lbl = t.label ?? c.stat;
         delta = said.endsWith(lbl) ? said.slice(0, -lbl.length).trim() : said;
@@ -441,9 +478,27 @@ export function upgradeTipContent(upgrade, {
       // Short keeps it for the same reason it drops the others' spans: without
       // it a first-pick card would have no rows at all, which is the state this
       // whole branch was added to fix.
-      const span = (c.how === 'unlock' || c.how === 'held')
+      // THREE ROWS THAT ARROW FROM SOMETHING THAT IS NOT A BEFORE.
+      //
+      //   unlock / held  no before exists — the branch above this one.
+      //   from zero      "0 -> 18" on a card you have never taken. Same rule
+      //                  effectiveSpan follows: the ability was not sitting at
+      //                  zero, it was not there.
+      //   flat           `how: 'none'` is a quantity this pick does not move,
+      //                  and it rendered as "beam | 2 -> 2" — the exact shape
+      //                  effectiveSpan rejects a few lines up as "a row saying
+      //                  no change in the loudest position on the tip". It is
+      //                  kept (levelStats has the argument) but as a value.
+      const valueOnly = c.how === 'unlock' || c.how === 'held' || c.how === 'none'
+        || c.from === 0;
+      let span = valueOnly
         ? at(c.to)
         : (verbosity === 'short' ? '' : `${at(c.from)} ${ARROW} ${at(c.to)}`);
+      // AND A SPAN THAT ROUNDS ITS OWN CHANGE AWAY. fmt() holds one decimal, so
+      // the starfish's fire rate printed "+12% . 0.4s -> 0.4s" — a claim beside
+      // a proof that it did not happen. The delta is the honest half; the span
+      // is the half that cannot see this step, so it goes.
+      if (!valueOnly && span && at(c.from) === at(c.to)) span = '';
       if (!delta && !span) continue;
       rows.push({
         key: `lv:${c.stat}`,
@@ -481,13 +536,22 @@ export function upgradeTipContent(upgrade, {
   // reader has to join them back up.
   // The lead span belongs to the single `next` row. A levelled readout already
   // carries a span on every row of its table, so there is nothing here to lead.
-  const lead = nextRow && !atCap && !derived?.length ? leadChange(changes, step, next) : null;
-  let solo = null;
+  //
+  // AND NOT WHEN THE PHRASE IS ALREADY A RANGE. phrase() falls back to printing
+  // the two measured endpoints for a compounding stat one decimal can separate
+  // — "chain damage 1.1 -> 1.2" — and appending a span put a second arrow in
+  // the same row, four words apart, describing a different quantity at a
+  // different scale. The sentence has the reading covered.
+  const lead = nextRow && !atCap && !derived?.length && !step.includes(ARROW)
+    ? leadChange(changes, step, next)
+    : null;
+  let hasSpan = false;
   if (lead && live) {
     const span = after ? effectiveSpan(lead, live, after) : '';
-    if (span) nextRow.text = `${nextRow.text} ${SPAN_SEP} ${span}`;
-    // Kept for the NOW row's own question below — see there.
-    solo = lead.stat;
+    if (span) {
+      nextRow.text = `${nextRow.text} ${SPAN_SEP} ${span}`;
+      hasSpan = true;
+    }
   }
 
   // --- WHERE YOU ALREADY ARE ----------------------------------------------
@@ -513,9 +577,25 @@ export function upgradeTipContent(upgrade, {
     // number, printed twice, four pixels apart. Measured rather than assumed:
     // the card is replayed alone from a fresh seal, and if that lands exactly
     // where the live block is, the card is the only thing there.
-    const alone = solo ? totals.find((c) => c.stat === solo) : null;
-    const soleSource = alone != null && live != null
-      && Math.abs((alone.to ?? NaN) - live[solo]) < Math.abs(live[solo] || 1) * 1e-9;
+    // EVERY STAT THE CARD GRANTS, not just the one the span happens to describe.
+    //
+    // It used to ask about `solo` alone, which was fine while the sentence led
+    // with whatever order the stat block was in. phraseAll now leads with the
+    // stat the FEWEST other cards grant (see grantCount) — so `solo` is the
+    // card's most distinctive stat almost by definition, and asking "is this
+    // the only source of it" answers yes on nearly the whole roster. The rule
+    // would have quietly deleted the row everywhere rather than where it is
+    // redundant.
+    //
+    // The question the row asks is "what has THIS card given me", and it is
+    // worth asking as soon as ANY of what the card grants also comes from
+    // somewhere else. So: sole-source only when every one of its totals lands
+    // exactly where the live block already is.
+    const soleSource = live != null && totals.length > 0 && totals.every((c) => {
+      const at = live[c.stat];
+      if (!Number.isFinite(at) || !Number.isFinite(c.to)) return false;
+      return Math.abs(c.to - at) < Math.abs(at || 1) * 1e-9;
+    });
 
     // EXCEPT WHEN THE TOTAL IS THE UNLOCK SENTENCE, which is not a number and
     // cannot be duplicated by one.
@@ -536,7 +616,27 @@ export function upgradeTipContent(upgrade, {
     // and does have an unlock, just not one phraseAll is using at this depth.
     // The exemption has to be for the sentence actually rendered.
     const unlocks = totals.some((c) => c.from === 0 && c.to === 1 && STAT_TEXT[c.stat]?.unlock);
-    if (sum && sum !== nextRow?.text && (!soleSource || unlocks)) {
+
+    // AND NOT WHEN THE SPAN ABOVE HAS ALREADY ANSWERED IT — with a DIFFERENT
+    // number, which is the whole problem.
+    //
+    // These two rows mean different things and are headed as though they mean
+    // the same one. `Current` is measureTotal: this card's stacks, replayed
+    // from a fresh seal, alone. The span's left side is computeStats: the run
+    // as the FIGHT has it, with the level growth and every other card folded
+    // in. Four stacks of Andre the Giant printed
+    //
+    //     Next    | +40% projectile damage . x6.9 -> x9.1
+    //     Current | +284.2% projectile damage
+    //
+    // — x3.84 and x6.9, one above the other, both answering "where am I now".
+    // Both are true and there is no reading of the box that gets you there.
+    //
+    // The span wins because it is the number the fight actually uses, and it is
+    // already attached to the delta it belongs with. The UNLOCK exemption
+    // stands: that row is a sentence saying what the ability IS, which no span
+    // duplicates.
+    if (sum && sum !== nextRow?.text && (!soleSource || unlocks) && (!hasSpan || unlocks)) {
       rows.push({ key: 'total', label: TIP_COPY.total, text: sum });
     }
   }

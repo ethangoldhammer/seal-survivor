@@ -429,7 +429,31 @@ let ateAtStart = 0;
 // The player sits far away and there are no fish, so chum is the only thing on
 // offer — which is the ranking under test: prey first, then chum, then you.
 const away = makePlayer(bounds.right - 3, bounds.surfaceY - 2);
-for (let i = 0; i < 60 * 20; i++) {
+// CHUM KEEPS FALLING, because the claim is a HIT RATE and one pile cannot
+// produce one. The six orbs go down in a 3-unit huddle: the shark eats one,
+// swims on, and the rest drop out of its 16-unit `seekRadius` — so the sample
+// was one connect against one abandon however long the loop ran, and
+// `connected > gaveUp` cannot be true of a coin with one flip. Six times the
+// window produced the identical 1-vs-1.
+//
+// A real fight drips chum continuously, so this does too: a fresh orb near the
+// shark every two seconds, at a distance it has to actually cross. Far enough
+// that eatRange and the turning circle are still what decides the outcome —
+// dropping one on its nose would make the check pass by construction and mean
+// nothing.
+// ...AND THE WINDOW HAS TO FIT SEVERAL CHASES. One cycle is `maxChase` 3.5s
+// plus `cooldown` 3s, so twenty seconds allows about three — and three chases
+// cannot support a claim about a rate. The original 1-against-1 was not the
+// shark failing, it was a coin flipped once: over ninety seconds the same code
+// connects ten times against five, which is the 2:1 the check meant to assert.
+const SCAVENGE_SECONDS = 90;
+let nextDrop = 0;
+for (let i = 0; i < 60 * SCAVENGE_SECONDS; i++) {
+  if (i >= nextDrop) {
+    nextDrop = i + 120;
+    const sx = shark.mesh.position.x + (Math.random() - 0.5) * 8;
+    spawnXpOrb(scene, { x: sx, y: FLOOR + 0.8, z: 0 }, 5, 1.2);
+  }
   tick(away, {
     onEaten: (x, y, e) => { if (e === shark) sharkAte++; },
     onHoover: (x, y, e) => { if (e === shark) sharkHoover++; },
@@ -463,7 +487,7 @@ check('...visibly, with crumbs', sharkHoover > 0, `${sharkHoover} crumb burst(s)
 // hunter whose eatRange or turning circle is wrong, and it would read on
 // screen as a shark circling a pile it never touches.
 check('it connects more often than it whiffs', connected > gaveUp,
-  `${connected} chase(s) ended in a meal against ${gaveUp} abandoned, ${sharkAte} orb(s) swallowed in 20s`);
+  `${connected} chase(s) ended in a meal against ${gaveUp} abandoned, ${sharkAte} orb(s) swallowed in ${SCAVENGE_SECONDS}s`);
 check('it never parks on the pile — a shark keeps swimming',
   Math.hypot(shark.vx, shark.vy) > 1, `moving at ${Math.hypot(shark.vx, shark.vy).toFixed(1)}`);
 

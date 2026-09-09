@@ -34,6 +34,9 @@ globalThis.localStorage = {
   removeItem: (k) => { store.delete(k); },
 };
 
+// ...and a URL carrying the flag, so the import-time read can be checked.
+globalThis.location = { search: '?gate' };
+
 import './dom-stub.mjs';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -53,7 +56,7 @@ const unlocks = await import('../path/src/systems/unlocks.js');
 const {
   STATS, GATE_DEFAULT, unlockGates, rebuildUnlockGates, setUnlockGate, unlockGateOn,
   loadUnlocks, resetUnlocks, unlockStats, recordUnlockStat, recordBoatDestroyed,
-  recordBossDefeated, unlockGranted, unlockProgress,
+  recordBossDefeated, unlockGranted, unlockProgress, commitUnlocks, pendingUnlocks,
 } = unlocks;
 const { accessoryUnlocked, accessoryRoster, wornAccessory } = await import('../path/src/systems/accessories.js');
 const { player, availableUpgrades } = await import('../path/src/entities/player.js');
@@ -70,7 +73,14 @@ const accessoryKeys = Object.keys(CONFIG.accessories.items);
 const upgradeIds = CONFIG.upgrades.map((u) => u.id);
 warnings.length = 0;
 const gates = buildUnlocks(rows, { accessory: accessoryKeys, upgrade: upgradeIds }, collect, STATS);
-check('every row builds', gates.length === rows.size, `${gates.length} of ${rows.size}`);
+// The DISABLED rows are not expected to build — that is what `enabled` FALSE
+// means, and the stub block at the bottom of the table is a parking space for
+// achievements whose accessory does not exist yet. So the count is against the
+// rows that are switched ON, and a stub silently building anyway (because
+// someone cleared `enabled` without filling in a target) fails here.
+const liveRows = [...rows.values()].filter((r) => String(r.enabled ?? '').trim().toUpperCase() !== 'FALSE');
+check('every enabled row builds', gates.length === liveRows.length, `${gates.length} of ${liveRows.length}`);
+check('the stubs are parked, not live', rows.size > liveRows.length, `${rows.size - liveRows.length} disabled`);
 check('...without a warning', warnings.length === 0, warnings.join(' | '));
 for (const g of gates) {
   const roster = g.kind === 'accessory' ? accessoryKeys : upgradeIds;
@@ -118,7 +128,14 @@ check('every drop was warned about', ['noKind', 'noTarget', 'noStat'].every((id)
 // ---------------------------------------------------------------------------
 section('THE SWITCH');
 resetUnlocks();
-check('the default is the private build — gate off', GATE_DEFAULT === false && unlockGateOn() === false);
+check('?gate on the URL is read at import, before any ledger read', unlockGateOn() === true);
+// THE TRIPWIRE. It asserts the value rather than reading it, so flipping the
+// switch is always a deliberate edit in two files and never a side effect of
+// one. It changed direction when the upgrade gates went in: the public build
+// is the default now, and a dev session opts OUT with `?gate=0`.
+check('the default is the public build — earning is required', GATE_DEFAULT === true);
+setUnlockGate(false);
+check('...and the dev override turns it back off', unlockGateOn() === false);
 check('gate off: the hat is wearable with zero boats', accessoryUnlocked('accessoryHat'));
 check('gate off: the hat is in the drawer', accessoryRoster(true).includes('accessoryHat'));
 player.upgrades.length = 0;
@@ -130,7 +147,25 @@ check('gate on: ...and out of the drawer', !accessoryRoster(true).includes('acce
 check('gate on: ...but still in the tools\' roster', accessoryRoster(false).includes('accessoryHat'));
 check('gate on: laser eyes is not dealt', !availableUpgrades().some((u) => u.id === 'laserEyes'));
 check('gate on: the glasses are withheld too', !accessoryUnlocked('accessoryGlasses'));
-check('gate on: a thing with no row is untouched (bowler)', accessoryUnlocked('accessoryBowler'));
+// THE DRAWER STARTS BARE, FULL STOP.
+//
+// This assertion has been round the houses. It began as "the drawer is empty",
+// which held while the roster and the gate list were the same eight things; it
+// was weakened to "everything left open is the parked set" when five
+// accessories arrived with their gate rows PARKED (`enabled` FALSE) waiting on
+// a toast line, because a parked row gates nothing. Those five are unparked
+// now — every one of the thirteen accessories has a live gate — so the strong
+// version is true again and is what is asserted.
+//
+// Weakening it a second time would be the wrong move: an accessory added
+// without a row should fail HERE, loudly, rather than quietly appearing in a
+// drawer that is meant to start empty.
+const open = accessoryRoster(true);
+const gatedKeys = new Set(unlockGates().filter((g) => g.kind === 'accessory').map((g) => g.target));
+check('gate on: the drawer starts completely bare', open.length === 0, open.join());
+check('gate on: ...because the table gates every accessory there is',
+  Object.keys(CONFIG.accessories.items).every((k) => gatedKeys.has(k)),
+  Object.keys(CONFIG.accessories.items).filter((k) => !gatedKeys.has(k)).join());
 CONFIG.accessories.equipped = 'accessoryGlasses';
 check('gate on: the default slot holds the glasses, but the seal is bare', wornAccessory() === '');
 check('gate on: a card with no row is untouched (rapidFire)', availableUpgrades().some((u) => u.id === 'rapidFire'));
@@ -145,27 +180,35 @@ check('the hand lock still holds on its own', (() => {
 section('THE LEDGER');
 let opened = [];
 for (let i = 0; i < 49; i++) opened.push(...recordBoatDestroyed({ isTrawler: false }));
-check('49 boats: nothing opens', opened.length === 0);
+check('49 boats: nothing on the boat ladder below the hat popped', opened.length === 0, opened.join());
 check('49 boats: the hat is still withheld', !accessoryUnlocked('accessoryHat'));
 let p = unlockProgress('sailorHat');
 check('progress reads 49 of 50', p?.have === 49 && p.need === 50 && p.done === false);
 opened = recordBoatDestroyed({ isTrawler: true });
-check('the 50th hull opens the hat, and says so', opened.length === 1 && opened[0] === 'sailorHat', opened.join());
+check('the 50th hull POPS the hat, and says so', opened.length === 1 && opened[0] === 'sailorHat', opened.join());
 check('the trawler counted twice — once as a hull, once as a trawler', unlockStats().boatsDestroyed === 50
   && unlockStats().trawlersDestroyed === 1);
-check('the hat is wearable', accessoryUnlocked('accessoryHat'));
-check('...and back in the drawer', accessoryRoster(true).includes('accessoryHat'));
+p = unlockProgress('sailorHat');
+check('popped is not granted: still withheld mid-run', !accessoryUnlocked('accessoryHat') && p.popped && !p.done
+  && pendingUnlocks().includes('sailorHat'));
 check('the 51st says nothing', recordBoatDestroyed({}).length === 0);
+check('the run ends: commit hands over everything popped, once', commitUnlocks().includes('sailorHat') && commitUnlocks().length === 0);
+check('the hat is wearable', accessoryUnlocked('accessoryHat') && unlockProgress('sailorHat').done);
+check('...and in the drawer', accessoryRoster(true).includes('accessoryHat'));
 check('an unknown gate id reads null', unlockProgress('nope') === null);
 
 opened = recordBossDefeated('bossShark', 'lunge');
 check('a lunging shark does not open laser eyes', !opened.includes('laserEyes') && !availableUpgrades().some((u) => u.id === 'laserEyes'));
-check('...but it is a boss, so it opens the glasses', opened.includes('dealWithIt') && accessoryUnlocked('accessoryGlasses'));
-check('...and the slot it already held goes on without a re-equip', wornAccessory() === 'accessoryGlasses');
+check('...but it is a boss, so it pops the glasses', opened.includes('dealWithIt') && !accessoryUnlocked('accessoryGlasses'));
+commitUnlocks();
+check('...collected at the door, the slot it already held goes on without a re-equip',
+  accessoryUnlocked('accessoryGlasses') && wornAccessory() === 'accessoryGlasses');
 check('...but counted as a boss, and as that boss', unlockStats().bossesDefeated === 1 && unlockStats()['boss.bossShark'] === 1);
 opened = recordBossDefeated('bossCrab', 'eyebeam');
-check('an eyebeam boss opens laser eyes', opened.includes('laserEyes'), opened.join());
-check('...and the card is dealt', availableUpgrades().some((u) => u.id === 'laserEyes'));
+check('an eyebeam boss pops laser eyes', opened.includes('laserEyes'), opened.join());
+check('...but the card is not dealt THIS run', !availableUpgrades().some((u) => u.id === 'laserEyes'));
+commitUnlocks();
+check('...and is dealt the next', availableUpgrades().some((u) => u.id === 'laserEyes'));
 check('a perkless boss records no perk', (() => {
   const before = Object.keys(unlockStats()).length;
   recordBossDefeated('bossOrca', null);
@@ -179,6 +222,9 @@ const saved = store.get('sealSurvivor.unlocks');
 check('the ledger was written', typeof saved === 'string' && saved.includes('"sailorHat":true'));
 loadUnlocks();
 check('read back: the hat is still earned', accessoryUnlocked('accessoryHat') && unlockStats().boatsDestroyed === 51);
+store.set('sealSurvivor.unlocks', JSON.stringify({ v: 1, stats: { boatsDestroyed: 50 }, unlocked: {}, pending: { sailorHat: true } }));
+loadUnlocks();
+check('a page closed mid-run: what it popped is collected on the next load', accessoryUnlocked('accessoryHat') && pendingUnlocks().length === 0);
 store.set('sealSurvivor.unlocks', '{not json');
 loadUnlocks();
 check('unreadable storage starts fresh rather than throwing', !accessoryUnlocked('accessoryHat') && unlockStats().boatsDestroyed == null);
@@ -190,6 +236,7 @@ check('a mangled ledger is coerced: negatives dropped, floats floored, non-true 
 section('AN EARNED GATE STAYS EARNED');
 resetUnlocks();
 for (let i = 0; i < 50; i++) recordBoatDestroyed({});
+commitUnlocks();
 check('earned at 50', accessoryUnlocked('accessoryHat'));
 const raised = parseUnlockCsv(csv.replace('boatsDestroyed,50', 'boatsDestroyed,500'), quiet);
 rebuildUnlockGates(raised);
@@ -209,10 +256,22 @@ section('THE WIRING (source level — main.js cannot run headless)');
 const main = readFileSync(resolve(ROOT, 'path/src/main.js'), 'utf8');
 const boatHook = main.slice(main.indexOf('function onBoatDestroyed('));
 check('main.js imports both recorders', /import \{[^}]*recordBoatDestroyed[^}]*recordBossDefeated[^}]*\} from '\.\/systems\/unlocks\.js'/.test(main));
-check('a hull going up is recorded in onBoatDestroyed', boatHook.slice(0, boatHook.indexOf('\n}')).includes('recordBoatDestroyed(boat)'));
+check('a hull going up is recorded in onBoatDestroyed, and announced', boatHook.slice(0, boatHook.indexOf('\n}')).includes('announceUnlocks(recordBoatDestroyed(boat))'));
+// IN THE SHARED TEARDOWN, which is where it has to be now that there are two
+// things on the far side of a run rather than one. startGame goes through
+// resetArena and so does the route back to the main menu — and the menu is
+// where the accessory drawer is, so a player who pops a hat and then leaves the
+// run to go and look at it must find it there. Asserted against resetArena
+// rather than against startGame because a check that named the old function
+// would have gone green on the day the second route stopped banking anything.
+check('the teardown every route shares collects what the run popped',
+  /function resetArena\([^)]*\) \{[\s\S]{0,400}commitUnlocks\(\)/.test(main));
+check('...and a run still starts through it', /function startGame\([^)]*\) \{[\s\S]{0,200}resetArena\(/.test(main));
+check('...as does the way back to the menu', /function returnToMenu\([^)]*\) \{[\s\S]{0,900}resetArena\(/.test(main));
+check('a run ending collects too, before the score screen', /commitUnlocks\(\);\s*showGameOver\(/.test(main));
 const shot = main.slice(main.indexOf('function updateBossShot('));
 check('a boss going down is recorded on the gained edge, with its archetype and perk',
-  /if \(gained\) recordBossDefeated\(bossState\.archetype, bossState\.perk\?\.id/.test(shot.slice(0, shot.indexOf('\n}'))));
+  /if \(gained\) announceUnlocks\(recordBossDefeated\(bossState\.archetype, bossState\.perk\?\.id/.test(shot.slice(0, shot.indexOf('\n}'))));
 const acc = readFileSync(resolve(ROOT, 'path/src/systems/accessories.js'), 'utf8');
 check('the drawer roster and the slot ask the same function', /filter\(\(k\) => !onlyUnlocked \|\| accessoryUnlocked\(k\)\)/.test(acc));
 const pl = readFileSync(resolve(ROOT, 'path/src/entities/player.js'), 'utf8');

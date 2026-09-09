@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { weatherState } from './weather.js';
 import { skyLight } from './daylight.js';
+import { retireMaterial } from './programPin.js';
 
 // CLOUDS — a stack of noise bands at different distances, which is where the
 // sky gets its depth from.
@@ -161,7 +162,7 @@ export function createClouds(scene) {
     while (layers.length > n) {
       const dead = layers.pop();
       scene.remove(dead.mesh);
-      dead.material.dispose();
+      retireMaterial(dead.material);
     }
   }
 

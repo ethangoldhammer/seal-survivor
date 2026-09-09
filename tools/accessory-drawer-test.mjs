@@ -60,6 +60,14 @@ const {
 } = await import('../path/src/systems/accessories.js');
 const { mountAccessoryDrawer } = await import('../path/src/ui/accessoryDrawer.js');
 
+// THE GATE IS OFF FOR THIS WHOLE FILE. GATE_DEFAULT is the public build now, so
+// every accessory with a row in unlocks.csv starts withheld — and this harness
+// is about what the drawer DOES with an accessory, not about who has earned
+// one. Leaving the gate on would test the gate here, in the file that would
+// then fail every time a row was added to the table. Gating is unlock-test's.
+const { setUnlockGate } = await import('../path/src/systems/unlocks.js');
+setUnlockGate(false);
+
 // The seal, as far as this test is concerned: a circle in the middle of a
 // notional 800x600 window. The real one comes from the menu's own projection of
 // the measured bust — see sealScreen in systems/mainMenu.js.
@@ -105,6 +113,7 @@ function tap(tile) {
 }
 
 // ---------------------------------------------------------------------------
+const drawerSrc = await readFile(join(ROOT, 'path/src/ui/accessoryDrawer.js'), 'utf8');
 section('THE TILES');
 // ---------------------------------------------------------------------------
 const roster = accessoryRoster(true);
@@ -114,9 +123,13 @@ check('the bare seal is a tile of its own, not an absence', !!tileFor(''));
 check('...and it is FIRST — taking a hat off has to be something you can point at',
   tiles()[0].dataset.key === '');
 // The names come from uiText.csv, which is the whole reason the drawer has no
-// strings of its own. Lorem today, and that is the gate doing its job.
-check('the names come from the table rather than from this file',
-  tiles().every((t) => (t.querySelector('.sv-acc-name')?.textContent ?? '').length > 0));
+// strings of its own — and they are the tiles' TITLES now, not captions: the
+// picture is the tile.
+check('every tile carries its name as title and accessible name',
+  tiles().every((t) => (t.title ?? '').length > 0 && t.getAttribute('aria-label') === t.title));
+check('...and shows no text of its own', tiles().every((t) => t.textContent.trim() === ''));
+check('the strip is a carousel: it scrolls sideways when it overflows',
+  /\.sv-acc-row \{[^}]*overflow-x: auto/.test(drawerSrc) && /touch-action: pan-x/.test(drawerSrc));
 
 // ---------------------------------------------------------------------------
 section('EQUIPPING');
@@ -195,7 +208,7 @@ check('a tile equips AND turns the animal',
 tap(tileFor(''));
 check('the bare tile stands it back up', accessoryTurn() === 0);
 cycleAccessory(1);
-check('...and so does the menu\'s cycle',
+check('...and so does the roster cycle',
   accessoryTurn() === 0 || CONFIG.accessories.items[CONFIG.accessories.equipped]
     ?.showTurns?.includes(accessoryTurn()),
   `${CONFIG.accessories.equipped || '(bare)'} at ${(accessoryTurn() * 180 / Math.PI).toFixed(0)}deg`);
@@ -248,14 +261,10 @@ check('the menu mounts the drawer', menuSrc.includes('mountAccessoryDrawer({'));
 check('...hands it the seal\'s own screen circle', /sealRect:\s*sealScreen/.test(menuSrc));
 check('...fades it with the buttons', /drawer\?\.setWeight\(labelFade\(w\)\)/.test(menuSrc));
 check('...and destroys it on the way out', menuSrc.includes('drawer?.destroy()'));
-check('a press on the seal cycles what it wears', menuSrc.includes('cycleAccessory(1)'));
-// The cycle has to be reached from the OPEN-WATER branch, before the knock —
-// checked positionally because "the call is in the file" would pass with it
-// sitting in a function nothing runs.
-const openWater = menuSrc.indexOf('if (hovered < 0) {');
-check('...on the branch where nothing else was pressed',
-  openWater > -1 && menuSrc.indexOf('cycleAccessory(1)') > openWater
-  && menuSrc.indexOf('cycleAccessory(1)') < menuSrc.indexOf('OPEN WATER.'));
+// The seal is NOT a control. A press on it used to step the slot through the
+// roster, so a stray click while reaching for Play changed the hat; what the
+// seal wears is decided in the drawer and nowhere else on this screen.
+check('a press on the seal does not cycle what it wears', !menuSrc.includes('cycleAccessory('));
 
 console.log(failures === 0 ? '\nall good\n' : `\n${failures} failing\n`);
 process.exit(failures === 0 ? 0 : 1);

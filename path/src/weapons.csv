@@ -38,12 +38,12 @@ scallop.maxBounces,6,0,20,scallop wall bounces
 oyster.fireRate,1.9,0.2,8,"oyster seconds between pearls. Long on purpose — the pearl is the game's one BOMB, and the wait is what the burst is paid for. Read against oyster.bombletDamage x oyster.bomblets, not on its own"
 oyster.fireRatePerLevel,0.1,0,0.5,oyster cadence gain per level
 oyster.fireRateFloor,1.1,0.1,4,"oyster fastest allowed cadence. Kept above a second at the cap: a stream of blasts this wide is a screen nobody can read, and the gap between them is where the weapon's danger lives"
-oyster.damage,30,1,120,oyster pearl impact damage
-oyster.damagePerLevel,7,0,40,oyster pearl damage per level
+oyster.damage,15,1,120,"oyster pearl impact damage. Halved 30 -> 15 IN STEP with oyster.bombletDamage below — the nerf had to take both halves or it would have changed what the card is. ability-smoke asserts the burst is worth more than five times the impact, which is the line between a bomb and a slow bullet; cutting only the burst walked the blaster right onto it."
+oyster.damagePerLevel,3.5,0,40,oyster pearl damage per level. Halved with the base above so the stack curve keeps its shape.
 oyster.bomblets,5,1,20,oyster bomblets per burst
 oyster.bombletsPerLevel,1,0,5,oyster bomblets per level
-oyster.bombletDamage,62,1,200,"oyster bomblet damage. Every bomblet's blast reaches back over the impact point (see bombletBlastRadius), so a body standing where the pearl landed takes this once PER BOMBLET — multiply by oyster.bomblets before comparing it to anything"
-oyster.bombletDamagePerLevel,14,0,60,oyster bomblet damage per level
+oyster.bombletDamage,30,1,200,"oyster bomblet damage. Every bomblet's blast reaches back over the impact point (see bombletBlastRadius), so a body standing where the pearl landed takes this once PER BOMBLET — multiply by oyster.bomblets before comparing it to anything. Halved 62 -> 30, and oyster.damage halved with it: the ledger had the blaster at 28,197 damage per stack-minute, more than twice the base gun, returning 3.77x its weight and flagged overtuned at 16% of a run's damage on 3% of its investment. Cut HERE and on the impact rather than on the cadence — the long wait between pearls is what the burst is paid for."
+oyster.bombletDamagePerLevel,7,0,60,oyster bomblet damage per level. Halved with the base above so the stack curve keeps its shape.
 oyster.bombletBlastRadius,4.6,0.5,15,oyster bomblet blast radius — must stay ABOVE max bomblet travel (2.44 at the shipped speed/drag/life; see CONFIG.oyster) or the burst leaves a hole where the pearl actually landed
 oyster.bombletBlastRadiusPerLevel,0.34,0,2,oyster blast radius per level
 razorClam.fireRate,1.6,0.2,8,razor clam seconds between volleys at level 1
@@ -64,8 +64,10 @@ razorClam.piercePerLevel,0.6,0,3,razor clam pierce per level (floored)
 razorClam.pierceMax,9,0,30,razor clam pierce ceiling
 sardineSwirl.damage,9,1,60,sardine swirl damage one sardine deals on contact
 sardineSwirl.damagePerLevel,2,0,20,sardine swirl contact damage added per stack
-sardineSwirl.count,3,1,12,sardine swirl PAIRS in the school at level 1 — bodies are twice this
+sardineSwirl.count,5,1,12,sardine swirl PAIRS in the school at level 1 — bodies are twice this
 sardineSwirl.countPerLevel,1,0,4,sardine swirl pairs added per stack
+sardineSwirl.span,11,2,24,sardine swirl how wide the school is drawn in world units at level 1 — the seal contacts a fish at about 1.5u and a megalodon at 3.2u
+sardineSwirl.spanPerLevel,0.13,0,0.4,sardine swirl width added per stack as a fraction of the base
 sardineSwirl.contactCooldown,0.4,0.05,2,sardine swirl per-sardine re-hit delay against one creature
 seagullBomb.baseFireRate,2.3,0.5,10,seagull seconds between runs at level 1
 seagullBomb.fireRatePerLevel,0.85,0.5,1,seagull fire rate mult per level
@@ -92,8 +94,8 @@ biolum.statusPerLevel,0.22,0,1,glow-up status strength per level
 biolum.strikeFraction,0.5,0,1,glow-up share a dash carries
 starfish.baseFireRate,0.42,0.05,2,starfish seconds between throws at level 1
 starfish.fireRatePerLevel,0.88,0.5,1,starfish fire rate mult per level (compounds)
-starfish.damage,22,1,120,starfish damage per hit
-starfish.damagePerLevel,6,0,40,starfish damage per level — the stack used to buy cadence and size ONLY
+starfish.damage,55,1,120,"starfish damage per hit. Raised 22 -> 55, the SECOND buff this row has had: the first move (232 -> 1,767 damage per stack-minute) took it off the floor but left it bottom three, still returning 0.02-0.30x its weight and never once above 0.30x. The shuriken pierces, so damage is the honest lever — cadence is already at 0.42s."
+starfish.damagePerLevel,15,0,40,starfish damage per level — the stack used to buy cadence and size ONLY. Scaled with the base above so the curve keeps its shape.
 starfish.basePierce,1,0,10,starfish bodies one shuriken cuts through beyond the first
 starfish.piercePerLevel,0.34,0,2,starfish extra pierce per level (floored — one more body every third stack)
 starfish.pierceMax,4,0,12,starfish pierce cap
@@ -293,15 +295,17 @@ bakalar.catch.powerPerLevel,0.55,0,3,bakalar net power gained per stack
 bakalar.catch.massExponent,2,0.5,4,"bakalar how fast resistance grows with radius - 2 is area, i.e. mass on a 2D field"
 bakalar.catch.gripReset,0.5,0,5,bakalar seconds out of the net before a part-gripped fish starts again
 bakalar.catch.maxPrey,3,0.5,12,bakalar biggest prey radius the net will hold at all - refuses whale-scale bodies outright
-garlic.damagePerTick,4.5,0.1,12,sea garlic damage per tick — with tickInterval 0.25 this is x4 for a DPS
-garlic.damagePerLevel,1.5,0,6,"sea garlic damage per tick added per stack. A third of base, so a maxed aura hits about three times as hard rather than only reaching further"
+garlic.damagePerTick,12,0.1,24,"sea garlic damage per tick — with tickInterval 0.25 this is x4 for a DPS. Raised 4.5 -> 12 off the ledger: the cloud was last but one of every weapon in the game at 1,366 damage per stack-minute against a 4,000-5,000 mid-table, and returned 0.09-0.34x its weight in every ramp block it appeared in. The radius is not the problem and stays on its slider — what a tick hits for was."
+garlic.damagePerLevel,4,0,12,"sea garlic damage per tick added per stack. Held at a third of base through the buff above, so a maxed aura still hits about three times as hard rather than only reaching further."
+calamari.damage,24,1,120,"calamari wave damage per pass. Here for the same reason starfish and musselVolley are: the ring returned 0.12-0.61x its weight in every ramp block and sat at 2,560 damage per stack-minute against a 4,000-5,000 mid-table, while calamari.damage and calamari.damagePerLevel BOTH sat in imported-tuning.json — where a saved value beats a config.js default — so no edit to the block in config.js could ever have moved them. A row is what makes the number authoritative; the paths are stripped from the snapshot on the way in and out. Raised 14 -> 24 in the same move."
+calamari.damagePerLevel,11,0,40,"calamari wave damage per stack. Raised 6 -> 11 alongside the base above, keeping the stack worth a little under half of base. The wave's reach, speed, band width, colour and the squid riding it are unchanged and stay on their sliders — the ring is judged by eye while it sweeps, and only what it HITS for is read against the rest of the arsenal over a run."
 musselVolley.count,3,1,30,mussel shells in a level-1 barrage
 musselVolley.countPerLevel,1.75,0,8,"mussel shells added per stack — 1.75 so the five stacks run 3, 5, 7, 8, 10"
 musselVolley.pipShellsMax,2,0,20,"mussel ceiling on the bonus shells a charged release buys — one per whole pip spent, capped low so the card's own count (3 at one stack, 10 at five) stays the number the barrage reads as; a deep or chained bar adds a shell or two on top rather than doubling the flight"
-musselVolley.damage,34,1,120,mussel direct hit damage per shell
-musselVolley.damagePerLevel,12,0,40,mussel direct hit damage per shell per stack
-musselVolley.splashDamage,58,0,200,"mussel blast damage per shell. Worth more than the direct hit on purpose — a homing shell almost always finds a body, so the blast is what the barrage is actually for"
-musselVolley.splashDamagePerLevel,22,0,60,mussel blast damage per shell per stack
+musselVolley.damage,21,1,120,"mussel direct hit damage per shell. Cut 34 -> 21 with the splash below: the barrage overshot its own buff, going from 0.37x its weight to 19,416 damage per stack-minute and 47% of a run's damage on 17% of its investment. The shell count is untouched — how many shells fly is what the card reads as."
+musselVolley.damagePerLevel,7,0,40,mussel direct hit damage per shell per stack. Scaled with the base above.
+musselVolley.splashDamage,36,0,200,"mussel blast damage per shell. Still worth more than the direct hit on purpose — a homing shell almost always finds a body, so the blast is what the barrage is actually for. Cut 58 -> 36 with the direct hit above; the ratio between the two is the part that had to survive the nerf."
+musselVolley.splashDamagePerLevel,14,0,60,mussel blast damage per shell per stack. Scaled with the base above.
 musselVolley.splashRadius,4.6,0.5,12,mussel blast radius per shell
 weapon.damagePerMultishot,0.04,0,0.2,"basic shot damage added per stack of Multishot, as a FRACTION of the gun's current damage — the gun's damage is a live stat that grows all run, so a flat step would be decisive early and nothing late"
 weapon.radiusPerMultishot,0.03,0,0.2,"basic shot size added per stack of Multishot, as a fraction of the pellet's radius"

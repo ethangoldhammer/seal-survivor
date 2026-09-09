@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { shapeLocalToWorld, worldToShapeLocal } from './hitShape.js';
 import { emit } from '../entities/particles.js';
+import { retireMaterial } from './programPin.js';
 
 // ---------------------------------------------------------------------------
 // HITTING SOMETHING BIG
@@ -501,7 +502,7 @@ export function disposeBossImpacts(scene) {
   for (const m of [shards, rings, wounds]) {
     if (!m) continue;
     m.geometry.dispose();
-    m.material.dispose();
+    retireMaterial(m.material);
   }
   group = null;
   shards = null;

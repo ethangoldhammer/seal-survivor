@@ -35,8 +35,6 @@ accessoryRoundsName,Spectacles,,accessory drawer,"Round spectacles in thick wood
 accessoryAviatorsName,Aviators,,accessory drawer,"Gold-wire aviators with a green tint. Same tile, two words at most."
 accessoryWireFramesName,Cute Glasses,,accessory drawer,"Small round gold wire frames with near-black lenses. Same tile. Two or three words, and it has to be distinguishable from the aviators, which are also gold wire — the difference the player sees is round versus teardrop, and small versus wide."
 loadResuming,Resuming,,loading,
-<<<<<<< Updated upstream
-=======
 mainMenuButton,Main Menu,,pause menu,
 versusWinner,Champion!,,versus,"Centre-screen line under the winning score at the end of a two-player match, first to 5 goals. Two or three words at most, read for about three seconds while the water is frozen; the number above it says who won, so this only has to feel like a whistle."
 versusGo,Go!,,versus,"The whistle: the line that pops at centre screen when the kickoff countdown (3, 2, 1) reaches zero and the two seals are released to race for the ball. One or two words, read for about half a second, in the same big type as the numerals it follows. Play is already live under it."
@@ -56,4 +54,3 @@ teamStart,Start,,team select,"The button at the foot of the team select once bot
 teamNoPads,Press a key/button.,,team select,"Shown in the middle of the team select when no controller has been seen yet; the browser only shows a pad after a button on it is pressed. One line telling the player to press a button on their pad."
 versusOverTitle,now what?,,versus,"Heading of the prompt after a Blubberball match ends (first to 5), over the frozen water under the winner's score. One or two words asking what next."
 versusRematch,Rematch,TRUE,versus,"The first button on that prompt: same sides, same colours, straight back to a kickoff. Your word from chat."
->>>>>>> Stashed changes

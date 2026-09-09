@@ -440,6 +440,7 @@ function lureAt(e, c) {
 // told by the body turning.
 function makeTell(kind, c) {
   const ring = makeOrganicRing({
+    role: 'tell',
     type: kind === 'pulse' ? 'chill' : 'electric',
     thickness: kind === 'pulse' ? 0.09 : 0.18,
     renderOrder: 6,

@@ -672,6 +672,13 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
+// ---------------------------------------------------------------------------
+// ONE RING, AS A CLOSURE. Everything from here to the return is the state of
+// ONE instrument — its quad, its springs, its stagger queue, its clocks — so
+// a second seal can have a second ring by calling makeRing() again, with no
+// shared state between the two. The run's own is `ring0` at the bottom.
+// ---------------------------------------------------------------------------
+function makeRing() {
 let mesh = null;
 
 // ---------------------------------------------------------------------------
@@ -814,12 +821,12 @@ let lastPips = 0;      // pip count last frame, to detect a re-segmentation
  * animation is currently cut into, which trails a re-segmentation by nothing:
  * updatePips snaps on the frame it changes.
  */
-export function pipAnim() {
+function pipAnim() {
   return { fill: pipFill, pop: pipPop, count: lastPips };
 }
 
 /** Put the springs back where a fresh run starts them. */
-export function resetStrikeRing() {
+function resetStrikeRing() {
   powerSpring.x = 0; powerSpring.v = 0; powerSpring.over = 0;
   coreClock = 0;
   coreChurn = 0;
@@ -1369,7 +1376,7 @@ function updateVerdict(strikeState, u, ring, stats) {
   u.uSweetGlow.value = (v.bandGlow ?? 1) * fall;
 }
 
-export function createStrikeRing() {
+function createStrikeRing() {
   const geometry = new THREE.PlaneGeometry(2 * OVERSCAN, 2 * OVERSCAN);
   const ring = CONFIG.strike.ring;
   const material = new THREE.ShaderMaterial({
@@ -1465,7 +1472,7 @@ export function createStrikeRing() {
   return mesh;
 }
 
-export function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
+function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
   if (!mesh) return;
   mesh.visible = running && CONFIG.strike.enabled;
   if (!mesh.visible) return;
@@ -1571,4 +1578,42 @@ export function updateStrikeRing(dt, playerPos, strikeState, running, stats = nu
   let loudest = 0;
   for (let i = 0; i < pips; i++) if (pipPop[i] > loudest) loudest = pipPop[i];
   u.uGlow.value = ring.glow * (1 + loudest * (ring.bounceGlow ?? 6) * 0.12);
+}
+
+
+  return {
+    get mesh() { return mesh; },
+    pipAnim, resetStrikeRing, createStrikeRing, updateStrikeRing,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE RUN'S OWN RING — player 1's — is the first instance, and the exports
+// below are its methods, so main.js reads exactly as it always did.
+// createStrikeRingInstance() makes another, with its own springs, its own
+// stagger queue and its own quad, for a second seal (systems/versus.js).
+// ---------------------------------------------------------------------------
+const ring0 = makeRing();
+export function pipAnim() { return ring0.pipAnim(); }
+export function resetStrikeRing() { return ring0.resetStrikeRing(); }
+export function createStrikeRing() { return ring0.createStrikeRing(); }
+export function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
+  return ring0.updateStrikeRing(dt, playerPos, strikeState, running, stats);
+}
+
+/**
+ * A ring of its own for another seal: { mesh, update, reset, pipAnim,
+ * dispose }. `update` takes what updateStrikeRing takes — the dt is REAL time,
+ * the state is that seal's strike state (createStrikeState in strike.js).
+ */
+export function createStrikeRingInstance() {
+  const r = makeRing();
+  const mesh = r.createStrikeRing();
+  return {
+    mesh,
+    update: r.updateStrikeRing,
+    reset: r.resetStrikeRing,
+    pipAnim: r.pipAnim,
+    dispose() { mesh.geometry.dispose(); mesh.material.dispose(); },
+  };
 }

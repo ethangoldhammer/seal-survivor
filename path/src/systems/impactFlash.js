@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { retireMaterial } from './programPin.js';
 
 // A short, bright bloom of light at a point — the "something just detonated
 // here" flash that particles alone can't give you. A burst of points reads as
@@ -109,7 +110,7 @@ export function disposeImpactFlashes(scene) {
   scene.remove(group);
   for (const f of pool) {
     f.mesh.geometry.dispose();
-    f.mesh.material.dispose();
+    retireMaterial(f.mesh.material);
   }
   pool.length = 0;
   group = null;

@@ -16,6 +16,11 @@
 //   toon      toonShade — banded (cel) lighting
 //   biolum    biolumSkin — a painted/glowing pattern
 //
+// The noise layer carries two more sections on the same preset: `wet` (the
+// film lying on the skin) and `split` (the same six mottle numbers again for
+// the side of the body facing the seabed, crossfaded in on WORLD up — see
+// SPLIT and CONFIG.sealShader.split).
+//
 // ...and under each of them, the control that decides how much of the model's
 // own baked map survives: `paint` on the noise, `pigment` on the biolum. That
 // pair is the whole answer to "mix or replace" — 0 lets the photograph through
@@ -465,6 +470,27 @@ const WET = [
   { key: 'wetTint', label: 'sheen takes the water colour', min: 0, max: 1, step: 0.05, def: 0.5 },
 ];
 
+// THE SKY/OCEAN SPLIT (CONFIG.sealShader.split*). The same root and preset as
+// the noise above, in a section of its own for the same reason the wet film
+// is: NOISE is what the skin is, this is which HALF of the body you are
+// describing. The six underside controls are the six mottle controls again —
+// same ranges, same order — so the two sections read as the back and the belly
+// of one animal rather than as two different layers.
+//
+// `def` mirrors the base in config.js, same rule as WET.
+const SPLIT = [
+  { key: 'split', label: 'split (0 = one surface)', min: 0, max: 1, step: 0.02, def: 0 },
+  { key: 'splitLine', label: 'belly begins at', min: -1, max: 1, step: 0.02, def: 0 },
+  // Step 0.01, not 0.02: the base is 0.25, and a range input rounds a value off
+  // its grid to the nearest tick, so at 0.02 the readout said 0.26 over a
+  // number nobody had moved.
+  { key: 'splitSoft', label: 'crossfade width', min: 0, max: 1, step: 0.01, def: 0.25 },
+  { key: 'splitPaint', label: 'underside covers the map', min: 0, max: 1, step: 0.02, def: 0 },
+  { key: 'splitStrength', label: 'underside strength', min: 0, max: 1.5, step: 0.02, def: 0.35 },
+  { key: 'splitSize', label: 'underside size', min: 0.02, max: 2, step: 0.01, def: 0.4 },
+  { key: 'splitContrast', label: 'underside contrast', min: 0.2, max: 4, step: 0.05, def: 1 },
+];
+
 const BIO = [
   // The biolum half of the same question `paint` asks of the noise: how much of
   // the model's baked map survives under the pattern. 0 is a glow over a
@@ -481,6 +507,11 @@ const BIO = [
   { key: 'coverage', label: 'coverage', min: 0, max: 1, step: 0.02, def: 0.45 },
   { key: 'strength', label: 'glow', min: 0, max: 3, step: 0.02, def: 0 },
   { key: 'flow', label: 'drift', min: 0, max: 2, step: 0.02, def: 0 },
+  // Sky/seabed bias on the pattern's mask — paint and glow together, since
+  // both read it. The biolum half of the noise layer's split: one number
+  // rather than a second set, because a pattern is a mask over a ramp and
+  // "more of it on the back" is the whole of what countershading asks of it.
+  { key: 'upBias', label: 'belly ← → back bias', min: -1, max: 1, step: 0.05, def: 0 },
 ];
 
 // The rim. NOT part of toonShade — the game builds outlines as inverted-hull
@@ -1217,6 +1248,25 @@ function buildPanels() {
     p.appendChild(wetSect);
   }
 
+  // THE SKY/OCEAN SPLIT, on the same root and preset again — see SPLIT. Its
+  // two colours are the underside's `coat colour` and `tint`, named to match
+  // the noise section's pair so the belly's pickers line up under the back's.
+  if (on.noise) {
+    const splitSect = section('split', 'sealShader', target.noise, SPLIT, (body, name) => {
+      colorRow(body, 'sealShader', name, 'splitBaseColor', 'underside coat', 0xffffff);
+      colorRow(body, 'sealShader', name, 'splitColor', 'underside tint', 0x0a2233);
+      const how = document.createElement('div');
+      how.className = 'row warnrow';
+      how.innerHTML = '<label>which way</label><output>'
+        + 'WORLD up: the belly is whatever faces the seabed on screen, so orbit '
+        + 'under the animal to see it. The six underside controls are the noise '
+        + 'section\'s six again; at split 0 none of them are sampled.'
+        + '</output>';
+      body.appendChild(how);
+    });
+    p.appendChild(splitSect);
+  }
+
   if (on.biolum) p.appendChild(section('pattern', 'biolumSkin', target.bio, BIO, (body, name) => {
     const row = document.createElement('div');
     row.className = 'row';
@@ -1541,11 +1591,17 @@ function presetsFor(on) {
     // NOISE AND WET ARE THE SAME PRESET — both are CONFIG.sealShader.
     fold(gather('noise', 'sealShader', target.noise, NOISE));
     fold(gather('wet', 'sealShader', target.noise, WET));
+    // THE SPLIT IS THE SAME PRESET TOO — and it is in this list for the same
+    // reason the wet film is: a record that carried the back and dropped the
+    // belly would ship an animal with half its look.
+    fold(gather('split', 'sealShader', target.noise, SPLIT));
     // The colour pickers are in neither list, and a recorded look without them
     // is a recorded look with the wrong colours. `baseColor` joins them: it is
     // what `paint` lays down, so recording a covered map without it would write
-    // a preset that covers the photograph with a colour nobody chose.
-    for (const [k, d] of [['color', 0x0a2233], ['wetColor', 0xdff2ff], ['baseColor', 0xffffff]]) {
+    // a preset that covers the photograph with a colour nobody chose. The two
+    // split colours for the same reason, one section down.
+    for (const [k, d] of [['color', 0x0a2233], ['wetColor', 0xdff2ff], ['baseColor', 0xffffff],
+      ['splitColor', 0x0a2233], ['splitBaseColor', 0xffffff]]) {
       out.sealShader[target.noise][k] = valOf(k, 'sealShader', target.noise, { key: k, def: d });
     }
   }

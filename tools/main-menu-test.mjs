@@ -226,5 +226,117 @@ check('...and can still be resumed', footText().includes('Resume'), footText().j
 check('...and restarted', footText().includes('Restart run'), footText().join(' / '));
 pause.hidePauseMenu();
 
+// ---------------------------------------------------------------------------
+// THE ROUTE BACK, READ OUT OF main.js.
+//
+// Read as SOURCE rather than imported, which is how every check in this repo
+// that has to say something about main.js works: it opens a GL context, loads
+// the roster and starts a frame loop, and none of that can happen in jsdom.
+// A text check is weaker than a behavioural one and worth having anyway,
+// because what it guards is a SHAPE — one teardown, reached by two routes —
+// and the failure it catches is the one that is silent.
+//
+// The silent failure is a second copy. Emptying the water is two hundred reset
+// calls in a load-bearing order, several of which say so in their own comments.
+// Anyone writing "go back to the menu" from scratch writes a shorter list, and
+// a shorter list is a menu with the last run's sharks still swimming through
+// the bust's crop, or a boss corpse raining onto it, or a warning band from a
+// run that ended. None of that throws. It just looks wrong, once, to somebody
+// who is not looking for it.
+// ---------------------------------------------------------------------------
+section('Leaving a run for the menu, as main.js wires it');
+{
+  const { readFileSync } = await import('node:fs');
+  const main = readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
+  const body = (name) => {
+    const at = main.indexOf(`function ${name}(`);
+    if (at < 0) return '';
+    let depth = 0;
+    for (let i = main.indexOf('{', at); i < main.length; i++) {
+      if (main[i] === '{') depth++;
+      else if (main[i] === '}' && --depth === 0) return main.slice(at, i + 1);
+    }
+    return '';
+  };
+
+  const menu = body('returnToMenu');
+  check('there is a returnToMenu at all', menu.length > 0);
+  // THE SHARED TEARDOWN, not a hand-written list. This is the check the whole
+  // section exists for.
+  check('...and it empties the water through the same function a restart does',
+    /resetArena\(\s*\{[^}]*forMenu:\s*true/.test(menu), 'resetArena({ forMenu: true })');
+  check('...and stops the run rather than leaving it ticking under the menu',
+    /gameState\.running\s*=\s*false/.test(menu) && /gameState\.paused\s*=\s*false/.test(menu));
+  // The HUD is the run's own furniture and no menu hides it — the score card
+  // is what normally takes it down, and this route never shows one.
+  check('...takes the HUD down, which nothing else on this route would',
+    /hideHud\(\)/.test(menu));
+  check('...and ends on the menu', /showMainMenu\(\)/.test(menu));
+
+  // ONE TEARDOWN, TWO ROUTES. If startGame stopped going through resetArena the
+  // two would drift, and the one that drifts is always the one nobody is
+  // looking at.
+  const start = body('startGame');
+  check('a run starts through that same teardown',
+    /resetArena\(/.test(start), start.split('\n').length + ' line(s)');
+  check('...and startGame is now the two halves and nothing else',
+    /buildRun\(/.test(start));
+
+  // Both buttons have to reach it, and the pause one has to unpause first —
+  // returnToMenu clears `paused` only after the teardown, so a panel left
+  // latched would hand the menu a game that thinks it is mid-pause.
+  check('the pause panel\'s button is wired to it',
+    /onPauseMainMenu:\s*\(\)\s*=>\s*\{[^}]*setPaused\(false\)[^}]*returnToMenu\(\)/.test(main));
+  // The score card's route goes under the same cover Try again uses: the death
+  // left the clock dilated and the lens pushed in on a corpse, and cutting
+  // straight to a menu from there snaps all of it back on one frame.
+  const at = main.indexOf('onMainMenu:');
+  const route = at < 0 ? '' : main.slice(at, at + 700);
+  check('the score card\'s goes through the death transition, as Try again does',
+    /showRestartTransition\(/.test(route) && /beginRestartTransition\(/.test(route)
+    && /returnToMenu\(\)/.test(route));
+}
+
+// ---------------------------------------------------------------------------
+section('Seal sports is a panel of one working game and two promises');
+// The fifth hex opens a list (showSealSports). The ball game's button does
+// whatever main.js hands it — switching the versus flag and building the run
+// is main.js's job and not the panel's — and the two stubs are disabled with
+// "coming soon" under them, so a player can see the list's shape without
+// being able to press a button that goes nowhere.
+{
+  let pressed = 0;
+  ui.showSealSports({ onBall: () => { pressed++; } });
+  const panel = document.getElementById('svSportsPanel');
+  check('the panel is mounted and shown', !!panel && !panel.classList.contains('sv-hidden'));
+  const buttons = [...(panel?.querySelectorAll('.sv-sport') ?? [])];
+  check('it lists three sports', buttons.length === 3, String(buttons.length));
+  const ball = buttons.find((b) => b.dataset.sport === 'sportBall');
+  check('the ball game is the one that can be pressed', !!ball && !ball.disabled);
+  ball?.click();
+  check('...and pressing it calls what main.js handed over', pressed === 1, `x${pressed}`);
+  const stubs = buttons.filter((b) => b !== ball);
+  check('the other two are disabled', stubs.length === 2 && stubs.every((b) => b.disabled));
+  check('...and each says it is coming', stubs.every((b) => b.querySelector('.sv-sport-soon')?.textContent.length > 0));
+  check('every word on it comes from the table (no id showing through)',
+    ![...panel.querySelectorAll('button, .sv-title')].some((n) => /^(sport|sealSports)/.test(n.textContent.trim())),
+    [...panel.querySelectorAll('button, .sv-title')].map((n) => n.textContent.trim()).join(' / '));
+  // Back closes it, and so does the sweep every run makes on its way in — the
+  // panel is a DOM overlay a canvas button can be pressed behind, exactly the
+  // case hideAllMenus lists the Leaderboard for.
+  panel.querySelector('#svSportsBack').click();
+  check('Back hides it', panel.classList.contains('sv-hidden'));
+  ui.showSealSports({ onBall: () => {} });
+  ui.hideAllMenus();
+  check('hideAllMenus takes it down too', panel.classList.contains('sv-hidden'));
+  // The main menu wires the ball game to a mode switch, and the switch has to
+  // rebuild the arena when the flag changes — the walls are measured off it.
+  const main = readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
+  check('main.js switches the flag and rebuilds the arena before the run',
+    /function enterMode\(versus\)[\s\S]{0,600}enableVersus\([\s\S]{0,200}world\.resize\(\)[\s\S]{0,400}startGame\(\)/.test(main));
+  check('...and the menu no longer reads a ?versus URL flag', !/has\('versus'\)/.test(main));
+  check('closeMainMenu hides the sports panel with the board', /function closeMainMenu[\s\S]{0,300}hideSealSports\(\)/.test(main));
+}
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}`);
 process.exit(failures ? 1 : 0);

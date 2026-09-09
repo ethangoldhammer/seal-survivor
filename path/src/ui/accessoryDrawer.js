@@ -22,13 +22,23 @@ import { feedback } from '../systems/feedback.js';
 //
 // WHAT IS STUBBED, and why each is a decision rather than an omission:
 //
-//   THE UNLOCK. Every accessory is `unlocked: true` in config.js because
-//   nothing in the game yet says what earns one. The field is read here rather
-//   than assumed, so whatever eventually grants an accessory — a boss down, a
-//   run length, a shop — writes that one flag and this panel is already
-//   correct. What is NOT here is where the flag persists: it lives in CONFIG,
-//   which the tuner snapshots, and a real inventory belongs in the same store
-//   the graveyard and the loadout use, not in a tuning file.
+//   THE UNLOCK — DONE, in systems/unlocks.js. unlocks.csv names what gates
+//   each accessory and the ledger of what has been earned lives in its own
+//   localStorage key, well away from the tuning snapshot. The roster read
+//   here is already filtered by it, so the drawer starts with the bare tile
+//   and whatever has no row, and fills in as gates are collected — one tile
+//   per unlock, in config order. A gate popped mid-run is NOT in the roster
+//   until that run is over (see EARNED IS NOT YET GRANTED there), which is
+//   why the menu never has to rebuild this strip while it is up.
+//
+//   NO NAMES ON THE TILES. The picture is the tile; the name from uiText.csv
+//   is its `title` and accessible name, so a hover or a screen reader still
+//   gets it and the table's rows are still read. Which is also why the strip
+//   is a CAROUSEL: at 64px a tile, eight accessories and the bare seal are
+//   wider than a phone, so the row scrolls sideways — a horizontal pan
+//   scrolls, a lift toward the seal drags, the wheel scrolls it on a mouse,
+//   and the two edges fade so an overflow reads as "more" rather than as a
+//   cut. A row that fits needs none of that and gets none of it.
 //
 //   THE TILE ART — DONE, and left in this list because what it turned into is
 //   worth knowing about. It used to be a coloured lozenge per accessory, with
@@ -62,12 +72,23 @@ const STYLES = `
     pointer-events: auto; user-select: none; -webkit-user-select: none; }
   .sv-acc-drawer h4 { margin: 0; font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
     color: rgba(226,240,255,0.45); font-weight: 600; }
-  .sv-acc-row { display: flex; gap: 8px; }
+  .sv-acc-row { display: flex; gap: 8px; padding: 3px 6px;
+    max-width: min(92vw, 720px); overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x proximity; overscroll-behavior-x: contain;
+    scrollbar-width: none; -ms-overflow-style: none; }
+  .sv-acc-row::-webkit-scrollbar { display: none; }
+  /* The fade at either edge, only once the strip overflows — set by the
+     drawer after it measures itself, so a row that fits has hard edges. */
+  .sv-acc-row.overflowing { mask-image: linear-gradient(90deg, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
   .sv-acc-empty { font-size: 11px; color: rgba(226,240,255,0.35); padding: 10px 4px; }
-  .sv-acc-tile { width: 64px; padding: 7px 5px 6px; border-radius: 7px; cursor: grab;
+  /* touch-action: pan-x — a sideways finger scrolls the strip and the browser
+     cancels the pointer (see cancelDrag); an upward one is the drag. */
+  .sv-acc-tile { width: 64px; flex: 0 0 auto; scroll-snap-align: center;
+    padding: 7px 5px 6px; border-radius: 7px; cursor: grab;
     background: rgba(10,20,32,0.55); border: 1px solid rgba(150,200,255,0.18);
     backdrop-filter: blur(6px); display: flex; flex-direction: column; align-items: center; gap: 5px;
-    transition: border-color .12s ease, background .12s ease, transform .12s ease; touch-action: none; }
+    transition: border-color .12s ease, background .12s ease, transform .12s ease; touch-action: pan-x; }
   .sv-acc-tile:hover { border-color: rgba(150,200,255,0.45); background: rgba(16,32,50,0.7); }
   .sv-acc-tile.on { border-color: rgba(124,230,160,0.75); background: rgba(14,38,32,0.72); }
   .sv-acc-tile.dragging { opacity: 0.35; cursor: grabbing; }
@@ -80,8 +101,6 @@ const STYLES = `
      written on the element rather than here, because it rides the same one-line
      background shorthand that carries the image. */
   .sv-acc-swatch.shot { height: 40px; }
-  .sv-acc-name { font-size: 9px; line-height: 1.15; text-align: center; color: rgba(226,240,255,0.8);
-    letter-spacing: .02em; }
   .sv-acc-ghost { position: fixed; z-index: 40; pointer-events: none; width: 64px;
     transform: translate(-50%, -50%) scale(1.08); opacity: 0.92; }
   /* The seal lighting up as a drop target. Drawn on the drawer rather than on
@@ -216,21 +235,39 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
       swatch.style.background = shot
         ? `url("${shot}") center / contain no-repeat`
         : (SWATCH[key] ?? 'linear-gradient(160deg, #6d7f92, #33414f)');
-      const name = document.createElement('div');
-      name.className = 'sv-acc-name';
-      // A new accessory with no line here falls through to its asset key, which
-      // is ugly and visible — the same bargain uiText makes for a missing row.
-      name.textContent = key
-        ? (TILE_NAME[key]?.() ?? key)
-        : uiText('accessoryBare');
-      tile.append(swatch, name);
+      // The name is the tile's title and accessible name, not a caption. A
+      // new accessory with no line here falls through to its asset key, which
+      // is ugly on hover — the same bargain uiText makes for a missing row.
+      const name = key ? (TILE_NAME[key]?.() ?? key) : uiText('accessoryBare');
+      tile.title = name;
+      tile.setAttribute('role', 'button');
+      tile.setAttribute('aria-label', name);
+      tile.appendChild(swatch);
 
       tile.addEventListener('pointerdown', (e) => startDrag(e, key, tile));
       row.appendChild(tile);
       tiles.set(key, tile);
     }
     paint();
+    measure();
   }
+
+  // Does the strip overflow? Decides the edge fade, and it is re-asked on
+  // resize because the answer is a function of the viewport.
+  function measure() {
+    row.classList.toggle('overflowing', row.scrollWidth > row.clientWidth + 1);
+  }
+  window.addEventListener('resize', measure);
+
+  // A mouse has no sideways gesture; the wheel is it. Only claimed while the
+  // strip actually overflows, so a wheel over a row that fits still reaches
+  // whatever is behind it.
+  row.addEventListener('wheel', (e) => {
+    if (row.scrollWidth <= row.clientWidth + 1) return;
+    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    row.scrollLeft += d;
+    e.preventDefault();
+  }, { passive: false });
 
   function paint() {
     const on = CONFIG.accessories?.equipped ?? '';
@@ -337,6 +374,6 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
     rebuild: build,
     /** Fade with the shot: the drawer belongs to the menu, not to the run. */
     setWeight(w) { root.style.opacity = String(w); target.style.display = w > 0.01 ? '' : 'none'; },
-    destroy() { cancelDrag(); root.remove(); target.remove(); },
+    destroy() { cancelDrag(); window.removeEventListener('resize', measure); root.remove(); target.remove(); },
   };
 }

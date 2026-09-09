@@ -426,6 +426,32 @@ section('and where that puts you');
     check('...and brings it back when another card shares the stat',
       shared.rows.some((r) => r.key === 'total'), shared.rows.map((r) => r.key).join(','));
   }
+  {
+    // AND A SPAN DROPS IT, sharing or no sharing.
+    //
+    // The two rows are measured through DIFFERENT PIPELINES and were headed as
+    // though they were one quantity. `total` is measureTotal: this card's
+    // stacks replayed from a fresh seal, alone. The span appended to `next` is
+    // computeStats: the run as the fight has it, with the level growth and
+    // every other card folded in. Four stacks of Andre the Giant printed
+    // "x6.9 -> x9.1" directly above "+284.2%" — x3.84 against x6.9, one on top
+    // of the other, both answering "where am I now", with no reading of the box
+    // that gets you there. The span wins: it is the figure the fight uses and
+    // it is already attached to the delta it belongs with.
+    player.upgrades.length = 0;
+    player.level = 9;
+    for (let i = 0; i < 4; i++) player.upgrades.push({ id: 'heavyRounds', rarity: 'common' });
+    recomputeStats();
+    const spanned = tip.upgradeTipContent('heavyRounds', {
+      owned: 4, verbosity: 'full',
+      totals: { dealtBySource: {}, killsBySource: {}, controlEvents: {} },
+      liveStats: player.stats, afterStats: statsWithOneMore('heavyRounds', 'common'),
+    });
+    check('a span drops the running total, however many cards share the stat',
+      !spanned.rows.some((r) => r.key === 'total'), spanned.rows.map((r) => r.key).join(','));
+    check('...with the span itself there to have replaced it',
+      (rowOf(spanned, 'next') ?? '').includes('\u2192'), rowOf(spanned, 'next') ?? '');
+  }
 
   // EXCEPT AN UNLOCK, which is prose and cannot be duplicated by a figure. The
   // orca family is of course the only source of orca family levels, and its
@@ -500,9 +526,12 @@ section('what a level actually buys');
   const dmg = boat.rows.find((r) => /damage/.test(r.label));
   check('a row shows the step and where it lands', /→/.test(dmg?.text ?? ''), dmg?.text ?? 'no row');
   check('...matching the ability\'s own numbers', (() => {
-    const a = bakalarLevelStats(1, player.stats).bakalarBombDamage;
-    const b = bakalarLevelStats(2, player.stats).bakalarBombDamage;
-    return dmg.text.includes(String(a)) && dmg.text.includes(String(b));
+    // THROUGH THE TIP'S OWN FORMATTER. The row is rounded to one decimal on
+    // the way to the screen, so comparing it against the raw measurement fails
+    // on any quantity that carries hundredths — the boat's bomb damage does.
+    const a = tip.fmt(bakalarLevelStats(1, player.stats).bakalarBombDamage);
+    const b = tip.fmt(bakalarLevelStats(2, player.stats).bakalarBombDamage);
+    return dmg.text.includes(a) && dmg.text.includes(b);
   })(), dmg?.text ?? '');
 
   // A LOWER-IS-BETTER ADDITIVE STAT MUST NOT READ "+-0.32s". The hardcoded plus

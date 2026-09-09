@@ -616,6 +616,26 @@ function spliceHandPresets(text, presetsByRoot, editBuffer = {}) {
   return { text: next, handled, changes, stale, untouched };
 }
 
+// WHICH ROSTER A PAINTED PRESET IS ON, written down rather than inherited.
+//
+// `luminous` is not a slider, so the lab never records one, so every preset it
+// writes arrives without it — and a biolumSkin preset that leaves it unsaid
+// takes `base.luminous`, which is TRUE. That is how fifteen daylight species
+// once ended up claiming a place on the night roster with nothing to say they
+// had, and `npm run test:skin` has now caught two more the same way, one per
+// session, because the tool that creates them cannot say it.
+//
+// So it is stated here, at the point of writing, and stated as the value it
+// would have inherited anyway — nothing moves, and the flag becomes something
+// on the page that a person can disagree with. Only for presets that actually
+// paint: `pigment` is what puts a preset in that family, and a pure-light
+// preset has no roster question to answer.
+function withRoster(root, fields) {
+  if (root !== 'biolumSkin' || !((fields?.pigment ?? 0) > 0)) return fields;
+  if ('luminous' in fields) return fields;
+  return { ...fields, luminous: true };
+}
+
 async function writePresets(presetsByRoot, { dry, edits = {} }, notes) {
   const text = await readFile(CONFIG_JS, 'utf8');
 
@@ -649,7 +669,8 @@ async function writePresets(presetsByRoot, { dry, edits = {} }, notes) {
   for (const [root, presets] of Object.entries(presetsByRoot)) {
     for (const [name, fields] of Object.entries(presets)) {
       if (spliced.handled.has(`${root}.${name}`)) continue;
-      const body = Object.entries(fields).map(([k, v]) => `${k}: ${fieldLiteral(k, v)}`).join(', ');
+      const body = Object.entries(withRoster(root, fields))
+        .map(([k, v]) => `${k}: ${fieldLiteral(k, v)}`).join(', ');
       merged.set(`${root}.${name}`, `{ ${body} },`);
     }
   }

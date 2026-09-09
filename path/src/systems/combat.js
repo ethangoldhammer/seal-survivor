@@ -1,5 +1,6 @@
 import { CONFIG } from '../config.js';
 import { isInvulnerable } from './strike.js';
+import { feedback } from './feedback.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
 import { damageDebris } from './boatDebris.js';
 import { damageCrew } from './crew.js';
@@ -431,6 +432,80 @@ export function resolveCombat(dt, scene, hooks) {
           'strike',
         );
       }
+    }
+
+    // THE STING — a jellyfish, and the one creature whose body is not the
+    // thing that hurts you. Its damage hangs UNDER it, in the filaments, and
+    // the bell on top is free to swim into.
+    //
+    // Arranged like the crab's claw above and for the same reason: the answer
+    // to "this animal's threat is somewhere other than its outline" is to move
+    // the whole budget out of the contact circle, not to scale the circle
+    // down. What makes it the opposite of the crab is that there is no tell to
+    // read and no swing to time — the reach is simply always there, in the
+    // same place, on a body that never comes after you. See CONFIG.enemies
+    // .jellyfish for what that pays for.
+    //
+    // `continue` before the body test below, so contact with the animal itself
+    // bills nothing at all. That is the feature, and it is why this sits ahead
+    // of the shape rather than inside it: the filaments hang two units clear
+    // of a 0.7-unit hitbox, so a check that ran only once the player was
+    // already touching the bell could never fire.
+    const sting = e.def.sting;
+    if (sting) {
+      // Down the creature's own axis rather than down the screen. The two are
+      // the same today — a stinger does not face its motion, so its heading
+      // sits at zero — but a knockback that ever rotates one would otherwise
+      // leave the damage hanging in the water where the tentacles used to be.
+      const a = e.mesh.rotation.z;
+      // Local (0, offset) turned by that heading, in MULTIPLES OF `e.radius`:
+      // the hitbox is derived from the visual scale, so both numbers follow
+      // assets.csv on their own and cannot be left behind by a resize.
+      const drop = sting.offset * e.radius;
+      const sx = e.mesh.position.x - Math.sin(a) * drop - pPos.x;
+      const sy = e.mesh.position.y + Math.cos(a) * drop - pPos.y;
+      const reach = sting.radius * e.radius + pRadius;
+      if (sx * sx + sy * sy <= reach * reach && !isInvulnerable()) {
+        // A DRAIN, on the ordinary 'contact' channel, not a burst on 'strike'.
+        // The pinch and the pack bite are discrete because they are EVENTS —
+        // a swing that lands, a pass that connects — and a rate cannot price
+        // an event. This is the other kind: standing in it is the mistake, and
+        // paying by the second is what lets a player brush the edge cheaply
+        // and lets sitting in the middle of it be a real decision.
+        //
+        // The shove is off the STING and not off the body, unlike everywhere
+        // else in this loop. Pushed away from the bell you would slide down
+        // the animal into the filaments, which is being punished for being
+        // hit; pushed out of the filaments you leave the part that hurts.
+        hooks.onPlayerHit(
+          (e.contactDamage ?? e.def.contactDamage) * dt,
+          { x: -sx, y: -sy },
+          e.type,
+          // THE 'contact' CHANNEL, and on a stinging BOSS that matters: the
+          // per-second ceiling in capBossDamage is keyed on this exact string
+          // (`const contact = channel === 'contact'`), so a sting given a
+          // channel of its own would quietly escape the one cap that holds a
+          // boss's overlap damage down. A drain that ticks every frame is the
+          // last thing that should be uncapped.
+          'contact',
+        );
+        // ...and it SAYS what kind of hurt it is. Named on the def rather than
+        // written in here, so the event audit can see it — a feedback() name
+        // built inline is invisible to everything that checks the table.
+        //
+        // RATE-LIMITED HERE rather than by the event's own sfxMinGap, which
+        // only governs the sound: this fires from inside a per-frame drain, so
+        // an unlimited call is sixty particle bursts a second for as long as
+        // the player stands in the filaments.
+        if (sting.feedback) {
+          e.stingFxTimer = (e.stingFxTimer ?? 0) - dt;
+          if (e.stingFxTimer <= 0) {
+            e.stingFxTimer = sting.feedbackGap ?? 0.4;
+            feedback(sting.feedback, { x: pPos.x, y: pPos.y });
+          }
+        }
+      }
+      continue;
     }
 
     // THE SAME SHAPE THAT DECIDES WHETHER YOU CAN HIT IT decides whether it

@@ -493,12 +493,13 @@ function updateTrail(p, dt, scene, live) {
 
 /**
  * @param projectiles the live shots
- * @param extra       anything else that wants a ribbon this frame, shaped the
- *                    same way — today, the clubs on the ring. Iterated as a
- *                    second list rather than concatenated, so the common frame
- *                    allocates nothing.
+ * @param extras      anything else that wants a ribbon this frame, shaped the
+ *                    same way — the clubs on the ring, and the chum being drawn
+ *                    into a mouth (systems/chumPull.js). Iterated as further
+ *                    lists rather than concatenated, so the common frame does
+ *                    not build an array the size of everything on screen.
  */
-export function updateProjectileTrails(dt, scene, projectiles, extra = null) {
+export function updateProjectileTrails(dt, scene, projectiles, ...extras) {
   if (!CONFIG.trails.enabled) {
     if (trails.size) clearProjectileTrails(scene);
     return;
@@ -506,7 +507,10 @@ export function updateProjectileTrails(dt, scene, projectiles, extra = null) {
 
   const live = new Set();
   for (const p of projectiles) updateTrail(p, dt, scene, live);
-  if (extra) for (const p of extra) updateTrail(p, dt, scene, live);
+  for (const list of extras) {
+    if (!list) continue;
+    for (const p of list) updateTrail(p, dt, scene, live);
+  }
 
   // Tear down trails whose mover is gone — a shot that landed, a club that
   // moved into a flipper or was taken off the ring by a level-up.

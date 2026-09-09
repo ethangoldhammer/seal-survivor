@@ -3,7 +3,7 @@ import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { createVisual, morphControl } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
-import { pickups, bitePickup } from '../entities/pickups.js';
+import { pickups, chumChunks, bitePickup } from '../entities/pickups.js';
 import { createAnimationController } from './animation.js';
 import { isBossDef } from './boss.js';
 
@@ -59,6 +59,12 @@ const _box = new THREE.Box3();
 const _size = new THREE.Vector3();
 const _vert = new THREE.Vector3();
 const _imp = new THREE.Vector3();
+// The body-collision scratch: an outward unit vector and how deep the point was
+// inside the animal. One object, rewritten per orb — see bodyPush.
+const _push = { x: 0, y: 0, depth: 0 };
+// What the mouth has hold of this frame, so the body does not shove the whale's
+// own mouthful back out of its head. Rebuilt per whale per frame.
+const _swallowing = new Set();
 
 // ---------------------------------------------------------------------------
 // THE SILHOUETTE
@@ -288,6 +294,65 @@ export function bodyDistance(w, x, y) {
   const s = Math.min(p.maxS, Math.max(p.minS, along));
   const sec = sectionAt(p, s, _section);
   return Math.hypot(Math.abs(along - s), Math.max(0, Math.abs(across - sec.mid) - sec.half));
+}
+
+/**
+ * IS (x, y) INSIDE THE ANIMAL, and which way is out?
+ *
+ * The push-out half of bodyDistance, and it has to be a separate function
+ * rather than a gradient of that one: bodyDistance returns 0 everywhere inside
+ * the body, so differencing it — the obvious way to get a normal — gives zero
+ * in exactly the region where a direction is needed.
+ *
+ * OUT ACROSS, NEVER ALONG. The exit is taken perpendicular to the animal's
+ * axis even where the point is nearer an end, because on a body 31 units long
+ * and 5 through, across is the short way out by a factor of six almost
+ * everywhere — and pushing an orb ALONG the axis would post it out of the
+ * whale's nose or tail, which reads as the animal spitting.
+ *
+ * Returns false, and leaves `out` alone, for a point that is not inside.
+ *
+ * @param out {x, y, depth} — a unit vector pointing out, and how far in it was
+ */
+export function bodyPush(w, x, y, out = { x: 0, y: 0, depth: 0 }) {
+  const dx = x - w.container.position.x;
+  const dy = y - w.container.position.y;
+  const th = w.container.rotation.z;
+  const cs = Math.cos(th);
+  const sn = Math.sin(th);
+  const flip = w.flip ? -1 : 1;
+  const along = -sn * dx + cs * dy;
+  const across = flip * (cs * dx + sn * dy);
+
+  const p = w.profile;
+  let mid = 0;
+  let half = w.bodyRadius;
+  let minS = -w.length * 0.5;
+  let maxS = w.length * 0.5;
+  if (p) {
+    minS = p.minS;
+    maxS = p.maxS;
+    if (along < minS || along > maxS) return false;
+    const sec = sectionAt(p, along, _section);
+    mid = sec.mid;
+    half = sec.half;
+  } else if (along < minS || along > maxS) return false;
+
+  const off = across - mid;
+  const depth = half - Math.abs(off);
+  if (depth <= 0) return false;
+
+  // The nearer face. `off` is signed in the animal's own frame, so this is the
+  // side the point is already on — pushing it through the body to the far side
+  // would be a shorter number on paper and an orb teleporting through a whale
+  // on screen.
+  const sign = off >= 0 ? 1 : -1;
+  // Entity +X in world is flip * (cs, sn) — the same basis bodyDistance reads
+  // the point into, run backwards.
+  out.x = flip * cs * sign;
+  out.y = flip * sn * sign;
+  out.depth = depth;
+  return true;
 }
 
 export function whaleCount() {
@@ -833,6 +898,22 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     //
     // The player is paid NOTHING, which is now expressed by there being no
     // collect callback anywhere in this block rather than by an empty one.
+    //
+    // AND WHERE IT ACTUALLY GOES IS THE THROAT, not the lips. `mouthRadius` is
+    // a sphere centred on the jaw with roughly half its volume in open water in
+    // front of the animal (see mouthAheadOf), so an orb removed on crossing it
+    // popped while it was still visibly outside the whale — the pull was drawn
+    // and then the last of it was not. Past the lips the orb is handed a second
+    // target INSIDE the head and it is removed there and nowhere else; see
+    // `throatBack` in CONFIG.whale and the `kill` gate in bitePickup.
+    const fwdX = w.dir * Math.cos(w.bank);
+    const fwdY = w.dir * Math.sin(w.bank);
+    const throatX = _mouth.x - fwdX * (c.throatBack ?? 0.9) * reach;
+    const throatY = _mouth.y - fwdY * (c.throatBack ?? 0.9) * reach;
+    const throatR = (c.throatRadius ?? 0.45) * reach;
+    // Everything the mouth has hold of this frame, so the body collision below
+    // does not shove the whale's own mouthful back out of its head.
+    _swallowing.clear();
     let orbs = 0;
     if (suction > 0.02 && field > 0) {
       const f2 = field * field;
@@ -845,9 +926,26 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
         if (-dx * w.dir < -reach) continue;
         const d = Math.sqrt(d2);
         const t = 1 - d / field;
-        const pull = (c.intakePull ?? 0) * Math.pow(t, c.intakeFalloff ?? 1) * suction;
+        const atLips = d2 <= reach * reach;
+        if (atLips) _swallowing.add(p);
+        // FORCEFUL PAST THE LIPS. The intake ramp is deliberately gentle at the
+        // rim so a fast fish can fight it, and that same gentleness applied to
+        // something already in the jaw is an orb loitering in an open mouth.
+        // `mouthGrip` is the moment it stops being suction and becomes being
+        // swallowed.
+        const pull = (c.intakePull ?? 0) * Math.pow(t, c.intakeFalloff ?? 1) * suction
+          * (atLips ? (c.mouthGrip ?? 1) : 1);
         const eat = dt / Math.max(0.02, c.intakeEatTime ?? 0.4);
-        const suck = { x: _mouth.x, y: _mouth.y, z: w.container.position.z, rate: pull, dt };
+        const suck = {
+          // Once it is past the lips it is aimed at the throat rather than at
+          // the jaw point, so the last of the travel is INTO the animal.
+          x: atLips ? throatX : _mouth.x,
+          y: atLips ? throatY : _mouth.y,
+          z: w.container.position.z,
+          rate: pull,
+          dt,
+          kill: { x: throatX, y: throatY, r: throatR },
+        };
         // CHEWED AT THE LIPS, PULLED EVERYWHERE ELSE — the same two-part shape
         // the prey loop above has, and for the same reason. `eat` used to be
         // spent anywhere inside the field, so an orb sitting at the rim of a
@@ -862,7 +960,6 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
         // Nothing is lost by the whale: the orbs it sweeps are on its own
         // line, so the mouth arrives at them whether or not the suction got
         // there first.
-        const atLips = d2 <= reach * reach;
         if (bitePickup(scene, p, atLips ? eat : 0, suck)) orbs++;
         else if (t > 0.15) hooks.onOrbHoover?.(p.mesh.position.x, p.mesh.position.y);
       }
@@ -870,6 +967,45 @@ export function updateWhales(dt, scene, enemiesList, hooks = {}) {
     if (orbs) {
       w.orbs += orbs;
       hooks.onOrbsEaten?.(_mouth.x, _mouth.y, orbs);
+    }
+
+    // --- AND THE CHUM IT IS NOT EATING BOUNCES OFF ITS SIDE ------------------
+    //
+    // Orbs and chunks are points to everything except a mouth, so a thirty-tonne
+    // animal used to cross a chum pile with the whole pile hanging inside its
+    // ribs. The body already knows its own silhouette — the same one the shove
+    // and the ram share — so anything found inside it is pushed back out to the
+    // surface it crossed and left with a little outward drift, which is what
+    // makes a pile visibly part around the head instead of passing through.
+    //
+    // CHUNKS TOO, and they are the case that matters most: the whale never eats
+    // one (see the note at the top of this file), so a chunk is the one piece of
+    // chum guaranteed to still be there when the body arrives.
+    if (c.bodyCollide !== false) {
+      const skin = c.bodyClearance ?? 0.15;
+      const kick = c.bodyBounce ?? 0;
+      // Coarse first: bodyDistance is cheap but it is not free, and `maxAlive`
+      // is 140 orbs. Nothing further than the animal's own half-length plus a
+      // margin can possibly be inside it.
+      const near = w.length * 0.5 + 2;
+      const near2 = near * near;
+      const bump = (list) => {
+        for (const p of list) {
+          if (_swallowing.has(p)) continue;
+          const ox = p.mesh.position.x - w.container.position.x;
+          const oy = p.mesh.position.y - w.container.position.y;
+          if (ox * ox + oy * oy > near2) continue;
+          if (!bodyPush(w, p.mesh.position.x, p.mesh.position.y, _push)) continue;
+          p.mesh.position.x += _push.x * (_push.depth + skin);
+          p.mesh.position.y += _push.y * (_push.depth + skin);
+          if (kick > 0) {
+            p.vx = _push.x * kick;
+            p.vy = _push.y * kick;
+          }
+        }
+      };
+      bump(pickups);
+      bump(chumChunks);
     }
 
     // --- the shove ---------------------------------------------------------

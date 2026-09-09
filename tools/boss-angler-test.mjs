@@ -224,7 +224,7 @@ const step = (e, dt) => {
   e.mesh.position.x += e.vx * dt;
   e.mesh.position.y += e.vy * dt;
   clampBelowSurface(e.mesh.position, e.radius);
-  if (e.def.faceMotion && !e.faceLocked && comesAbout(e.def)) turnFish(e, dt, false);
+  if (e.def.faceMotion && !e.faceLocked && comesAbout(e.def, e)) turnFish(e, dt, false);
 };
 
 // WHERE THE NOSE ACTUALLY POINTS, composed, rather than the value of any one

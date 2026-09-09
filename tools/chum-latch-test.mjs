@@ -19,11 +19,20 @@
 //   4. THE ALIVE CAP TOOK IT. `maxAlive` shifts the OLDEST orb, and an orb the
 //      player is about to swallow is very often the oldest one in the water.
 //
-// Every case below fails LOUDLY without the latch and passes with it. The last
-// two go the other way: an orb nobody has claimed must still sink and settle
+// Every case below fails LOUDLY without the latch and passes with it. Two of
+// them go the other way: an orb nobody has claimed must still sink and settle
 // normally, and a sealed mouth must still refuse to drag food inside itself —
 // a latch that quietly turns into "everything is always collected" would pass
 // the four above and ruin both.
+//
+// AND IT IS NOT ONLY CHUM. Case 2 is the reason the latch exists and it is a
+// fact about the DASH, not about food: the corridor is the widest reach in the
+// game and it lasts 0.22 seconds. Every pickup in the game is claimed by it,
+// and for a long time only chum survived it ending — the strike orb, the
+// rapid-fire morsel, the air bubble and the level blob were all claimed from
+// nine or ten units out and then abandoned in mid water a fifth of a second
+// later, a few units short. That is the "I struck right at it and nearly got
+// it" the player sees, and the last section here is the case for each of them.
 //
 //   node --import ./tools/vite-loader.mjs tools/chum-latch-test.mjs
 // ---------------------------------------------------------------------------
@@ -32,8 +41,12 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import {
   updatePickups, resetPickups, spawnXpOrb, spawnChumChunk, bitePickup,
-  pickups, chumChunks,
+  spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb,
+  pickups, chumChunks, strikeOrbs, bubbleOrbs, rapidFireOrbs, levelOrbs,
 } from '../path/src/entities/pickups.js';
+import { spawnAttractorOrb, updateBoats, resetBoats, attractorOrbs } from '../path/src/systems/boats.js';
+import { strikeState } from '../path/src/systems/strike.js';
+import { player as livePlayer } from '../path/src/entities/player.js';
 
 const DT = 1 / 60;
 const scene = new THREE.Scene();
@@ -231,6 +244,153 @@ console.log('\nAnd an unclaimed orb is still ordinary chum');
     paid === 0 && stayedPut && took !== null,
     `${paid === 0 ? 'not swallowed' : 'SWALLOWED'}, ${stayedPut ? 'held' : 'drifted'}, ` +
     `resumed in ${took === null ? 'never' : `${took.toFixed(2)}s`}`);
+}
+
+
+// ---------------------------------------------------------------------------
+// ...AND EVERY OTHER PICKUP, THROUGH THE ONE CASE THAT ACTUALLY BITES.
+//
+// The dash corridor (CONFIG.pickups.magnet.striking) is the widest reach in
+// the game — 2.2x the base radius, swept ten units back down the dash line —
+// and it lasts 0.22 seconds. The moment the dash ends the state falls back to
+// whatever the seal is doing now, and a seal that has finished its dash and
+// is drifting reaches 4.4 units. An orb claimed out at the corridor's edge is
+// then twice that distance from a mouth that can no longer see it.
+//
+// So each case below claims the pickup with ONE FRAME of corridor and then
+// takes the corridor away, which is the same shape as "the reach closes
+// mid-flight" at the top of this file. Without the latch every one of them
+// stops dead in open water; with it, every one arrives.
+// ---------------------------------------------------------------------------
+console.log('\nA dash claims it, and the dash ending does not drop it');
+
+// The dash, faked at the level the magnet reads it: magnetState() tests
+// `strikeState.active` before it looks at speed, so this is the whole of "the
+// seal is striking" as far as the reach is concerned.
+function dashFrame(on, dirX = 1, dirY = 0) {
+  strikeState.active = on;
+  strikeState.dashDir = { x: dirX, y: dirY };
+  strikeState.dashDuration = CONFIG.strike.dashDuration;
+  strikeState.dashTimeLeft = on ? CONFIG.strike.dashDuration : 0;
+  strikeState.power = 1;
+}
+
+// Every collect callback, so a case can ask "did THIS one arrive" without
+// caring which array it lives in. Counted rather than summed: only chum pays
+// an xp value, and the rest would all read as zero.
+function stepAll(player, dt = DT) {
+  let took = 0;
+  const hit = () => { took++; };
+  updatePickups(dt, scene, player, hit, hit, hit, hit, hit, { onLevelOrb: hit });
+  return took;
+}
+
+// Off the dash line by more than a drifting seal can reach and less than the
+// corridor can: the striking radius is pickupRadius x 2.2 (9.7 at the shipped
+// 4.4) and the idle one is the bare 4.4. Nine units is claimable by the dash
+// and unreachable the instant it ends, which is the whole question.
+const CORRIDOR_EDGE = 9;
+
+// The dash runs UP the screen and the pickup sits beside it, rather than the
+// other way round. Nine units of headroom is not a thing this arena has — the
+// waterline is a couple of units above the seal and a bubble put over it is
+// snapped back down to the surface before the magnet is ever asked — so the
+// offset that can be nine units is the horizontal one, and the corridor is
+// pointed to match. Well under the surface for the same reason.
+const LANE_Y = -8;
+
+for (const [name, spawn, alive] of [
+  ['the strike orb', (p) => spawnStrikeOrb(scene, p), strikeOrbs],
+  ['the rapid-fire morsel', (p) => spawnRapidFireOrb(scene, p), rapidFireOrbs],
+  ['the level blob', (p) => spawnLevelOrb(scene, p), levelOrbs],
+  ['the air bubble', (p) => spawnBubbleOrb(scene, p), bubbleOrbs],
+]) {
+  resetPickups(scene);
+  const player = makePlayer(0, LANE_Y, CONFIG.player.pickupRadius);
+  spawn(new THREE.Vector3(CORRIDOR_EDGE, LANE_Y, 0));
+  // A bubble spawns SWELLING and the magnet will not touch one still attached
+  // to the floor. Grown by hand because the question here is the latch, not
+  // the swell gate — a half-grown bubble would answer neither.
+  for (const b of bubbleOrbs) b.grow = 1;
+
+  dashFrame(true, 0, 1);
+  stepAll(player);
+  const claimed = !!alive[0]?.magnetLatch;
+  dashFrame(false);
+
+  let took = false;
+  for (let t = 0; t < 4; t += DT) {
+    for (const b of bubbleOrbs) b.grow = 1;
+    if (stepAll(player) > 0) { took = true; break; }
+  }
+  check(`${name} claimed by the corridor still arrives`, claimed && took,
+    !claimed ? 'the corridor never claimed it' : took ? `pulled in from ${CORRIDOR_EDGE} units off the line` : 'stranded when the dash ended');
+}
+
+{
+  // AND THE CLAM, which had no magnet at all. It was taken by touching it and
+  // nothing else — collectRadius plus its body, about 2.2 units, a fifth of
+  // what every orb above reaches — so the one pickup whose coach line tells
+  // you to go and grab it was the one you had to fly through the middle of at
+  // 46 u/s. Striking at it and nearly getting it was the normal outcome.
+  //
+  // The dash runs UP the screen here, not across: spawnAttractorOrb drops the
+  // clam just under the waterline whatever y it is handed (a clam spawned in
+  // the air is a clam nothing can reach), so the offset that can be controlled
+  // is the horizontal one, and the corridor has to be pointed to match.
+  resetPickups(scene);
+  resetBoats(scene);
+  const boatsWere = CONFIG.boats.enabled;
+  CONFIG.boats.enabled = false;
+  spawnAttractorOrb(scene, new THREE.Vector3(CORRIDOR_EDGE, LANE_Y, 0));
+  const clam = attractorOrbs[0];
+  const player = makePlayer(0, clam.mesh.position.y, CONFIG.player.pickupRadius);
+  // updateBoats reads the shared `player` singleton for the magnet's state —
+  // the speed it is travelling at and the stats that set the reach — and takes
+  // the position separately. Both are pointed at this stub for the case and
+  // put back afterwards, so nothing here leaks into the harnesses that follow.
+  const real = { mesh: livePlayer.mesh, velocity: livePlayer.velocity, stats: livePlayer.stats };
+  livePlayer.mesh = player.mesh;
+  livePlayer.velocity = player.velocity;
+  livePlayer.stats = player.stats;
+
+  dashFrame(true, 0, 1);
+  updateBoats(DT, scene, 1, player.mesh.position);
+  const claimed = !!clam.magnetLatch;
+  dashFrame(false);
+
+  let took = false;
+  for (let t = 0; t < 4; t += DT) {
+    updateBoats(DT, scene, 1, player.mesh.position);
+    if (clam.taken) { took = true; break; }
+  }
+
+  livePlayer.mesh = real.mesh;
+  livePlayer.velocity = real.velocity;
+  livePlayer.stats = real.stats;
+  CONFIG.boats.enabled = boatsWere;
+  resetBoats(scene);
+  check('the attractive clam claimed by the corridor still arrives', claimed && took,
+    !claimed ? 'the corridor never claimed it' : took ? `pulled in from ${CORRIDOR_EDGE} units off the line` : 'flown past');
+}
+
+{
+  // AND A DASH PAST NOTHING IN PARTICULAR STILL LEAVES IT ALONE. The latch is
+  // a claim KEPT, not a claim invented: a pickup the corridor never reached
+  // has to still be sitting where it was afterwards, or every case above is
+  // passing because the magnet now takes everything in the ocean.
+  resetPickups(scene);
+  const player = makePlayer(0, LANE_Y, CONFIG.player.pickupRadius);
+  spawnStrikeOrb(scene, new THREE.Vector3(40, LANE_Y, 0));
+  const orb = strikeOrbs[0];
+  const where = orb.mesh.position.clone();
+  dashFrame(true, 0, 1);
+  let took = 0;
+  for (let t = 0; t < 1; t += DT) took += stepAll(player);
+  dashFrame(false);
+  check('a pickup the corridor never reached is not claimed',
+    !took && !orb.magnetLatch && where.distanceTo(orb.mesh.position) < 0.01,
+    took ? 'collected anyway' : 'left where it was');
 }
 
 console.log(failures ? `\n${failures} failure(s).\n` : '\nAll good.\n');

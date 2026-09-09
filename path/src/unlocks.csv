@@ -1,4 +1,28 @@
 id,kind,target,stat,count,label,review,enabled,notes
 sailorHat,accessory,accessoryHat,boatsDestroyed,50,Hello Sailor!,,,
 laserEyes,upgrade,laserEyes,perk.eyebeam,1,Lasers Unlocked!,,,
+orcaFamily,upgrade,orcaFamily,boss.bossOrca,1,Orca Family Unlocked!,,,
+beluga,upgrade,beluga,bubblesPopped,50,Baby Beluga Bubble Blaster Unlocked!,,,
 dealWithIt,accessory,accessoryGlasses,bossesDefeated,1,Deal with it!!!!,,,
+bowler,accessory,accessoryBowler,bossesDefeated,3,Steamy Hat,,,
+tricorn,accessory,accessoryTricorn,boatsDestroyed,100,Pirate Hat,,,Raised from 10. The long-haul boat gate now; the captain's cap at 50 is the middle rung and wireFrames has left the boat ladder entirely.
+fedora,accessory,accessoryFedora,humansEaten,200,Fedora,,,"Lifetime crew swallowed, summed across every run. Booked at the maneater bite in main.js."
+rounds,accessory,accessoryRounds,runMinutes,5,Specs,,,"Minutes survived IN ONE RUN — a high-water mark, not a sum. Booked when the seal dies, off the run clock."
+aviators,accessory,accessoryAviators,airTimeSeconds,60,Aviators,,,"Whole seconds out of the water, summed across every run. Booked per frame from player.airTime with the remainder carried."
+wireFrames,accessory,accessoryWireFrames,levelReached,20,Shades,,,"Highest level reached IN ONE RUN — a high-water mark, not a sum. Forty runs to level 5 is still 5."
+achCreaturesEaten,accessory,,creaturesEaten,1000,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Every creature killed, of any kind, summed across every run. The broadest tally there is — count is a placeholder, set it against what a long-lived player actually reaches."
+achSharksDefeated,accessory,accessorySharkHood,sharksDefeated,100,Hood Unlocked!,,,
+achChumEaten,accessory,,chumEaten,500,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. MOUTHFULS, not kills. The seal eats 3-25x less than it kills, so this counter runs far slower than creaturesEaten and its threshold must be much lower."
+achBaitBalls,accessory,,baitBallsWiped,25,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Bait balls the player emptied to the last fish. Rewards contesting a school against the predators rather than picking at it."
+achLevelsGained,accessory,accessoryWizard,levelsGained,250,Wizard Hat Unlocked!,,,
+achRunsPlayed,accessory,,runsPlayed,50,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Runs that reached a death. Pure attendance; good for something given rather than earned."
+achGravesVisited,accessory,accessoryCowboy,gravesVisited,20,Cowboy Hat Unlocked!,,,
+achPerfectDodges,accessory,,perfectDodges,50,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Committed boss runs that ended in water the seal was not in. See systems/dodge.js — this is the same event the PERFECT DODGE line fires on."
+achUpgradesMaxed,accessory,accessoryHardHat,upgradesMaxed,10,Hard Hat Unlocked!,,,
+achBossRoster,accessory,,bossArchetypes,9,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Distinct boss archetypes beaten. 9 is the whole of bosses.csv today — raise this row whenever an archetype is added, or it silently becomes an easier gate."
+achFlawlessBoss,accessory,,flawlessBosses,1,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Bosses beaten without the seal taking a single hit. Needs the per-fight damage flag in main.js to stay honest — see recordBossDefeated."
+achFoodChain,accessory,,foodChainLength,25,???,,FALSE,
+achBoostPips,accessory,,boostPips,8,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Most boost pips the strike meter has ever been cut into. A build gate: it asks for a seal specced into the meter rather than for time played."
+achMaxHp,accessory,,maxHpAdded,200,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Most max health added over a run's starting pool. Measured as an ADDITION so it does not move when CONFIG.player.maxHp is retuned."
+achMaxO2,accessory,,maxO2Added,100,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. The oxygen half of achMaxHp, and the same reasoning about measuring the addition rather than the total."
+achBurstDamage,accessory,,burstDamage,2000,,,FALSE,"STUB — no accessory yet. Put the asset key in `target`, write the `label`, set `count`, clear `enabled`. Most damage dealt inside one 10-second window. The only gate here that asks about a moment rather than an accumulation."

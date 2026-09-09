@@ -53,8 +53,13 @@ function closing(u) {
  * @returns null when this model declares no bite rig or the bone doesn't
  *   resolve, which every caller treats as "this creature doesn't bite".
  */
-export function createJawDriver(instance) {
-  const def = instance?.userData?.biteRig;
+export function createJawDriver(instance, { rig = null, timing = null } = {}) {
+  // The rig may be handed in rather than read off the instance: the level-up
+  // seal (systems/levelUpSeal.js) drives the player's own jaw, whose bite rig
+  // no enemy path ever attaches, and reads its timing from its own block
+  // rather than the predators'. `openAngle` is read live off the rig object,
+  // so a caller can scale it from a tuner.
+  const def = rig ?? instance?.userData?.biteRig;
   if (!def?.bone) return null;
 
   const bone = instance.getObjectByName(def.bone);
@@ -66,7 +71,8 @@ export function createJawDriver(instance) {
   const axis = AXES[def.axis] ?? AXES.x;
   // Signed: the sign IS the measurement (which way this particular rig's jaw
   // swings down), so it lives in the asset, not here.
-  const openAngle = def.openAngle ?? 0.5;
+  const openAngleNow = () => def.openAngle ?? 0.5;
+  let lastOpen = 0; // the angle written this frame, radians — for a harness
 
   // -1 = shut and idle. Anything >= 0 is elapsed seconds into a bite.
   let t = -1;
@@ -106,13 +112,16 @@ export function createJawDriver(instance) {
       return t >= 0;
     },
 
+    /** The angle written this frame, radians about the hinge. */
+    get open() { return lastOpen; },
+
     update(dt) {
       if (hasWritten && bone.quaternion.equals(wrote)) bone.quaternion.copy(given);
       given.copy(bone.quaternion);
 
       let open = gape;
       if (t >= 0) {
-        const cfg = CONFIG.bite.jaw;
+        const cfg = timing?.() ?? CONFIG.bite.jaw;
         t += dt;
         const openTime = Math.max(0.01, cfg.openTime);
         const holdEnd = openTime + cfg.holdTime;
@@ -125,8 +134,9 @@ export function createJawDriver(instance) {
         open = Math.max(open, snap);
       }
 
+      lastOpen = open > 0.001 ? openAngleNow() * open : 0;
       if (open > 0.001) {
-        q.setFromAxisAngle(axis, openAngle * open);
+        q.setFromAxisAngle(axis, lastOpen);
         // Post-multiply: rotate about the bone's OWN axis, on top of whatever
         // pose it is already in. Pre-multiplying would hinge it about the
         // parent's axis, which on these rigs is the head's roll.

@@ -2,7 +2,7 @@ id,group,kind,label,plural,unlock,template,review,unit,lower,bare,percentOfOne,n
 maxHp,the seal,flat,max HP,,,,,,,,,
 maxSpeed,the seal,percent,max speed,,,,,,,,,
 pickupRadius,the seal,percent,pickup radius,,,,,,,,,
-chumGulpRadius,the seal,percent,gulp radius,,,,,,,,,
+chumGulpRadius,the seal,percent,gulp size,,,,,,,,,
 regenPerSec,the seal,flat,HP/sec,,,,,,,,,
 maxOxygen,the seal,flat,max oxygen,,,,,,,,,
 oxygenRefillRate,the seal,percent,surface refill speed,,,,,,,,,
@@ -14,7 +14,7 @@ rightFinRadiusMul,the gun,percent,right fin projectile size,,,,,,,,,"The right-h
 flippersUpStacks,the gun,level,Flippers Up!,,,,,,,,,"NOT NEW COPY — this is the card's own name out of upgrades.csv, repeated here only so a card can never render the raw variable name. phraseAll drops a level stat that arrives beside real ones, and this one always does (the size multiplier moves on every stack), so it is not expected to appear on any card. It exists because 'not expected to' is not the same as 'cannot'."
 andreStacks,the gun,level,André 3000,,,,,,,,,"NOT NEW COPY — the card's own name out of upgrades.csv, repeated here for exactly the reason the row above it is, so a card can never render the raw variable name. The stat is a PARITY (odd stacks buy pierce, even ones spread) rather than an amount, and the thing it bought always moves beside it, so phraseAll drops it every time. It exists because ""not expected to appear"" is not the same as ""cannot""."
 leftFinElementLevel,the gun,level,Fix FX,,Fin FX,,,,,,,"Flippers Up! stack 3 and up: how deep the LEFT flipper's own element is. Two lines needed. `label` is what a deepening stack reads as ('+1 <label> levels'), two or three words naming the fin and its element. `unlock` is the whole clause the card that first lights that fin shows instead — the shape Sea Garlic and the Glow Up! cards use, a bare noun phrase with no verb in front of it, naming what the player just bought. The element itself is rolled per run, so neither line can name a specific one."
-rightFinElementLevel,the gun,level,Finx FX,,Fin FX,,,,,,,"The right-hand half of the pair above. Same two lines, same lengths; they differ only in the word for the side."
+rightFinElementLevel,the gun,level,Fin FX,,Fin FX,,,,,,,"The right-hand half of the pair above. Same two lines, same lengths; they differ only in the word for the side."
 multishot,the gun,count,projectile,,,,,,,,,
 multishotLevel,the gun,level,projectile,,,,,,,,,"Bookkeeping, not a card line. `multishot` beside it is the pellet count a player reads; this row exists because every stat an upgrade moves needs an entry, and it is deliberately given no `unlock` text so phraseAll drops it every time — the count row is always moving alongside it. Same word as that row on purpose; there is nothing new to write here."
 pierce,the gun,count,enemy,enemies,,,,,,,,"Reads as the tail of a sentence — ""Bullets pierce {effect}"" — because that is the shape the card has always had."

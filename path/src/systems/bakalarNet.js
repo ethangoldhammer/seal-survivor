@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { retireMaterial } from './programPin.js';
 
 // THE NET ITSELF — the twine, not the light.
 //
@@ -277,7 +278,7 @@ export function disposeBakalarNet(scene) {
   if (!mesh) return;
   scene?.remove(mesh);
   mesh.geometry.dispose();
-  mesh.material.dispose();
+  retireMaterial(mesh.material);
   mesh = null;
   material = null;
 }
