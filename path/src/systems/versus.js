@@ -175,6 +175,10 @@ export const ball = {
   r: 2.4,
   rim: new Float32Array(0),
   rimV: new Float32Array(0),
+  // The DRAWN edge at each rim sample — the goo isoline, solved once a frame
+  // from the same splats renderBall writes. This is the hitbox; see the note
+  // above ballSplats for why there is no second radius.
+  surf: new Float32Array(0),
   // one flag per seal: a single dash shoves the ball once, like hitThisDash
   dashHit: [false, false],
   above: false,           // which side of the surface it was on last frame (stepBall)
@@ -388,6 +392,7 @@ function buildBall() {
   ball.r = c.radius ?? 2.4;
   ball.rim = new Float32Array(n);
   ball.rimV = new Float32Array(n);
+  ball.surf = new Float32Array(n);
   // centre + inner ring (a third of the rim's count) + the rim
   const inner = Math.max(4, Math.round(n / 3));
   const want = 1 + inner + n;
@@ -417,11 +422,216 @@ export function resetBall() {
   ball.pinch.seal = null;
   ball.pinch.wall = null;
   ball.live = true;
+  // The drawn edge, before anything asks for it. A hitbox of zero for one
+  // frame is a ball that starts the kickoff inside both seals.
+  solveBallSurface();
 }
 
-/** The radius the ball COLLIDES at: its own, less what a pinch has squeezed out of it. */
+// ---------------------------------------------------------------------------
+// THE DRAWN EDGE IS THE HITBOX
+//
+// The ball collided as a circle of `radius` and DREW as a goo isosurface, and
+// the two were never the same thing: measured on the shipped numbers the goo
+// body's edge sits at 4.87 world units and the circle at 2.8, so two units of
+// visible ball were not there to be hit. A seal's nose crossed the ball, went
+// on crossing it for most of a body length, and only then did anything happen
+// — which is the bug, and it is a bug that no amount of tuning either number
+// could fix, because they were tuned in different files against different
+// pictures.
+//
+// So there is ONE description of the ball's body now, and it is the one the
+// renderer uses: `ballSplats` says where the splats go, `renderBall` writes
+// exactly those into the driven slots, and `solveBallSurface` finds where the
+// goo pass's isoline falls through exactly those. The hitbox is that isoline.
+// Retune the look and the hitbox follows on the next frame; there is no
+// second number to keep in step, because there is no second number.
+//
+// WHY THE FIELD CAN BE SOLVED ON THE CPU AT ALL. The splat is a closed form —
+// entities/particles.js's gooFragmentShader is (1 - d)^3 over d = (r/R)^2,
+// zero past R — and a driven slot is written at age 0 with life 1, so its
+// `vAlpha` is exactly 1 and its point size exactly `size * uGooRadius`. There
+// is nothing in the shader's answer that is not in these few lines, which is
+// why this is a mirror rather than an approximation of one.
+//
+// WHAT IT DOES NOT INCLUDE: the screen-space warp and the outline's boil.
+// Both are measured in TEXELS and both displace where a pixel reads the field
+// rather than moving the field — see the uniform notes in systems/post.js.
+// They wobble the drawn line by a pixel or two around this isoline, which is
+// the whole point of them, and a hitbox that chased a per-pixel wobble would
+// be a hitbox that changed with the window size.
+// ---------------------------------------------------------------------------
+
+// The splat set, in the BALL'S OWN FRAME (renderBall adds ball.x/ball.y).
+// Rebuilt in place: this is read once a frame on the hot path and has no
+// business allocating.
+const _splats = [];
+
+/** The goo group's splat diameter multiplier — the shader's `uGooRadius`. */
+function gooSplatMul() {
+  const goo = CONFIG.fx?.goo ?? {};
+  return goo.groups?.ball?.radius ?? goo.radius ?? 3.4;
+}
+
+/** Where the ball's splats go this frame. THE description of the drawn body. */
+function ballSplats(out = _splats) {
+  const look = cfg().ball?.look ?? {};
+  const n = ball.rim.length;
+  const inner = Math.max(4, Math.round(n / 3));
+  const mul = gooSplatMul() * 0.5; // `size` is a DIAMETER multiplier
+  out.length = 0;
+  out.push({ x: 0, y: 0, r: (look.coreSize ?? 1.0) * mul });
+  const innerAt = look.innerAt ?? 0.42;
+  for (let i = 0; i < inner; i++) {
+    const j = Math.round((i / inner) * n) % n;
+    const a = rimAngle(j);
+    const rad = (rimRadius(j) - ball.r) * 0.5 + ball.r * innerAt;
+    out.push({ x: Math.cos(a) * rad, y: Math.sin(a) * rad, r: (look.innerSize ?? 0.8) * mul });
+  }
+  const inset = look.inset ?? 0.72;
+  for (let i = 0; i < n; i++) {
+    const a = rimAngle(i);
+    const rad = rimRadius(i) * inset;
+    out.push({ x: Math.cos(a) * rad, y: Math.sin(a) * rad, r: (look.rimSize ?? 0.62) * mul });
+  }
+  return out;
+}
+
+/** The accumulated density at a point in the ball's frame — the goo shader's splat, summed. */
+function gooDensity(splats, x, y) {
+  let s = 0;
+  for (let i = 0; i < splats.length; i++) {
+    const p = splats[i];
+    const dx = x - p.x;
+    const dy = y - p.y;
+    const d = (dx * dx + dy * dy) / (p.r * p.r);
+    if (d >= 1) continue;
+    const f = 1 - d;
+    s += f * f * f;
+  }
+  return s;
+}
+
+/**
+ * Where the isoline crosses the ray leaving the centre at `angle`, by
+ * bisection. `hi` starts outside every splat, so the bracket is always valid:
+ * the density there is zero by construction, not by hope.
+ */
+function isolineAlong(splats, angle, iso, hi) {
+  const ax = Math.cos(angle);
+  const ay = Math.sin(angle);
+  let lo = 0;
+  for (let i = 0; i < 20; i++) {
+    const m = (lo + hi) * 0.5;
+    if (gooDensity(splats, ax * m, ay * m) > iso) lo = m;
+    else hi = m;
+  }
+  return lo;
+}
+
+/**
+ * Re-solve the drawn surface at every rim sample. Called once a frame, right
+ * after the soft body has stepped and before anything collides — so what the
+ * frame hits is exactly the silhouette the frame draws, not last frame's.
+ */
+export function solveBallSurface() {
+  const n = ball.surf.length;
+  if (!n) return ball.surf;
+  const splats = ballSplats();
+  const iso = CONFIG.fx?.goo?.groups?.ball?.iso ?? CONFIG.fx?.goo?.iso ?? 0.9;
+  let hi = 0;
+  for (const p of splats) hi = Math.max(hi, Math.hypot(p.x, p.y) + p.r);
+  hi *= 1.01;
+  for (let i = 0; i < n; i++) ball.surf[i] = isolineAlong(splats, rimAngle(i), iso, hi);
+  return ball.surf;
+}
+
+/**
+ * THE RADIUS THE BALL COLLIDES AT, toward a WORLD angle: the drawn edge, in
+ * that direction. Between samples exactly as rimRadiusAt interpolates the
+ * rim, and for the same reason — a contact does not land on a sample.
+ *
+ * The pinch is in here for free and must NOT be applied on top: rimRadius
+ * already flattens the body along the pinch's axis, so the squeezed ball
+ * collides as the ELLIPSE it is drawn as rather than as a shrinking circle.
+ * That is the shape that gets through a gap narrower than the ball, which is
+ * what the pinch was for.
+ */
+export function ballHitRadiusAt(angle) {
+  const n = ball.surf.length;
+  if (!n) return ball.r;
+  const TAU = Math.PI * 2;
+  let u = ((angle - ball.angle) / TAU) * n;
+  u = ((u % n) + n) % n;
+  const i0 = Math.floor(u);
+  const i1 = (i0 + 1) % n;
+  const f = u - i0;
+  return ball.surf[i0] * (1 - f) + ball.surf[i1] * f;
+}
+
+/** The widest the drawn body reaches, for a broad phase and for anything that wants one number. */
 export function ballHitRadius() {
-  return ball.r * (1 - clamp01(ball.squeeze));
+  const n = ball.surf.length;
+  if (!n) return ball.r;
+  let max = 0;
+  for (let i = 0; i < n; i++) if (ball.surf[i] > max) max = ball.surf[i];
+  return max;
+}
+
+// ---------------------------------------------------------------------------
+// THE SEAL'S BODY — see CONFIG.versus.ball.body.
+// ---------------------------------------------------------------------------
+
+/** Which way a seal's nose points, in world radians. The art's forward is +Y. */
+export function sealHeading(seal) {
+  const rz = seal?.mesh?.rotation?.z;
+  return typeof rz === 'number' ? rz + Math.PI / 2 : null;
+}
+
+/**
+ * How far the seal's body reaches from its own origin toward `angle`, and
+ * where on its spine that reach is measured from. The animal is a CAPSULE:
+ * a segment from tail to nose with the body's own half-thickness around it,
+ * which is what makes a nose-first arrival reach further than a flank.
+ */
+function sealSpine(pos, heading, toX, toY, out) {
+  const b = cfg().ball?.body ?? {};
+  const thick = Math.max(0.01, b.thickness ?? 0.69);
+  let hx = 0;
+  let hy = 0;
+  if (heading != null) { hx = Math.cos(heading); hy = Math.sin(heading); }
+  const nose = Math.max(0, (b.nose ?? 3.31) - thick);
+  const tail = Math.max(0, (b.tail ?? 2.82) - thick);
+  let t = hx * (toX - pos.x) + hy * (toY - pos.y);
+  t = Math.max(-tail, Math.min(nose, t));
+  out.x = pos.x + hx * t;
+  out.y = pos.y + hy * t;
+  out.r = thick;
+  return out;
+}
+
+const _spine = { x: 0, y: 0, r: 0 };
+
+/**
+ * The heading sealContact will use for `who`. The mesh when there is one; a
+ * seal with no body (a harness, the ball lab's invented striker) is taken to
+ * be pointed the way it is swimming, and a stationary one at the ball — the
+ * two readings that make a bare {x,y} striker behave like a seal arriving
+ * rather than like a sphere.
+ */
+function contactHeading(pos, vel, heading) {
+  if (heading != null) return heading;
+  if (vel && (Math.abs(vel.x) > 1e-3 || Math.abs(vel.y) > 1e-3)) return Math.atan2(vel.y, vel.x);
+  return Math.atan2(ball.y - pos.y, ball.x - pos.x);
+}
+
+/**
+ * How far from the ball's CENTRE a seal arriving along `angle` first touches
+ * it, nose-on. What the bot steers to and what the labs draw — one answer,
+ * from the same two shapes the contact itself uses.
+ */
+export function ballContactReach(angle = 0) {
+  const b = cfg().ball?.body ?? {};
+  return ballHitRadiusAt(angle) + Math.max(b.nose ?? 3.31, b.thickness ?? 0.69);
 }
 
 /** The world angle of rim sample i, with the ball's turn included. */
@@ -629,16 +839,21 @@ function stepBall(dt, goals = true) {
   }
 
   const rest = c.restitution ?? 0.85;
-  // The radius it collides at — less than drawn while a pinch has it squeezed.
-  const r = ballHitRadius();
+  // The radius it collides at, PER WALL: the drawn edge in that wall's own
+  // direction. A dented or pinched ball is not round, and one number for the
+  // whole body would put the flat side of it through the floor.
+  const rDown = ballHitRadiusAt(-Math.PI / 2);
+  const rUp = ballHitRadiusAt(Math.PI / 2);
+  const rLeft = ballHitRadiusAt(Math.PI);
+  const rRight = ballHitRadiusAt(0);
 
   // Floor and ceiling. The wall's normal points INTO the water.
-  if (ball.y < bounds.bottom + r) {
-    ball.y = bounds.bottom + r;
+  if (ball.y < bounds.bottom + rDown) {
+    ball.y = bounds.bottom + rDown;
     notePinchWall(0, 1);
     if (ball.vy < 0) { const v = -ball.vy; ball.vy = v * rest; bounce(0, 1, v, rest); }
-  } else if (ball.y > bounds.top - r) {
-    ball.y = bounds.top - r;
+  } else if (ball.y > bounds.top - rUp) {
+    ball.y = bounds.top - rUp;
     if (ball.vy > 0) { const v = ball.vy; ball.vy = -v * rest; bounce(0, -1, v, rest); }
   }
 
@@ -646,19 +861,19 @@ function stepBall(dt, goals = true) {
   // in it, and the ball meets the rock either side of the mouth, its posts
   // and its lips — see collideMouth — before the goal line is asked.
   if (!goals) {
-    if (ball.x < bounds.left + r) {
-      ball.x = bounds.left + r;
+    if (ball.x < bounds.left + rLeft) {
+      ball.x = bounds.left + rLeft;
       notePinchWall(1, 0);
       if (ball.vx < 0) { const v = -ball.vx; ball.vx = v * rest; bounce(1, 0, v, rest); }
-    } else if (ball.x > bounds.right - r) {
-      ball.x = bounds.right - r;
+    } else if (ball.x > bounds.right - rRight) {
+      ball.x = bounds.right - rRight;
       notePinchWall(-1, 0);
       if (ball.vx > 0) { const v = ball.vx; ball.vx = -v * rest; bounce(-1, 0, v, rest); }
     }
     return;
   }
-  if (ball.x - r < bounds.left) { if (collideMouth(-1, rest)) return; }
-  else if (ball.x + r > bounds.right) { if (collideMouth(1, rest)) return; }
+  if (ball.x - rLeft < bounds.left) { if (collideMouth(-1, rest)) return; }
+  else if (ball.x + rRight > bounds.right) { if (collideMouth(1, rest)) return; }
 }
 
 const _blocks = [{ qx: 0, qy: 0 }, { qx: 0, qy: 0 }];
@@ -1729,6 +1944,10 @@ export function updateVersus(dt, pads = null, humanInput = null) {
 
   if (ball.live) {
     stepSoftBody(dt);
+    // The silhouette this frame will draw, solved before anything collides
+    // with it — the hitbox and the picture are the same shape by ORDER as
+    // well as by construction.
+    solveBallSurface();
     stepBall(dt);
     updateBallSpin(ball.live ? ball.spin : 0, dt);
     // A goal just went in: this frame — the ball at the line — is the
@@ -3453,6 +3672,7 @@ export function initBallAlone() {
 export function stepBallAlone(dt) {
   if (!ball.live) return;
   stepSoftBody(dt);
+  solveBallSurface();
   stepBall(dt, false);
   updateBallSpin(ball.spin, dt);
 }

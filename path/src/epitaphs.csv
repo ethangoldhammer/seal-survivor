@@ -51,3 +51,5 @@ shotholed,shot by,,shot,FALSE,3,
 shotpeppered,peppered by,,shot,FALSE,2,
 jellylorem1,jellied by,,jellyfish,FALSE,3,
 jellylorem2,tentacled by,,jellyfish,FALSE,2,
+manowarlorem1,lorem ipsum dolor,,manowar,FALSE,3,"An epitaph lead for a death by the man o' war — it reads into the killer's name on the line below, so lowercase and no end punctuation (""lorem ipsum dolor / A Man o' War""). Two or three words about being stung or tangled. This is the common one, weight 3."
+manowarlorem2,lorem ipsum,,manowar,FALSE,2,"A second man o' war lead, same shape as the one above — lowercase, no punctuation, reads into the name. Weight 2, so it comes up less often; make it the drifting/floating angle rather than the sting."

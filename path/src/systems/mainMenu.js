@@ -1309,6 +1309,21 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
      */
     release() {
       if (state.phase === 'out') return;
+      // A MATCH CUTS, so there is nothing for this shot to open into and the
+      // glide has to go. updateVersusCamera claims world.focusCamera at full
+      // weight on the first frame of a match: the lens is on the pitch
+      // immediately, and the buttons' own fade (labelFade, a third of a
+      // second) then runs over a live game with the words re-projected
+      // through the MATCH camera every frame — menu type sitting on top of
+      // the kickoff at whatever the pitch projects it to. Same argument as
+      // the caustics punch in update(): the moment the match owns the lens,
+      // this screen is over, so it is dropped outright rather than eased.
+      if (versusActive()) {
+        pin?.release();
+        fitRim(0, held.pxPerUnit);
+        tidy();
+        return;
+      }
       state.phase = 'out';
       state.elapsed = 0;
       state.releaseFrom = state.weight;
