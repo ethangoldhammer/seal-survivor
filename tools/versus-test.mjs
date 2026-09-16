@@ -22,6 +22,8 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { enableVersus, versusActive, versusDrops, versusSetup } from '../path/src/systems/versusFlag.js';
+import { beginLobby, endSession, REMOTE } from '../path/src/systems/online/session.js';
+import { versusZoomFloor, matchMargins } from '../path/src/systems/backdropFit.js';
 import { bounds, updateBounds, midWater, seabedTopY } from '../path/src/arena.js';
 import { player, initPlayer, resetPlayer, poseBody } from '../path/src/entities/player.js';
 import { strikeState, resetStrike, cancelDash } from '../path/src/systems/strike.js';
@@ -117,6 +119,17 @@ function check(name, cond, detail = '') {
   if (!cond) failures++;
 }
 function note(text) { console.log(`        ${text}`); }
+/**
+ * IS THIS POINT IN THE SHOT — the one question the match's camera answers, and
+ * the thing every check below is really asking. `goal` is what
+ * versusCameraGoal handed back, `frame` the frustum at zoom 1; `r` is the
+ * subject's own radius, so a ball is asked about as a circle rather than as a
+ * centre that happens to be inside while half of it hangs over the edge.
+ */
+function inFrame(goal, frame, x, y, r = 0) {
+  return Math.abs(x - goal.x) + r <= frame.w / (2 * goal.zoom) + 1e-9
+    && Math.abs(y - goal.y) + r <= frame.h / (2 * goal.zoom) + 1e-9;
+}
 const V = CONFIG.versus;
 // The bot is tools/versus-bot-test.mjs's business. Here player 2 is a body
 // the tests place by hand, and a bot swimming it into the ball mid-check
@@ -1916,8 +1929,7 @@ section('The camera frames the ball and the seals');
   player.mesh.position.set(bounds.left + 10, midWater(), 0);
   p2.pos.set(bounds.right - 10, midWater(), 0);
   let g = versusCameraGoal(frame);
-  const zoomMin = cam.zoomMin ?? 0.55;
-  check('A: subjects a pitch apart → the frame zooms OUT to hold both, never under zoomMin', g.zoom < 1 && g.zoom >= zoomMin - 1e-9 && (p2.pos.x - player.mesh.position.x + 2 * cam.pad) * g.zoom <= frame.w + 1e-6, `zoom=${g.zoom.toFixed(3)} (floor ${zoomMin})`);
+  check('A: subjects a pitch apart → the frame zooms OUT to hold both, however far that is', g.zoom < 1 && (p2.pos.x - player.mesh.position.x + 2 * cam.pad) * g.zoom <= frame.w + 1e-6, `zoom=${g.zoom.toFixed(3)}`);
   check('A: centred on the box', Math.abs(g.x - (player.mesh.position.x + p2.pos.x) / 2) < 1e-6 && Math.abs(g.y - midWater()) < 1e-6, `x=${g.x.toFixed(1)} y=${g.y.toFixed(1)}`);
 
   // A: everyone on the ball — as tight as it is allowed to go.
@@ -1966,9 +1978,218 @@ section('The camera frames the ball and the seals');
   const goal = versusCameraGoal(frame);
   check('...and settles on the goal within three seconds', Math.abs(last.x - goal.x) < 0.2 && Math.abs(last.zoom - goal.zoom) < 0.02, `zoom ${first.zoom.toFixed(2)} → ${last.zoom.toFixed(2)} (goal ${goal.zoom.toFixed(2)})`);
   check('the first frame is a CUT onto the goal, not a blend from the menu', Math.abs(first.zoom - goal.zoom) < 1e-6 && Math.abs(first.x - goal.x) < 1e-6, `first ${first.zoom.toFixed(2)} = goal ${goal.zoom.toFixed(2)}`);
-  check('the claim is never wider than zoomMin', claims.every((c) => c.zoom >= (cam.zoomMin ?? 0.55) - 1e-9));
+  check('every claim is a zoom that holds the box it was asked for', claims.every((c) => c.zoom > 0 && c.zoom <= cam.zoomMax + 1e-9));
   cam.mode = savedMode;
   cam.subject = savedSubject;
+}
+
+// ---------------------------------------------------------------------------
+section('One person playing: the ball and THEIR seal, and nobody else\'s');
+{
+  // WHO IS IN THE BOX — the only thing the framing varies, since the rule
+  // above holds whatever is in it. 'auto' is the shipped mode and asks the
+  // ROSTER, not the device: two people on one screen means both seals are
+  // subjects, one person means the computer's seal is not one and does not
+  // widen the shot. Both frames are real ones — a 16:9 laptop and a phone held
+  // upright, which sees 24 world units of a 143-unit pitch.
+  const wide = { w: 52 * 16 / 9, h: 52 };
+  const tall = { w: 52 * 9 / 19.5, h: 52 };
+  const cam = V.camera;
+  const savedMode = cam.mode;
+  const savedSubject = cam.subject;
+  const savedBias = cam.bias;
+  const savedTeams = versusSetup.teams.map((t) => ({ color: t.color, members: [...t.members] }));
+  const roster = (a, b) => {
+    versusSetup.teams[0].members.length = 0;
+    versusSetup.teams[1].members.length = 0;
+    if (a) versusSetup.teams[0].members.push(a);
+    if (b) versusSetup.teams[1].members.push(b);
+  };
+  const HUMAN = { kind: 'human', pad: 'keyboard' };
+  const PAD = { kind: 'human', pad: 1 };
+  const CPU = { kind: 'cpu', pad: null };
+  cam.mode = 'auto';
+  resetBall();
+  ball.vx = ball.vy = 0;
+  const bx = ball.x;
+  const by = ball.y;
+
+  // WHO IS IN THE ROOM picks the framing.
+  roster(null, null);
+  player.mesh.position.set(bx - 30, by, 0);
+  p2.pos.set(bx + 30, by, 0);
+  const empty = versusCameraGoal(wide, {});
+  cam.mode = 'A';
+  const forcedA = versusCameraGoal(wide, {});
+  cam.mode = 'auto';
+  check('a match nobody set up frames everybody — the pad fallback can still put two people on the pitch',
+    Math.abs(empty.zoom - forcedA.zoom) < 1e-9 && Math.abs(empty.x - forcedA.x) < 1e-9, `zoom ${empty.zoom.toFixed(3)} vs ${forcedA.zoom.toFixed(3)}`);
+
+  roster(HUMAN, PAD);
+  const twoUp = versusCameraGoal(wide, {});
+  check('two people on one screen frames everybody', Math.abs(twoUp.zoom - forcedA.zoom) < 1e-9, `zoom ${twoUp.zoom.toFixed(3)}`);
+
+  roster(HUMAN, CPU);
+  const oneUp = versusCameraGoal(wide, {});
+  check('one person against the computer does NOT — the CPU seal is not framed', oneUp.zoom > forcedA.zoom, `zoom ${oneUp.zoom.toFixed(2)} vs ${forcedA.zoom.toFixed(2)}`);
+  p2.pos.set(bx + 30, by + 40, 0);
+  const cpuMoved = versusCameraGoal(wide, {});
+  check('...and moving it clean off the pitch moves nothing', Math.abs(cpuMoved.y - oneUp.y) < 1e-9 && Math.abs(cpuMoved.zoom - oneUp.zoom) < 1e-9, `y ${cpuMoved.y.toFixed(1)} zoom ${cpuMoved.zoom.toFixed(2)}`);
+
+  // THE OTHER PERSON IS IN ANOTHER COUNTRY. Two humans on the roster, but one
+  // of them is driven down a wire and has a screen and a camera of their own —
+  // the case mode B was written for before a phone needed it.
+  roster(HUMAN, { kind: 'human', pad: REMOTE });
+  p2.pos.set(bx + 30, by + 40, 0);
+  const remote = versusCameraGoal(wide, {});
+  check('an online opponent is a person but not one on THIS screen', Math.abs(remote.zoom - oneUp.zoom) < 1e-9 && Math.abs(remote.y - oneUp.y) < 1e-9, `zoom ${remote.zoom.toFixed(2)}`);
+  beginLobby('guest');
+  const asGuest = versusCameraGoal(wide, {});
+  check('...and the guest frames the seal IT drives, which is the right-hand one', asGuest.y > by + 3, `y=${asGuest.y.toFixed(1)} vs ball ${by.toFixed(1)}`);
+  roster(HUMAN, PAD);
+  const netTwo = versusCameraGoal(wide, {});
+  check('a session in a room is never local play, whatever the roster says', Math.abs(netTwo.zoom - asGuest.zoom) < 1e-9, `zoom ${netTwo.zoom.toFixed(2)}`);
+  endSession();
+
+  // The one person can be the side on the RIGHT — a pad captain picked there
+  // in the team select — and the frame follows their seal, not seat 0's.
+  roster(CPU, PAD);
+  p2.pos.set(bx + 6, by + 20, 0);
+  player.mesh.position.set(bx - 6, by, 0);
+  const right = versusCameraGoal(wide, {});
+  check('the seal it biases to is the HUMAN captain, whichever side that is', right.y > by + 3, `y=${right.y.toFixed(1)} vs ball ${by.toFixed(1)}`);
+
+  // THE PHONE. One person by construction, and the frame is a quarter as wide
+  // as the one the pitch was composed for.
+  roster(HUMAN, CPU);
+  // A scramble at one end with the seal upfield, which is an ordinary shape
+  // for a match and a hopeless one for a 24-unit frame. The rule does not
+  // care: the shot opens out until it holds them, and what it costs is the
+  // note above versusCameraGoal.
+  player.mesh.position.set(bx - 80, by, 0);
+  p2.pos.set(bx + 10, by, 0);
+  const phone = versusCameraGoal(tall, {});
+  check('upright, a seal 80 units off the ball still holds both...', inFrame(phone, tall, bx, by, ball.r) && inFrame(phone, tall, bx - 80, by), `zoom=${phone.zoom.toFixed(3)}, frame ${(tall.w / phone.zoom).toFixed(0)}x${(tall.h / phone.zoom).toFixed(0)}`);
+  check('...by going far wider than the old 0.55 floor, which could not have', phone.zoom < 0.55, `zoom=${phone.zoom.toFixed(3)}`);
+  check('...and it is the WIDTH that costs it, on a frame this shape', Math.abs(phone.zoom - tall.w / (80 + ball.r + 2 * cam.pad)) < 1e-9, `zoom=${phone.zoom.toFixed(3)}`);
+
+  // ...and the same on the other axis: a seal deep under the ball opens the
+  // frame downward rather than being left out of it.
+  player.mesh.position.set(bx - 6, by - 26, 0);
+  const deep = versusCameraGoal(tall, {});
+  check('a seal deep below the ball opens the frame out', deep.zoom < 2 - 1e-6, `zoom ${deep.zoom.toFixed(3)}`);
+  check('...and both are inside it', inFrame(deep, tall, bx, by, ball.r) && inFrame(deep, tall, bx - 6, by - 26), `y=${deep.y.toFixed(1)}`);
+
+  // THE BIAS, on the axis the frame pans. On a wide screen there is slack for
+  // it, so it is the whole of the difference between the two ends.
+  // The seal is DEEP as well as wide: its depth is what opens the frame out
+  // far enough for there to be slack to spend. Nose to nose with the ball the
+  // shot is already at zoomMax and the clamp eats the bias whole.
+  player.mesh.position.set(bx - 22, by - 20, 0);
+  p2.pos.set(bx + 40, by, 0);
+  cam.bias = 0;
+  const none = versusCameraGoal(wide, {});
+  cam.bias = 1;
+  const full = versusCameraGoal(wide, {});
+  check('bias 0 is the box\'s own centre', Math.abs(none.x - ((bx - 22) + (bx + ball.r)) / 2) < 1e-9, `x=${none.x.toFixed(2)}`);
+  check('bias 1 puts the seal dead centre when there is slack for it', Math.abs(full.x - (bx - 22)) < 1e-9, `x=${full.x.toFixed(2)}`);
+  check('...and both subjects are still in frame at either end',
+    inFrame(none, wide, bx, by, ball.r) && inFrame(none, wide, bx - 22, by - 20)
+    && inFrame(full, wide, bx, by, ball.r) && inFrame(full, wide, bx - 22, by - 20));
+  // AND IT CANNOT SPEND WHAT IS NOT THERE. On the axis whose fit won, the box
+  // touches both edges — so however hard the bias is asked to pull, the frame
+  // does not move and nobody is pushed out.
+  const clamped = versusCameraGoal(tall, {});
+  check('bias 1 on the tight axis moves the frame not at all', Math.abs(clamped.x - none.x) < 1e-9 && inFrame(clamped, tall, bx, by, ball.r) && inFrame(clamped, tall, bx - 22, by - 20), `x=${clamped.x.toFixed(2)} vs ${none.x.toFixed(2)}`);
+
+  cam.bias = savedBias;
+  cam.mode = savedMode;
+  cam.subject = savedSubject;
+  for (let i = 0; i < versusSetup.teams.length; i++) {
+    versusSetup.teams[i].color = savedTeams[i].color;
+    versusSetup.teams[i].members.length = 0;
+    versusSetup.teams[i].members.push(...savedTeams[i].members);
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('THE RULE: the player and the ball are in frame, on every screen there is');
+{
+  // The one non-negotiable thing the match's camera does, swept rather than
+  // spot-checked: every shape of screen the game ships on, against every
+  // placement of a seal and a ball that a match can produce — both goalmouths,
+  // the back of both tunnels, the ceiling, the floor, and the far corners
+  // crossed against each other.
+  //
+  // IT IS SWEPT BECAUSE THE BUG IT IS FOR WAS INVISIBLE FROM 16:9. The floor
+  // under the zoom was 0.55, typed against a laptop, and it held the pitch
+  // there and nowhere else — the frame's height is a constant and its width is
+  // the window's, so the zoom that holds a pitch-wide box is a different number
+  // on every shape of glass. On a phone held upright 0.55 is four times too
+  // tight, and the shot simply stopped opening and left the ball outside it.
+  const cam = V.camera;
+  const savedMode = cam.mode;
+  const savedAspect = 16 / 9;
+  cam.mode = 'B';
+  cam.subject = 0;
+  resetBall();
+  ball.vx = ball.vy = 0;
+
+  const screens = [
+    ['laptop 16:9', 16 / 9],
+    ['phone sideways 19.5:9', 19.5 / 9],
+    ['tablet 4:3', 4 / 3],
+    ['phone upright 9:16', 9 / 16],
+    ['phone upright 9:19.5', 9 / 19.5],
+  ];
+  let worstZoom = Infinity;
+  let worstWhere = '';
+  for (const [name, aspect] of screens) {
+    updateBounds(aspect);
+    const frame = { w: bounds.frameWidth, h: bounds.frameTop - bounds.frameBottom };
+    const floor = versusZoomFloor();
+    // The extremes of the pitch, including the reach into both tunnels that a
+    // keeper may swim to the back of (cameraReach).
+    const reach = cameraReach();
+    const xs = [bounds.left - reach, bounds.left + 1, 0, bounds.right - 1, bounds.right + reach];
+    const ys = [bounds.bottom + 1, midWater(), bounds.top - 1];
+    let held = 0;
+    let tried = 0;
+    let tightest = Infinity;
+    for (const px of xs) for (const py of ys) for (const bxx of xs) for (const byy of ys) {
+      ball.x = bxx; ball.y = byy;
+      player.mesh.position.set(px, py, 0);
+      const g = versusCameraGoal(frame, {});
+      tried++;
+      if (inFrame(g, frame, bxx, byy, ball.r) && inFrame(g, frame, px, py)) held++;
+      if (g.zoom < tightest) tightest = g.zoom;
+      if (g.zoom < worstZoom) { worstZoom = g.zoom; worstWhere = name; }
+    }
+    check(`${name}: both in frame in all ${tried} placements`, held === tried, `${tried - held} lost the ball or the seal`);
+    // ...AND THE BACKDROP IS BUILT FOR THE WIDEST OF THEM. The camera has no
+    // floor; versusZoomFloor is the same arithmetic run the other way round, so
+    // it has to bound every shot the sweep just produced or the widest frame
+    // lands on bare background.
+    check(`${name}: the backdrop's floor ${floor.toFixed(3)} bounds the widest shot ${tightest.toFixed(3)}`, floor <= tightest + 1e-9);
+  }
+  note(`widest shot anywhere: zoom ${worstZoom.toFixed(3)} on ${worstWhere}`);
+
+  // And the pair that made the rule: a phone upright, the ball at one goal and
+  // the seal at the other. This is the shot the note above versusCameraGoal
+  // costs out, and it is held.
+  updateBounds(9 / 19.5);
+  const tallFrame = { w: bounds.frameWidth, h: bounds.frameTop - bounds.frameBottom };
+  ball.x = bounds.right - 2; ball.y = midWater();
+  player.mesh.position.set(bounds.left + 2, midWater(), 0);
+  const worst = versusCameraGoal(tallFrame, {});
+  check('upright, ball at one goal and the seal at the other: both in frame',
+    inFrame(worst, tallFrame, ball.x, ball.y, ball.r) && inFrame(worst, tallFrame, bounds.left + 2, midWater()),
+    `zoom ${worst.zoom.toFixed(3)} — a frame ${(tallFrame.w / worst.zoom).toFixed(0)} x ${(tallFrame.h / worst.zoom).toFixed(0)} world units`);
+  note(`the pitch is ${bounds.width.toFixed(0)} x ${(bounds.top - bounds.bottom).toFixed(0)}, so the play is ${((bounds.top - bounds.bottom) / (tallFrame.h / worst.zoom) * 100).toFixed(0)}% of that frame's height`);
+
+  updateBounds(savedAspect);
+  cam.mode = savedMode;
+  resetBall();
 }
 
 // ---------------------------------------------------------------------------

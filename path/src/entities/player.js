@@ -11,6 +11,7 @@ import { createAnimationController, stateForSpeed } from '../systems/animation.j
 import { createAimRig } from '../systems/aimRig.js';
 import { createCelebrationDriver, resetCelebration, celebrationSpin, celebrationFacing } from '../systems/celebrate.js';
 import { createClapDriver, resetClap } from '../systems/clap.js';
+import { createStrikePoseDriver, resetStrikePose } from '../systems/strikePose.js';
 import { createBreathDriver } from '../systems/breathe.js';
 import { createJawDriver } from '../systems/jaw.js';
 import { attachPlayerOutline } from '../systems/outlines.js';
@@ -551,6 +552,7 @@ export function initPlayer(scene) {
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
   player.clap = createClapDriver(body);
+  player.coil = createStrikePoseDriver(body);
   player.breathe = createBreathDriver(body);
   player.jaw = createSealJaw(body);
   scene.add(group);
@@ -1083,6 +1085,7 @@ export function rebuildShipBody() {
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
   player.clap = createClapDriver(body);
+  player.coil = createStrikePoseDriver(body);
   player.breathe = createBreathDriver(body);
   // Bones are per-instance, as above — the old driver holds a bone that just
   // left the scene, and its anti-ratchet reference pose belongs to it too.
@@ -1545,6 +1548,12 @@ export function resetPlayer() {
   // press. See systems/clap.js.
   resetClap();
   player.clap?.reset();
+  // ...and the coil, both halves, for the same two reasons: the shared clock
+  // is what the "STRIKE NOW!" accent is counted on, and this body's smoothed
+  // IK pose would otherwise blend the last run's wind-up into the first frames
+  // of this one. See systems/strikePose.js.
+  resetStrikePose();
+  player.coil?.reset();
   // A new run starts on a fresh breath, not mid-exhale, and never still
   // relaxed from where the last seal came to rest.
   player.breathe?.reset();

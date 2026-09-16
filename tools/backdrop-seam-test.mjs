@@ -49,7 +49,7 @@ import { CONFIG } from '../path/src/config.js';
 import { enableVersus } from '../path/src/systems/versusFlag.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import { resetPool, updatePool } from '../path/src/systems/replayCams.js';
-import { backdropRects, replayStandOff } from '../path/src/systems/backdropFit.js';
+import { backdropRects, replayStandOff, versusZoomFloor } from '../path/src/systems/backdropFit.js';
 import { rockX, mouthY } from '../path/src/systems/versusGoal.js';
 
 let failures = 0;
@@ -78,8 +78,8 @@ const pool = shots.map((s) => ({ ...s }));
 // horizontal (bounded in x and z) and the picture's three are upright (bounded
 // in x and y) — see systems/backdropFit.js.
 const _ray = new THREE.Vector3();
-function covered(origin, ray) {
-  for (const r of rects) {
+function covered(origin, ray, list = rects) {
+  for (const r of list) {
     if (r.axis === 'y') {
       if (Math.abs(ray.y) < 1e-6) continue;
       const t = (r.y - origin.y) / ray.y;
@@ -153,6 +153,61 @@ function poisAt(s, side) {
     mouth: { x: rockX(side) - side * 2, y: mouthY(), z: 0 },
     impact: { x: s.x, y: s.y, z: 0 },
   };
+}
+
+// ---------------------------------------------------------------------------
+section('...and for the MATCH\'s own frame, at its widest, on every shape of screen');
+{
+  // THE ORTHOGRAPHIC ONE, which is the camera the game is actually played on.
+  // Everything below this section is about the replay's perspective rig; this
+  // is the flat frame, and what it can see is decided by how far the match's
+  // camera may zoom OUT — which has no floor any more, because the rule is
+  // that the player and the ball are both in frame and a floor is a promise to
+  // break it (see versusCameraGoal). versusZoomFloor is the same arithmetic
+  // run backwards — the widest that rule can ever take the shot — and it is
+  // what matchMargins builds the picture for.
+  //
+  // SWEPT ACROSS ASPECTS BECAUSE THE MARGIN USED TO BE TYPED. It read a 0.55
+  // that was chosen against a laptop, while the camera's floor was the same
+  // constant: both were wrong off 16:9 in the same direction, so they agreed
+  // with each other and the backdrop looked sized. It is four times too short
+  // for a phone held upright.
+  const savedAspect = 16 / 9;
+  const origin = new THREE.Vector3();
+  const down = new THREE.Vector3(0, 0, -1);
+  for (const [name, aspect] of [
+    ['laptop 16:9', 16 / 9],
+    ['phone sideways 19.5:9', 19.5 / 9],
+    ['tablet 4:3', 4 / 3],
+    ['phone upright 9:16', 9 / 16],
+    ['phone upright 9:19.5', 9 / 19.5],
+  ]) {
+    updateBounds(aspect);
+    const list = backdropRects();
+    const zoom = versusZoomFloor();
+    const halfW = bounds.frameWidth / (2 * zoom);
+    const halfH = (bounds.frameTop - bounds.frameBottom) / (2 * zoom);
+    // Centred on the arena, which is where world.clampFocus pins the focus once
+    // the frame is wider than the water — and at this zoom it always is.
+    const cx = (bounds.left + bounds.right) / 2;
+    const cy = (bounds.bottom + bounds.top) / 2;
+    let bare = 0; let bareDown = 0; let total = 0;
+    for (let iy = 0; iy <= GRID; iy++) {
+      for (let ix = 0; ix <= GRID; ix++) {
+        const x = cx + ((ix / GRID) * 2 - 1) * halfW;
+        const y = cy + ((iy / GRID) * 2 - 1) * halfH;
+        origin.set(x, y, 40);
+        total++;
+        if (covered(origin, down, list)) continue;
+        bare++;
+        if (y < bounds.surfaceY) bareDown++;
+      }
+    }
+    check(`${name}: the widest frame (zoom ${zoom.toFixed(3)}) lands on no bare background below the water line`,
+      bareDown === 0, `${bareDown} of ${total} samples`);
+    if (bare) note(`${name}: ${((bare / total) * 100).toFixed(1)}% of that frame is above the water line, where scene.background is the sky's own colour`);
+  }
+  updateBounds(savedAspect);
 }
 
 // ---------------------------------------------------------------------------

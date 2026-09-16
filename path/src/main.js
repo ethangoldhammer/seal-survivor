@@ -190,6 +190,7 @@ import { mountUnlockToasts, showUnlockToast, clearUnlockToasts } from './ui/unlo
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { triggerClap, updateClap } from './systems/clap.js';
+import { updateStrikePose } from './systems/strikePose.js';
 import { captureBossShot, resetBossShot, bossShot, bossShotBytes } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
 import { beginTitleSeal, endTitleSeal, resetTitleSeal, titleSealEngaged, updateTitleSeal } from './systems/titleSeal.js';
@@ -1464,9 +1465,12 @@ function handleTunerChange(path) {
   // build, so a slider on them is a rebuild. Cheap — one merge of sixty
   // boulders — and it is the one path that moves the ROCK as well as the
   // light, which the F panel's live refresh cannot.
-  // The tunnel's depth and the frame's zoom floor size the BACKDROP as well
-  // as the shore, so those go through the arena's whole rebuild.
-  if (path.startsWith('versus.goal.tunnel') || path.startsWith('versus.camera.zoomMin')) world.resize();
+  // The tunnel's depth and the frame's widest shot size the BACKDROP as well
+  // as the shore, so those go through the arena's whole rebuild. The widest
+  // shot is measured rather than typed now (versusZoomFloor), so what moves it
+  // is the padding round the camera's box and the ball's own radius — both
+  // sliders, and both silently too-small-a-backdrop if they do not rebuild.
+  if (path.startsWith('versus.goal.tunnel') || path.startsWith('versus.camera.pad') || path.startsWith('versus.ball.radius')) world.resize();
   // The light's own numbers — glow, spill, feather, the noise — move on the
   // live quads without a rebuild of the shore.
   else if (path.startsWith('versus.goal.noise') || path.startsWith('versus.goal.swim') || path.startsWith('versus.goal.scored') || path.startsWith('versus.goal.ball') || path.startsWith('versus.goal.tunnelFalloff') || path.startsWith('versus.goal.glow') || path.startsWith('versus.goal.spill') || path.startsWith('versus.goal.feather')) refreshGoalGlow();
@@ -10122,6 +10126,25 @@ function runFrame(now) {
     if (!saluted && !saluteReady()) triggerClap(at);
   }
   updateSalute(rawDt);
+  // THE WIND-UP'S OWN MOMENT, ON THE ANIMAL — systems/strikePose.js. Before
+  // the clap and the victory lap, which are the two performances allowed to
+  // take the flippers off it (the coil stands down for either), and for the
+  // same ordering reason they are here at all: the mixer and the aim rig write
+  // an absolute pose every frame, so a hand-posed gesture has to run after
+  // both or it is simply overwritten.
+  //
+  // `strikeMoment` VERBATIM — the same const the "STRIKE NOW!" prompt is drawn
+  // from, a few hundred lines up. Not a second reading of strikeLoaded(): the
+  // words and the pose describe one instant, and two spellings of it could
+  // disagree by a frame at the one moment in this game that is judged in
+  // frames. The liveness is the prompt's too (`chainPin`), so the seal cannot
+  // be caught coiled on a menu or over a corpse.
+  //
+  // On rawDt, like the clap and the lap: a hit-stop landing on the frame the
+  // bar tops out would stretch the snap into the freeze and there would be no
+  // accent left. See the header in systems/strikePose.js.
+  updateStrikePose(rawDt, strikeMoment && gameState.running && !deathState.active);
+  player.coil?.update(rawDt);
   updateClap(rawDt);
   player.clap?.update(rawDt);
 

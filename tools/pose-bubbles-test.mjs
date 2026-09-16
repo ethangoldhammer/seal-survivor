@@ -41,6 +41,7 @@ import {
   playCelebration, updateCelebration, resetCelebration, celebrationState,
 } from '../path/src/systems/celebrate.js';
 import { updatePoseBubbles, resetPoseBubbles } from '../path/src/systems/poseBubbles.js';
+import { updateStrikePose, resetStrikePose, strikePoseState } from '../path/src/systems/strikePose.js';
 
 const scene = new THREE.Scene();
 initParticles(scene);
@@ -253,6 +254,66 @@ section('the things that must emit nothing');
 }
 
 // ---------------------------------------------------------------------------
+section('the coil — a puff on the moment, and exactly one of it');
+// ---------------------------------------------------------------------------
+// The wind-up's own source (CONFIG.strikePose.bubbles). It is driven through
+// the real envelope rather than by setting `t` by hand, because the two things
+// that can go wrong here are both about the envelope's shape: the snap
+// overshoots 1, and the hold sits at 1 for as long as the player likes. A
+// phase that was not capped would cross a burst written at 1 twice — once on
+// the way up and once coming back down through it — and a burst that re-armed
+// on the hold would fire every frame of it.
+{
+  clear();
+  resetStrikePose();
+  const was = CONFIG.strikePose.bubbles;
+  CONFIG.strikePose.bubbles = { enabled: true, emitter: 'wakeBubbles', from: 'tail', rate: 0, bursts: [{ at: 0.7, count: 3 }] };
+
+  const coil = (seconds, armed) => {
+    let fired = 0;
+    for (let t = 0; t < seconds; t += DT) {
+      updateStrikePose(DT, armed);
+      fired += updatePoseBubbles(DT, RIG, CTX);
+      updateParticles(DT);
+    }
+    return fired;
+  };
+
+  const onEntry = coil(0.4, true);
+  check('the moment puffs once', onEntry === 3, `${onEntry} emitted`);
+  check('...off the fluke', live().every((p) => p.x === RIG.anchors.tail.x),
+    live().map((p) => p.x).join(','));
+
+  // FIVE SECONDS OF HOLD. The pose is still fully up and `t` is pinned at 1
+  // the whole time; nothing more may come out of it.
+  const held = coil(5, true);
+  check('a long hold adds nothing', held === 0, `${held} during the hold`);
+
+  // The let-go, then a second wind-up: a new moment is a new puff.
+  coil(0.5, false);
+  const second = coil(0.4, true);
+  check('the next wind-up puffs again', second === 3, `${second} emitted`);
+
+  // ...AND A RE-GRAB MID-RELEASE IS ALSO A NEW MOMENT, even though the coil
+  // never got back to zero — `hits` is the seq for exactly this case.
+  updateStrikePose(DT, false);
+  updateStrikePose(DT, false);
+  const regrab = coil(0.4, true);
+  check('grabbing it again mid-release puffs again', regrab === 3, `${regrab} emitted`);
+
+  // Above the surface there is no water to bubble in.
+  coil(0.5, false);
+  CTX.aboveSurface = true;
+  const air = coil(0.4, true);
+  CTX.aboveSurface = false;
+  check('a coil in the air emits nothing', air === 0, `${air} emitted`);
+
+  CONFIG.strikePose.bubbles = was;
+  resetStrikePose();
+  clear();
+}
+
+// ---------------------------------------------------------------------------
 section('the shipped poses are wired to anchors that exist');
 {
   // Not a taste check — a `from` that resolves to nothing is silent, and
@@ -268,11 +329,18 @@ section('the shipped poses are wired to anchors that exist');
     check(`${name}: every emitter it names is in CONFIG.emitters`,
       emitters.every((e) => !!CONFIG.emitters[e]), emitters.join(','));
   }
-  const cb = CONFIG.clap?.bubbles;
-  if (cb) {
-    const names = [cb.from, ...(cb.bursts ?? []).map((x) => x.from)].filter(Boolean);
-    check('clap: every anchor it names resolves', names.every((n) => KNOWN.has(n)), names.join(','));
-    check('clap: its emitter exists', !!CONFIG.emitters[cb.emitter ?? 'breathBubbles'], cb.emitter);
+  for (const [label, b] of [['clap', CONFIG.clap?.bubbles], ['coil', CONFIG.strikePose?.bubbles]]) {
+    if (!b) continue;
+    const names = [b.from, ...(b.bursts ?? []).map((x) => x.from)].filter(Boolean);
+    check(`${label}: every anchor it names resolves`, names.every((n) => KNOWN.has(n)), names.join(','));
+    const emitters = [b.emitter, ...(b.bursts ?? []).map((x) => x.emitter)].filter(Boolean);
+    check(`${label}: every emitter it names exists`,
+      emitters.every((e) => !!CONFIG.emitters[e]), emitters.join(','));
+    // A burst written past the top of the envelope can never be crossed. The
+    // coil's phase is capped at 1 (the snap overshoots and the cap is what
+    // stops a double), so `at` above 1 is a puff that silently never happens.
+    const ats = (b.bursts ?? []).map((x) => x.at ?? 1);
+    check(`${label}: every burst is inside the envelope`, ats.every((a) => a > 0 && a <= 1), ats.join(','));
   }
 }
 

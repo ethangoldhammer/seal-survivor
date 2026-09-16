@@ -144,7 +144,7 @@ const SECTION_ORDER = {
 
 const EMITTER_SECTIONS = [
   ['Your weapon', ['muzzle', 'sparks', 'bounce', 'explosion', 'bigExplosion', 'missileLaunch', 'missileTrail', 'missileImpact']],
-  ['The seal', ['boost', 'playerHit', 'bite', 'splash', 'breathBubbles', 'wakeBubbles', 'bubbleBurst']],
+  ['The seal', ['boost', 'playerHit', 'bite', 'splash', 'breathBubbles', 'wakeBubbles', 'bubbleBurst', 'coilPuff']],
   ['Pickups & progression', ['pickup', 'chumCrumbs', 'levelUp']],
   ['Escorts', ['trapPop']],
   ['The ocean', ['rainSplash', 'silt', 'sunPass', 'moonPass']],

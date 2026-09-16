@@ -50,6 +50,7 @@ const CODE_OWNED = [
   'music.versusSrc',
   'versus.replay.cams.shots',
   'versus.camera.reach',
+  'versus.camera.mode',
   'feedback.*.emit',
   'feedback.*.toast',
   'emitters.*.colors',
@@ -79,7 +80,7 @@ const dirty = {
   gravesite: { stones: ['a', 'b'], scale: 1 },
   pickups: { sinkSpeed: 1.2, magnet: 3 },
   music: { bossSrc: ['x.mp3'], versusSrc: ['y.mp3'], bpm: 170 },
-  versus: { camera: { reach: 12, zoomMin: 1 }, replay: { cams: { shots: [1, 2], hold: 2 } } },
+  versus: { camera: { reach: 12, mode: 'A', zoomMin: 1 }, replay: { cams: { shots: [1, 2], hold: 2 } } },
   feedback: { clamDrop: { emit: 'pop', toast: 'words', sfx: 'clam' } },
   emitters: { muzzle: { colors: ['#fff'], rate: 4 } },
 };

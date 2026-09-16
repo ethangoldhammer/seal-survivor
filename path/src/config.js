@@ -18573,6 +18573,45 @@ export const CONFIG = {
         colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 0, drag: 5.5,
         gravity: [0, 2.6], inherit: 0.6, glow: 1.3, killAtSurface: true,
     },
+      // THE PUFF ON "STRIKE NOW!" — shed off the fluke as the coil snaps in
+      // (CONFIG.strikePose.bubbles). It has one job the other bubble emitters
+      // cannot do for it: be SEEN THROUGH THE VENT. `chargeBurst` above is the
+      // wind-up's own spray and is already pouring at up to 73 firings a
+      // second when this fires, so a puff made of the same thing is a puff
+      // nobody can see — and a puff nobody can see is exactly what a player
+      // reports as "nothing happens when the bar fills".
+      //
+      // So it is the opposite of the vent in every number that matters: FEW
+      // and BIG rather than many and fine, slow rather than fast, and lasting
+      // about a second rather than a third of one. Eight legible bubbles
+      // leaving the tail read as one event; eighty small ones read as more
+      // haze.
+      //
+      // `cone` is wide because this is shed water rather than a jet, and the
+      // low `drag` with a healthy `gravity` is what makes them rise and hang
+      // instead of shooting out and stopping. `inherit` is small: they are
+      // left behind by the animal, not carried with it.
+      // Sized in the coil lab against the vent, not against clear water — and
+      // two of the numbers here are the answer to a measurement rather than a
+      // taste, so they are worth the paragraph:
+      //
+      // `count` IS NOT HOW MANY COME OUT. entities/particles.js multiplies it
+      // by CONFIG.fx.spriteDensity, which is tuned to 0.35 — so an authored 9
+      // is 3 sprites, and the first version of this puff was six bubbles
+      // wondering why it could not be seen. Every count in this block is
+      // roughly a third of itself by the time it reaches the water.
+      //
+      // AND THEY MUST OUTRUN THEIR OWN SIZE. A bubble 0.3 units across that
+      // travels 0.2 units in the tenth of a second anyone is looking is a
+      // bubble sitting on top of its neighbours: thirty of them read as one
+      // white disc, not as a puff. Speed against size is what makes it a
+      // burst — these leave fast and are pulled up short by `drag`, which is
+      // the shape of something shed rather than sprayed.
+      coilPuff: {
+        count: 26, speed: [2.2, 6], size: [0.16, 0.28], life: [0.5, 1.1],
+        colors: [0xdff6ff, 0xffffff, 0xbfefff], cone: 0.9, drag: 3,
+        gravity: [0, 3.2], inherit: 0.15, glow: 1.6, killAtSurface: true,
+      },
       // What a bubble leaves behind at the water line. Small, fast and short —
       // the whole event is over in a third of a second, because a burst that
       // lingers reads as a splash, and a bubble is not big enough to splash.
@@ -23952,6 +23991,180 @@ export const CONFIG = {
         headUp: -0.15,
         headFore: 0.7,
         headWeight: 0.6,
+      },
+    },
+
+    // ---------------------------------------------------------------------------
+    // THE COIL — what the seal does on "STRIKE NOW!". systems/strikePose.js.
+    //
+    // The wind-up's own moment, read on the animal instead of only at the edge
+    // of the frame. The prompt and the meter both live where a player mid-fight
+    // is not looking; this is the same instant said by the thing they ARE
+    // looking at, and it is the reason a held strike now looks like a held
+    // strike rather than like ordinary swimming with a word next to it.
+    //
+    // NOT A GESTURE — a state. It snaps in on the frame the bar can hold no
+    // more and stays up until the button comes off, however long that is, so
+    // there is a hold in the middle of the envelope with no clock on it. See
+    // the header of systems/strikePose.js for why that makes it a `sync` pose
+    // rather than a `restore` one.
+    //
+    // No gameplay in it whatsoever: nothing below changes what a strike is
+    // worth, when it can fire, or how wide the sweet spot is. The window is
+    // weapons.csv's (strike.charge.sweetFraction) and stays there.
+    // ---------------------------------------------------------------------------
+    strikePose: {
+      enabled: true,
+      // THE ENVELOPE, in WALL seconds. `snap` is the accent — the moment
+      // arriving. It started at 0.07, four frames, on the argument that an
+      // accent has to be struck rather than faded; dialled in the coil lab it
+      // came out three times that, which is a different reading of the same
+      // gesture: the seal GATHERS at the moment rather than flinching at it,
+      // and at four frames the tail was snapping hard enough to read as a hit
+      // taken rather than a strike loaded. `settle` is the overshoot relaxing
+      // back onto the held pose and is now about as long as the snap, which is
+      // what makes the arrival a swell with a top on it.
+      snap: 0.225,
+      settle: 0.215,
+      // Coming out of it, on the release. Short, and deliberately much shorter
+      // than the way in: the dash is already leaving and the roll clip wants
+      // the limbs back.
+      release: 0.16,
+      // HOW FAR PAST THE POSE THE SNAP GOES, as a multiple of the two offsets
+      // that travel (see the note in strikePose.js). 1 retires the accent and
+      // leaves a plain ease-in; much above 1.2 and the joint stops eat it, so
+      // it is spent for nothing. `npm run test:coil` measures what survives
+      // the solver on the actual bone rather than trusting this number.
+      overshoot: 1.11,
+      // How completely the coil replaces the aim pose at full extension. Under
+      // 1 the animal keeps a fifth of whatever it was already doing underneath
+      // the pose, so the coil reads as a seal gathering mid-swim rather than
+      // as a pose switched on over the top of one.
+      weight: 0.81,
+
+      // THE WATER, ON THE MOMENT. Authored exactly like a celebration's and the
+      // clap's — see systems/poseBubbles.js — and keyed to the pose's own
+      // phase, so the puff lands on the snap rather than on a clock of its own.
+      //
+      // A BURST AND NO RATE, and this one has a reason beyond taste: the
+      // wind-up vent (CONFIG.bubbles.charge) is already pouring out of the
+      // mouth and down the tail at up to 73 firings a second for the whole
+      // hold, and it does NOT stop when the bar tops out — `charging` going
+      // false is what ends the tremble, not the vent, which rides `pending`
+      // and stays at full while the button is down. A stream added on top of
+      // that would be invisible. A puff that arrives once, from a different
+      // emitter, is the only thing that can read against it.
+      //
+      // `coilPuff` is its own emitter, authored to be legible THROUGH that
+      // haze — few, big and slow where the vent is many, fine and fast. It is
+      // deliberately not `chargeBurst`, which is what the vent itself fires
+      // (CONFIG.feedback.strikeVent): the same sprites again would be
+      // invisible by construction. Off the TAIL, because the fluke is the part
+      // of the animal the coil actually moves — the bubbles are shed by the
+      // thing the player is being shown.
+      //
+      // `at` is where in the pose it fires, and it is inside the SNAP (`t`
+      // passes 1 before the snap ends, since the snap overshoots). The sound
+      // on this moment — feedback('strikePerfect') — is already on the exact
+      // frame; the puff is two or three frames behind it, riding the fluke at
+      // its fastest.
+      bubbles: {
+        enabled: true,
+        emitter: 'coilPuff',
+        from: 'tail',
+        rate: 0,
+        scale: 1,
+        bursts: [{ at: 0.7, count: 2 }],
+      },
+
+      // The IK the pose solves through — the clap's numbers, which are the aim
+      // rig's with the stops opened up. `smoothing` is the responsiveness knob
+      // and it is high for the same reason it is high there: this pose is
+      // answering an instant, and three frames of solver lag on top of the
+      // snap would put the accent after the moment it is about.
+      ik: {
+        iterations: 4,
+        smoothing: 45,
+        maxBend: 1.6,
+        softness: 0.8,
+        maxFold: 1.9,
+        maxTwist: 0.7,
+        tolerance: 0.01,
+      },
+
+      // WHERE THE ANIMAL GOES. Every distance is a fraction of THAT chain's
+      // own measured reach, anchored at its own root — never a world unit,
+      // since the seal carries a size multiplier and its two flippers do not
+      // even have the same reach. `up` is dorsal, `fore` is the nose, and
+      // `spread` is measured from the BODY'S CENTRELINE. See poseTarget in
+      // systems/poseRig.js.
+      //
+      // THE CAMERA IS THE CONSTRAINT. The seal is seen in profile, so anything
+      // that happens along the lateral axis happens along the camera's own
+      // axis and reads as almost nothing (see the header of
+      // systems/celebrate.js). The whole coil is therefore spent in `up` and
+      // `fore`, which are the two directions the screen can see.
+      pose: {
+        // THE FLUKE COCKS, and on this animal that is most of the gesture.
+        //
+        // MEASURED IN THE COIL LAB (npm run looks:coillab), against a second
+        // seal running the same clip that never coils — which is the only way
+        // to tell a pose from the swim cycle it is happening on top of. It is
+        // the part of a seal that moves furthest in the frame anyway, so it is
+        // the one channel that reads at the size the game actually draws this
+        // creature.
+        //
+        // `tailUp` is dorsal and travels with `t` (so the snap overshoots it);
+        // `tailFore` is how far back along the body the target sits and holds
+        // still. Rest is about `up: 0.3, fore: -0.7` — measured the same way,
+        // by walking the number until the limb stopped moving — so this is
+        // half a reach of real displacement rather than a number that looks
+        // large next to nothing.
+        tailUp: 0.8,
+        tailFore: -0.6,
+        tailWeight: 1,
+
+        // THE FLIPPERS, CLAMPED TO THE FLANKS. `up: -0.8` is down along the
+        // belly and `spread: 0` asks them in to the centreline, which is the
+        // streamlined half of the shape — but at a WEIGHT of 0.15, so what
+        // lands on the animal is a suggestion of it rather than the pose.
+        //
+        // That number is small for a reason that is not taste. The fins are
+        // the guns: the seal autofires all the way through a wind-up, so
+        // sweeping them moves the muzzles, and at full weight the flipper has
+        // to fold through the chest to reach a target back there — in the lab
+        // every strong version either hid them inside the body or left one
+        // sticking out of the silhouette. A sixth of the way there is the
+        // amount that reads as tension without either.
+        up: -0.8,
+        fore: -0.05,
+        spread: 0,
+        finWeight: 0.15,
+
+        // THE HEAD, BARELY. 0.08 is nearly nothing on purpose, and this is the
+        // second time this project has answered the question: systems/aimRig.js
+        // already tried an authored neck coil for the wind-up and threw it out
+        // — it pulled the head into exactly the crane the peek there exists to
+        // avoid — and settled on a tremble instead. What is left here is a
+        // breath of it under the aim, so the seal keeps tracking what it is
+        // pointed at, which is the entire reason it is holding the button.
+        headUp: 0.3,
+        headFore: 0.78,
+        headWeight: 0.08,
+
+        // --- WHAT EITHER OF THEM COSTS, and the tail does not ---------------
+        //
+        // A chain the aim rig owns does not come all the way back from being
+        // posed: it solves from wherever the bone already is, so it inherits
+        // the pose instead of correcting it, and the flipper and the neck each
+        // end a coil a small fixed distance from where an un-coiled seal's
+        // would be. Measured against a control seal both in the lab and in
+        // `npm run test:coil`, which also holds the other half of it — the
+        // offset is BOUNDED, and twenty coils add nothing to it, so it is a
+        // constant and not the ratchet systems/poseRig.js exists to prevent.
+        //
+        // The tail is a spring rather than a solve and returns to exactly
+        // zero, which is the other reason the gesture is mostly spent there.
       },
     },
 
@@ -40924,26 +41137,50 @@ export const CONFIG = {
       // run's does. Anything on the list above is re-rolled out of it.
       crateDrops: true,
     },
-    // THE CAMERA. Two framings, both built the same way: a box round the
-    // subjects, padded, and the tightest zoom that holds the box inside the
-    // frame — never wider than zoom 1, because at 1 the frame is already the
-    // full depth of the water and anything wider shows the bare background.
-    //   'A'  frames the ball AND BOTH seals — local play, one screen.
-    //   'B'  frames the ball and `subject`'s seal only — online play, where
-    //        the other seal is on someone else's screen.
+    // THE CAMERA. ONE RULE — the player and the ball are in frame, always, on
+    // every screen — and then a padded box round the subjects and the zoom
+    // that holds it on both axes. Nothing below may clamp that zoom in the
+    // direction that cuts a subject out; see the note above versusCameraGoal.
+    //
+    // The mode picks WHO IS A SUBJECT, which is all that varies:
+    //   'A'  the ball and BOTH seals. Local multiplayer: two people on one
+    //        screen and neither may be left off it.
+    //   'B'  the ball and `subject`'s seal. One person playing — against the
+    //        computer, online (the other seal is on someone else's screen), or
+    //        on a phone, which can only be one of those. The seal nobody here
+    //        is driving is not a subject and does not widen the shot.
+    //   'auto' picks between them off the roster (versusLocalMultiplayer),
+    //        which is a question about how many people are in the room and
+    //        NOT about the device. An explicit 'A'/'B' forces one, which is
+    //        how the tuner and the harness look at either.
     camera: {
-      mode: 'A',
-      subject: 0,         // mode B: 0 = player 1 (the local seal), 1 = player 2
+      mode: 'auto',
+      subject: 0,         // forced mode B: 0 = player 1 (the local seal), 1 = player 2
+      // MODE B'S PULL TOWARDS THE SEAL, as a share of the way from the box's
+      // own centre to the seal itself: 0 is the centre mode A would have used,
+      // 1 puts the seal as central as the frame allows.
+      //
+      // IT SPENDS SLACK AND NOTHING ELSE. The fit is tight on exactly one axis
+      // — whichever of the two ran out first — and the other has room between
+      // the box's edge and the frame's. That room is all this may move the
+      // centre by, so on the tight axis it does nothing at all and the rule
+      // above is never what pays for it.
+      bias: 0.5,
       pad: 9,             // world units of air round the box
       zoomMax: 2.0,       // how far in it may push when the subjects are close
       lead: 0.22,         // seconds of ball velocity the centre looks ahead by
       lerp: 5,            // per-second rate the centre chases its goal
       zoomLerp: 3,        // ...and the zoom
-      // BOTH SEALS AND THE BALL, ALWAYS. The zoom may go UNDER 1 to hold the
-      // box — down to this — and the backdrop is built deep and tall enough
-      // in a match that the frame at zoomMin still lands on sky above and
-      // seabed below (world.js). 0.55 holds the whole 1.55-frame pitch.
-      zoomMin: 0.55,
+      // THERE IS NO zoomMin. It was 0.55 — "the zoom that holds the whole
+      // 1.55-frame pitch" — and it held that at 16:9 and nowhere else: the
+      // frame's height is a constant and its width is the window's, so the
+      // zoom that holds a pitch-wide box is a different number on every shape
+      // of screen (0.47 on a laptop once the goals and the padding are
+      // counted, 0.12 on a phone held upright). A typed floor is a promise to
+      // cut the ball or the player out of the shot on any screen it was not
+      // typed for, and that is the one thing this camera may not do. The floor
+      // the BACKDROP is built to is measured off the same worst box the camera
+      // can be handed — versusZoomFloor in systems/backdropFit.js.
       // How far past each wall the frame may reach in a match — into the
       // goal, so the line and a keeper in front of it are seen. Capped by
       // the tunnel's depth (versusGoal.cameraReach), and set PAST it on
@@ -51024,8 +51261,14 @@ export function withoutTableOwnedKeys(snapshot) {
   // (see versus.camera.reach); every snapshot carries the 12 from when it
   // was a keeper's stop, and left in it would hold the frame short of a seal
   // that may now swim to the back of the corridor.
-  if (rest.versus?.camera && 'reach' in rest.versus.camera) {
-    const { reach, ...camera } = rest.versus.camera;
+  // ...and the FRAMING MODE alongside it, for a sharper version of the same
+  // reason: 'auto' is not a value anybody picked, it is the question "how many
+  // people are in the room" being asked at the frame it matters. Every
+  // snapshot carries the 'A' from when local play was the only kind, and left
+  // in, a match against the computer on a phone would go on composing for a
+  // second player who is not there — with nothing on any screen to say why.
+  if (rest.versus?.camera) {
+    const { reach, mode, ...camera } = rest.versus.camera;
     rest.versus = { ...rest.versus, camera };
   }
   // THE REPLAY'S SHOT POOL, and the same story as gravesite.stones below.
@@ -51286,6 +51529,17 @@ function withoutReplayShots(versus) {
   return { ...versus, replay: { ...versus.replay, cams } };
 }
 
+// ...and the camera's reach and framing mode, which config.js owns (see the
+// strip on the load side). Out the way they come in: stripping only on load
+// would leave every save writing the echo back, so the file would be wrong
+// again the moment anybody moved a slider — and the mode's echo is the one
+// that silently un-does the roster switch.
+function withoutCodeOwnedCamera(versus) {
+  if (!versus?.camera) return versus;
+  const { reach, mode, ...camera } = versus.camera;
+  return { ...versus, camera };
+}
+
 // Overwrite `target` with `source` in place, preserving the identity of every
 // nested plain object rather than swapping it for a clone.
 //
@@ -51386,7 +51640,7 @@ function tuningSnapshot() {
   // on load would leave every save writing the echo back, so the file would be
   // wrong again the moment anyone tuned anything — and a pool in the file is
   // the whole pool (deepMerge replaces arrays), which makes config.js dead text.
-  snapshot.versus = withoutReplayShots(CONFIG.versus);
+  snapshot.versus = withoutCodeOwnedCamera(withoutReplayShots(CONFIG.versus));
   // ...and the two banks of filenames go out the way they come in, for the
   // same reason: stripping only on load would leave every save writing the
   // echo back, and the file would be wrong again the moment anyone tuned

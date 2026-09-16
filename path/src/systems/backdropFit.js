@@ -17,7 +17,7 @@
 import { CONFIG } from '../config.js';
 import { bounds, maxWaveExcursion, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z, FLOOR_OVERSCAN } from '../arena.js';
 import { skyPlaneMetrics } from './sky.js';
-import { tunnelDepth } from './versusGoal.js';
+import { tunnelDepth, cameraReach } from './versusGoal.js';
 import { versusActive } from './versusFlag.js';
 
 /** The z the sky plane sits at — out of the water fill's band. */
@@ -37,11 +37,49 @@ export function replayStandOff() {
 }
 
 /**
+ * THE WIDEST THE MATCH'S SHOT CAN EVER BE ASKED TO GO — the zoom that holds the
+ * WORST BOX the camera can be handed, which is the one number the backdrop has
+ * to be built for.
+ *
+ * The worst box is a subject against one goal and another against the other:
+ * the whole pitch, plus the reach into both tunnels a seal may swim to the back
+ * of, plus the camera's own padding and the ball's radius at each end. Fitted
+ * on whichever of the frame's two axes runs out first — which on a wide screen
+ * is the width and on a phone held upright is the width by a factor of four.
+ *
+ * NOT A CLAMP, and nothing may use it as one: versusCameraGoal has no floor,
+ * because the rule is that both subjects are in frame and a floor is a promise
+ * to break it. This is the same arithmetic run the other way round — "how far
+ * out can that rule take the shot" — so that the picture behind it is big
+ * enough. It is therefore an UPPER bound on how wide the frame ever gets, and
+ * being generous with it costs two bigger triangles and nothing else.
+ */
+export function versusZoomFloor() {
+  const c = CONFIG.versus?.camera ?? {};
+  const pad = (c.pad ?? 9) + (CONFIG.versus?.ball?.radius ?? 0);
+  const frameW = bounds.frameWidth;
+  const frameH = bounds.frameTop - bounds.frameBottom;
+  const w = bounds.width + 2 * (cameraReach() + pad);
+  const h = (bounds.top - bounds.bottom) + 2 * pad;
+  if (!(frameW > 0) || !(frameH > 0) || !(w > 0) || !(h > 0)) return 1;
+  return Math.max(0.01, Math.min(1, frameW / w, frameH / h));
+}
+
+/**
  * How much further than a run the backdrop has to reach in a MATCH, per side:
  * sideways into each goal's tunnel, and up and down for a frame that may zoom
- * out below 1 to hold both seals (CONFIG.versus.camera.zoomMin) — at zoomMin the
- * frame is 1/zoomMin of the arena tall, and the half of that past the arena's
- * own height is what would otherwise be bare background.
+ * out below 1 to hold its subjects (versusZoomFloor) — at the floor the frame
+ * is 1/floor of the arena tall, and the half of that past the arena's own
+ * height is what would otherwise be bare background.
+ *
+ * MEASURED, NOT TYPED, and that is the whole of the fix it carries. This used
+ * to read `CONFIG.versus.camera.zoomMin` — 0.55, a number chosen against a
+ * 16:9 frame — while the camera's floor was the same constant. Both were wrong
+ * off 16:9 in the same direction and so agreed with each other: on a phone
+ * held upright the shot needs to reach 0.12 to hold a seal and a ball at
+ * opposite ends, and a backdrop built for 0.55 is four times too short for it.
+ * Reading the floor itself means the picture is built for whatever the camera
+ * can actually do, at whatever shape the window is.
  *
  * ...AND THE REPLAY'S PARALLAX ON TOP. All of that is measured for the match's
  * own ORTHOGRAPHIC frame, where the backdrop sits square behind the play and its
@@ -54,7 +92,7 @@ export function replayStandOff() {
  */
 export function matchMargins() {
   if (!versusActive()) return { side: 0, vertical: 0 };
-  const zoomMin = Math.max(0.1, Math.min(1, CONFIG.versus?.camera?.zoomMin ?? 1));
+  const zoomMin = versusZoomFloor();
   const arenaH = bounds.top - bounds.bottom;
   const reach = replayStandOff();
   return {

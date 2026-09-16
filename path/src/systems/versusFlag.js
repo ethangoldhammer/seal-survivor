@@ -1,4 +1,8 @@
 import { CONFIG } from '../config.js';
+// Both leaves, and both stay leaves: session.js imports nothing at all, so the
+// question "how many people are at THIS screen" can be asked from here without
+// the socket, the codec or the lobby screen coming with it.
+import { onlineActive, localSeat, REMOTE } from './online/session.js';
 
 // ---------------------------------------------------------------------------
 // VERSUS — the one bit every other system may ask.
@@ -115,4 +119,84 @@ export function captainPad(team) {
 /** True when side `team`'s captain is the computer. */
 export function captainIsCpu(team) {
   return captainOf(team)?.kind === 'cpu';
+}
+
+// ---------------------------------------------------------------------------
+// HOW MANY PEOPLE ARE IN THE ROOM — which is a question about the CAMERA more
+// than about the match.
+//
+// A shot that has to hold both goalmouths' worth of pitch is a shot composed
+// for two people sharing one screen: neither of them may be left off it, so
+// the frame gives up closeness to keep everybody in. With one person playing,
+// that trade buys nothing — it spends the whole screen holding a CPU seal the
+// player is not watching — and on a phone held upright it is actively wrong,
+// because the frame is a quarter as wide as the one the pitch was composed
+// for and the zoom-out that would hold both seals leaves the ball a speck.
+//
+// So the count is the camera's mode switch (see versusCameraGoal): more than
+// one human is local multiplayer and frames everything; one human frames the
+// ball and biases to their seal.
+//
+// NOTHING SET UP AT ALL answers "local", deliberately. A `?versus` boot or a
+// harness has an empty roster and falls through to the by-index pad rules
+// (p2Pad), which can put two people on the pitch without ever writing a
+// member — so the empty case takes the framing that leaves nobody out.
+//
+// AN ONLINE MATCH IS NEVER LOCAL. Two people are playing it and only one of
+// them is here; the other has a screen and a camera of their own. That is the
+// case mode B was written for before a phone ever needed it.
+// ---------------------------------------------------------------------------
+
+/**
+ * How many members across both sides are people AT THIS SCREEN.
+ *
+ * A remote captain is a person and is NOT one of these: they are on their own
+ * machine, with their own camera, and framing a seal that is somebody else's
+ * whole view of the match is the exact thing mode B was written for in the
+ * first place. `REMOTE` is the sentinel on their member record (see
+ * online/session.js), which is the same thing seatPad reads to make sure a
+ * local pad never drives a remote seal.
+ */
+export function versusHumanCount() {
+  let n = 0;
+  for (const t of versusSetup.teams) {
+    for (const m of t.members) if (m?.kind === 'human' && m.pad !== REMOTE) n++;
+  }
+  return n;
+}
+
+/** Has the team select written anything at all? */
+export function versusSetUp() {
+  return versusSetup.teams.some((t) => t.members.length > 0);
+}
+
+/** Two or more people on one screen — or a match nobody set up. */
+export function versusLocalMultiplayer() {
+  // ONLINE IS NEVER LOCAL, whatever the roster says. Asked ahead of the count
+  // rather than left to the REMOTE sentinel because the count is a fact about
+  // a roster somebody has to have written, and a session that reaches a match
+  // without one would otherwise fall through to the empty-roster default and
+  // compose for a player who is in another country.
+  if (onlineActive()) return false;
+  return !versusSetUp() || versusHumanCount() > 1;
+}
+
+/**
+ * Which side the one person is on, for a camera that frames their seal: the
+ * first side with a human CAPTAIN, since the captain is the seal that is
+ * driven and drawn. 0 when there is nobody to find, which is player 1 — the
+ * seat the keyboard can only ever be.
+ */
+export function versusLocalTeam() {
+  // ONLINE SAYS IT OUTRIGHT: the guest is always the right-hand captain, on
+  // both machines (GUEST_SEAT), and each end frames its own end of that.
+  if (onlineActive()) {
+    const seat = localSeat();
+    if (seat >= 0) return Math.min(seat, versusSetup.teams.length - 1);
+  }
+  for (let i = 0; i < versusSetup.teams.length; i++) {
+    const c = captainOf(i);
+    if (c?.kind === 'human' && c.pad !== REMOTE) return i;
+  }
+  return 0;
 }

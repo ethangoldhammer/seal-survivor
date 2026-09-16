@@ -2,6 +2,7 @@ import { CONFIG } from '../config.js';
 import { emit } from '../entities/particles.js';
 import { celebrationState } from './celebrate.js';
 import { clapState } from './clap.js';
+import { strikePoseState } from './strikePose.js';
 
 // ============================================================================
 // BUBBLES ATTACHED TO A POSE — the water's answer to the animal doing
@@ -86,11 +87,13 @@ function newTrack() {
 const tracks = {
   celebrate: newTrack(),
   clap: newTrack(),
+  coil: newTrack(),
 };
 
 export function resetPoseBubbles() {
   tracks.celebrate = newTrack();
   tracks.clap = newTrack();
+  tracks.coil = newTrack();
 }
 
 /**
@@ -235,6 +238,25 @@ export function updatePoseBubbles(rawDt, rig, ctx = {}) {
   // go of, and it should get its own puff.
   if (clapState.active || clapState.t > 0.001) {
     fired += run(CONFIG.clap?.bubbles, tracks.clap, clapState.presses, clapState.t, clapState.t, rig, ctx, dt);
+  }
+
+  // THE COIL — the wind-up reaching its moment (systems/strikePose.js). A
+  // third source for the same reason the clap is a second one: it is neither a
+  // celebration nor a gesture but a STATE, and its clock is its own.
+  //
+  // `hits` is the seq — a player who lets go and grabs the button again inside
+  // one wind-up has asked for the moment twice and should get two puffs, even
+  // though the coil never returned to zero in between.
+  //
+  // PHASE IS CAPPED AT 1 AND `t` IS NOT. The snap overshoots the pose on
+  // purpose (CONFIG.strikePose.overshoot), and a phase that went past 1 would
+  // make a burst written at 1 fire on the way in and again on the way back
+  // down through it — the double that the edge test exists to prevent, arriving
+  // through the one door it leaves open. Capped, the hold sits at exactly 1 and
+  // the crossing happens once.
+  if (strikePoseState.active || strikePoseState.t > 0.001) {
+    const phase = Math.min(1, strikePoseState.t);
+    fired += run(CONFIG.strikePose?.bubbles, tracks.coil, strikePoseState.hits, phase, phase, rig, ctx, dt);
   }
 
   return fired;

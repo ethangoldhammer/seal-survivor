@@ -121,6 +121,8 @@ dist-bolt-lab
 # npm run looks:poselab. (dist-clap-lab is deliberately NOT here — that one is
 # checked in, and adding it would leave a tracked directory quietly ignored.)
 dist-pose-lab
+# The coil lab's build (npm run looks:coillab), same rule.
+dist-coil-lab
 dist-ball-lab/
 dist-replay-lab/
 dist-deck-gun

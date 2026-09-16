@@ -289,3 +289,6 @@ releaseep,epithet,the Released.,,,,,release,"PLACEHOLDER — a name for a boss t
 bigticket,epithet,the Big Ticket,,,,,giant,
 giant,epithet,the Giant,,,,,giant,
 mega,prefix,Mega,,,,,giant,
+megaCopy,prefix,Whopper,,,,,giant,
+megaCopy2,prefix,Bigg,,,,,giant,
+megaCopy3,prefix,Xtra,,,,,giant,

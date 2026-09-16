@@ -24,6 +24,7 @@ import {
   setGoalSwimmers, setGoalBall, goalGlowImpulse, resetGoalStir, goalGlowState,
 } from '../../path/src/systems/wallRocks.js';
 import { mouthHalfHeight, tunnelDepth, rockX, goalLineX, cameraReach, installGoalHoles } from '../../path/src/systems/versusGoal.js';
+import { versusZoomFloor } from '../../path/src/systems/backdropFit.js';
 // THE GOAL ITSELF — the shipping modules, so the last block of this page can
 // score one rather than describe one. See the section at the bottom.
 import { initPlayer, resetPlayer, player, buildSealBody, updatePlayer, poseBody } from '../../path/src/entities/player.js';
@@ -169,7 +170,10 @@ const b = await shot('into the left goal, zoom 2', `the frame's edge ${reach.toF
 place(bounds.left - 8, gy, 1.6);
 const c = await shot('camera 8 past the wall', 'past the reach: what the tunnel is made of');
 // And the whole pitch at the zoom floor: what "always frame both seals" costs.
-const zoomMin = CONFIG.versus.camera.zoomMin ?? 0.55;
+// The widest the shot can be asked to go, measured off this page's own frame
+// (versusZoomFloor) rather than typed — the same number the backdrop is built
+// for, which is the whole point of looking at it here.
+const zoomMin = versusZoomFloor();
 place(0, (bounds.bottom + bounds.top) / 2, zoomMin);
 {
   const cam = world.camera;

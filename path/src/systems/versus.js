@@ -120,7 +120,7 @@ import { pollPads } from '../ui/padPoll.js';
 // ensureVersusStyle, and installStyleBelowRoles for why order is the whole
 // mechanism.
 import { installStyleBelowRoles } from '../ui/typography.js';
-import { versusActive, captainPad } from './versusFlag.js';
+import { versusActive, captainPad, versusLocalMultiplayer, versusLocalTeam } from './versusFlag.js';
 import { spendAirJump, airRamp } from './airborne.js';
 import { updateBot, botWanted, botState, resetBot, resetBotBrains } from './versusBot.js';
 // The ball's drawn edge and the seal's body — THE two shapes a contact is
@@ -7073,19 +7073,53 @@ function paintSkip(t) {
 // ---------------------------------------------------------------------------
 // THE CAMERA — a box round the subjects, and the tightest frame that holds it.
 //
-// Mode A boxes the ball and both seals (one screen, local play); mode B boxes
-// the ball and one seal (online play — the other seal is on another screen).
-// Either way: the box is padded, the zoom is the tighter of the two axes'
-// fits, clamped to [zoomMin, zoomMax]. BOTH SEALS AND THE BALL ARE ALWAYS IN
-// FRAME: zoomMin is under 1 (0.55 holds the whole pitch), and the backdrop is
-// built deep and tall enough in a match that a frame that wide still lands on
-// sky and seabed (world.js matchMargins) rather than bare background; zoomMax
-// so two seals nose to nose on the ball are not a close-up of three noses. The
-// centre is the box's, led a little by where the ball is going, and
-// world.clampFocus keeps it inside the walls — plus `camera.reach` past them,
-// into the goals (versusGoal.cameraReach) — at whatever zoom the frame ended
-// up at. Smoothed here, claimed at full weight every frame the way the dev
-// stage parks its shot.
+// ONE RULE, AND IT IS NOT NEGOTIABLE: THE PLAYER AND THE BALL ARE IN FRAME.
+// Everything else here — the mode, the padding, the lead, the bias, the goal
+// widening — is a preference about a shot that already obeys it. Nothing may
+// clamp the zoom in a direction that leaves a subject outside the frame, which
+// is why there is no zoom FLOOR any more: a floor is a promise to cut somebody
+// out on the day the box gets bigger than it. `zoomMax` is the only clamp left
+// and it can only punch in on a box that already fits.
+//
+// WHO IS IN THE BOX is the one thing that varies, and it is a question about
+// how many people are in the room rather than about the device:
+//
+//   A  the ball and BOTH seals — local multiplayer, two people on one screen,
+//      and neither of them may be left off it.
+//   B  the ball and ONE seal, the one the person here is driving. A match
+//      against the computer, an online match (the other seal is on someone
+//      else's screen), and anything on a phone, which can only be one of
+//      those. The CPU's seal is not a subject and does not widen the shot.
+//
+// WHAT THE RULE COSTS ON A NARROW SCREEN, because it is a real cost and the
+// number is not small. The frame's HEIGHT is 52 world units at zoom 1 on every
+// device — viewHeight is a constant, and the window's aspect only moves the
+// WIDTH (updateBounds in arena.js) — so the shape of the frame is the shape of
+// the glass, and holding two things 143 units apart on a 9:19.5 phone means a
+// frame 198 wide, which is 429 tall. The pitch is then a sixth of the screen's
+// height with sky and seabed over and under it. That is not a bug in the fit:
+// it is what "both in frame" means on a screen that shape, and the only ways
+// out of it are a shorter pitch or a letterboxed viewport, neither of which
+// the camera can decide for itself. The BACKDROP is built for it (see
+// versusZoomFloor in systems/backdropFit.js, which measures the same worst box
+// this camera can be handed) so the widest shot still lands on sky and seabed
+// rather than on bare background.
+//
+// THE PADDING AND THE BIAS both live inside the rule. `pad` is air round the
+// box and is part of what the fit holds, so it is never spent to keep a
+// subject in — it cannot be, because it is inside the thing being fitted.
+// `bias` moves the centre towards the person's own seal, and may only spend
+// SLACK: the frame is tight on exactly one axis (the one whose fit won), and
+// the other has room between the box's edge and the frame's. Zero on the tight
+// axis, by construction, so the bias can never be the thing that breaks this.
+//
+// The centre is led a little by where the ball is going, and world.clampFocus
+// keeps it inside the walls — plus `camera.reach` past them, into the goals
+// (versusGoal.cameraReach) — at whatever zoom the frame ended up at. That
+// clamp cannot break the rule either: it only ever moves a frame that was
+// hanging PAST the arena back towards it, and every subject is inside the
+// arena and its reach. Smoothed here, claimed at full weight every frame the
+// way the dev stage parks its shot.
 // ---------------------------------------------------------------------------
 
 const camState = { x: 0, y: 0, zoom: 1, seeded: false };
@@ -7100,6 +7134,27 @@ function boxInclude(x, y, first) {
 }
 
 /**
+ * WHOSE SEAL THE FRAME IS ON: null for everybody (mode A), or the seat index
+ * of the one seal it is biased towards (mode B).
+ *
+ * 'auto' asks the roster rather than the device (see versusLocalMultiplayer in
+ * systems/versusFlag.js): two people on one screen is A, one person is B on
+ * their own seal. A phone can only ever be the second of those, which is why
+ * there is no touch test here — the count already answers it, and a
+ * user-agent sniff would answer it worse.
+ *
+ * An explicit 'A' or 'B' forces that framing, with `camera.subject` picking
+ * B's seal. That is the tuner's and the harness's way of looking at either one
+ * without a roster, and it is what the shipped config used to say.
+ */
+function camSubject(c) {
+  const m = (c.mode ?? 'auto').toUpperCase();
+  if (m === 'A') return null;
+  if (m === 'B') return (c.subject ?? 0) === 1 ? 1 : 0;
+  return versusLocalMultiplayer() ? null : versusLocalTeam();
+}
+
+/**
  * The frame the camera is aiming for, unsmoothed: { x, y, zoom }. `frame` is
  * the frustum at zoom 1 in world units — { w, h } — which is what the world's
  * orthographic camera's right-left and top-bottom are.
@@ -7107,7 +7162,7 @@ function boxInclude(x, y, first) {
 export function versusCameraGoal(frame, out = { x: 0, y: 0, zoom: 1 }) {
   if (replayState.active) return replayCameraGoal(frame, out);
   const c = cfg().camera ?? {};
-  const mode = (c.mode ?? 'A').toUpperCase();
+  const subject = camSubject(c);
   const pad = c.pad ?? 9;
   const lead = c.lead ?? 0.22;
   const bx = ball.x + ball.vx * lead;
@@ -7116,9 +7171,8 @@ export function versusCameraGoal(frame, out = { x: 0, y: 0, zoom: 1 }) {
   boxInclude(bx - ball.r, by - ball.r, false);
   boxInclude(bx + ball.r, by + ball.r, false);
   const p1 = player.mesh?.position;
-  const seals = mode === 'B'
-    ? [(c.subject ?? 0) === 1 ? p2.pos : p1]
-    : [p1, p2.pos];
+  const subjectPos = subject === 1 ? p2.pos : p1;
+  const seals = subject == null ? [p1, p2.pos] : [subjectPos];
   for (const s of seals) if (s) boxInclude(s.x, s.y, false);
   // THE GOAL, once the ball is in its zone: the mouth's face and a little of
   // the tunnel, the full band tall, blended in from the ball's own edge over
@@ -7145,11 +7199,30 @@ export function versusCameraGoal(frame, out = { x: 0, y: 0, zoom: 1 }) {
   const h = (_box.maxY - _box.minY) + pad * 2;
   const fitW = frame.w / Math.max(1e-6, w);
   const fitH = frame.h / Math.max(1e-6, h);
-  const zoomMin = Math.max(0.1, Math.min(1, c.zoomMin ?? 0.55));
-  const zoomMax = Math.max(zoomMin, c.zoomMax ?? 2);
-  out.zoom = Math.max(zoomMin, Math.min(zoomMax, fitW, fitH));
+  // THE RULE: the box is held on BOTH axes, whatever that costs. The tighter
+  // of the two fits is the widest frame either axis needs, and there is NO
+  // floor under it — a floor is a promise to cut somebody out, which is the
+  // one thing this camera may not do. zoomMax is the only clamp, and it can
+  // only ever punch IN on a box that already fits.
+  const zoomMax = Math.max(0.01, c.zoomMax ?? 2);
+  out.zoom = Math.min(zoomMax, fitW, fitH);
   out.x = (_box.minX + _box.maxX) * 0.5;
   out.y = (_box.minY + _box.maxY) * 0.5;
+  // ...AND THE BIAS, WHICH SPENDS SLACK AND NOTHING ELSE. The frame is only
+  // ever tight on ONE axis — the one whose fit won — so the other has room
+  // between the box's edge and the frame's, and that room is what the bias may
+  // move the centre by. Measured against the zoom this frame actually ended up
+  // at, so it is right at every aspect and through every punch-in; zero when
+  // the axis is the tight one, which is why the rule above survives it.
+  if (subject != null && subjectPos) {
+    const bias = clamp01(c.bias ?? 0.5);
+    const slackX = Math.max(0, frame.w / (2 * out.zoom) - w * 0.5);
+    const slackY = Math.max(0, frame.h / (2 * out.zoom) - h * 0.5);
+    const wantX = out.x + (subjectPos.x - out.x) * bias;
+    const wantY = out.y + (subjectPos.y - out.y) * bias;
+    out.x = Math.max(out.x - slackX, Math.min(out.x + slackX, wantX));
+    out.y = Math.max(out.y - slackY, Math.min(out.y + slackY, wantY));
+  }
   return out;
 }
 
