@@ -10,8 +10,8 @@
   <title>Seal Survivor</title>
   <!-- Generated from the splash art by `npm run icons:app`, so the tab, a
        home-screen bookmark and the real iOS app are all the same picture. -->
-  <link rel="icon" type="image/png" href="/favicon.png" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <!-- Only read when the deployed page is added to a home screen: without it
        Safari draws its own chrome over the game. The native shell ignores all
        of this — it is a real app there, not a bookmark. -->
@@ -24,7 +24,7 @@
        that fails to arrive is not a fallback, it is a subtly wrong screen.
        Linked here rather than @imported from ui.js's stylesheet so it starts
        downloading with the document instead of after the first paint. -->
-  <link rel="stylesheet" href="/fonts/fonts.css" />
+  <link rel="stylesheet" href="fonts/fonts.css" />
   <style>
     * { margin: 0; padding: 0; outline: none !important; box-sizing: border-box; }
     html, body, #root { width: 100%; height: 100%; overflow: hidden; background: #05060a; }
@@ -34,6 +34,6 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="module" src="/path/src/main.js"></script>
+  <script type="module" src="./path/src/main.js"></script>
 </body>
 </html>

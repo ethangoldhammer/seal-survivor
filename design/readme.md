@@ -47,10 +47,12 @@ leaderboard, `renderRunDetail()` for the back of the card.
 
 ## Type on the role selectors is the fallback layer
 
-`path/src/textRoles.js` names 21 selectors as **text roles**, and for those,
+`path/src/textRoles.js` names every selector that is a **text role** (the
+list there is the list — 25 for the run's own UI, and since September 2026
+another 21 for Blubberball's match HUD and team select), and for those,
 `font-size`, weight, colour and `text-shadow` in `styles.css` are **re-stated
 at runtime** by `ui/typography.js` from `CONFIG.textStyles`, in a sheet
-appended after this one:
+appended after this one. The first twenty-one:
 
 ```
 .sv-title  .sv-sub  .sv-btn  .sv-hint  .sv-blob-label  .sv-lb-row  .sv-status
@@ -58,6 +60,11 @@ appended after this one:
 .sv-card-desc  .sv-toast  .sv-toast-combo  .sv-chain  .sv-proc  .sv-callout
 .sv-callout-coach  .sv-callout-boost  .sv-callout-strike
 ```
+
+The Blubberball surfaces are not in `styles.css` at all: their fallback rules
+live in `systems/versus.js` and `ui/teamSelect.js`, which build their sheets
+late and file them *under* the role sheet (`installStyleBelowRoles`). Same
+contract — the numbers there are what the Text panel's Reset restores.
 
 The family is not set anywhere in this file — `--sv-font` is only what the game
 uses for the few frames before that module has run.

@@ -1,0 +1,144 @@
+<Rive version="1" kind="fragment">
+
+    <!-- =========================================================================
+         GOAL CARD — the card that pops in the lower third after a goal.
+
+         Wears the same Theme as the stats page and the seat card, off the same
+         instance: a card styled out of its own numbers would drift from the
+         page beside it the first time either was tuned.
+
+         NOT WIRED INTO THE MATCH YET. The goal shutter runs on the water's own
+         dilated clock and its timings are tuned to the frame (see the shutter
+         note in systems/versus.js); swapping the live card for this one is a
+         change to the most timing-sensitive three seconds in the mode, and is
+         worth doing with the game actually running rather than from a
+         screenshot.
+         ========================================================================= -->
+    <Artboard viewModelId="3:400" viewModelInstanceId="3:410" defaultStateMachineId="4:70"
+              x="1500" y="0" width="560" height="200" styleId="4:80" name="Goal Card" id="0:4">
+
+        <LayoutComponentStyle name="Style" id="4:80"/>
+
+        <!-- Declared first paints on top. -->
+
+        <Text x="512" y="46" sizingValue="autoWidth" originX="1" originY="0.5" name="Clock" id="4:30">
+            <TextStylePaint letterSpacing="0.1" fontAssetId="3:1" name="S" id="4:31">
+                <DataBindContext sourcePathIds="3:400-3:405-3:313" propertyKey="274" id="0:5060"/>
+                <Fill name="Fill" id="0:5061"><SolidColor colorValue="FF4A5A68" name="C" id="0:5062"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="4:31" text="lorem" name="Run" id="4:32">
+                <DataBindContext sourcePathIds="3:400-3:403" propertyKey="268" id="0:5063"/>
+            </TextValueRun>
+        </Text>
+
+        <Text x="48" y="132" sizingValue="autoWidth" originX="0" originY="0.5" name="Goal Line" id="4:20">
+            <TextStylePaint letterSpacing="0.04" fontAssetId="3:1" name="S" id="4:21">
+                <DataBindContext sourcePathIds="3:400-3:405-3:313" propertyKey="274" id="0:5064"/>
+                <Fill name="Fill" id="0:5065">
+                    <SolidColor colorValue="FFF5B02E" name="C" id="0:5066">
+                        <DataBindContext sourcePathIds="3:400-3:404" propertyKey="37" id="0:5067"/>
+                    </SolidColor>
+                </Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="4:21" text="dolor sit amet" name="Run" id="4:22">
+                <DataBindContext sourcePathIds="3:400-3:402" propertyKey="268" id="0:5068"/>
+            </TextValueRun>
+        </Text>
+
+        <!-- The scorer. The one hero size on this card, so it is NOT themed:
+             folding it into a shared role would mean the role could never be
+             tuned without wrecking the thing the card exists to say. -->
+        <Text x="48" y="78" sizingValue="autoWidth" originX="0" originY="0.5" name="Scorer" id="4:10">
+            <TextStylePaint fontSize="46" fontAssetId="3:1" name="S" id="4:11">
+                <Fill name="Fill" id="0:5069"><SolidColor colorValue="FFF2F6FA" name="C" id="0:5070"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="4:11" text="Lorem ipsum" name="Run" id="4:12">
+                <DataBindContext sourcePathIds="3:400-3:401" propertyKey="268" id="0:5071"/>
+            </TextValueRun>
+        </Text>
+
+        <Shape x="10" y="10" name="Team Bar" id="4:40">
+            <Rectangle width="16" height="180" originX="0" originY="0" name="Path" id="0:5072"/>
+            <Fill name="Fill" id="0:5073">
+                <SolidColor colorValue="FFF5B02E" name="C" id="0:5074">
+                    <DataBindContext sourcePathIds="3:400-3:404" propertyKey="37" id="0:5075"/>
+                </SolidColor>
+            </Fill>
+        </Shape>
+
+        <Shape x="280" y="100" rotation="0.34" name="Glare" id="4:51">
+            <Rectangle width="30" height="244" originX="0.5" originY="0.5" name="Path" id="0:5076"/>
+            <Fill name="Fill" id="0:5077">
+                <LinearGradient startX="-15" startY="0" endX="15" endY="0" name="G" id="0:5078">
+                    <GradientStop colorValue="00FFFFFF" position="0" name="A" id="0:5079"/>
+                    <GradientStop colorValue="45FFFFFF" position="0.5" name="B" id="0:5080"/>
+                    <GradientStop colorValue="00FFFFFF" position="1" name="C" id="0:5081"/>
+                </LinearGradient>
+            </Fill>
+            <ClippingShape sourceId="4:50" name="Clip" id="0:5082"/>
+        </Shape>
+
+        <Shape x="10" y="10" name="Card" id="4:50">
+            <Rectangle width="540" height="180" originX="0" originY="0" cornerRadiusTL="12" name="Path" id="0:5083"/>
+            <Stroke name="Glow" id="0:5084">
+                <DataBindContext sourcePathIds="3:400-3:405-3:302" propertyKey="47" id="0:5085"/>
+                <SolidColor colorValue="4D3FE0C8" name="C" id="0:5086"/>
+                <Feather name="F" id="0:5087"><DataBindContext sourcePathIds="3:400-3:405-3:303" propertyKey="749" id="0:5088"/></Feather>
+            </Stroke>
+            <Stroke name="Edge" id="0:5089">
+                <DataBindContext sourcePathIds="3:400-3:405-3:301" propertyKey="47" id="0:5090"/>
+                <SolidColor colorValue="FF5FF0DC" name="C" id="0:5091"/>
+                <TrimPath start="0" end="0" modeValue="sequential" name="Trim" id="4:60">
+                    <DataBindContext sourcePathIds="3:400-3:405-3:309" propertyKey="116" id="0:5092"/>
+                </TrimPath>
+                <DashPath name="Dashes" id="0:5093">
+                    <DataBindContext sourcePathIds="3:400-3:405-3:308" propertyKey="690" id="0:5094"/>
+                    <Dash name="On" id="0:5095"><DataBindContext sourcePathIds="3:400-3:405-3:306" propertyKey="692" id="0:5096"/></Dash>
+                    <Dash name="Off" id="0:5097"><DataBindContext sourcePathIds="3:400-3:405-3:307" propertyKey="692" id="0:5098"/></Dash>
+                </DashPath>
+            </Stroke>
+            <Fill name="Fill" id="0:5099"><SolidColor colorValue="F216202B" name="C" id="0:5100"/></Fill>
+        </Shape>
+
+        <Shape x="280" y="100" name="Shadow" id="4:52">
+            <Rectangle width="540" height="180" originX="0.5" originY="0.5" cornerRadiusTL="12" name="Path" id="0:5101"/>
+            <Stroke name="Shadow" id="0:5102">
+                <DataBindContext sourcePathIds="3:400-3:405-3:304" propertyKey="47" id="0:5103"/>
+                <SolidColor colorValue="A6000000" name="C" id="0:5104"/>
+                <Feather name="F" id="0:5105">
+                    <DataBindContext sourcePathIds="3:400-3:405-3:304" propertyKey="749" id="0:5106"/>
+                    <DataBindContext sourcePathIds="3:400-3:405-3:305" propertyKey="751" id="0:5107"/>
+                </Feather>
+            </Stroke>
+        </Shape>
+
+        <!-- THE ENTRANCE, once. The edge draws itself round the card and the
+             glare crosses it as it arrives; both ride the one timeline so the
+             card has a single arrival rather than two things happening near
+             each other. It does NOT loop — a goal card is an event. -->
+        <LinearAnimation duration="46" name="Arrive" id="4:71">
+            <KeyedObject objectId="4:60" id="0:5108">
+                <KeyedProperty propertyKey="115" id="0:5109">
+                    <KeyFrameDouble value="0" interpolationType="cubic" frame="0" id="0:5110"/>
+                    <KeyFrameDouble value="1" interpolationType="cubic" frame="38" id="0:5111"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="4:51" id="0:5112">
+                <KeyedProperty propertyKey="13" id="0:5113">
+                    <KeyFrameDouble value="-40" interpolationType="linear" frame="0" id="0:5114"/>
+                    <KeyFrameDouble value="600" interpolationType="linear" frame="46" id="0:5115"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+
+        <StateMachine name="State Machine 1" id="4:70">
+            <StateMachineLayer name="Layer 1" id="4:72">
+                <AnyState x="200" y="-120" id="0:5116"/>
+                <ExitState x="400" y="-120" id="0:5117"/>
+                <EntryState id="0:5118"><StateTransition stateToId="4:73" id="0:5119"/></EntryState>
+                <AnimationState x="200" animationId="4:71" id="4:73"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+</Rive>

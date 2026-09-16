@@ -20,6 +20,11 @@ import {
   loadAmbientFromFile, clearAmbientClip, hasAmbientClip, onAmbientClipsChanged, ambientState,
   skipAmbientClip,
 } from '../systems/ambient.js';
+import {
+  startSplashBed, stopSplashBed, resetSplashBed, reloadSplashBed, applySplashBedSettings,
+  loadSplashBedFromFile, clearSplashBedClip, hasSplashBedClip, onSplashBedClipsChanged,
+  splashBedState,
+} from '../systems/splashBed.js';
 
 // Curated rather than every ASSETS key: particles and the like are tiny FX
 // that don't benefit from a texture, so they're left out to reduce clutter. Everything that swims — every companion, and every species with an
@@ -67,6 +72,9 @@ const EDITABLE_SECTIONS = [
     // Tint only. The coral's brightness is its own gradient — see the note in
     // createCoralOrb about why the glow slider here is not read.
     ['rapidFireOrb', 'Coral (fire rate) — tint'],
+    // Same asset arrangement, same exemption: the score coral is grown too, so
+    // only the tint here reaches it.
+    ['scoreOrb', 'Coral (score multiplier) — tint'],
     ['trapBubble', 'Beluga bubble'],
   ]],
   ['Weapons & projectiles', [
@@ -404,8 +412,8 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
   // What is left of the old Sound tab once the per-event rows moved to the
   // workbench (F): the three things here that were never one event's sound.
   // The bus colours every voice, the music chain is on its own graph entirely,
-  // and the ambient bed is a continuous sound with no event behind it — none
-  // of the three has a row in an event-first panel to live in.
+  // and the two beds are continuous sounds with no event behind them — none
+  // of the four has a row in an event-first panel to live in.
   //
   // The 67 voice rows and the whole Haptics tab are gone. They were a second
   // place to edit the same numbers, and a second place is a place to disagree:
@@ -413,8 +421,11 @@ export function initTexturePanel(onAssetChanged, onTuningChanged) {
   // both under different identities and neither showed what the other did.
   const soundPanel = panel.querySelector('#svTexPanelSound');
   const master = buildSection('Mix, music & ambience', 'sound');
-  master.body.append(buildBusRow(), buildMusicRow(), buildAmbientRow());
-  master.setCount(3);
+  // The title bed sits last and directly under the run's bed, because the two
+  // are the same kind of thing on two different screens and the only way to
+  // judge either level is against the other.
+  master.body.append(buildBusRow(), buildMusicRow(), buildAmbientRow(), buildSplashBedRow());
+  master.setCount(4);
   soundPanel.appendChild(master.el);
 
   const moved = document.createElement('div');
@@ -1318,6 +1329,27 @@ function buildBusRow() {
   slider(el, 'echo fade in', 0.05, 2, 0.05, () => echo().fadeIn ?? 0.35, (v) => { echo().fadeIn = v; changed(); });
   slider(el, 'echo fade out', 0.05, 3, 0.05, () => echo().fadeOut ?? 0.7, (v) => { echo().fadeOut = v; changed(); });
 
+  // --- the near-death wash --------------------------------------------------
+  // Bypassed except in the last sliver of the health bar, so these hear nothing
+  // until the frame has gone bloody. See CONFIG.audio.bus.nearDeath.
+  const dying = () => (bus().nearDeath ??= {});
+  const dyingRow = document.createElement('div');
+  dyingRow.className = 'sv-sfx-field';
+  const dyingLab = document.createElement('label');
+  dyingLab.textContent = 'near death';
+  dyingLab.title = 'warble and reverb wash as the health bar empties';
+  const dyingBox = document.createElement('input');
+  dyingBox.type = 'checkbox';
+  dyingBox.checked = dying().enabled !== false;
+  dyingBox.addEventListener('change', () => { dying().enabled = dyingBox.checked; changed(); });
+  dyingRow.append(dyingLab, dyingBox);
+  el.appendChild(dyingRow);
+
+  slider(el, 'death wet', 0, 1, 0.01, () => dying().wet ?? 0.75, (v) => { dying().wet = v; changed(); });
+  slider(el, 'warble rate', 0.1, 8, 0.1, () => dying().warbleHz ?? 1.5, (v) => { dying().warbleHz = v; changed(); });
+  slider(el, 'warble depth', 0, 12, 0.1, () => dying().warbleDepthMs ?? 3.2, (v) => { dying().warbleDepthMs = v; changed(); });
+  slider(el, 'warble mix', 0, 1, 0.01, () => dying().warbleMix ?? 1, (v) => { dying().warbleMix = v; changed(); });
+
   // Depth tracking. Its own range rather than the music's — see the note in
   // CONFIG.audio.bus.depth for why they can't share one.
   const depth = () => (bus().depth ??= {});
@@ -1789,6 +1821,160 @@ function buildAmbientRow() {
   stopBtn.textContent = 'Stop';
   stopBtn.addEventListener('click', () => stopAmbient());
   testRow.append(testLab, playBtn, skipBtn, stopBtn);
+  el.appendChild(testRow);
+
+  return el;
+}
+
+// The title bed — one loop under the splash, and the only sound that screen has
+// besides the dice. Sits under the ambient row because the two are the same kind
+// of thing and their levels are only judgeable against each other.
+//
+// SHORTER THAN THE ROW ABOVE ON PURPOSE. There is no rotation here, so there is
+// no hold, no crossfade, no shuffle and no skip — see CONFIG.splashBed for why
+// a title card wants a held loop and not a rotation.
+function buildSplashBedRow() {
+  const el = document.createElement('div');
+  el.className = 'sv-sfx-row';
+  el.style.borderColor = 'rgba(150,255,190,0.3)';
+
+  const bed = () => (CONFIG.splashBed ??= {});
+
+  const head = document.createElement('div');
+  head.className = 'sv-sfx-name';
+  const title = document.createElement('span');
+  title.textContent = 'Title bed';
+  const info = document.createElement('span');
+  info.className = 'sv-sfx-type';
+  const refreshInfo = () => {
+    const s = splashBedState();
+    if (!s.clips.length) { info.textContent = 'empty — nothing plays'; return; }
+    const n = `${s.clips.length} clip${s.clips.length === 1 ? '' : 's'}`;
+    info.textContent = s.clips.length > 1 ? `${n} · one at random per load` : `${n} · looping`;
+  };
+  refreshInfo();
+  head.append(title, info);
+  el.appendChild(head);
+
+  const note = document.createElement('div');
+  note.className = 'sv-tex-upload-status';
+  note.textContent = 'One loop, under the splash only. It fades up when the name card mounts and away when the card breaks up — no rotation, because the card is on screen for seconds. Ships empty; drop a clip in a slot and it plays from the next splash. Several clips makes them an A/B across reloads rather than a cycle within one. Through the FX bus like the ambient bed above, so the player\u2019s effects volume reaches it.';
+  el.appendChild(note);
+
+  // Audio cannot play before the player has pressed something, and on the splash
+  // the presses are the dice, Start and a tap on open water — so this is the one
+  // row in the panel whose thing is expected to be silent for reasons that have
+  // nothing to do with how it is tuned. Said out loud rather than left as a
+  // puzzle for whoever next uploads a loop and hears nothing on reload.
+  const gate = document.createElement('div');
+  gate.className = 'sv-tex-upload-status';
+  gate.style.opacity = '0.75';
+  gate.textContent = 'On the real splash this starts on mount but stays silent until the browser has had a gesture — the first tap, wherever it lands. Preview below is already past that.';
+  el.appendChild(gate);
+
+  for (let i = 0; i < (bed().slots ?? 4); i++) {
+    const row = document.createElement('div');
+    row.className = 'sv-sfx-field';
+    const lab = document.createElement('label');
+    lab.style.width = '46px';
+    lab.textContent = `clip ${i + 1}`;
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = 'audio/*';
+    file.style.display = 'none';
+    const up = document.createElement('button');
+    up.className = 'sv-tex-btn';
+    const clr = document.createElement('button');
+    clr.className = 'sv-tex-btn';
+    clr.textContent = 'Clear';
+    const status = document.createElement('span');
+    status.className = 'sv-sfx-val';
+    status.style.width = 'auto';
+
+    // Two things land at different times — what the config says is in the slot
+    // (immediately) and whether that file has decoded (after the fetch). Read
+    // both, and re-read on the decode.
+    const refresh = () => {
+      const src = (bed().srcs ?? [])[i] ?? null;
+      up.textContent = src ? 'Replace' : 'Upload';
+      if (!src) status.textContent = '—';
+      else status.textContent = hasSplashBedClip(src) ? src.split('/').pop().slice(0, 14) : 'not loaded yet';
+    };
+    refresh();
+    const unsubscribe = onSplashBedClipsChanged(refresh);
+
+    up.addEventListener('click', () => file.click());
+    file.addEventListener('change', async () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      unlockAudio();
+      status.textContent = 'loading…';
+      // Saved to disk FIRST so the slot holds a real path rather than a
+      // session-only handle: the tuning file is what survives a reload, and a
+      // path it cannot resolve next boot is worse than an empty slot.
+      const src = await uploadAsset('sfx', f);
+      const key = src ?? `session:${f.name}`;
+      const ok = await loadSplashBedFromFile(key, f);
+      if (!ok) { status.textContent = 'failed'; return; }
+      (bed().srcs ??= [])[i] = key;
+      resetSplashBed();
+      await reloadSplashBed();
+      startSplashBed();
+      saveTuningToStorage();
+      refreshInfo();
+      refresh();
+      if (!src) status.textContent = `${f.name.slice(0, 9)} (session)`;
+    });
+    clr.addEventListener('click', async () => {
+      const src = (bed().srcs ?? [])[i] ?? null;
+      if (src) clearSplashBedClip(src);
+      (bed().srcs ??= [])[i] = null;
+      resetSplashBed();
+      await reloadSplashBed();
+      startSplashBed();
+      saveTuningToStorage();
+      refreshInfo();
+      refresh();
+    });
+    // Nothing here unmounts, so the subscription lives as long as the panel —
+    // held only so the intent sits next to the thing it feeds.
+    void unsubscribe;
+
+    row.append(lab, up, clr, file, status);
+    el.appendChild(row);
+  }
+
+  slider(el, 'volume', 0, 1, 0.01, () => bed().volume ?? 0.3, (v) => { bed().volume = v; applySplashBedSettings(); });
+  const fadeIn = slider(el, 'fade in', 0.1, 10, 0.1, () => bed().fadeIn ?? 2.6, (v) => { bed().fadeIn = v; });
+  fadeIn.title = 'Seconds to come up under the wordmark. Squared rather than linear, so it creeps in — see systems/splashBed.js.';
+  const fadeOut = slider(el, 'fade out', 0.1, 6, 0.1, () => bed().fadeOut ?? 0.9, (v) => { bed().fadeOut = v; });
+  fadeOut.title = 'Seconds to go as the card breaks up. Keep it under the splash reveal or the water outlives the screen it belongs to.';
+  slider(el, 'pitch var', 0, 0.3, 0.01, () => bed().pitchVary ?? 0, (v) => { bed().pitchVary = v; });
+
+  // Auditioned here or not at all: the splash mounts once per page load, so the
+  // only other way to hear a change is to reload the game and be quick.
+  const testRow = document.createElement('div');
+  testRow.className = 'sv-sfx-field';
+  const testLab = document.createElement('label');
+  testLab.textContent = 'preview';
+  const playBtn = document.createElement('button');
+  playBtn.className = 'sv-tex-btn';
+  playBtn.textContent = 'Play';
+  playBtn.addEventListener('click', async () => {
+    unlockAudio();
+    // Reset first, or a second press lands on a bed that is already up and
+    // hears nothing change — the fade-in is the whole thing being tuned here.
+    resetSplashBed();
+    await reloadSplashBed();
+    startSplashBed();
+    refreshInfo();
+  });
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'sv-tex-btn';
+  stopBtn.textContent = 'Stop';
+  stopBtn.title = 'Fades out over the tuned fade, exactly as leaving the splash does';
+  stopBtn.addEventListener('click', () => stopSplashBed());
+  testRow.append(testLab, playBtn, stopBtn);
   el.appendChild(testRow);
 
   return el;

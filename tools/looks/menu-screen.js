@@ -34,7 +34,7 @@ import {
   mountMainMenu, mainMenu, mainMenuActive, mainMenuAim, mainMenuEngaged, mainMenuGrid,
 } from '../../path/src/systems/mainMenu.js';
 import { updateBiolumSkin } from '../../path/src/systems/biolumSkin.js';
-import { initCreatureOutlines } from '../../path/src/systems/outlines.js';
+import { initCreatureOutlines, updateOutlineScale } from '../../path/src/systems/outlines.js';
 import { initParticles, updateParticles, updateParticleScale } from '../../path/src/entities/particles.js';
 import { updateBubbles } from '../../path/src/systems/bubbles.js';
 import { bounds } from '../../path/src/arena.js';
@@ -160,6 +160,11 @@ function tick(now) {
   world.updateCamera(player.mesh.position, dt, {});
   updateParticles(dt);
   updateParticleScale(world.camera, world.renderer);
+  // The menu holds a CROP — it zooms in until the bust and the hex row fit —
+  // and the rim is asked for in pixels against the un-zoomed frame, so this
+  // page has to take the zoom off the rim exactly as main.js does or the bust
+  // here is not the bust the game draws. See systems/outlines.js.
+  updateOutlineScale(world.camera, world.halfExtents(1).h * 2);
   post.render(world.scene, world.camera, dt);
   requestAnimationFrame(tick);
 }

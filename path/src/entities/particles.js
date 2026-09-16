@@ -652,13 +652,20 @@ export function releaseDriven(idx) {
  * Write one driven slot for this frame. `rgb` is already glow-multiplied (see
  * drivenColor), `group` is a goo group INDEX (0 for a plain sprite). Call
  * flushDriven() once after the frame's writes.
+ *
+ * `z` IS OPTIONAL AND IT IS NOT COSMETIC. The gameplay camera is orthographic
+ * (world.js), so depth moves nothing on screen there — but a replay is filmed
+ * by a pool of PERSPECTIVE cameras (systems/replayCams.js), and the goal's
+ * explosion is the beat those cameras exist to swing around. A cloud pinned to
+ * z = 0 is a cut-out from every angle but dead on. Defaulted to the plane so
+ * every driven system that has no depth to give keeps the behaviour it had.
  */
-export function writeDriven(idx, x, y, age, life, size, rgb, group) {
+export function writeDriven(idx, x, y, age, life, size, rgb, group, z = 0) {
   if (!geometry) return;
   const p3 = idx * 3;
   const p2 = idx * 2;
   const pos = attrs.position.array;
-  pos[p3] = x; pos[p3 + 1] = y; pos[p3 + 2] = 0;
+  pos[p3] = x; pos[p3 + 1] = y; pos[p3 + 2] = z;
   const vel = attrs.aVelocity.array;
   vel[p3] = 0; vel[p3 + 1] = 0; vel[p3 + 2] = 0;
   const col = attrs.aColor.array;
@@ -837,7 +844,16 @@ export function emit(name, x, y, opts = {}) {
       // explosion, so brightness is scattered per particle. That restores the
       // depth the multi-colour palettes give the other emitters while staying
       // unmistakably the one hue.
-      color.copy(tint).multiplyScalar(0.65 + Math.random() * 0.7);
+      //
+      // `tintMix` on the emitter is how much of the event's colour the palette
+      // takes: 1 (the default, and every death) is the tint outright; less is
+      // the emitter's own palette washed toward it. The goal spray is the case
+      // — a bang wants to read as a bang, hot and white at the core, and only
+      // carry the scorer's colour on it, not be made of it.
+      const mix = Math.max(0, Math.min(1, def.tintMix ?? 1));
+      if (mix < 1) color.set(colors[(Math.random() * colors.length) | 0]).lerp(tint, mix);
+      else color.copy(tint);
+      color.multiplyScalar(0.65 + Math.random() * 0.7);
     } else {
       color.set(colors[(Math.random() * colors.length) | 0]);
     }
@@ -1078,6 +1094,27 @@ export function updateParticles(dt) {
     u.uGooHide.value = gooSettings() ? 1 : 0;
   }
   updateSurfacePops();
+}
+
+/**
+ * Retire every LOOSE particle — the ring's, the ones emit() threw — and leave
+ * the driven reserve alone. For the goal replay, which rewinds the picture to
+ * a second before the goal and must not open on the spray from a shot that,
+ * as far as the footage is concerned, has not been taken yet.
+ *
+ * NOT resetParticles: that rebuilds `drivenFree` from scratch, which orphans
+ * the slots the versus ball is already holding and hands the same indices out
+ * again. The ball would be drawn by particles something else is also writing.
+ * The split at `ring` is exactly the line between "thrown and forgotten" and
+ * "owned by a system that rewrites it every frame", which is the line this
+ * wants.
+ */
+export function clearLooseParticles() {
+  if (!geometry) return;
+  for (let i = 0; i < ring; i++) attrs.aStart.array[i] = -1e9;
+  markWhole(attrs.aStart);
+  tracked.length = 0;
+  gooUntil.clear();
 }
 
 export function resetParticles() {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, applyIronLung, applyLaserReach } from '../stats.js';
+import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, applyIronLung, applyLaserReach, stashBreathSpeed, applyBreathSpeed } from '../stats.js';
 import { rollLoadout, laserReachMul, DEFAULT_LOADOUT } from '../loadout.js';
 import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
 import { flipperSideForStack, finElementsIn, otherSide } from '../flipperSide.js';
@@ -14,7 +14,7 @@ import { createClapDriver, resetClap } from '../systems/clap.js';
 import { createBreathDriver } from '../systems/breathe.js';
 import { createJawDriver } from '../systems/jaw.js';
 import { attachPlayerOutline } from '../systems/outlines.js';
-import { cancelDash, dashSteer, steerFollow, strikeState } from '../systems/strike.js';
+import { cancelDash, dashSteer, holdAim, steerFollow, strikeState, turboLerp } from '../systems/strike.js';
 
 // dashSteer's per-frame result, reused so a dash frame allocates nothing.
 const steerStep = { heading: 0, speed: 0, breakOut: false };
@@ -29,6 +29,90 @@ const _yAxis = new THREE.Vector3(0, 1, 0); // the art's forward — the roll axi
 const _xAxis = new THREE.Vector3(1, 0, 0); // swings the nose toward the camera
 const _spinQ = new THREE.Quaternion();
 const _zAxis = new THREE.Vector3(0, 0, 1); // the seal's lateral axis — the somersault's
+
+// ---------------------------------------------------------------------------
+// THE RAGDOLL'S OWN CLOCK — see joltDelta.
+//
+// -1 means nobody has published one this frame and the water's clock is all
+// there is, which is what every harness, look page and title screen gets. A
+// running game publishes it once a frame from main.js, so it cannot go stale
+// inside a loop that is turning.
+// ---------------------------------------------------------------------------
+let _wallDt = -1;
+
+// ...AND WHETHER IT MAY RUN AT ALL. See setJoltPaused.
+let _joltPaused = false;
+
+/**
+ * WHAT A WALL SECOND WAS THIS FRAME. Called once a frame by main.js, before
+ * anything is stepped. Anything below `dt` is meaningless and is taken as
+ * "unpublished".
+ */
+export function setJoltWallDt(rawDt) {
+  _wallDt = Number.isFinite(rawDt) && rawDt >= 0 ? rawDt : -1;
+}
+
+/**
+ * A REPLAY IS NOT PLAY, AND A RAGDOLL IS NOT FOOTAGE.
+ *
+ * The same rule main.js applies to the pad (replayHoldsInput / holdInput in
+ * systems/versus.js), applied to the one other live thing that reaches the
+ * body while a recording is on screen.
+ *
+ * A replay REWINDS. It opens `replay.lead` seconds BEFORE the touch that
+ * scored, and every frame of its footage is a frame from before the goal — so
+ * before the blast, and before anything went limp. But the ragdoll is live
+ * state on the seal, and poseReplay calls `anim.update` on every body it
+ * poses: a limp controller takes its limp branch there, ignores the swim state
+ * poseReplay worked out from the record, and hangs the skeleton off the pose
+ * the seal was blown out of. The replay therefore showed all eight animals
+ * ragdolling through a shot of them swimming, and the goal's own tumble
+ * meanwhile ran itself out against footage that had not reached the goal yet.
+ *
+ * So for the length of a replay the jolt is PARKED: nothing advances, and the
+ * skeleton goes back to the mixer so the clip poseReplay asks for is the clip
+ * that plays. This is the same thing endReplay does with the shutter's clock
+ * (`rs.resumeT`) — the goal moment is held where it was and picked up after.
+ *
+ * Held rather than cancelled, because the throw is not over: the blast is
+ * still turning the body when the footage hands the pitch back, and a ragdoll
+ * that ended while nobody was looking would drop the animal into the last
+ * second of its own arc perfectly rigid.
+ */
+export function setJoltPaused(paused) {
+  _joltPaused = !!paused;
+}
+
+/**
+ * THE JOLT IS ON ITS OWN CLOCK, and getting this wrong is invisible in
+ * ordinary play. The goal blast is the case that proves it: the shockwave
+ * fires on the frame the ball goes in, and that is the one frame in the match
+ * the world drops to CONFIG.versus.clock.freezeScale — four percent — for the
+ * goal's shutter and the whole replay after it.
+ *
+ * A ragdoll spending the water's seconds therefore ran a 1.6-second tumble
+ * over FORTY wall seconds. Measured, not theorised: the seals were still
+ * limp, still turning, and still hanging off their skeletons when the replay
+ * opened over them, and the only thing that ever ended it was holdKickoff
+ * snapping every body onto its mark — which is why it read as the skeleton
+ * breaking on the goal and carrying into the replay rather than as a tumble
+ * that was simply too slow.
+ *
+ * So it runs mostly on the wall clock, the way a dead boss's does
+ * (ragdollDelta in systems/bossRagdoll.js, same shape and the same reasoning).
+ * `CONFIG.player.jolt.clock` is the mix, short of 1 so the tumble still
+ * decelerates with the water instead of reading as one animal running at full
+ * speed through a slow-motion shot.
+ */
+function joltDelta(dt) {
+  // Parked under a replay — see setJoltPaused. Zero rather than a small
+  // number: every reader of this multiplies a rate by it, so nothing advances
+  // and nothing has to know why.
+  if (_joltPaused) return 0;
+  if (_wallDt < 0) return dt;
+  const mix = Math.max(0, Math.min(1, CONFIG.player?.jolt?.clock ?? 0.85));
+  return dt + (_wallDt - dt) * mix;
+}
 
 // THE RAGDOLL'S ROLE, and the reason a living seal is unaffected by it.
 //
@@ -179,7 +263,14 @@ export const player = {
   comboSpeedMul: 1,
   // The jolt and the heavy fall — see createSealState below; the run's own
   // seal takes them in a match like the other one.
-  jolt: { spin: 0, spinV: 0, roll: 0, rollV: 0 },
+  jolt: { spin: 0, spinV: 0, roll: 0, rollV: 0, free: 0, kickX: 0, kickY: 0, kick: 0, kickAt: 0, limp: false },
+  // THE BLAST WINDOW — see flingSeal. `flingMul` is how far the speed ceiling
+  // is lifted while a thrown seal is flying and `flingT` is what is left of
+  // the walk back down. The pair is exactly `heavyT`/`heavyMul` below, read
+  // the other way round: one makes a knocked seal fall harder, this one lets
+  // a knocked seal actually travel.
+  flingT: 0,
+  flingMul: 1,
   heavyT: 0,
   heavyMul: 1,
   // Thrust multiplier from the boost meter's current fuel, pushed in by main.js
@@ -188,6 +279,11 @@ export const player = {
   // without changing what it is to steer. See chargeThrustMul in
   // systems/strike.js.
   chargeThrustMul: 1,
+  // TURBO's blend, 0..1, pushed in by main.js each frame off strikeState.turbo
+  // for the same reason as the two above. updatePlayer lerps the stat block's
+  // turboThrustMul / turboSpeedMul / turboAnimMul from 1 by this, so the
+  // faster swim of a held wind-up eases in and out rather than stepping.
+  turbo: 0,
   // HOW MANY BODIES THE SEAL HAS SWALLOWED THIS RUN. Maneater's whole payload,
   // and the only run-scoped number the stat block is built against other than
   // `level`. It lives here rather than in the stats because it is not a stat:
@@ -208,6 +304,35 @@ export const player = {
   // never disagree about how many bosses a run has beaten; see updateBossShot
   // in main.js.
   bossesDefeated: 0,
+  // HOW MANY HANDS THIS RUN MAY STILL THROW BACK. Earned from bosses and spent
+  // on the level-up screen — see CONFIG.upgradeReroll and rerollHand in
+  // ui/ui.js.
+  //
+  // A COUNTER RATHER THAN A DERIVATION, unlike `bossesDefeated` above, which is
+  // a mirror of the one place a kill is counted. "Bosses beaten minus rerolls
+  // spent" would need the spends kept somewhere anyway, and two numbers that
+  // have to be subtracted to mean anything are two numbers that can disagree.
+  // This is the bank, main.js pays into it on the kill edge, and the menu is
+  // the only thing that draws on it.
+  //
+  // Here rather than in the stat block for the reason humansEaten is:
+  // recomputeStats() throws that block away and rebuilds it several times a
+  // minute, so a total kept there would be reset by every level-up.
+  rerolls: 0,
+  // HOW MANY THIS RUN HAS EVER BEEN PAID, spent or not.
+  //
+  // A SECOND NUMBER RATHER THAN A READ OF THE FIRST, because "has this run ever
+  // had one" and "has this run got one now" are different questions and the
+  // menu asks both. The button appears the first time a boss pays out and then
+  // STAYS, greyed, once the bank is empty — a control that vanishes reads as a
+  // bug, and the empty state is where the answer ("beat another boss") lives.
+  // Off `rerolls` alone the button would disappear again the moment the last
+  // one was spent, which is the exact case it exists for.
+  //
+  // Not derivable from `bossesDefeated` either: the cap can refuse a payout and
+  // CONFIG.upgradeReroll.perBoss can be zero, and both would have this claiming
+  // a run had been paid something it never received.
+  rerollsEarned: 0,
   // WHICH GUN THIS RUN ROLLED — 'pebbles' or 'laser'. Seeded to the default
   // rather than rolled here: this object is built once at module load and a
   // run's identity is decided at resetPlayer, which is the one place that runs
@@ -474,10 +599,15 @@ export function createSealState() {
     dashTimer: 0,
     comboSpeedMul: 1,
     chargeThrustMul: 1,
+    turbo: 0,
     // THE JOLT — a rotation impulse on the body (a shove in a match, see
     // joltSeal): a tumble in the screen plane and a roll about the spine,
-    // each a spring back to true. Angles and their rates.
-    jolt: { spin: 0, spinV: 0, roll: 0, rollV: 0 },
+    // each a spring back to true. Angles and their rates. `free` is seconds
+    // of LIMP left, during which the spring is off and the body simply keeps
+    // turning — see tumbleSeal.
+    jolt: { spin: 0, spinV: 0, roll: 0, rollV: 0, free: 0, kickX: 0, kickY: 0, kick: 0, kickAt: 0, limp: false },
+    flingT: 0,
+    flingMul: 1,
     // Seconds of heavier gravity left after a knock, and how much heavier.
     heavyT: 0,
     heavyMul: 1,
@@ -496,6 +626,297 @@ export function joltSeal(seal, spin = 0, roll = 0) {
   if (!j) return;
   j.spinV += spin;
   j.rollV += roll;
+}
+
+/**
+ * THROW THE BODY LIMP — the same two axes joltSeal drives, but with the
+ * spring that rights them switched OFF for `seconds`.
+ *
+ * A jolt is a wobble on purpose: it is what a shove in a rally looks like,
+ * and a seal that had to swim out of a tumble every time it was bumped would
+ * be a seal nobody could steer. An EXPLOSION is the other thing, and the
+ * spring is exactly what stops it reading as one — at 60 stiffness the body
+ * is already on its way back to true on the frame after the bang, and the
+ * cap (CONFIG.player.jolt.max) means it never gets past three quarters of a
+ * turn however hard it is hit. So a blast asks for the spring to let go: the
+ * body keeps turning at whatever rate it was given, bleeding off on
+ * `tumbleDrag` alone, and when the seconds run out the spring picks it up
+ * from wherever it has ended up and rights it the short way round.
+ *
+ * As with joltSeal, this is the skeleton being thrown about and not the
+ * animal being turned — the heading, the hitbox and the aim are untouched.
+ * What actually throws the seal across the water is the shove that comes
+ * with it (jostle in systems/versus.js).
+ */
+export function tumbleSeal(seal, spin = 0, roll = 0, seconds = 0, dirX = 0, dirY = 0, kick = 0) {
+  const j = seal.jolt;
+  if (!j) return;
+  const jc = CONFIG.player?.jolt ?? {};
+  // NOTHING A CALLER PASSES MAY BREAK THE ANIMAL, and the ceilings live here
+  // rather than at the call sites because there are four of them and a fifth
+  // is one edit away. See the note on `spinMax` in config.js: past a few turns
+  // a second the tumble stops reading as a throw and starts reading as a model
+  // spinning, and the loose chains are being asked to chase a pose that jumps
+  // most of a circle between frames — which is how a skeleton comes apart.
+  //
+  // A non-finite number is refused outright rather than clamped. One NaN
+  // reaching j.spin is a body quaternion of NaN, which is a seal that renders
+  // nothing and never comes back, and the arithmetic that produced it (a
+  // divide by a zero distance) is exactly the kind a blast does.
+  if (!Number.isFinite(spin) || !Number.isFinite(roll) || !Number.isFinite(seconds)) return;
+  const spinMax = jc.spinMax ?? 26;
+  const rollMax = jc.rollMax ?? 34;
+  j.spinV = clampMag(j.spinV + spin, spinMax);
+  j.rollV = clampMag(j.rollV + roll, rollMax);
+  // The LONGEST limp wins rather than the newest: two blasts inside a second
+  // must not cut the first one's tumble short. Ceilinged all the same — a
+  // window is how long control is taken away from a player, and no shove may
+  // buy more of that than `freeMax`.
+  j.free = Math.min(jc.freeMax ?? 2.5, Math.max(j.free ?? 0, Math.max(0, seconds)));
+  // THE SHOVE, BANKED FOR THE SKELETON. It cannot be spent here: the ragdoll
+  // chains are `asleep` for the whole run (see ASSETS.ship.rig.springChains)
+  // and anim.impulse is a documented no-op on a muted chain, so a kick thrown
+  // at them now would be thrown away — they are not awake until syncJoltLimp
+  // cuts the body loose, which happens on the next pose. Held here and spent
+  // there, on the frame the springs can actually take it.
+  //
+  // The BIGGEST pending kick wins, same rule as the limp above and for the
+  // same reason: a graze arriving a frame after a blast must not overwrite
+  // what the blast was going to do to the body.
+  // ...and the kick into the chains is ceilinged here too, for the reason the
+  // rates above are: every caller already passes a Math.min against its own
+  // kickMax, and every one of them is a place the ceiling can be forgotten.
+  const k = Number.isFinite(kick) ? Math.min(Math.max(0, kick), jc.limp?.kickMax ?? 16) : 0;
+  if (k > (j.kick ?? 0)) { j.kick = k; j.kickX = dirX; j.kickY = dirY; }
+}
+
+/** Signed clamp: the magnitude held to `max`, the direction kept. */
+function clampMag(v, max) {
+  if (!Number.isFinite(v)) return 0;
+  if (!(max > 0)) return 0;
+  return v > max ? max : (v < -max ? -max : v);
+}
+
+/**
+ * THROW THE SEAL ACROSS THE WATER — the other half of a blast, and the half
+ * that was missing.
+ *
+ * A shove is delivered two ways today and BOTH of them saturate. The velocity
+ * share is clipped to the seal's own top speed by the clamp in updatePlayer,
+ * on the frame it lands; the knock offset is clamped to
+ * CONFIG.playerKnockback.maxSpeed and decays. So the goal explosion's `push`
+ * stopped meaning anything a long way below what it was set to: measured,
+ * forty times the shipped number moved a seal the same 46 units it moved at
+ * twice the number, peaked at the same 33 u/s, and never once reached a wall.
+ * Turning `push` up made the seals SPIN harder and go no further, which is the
+ * one knob that breaks skeletons and the one that does not move bodies.
+ *
+ * This is the shove that does move them: real velocity, with the speed ceiling
+ * lifted for `seconds` so the clamp cannot confiscate it on the frame it
+ * arrives. The seal then flies under everything that already exists — the
+ * water's drag bleeds it, `clampToArena` reflects it off the walls at
+ * `wallRestitution`, gravity acts on the vertical share — which is what makes
+ * it read as a body being thrown around the arena rather than as a position
+ * being written. Nothing here touches rotation, the skeleton or the hitbox.
+ *
+ * THE CEILING IS LET DOWN, NOT DROPPED, over the window — the same shape the
+ * dash's `recover` uses a few lines below the clamp, and for the same reason:
+ * a ceiling that falls in one step takes the seal's momentum away in one
+ * frame, which is a stumble at the end of every blast.
+ *
+ * @param mul   what to multiply the seal's speed ceiling by while it flies.
+ * @param seconds how long the ceiling takes to walk back down.
+ */
+export function flingSeal(seal, dirX, dirY, speed, mul = 1, seconds = 0) {
+  if (!seal?.velocity) return 0;
+  if (!Number.isFinite(speed) || !(speed > 0)) return 0;
+  const len = Math.hypot(dirX, dirY);
+  if (!Number.isFinite(len) || len < 1e-6) return 0;
+  const jc = CONFIG.player?.jolt ?? {};
+  // A CEILING ON THE CEILING. This is the one call that can put a seal above
+  // its own top speed, so how fast it may go is bounded here and not by
+  // whoever is tuning a blast — a body moving further than the arena is wide
+  // in a frame would tunnel straight through a wall the clamp only tests
+  // after the step.
+  const cap = jc.flingMax ?? 240;
+  const v = Math.min(speed, cap);
+  seal.velocity.x += (dirX / len) * v;
+  seal.velocity.y += (dirY / len) * v;
+  // ...AND THE SAME RAIL AGAIN, AS A MULTIPLIER. `mul` lifts the speed clamp,
+  // and a clamp lifted higher than `flingMax` would let the seal ACCELERATE
+  // past the speed this call is bounded to — the two have to be the same rail
+  // or the first one is decoration. Derived from the seal's own top speed
+  // rather than written down twice, so a movement upgrade cannot quietly
+  // tighten it.
+  //
+  // Opened on the multiplier alone, not on the window: a `seconds` of zero is
+  // a ceiling that is let straight back down (see flingCeilingMul), which is a
+  // small throw, and NOT a ceiling that never rises — which would be a throw
+  // the clamp confiscates whole on the frame it lands, silently.
+  if (mul > 1) {
+    const top = Math.max(1, seal.stats?.maxSpeed ?? 34);
+    // The BIGGEST window and the HIGHEST ceiling win, the same rule
+    // tumbleSeal's limp follows: a graze arriving a frame after a blast must
+    // not cut short what the blast was going to do.
+    seal.flingT = Math.max(seal.flingT ?? 0, Math.max(0, seconds));
+    seal.flingMul = Math.max(seal.flingMul ?? 1, Math.min(mul, Math.max(1, cap / top)));
+  }
+  return v;
+}
+
+// The limp spring, rebuilt only when its numbers change — the same
+// arrangement limpSpring() in systems/deathDive.js uses, and for the same
+// reason: this is read once per limp seal per frame and the object is handed
+// straight to the solver.
+let _joltLimpCfg = null;
+let _joltLimpStamp = '';
+// Exported for the rig inspector (tools/looks/rig-limits.js), which has to
+// read the numbers the GAME solves with rather than a copy of them — a tool
+// that inspects its own second opinion is worse than no tool.
+export { joltLimpSpring as sealLimpSpring };
+
+function joltLimpSpring() {
+  const l = CONFIG.player?.jolt?.limp ?? {};
+  const stamp = `${l.stiffness}|${l.damping}|${l.tipLooseness}|${l.maxLag}|${l.softness}|${l.snapAngle}|${l.chainMax}`;
+  if (_joltLimpStamp !== stamp) {
+    _joltLimpStamp = stamp;
+    _joltLimpCfg = {
+      stiffness: l.stiffness ?? 5.5,
+      damping: l.damping ?? 1.9,
+      tipLooseness: Math.min(0.98, l.tipLooseness ?? 0.94),
+      maxLag: l.maxLag ?? 2.1,
+      softness: l.softness ?? 0.45,
+      snapAngle: l.snapAngle ?? 3.2,
+      // THE WHOLE LIMB'S CAP, not each bone's — see the chain budget in
+      // systems/boneSpring.js. `maxLag` alone bounds nothing a player sees,
+      // because it is measured from a direction the parent has already moved.
+      chainMax: l.chainMax ?? 2.6,
+    };
+  }
+  return _joltLimpCfg;
+}
+
+const _kickDir = new THREE.Vector3();
+
+/**
+ * THE SKELETON HANGS WHILE THE BODY TUMBLES — the half of tumbleSeal that
+ * happens to the bones.
+ *
+ * A tumble on its own rotates the whole body group and nothing inside it, so
+ * a seal blown out of a goal went end over end in exactly the pose it had been
+ * swimming in. That reads as a model being spun rather than as an animal being
+ * thrown, and it is the single thing that was wrong with the goal explosion:
+ * the arc was right and the skeleton was rigid inside it.
+ *
+ * The fix is the ragdoll that was already on this rig for the death dive. It
+ * is `asleep` for the whole run on purpose (see ASSETS.ship.rig.springChains)
+ * and setLimp is the one thing that wakes it, so the limp clock the tumble
+ * already keeps — `jolt.free` — is all this needs to drive it: cut loose while
+ * the body is free, hand it back when the spring picks it up again.
+ *
+ * WE ONLY EVER HAND BACK WHAT WE TOOK. systems/deathDive.js owns setLimp for a
+ * corpse and runs for as long as the score card is up; a `limp` flag of our own
+ * (rather than reading anim.isLimp()) is what stops a stray jolt landing on the
+ * frame the seal died from stealing the ragdoll and then switching it off
+ * underneath the dive.
+ */
+/**
+ * syncJoltLimp for a body NOBODY IS STEPPING — the replay's hand on it.
+ *
+ * updateVersus returns early while a replay is active, so seats 1..7 never
+ * reach stepSeat and their own syncJoltLimp is not called for the length of the
+ * footage. A seal that went limp on the goal would therefore keep the ragdoll
+ * through the whole replay however firmly the pause was published — the flag
+ * is only ever read by the function that is not running.
+ *
+ * So poseReplay calls this on every body it poses, which is the only loop that
+ * definitely covers all of them. A no-op on a body whose state already agrees
+ * with the pause.
+ */
+export function syncSealRagdoll(seal) {
+  return syncJoltLimp(seal);
+}
+
+function syncJoltLimp(seal) {
+  const j = seal?.jolt;
+  if (!j || !seal.anim) return false;
+  // PARKED UNDER A REPLAY — see setJoltPaused. The skeleton goes back to the
+  // mixer so the clip poseReplay asks for is the clip that plays; the tumble
+  // itself is not cancelled, only stopped (joltDelta returns 0), so `free`
+  // still holds whatever is left of it for when the footage is over.
+  const on = (j.free ?? 0) > 0 && !_joltPaused && CONFIG.player?.jolt?.limp?.enabled !== false;
+  if (on && !j.limp) {
+    // False means this body has no springs to ragdoll WITH — a harness rig, a
+    // primitive stand-in — and the flag stays down so nothing is handed back.
+    j.limp = seal.anim.setLimp?.(joltLimpSpring()) === true;
+    // RE-SHOVING WHAT THE PAUSE TOOK. Coming out of a replay the tumble picks
+    // up where it left off, and setLimp freezes the pose it finds — which is
+    // whatever the mixer was doing, not the pose the blast threw the animal
+    // out of. Without the kick back the springs would have nothing to chase
+    // and no velocity of their own, so the seal would finish the last second
+    // of its own arc limp and PERFECTLY STILL. `kickAt` is what the blast
+    // actually spent, banked below.
+    if (j.limp && !(j.kick > 0) && (j.kickAt ?? 0) > 0) j.kick = j.kickAt;
+  } else if (!on && j.limp) {
+    j.limp = false;
+    seal.anim.setLimp?.(null);
+  }
+  // A TUMBLE THAT HAS RUN OUT TAKES ITS KICK WITH IT. Held only across a
+  // pause, never across the window it belongs to — a shove banked here is a
+  // shove the NEXT blast would inherit.
+  if (!((j.free ?? 0) > 0)) j.kickAt = 0;
+  // THE SHOVE INTO THE CHAINS, once, on the first frame they are awake to take
+  // it. Without this the body is limp and PERFECTLY STILL inside its tumble:
+  // the springs have nothing to chase (the pose is frozen) and no velocity of
+  // their own, so they sit in the pose they were cut loose in. The kick is what
+  // makes the limbs actually fly.
+  if (j.limp && (j.kick ?? 0) > 0) {
+    const l = Math.hypot(j.kickX, j.kickY) || 1;
+    _kickDir.set(j.kickX / l, j.kickY / l, 0);
+    seal.anim.impulse?.(_kickDir, j.kick, CONFIG.player?.jolt?.limp?.tipBias);
+    j.kickAt = j.kick;
+    j.kick = 0;
+  }
+  return j.limp;
+}
+
+/**
+ * HOW FAR THE SPEED CEILING IS LIFTED THIS FRAME, and the window stepped.
+ *
+ * Eased to 1 across what is left of the window with the same smoothstep the
+ * mirror and the barrel roll use, so the ceiling comes down as a curve rather
+ * than as a line that stops. A seal that is not flying pays one property read.
+ */
+function flingCeilingMul(seal, dt, speed, base) {
+  const mul = seal.flingMul ?? 1;
+  if (!(mul > 1)) return 1;
+  // IT ENDS WHEN THE SEAL IS DONE FLYING, not when a timer says so. The window
+  // exists for one purpose — to stop the clamp confiscating a blast's impulse
+  // on the frame it lands — so the moment the water's drag has brought the body
+  // back under its own ceiling the window has nothing left to do. Holding it
+  // open past that is how a player ends up swimming at seven times their top
+  // speed after a goal, and this is the normal way out of it.
+  if (!(speed > base)) { seal.flingT = 0; seal.flingMul = 1; return 1; }
+  // ...AND A RAIL UNDER THAT, on the ragdoll's clock rather than the water's
+  // (joltDelta). Same reason the tumble is on it: the blast fires on the frame
+  // the match freezes to four percent, and a window spending the water's
+  // seconds there would hold the ceiling up for half a minute of real time.
+  const jdt = joltDelta(dt);
+  const left = seal.flingT ?? 0;
+  if (left > 0) {
+    seal.flingT = Math.max(0, left - jdt);
+    return mul;
+  }
+  // THE RAIL LETS THE CEILING DOWN, IT DOES NOT DROP IT. A window that expired
+  // while the seal was still travelling took the rest of its momentum away in
+  // one frame — the same stumble the dash's `recover` exists to prevent, at the
+  // other end of the match. `flingEase` is e-folds per second off what is left
+  // of the lift, so the throw is spent rather than confiscated.
+  const fall = Math.exp(-Math.max(0, CONFIG.player?.jolt?.flingEase ?? 1.6) * jdt);
+  const next = 1 + (mul - 1) * fall;
+  if (next <= 1.01) { seal.flingT = 0; seal.flingMul = 1; return 1; }
+  seal.flingMul = next;
+  return next;
 }
 
 /** Heavier gravity for `seconds` after a knock — the fall out of the air. */
@@ -531,6 +952,48 @@ export function buildSealBody(seal, scene, { name = 'seal', celebrateTag = null 
 }
 
 /**
+ * POINT A SEAL AT A HEADING, RIGHT WAY UP — every hard placement's one writer.
+ *
+ * Turning the animal is two fields, not one. `mesh.rotation.z` is where the
+ * nose points; `mirrorAngle` is the HALF ROLL that keeps it belly-down while
+ * it points that way, because in side view a full turn would otherwise leave
+ * it swimming on its back (see the mirror note in poseBody). Setting only the
+ * first is how a seal ends up upside down.
+ *
+ * Anything that teleports a body — a kickoff putting everyone on their spot, a
+ * seat being built — has to write both, and cannot delegate the second to
+ * poseBody: poseBody resolves the mirror inside its `dirLen > minTurn` branch,
+ * and a seal being HELD on a mark has no velocity by definition. A kickoff
+ * zeroes every velocity on every frame of the count, so the branch that was
+ * supposed to sort the mirror out never ran once, and the seal stood belly-up
+ * through "3, 2, 1" and past the whistle — until it first swam faster than
+ * `minSpeedToTurn`, at which point it snapped upright with no turnaround.
+ *
+ * SETTLED, NOT EASED. The turnaround roll exists to hide a swimming animal
+ * changing direction; a body that has just been teleported onto a mark has
+ * nothing to hide, and a seal rolling over on the spot through a countdown
+ * reads as the placement having gone wrong.
+ *
+ * @param facing where the nose should point, in world radians.
+ */
+export function faceSeal(seal, facing) {
+  if (!seal?.mesh || !Number.isFinite(facing)) return;
+  // The art's forward is +Y, a quarter turn off the axis — the same
+  // convention poseBody writes every frame.
+  seal.mesh.rotation.z = facing - Math.PI / 2;
+  // Only in side view is there a mirror to resolve. Left alone otherwise, so
+  // this cannot invent a roll on a camera that has no use for one.
+  if (CONFIG.view !== 'side') return;
+  const mirrored = Math.cos(facing) < 0;
+  seal.mirrored = mirrored;
+  seal.mirrorAngle = mirrored ? Math.PI : 0;
+  seal.mirrorFrom = seal.mirrorAngle;
+  seal.mirrorTo = seal.mirrorAngle;
+  seal.mirrorT = 1;
+  seal.mirrorDuration = 0;
+}
+
+/**
  * Put a seal's BODY state back where a fresh run starts it — the per-body
  * half of resetPlayer, for a seal that is not the run's. Position is the
  * caller's; stats, hp and air are too.
@@ -558,11 +1021,22 @@ export function resetSealBody(seal) {
   seal.dashTimer = 0;
   seal.comboSpeedMul = 1;
   seal.chargeThrustMul = 1;
+  seal.turbo = 0;
   seal.chumSealed = false;
   seal.chargePose = 0;
   seal.snareTimer = 0; seal.snareMul = 1;
-  if (seal.jolt) { seal.jolt.spin = seal.jolt.spinV = seal.jolt.roll = seal.jolt.rollV = 0; }
+  if (seal.jolt) {
+    const j = seal.jolt;
+    j.spin = j.spinV = j.roll = j.rollV = 0;
+    j.free = 0;
+    // The ragdoll goes with the tumble that opened it. anim.reset() below drops
+    // the limp record on its own, so this is only our own flag catching up —
+    // left standing, the next pose would hand back a skeleton nobody holds.
+    j.kick = j.kickX = j.kickY = j.kickAt = 0;
+    if (j.limp) { j.limp = false; seal.anim?.setLimp?.(null); }
+  }
   seal.heavyT = 0; seal.heavyMul = 1;
+  seal.flingT = 0; seal.flingMul = 1;
   seal.anim?.reset();
   seal.aimRig?.reset();
   seal.celebrate?.reset();
@@ -672,6 +1146,15 @@ export function computeStats(picks = [], level = 1, humansEaten = 0, bossesDefea
   // multiply the finished numbers rather than a partial block. Both are
   // no-ops on a run that holds neither. See applyDamageScaling in stats.js.
   applyDamageScaling(s, humansEaten, oxygen);
+  // ...and the breath's speed LAST, because it is the only thing here that
+  // multiplies a finished ceiling rather than building one: every card, every
+  // growth and the loadout have all had their say about `maxSpeed` and
+  // `strikeDashSpeed` by now, and the stash has to hold the full-tank numbers
+  // this run actually earned. A stash taken any earlier would keep a ceiling
+  // that was still growing, and the next frame's respend would hand back a
+  // seal slower than its own upgrades. See stats.js.
+  stashBreathSpeed(s);
+  applyBreathSpeed(s, oxygen);
   return s;
 }
 
@@ -779,8 +1262,11 @@ export function addUpgrade(id, rarity = null, random = Math.random) {
   // line ago. recomputeStats above ran before the grant, so without this a
   // Deep Lungs pick would leave Iron Lung reading the old tank until the next
   // frame — a frame in which the card that was just taken looks like it did
-  // nothing.
+  // nothing. The speed caps are re-spent for the same reason and against the
+  // same grant: a bigger tank is a fuller bar, and a fuller bar is a faster
+  // seal the instant the card lands rather than one frame later.
   applyIronLung(player.stats, player.oxygen);
+  applyBreathSpeed(player.stats, player.oxygen);
 }
 
 /**
@@ -839,6 +1325,83 @@ export function levelableUpgrades() {
  */
 export function isCompanionCard(u) {
   return !!u && u.family === 'companion' && u.companionMod !== true;
+}
+
+// ---------------------------------------------------------------------------
+// THE REROLL BANK
+//
+// Four one-liners rather than four reads of `player.rerolls` spread across
+// main.js and ui.js, because every one of them has a rule attached that would
+// otherwise be copied: the cap, the floor, and the switch. A menu asking
+// `player.rerolls > 0` directly would show its button on a build with the
+// feature switched off, which is exactly the kind of thing that ships.
+// ---------------------------------------------------------------------------
+
+function rerollCfg() {
+  return CONFIG.upgradeReroll ?? {};
+}
+
+/** Is the mechanic on at all? Everything below answers 0 / false when it is not. */
+export function rerollEnabled() {
+  return rerollCfg().enabled !== false;
+}
+
+/** What a fresh run banks. See resetPlayer, which is the only caller. */
+export function startingRerolls() {
+  if (!rerollEnabled()) return 0;
+  return Math.max(0, Math.floor(rerollCfg().start ?? 0));
+}
+
+/**
+ * Pay into the bank, capped.
+ *
+ * CAPPED HERE rather than at the call site, so the ceiling holds however many
+ * places learn to pay out later. Returns what was ACTUALLY banked — a boss
+ * killed against a full bank pays nothing, and the caller needs to know that
+ * before it announces a reward the player did not receive.
+ */
+export function grantRerolls(n = 1) {
+  if (!rerollEnabled()) return 0;
+  const add = Math.max(0, Math.floor(n));
+  if (!add) return 0;
+  const max = Math.max(0, Math.floor(rerollCfg().max ?? 0));
+  const before = player.rerolls;
+  player.rerolls = max > 0 ? Math.min(max, before + add) : before + add;
+  const banked = player.rerolls - before;
+  // The lifetime tally moves by what was ACTUALLY banked, so a payout the cap
+  // refused does not count as this run having been paid one.
+  player.rerollsEarned += banked;
+  return banked;
+}
+
+/**
+ * Has this run ever been paid one?
+ *
+ * The menu's other question — see the note on `rerollsEarned`. Answers false
+ * with the mechanic switched off, so one read covers both reasons the button
+ * has no business being on screen.
+ */
+export function rerollsEverEarned() {
+  return rerollEnabled() && player.rerollsEarned > 0;
+}
+
+/** What is left to spend. The menu's read. */
+export function rerollsLeft() {
+  return rerollEnabled() ? Math.max(0, player.rerolls) : 0;
+}
+
+/**
+ * Take one out, if there is one.
+ *
+ * Returns whether it succeeded, and the caller must not deal a new hand unless
+ * it did: a spend that silently fails open is a free reroll, and a button that
+ * works when the counter says 0 is indistinguishable from the counter being
+ * broken.
+ */
+export function spendReroll() {
+  if (rerollsLeft() <= 0) return false;
+  player.rerolls -= 1;
+  return true;
 }
 
 export function availableUpgrades() {
@@ -923,6 +1486,11 @@ export function resetPlayer() {
   // the seal mid-shove would otherwise start the next one still sliding.
   player.knockX = 0;
   player.knockY = 0;
+  // ...and the blast window that lets a shove exceed the seal's own top speed
+  // (flingSeal). A run opening with a raised ceiling is a seal that swims
+  // faster than its stats say for as long as the window has left.
+  player.flingT = 0;
+  player.flingMul = 1;
   player.aboveSurface = false;
   player.breachDir = 0;
   player.airTime = 0;
@@ -941,6 +1509,11 @@ export function resetPlayer() {
   // Before recomputeStats() below for the same reason, and it is the same
   // mistake: a new run must not open firing the last one's boss pellets.
   player.bossesDefeated = 0;
+  // The bank a run opens with. Read from CONFIG rather than typed as 0 so the
+  // knob is the only place the answer lives — see CONFIG.upgradeReroll.start
+  // for why it is zero today.
+  player.rerolls = startingRerolls();
+  player.rerollsEarned = 0;
   // BEFORE recomputeStats() below, and for the same reason the two lines above
   // are: the block is seeded from this, and two of the gun cards fork on it. A
   // run that rolled the laser and built its stats against the pebble gun would
@@ -950,6 +1523,7 @@ export function resetPlayer() {
   player.dashTimer = 0;
   player.comboSpeedMul = 1;
   player.chargeThrustMul = 1;
+  player.turbo = 0;
   player.chumSealed = false;
   // A run that ended held does not start held.
   player.snareTimer = 0;
@@ -987,7 +1561,10 @@ export function resetPlayer() {
   player.oxygen = player.stats.maxOxygen;
   // Same order problem as addUpgrade, for the same one-line fix: the block was
   // rebuilt while `player.oxygen` still held whatever the last run drowned on.
+  // The speed caps too — a run must not open at the top of a fresh tank with
+  // the ceiling the last one died on.
   applyIronLung(player.stats, player.oxygen);
+  applyBreathSpeed(player.stats, player.oxygen);
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,6 +1637,14 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   const combo = seal.comboSpeedMul || 1;
   // Thrust only — the ceiling and the dash below read `combo` alone.
   const boost = seal.chargeThrustMul || 1;
+  // TURBO — the faster swim of a wind-up held with the stick pushed. The
+  // blend is pushed in by main.js (strikeState.turbo); the multipliers are
+  // the run's, so a card can scale them. Thrust AND the ordinary ceiling,
+  // unlike `boost` above — see CONFIG.strike.turbo for why this one may.
+  // Never the dash: a strike's velocity is set outright by dashSteer.
+  const turboT = seal.turbo || 0;
+  const turboThrust = turboLerp(s.turboThrustMul, turboT);
+  const turboSpeed = turboLerp(s.turboSpeedMul, turboT);
   // Advanced exactly once a frame, here, because it is a clock as well as a
   // multiplier — reading it twice would run the hold out at double speed.
   const snare = snareFactor(dt, seal);
@@ -1106,8 +1691,8 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
     // isn't. Multiplies with the charge bonus rather than replacing it, so a
     // seal that has already refilled keeps what refilling bought.
     const push = 1 + ((CONFIG.strike.dashControl?.followThrust ?? 1) - 1) * recover;
-    seal.velocity.x += input.move.x * s.thrust * combo * boost * push * snare * dt;
-    seal.velocity.y += input.move.y * s.thrust * combo * boost * push * snare * dt;
+    seal.velocity.x += input.move.x * s.thrust * combo * boost * turboThrust * push * snare * dt;
+    seal.velocity.y += input.move.y * s.thrust * combo * boost * turboThrust * push * snare * dt;
   }
 
   // Steering mid-dash. A strike used to be a straight line you waited out —
@@ -1131,28 +1716,26 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   // same function ahead of time, and a copy here would be a corridor that
   // lies the first time one of them is retuned.
   //
-  // WHAT COUNTS AS A HAND ON THE WHEEL, and it used to be one hand only.
+  // WHAT COUNTS AS A HAND ON THE WHEEL: the move stick while it is pushed,
+  // or an aim GESTURE since the launch.
   //
-  // The gate was `input.move.lengthSq() > 0.001` — the movement stick, and
-  // nothing else. But the thing being steered TOWARD is strikeDirection(move,
-  // aim), the angular halfway point between BOTH hands, and the aim was a full
-  // participant in it. So a player aiming with the mouse and not holding WASD
-  // could swing the cursor through ninety degrees mid-dash and turn the seal
-  // exactly zero: the aim decided where the dash went for one frame at the
-  // launch and then had no vote for the rest of it. Measured, before this: 90
-  // degrees of cursor bought 0.0 degrees of seal.
-  //
-  // `aimLive` and not `aim`, because `aim` is never off — it holds the last
-  // direction anything gave it, forever, which is the right answer for the
-  // guns and the wrong one here. A gamepad with an idle right stick would
-  // otherwise steer the dash toward a heading nobody is asking for. See the
-  // note on it in input.js.
+  // The aim the dash steers by is its HELD aim (holdAim / strikeState.aim),
+  // not `input.aim`. A pointer's heading is cursor-minus-seal and changes on
+  // its own as the seal moves, so a dash that read it live turned round the
+  // moment it flew past the cursor — with no hand on anything. The held aim
+  // is seeded on the launch line and replaced only on a frame the aim device
+  // actually moved (`input.aimMoved`), with the direction it moved IN
+  // (`input.aimGesture`: a mouse flicked up is up, a thumb slid is its slide,
+  // a right stick is itself). `aimLive` was the gate here before and is true
+  // for a mouse every frame, which is exactly the hand that was not doing
+  // anything.
   //
   // AND IT OUTLIVES THE DASH. `steerFollow(st)` is 1 while the dash is live and
   // fades to nothing over dashControl.followThrough afterwards — the exit from
   // the manoeuvre, rather than the hands being cut off on the frame the timer
   // runs out. See steerFollow(st) in systems/strike.js.
-  const handOn = input.move.lengthSq() > 0.001 || input.aimLive;
+  const heldAim = holdAim(st, input);
+  const handOn = input.move.lengthSq() > 0.001 || st.aimSteer;
   if ((dashing || follow > 0) && handOn) {
     const v = seal.velocity.length();
     if (v > 0.001) {
@@ -1165,7 +1748,7 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
       const progress = strike ? 1 - st.dashTimeLeft / st.dashDuration : 1;
       // ...and what it was bought with: a one-pip dash does not steer at all.
       const power = strike ? st.power : 1;
-      dashSteer(cur, v, input.move.x, input.move.y, input.aim.x, input.aim.y, combo, dt, s, progress, power, steerStep, follow);
+      dashSteer(cur, v, input.move.x, input.move.y, heldAim.x, heldAim.y, combo, dt, s, progress, power, steerStep, follow);
       if (steerStep.breakOut) {
         // BREAK OUT. Steering hard AGAINST the dash ends it on the spot and
         // hands back ordinary swimming, at the cost of the reach not yet
@@ -1214,10 +1797,27 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   // fixes. Over the recovery the ceiling walks back down to the ordinary one,
   // so the momentum is spent rather than confiscated. `followCeiling: false`
   // restores the snap.
-  const dashCeiling = Math.max(s.maxSpeed, s.strikeDashSpeed);
+  //
+  // AND TURBO RAISES THE ORDINARY CEILING — the swim's, not the dash's. The
+  // dash ceiling is left alone (dashSteer sets that velocity outright), and
+  // the recovery walks down to the turbo'd swim ceiling so a dash launched
+  // out of turbo lands back in it rather than under it.
+  //
+  // AND A BLAST LIFTS IT OUTRIGHT, for as long as the seal is still flying.
+  // See flingSeal: this is the one thing in the game that may put a seal above
+  // its own top speed, and without this line the clamp confiscated the whole
+  // impulse on the frame it landed — which is why turning the goal
+  // explosion's `push` up moved nobody any further. Walked back down over the
+  // window rather than dropped, the same shape `recover` gives the dash above,
+  // so a thrown seal spends its momentum instead of having it taken away in
+  // one frame. Multiplied over the dash ceiling rather than replacing it: a
+  // seal blown up mid-dash is going at least as fast as it was.
+  const swimMax = s.maxSpeed * turboSpeed;
+  const dashCeiling = Math.max(swimMax, s.strikeDashSpeed);
   const eased = CONFIG.strike.dashControl?.followCeiling === false ? 0 : recover;
-  const ceiling = (dashing ? dashCeiling : s.maxSpeed + (dashCeiling - s.maxSpeed) * eased) * combo * snare;
+  const base = (dashing ? dashCeiling : swimMax + (dashCeiling - swimMax) * eased) * combo * snare;
   const speed = seal.velocity.length();
+  const ceiling = base * flingCeilingMul(seal, dt, speed, base);
   if (speed > ceiling) seal.velocity.multiplyScalar(ceiling / speed);
 
   // Drag, and WHICH drag depends on what the seal is in. `friction` is the
@@ -1386,7 +1986,22 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
       // that only just failed to be a flight should be the loud end of THIS
       // cue, not the silent end of the other one.
       const frac = launch ? Math.min(1, launch.air / Math.max(0.01, CONFIG.airborne?.launch?.flyAir ?? 0.4)) : 1;
-      feedback('surfacing', { ...at, scale: 0.45 + 0.55 * frac });
+      // AND THE FOAM IS SIZED TOO, not only counted. `scale` reaches the lobe
+      // COUNT and nothing else (see emit in entities/particles.js), so this row
+      // was firing seven full-sized lobes of `breachFoam` for a head lifted to
+      // breathe — the wall of water an athletic breach makes, with two thirds
+      // of it deleted rather than a small amount of water. The pair goes
+      // together on purpose: a goo mass shrunk on size alone tears into
+      // separate dots, because fusion is a question of how far neighbours have
+      // travelled RELATIVE to their own radius. See the note on
+      // CONFIG.fx.goo.groups.gore.
+      const gooMul = 0.45 + 0.55 * frac;
+      feedback('surfacing', {
+        ...at,
+        scale: 0.45 + 0.55 * frac,
+        gooSizeMul: gooMul,
+        gooSpeedMul: gooMul,
+      });
     }
     // Surfacing for air is the moment a seal vocalizes; barking as you dive
     // back under reads as a hiccup. Lowest one-shot priority, so a hit or
@@ -1408,7 +2023,20 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   // a level-up, not once a frame. applyIronLung re-derives four numbers from
   // the stash applyDamageScaling left, so a run without the card pays one
   // property lookup for it. See stats.js.
-  if (seal === player) applyIronLung(s, seal.oxygen);
+  // ...AND THE SPEED CAPS, against the same bar and on the same terms: the
+  // clamp a few lines up reads `s.maxSpeed` and `s.strikeDashSpeed`, so both
+  // are re-derived here rather than multiplied where they are spent. One frame
+  // of lag on purpose — the bar moves after the clamp has run, exactly as the
+  // lung's damage is a frame behind the bar it is paid from.
+  //
+  // `seal === player` for the reason the lung has it and one more: in a versus
+  // match every seal on the ice reads ONE stat block (player.stats — see
+  // stepSeat in systems/versus.js), so a per-seal number written into it would
+  // be seat 0's air quietly deciding the whole rink's top speed.
+  if (seal === player) {
+    applyIronLung(s, seal.oxygen);
+    applyBreathSpeed(s, seal.oxygen);
+  }
 
   // --- facing, mirror, roll, crane and the body transform -------------------
   // The whole block moved into poseBody below, so the title screen can pose the
@@ -1451,10 +2079,27 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
     seal.hp = Math.min(s.maxHp, seal.hp + s.regenPerSec * dt);
   }
 
+  // THE RAGDOLL WINDOW, before the controller — setLimp freezes the pose it is
+  // called ON as the springs' target, so it has to happen while the skeleton
+  // still holds the frame the seal was last posed in rather than after this
+  // frame's clip has been written over it. See syncJoltLimp.
+  const limpNow = syncJoltLimp(seal);
+
   if (CONFIG.animation.enabled && seal.anim) {
     // aboveSurface picks the land clips (idle/walk) over the water ones —
     // a seal that's breached shouldn't be swim-cycling through the air.
-    const state = stateForSpeed(seal.velocity.length(), seal.aboveSurface, seal.surfaceRest);
+    let state = stateForSpeed(seal.velocity.length(), seal.aboveSurface, seal.surfaceRest);
+    // TURBO IS THE ORDINARY SWIM, FASTER — never the tail-up 'boost' clip
+    // (`sliding` on the fur seal). The extra speed carries the seal over
+    // boostThreshold, and left alone the state picker would swap clips the
+    // moment it did: the wind-up would READ as a different move rather than
+    // as the same stroke quickened. So while any of the blend is live the
+    // boost state is pinned back to 'swim', and the pace comes from setRate
+    // multiplying the swim clip's own timescale. Locomotion only — setRate
+    // never touches a one-shot — and set every frame so it eases out with the
+    // blend rather than sticking at the last value the hold left.
+    if (turboT > 0 && state === 'boost') state = 'swim';
+    seal.anim.setRate?.(turboLerp(s.turboAnimMul, turboT));
     seal.anim.update(dt, state, seal.hitThisFrame);
     // Straight after the controller, so the breath lands on top of the pose the
     // mixer just wrote rather than under it. Both bones it drives are keyed by
@@ -1478,7 +2123,16 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   // performance. This is also the last thing to touch the skeleton before the
   // frame renders, which is what makes the muzzles and bubble anchors it
   // publishes current rather than one frame stale.
-  updateAimRig(dt, input.aim, CONFIG.weapon.autofire, seal.chargePose, false, 0, seal);
+  //
+  // ...AND A RAGDOLLING SEAL IS NOT AIMING. Three of this rig's five ragdoll
+  // chains ARE the aim rig's chains (both front flippers and the neck — see
+  // ASSETS.ship.rig.springChains), and the IK runs after the springs, so a seal
+  // handed an aim while limp flops its rear flippers and holds the other three
+  // limbs out perfectly straight. The death dive solved this by having main.js
+  // stop feeding the rig an aim; a null here is the same move for the moment a
+  // body check lasts. `limp` on top keeps the tail's own spring solving, which
+  // is what trails it off the tumble.
+  updateAimRig(dt, limpNow ? null : input.aim, CONFIG.weapon.autofire && !limpNow, seal.chargePose, limpNow, 0, seal);
 
   seal.hitThisFrame = false;
 }
@@ -1700,20 +2354,48 @@ export function poseBody(...args) {
   let joltSpin = 0;
   let joltRoll = 0;
   const j = seal.jolt;
-  if (j && (j.spin || j.spinV || j.roll || j.rollV)) {
+  if (j && (j.spin || j.spinV || j.roll || j.rollV || j.free > 0)) {
     const jc = CONFIG.player?.jolt ?? {};
-    const k = jc.spring ?? 60;
-    const c = jc.damping ?? 5.5;
-    const cap = jc.max ?? 2.6;
-    // Semi-implicit Euler, stable at the game's frame cap for these rates.
-    j.spinV += (-k * j.spin - c * j.spinV) * dt;
-    j.spin += j.spinV * dt;
-    j.rollV += (-k * j.roll - c * j.rollV) * dt;
-    j.roll += j.rollV * dt;
-    if (j.spin > cap) { j.spin = cap; if (j.spinV > 0) j.spinV = 0; } else if (j.spin < -cap) { j.spin = -cap; if (j.spinV < 0) j.spinV = 0; }
-    if (j.roll > cap) { j.roll = cap; if (j.rollV > 0) j.rollV = 0; } else if (j.roll < -cap) { j.roll = -cap; if (j.rollV < 0) j.rollV = 0; }
-    if (Math.abs(j.spin) < 1e-4 && Math.abs(j.spinV) < 1e-3) { j.spin = 0; j.spinV = 0; }
-    if (Math.abs(j.roll) < 1e-4 && Math.abs(j.rollV) < 1e-3) { j.roll = 0; j.rollV = 0; }
+    // THE JOLT'S OWN CLOCK, not the frame's — see joltDelta. The goal blast is
+    // the whole reason: it fires on the one frame the world drops to four
+    // percent, so a tumble stepped on the water's seconds ran for forty wall
+    // seconds and was still going, still limp, under the replay.
+    const jdt = joltDelta(dt);
+    if (j.free > 0) {
+      // LIMP (tumbleSeal). No spring and no cap: the body keeps turning at
+      // the rate it was thrown at, bleeding off on `tumbleDrag` alone, so a
+      // blast reads as a seal going end over end rather than as a wobble
+      // that is already righting itself on the frame it starts.
+      const bleed = Math.exp(-Math.max(0, jc.tumbleDrag ?? 1.1) * jdt);
+      j.spinV *= bleed;
+      j.rollV *= bleed;
+      j.spin += j.spinV * jdt;
+      j.roll += j.rollV * jdt;
+      j.free -= jdt;
+      if (j.free <= 0) {
+        // HANDING BACK TO THE SPRING. Wrap to the nearest turn first: after
+        // two revolutions the angle is 13 radians, and the clamp below would
+        // take a body that is visually a few degrees off true and snap it to
+        // the cap in one frame. Wrapped, the spring rights it the short way
+        // round from where the tumble actually left it.
+        j.free = 0;
+        j.spin = Math.atan2(Math.sin(j.spin), Math.cos(j.spin));
+        j.roll = Math.atan2(Math.sin(j.roll), Math.cos(j.roll));
+      }
+    } else {
+      const k = jc.spring ?? 60;
+      const c = jc.damping ?? 5.5;
+      const cap = jc.max ?? 2.6;
+      // Semi-implicit Euler, stable at the game's frame cap for these rates.
+      j.spinV += (-k * j.spin - c * j.spinV) * jdt;
+      j.spin += j.spinV * jdt;
+      j.rollV += (-k * j.roll - c * j.rollV) * jdt;
+      j.roll += j.rollV * jdt;
+      if (j.spin > cap) { j.spin = cap; if (j.spinV > 0) j.spinV = 0; } else if (j.spin < -cap) { j.spin = -cap; if (j.spinV < 0) j.spinV = 0; }
+      if (j.roll > cap) { j.roll = cap; if (j.rollV > 0) j.rollV = 0; } else if (j.roll < -cap) { j.roll = -cap; if (j.rollV < 0) j.rollV = 0; }
+      if (Math.abs(j.spin) < 1e-4 && Math.abs(j.spinV) < 1e-3) { j.spin = 0; j.spinV = 0; }
+      if (Math.abs(j.roll) < 1e-4 && Math.abs(j.rollV) < 1e-3) { j.roll = 0; j.rollV = 0; }
+    }
     joltSpin = j.spin;
     joltRoll = j.roll;
   }

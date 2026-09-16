@@ -43,7 +43,7 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
 const PROD_BRANCH = 'SealSurvivor-Main';
-const LIVE_URL = 'https://seal-survivor.pages.dev';
+const LIVE_URL = 'https://sealsurvivor.com';
 const ACTIONS_URL = 'https://github.com/ethangoldhammer/seal-survivor/actions';
 
 // Every gate, in the order they run. Tests before build: they're faster and

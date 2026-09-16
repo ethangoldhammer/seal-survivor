@@ -281,6 +281,23 @@ export function setMusicRateScale(scale, glide = 0.2) {
   writeRate(glide);
 }
 
+/**
+ * THE DRAG ON THE TAPE, as a model: `rateScale`, not the rate you hear (that is
+ * the configured rate times this — see currentBpm). 1 is undilated.
+ *
+ * Exported so a dilation that has to carry the ONE-SHOTS with it can follow the
+ * music's own move instead of modelling it a second time. The move is scheduled
+ * on the audio thread as an exponential approach (writeRate's setTargetAtTime),
+ * and a wall-clock copy of that curve written in another file would be a second
+ * number to retune every time this one changed — and would be wrong for the
+ * whole of any move that was taken over mid-flight. See the replay's drag in
+ * systems/versus.js.
+ */
+export function musicRateScale() {
+  advance();
+  return rateScale;
+}
+
 // The tempo you actually HEAR. `playbackRate` is applied to the source node
 // (see startSource), so a rate of 1.5 makes a 120bpm loop play at 180 — and
 // anything trying to move in time with the music has to follow that, not the
@@ -291,7 +308,24 @@ export function setMusicRateScale(scale, glide = 0.2) {
 // CONFIG.enemies.<key>.beatSync.
 export function currentBpm() {
   advance();
-  return Math.max(1, CONFIG.music.bpm) * (started ? rateNow : targetRate());
+  return Math.max(1, configBpm(currentTrack)) * (started ? rateNow : targetRate());
+}
+
+// The ANIMATION grid of a given file. Every loop the game shipped for two years
+// was on one tempo and this was simply CONFIG.music.bpm; the match bank is at
+// 170 (see CONFIG.music.versusSrc), so the number has to be a property of the
+// track rather than of the game.
+//
+// READ OFF THE PLAYING FILE, not switched on the mode, and that is the whole
+// reason it is safe. A match that SET the tempo would have to remember to put
+// it back — on the whistle, on a restart, on a quit to the menu, on a reload
+// mid-match — and every one of those routes that forgot would leave the
+// ordinary game marching at 170 with no way to tell from CONFIG that anything
+// had happened. Derived, the tempo goes back the instant the run's own loop is
+// what is sounding, because there is nothing to put back.
+function configBpm(name = currentTrack) {
+  if (isVersusTrack(name)) return CONFIG.music.versusBpm ?? CONFIG.music.bpm;
+  return CONFIG.music.bpm;
 }
 
 // Seconds per beat at the audible tempo.
@@ -307,14 +341,29 @@ export function loopDuration() {
 }
 
 // --- the bar grid ----------------------------------------------------------
-// One bar of the MUSIC, in score seconds, and note that it is measured off the
-// files rather than derived from CONFIG.music.bpm. Every file in the library —
-// all sixteen run loops and all seven boss loops — is a whole number of 2.265s
-// bars, which is 105.96bpm; `bpm` is the ANIMATION grid, is tuned by ear, and
-// is currently a fraction under that. The gap is nothing to a creature marching
-// to the beat and everything to a track switch, which either lands on the
-// downbeat or does not. See CONFIG.music.barSeconds.
-function barSeconds() {
+// One bar of the MUSIC, in score seconds, for the file NAMED — defaulting to
+// the one playing.
+//
+// Note that it is measured off the files rather than derived from
+// CONFIG.music.bpm. Every file in the RUN library — all sixteen run loops and
+// all seven boss loops — is a whole number of 2.265s bars, which is 105.96bpm;
+// `bpm` is the ANIMATION grid, is tuned by ear, and is currently a fraction
+// under that. The gap is nothing to a creature marching to the beat and
+// everything to a track switch, which either lands on the downbeat or does not.
+// See CONFIG.music.barSeconds.
+//
+// IT TAKES A NAME because a bar is a property of the music, and the match bank
+// (CONFIG.music.versusSrc) is at 170 where everything else the game ships is at
+// 106. A single global answer would put the match's bar line most of a bar out
+// — audible on every quantised switch and on everything the bar grid drives.
+//
+// The argument is also what keeps measureTrack honest: it runs once, at decode,
+// at whatever moment the file happens to land, and against a bar that depended
+// on what was PLAYING at that instant the same file would report a different
+// bar count on different runs. Passed its own name, the measurement is a fact
+// about the file.
+function barSeconds(name = currentTrack) {
+  if (isVersusTrack(name)) return Math.max(0.05, CONFIG.music.versusBarSeconds ?? 1.411765);
   return Math.max(0.05, CONFIG.music.barSeconds ?? 2.265);
 }
 
@@ -342,7 +391,11 @@ function barSeconds() {
 const SILENCE = 0.0015; // -56 dBFS, below the noise floor of every file here
 
 function measureTrack(name, buffer) {
-  const bar = barSeconds();
+  // ITS OWN bar, not the playing file's — see barSeconds. `leadIn` does not
+  // care, but `bars` and `drift` are the numbers trackReport prints, and a
+  // match loop measured against the run library's bar reports sixteen bars as
+  // ten and a bit.
+  const bar = barSeconds(name);
   const fallback = { leadIn: 0, loopEnd: buffer?.duration ?? 0, bars: 0, drift: 0 };
   if (!(buffer?.duration > 0.05)) { trackMeta.set(name, fallback); return; }
 
@@ -502,6 +555,63 @@ export function barGrid() {
     pos: transportPos,
     phase: ((transportPos - loopAnchor) % bar + bar) % bar,
   };
+}
+
+// --- the beat, for anything that has to FLASH on one --------------------------
+//
+// THE QUARTER NOTE, as a phase from 0 (on the beat) to 1 (the instant before
+// the next), in the same score seconds barGrid works in.
+//
+// IT IS THE BAR DIVIDED, not `60 / CONFIG.music.bpm`, and the difference is the
+// whole reason this is here. `bpm` is the ANIMATION grid — tuned by ear, a
+// fraction under the library's real tempo — and it is a single global number,
+// where the match bank plays at 170 against the run library's 106. Anything
+// pulsing off `bpm` during a match is marching to a tempo nothing is playing.
+// The bar is measured off the FILE (see barSeconds), so this follows a track
+// change and a change of mode on its own.
+//
+// FOUR TO THE BAR, and NOT a four written here: CONFIG.beatSync.beatsPerBar is
+// already the game's answer to that question — systems/beatSync.js reads it to
+// turn a division name into seconds — and a second copy is the one that goes
+// stale the day somebody writes a bar in three.
+//
+// It happens to be true of this whole library (2.265s at 105.96bpm and
+// 1.411765s at 170bpm are both exactly four beats), which is what makes the
+// division safe to make; tools/beat-sync-test.mjs checks that against the
+// shipped bar lengths, so a file added at another metre is a red test rather
+// than a wheel flashing on the off-beat.
+
+/**
+ * `{ running, beat, beats, phase }` — the quarter-note grid.
+ *
+ * `beats` is how many quarter notes have gone by since the playing file's
+ * downbeat, as a real number, and `phase` is its fractional part. Both are
+ * measured from the SAME origin (`loopAnchor`), which is the only way a caller
+ * that uses the whole part to pick a thing and the fraction to light it can
+ * have the two agree — derived separately they disagree by a fraction of a
+ * beat and the thing lights just before or just after its own turn.
+ *
+ * COUNTED, NOT INCREMENTED. A caller stepping a counter each time it noticed a
+ * boundary go past would drift from the music by one beat for every frame that
+ * was dropped, every time the tab was backgrounded, every hitch — and would
+ * never recover. Read off the transport's own clock it is right on the frame
+ * after a stall as surely as on any other.
+ *
+ * `running` is false with no transport, exactly as barGrid's is, and a caller
+ * has to say what it does then: a flash that treats silence as a downbeat is a
+ * wheel keeping time to music nobody can hear.
+ */
+export function beatGrid() {
+  const g = barGrid();
+  const beat = g.bar / Math.max(1, CONFIG.beatSync?.beatsPerBar ?? 4);
+  if (!g.running || !(beat > 0)) return { running: false, beat, beats: 0, phase: 0 };
+  const beats = (transportPos - loopAnchor) / beat;
+  return { running: true, beat, beats, phase: ((beats % 1) + 1) % 1 };
+}
+
+/** One bar of the file NAMED (or the one playing), in score seconds. For tests. */
+export function barSecondsOf(name = undefined) {
+  return name === undefined ? barSeconds() : barSeconds(name);
 }
 
 // Snap an interval onto the bar ladder — see barDivisions in config.js for
@@ -771,6 +881,26 @@ function warmSet() {
     want.add(bank[arrivalCursor(bossCursor, bank.length)]);
     want.add(bank[nextBossCursor(bossCursor, bank.length)]);
   }
+
+  // THE MATCH'S LOOP, and ONLY WHILE A MATCH IS ON — where the fight's two are
+  // held whether or not a boss is alive. The difference is what the run costs
+  // in memory: a boss is a scheduled event inside every run, so the two loops
+  // an arrival would need are worth a couple of megabytes all the way through
+  // one; Blubberball is a mode you have to go to the menu and choose, and
+  // holding its bank through every ordinary run would be three files nobody is
+  // ever a level away from hearing. The cold open is a decode on the whistle
+  // (see startVersusMusic), which is the one moment there is nothing to hear
+  // anyway.
+  if (versusActive) {
+    const vBank = versusBank();
+    // The one sounding and the one after it. `versusCursor` points at the
+    // QUEUED loop once a match is under way, so its successor is the file the
+    // chain will ask for next and it has to be resident a whole loop early.
+    if (vBank.length) {
+      want.add(vBank[versusCursor % vBank.length]);
+      want.add(vBank[(versusCursor + 1) % vBank.length]);
+    }
+  }
   return want;
 }
 
@@ -831,6 +961,11 @@ export async function preloadDefaultTracks() {
   for (let i = 0; i < bossSources.length; i++) {
     const name = BOSS_PREFIX + i;
     if (bossSources[i] && !available(name)) sources.set(name, { src: bossSources[i] });
+  }
+  const versusSources = CONFIG.music.versusSrc ?? [];
+  for (let i = 0; i < versusSources.length; i++) {
+    const name = VERSUS_PREFIX + i;
+    if (versusSources[i] && !available(name)) sources.set(name, { src: versusSources[i] });
   }
   notifyTracksChanged();
 
@@ -949,6 +1084,11 @@ export function play(level = 1) {
   // without this the new run would open on the run's first loop and then be
   // taken back over by the dead fight's next boss loop one bar later.
   resetBossMusic();
+  // ...and any match the last press left up, which is the identical failure one
+  // mode over: leaving Blubberball for the menu goes through startMusicAtRest,
+  // and without this the menu would open on the run's loop and be taken back
+  // over by the match's next one at the following boundary.
+  resetVersusMusic();
   // NOT unconditionally false: the menu starts the transport with the lid
   // already on (see startMusicAtRest), and clearing the hold here would let the
   // first updateDepth of the run sweep it open a frame after Play.
@@ -1054,6 +1194,7 @@ export function stop() {
   queuedTrack = null;
   queuedQuantum = 'loop';
   resetBossMusic();
+  resetVersusMusic();
   pendingLevel = null;
   if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
 }
@@ -1125,6 +1266,14 @@ export function queueTrack(name, quantum = 'loop') {
 // the run is: the fight's queued entry while a boss is up (the cursor points at
 // the loop QUEUED, see queueNextBossLoop), the level's slot otherwise.
 function owedTrack() {
+  // BEFORE the boss test, though the two cannot both be up: a match switches
+  // the boss clock off (see versusFlag.js), and startVersusMusic clears the
+  // rotation on the way in. Ordered so that if one ever did outlive the other,
+  // the mode the player is actually in wins over a fight that should not exist.
+  if (versusActive) {
+    const bank = versusBank();
+    return bank.length ? bank[versusCursor % bank.length] : null;
+  }
   if (bossActive) {
     const bank = bossBank();
     return bank.length ? bank[Math.max(0, Math.min(bossCursor, bank.length - 1))] : null;
@@ -1147,12 +1296,15 @@ function pollQueue() {
     const name = queuedTrack;
     queuedTrack = null;
     startSource(name, boundary);
-    // A boss fight chains: the loop that just started queues its own successor
-    // for the END of itself, so the rotation carries on with no clock outside
-    // the music driving it. See startBossMusic. (queueNextBossLoop warms; the
-    // ordinary case has to do it here, or the loop that just stopped playing
-    // would be held for the rest of the run.)
-    if (bossActive) queueNextBossLoop();
+    // A fight CHAINS: the loop that just started queues its own successor for
+    // the END of itself, so the rotation carries on with no clock outside the
+    // music driving it. See startBossMusic. A match asks the same question and
+    // usually gets no for an answer — its cycle is gated on goals, and this is
+    // where a credit banked during the last pass is spent.
+    // (Both queue helpers warm; the ordinary case has to do it here, or the
+    // loop that just stopped playing would be held for the rest of the run.)
+    if (versusActive) queueNextVersusLoop();
+    else if (bossActive) queueNextBossLoop();
     else keepWarm();
   }
 }
@@ -1265,7 +1417,13 @@ export function setLevel(level) {
   // boundary, ending the fight's score while the boss was still alive. The
   // level is still recorded above, and endBossMusic reads it on the way out, so
   // the loop that comes back after the kill is the one this level asked for.
-  if (!bossActive) {
+  // ...AND NOT DURING A MATCH, for the same reason with a different mode on the
+  // other end of it. Blubberball has no upgrade cards, but the XP counter still
+  // runs and this is still called — so without the stand-down the run's
+  // ordinary rotation would queue slot 2 underneath the match and cut in at the
+  // next loop boundary, and the match's music would quietly become the run's a
+  // minute in. See the note over the match rotation.
+  if (!bossActive && !versusActive) {
     const slot = slotForLevel(level);
     if (slot != null && slot !== currentTrack) queueTrack(slot);
   }
@@ -1547,6 +1705,242 @@ export function resetBossMusic() {
   // not open muted. play() clears the hush outright a line later; this is the
   // one that matters for the routes that do not go through play().
   endBossFade(null, 0);
+}
+
+// ---------------------------------------------------------------------------
+// THE MATCH ROTATION — Blubberball's music.
+// ---------------------------------------------------------------------------
+// A third bank on the SAME transport, for the reasons spelled out above the
+// boss one. What makes it a separate rotation rather than a reuse of that code
+// is that it answers a different question: the boss bank is a WINDOW onto a run
+// that is still going on underneath, so it has an intro that plays once, a
+// cursor that belongs to the run and survives a kill, a refcount for two bosses
+// at once, and a handover back to the level's own loop. A match has none of
+// those. It is the whole soundtrack for as long as it lasts, and it starts at
+// the top every time, which is exactly what CONFIG.music.versusSrc describes: a
+// cycle, 00 → 01 → … → 07 → 00.
+//
+// WHAT MOVES IT IS GOALS, one step each. Left to the clock the cycle was a
+// playlist — eight loops going past at their own pace, saying nothing about the
+// match they were over. Gated, the bank is a scoreboard you can hear: a side
+// that cannot score hears the same loop come round again, and the piece opens
+// out on the goal rather than thirty seconds after it.
+//
+// The gate holds the NEXT loop, never the one sounding. A goal does not cut the
+// music: it books the switch for the end of the current pass (`queueTrack`'s
+// 'loop' quantum, the same handover the ungated cycle used), so what is playing
+// when the ball goes in always finishes.
+//
+// A LEVEL CANNOT REACH IT. A match has no upgrade cards, but the XP counter
+// still runs and setLevel is still called from the same place — so without the
+// stand-down there, the run's ordinary rotation would queue slot 2 underneath
+// the match and cut in at the next loop boundary. Same argument as the boss
+// bank's, arrived at from the other mode.
+//
+// Named 'versus0'… so slotForLevel — which scans '1'..CONFIG.music.slots — can
+// never draw one for an ordinary level, and so isVersusTrack can read the
+// tempo off a name (see barSeconds and configBpm).
+
+const VERSUS_PREFIX = 'versus';
+
+let versusActive = false;
+// Where the cycle is. Points at the loop SOUNDING, and at the one QUEUED for
+// the window between a goal and the boundary it hands over on — the cursor
+// moves when the switch is booked, not when it lands, which is what lets
+// owedTrack answer for a queue that has not fired yet. startVersusMusic sets it
+// to 0 and plays bank[0] rather than advancing into it: a match always opens on
+// Loop00.
+let versusCursor = 0;
+// How many steps the cycle is BEHIND THE SCORE: one per goal, spent one per
+// handover. Not a boolean, because two goals inside one 22-second loop are two
+// steps and the second must not be swallowed — the cycle owes that loop and
+// plays it next time round instead of skipping it.
+//
+// Capped at a lap of the bank so a long timed match cannot build a backlog the
+// music would still be paying off after the whistle.
+let versusGoalsOwed = 0;
+
+/** Is this one of the match loops? Reads the NAME, so it works before decode. */
+function isVersusTrack(name) {
+  return typeof name === 'string' && name.startsWith(VERSUS_PREFIX);
+}
+
+// Which match loops actually loaded, in file order — the catalogue and not the
+// warm set, for the reason slotForLevel gives. A 404 on one file costs that
+// loop rather than the match's music.
+function versusBank() {
+  const out = [];
+  const n = (CONFIG.music.versusSrc ?? []).length;
+  for (let i = 0; i < n; i++) {
+    const name = VERSUS_PREFIX + i;
+    if (available(name)) out.push(name);
+  }
+  return out;
+}
+
+/** Is the score currently on the match bank? For the tuner readout and tests. */
+export function versusMusicActive() {
+  return versusActive;
+}
+
+// The next loop in the cycle, IF A GOAL HAS PAID FOR IT. Wraps to 0 — every
+// entry is a body loop, there is no announcement to avoid repeating, so nothing
+// is floored past.
+//
+// Called from two places that both mean "the cycle may move now": pollQueue,
+// the instant a switch lands, and versusGoalScored. Neither knows whether the
+// step is owed, which is the point — the gate lives here, in the one function
+// that advances the cursor, so there is no route round it.
+function queueNextVersusLoop() {
+  const bank = versusBank();
+  if (bank.length === 0) return;
+  // A switch is already booked for the end of this pass. Advancing again would
+  // not queue a second one, it would REPLACE the first — and the loop that
+  // goal bought would never be heard. The credit stays on the counter and is
+  // spent at the next boundary.
+  if (queuedTrack) return;
+  // THE GATE. Nothing owed means the file plays on: `source.loop` is true, so
+  // "do not queue" is not silence, it is the same loop coming round again.
+  if (versusGoalsOwed <= 0) return;
+  versusGoalsOwed--;
+  versusCursor = (versusCursor + 1) % bank.length;
+  // A bank of one keeps looping: queueTrack refuses a name already playing,
+  // which is the correct behaviour and not a stall. The credit is spent either
+  // way — there is nowhere for it to be saved to.
+  queueTrack(bank[versusCursor], 'loop');
+  keepWarm();
+}
+
+/**
+ * A GOAL WENT IN. Unlock one step of the cycle.
+ *
+ * Called from goal() in systems/versus.js — the live goal, once. Deliberately
+ * NOT hung off the `versusGoal` feedback event, which the replay fires again on
+ * its explosion beat (see explodeReplay): the music would take a second step
+ * for a goal that had already been paid for.
+ *
+ * The switch is booked here rather than at the boundary, so the handover is
+ * `queueTrack`'s ordinary end-of-file one and the loop the ball went in over
+ * finishes. If the transport is between files, or the opener has not decoded
+ * yet, the credit simply sits on the counter until something can spend it.
+ */
+export function versusGoalScored() {
+  if (!versusActive) return;
+  const lap = Math.max(1, versusBank().length - 1);
+  versusGoalsOwed = Math.min(versusGoalsOwed + 1, lap);
+  queueNextVersusLoop();
+}
+
+/** How many steps the cycle owes the score. For the tuner readout and tests. */
+export function versusGoalsPending() {
+  return versusGoalsOwed;
+}
+
+/**
+ * A match is starting. Take the transport onto the match bank, from the top.
+ *
+ * Called from startGame in main.js on the versus branch, where it replaces the
+ * stopMusic() that stood there while a match had no music of its own.
+ *
+ * UNQUANTISED, unlike a boss arrival. A bar line exists to hide a seam, and
+ * there is no seam here: what is playing is the menu's loop, half speed under a
+ * 500Hz lid, and the match is a different piece of music at a different tempo.
+ * Waiting would only mean up to 2.265s of menu after the whistle.
+ *
+ * @returns true if the bank is loaded and the match has music.
+ */
+export function startVersusMusic() {
+  resetVersusMusic();
+  if (!CONFIG.music.enabled || !ensureChain()) return false;
+  const bank = versusBank();
+  if (bank.length === 0) {
+    // Nothing loaded. Silence rather than the run's music: a match playing the
+    // ordinary rotation is not a degraded match, it is the wrong game.
+    stop();
+    return false;
+  }
+  // Whatever the last run left standing. A match is reachable straight off a
+  // score card — the rotation may be on a boss loop, there may be a switch
+  // queued behind it, and the kill's hush may still have the gain ramped to
+  // zero, which would open the match MUTED.
+  resetBossMusic();
+  releaseMusicHush(0);
+  queuedTrack = null;
+  queuedQuantum = 'loop';
+  rateCurve = null;
+  opening = null;
+  // Out from under the menu, in one step and with no ramp: the lid and the half
+  // speed are the menu's, and there is nothing on screen for a move to be
+  // choreographed against — a match cuts to its own camera framing (see the
+  // note on the versus branch in startGame).
+  atRest = false;
+  depthHeld = false;
+  resumeUntil = 0;
+  setMusicRateScale(1, 0);
+  rateNow = rateTarget = targetRate();
+  rateTau = 0;
+  filter.frequency.cancelScheduledValues(ctx.currentTime);
+  filter.frequency.setValueAtTime(Math.max(60, CONFIG.music.surfaceHz), ctx.currentTime);
+
+  versusActive = true;
+  versusCursor = 0;
+  const opener = bank[0];
+  if (tracks.has(opener)) {
+    // play()'s own open, which re-anchors the beat grid to the first sample of
+    // the match rather than leaving it where the menu's loop had got to. That
+    // matters more here than it does for a boss switch: the bar grid is what
+    // everything beat-synced reads, and an anchor inherited across a change of
+    // TEMPO is a downbeat in the wrong place from the first bar.
+    openOn(opener);
+    // Nothing is queued behind it, and that is the first turn of the gate
+    // rather than a match that plays Loop00 and stops there: Loop00 repeats
+    // until somebody scores. See queueNextVersusLoop — this call is kept
+    // because the CREDIT may already be there (a goal cannot reach it, but a
+    // rematch inside one press can leave the counter reset either way, and the
+    // call costs nothing and cannot advance an unpaid cycle).
+  } else {
+    // NOT DECODED YET — the first match of a session, before keepWarm has had a
+    // reason to hold anything from this bank. Deferred to the decode rather
+    // than queued, which is the same choice play() makes on its own cold path
+    // and for one more reason here: queueTrack declines outright when the
+    // transport has never started, and a match reached inside the first seconds
+    // of a session — before the menu's own first loop has landed — would then
+    // be silent for its whole length with nothing to say so.
+    //
+    // The menu's loop plays on until the file arrives, and the match opens from
+    // its own downbeat, one decode late. `openSeq` is play()'s guard against a
+    // stale decode and it is exactly the right one to share: a run started in
+    // the gap bumps it AND clears `versusActive` (play calls resetVersusMusic),
+    // so this drops on either test.
+    const seq = ++openSeq;
+    ensureTrack(opener).then((buffer) => {
+      if (!buffer || seq !== openSeq || !versusActive) return;
+      openOn(opener);
+      // A goal scored during the decode is still owed — the counter kept it,
+      // and this is the first moment there is a transport to spend it on.
+      queueNextVersusLoop();
+    });
+  }
+  keepWarm();
+  return true;
+}
+
+/**
+ * Drop the match bank. The match is over, or its owner has gone away.
+ *
+ * No handover: every route out of a match ends up somewhere that starts its own
+ * music (play() out of the menu's startMusicAtRest, or startVersusMusic again
+ * on a rematch), so a switch scheduled here would be a track change nobody
+ * hears the end of. play() calls this for the same reason it calls
+ * resetBossMusic.
+ */
+export function resetVersusMusic() {
+  versusActive = false;
+  versusCursor = 0;
+  // The score is gone with the match. A credit left standing would open the
+  // next one on Loop01 at its first boundary, which is the ungated playlist
+  // again for anyone who plays two matches in a row.
+  versusGoalsOwed = 0;
 }
 
 // Which uploaded loop should be playing at this level. Empty slots are

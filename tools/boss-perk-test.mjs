@@ -5,7 +5,24 @@
 // Two rules a boss fight now has, checked against the real systems rather than
 // against the config that is supposed to drive them.
 //
-//   1. A BOSS CANNOT BE HELD — IT IS DAZED INSTEAD. Six systems in this game
+//   1. A BOSS CANNOT BE HELD, and the daze is what a refusal USED to become.
+//
+//      RETIRED, AND MEASURED ANYWAY. `CONFIG.boss.control.holdsDaze` ships
+//      false: a hold on a boss is refused outright, exactly as it was before
+//      the daze was written, because a perfect strike into a lit weak spot
+//      should be the only thing in the game that stops a boss and seven
+//      abilities buying the same window is how the expensive one stops being
+//      worth paying. See the note over that key, and npm run test:bossthreat
+//      for the arithmetic that retired it.
+//
+//      The MECHANISM is untouched and still tuned, behind that one boolean,
+//      because turning it back on is the only honest way to see what the
+//      retirement changed — so this section opens the door for its own
+//      measurements and shuts it again, and asserts the shipped default
+//      separately. Deleting the section instead would have thrown away the
+//      only description of what the door opens onto.
+//
+//      Six systems in this game
 //      stop a creature moving — the beluga's bubbles, the octopus grab, the
 //      bakalar's net, the club's ice, the club's own launch, the dumbo's charm
 //      — and every one of them is on a cooldown short enough that two together
@@ -156,6 +173,19 @@ section('A BOSS CANNOT BE HELD');
 fresh();
 const boss = put('bossShark', { boss: true });
 const fish = put('fish');
+
+// THE SHIPPED RULE FIRST, before the door is opened — otherwise this whole
+// section would keep passing after the retirement it is measuring and nothing
+// would say that no hold in the game reaches any of it any more.
+check('a hold on a boss is REFUSED in the shipped game',
+  CONFIG.boss.control.holdsDaze === false && !holdEnemy(boss, 5) && !isDazed(boss));
+check('...and a fish is unaffected by that', holdEnemy(fish, 5) === true && fish.trapTimer > 0);
+
+// ...and now the mechanism, with the door held open for the rest of the file.
+// Restored at the bottom of the run — see the note in the header.
+const shippedHoldsDaze = CONFIG.boss.control.holdsDaze;
+CONFIG.boss.control.holdsDaze = true;
+process.on('exit', () => { CONFIG.boss.control.holdsDaze = shippedHoldsDaze; });
 
 check('the rule is on for bosses', controlImmune(boss) && !controlImmune(fish));
 check('canHold refuses the boss and allows the fish', !canHold(boss) && canHold(fish));

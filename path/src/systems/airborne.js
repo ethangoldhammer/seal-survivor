@@ -91,9 +91,17 @@ export function airRamp(player) {
  * of impact would refuse to pay for it, because by then the seal has spent half
  * a second falling and nothing has been added since.
  */
-export function updateAirborne(player) {
+export function updateAirborne(player, cache = true) {
   const live = airRamp(player);
-  airState.ramp = live;
+  // THE SINGLETON IS THE RUN'S SEAL, and only it. The cache exists for the
+  // call sites that are handed a stat block and a speed rather than a body
+  // (systems/chumMagnet.js) — there is exactly one of those and it is about
+  // the person playing. A match has up to eight seals in the air at once, and
+  // letting any of them write here would hand the player whichever seal
+  // breached last: pass `cache: false` for anybody else. Their ramp is read
+  // off their own body with airRamp(), which is what every multiplier below
+  // now takes.
+  if (cache) airState.ramp = live;
   if (live > player.airPeak) player.airPeak = live;
   return live;
 }
@@ -113,16 +121,19 @@ export function resetAirborne() {
 // by exactly 1 and every call site stays unconditional — the same identity-value
 // rule the cross-cutting stats in stats.js follow.
 
-export function airDamageMul() {
-  return 1 + airState.ramp * (cfg().damageMul ?? 0);
+// WHOSE AIR, and the default is the run's — see `airState` above. A caller
+// with a body in its hand passes that body's own ramp (airRamp(seal)), which
+// is the only way eight seals in the water can each be paid for their own arc.
+export function airDamageMul(ramp = airState.ramp) {
+  return 1 + ramp * (cfg().damageMul ?? 0);
 }
 
-export function airFireRateMul() {
-  return 1 + airState.ramp * (cfg().fireRateMul ?? 0);
+export function airFireRateMul(ramp = airState.ramp) {
+  return 1 + ramp * (cfg().fireRateMul ?? 0);
 }
 
-export function airPickupMul() {
-  return 1 + airState.ramp * (cfg().pickupMul ?? 0);
+export function airPickupMul(ramp = airState.ramp) {
+  return 1 + ramp * (cfg().pickupMul ?? 0);
 }
 
 // --- mid-air jumps ----------------------------------------------------------
@@ -153,7 +164,7 @@ export function canAirJump(player) {
  * straight down stays a dive — see the note on CONFIG.airborne.jumps.upBias
  * for why that fork is the point.
  */
-export function spendAirJump(player, dir) {
+export function spendAirJump(player, dir, cache = true) {
   if (!canAirJump(player)) return null;
   const j = cfg().jumps ?? {};
   const bias = Math.min(1, Math.max(0, j.upBias ?? 0));
@@ -179,7 +190,7 @@ export function spendAirJump(player, dir) {
   // updateAirborne: the feedback fired at this call site is scaled by the
   // ramp, and a jump that didn't count toward its own burst would read as the
   // second jump being weaker than the first.
-  updateAirborne(player);
+  updateAirborne(player, cache);
   return { vx: x * speed, vy: y * speed, invuln: j.invuln ?? 0 };
 }
 

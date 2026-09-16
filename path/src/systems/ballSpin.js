@@ -170,6 +170,68 @@ export function updateBallSpin(spin, dt) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE RECORD — the live strokes, as floats a replay frame can hold.
+//
+// A replay poses the ball rather than stepping it, so nothing advanced the
+// strokes: they sat wherever the goal's freeze had left them (dying, since a
+// dead ball is fed a spin of zero) while the replayed ball turned under them.
+// The recorder keeps every stroke per frame (recordBallSpin) and the poser
+// rebuilds the set from the record (poseBallSpin), so the strokes in the
+// replay are the strokes that were on the ball.
+// ---------------------------------------------------------------------------
+
+/**
+ * Strokes a record can hold, and floats per stroke: phase, arc, fade, lane,
+ * dying. Room for the live set AND the dying sets behind it — a spin that
+ * crosses the threshold twice inside `fadeOut` has three sets on the ball at
+ * once, and a record that only held one would drop strokes from the replay.
+ */
+export const SPIN_REC_MAX = 16;
+export const SPIN_REC_STRIDE = 5;
+/** Floats per record. Slot 0 is the count; -1 is a frame that never recorded one. */
+export const SPIN_REC = 1 + SPIN_REC_MAX * SPIN_REC_STRIDE;
+
+/** Write the live strokes into `out` (a Float32Array of SPIN_REC or more). */
+export function recordBallSpin(out) {
+  if (!out || out.length < SPIN_REC) return out;
+  const n = Math.min(SPIN_REC_MAX, streaks.length);
+  out[0] = n;
+  for (let i = 0; i < n; i++) {
+    const s = streaks[i];
+    const k = 1 + i * SPIN_REC_STRIDE;
+    out[k] = s.phase; out[k + 1] = s.arc; out[k + 2] = s.fade; out[k + 3] = s.lane; out[k + 4] = s.dying ? 1 : 0;
+  }
+  return out;
+}
+
+/**
+ * Rebuild the strokes from record `a`, `u` of the way toward record `b` where
+ * the two hold the same set (same count, same lanes) — otherwise the nearer
+ * record whole, since a set that was born or buried between the two frames
+ * has no counterpart to lerp toward. `spin` is the ball's, for the direction
+ * renderBallSpin draws them in. Returns false, touching nothing, when either
+ * record is unrecorded.
+ */
+export function poseBallSpin(spin, a, b, u = 0) {
+  if (!a || !b || a[0] < 0 || b[0] < 0) return false;
+  u = Math.max(0, Math.min(1, u));
+  state.spin = spin;
+  const na = a[0];
+  const nb = b[0];
+  let same = na === nb;
+  for (let i = 0; same && i < na; i++) same = a[1 + i * SPIN_REC_STRIDE + 3] === b[1 + i * SPIN_REC_STRIDE + 3];
+  const src = same || u < 0.5 ? a : b;
+  const n = src[0];
+  streaks.length = 0;
+  for (let i = 0; i < n; i++) {
+    const k = 1 + i * SPIN_REC_STRIDE;
+    const l = (j) => (same ? a[k + j] + (b[k + j] - a[k + j]) * u : src[k + j]);
+    streaks.push({ phase: l(0), arc: l(1), fade: l(2), lane: src[k + 3], dying: src[k + 4] > 0.5 });
+  }
+  return true;
+}
+
 const _col = new THREE.Color();
 
 /**

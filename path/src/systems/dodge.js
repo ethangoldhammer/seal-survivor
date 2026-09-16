@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { isCommittedRun } from '../entities/enemies.js';
 import { player } from '../entities/player.js';
 import { hitCreature } from './hitShape.js';
 import { addCharge } from './strike.js';
@@ -110,7 +111,11 @@ export function resetDodge() {
  */
 function committed(e) {
   if (!e.isBoss) return false;
-  return e.ramming === true || e.lungeStage === 'strike';
+  // The two fields themselves live in entities/enemies.js, because
+  // CONFIG.boss.tenacity asks the same question about the same moment — a
+  // committed run may not be nudged off its line — and two copies of "is it
+  // committed" is one retune away from the payout and the rule disagreeing.
+  return isCommittedRun(e);
 }
 
 /** How close the run had to come for it to have been aimed at the seal. */

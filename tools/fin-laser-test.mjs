@@ -515,9 +515,31 @@ console.log('\nTHE HALO — where it sits');
 
   const short = bolt(1);
   const long = bolt(6);
-  check('the nose is a local offset, not a world one',
-    Math.abs(short.offset - long.offset) < 1e-6,
-    `${short.offset.toFixed(4)} at length 1 vs ${long.offset.toFixed(4)} at length 6`);
+  // THE CONTRACT IS THE WORLD NOSE, not the raw local number.
+  //
+  // This asked for `offset` to be identical at length 1 and length 6, on the
+  // reasoning that a local measurement cannot care how the root is scaled. True
+  // of the body — and the bolt is not only the body. `finLaserGlow` is a child
+  // the look COUNTER-SCALES so the halo keeps its world size: 0.400 tall at
+  // length 1 and 0.067 at length 6, a clean 1/length. The local box therefore
+  // does change, because the biggest thing in it changes — the glow sticks out
+  // past the body on a short bolt and is swallowed by it on a long one. The
+  // number was right and so was the mesh; the invariance was asserted of the
+  // wrong frame.
+  //
+  // What has to hold is that `offset * scale.y` lands on the drawn nose at any
+  // length, which is exactly what the call site does with it — and is checked
+  // against the real world box immediately below. Asserted here as the ratio,
+  // so a bolt whose nose drifted to two thirds of its body would still fail.
+  const noseFrac = (b) => {
+    const box = new THREE.Box3().setFromObject(b.mesh);
+    return (b.offset * b.mesh.scale.y) / box.max.y;
+  };
+  const fShort = noseFrac(short);
+  const fLong = noseFrac(long);
+  check('the nose rides the root scale out to the same place at any length',
+    Math.abs(fShort - fLong) < 0.02,
+    `${(fShort * 100).toFixed(1)}% of the drawn body at length 1 vs ${(fLong * 100).toFixed(1)}% at length 6`);
   check('...and it is in front of the middle', short.offset > 0,
     short.offset.toFixed(4));
 

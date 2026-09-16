@@ -574,8 +574,9 @@ section('The panel');
       .find((c) => c.textContent === name);
     const shown = (id) => !document.getElementById(id).classList.contains('sv-hidden');
     check('the picker offers every screen',
-      panel.querySelectorAll('.sv-txp-screens .sv-t-chip').length === PREVIEW_SCREENS.length,
-      PREVIEW_SCREENS.join(', '));
+      panel.querySelectorAll('.sv-txp-screens .sv-t-chip').length === ui.previewScreenNames().length
+      && ui.previewScreenNames().length >= PREVIEW_SCREENS.length,
+      ui.previewScreenNames().join(', '));
 
     chip('HUD').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
     check('HUD puts the HUD up', shown('svHud'));
@@ -595,6 +596,148 @@ section('The panel');
       'the name row is still live — an invented run can be posted to the real board');
 
     chip('clear').dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  }
+
+  // A ROLE WHOSE SELECTOR HAS TWO PARTS. The quip is `.sv-ldg-head .sv-title`,
+  // and the old specimen turned that into a class list — "sv-ldg-head" and
+  // ".sv-title", dot included — so its line was styled by neither rule and
+  // rendered in the panel's own Inter for as long as the role existed. The
+  // specimen has to build the ancestor the selector needs, and then flatten
+  // whatever layout that ancestor brings (the after-match prompt is a centred
+  // flex column with a scrim in ::before).
+  {
+    const sampleOf = (key) => panel.querySelector(`[data-role="${key}"] .sv-txp-sample`);
+    const quip = sampleOf('quip');
+    const quipSize = TEXT_ROLES.find((r) => r.key === 'quip').style.size;
+    check('a descendant-selector specimen is styled by its own rule',
+      getComputedStyle(quip).fontSize.includes(`${quipSize}px`), getComputedStyle(quip).fontSize);
+    check('...inside the ancestor its selector needs',
+      quip.parentElement.classList.contains('sv-ldg-head') && quip.parentElement.classList.contains('sv-txp-wrap'),
+      quip.parentElement.className);
+    const overBtn = sampleOf('vsOverButton');
+    check('the after-match button wears its two-deep rule, not the plain button one',
+      getComputedStyle(overBtn).fontSize.includes('2.6vmin'), getComputedStyle(overBtn).fontSize);
+    const go = sampleOf('vsGo');
+    check('a two-class selector is one element with both classes',
+      go.classList.contains('sv-versus-count') && go.classList.contains('sv-versus-go'), go.className);
+
+    // BLACK TYPE ON GLASS. The goal card's roles are #05070a on a frosted pane;
+    // on the strip's near-black they are invisible, so the specimen draws the
+    // pane — the real .sv-glass from versus.js, in P1's colour.
+    const plate = panel.querySelector('[data-role="vsCardName"] .sv-txp-plate');
+    check('a glass role\'s specimen sits on a pane', plate?.classList.contains('sv-glass'));
+    check('...tinted the team colour', /rgba\(\d+,\d+,\d+,0\.26\)/.test(plate?.style.getPropertyValue('--sv-team-wash') ?? ''),
+      plate?.style.getPropertyValue('--sv-team-wash'));
+
+    // THE WORDS ARE THE TABLE'S. A `sampleFrom` role shows its uiText row, and
+    // `{name}` is the longest name the roster can cast — the worst case, which
+    // is the one that decides the type.
+    const { UI_TEXT } = await import('../path/src/uiTextTable.js');
+    // vsCardLine is the exemplar for both halves now: it has a sampleFrom AND a
+    // {name} to fill. It took over from vsCardWin, which was the winner line on
+    // this card until the result moved onto the stats page — an artboard, whose
+    // type has no DOM node for a role to measure. See textRoles.js.
+    const line = sampleOf('vsCardLine').textContent;
+    check('a sampleFrom specimen shows its uiText row', line.startsWith(UI_TEXT.versusAssist.split('{')[0]), line);
+    check('...with {name} filled', !line.includes('{name}') && line.length > UI_TEXT.versusAssist.length, line);
+    check('...by a name at the field\'s limit', sampleOf('vsCardName').textContent.length >= 12,
+      sampleOf('vsCardName').textContent);
+    check('the readout says which unit a role is in',
+      panel.querySelector('[data-role="vsCount"]').firstChild.textContent.endsWith('vmin'),
+      panel.querySelector('[data-role="vsCount"]').firstChild.textContent);
+  }
+
+  // A ROLE SIZED TO THE SCREEN. The countdown and the goal card were authored
+  // in vmin and stay in it; the prompt's buttons carry a px floor so they
+  // stay tap targets on a phone in landscape.
+  {
+    const css = typography.buildRoleCss();
+    const rule = (sel) => css.split('\n').find((l) => l.startsWith(`${sel} {`)) ?? '';
+    check('a vmin role emits vmin', /font-size: calc\(26vmin \* var\(--sv-scale\)\)/.test(rule('.sv-versus-count')),
+      rule('.sv-versus-count').slice(0, 120));
+    check('...and a floored one is max()ed with its px floor',
+      /font-size: max\(18px, calc\(2\.6vmin \* var\(--sv-scale\)\)\)/.test(rule('.sv-versus-over .sv-btn')),
+      rule('.sv-versus-over .sv-btn').slice(0, 140));
+    const vminRows = TUNER_SCHEMA.filter((g) => g.panel === 'text')
+      .flatMap((g) => g.items).filter((it) => /^textStyles\.vs(Count|Go|Card\w+|Over\w+|ReelTag)\.size$/.test(it.path));
+    // EIGHT, not nine: vsCardWin was the goal card's winner line and the result
+    // lives on the stats page now — a Rive artboard, whose type is sized by the
+    // Theme view model rather than by a tuner row. See textRoles.js.
+    check('...and its slider is a vmin slider, not a px one',
+      vminRows.length === 8 && vminRows.every((it) => it.max <= 40 && it.label.includes('vmin')),
+      `${vminRows.length} rows: ${vminRows.map((it) => it.max).join(',')}`);
+    check('...that names the floor where there is one',
+      vminRows.find((it) => it.path === 'textStyles.vsOverButton.size')?.label.includes('18px'));
+  }
+
+  // A SHEET THAT ARRIVES AFTER THE ROLE SHEET. The match HUD and the team
+  // select build their <style> on first use — after boot, after the role sheet
+  // — and a rule there of the same specificity would beat the role's for the
+  // same selector. The panel would write a size, save it, and the match would
+  // keep drawing its own. installStyleBelowRoles files a late sheet UNDER the
+  // role sheet, so order keeps doing the job it does for ui.js's rules.
+  {
+    typography.installStyleBelowRoles('svLateTest', '.sv-versus-count { font-size: 999px; }');
+    const late = document.getElementById('svLateTest');
+    const roles = document.getElementById('svTypographyRoles');
+    // DOM ORDER ONLY, not a computed style. A browser cascades stylesheets in
+    // document order, which is the whole mechanism; jsdom cascades them in
+    // INSERTION order (document.styleSheets is appended to as elements
+    // connect), so in here the late sheet wins no matter where it was filed
+    // and a computed check would fail against correct code. Proved in a
+    // browser instead — see the note on ensureVersusStyle in versus.js.
+    check('a late sheet is filed under the role sheet',
+      late && roles && !!(late.compareDocumentPosition(roles) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING));
+    typography.installStyleBelowRoles('svLateTest', '.sv-versus-count { font-size: 1px; }');
+    check('...and installing it twice keeps the first', document.querySelectorAll('#svLateTest').length === 1
+      && late.textContent.includes('999px'));
+    late.remove();
+    // The two sheets the mode builds late go through it — a plain appendChild
+    // in either is the bug coming back.
+    const { readFileSync: readSrc } = await import('node:fs');
+    for (const file of ['../path/src/systems/versus.js', '../path/src/ui/teamSelect.js']) {
+      const text = readSrc(new URL(file, import.meta.url), 'utf8');
+      check(`${file.split('/').pop()} files its sheet with installStyleBelowRoles`,
+        text.includes('installStyleBelowRoles(') && !/document\.head\.appendChild\(style\)/.test(text));
+    }
+  }
+
+  // EVERY BLUBBERBALL ROLE NAMES A CLASS THE MODE ACTUALLY WRITES. A role is a
+  // selector plus a default, and a selector nobody's markup wears is a group of
+  // sliders that move nothing — the one thing a tuning panel must never carry.
+  {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../path/src/systems/versus.js', import.meta.url), 'utf8')
+      + readFileSync(new URL('../path/src/ui/teamSelect.js', import.meta.url), 'utf8');
+    const modeRoles = TEXT_ROLES.filter((r) => r.section === 'Blubberball' || r.section === 'Team select');
+    check('the match and its team select have roles', modeRoles.length >= 20, `${modeRoles.length}`);
+    for (const role of modeRoles) {
+      const classes = role.selector.split(/[\s.]+/).filter(Boolean);
+      const missing = classes.filter((c) => !src.includes(c));
+      check(`${role.key} names classes the mode writes`, missing.length === 0, missing.join(', '));
+    }
+    // No DIMMING `opacity` left on a roled selector in either sheet — the
+    // role's alpha is in its colour, and the two would multiply. `opacity: 0`
+    // is allowed: that is the countdown's birth state, which its keyframes
+    // animate to 1, not a dimming.
+    for (const role of modeRoles) {
+      const re = new RegExp(`\\n${role.selector.replace(/[.]/g, '\\.')} \\{[^}]*opacity: (?!0[;\\s])`);
+      check(`...and ${role.key}'s fallback rule carries no opacity`, !re.test(src));
+    }
+  }
+
+  // SCREENS FROM OTHER MODULES. ui.js cannot import the match HUD or the team
+  // select (both import from it), so main.js registers them; every registered
+  // screen's hide runs on every switch, so nothing survives the next chip.
+  {
+    const log = [];
+    ui.registerPreviewScreen('zz test screen', { show: () => log.push('show'), hide: () => log.push('hide') });
+    check('a registered screen is offered', ui.previewScreenNames().includes('zz test screen'));
+    ui.previewScreen('zz test screen');
+    check('...and put up when picked', log.at(-1) === 'show', log.join(','));
+    ui.previewScreen('HUD');
+    check('...and taken down by the next pick', log.at(-1) === 'hide', log.join(','));
+    ui.previewScreen('clear');
   }
 
   // A HOT RELOAD MUST NOT KILL THE SYSTEM SILENTLY.
@@ -619,9 +762,15 @@ section('The panel');
     check('...and does not leave a second one behind',
       document.querySelectorAll('#svTypographyRoles').length === before,
       `${document.querySelectorAll('#svTypographyRoles').length} role sheets`);
+    // A DIRECT CHILD, not the first `.sv-title` in the tree. The first one in
+    // document order is the score card's, inside .sv-ldg-head, and that one is
+    // the QUIP role's by design (its selector is two classes deep so it beats
+    // this rule) — measuring it reads 22px and blames the sheet for a size
+    // that is correct.
+    const plainTitle = document.querySelector('.sv-ui > .sv-title');
     check('...and the element really computes it',
-      getComputedStyle(document.querySelector('.sv-ui .sv-title')).fontSize.includes('77px'),
-      getComputedStyle(document.querySelector('.sv-ui .sv-title')).fontSize);
+      getComputedStyle(plainTitle).fontSize.includes('77px'),
+      getComputedStyle(plainTitle).fontSize);
 
     // initTypography is idempotent too — the other half of the same fix.
     reloaded.initTypography();

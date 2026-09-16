@@ -582,9 +582,14 @@ section('At the size it ships <span>— the same states in the frame the game ac
 // choice rather than like geometry being cut off.
 log('\nTHE INSTRUMENT FITS ON ITS OWN QUAD');
 {
-  const widest = Math.max(RING.chainRadiusMul ?? 1.14, CORE.ringTo ?? 1.4);
+  // The AIR band (Blubberball's, CONFIG.strike.ring.air) is the outermost of
+  // them and has to be in this list — a band added without one is a band
+  // nothing checks, which is precisely how the chain arc drew as four corner
+  // smears for as long as it existed.
+  const airOuter = (RING.air?.radiusMul ?? 1.28) + (RING.thickness ?? 0.16) * 0.25;
+  const widest = Math.max(RING.chainRadiusMul ?? 1.14, CORE.ringTo ?? 1.4, airOuter);
   check('the quad reaches past everything drawn on it', RING_OVERSCAN >= widest,
-    `overscan ${RING_OVERSCAN} vs widest band ${widest}`);
+    `overscan ${RING_OVERSCAN} vs widest band ${widest.toFixed(3)} (air reaches ${airOuter.toFixed(3)})`);
 
   // And measured: the shock ring at full travel has to be lit on the AXES as
   // well as on the diagonals. A clipped ring is bright in the corners and
@@ -616,6 +621,141 @@ log('\nTHE INSTRUMENT FITS ON ITS OWN QUAD');
   }
   check(`the shock ring is a whole circle at r ${shockR.toFixed(2)}`, darkest > 40,
     `dimmest point ${darkest}/255 at ${where}`);
+}
+
+// --- THE AIR BAND, WHICH ONLY BLUBBERBALL DRAWS -----------------------------
+// A match is two or more people on one screen and the HUD's air gauge belongs
+// to seat 0, so every other seal's lungs had no readout anywhere. This is that
+// readout, drawn as the outermost band on each human-driven seal's own ring —
+// see CONFIG.strike.ring.air and the gate in systems/versus.js.
+//
+// MEASURED, on the circle, and both halves of it: the lit part has to be lit
+// and the spent part has to still be THERE. An arc with no track behind it is
+// a stub of colour at some angle of a circle, and which fraction of a lungful
+// that is cannot be read — which is the whole reason the empty side is drawn
+// at a fraction of the alpha rather than not at all.
+//
+// It is also the only band whose absence is silent in the ordinary game: every
+// run outside a match hands the ring a null and draws nothing here, so a
+// broken air band looks exactly like the feature not being on yet.
+section('Air <span>— the outermost band, on a Blubberball seal a person is driving. It drains rather than fills, like the chain arc inside it.</span>', 4);
+{
+  const airCam = new THREE.OrthographicCamera(
+    -44 * (W / H) / 2, 44 * (W / H) / 2, 44 / 2, -44 / 2, -100, 100,
+  );
+  airCam.position.set(0, 0, 20);
+  const airR = (RING.air?.radiusMul ?? 1.28) * ringR * PX_PER_UNIT;
+  // What the ring reads at an angle, on a raw render: bloom would smear the
+  // fuel wheel's halo out over a band this close to it.
+  const litAt = (deg) => {
+    const a = (deg / 180) * Math.PI;
+    const x = Math.round(probe.width / 2 + Math.sin(a) * airR);
+    const y = Math.round(probe.height / 2 - Math.cos(a) * airR);
+    const i = (y * probe.width + x) * 4;
+    return Math.max(px2[i], px2[i + 1], px2[i + 2]);
+  };
+  let px2 = null;
+  let airLeft = 1;
+  const drawAir = (left) => {
+    airLeft = left;
+    const s = state();
+    s.charge = 0.5;
+    settle(s);
+    for (let i = 0; i < 30; i++) {
+      updateStrikeRing(DT, ORIGIN, s, true, stats, { oxygen: left * 100, max: 100 });
+    }
+    gl.render(scene, camera);
+    pctx.clearRect(0, 0, probe.width, probe.height);
+    pctx.drawImage(gl.domElement, 0, 0);
+    px2 = pctx.getImageData(0, 0, probe.width, probe.height).data;
+  };
+
+  // A FULL LUNGFUL: lit the whole way round.
+  drawAir(1);
+  let dimmest = 255;
+  let where2 = '';
+  for (let k = 0; k < 8; k++) {
+    const deg = (k / 8) * 360;
+    const v = litAt(deg);
+    if (v < dimmest) { dimmest = v; where2 = `${Math.round(deg)}deg`; }
+  }
+  check('a full lungful lights the band the whole way round', dimmest > 90,
+    `dimmest point ${dimmest}/255 at ${where2}`);
+
+  // HALF: lit on the first half of the sweep, and still THERE on the rest.
+  drawAir(0.5);
+  const early = litAt(45);
+  const late = litAt(270);
+  check('half a lungful is lit on the way round and spent after it', early > late + 30,
+    `${early}/255 at 45deg vs ${late}/255 at 270deg`);
+  check('...and the spent half is still drawn, so the lit part has a circle to be a fraction OF',
+    late > 80, `spent side reads ${late}/255 against about 74 for water`);
+
+  // AND IT IS OFF FOR EVERY RUN THAT IS NOT A MATCH. The null is the switch.
+  {
+    const s = state();
+    s.charge = 0.5;
+    settle(s);
+    for (let i = 0; i < 30; i++) updateStrikeRing(DT, ORIGIN, s, true, stats);
+    check('a run that hands over no air draws no band at all', U.uAirGlow.value === 0,
+      `uAirGlow ${U.uAirGlow.value}`);
+  }
+
+  // THE STRAIN. Below CONFIG.oxygen.fx.threshold the band walks to the low
+  // colour and starts to throb, on the same crossing the screen tears and the
+  // mix band-passes at — so the three arrive together rather than as three
+  // separate warnings.
+  {
+    const t = CONFIG.oxygen?.fx?.threshold ?? 0.125;
+    const s = state();
+    settle(s);
+    for (let i = 0; i < 30; i++) updateStrikeRing(DT, ORIGIN, s, true, stats, { oxygen: 100, max: 100 });
+    const clear = U.uAirStrain.value;
+    for (let i = 0; i < 30; i++) updateStrikeRing(DT, ORIGIN, s, true, stats, { oxygen: t * 100 * 0.5, max: 100 });
+    const strained = U.uAirStrain.value;
+    check('a full seal reads no strain', clear === 0, `strain ${clear}`);
+    check('...and half way past the threshold reads half of it', Math.abs(strained - 0.5) < 0.02,
+      `strain ${strained.toFixed(3)} at ${(t * 50).toFixed(1)}% of a bar, threshold ${(t * 100).toFixed(1)}%`);
+  }
+  present('air', 'half a lungful', false);
+  // AND THE WARNING HAS TO BE RED, not white — the one cue on this ring whose
+  // MEANING is its hue, and the one that cannot fall back on geometry the way
+  // the traveller does ("the same arc, but urgent" has no shape of its own).
+  // Every colour here is multiplied by ring.glow on the way out, so a red with
+  // channels that all clip comes out white and reads as the meter breaking
+  // rather than as the seal drowning. Measured, because it looks like a tuning
+  // choice from the outside.
+  drawAir((CONFIG.oxygen?.fx?.threshold ?? 0.125) * 0.3);
+  {
+    // INSIDE THE LIT ARC, which by now is a sliver: with a twentieth of a
+    // lungful left the band is lit for eighteen degrees, and a probe at a
+    // fixed angle reads the water and calls the warning black.
+    const deg = airLeft * 360 * 0.4;
+    const a = (deg / 180) * Math.PI;
+    // ACROSS THE BAND, brightest pixel wins. A band is a few pixels thick and
+    // a probe aimed at one radius reads its soft edge as often as its middle —
+    // which is water with a little colour over it, and answers a question
+    // about the probe rather than about the colour.
+    let r8 = 0; let g8 = 0; let b8 = 0; let best = -1;
+    for (let d = -3; d <= 3; d++) {
+      const x = Math.round(probe.width / 2 + Math.sin(a) * (airR + d));
+      const y = Math.round(probe.height / 2 - Math.cos(a) * (airR + d));
+      const i = (y * probe.width + x) * 4;
+      const lum = px2[i] + px2[i + 1] + px2[i + 2];
+      if (lum > best) { best = lum; r8 = px2[i]; g8 = px2[i + 1]; b8 = px2[i + 2]; }
+    }
+    const v = Math.max(r8, g8, b8);
+    check('a seal nearly out of air reads RED rather than clipping to white',
+      r8 > 120 && r8 > g8 + 50 && r8 > b8 + 40,
+      `rgb(${r8},${g8},${b8}) at ${deg.toFixed(0)}deg, ${(airLeft * 100).toFixed(1)}% of a lungful (peak ${v})`);
+  }
+
+  // ...AND THE STATE THAT MATTERS. The warning is the whole reason a second
+  // air readout exists at all, so it gets a frame of its own: below
+  // CONFIG.oxygen.fx.threshold the band walks to the low colour and throbs,
+  // on the same crossing the screen tears and the mix band-passes at.
+  drawAir((CONFIG.oxygen?.fx?.threshold ?? 0.125) * 0.4);
+  present('air-low', 'nearly out — the strain is on', false);
 }
 
 // --- THE OTHER VIEW: WHAT IS LEFT WHEN THE PIPS MOVE TO THE HUD -------------

@@ -19,6 +19,9 @@ import { player } from '../entities/player.js';
 import { projectiles } from '../entities/projectiles.js';
 import { rollBiolumSkinVariant } from './biolumSkin.js';
 import { setOutlineVariant } from './outlines.js';
+import {
+  dressBoatShot, boatTell, clearBoatTell, updateBoatShotFx, resetBoatShotFx,
+} from './boatShotFx.js';
 
 // Boats sail along the water line. They don't chase — they're targets
 // floating above the fight, and shooting one showers the water with chum —
@@ -48,6 +51,7 @@ function randomBetween(a, b) {
 export function resetBoats(scene) {
   for (const b of boats) {
     if (b.body) removeBody(b.body);
+    clearBoatTell(scene, b);
     scene.remove(b.mesh);
   }
   boats.length = 0;
@@ -56,6 +60,7 @@ export function resetBoats(scene) {
     disposeAttractiveClam(o.mesh);
   }
   attractorOrbs.length = 0;
+  resetBoatShotFx(scene);
   resetBoatDebris(scene);
   resetCrew(scene);
   // The measured deck is a fact about the MODEL, so it survives a run — but
@@ -291,7 +296,7 @@ export function boatGunTier(difficulty) {
 export function armBoat(isTrawler, difficulty) {
   const g = CONFIG.boats.guns ?? {};
   const tier = boatGunTier(difficulty);
-  const price = (d) => d * difficultyRamp('damage', difficulty) * enemyPaceMul('damage');
+  const price = (d) => Math.min(shotCeiling(), d * gunRamp(difficulty) * enemyPaceMul('damage'));
   const rate = isTrawler ? (g.trawlerRateMul ?? 1) : 1;
   const gun = {
     tier: tier ? tier.id : null,
@@ -300,8 +305,14 @@ export function armBoat(isTrawler, difficulty) {
     // The first shot waits for the hull to be well inside the arena, then a
     // full reload on top so two boats spawned together still drift apart.
     timer: (g.openingDelay ?? 3) + (tier ? reload(tier, rate) : 0),
+    // The run's difficulty as it was when this hull was armed — banked beside
+    // the priced damage, and for the same reason: how much fire it takes to
+    // shoot one of its shells out of the air (CONFIG.enemyShot) should be the
+    // fight's number rather than the minute the trigger happened to be pulled.
+    difficulty: Math.max(0, difficulty ?? 0),
     stage: 'ready', // 'ready' | 'windup'
     windup: 0,
+    windupFull: 0, // how long the wind-up in progress was, for the tell's ramp
     pending: null, // which battery the windup is for: 'fish' | 'mussel' | 'gull'
     artillery: null,
     aaTimer: 0,
@@ -323,6 +334,38 @@ export function armBoat(isTrawler, difficulty) {
 
 function reload(tier, rate) {
   return randomBetween(tier.cooldownMin ?? 3, tier.cooldownMax ?? 4.5) * rate;
+}
+
+/**
+ * THE SHARE OF THE ENEMY DAMAGE RAMP A DECK GUN RIDES — see
+ * CONFIG.boats.guns.damageRampShare, which is where the reasoning is.
+ *
+ * The share is taken of the ramp's EXCESS OVER 1 rather than of the ramp
+ * itself, so a share of 0 is "no ramp at all" and 1 is "exactly what every
+ * creature pays". Multiplying the whole ramp by 0.42 instead would have priced
+ * a difficulty-0 boat at 42% of its own tier row, which would make the numbers
+ * in that table mean nothing.
+ *
+ * Exported for the harness, which asserts the shape of the curve rather than
+ * any one number in it.
+ */
+export function gunRamp(difficulty) {
+  const share = CONFIG.boats.guns?.damageRampShare ?? 1;
+  return 1 + (difficultyRamp('damage', difficulty) - 1) * Math.max(0, share);
+}
+
+/**
+ * THE MOST ANY ONE SHOT MAY BE WORTH — a fraction of the seal's BASE maxHp.
+ *
+ * Base, not the player's live bar: a boat that hit harder because you took a
+ * health card would be punishing the card. Infinity when the share is unset, so
+ * removing the key restores the old uncapped behaviour rather than silently
+ * clamping everything to zero.
+ */
+export function shotCeiling() {
+  const share = CONFIG.boats.guns?.maxShotShare;
+  if (!(share > 0)) return Infinity;
+  return (CONFIG.player?.maxHp ?? 100) * share;
 }
 
 // Where a shot leaves the hull: the waterline amidships, so a fish comes out
@@ -402,6 +445,11 @@ function volley(scene, b, row, at) {
       damage: row.damage ?? 0,
       speed: row.speed ?? 10,
       life: row.life ?? 3,
+      // THE GUN'S OWN RANGE, which is the gap the shot has to be able to cross.
+      // See CONFIG.enemyShot: the fish tier's 33 units of flight against a
+      // 30-unit range was the whole of "the boat shots die before they arrive".
+      range: CONFIG.boats.guns?.range ?? 0,
+      difficulty: b.gun?.difficulty ?? 0,
       blastRadius: row.blastRadius ?? 0,
       turnRate: row.turnRate,
       chase: homing ? player : null,
@@ -416,6 +464,13 @@ function volley(scene, b, row, at) {
     const shot = projectiles[projectiles.length - 1];
     if (shot?.mesh) {
       setOutlineVariant(shot.mesh, row.asset, rollBiolumSkinVariant(shot.mesh)?.__rim ?? null);
+      // A LAMP ON IT, so a fish thrown at the seal is not the same dark shape
+      // as the fish swimming past it. Marked as well as lit: the mark is what
+      // combat.js reads to decide whether a hit gets the impact pop, which
+      // keeps that burst on the deck guns rather than on every enemy shot in
+      // the game. See systems/boatShotFx.js.
+      shot.boatShot = true;
+      dressBoatShot(shot.mesh);
     }
   }
   return count;
@@ -449,9 +504,26 @@ export function updateBoatGun(dt, scene, b, playerPos) {
   if (gun.stage === 'windup') {
     gun.windup -= dt;
     const wantsAir = gun.pending !== 'fish';
-    if (wantsAir !== airborne) { gun.stage = 'ready'; gun.pending = null; return 0; }
-    if (gun.windup > 0) return 0;
+    // STOOD DOWN. The seal crossed the surface and this shot was for where it
+    // was, so the light goes out with the intent — a tell still burning over a
+    // gun that is no longer going to fire teaches the player that the light
+    // means nothing.
+    if (wantsAir !== airborne) { gun.stage = 'ready'; gun.pending = null; clearBoatTell(scene, b); return 0; }
+    if (gun.windup > 0) {
+      // The light rides the muzzle for the whole wind-up, blinking faster as
+      // the gun comes up. `windup` counts DOWN, so this is how far through it
+      // is rather than how much is left.
+      const full = Math.max(0.0001, gun.windupFull ?? g.windup ?? 0.45);
+      const m = muzzle(b);
+      // The hull's half-length is what the light is sized against — a trawler's
+      // tell is a trawler-sized tell. Measured at spawn (see hullExtents), so
+      // it already carries the trawler multiplier, the artillery scale and
+      // whatever the T panel's Size slider did on top.
+      boatTell(dt, scene, b, m.x, m.y, m.z, 1 - gun.windup / full, b.halfLength ?? 1);
+      return 0;
+    }
     gun.stage = 'ready';
+    clearBoatTell(scene, b);
     const which = gun.pending;
     gun.pending = null;
     if (which === 'fish') {
@@ -473,6 +545,10 @@ export function updateBoatGun(dt, scene, b, playerPos) {
     gun.aaTimer = a.cooldown;
     gun.stage = 'windup';
     gun.windup = a.windup;
+    // Kept beside the countdown so the tell knows how far through it is. The
+    // two batteries have different wind-ups, and a tell that measured itself
+    // against the fish gun's would run the anti-air blink at the wrong rate.
+    gun.windupFull = a.windup;
     gun.pending = which;
     return 0;
   }
@@ -481,6 +557,7 @@ export function updateBoatGun(dt, scene, b, playerPos) {
   gun.timer = reload(gun.shot, gun.rate);
   gun.stage = 'windup';
   gun.windup = g.windup ?? 0.45;
+  gun.windupFull = gun.windup;
   gun.pending = 'fish';
   return 0;
 }
@@ -742,6 +819,7 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     const margin = b.radius + 5;
     if (b.body.x < bounds.left - margin || b.body.x > bounds.right + margin) {
       releaseCrew(scene, b, false);
+      clearBoatTell(scene, b);
       removeBody(b.body);
       scene.remove(b.mesh);
       boats.splice(i, 1);
@@ -751,6 +829,7 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
   // The wreckage of anything destroyed above, arcing and sinking on its own
   // clock long after the boat it came from left the list — and the people, who
   // outlive their boat by even longer.
+  updateBoatShotFx(dt, scene);
   updateBoatDebris(dt, scene);
   updateCrew(dt, scene);
 
@@ -1111,6 +1190,10 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   blastBodies(b.mesh.position.x, b.mesh.position.y, radius, strength, b.body);
 
   if (b.body) removeBody(b.body);
+  // A hull that goes up mid-wind-up takes its tell with it. Without this the
+  // light is orphaned in the pool's "in use" half and never handed back, which
+  // presents as the blink slowly running out of sprites over a long run.
+  clearBoatTell(scene, b);
   scene.remove(b.mesh);
   boats.splice(index, 1);
   return true;

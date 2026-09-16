@@ -66,6 +66,7 @@ import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
 // once, and a second copy here would let this table start rolling names the
 // board silently cuts. playerName.js imports nothing, so nothing cycles.
 import { stripName, MAX_NAME_LEN, DEFAULT_PLAYER_NAME } from './systems/playerName.js';
+import { withoutRecent, rememberPick, rememberName, wasJustRolled } from './namePool.js';
 
 const LABEL = 'sealNames';
 const FILE = 'sealNames.csv';
@@ -193,7 +194,11 @@ export function parseSealNameCsv(text, warn = console.warn) {
 // bossNameTable.js: a pool whose every weight is 0 picks uniformly rather than
 // returning nothing, because the file is misconfigured and no name is worse
 // than an unwanted one.
-function pick(parts, random) {
+// `memory` and `slot` narrow the pool to what has NOT been drawn lately --
+// see namePool.js. Both optional: passing neither is the old behaviour
+// exactly, which is what keeps every existing caller and harness unchanged.
+function pick(parts, random, memory = null, slot = '', keep = undefined) {
+  parts = memory ? withoutRecent(parts, memory, slot, keep) : parts;
   if (!parts?.length) return null;
 
   let total = 0;
@@ -223,41 +228,79 @@ function pick(parts, random) {
  * ALWAYS RETURNS SOMETHING, and always something the field can hold: at most
  * MAX_NAME_LEN characters, and only characters the leaderboard keeps.
  */
+
+// MEMORY IS THE CALLER'S, never a module-level default. The same reasoning as
+// bossState.bag in bossTable.js: a roll that quietly reads hidden state is no
+// longer a function of its arguments, so two seeded loops in one harness stop
+// being reproducible -- which is exactly how this arrived, as tools/boss-test
+// failing an exclusivity check that had nothing to do with cooldowns.
 export function rollSealName(parts, opts = {}, random = Math.random) {
   const avoid = String(opts.avoid ?? '').trim();
-  const name = drawSealName(parts, opts, random);
-  // ONE REROLL, not a loop. A table with one usable name in it must still
-  // terminate, and the second draw is allowed to repeat — at that point the
-  // player has been given everything the file has.
-  if (avoid && name === avoid) return drawSealName(parts, opts, random);
+  const mem = opts.memory ?? null;
+  const keep = opts.keepRecent;
+  // AVOID OUTRANKS THE COOLDOWN. They are the same request over different
+  // spans -- "not the name in the field" and "not the last few" -- but only one
+  // of them is a correctness requirement: a randomise button that hands back
+  // what you are already looking at did nothing, while a name repeating sooner
+  // than ideal is merely a shame.
+  //
+  // They can genuinely fight. On this test's table -- one adjective, two
+  // nicknames -- the cooldown forces strict alternation between the only two
+  // names there are, so a retry that weighed them equally landed on the avoided
+  // name half the time. Hence: take the first draw that satisfies BOTH, fall
+  // back to the first that merely isn't avoided, and only then to the last one
+  // drawn. Bounded so a one-name table still terminates.
+  let name = drawSealName(parts, opts, random);
+  if ((avoid && name === avoid) || wasJustRolled(mem, name, keep)) {
+    let firstAllowed = (avoid && name === avoid) ? null : name;
+    for (let i = 0; i < 4; i++) {
+      const next = drawSealName(parts, opts, random);
+      const avoided = avoid && next === avoid;
+      if (!avoided && firstAllowed == null) firstAllowed = next;
+      if (!avoided && !wasJustRolled(mem, next, keep)) { firstAllowed = next; break; }
+      name = next;
+    }
+    if (firstAllowed != null) name = firstAllowed;
+  }
+  rememberName(mem, name, keep);
   return name;
 }
 
 function drawSealName(parts, opts, random) {
   const chance = opts.fullChance ?? DEFAULT_FULL_CHANCE;
+  // The memory the caller owns, or this module's own. A default here rather
+  // than at every call site: the randomise button is the surface that needs
+  // this and it has nowhere natural to keep one.
+  const mem = opts.memory ?? null;
+  const keep = opts.keepRecent;
   const full = parts?.full ?? [];
   if (full.length && chance > 0 && random() < chance) {
-    const written = pick(full, random);
-    if (written) return written.text;
+    const written = pick(full, random, mem, 'full', keep);
+    if (written) { rememberPick(mem, 'full', written.id, keep); return written.text; }
   }
 
   // THE NICKNAME FIRST, because it is the half that can stand alone and so the
   // half the length rule has to be measured against. Drawing the adjective
   // first would mean discovering that nothing fits beside it and having to
   // throw the draw away.
-  const nick = pick(parts?.nickname ?? [], random);
+  const nick = pick(parts?.nickname ?? [], random, mem, 'nickname', keep);
   if (!nick) {
     // No nicknames at all — the written names are the only thing left, and are
     // reached here even when the roll above said no. A table of nothing but
     // `full` rows is a table where `fullChance` has nothing to choose against.
-    const written = pick(full, random);
+    const written = pick(full, random, mem, 'full', keep);
+    if (written) rememberPick(mem, 'full', written.id, keep);
     return written ? written.text : FALLBACK_SEAL_NAME;
   }
 
   // Only the adjectives that still fit in the field beside this nickname. See
   // the length rule at the top of the file: the alternative is a name the
   // player watches get cut off as it arrives.
-  const adj = pick(adjectivesBeside(parts, nick.text), random);
+  const adj = pick(adjectivesBeside(parts, nick.text), random, mem, 'adjective', keep);
+  // Filed AFTER both halves are settled, so a nickname whose adjective pool was
+  // empty still goes on cooldown and an adjective that was never used does not.
+  rememberPick(mem, 'nickname', nick.id, keep);
+  if (adj) rememberPick(mem, 'adjective', adj.id, keep);
   return adj ? `${adj.text} ${nick.text}` : nick.text;
 }
 

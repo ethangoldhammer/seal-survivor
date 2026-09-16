@@ -1,4 +1,5 @@
 import { CONFIG } from '../config.js';
+import { setNearDeathBus } from './audio.js';
 
 // THE LAST SLIVER OF THE HEALTH BAR, as a picture.
 //
@@ -16,13 +17,25 @@ import { CONFIG } from '../config.js';
 // A player mid-fight reads the state one without ever looking at it, because
 // it is the whole frame rather than a mark inside it.
 //
+// It also starts a long way from death, which is the second half of the same
+// idea. Health drops in BITES, so the last sliver of the bar is not somewhere
+// you sit — it is somewhere you pass through on the way out. An effect that
+// waits for it is a warning you get for the second before the end, which is no
+// warning at all.
+//
 // All of it hangs off ONE value, `lowHealthFxState.strain` — the same shape as
 // oxygenFxState.strain, deliberately, because they are the same kind of thing
 // and they will very often be running at the same time:
 //
-//   strain 0   health at or above CONFIG.fx.lowHealth.threshold (15% of the
-//              bar). Nothing runs at all — no shader work, no beat.
+//   strain 0   health at or above CONFIG.fx.nearDeath.threshold (a third of
+//              the bar). Nothing runs at all — no shader work, no beat.
 //   strain 1   the bar is empty.
+//
+// THE CONFIG KEY IS `fx.nearDeath` AND THIS FILE IS `lowHealthFx`, on purpose.
+// The block was renamed to escape a saved snapshot that was pinning the old
+// threshold (the long note is in config.js); the file keeps its name because it
+// is about the health bar rather than about a config key, and renaming a module
+// to chase a tuning-snapshot problem would be the tail wagging the dog.
 //
 // Strain is EASED rather than read straight off the bar. A health pickup and
 // a Blubber level are both instant, and without the ease the frame would snap
@@ -59,6 +72,11 @@ export function resetLowHealthFx() {
   lowHealthFxState.strain = 0;
   lowHealthFxState.beatPhase = 0;
   lowHealthFxState.beat = 0;
+  // The bus with it, and NOT left to the next frame's update to walk down: a
+  // run restarted from the score card while the wash was still open would spend
+  // its first second warbled, and the frame that decides a run is the first one.
+  // No-ops before audio is unlocked.
+  setNearDeathBus(0);
 }
 
 /**
@@ -93,7 +111,7 @@ export function heartbeat(phase) {
  *                         score card is not served under a bloody frame.
  */
 export function updateLowHealthFx(dt, player, active) {
-  const fx = CONFIG.fx?.lowHealth ?? {};
+  const fx = CONFIG.fx?.nearDeath ?? {};
   // The PER-RUN max, not CONFIG's. Blubber stacks raise the bar, and a curve
   // dividing by the base value would have the screen going red at a bar that
   // is still a third full.
@@ -123,6 +141,21 @@ export function updateLowHealthFx(dt, player, active) {
   if (raw === 0 && lowHealthFxState.strain <= SETTLED) lowHealthFxState.strain = 0;
   const strain = lowHealthFxState.strain;
 
+  // --- the mix --------------------------------------------------------------
+  // The sound half: a warble on the whole SFX bus and the reverb send coming up
+  // (systems/audio.js). Handed the strain rather than the ramped vignette
+  // number on purpose — the picture is front-loaded so the CROSSING is the
+  // moment you notice, which is right for something you see out of the corner
+  // of your eye and wrong for a wash you are meant to sink into.
+  //
+  // Pushed unconditionally, zeros included, and outside the `strain <= SETTLED`
+  // return below: setNearDeathBus is the thing that knows a bypass is already a
+  // bypass, and returning above it would strand the bus a hair wet forever.
+  // Its own curve, not the picture's: sound is the more intrusive of the two
+  // and comes in a little later. Both are above 1 now — see rampCurve's note in
+  // config.js for why the whole shape inverted when the band widened.
+  setNearDeathBus(Math.pow(strain, Math.max(0.1, fx.mixCurve ?? 1.9)));
+
   // --- the heart ------------------------------------------------------------
   if (strain <= SETTLED) {
     // Parked rather than left to run down while dormant, so the first beat of
@@ -133,7 +166,7 @@ export function updateLowHealthFx(dt, player, active) {
     lowHealthFxState.beat = 0;
     return;
   }
-  const far = fx.beatFar ?? 1.05;
+  const far = fx.beatFar ?? 1.4;
   const near = fx.beatNear ?? 0.42;
   const interval = Math.max(0.08, far + (near - far) * strain);
   lowHealthFxState.beatPhase = (lowHealthFxState.beatPhase + dt / interval) % 1;
@@ -149,18 +182,23 @@ export function updateLowHealthFx(dt, player, active) {
  * live next to the rest of the screen filter, in systems/post.js. See
  * `applyLowHealthVignette` there.
  *
- * The default curve is BELOW 1, which is the opposite of drowning's 1.8, and
- * the difference is the point. Suffocation holds itself back early and saves
- * the worst for the last breath, because the oxygen bar is a countdown you can
- * watch and the effect is the punchline. Health is not a countdown — you can
- * be taken from 60% to 8% by one bite — so the crossing itself has to be the
- * moment you notice, not something that creeps up over the following seconds.
- * Front-loading it means 15% is immediately visible and 0% is still worse.
+ * The default curve is ABOVE 1, which is a reversal — it was 0.7, front-loaded
+ * so that the CROSSING was the moment you noticed. That was right while the
+ * band was 15% of the bar: there is no room to build in a sliver you pass
+ * through on the way to dying, so the crossing had to carry the whole read.
+ *
+ * The band is now a third of the bar, and the same shape there is actively
+ * bad — it would put a third of every run under a visibly red frame, and an
+ * alarm that is usually on is not an alarm. At 1.6 the crossing is nearly
+ * invisible and the picture goes wrong around the player over the following
+ * thirty seconds instead of announcing itself. The curve and the threshold are
+ * one decision; changing either alone gets a worse effect than either of the
+ * two shapes it is between.
  */
 export function lowHealthVignette() {
   const strain = lowHealthFxState.strain;
   if (strain <= SETTLED) return 0;
-  const fx = CONFIG.fx?.lowHealth ?? {};
+  const fx = CONFIG.fx?.nearDeath ?? {};
   if (fx.enabled === false) return 0;
   return Math.pow(strain, Math.max(0.1, fx.rampCurve ?? 0.7));
 }

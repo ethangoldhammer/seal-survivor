@@ -194,12 +194,22 @@ function beamProfile() {
 let GLOW_SPRITE = null;
 // Shared with systems/eyeLights.js — same soft radial, and one 64x64 upload
 // for the whole run rather than one per system that wants a glow.
+/**
+ * ...or NULL where there is no 2D canvas to draw it on. A Node harness's
+ * document stub returns null from getContext('2d'), and reaching through that
+ * takes the frame down from inside a gradient call, on a line that has nothing
+ * to do with whatever the harness was checking. The sprite is the LOOK; a quad
+ * with no map is still in the right place, at the right size, on the right
+ * clock. A browser always has the context, so nothing on a screen ever sees
+ * the fallback.
+ */
 export function glowSprite() {
   if (GLOW_SPRITE) return GLOW_SPRITE;
   const S = 64;
-  const cv = document.createElement('canvas');
+  const cv = document.createElement?.('canvas');
+  const g = cv?.getContext?.('2d');
+  if (!g?.createRadialGradient) return null;
   cv.width = cv.height = S;
-  const g = cv.getContext('2d');
   const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
   // Quartic-ish falloff: a linear radial gradient reads as a disc with an edge,
   // and the thing being faked here has no edge at all.

@@ -20,6 +20,7 @@ import { strangePull, decayPull, releasePull, resetChumPull } from '../systems/c
 import { telegraphMul } from '../systems/telegraph.js';
 import { initBubble, updateBubblePhysics, bubbleRadius, bubbleBirthPoint, growthOf } from '../systems/oxygenBubble.js';
 import { createCoralOrb, updateCoralOrb, disposeCoralOrb } from '../systems/coralOrb.js';
+import { rollScoreBoost } from '../systems/scoreBoost.js';
 import { createLevelOrb, updateLevelOrb, disposeLevelOrb, setLevelOrbScale } from '../systems/levelOrb.js';
 
 export { bubbleBirthPoint, bubbleRadius };
@@ -94,6 +95,11 @@ export function chumGlowAt(dist, reach, clock = 0, phase = 0) {
 export const strikeOrbs = [];
 export const bubbleOrbs = [];
 export const rapidFireOrbs = [];
+// The score coral. Its own array rather than a flag on the one above, for the
+// reason the chunk has one: what it pays is rolled at spawn and carried on the
+// orb, and a second kind sharing an array is a branch in every loop that
+// touches it.
+export const scoreOrbs = [];
 // The one pickup that changes the BUILD — see systems/levelOrb.js.
 export const levelOrbs = [];
 export const chumChunks = [];
@@ -115,6 +121,14 @@ export function resetPickups(scene) {
     disposeCoralOrb(o.mesh);
   }
   rapidFireOrbs.length = 0;
+  // Its own geometry and its own material, exactly like the coral above it —
+  // it IS a coral. Dropping the array without disposing would leak one buffer
+  // and one program's uniforms per run.
+  for (const o of scoreOrbs) {
+    scene.remove(o.mesh);
+    disposeCoralOrb(o.mesh);
+  }
+  scoreOrbs.length = 0;
   for (const o of levelOrbs) {
     scene.remove(o.mesh);
     disposeLevelOrb(o.mesh);
@@ -300,6 +314,50 @@ export function spawnRapidFireOrb(scene, pos) {
   // replaced. Measured once here rather than per frame — the geometry never
   // changes after it is grown.
   rapidFireOrbs.push({ mesh, life: CONFIG.rapidFirePickup.lifetime, bodyRadius: measuredBodyRadius(mesh) });
+}
+
+/**
+ * THE SCORE CORAL. The same grown geometry as the one above, from a different
+ * species block — see systems/coralOrb.js and CONFIG.scorePickup.coral.
+ *
+ * WHAT IT IS WORTH IS ROLLED HERE AND WORN HERE. The multiplier and the
+ * seconds come off one roll (rollScoreBoost) and the SIZE is that roll, so a
+ * coral carrying 9x is visibly bigger than one carrying 3x and the question
+ * "is that worth swimming for" can be answered from across the arena — the
+ * same promise the chum chunk's size makes about its heal. Rolled at spawn
+ * rather than at collection for exactly that reason: a size that did not match
+ * the payout would be the pickup lying about itself.
+ *
+ * `opts.roll` lets a caller (a harness, a look page) supply the roll instead
+ * of taking one.
+ */
+export function spawnScoreOrb(scene, pos, opts = {}) {
+  const c = CONFIG.scorePickup ?? {};
+  const roll = opts.roll ?? rollScoreBoost();
+  const mesh = createCoralOrb(Math.random, { species: 'score', assetKey: 'scoreOrb' });
+  mesh.position.copy(pos);
+  // multiplyScalar, NOT setScalar, and TWICE: the asset's own size from
+  // assets.csv, then the roll on top of it. Assigning either one over the
+  // other would silently delete the other's effect — see the same pair on the
+  // chum chunk.
+  const sizeMul = getAssetSizeMultiplier('scoreOrb');
+  if (sizeMul) mesh.scale.multiplyScalar(sizeMul);
+  mesh.scale.multiplyScalar((c.scaleMin ?? 0.85)
+    + ((c.scaleMax ?? 1.6) - (c.scaleMin ?? 0.85)) * roll.t);
+  scene.add(mesh);
+  const orb = {
+    mesh,
+    life: c.lifetime ?? 16,
+    // MEASURED after the scale, like the coral's: this one is a different
+    // shape AND a different size every time, so the reach to take it has to be
+    // read off the object that actually exists.
+    bodyRadius: measuredBodyRadius(mesh),
+    mult: roll.mult,
+    seconds: roll.seconds,
+    t: roll.t,
+  };
+  scoreOrbs.push(orb);
+  return orb;
 }
 
 // A GROWN BLOB, not a createVisual, for exactly the two reasons the coral is
@@ -914,7 +972,16 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
     // All of those used to strand food in mid water with no explanation the
     // player can see — the orb was flying at them, and then it simply stopped
     // and sank. The claim is the promise; this latch is what keeps it.
-    const claimed = !sealed && (reach < reachNow || p.magnetLatch);
+    // ...AND NOT IF SOMEBODY ELSE HAS IT. In a match there are up to eight
+    // mouths in the water and this loop knows about one of them — the seal it
+    // was handed. `claimedBy` is a seat number written by the match's own
+    // magnet (systems/versus.js), and it is how an orb already flying at a CPU
+    // seal is not also dragged at the person: two magnets on one orb is a tug
+    // of war, and the orb would be swallowed by whichever loop measured it
+    // closest that frame — crediting the wrong seal's meter. Null outside a
+    // match, so an ordinary run reads exactly as it did.
+    const theirs = p.claimedBy != null && p.claimedBy !== 0;
+    const claimed = !sealed && !theirs && (reach < reachNow || p.magnetLatch);
     if (claimed) p.magnetLatch = true;
 
     // Chum keeps turning after it settles — a still pile on the seabed is the
@@ -1124,6 +1191,17 @@ export function updatePickups(dt, scene, player, onCollect, onStrikeOrb, onBubbl
       tick: updateCoralOrb,
       dispose: disposeCoralOrb,
       // The coral's pulse is beat-synced, so it wants the undilated clock.
+      rawDt: opts?.rawDt ?? dt,
+    });
+  }
+  // The score coral, on the coral's own terms — same grown geometry, same
+  // beat-synced pulse, so the same undilated clock. In `opts` rather than as a
+  // tenth positional argument for the reason the level blob is: every harness
+  // that calls updatePickups with four handlers keeps working untouched.
+  if (opts?.onScoreOrb) {
+    updateOrbArray(dt, scene, player, scoreOrbs, 0, opts.onScoreOrb, {
+      tick: updateCoralOrb,
+      dispose: disposeCoralOrb,
       rawDt: opts?.rawDt ?? dt,
     });
   }
@@ -1381,6 +1459,7 @@ function listFor(kind) {
   if (kind === 'strikeOrb') return strikeOrbs;
   if (kind === 'bubbleOrb') return bubbleOrbs;
   if (kind === 'rapidFireOrb') return rapidFireOrbs;
+  if (kind === 'scoreOrb') return scoreOrbs;
   if (kind === 'levelOrb') return levelOrbs;
   if (kind === 'chumChunk') return chumChunks;
   return null;

@@ -4,6 +4,8 @@ import {
   addOutlineShells,
   makeOutlineMaterial,
   setOutlineThicknessOn,
+  setOutlineViewFactor,
+  resetOutlineViewFactor,
   setSpawnDecorator,
 } from '../assets.js';
 import { retireMaterial } from './programPin.js';
@@ -39,6 +41,52 @@ import { retireMaterial } from './programPin.js';
 //      skeleton keeps that at once.
 
 const shellColor = new THREE.Color();
+
+// ---------------------------------------------------------------------------
+// The rim, in screen pixels
+// ---------------------------------------------------------------------------
+//
+// Every `thickness` in this file — the player's, the threat rim's, an escort's,
+// the boats' — is a WORLD width, and left at that a rim is a different number
+// of pixels every time the lens moves. The death dive pushes to 3.5x, the menu
+// crops to whatever the hex row needs, a Blubberball replay flies a perspective
+// camera to arm's length: at every one of those the line the player is meant to
+// find the animal by was quietly retuned.
+//
+// So the config numbers keep meaning what they meant — a world width at the
+// RUN'S OWN un-zoomed framing — and this converts that to the framing actually
+// being drawn. At zoom 1 the factor is exactly 1 and not one authored number
+// has changed; everywhere else the rim holds its pixels.
+//
+// Once a frame, from the camera the frame is being drawn with, which during a
+// replay is the pool's perspective camera and not the world's. See main.js,
+// beside updateParticleScale — the same question asked about points.
+//
+// @param camera     the camera this frame is drawn with.
+// @param refHeight  world units the RUN's frame is tall at zoom 1. The framing
+//                   every rim width in CONFIG was authored against, so it is
+//                   what makes the factor 1 there.
+export function updateOutlineScale(camera, refHeight) {
+  if (!camera || !(refHeight > 1e-6)) {
+    // No framing to compare against is not "make something up": it is the
+    // untouched world-unit rim the game drew before this existed.
+    resetOutlineViewFactor();
+    return;
+  }
+  if (camera.isPerspectiveCamera) {
+    // Nothing flat at all — a perspective frame's world-per-pixel IS its depth,
+    // so the whole factor rides the per-depth term. `fov` is vertical degrees,
+    // matching refHeight being a height.
+    setOutlineViewFactor(0, (2 * Math.tan((camera.fov * Math.PI) / 360)) / refHeight);
+  } else {
+    // three keeps top/bottom as authored and divides by `zoom` in the
+    // projection (see the note in world.js viewCentre), so this is the frame's
+    // real height this frame — and the ratio is 1/zoom whenever the reference
+    // is the same camera's un-zoomed frame, which is the ordinary case.
+    const height = (camera.top - camera.bottom) / (camera.zoom || 1);
+    setOutlineViewFactor(height / refHeight, 0);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The player
@@ -109,14 +157,32 @@ export function attachPlayerOutline(body) {
 // hands it back on the way out.
 let playerTint = null;
 
-export function setPlayerOutlineTint(color = null) {
+/**
+ * Tint the run's own rim, and optionally lean on it.
+ *
+ * `extra` is a bag merged over CONFIG.playerOutline — Blubberball spends it on
+ * `glow` and `thickness` so the seal YOU are driving wears a hotter rim than
+ * the three beside it. That question ("which one am I") used to be answered
+ * with a fat ring drawn on the water, which sat on top of the strike ring that
+ * was already there; a rim is on the ANIMAL and cannot cover the HUD.
+ *
+ * Null for both puts it back to the run's own rim, which is what leaving a
+ * match does.
+ */
+export function setPlayerOutlineTint(color = null, extra = null) {
   playerTint = color;
+  playerExtra = color == null ? null : extra;
   applyPlayerOutline();
 }
 
+// What the mode has asked for on top of the tint — see setPlayerOutlineTint.
+let playerExtra = null;
+
 export function applyPlayerOutline() {
   const base = CONFIG.playerOutline ?? {};
-  const cfg = playerTint == null ? base : { ...base, color: playerTint };
+  const cfg = playerTint == null
+    ? base
+    : { ...base, color: playerTint, ...(playerExtra ?? {}) };
   for (const shell of playerShells) {
     shell.visible = cfg.enabled !== false;
     if (shell.material) applyLook(shell.material, cfg, accumulatedScale(shell));

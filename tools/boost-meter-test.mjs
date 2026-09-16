@@ -26,10 +26,24 @@ import {
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
   chainLevel, chainDamageMul, comboSpeedMul, chargeThrustMul, tryStrike, consumeStrikeLink, linkPips, linkCost, cancelDash,
   updateCharge, perfectCrossed, strikeLoaded, inSweetSpot, sweetOffset, sweetHalfWidth,
-  consumeChainLink,
+  consumeChainLinks,
   strikeBurst, riderDamage,
   minFire, basePips, windUpTime,
 } from '../path/src/systems/strike.js';
+
+// THE DEEPEST LINK OF WHATEVER THE LAST CALL SCORED, or 0 — which is exactly
+// what consumeChainLink() returned before it became consumeChainLinks().
+//
+// A HARNESS HELPER RATHER THAN AN EXPORT, deliberately. The GAME has to see
+// every link, because the banner is a number the player is asked to count and
+// one that skips is the bug the queue exists to fix; a check asking "did the
+// counter reach x2" does not, and giving the game back a reader that drops
+// links would be handing the bug back with it.
+const lastLink = (...a) => {
+  const links = consumeChainLinks(...a);
+  return links.length ? links[links.length - 1].chain : 0;
+};
+
 import { magnetRadius, magnetSpeed, magnetDistance, magnetState, chumSweep, foodReach, foodPull } from '../path/src/systems/chumMagnet.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
 import { updatePickups, resetPickups, spawnXpOrb } from '../path/src/entities/pickups.js';
@@ -533,12 +547,12 @@ strikeState.active = false;
 tick(CONFIG.strike.chainWindow + 0.05);          // let it lapse
 check('the window lapsed', strikeState.chainTimer <= 0);
 feedChum(stats());
-check('a mouthful after it shut scores nothing', consumeChainLink() === 0);
+check('a mouthful after it shut scores nothing', lastLink() === 0);
 fillTank();
 strike();
 check('  ...but a fresh strike opens a fresh window',
   strikeState.chainTimer > 0 && strikeState.armed === true);
-check('  ...and the next mouthful links again', (feedChum(stats()), consumeChainLink()) === 1);
+check('  ...and the next mouthful links again', (feedChum(stats()), lastLink()) === 1);
 cancelDash();
 
 console.log('\nONE MOUTHFUL IS EXACTLY ONE LINK — AT THE BOTTOM OF A CHAIN');
@@ -573,9 +587,9 @@ console.log('\nTHE STRIKE ARMS, THE FOOD SCORES');
 // player does it in.
 fuelled();
 check('a sweet release arms a chain', strike() === true && strikeState.armed === true);
-check('  ...and scores nothing on its own', consumeChainLink() === 0);
+check('  ...and scores nothing on its own', lastLink() === 0);
 check('  ...with no chain running yet', liveChain() === 0);
-check('ONE mouthful makes it a chain', (feedChum(stats()), consumeChainLink()) === 1);
+check('ONE mouthful makes it a chain', (feedChum(stats()), lastLink()) === 1);
 check('  ...and the chain is live at x1', liveChain() === 1);
 // ...and the number climbs from there at a price that goes UP with it, which is
 // the other half. The second link costs linkCost(1) mouthfuls, so the mouthful
@@ -585,7 +599,7 @@ for (let i = 0; i < secondCost - 1; i++) feedChum(stats());
 check(`  ...${secondCost - 1} more mouthful(s) is still x1 — the second link costs ${secondCost}`,
   liveChain() === 1, `x${liveChain()}`);
 feedChum(stats());
-check(`  ...and the ${secondCost}th ticks it to x2`, consumeChainLink() === 2, `x${liveChain()}`);
+check(`  ...and the ${secondCost}th ticks it to x2`, lastLink() === 2, `x${liveChain()}`);
 // AND THE THIRD RUNS INTO THE OTHER RULE. linkCost(2) is three mouthfuls and
 // this cycle has already spent linkCost(0) + linkCost(1) of its barful, so the
 // budget runs out inside the price — the food goes into the bank and the link
@@ -608,7 +622,7 @@ console.log('\nAND EATING WITHOUT A SWEET STRIKE BEHIND IT SCORES NOTHING');
 fuelled();
 strikeState.chainTimer = CONFIG.strike.chainWindow;   // a window, but unearned
 feedChum(stats());
-check('an unarmed window scores no link', consumeChainLink() === 0);
+check('an unarmed window scores no link', lastLink() === 0);
 check('  ...and leaves the chain at zero', liveChain() === 0);
 // A release that never finished its wind-up does not arm one either.
 fuelled();
@@ -616,7 +630,7 @@ const halfW = sweetHalfWidth(stats());
 strike({ early: true });
 check('an unfinished wind-up arms nothing', strikeState.armed === false);
 feedChum(stats());
-check('  ...so eating after it scores nothing', consumeChainLink() === 0);
+check('  ...so eating after it scores nothing', lastLink() === 0);
 cancelDash();
 fuelled();
 
@@ -625,13 +639,13 @@ console.log('\nAND THE ARMING DIES WITH THE CHAIN');
 fuelled();
 strike(); cancelDash();
 feedChum(stats());
-check('the chain is running', liveChain() === 1 && (consumeChainLink(), true));
+check('the chain is running', liveChain() === 1 && (lastLink(), true));
 tick(CONFIG.strike.chainWindow + 0.05);
 check('  ...the window lapsed', strikeState.chainTimer <= 0);
 check('  ...and the arming went with it', strikeState.armed === false);
 strikeState.chainTimer = CONFIG.strike.chainWindow;
 feedChum(stats());
-check('  ...so eating no longer links', consumeChainLink() === 0);
+check('  ...so eating no longer links', lastLink() === 0);
 fuelled();
 
 console.log('\nTHE DASH EATS SMALL PREY, AND ONLY SMALL PREY');
@@ -809,7 +823,7 @@ fuelled();
 check('a mistimed opening strike fires', strike({ late: half * 3 }) === true);
 check('  ...and DOES open a window, because the charge completed',
   strikeState.chainTimer > 0, `${strikeState.chainTimer.toFixed(2)}s`);
-check('  ...so the food after it links', (feedChum(stats()), consumeChainLink()) === 1);
+check('  ...so the food after it links', (feedChum(stats()), lastLink()) === 1);
 cancelDash();
 
 console.log('\nAN UNFINISHED WIND-UP IS WHAT NEITHER STARTS NOR EXTENDS A CHAIN');
@@ -829,7 +843,7 @@ fuelled();
 // and the food that follows has nothing to score against.
 strike(); cancelDash();
 feedChum(stats());
-check('a chain is running', liveChain() === 1 && (consumeChainLink(), true));
+check('a chain is running', liveChain() === 1 && (lastLink(), true));
 strikeState.active = false;
 tick(CONFIG.strike.chainWindow + 0.05);
 check('  ...and then lapses', strikeState.chainTimer <= 0 && strikeState.armed === false);
@@ -838,7 +852,7 @@ const missed = (strike({ early: true }), consumeStrikeLink());
 check('  ...an unfinished wind-up arms nothing', strikeState.armed === false);
 check('  ...booked as arming nothing', missed.arms === false);
 feedChum(stats());
-check('  ...so the food after it links nothing', consumeChainLink() === 0);
+check('  ...so the food after it links nothing', lastLink() === 0);
 cancelDash();
 fuelled();
 
@@ -1202,7 +1216,7 @@ check('  ...but scores nothing, with no strike behind it', liveChain() === 0);
 strike();
 check('  ...and the release spends the hoard', strikeState.pipsSinceStrike === 0);
 check('  ...so the chain still starts from the next mouthful',
-  (feedChum(stats()), consumeChainLink()) === 1);
+  (feedChum(stats()), lastLink()) === 1);
 cancelDash();
 
 console.log('\nBREAKING OUT OF A DASH STILL PAYS THE WINDOW');

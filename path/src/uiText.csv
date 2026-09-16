@@ -34,10 +34,23 @@ accessoryFedoraName,Fedora,,accessory drawer,"A brown felt fedora, brim turned d
 accessoryRoundsName,Spectacles,,accessory drawer,"Round spectacles in thick wooden frames — reading glasses rather than shades. Two or three words; it shares the row with two pairs of sunglasses, so the name is what says these are the ones you can see through."
 accessoryAviatorsName,Aviators,,accessory drawer,"Gold-wire aviators with a green tint. Same tile, two words at most."
 accessoryWireFramesName,Cute Glasses,,accessory drawer,"Small round gold wire frames with near-black lenses. Same tile. Two or three words, and it has to be distinguishable from the aviators, which are also gold wire — the difference the player sees is round versus teardrop, and small versus wide."
+accessoryHardHatName,Hard Hat,,accessory drawer,"A builder's hard hat, on its tile and when it goes on. Two words at most — the tiles are small and the name sits under the picture. It shares the row with five other hats, so it has to be tellable apart from them by name alone."
+accessoryCowboyName,Cowboy,,accessory drawer,"A cowboy hat. Same tile, same two-word ceiling."
+accessoryWizardName,Wizard,,accessory drawer,"A pointed wizard's hat. Same tile. Two words at most."
+accessorySharkHoodName,Shark Hood,,accessory drawer,"A shark-head hood the seal wears pulled over its own head — the joke being what a seal is to a shark. Same tile, two or three words; it is the most costume-y thing in the drawer and the name should know it."
+accessoryUshankaName,Trapper Hat,,accessory drawer,"A trapper's ushanka with the ear flaps hanging down. On its tile and when it goes on. Two words at most — the tiles are small and the name sits under the picture. It is the only hat in the drawer with anything hanging off it, which is the thing to name."
+accessoryStetsonName,Croc Hunter,,accessory drawer,"A cowboy hat: crown pinched down the middle, both sides of the brim rolled up hard, a tooled leather band. Same tile, two-word ceiling. THE HARD ONE — accessoryCowboyName is already Cowboy"" and this is the more obviously cowboy of the two"
+accessoryBobbleName,Beanie,,accessory drawer,"A knit beanie with a pom pom on top. Same tile, two words at most. Warm and ordinary next to a jester hat and a shark hood, which is its whole character in the row."
+accessoryClocheName,Cloche,,accessory drawer,"A cloche — a deep bell-shaped crown, short brim turned down, a bow on one side with two ribbons hanging from it. 1920s. Same tile, two words at most; it is the most elegant thing in the drawer."
+accessoryJesterName,Jester,,accessory drawer,"A three-horned jester hat with a bell on the end of each horn, worn enormous — the horns span wider than the seal is long. Same tile, two or three words; it is the loudest thing in the drawer and the name can be."
+accessoryShortHairName,Bob,,accessory drawer,"Not a hat: HAIR. A layered short cut, worn by a seal. Same tile, two words at most. It is the first thing in the drawer that is not headwear, so the name has to say hair rather than sound like another hat."
+accessoryBobHairName,Anime Hair,,accessory drawer,"Not a hat: HAIR. A side-swept bob, swept across the face on one side. Same tile, two words at most. It shares the row with the short cut, so the two have to be tellable apart by name — the difference the player sees is long and smooth against short and spiky."
 loadResuming,Resuming,,loading,
 mainMenuButton,Main Menu,,pause menu,
 versusWinner,Champion!,,versus,"Centre-screen line under the winning score at the end of a two-player match, first to 5 goals. Two or three words at most, read for about three seconds while the water is frozen; the number above it says who won, so this only has to feel like a whistle."
+versusDraw,Tie,,versus,"Centre-screen line at the end of a TIMED Blubberball match that ran out with the scores level — the one result a first-to-five cannot produce. Sits exactly where versusWinner sits and is read the same way, for about three seconds over frozen water with the score on the strip above it. One or two words. It is not a failure and not nothing happening: both sides played the whole match and neither won it."
 versusGo,Go!,,versus,"The whistle: the line that pops at centre screen when the kickoff countdown (3, 2, 1) reaches zero and the two seals are released to race for the ball. One or two words, read for about half a second, in the same big type as the numerals it follows. Play is already live under it."
+versusKickoffVs,vs,,versus,
 sealSports,Seal sports,,main menu,"The fifth hex on the main menu, and the heading of the panel it opens — a list of the other things a seal can play. Your words from chat, typed in by Claude: read once. Two short words, one per line in the hexagon."
 sportBall,Blubberball,,seal sports,"The name of the two-seal ball game (systems/versus.js) as a button in the Seal sports panel, and the heading of its team select. Your word from chat."
 sportFinball,Finball,,seal sports,"A stubbed sport in the Seal sports panel; the button is greyed and reads Coming soon under it. Your word from chat."
@@ -51,11 +64,59 @@ teamCpu,CPU,,team select,"The chip that fills a side nobody has joined: the comp
 teamReady,Ready,,team select,"Stamped over a captain's chip once they have pressed A. One word, past tense, the kind of thing a fighting-game select says."
 teamLocked,Locked,,team select,"The three empty slots under each captain on the team select — four a side is coming and these are its shape. One or two words that say not yet without promising when."
 teamStart,Start,,team select,"The button at the foot of the team select once both sides have a ready captain. Also what a pad's Start button does. Two words."
-teamRoster,[DRAFT] Per side,,team select,"The label on the roster row of the Blubberball team select — the control that says how many seals each side puts on the pitch (1 to 4). Two or three words, sitting to the LEFT of a minus, a number and a plus. It names the quantity, not the action: the buttons do the acting."
+teamRoster,Per side,,team select,"The label on the roster row of the Blubberball team select — the control that says how many seals each side puts on the pitch (1 to 4). Two or three words, sitting to the LEFT of a minus, a number and a plus. It names the quantity, not the action: the buttons do the acting."
+teamFirstTo,First to,,team select,"On the button that switches how a Blubberball match ends, when it is set to FIRST TO a number of goals. It names the state it is IN, not the one it would switch to. Two or three words, sitting to the left of a number and a minus/plus pair that step that number."
+teamTimed,Timed Match,,team select,"The same button in its other state: the match runs to a clock and the side ahead at zero wins. One or two words. It names the state it is in, not the one it would switch to."
+teamGoals,goals,,team select,"The unit beside the number on that row while the match is a first-to — the number is how many goals win it. One word, lower case, reads as part of a phrase with the number before it."
+teamMinutes,on the clock,,team select,"The unit beside the number on that row while the match is TIMED. The number beside it is shown as a clock (3:00), so this has to work as a label for a duration rather than for a count. Two or three words."
 teamNoPads,Press a key/button.,,team select,"Shown in the middle of the team select when no controller has been seen yet; the browser only shows a pad after a button on it is pressed. One line telling the player to press a button on their pad."
+teamReroll,Reroll,,team select,"The label on the dice button beside every seal name but the player's own on the Blubberball team select — it re-rolls that seal a new name off sealNames.csv. Not shown: the button is a dice glyph, and this is its tooltip and its screen-reader label. One or two words, a verb."
 versusOverTitle,Again?,,versus,"Heading of the prompt after a Blubberball match ends (first to 5), over the frozen water under the winner's score. One or two words asking what next."
 versusRematch,Rematch,,versus,"The first button on that prompt: same sides, same colours, straight back to a kickoff. Your word from chat."
 versusReplay,Replay,,versus,"The tag in a corner while the instant replay of a goal plays (slow motion, the world frozen). One word, all it has to say is that this is a replay and not live play — it is up for two to five seconds after every goal."
 versusReplaySkip,Hold to skip,,versus,"The prompt under the replay tag, with a small bar that fills while any button is held. Two or three words telling the player that HOLDING any button (not tapping it) skips the replay. Read in the corner, at the size of the HUD's numerals."
-versusAssist,Assist {name},,versus,"Second line of the small goal card after a goal, under the scorer's name and in the scoring team's colour: credits the team-mate whose touch set the goal up. {name} is filled with that seal's name. Two or three words plus the name; only shown in a team match, never in one-on-one."
+versusReelGoal,Goal,,versus,"The tag in a corner of the HIGHLIGHT REEL that loops under the rematch prompt at the end of a match, while a goal from that match is being replayed. One word, in the scoring seal's colour, up for three to six seconds per clip. Sits where the instant replay's own tag sits and is read the same way: it names what you are watching."
+versusReelSave,Save,,versus,"Same corner tag on the highlight reel, for a clip where a seal got in front of a shot that was on target for its own goal and cleared it. One word. Up for three to four seconds, in the colour of the seal that made the save."
+versusReelCheck,Blubber check,,versus,"Same corner tag on the highlight reel, for a clip where one seal dashed into another hard enough to send it tumbling. One or two words. Up for three to four seconds, in the colour of the seal that threw it — no ball involved, this is the hit itself."
+versusAssist,Assisted by {name},,versus,"Second line of the small goal card after a goal, under the scorer's name and in the scoring team's colour: credits the team-mate whose touch set the goal up. {name} is filled with that seal's name. Two or three words plus the name; only shown in a team match, never in one-on-one."
 versusOwnGoal,Own goal :/,,versus,"Second line of the small goal card when the last seal to touch the ball put it in its OWN goal: the card names that seal and this line says what happened. Two words at most, read in the lower third for a couple of seconds while the replay plays. {name} is available but not needed."
+rerollButton,Reroll,,level-up card,
+rerollNone,No reolls,,level-up card,
+rerollEarned,+Reroll,,level-up card,
+bossPelletPebbles,pebbles up ++,,boss payout,"The receipt a dead boss leaves on a PEBBLE run: the gun got permanently wider and nothing else on screen says so. Ethan's existing line, moved out of config.js so the laser row below can sit beside it. Two or three words; read for about a second and a half, pinned to the seal during the victory lap."
+bossPelletLaser,lasers up ++,,boss payout,"The same receipt on a LASER run — same moment, same length, same shape as the pebble row above; only the noun differs. Picked by the run's loadout, exactly as upgrades.csv's weaponName/weaponNameLaser pair is."
+sportBallOnline,Blubberball online,,seal sports,
+roomTitle,Blubberball Room,,room lobby,
+roomHost,Host,,room lobby,
+roomJoin,Join,,room lobby,
+roomCodeLabel,Room Code,,room lobby,
+roomCodePrompt,Enter Room Code,,room lobby,
+roomCodeGo,Go,,room lobby,
+roomReady,Ready,,room lobby,
+roomUnready,Not ready,,room lobby,
+roomStart,Start,,room lobby,
+roomYou,You,,room lobby,
+roomSeatEmpty,Open,,room lobby,
+roomConnecting,Connecting,,room lobby,
+roomRetrying,Retrying,,room lobby,
+roomWaitingHost,Waiting for Host,,room lobby,
+roomPeerLeft,Left,,room lobby,
+roomErrNoRoom,Error: No Room,,room lobby,
+roomErrFull,Room Full,,room lobby,
+roomErrBadCode,Bad Code,,room lobby,
+roomErrBuild,Bad Build,,room lobby,
+roomErrLost,Lost Connection,,room lobby,
+roomErrOffline,Offline,,room lobby,
+statsTitle,Match Stats,,blubberball stats,"Heading at the top of the Blubberball stats page, over the two team names and the final score. Two or three words naming what the screen is."
+statsGoals,Goals,,blubberball stats,
+statsAssists,Assists,,blubberball stats,"The row heading for assists on the team tab — the touch that set a goal up, credited to a team-mate. One word, reads as a set with the goals, saves and possession rows."
+statsSaves,Saves,,blubberball stats,"The row heading for saves — a shot that was on target for a side's own goal and got cleared. One word, in the same set."
+statsPossession,Possession,,blubberball stats,"The row heading for share of the ball, shown as a percentage each side. One word, in the same set."
+statsVersus,vs,,blubberball stats,
+statsRecord,Record!,,blubberball stats,"The badge that appears above the score only when the match set a new record. One or two words, read for a few seconds, and it should feel like a announcement rather than a label."
+statsTabTeam,Team Stats,,blubberball stats,"The first of two tabs on the stats page: the two sides' totals. One or two words, sits beside the players tab and names what you get by pressing it."
+statsTabPlayers,Player Stats,,blubberball stats,"The second tab: each seal's own line. One or two words, same length and register as the team tab beside it."
+statsColName,P,,blubberball stats,"The column heading over the seals' NAMES on the players tab. One or two characters — it sits above a column of names in small faint type, beside three single-letter columns."
+statsColGoals,G,,blubberball stats,"The column heading over goals on the players tab. One character, in a row with the assists and saves columns."
+statsColAssists,A,,blubberball stats,The column heading over assists on the players tab. One character.
+statsColSaves,S,,blubberball stats,The column heading over saves on the players tab. One character.

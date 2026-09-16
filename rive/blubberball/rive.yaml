@@ -1,0 +1,8 @@
+name: blubberball
+main: Stats Page
+logs:
+  file: build/rive.log
+  problems: build/problems.log
+push:
+  projectId: 316606
+  fileId: 2577246

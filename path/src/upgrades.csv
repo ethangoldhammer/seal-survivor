@@ -9,7 +9,7 @@ projectileLife,André 3000,Shoot longer.,,4,TRUE,1,OpeanOcean_003,,Piercing Pebb
 vitality,Healthy Pup!,Health up.,,,TRUE,1,Beach_001,,,
 magnet,C.H.U.M.,Carnivorous Hangry Underwater Mammals,,,TRUE,1,Beach_002,,,
 regen,Seal all Wounds,Health regen.,,,TRUE,1,Beach_003,,,
-velocity,Seal the Deal,Shoot faster.,,,TRUE,1,OpeanOcean_003,,Swift Pebbles,Quick Lasers
+velocity,Seal the Deal,Shots travel quicker.,,,TRUE,1,OpeanOcean_003,,Swift Pebbles,Quick Lasers
 homingMissile,Homing Mussels,Heat-seeking mussel launcher.,,15,TRUE,1,DeepSea_002,,,
 seaGarlic,Sea Garlic,It's like garlic to a vampire. For for fish.,,9,TRUE,1,Reef_003,,,
 shrimpRing,Shrimp Ring,Shrimp is the bible for seals.,,15,TRUE,1,Reef_003,,,

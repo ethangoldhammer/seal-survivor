@@ -16,6 +16,19 @@
 //
 // WHAT IT DOES, in the order it matters:
 //
+//   0. CONVERTS SPEC-GLOSS, because three.js cannot read it any more.
+//      KHR_materials_pbrSpecularGlossiness was removed from GLTFLoader at
+//      r152 and this project is on r183, so a file declaring it loads with NO
+//      base colour at all — the diffuse map and factor live inside the
+//      extension, the core material's pbrMetallicRoughness block is empty, and
+//      the loader silently hands back a white default. It does not throw and
+//      nothing downstream notices: every measurement in this file would pass,
+//      the triangle budget would be met, and the hat would arrive on the
+//      seal's head as a blank white shape. metalRough() moves diffuse ->
+//      baseColour and gloss -> roughness before anything else runs, so the
+//      rest of the pipeline sees an ordinary material. Automatic rather than a
+//      row flag: there is no version of shipping this extension that works.
+//
 //   1. UNPACKS THE PACK. gangster_hats.glb is two fedoras side by side,
 //      mirrored across x, one per material. A pack is not an accessory; the
 //      slot takes one key and `fit` normalises the LONGEST AXIS, so importing
@@ -87,7 +100,7 @@
 
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
-import { prune, dedup, weld, simplify } from '@gltf-transform/functions';
+import { prune, dedup, weld, simplify, metalRough } from '@gltf-transform/functions';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import sharp from 'sharp';
 import fs from 'node:fs';
@@ -112,6 +125,14 @@ const trisOverride = Number((argv.find((s) => s.startsWith('--tris=')) || '').sp
 
 // The map size every accessory gets. See the header: 256 is four times what the
 // most zoomed-in frame in the game can resolve on an object this size.
+//
+// A row can override it with `map: [w, h]`, and the reason is ASPECT rather
+// than resolution. The resize is `fit: 'fill'` — it does not letterbox — so a
+// 512 x 1024 source squeezed into 256 x 256 is stretched 2:1 along u, which on
+// an ordinary base map is invisible (the UVs stretch with it) and on a HAIR
+// CARD ATLAS is not: the strands are vertical strips whose whole read is their
+// width, and halving that width against their length turns a lock of hair into
+// a smear. Give those rows a 2:1 box. Nothing else needs one.
 const MAP = 256;
 
 // ---------------------------------------------------------------------------
@@ -259,6 +280,198 @@ const POOL = [
     tris: 2200,
     note: 'shark-head hood',
   },
+  // -------------------------------------------------------------------------
+  // THE THIRD BATCH. Seven files, and all seven are here — which is not the
+  // pass rate of the first two batches and is worth saying why. The failure
+  // mode that killed sailor_hat was a hat that is MOSTLY NOT HAT: stitching
+  // modelled as thread, and a mannequin it was posed on. Two of these carry
+  // exactly that, and the difference is that here it comes off by material
+  // name and leaves a hat behind that is smooth enough to decimate. Rejecting
+  // a file is about what remains after the junk, not how much junk there is.
+  //
+  // Two of the seven are HAIR, which is a category this pool has not had. What
+  // that costs is at the bottom of the batch, on the rows themselves.
+  // -------------------------------------------------------------------------
+
+  {
+    name: 'ushankahat',
+    src: 'ushanka_-_trapper_hat.glb',
+    // 770 TRIANGLES AND ONE MATERIAL — the cleanest source either of the first
+    // two batches saw, let alone this one. Like hardhat, the target sits above
+    // what the file has so `ratio` clamps to 1 and simplify is a no-op.
+    //
+    // THE SPEC-GLOSS ONE. See step 0 — this is the file that found it. Its
+    // four 1024 maps are a diffuse, a specular-glossiness, a normal and an
+    // occlusion, and on r183 every one of them was unreachable: the hat loaded
+    // white. Converted on read now.
+    //
+    // The flaps are the reason to want it. Every hat in the wardrobe so far is
+    // a brim and a crown; this is the only silhouette with something HANGING,
+    // which reads at 65 pixels when a brim profile does not.
+    tris: 900,
+    note: 'ushanka, flaps down',
+  },
+  {
+    name: 'stetsonhat',
+    src: 'cowboy_hat2.glb',
+    // NOT A DUPLICATE OF cowboyhat, and worth being explicit because the file
+    // name says it is. Render both (npm run acc:render) and they are different
+    // hats: cowboyhat is a smooth round crown with an even downturned brim —
+    // closer to a bush hat — and this one has the pinched telescope crown and
+    // the two sides of the brim rolled up, which is the shape anybody means by
+    // "cowboy hat". It also carries a tooled band the other has no trace of.
+    //
+    // Imported alongside rather than over the top of it. Replacing a shipped
+    // asset is a wardrobe decision, and the two silhouettes are far enough
+    // apart to both stand.
+    //
+    // The pinch and the roll are the whole read, so it holds more than a
+    // smooth-crowned hat would: both are curvature the simplifier is happy to
+    // flatten, because flattening them costs it almost no error.
+    tris: 1600,
+    note: 'pinched-crown stetson (NOT the existing cowboyhat)',
+  },
+  {
+    name: 'bobblehat',
+    src: 'bobble_hat.glb',
+    // THE MANNEQUIN GOES. `default` is two primitives, 136,000 triangles, a
+    // figure standing from z -1 to z 1800 with the hat perched at 1614-1858 —
+    // the same head-and-shoulders that got sailor_hat rejected, and the same
+    // two meshes byte for byte as the ones in hat (1).glb below. Here it comes
+    // off by material name and what is left is a hat.
+    //
+    // 225,278 triangles of actual hat after that, and 74,676 of them are the
+    // POM POM — modelled as a displaced ball rather than as strands, which is
+    // the only reason this row exists. Strands would be the wire-frame problem
+    // at fifty times the scale.
+    keep: (mat) => mat !== 'default',
+    // THE KNIT IS MODELLED, and that is why this needs an error seven times
+    // the pool's default. 110,402 triangles of the body are individual knit
+    // bumps and 39,072 of the cuff are forty separate ribbed tubes — surface
+    // detail a millimetre across, on a hat that covers 65 pixels. At 0.004 the
+    // simplifier defends every one of them and stops at 50,136 triangles; at
+    // 0.03 it is free to treat the body as the smooth dome it reads as.
+    //
+    // Checked rather than assumed, because a big error is how you mangle a
+    // shape: rendered at 1,915, 3,208, 6,204 and the full 225,278 and shrunk
+    // to the 65 pixels the game actually draws, the four are the same picture.
+    // The ribs are gone in ALL of them, 6,204 included — so paying three times
+    // the budget buys nothing, and 1,900 is where it lands.
+    //
+    // hardWeld was tried and changed nothing (50,136 -> 50,123): this is not
+    // the topology-bound case the wire frames are, it is genuinely error-bound.
+    error: 0.03,
+    // Level with the wizard hat. The pom pom has to stay a ball while the
+    // body stays a dome, and the simplifier splits the budget between them by
+    // ratio — which happens to be roughly the split wanted here.
+    tris: 1900,
+    note: 'bobble hat (mannequin dropped)',
+  },
+  {
+    name: 'clochehat',
+    src: 'hat (1).glb',
+    // 676,718 TRIANGLES, and 484,000 of them are not the hat: 348,480 of
+    // `Stitch_1` — four primitives modelling the seams as individual tubes of
+    // thread, which is the sailor_hat problem verbatim — and the same 136,000
+    // triangle mannequin as the bobble hat.
+    //
+    // WHAT SAVES IT is that the stitching is its own material rather than
+    // merged into the felt. sailor_hat's thread could be isolated too; what
+    // could not be saved there was the 700,000-triangle hat UNDER it. Here the
+    // remainder is 192,238 triangles of Band, Brim, Brim_Dettail, Cloche and
+    // Ribbon — five smooth closed surfaces, the easiest thing this simplifier
+    // does. 120:1 on a smooth brim is nothing; 470:1 on thread is confetti.
+    //
+    // Losing the stitches loses nothing visible either way: they are sub-
+    // millimetre tubes on a hat that covers 65 pixels.
+    keep: (mat) => mat !== 'default' && mat !== 'Stitch_1',
+    // Five times the default, for the same reason the bobble hat needs it:
+    // what is left after the stitching comes off is still felt with a woven
+    // surface modelled into it, and at 0.004 that holds it at 5,380.
+    error: 0.02,
+    tris: 1600,
+    note: 'cloche with ribbon (mannequin and 348k tris of stitching dropped)',
+  },
+  {
+    name: 'jesterhat',
+    src: 'clown_hat.glb',
+    // NO TEXTURES AT ALL — four materials of pure factors, like the aviators.
+    // Which makes it the best subject in the wardrobe for the shader lab:
+    // there is no baked art to fight, so whatever the lab paints on it IS the
+    // hat.
+    //
+    // Three tapered horns and three bells, and the horns are the read. They
+    // are swept tubes that come to a point, which is closer to the wire-frame
+    // case than to a brim — a collapsed ring near the tip is a blunt horn, and
+    // a blunt horn is a different hat. So it holds well above the hats.
+    //
+    // The bells are 480 triangles each and come down with everything else;
+    // a sphere at 80 triangles is still a sphere at this size.
+    error: 0.02,
+    tris: 2600,
+    note: 'three-horned jester hat with bells',
+  },
+
+  // -------------------------------------------------------------------------
+  // THE HAIR. Two haircuts, and they are the first thing in this pool that is
+  // neither a hat nor a pair of glasses. Everything below is what is different
+  // about them; the numbers are on the rows.
+  //
+  //   THEY ARE GEOMETRY, NOT CARDS. This was the thing worth checking before
+  //   importing either, because a haircut built the cheap way is a dozen
+  //   crossed quads carrying an alpha atlas, and that decimates into nothing
+  //   and sorts into a mess. Rendered (npm run acc:render), both are modelled
+  //   shells with real tapered locks — the alpha is an EDGE cutout on solid
+  //   geometry rather than the shape itself. That is what makes them survive
+  //   the simplifier, and it is why the targets below are so much higher than
+  //   a hat's: the silhouette here is tips, and tips are what an edge collapse
+  //   takes first.
+  //
+  //   THE ALPHA MODE IS WRONG IN THE SOURCE. Both ship BLEND. See the
+  //   blend -> mask block in fixMaterials for why that is two bugs on one
+  //   mesh, and why a cutout wants a cutoff.
+  //
+  //   AND THEY ARE SKINNED, to 6 and 11 joints, weighted across them — so the
+  //   general linear-blend bake handles both. The short cut's rig carries a
+  //   scale of about 1/100, which is why its baked box reads 0.003 units;
+  //   harmless, `fit` normalises the longest axis whatever it is, but it will
+  //   look alarming in a measurement and is not a bug.
+  // -------------------------------------------------------------------------
+
+  {
+    name: 'shorthair',
+    src: 'short_hair_cut_in_layers_with_bones.glb',
+    // The spikiest of the two — layered, and every layer ends in a point. It
+    // holds nearly half its source for that reason, which is the most anything
+    // in this pool keeps.
+    //
+    // Its maps are already 256 and 128, under budget, so nothing resizes. Two
+    // of the three are GREYSCALE-PLUS-ALPHA, which is the encoding that found
+    // the hasAlpha bug in the resize — see the note there. Nothing here is
+    // affected only because nothing here is big enough to be resized.
+    alpha: 'mask',
+    // Loose enough to reach the target, tight enough to keep the points. At
+    // the pool's 0.004 it stops at 4,901.
+    error: 0.01,
+    tris: 3000,
+    note: 'layered short cut',
+  },
+  {
+    name: 'bobhair',
+    src: 'side_swept_bob_haircut.glb',
+    // One mesh, one material, one map — and the map is 512 x 1024, the only
+    // non-square texture in the wardrobe. See MAP: squashing it to 256 square
+    // would halve the width of every strand against its length.
+    alpha: 'mask',
+    map: [256, 512],
+    // A bob is a smoother shape than the layered cut — the sweep is one
+    // surface and the read is its outline rather than a set of points — so it
+    // comes down further, but still nowhere near a hat's.
+    error: 0.01,
+    tris: 2600,
+    note: 'side-swept bob',
+  },
+
   // -------------------------------------------------------------------------
   // THE ONE THAT IS NOT AN ACCESSORY. It came in with the wardrobe batch and it
   // is a CREATURE — `enemyJellyfish` in assets.js, a row in enemies.csv — not
@@ -718,9 +931,26 @@ function centre(doc) {
   return { size: [0, 1, 2].map((k) => +(hi[k] - lo[k]).toFixed(4)) };
 }
 
-/** Drop the vertex attributes nothing downstream reads. */
+/**
+ * Drop the vertex attributes nothing downstream reads.
+ *
+ * DETACH EVERYTHING FIRST, THEN DISPOSE WHAT IS ORPHANED. The two-pass shape
+ * is not tidiness: an accessor can be wired to more than one semantic, and
+ * disposing it through one of them takes the others with it.
+ *
+ * short_hair_cut_in_layers_with_bones.glb is the case. Both its primitives
+ * point TEXCOORD_0, TEXCOORD_1 and TEXCOORD_2 at ONE accessor — the exporter
+ * wrote the UV set once and referenced it three times. Dropping TEXCOORD_1 and
+ * disposing it in the same breath unwired TEXCOORD_0 as well, and TEXCOORD_0 is
+ * the hair's only UV set. Here that threw on the next semantic, which is the
+ * lucky version; a file sharing across just TEXCOORD_0 and TEXCOORD_1 would
+ * have sailed through and written a model with no UVs, which renders as one
+ * flat colour with every other check in this file still passing. Same failure
+ * as prune() running before the textures are attached.
+ */
 function trimAttributes(doc) {
   const dropped = new Set();
+  const orphans = new Set();
   for (const mesh of doc.getRoot().listMeshes()) {
     for (const p of mesh.listPrimitives()) {
       for (const sem of p.listSemantics()) {
@@ -728,17 +958,24 @@ function trimAttributes(doc) {
         // map here is dropped. TEXCOORD_1..4 are Sketchfab lightmap slots that
         // no material in these files references. COLOR_0 is checked rather than
         // assumed — a vertex colour that is not white is art.
+        const acc = p.getAttribute(sem);
+        if (!acc) continue;
         const drop =
           sem === 'TANGENT' ||
           /^TEXCOORD_[1-9]/.test(sem) ||
-          (sem === 'COLOR_0' && isWhite(p.getAttribute('COLOR_0')));
+          (sem === 'COLOR_0' && isWhite(acc));
         if (!drop) continue;
-        const acc = p.getAttribute(sem);
         p.setAttribute(sem, null);
-        acc.dispose();
+        orphans.add(acc);
         dropped.add(sem);
       }
     }
+  }
+  // Only the ones nothing still points at. listParents() still reports the
+  // document root, so a primitive is what is being looked for.
+  for (const acc of orphans) {
+    const stillUsed = acc.listParents().some((p) => p.propertyType === 'Primitive');
+    if (!stillUsed) acc.dispose();
   }
   return [...dropped];
 }
@@ -889,6 +1126,27 @@ async function fixMaterials(doc, spec = {}) {
       notes.push(`${label}: unlit dropped (it would not shade with the seal)`);
     }
 
+    // BLEND -> MASK, for a cutout that was authored as one.
+    //
+    // Both haircuts ship alphaMode BLEND, and on hair cards that is the wrong
+    // mode twice over. BLEND is order-dependent: three.js sorts transparent
+    // meshes by their object centre, and a haircut is ONE mesh whose cards
+    // interpenetrate, so the sort has nothing to work with and the strands
+    // draw over each other differently depending on which way the seal is
+    // facing. It also writes no depth, so the cards do not occlude each other
+    // at all and the inside of the head shows through the outside of it.
+    //
+    // The alpha in these maps is not a gradient, it is a CUTOUT — a strand is
+    // either there or it is not — so a mask with a cutoff is what the art
+    // meant, and it is depth-written and order-independent. The cutoff is low
+    // (0.35 rather than 0.5) because the 256-square resize bilinearly erodes a
+    // thin strand's alpha toward its edges, and a 0.5 test on an eroded map
+    // eats the tips of the hair.
+    if (spec.alpha === 'mask' && mat.getAlphaMode() === 'BLEND') {
+      mat.setAlphaMode('MASK').setAlphaCutoff(spec.cutoff ?? 0.35);
+      notes.push(`${label}: blend -> mask (cutoff ${mat.getAlphaCutoff()})`);
+    }
+
     const tr = mat.getExtension('KHR_materials_transmission');
     if (tr) {
       mat.setExtension('KHR_materials_transmission', null);
@@ -948,16 +1206,22 @@ async function fixMaterials(doc, spec = {}) {
     if (DEAD.includes(ext.extensionName)) ext.dispose();
   }
 
+  const [mw, mh] = Array.isArray(spec.map) ? spec.map : [spec.map ?? MAP, spec.map ?? MAP];
   for (const tex of doc.getRoot().listTextures()) {
-    const [w] = tex.getSize() ?? [0];
-    if (w <= MAP) continue;
-    const img = sharp(Buffer.from(tex.getImage())).resize(MAP, MAP, { fit: 'fill' });
-    const alpha = (await sharp(Buffer.from(tex.getImage())).stats()).channels.length === 4;
+    const [w, h] = tex.getSize() ?? [0, 0];
+    if (w <= mw && h <= mh) continue;
+    const img = sharp(Buffer.from(tex.getImage())).resize(mw, mh, { fit: 'fill' });
+    // hasAlpha, not a channel count. A greyscale-plus-alpha PNG — which is what
+    // a hair-card cutout mask is, and what two of these sources ship — has TWO
+    // channels, so the old `=== 4` read it as opaque and re-encoded it as JPEG.
+    // That does not fail: it writes a valid texture with the cutout filled in,
+    // and the hair arrives as solid rectangular cards.
+    const alpha = (await sharp(Buffer.from(tex.getImage())).metadata()).hasAlpha === true;
     const buf = alpha
       ? await img.png({ compressionLevel: 9, palette: true }).toBuffer()
       : await img.jpeg({ quality: 82, chromaSubsampling: '4:2:0' }).toBuffer();
     tex.setImage(buf).setMimeType(alpha ? 'image/png' : 'image/jpeg');
-    notes.push(`${tex.getName() || 'texture'}: ${w} -> ${MAP} (${Math.round(buf.byteLength / 1024)}KB)`);
+    notes.push(`${tex.getName() || 'texture'}: ${w}x${h} -> ${mw}x${mh} (${Math.round(buf.byteLength / 1024)}KB)`);
   }
   return notes;
 }
@@ -976,6 +1240,13 @@ for (const spec of POOL) {
   console.log(`\n=== ${spec.name}.glb  <-  ${spec.src}  (${spec.note})`);
   const doc = await io.read(src);
   const before = { ...stats(doc), fileKB: Math.round(fs.statSync(src).size / 1024) };
+
+  // Step 0. Before everything, because every later step reads the material's
+  // core properties and spec-gloss leaves them empty. See the header.
+  if (doc.getRoot().listExtensionsUsed().some((e) => e.extensionName === 'KHR_materials_pbrSpecularGlossiness')) {
+    await doc.transform(metalRough());
+    console.log('  spec-gloss -> metal-rough (three r183 cannot read the extension)');
+  }
 
   if (spec.keep) isolate(doc, spec.keep);
   // Before the skin bake and the flatten, because the predicate is written

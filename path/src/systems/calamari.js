@@ -6,7 +6,7 @@ import { aoe } from './scaling.js';
 import { playerOverlayZ } from '../entities/player.js';
 import { player } from '../entities/player.js';
 import { calamariLevelStats } from '../levelStats.js';
-import { attachDamageGlow, stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
+import { attachDamageGlow, stoke, cool, glowLevel, glowStir, hotFieldColor } from './damageGlow.js';
 
 // Calamari Ring — a glowing shockwave that sweeps outward from the seal on a
 // cadence, damaging and shoving everything the wavefront passes through.
@@ -44,10 +44,12 @@ const vertexShader = /* glsl */ `
 // keeps a band around `uProgress` and discards the rest, so the lit region is
 // an annulus that marches outward as progress runs 0 -> 1.
 const fragmentShader = /* glsl */ `
-  uniform float uTime;
+  // Integrated on the CPU, per wave, exactly as garlic's is and for the same
+  // reason — a rate multiplied into an elapsed clock teleports the noise the
+  // frame the stir moves. See glowStir() in systems/damageGlow.js.
+  uniform float uFlow;
   uniform vec3 uColor;
   uniform float uOpacity;
-  uniform float uSwirl;
   uniform float uDensity;
   uniform float uProgress;
   uniform float uRingWidth;
@@ -80,7 +82,7 @@ const fragmentShader = /* glsl */ `
     // grid as it expands.
     float band = 1.0 - smoothstep(0.0, 1.0, d);
 
-    vec2 q = p * uDensity + vec2(uTime * uSwirl * 0.3, uTime * uSwirl * 0.2);
+    vec2 q = p * uDensity + vec2(uFlow * 0.3, uFlow * 0.2);
     float n = noise(q * 3.0) * 0.6 + noise(q * 6.0 + 10.0) * 0.4;
 
     // Fade the whole wave out as it runs, so it dissipates rather than
@@ -129,10 +131,9 @@ function makeMesh() {
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     uniforms: {
-      uTime: { value: 0 },
+      uFlow: { value: 0 },
       uColor: { value: new THREE.Color(CONFIG.calamari.color) },
       uOpacity: { value: CONFIG.calamari.opacity },
-      uSwirl: { value: CONFIG.calamari.swirl },
       uDensity: { value: CONFIG.calamari.density },
       uProgress: { value: 0 },
       uRingWidth: { value: CONFIG.calamari.ringWidth },
@@ -338,8 +339,13 @@ export function updateCalamari(dt, scene, playerPos, level, enemiesList, hooks =
         emitVy: pvy,
         released: false,
         // 0..1, stoked by the bodies the front crosses and spent on the ring's
-        // own brightness. See systems/damageGlow.js.
+        // brightness, its hue and how fast its noise churns. See
+        // systems/damageGlow.js.
         heat: 0,
+        // Per wave and reset here rather than carried on the pooled mesh: a
+        // recycled ring inheriting the last one's scroll phase would start
+        // mid-churn, which on a band this short-lived is the whole of its look.
+        flow: 0,
       };
       waves.push(w);
       const n = calamariSquidCount(level);
@@ -378,20 +384,21 @@ export function updateCalamari(dt, scene, playerPos, level, enemiesList, hooks =
 
     // Carried to now; stoked below by whatever the front crosses this frame.
     w.heat = cool(w.heat, GLOW_SOURCE, dt);
-    const heat = glowLevel(w.heat, GLOW_SOURCE);
-    const g = damageGlowCfg(GLOW_SOURCE);
 
     w.mesh.scale.setScalar(w.maxRadius);
     const u = w.mesh.material.uniforms;
-    u.uTime.value += dt;
-    // OVERDRIVEN PAST 1, not tinted toward the hot colour — the same choice
-    // attachDamageGlow makes for an unlit material, and the reason is the
-    // same: pulling the hue over would RECOLOUR the wave, where this lights
-    // it. The material is additive and per wave, so the overdrive lands in the
-    // bright pass and only this ring flares.
-    u.uColor.value.set(c.color).multiplyScalar(1 + g.peak * heat);
+    // The noise crawls faster while the front is cutting through something.
+    w.flow += dt * c.swirl * glowStir(w.heat, GLOW_SOURCE);
+    u.uFlow.value = w.flow;
+    // OVERDRIVEN PAST 1 AND ROTATED, not washed toward the hot colour. The
+    // overdrive is the same choice attachDamageGlow makes for an unlit
+    // material: the band is additive and per wave, so a channel past 1 is real
+    // light that lands in the bright pass and only this ring flares. The hue
+    // moves too, but as a rotation of the wave's own pink rather than a lerp
+    // to `color` — a lerp has nothing underneath it here and would replace the
+    // ability's colour outright at full heat. See hotFieldColor().
+    hotFieldColor(u.uColor.value, c.color, w.heat, GLOW_SOURCE);
     u.uOpacity.value = c.opacity;
-    u.uSwirl.value = c.swirl;
     u.uDensity.value = c.density;
     u.uRingWidth.value = c.ringWidth;
     u.uProgress.value = Math.min(1, w.radius / w.maxRadius);

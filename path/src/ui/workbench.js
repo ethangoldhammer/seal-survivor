@@ -53,10 +53,32 @@ const RAIL_SECTIONS = [
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'chumChunkEaten', 'chumFull', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
-  // THE BALL GAME, in the order a rally goes: a seal into a seal, the ball
-  // off the post, the goal (its impact, then its cheer — two events for one
-  // moment, like a boss blow), then the count and the whistle that restart.
-  ['Versus', ['bodyCheck', 'versusBallHit', 'versusBallWall', 'versusPost', 'versusGoal', 'versusGoalCheer', 'versusCountdown', 'versusKickoff']],
+  // BLUBBERBALL — the whole match, in the order one goes, so firing down the
+  // section is a rally. It was eight rows called "Versus" and it was missing
+  // half the game: the shove was filed under Escorts with the companion
+  // seals, the ball's two crossings of the surface were not listed anywhere,
+  // and a seal bursting had no row at all.
+  //
+  // Read top to bottom: the count and the whistle start it; the ball is
+  // played, off a seal, off rock, off a post, through the surface both ways;
+  // the contest is won one way or the other (block, pierce) and the save is
+  // the layer over a block that was a shot on target; two bodies meet, one
+  // comes apart, one comes back; the goal is its bang and then its cheer; and
+  // the match ends as one result heard two ways.
+  //
+  // THE PAIRS ARE ADJACENT ON PURPOSE — block/save, goal/cheer, win/lose, and
+  // hit/spike.
+  // Each of those is two events on one moment and the only useful question
+  // about the second is how it sits over the first, which is unaskable if
+  // they are twelve rows apart.
+  ['Blubberball', [
+    'versusCountdown', 'versusKickoff',
+    'versusBallHit', 'versusSpike', 'versusBallWall', 'versusPost', 'versusBallBreach', 'versusBallReentry',
+    'versusBlock', 'versusSave', 'versusPierce',
+    'bodyCheck', 'sealBurst', 'versusRespawn',
+    'versusGoal', 'versusGoalCheer',
+    'versusWin', 'versusLose',
+  ]],
   ['Thrown & launched', ['seagullDive', 'scallopLaunch', 'scallopJet', 'pearlShot', 'pearlBurst', 'bakalarHaul', 'bakalarBombDrop', 'bakalarBombBlast']],
   ['Boats', ['debrisBreak', 'boatExplosion', 'crewEaten', 'crewHit']],
   // THE LEVEL-UP SCREEN, in the order it happens: the comb powering on, then
@@ -217,9 +239,13 @@ const LOOP_ROWS = { '*jetbedloop': 'jetBed', '*jetbedwiggleloop': 'jetBedWiggle'
 // THE GOAL, on the same terms as the boom and for the same reason: it is a
 // PLACE with a light in it and a jet that comes out of it, not a moment. The
 // two feedback events a goal fires (`versusGoal`, `versusGoalCheer`) are rows
-// in the Versus section like any others and carry the spray and the sound;
+// in the Blubberball section like any others and carry the spray and the sound;
 // this row is the hole's glow (CONFIG.versus.goal) and the corridor jet
 // (CONFIG.versus.goalJet), and its Fire button scores one on the empty ocean.
+//
+// The section it is pinned to is matched BY TITLE, so renaming the section
+// moves this row with it or loses it in silence — there is no error for a
+// pinned row whose section no longer exists, it simply stops being anywhere.
 const GOAL_ROW = '*goal';
 const GOAL_TERMS = 'goal hole mouth corridor tunnel jet glow bloom team versus ball score net post';
 const LOOP_TERMS = 'loop bed jet bubble beam wiggle sample layer stream jetbed';
@@ -365,6 +391,80 @@ const STYLES = `
   .sv-wb-hint { position: fixed; right: 14px; bottom: 100px; z-index: 33; font-size: 10px;
     color: rgba(232,236,243,0.35); font-family: 'Inter', system-ui, sans-serif; pointer-events: none; }
   .sv-wb-hint.sv-wb-off { display: none; }
+
+  /* --- DOCKED ----------------------------------------------------------------
+     The same panel against the right edge, one column wide, so the pitch it is
+     tuning stays on screen beside it. The other tuner has lived there since the
+     beginning (.sv-tuner, 300px); this is the second panel to do it, and the
+     two are meant to sit side by side without either one moving.
+
+     NOTHING IS REBUILT. The three panes are the SAME elements as in full mode —
+     every els.* reference, every listener and every render function is
+     untouched, because a docked mode that re-parents the DOM is a second
+     layout to keep in step with the first, and the one that is not open is the
+     one that rots. They are stacked into a single grid cell here and shown one
+     at a time, so both modes are the one tree seen through different CSS.
+
+     THE TAB STRIP BORROWS ITS WORDS. Four tabs — the rail's own heading, the
+     name of whatever is selected, and the dock's two existing tab labels — all
+     read off the DOM rather than typed in, so there is no second copy of a
+     label to fall out of date, and the middle tab says what you are looking at
+     rather than a category it belongs to. The dock's inner strip hides while
+     the outer one is driving it, or the same two words appear twice.
+
+     WHY IT OVERLAYS RATHER THAN SQUEEZES: world.js sizes the renderer off
+     window.innerWidth, so the pitch is drawn full-width behind this whatever
+     the panel does. Docking right is what makes that workable — the left mouth
+     stays clear, and the goal panel's own side toggle picks which one fires. */
+  .sv-wb-mode { margin-left: auto; align-self: center; flex-shrink: 0;
+    font-size: 13px; line-height: 1; padding: 3px 8px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.06);
+    color: rgba(232,236,243,0.7); cursor: pointer; font-family: inherit; }
+  .sv-wb-mode:hover { border-color: #7ad7ff; color: #7ad7ff; }
+
+  .sv-wb-panetabs, .sv-wb-grip { display: none; }
+
+  /* border-box, so --sv-wb-w is the width you can SEE. Under the default
+     content-box the 1px edge below is added to it, and every measurement of
+     this panel — the clamp, the drag, the gap the hint steps aside by — is one
+     px out from the number that set it. A pixel is nothing to look at and a
+     nuisance to test against, which is the worst of both. */
+  .sv-wb.sv-wb-docked { left: auto; right: 0; width: var(--sv-wb-w, 420px);
+    box-sizing: border-box;
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+    border-left: 1px solid rgba(255,255,255,0.13); }
+  .sv-wb.sv-wb-docked .sv-wb-panetabs { display: grid; grid-column: 1; grid-row: 1;
+    grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+    border-bottom: 1px solid rgba(255,255,255,0.09); }
+  .sv-wb.sv-wb-docked .sv-wb-panetabs .sv-wb-tab { overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  /* All three in one cell, and display is what chooses — not visibility, so
+     the hidden two cost no layout and the cards keep the full width. */
+  .sv-wb.sv-wb-docked > .sv-wb-rail,
+  .sv-wb.sv-wb-docked > .sv-wb-main,
+  .sv-wb.sv-wb-docked > .sv-wb-dock { grid-column: 1; grid-row: 2;
+    min-width: 0; min-height: 0; display: none; border-left: 0; border-right: 0; }
+  .sv-wb.sv-wb-docked[data-pane="feel"] > .sv-wb-rail { display: block; }
+  .sv-wb.sv-wb-docked[data-pane="tune"] > .sv-wb-main { display: flex; }
+  .sv-wb.sv-wb-docked[data-pane="lib"] > .sv-wb-dock,
+  .sv-wb.sv-wb-docked[data-pane="live"] > .sv-wb-dock { display: flex; }
+  .sv-wb.sv-wb-docked .sv-wb-dock > .sv-wb-tabs { display: none; }
+  /* The header is a baseline row of title + CONFIG path + button, which at this
+     width breaks the title across two lines ("The / goal") before the path has
+     given up any of its own. The name gets the line, the path drops under it. */
+  .sv-wb.sv-wb-docked .sv-wb-head { padding: 11px 14px 9px; }
+  .sv-wb.sv-wb-docked .sv-wb-title { flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sv-wb.sv-wb-docked .sv-wb-title h1 { font-size: 15px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .sv-wb.sv-wb-docked .sv-wb-via { order: 3; flex: 1 0 100%; overflow-wrap: anywhere; }
+  .sv-wb.sv-wb-docked .sv-wb-cols { padding: 11px 14px 24px; }
+  /* Outside the panel's own edge, so the hit area is not stealing the first
+     few px of the leftmost slider in the column. */
+  .sv-wb.sv-wb-docked .sv-wb-grip { display: block; position: absolute;
+    left: -3px; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 2; }
+  .sv-wb.sv-wb-docked .sv-wb-grip:hover, .sv-wb-grip.sv-wb-dragging { background: rgba(122,215,255,0.4); }
+  /* The hint sits at the right edge, which is now under the panel. */
+  .sv-wb.sv-wb-docked ~ .sv-wb-hint { right: calc(var(--sv-wb-w, 420px) + 14px); }
 `;
 
 const FEED_COLOR = {
@@ -378,6 +478,69 @@ const FEED_COLOR = {
 let panel = null;
 let visible = false;
 let current = 'kill';
+
+// --- DOCKED MODE ------------------------------------------------------------
+// Which pane the docked panel is showing, in the order the strip lays them out.
+// 'lib' and 'live' both show the dock element and differ only in which of its
+// inner tabs is driven, which is why they are two entries rather than one.
+const PANES = ['feel', 'tune', 'lib', 'live'];
+const dockTabs = {};
+let docked = false;
+let dockPane = 'tune';
+let dockWidth = 420;
+// localStorage, not the tuning snapshot: where a dev panel sits is a fact about
+// this browser, and the snapshot is the game's own numbers on a shared file.
+// See systems/settings.js — same split, same reason.
+const DOCK_KEY = 'sv-wb-docked';
+const PANE_KEY = 'sv-wb-pane';
+const WIDTH_KEY = 'sv-wb-width';
+const store = (k, v) => { try { window.localStorage.setItem(k, v); } catch { /* private window */ } };
+const recall = (k) => { try { return window.localStorage.getItem(k); } catch { return null; } };
+
+/** The panel's width, clamped to what a column of cards can actually use. */
+function setDockWidth(px) {
+  // The floor is the card grid's own minmax(310px) plus the pane padding, so a
+  // drag can never squeeze a card narrower than the layout it was written for;
+  // the ceiling is half the window, past which "docked" stops meaning anything.
+  const min = 338;
+  const max = Math.max(min, Math.round(window.innerWidth * 0.5));
+  dockWidth = Math.round(Math.min(max, Math.max(min, px)));
+  // On the root rather than the panel: the hint is the panel's SIBLING and has
+  // to step aside by the same amount.
+  document.documentElement.style.setProperty('--sv-wb-w', `${dockWidth}px`);
+}
+
+/** Show one of the four docked panes. A no-op to look at while full-bleed. */
+function showPane(key) {
+  dockPane = PANES.includes(key) ? key : 'tune';
+  if (panel) panel.dataset.pane = dockPane;
+  store(PANE_KEY, dockPane);
+  // The dock is one element behind two tabs, so picking one of them out here
+  // has to move its inner switch as well or the strip and the pane disagree.
+  if (dockPane === 'lib' || dockPane === 'live') dockTabs[dockPane]?.click();
+  syncPaneTabs();
+}
+
+function setDocked(on) {
+  docked = !!on;
+  if (!panel) return;
+  panel.classList.toggle('sv-wb-docked', docked);
+  // ⇥ pushes it to the edge, ⤢ opens it back out. Glyphs, so this panel gains
+  // no words that are not already Ethan's.
+  els.mode.textContent = docked ? '⤢' : '⇥';
+  store(DOCK_KEY, docked ? '1' : '0');
+  showPane(dockPane);
+}
+
+/** Keep the strip's live label and its highlight in step with the detail pane. */
+function syncPaneTabs() {
+  if (!els.paneTabs) return;
+  for (const tab of els.paneTabs.children) {
+    const key = tab.dataset.pane;
+    if (key === 'tune') tab.textContent = els.name?.textContent || '—';
+    tab.classList.toggle('on', key === dockPane);
+  }
+}
 // How big the body under the test explosion is. Lives here rather than in
 // CONFIG for the reason stageState does: it is where the knob happens to be
 // sitting while you work, not an authored value, and everything in CONFIG
@@ -627,7 +790,7 @@ function renderRail() {
     // LOOP_ROWS — they are voices, not events, so nothing else would list them.
     const loopsHere = title === 'Your weapon' && (!filter || LOOP_TERMS.includes(filter));
     // ...and the goal at the top of the ball game's section. See GOAL_ROW.
-    const goalHere = title === 'Versus' && (!filter || GOAL_TERMS.includes(filter));
+    const goalHere = title === 'Blubberball' && (!filter || GOAL_TERMS.includes(filter));
     if (!hits.length && !boomHere && !lightHere && !riserHere && !jetHere && !laserHere && !loopsHere && !goalHere) continue;
     const h = document.createElement('div');
     h.className = 'sv-wb-sec';
@@ -712,7 +875,15 @@ function renderRail() {
 // ---------------------------------------------------------------------------
 // the detail pane
 
+// Every branch of renderDetail below returns early into a different view, and
+// each one writes els.name last — so the docked strip's live label is synced
+// out here, once, rather than at eleven return sites that would drift apart.
 function render() {
+  renderDetail();
+  syncPaneTabs();
+}
+
+function renderDetail() {
   if (!panel) return;
   // See `jetPoll` — the jet view is the one detail pane with a timer behind it.
   if (jetPoll) { clearInterval(jetPoll); jetPoll = null; }
@@ -2568,10 +2739,17 @@ function renderGoal() {
     title: 'World units the light reaches past the hole \u2014 into the water in front of the face and into the rock above and below.' });
   slider(light, 'feather', { min: 0.05, max: 1, step: 0.05, get: () => g.feather ?? 0.55, set: (v) => { g.feather = v; live(); },
     title: 'The share of the quad that is falloff. 1 fades from the centre; low holds a bright core the size of the hole and fades over the spill.' });
+  slider(light, 'how far it carries', { min: 0.25, max: 2, step: 0.05, get: () => g.trim ?? 1, set: (v) => { g.trim = v; live(); },
+    title: 'Brings the light in WITHOUT sharpening the edge it stops at \u2014 the only control here that can. Feather and spill both shorten the falloff by steepening it (a curve that dies sooner falls faster, always, and at feather 1 there is no slack left at all); this changes the CURVE instead, pulling the tail in and flattening the shoulder, so the edge gets softer rather than harder. It cannot make a line at any setting. 1 is the tuned default; 2 is the longest the light has ever been.' });
   slider(light, 'throw down the tunnel', { min: 0.02, max: 1, step: 0.02, get: () => g.tunnelFalloff ?? 1, set: (v) => { g.tunnelFalloff = v; live(); },
     title: 'The share of the source still there at the drawn face \u2014 exponential absorption on the way in, so the corridor reads as light coming from somewhere off the frame rather than as a lit surface. 1 is flat, as it was. Only the light throws; the slab behind it holds, or the corridor would be a window onto the seabed at the mouth.' });
-  slider(light, 'mouth half height', { min: 3, max: 14, step: 0.5, dp: 1, get: () => g.halfHeight ?? 7, set: (v) => { g.halfHeight = v; live(); },
-    title: 'The hole\u2019s half height. The light follows it now; the ROCK is carved on the next resize or match, and the ball\u2019s posts read it live.' });
+  slider(light, 'mouth half height (1 a side)', { min: 3, max: 14, step: 0.5, dp: 1, get: () => g.halfHeight ?? 7, set: (v) => { g.halfHeight = v; live(); },
+    title: 'The hole\u2019s half height in a 1v1. The light follows it now; the ROCK is carved on the next resize or match, and the ball\u2019s posts read it live.' });
+  const gr = g.roster ?? (g.roster = {});
+  slider(light, '...times this at 4 a side', { min: 1, max: 2, step: 0.05, get: () => gr.widest ?? 1.4, set: (v) => { gr.widest = v; live(); },
+    title: 'The mouth grows with the roster \u2014 the pitch cannot, so the target is what makes room for more attackers. Straight-line from 1 a side to MAX_PER_SIDE, and capped by the lip below.' });
+  slider(light, 'lip of rock left above and below', { min: 0, max: 12, step: 0.5, dp: 1, get: () => gr.lip ?? 3.5, set: (v) => { gr.lip = v; live(); },
+    title: 'What the wall has to keep at whichever edge is nearer \u2014 the surface above, the seabed below. This is what the roster ramp runs into, so a tall authored mouth stops growing rather than opening into the sky.' });
 
   // --- THE BALL IN IT ------------------------------------------------------------
   const gb = g.ball ?? (g.ball = {});
@@ -2584,6 +2762,10 @@ function renderGoal() {
     title: 'Times the light\u2019s own overdrive, at the ball.' });
   slider(inIt, 'boils by', { min: 0, max: 24, step: 0.5, dp: 1, get: () => gb.boil ?? 6, set: (v) => { gb.boil = v; live(); },
     title: 'How far the field slides along its third axis under the ball \u2014 the pattern there churns while the rest of the mouth holds.' });
+  slider(inIt, 'the shooter takes the colour', { min: 0, max: 1, step: 0.02, get: () => gb.tint ?? 0.85, set: (v) => { gb.tint = v; live(); },
+    title: 'Before the ball is anywhere near the light, the colour of whoever last hit it starts taking that light over \u2014 a read on how close this shot is to being a goal. Nobody\u2019s colour until somebody has hit it, so a kickoff tints nothing.' });
+  slider(inIt, '...from this far short of the line', { min: 0, max: 120, step: 1, dp: 0, get: () => gb.tintLead ?? 45, set: (v) => { gb.tintLead = v; live(); },
+    title: 'World units left to the GOAL LINE \u2014 the trigger, not the face \u2014 where the take-over starts. It spreads as it comes on: a disc round the ball while the shot is travelling, the whole mouth by the time it is on the line.' });
 
   // --- WHOSE LIGHT IT IS ---------------------------------------------------------
   const sc = g.scored ?? (g.scored = {});
@@ -2615,6 +2797,12 @@ function renderGoal() {
     title: 'How far toward its own team\u2019s colour a seal can take the light it is attacking. Its own goal is already its colour, so a keeper stirs the field without repainting it.' });
   slider(stir, '...bleeding in from', { min: 0, max: 30, step: 1, dp: 0, get: () => sw.tintLead ?? 5, set: (v) => { sw.tintLead = v; live(); },
     title: 'World units short of the wall\u2019s line where the colour starts to come in. Full over by the depth a keeper may stand.' });
+  slider(stir, 'a keeper pushes back', { min: 0, max: 1, step: 0.02, get: () => sw.defend ?? 0.9, set: (v) => { sw.defend = v; live(); },
+    title: 'A shot coming in paints the goal in the SHOOTER\u2019s colour; the seal standing in that goal argues with it. How much of its own colour it puts back into the mix \u2014 additively, so the mouth is contested rather than handed over. Scales with how far into its goal the keeper is and how far the shot has got.' });
+  slider(stir, '...shoving this much harder', { min: 0, max: 6, step: 0.1, dp: 1, get: () => sw.defendPush ?? 1.8, set: (v) => { sw.defendPush = v; live(); },
+    title: 'Times its usual shove on the field, at full contest.' });
+  slider(stir, '...and boiling this much', { min: 0, max: 20, step: 0.5, dp: 1, get: () => sw.defendChurn ?? 5, set: (v) => { sw.defendChurn = v; live(); },
+    title: 'Extra churn under a contesting keeper, on top of whatever its own speed is already putting in.' });
   slider(stir, 'burst speed', { min: 10, max: 120, step: 1, dp: 0, get: () => sw.burst ?? 46, set: (v) => { sw.burst = v; live(); },
     title: 'u/s a seal has to cross to throw a ring \u2014 an edge, so a dash throws one and not sixty a second.' });
   slider(stir, '...within', { min: 0, max: 120, step: 1, dp: 0, get: () => sw.range ?? 46, set: (v) => { sw.range = v; },
@@ -2634,12 +2822,14 @@ function renderGoal() {
     title: 'World units beyond whichever is further out, the goal line or the screen\u2019s edge \u2014 both of which move with the tuning, which is why this is measured off them rather than off the face. Clipped to the tunnel\u2019s back.' });
   slider(jet, '...across a band', { min: 0, max: 14, step: 0.5, dp: 1, get: () => j.bornSpan ?? 5, set: (v) => { j.bornSpan = v; },
     title: 'How deep the band it is born across is. 0 is a single plane and reads as a puff; a few units is a jet with a front and a back to it.' });
+  slider(jet, '...across the corridor', { min: 0, max: 1, step: 0.02, get: () => j.spread ?? 1, set: (v) => { j.spread = v; },
+    title: 'The share of the corridor\u2019s height a lobe may be born across \u2014 so the band above times this is the RECTANGLE the jet comes out of. 1 is the whole mouth, less the lobe\u2019s own body so nothing is born inside a lip.' });
   slider(jet, 'released over', { min: 0, max: 1.5, step: 0.05, get: () => j.stagger ?? 0.3, set: (v) => { j.stagger = v; },
     title: 'Seconds. 0 is a puff; longer is a jet.' });
   slider(jet, 'launch speed', { min: 5, max: 160, step: 1, dp: 0, get: () => j.speed?.[0] ?? 45, set: (v) => { j.speed = [v, Math.max(v, j.speed?.[1] ?? v)]; } });
   slider(jet, '...up to', { min: 5, max: 160, step: 1, dp: 0, get: () => j.speed?.[1] ?? 80, set: (v) => { j.speed = [Math.min(v, j.speed?.[0] ?? v), v]; } });
-  slider(jet, 'aim scatter', { min: 0, max: 1.5, step: 0.05, get: () => j.scatter ?? 0.6, set: (v) => { j.scatter = v; },
-    title: 'Radians either side of straight out. What the lips fold back in.' });
+  slider(jet, 'aim scatter', { min: 0, max: 2.6, step: 0.05, get: () => j.scatter ?? 1.15, set: (v) => { j.scatter = v; },
+    title: 'Radians either side of straight out, AT BIRTH. This cannot widen the cone that comes out on its own: a lobe aimed steeper than atan(mouth half height / tunnel depth) hits a lip before it reaches the opening, and the nozzle pulls the rest back onto the centre line. Use \u201cflares out by\u201d below for the cone you can see.' });
   slider(jet, 'push down the corridor', { min: 0, max: 400, step: 5, dp: 0, get: () => j.push ?? 120, set: (v) => { j.push = v; },
     title: 'u/s\u00b2 toward the water while a lobe is still inside the rock.' });
   slider(jet, 'nozzle', { min: 0, max: 20, step: 0.5, dp: 1, get: () => j.nozzle ?? 4, set: (v) => { j.nozzle = v; },
@@ -2668,6 +2858,38 @@ function renderGoal() {
     title: 'What a lobe is worth as a body, in multiples of its own splat size. The drawn goo surface is wider than the splat that seeds it, so this is also what the LIPS hold it back by \u2014 what fits between two lobes is what fits between the rocks.' });
   slider(squeeze, 'kick out of the mouth', { min: 0, max: 120, step: 1, dp: 0, get: () => j.burstOut ?? 26, set: (v) => { j.burstOut = v; },
     title: 'u/s added along the way out, once, on the frame a lobe finally clears the face \u2014 so the jet leaves the opening with a bang rather than merely stopping being pushed.' });
+  slider(squeeze, 'flares out by', { min: 0, max: 1.6, step: 0.02, get: () => j.flare ?? 0.5, set: (v) => { j.flare = v; },
+    title: 'Radians either side of the way it is already going, turned once on the same frame as the kick. Out here there is no rock left to fold the spread back in, so this is the cone the jet actually leaves by \u2014 the one you can see. Aim scatter at birth is spent inside the corridor.' });
+  // --- THE THIRD AXIS -----------------------------------------------------------
+  const depth = card(cols, 'sv-wb-imp', 'Depth, and the seals in the way',
+    'The pitch is filmed flat, so none of this shows on the pitch \u2014 the instant replay is filmed by perspective cameras that swing right through this cloud, and the goal\u2019s explosion is the beat they exist for. Flat on one plane the jet is a cut-out from every angle but dead on.');
+  slider(depth, 'the corridor\u2019s bore', { min: 0, max: 2, step: 0.05, get: () => j.bore ?? 0.7, set: (v) => { j.bore = v; },
+    title: 'How deep the tunnel is, as a share of the mouth\u2019s own half height \u2014 one number for both, because an opening is as deep as it is tall unless somebody says otherwise. It holds the cloud in while it is inside the rock, so the squeeze happens in three dimensions and the goo arrives at the mouth as a plug rather than a slab.' });
+  slider(depth, 'aim scatter in depth', { min: 0, max: 1, step: 0.02, get: () => j.zScatter ?? 0.12, set: (v) => { j.zScatter = v; },
+    title: 'The share of the launch speed spent on depth AT BIRTH. Small on purpose, exactly like the in-plane aim scatter: the bore and the nozzle take it straight back off you before the lobe reaches the opening.' });
+  slider(depth, 'flares in depth by', { min: 0, max: 80, step: 1, dp: 0, get: () => j.zFlare ?? 18, set: (v) => { j.zFlare = v; },
+    title: 'u/s of depth added on the frame a lobe clears the face \u2014 the depth half of the cone, added where there is no rock left to fold it back in. In u/s and not radians: the two in-plane axes are turned as a pair by \u201cflares out by\u201d, and depth has no pair to turn with.' });
+  toggle(depth, 'the goo hits the seals', () => j.hitSeals !== false, (v) => { j.hitSeals = v; });
+  slider(depth, '...a seal is this much fatter than the ball thinks', { min: 0, max: 4, step: 0.05, get: () => j.sealPad ?? 0.6, set: (v) => { j.sealPad = v; },
+    title: 'World units on top of the capsule the BALL collides with (CONFIG.versus.ball.body, measured off furseal.glb). Deliberately not the same number: the ball\u2019s body is a contest and has to be the honest animal, and this one is a surface goo lands on, which reads better a little proud of the fur than a little inside it.' });
+  // --- THE SHOCKWAVE ------------------------------------------------------------
+  const bl = j.blast ?? (j.blast = {});
+  const blast = card(cols, 'sv-wb-imp', 'The bang throws the seals',
+    'The goo landing on a seal is a surface; this is the bang under it. Every seal within reach of where the jet is BORN — deep in the tunnel, not at the mouth, so a keeper on the line takes far more of it than a striker outside the box — is shoved away from it and left tumbling. The shove is the same one a body check delivers, so it gains the heavy fall and the knock with it. Only in a match: Score a goal above fires the jet on an empty ocean, where there are no seals to throw.');
+  toggle(blast, 'a goal throws the seals', () => bl.enabled !== false, (v) => { bl.enabled = v; });
+  slider(blast, 'reaches', { min: 0, max: 140, step: 1, dp: 0, get: () => bl.radius ?? 46, set: (v) => { bl.radius = v; },
+    title: 'World units from the birth point. Measured from inside the tunnel, so a seal standing on its own line is already most of the corridor away — which is what makes this bigger than it looks.' });
+  slider(blast, 'shoves at', { min: 0, max: 200, step: 1, dp: 0, get: () => bl.push ?? 78, set: (v) => { bl.push = v; },
+    title: 'u/s at the centre, falling to nothing at the rim. Delivered through the body check’s own shove (CONFIG.versus.bodyCheck), so velShare of it is real velocity that gravity then acts on and the rest is the decaying knock.' });
+  slider(blast, 'falls off by', { min: 0.2, max: 4, step: 0.05, get: () => bl.falloff ?? 1.6, set: (v) => { bl.falloff = v; },
+    title: '1 is linear across the reach. Higher keeps the throw close to the hole — a keeper is launched, a seal at the edge of the box is nudged.' });
+  slider(blast, 'tumbles', { min: 0, max: 0.8, step: 0.01, get: () => bl.spin ?? 0.2, set: (v) => { bl.spin = v; },
+    title: 'Radians per second of somersault, per u/s of shove. The righting spring is off while the tumble lasts, so this is the rate the body actually turns at — unlike the body check’s jolt, which is sprung and capped.' });
+  slider(blast, '...and rolls', { min: 0, max: 0.8, step: 0.01, get: () => bl.roll ?? 0.26, set: (v) => { bl.roll = v; },
+    title: 'The same, about the seal’s own spine. Signed by whether the bang was above or below it.' });
+  slider(blast, 'stays limp for', { min: 0, max: 4, step: 0.05, get: () => bl.tumbleFor ?? 1.6, set: (v) => { bl.tumbleFor = v; },
+    title: 'Seconds the spring stays off, at a full-strength hit and scaled down with the shove. Only CONFIG.player.jolt.tumbleDrag slows the turn while it does; when it runs out the spring picks the body up from wherever it ended and rights it the short way round. A kickoff clears it whatever is left.' });
+
   const status = document.createElement('div');
   status.className = 'sv-wb-none';
   // WHERE IT WAS ACTUALLY BORN. Both birth sliders are requests the tunnel is
@@ -3451,6 +3673,12 @@ export function initWorkbench(onChange = null) {
   els.meta.className = 'sv-wb-meta';
   railhead.append(els.search, els.meta);
   els.list = document.createElement('div');
+  // Picking a row while docked is a request to look at it, and the rail is
+  // filling the whole panel — so the strip follows. Delegated rather than
+  // added to each row's own handler: there are ten row builders (events, the
+  // goo, the boom, the goal, the lights, the riser, the jet, the laser, the
+  // loop voices) and an eleventh added later would be the one that forgets.
+  els.list.addEventListener('click', () => { if (docked) showPane('tune'); });
   rail.append(railhead, els.list);
 
   // main
@@ -3466,6 +3694,12 @@ export function initWorkbench(onChange = null) {
   title.append(els.name, els.via);
   els.chips = document.createElement('div');
   els.chips.className = 'sv-wb-chips';
+  // Full ⇄ docked. A glyph and not a word on purpose: every label in this panel
+  // is Ethan's, and this button can do its job without borrowing one.
+  els.mode = document.createElement('button');
+  els.mode.className = 'sv-wb-mode';
+  els.mode.addEventListener('click', () => setDocked(!docked));
+  title.appendChild(els.mode);
   head.append(title, els.chips);
   els.cols = document.createElement('div');
   els.cols.className = 'sv-wb-cols';
@@ -3490,6 +3724,10 @@ export function initWorkbench(onChange = null) {
       paneLive.classList.toggle('on', pane === paneLive);
     });
     tabs.appendChild(tab);
+    // Kept so the docked strip can drive this one rather than own a second
+    // copy of the same two-way switch — and so its labels are read off these
+    // rather than typed in again.
+    dockTabs[key] = tab;
   }
 
   const libhead = document.createElement('div');
@@ -3543,7 +3781,49 @@ export function initWorkbench(onChange = null) {
   paneLive.append(stats, els.feed);
 
   dock.append(tabs, paneLib, paneLive);
-  panel.append(rail, main, dock);
+
+  // THE DOCKED STRIP. Built in both modes and hidden by CSS in full, so there
+  // is no branch here that only runs for one of them — the pane that is not
+  // exercised is the pane that breaks. Its four labels come off the DOM: the
+  // rail's heading, the detail pane's live title (kept in step by render), and
+  // the dock's own two tabs.
+  els.paneTabs = document.createElement('div');
+  els.paneTabs.className = 'sv-wb-panetabs';
+  for (const key of PANES) {
+    const tab = document.createElement('div');
+    tab.className = 'sv-wb-tab';
+    tab.dataset.pane = key;
+    tab.textContent = key === 'feel' ? railhead.querySelector('h2').textContent
+      : key === 'tune' ? '—'
+      : dockTabs[key].textContent;
+    tab.addEventListener('click', () => showPane(key));
+    els.paneTabs.appendChild(tab);
+  }
+
+  // The width handle. Pointer capture rather than window listeners: a drag that
+  // leaves the panel — which every widening drag does, since it travels left
+  // into the pitch — otherwise stops dead the moment the cursor is over the
+  // canvas.
+  els.grip = document.createElement('div');
+  els.grip.className = 'sv-wb-grip';
+  els.grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    els.grip.setPointerCapture(e.pointerId);
+    els.grip.classList.add('sv-wb-dragging');
+    const move = (ev) => setDockWidth(window.innerWidth - ev.clientX);
+    const up = () => {
+      els.grip.classList.remove('sv-wb-dragging');
+      els.grip.removeEventListener('pointermove', move);
+      els.grip.removeEventListener('pointerup', up);
+      els.grip.removeEventListener('pointercancel', up);
+      store(WIDTH_KEY, String(dockWidth));
+    };
+    els.grip.addEventListener('pointermove', move);
+    els.grip.addEventListener('pointerup', up);
+    els.grip.addEventListener('pointercancel', up);
+  });
+
+  panel.append(els.paneTabs, rail, main, dock, els.grip);
   document.body.appendChild(panel);
 
   els.hint = document.createElement('div');
@@ -3562,7 +3842,19 @@ export function initWorkbench(onChange = null) {
 
   // The bar rewraps as the window changes, and the gap under the panel has to
   // follow it or the library's delete button ends up behind it again.
-  window.addEventListener('resize', () => { if (visible) fitToStageBar(); });
+  window.addEventListener('resize', () => {
+    if (visible) fitToStageBar();
+    // A window narrowed past twice the dock is a dock over most of the screen,
+    // which is the thing it exists not to be. Re-clamping here rather than only
+    // on drag is what keeps that true across a fullscreen toggle.
+    if (docked) setDockWidth(dockWidth);
+  });
+
+  // Where it was last left. Read AFTER the tree exists, because setDocked and
+  // showPane both write to it.
+  setDockWidth(Number(recall(WIDTH_KEY)) || dockWidth);
+  dockPane = PANES.includes(recall(PANE_KEY)) ? recall(PANE_KEY) : dockPane;
+  setDocked(recall(DOCK_KEY) === '1');
 }
 
 // Leave exactly enough room for the stage bar, which wraps to two or three
@@ -3606,6 +3898,26 @@ export function setWorkbenchVisible(on) {
 
 export function isWorkbenchOpen() {
   return visible;
+}
+
+/**
+ * Full bleed or docked, driven from outside.
+ *
+ * The button is the way a person does this; a harness needs it too, and needs
+ * it to be a SET rather than a toggle — the mode is remembered between runs
+ * (localStorage), so a test that clicks to get where it wants starts from
+ * wherever the last session left the panel and asserts the opposite state
+ * without ever looking wrong. Both the jsdom harness and the look page call
+ * this first for exactly that reason.
+ */
+export function setWorkbenchDocked(on, pane = null) {
+  setDocked(on);
+  if (pane) showPane(pane);
+}
+
+/** What the dock is currently doing. Read-only; for the harnesses. */
+export function workbenchDockState() {
+  return { docked, pane: dockPane, width: dockWidth };
 }
 
 /** Called every frame from the loop; returns immediately while hidden. */

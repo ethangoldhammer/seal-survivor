@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { ease } from '../ease.js';
-import { createVisual, addOutlineShells, setOutlineThicknessOn } from '../assets.js';
+import { createVisual, addOutlineShells, setOutlineThicknessOn, resetOutlineViewFactor } from '../assets.js';
 import { createAnimationController, stateForSpeed } from './animation.js';
 import { createAimRig } from './aimRig.js';
 import { createBustPin, measureBust, bustPlumb, bustAim } from './splashBust.js';
@@ -1550,5 +1550,12 @@ export function updateLevelUpSeal(rawDt) {
   camera.top = 0;
   camera.bottom = -h;
   camera.updateProjectionMatrix();
+  // ONE WORLD UNIT IS ONE CSS PIXEL on this camera (left/right are the column's
+  // own screen edges), which is exactly why fitRim above can set a rim in
+  // pixels and be done. So the shared screen-space factor — which the arena's
+  // draw sets from a camera that zooms, see assets.js setOutlineViewFactor —
+  // has to come off before this pass, or a lens push-in out in the water would
+  // thin the rim on a bust that has nothing to do with it.
+  resetOutlineViewFactor();
   renderer.render(scene, camera);
 }

@@ -3,7 +3,7 @@ import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { emit } from '../entities/particles.js';
 import { createRig, runRibbon, clearRig, rigStats } from './ribbonTrail.js';
-import { ballCredit, teamColor } from './ballLook.js';
+import { ballCredit, teamColor, heldColor, starterColor, ballLookState } from './ballLook.js';
 
 // ============================================================================
 // THE BALL TRAIL — what the Blubberball drags behind it, in the two colours
@@ -28,11 +28,16 @@ import { ballCredit, teamColor } from './ballLook.js';
 //   fought over draws an even two-colour split. Nothing here decides anything
 //   about possession — it reads the ledger and describes it.
 //
-//   IT COMES OFF THE TRAILING EDGE. A seal has two hind flippers and sheds off
-//   both. A ball has no flippers, so the shed points are placed astern of the
-//   heading, on the drawn edge — one or two of them (`sources`), thrown apart
-//   by `shoulder`. Two is the default because two clouds braiding around each
-//   other read as a ball turning over, which is what the thing is doing.
+//   IT COMES OFF THE TRAILING EDGE, AND OUT OF ONE POINT. A seal has two hind
+//   flippers and sheds a plume off each, because two flippers is what a seal
+//   drives with. A ball has one back. So there is one shed point, placed dead
+//   astern of the heading on the drawn edge, and one cloud.
+//
+//   A twin was tried first, on the theory that two clouds braiding around each
+//   other would read as a body turning over. They do not: at ball speed the two
+//   spines run parallel a unit apart and it reads as a tramline, i.e. as one
+//   trail that has been drawn twice by mistake. The engine takes any number of
+//   sources — the seal needs two — and this passes it one.
 //
 //   IT BUBBLES UNDERWATER. The swim trail is a filament, and a filament alone
 //   is a thin thing for an object with that much mass to leave. So the water
@@ -52,16 +57,54 @@ const profiles = {
 };
 const PROFILE_LIST = [profiles.air, profiles.water];
 
+// WHAT THE WATER IS ALLOWED TO CHANGE, and this list is the whole reason the
+// override is not a blanket Object.assign any more.
+//
+// The ball crosses the surface constantly — a lob, a bounce, a save — and the
+// air and water profiles are two SEPARATE rigs drawn at the same time. So an
+// override that reached the band's look meant a single unbroken trail visibly
+// changed width, core, halo and glow at the water line, twice a second, while
+// the cloud either side of the crossing was the same cloud. It read as the
+// effect breaking rather than as the ball entering water.
+//
+// A trail looks like ONE THING. What the medium changes is how the particles
+// laid down in it MOVE: how many there are, how long they last, how hard they
+// are thrown off the line, how much of the ball's velocity they keep, how fast
+// the water takes it away, and the turbulence they ride. Every one of those is
+// a property of a particle, fixed at birth or applied to that rig's own cloud —
+// so a ball that breaches leaves the trail behind it exactly as it is and only
+// the particles shed from that moment on behave like air.
+//
+// `z` is here because it is not appearance: the two rigs need separate planes
+// or they z-fight, and both sit behind the ball either way. `enabled` and
+// `bubbles` are the water half's own switches.
+//
+// Anything NOT on this list is inherited from the air block and cannot be
+// overridden — width, growth, fade, glow, minIntensity, coreWidth, coreGain,
+// haloGain, softness, samples, curveSmooth, the tapers and the colour split.
+// The ball lab has no water sliders for them, so there is one place this can be
+// changed rather than two that have to agree.
+const WATER_KEYS = [
+  'enabled', 'z', 'bubbles',
+  'emitPerSecond', 'life', 'lifeVary', 'maxNodes',
+  'turbulence', 'turbFreq', 'turbSpeed',
+  'blowOut', 'blowWave', 'inherit', 'drag', 'foldSafety',
+  'minSpeed', 'fullSpeed',
+];
+
 // The water profile's numbers, rebuilt in place each frame — the air block with
-// `trail.water` laid over it, exactly as the swim trail is assembled over the
-// breach trail. Live rather than cached, because every value in it is a slider
-// in the ball lab and a cache would freeze the water trail at load.
+// the allowed keys of `trail.water` laid over it. Live rather than cached,
+// because every value in it is a slider in the ball lab and a cache would
+// freeze the water trail at load.
 const _water = {};
 
 function cfg(key = 'air') {
   const base = CONFIG.versus?.ball?.trail ?? {};
   if (key !== 'water') return base;
-  return Object.assign(_water, base, base.water ?? {});
+  Object.assign(_water, base);
+  const over = base.water ?? {};
+  for (const k of WATER_KEYS) if (k in over) _water[k] = over[k];
+  return _water;
 }
 
 // The resolved settings handed to the engine: the profile block with this
@@ -70,12 +113,10 @@ function cfg(key = 'air') {
 // team last held the ball into the tuning file.
 const _resolved = { air: {}, water: {} };
 
-// Where the shed points are this frame. Two point objects and the two lists
-// that can be handed to the engine, all preallocated — a frame of trail
-// allocates nothing, and a `slice` here would allocate one array per profile
-// per frame for the life of a match.
-const _pt = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
-const _sourceLists = [[_pt[0]], [_pt[0], _pt[1]]];
+// Where the ball is shedding from this frame, and the one-item list the engine
+// takes. Both preallocated: a frame of trail allocates nothing.
+const _pt = { x: 0, y: 0 };
+const _sources = [_pt];
 // The last heading worth having. A ball at rest has no direction of travel, and
 // falling back to +x would swing every shed point to the same side of the body
 // the moment it stopped rolling.
@@ -118,21 +159,24 @@ function splitFor(c) {
     // Nobody has touched it. One ribbon, in the ball's own colour — see the
     // swim trail, which is the same idea for the same reason.
     _split.colors.length = 1;
-    _split.colors[0] = CONFIG.versus?.ball?.look?.color ?? 0xffd166;
+    _split.colors[0] = starterColor();
     _split.channelLean.length = 1;
     _split.channelLean[0] = 0;
     _split.channelGain.length = 1;
     _split.channelGain[0] = 1;
     return _split;
   }
-  const other = led.newest === 1 ? 0 : 1;
   const wB = Math.max(0, Math.min(1, led.share));
   const wA = 1 - wB;
   const throwBy = Math.max(0, c.splitThrow ?? 1);
   const bias = Math.max(0, c.splitBias ?? 0.6);
 
   _split.colors.length = 2;
-  _split.colors[0] = teamColor(other);
+  // THE SAME PAIR THE BODY IS WEARING — heldColor, not "the other team". Until
+  // the other side has actually held this ball there is no colour of theirs on
+  // it, and a trail that shed one was the only thing on screen claiming a team
+  // had touched a ball it had not. See systems/ballLook.js.
+  _split.colors[0] = heldColor(led.newest);
   _split.colors[1] = teamColor(led.newest);
   _split.channelLean.length = 2;
   // ±0.5 at parity — the engine's own symmetric spacing — opening to the full
@@ -146,35 +190,50 @@ function splitFor(c) {
 }
 
 /** The profile block plus this frame's split, in a copy CONFIG never sees. */
-function resolve(key, c, split) {
+function resolve(key, c, split, spike = 0) {
   const o = Object.assign(_resolved[key], c);
   o.colors = split.colors;
   o.channelLean = split.channelLean;
   o.channelGain = split.channelGain;
+  // A SPIKE BLOWS THE TRAIL OPEN — see CONFIG.versus.ball.trail.spike and the
+  // note at updateBallTrail. Applied HERE, on the resolved copy, so it reaches
+  // both profiles through the one path they already share and never touches the
+  // authored numbers: `_resolved` is rebuilt from `c` on every call, so this is
+  // a multiplier on a frame's values rather than a write to the config.
+  if (spike > 0) {
+    const sk = (CONFIG.versus?.ball?.trail?.spike) ?? {};
+    if (sk.enabled !== false) {
+      const t = Math.min(spike, sk.max ?? 2.2);
+      const mul = (v, k) => 1 + t * ((k ?? 1) - 1) * (v ?? 1);
+      o.width = (o.width ?? 1) * mul(1, sk.width);
+      o.glow = (o.glow ?? 1) * mul(1, sk.glow);
+      o.emitPerSecond = (o.emitPerSecond ?? 0) * mul(1, sk.emit);
+      o.life = (o.life ?? 1) * mul(1, sk.life);
+      o.growth = (o.growth ?? 1) * mul(1, sk.growth);
+    }
+  }
   return o;
 }
 
 /**
- * WHERE IT SHEDS FROM: astern, on the drawn edge.
+ * WHERE IT SHEDS FROM: dead astern, on the drawn edge.
  *
  * `radiusAt` is the ball's own hit radius toward a world angle — the DRAWN
  * edge, which on a dented or stretched ball is not a circle. Passing it in
  * rather than reading a radius off the ball keeps the trail on the skin a
  * player can see, exactly as the goo splats and the hitbox are (ballShape.js).
  * Without one, `r` is used as a plain radius.
+ *
+ * `atRadius` is how far out along that direction, as a share of the edge: a
+ * touch inside it, so the head of the trail is under the goo body rather than
+ * standing off the back of it with a gap.
  */
 function shedPoints(ball, c, radiusAt) {
-  const n = Math.max(1, Math.min(2, Math.round(c.sources ?? 2)));
   const back = Math.atan2(-dirY, -dirX);
-  const half = n > 1 ? (c.shoulder ?? 0.5) : 0;
-  const at = Math.max(0, c.atRadius ?? 0.9);
-  for (let i = 0; i < n; i++) {
-    const a = back + (n > 1 ? (i === 0 ? -half : half) : 0);
-    const r = (radiusAt ? radiusAt(a) : (ball.r ?? 2.4)) * at;
-    _pt[i].x = ball.x + Math.cos(a) * r;
-    _pt[i].y = ball.y + Math.sin(a) * r;
-  }
-  return _sourceLists[n - 1];
+  const r = (radiusAt ? radiusAt(back) : (ball.r ?? 2.4)) * Math.max(0, c.atRadius ?? 0.9);
+  _pt.x = ball.x + Math.cos(back) * r;
+  _pt.y = ball.y + Math.sin(back) * r;
+  return _sources;
 }
 
 /**
@@ -198,14 +257,51 @@ let bubbleDebt = 0;
 // to prove the bubbles are being asked for at all.
 let bubblesFired = 0;
 
+// BUBBLES OWED TO AN IMPACT, over whatever the drive is shedding — see
+// burstBallBubbles. Banked rather than emitted on the spot so the burst comes
+// out of the same two sources, in the same team tint, through the same
+// emitter as the trail's own: a hit should make the ball's OWN bubbles boil,
+// not add a second effect beside them.
+let bubbleBurst = 0;
+
+/**
+ * A HIT PUFFS BUBBLES. `force` is 0..1 of the hardest thing that happens to
+ * this ball — the same figure ballImpactFx rides — and it buys
+ * `bubbles.burst` of them at 1.
+ *
+ * Spent on the next frame of the trail rather than here, because here has no
+ * sources: where a bubble is born is the two points the ribbon is being drawn
+ * from, and those are solved once a frame from the drawn edge. A burst owed
+ * while the ball is stationary is still paid — the drive gate below is about
+ * the CONTINUOUS shedding, and a ball smacked while sitting still is exactly
+ * the case that should boil.
+ */
+export function burstBallBubbles(force = 1) {
+  const b = CONFIG.versus?.ball?.trail?.water?.bubbles ?? {};
+  if (b.enabled === false) return 0;
+  const n = Math.max(0, b.burst ?? 0) * Math.max(0, Math.min(1, force));
+  if (!(n > 0)) return 0;
+  bubbleBurst = Math.min(b.burstMax ?? 24, bubbleBurst + n);
+  return n;
+}
+
 function shedBubbles(dt, sources, ball, c, drive, split) {
   const b = c.bubbles ?? {};
-  if (b.enabled === false || !(drive > 0)) { bubbleDebt = 0; return; }
-  bubbleDebt += (b.perSecond ?? 14) * drive * dt;
+  if (b.enabled === false) { bubbleDebt = 0; bubbleBurst = 0; return; }
+  // The drive's own shedding, and only it, is what a still ball stops doing.
+  if (drive > 0) bubbleDebt += (b.perSecond ?? 14) * drive * dt;
+  else bubbleDebt = 0;
+  // The impact's, paid whatever the ball is doing — and paid in FULL on the
+  // frame it is owed rather than dribbled out under the per-frame cap, which
+  // is the difference between a ball that boils when it is hit and one that
+  // fizzes for a moment afterwards.
+  const owed = Math.floor(bubbleBurst);
+  bubbleBurst -= owed;
   let n = Math.floor(bubbleDebt);
+  if (n <= 0 && owed <= 0) return;
+  if (n > 0) bubbleDebt -= n;
+  n = Math.min(Math.max(0, n), 6) + owed;
   if (n <= 0) return;
-  bubbleDebt -= n;
-  n = Math.min(n, 6);
 
   const mix = Math.max(0, Math.min(1, b.tint ?? 0));
   let color = null;
@@ -217,11 +313,6 @@ function shedBubbles(dt, sources, ball, c, drive, split) {
     color = _tint.set(b.color ?? 0xdff6ff).lerp(_teamCol, mix).getHex();
   }
   for (let i = 0; i < n; i++) {
-    // ALTERNATING ON THE RUNNING TOTAL, not on `i`. The debt counter hands back
-    // one burst on most frames, so an index into this frame's batch is 0 nearly
-    // every time and every bubble in a match comes off the same shoulder — a
-    // wake down one side of the ball, which reads as a fault in the body rather
-    // than as bubbles.
     const s = sources[bubblesFired % sources.length];
     bubblesFired++;
     emit(b.emitter ?? 'ballWake', s.x, s.y, {
@@ -287,7 +378,18 @@ export function updateBallTrail(dt, scene, ball, opts = {}) {
 
   const sources = shedPoints(ball, c, opts.radiusAt);
 
-  runRibbon(profiles.air, dt, scene, sources, resolve('air', a, split), {
+  // HOW MUCH OF A SPIKE IS STILL RINGING. Off the look rather than off the ball
+  // (see `spike` in systems/ballLook.js): this module runs in the lab with no
+  // match around it, and the look is the channel that already carries "a thing
+  // happened to the ball" to everything that draws.
+  //
+  // The boost rides the DECAY and not the flight, so it is a flare at the
+  // moment of the strike that rings down over the next few tenths — the trail
+  // says WHERE it was hit. Held open for the whole flight it would say only
+  // that a spike happened somewhere, which the speed already says.
+  const spike = ballLookState().spike ?? 0;
+
+  runRibbon(profiles.air, dt, scene, sources, resolve('air', a, split, spike), {
     active: a.enabled !== false && airborne && ball.live !== false && speed >= minSpeed,
     emitting,
     rate: drive,
@@ -295,7 +397,7 @@ export function updateBallTrail(dt, scene, ball, opts = {}) {
     vx,
     vy,
   });
-  runRibbon(profiles.water, dt, scene, sources, resolve('water', w, split), {
+  runRibbon(profiles.water, dt, scene, sources, resolve('water', w, split, spike), {
     // NOT `!airborne` alone: a ball rolling to a stop has to close its strand,
     // or the next strike is joined to this one by a ribbon drawn straight
     // across the pitch.
@@ -308,13 +410,18 @@ export function updateBallTrail(dt, scene, ball, opts = {}) {
   });
 
   if (!airborne && emitting) shedBubbles(dt, sources, ball, w, drive, split);
-  else bubbleDebt = 0;
+  // Out of the water there is nothing to bubble, and an impact's burst owed up
+  // there is FORGOTTEN rather than banked: paying it on splashdown would put a
+  // volley's worth of foam on the frame the ball re-enters, which is a frame
+  // that already has its own event.
+  else { bubbleDebt = 0; bubbleBurst = 0; }
 }
 
 /** Tear both trails down — kickoff, a goal, the end of a match, the lab's R. */
 export function clearBallTrail(scene) {
   for (const profile of PROFILE_LIST) clearRig(profile, scene);
   bubbleDebt = 0;
+  bubbleBurst = 0;
   bubblesFired = 0;
   dirX = 1;
   dirY = 0;
@@ -325,6 +432,18 @@ export function ballTrailStats(key = 'water') {
   const r = rigStats(profiles[key] ?? profiles.water);
   r.bubbles = bubblesFired;
   return r;
+}
+
+/**
+ * For the harness: one profile's resolved numbers, without drawing anything.
+ *
+ * The only way to prove the water override cannot reach the band's look — the
+ * drawn keys are uniforms and vertex data by the time anything is on screen,
+ * and two rigs that agree about width are indistinguishable from two that were
+ * never asked. See WATER_KEYS.
+ */
+export function ballTrailProfile(key = 'water') {
+  return { ...cfg(key === 'water' ? 'water' : 'air') };
 }
 
 /** For the harness: this frame's resolved split, without drawing anything. */

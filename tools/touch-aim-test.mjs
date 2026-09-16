@@ -250,5 +250,65 @@ section('A CANVAS WITH NO SIZE AIMS NOWHERE');
   clearPendingInput();
 }
 
+// ---------------------------------------------------------------------------
+section('THE FLICK — a pointer steers a dash by which way it MOVED');
+// ---------------------------------------------------------------------------
+// A pointer aims at a point, and mid-dash a point is the wrong thing: its
+// heading is cursor-minus-seal and flips as the seal flies past it. So for
+// the dash the mouse and the aim thumb are read like a stick, by their
+// motion (input.aimMoved + input.aimGesture — holdAim in systems/strike.js).
+// The clock is patched so the window can be crossed without waiting for it.
+{
+  const realNow = performance.now;
+  let clock = 1000;
+  performance.now = () => clock;
+  const f = CONFIG.touch.aimFlick;
+  const gest = () => `moved ${input.aimMoved} gesture (${input.aimGesture.x.toFixed(2)}, ${input.aimGesture.y.toFixed(2)})`;
+  const mouse = (x, y) => handlers.mousemove({ clientX: x, clientY: y });
+
+  // THE MOUSE. Park it, settle, then flick it up across several events.
+  clearPendingInput();
+  mouse(300, 400); clock += 20; mouse(300, 400);
+  frame();
+  check('a parked mouse is no gesture', input.aimMoved === false && input.aimGesture.length() === 0, gest());
+  mouse(300, 400 - f.px * 0.4); clock += 8;
+  mouse(300, 400 - f.px * 0.8); clock += 8;
+  frame();
+  check('...and under the threshold it is still no gesture', input.aimMoved === false, gest());
+  mouse(300, 400 - f.px * 1.5); clock += 8;
+  frame();
+  check('a flick up is a gesture', input.aimMoved === true, gest());
+  check('...pointing up', near(input.aimGesture.x, 0) && near(input.aimGesture.y, 1), gest());
+  check('...while the aim itself still points at the cursor', input.aim.y > 0 && input.aimLive === true, aimStr());
+  clock += (f.window * 1000) + 5;
+  frame();
+  check('the gesture dies with the window', input.aimMoved === false && input.aimGesture.length() === 0, gest());
+
+  // ...AND A FLICK BACK TOWARD THE SEAL IS THE DIRECTION IT MOVED, not where it
+  // ended up: the cursor is still up and to the right of the seal, the gesture
+  // says left.
+  mouse(300 - f.px * 2, 400 - f.px * 1.5); clock += 8;
+  frame();
+  check('a flick left reads left even with the cursor to the right of the seal',
+    near(input.aimGesture.x, -1) && near(input.aimGesture.y, 0) && input.aim.x > 0, `${gest()} ${aimStr()}`);
+  clock += (f.window * 1000) + 5; frame();
+
+  // THE THUMB. Lands (no gesture — landing is a point, not a motion), slides
+  // down (a gesture, down), rests (none).
+  fire('touchstart', [9, 300, 300]);
+  frame();
+  check('a thumb landing is not a gesture', input.aimMoved === false && input.aiming === true, gest());
+  fire('touchmove', [9, 300, 300 + f.px * 0.7]); clock += 8;
+  fire('touchmove', [9, 300, 300 + f.px * 1.4]); clock += 8;
+  frame();
+  check('a thumb slide down is a gesture down', input.aimMoved === true && near(input.aimGesture.y, -1) && near(input.aimGesture.x, 0), gest());
+  clock += (f.window * 1000) + 5;
+  frame();
+  check('...and a resting thumb is none', input.aimMoved === false, gest());
+  fire('touchend', [9, 300, 300 + f.px * 1.4]);
+  clearPendingInput();
+  performance.now = realNow;
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nall good');
 process.exit(failures ? 1 : 0);

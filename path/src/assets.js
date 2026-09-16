@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { KTX2_MODELS } from './ktx2Models.js';
+import { assetUrl } from './assetPath.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { CONFIG, registerSkinWearers } from './config.js';
 import { applyAssetTable } from './assetTable.js';
@@ -984,6 +985,206 @@ export const ASSETS = {
     unlit: true,
   },
 
+  // ---------------------------------------------------------------------------
+  // THE THIRD BATCH — five hats and two HAIRCUTS, imported the same way by
+  // tools/optimize-accessories.mjs. Read its rows for what came off each file;
+  // what matters here is what the entry has to say about the result.
+  //
+  // `forward` IS MEASURED, as it is above. Four of the seven came out +Z like
+  // everything else in the wardrobe, and two did not: the stetson faces +X (its
+  // brim runs front-to-back along x, which is why its longest axis is x and not
+  // z), and the jester hat was settled by reading its three bells off the file
+  // rather than by looking — they sit at -49, +49 and 180 degrees from +Z, so
+  // +Z puts two horns splaying forward and one trailing behind, which is how
+  // the hat is worn.
+  //
+  // `color` ON EVERY ONE IS MEASURED OFF THE ART, not chosen — the mean of that
+  // model's base map where it is opaque. It is only the stand-in's colour, and
+  // the stand-in is only ever seen if the file fails to load, but a stand-in
+  // that is the wrong colour is a bug report waiting to happen.
+  //
+  // THESE ARE FOR THE SHADER LAB FIRST. An ASSETS entry with a `model` is what
+  // puts a key in the lab's roster (see the `models` filter in
+  // tools/looks/shader-lab.js), and the `outline` block is what unlocks its own-
+  // rim panel. None of the seven is WEARABLE yet: that needs a block in
+  // CONFIG.accessories.slots, a group in TUNER_SCHEMA and a name, and the name
+  // is Ethan's.
+  // ---------------------------------------------------------------------------
+
+  // A trapper's ushanka with the ear flaps down. THE ONLY SILHOUETTE IN THE
+  // WARDROBE WITH SOMETHING HANGING off it — every other hat here is a brim and
+  // a crown, and a brim profile is what is hardest to read at 65 pixels.
+  //
+  // 770 triangles in the SOURCE, the cleanest file any of the three batches has
+  // seen, so nothing was decimated. What it did carry was
+  // KHR_materials_pbrSpecularGlossiness, which three.js dropped at r152 — on
+  // r183 this hat loaded pure white, with the diffuse map sitting unreachable
+  // inside an extension the loader ignores. Converted at import now; see step 0
+  // in the optimizer.
+  accessoryUshanka: {
+    model: '/models/ushankahat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0xffffff, thickness: 0.3567 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x7a7776,
+    unlit: true,
+  },
+
+  // A stetson: telescope crown pinched down the middle, both sides of the brim
+  // rolled up hard.
+  //
+  // NOT accessoryCowboy, which the source file name (cowboy_hat2.glb) makes it
+  // easy to assume it is. Render the two together and they are different hats —
+  // accessoryCowboy has a smooth unpinched crown and an evenly downturned brim,
+  // which reads closer to a bush hat, and it carries no band. Both stand.
+  accessoryStetson: {
+    model: '/models/stetsonhat.glb',
+    fit: 1,
+    // The odd one. Its brim is longest front-to-back and that axis is x here,
+    // so the view that shows the pinch and both rolled sides is the x one.
+    forward: '+X',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.007788 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x3d241d,
+    unlit: true,
+  },
+
+  // A knit beanie with a ribbed cuff and a pom pom.
+  //
+  // ITS RIBS ARE GONE AND THAT IS NOT A DEFECT. The source modelled the knit as
+  // geometry — 110,402 triangles of stitch bumps on the body and forty separate
+  // rib tubes on the cuff — and no triangle budget this game could justify keeps
+  // them. Checked properly rather than assumed: rendered at 1,915 / 3,208 /
+  // 6,204 and the full 225,278 triangles and shrunk to the size the game draws,
+  // the ribs are absent from all four. So the knit is something the shader lab
+  // has to put back as surface if it is wanted, and paying triangles for it
+  // buys nothing.
+  //
+  // The pom pom DID survive, because it is a displaced ball rather than
+  // strands. It is the reason the file was importable at all.
+  accessoryBobble: {
+    model: '/models/bobblehat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 1.83153 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x383330,
+    unlit: true,
+  },
+
+  // A cloche — deep bell crown, short downturned brim, a bow on the side with
+  // two ribbons hanging from it.
+  //
+  // 676,718 TRIANGLES IN THE SOURCE and 484,000 of them were not the hat: a
+  // mannequin it was posed on, and four primitives modelling the SEAMS as
+  // individual tubes of thread. That is the file that got sailor_hat rejected
+  // in the second batch; the difference here is that both came off by material
+  // name and left 192,238 triangles of smooth felt behind, which decimates
+  // cleanly. A rejection is about the remainder, not the junk.
+  //
+  // Near-black felt, and 0x1b1b1b is genuinely what the map averages to — a 10%
+  // albedo. Worth knowing before the lab tries to band it: there is very little
+  // range in this surface to shade with.
+  accessoryCloche: {
+    model: '/models/clochehat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 1.93555 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x1b1b1b,
+    unlit: true,
+  },
+
+  // A three-horned jester hat, a bell on each point.
+  //
+  // THE BEST SUBJECT IN THE WARDROBE FOR THE SHADER LAB, and the reason is that
+  // it has NO TEXTURES AT ALL — four materials of pure factors, red, green,
+  // blue and an orange for the bells. There is no baked art to fight, so
+  // whatever the lab paints on it is the whole hat. It is also the only
+  // accessory that arrives already coloured rather than grey or brown.
+  //
+  // `color` below is the red horn; the other three are in the file.
+  accessoryJester: {
+    model: '/models/jesterhat.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.08744 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0xcc0400,
+    unlit: true,
+  },
+
+  // ---------------------------------------------------------------------------
+  // THE HAIR. Two haircuts, and they are the first thing the seal can wear that
+  // is neither a hat nor a pair of glasses. Three things are different about
+  // them and all three land on whoever opens the shader lab:
+  //
+  //   THE MAPS ARE GREYSCALE. Measured over the opaque pixels: 0x909090 and
+  //   0xa9a9a9 on the short cut, 0xc8c8c8 on the bob. That is not washed-out
+  //   art, it is art that expects to be TINTED — the colour of these is a
+  //   decision nobody has made yet, and the lab is where it gets made.
+  //
+  //   THEY ARE ALPHA CUTOUTS, alphaMode MASK with a cutoff of 0.35. The source
+  //   shipped BLEND, which on a single interpenetrating mesh sorts by object
+  //   centre and therefore does not sort at all; the optimizer converts it. The
+  //   bob's map is only 13% opaque, so anything the lab does that touches alpha
+  //   is touching most of this model.
+  //
+  //   AND THE SHORT CUT MEASURES 0.003 UNITS ACROSS. Its rig carried a scale of
+  //   about 1/100 and the skin bake carried that onto the vertices. `fit: 1`
+  //   normalises the longest axis whatever it was, so nothing downstream cares
+  //   — but its rim thickness is in the model's own units, which is why that
+  //   number is 0.00002 and not a typo.
+  // ---------------------------------------------------------------------------
+
+  // A layered short cut — every layer ends in a point, and the points are the
+  // read. It keeps 42% of its source triangles for that, the most anything in
+  // the wardrobe holds.
+  accessoryShortHair: {
+    model: '/models/shorthair.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.00002 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0x909090,
+    unlit: true,
+  },
+
+  // A side-swept bob. Smoother than the layered cut — the sweep is one surface
+  // and its read is the outline rather than a set of tips — so it comes down
+  // further.
+  accessoryBobHair: {
+    model: '/models/bobhair.glb',
+    fit: 1,
+    forward: '+Z',
+    up: '+Y',
+    outline: { color: 0x000000, thickness: 0.00723 },
+    shape: 'cone',
+    radius: 0.35,
+    height: 0.5,
+    color: 0xc8c8c8,
+    unlit: true,
+  },
+
   // The basic shot: a tumbling stone. Same size and same yellow as the sphere
   // it replaces, so the shot reads exactly as it did — what's new is that it
   // has a form and turns while it flies. Faster tumble than the pickups
@@ -1180,6 +1381,14 @@ export const ASSETS = {
   // its skin rather than by reaching its centre. See CONFIG.oxygen.bubble.
   bubbleOrb: { shape: 'sphere', radius: 0.44, segments: 32, color: 0xbfefff, opacity: 1, unlit: true, shell: 'oxygenBubbleShell' },
   rapidFireOrb: { shape: 'rock', radius: 0.3, color: 0xffe066, unlit: true, rock: { tumble: 1.2, frequency: 1.8, squash: 0.34 } },
+  // THE SCORE CORAL, which createVisual never builds either — it is the same
+  // grown geometry as the one above from a different species block (see
+  // systems/coralOrb.js). The entry is here so `scoreOrb` is a key assets.csv
+  // is allowed to have a row for (that row is the size multiplier the spawner
+  // applies, and an asset with no row spawns at 1) and so the Look panel has
+  // somewhere to hang its TINT. `radius` is the collect test's fallback and
+  // matches the fit the coral normalises itself to.
+  scoreOrb: { shape: 'rock', radius: 0.3, color: 0x5ef2a8, unlit: true, rock: { tumble: 1.2, frequency: 1.8, squash: 0.34 } },
   // THE LEVEL BLOB, which createVisual never builds. Its body is grown per
   // spawn and its material is its own (systems/levelOrb.js), for the same two
   // reasons the coral's are — the shape is the point, and the colour lives in
@@ -2746,6 +2955,21 @@ export const ASSETS = {
       idle: 'metarig|Swim', swim: 'metarig|Swim', boost: 'metarig|Swim Fast',
       bite: 'metarig|Bite',
     },
+
+    // WHERE A HELD SEAL RIDES — systems/bossGrab.js. Named here rather than
+    // reused from `biteRig` because this model HAS no biteRig: it plays the
+    // authored clip above instead, so the bone that moves during a bite is only
+    // discoverable from the clip. Measured with `npm run jaws`: through
+    // "metarig|Bite", `jaw_016` travels 0.51u and sweeps 27 degrees, sitting
+    // 82% of the way toward the snout.
+    //
+    // NOT the bigger mover. `spine007_015` (the head) carries 0.93u and sweeps
+    // 35 degrees, and the clip's real energy is further back still — the top
+    // three rotators are all TAIL fins at 46-59 degrees, because "metarig|Bite"
+    // is a whole-body lunge rather than a jaw snap. A seal pinned to the head
+    // would be shaken convincingly and would not be in the animal's MOUTH,
+    // which is the one thing the grab has to read as.
+    grabBone: 'jaw_016',
 
     // TAIL TRAIL — the house rule for anything that swims: the tail lags the
     // body rather than moving rigidly with it. `springChains` (not `wagChain`)
@@ -4689,6 +4913,301 @@ export const ASSETS = {
     shape: 'icosahedron', radius: 0.5, color: 0x9fd6e0, unlit: true,
   },
 
+  // ---------------------------------------------------------------------------
+  // EIGHT LOOK-ONLY IMPORTS, staged exactly the way enemyManOWar above was:
+  // present so the shader lab's creature select can put them in the water and
+  // they can be LOOKED AT, and nothing more. None of them has a row in
+  // enemies.csv or spawning.csv, so none of them can appear in a run.
+  //
+  // EVERY NUMBER BELOW IS A STAND-IN. `fit` is a first pass measured off the
+  // optimised file's own long axis and related to a creature already in the
+  // roster, which is enough to frame a body for a surface decision and is not
+  // enough to balance one. `forward`/`up` decide framing here and nothing else
+  // — the lab lays every subject flat regardless — so where the measurement
+  // was ambiguous the entry says so rather than presenting a guess as a fact.
+  //
+  // ORIENTING A JELLYFISH: ALL FIVE SHIPPED UPSIDE DOWN, AND HERE IS WHY.
+  //
+  // `forward` on a jellyfish POINTS AT THE BELL. enemyJellyfish says so
+  // directly — "-Y is the BELL", `forward: '-Y'` — and the mechanism is that
+  // orientationQuaternion maps the model's forward axis onto entity +Y, which
+  // with `faceMotion: false` IS WORLD UP. So forward names the end that rides
+  // on top.
+  //
+  // The first pass measured which axis the bell sits on and then wrote the
+  // NEGATIVE of it into `forward`, on every one of the five. Bell down,
+  // filaments overhead — exactly the "dead one floating" enemyJellyfish's note
+  // warns about, and the one failure a radially symmetric animal hides well
+  // enough to survive a look.
+  //
+  // MEASURED PROPERLY THE SECOND TIME, and this is the measurement worth
+  // repeating rather than the axis worth copying: orient the body through the
+  // real orientationQuaternion, pose it mid-clip, then take the mean WORLD Y
+  // of the bell's skinned vertices minus the mean world Y of the hanging ones.
+  // Positive is bell-up. Every candidate axis, so the sign cannot be assumed:
+  //
+  //   moonjelly       +Y +0.18   (-Y was -0.18)
+  //   combjelly       +Z +1.32   (-Z was -1.32)
+  //   flowerhatjelly  +Y +0.85   (-Y was -0.85)
+  //   spottedjelly    +Z +0.66   (-X was -0.16 — and X was never the axis)
+  //   crownjelly      +X +8.39   (-X was -8.39)
+  //
+  // THE SPOTTED JELLY IS THE ONE THAT WAS DOUBLY WRONG: the first pass read
+  // its posed rest state, which is TILTED in the source scene, so bell->arms
+  // came out diagonal in XY and X won a coin flip it had no business being in.
+  // Its real axis is Z by a factor of four. A tilted rest pose is why reading
+  // this off raw centroids does not work; posing through the game's own basis
+  // is why the second pass does.
+  //
+  // TWO TRAPS IN MAKING THAT MEASUREMENT, both of which produced confident
+  // wrong answers first:
+  //
+  //   A SkinnedMesh is placed by its SKELETON, not by its own parent
+  //   transform. Rotating a container around a `.clone()` that shares the
+  //   source skeleton changes nothing on screen — all six candidates rendered
+  //   identically, which reads as "the axis does not matter" rather than as a
+  //   broken harness. Load the file fresh per candidate.
+  //
+  //   Group by material name and the comb jelly classifies its own tentacles
+  //   as bell, because `Comb-jelly_tentacle` contains "comb". Test the hanging
+  //   pattern FIRST. And note the optimised files have FEWER material names
+  //   than the sources — dedup merges identical materials, so the spotted
+  //   jelly is down to Bell1/Bell2/Fold and the crown to arm/bell.
+  //
+  // The three fish are the easy case: one long axis each, Z, with the bone
+  // chain running down it.
+  // ---------------------------------------------------------------------------
+
+  // Moon jelly. THE ONE THAT CARRIES ART THE BIOLUM SYSTEM WANTS: its second
+  // map is a hand-drawn line-art mask of the radial canal network, which is
+  // exactly the structure a bioluminescent jelly should glow along and which
+  // cannot be derived from its diffuse (that map is near-white, the case where
+  // a percentile pivot inverts). The source binds it to the emissive slot of
+  // `Moon-Jelly_Canal1_mat` — a real slot, pointed at a near-blank corner of
+  // the atlas, so it renders a sliver. Repointing it is the work; the mask is
+  // the reason this model is here.
+  //
+  // 206 BONES, which is the number that decides where it can spawn. That is
+  // 1.6x crabpincer's 126, which enemyWalkingCrab's own note calls expensive
+  // "on the creature that spawns in the biggest crowds". Fine as a solo
+  // drifter; measure before letting it arrive in a school.
+  //
+  // Its source also shipped seven grey helper cubes on an untextured
+  // `material_0`, which widened the bounding box by ~80% — so a `fit` measured
+  // off the raw download would have sized this animal wrong before it ever
+  // rendered. tools/optimize-creatures.mjs drops them and prints that it did.
+  enemyMoonJelly: {
+    model: '/models/moonjelly.glb',
+    // 2.4, UP FROM THE 2.2 THIS WAS STAGED AT, and the correction is worth
+    // recording because the staged number was wrong in a way that looked
+    // right. `fit` sets the long axis in world units, and the roster's
+    // jellyfish is fit 2 x assets.csv size 1.9 = 3.80 long — so 2.2 here made
+    // the new animal SMALLER than the one it stands beside, which reads as a
+    // runt of the same species rather than a different one. This model has no
+    // size row, so fit IS its length.
+    //
+    // 2.4 of near-solid bell against the jellyfish's 3.80 of which only 1.43
+    // is bell: the broad flat one, wider across than the incumbent while
+    // being shorter overall, which is exactly what a moon jelly is.
+    fit: 2.4,
+    pivot: 0.25,
+    forward: '+Y', up: '+Z',
+    animations: { idle: 'Loop-400', swim: 'Loop-400' },
+    shape: 'icosahedron', radius: 0.5, color: 0x9fd6e0, unlit: true,
+  },
+
+  // Spotted jelly. THE ONLY REAL GLOW IN THE BATCH: `Spotted-Jelly_Fold_mat`
+  // carries emissive #e3dbdb with no map, and it works because that submesh IS
+  // the frilly oral fold — a flat factor on the right geometry reads as a ring
+  // of light. Nothing here is an ANIMATED emissive; every animation channel in
+  // all eight of these files targets TRS on a joint.
+  enemySpottedJelly: {
+    model: '/models/spottedjelly.glb',
+    // 2.8: a little over the moon jelly, under the crown. Raised from the
+    // staged 2.4 for the same reason — see enemyMoonJelly's note.
+    fit: 2.8,
+    pivot: 0.25,
+    // Ambiguous — see the block note. Bell reads +X of the fold, but the pose
+    // is tilted and the real vector is diagonal in XY.
+    forward: '+Z', up: '+Y',
+    animations: { idle: 'Loop-400', swim: 'Loop-400' },
+    shape: 'icosahedron', radius: 0.5, color: 0x9fd6e0, unlit: true,
+  },
+
+  // Comb jelly. Fully unlit (KHR_materials_unlit throughout), which is why it
+  // already reads as self-luminous with no shading at all — and also why its
+  // `emissiveFactor: [1,1,1]` on `Comb-jelly_comb` does nothing: three.js maps
+  // an unlit material to MeshBasicMaterial, which has NO EMISSIVE SLOT, and
+  // drops the factor silently. The glTF JSON says emissive; the loaded
+  // material says otherwise. Same trap on crownjelly and flowerhatjelly.
+  enemyCombJelly: {
+    model: '/models/combjelly.glb',
+    // 3.4, of which 41% is trailing tentacle — so this buys a body of about
+    // 2.0 with 1.4 of reach behind it. That split IS the creature: see the
+    // deep, narrow sting ring on CONFIG.enemies.combjelly.
+    fit: 3.4,
+    pivot: 0.25,
+    // The one clean measurement of the five. Tentacles trail +Z, so the body
+    // leads -Z.
+    forward: '+Z', up: '+Y',
+    animations: { idle: '400', swim: '400' },
+    shape: 'icosahedron', radius: 0.45, color: 0xbfe6f0, unlit: true,
+  },
+
+  // Crown jelly. THE HEAVIEST THING IN THE BATCH at 29,788 triangles, 19,500
+  // of them in the arm cluster alone — boss scale rather than crowd scale, and
+  // the one row here that would ever earn `simplify`. Unlit like the comb
+  // jelly, so it is already biolum-ready without a shader doing anything.
+  enemyCrownJelly: {
+    model: '/models/crownjelly.glb',
+    // Long axis 19.24 in file units — the biggest of the five by an order of
+    // magnitude, which says nothing except that the artist worked at a
+    // different scale. At 5.0 it is roughly twice the jellyfish, which is
+    // where a body this detailed earns its triangles.
+    fit: 5.0,
+    pivot: 0.25,
+    // Ambiguous — see the block note.
+    forward: '+X', up: '+Y',
+    animations: { idle: '100', swim: '100' },
+    shape: 'icosahedron', radius: 0.9, color: 0xe8889c, unlit: true,
+  },
+
+  // Flower hat jelly. 53 bones — the cheapest jelly rig here by a factor of
+  // four against the moon jelly, on 15,236 triangles. The magenta tentacle
+  // tips are baked into its base map, not into any emissive slot.
+  enemyFlowerHatJelly: {
+    model: '/models/flowerhatjelly.glb',
+    // Long axis 9.13 is almost entirely the tentacle HALO — which on this
+    // animal wraps the bell rather than hanging under it, and is why its sting
+    // is a ring centred on the body. 2.8 puts a ~0.95 bell inside a 2.8 spread.
+    fit: 2.8,
+    pivot: 0.25,
+    // Ambiguous — see the block note.
+    forward: '+Y', up: '+Z',
+    animations: { idle: '100', swim: '100' },
+    shape: 'icosahedron', radius: 0.5, color: 0xc9d8e0, unlit: true,
+  },
+
+  // Myllokunmingia — a Cambrian jawless fish, and THE CHEAPEST RIG IN THE
+  // ROSTER at 8 bones on 6,244 triangles. Its whole 2.36MB download was two
+  // 1024 maps; at 512 WebP it is 0.22MB.
+  //
+  // ITS SILHOUETTE IS THE PROBLEM, not its cost. No tail fork, no distinct
+  // fins, and an 8-bone rig that only undulates the body — at the 26-80px a
+  // fish occupies in play this reads as a grey lozenge. It is in the lab
+  // precisely because that is a surface question: a pattern or a rim is the
+  // cheapest thing that could make it legible.
+  enemyMyllokunmingia: {
+    model: '/models/myllokunmingia.glb',
+    // 1.2, DOWN FROM THE 2.0 THIS WAS STAGED AT. The staged number sized it as
+    // solitary traffic when it is a school fish: the roster's schools run 0.85
+    // to 1.5 long (clownfish 0.85, tang 1.10, trout 1.30, tuna 1.50) and 2.0
+    // would have put a background animal between the squid and the barracuda.
+    // 1.2 sits it between the tang and the trout, which is the company it
+    // keeps.
+    fit: 1.2,
+    pivot: 0.15,
+    // Long axis Z with the bone chain running down it. WHICH END IS THE NOSE
+    // is not settled: the rendered plate reads head-left/tail-right, so +Z is
+    // the starting assumption and not a measurement.
+    forward: '+Z', up: '+Y',
+    animations: { idle: 'Take 001', swim: 'Take 001' },
+    shape: 'cone', radius: 0.3, height: 1.4, color: 0x8fa4b0, unlit: true,
+  },
+
+  // Lizardfish. 70 bones, 13,280 triangles, one 3.97s idle. Like the
+  // myllokunmingia its weight was texture rather than keyframes.
+  enemyLizardfish: {
+    model: '/models/lizardfish.glb',
+    // Long axis 4.90, a good part of it translucent fin. 2.6 is the stingray's
+    // number and puts the solid body near the barracuda's.
+    fit: 2.6,
+    pivot: 0.15,
+    // Same caveat as the myllokunmingia: axis measured, nose end assumed.
+    forward: '+Z', up: '+Y',
+    animations: { idle: 'lizardfish_rig|lizardfishV2_idle', swim: 'lizardfish_rig|lizardfishV2_idle' },
+    shape: 'cone', radius: 0.32, height: 1.5, color: 0x9c8f76, unlit: true,
+  },
+
+  // Fiddler crab (Uca mjoebergi). THE BEST-LOOKING CRAB IN THE PROJECT, and it
+  // was invisible: it arrives as KHR_materials_pbrSpecularGlossiness, an
+  // extension three.js REMOVED, so r183's GLTFLoader never reads its diffuse
+  // and it loads as a flat white crab with only a normal map. Nothing on
+  // screen says "missing extension" rather than "missing file" — it just looks
+  // like a broken texture path. tools/optimize-creatures.mjs runs metalRough()
+  // over it, and underneath was a dark speckled carapace, red-and-cream banded
+  // legs and one oversized yellow claw.
+  //
+  // THE ASYMMETRIC CLAW IS THE WHOLE ARGUMENT for it over enemyWalkingCrab.
+  // crabpincer's two claws are near-identical and pale, which is most of why
+  // that crab reads washed out at distance; one huge coloured claw against
+  // seven thin red legs is a silhouette a player can name at 30 pixels.
+  //
+  // WHAT IT CANNOT DO, and this is the honest trade rather than a footnote:
+  //
+  //   NO WALK CYCLE. One clip, `Dance` (2.46s) — a fiddler's courtship wave,
+  //   not locomotion. Mapped to idle and swim below because that is all there
+  //   is, which means this crab waves its claw while it travels.
+  //   NO PINCER. The claw is one closed lump on a leaf bone. That is exactly
+  //   the limitation crabwalking.glb had, and the reason systems/crabClaw.js
+  //   exists at all — see enemyWalkingCrab, where the pincer that actually
+  //   opens is the stated reason crabpincer.glb won. So this is a
+  //   better-looking crab that cannot pinch against a worse-looking one that
+  //   can, and the two halves of "the crabs aren't right yet" are in different
+  //   files.
+  //
+  // 45 bones against crabpincer's 126, on 3,084 triangles against 12,012 — a
+  // third of the rig and a quarter of the geometry, on the creature the game
+  // spawns in the biggest crowds. If the look wins, the cost does too.
+  //
+  // ORIENTATION IS MEASURED, off renders down each principal axis rather than
+  // off the hierarchy: down +Y is a clean top-down (so +Y is the back), and
+  // down +Z is a head-on view with the legs spread left and right (so the face
+  // and claw are on +Z and the legs straddle X). That is the same pair
+  // enemyWalkingCrab takes and for the same reason — `forward` here names the
+  // STRIDE axis, not the way the crab looks.
+  //
+  // Its source also carried a 32 x 24 baked-AO floor plane, 5x the crab, which
+  // would have become the thing `fit` scaled.
+  enemyDancingCrab: {
+    model: '/models/dancingcrab.glb',
+    // DECLARED, NOT DERIVED. tools/crab-claw-probe.mjs measures this body at
+    // (2.00, 1.87, 1.74) and picks X by 7% — under the ~10% the probe itself
+    // calls a coin flip, so the derived axis could land on Y or Z on any
+    // reimport and the pattern would run the wrong way down the shell with
+    // nothing throwing. X is the stride axis, which is the one a carapace
+    // band should follow.
+    biolumAxis: 'x',
+    // crabpincer sits at 2.8 and enemyClawCrab at 2.4. A fiddler is a small
+    // crab and this body is compact (5.87 units long against the sand-free
+    // bounds), so 2.4 puts the three of them within a carapace of each other
+    // for a side-by-side. Not a balance number.
+    fit: 2.4,
+    forward: '+X', up: '+Y',
+    animations: { idle: 'Dance', swim: 'Dance', boost: 'Dance' },
+    shape: 'icosahedron', radius: 0.45, color: 0xb8794a, unlit: true,
+  },
+
+  // A WHOLE CRAB, despite the file name — 63 nodes of body, arms and legs
+  // animated on NODE TRANSFORMS with no skin and no textures at all, which is
+  // why it costs 0.05MB and has nothing for a biolum pattern to paint.
+  //
+  // It is in the lab as a comparison rather than a candidate: crabpincer.glb
+  // already owns every crab in the game through the shared CRAB_RIG, and that
+  // one has a claw that actually opens (see enemyWalkingCrab). This is a
+  // second crab with different topology, not a claw prop.
+  enemyClawCrab: {
+    model: '/models/crabclaw.glb',
+    // crabpincer sits at 2.8; this body is stockier, so the same number would
+    // read bigger. 2.4 matches them across the carapace.
+    fit: 2.4,
+    // Claws and face point +Z, legs straddle X — the same arrangement
+    // enemyWalkingCrab describes, so it takes the same pair.
+    forward: '+X', up: '+Y',
+    animations: { idle: 'Claw_Attack', swim: 'Claw_Attack' },
+    shape: 'icosahedron', radius: 0.45, color: 0xa8653f, unlit: true,
+  },
+
   enemyOyster: {
     model: '/models/oyster.glb',
     texture: { emissive: '/textures/emissive/oyster.jpg' },
@@ -4927,6 +5446,9 @@ export function noTexturesReport() {
 // still load normally — those arrive as blob:/data: URLs and are passed
 // through to a real TextureLoader.
 const fbxManager = new THREE.LoadingManager();
+// Its own manager means DefaultLoadingManager's rewrite does not reach it, so
+// it gets the same one — see assetPath.js for why any of this is needed.
+fbxManager.setURLModifier(assetUrl);
 {
   const real = new THREE.TextureLoader(fbxManager);
   const stub = {
@@ -4972,7 +5494,7 @@ export function initModelTranscoder(renderer) {
   if (ktx2Loader || !renderer) return;
   try {
     ktx2Loader = new KTX2Loader()
-      .setTranscoderPath('/basis/')
+      .setTranscoderPath(assetUrl('/basis/'))
       .detectSupport(renderer);
   } catch (err) {
     // A context without any compressed-texture extension at all, or a missing
@@ -6080,6 +6602,11 @@ export function prepareModel(source, def, clips = [], overrideTex = null, label 
   wrapper.userData.aimRig = def.aimRig ?? null;
   wrapper.userData.lookRig = def.lookRig ?? null;
   wrapper.userData.biteRig = def.biteRig ?? null;
+  // The bone a held seal rides on, falling back to the jaw the procedural
+  // driver hinges — one name for "the moving part of the mouth", however this
+  // particular model animates it. Null is the synthetic carry (see
+  // systems/bossGrab.js), which is what every body without either keeps.
+  wrapper.userData.grabBone = def.grabBone ?? def.biteRig?.bone ?? null;
   wrapper.userData.clawRig = def.clawRig ?? null;
   wrapper.userData.breathRig = def.breathRig ?? null;
   wrapper.userData.morphs = def.morphs ?? null;
@@ -7020,6 +7547,56 @@ export function addOutlineShells(model, spec) {
   return shells;
 }
 
+// SCREEN-SPACE WIDTH — the one uniform every outline material in the game
+// shares.
+//
+// `uOutline` stays exactly what it always was: the rim's width in WORLD units,
+// as authored, at the framing it was authored at. This is the factor that turns
+// that into the same number of PIXELS whatever the camera is doing — a rim that
+// stayed a fixed world width got visibly fatter every time the lens pushed in
+// (the death dive's 3.5x, a menu crop, a replay close-up) and thinner every
+// time it pulled back, which is the one thing a readability aid must not do.
+//
+// SHARED rather than per-material, because it is a property of the CAMERA and
+// not of any rim: one write a frame covers every outline in the scene at once,
+// including the static ones prepareModel builds from a def block that no system
+// holds a list of. Written by systems/outlines.js updateOutlineScale, from the
+// camera the frame is actually being drawn with.
+//
+// Two components, which is what lets one number cover both cameras the game
+// draws with. An ORTHOGRAPHIC frame's world-per-pixel does not depend on depth
+// at all (x = 1/zoom, y = 0); a PERSPECTIVE one is nothing but depth
+// (x = 0, y = 2*tan(fov/2)/referenceHeight), which is the replay pool in
+// systems/replayCams.js. The shader evaluates x + y*depth and neither camera
+// needs to know the other exists.
+const outlineView = { value: new THREE.Vector2(1, 0) };
+
+/**
+ * Set the factor above. `flat` is applied at every depth, `perDepth` per world
+ * unit of distance from the lens.
+ *
+ * The identity — (1, 0) — is what every rim was drawn at before this existed,
+ * so a surface that composes its own framing and asks for its rim in its own
+ * pixels (systems/levelUpSeal.js, the look pages) resets to it rather than
+ * being handed a factor it would then have to divide back out.
+ */
+export function setOutlineViewFactor(flat = 1, perDepth = 0) {
+  outlineView.value.set(flat, perDepth);
+}
+
+export function resetOutlineViewFactor() {
+  outlineView.value.set(1, 0);
+}
+
+/**
+ * The factor as it stands this frame. A COPY, not the live vector — the only
+ * way to move it is through the two setters above, so a caller reading it to
+ * report on it cannot become a second writer of it by accident.
+ */
+export function outlineViewFactor() {
+  return { flat: outlineView.value.x, perDepth: outlineView.value.y };
+}
+
 // The back-face material an outline shell draws with, and the vertex-shader
 // patch that pushes it out along the normal.
 //
@@ -7049,10 +7626,14 @@ export function makeOutlineMaterial(spec = {}) {
   mat.userData.__isOutline = true;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uOutline = uOutline;
+    // The shared one, by REFERENCE — that is the whole mechanism. Every
+    // material patched here points at the same object, so one write a frame
+    // reaches all of them without a registry of who is wearing a rim.
+    shader.uniforms.uOutlineView = outlineView;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        '#include <common>\nuniform float uOutline;\nattribute vec3 aOutlineNormal;'
+        '#include <common>\nuniform float uOutline;\nuniform vec2 uOutlineView;\nattribute vec3 aOutlineNormal;'
       )
       // Offset in OBJECT space, immediately after begin_vertex sets
       // `transformed` and BEFORE skinning runs. Skinning then transforms the
@@ -7068,9 +7649,20 @@ export function makeOutlineMaterial(spec = {}) {
       // seam, so the hull came apart along each one. addOutlineShells guarantees
       // the attribute exists on every geometry it outlines — WebGL would
       // silently feed (0,0,0) here otherwise and the rim would vanish.
+      //
+      // The depth is the OBJECT'S ORIGIN, read straight out of the model-view
+      // matrix's translation, not the vertex's own. Two reasons, and only the
+      // second is about cost: `transformed` here is still the BIND pose on a
+      // skinned mesh (the offset is deliberately applied before skinning, see
+      // above), so a per-vertex depth would be measured at wherever the T-pose
+      // put that vertex rather than where the animation did. Per-object also
+      // gives one width across the whole body, which is what an outline is —
+      // a creature drawn at a slight angle should not have a fatter rim at its
+      // near end.
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\n\ttransformed += aOutlineNormal * uOutline;'
+        '#include <begin_vertex>\n\tfloat oDepth = max(-modelViewMatrix[3].z, 0.0);'
+        + '\n\ttransformed += aOutlineNormal * (uOutline * (uOutlineView.x + uOutlineView.y * oDepth));'
       );
   };
   return mat;

@@ -190,12 +190,20 @@ export function setSfxRateScale(scale) {
   rateScale = Math.max(0.05, Math.min(4, scale || 1));
 }
 
+/** What that rate is now. For the tuner's readouts and for the harnesses. */
+export function sfxRateScale() {
+  return rateScale;
+}
+
 // --- master SFX bus ---------------------------------------------------------
 // Everything synthesised or sampled lands on `master`, which then runs through
 // a shared filter, a reverb send and a dynamics stage before the speakers:
 //
-//   master -> busFilter ->  dryGain ---> sum -> [comp] -> makeup -> ceiling -> out
-//                       \-> convolver -> wetGain -/
+//   master -> warble -> busFilter ->  dryGain ---> sum -> [comp] -> makeup -> ceiling -> out
+//                                 \-> convolver -> wetGain -/
+//
+// `warble` is an exact bypass for all but the last sliver of the health bar —
+// see the near-death wash below.
 //
 // The reverb is parallel (send/return) rather than in series, so the wet signal
 // is mixed ALONGSIDE the dry one — a purely serial reverb would swallow the
@@ -225,6 +233,36 @@ let compressor = null;
 let makeupGain = null;
 let ceilingShaper = null;
 let irSignature = ''; // regenerate the impulse only when its shape changes
+
+// --- the near-death wash -----------------------------------------------------
+// A tape warble spliced in AHEAD of everything else on the bus, and a lift on
+// the reverb send. Both ride systems/lowHealthFx.js's strain, so they are
+// exactly as far in as the bloody frame is — see setNearDeathBus at the bottom
+// of this section.
+//
+//   master -> warbleIn -> [ dry ------------------> ] -> warbleOut -> busFilter
+//                         [ delay (LFO on its time) ]
+//
+// The modulated delay is the whole trick: a delay line whose length is moving
+// resamples what goes through it, so the pitch of everything on the bus rides
+// the LFO. That is what a warble IS — it is not a filter or a tremolo, and
+// neither of those reads as the seal's hearing going.
+//
+// Spliced rather than sent in parallel, because a parallel copy of a pitch-
+// shifted signal against a clean one is a chorus — a thickening, which sounds
+// like production value rather than like something being wrong. `warbleDry`
+// backs off as `warbleWet` comes up so that at full strain there is no clean
+// path left at all.
+let warbleIn = null;
+let warbleOut = null;
+let warbleDry = null;
+let warbleWet = null;
+let warbleDelay = null;
+let warbleLfo = null;
+let warbleDepth = null;
+// 0..1, the strain the wash is currently at. Read by the reverb mix as well as
+// by the warble, which is why it lives here rather than inside one of them.
+let nearDeath = 0;
 
 // --- the celebration echo ---------------------------------------------------
 // A feedback delay hanging off the bus, silent for the whole run and opened up
@@ -314,7 +352,38 @@ function buildBus() {
   makeupGain = ctx.createGain();
   ceilingShaper = ctx.createWaveShaper();
 
-  master.connect(busFilter);
+  // THE WARBLE SITS IN FRONT OF THE WHOLE BUS, which is the only place it can
+  // go: put it after the split and the reverb tail would be clean while the dry
+  // signal wobbled, so the wash the seal is dissolving into would be the one
+  // part of the mix still holding its pitch.
+  warbleIn = ctx.createGain();
+  warbleOut = ctx.createGain();
+  warbleDry = ctx.createGain();
+  warbleWet = ctx.createGain();
+  // The base length is FIXED (see applyAudioBusSettings) and only the
+  // modulation depth and the wet level move. Sweeping the base as well would
+  // mean a per-frame write to a delay line's length, which is an audible slide
+  // in its own right on top of the one this is trying to make.
+  warbleDelay = ctx.createDelay(0.5);
+  warbleDry.gain.value = 1;
+  warbleWet.gain.value = 0; // an exact bypass until the bar is nearly empty
+  warbleIn.connect(warbleDry).connect(warbleOut);
+  warbleIn.connect(warbleDelay).connect(warbleWet).connect(warbleOut);
+
+  // The LFO runs for the whole session at zero depth. An oscillator multiplied
+  // by a gain of 0 contributes nothing and costs one multiply per sample;
+  // starting and stopping one per emergency would mean the warble arrives at
+  // whatever phase the node happened to boot at, which is audible as a click
+  // when that phase is not zero.
+  warbleLfo = ctx.createOscillator();
+  warbleLfo.type = 'sine';
+  warbleDepth = ctx.createGain();
+  warbleDepth.gain.value = 0;
+  warbleLfo.connect(warbleDepth).connect(warbleDelay.delayTime);
+  warbleLfo.start();
+
+  master.connect(warbleIn);
+  warbleOut.connect(busFilter);
   // Both halves of the reverb send meet at `sum` rather than at the speakers,
   // because the dynamics stage below has to see the WHOLE bus. A compressor fed
   // only the dry path would duck the transient while the tail carried on at
@@ -395,7 +464,10 @@ export function sfxEchoOpen() {
 // graph — that the echo sums with the dry path ahead of the compressor — and
 // a test that cannot see the nodes can only assert that a function was called.
 export function __busNodes() {
-  return { echoDelay, echoTone, echoFeedback, echoWet, sumGain, busFilter, dryGain, wetGain };
+  return {
+    echoDelay, echoTone, echoFeedback, echoWet, sumGain, busFilter, dryGain, wetGain,
+    master, warbleIn, warbleOut, warbleDry, warbleWet, warbleDelay, warbleDepth, warbleLfo,
+  };
 }
 
 // (Re)wire the tail of the bus. Called whenever the compressor is switched on
@@ -426,6 +498,101 @@ export function busReduction() {
   return compressor.reduction ?? 0;
 }
 
+/**
+ * Write the dry/wet crossfade, from the slider's mix lifted by however far into
+ * the near-death wash we are.
+ *
+ * ONE OWNER, because there are two writers: applyAudioBusSettings pushes the
+ * Sound tab's `reverbMix`, and setNearDeathBus pushes the strain. Left as two
+ * independent assignments, whichever ran last won — and the one that runs every
+ * frame is the wash, so a player touching any bus slider while dying would hear
+ * the reverb snap dry for exactly one frame each time.
+ *
+ * LIFTS, never cuts. `nearDeath.wet` is where the mix ENDS UP at an empty bar,
+ * and a bus already tuned wetter than that must not be dried out by a seal
+ * about to die — which is what a plain lerp toward the target would do.
+ */
+function applyReverbMix(smoothing = 0) {
+  if (!dryGain || !wetGain) return;
+  const b = CONFIG.audio.bus ?? {};
+  const base = Math.max(0, Math.min(1, b.reverbMix ?? 0));
+  const n = b.nearDeath ?? {};
+  const end = Math.max(0, Math.min(1, n.wet ?? 0.75));
+  const mix = n.enabled === false ? base : Math.max(base, base + (end - base) * nearDeath);
+  // Equal-power crossfade: a linear one dips in perceived loudness through
+  // the middle of the range, which reads as a volume bug while you're just
+  // trying to dial in reverb.
+  const dry = Math.cos(mix * Math.PI * 0.5);
+  const wet = Math.sin(mix * Math.PI * 0.5);
+  if (smoothing > 0) {
+    const now = ctx.currentTime;
+    dryGain.gain.setTargetAtTime(dry, now, smoothing);
+    wetGain.gain.setTargetAtTime(wet, now, smoothing);
+  } else {
+    dryGain.gain.value = dry;
+    wetGain.gain.value = wet;
+  }
+}
+
+/**
+ * THE SOUND OF NEARLY BEING DEAD. `amount` is systems/lowHealthFx.js's eased
+ * strain — 0 above the threshold, 1 at an empty bar — and it is the SAME number
+ * the bloody frame is drawn from, on purpose: a picture and a mix that arrive
+ * on different curves read as two unrelated effects rather than as one state.
+ *
+ * Two things move together:
+ *
+ *   THE WARBLE   the whole bus crossfades into a delay line whose length is
+ *                riding an LFO, so every sound in the game slides in pitch.
+ *                Small — a few milliseconds of travel a second or so — because
+ *                the read wanted is a seal whose hearing is going, not a broken
+ *                tape deck.
+ *   THE WASH     the reverb send comes up, and the equal-power crossfade takes
+ *                the dry path DOWN with it. That second half is what makes it
+ *                a wash rather than a bigger room: at the end the loudest thing
+ *                in the mix is the tail of a sound that already happened.
+ *
+ * Called every frame from updateLowHealthFx — including while dead, paused and
+ * on the score card, where the strain is easing back down and this has to ease
+ * with it. Everything is setTargetAtTime for that reason: a per-frame
+ * assignment to an AudioParam zippers.
+ *
+ * Cheap when dormant. The early return is on BOTH values, so the frame the
+ * strain first reaches 0 still writes the bypass — gating on `amount` alone
+ * would leave the bus a hair wet and permanently warbled for the rest of a run
+ * that recovered ages ago.
+ */
+export function setNearDeathBus(amount) {
+  if (!ctx || !warbleWet) return;
+  const n = CONFIG.audio.bus?.nearDeath ?? {};
+  const a = n.enabled === false ? 0 : Math.max(0, Math.min(1, amount || 0));
+  if (a === 0 && nearDeath === 0) return;
+  nearDeath = a;
+
+  const now = ctx.currentTime;
+  const t = Math.max(0.01, n.smoothing ?? 0.12);
+
+  // The clean path backs off as the warbled one comes up, rather than both
+  // sounding at once — see the note on the graph above. At full strain there is
+  // no unmodulated copy left, which is the difference between a warble and a
+  // chorus.
+  const wet = a * Math.max(0, Math.min(1, n.warbleMix ?? 1));
+  warbleWet.gain.setTargetAtTime(wet, now, t);
+  warbleDry.gain.setTargetAtTime(1 - wet, now, t);
+  // Depth is in MILLISECONDS of travel either side of the base length, which is
+  // the number that has a feel to it; the pitch swing it produces is
+  // 2*pi*rate*depth, so the two knobs multiply.
+  warbleDepth.gain.setTargetAtTime(a * Math.max(0, n.warbleDepthMs ?? 3.2) / 1000, now, t);
+  warbleLfo.frequency.setTargetAtTime(Math.max(0.05, n.warbleHz ?? 1.5), now, t);
+
+  applyReverbMix(t);
+}
+
+/** How far into the near-death wash the bus currently is, 0..1. For the tests. */
+export function sfxNearDeath() {
+  return nearDeath;
+}
+
 // Push CONFIG.audio.bus onto the live nodes. Safe to call every time a slider
 // moves — the impulse response is only rebuilt when its shape actually
 // changed, since regenerating a couple of seconds of noise per frame while
@@ -443,12 +610,11 @@ export function applyAudioBusSettings() {
     busFilter.frequency.value = Math.max(20, b.filterHz ?? 20000);
   }
 
-  const mix = Math.max(0, Math.min(1, b.reverbMix ?? 0));
-  // Equal-power crossfade: a linear one dips in perceived loudness through
-  // the middle of the range, which reads as a volume bug while you're just
-  // trying to dial in reverb.
-  dryGain.gain.value = Math.cos(mix * Math.PI * 0.5);
-  wetGain.gain.value = Math.sin(mix * Math.PI * 0.5);
+  // Not written here any more: the near-death wash lifts this same pair, and
+  // stamping the slider's value back on every time another bus control moved
+  // would snap the reverb dry under a dying seal. Same reasoning as the depth
+  // filter above and as the echo's wet level below — one owner per parameter.
+  applyReverbMix();
 
   const seconds = b.reverbSeconds ?? 1.6;
   const decay = b.reverbDecay ?? 2;
@@ -471,6 +637,21 @@ export function applyAudioBusSettings() {
     echoFeedback.gain.value = Math.max(0, Math.min(0.95, e.feedback ?? 0.4));
     echoTone.frequency.value = Math.max(200, e.toneHz ?? 2600);
     if (e.enabled === false && echoOpen) setSfxEcho(false);
+  }
+
+  // --- the warble -----------------------------------------------------------
+  // Only the base length, which is fixed: the depth and the wet level belong to
+  // setNearDeathBus and stamping them back here would slam the warble on the
+  // moment any other bus slider moved, exactly as the echo's note describes.
+  //
+  // The base has to be at least the depth or the LFO drives the delay negative,
+  // where an AudioParam clamps at 0 — and a clamped sine is a half-wave, which
+  // is a rasp rather than a warble. Doubled for margin against a depth raised
+  // while the wash is already open.
+  if (warbleDelay) {
+    const n = b.nearDeath ?? {};
+    const depth = Math.max(0, n.warbleDepthMs ?? 3.2) / 1000;
+    warbleDelay.delayTime.value = Math.min(0.4, Math.max(0.001, depth * 2));
   }
 
   // --- dynamics -------------------------------------------------------------

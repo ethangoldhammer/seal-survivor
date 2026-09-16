@@ -153,13 +153,38 @@ export function seatPad(i) {
  * rebuilt at a different width for a match, and the caller is the one holding
  * the bounds. See kickoffSpot in systems/versus.js.
  */
-export function seatFormation(i) {
-  const nth = Math.floor(i / TEAMS);
+export function seatFormation(i, turn = 0) {
+  const nth = formationSlot(i, turn);
   const r = CONFIG.versus?.roster ?? {};
   const back = (r.rowStep ?? 0.16) * nth;
   // 0, +1, -1, +2, -2… so the captain is on the line and the rest bracket it.
   const rank = Math.ceil(nth / 2) * (nth % 2 === 1 ? 1 : -1);
   return { back, lane: rank * (r.laneStep ?? 0.34) };
+}
+
+/**
+ * WHICH SPOT OF ITS SIDE'S FORMATION A SEAT TAKES ON KICKOFF `turn`.
+ *
+ * Rotated, the way a kickoff rotates in Rocket League: the seal that took the
+ * front spot last time takes the one behind it now, and the one at the back
+ * comes to the front. Without it the same seal is the striker at every single
+ * kickoff of the match and the other three are permanently its escort — which
+ * is not a formation, it is a queue that never moves.
+ *
+ * THE ROTATION IS WITHIN A SIDE, not across the roster: a seat cannot change
+ * team between kickoffs, so what turns is the seat's index in its OWN side's
+ * list (`nth`), modulo how many spots that side has. A one-a-side match has one
+ * spot and rotating it is the identity, which is why this needs no special case
+ * for the pair Blubberball used to be.
+ *
+ * `turn` is the match's kickoff count. It is a parameter rather than a read of
+ * the match state because this module is a leaf — the team select, the harness
+ * and the labs all ask it, and none of them has a kickoff count.
+ */
+export function formationSlot(i, turn = 0) {
+  const nth = Math.floor(i / TEAMS);
+  const n = Math.max(1, perSide);
+  return (((nth + Math.round(turn || 0)) % n) + n) % n;
 }
 
 /** For the team select and the harness: every seat, with who is in it. */

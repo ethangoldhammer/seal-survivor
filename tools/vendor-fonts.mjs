@@ -112,6 +112,11 @@ for (const font of families) {
   }
 
   let kept = 0;
+  // The url() is written BARE — just the filename, resolved by the browser
+  // against this stylesheet's own location. '/fonts/<name>' would be equivalent
+  // on Cloudflare Pages and in the native shell, and would 404 on itch.io,
+  // which serves an HTML5 build from a per-project subdirectory. Same reason
+  // index.html's paths are relative; see path/src/assetPath.js for the rest.
   for (const { block } of faces) {
     const url = urlIn(block);
     if (!url) continue;
@@ -121,7 +126,7 @@ for (const font of families) {
     // fetched once per block and written over itself — 2MB of transfer for
     // 0.5MB on disk, and the count in the summary reads like six files.
     if (seen.has(name)) {
-      sheets.push(block.replace(/url\(https:\/\/fonts\.gstatic\.com\/[^)]+\)/, `url(/fonts/${name})`));
+      sheets.push(block.replace(/url\(https:\/\/fonts\.gstatic\.com\/[^)]+\)/, `url(${name})`));
       kept++;
       continue;
     }
@@ -142,7 +147,7 @@ for (const font of families) {
     // Rewritten to the local path. Absolute, like every other asset reference
     // in this game — the desktop shell serves from an origin root, so a leading
     // slash means the same thing there as it does on the deployed site.
-    sheets.push(block.replace(/url\(https:\/\/fonts\.gstatic\.com\/[^)]+\)/, `url(/fonts/${name})`));
+    sheets.push(block.replace(/url\(https:\/\/fonts\.gstatic\.com\/[^)]+\)/, `url(${name})`));
   }
   console.log(`  ok   ${font.label.padEnd(12)} ${kept} face${kept === 1 ? '' : 's'}`);
 }

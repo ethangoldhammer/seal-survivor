@@ -18,6 +18,7 @@
 
 import sealNamesCsv from '../sealNames.csv?raw';
 import { parseSealNameCsv, rollSealName, rollSealPart, splitSealName, joinSealName } from '../sealNameTable.js';
+import { newNameMemory } from '../namePool.js';
 import { MAX_NAME_LEN } from './playerName.js';
 import { isNameBuried } from './nameLedger.js';
 
@@ -26,6 +27,12 @@ import { isNameBuried } from './nameLedger.js';
 // answer. Warnings land in the console at boot, which is where the rest of the
 // table warnings are.
 const PARTS = parseSealNameCsv(sealNamesCsv, console.warn);
+
+// WHAT THE BUTTON JUST OFFERED. `avoid` only knows the one name in the field,
+// so without this a player pressing randomise four times sees the same
+// adjective twice and reads the pool as tiny. Lives here rather than inside
+// the table so the roll stays a function of its arguments -- see namePool.js.
+const NAME_MEMORY = newNameMemory();
 
 /**
  * A name for the field. `current` is what is already in it — pass it, and a
@@ -44,7 +51,7 @@ export function randomPlayerName(current = '') {
   // rerolls once. That is the right contract for "don't hand me the same name
   // twice in a row" and the wrong one for "don't hand me any of four hundred".
   for (let i = 0; i < ROLL_TRIES; i += 1) {
-    const name = rollSealName(PARTS, { avoid: current });
+    const name = rollSealName(PARTS, { avoid: current, memory: NAME_MEMORY });
     if (!isNameBuried(name)) return name;
   }
 
@@ -58,7 +65,7 @@ export function randomPlayerName(current = '') {
   // a game, and a random suffix would be a serial number. "Fat Tony II" is what
   // a graveyard full of one family actually looks like, and it is the only
   // answer here that gets funnier the deeper into it you are.
-  const base = rollSealName(PARTS, { avoid: current });
+  const base = rollSealName(PARTS, { avoid: current, memory: NAME_MEMORY });
   for (const numeral of NUMERALS) {
     const candidate = `${base} ${numeral}`;
     if (candidate.length <= MAX_NAME_LEN && !isNameBuried(candidate)) return candidate;
@@ -98,7 +105,7 @@ export function sealNameParts() {
 
 /** One half. `beside` is the nickname an adjective has to fit next to. */
 export function randomNamePart(slot, { beside } = {}) {
-  return rollSealPart(PARTS, slot, { beside });
+  return rollSealPart(PARTS, slot, { beside, memory: NAME_MEMORY });
 }
 
 /** A name into its halves — see splitSealName. */

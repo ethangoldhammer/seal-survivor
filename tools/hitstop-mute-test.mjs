@@ -2,7 +2,7 @@
 // ---------------------------------------------------------------------------
 // npm run test:hitstop
 //
-// THE HIT-STOP GUEST LIST — CONFIG.fx.hitstopOnly.
+// THE HIT-STOP GUEST LIST — CONFIG.fx.hitstopEvents.
 //
 // Thirty events carried a `hitstop`, and because every one of them draws on a
 // single `hitstopCooldown` they were never layering — they were competing. The
@@ -58,7 +58,7 @@ function check(name, cond, detail = '') {
 // check below fails for a reason that has nothing to do with the hit-stop.
 initParticles(new THREE.Scene());
 
-const LIST = CONFIG.fx.hitstopOnly ?? [];
+const LIST = CONFIG.fx.hitstopEvents ?? [];
 const EVENTS = CONFIG.feedback;
 
 /**
@@ -178,39 +178,56 @@ section('3. a mute takes the freeze and nothing else');
 section('4. an empty list means everything, for every harness in the project');
 // ---------------------------------------------------------------------------
 {
-  const real = CONFIG.fx.hitstopOnly;
+  const real = CONFIG.fx.hitstopEvents;
   const muted = Object.keys(EVENTS).find((n) => EVENTS[n]?.hitstop > 0 && !LIST.includes(n));
 
-  CONFIG.fx.hitstopOnly = [];
+  CONFIG.fx.hitstopEvents = [];
   check('an empty list lets a muted event through', stopFrom(muted) > 0, muted);
-  delete CONFIG.fx.hitstopOnly;
+  delete CONFIG.fx.hitstopEvents;
   check('...and so does no list at all', stopFrom(muted) > 0);
 
   // Back to the real list, and the SAME array identity — hitstopAllowed caches
   // a Set keyed on the array itself, so handing it an equal-but-different array
   // would leave this file passing while hiding a stale-cache bug.
-  CONFIG.fx.hitstopOnly = real;
+  CONFIG.fx.hitstopEvents = real;
   check('restoring the list mutes it again', stopFrom(muted) === 0);
   check('...and the cache followed the swap, twice over',
     hitstopAllowed(LIST[0]) === true && hitstopAllowed(muted) === false);
 }
 
 // ---------------------------------------------------------------------------
-section('5. the one moment on the list is actually reachable');
+section('5. every moment on the list is actually reachable');
 // ---------------------------------------------------------------------------
-// A guest list with one name is only as good as that name being fired by
-// something. `strikeWeakSpot` is fired from main.js's onWeakSpotRam hook, which
+// A guest list is only as good as its names being fired by something.
+// `strikeWeakSpot` is fired from main.js's onWeakSpotRam hook, which
 // systems/strike.js calls only when a dash finds a lit weak spot on an arming
 // strike — so the event is three files away from the list that names it, and
 // nothing else in this project would notice if that chain were broken.
+//
+// THE WHOLE TREE, not main.js. The list had one name and that name was fired
+// from main.js, so a search of one file was enough — and it silently became a
+// test of the wrong thing the moment a second name was added from
+// systems/versus.js. What the check is actually about is "somebody fires this",
+// and the honest way to ask that is to look everywhere.
 {
-  const src = await import('node:fs').then((fs) =>
-    fs.readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8'));
-  const strikeSrc = await import('node:fs').then((fs) =>
-    fs.readFileSync(new URL('../path/src/systems/strike.js', import.meta.url), 'utf8'));
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = new URL('../path/src/', import.meta.url).pathname;
+  const sources = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.js')) sources.push(fs.readFileSync(full, 'utf8'));
+    }
+  };
+  walk(root);
+  const firedSomewhere = (name) => sources.some((f) => f.includes(`feedback('${name}'`) || f.includes(`'${name}'`));
+  const src = fs.readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
+  const strikeSrc = fs.readFileSync(new URL('../path/src/systems/strike.js', import.meta.url), 'utf8');
 
   for (const name of LIST) {
-    check(`"${name}" is fired by something`, src.includes(`'${name}'`),
+    check(`"${name}" is fired by something`, firedSomewhere(name),
       'a listed event nothing fires is a freeze that never happens');
   }
   check('the strike system calls the hook that fires it',

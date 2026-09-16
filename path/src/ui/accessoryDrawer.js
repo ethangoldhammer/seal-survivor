@@ -91,6 +91,18 @@ const STYLES = `
     transition: border-color .12s ease, background .12s ease, transform .12s ease; touch-action: pan-x; }
   .sv-acc-tile:hover { border-color: rgba(150,200,255,0.45); background: rgba(16,32,50,0.7); }
   .sv-acc-tile.on { border-color: rgba(124,230,160,0.75); background: rgba(14,38,32,0.72); }
+  /* THE CURSOR — a pad's, or the arrow keys'. A ring rather than a change of
+     border colour, because the equipped state is already a border colour and
+     "the hat I am wearing" and "the hat I am pointing at" have to be two
+     readable states at once.
+     (No backticks in this block: it is inside a template literal and one would
+     end the string, with the error pointing at a comment.) Same ring the score card and the pause menu use (.sv-nav-sel in
+     ui/ui.js), restated here because this strip is mounted into the menu's
+     label layer and carries its own sheet.
+     :focus-visible beside it so the keyboard route (a tile is tabbable now) is
+     lit by the browser as well, on the frames before the cursor has adopted it. */
+  .sv-acc-tile:focus-visible, .sv-acc-tile.sv-nav-sel { outline: 2px solid #fff; outline-offset: 2px; }
+  .sv-acc-tile:focus { outline-offset: 2px; }
   .sv-acc-tile.dragging { opacity: 0.35; cursor: grabbing; }
   .sv-acc-swatch { width: 100%; height: 26px; border-radius: 4px; }
   /* A RENDERED TILE IS TALLER THAN A LOZENGE. 26px was the height of a coloured
@@ -101,6 +113,16 @@ const STYLES = `
      written on the element rather than here, because it rides the same one-line
      background shorthand that carries the image. */
   .sv-acc-swatch.shot { height: 40px; }
+  /* A THUMB. A tile is 64 wide and always has been, but its HEIGHT is whatever
+     its picture asks for: a rendered hat is 40 plus 13 of padding and clears the
+     minimum, and a tile with no render yet is 26 plus 13 — 39px, under Apple's
+     44, on the one screen this game opens on. Which tiles have been shot is a
+     question about the asset bake (see ACCESSORY_ICONS), so a strip could be
+     half above the minimum and half below it with nothing to say so.
+     .sv-touch and not a width query: whether there is a thumb is not a question
+     about how wide the screen is — an iPad in landscape is 1024px and is still
+     touched. ui.js puts the class on the UI root, which this strip is inside. */
+  .sv-touch .sv-acc-tile { min-height: 44px; }
   .sv-acc-ghost { position: fixed; z-index: 40; pointer-events: none; width: 64px;
     transform: translate(-50%, -50%) scale(1.08); opacity: 0.92; }
   /* The seal lighting up as a drop target. Drawn on the drawer rather than on
@@ -137,7 +159,41 @@ const TILE_NAME = {
   accessoryRounds: () => uiText('accessoryRoundsName'),
   accessoryAviators: () => uiText('accessoryAviatorsName'),
   accessoryWireFrames: () => uiText('accessoryWireFramesName'),
+  // These four shipped with meshes and no line, so their tiles showed the raw
+  // asset key as their name — "accessoryCowboy" on a hover and to a screen
+  // reader. The fallback in accessoryName is deliberate (a new accessory should
+  // be visible rather than nameless) but it is a fallback, not a destination.
+  accessoryHardHat: () => uiText('accessoryHardHatName'),
+  accessoryCowboy: () => uiText('accessoryCowboyName'),
+  accessoryWizard: () => uiText('accessoryWizardName'),
+  accessorySharkHood: () => uiText('accessorySharkHoodName'),
+  // The fourth batch. Five hats and two haircuts; their rows are staged as
+  // [DRAFT] in uiText.csv with a brief each, so they are in the drawer and
+  // wearable while the names are still outstanding — and the copy gate can see
+  // exactly which lines it is waiting on, which is the point of staging a
+  // marker rather than a plausible word.
+  accessoryUshanka: () => uiText('accessoryUshankaName'),
+  accessoryStetson: () => uiText('accessoryStetsonName'),
+  accessoryBobble: () => uiText('accessoryBobbleName'),
+  accessoryCloche: () => uiText('accessoryClocheName'),
+  accessoryJester: () => uiText('accessoryJesterName'),
+  accessoryShortHair: () => uiText('accessoryShortHairName'),
+  accessoryBobHair: () => uiText('accessoryBobHairName'),
 };
+
+/**
+ * WHAT TO CALL ONE, for any screen that shows an accessory. '' is the bare
+ * seal, which has a name of its own rather than a dash.
+ *
+ * Exported from HERE rather than written out again wherever it is needed,
+ * because of the rule above: the id has to be a literal inside the uiText call
+ * for the table's own test to see the read at all, and a second copy of this
+ * map somewhere else would be a second set of reads to keep in step. The team
+ * select's per-seat accessory button is the second caller.
+ */
+export function accessoryName(key) {
+  return key ? (TILE_NAME[key]?.() ?? key) : uiText('accessoryBare');
+}
 
 // The tile colours — THE FALLBACK NOW, not the plan. ACCESSORY_ICONS holds a
 // render of the actual mesh for anything somebody has sat down with the picker
@@ -205,6 +261,10 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
   function build() {
     row.textContent = '';
     tiles.clear();
+    // THE CURSOR CANNOT SURVIVE ITS OWN LIST. Every tile here is about to be
+    // thrown away, so an index into the old row is an index into nothing — and
+    // the menu above would go on believing the player was down here.
+    navAt = -1;
     const roster = accessoryRoster(true);
     if (!roster.length) {
       const empty = document.createElement('div');
@@ -238,13 +298,30 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
       // The name is the tile's title and accessible name, not a caption. A
       // new accessory with no line here falls through to its asset key, which
       // is ugly on hover — the same bargain uiText makes for a missing row.
-      const name = key ? (TILE_NAME[key]?.() ?? key) : uiText('accessoryBare');
+      const name = accessoryName(key);
       tile.title = name;
       tile.setAttribute('role', 'button');
       tile.setAttribute('aria-label', name);
       tile.appendChild(swatch);
 
       tile.addEventListener('pointerdown', (e) => startDrag(e, key, tile));
+      // A TILE IS A BUTTON AND NOW BEHAVES LIKE ONE. It has said role="button"
+      // to a screen reader since it was written, which was a promise it did not
+      // keep: no tabindex, so Tab never reached it, and no key handler, so
+      // Enter did nothing when it did. The only way to put a hat on was a
+      // pointer — on the one screen in this game that a controller is most
+      // likely to be sitting in front of.
+      tile.tabIndex = 0;
+      tile.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        equip(key);
+      });
+      // Focus and the cursor are the same thing on this strip — unlike the
+      // panels, where the highlight is deliberately independent of focus. There
+      // is nothing else on the screen to tab to while the strip has focus, and
+      // a Tab that moved the ring but not the cursor would be two selections.
+      tile.addEventListener('focus', () => { navAt = tileList().indexOf(tile); paintNav(); });
       row.appendChild(tile);
       tiles.set(key, tile);
     }
@@ -273,6 +350,44 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
     const on = CONFIG.accessories?.equipped ?? '';
     for (const [key, tile] of tiles) tile.classList.toggle('on', key === on);
   }
+
+  // --- the cursor -----------------------------------------------------------
+  // WHAT A PAD AND THE ARROW KEYS DRIVE. The strip is a row under the menu's
+  // hexagons and it is walked as one: the hexagon cursor drops into it on a push
+  // DOWN with nothing below (systems/mainMenu.js), left and right walk the
+  // tiles, up climbs back out, confirm puts the hat on.
+  //
+  // ITS OWN INDEX AND NOT THE MENU'S. The hexagons are picked in world space by
+  // where they are; this is a list in DOM order, and the two have no common
+  // coordinate to be walked in. What they share is the one confirm button, which
+  // is why the menu hands the frame over rather than driving both.
+  //
+  // CLAMPED AT BOTH ENDS, like every other list in this game: a push at the end
+  // of the row that lands you back at the start is a cursor that has teleported,
+  // and on a strip that scrolls it is one that has also scrolled the strip out
+  // from under itself.
+  let navAt = -1;
+
+  function tileList() { return [...row.querySelectorAll('.sv-acc-tile')]; }
+
+  function paintNav() {
+    const list = tileList();
+    list.forEach((t, i) => t.classList.toggle('sv-nav-sel', i === navAt));
+    // THE STRIP SCROLLS, so the cursor has to bring its tile with it — the row
+    // is a carousel once there are more hats than fit (see measure), and a
+    // selection off the end of it is a selection nobody can see.
+    list[navAt]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }
+
+  /** Equip `key` the way a click does — one path, sound and callback included. */
+  function equip(key) {
+    const now = equipAccessory(key);
+    paint();
+    feedback('uiClick');
+    onEquip?.(now);
+    return now;
+  }
+
 
   // --- the drag -------------------------------------------------------------
   // A press that never moves far is a CLICK and equips on release; one that
@@ -347,10 +462,10 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
     const landed = !moved || overSeal(e.clientX, e.clientY);
     cancelDrag();
     if (!landed) return;
-    const now = equipAccessory(key);
-    paint();
-    feedback('uiClick');
-    onEquip?.(now);
+    // Through `equip`, which is the one path a hat goes on by — a pointer, a
+    // key and a pad all end here, so none of them can take a route the others
+    // do not (the repaint, the click and the menu's own reaction included).
+    equip(key);
   }
 
   function cancelDrag() {
@@ -370,6 +485,57 @@ export function mountAccessoryDrawer({ parent, sealRect, onEquip } = {}) {
   return {
     /** Repaint after something else moved the slot — the seal being clicked. */
     refresh: paint,
+
+    // --- the pad's cursor, driven by systems/mainMenu.js ---------------------
+    /** Is the cursor in the strip right now? */
+    padInside: () => navAt >= 0,
+    /**
+     * Drop into the strip, landing on the hat the seal is ALREADY WEARING
+     * rather than on the first tile — the row is a ring the player is stepping
+     * through, and starting anywhere else means the first press walks away from
+     * where they are. False if there is nothing in the strip to land on, which
+     * is a real state: the roster is empty until something is unlocked.
+     */
+    padIn() {
+      const list = tileList();
+      if (!list.length) return false;
+      const on = CONFIG.accessories?.equipped ?? '';
+      const at = list.findIndex((t) => t.dataset.key === on);
+      navAt = at >= 0 ? at : 0;
+      paintNav();
+      list[navAt].focus?.({ preventScroll: true });
+      feedback('uiHover');
+      return true;
+    },
+    /** Left or right one tile. Silent at either end — see the note on navAt. */
+    padStep(dir) {
+      const list = tileList();
+      if (navAt < 0 || !list.length) return;
+      const next = Math.max(0, Math.min(list.length - 1, navAt + Math.sign(dir)));
+      if (next === navAt) return;
+      navAt = next;
+      paintNav();
+      list[navAt].focus?.({ preventScroll: true });
+      feedback('uiHover');
+    },
+    /** Put on whatever the cursor is over. */
+    padConfirm() {
+      const list = tileList();
+      const tile = list[navAt];
+      if (tile) equip(tile.dataset.key ?? '');
+    },
+    /** Climb back out to the hexagons. */
+    padOut() {
+      navAt = -1;
+      paintNav();
+      // BLUR THE TILE, or it keeps the browser's focus and its own Enter
+      // handler over a cursor that has gone back to the buttons above — one
+      // key press putting a hat on and pressing a hexagon. Only if the focus is
+      // actually in this strip: blurring whatever happens to be focused would
+      // reach into a screen this drawer knows nothing about.
+      const focused = document.activeElement;
+      if (focused && row.contains(focused)) focused.blur?.();
+    },
     /** Rebuild the tiles after an unlock. Nothing calls this yet; see the stub note. */
     rebuild: build,
     /** Fade with the shot: the drawer belongs to the menu, not to the run. */

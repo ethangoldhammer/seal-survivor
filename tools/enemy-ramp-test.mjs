@@ -65,7 +65,16 @@ const at = (def, field, m) => {
 section('WHERE EACH ROSTER-WIDE RAMP STOPS CLIMBING');
 {
   const r = CONFIG.spawn.ramp;
-  const rows = [['hp', r.hp, r.hpMax], ['damage', r.damage, r.damageMax], ['speed', r.speed, r.speedMax]];
+  // `size` is printed with the other three and guarded apart from them. It is
+  // a roster-wide ramp like the rest — every creature reads it, it compounds
+  // per difficulty point, it has a cap — but it is not a THREAT axis: the
+  // hitbox and the physics mass both derive from the visual scale, so a bigger
+  // body is a bigger target as well as a bigger danger, and a size ramp that
+  // levels off late is a picture that stops changing rather than a run that
+  // stops escalating.
+  const THREAT = ['hp', 'damage', 'speed'];
+  const rows = [['hp', r.hp, r.hpMax], ['damage', r.damage, r.damageMax],
+    ['speed', r.speed, r.speedMax], ['size', r.size, r.sizeMax]];
   const capAt = {};
   for (const [k, per, max] of rows) {
     const d = per > 0 ? Math.log(max) / Math.log(1 + per) : Infinity;
@@ -76,9 +85,15 @@ section('WHERE EACH ROSTER-WIDE RAMP STOPS CLIMBING');
   // A run is expected to go fifteen minutes (see tools/xp-economy-test.mjs). A
   // ramp that flattens in the first half means the back half of every run is
   // escalating by headcount alone.
+  const earliest = THREAT.map((k) => [k, capAt[k]]).sort((a, b) => a[1] - b[1])[0];
   check('no stat ramp flattens before the run is half over',
-    Math.min(capAt.hp, capAt.damage, capAt.speed) >= 7.5,
-    `earliest is ${Object.entries(capAt).sort((a, b) => a[1] - b[1])[0][0]} at ${Math.min(...Object.values(capAt)).toFixed(1)} min`);
+    earliest[1] >= 7.5,
+    `earliest is ${earliest[0]} at ${earliest[1].toFixed(1)} min`);
+  // The size ramp gets the same question asked more gently: it may flatten,
+  // but not while the player is still watching the water change.
+  check('...and bodies keep growing to the end of a run',
+    capAt.size >= 12,
+    `size is flat from ${capAt.size.toFixed(1)} min — a run is about 15`);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +135,67 @@ const SHOW = [...BASIC, 'barracuda', 'squid'].filter((k) => CONFIG.enemies[k]);
   check('...and a single basic fish still cannot kill a fresh seal in a second',
     dmg15 < CONFIG.player.maxHp,
     `${dmg15.toFixed(0)} dps against ${CONFIG.player.maxHp} hp`);
+}
+
+// ---------------------------------------------------------------------------
+section('AND THE BODIES GET BIGGER — spawn.ramp.size, read off real spawns');
+{
+  // Measured off creatures rather than off the curve, for the reason the
+  // SEEKING section gives: the multiply that matters happens in spawnOne, and
+  // a ramp that computes perfectly and never reaches visual.scale is exactly
+  // the bug worth a harness. The hitbox is derived from that scale, so this
+  // also checks the two have not come apart.
+  //
+  // `fish` because it authors no scaleVariance — its size at a given minute is
+  // one number rather than a roll, so this needs no seeded RNG.
+  const bodyAt = (key, minute, opts = {}) => {
+    resetEnemies(scene);
+    spawnNamed(scene, key, minute * 60 * dps, undefined, opts);
+    return enemies[0];
+  };
+  const K = 'fish';
+  console.log('        minute ' + MINUTES.map((m) => `m${m}`.padStart(8)).join(''));
+  console.log(`        ${K.padEnd(7)}`
+    + MINUTES.map((m) => `x${bodyAt(K, m).sizeMul.toFixed(2)}`.padStart(8)).join(''));
+
+  const early = bodyAt(K, 1);
+  const late = bodyAt(K, 15);
+  check('a late fish is a bigger fish',
+    late.sizeMul > early.sizeMul * 1.2,
+    `x${early.sizeMul.toFixed(2)} at minute one, x${late.sizeMul.toFixed(2)} at fifteen`);
+  // THE HITBOX CAME WITH IT. A size ramp that moved the model and not the
+  // radius would be a creature that looks bigger and is hit at its old size —
+  // and it would look exactly like this one on screen.
+  const fits = (e) => Math.abs(e.radius / (CONFIG.enemies[K].radius * e.sizeMul) - 1) < 1e-6;
+  check('...and the hitbox grew with it, not just the model',
+    fits(early) && fits(late),
+    `radius ${early.radius.toFixed(2)} → ${late.radius.toFixed(2)} against an authored ${CONFIG.enemies[K].radius}`);
+
+  // A BOSS IS EXEMPT, and this is the guard on that. Boss size is authored per
+  // archetype in bosses.csv and the entrance, the camera framing and the bar
+  // are all measured against it; a clock-keyed multiplier would make the same
+  // fight a different shape depending on how long the player took to reach it.
+  const bossKey = Object.keys(CONFIG.enemies).find((k) => k.startsWith('boss') && !CONFIG.enemies[k].bossMinion);
+  const b1 = bodyAt(bossKey, 1, { boss: true });
+  const b15 = bodyAt(bossKey, 15, { boss: true });
+  check('a boss does not read it — its size is the archetype\'s, at any minute',
+    Math.abs(b1.sizeMul - b15.sizeMul) < 1e-9,
+    `${bossKey} x${b1.sizeMul.toFixed(2)} at minute one and x${b15.sizeMul.toFixed(2)} at fifteen`);
+
+  // ...and a row that authored a ceiling still has exactly the ceiling it
+  // authored: `maxGrowth` caps the product of both terms, not just the
+  // species' own. The crab rolls a scaleVariance on top, so the bound is the
+  // cap times that roll's largest value.
+  const crab = Object.keys(CONFIG.enemies).find((k) => CONFIG.enemies[k].maxGrowth > 0);
+  if (crab) {
+    const def = CONFIG.enemies[crab];
+    const ceiling = def.maxGrowth * (1 + (def.scaleVariance ?? 0));
+    const worst = Math.max(...Array.from({ length: 40 }, () => bodyAt(crab, 15).sizeMul));
+    check(`${crab} still stops where its row says it stops`,
+      worst <= ceiling + 1e-9,
+      `x${worst.toFixed(2)} at minute fifteen against maxGrowth ${def.maxGrowth} and a ±${((def.scaleVariance ?? 0) * 100).toFixed(0)}% roll`);
+  }
+  resetEnemies(scene);
 }
 
 // ---------------------------------------------------------------------------

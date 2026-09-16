@@ -71,6 +71,12 @@ export const COPY_COLUMNS = {
   'quips.csv': ['text'],
   'bossNames.csv': ['text'],
   'sealNames.csv': ['text'],
+  // What a Blubberball side is called — the colour words, the collective nouns
+  // and the written whole names. `text` covers the SHAPE rows too, and that is
+  // correct rather than incidental: a shape is grammar ("{colour} {noun}") and
+  // carries no English of its own, so it passes this gate without being copy —
+  // the same bargain statText.csv's `template` makes.
+  'teamNames.csv': ['text'],
   'rarities.csv': ['name'],
   // Every word {effect} can say. `template` is prose too — it is the shape of
   // the phrase, not a format string the game depends on.

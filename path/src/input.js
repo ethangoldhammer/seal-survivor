@@ -46,9 +46,29 @@ export const input = {
   //
   // TRUE FOR A MOUSE EVERY FRAME, on purpose. The heading is recomputed from
   // the cursor's position relative to the SEAL, so it keeps changing as the
-  // animal flies past a pointer that never moved: it is a live steering input
-  // whether or not the hand on it is doing anything.
+  // animal flies past a pointer that never moved. Which is why the dash does
+  // NOT read this any more — see `aimMoved` below.
   aimLive: false,
+  // Did the aim device GESTURE this frame — the mouse flicked, the aim thumb
+  // slid, the right stick is pushed. Not "is the aim being written" (that is
+  // `aimLive`, true for a mouse every frame) and not "is a thumb resting on
+  // the aim half" (`aiming`): the question is whether the hand DID something.
+  //
+  // The dash's steering reads this and nothing else about the aim (holdAim in
+  // systems/strike.js). A pointer aims at a point, and its heading flips
+  // through 180 degrees on its own as the seal flies past the cursor; a dash
+  // that steered by the live heading turned round with no hand on anything.
+  aimMoved: false,
+  // ...AND WHICH WAY THE GESTURE WENT. A unit vector on a frame `aimMoved` is
+  // true, zero otherwise. For a pointer this is the direction the mouse or
+  // the thumb MOVED — a flick up is up — summed over the last
+  // CONFIG.touch.aimFlick.window seconds and only once it has covered
+  // aimFlick.px of screen, so a resting hand's tremor is nothing and a flick
+  // reads as one direction rather than five jittery ones. Not where the
+  // cursor IS: that heading depends on where the seal is, and mid-dash the
+  // seal is moving fast. A stick is already a direction and comes through
+  // as itself. The one thing that reads this is holdAim in systems/strike.js.
+  aimGesture: new THREE.Vector2(0, 0),
   // The clap button — edge-triggered, true for exactly one frame per press.
   // Edge and nothing else: there is no held state to keep, because the gesture
   // it starts re-enters itself rather than being sustained (see
@@ -97,6 +117,17 @@ export const menuInput = {
   // screens, and no pad can reach both at once.
   nameNext: false,
   namePrev: false,
+  // Y / Triangle, edge-triggered. THROW THE HAND BACK on the level-up screen —
+  // see CONFIG.upgradeReroll. Index 3, which the note beside CLAP_BUTTON below
+  // has been holding open for exactly this: 0 confirms, 1 goes back, 2 claps in
+  // gameplay, and 3 was the face button left unspent.
+  //
+  // A button of its own rather than a nav stop the stick can reach. The hand is
+  // laid out as a lattice and stepSelection walks it geometrically, so a
+  // fourth thing below the cards would be "down" from two of them and from
+  // neither, depending on how the row wrapped — and on a phone, where the cards
+  // stack into a column, it would sit in the path of every downward step.
+  reroll: false,
   // ANY face/stick button going down, edge-triggered. For surfaces that ask for
   // "press anything to continue" rather than for a choice — the splash. The
   // keyboard's version of this is a bare keydown listener; the pad has no
@@ -127,9 +158,9 @@ const strikeButtonHeld = {};
 let clapRequested = false;
 // X / Square — Standard Gamepad index 2. The one free face button in
 // gameplay: 0 is the menu confirm (and so cannot be spent, see the firing note
-// in updateInput), 1 is the universal back, and 3 is left unclaimed rather
-// than doubled up on this, so there is still a face button to spend on the
-// next thing that needs one.
+// in updateInput), 1 is the universal back, and 3 has since gone to the
+// level-up screen's reroll (see menuInput.reroll) — in the MENUS only, so it is
+// still free in gameplay if something ever needs it there.
 const CLAP_BUTTON = 2;
 let clapButtonHeld = false;
 let domElement = null;
@@ -304,6 +335,12 @@ export const inputStatus = {
   padIndex: -1,
   padMapping: '',
   padCount: 0,
+  // See the note where this is written, in getGamepad.
+  pageFocused: true,
+  // Whether navigator.getGamepads exists at all — see noGamepadApi.
+  gamepadApi: true,
+  // How many slots the browser returned, nulls included. See getGamepad.
+  padSlots: 0,
   axes: [],
   buttons: [],
   // What inputDevice() is answering, refreshed each frame. Here rather than
@@ -340,6 +377,47 @@ export function feedMouse(clientX, clientY) {
   updateMouseNDC(clientX, clientY);
 }
 
+// --- THE FLICK — a pointer's gesture, read as a direction ---------------------
+//
+// The mouse and the aim thumb aim at a POINT, and a point is the wrong thing
+// to steer a dash by: its heading is cursor-minus-seal, which changes on its
+// own as the seal moves and flips outright as the seal flies past it. So for
+// steering, a pointer is read the way a stick is — by which way it MOVED.
+//
+// Screen-pixel deltas (y up) from every mousemove / aim-thumb touchmove land
+// here with a timestamp. Each frame, readFlick() sums the ones inside
+// CONFIG.touch.aimFlick.window and, once the sum has covered aimFlick.px, the
+// sum's direction is the gesture. Summed over a window rather than read per
+// event because a flick is five or six events long and its first and last
+// are jittery; thresholded because a hand resting on a mouse drifts.
+//
+// One list for both devices: only one of them is the aim at a time (the
+// priority chain in updateInput), and a delta from the other is a stray.
+const flick = []; // { dx, dy, t } — CSS px, y up, ms
+const FLICK_CAP = 64;
+let mousePxX = NaN, mousePxY = NaN;
+function feedFlick(dx, dy) {
+  if (!(dx || dy)) return;
+  if (flick.length >= FLICK_CAP) flick.shift();
+  flick.push({ dx, dy, t: performance.now() });
+}
+function feedMouseFlick(clientX, clientY) {
+  if (Number.isFinite(mousePxX)) feedFlick(clientX - mousePxX, -(clientY - mousePxY));
+  mousePxX = clientX; mousePxY = clientY;
+}
+/** The gesture inside the window, as a unit vector in `out`. False (and zero) if there is none. */
+function readFlick(out) {
+  const f = CONFIG.touch?.aimFlick ?? {};
+  const cutoff = performance.now() - (f.window ?? 0.08) * 1000;
+  while (flick.length && flick[0].t < cutoff) flick.shift();
+  let sx = 0, sy = 0;
+  for (const d of flick) { sx += d.dx; sy += d.dy; }
+  const len = Math.hypot(sx, sy);
+  if (len < (f.px ?? 24)) { out.set(0, 0); return false; }
+  out.set(sx / len, sy / len);
+  return true;
+}
+
 export function initInput(canvas) {
   domElement = canvas;
 
@@ -352,13 +430,29 @@ export function initInput(canvas) {
   // rather than silent. Browsers only expose a pad AFTER a button press on
   // it — "connected but doing nothing" is usually just that.
   window.addEventListener('gamepadconnected', (e) => {
+    // AND IT CLEARS THE BLOCKED LATCH. The event is the one thing the policy
+    // check below cannot give us: proof that this page really does get pads.
+    // checkGamepadPolicy reads a permission at boot and getGamepads throws at
+    // most once, and either answering wrong latched `gamepadBlocked` for the
+    // whole session with nothing able to clear it — so the pad connected, was
+    // named in the console, and was then never polled again.
+    unblockGamepads('a pad connected');
     inputStatus.gamepadConnected = true;
     inputStatus.gamepadName = e.gamepad?.id ?? 'gamepad';
     console.info(`[input] gamepad connected: ${inputStatus.gamepadName}`);
   });
-  window.addEventListener('gamepaddisconnected', () => {
-    inputStatus.gamepadConnected = false;
-    console.info('[input] gamepad disconnected');
+  window.addEventListener('gamepaddisconnected', (e) => {
+    // ASKED AGAIN RATHER THAN BLANKET-CLEARED. One physical controller is
+    // often several entries — a wireless receiver, or an 8BitDo exposing a
+    // DInput node beside its XInput one — and a Bluetooth pad that naps drops
+    // one of them and comes back. Clearing the flag on any disconnect at all
+    // reported "no controller" with the live one still in the player's hands.
+    inputStatus.gamepadConnected = connectedPads().length > 0;
+    // ...and the sticky choice lets go of a slot that is gone, so the next pad
+    // is chosen on merit rather than compared against a dead index.
+    if (e.gamepad?.index === activePadIndex) activePadIndex = -1;
+    console.info(`[input] gamepad disconnected: ${e.gamepad?.id ?? 'gamepad'}`
+      + (inputStatus.gamepadConnected ? ' (another is still connected)' : ''));
   });
 
   canvas.addEventListener('mousemove', (e) => feedMouse(e.clientX, e.clientY));
@@ -421,7 +515,13 @@ export function initInput(canvas) {
       const rect = canvas.getBoundingClientRect();
       forEachTouch(e.changedTouches, (t) => {
         const stick = stickById(t.identifier);
-        if (stick) stick.current.set(t.clientX, t.clientY);
+        if (stick) {
+          // The aim thumb's slide is its flick (readFlick), read off the
+          // previous position rather than the anchor: a thumb that lands and
+          // then slides is gesturing from where it is, not from where it hit.
+          if (stick === sticks.aim) feedFlick(t.clientX - stick.current.x, -(t.clientY - stick.current.y));
+          stick.current.set(t.clientX, t.clientY);
+        }
         moveTouchSlot(t, rect);
       });
     },
@@ -667,6 +767,8 @@ const aimNDC = new THREE.Vector2();
 // frame of the run. Same story for a key still held when a run restarts.
 export function clearPendingInput() {
   strikeRequested = false;
+  flick.length = 0;
+  mousePxX = mousePxY = NaN;
   clapRequested = false;
   // Adopt whatever is physically down RIGHT NOW as the baseline rather than
   // zeroing it. Clearing to false would make a trigger the player happens to be
@@ -752,6 +854,7 @@ function setKey(e, down) {
 }
 
 function updateMouseNDC(clientX, clientY) {
+  feedMouseFlick(clientX, clientY);
   const rect = domElement.getBoundingClientRect();
   mouseNDC.set(
     ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -776,11 +879,46 @@ function checkGamepadPolicy() {
     if (!policy.allowsFeature('gamepad')) {
       gamepadBlocked = true;
       inputStatus.gamepadBlocked = true;
+      blockedAt = performance.now();
+      blockedWarned = true;
       console.warn(BLOCKED_MESSAGE);
     }
   } catch {
     // Older engines don't know the 'gamepad' feature name; fall through and
     // let the try/catch around getGamepads be the backstop.
+  }
+}
+
+/**
+ * Let go of the latch above. It is one-way on purpose everywhere else — a page
+ * that cannot have pads cannot grow them — but it is set from two guesses (a
+ * permission read at boot, and one throw) and a session is a long time to be
+ * wrong for. A pad announcing itself is not a guess, so it wins.
+ *
+ * Silent when nothing was latched, because the common case is every pad on a
+ * perfectly ordinary page and this must not put a line in the log for it.
+ */
+function unblockGamepads(why) {
+  if (!gamepadBlocked) return;
+  gamepadBlocked = false;
+  inputStatus.gamepadBlocked = false;
+  console.info(`[input] the Gamepad API works here after all (${why}) — polling pads again.`);
+}
+
+/**
+ * Every pad the browser is currently willing to admit to, as a plain array.
+ *
+ * The throw is swallowed rather than latched: this is asked from the connect
+ * and disconnect handlers, where a failure means "I don't know" rather than
+ * "this page has no pads", and latching out of an event handler would be a way
+ * to lose a controller that the very next poll can see.
+ */
+function connectedPads() {
+  if (!navigator.getGamepads) return [];
+  try {
+    return Array.from(navigator.getGamepads()).filter((p) => p?.connected);
+  } catch {
+    return [];
   }
 }
 
@@ -808,8 +946,67 @@ export function getActivePad() {
   return activePad;
 }
 
+// While blocked, the API is asked again this often rather than never. The
+// latch exists so a throwing call isn't made sixty times a second; making it
+// permanent is a different and worse thing, because both of the readings that
+// can set it are guesses — and a wrong one used to cost the whole session with
+// the controller sitting there lit up. Two seconds costs nothing and is under
+// the time it takes to wonder whether the pad is charged.
+const BLOCKED_RETRY_MS = 2000;
+let blockedAt = 0;
+let blockedWarned = false;
+
+/**
+ * Forget whatever the last poll saw. Every path that leaves getGamepad without
+ * a pad goes through here, including the two that used to return early from
+ * the top: the readout is what somebody checks when a controller has stopped
+ * working, and a slot number left over from the last frame that DID work is
+ * the most misleading thing it could be showing them. `activePad` goes with
+ * it — systems/haptics.js rumbles through that reference, and a pad the poll
+ * has lost is not one to keep buzzing.
+ */
+function clearPadStatus() {
+  activePad = null;
+  inputStatus.padIndex = -1;
+  inputStatus.padMapping = '';
+  inputStatus.padSlots = 0;
+  inputStatus.padCount = 0;
+  inputStatus.gamepadConnected = false;
+  inputStatus.axes = [];
+  inputStatus.buttons = [];
+  return null;
+}
+
+// THE API IS NOT THERE AT ALL — a third state, and until this it was the one
+// that looked most like a flat battery. getGamepads is [SecureContext] in the
+// spec and every engine enforces it, so a build opened over plain http on a
+// LAN address — a phone or a second machine pointed at the dev server, which
+// is the ONLY way this game gets played on http — has no method to call. Not
+// blocked, not empty: absent, and the old code returned null for it without a
+// word.
+let warnedNoApi = false;
+
+function noGamepadApi() {
+  if (!warnedNoApi) {
+    warnedNoApi = true;
+    inputStatus.gamepadApi = false;
+    console.warn(
+      '[input] this page has no Gamepad API at all'
+      + (window.isSecureContext === false
+        ? ' — it was opened over plain http on a non-local address, and the API is https/localhost only.'
+        : '.')
+      + ' No controller can be read here.'
+    );
+  }
+  return clearPadStatus();
+}
+
 function getGamepad() {
-  if (gamepadBlocked || !navigator.getGamepads) return null;
+  if (!navigator.getGamepads) return noGamepadApi();
+  if (gamepadBlocked) {
+    if (performance.now() - blockedAt < BLOCKED_RETRY_MS) return clearPadStatus();
+    blockedAt = performance.now();
+  }
 
   let pads;
   try {
@@ -817,8 +1014,15 @@ function getGamepad() {
   } catch {
     gamepadBlocked = true;
     inputStatus.gamepadBlocked = true;
-    console.warn(BLOCKED_MESSAGE);
-    return null;
+    blockedAt = performance.now();
+    // Once. The retry above would otherwise write this line every two seconds
+    // for as long as the page is open, and the second copy of it has never
+    // told anybody anything the first didn't.
+    if (!blockedWarned) {
+      blockedWarned = true;
+      console.warn(BLOCKED_MESSAGE);
+    }
+    return clearPadStatus();
   }
 
   // Prefer the pad actually being touched. One physical controller can show up
@@ -834,6 +1038,11 @@ function getGamepad() {
 
   for (const p of pads) {
     if (!p?.connected) continue;
+    // A pad in the list is the same proof the connect event is, and it is the
+    // proof that arrives when that event does not: it fires once, at a moment
+    // this page may not have been listening yet, and Safari holds it until the
+    // page has been touched. The poll is every frame and has no such moment.
+    unblockGamepads('a pad is in the list');
     if (!firstConnected) firstConnected = p;
     if (p.index === activePadIndex) sticky = p;
     const activity = padActivity(p);
@@ -865,12 +1074,39 @@ function getGamepad() {
     }
   }
   activePad = pad;
+  // THE COUNT IS OF THE LIST, NOT OF THE PAD WE CHOSE, and it is set on both
+  // paths out of here. `padCount` used to be written only where a pad was
+  // being read and zeroed everywhere else, so the two states it exists to tell
+  // apart — nothing plugged in, and a pad present that this half of the game
+  // is deliberately not reading (see the versus branch above) — both showed a
+  // flat zero. That is the readout somebody checks when a controller "isn't
+  // connecting", and it was answering the wrong question.
+  // THE RAW LENGTH, NULLS AND ALL, beside the count of live ones. They answer
+  // two different questions and only together do they say which half of the
+  // chain is failing: a browser that has pads to give but has not been handed
+  // a button press on THIS document returns a row of nulls (4 in Chrome), so
+  // `slots 4 · in list 0` is "press a button in this tab" while `slots 0` is
+  // "this browser has nothing at all". One number could not tell them apart.
+  inputStatus.padSlots = pads?.length ?? 0;
+  inputStatus.padCount = firstConnected ? Array.from(pads).filter((p) => p?.connected).length : 0;
+  inputStatus.gamepadConnected = inputStatus.padCount > 0;
+  // WHETHER THE PAGE IS EVEN ELIGIBLE. A browser hands gamepad input to the
+  // focused document and to nothing else, so a game in a window that has lost
+  // focus — behind the devtools, behind the editor, a second tab of the same
+  // build — polls an empty list and is indistinguishable from a flat battery.
+  // It is not a fault to fix in here, it is the answer to "the controller is
+  // connected and the game can't see it", and there was nowhere to read it.
+  inputStatus.pageFocused = document.hasFocus?.() ?? true;
   if (!pad) {
     // A pad that has never been touched is invisible to the browser by design,
-    // so this is the normal state until the first button press.
+    // so this is the normal state until the first button press. The count and
+    // the connected flag set just above SURVIVE this, unlike clearPadStatus:
+    // "there are two pads and this half of the game is reading neither"
+    // (the versus branch) is a different state from "there are none", and it
+    // is the whole reason the count is on screen.
+    activePad = null;
     inputStatus.padIndex = -1;
     inputStatus.padMapping = '';
-    inputStatus.padCount = 0;
     inputStatus.axes = [];
     inputStatus.buttons = [];
     return null;
@@ -881,7 +1117,6 @@ function getGamepad() {
   // stale name there is a tip telling a PlayStation player to press LB. The
   // log line stays on the slot change, which is the event worth reading about.
   if (pad.index !== activePadIndex || inputStatus.gamepadName !== (pad.id ?? 'gamepad')) {
-    inputStatus.gamepadConnected = true;
     inputStatus.gamepadName = pad.id ?? 'gamepad';
     if (pad.index !== activePadIndex) {
       console.info(`[input] reading gamepad ${pad.index}: ${pad.id} (mapping: ${pad.mapping || 'non-standard'})`);
@@ -902,7 +1137,6 @@ function getGamepad() {
 
   inputStatus.padIndex = pad.index;
   inputStatus.padMapping = pad.mapping || 'non-standard';
-  inputStatus.padCount = Array.from(pads).filter((p) => p?.connected).length;
   inputStatus.axes = Array.from(pad.axes);
   inputStatus.buttons = Array.from(pad.buttons, (b) => b.value ?? (b.pressed ? 1 : 0));
 
@@ -931,6 +1165,9 @@ const PAUSE_BUTTON = 9; // Start, Standard Gamepad
 // and are left out of the menus on purpose: an analog trigger with a low
 // break point steps a tab strip the moment a hand rests on it.
 const BACK_BUTTON = 1;
+// Y / Triangle. The face button the note on CLAP_BUTTON was saving; see
+// menuInput.reroll.
+const REROLL_BUTTON = 3;
 const TAB_PREV_BUTTON = 4;
 const TAB_NEXT_BUTTON = 5;
 // THE DICE PAIR — see menuInput.nameNext. Both shoulders on a side, so the
@@ -947,6 +1184,7 @@ const NAME_TRIGGER_BREAK = 0.5;
 let nameNextHeld = false;
 let namePrevHeld = false;
 let backHeld = false;
+let rerollHeld = false;
 let tabPrevHeld = false;
 let tabNextHeld = false;
 let anyHeld = false;
@@ -1040,6 +1278,10 @@ function updateMenuInput(pad) {
   menuInput.back = backDown && !backHeld;
   backHeld = backDown;
 
+  const rerollDown = !!pad?.buttons[REROLL_BUTTON]?.pressed;
+  menuInput.reroll = rerollDown && !rerollHeld;
+  rerollHeld = rerollDown;
+
   const prevDown = !!pad?.buttons[TAB_PREV_BUTTON]?.pressed;
   menuInput.tabPrev = prevDown && !tabPrevHeld;
   tabPrevHeld = prevDown;
@@ -1095,6 +1337,10 @@ export function resetMenuInput() {
   // B held as the screen changes has to be released before it counts — the
   // level-up menu opens under a hand that may be holding any of them.
   backHeld = !!pad?.buttons[BACK_BUTTON]?.pressed;
+  // Y too, and it matters more here than the others: a level-up screen opens
+  // straight out of a fight, and Y held as the cards land would throw the hand
+  // back before the player had seen it.
+  rerollHeld = !!pad?.buttons[REROLL_BUTTON]?.pressed;
   tabPrevHeld = !!pad?.buttons[TAB_PREV_BUTTON]?.pressed;
   tabNextHeld = !!pad?.buttons[TAB_NEXT_BUTTON]?.pressed;
   // The dice too — a shoulder held as the score card arrives must be let go of
@@ -1105,6 +1351,7 @@ export function resetMenuInput() {
   anyHeld = anyButtonDown(pad);
   actionHeld = anyActionButtonDown(pad);
   menuInput.back = false;
+  menuInput.reroll = false;
   menuInput.tabPrev = false;
   menuInput.tabNext = false;
   menuInput.nameNext = false;
@@ -1131,6 +1378,38 @@ const worldPoint = new THREE.Vector3();
 
 // Called once per frame. Aim resolves in WORLD space against the ship's actual
 // position, so it stays correct wherever the ship sits on screen.
+/**
+ * TAKE THE CONTROLS AWAY, in place, for a frame nobody is playing — the goal
+ * replay (systems/versus.js).
+ *
+ * Done to the live object at the source rather than by handing each consumer a
+ * neutral copy, because there is no single consumer. A replay frame still runs
+ * the whole gameplay loop in main.js — updatePlayer, updateCharge, the strike
+ * release, the bubble emitters, the aim indicator, the cinematic camera — and
+ * every one of them reads this object. Substituting at one call site fixes one
+ * of them and leaves the rest, which is how the replay ended up with the seal
+ * banking a dash that fired the moment it ended, the flippers tracking the live
+ * cursor over recorded footage, and the charge sound going off underneath it.
+ *
+ * `aim` is LEFT ALONE. It is a heading, never "off", and something has to be
+ * true for anything that reads a direction; `aimLive`/`aiming` going false is
+ * what tells the aim rig nobody is pointing, which is the honest statement.
+ *
+ * The menu poll is a different object (menuInput) and the replay's own skip
+ * runs its own listeners and its own pad poll (anyButtonHeld), so pausing and
+ * skipping still work — those are the two things a viewer IS allowed to do.
+ */
+export function holdInput(io = input) {
+  io.move.set(0, 0);
+  io.strike = false;
+  io.strikeHeld = false;
+  io.strikeRelease = false;
+  io.aiming = false;
+  io.aimLive = false;
+  io.clap = false;
+  return io;
+}
+
 export function updateInput(camera, playerPos) {
   const pad = getGamepad();
 
@@ -1179,6 +1458,8 @@ export function updateInput(camera, playerPos) {
   // Reset per frame, unlike `aim` itself: this is the gesture, not the heading.
   input.aiming = false;
   input.aimLive = false;
+  input.aimMoved = false;
+  input.aimGesture.set(0, 0);
 
   if (pad) {
     const rx = pad.axes[2] ?? 0;
@@ -1188,6 +1469,10 @@ export function updateInput(camera, playerPos) {
       aimed = true;
       input.aiming = true;
       input.aimLive = true;
+      // A pushed stick IS the gesture: it is a direction, not a point, so it
+      // cannot flip on its own and reading it every frame is safe.
+      input.aimMoved = true;
+      input.aimGesture.copy(input.aim);
       lastAimDevice = 'gamepad';
     }
   }
@@ -1206,6 +1491,10 @@ export function updateInput(camera, playerPos) {
       aimed = true;
       input.aiming = true;
       input.aimLive = true;
+      // The thumb SLID — not merely that it is down — and the slide is the
+      // gesture's direction. A thumb resting on the glass names a point the
+      // seal is about to fly past; a thumb that flicks up means up.
+      input.aimMoved = readFlick(input.aimGesture);
       lastAimDevice = 'touch';
     }
   }
@@ -1217,6 +1506,9 @@ export function updateInput(camera, playerPos) {
     input.aim.copy(moveVec);
     aimed = true;
     input.aimLive = true;
+    // A direction from the move thumb, like a stick: no point to fly past.
+    input.aimMoved = true;
+    input.aimGesture.copy(moveVec);
   }
 
   if (!aimed && hasMouse && lastAimDevice === 'mouse') {
@@ -1226,6 +1518,9 @@ export function updateInput(camera, playerPos) {
     if (Math.hypot(dx, dy) > 0.001) {
       input.aim.set(dx, dy).normalize();
       input.aimLive = true;
+      // ...and the gesture is the MOUSE moving, not the heading changing —
+      // and it is the direction it moved in, not where it ended up.
+      input.aimMoved = readFlick(input.aimGesture);
     }
   }
 

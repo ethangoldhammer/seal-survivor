@@ -41,6 +41,7 @@
 import { CONFIG } from '../../path/src/config.js';
 import { preloadAssets } from '../../path/src/assets.js';
 import { createWorld } from '../../path/src/world.js';
+import { updateOutlineScale } from '../../path/src/systems/outlines.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { enableVersus } from '../../path/src/systems/versusFlag.js';
 import { bounds } from '../../path/src/arena.js';
@@ -161,6 +162,8 @@ const SEAM_ROWS = [
   ['pitchAtWall', 'pitch kept at wall', 0, 1, 0.02],
   ['pastFace', 'frame may reach past', 0, 10, 0.25],
   ['fovMin', 'never below fov', 6, 40, 0.5],
+  ['keepAbove', 'keeps targets weighing', 0, 2, 0.05],
+  ['keepDolly', 'may stand back x (1 = off)', 1, 3, 0.05],
 ];
 // The replay's own clock — not the pool's, but it decides how long each beat
 // lasts and therefore which shots ever get a turn.
@@ -624,6 +627,11 @@ function step(rawDt) {
 function render(rawDt) {
   const cam = replayRenderCamera() ?? world.camera;
   updateParticleScale(cam, gl);
+  // The rims, against the same reference the run uses: `cam` here is one of the
+  // pool's PERSPECTIVE shots, and the whole point of a replay is that it flies
+  // in close — which is exactly where a fixed world width reads as a rim three
+  // times too fat. See systems/outlines.js updateOutlineScale.
+  updateOutlineScale(cam, world.halfExtents(1).h * 2);
   // The ball is a goo group written from here, the way renderVersus writes it
   // in a match: nothing draws it if this is skipped and the frame is a goal
   // with no ball in it.
@@ -805,6 +813,7 @@ requestAnimationFrame(tick);
 window.__pool = poolState;
 window.__replay = replayState;
 window.__celebration = celebrationState;
+window.__CONFIG = CONFIG;
 window.__world = world;
 window.__seals = [player, p2];
 window.__ball = ball;

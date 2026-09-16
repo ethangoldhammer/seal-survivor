@@ -138,6 +138,16 @@ export function baseStats(loadout = 'pebbles') {
     // in systems/strike.js.
     strikeExtraPips: 0,
     strikePipRegen: 0,
+    // TURBO — the faster swim the seal blends into while winding up a strike
+    // with the stick held (CONFIG.strike.turbo, updateTurbo in
+    // systems/strike.js). Three multipliers at FULL blend: swimming thrust,
+    // the ordinary speed ceiling, and the swim-cycle playback rate. Seeded
+    // from the config so a card can scale any one of them like every other
+    // strike stat; updatePlayer reads the live blend off player.turbo and
+    // lerps each of these from 1.
+    turboThrustMul: CONFIG.strike.turbo?.thrustMul ?? 1,
+    turboSpeedMul: CONFIG.strike.turbo?.speedMul ?? 1,
+    turboAnimMul: CONFIG.strike.turbo?.animMul ?? 1,
     // How wide the release gulp reaches (see CONFIG.strike.charge.gulp). Per-run
     // rather than read off CONFIG at the point of use, because Attractor scales
     // it — it's the mouth's reach, and the mouth is upgradeable.
@@ -586,6 +596,93 @@ export function applyIronLung(s, oxygen) {
   if (!base) return s;
   const mul = ironLungMul(s, oxygen);
   for (const k of DAMAGE_STATS) s[k] = base[k] * mul;
+  return s;
+}
+
+// ============================================================================
+// THE BREATH AS SPEED — the other thing the bar buys, and the opposite shape
+// to Iron Lung above.
+//
+// The lung is a CARD: a run that never takes it is unaffected, and the bonus
+// is a reward for diving on a full tank. This is the run's BASELINE, paid by
+// every seal on every dive and in one direction only — a full tank is exactly
+// the speed the game has always run at, and the last of a dive is slightly
+// slower than that. It can only ever take speed away, which is what keeps
+// every number tuned against `player.maxSpeed` still true: the ceiling the
+// tuner shows and the ceiling a fresh breath delivers are the same number.
+//
+// WHAT IT REACHES is two stats, which is three caps to the player: the swim,
+// the turbo'd swim (turboSpeedMul multiplies `maxSpeed`, so it follows for
+// free and by the same fraction) and the strike. Spent on the STAT BLOCK
+// rather than at the clamp in updatePlayer, which is what makes that true
+// everywhere at once — the launch impulse in main.js, the dash's throttle
+// (dashSteer), the forecast corridor the lens draws (predictDash) and the
+// clamp itself all read `stats.maxSpeed` and `stats.strikeDashSpeed`. A
+// multiplier spent at the clamp alone would leave the corridor drawing a reach
+// the dash no longer has.
+//
+// THRUST IS DELIBERATELY NOT IN HERE. Acceleration is how the seal STEERS, and
+// a low tank that made the animal turn worse as well as travel slower would
+// read as the controls going soft — which is the one thing a survival timer
+// must not do to the hands. Low air is a slower animal, not a mushier one.
+// ============================================================================
+const BREATH_SPEED_STATS = ['maxSpeed', 'strikeDashSpeed'];
+
+/**
+ * The breath's speed multiplier — 1 for a full tank, `emptyMul` at nothing,
+ * ramping between them below `from`.
+ *
+ * THE KNEE IS THE POINT. A ramp over the whole bar would make every dive one
+ * long fade with no moment in it; below `from` it is a state the player can
+ * feel arrive, and it lands in the same stretch of the dive the warning beep
+ * and the screen tear do — without being wired to either, which are
+ * presentation and may be moved (see the note on CONFIG.hud.oxygenLow).
+ *
+ * `oxygen` defaults to a full tank, so a caller with no run in hand (the card
+ * prober, the hover tips, a Node harness) measures the block at its headline
+ * speed rather than at whatever the last frame happened to hold — the same
+ * convention ironLungMul uses.
+ */
+export function breathSpeedMul(s, oxygen) {
+  const c = CONFIG.oxygen?.speed ?? {};
+  const empty = c.emptyMul ?? 1;
+  // 1 is the off switch: nothing to give back, so nothing is taken. Anything
+  // ABOVE 1 would be a bonus over the tuned ceiling, which this is not — see
+  // the header — so it is read as off too rather than quietly inverting.
+  if (!(empty < 1)) return 1;
+  const cap = Math.max(0, s?.maxOxygen ?? 0);
+  if (!(cap > 0)) return 1;
+  const frac = Math.max(0, Math.min(oxygen ?? cap, cap)) / cap;
+  const from = Math.min(1, Math.max(0, c.from ?? 0));
+  if (frac >= from) return 1;
+  return empty + (1 - empty) * (from > 0 ? frac / from : 0);
+}
+
+/**
+ * Take the caps as they stand — every upgrade replayed, every growth spent —
+ * as the full-tank speed this run is entitled to. Called once per rebuild,
+ * from computeStats, for the reason applyDamageScaling stashes where it does:
+ * a stash taken mid-replay is a ceiling that had not finished growing.
+ */
+export function stashBreathSpeed(s) {
+  s.breathBase = {};
+  for (const k of BREATH_SPEED_STATS) s.breathBase[k] = s[k];
+  return s;
+}
+
+/**
+ * WHAT THE BAR IS WORTH RIGHT NOW — re-derived from the stash, every frame.
+ *
+ * The same two properties applyIronLung has, for the same reasons: a no-op on
+ * a block that was never stashed, and idempotent for a given oxygen, which is
+ * what lets updatePlayer call it unconditionally rather than tracking whether
+ * the bar moved.
+ */
+export function applyBreathSpeed(s, oxygen) {
+  const base = s?.breathBase;
+  if (!base) return s;
+  const mul = breathSpeedMul(s, oxygen);
+  for (const k of BREATH_SPEED_STATS) s[k] = base[k] * mul;
   return s;
 }
 

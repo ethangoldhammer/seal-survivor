@@ -929,7 +929,13 @@ resetEnemies(scene);
   // body the CSV describes rather than with a number typed here.
   const wanted = bossState.archetype.sizeMul;
   const bossKey = bossState.archetype.enemy;
-  const control = spawnNamed(scene, bossKey, gameState.difficulty, undefined, { ignoreCaps: true });
+  // `boss: true` on the control as well, and it has to be: the roster-wide
+  // size ramp (CONFIG.spawn.ramp.size) grows every ordinary body over a run
+  // and deliberately skips bosses, so a control spawned through the wildlife
+  // door would be a bigger fish than the one the archetype was measured
+  // against and this would read as a shrinking boss. Same door, same minute —
+  // the only difference left is the archetype's sizeMul, which is the claim.
+  const control = spawnNamed(scene, bossKey, gameState.difficulty, undefined, { ignoreCaps: true, boss: true });
   check(`the hitbox is ${wanted}x an unscaled ${bossKey}`,
     Math.abs(boss.radius / control.radius - wanted) < 1e-6,
     `boss radius ${boss.radius.toFixed(2)} vs ${control.radius.toFixed(2)}`);

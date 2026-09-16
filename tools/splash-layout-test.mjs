@@ -6,7 +6,7 @@
 //
 // WHAT WENT WRONG. The entry column's size was capped at 42% of the screen's
 // height as a stand-in for "stay under the wordmark". The wordmark is not 42%
-// of anything: it is a 1920x640 artboard fitted CONTAIN into the top 57% of
+// of anything: it is a 1920x360 artboard fitted CONTAIN into the top 32% of
 // the screen, so on a wide screen the width binds and the title ends lower
 // than the fraction assumed. A laptop at 1280x800, an iPad held sideways and a
 // phone held sideways all drew the dice on the SURVIVOR — and nothing in the
@@ -27,8 +27,10 @@
 // reported as an overlap at the sizes it broke on.
 //
 // AND IT IS PINNED TO THE REAL RUNTIME. The scales below were read back from
-// the shipping artboard in Electron (tools/looks/splash-probe.html, 2026-09-05)
-// after the fit landed: the game's own `numEntryScale` at eight device sizes.
+// the shipping artboard in Electron (tools/looks/splash-probe.html, re-read
+// 2026-09-11 after the title was pinned to the horizon — see splashLayout.js —
+// which moved both the wordmark's anchor and the fit's own constants): the
+// game's own `numEntryScale` at eight device sizes.
 // The model here must reproduce them, or the model and the artboard have
 // drifted — a redesign in the Rive editor is the usual reason, and the fix is
 // to re-measure SPLASH_GEOMETRY, not to loosen the pin.
@@ -42,7 +44,7 @@
 // ---------------------------------------------------------------------------
 import {
   SPLASH_GEOMETRY, fitEntryScale, entryRects, wordmarkRect, splashFindings,
-  estimateRowWidth, entryColumnHeight,
+  estimateRowWidth, entryColumnHeight, horizonY,
 } from '../path/src/ui/splashLayout.js';
 import { MAX_NAME_LEN } from '../path/src/systems/playerName.js';
 
@@ -124,28 +126,57 @@ console.log('splash layout — the entry column never sits on the wordmark');
 {
   const MEASURED = [
     // name, W, H, numEntryWidth read back, numEntryScale read back
-    ['iPhone SE', 375, 667, 327, 0.39656],
-    ['iPhone 15', 393, 852, 345, 0.41839],
-    ['iPhone 15 Pro Max', 430, 932, 382, 0.46326],
-    ['iPhone 15 landscape', 852, 393, 226.484, 0.27466],
-    ['iPad mini', 744, 1133, 696.0, 0.84405],
-    ['iPad landscape', 1024, 768, 772.611, 0.93695],
-    ['Laptop', 1280, 800, 725.510, 0.87984],
-    ['Desktop', 1920, 1080, 824.598, 1],
+    ['iPhone SE', 375, 667, 327.000, 0.60214],
+    ['iPhone 15', 393, 852, 345.000, 0.63528],
+    ['iPhone 15 Pro Max', 430, 932, 382.000, 0.70341],
+    ['iPhone 15 landscape', 852, 393, 156.917, 0.28895],
+    ['iPad mini', 744, 1133, 543.066, 1],
+    ['iPad landscape', 1024, 768, 501.677, 0.92379],
+    ['Laptop', 1280, 800, 478.256, 0.88066],
+    ['Desktop', 1920, 1080, 543.066, 1],
   ];
   let drift = 0;
   for (const [name, W, H, width, scale] of MEASURED) {
-    // The runtime measured "Enter Your Name" at 824.6 wide at scale 1.
+    // The pill hugs whatever name the dice rolled, so the widths above are one
+    // run's name at eight sizes — width/scale is the same 543.07 in every row,
+    // and a row where it is not is a reading taken before the resize settled.
     const rowW = width / scale;
     const s = fitEntryScale({ W, H, rowW });
     if (Math.abs(s - scale) > 0.003) { drift++; fail(`${name}: model fits ${s.toFixed(4)}, the artboard was read at ${scale}`); }
   }
   if (!drift) ok('the fit reproduces numEntryScale as read back from the shipping artboard at 8 device sizes');
-  // The wordmark's edge, once, in words: at 852x393 the title ends at 224 and
-  // the tail of the V at the same line — the ink bottom is the artboard's.
-  const wm = wordmarkRect(852, 393);
-  if (Math.abs(wm.bottom - 224) < 1.5) ok(`the wordmark ends at ${wm.bottom.toFixed(1)}px on a sideways phone (224 measured)`);
-  else fail(`wordmark bottom at 852x393 is ${wm.bottom.toFixed(1)}, expected ~224`);
+}
+
+// 2b. THE TITLE IS PINNED TO THE HORIZON, which is the whole point of the
+//     32%-tall slot and the bottom alignment (see splashLayout.js). The claim
+//     is not "the wordmark is somewhere sensible" — it is that the waterline
+//     crosses the SAME LINE of the artwork on every screen there is. So the
+//     gap from the horizon to the ink, divided by the fit scale, has to be one
+//     constant; anything else means the anchor has come loose again.
+//
+//     It was not a constant before: the wordmark was centred in a 57% slot, and
+//     the ink ended 270px below the waterline at 1920x1080, 179 at 1280x800 and
+//     34 on a phone — the fin drifting from mid-SURVIVOR to above the S.
+{
+  const g = SPLASH_GEOMETRY;
+  const EXPECT = g.wordmark.ink.bottom - g.wordmark.height;   // 268 units of art below the waterline
+  let worst = 0; let worstAt = '';
+  for (let W = 320; W <= 2560; W += 8) {
+    for (let H = 300; H <= 1600; H += 8) {
+      const wm = wordmarkRect(W, H);
+      const off = (wm.bottom - horizonY(H)) / wm.scale;
+      const d = Math.abs(off - EXPECT);
+      if (d > worst) { worst = d; worstAt = `${W}x${H} (${off.toFixed(2)})`; }
+    }
+  }
+  if (worst < 1e-6) ok(`the waterline crosses the wordmark ${EXPECT} art-units above its ink's bottom edge at every viewport`);
+  else fail(`the title has come off the horizon: ${worstAt} against ${EXPECT}, off by ${worst.toFixed(2)}`);
+  // And the horizon is the slot's own bottom edge, not a second number that
+  // has to be kept in step with it by hand.
+  const wm = wordmarkRect(1920, 1080);
+  if (Math.abs((wm.bottom - g.wordmark.ink.bottom * wm.scale) + g.wordmark.height * wm.scale - horizonY(1080)) < 1e-6) {
+    ok('the wordmark artboard\'s bottom edge IS the waterline');
+  } else fail('the wordmark box no longer ends on the horizon');
 }
 
 // 3. EVERY DEVICE, AND EVERYTHING AROUND THEM.

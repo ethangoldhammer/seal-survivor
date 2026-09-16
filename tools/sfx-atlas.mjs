@@ -238,6 +238,18 @@ const continuous = {
     slots: CONFIG.ambient?.slots ?? null,
     clips: (CONFIG.ambient?.srcs ?? []).filter(Boolean).map(describeFile),
   },
+  // The title card's own bed. Separate from the above because it is a different
+  // sound on a different screen with a different shape — one loop, held, no
+  // rotation. See CONFIG.splashBed.
+  splashBed: {
+    enabled: CONFIG.splashBed?.enabled !== false,
+    volume: CONFIG.splashBed?.volume ?? null,
+    fadeIn: CONFIG.splashBed?.fadeIn ?? null,
+    fadeOut: CONFIG.splashBed?.fadeOut ?? null,
+    pitchVary: CONFIG.splashBed?.pitchVary ?? 0,
+    slots: CONFIG.splashBed?.slots ?? null,
+    clips: (CONFIG.splashBed?.srcs ?? []).filter(Boolean).map(describeFile),
+  },
   flight: Object.entries(CONFIG.flightSfx ?? {})
     .filter(([, v]) => v && typeof v === 'object')
     .map(([name, v]) => ({
@@ -277,6 +289,7 @@ const bus = {
 const referenced = new Set();
 for (const s of sfx) for (const f of s.files) referenced.add(f.path);
 for (const c of continuous.ambient.clips) referenced.add(c.path);
+for (const c of continuous.splashBed.clips) referenced.add(c.path);
 
 const files = existsSync(SFX_DIR)
   ? readdirSync(SFX_DIR)
@@ -286,7 +299,8 @@ const files = existsSync(SFX_DIR)
         const info = describeFile(webPath);
         const usedBy = sfx.filter((s) => s.files.some((f) => f.path === webPath)).map((s) => s.name);
         const ambientUse = continuous.ambient.clips.some((c) => c.path === webPath) ? ['(ambient bed)'] : [];
-        return { ...info, name: n, usedBy: [...usedBy, ...ambientUse] };
+        const titleUse = continuous.splashBed.clips.some((c) => c.path === webPath) ? ['(title bed)'] : [];
+        return { ...info, name: n, usedBy: [...usedBy, ...ambientUse, ...titleUse] };
       })
       .sort((a, b) => b.bytes - a.bytes)
   : [];

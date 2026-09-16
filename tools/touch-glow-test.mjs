@@ -484,8 +484,12 @@ check('the vertex shader disrupts the lattice — radial shove AND tangential sh
   /uTouchWarp\.x/.test(mat.vertexShader) && /vec2\(-dir\.y, dir\.x\)/.test(mat.vertexShader));
 check('the glow is measured per fragment against the DISPLACED position',
   /distance\(vPos, uTouch\[i\]\.xy\)/.test(mat.fragmentShader));
+// ...AND SO IS THE BALL'S. The Blubberball channel (systems/ballGrid.js) lights
+// the lattice the same way the fingers do and shares this line with them, so
+// the two are asserted together: a light added OUTSIDE the mask draws above the
+// water line on a grid that is cut off at it.
 check('the glow is cut off at the water line with the rest of the grid',
-  /fingerAmt \* uTouchGain\.y \* mask/.test(mat.fragmentShader));
+  /\(fingerAmt \* uTouchGain\.y \+ ballAmt \* uBallGain\.y\) \* mask/.test(mat.fragmentShader));
 
 // ---------------------------------------------------------------------------
 section('COLOUR — five fingers you can actually tell apart');

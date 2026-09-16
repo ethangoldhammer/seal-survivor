@@ -86,7 +86,16 @@ if (vs && fs) {
     // the seal and every hull on the water. See MAX_WAKES in systems/grid.js.
     // (No backticks in this comment: it is inside the page's template literal,
     // and one would end the string. Same trap as a backtick in a GLSL comment.)
-    for (const want of ['uTouch[0]', 'uTouchColor[0]', 'uTouchWarp', 'uTouchGain', 'uWake[0]']) {
+    // uBall[0] and uBallDir[0] are the Blubberball channel — the dents the ball
+    // springs into the lattice and the possession colour they are lit in. They
+    // are arrays for the same reason, and they carry one thing the others do
+    // not: the drop in uTeamA/uTeamB is the SHARED function systems/post.js
+    // paints the ball's own body with (systems/possessionGlsl.js), and it is
+    // the only piece of this shader that also has to compile inside another
+    // one. A uniform optimised away here is a trail that dents the water and
+    // never takes a colour.
+    for (const want of ['uTouch[0]', 'uTouchColor[0]', 'uTouchWarp', 'uTouchGain', 'uWake[0]',
+      'uBall[0]', 'uBallDir[0]', 'uBallWarp', 'uBallGain', 'uBallField', 'uTeamA', 'uTeamB', 'uShare', 'uSeed']) {
       const live = names.some((n) => n === want || n === want.replace('[0]', ''));
       if (!live) bad++;
       lines.push((live ? 'PASS  ' : 'FAIL  ') + want + ' survived into the linked program');

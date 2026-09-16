@@ -8,9 +8,10 @@ import * as THREE from 'three';
 import { CONFIG, difficultyRamp, enemyPaceMul } from '../path/src/config.js';
 import { bounds } from '../path/src/arena.js';
 import {
-  boats, resetBoats, updateBoats, boatGunTier, armBoat,
+  boats, resetBoats, updateBoats, boatGunTier, armBoat, gunRamp, shotCeiling,
 } from '../path/src/systems/boats.js';
 import { projectiles, resetProjectiles, updateProjectiles } from '../path/src/entities/projectiles.js';
+import { stepBodies } from '../path/src/systems/rigidBody.js';
 import { player } from '../path/src/entities/player.js';
 import { causesOfDeath, primaryCause } from '../path/src/deathCauses.js';
 
@@ -30,6 +31,10 @@ Math.random = seeded(0xB0A75);
 const scene = new THREE.Scene();
 const DT = 1 / 60;
 const g = CONFIG.boats.guns;
+// Captured before anything in this file touches them — spawnOne pins the window
+// at 999s and does not put it back. See the DPS section.
+const SPAWN_MIN = CONFIG.boats.spawnMin;
+const SPAWN_MAX = CONFIG.boats.spawnMax;
 
 section('tier by difficulty');
 check(boatGunTier(0)?.id === 'fish', 'a fresh run throws small fish', boatGunTier(0)?.id);
@@ -43,12 +48,29 @@ check(boatGunTier(g.tiers[1].minDifficulty - 0.01)?.id === 'fish', 'a hair under
   g.enabled = was;
 }
 
+// THE ROWS IN behaviour.csv ARE POSITIONAL, because `tiers` is an array and a
+// path table is keyed by a dotted path — `boats.guns.tiers.1.damage` is the
+// trout because the trout is second, and nothing in the spreadsheet says so.
+// Reorder the array and every row silently retunes a different gun, which is a
+// change that would look like no change at all. This is the check that makes
+// the CSV's notes true.
+section('the tier order the CSV rows are written against');
+{
+  const want = ['fish', 'trout', 'sailfish'];
+  want.forEach((id, i) => {
+    check(g.tiers[i]?.id === id, `tiers[${i}] is still the ${id} tier`,
+      `${g.tiers[i]?.id} — behaviour.csv's boats.guns.tiers.${i}.* rows tune whatever is here`);
+  });
+  check(g.tiers.length === want.length, 'and there are no tiers the CSV has never heard of',
+    `${g.tiers.length} tiers, ${want.length} named`);
+}
+
 section('arming');
 {
   const d = 20;
   const gun = armBoat(false, d);
-  const expect = g.tiers[2].damage * difficultyRamp('damage', d) * enemyPaceMul('damage');
-  check(Math.abs(gun.shot.damage - expect) < 1e-9, 'damage is priced on the enemy damage ramp at spawn',
+  const expect = Math.min(shotCeiling(), g.tiers[2].damage * gunRamp(d) * enemyPaceMul('damage'));
+  check(Math.abs(gun.shot.damage - expect) < 1e-9, 'damage is priced on the deck guns\' share of the ramp at spawn',
     `${gun.shot.damage.toFixed(2)} vs ${expect.toFixed(2)}`);
   check(gun.artillery === null, 'an ordinary boat never carries artillery');
   const chance = g.artillery.chance;
@@ -61,6 +83,50 @@ section('arming');
   const t = armBoat(true, 0);
   const b = armBoat(false, 0);
   check(t.rate < b.rate, 'a trawler reloads faster than a boat', `${t.rate} vs ${b.rate}`);
+}
+
+// ---------------------------------------------------------------------------
+// THE TWO THINGS THAT KEEP A DECK GUN FROM DELETING YOU
+// ---------------------------------------------------------------------------
+// Both are new, and both exist because the guns were measured throwing three to
+// six times the incoming damage per second of anything else in the water, with
+// a single late-run sailfish worth more than the seal's whole starting bar.
+section('the ramp share');
+{
+  check(Math.abs(gunRamp(0) - 1) < 1e-9, 'difficulty 0 pays exactly the tier row', String(gunRamp(0)));
+  const share = CONFIG.boats.guns.damageRampShare;
+  for (const d of [5, 15, 30, 45]) {
+    const full = difficultyRamp('damage', d);
+    const mine = gunRamp(d);
+    check(mine > 1 && mine < full, `a deck gun at difficulty ${d} still ramps, but under the roster's`,
+      `${mine.toFixed(2)} vs ${full.toFixed(2)}`);
+    check(Math.abs(mine - (1 + (full - 1) * share)) < 1e-9,
+      '...by exactly the share the CSV names', `${share}`);
+  }
+  // The share is taken of the EXCESS over 1, not of the ramp. Multiplying the
+  // whole ramp would price a difficulty-0 boat at 42% of its own tier row and
+  // make every number in that table a lie.
+  check(gunRamp(0) === 1, 'the share cannot move a difficulty-0 shot');
+}
+
+section('the per-shot ceiling');
+{
+  const cap = shotCeiling();
+  check(Math.abs(cap - CONFIG.player.maxHp * CONFIG.boats.guns.maxShotShare) < 1e-9,
+    'the ceiling is a share of the seal\'s BASE bar', `${cap.toFixed(1)} of ${CONFIG.player.maxHp}`);
+  check(cap < CONFIG.player.maxHp * (CONFIG.player.damageCap?.perSecond ?? 0.9),
+    '...and sits well under the rolling damage cap, so a boat alone can never reach it',
+    `${cap.toFixed(1)} vs ${(CONFIG.player.maxHp * (CONFIG.player.damageCap?.perSecond ?? 0.9)).toFixed(1)}`);
+  // Deep enough in the run that every row has run away from its own number.
+  for (const d of [45, 80, 200]) {
+    const gun = armBoat(true, d);
+    check(gun.shot.damage <= cap + 1e-9, `no fish off a hull at difficulty ${d} passes the ceiling`,
+      gun.shot.damage.toFixed(1));
+    if (gun.artillery) {
+      check((gun.artillery.mussel?.damage ?? 0) <= cap + 1e-9, '...nor a mussel', gun.artillery.mussel?.damage.toFixed(1));
+      check((gun.artillery.gull?.damage ?? 0) <= cap + 1e-9, '...nor the gull', gun.artillery.gull?.damage.toFixed(1));
+    }
+  }
 }
 
 // Spawn one boat through the real path and return it.
@@ -185,6 +251,132 @@ section('the artillery trawler');
   const before = projectiles.length;
   for (let i = 0; i < 120; i++) updateBoats(DT, scene, d, { x: air.x, y: -6 }, {});
   check(projectiles.length === before && b.gun.stage === 'ready', '...and lets it go when the seal dives first', `${projectiles.length - before} shots`);
+}
+
+// ---------------------------------------------------------------------------
+// THE TELL AND THE MARK
+// ---------------------------------------------------------------------------
+// The lights themselves cannot be asserted here — systems/boatShotFx.js paints
+// its falloff into a 2D canvas context and dom-stub has none, so every sprite
+// in this file comes back null and the effects are inert. What IS testable
+// headless is the bookkeeping around them, and the bookkeeping is where both of
+// the real failure modes live: a wind-up whose length the tell measures itself
+// against, and the mark combat.js reads to decide whose hit gets a pop.
+section('the wind-up the tell is drawn against');
+{
+  const b = spawnOne(0);
+  b.gun.timer = 0;
+  const under = { x: b.mesh.position.x + 6, y: -6 };
+  updateBoats(DT, scene, 0, under, {});
+  check(b.gun.stage === 'windup', 'the fish gun winds up', b.gun.stage);
+  check(b.gun.windupFull === g.windup, '...and records the length the tell ramps over',
+    `${b.gun.windupFull} vs ${g.windup}`);
+}
+{
+  const d = g.artillery.minDifficulty + 2;
+  const b = spawnOne(d, { trawler: true, artillery: true });
+  b.gun.aaTimer = 0;
+  b.gun.timer = 999;
+  updateBoats(DT, scene, d, { x: b.mesh.position.x + 5, y: bounds.surfaceY + 4 }, {});
+  // The two batteries have DIFFERENT wind-ups. A tell that measured the
+  // anti-air's against the fish gun's would run its blink at the wrong rate for
+  // the whole of it — and would read as correct, because both are in seconds.
+  check(b.gun.windupFull === g.artillery.windup, 'the anti-air records its own, longer wind-up',
+    `${b.gun.windupFull} vs the fish gun's ${g.windup}`);
+  check(g.artillery.windup > g.windup, '...and it IS longer — a seal in the air has the least control',
+    `${g.artillery.windup} vs ${g.windup}`);
+}
+{
+  const b = spawnOne(0);
+  const { first } = run(14, { x: b.mesh.position.x + 6, y: -6 });
+  // combat.js fires the impact pop on `boatShot` alone, so an unmarked shot is
+  // a deck gun that lands invisibly — which is the whole complaint the pop was
+  // added to answer.
+  check(first?.p.boatShot === true, 'every shot off a deck is marked for the impact pop',
+    String(first?.p.boatShot));
+  check(CONFIG.boats.guns.fx?.enabled === true, 'and the lights are on', String(CONFIG.boats.guns.fx?.enabled));
+  const tell = CONFIG.boats.guns.fx?.tell ?? {};
+  check(tell.blinkTo > tell.blinkFrom, 'the tell ACCELERATES — the rate is the warning, not the brightness',
+    `${tell.blinkFrom} -> ${tell.blinkTo} blinks/s`);
+  check((tell.minAlpha ?? 0) > 0, '...and never goes fully out between blinks, which would read as two lights',
+    String(tell.minAlpha));
+}
+
+// ---------------------------------------------------------------------------
+// WHAT A RUN ACTUALLY TAKES FROM THE BOATS
+// ---------------------------------------------------------------------------
+// The arming checks above price ONE shot. This is the number that was the
+// complaint: damage thrown per second at a seal that is just there, through the
+// real spawn loop, with as many hulls in the water as the run allows and every
+// one of them on its own reload.
+//
+// THE BODIES HAVE TO BE STEPPED or this measures nothing. A boat's position is
+// a RigidBody's (see spawnBoat), and updateBoats only writes accelerations into
+// it — without stepBodies every hull sits at the edge it spawned on, never
+// closes to `range`, and the whole arena fires zero shots while every assertion
+// about cadence passes. It is the exact shape of a harness that agrees with
+// you: the number comes out 0.00 and 0 is under any ceiling you care to name.
+//
+// SEEDED AND AVERAGED. Reloads, the trawler roll and the artillery roll are all
+// random, so one run is a coin toss — and the fix for a flaky threshold here is
+// more seeds, never a lower bar.
+section('incoming damage per second');
+{
+  const SECONDS = 240;
+  const SEEDS = [1, 2, 3, 4, 5];
+  // THE SPAWN WINDOW BACK. spawnOne above pins it at 999s so a second hull
+  // cannot sail in mid-test and never puts it back — which is correct for every
+  // check before this one and fatal for this one, because it is the only
+  // section that wants the real spawn loop. Without this the arena stays empty,
+  // every shot count is 0, and the ceiling below passes on a system that was
+  // switched off. See the note at the top of this section.
+  CONFIG.boats.spawnMin = SPAWN_MIN;
+  CONFIG.boats.spawnMax = SPAWN_MAX;
+  const measure = (difficulty) => {
+    let total = 0;
+    for (const seed of SEEDS) {
+      Math.random = seeded(seed * 7919);
+      resetProjectiles(scene);
+      resetBoats(scene);
+      let dmg = 0;
+      const pos = { x: 0, y: -6 };
+      for (let i = 0; i < Math.round(SECONDS / DT); i++) {
+        const before = projectiles.length;
+        stepBodies(DT);
+        updateBoats(DT, scene, difficulty, pos, {});
+        for (let k = before; k < projectiles.length; k++) {
+          if (projectiles[k].faction === 'enemy') dmg += projectiles[k].damage;
+        }
+        updateProjectiles(DT, scene, [], () => {}, () => {}, () => {});
+      }
+      total += dmg / SECONDS;
+    }
+    return total / SEEDS.length;
+  };
+
+  const hp = CONFIG.player.maxHp;
+  const rows = [0, 10, 30, 45].map((d) => [d, measure(d)]);
+  for (const [d, dps] of rows) {
+    console.log(`  difficulty ${String(d).padStart(2)}: ${dps.toFixed(2)} damage/s thrown `
+      + `(${((dps / hp) * 100).toFixed(1)}% of a starting bar per second)`);
+  }
+  // A CEILING ON THE WHOLE SYSTEM, not on one gun. This is damage THROWN at a
+  // stationary seal, so it is the worst case and not what a moving player takes
+  // — but it is the number that has to stay bounded, because the counterplay is
+  // swimming and the player is already swimming away from something else.
+  //
+  // A fifteenth of the bar a second is the bar in fifteen seconds with nothing
+  // else in the water, which is a real threat and not a death sentence. It was
+  // over a THIRD of the bar a second at difficulty 45 before this pass.
+  const worst = Math.max(...rows.map(([, dps]) => dps));
+  check(worst < hp * 0.067, 'the deck guns stay under a fifteenth of the starting bar per second',
+    `worst ${worst.toFixed(2)}/s vs ${(hp * 0.067).toFixed(2)}`);
+  // ...AND THEY ARE STILL A THREAT. The failure in the other direction is
+  // silent: every ceiling above would also be satisfied by guns that had been
+  // turned off, and nothing else in this file would notice.
+  check(rows[0][1] > 0.2, 'a boat at minute one is still shooting at you', `${rows[0][1].toFixed(2)}/s`);
+  check(rows[3][1] > rows[0][1] * 2, 'and a deep-run boat is meaningfully worse than a fresh one',
+    `${rows[0][1].toFixed(2)}/s -> ${rows[3][1].toFixed(2)}/s`);
 }
 
 section('death credit');

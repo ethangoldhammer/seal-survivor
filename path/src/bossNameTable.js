@@ -69,6 +69,7 @@
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
+import { withoutRecent, rememberPick, rememberName, wasJustRolled } from './namePool.js';
 
 const LABEL = 'bossNames';
 const FILE = 'bossNames.csv';
@@ -115,6 +116,7 @@ const DEFAULT_NICKNAME_CHANCE = 0.25;
 // is a visibly broken health bar, and it would be caused by a file the player
 // can edit — so every failure path below ends at this name instead.
 export const FALLBACK_BOSS_NAME = 'The Old Shadow';
+
 
 // A `bosses` cell into a list of ids. Space OR comma, for the same reason
 // `spawnGroup` accepts both: the value comes out of a spreadsheet cell, where
@@ -225,7 +227,10 @@ export function parseBossNameCsv(text, warn = console.warn, known = null) {
 // One part from one slot, weighted. Same contract as pickQuip: a slot whose
 // every weight is 0 picks uniformly rather than returning nothing, because
 // the file is misconfigured and no name is worse than an unwanted one.
-function pickPart(parts, random) {
+// `memory`/`slot` narrow the pool to what has not been drawn lately -- see
+// namePool.js. Both optional, so every existing caller is unchanged.
+function pickPart(parts, random, memory = null, slot = '', keep = undefined) {
+  parts = memory ? withoutRecent(parts, memory, slot, keep) : parts;
   if (!parts?.length) return null;
 
   let total = 0;
@@ -319,6 +324,11 @@ function poolFor(parts, slot, boss, perk, exclusive = false) {
  * in each — a perk with four prefixes and two epithets front-loads more often,
  * which is what an author writing four prefixes was asking for.
  */
+// MEMORY IS THE CALLER'S, never a module-level default. The same reasoning as
+// bossState.bag in bossTable.js: a roll that quietly reads hidden state is no
+// longer a function of its arguments, so two seeded loops in one harness stop
+// being reproducible -- which is exactly how this arrived, as tools/boss-test
+// failing an exclusivity check that had nothing to do with cooldowns.
 export function rollBossName(parts, opts = {}, random = Math.random) {
   // Called as rollBossName(parts, random) before the roster existed, and the
   // shape of the second argument is what tells the two apart. Not a nicety: a
@@ -366,10 +376,26 @@ export function rollBossName(parts, opts = {}, random = Math.random) {
     }
   }
 
+  // The memory this roll draws against -- the caller's, or the module's own.
+  // A default here rather than at the call site: systems/boss.js rolls a name
+  // per boss and has nowhere natural to keep one.
+  const mem = opts.memory ?? null;
+  const keep = opts.keepRecent;
+  // WHAT THE ROLL ACTUALLY USED, filed once at the end rather than as each
+  // part is drawn. A part the roll discarded -- an epithet that echoed, a
+  // nickname refused because the perk needed the prefix -- was never seen by
+  // anyone, and putting it on cooldown would quietly thin the pool.
+  const used = { prefix: null, root: null, nickname: null, epithet: null };
+  const finish = (name, epithet = null) => {
+    used.epithet = epithet;
+    for (const [slot, row] of Object.entries(used)) if (row) rememberPick(mem, slot, row.id, keep);
+    rememberName(mem, name, keep);
+    return name;
+  };
   const draw = (slot, filter = null) => {
     let pool = poolFor(parts, slot, boss, slot === perkSlot ? perk : null, exclusive);
     if (filter) pool = pool.filter(filter);
-    return pickPart(pool, random);
+    return pickPart(pool, random, mem, slot, keep);
   };
 
   // --- the nickname decision ------------------------------------------------
@@ -413,18 +439,18 @@ export function rollBossName(parts, opts = {}, random = Math.random) {
     // with the fallback would mean the feature working perfectly and every
     // boss still called "The Old Shadow".
     if (!prefix || !root) nickname = draw('nickname', nickFilter);
-    else { name = `${prefix.text}${root.text}`; echoAgainst = root.text; }
+    else { name = `${prefix.text}${root.text}`; echoAgainst = root.text; used.prefix = prefix; used.root = root; }
   }
   if (!name && !nickname) return FALLBACK_BOSS_NAME;
 
   // A nickname has no halves to pick from, so the whole of it is what an
   // epithet must not echo.
-  if (nickname) { name = nickname.text; echoAgainst = nickname.text; }
+  if (nickname) { name = nickname.text; echoAgainst = nickname.text; used.nickname = nickname; }
 
   // SOLO IS THE END OF THE NAME. Checked before the epithet is drawn rather
   // than after, so a solo nickname cannot be knocked back into a reroll by the
   // echo logic below.
-  if (nickname?.solo) return name;
+  if (nickname?.solo) return finish(name);
 
   let epithet = draw('epithet');
   if (epithet && echoes(echoAgainst, epithet.text)) {
@@ -432,8 +458,8 @@ export function rollBossName(parts, opts = {}, random = Math.random) {
     // Dropped only when it is a GENERAL epithet. Dropping a perk's would trade
     // the echo for a boss whose name no longer says what it does, and the echo
     // is a cosmetic wobble while the missing telegraph is the feature failing.
-    if (epithet && echoes(echoAgainst, epithet.text) && perkSlot !== 'epithet') return name;
+    if (epithet && echoes(echoAgainst, epithet.text) && perkSlot !== 'epithet') return finish(name);
   }
 
-  return epithet ? `${name} ${epithet.text}` : name;
+  return finish(epithet ? `${name} ${epithet.text}` : name, epithet);
 }

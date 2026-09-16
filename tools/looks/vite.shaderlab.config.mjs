@@ -13,7 +13,19 @@ const PROJECT = resolve(HERE, '../..');
 
 export default defineConfig({
   root: PROJECT,
-  base: './',
+  // ROOT-ABSOLUTE, not './' — the same trap vite.versus.config.mjs documents,
+  // and on THIS page it is the whole point of the page. Every media path in the
+  // game is written '/models/…' and assetPath.js rewrites it through
+  // import.meta.env.BASE_URL, so a base of './' resolves it against THE
+  // DOCUMENT — which here is /tools/looks/shader-lab.html. All 100 models then
+  // 404 at /tools/looks/models/… and createVisual falls back to the primitive
+  // stand-in, silently: a missing model is a console warning and a shape, never
+  // an error. So the lab was painting its shaders onto cones and boxes for
+  // every subject in the roster, which looks like a lab that works.
+  //
+  // serve.mjs mounts the build at '/' and public/models, /textures, /sprites
+  // and /flags beside it, so '/' is the truth for this server.
+  base: '/',
   build: {
     // The page awaits preloadAssets at the top level.
     target: 'esnext',

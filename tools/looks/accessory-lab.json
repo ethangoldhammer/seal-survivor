@@ -1,7 +1,9 @@
 {
   "items": {
-    "accessoryCowboy": {
-      "size": 1.391
+    "accessoryUshanka": {
+      "snout": 0.186,
+      "lift": 0.35,
+      "depth": 0
     }
   }
 }

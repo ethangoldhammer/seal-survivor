@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { resolutionScale } from './systems/settings.js';
 import { createAdaptiveScale } from './systems/adaptiveScale.js';
-import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, maxWaveExcursion, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z, FLOOR_OVERSCAN } from './arena.js';
+import { bounds, updateBounds, surfaceHeightAt, setWaveTime, setSeaState, SEABED_HEIGHT, SEABED_Z, WATER_FILL_Z, FLOOR_OVERSCAN } from './arena.js';
 import { createGrid } from './systems/grid.js';
 import { createConstellations } from './systems/constellations.js';
 import { createWaterMaterial, updateWaterMaterial, setWaterWaveTime, liveCaustics } from './systems/water.js';
@@ -16,8 +16,15 @@ import { createRain, weatherState } from './systems/weather.js';
 import { createLightning } from './systems/lightning.js';
 import { createHorizonGlow } from './systems/horizon.js';
 import { createWallRocks } from './systems/wallRocks.js';
-import { cameraReach, tunnelDepth } from './systems/versusGoal.js';
-import { versusActive } from './systems/versusFlag.js';
+import { cameraReach } from './systems/versusGoal.js';
+// The replay's perspective camera — the only camera in the game that ever
+// leaves the plane, and therefore the only one the deep shell below is for.
+import { poolState } from './systems/replayCams.js';
+// WHERE THE BACKDROP'S EDGES GO. Kept out of this file so `npm run test:seams`
+// can ask the same functions whether a shot can see past one — a mesh cannot be
+// built without a GL context, and a copy of these numbers in the test is a test
+// that passes the day the shipped ones change.
+import { matchMargins, backdropWidth, seabedSkirt, waveHeadroom, shellReach, SKY_Z } from './systems/backdropFit.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
 import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
 import { mark as crashMark } from './systems/crashLog.js';
@@ -232,6 +239,9 @@ export function createWorld(container) {
   // so colour changes can update them in place every frame with no rebuild —
   // only their geometry (size/position) needs to change on resize.
   let skyMesh = null, seabedMesh = null, depthLines = null, waterMesh = null;
+  // The deep shell — see buildBackdrop. A horizontal quad that only the
+  // replay's perspective camera can see.
+  let shellFloor = null;
   let waterClock = 0;
 
   let surfaceLine = null;
@@ -255,6 +265,7 @@ export function createWorld(container) {
     seabedMesh = null;
     depthLines = null;
     waterMesh = null;
+    shellFloor = null;
   }
 
   function plane(width, height, color, y, z, opacity = 1) {
@@ -267,26 +278,27 @@ export function createWorld(container) {
   }
 
   /**
-   * How much further than a run the backdrop has to reach in a MATCH, per
-   * side: sideways into each goal's tunnel, and up and down for a frame that
-   * may zoom out below 1 to hold both seals (CONFIG.versus.camera.zoomMin) —
-   * at zoomMin the frame is 1/zoomMin of the arena tall, and the half of that
-   * past the arena's own height is what would otherwise be bare background.
+   * THE DEEP SHELL'S FLOOR: a horizontal quad flat on the y = `y` plane, `size`
+   * across in both x and z, centred on the arena. DoubleSide so a camera that
+   * ends up under it sees sand rather than nothing — poseShot's floorInset keeps
+   * it above, but one material that does not care costs nothing to be sure.
+   * Hidden until a replay camera is the one rendering — see updateColors.
    */
-  function matchMargins() {
-    if (!versusActive()) return { side: 0, vertical: 0 };
-    const zoomMin = Math.max(0.1, Math.min(1, CONFIG.versus?.camera?.zoomMin ?? 1));
-    const arenaH = bounds.top - bounds.bottom;
-    return {
-      side: tunnelDepth() + 2,
-      vertical: Math.max(0, (arenaH / zoomMin - arenaH) / 2) + 2,
-    };
+  function shell(size, y, color) {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthWrite: true })
+    );
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(0, y, 0);
+    m.visible = false;
+    return m;
   }
 
   function buildBackdrop() {
     disposeBackdrop();
     const margins = matchMargins();
-    const w = bounds.width * 1.2 + margins.side * 2; // overscan so nothing pops at the edges
+    const w = backdropWidth(margins); // overscan so nothing pops at the edges
     const airH = bounds.top - bounds.surfaceY;
     const seaH = bounds.surfaceY - bounds.bottom;
 
@@ -303,7 +315,7 @@ export function createWorld(container) {
     skyMat.uniforms.uAirH.value = sky.gradientAirH;
     // ...and taller in a match, for the frame's zoom-out (matchMargins).
     skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, sky.height + margins.vertical), skyMat);
-    skyMesh.position.set(0, sky.centerY + margins.vertical / 2, -6);
+    skyMesh.position.set(0, sky.centerY + margins.vertical / 2, SKY_Z);
     backdrop.add(skyMesh);
 
     // The fill runs WAVE_HEADROOM above the still-water line and its shader
@@ -316,8 +328,7 @@ export function createWorld(container) {
     // itself to the wave, so a crest past the top of the geometry is a hard
     // horizontal cut across the sea. Safe to fix at build time: every path
     // that changes these numbers goes through world.resize().
-    const stormAmp = CONFIG.arena.waveAmplitude * Math.max(1, CONFIG.weather?.sea?.amp ?? 1);
-    const WAVE_HEADROOM = maxWaveExcursion(stormAmp, 1) + 1.5;
+    const WAVE_HEADROOM = waveHeadroom();
     const waterH = seaH + WAVE_HEADROOM;
     const waterCY = bounds.surfaceY + WAVE_HEADROOM / 2 - seaH / 2;
     const waterMat = createWaterMaterial();
@@ -359,9 +370,46 @@ export function createWorld(container) {
     // Two units deeper than the camera is ever allowed to go, so the bottom
     // edge of the frame lands on seabed rather than on the seam.
     // ...and deeper in a match, for the frame's zoom-out (matchMargins).
-    const skirt = FLOOR_OVERSCAN + 2 + margins.vertical;
+    const skirt = seabedSkirt(margins);
     seabedMesh = plane(w, SEABED_HEIGHT + skirt, CONFIG.colors.seabed, bounds.bottom + SEABED_HEIGHT / 2 - skirt / 2, SEABED_Z);
     backdrop.add(seabedMesh);
+
+    // THE DEEP SHELL — the sand as a SURFACE rather than as a picture of one.
+    //
+    // Everything above is a flat picture standing a few units behind the play:
+    // a complete backdrop for the game's orthographic camera, which looks
+    // straight down -z and can never reach the edge of anything. The replay's
+    // camera is a perspective one that leaves the plane (systems/replayCams.js),
+    // and it can look ALONG that picture and then past it — at which point there
+    // is no backdrop at any distance, because the whole backdrop is at z ~ -5.
+    // Those pixels are `scene.background`, one flat colour, the sky's horizon.
+    //
+    // ABOVE THE HORIZON that is the right answer and always was: a ray going up
+    // from under the water would cross the surface somewhere out there and show
+    // sky, and the sky's own horizon colour is what sky at that distance looks
+    // like. BELOW it, it is the seam — pale sky where the black floor should
+    // simply keep going, which is what the high angles were showing.
+    //
+    // So: a floor, at the top of the sand, running far enough out in x and z
+    // that no shot in the pool reaches an edge. `npm run test:seams` casts every
+    // shot's frame at the backdrop and holds it to no bare pixel below the
+    // horizon — 54% of the celebration shot's frame was bare before this.
+    //
+    // NO LID over the water, and that was tried: an opaque quad on the still
+    // line is in front of the sky plane from any camera under the surface, so
+    // it covered the entire sky with flat blue. The horizon rule above is why
+    // nothing is needed there.
+    //
+    // IT COSTS NOTHING IN A RUN, and nothing in play: two triangles, one flat
+    // colour, no lighting, hidden on every frame the replay's camera is not the
+    // one rendering (see updateColors). Even unhidden the game's camera would
+    // see it exactly edge-on — a horizontal plane viewed along the horizontal —
+    // but "invisible because it rasterises to nothing" is a promise about float
+    // precision, and the visibility gate is a promise about which camera is
+    // looking. It is the seabed's own colour, so it meets the strip's top edge
+    // with nothing between them.
+    shellFloor = shell(shellReach(), bounds.bottom + SEABED_HEIGHT, CONFIG.colors.seabed);
+    backdrop.add(shellFloor);
 
     // Animated water surface. The segment COUNT follows the width rather than
     // being fixed at the 140 that used to span the frame: the chop term of the
@@ -438,6 +486,13 @@ export function createWorld(container) {
     clouds.update(dt, camAnchor.x);
     if (seabedMesh) seabedMesh.material.color.set(CONFIG.colors.seabed);
     if (depthLines) depthLines.material.color.set(CONFIG.colors.depthLine);
+    // THE DEEP SHELL, on for exactly the frames the replay's camera renders —
+    // the same test replayRenderCamera makes in systems/versus.js, so the two
+    // cannot disagree about which camera is looking.
+    if (shellFloor) {
+      shellFloor.visible = poolState.active && poolState.shot >= 0;
+      shellFloor.material.color.set(CONFIG.colors.seabed);
+    }
     if (surfaceLine) {
       const hg = CONFIG.horizonGlow;
       const tw = CONFIG.dayNight?.enabled ? skyLight.twilight : 0;

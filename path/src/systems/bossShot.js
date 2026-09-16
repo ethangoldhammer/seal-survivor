@@ -764,7 +764,7 @@ function drawScorecard(g, run, x, y, w, h) {
   // card that is set large and whose width is a name nobody chose for its
   // length. Beside the boss count it has most of the band to itself, and what
   // it does have is measured against what that count actually took.
-  const url = cfg().url ?? 'seal-survivor.pages.dev';
+  const url = cfg().url ?? 'sealsurvivor.com';
   g.textAlign = 'right';
   g.fillStyle = 'rgba(232,236,243,0.5)';
   fitText(g, url, x + inner, subY,
@@ -955,8 +955,8 @@ export async function shareBossShot(index) {
   if (!shot?.url) return 'unavailable';
   const title = shot.name ? `I beat ${shot.name}` : 'Seal Survivor';
   const text = shot.name
-    ? `${title} at level ${shot.level} in Seal Survivor. ${cfg().url ?? 'https://seal-survivor.pages.dev'}`
-    : `Seal Survivor. ${cfg().url ?? 'https://seal-survivor.pages.dev'}`;
+    ? `${title} at level ${shot.level} in Seal Survivor. ${cfg().url ?? 'https://sealsurvivor.com'}`
+    : `Seal Survivor. ${cfg().url ?? 'https://sealsurvivor.com'}`;
   // The polaroid if there is one, the captioned composite if not — same file
   // name and same words either way, because what changed is how the picture
   // looks and not what it is.
@@ -1085,7 +1085,7 @@ export async function shareRunSheet(run = {}) {
   const title = 'My Seal Survivor run';
   const text = `${bosses} boss${bosses === 1 ? '' : 'es'} down, level ${run.level ?? 0},`
     + ` ${Math.floor(run.score ?? 0).toLocaleString()} points in Seal Survivor.`
-    + ` ${cfg().url ?? 'https://seal-survivor.pages.dev'}`;
+    + ` ${cfg().url ?? 'https://sealsurvivor.com'}`;
   return handOver(sheet.blob, sheet.url, 'seal-survivor-run.png', title, text);
 }
 

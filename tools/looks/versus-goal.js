@@ -23,7 +23,14 @@ import {
   shore, shoreOverscan, refreshGoalGlow, tickGoalGlow, flashGoalScored, clearGoalScored,
   setGoalSwimmers, setGoalBall, goalGlowImpulse, resetGoalStir, goalGlowState,
 } from '../../path/src/systems/wallRocks.js';
-import { mouthHalfHeight, tunnelDepth, rockX, goalLineX, cameraReach } from '../../path/src/systems/versusGoal.js';
+import { mouthHalfHeight, tunnelDepth, rockX, goalLineX, cameraReach, installGoalHoles } from '../../path/src/systems/versusGoal.js';
+// THE GOAL ITSELF — the shipping modules, so the last block of this page can
+// score one rather than describe one. See the section at the bottom.
+import { initPlayer, resetPlayer, player, buildSealBody, updatePlayer, poseBody } from '../../path/src/entities/player.js';
+import { initParticles, updateParticles, updateParticleScale } from '../../path/src/entities/particles.js';
+import { updateOutlineScale } from '../../path/src/systems/outlines.js';
+import { ball, p2, initBallAlone, stepBallAlone, renderBall, goalBlast } from '../../path/src/systems/versus.js';
+import { fireGoalJet, updateGoalJets, resetGoalJets, goalJets, goalJetOrigin } from '../../path/src/systems/goalJet.js';
 
 const logEl = document.getElementById('log');
 const sheetEl = document.getElementById('sheet');
@@ -52,9 +59,18 @@ document.body.appendChild(container);
 const world = createWorld(container);
 world.renderer.setPixelRatio(1);
 world.renderer.setSize(1280, 720);
+// BEFORE createPost's first resize: the goo pass sizes itself off a particle
+// system that has to exist by then, and a resize with none throws from inside
+// three.js on a uniform that was never made. Empty, it draws nothing — every
+// shot above this page's last section is the picture it always was.
+initParticles(world.scene);
 const post = createPost(world.renderer);
 
 enableVersus(true);
+// The mouths as a hole a BODY may enter, not only as a hole the rock is cut
+// for — arena.clampToArena reads this, and without it the keeper in the last
+// section stands against a flat wall where the goal is.
+installGoalHoles(true);
 world.resize();
 // The renderer's size is the WINDOW's (pinned above) at the pixel ratio the
 // world chose; pin the ratio to 1 and re-size so the drawing buffer IS the
@@ -86,6 +102,13 @@ function pixels() {
   // (updateSurface calls updateColors). A few frames so the clocks are real
   // numbers and the sky has settled.
   for (let i = 0; i < 4; i++) world.updateSurface(1 / 60);
+  // RE-PINNED EVERY SHOT. world.resize() takes the device's pixel ratio, and
+  // it runs on any window resize — so showing the Browser pane part-way
+  // through a run doubled the drawing buffer to 2560x1440 while every pixel
+  // probe on this page still measured a 1280-wide frame. The markers check
+  // then failed on a picture that was perfectly correct.
+  world.renderer.setPixelRatio(1);
+  world.renderer.setSize(1280, 720, false);
   post.resize();
   post.render(world.scene, world.camera, 1 / 60);
   const c = document.createElement('canvas');
@@ -191,6 +214,19 @@ await shot('right wall, zoom 1', 'the furthest right the match camera may look')
 place(bounds.left + world.halfExtents(2).w - reach, gy, 2);
 const px = (x) => Math.round(((x - (bounds.left - reach)) / (2 * world.halfExtents(2).w)) * 1280);
 const region = [px(rockX(-1)), 0, Math.min(1280, px(rockX(-1) + 6)), 720];
+// PROBE: the same frame with the throw off, so a failure here can be told
+// apart from the throw dimming the spill.
+// THE THROW IS NOT WHAT DIMS THIS. Measured with tunnelFalloff forced to 1,
+// this region reads exactly what it reads with the throw on — so a failure
+// below is the light's own spill and feather, never the corridor's
+// absorption. Kept as a probe because the two are easy to confuse and one of
+// them is a tuning slider somebody moved this morning.
+{
+  const tunedThrow = CONFIG.versus.goal.tunnelFalloff;
+  CONFIG.versus.goal.tunnelFalloff = 1; refreshGoalGlow();
+  log(`the same region with the throw OFF: ${(greenShare(pixels(), ...region) * 100).toFixed(2)}%`);
+  CONFIG.versus.goal.tunnelFalloff = tunedThrow; refreshGoalGlow();
+}
 const base = greenShare(b, ...region);
 const savedGlow = CONFIG.versus.goal.glow; const savedSpill = CONFIG.versus.goal.spill;
 CONFIG.versus.goal.glow = 0.6; CONFIG.versus.goal.spill = 3;
@@ -268,6 +304,190 @@ check('...and a tuning change moves it', hot < base - 0.05, `${(hot * 100).toFix
   log(`noise: relative roughness ${broken.std.toFixed(3)} with it vs ${smooth.std.toFixed(3)} without (means ${broken.mean.toFixed(0)} / ${smooth.mean.toFixed(0)}) — see the two shots`);
   check('...and it moves with the clock', moved > 3, `${moved.toFixed(1)}% of the region changed over a second`);
 }
+// ---------------------------------------------------------------------------
+// THE TRIM — bringing the falloff in without touching its edge.
+//
+// CONFIG.versus.goal.trim is the power the falloff is raised to, and the claim
+// it makes is one that feather and spill cannot: the light carries less far
+// and the edge it stops at does NOT get sharper. Both halves are about a
+// PROFILE rather than about a frame, so both are measured off one here — the
+// green channel along a row out from the face into the open water, which is
+// the falloff with nothing in the way of it.
+//
+//   IT SHORTENS THE LIGHT.   the profile has to die sooner as trim comes down.
+//   IT CANNOT MAKE A LINE.   the steepest step in that profile must NOT grow.
+//
+// The second is the whole point of the control, and the only way to say it
+// honestly is against the alternative: feather pulled down far enough to reach
+// the same distance, which gets there by drawing the same edge steeper. Both
+// are measured, so the claim is a comparison rather than an assertion.
+//
+// AT THE TUNED FEATHER, whatever that is. This ran first against a page that
+// forced its own, and passed every line while the control did nothing at all:
+// the tuning in the file is feather 1, where the first parameterisation of
+// this — sliding the ramp inward inside its own reach — has no room to move
+// and is exactly inert. A look page that sets up its own subject cannot find
+// that. So the profile is taken at the numbers the game is actually carrying.
+//
+// NOISE OFF AND THE GLOW DOWN. A saturated light clips its own profile flat
+// and every gradient in it reads the same; the noise puts a step between
+// neighbouring pixels that has nothing to do with the falloff. Both would
+// answer this question wrongly and neither would look wrong.
+// ---------------------------------------------------------------------------
+{
+  place(bounds.left + world.halfExtents(2).w - reach, gy, 2);
+  const G = CONFIG.versus.goal;
+  const saved = { glow: G.glow, spill: G.spill, spillOut: G.spillOut, feather: G.feather, trim: G.trim, noise: G.noise.enabled };
+  G.glow = 1.2; G.noise.enabled = false;
+  // Out into the OPEN WATER, where spillOut is the reach and nothing is drawn
+  // over the light. Past the lips it is rock and the boulders own those pixels.
+  const y = 360;
+  const x0 = px(rockX(-1));
+  const x1 = Math.min(1279, px(rockX(-1) + G.spillOut * 1.3));
+  // THE LIGHT'S OWN CONTRIBUTION, and not the frame's brightness.
+  //
+  // The first cut of this read the GREEN channel, because the left goal is the
+  // green team in the defaults — and the tuning in the file has colors null and
+  // a left goal that is not green at all. Every sample came back as backdrop
+  // and composite grain, which is flat: the profile read 849px of reach at
+  // every trim and the sweep passed its softness check while proving nothing.
+  //
+  // So: brightest channel, minus a BASELINE taken with the glow at zero. The
+  // light is additively blended, so glow 0 contributes exactly nothing and the
+  // difference is exactly the light — whatever colour the teams happen to be,
+  // and with the rock, the water and the grain subtracted rather than hoped
+  // past. Three rows averaged to drop what is left of the grain.
+  const row = (canvas) => {
+    const w = x1 - x0;
+    const d = canvas.getContext('2d').getImageData(x0, y - 1, w, 3).data;
+    const out = new Float32Array(w);
+    for (let i = 0; i < w; i++) {
+      let sum = 0;
+      for (let r = 0; r < 3; r++) {
+        const o = ((r * w) + i) * 4;
+        sum += Math.max(d[o], d[o + 1], d[o + 2]);
+      }
+      out[i] = sum / 3;
+    }
+    return out;
+  };
+  const litGlow = G.glow;
+  G.glow = 0; refreshGoalGlow();
+  const baseline = row(pixels());
+  G.glow = litGlow; refreshGoalGlow();
+  const profile = (canvas) => {
+    const r = row(canvas);
+    for (let i = 0; i < r.length; i++) r[i] = Math.max(0, r[i] - baseline[i]);
+    return r;
+  };
+  // How far the light carries, in pixels: the last sample still above a tenth
+  // of the profile's own peak. Relative, because trim changes the peak nothing
+  // and a fixed threshold would be measuring the glow instead.
+  const reachOf = (pr) => {
+    const peak = Math.max(...pr);
+    let last = 0;
+    for (let i = 0; i < pr.length; i++) if (pr[i] > peak * 0.1) last = i;
+    return last;
+  };
+  // The steepest fall between neighbouring pixels, as a share of the peak. THIS
+  // is the hard line: an edge is a big number here whatever it looks like in a
+  // thumbnail, and a soft ramp is a small one however short it is.
+  const steepest = (pr) => {
+    const peak = Math.max(1, Math.max(...pr));
+    let worst = 0;
+    for (let i = 1; i < pr.length; i++) worst = Math.max(worst, (pr[i - 1] - pr[i]) / peak);
+    return worst;
+  };
+
+  const runs = [];
+  for (const t of [1, 0.6, 0.4, 0.25]) {
+    G.trim = t; refreshGoalGlow();
+    const c = await shot(`left mouth, trim ${t}`, t === 1 ? 'the tuned default — the square this replaced, to the pixel' : `the tail raised to ${(2 / t).toFixed(1)}: shorter, and a flatter shoulder`);
+    const pr = profile(c);
+    runs.push({ t, reach: reachOf(pr), step: steepest(pr) });
+  }
+  for (const r of runs) log(`  trim ${r.t}: carries ${r.reach}px, steepest step ${(r.step * 100).toFixed(2)}% of peak`);
+
+  const full = runs[0]; const shortest = runs[runs.length - 1];
+  check('the trim shortens the light', shortest.reach < full.reach - 4,
+    `${full.reach}px at trim 1 down to ${shortest.reach}px at trim ${shortest.t}`);
+  check('...and every step of it is shorter than the one before',
+    runs.every((r, i) => i === 0 || r.reach <= runs[i - 1].reach + 2),
+    runs.map((r) => `${r.t}:${r.reach}px`).join(' '));
+  // The claim. Not "the edge is soft" — it was soft at trim 1 — but that
+  // trimming does not MAKE it harder, which is the thing feather does.
+  const worstStep = Math.max(...runs.map((r) => r.step));
+  check('...and it never sharpens the edge to do it', worstStep <= full.step * 1.25 + 0.01,
+    `worst ${(worstStep * 100).toFixed(2)}% vs ${(full.step * 100).toFixed(2)}% untrimmed`);
+
+  // THE ALTERNATIVES, measured — the two knobs that were already here, asked to
+  // do the same job.
+  //
+  // FEATHER CANNOT, AND NOT BECAUSE IT IS SET WRONG. It is the share of the
+  // reach that fades, so taking it DOWN lengthens the light: a small feather is
+  // a flat slab out to the rim with a quick edge on the end of it, which is
+  // both further and harder. The direction that shortens is up, and the tuning
+  // in the file already has it at 1 — the ceiling, the whole reach ramped,
+  // nowhere left to go. That is the wall this control exists on the far side
+  // of, so it is worth measuring rather than asserting: the first cut of this
+  // page swept feather DOWNWARD looking for a shorter light and reported 849px
+  // every time, which is the frame's full width and means saturated.
+  G.trim = 1;
+  const atFeather = [];
+  for (const f of [1, 0.5, 0.15]) {
+    G.feather = f; refreshGoalGlow();
+    const pr = profile(pixels());
+    atFeather.push({ f, reach: reachOf(pr), step: steepest(pr) });
+  }
+  for (const r of atFeather) log(`  feather ${r.f}: carries ${r.reach}px, steepest step ${(r.step * 100).toFixed(2)}% of peak`);
+  check('feather cannot shorten the light — down is LONGER, and up is already spent',
+    atFeather[2].reach >= atFeather[0].reach - 2 && (saved.feather ?? 0.55) >= 0.99,
+    `${atFeather[0].reach}px at feather 1 (the tuned value, and the ceiling) vs ${atFeather[2].reach}px at 0.15`);
+  G.feather = saved.feather;
+
+  // SPILLOUT CAN, and this is what it costs. The reach pulled in until the
+  // light dies about where the trimmed one does — the same distance by the
+  // other route, and the edge it takes to get there.
+  const savedOut = G.spillOut;
+  let byOut = null;
+  for (const o of [saved.spillOut * 0.75, saved.spillOut * 0.5, saved.spillOut * 0.35, saved.spillOut * 0.25]) {
+    G.spillOut = o; refreshGoalGlow();
+    const pr = profile(pixels());
+    byOut = { o, reach: reachOf(pr), step: steepest(pr) };
+    if (byOut.reach <= shortest.reach + 8) break;
+  }
+  await shot(`left mouth, spillOut ${byOut.o.toFixed(0)} instead`,
+    `about the same reach by pulling the rim in — ${byOut.reach}px, and the edge it takes to get there`);
+  log(`  spillOut ${byOut.o.toFixed(0)}: carries ${byOut.reach}px, steepest step ${(byOut.step * 100).toFixed(2)}% of peak`);
+  check('...and spillOut, reaching the same distance, is the harder edge',
+    byOut.step > shortest.step, `${(byOut.step * 100).toFixed(2)}% vs the trim's ${(shortest.step * 100).toFixed(2)}%`);
+  G.spillOut = savedOut;
+
+  // AND 1 IS EXACTLY WHAT SHIPPED. A default that is not a no-op is a silent
+  // retune of a light somebody already tuned, and it would arrive looking like
+  // a bug in the trim rather than like a moved number.
+  // AND 1 CHANGES NOTHING — against a CONTROL, because two renders of this page
+  // are never the same picture: pixels() advances the surface and the sky four
+  // frames every time it is called. So the control is that churn with nothing
+  // touched at all, and the test is that removing the trim adds none of its
+  // own on top of it. On the PROFILE rather than the whole frame, which is
+  // where the light is and where most of the sky is not.
+  G.feather = saved.feather;
+  G.trim = 1; refreshGoalGlow();
+  const withOne = profile(pixels());
+  const gap = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+  const churn = gap(withOne, profile(pixels()));
+  delete G.trim; refreshGoalGlow();
+  const moved = gap(withOne, profile(pixels()));
+  check('trim 1 is the light with no trim at all', moved <= churn + 2,
+    `worst sample moved ${moved.toFixed(1)}/255, against ${churn.toFixed(1)} the page moves on its own`);
+
+  Object.assign(G, { glow: saved.glow, spill: saved.spill, spillOut: saved.spillOut, feather: saved.feather });
+  G.noise.enabled = saved.noise;
+  if (saved.trim == null) delete G.trim; else G.trim = saved.trim;
+  refreshGoalGlow();
+}
+
 // ---------------------------------------------------------------------------
 // THE SCORE'S COLOUR, and THE SEALS IN THE FIELD.
 //
@@ -402,6 +622,52 @@ check('...and a tuning change moves it', hot < base - 0.05, `${(hot * 100).toFix
   check('...and a ball out in the water leaves it alone', diffPct(parked, noBall, litRegion) < ballMoved * 0.4,
     `${diffPct(parked, noBall, litRegion).toFixed(1)}% vs ${ballMoved.toFixed(1)}% with it in the mouth`);
 
+  // THE SHOT COMING IN. The shooter's colour takes the light over as the ball
+  // nears the goal LINE — and it spreads as it comes on, so the three frames
+  // below are a sequence and not three settings: far out, half way, on the
+  // line. Team 1, the red one, shooting into team 0's green goal.
+  const lineX = goalLineX(-1);
+  const lead = CONFIG.versus.goal.ball.tintLead;
+  // HOW FAR TOWARD RED, not whether red has won. redShare above is a hue
+  // DOMINANCE test: it reads a flat zero until the mix has crossed a
+  // threshold, so a take-over that is genuinely a fifth of the way there
+  // measures as nothing at all having happened — which is what the first
+  // version of this check reported about a picture that was correct.
+  const towardRed = (canvas, r) => {
+    const d = canvas.getContext('2d').getImageData(r[0], r[1], r[2] - r[0], r[3] - r[1]).data;
+    let sum = 0; let n = 0;
+    for (let i = 0; i < d.length; i += 4) { n++; sum += d[i] - d[i + 1]; }
+    return sum / Math.max(1, n);
+  };
+  const shotAt = async (short, title, caption) => {
+    setGoalBall({ x: lineX + short, y: gy, side: -1, amount: short <= 0 ? 1 : 0, tint: Math.max(0, Math.min(1, 1 - short / lead)) * CONFIG.versus.goal.ball.tint, color: CONFIG.versus.teams[1].color });
+    push();
+    const c = await shot(title, caption);
+    return towardRed(c, mouthRegion);
+  };
+  const shotFar = await shotAt(lead + 10, 'left goal, the shot still miles out', 'nobody has taken this light over yet');
+  const shotHalf = await shotAt(lead * 0.5, 'left goal, the shot closing', "the shooter's colour coming in ahead of it, local to the ball");
+  const shotOn = await shotAt(0, 'left goal, the shot on the line', 'full, and spread across the whole mouth');
+  check('the shooter\'s colour takes the light over as the shot nears the line',
+    shotHalf > shotFar + 4 && shotOn > shotHalf + 20,
+    `red-over-green ${shotFar.toFixed(0)} far out → ${shotHalf.toFixed(0)} closing → ${shotOn.toFixed(0)} on the line`);
+  // ...AND THE KEEPER ARGUING WITH IT. The same shot, on the line, with seal 0
+  // standing in its own goal: its colour and its churn go into the same field
+  // additively, so the mouth is contested rather than taken.
+  setGoalSwimmers([{ x: rockX(-1) - 3, y: gy, vx: 8, vy: 0, color: CONFIG.versus.teams[0].color, tint: 0.9, defend: 1 }]);
+  push();
+  const contested = await shot('left goal, the keeper arguing with it', "the shot on the line, and the keeper's own colour and churn pushed back into it");
+  const contestedRed = towardRed(contested, mouthRegion);
+  check('a keeper in the goal pushes the shot\'s colour back',
+    contestedRed < shotOn - 20,
+    `red-over-green ${shotOn.toFixed(0)} with the shot alone → ${contestedRed.toFixed(0)} with the keeper arguing`);
+  // ...and it is a MIX, not a replacement: the shot is still in there.
+  check('...contested, not simply reclaimed', contestedRed > shotFar + 10,
+    `${contestedRed.toFixed(0)} contested vs ${shotFar.toFixed(0)} with no shot at all`);
+  setGoalSwimmers([]);
+  setGoalBall(null);
+  push();
+
   // THE THROW: flat versus the tuned absorption, looking down the corridor.
   // Measured as a GRADIENT — how much dimmer the mouth is than the far end —
   // because a flat light and a thrown one can have the same mean and the
@@ -458,6 +724,193 @@ check('...and a tuning change moves it', hot < base - 0.05, `${(hot * 100).toFix
   resetGoalStir();
   push();
 }
+// ---------------------------------------------------------------------------
+// THE GOAL ITSELF — a shot going in, the bang, and the two bodies thrown.
+//
+// Everything above this point photographs the goal as GEOMETRY AND LIGHT: the
+// hole, the quad behind it, the field that breaks it up. None of it has a seal
+// or a ball in it, because none of those things need one. The shockwave does:
+// it is the one part of a goal whose whole subject is an animal, and the Node
+// harness can only tell you a number went up.
+//
+// SO THIS SCORES ONE. Two real seal bodies (buildSealBody, the same call a
+// match makes), the real ball stepped by the real soft body (stepBallAlone),
+// and on the frame its near edge crosses the goal line the two calls goal()
+// makes — fireGoalJet and goalBlast. From there the bodies are carried by
+// updatePlayer, exactly as a match carries them: the shove as real velocity,
+// the knock decaying on its own clock, clampToArena holding the keeper inside
+// the mouth. poseBody turns the skeletons, which is where the limp lives.
+//
+// WHAT THE LAB SUPPLIES is only what a match would have: the phase machine
+// that notices the ball has crossed. `goals: false` on stepBallAlone is what
+// makes that the lab's job rather than versus.js's — the ball lab wants a ball
+// that bounces off all four walls, and this page wants to choose the frame.
+//
+// A STRIP AND NOT A LOOP. The Browser pane suspends rAF, and a goal is a
+// second and a half of motion — so it is filmed: fixed frame, fixed marks off
+// the moment of the goal, every shot posted to disk. Two seals at two
+// distances in one frame, so the falloff is a thing you can see rather than a
+// number in the F panel.
+// ---------------------------------------------------------------------------
+{
+  const side = -1;
+  const faceX = rockX(side);
+  const lineX = goalLineX(side);
+  // The bodies. Seat 0 through initPlayer, which is also what gives it the
+  // stats updatePlayer swims on; seat 1 the way versus.js builds every seat
+  // past the first.
+  initPlayer(world.scene);
+  resetPlayer();
+  buildSealBody(p2, world.scene, { name: 'player2', celebrateTag: 'p2' });
+  initBallAlone();
+  // A Vector2, not a literal — updatePlayer asks it for lengthSq, and a plain
+  // {x, y} throws on the first frame of the sim.
+  const idle = { move: new THREE.Vector2(0, 0), aim: new THREE.Vector2(1, 0) };
+
+  // THE KEEPER, inside the mouth on its own line, and THE STRIKER out in the
+  // water — two distances from the same bang, which is the read.
+  const keeper = player;
+  const striker = p2;
+  const startKeeper = { x: faceX - 2, y: gy + 1 };
+  const startStriker = { x: faceX + 24, y: gy + 5 };
+  keeper.mesh.position.set(startKeeper.x, startKeeper.y, 0);
+  striker.mesh.position.set(startStriker.x, startStriker.y, 0);
+  for (const seal of [keeper, striker]) {
+    seal.velocity.set(0, 0);
+    seal.knockX = 0; seal.knockY = 0;
+    const j = seal.jolt;
+    if (j) { j.spin = j.spinV = j.roll = j.rollV = 0; j.free = 0; }
+    seal.mesh.visible = true;
+  }
+  // The shot: struck from outside the box, on its way in.
+  ball.live = true;
+  ball.x = bounds.left + 42;
+  ball.y = gy + 5;
+  ball.vx = -58;
+  ball.vy = -7;
+
+  // ONE FIXED FRAME for the whole strip, so the shots can be read against each
+  // other. The mouth sits in the left third and the rest is the water the
+  // bodies are thrown into.
+  const halfW = world.halfExtents(1.5).w;
+  place(faceX + halfW * 0.62, gy, 1.5);
+  updateParticleScale(world.camera, world.renderer);
+  updateOutlineScale(world.camera, world.halfExtents(1).h * 2);
+
+  const sim = 1 / 60;
+  let t = -1;                 // seconds since the goal; -1 until it is called
+  let fired = false;
+  // Whether the ball is still being carried by its own physics — see the note
+  // at the mouth below, where the lab takes the last few units over.
+  let flying = true;
+  const before = { keeper: { ...startKeeper }, striker: { ...startStriker } };
+  let peakSpin = 0;
+  // Step the world one frame: the ball, the jet, the bodies, the skeletons.
+  const step = () => {
+    if (flying) stepBallAlone(sim);
+    updateGoalJets(sim, [
+      { x: keeper.mesh.position.x, y: keeper.mesh.position.y, heading: keeper.mesh.rotation.z + Math.PI / 2 },
+      { x: striker.mesh.position.x, y: striker.mesh.position.y, heading: striker.mesh.rotation.z + Math.PI / 2 },
+    ]);
+    for (const seal of [keeper, striker]) {
+      updatePlayer(sim, idle, seal, seal === player ? undefined : seal.strike);
+      poseBody(seal, sim, Math.cos(seal.mesh.rotation.z + Math.PI / 2), Math.sin(seal.mesh.rotation.z + Math.PI / 2));
+    }
+    peakSpin = Math.max(peakSpin, Math.abs(keeper.jolt?.spin ?? 0));
+    renderBall();
+    tickGoalGlow(sim);
+    updateParticles(sim);
+    if (t >= 0) t += sim;
+  };
+
+  // THE APPROACH. Two shots before the goal, so the strip opens on a ball that
+  // is still in play and a keeper that still has a chance.
+  //
+  // EVERY LOOP IS BOUNDED. A `while (ball.x > line)` hangs the whole page the
+  // first time the ball stops short, and a hung look page presents as a
+  // contact sheet that is simply missing its last third — which reads as a
+  // shot that failed to post rather than as a loop that never ended.
+  //
+  // THE STOPS ARE OFF bounds.left, not off the rock face. stepBallAlone passes
+  // `goals: false` to stepBall, which makes the left WALL solid — the ball
+  // stops at bounds.left + its own radius and cannot reach the face, let alone
+  // the line. Asked to run to the face, this loop spent its whole 600-frame
+  // cap bouncing the ball off the wall and floating it up to the surface, and
+  // the goal then fired from twenty-eight units above the mouth.
+  const runTo = (stop, cap = 600) => { for (let k = 0; k < cap && !stop(); k++) step(); };
+  runTo(() => ball.x <= bounds.left + 26);
+  await shot('the shot coming in', `the ball ${(ball.x - lineX).toFixed(1)} units short of the line, the keeper on it`);
+  runTo(() => ball.x <= bounds.left + 9);
+  await shot('at the mouth', 'the last frame that is still a save');
+
+  // THROUGH THE MOUTH BY HAND, and only this stretch — about fifteen units of
+  // a hundred-unit flight. The solid wall above is why: the shipped flight
+  // cannot cross a line the ball lab's step will not let it reach. Nothing
+  // happens to a ball travelling down the middle of the band anyway (the lips
+  // are what the corridor is, and this one is nowhere near them), so it
+  // carries on at the velocity the real physics left it with. Everything
+  // before this is the shipped flight.
+  flying = false;
+  for (let k = 0; k < 240 && ball.x > lineX; k++) {
+    ball.x += ball.vx * sim;
+    ball.y += ball.vy * sim;
+    step();
+  }
+
+  // THE GOAL. The two calls goal() makes, on the frame the ball is past the
+  // line — the jet from inside the tunnel, and the shockwave out of the same
+  // point (goalJetOrigin, so the goo and the shove cannot disagree).
+  ball.live = false;
+  fired = true;
+  t = 0;
+  resetGoalJets();
+  flashGoalScored(side, 1);
+  fireGoalJet(side, ball.y, 1);
+  const caught = goalBlast(side, ball.y);
+  const src = goalJetOrigin(side, ball.y);
+  log(`the goal: ball across at y ${ball.y.toFixed(1)}, bang at x ${src.x.toFixed(1)} (${(faceX - src.x).toFixed(1)} deep), ${caught} seal(s) caught`);
+  log(`  the shove: keeper ${(keeper.velocity.x + keeper.knockX).toFixed(1)} u/s out, striker ${(striker.velocity.x + striker.knockX).toFixed(1)} u/s out`);
+  await shot('the goal', `the frame it crosses — ${caught} seal(s) in the blast, the mouth turning the scorer's colour`);
+
+  // ...AND THE SECOND AND A HALF AFTER IT. The marks are the shape of the
+  // moment: the goo still in the rock, the goo arriving, the bodies going
+  // over, and the tumble running out.
+  const marks = [
+    [0.10, 'the jet in the corridor', 'the goo still inside the rock, the bodies already going'],
+    [0.22, 'out of the mouth', 'the cloud squeezing out, the keeper thrown clear of its own line'],
+    [0.40, 'the bodies over', 'the tumble at its widest'],
+    [0.70, 'spreading', 'the goo tumbling free of the rock, both seals still limp'],
+    [1.20, 'the tumble running out', 'the righting spring has the bodies back'],
+  ];
+  for (const [at, title, caption] of marks) {
+    for (let k = 0; k < 600 && t < at; k++) step();
+    await shot(title, caption);
+  }
+
+  // WHAT THE PICTURES ARE OF. A strip proves nothing on its own — a page that
+  // quietly stopped firing the blast would post six shots of a seal sitting
+  // still, and they would look like tuning rather than like a bug.
+  const moved = (seal, from) => Math.hypot(seal.mesh.position.x - from.x, seal.mesh.position.y - from.y);
+  const keeperMoved = moved(keeper, before.keeper);
+  const strikerMoved = moved(striker, before.striker);
+  check('the goal throws both seals', keeperMoved > 4 && strikerMoved > 0.5,
+    `keeper ${keeperMoved.toFixed(1)} units, striker ${strikerMoved.toFixed(1)} units`);
+  check('...out of the goal rather than into it', keeper.mesh.position.x > before.keeper.x + 2,
+    `keeper x ${before.keeper.x.toFixed(1)} → ${keeper.mesh.position.x.toFixed(1)}, face ${faceX.toFixed(1)}`);
+  check('...hardest on the line', keeperMoved > strikerMoved * 1.5,
+    `${keeperMoved.toFixed(1)} vs ${strikerMoved.toFixed(1)} units`);
+  const cap = CONFIG.player.jolt.max ?? 2.6;
+  check('...and the body goes past the righting spring\'s cap: a tumble, not a wobble',
+    peakSpin > cap, `${peakSpin.toFixed(2)} rad, cap ${cap}`);
+  check('...and the jet actually ran over these frames', goalJets().length >= 0 && goalJetOrigin(side, ball.y).x < faceX,
+    `bang ${(faceX - src.x).toFixed(1)} units inside the rock`);
+
+  resetGoalJets();
+  clearGoalScored();
+  keeper.mesh.visible = false;
+  striker.mesh.visible = false;
+}
+
 check('no shader failed to compile', shaderErrors.length === 0, shaderErrors[0] ?? '');
 log(`posted ${posted.length} shots: ${posted.join(', ')}`);
 log(fails ? `${fails} FAILED` : 'all passed', fails ? 'bad' : 'ok');

@@ -3,7 +3,7 @@ import { CONFIG } from '../config.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { aoe } from './scaling.js';
 import { playerOverlayZ } from '../entities/player.js';
-import { stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
+import { stoke, cool, glowStir, hotFieldColor } from './damageGlow.js';
 import { player } from '../entities/player.js';
 import { garlicLevelStats } from '../levelStats.js';
 
@@ -19,10 +19,16 @@ const vertexShader = /* glsl */ `
 `;
 
 const fragmentShader = /* glsl */ `
-  uniform float uTime;
+  // THE SCROLL PHASE, INTEGRATED ON THE CPU — not a clock times a rate.
+  //
+  // This used to be uTime x uSwirl, which is the same picture right up until
+  // the rate moves: the phase is rate x elapsed, so stirring the cloud harder
+  // rewrites where the noise has always been and the whole field jumps a
+  // fraction of a second sideways on the frame the aura catches something. That
+  // is the exact frame the stir exists to draw attention to. See glowStir().
+  uniform float uFlow;
   uniform vec3 uColor;
   uniform float uOpacity;
-  uniform float uSwirl;
   uniform float uDensity;
   varying vec2 vUv;
 
@@ -46,7 +52,7 @@ const fragmentShader = /* glsl */ `
     float r = length(p);
     if (r > 1.0) discard;
 
-    vec2 q = p * uDensity + vec2(uTime * uSwirl * 0.3, uTime * uSwirl * 0.2);
+    vec2 q = p * uDensity + vec2(uFlow * 0.3, uFlow * 0.2);
     float n = noise(q * 3.0) * 0.6 + noise(q * 6.0 + 10.0) * 0.4;
     float edge = smoothstep(1.0, 0.55, r);
 
@@ -56,6 +62,9 @@ const fragmentShader = /* glsl */ `
 
 let mesh = null;
 let tickTimer = 0;
+// Where the noise has crawled to, integrated rather than derived from a clock —
+// see the uniform's note above.
+let flow = 0;
 // How hard the cloud is working, 0..1 — see systems/damageGlow.js. One number
 // for the whole field, unlike the shrimp ring's per-instance heat, because the
 // field IS one object: it ticks as a unit and it is drawn as a unit.
@@ -70,10 +79,9 @@ export function createGarlicVisual() {
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     uniforms: {
-      uTime: { value: 0 },
+      uFlow: { value: 0 },
       uColor: { value: new THREE.Color(CONFIG.garlic.color) },
       uOpacity: { value: CONFIG.garlic.opacity },
-      uSwirl: { value: CONFIG.garlic.swirl },
       uDensity: { value: CONFIG.garlic.density },
     },
   });
@@ -120,19 +128,27 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
   mesh.position.z = playerOverlayZ();
   mesh.scale.setScalar(radius);
 
-  // HOT WHILE IT IS GRINDING. Stoked below by a tick that caught something,
-  // carried to now here, and spent on the COLOUR rather than on the opacity:
-  // the layer is additive, so a colour driven past 1 is real brightness that
-  // survives into the bright pass and haloes, where more alpha would only make
-  // the cloud thicker. See CONFIG.damageGlow.sources.garlic.
+  // HOT WHILE IT IS GRINDING — on all three channels the field has, because
+  // brightness alone could not be told apart from the water it was floating
+  // over. Stoked below by a tick that caught something, carried to now here,
+  // and spent on:
+  //
+  //   COLOUR   brightness and hue together, through the shared hotFieldColor().
+  //            Brightness goes to the colour rather than to the opacity because
+  //            the layer is additive: a channel driven past 1 is real light
+  //            that survives into the bright pass and haloes, where more alpha
+  //            would only make the cloud thicker.
+  //   FLOW     the noise crawls faster. Integrated, never multiplied into an
+  //            elapsed clock — see the uniform.
+  //
+  // See CONFIG.damageGlow.sources.garlic for all three numbers.
   heat = cool(heat, 'garlic', dt);
-  const glow = 1 + damageGlowCfg('garlic').peak * glowLevel(heat, 'garlic');
 
   const u = mesh.material.uniforms;
-  u.uTime.value += dt;
-  u.uColor.value.set(CONFIG.garlic.color).multiplyScalar(glow);
+  flow += dt * CONFIG.garlic.swirl * glowStir(heat, 'garlic');
+  u.uFlow.value = flow;
+  hotFieldColor(u.uColor.value, CONFIG.garlic.color, heat, 'garlic');
   u.uOpacity.value = CONFIG.garlic.opacity;
-  u.uSwirl.value = CONFIG.garlic.swirl;
   u.uDensity.value = CONFIG.garlic.density;
 
   tickTimer -= dt;
@@ -176,4 +192,5 @@ export function updateGarlic(dt, scene, playerPos, garlicLevel, enemiesList, hoo
 export function resetGarlic() {
   tickTimer = 0;
   heat = 0;
+  flow = 0;
 }

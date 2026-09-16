@@ -17,7 +17,14 @@
 //   THE ATTRACTIVE CLAM a gooey white mantle with pink flesh inside it, pumping
 //                       waves of pink and purple out on the beat.
 //   THE CORAL           grown geometry, no two alike, with a bioluminescent
-//                       pulse travelling out along the branches.
+//                       pulse travelling out along the branches. There are TWO
+//                       of them now — the fire-rate coral and the score coral,
+//                       the same code from different numbers — and the row
+//                       below shows both, because the only thing that matters
+//                       about the second is whether it is tellable from the
+//                       first. Shaping either one is `npm run looks:coral`,
+//                       which grows a whole population per species and has a
+//                       slider per number; this row is the comparison.
 //   THE LEVEL BLOB      a molten lump that changes colour on every quarter
 //                       note. Two things are being looked at and they are not
 //                       the same question: whether it reads as HOT (a white
@@ -465,6 +472,45 @@ for (const seed of [1, 7, 13, 42, 99, 404]) {
   const peak = Math.max(...shapes.map((s) => s.peak));
   check('the tips reach past the bloom threshold',
     peak > (CONFIG.bloom?.threshold ?? 0.18), `peak ${peak.toFixed(2)} vs threshold ${CONFIG.bloom?.threshold}`);
+}
+
+// ...AND THE SECOND SPECIES BESIDE IT. Two pickups grow from this code now,
+// and the whole promise of the second is that a player mid-fight can tell it
+// from the first at the edge of vision — which is a claim about the PAIR and
+// cannot be judged from either one's own row. Faced the same way and at the
+// same scale, so what is left between them is the silhouette and the hue.
+section('The two corals <span>— fire rate (warm, an open fan) against score (cold, a dense head). Same code, different numbers. Can you tell them apart?</span>', 6);
+{
+  const both = [];
+  for (const [species, assetKey] of [['rapidFire', 'rapidFireOrb'], ['score', 'scoreOrb']]) {
+    for (const seed of [1, 13, 404]) {
+      const coral = createCoralOrb(mulberry32(seed), { species, assetKey });
+      coral.rotation.set(0, 0, 0);
+      coral.scale.setScalar(2.4);
+      scene.add(coral);
+      for (let i = 0; i < 30; i++) {
+        updateBeatSync(DT);
+        updateCoralOrb(coral, 0, DT);
+      }
+      coral.rotation.set(0, 0, 0);
+      const tris = (coral.geometry.index ? coral.geometry.index.count : coral.geometry.attributes.position.count) / 3;
+      const fp = footprint(coral);
+      both.push({ species, tris, pixels: fp.pixels });
+      present(`${species} ${seed}`, `${tris} triangles · ${(fp.pixels * 100).toFixed(1)}% of the panel`);
+      scene.remove(coral);
+    }
+  }
+  const meanOf = (sp) => {
+    const rows = both.filter((b) => b.species === sp);
+    return rows.reduce((a, b) => a + b.tris, 0) / rows.length;
+  };
+  // BOTH normalise to their own `fit`, so at the same scale the triangle count
+  // IS the branch density. If a helper in coralOrb.js ever went back to
+  // reading one species' block for both, this is the line that notices — the
+  // two would come out identical and the page would still look fine.
+  check('the two species are visibly different densities',
+    meanOf('score') > meanOf('rapidFire') * 1.25,
+    `score ${meanOf('score').toFixed(0)} triangles vs fire rate ${meanOf('rapidFire').toFixed(0)}`);
 }
 
 section('The coral, lit <span>— one individual through a bar of the pulse. The wave leaves the holdfast and runs out to the tips.</span>', 5);

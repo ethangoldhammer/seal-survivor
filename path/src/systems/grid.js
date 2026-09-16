@@ -4,6 +4,7 @@ import { bounds, WAVE, sea } from '../arena.js';
 import { hexMetrics, hexCorners, hexCellsIn } from './hexLattice.js';
 import { touchSlots, TOUCH_SLOTS } from '../input.js';
 import { retireMaterial } from './programPin.js';
+import { POSSESSION_UNIFORMS_GLSL, POSSESSION_FIELD_GLSL } from './possessionGlsl.js';
 
 // The backdrop grid. Every node is displaced in the vertex shader by a ring
 // buffer of ripples plus a constant pull from the ship's wake, so the whole
@@ -55,11 +56,29 @@ let sealCursor = 1;         // slot 0 is the frame's own seal and is never hande
 // Cells something else has claimed and this must not move — see `pin` below.
 const MAX_PINS = 8;
 
+// THE BALL'S DENTS. Blubberball only: slot 0 is the ball itself, re-published
+// every frame it is on the pitch, and the rest are the ECHOES it has left
+// behind it — the water it has already been through, still springing back.
+//
+// Nothing in here decides when an echo is dropped or how hard: systems/
+// ballGrid.js owns the whole ring buffer and republishes it wholesale, the way
+// `pin` is republished, because the alternative is a dent left in the water
+// where a ball used to be. What this file owns is the SHAPE of a dent — how it
+// is stretched along the line the ball was travelling, how it springs, and
+// what colour it is lit in.
+//
+// Eight, and for the same reason the wake band is small: every slot is a loop
+// iteration over every vertex in the lattice whether it holds anything or not.
+// At the shipped spacing eight dents is about twenty-five units of trail, which
+// is a good deal more than a ball covers in the time one takes to die.
+const MAX_BALL = 8;
+
 const vertexShader = /* glsl */ `
   #define MAX_RIPPLES ${MAX_RIPPLES}
   #define MAX_TOUCH ${MAX_TOUCH}
   #define MAX_WAKES ${MAX_WAKES}
   #define MAX_PINS ${MAX_PINS}
+  #define MAX_BALL ${MAX_BALL}
 
   uniform float uTime;
   uniform vec3 uRipples[MAX_RIPPLES];   // xy = origin, z = start time
@@ -68,6 +87,18 @@ const vertexShader = /* glsl */ `
   uniform vec4 uTouch[MAX_TOUCH];       // xy = world pos, z = radius, w = level
   uniform vec4 uTouchWarp;              // x = push, y = swirl, z = wave, w = spin
   uniform vec4 uPin[MAX_PINS];          // xy = centre, z = held radius, w = free radius
+  // THE BALL AND ITS ECHOES. xy = centre, z = reach, w = SIGNED amplitude —
+  // signed because the spring is solved on the CPU (systems/ballGrid.js) and
+  // folded straight into it, so this shader has no clock of its own to
+  // disagree with the one the echoes are aged on. A slot at 0 contributes
+  // nothing but its iteration.
+  uniform vec4 uBall[MAX_BALL];
+  // xy = the HEADING this dent was born with, unit; z = the glow, which is the spring's
+  // envelope WITHOUT its oscillation — a dent lit by the signed amplitude goes
+  // black every time the spring crosses zero, which reads as a strobe rather
+  // than as water settling.
+  uniform vec4 uBallDir[MAX_BALL];
+  uniform vec4 uBallWarp;               // x = radial shove, y = drive along the heading, z = swirl, w = stretch
   uniform float uDecay;
   uniform float uFreq;
   uniform float uWavelength;
@@ -123,6 +154,42 @@ const vertexShader = /* glsl */ `
               * fall * level;
     }
 
+    // THE BALL, AND EVERY DENT IT HAS LEFT BEHIND IT. Blubberball only.
+    //
+    // THREE COMPONENTS, and only the middle one is new. The radial shove and
+    // the swirl are the finger's (above) and are here for the same reason: the
+    // shove alone opens a clean bubble and it is the shear that breaks the
+    // hexes out of alignment with their neighbours, which is what reads as
+    // DISRUPTION rather than as one more ripple.
+    //
+    // The DRIVE is the ball's own. It pushes every node in the dent the same
+    // way — along the heading, not away from the centre — so the lattice is
+    // dragged bodily along the line of the flight. A dent made only of radial
+    // terms is the same picture whichever way the ball was going, and the one
+    // thing a player needs to read off the backdrop is which way it went.
+    //
+    // AND IT IS STRETCHED ALONG THAT LINE. The reach is measured in a frame
+    // scaled by uBallWarp.w down the heading, so a fast ball smears its dent
+    // out into a streak and a slow one leaves a circle.
+    //
+    // The heading is LAGGED, and a dent keeps the one it was born with — see
+    // systems/ballGrid.js, which is where that is decided and why.
+    for (int i = 0; i < MAX_BALL; i++) {
+      float amp = uBall[i].w;
+      if (amp == 0.0) continue;
+      vec2 delta = pos.xy - uBall[i].xy;
+      vec2 dir = uBallDir[i].xy;
+      float along = dot(delta, dir);
+      vec2 across = delta - dir * along;
+      float reach = length(vec2(along / max(uBallWarp.w, 0.01), length(across)));
+      float fall = smoothstep(uBall[i].z, 0.0, reach);
+      if (fall <= 0.0) continue;
+      float len = length(delta) + 0.0001;
+      vec2 n = delta / len;
+      disp += (n * uBallWarp.x + dir * uBallWarp.y + vec2(-n.y, n.x) * uBallWarp.z)
+              * fall * amp;
+    }
+
     // PINNED CELLS. Anything else on screen that has claimed a cell of this
     // lattice — the splash menu's buttons sit in three of them — needs those
     // cells to stay exactly where the maths put them, or the thing sitting in
@@ -160,6 +227,7 @@ const vertexShader = /* glsl */ `
 // clip line here is the same curve world.js draws the surface with.
 const fragmentShader = /* glsl */ `
   #define MAX_TOUCH ${MAX_TOUCH}
+  #define MAX_BALL ${MAX_BALL}
 
   uniform vec3 uColor;
   uniform vec3 uHotColor;
@@ -173,6 +241,22 @@ const fragmentShader = /* glsl */ `
   uniform vec4 uTouch[MAX_TOUCH];      // xy = world pos, z = radius, w = level
   uniform vec3 uTouchColor[MAX_TOUCH]; // one hue per finger, by arrival order
   uniform vec2 uTouchGain;             // x = colour gain, y = extra opacity
+  // THE BALL'S DENTS, again — the same slots the vertex shader bends the
+  // lattice with, read here to LIGHT what was bent. See the note there.
+  uniform vec4 uBall[MAX_BALL];
+  uniform vec4 uBallDir[MAX_BALL];
+  uniform vec2 uBallGain;              // x = colour gain, y = extra opacity
+  // The same clock the vertex stage runs on — the possession drop's lobes roll
+  // on it, and they have to roll at the rate they roll at inside the ball.
+  uniform float uTime;
+  uniform float uBallField;            // 0 = no ball, so the possession loop is skipped entirely
+  // WHOSE BALL IT IS, as a field — systems/possessionGlsl.js, which is the same
+  // function systems/post.js paints the ball's own body with. That is the whole
+  // point of it being a module: a dent in the water is lit by the drop that is
+  // in the ball at the moment the ball passed through, so a streak through the
+  // hexes is recognisably THIS ball rather than a coloured smear that happens
+  // to be nearby. See the header over there.
+  ${POSSESSION_UNIFORMS_GLSL}
   // How much of this lattice is being drawn at all — view.fade, 1 in a run.
   // The finger light is ADDED to the line's colour rather than multiplied into
   // it, so it does not go out when uOpacity does: a lattice faded to nothing
@@ -194,6 +278,18 @@ const fragmentShader = /* glsl */ `
       + sin(x * ${WAVE.k2.toFixed(4)} + uWaveT * ${WAVE.w2.toFixed(4)}) * uWaveAmp * ${WAVE.amp2.toFixed(4)}
       + sin(x * ${WAVE.k3.toFixed(4)} + uWaveT * ${WAVE.w3.toFixed(4)}) * uWaveAmp * ${WAVE.amp3.toFixed(4)} * uChop;
   }
+
+  // THE SKIN THE DROP IS HELD BY, and out here there is not one. The goo pass
+  // walks a lobe back inside the ball's own solved body, read out of the
+  // density field it is already sampling; a dent in the water has no body to
+  // be held by, so this is the bare clamp to the circle. The shared field calls
+  // whichever of the two it was compiled beside.
+  vec2 posHold(vec2 lp, float rim) {
+    float len = length(lp);
+    return len > rim ? lp * (rim / max(len, 1e-5)) : lp;
+  }
+
+  ${POSSESSION_FIELD_GLSL}
 
   void main() {
     // A narrow band rather than a hard cut: an additive hairline snapped off
@@ -229,9 +325,39 @@ const fragmentShader = /* glsl */ `
       fingerAmt = max(fingerAmt, a);
     }
 
+    // ...AND THE BALL'S, IN THE COLOUR OF WHOEVER OWNS IT. Same construction as
+    // the fingers above and for the same reasons — per-fragment so the light
+    // falls off smoothly down a span rather than stepping at the nodes,
+    // measured against the DISPLACED position so it stays on the line the ball
+    // just shoved out of place, colours adding while the opacity takes the
+    // strongest.
+    //
+    // The possession drop is sampled in EACH DENT'S OWN FRAME, so the two
+    // colours turn over inside every echo the way they turn over inside the
+    // ball — the trail is a row of little balls' worth of the same substance,
+    // not a gradient somebody tinted. It is by far the most expensive thing in
+    // this shader, which is why nothing reaches it until the dent has been
+    // shown to cover this fragment at all.
+    vec3 ballLight = vec3(0.0);
+    float ballAmt = 0.0;
+    // The whole loop is behind one uniform branch, so a frame with no ball on
+    // the pitch — which is every frame outside Blubberball — never reaches the
+    // possession field at all.
+    if (uBallField > 0.0) for (int i = 0; i < MAX_BALL; i++) {
+      float glow = uBallDir[i].z;
+      if (glow <= 0.0) continue;
+      vec2 d = (vPos - uBall[i].xy) / max(uBall[i].z, 1e-4);
+      float f = smoothstep(1.0, 0.0, length(d));
+      f *= f; // squared, so the falloff has a hot core instead of a flat disc
+      float a = f * glow;
+      if (a <= 0.002) continue;
+      ballLight += mix(uTeamA, uTeamB, possessionMix(d, uTime)) * a;
+      ballAmt = max(ballAmt, a);
+    }
+
     gl_FragColor = vec4(
-      color + fingerLight * uTouchGain.x * uFade,
-      clamp(alpha + fingerAmt * uTouchGain.y * mask * uFade, 0.0, 1.0)
+      color + (fingerLight * uTouchGain.x + ballLight * uBallGain.x) * uFade,
+      clamp(alpha + (fingerAmt * uTouchGain.y + ballAmt * uBallGain.y) * mask * uFade, 0.0, 1.0)
     );
   }
 `;
@@ -330,6 +456,19 @@ export function createGrid(scene) {
   // the screen from wherever the last one was.
   const touchOwner = new Array(MAX_TOUCH).fill(null);
   const touchPoint = new THREE.Vector3();
+
+  // THE BALL'S DENTS, as uniforms. Republished wholesale every frame by
+  // systems/ballGrid.js — see `ballWarp` below.
+  const ballSlots = new Array(MAX_BALL).fill(0).map(() => new THREE.Vector4(0, 0, 1, 0));
+  const ballDirs = new Array(MAX_BALL).fill(0).map(() => new THREE.Vector4(1, 0, 0, 0));
+  const ballShape = new THREE.Vector4(0, 0, 0, 1);
+  const ballGain = new THREE.Vector2(0, 0);
+  // The possession field, in the shape possessionGlsl.js declares. Colours are
+  // THREE.Color and the rest are plain uniform values, set in place.
+  const teamA = new THREE.Color(0xffffff);
+  const teamB = new THREE.Color(0xffffff);
+  const ballDrift = new THREE.Vector2(0, 0);
+  const field = { share: 0, seed: 0, lobes: 5, lobeSize: 0.62, wobble: 0.7, spin: 0.5, breathe: 0.25, on: 0 };
   // Seconds until this finger's next charge pulse. Counted down per slot rather
   // than off one global clock so two fingers charging at once don't pulse in
   // lockstep, which reads as one big event instead of two.
@@ -364,6 +503,21 @@ export function createGrid(scene) {
         uTouchColor: { value: touchColor },
         uTouchWarp: { value: touchWarp },
         uTouchGain: { value: touchGain },
+        uBall: { value: ballSlots },
+        uBallDir: { value: ballDirs },
+        uBallWarp: { value: ballShape },
+        uBallGain: { value: ballGain },
+        uBallField: { value: 0 },
+        uTeamA: { value: teamA },
+        uTeamB: { value: teamB },
+        uShare: { value: 0 },
+        uSeed: { value: 0 },
+        uLobes: { value: 5 },
+        uLobeSize: { value: 0.62 },
+        uWobble: { value: 0.7 },
+        uSpin: { value: 0.5 },
+        uBreathe: { value: 0.25 },
+        uDrift: { value: ballDrift },
         uDecay: { value: CONFIG.grid.rippleDecay },
         uFreq: { value: CONFIG.grid.rippleFreq },
         uWavelength: { value: CONFIG.grid.rippleWavelength },
@@ -422,6 +576,83 @@ export function createGrid(scene) {
       const r = Math.max(0, p.radius ?? 0);
       pins[i].set(p.x, p.y, r, Math.max(r + 1e-3, p.feather ?? r * 2));
     }
+  }
+
+  /**
+   * THE BALL, AND THE WATER IT HAS BEEN THROUGH. Blubberball's, published every
+   * frame by systems/ballGrid.js — `spec` is
+   *
+   *   { dents: [{ x, y, radius, amp, dirX, dirY, glow }], warp: { radial, drive,
+   *     swirl, stretch }, gain: { color, alpha }, field: <possession> }
+   *
+   * and null (or a spec with no dents) is a pitch with no ball on it.
+   *
+   * REPUBLISHED WHOLESALE rather than fired and forgotten, which is the pin's
+   * contract and not the ripple's. The two are different KINDS of thing: a
+   * ripple is an event that expands and dies on the shader's own clock, while a
+   * dent is a thing that exists as long as somebody keeps saying it does. A
+   * ball that goes in, a match that ends, a replay that cuts — all of them stop
+   * the publishing, and the failure mode of a fire-and-forget channel is a
+   * streak of somebody's colour left across the backdrop of the next kickoff.
+   *
+   * `amp` is SIGNED and already carries the spring; `glow` is the same envelope
+   * without the oscillation. Both are solved on the CPU where they can be
+   * tested, and neither has a clock in here to drift against.
+   *
+   * The possession `field` is the object systems/ballLook.js hands the goo pass
+   * (ballTeams()), so the dents are lit by the same drop that is in the ball.
+   */
+  function ballWarp(spec) {
+    const dents = spec?.dents ?? null;
+    const live = !!(dents && dents.length && spec.field);
+    for (let i = 0; i < MAX_BALL; i++) {
+      const d = live ? dents[i] : null;
+      if (!d) { ballSlots[i].set(0, 0, 1, 0); ballDirs[i].set(1, 0, 0, 0); continue; }
+      ballSlots[i].set(d.x, d.y, Math.max(0.001, d.radius ?? 1), d.amp ?? 0);
+      ballDirs[i].set(d.dirX ?? 1, d.dirY ?? 0, Math.max(0, d.glow ?? 0), 0);
+    }
+    if (!material) return;
+    const u = material.uniforms;
+    u.uBallField.value = live ? 1 : 0;
+    if (!live) { field.on = 0; return; }
+    const w = spec.warp ?? {};
+    ballShape.set(w.radial ?? 0, w.drive ?? 0, w.swirl ?? 0, Math.max(0.01, w.stretch ?? 1));
+    ballGain.set(spec.gain?.color ?? 0, spec.gain?.alpha ?? 0);
+    const f = spec.field;
+    teamA.set(f.a ?? 0xffffff);
+    teamB.set(f.b ?? 0xffffff);
+    u.uShare.value = Math.min(1, Math.max(0, f.share ?? 0));
+    u.uSeed.value = f.seed ?? 0;
+    u.uLobes.value = Math.max(0, Math.min(7, f.lobes ?? 5));
+    u.uLobeSize.value = Math.max(0, f.lobeSize ?? 0.62);
+    u.uWobble.value = Math.max(0, f.wobble ?? 0.7);
+    u.uSpin.value = f.spin ?? 0.5;
+    u.uBreathe.value = Math.max(0, f.breathe ?? 0.25);
+    ballDrift.set(f.driftX ?? 0, f.driftY ?? 0);
+    // Kept for the harness, which cannot read a uniform off a material it never
+    // built — see tools/ball-grid-test.mjs.
+    field.share = u.uShare.value;
+    field.seed = u.uSeed.value;
+    field.lobes = u.uLobes.value;
+    field.lobeSize = u.uLobeSize.value;
+    field.wobble = u.uWobble.value;
+    field.spin = u.uSpin.value;
+    field.breathe = u.uBreathe.value;
+    field.on = 1;
+  }
+
+  /** What the ball channel currently holds — for the harness and the labs. */
+  function ballState() {
+    return {
+      dents: ballSlots.map((v, i) => ({
+        x: v.x, y: v.y, radius: v.z, amp: v.w,
+        dirX: ballDirs[i].x, dirY: ballDirs[i].y, glow: ballDirs[i].z,
+      })),
+      warp: { radial: ballShape.x, drive: ballShape.y, swirl: ballShape.z, stretch: ballShape.w },
+      gain: { color: ballGain.x, alpha: ballGain.y },
+      field: { ...field, a: teamA.getHex(), b: teamB.getHex(), driftX: ballDrift.x, driftY: ballDrift.y },
+      on: material ? material.uniforms.uBallField.value : 0,
+    };
   }
 
   // Punch the grid. Called by the feedback system for every juicy event.
@@ -644,10 +875,13 @@ export function createGrid(scene) {
       touchOwner[i] = null;
       touchPulseAt[i] = 0;
     }
+    // The ball's dents go with it. They are republished every frame anyway,
+    // but a reset is exactly the moment nobody is publishing.
+    ballWarp(null);
   }
 
   build();
   reset();
 
-  return { build, dispose, ripple, hullWake, sealWake, pin, update, reset, setWaveTime };
+  return { build, dispose, ripple, hullWake, sealWake, pin, ballWarp, ballState, update, reset, setWaveTime };
 }

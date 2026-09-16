@@ -1074,6 +1074,172 @@ check('...and the shortfall is reported rather than hidden',
   near(short?.drift ?? 0, -0.192, 0.001), `${((short?.drift ?? 0) * 1000).toFixed(0)}ms short of eight bars`);
 music.stop();
 
+// ---------------------------------------------------------------------------
+// BLUBBERBALL — the third bank, and the one that is a plain cycle.
+// ---------------------------------------------------------------------------
+// The match bank differs from the boss bank in every way that could be got
+// wrong by copying it: no intro to play once, no cursor that survives the mode,
+// no handover back to a level's loop, and a DIFFERENT TEMPO. That last one is
+// the reason the tempo is read off the playing file rather than switched on the
+// mode — a mode that set it would have to remember to put it back, and the
+// route that forgot would leave the ordinary game marching at 170 with nothing
+// in CONFIG to say what had happened.
+const VBAR = 240 / 170; // 1.4118s — 170bpm in 4/4
+CONFIG.music.versusBarSeconds = VBAR;
+CONFIG.music.versusBpm = 170;
+CONFIG.music.versusSrc = ['v0', 'v1', 'v2'];
+// Uneven on purpose, the same argument the boss bank's lengths make: the cycle
+// has to switch on each file's OWN end, and a bank of equal loops would pass
+// either way. (The real files are 4, 16 and 16 bars; the shape is what is under
+// test, not the minutes.)
+await loadLoop('versus0', VBAR * 4);
+await loadLoop('versus1', VBAR * 6);
+await loadLoop('versus2', VBAR * 5);
+
+section('A match opens on Loop00, on the frame, out from under the menu');
+reset();
+music.startMusicAtRest();
+run(0.2);
+check('the menu is playing the run\'s loop at half speed', playing() === '1' && near(lastLoop().playbackRate.value, 0.5, 1e-6),
+  `${playing()} at ${lastLoop().playbackRate.value}`);
+const beforeMatch = loops().length;
+check('the match takes the transport', music.startVersusMusic() === true);
+run(0.05);
+check('...immediately, not on a boundary', loops().length === beforeMatch + 1,
+  'a bar line would only mean up to a bar of menu after the whistle');
+check('...onto the first entry of the bank', playing() === 'versus0', String(playing()));
+check('...and it says so', music.versusMusicActive() === true);
+check('the menu\'s half speed is gone', near(lastLoop().playbackRate.value, 1, 1e-6), String(lastLoop().playbackRate.value));
+const matchLid = () => (lastLoop()?.outputs ?? []).find((n) => n.kind === 'biquad');
+check('...and so is the menu\'s lid', (matchLid()?.frequency.value ?? 0) >= CONFIG.music.surfaceHz - 1,
+  `${Math.round(matchLid()?.frequency.value ?? 0)}Hz`);
+check('...with the score card\'s rest released', music.musicAtRest() === false);
+
+section('The cycle is gated on goals — nobody scores, nothing moves');
+const matchFrom = playedOrder().length - 1;
+// Three whole passes of Loop00 and a bit. On a clock-driven cycle that is two
+// handovers gone by; gated, it is the same file coming round again — which is
+// what `source.loop` already does, so the assertion is that NOTHING happened.
+run(VBAR * 4 * 3 + 0.5);
+check('Loop00 is still what is playing', playing() === 'versus0', String(playing()));
+check('...and it never handed over', playedOrder().slice(matchFrom).join(',') === 'versus0',
+  playedOrder().slice(matchFrom).join(' → '));
+check('...with nothing owed to spend', music.versusGoalsPending() === 0,
+  `${music.versusGoalsPending()} owed`);
+
+section('A goal books the next loop for the END of the one it went in over');
+music.versusGoalScored();
+run(0.2);
+check('the goal does not cut the music', playing() === 'versus0', String(playing()));
+// The rest of the pass the goal landed in, and then the boundary.
+run(VBAR * 4);
+check('...and Loop01 arrives when Loop00 finishes', playing() === 'versus1', String(playing()));
+
+section('Every step of the cycle is gated, not just the first');
+run(VBAR * 6 * 2 + 0.3);
+check('Loop01 comes round again rather than moving on', playing() === 'versus1', String(playing()));
+
+section('Two goals in one pass are two steps, not a skip');
+music.versusGoalScored();
+music.versusGoalScored();
+// The failure this is here for: a second goal that re-queued would REPLACE the
+// switch the first one booked, and the loop it paid for would never be heard.
+check('the second is banked rather than replacing the first', music.versusGoalsPending() === 1,
+  `${music.versusGoalsPending()} owed`);
+run(VBAR * 6);
+check('the first goal\'s loop plays', playing() === 'versus2', String(playing()));
+check('...and the second\'s is queued behind it, unpaid-for by anything new',
+  music.versusGoalsPending() === 0, `${music.versusGoalsPending()} owed`);
+run(VBAR * 5);
+check('...and it wraps to the top — there is no intro to skip', playing() === 'versus0',
+  String(playing()));
+let vGapsOk = true;
+const vStarts = [];
+for (const s of loops()) if (String(s.buffer?.tag).startsWith('versus')) vStarts.push([s.buffer.tag, s.started]);
+for (let i = 1; i < vStarts.length; i++) {
+  const wantLen = { versus0: VBAR * 4, versus1: VBAR * 6, versus2: VBAR * 5 }[vStarts[i - 1][0]];
+  const gap = vStarts[i][1] - vStarts[i - 1][1];
+  const passes = Math.round(gap / wantLen);
+  // A WHOLE NUMBER of passes, where the ungated cycle could only ever be one:
+  // a loop held by the gate repeats, and the handover still lands on the file's
+  // own end however many times it has come round.
+  if (passes < 1 || !near(gap, wantLen * passes, 0.005)) vGapsOk = false;
+}
+check('every handover lands on the end of a whole pass, with no gap', vGapsOk,
+  vStarts.map(([n, t]) => `${n}@${t.toFixed(2)}`).join(' '));
+
+section('The match\'s tempo is read off the file, so nothing has to put it back');
+check('the beat grid is the match\'s, not the run\'s', near(music.currentBpm(), 170, 1e-6),
+  `${music.currentBpm().toFixed(1)}bpm`);
+check('...and so is the bar the grid counts', near(music.barGrid().bar, VBAR, 1e-9),
+  `${music.barGrid().bar.toFixed(4)}s`);
+check('a match loop measures as the bars it was written as',
+  music.trackReport().find((r) => r.name === 'versus1')?.bars === 6,
+  `${music.trackReport().find((r) => r.name === 'versus1')?.bars} bars`);
+// The whole point of deriving it: the run's tempo comes back because there is
+// nothing to restore, only a different file sounding.
+check('a run loop measured at the same moment is still on the run\'s bar',
+  music.trackReport().find((r) => r.name === '1')?.bars === Math.round(SHORT / BAR),
+  'measured at decode against its own bar, not against whatever was playing');
+
+section('A level cannot reach the match');
+const beforeLevel = loops().length;
+music.setLevel(3); // levelsPerSlot 1, so this would queue slot '3' in a run
+music.versusGoalScored();
+run(VBAR * 4 + 0.2);
+check('the run\'s rotation does not cut in underneath', playing().startsWith('versus'), String(playing()));
+// ...and what did arrive is the one the GOAL bought, not the level's slot
+// riding in on the boundary the goal opened.
+check('...and the loop the goal bought is the match\'s own', playing() === 'versus1',
+  `${playing()}, ${loops().length - beforeLevel} switch(es)`);
+// A match name must never be drawable by an ordinary level, the same naming
+// contract the boss bank has.
+check('slotForLevel can never draw a match loop',
+  ![1, 2, 3, 8, 40].some((l) => String(music.slotForLevel(l)).startsWith('versus')),
+  [1, 2, 3, 8, 40].map((l) => music.slotForLevel(l)).join(','));
+
+section('A match reached off a score card opens audible, and on its own loop');
+reset();
+music.play(1);
+run(0.05);
+music.startBossMusic();
+run(BAR);
+check('the last run ended in a fight', playing() === 'boss0', String(playing()));
+music.hushMusic({ cut: 0.2, feed: 0.3 }); // the kill's cut — the gain is ramped to zero
+run(0.5);
+check('...under the kill\'s silence', musicGainNode().gain.value < 0.01,
+  String(musicGainNode().gain.value.toFixed(4)));
+music.startVersusMusic();
+run(0.05);
+check('the match opens on its own first loop', playing() === 'versus0', String(playing()));
+check('...and not muted', musicGainNode().gain.value > 0.01, String(musicGainNode().gain.value.toFixed(4)));
+check('...with the dead fight\'s rotation dropped', music.bossMusicActive() === false);
+run(BAR * 4);
+check('...and it does not come back for it', playing().startsWith('versus'), String(playing()));
+
+section('Leaving a match for the menu drops the cycle');
+music.startMusicAtRest();
+run(0.05);
+check('the menu is on the run\'s opening loop', playing() === '1', String(playing()));
+check('...and the match is over as far as the score is concerned', music.versusMusicActive() === false);
+check('...with the run\'s tempo back', near(music.currentBpm(), CONFIG.music.bpm * 0.5, 1e-6),
+  `${music.currentBpm().toFixed(1)}bpm at the menu's half speed`);
+// The failure this is here for: the cycle left up would queue its next loop and
+// take the menu back over one boundary later.
+run(VBAR * 6 + 1);
+check('the match\'s next loop never arrives', playing() === '1', String(playing()));
+// ...nor can a late goal drag it back. The replay reel and the score card both
+// run on after the whistle, and a goal reported from outside a match must find
+// nothing to move.
+music.versusGoalScored();
+run(BAR + 0.2);
+check('a goal after the match is over moves nothing', playing() === '1', String(playing()));
+check('...and banks nothing for the next one', music.versusGoalsPending() === 0,
+  `${music.versusGoalsPending()} owed`);
+music.stop();
+
+CONFIG.music.versusSrc = [];
+
 section('The menu plays the run\'s loop under a lid, and Play takes it off');
 // The score starts on the MAIN MENU now, with the depth low-pass pinned near
 // `menuHz` so what carries through is the groove and none of the top end.

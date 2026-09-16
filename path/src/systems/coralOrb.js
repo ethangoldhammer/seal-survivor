@@ -6,7 +6,21 @@ import { telegraphMul } from './telegraph.js';
 
 // ---------------------------------------------------------------------------
 // THE CORAL — the fire-rate pickup, the yellow one that doubles your gun for
-// eight seconds.
+// eight seconds... and every other coral in the game, because this grows a
+// SPECIES rather than an object.
+//
+// TWO PICKUPS ARE CORALS NOW. The yellow one doubles the gun; a second, in
+// another colour, multiplies the score for a while (CONFIG.scorePickup). They
+// share this file and share nothing else: every function here takes the block
+// of shape numbers it is growing FROM, so a species is a `coral:` block in
+// config and no code at all. `npm run looks:coral` is where a new one is
+// drawn, seeded and compared against the two that ship.
+//
+// WHICH IS WHY NOTHING HERE READS cfg() ANY MORE except as a default. A helper
+// that reached for CONFIG.rapidFirePickup.coral in the middle of growing the
+// score coral would silently give the second species the first one's
+// proportions, and the failure would look like a tuning decision rather than a
+// bug — the shape would simply be wrong, in a plausible way, forever.
 //
 // It used to be a rock: the same tumbling stone the strike orb is, in a
 // different colour. Three of the game's four floating pickups were the same
@@ -44,6 +58,24 @@ import { telegraphMul } from './telegraph.js';
 
 function cfg() {
   return CONFIG.rapidFirePickup?.coral ?? {};
+}
+
+/**
+ * The named species' shape-and-light block, or the fire-rate coral's when the
+ * name is unknown.
+ *
+ * A missing species FALLS BACK rather than throwing, because the name reaches
+ * this from a spawner and a run is not worth taking down over a typo — but the
+ * fallback is the first coral rather than an empty object, so a mistyped name
+ * grows something that is visibly the wrong pickup instead of a sphere.
+ */
+export const CORAL_SPECIES = {
+  rapidFire: () => CONFIG.rapidFirePickup?.coral ?? {},
+  score: () => CONFIG.scorePickup?.coral ?? {},
+};
+
+export function coralParams(species = 'rapidFire') {
+  return (CORAL_SPECIES[species] ?? CORAL_SPECIES.rapidFire)() ?? {};
 }
 
 // Which side each child of a fork takes: left, right, then straight on. See
@@ -91,11 +123,16 @@ function segment(len, r0, r1, bend, sides) {
  * question you can only ask by growing several from known seeds and measuring
  * them. See tools/coral-orb-test.mjs.
  *
+ * `params` is the species' shape block — CONFIG.rapidFirePickup.coral, or
+ * CONFIG.scorePickup.coral, or anything shaped like them that a tool is trying
+ * out. Passed in rather than looked up so the look page can grow a dozen
+ * candidate blocks side by side without writing any of them to CONFIG first.
+ *
  * The geometry carries an extra `aTip` attribute: 0 at the holdfast, 1 at the
  * tips. Everything about the light reads off it.
  */
-export function growCoral(rand = Math.random) {
-  const c = cfg();
+export function growCoral(rand = Math.random, params = null) {
+  const c = params ?? cfg();
   const parts = [];
   const tips = [];
   const sides = Math.max(3, Math.round(c.sides ?? 6));
@@ -266,8 +303,8 @@ const CORAL_FRAGMENT = `
   vec4 diffuseColor = vec4(diffuse * (coralBase + coralPulse * uCoralGlow * vCoralTip), opacity);
 `;
 
-function makeCoralMaterial(color) {
-  const c = cfg();
+function makeCoralMaterial(color, params = null) {
+  const c = params ?? cfg();
   const mat = new THREE.MeshBasicMaterial({ color });
   mat.userData.__coral = {
     uCoralPhase: { value: 0 },
@@ -322,16 +359,28 @@ function makeCoralMaterial(color) {
  * makes this read as a living coral is deleted. This asset carries its own
  * `glow`, which is what that ramp is sized against.
  */
-export function createCoralOrb(rand = Math.random) {
-  const c = cfg();
-  const look = CONFIG.assetLooks?.rapidFireOrb ?? {};
-  const tint = look.tint ?? c.color ?? 0xffe066;
+export function createCoralOrb(rand = Math.random, opts = {}) {
+  // WHICH CORAL. `species` names a block in CORAL_SPECIES and `assetKey` is
+  // the row the Look panel's tint and assets.csv's size hang off — two
+  // arguments rather than one because they are two different tables, and the
+  // fire-rate coral has been proving since it was written that the asset key
+  // and the config block do not have to be spelled the same.
+  const species = opts.species ?? 'rapidFire';
+  const assetKey = opts.assetKey ?? 'rapidFireOrb';
+  const c = opts.params ?? coralParams(species);
+  const look = CONFIG.assetLooks?.[assetKey] ?? {};
+  const tint = opts.tint ?? look.tint ?? c.color ?? 0xffe066;
   const glow = c.glow ?? 1.6;
-  const geo = growCoral(rand);
-  const mat = makeCoralMaterial(new THREE.Color(tint).multiplyScalar(glow));
+  const geo = growCoral(rand, c);
+  const mat = makeCoralMaterial(new THREE.Color(tint).multiplyScalar(glow), c);
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.name = 'rapidFireOrb';
+  mesh.name = assetKey;
   mesh.userData.coral = {
+    // The species it grew as, so the per-frame update can read the right
+    // block. Without this every coral in the water would pulse and turn on the
+    // fire-rate coral's numbers whatever it was grown from — the one way this
+    // split fails that renders perfectly and is completely wrong.
+    species,
     // Its own base colour, kept so the coach's highlight can multiply rather
     // than replace — see updateCoralOrb.
     base: new THREE.Color(tint).multiplyScalar(glow),
@@ -357,7 +406,7 @@ export function createCoralOrb(rand = Math.random) {
 export function updateCoralOrb(mesh, dt, rawDt = dt) {
   const state = mesh?.userData?.coral;
   if (!state) return;
-  const c = cfg();
+  const c = coralParams(state.species);
 
   // THE TURN. One axis, slowly — see the header. `dt`, not raw: this is the
   // object moving in the water, and the water is what hit-stop dilates.

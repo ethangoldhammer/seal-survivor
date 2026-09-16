@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG, TUNER_SCHEMA } from '../path/src/config.js';
 import { installModel, createVisual } from '../path/src/assets.js';
 import {
-  updateAccessories, resetAccessories, accessoryState,
+  updateAccessories, resetAccessories, accessoryState, dressBody,
   equipAccessory, cycleAccessory, accessoryRoster, accessoryTurn,
 } from '../path/src/systems/accessories.js';
 
@@ -758,6 +758,55 @@ const eyeSwing = scaleSwing('eye_L_09');
 check('the guard would catch an eye bone (it is the thing being kept out)',
   !!eyeSwing && Math.abs(eyeSwing.hi - eyeSwing.lo) > 1e-3,
   eyeSwing ? `${eyeSwing.lo.toFixed(3)}..${eyeSwing.hi.toFixed(3)}` : 'no scale track found');
+
+// ---------------------------------------------------------------------------
+section('A BODY THAT IS NOT THE PLAYER\'S');
+// ---------------------------------------------------------------------------
+// dressBody places a one-off hat on a body nobody is going to call
+// updateAccessories for — the level-up seal, the ghost, and now every seal in
+// a Blubberball roster past the player's own (systems/rosterCast.js gives each
+// seat its own accessory, and CONFIG's one slot is only ever the player's).
+//
+// SO IT TAKES A KEY. Without one every seal on the pitch wore whatever the
+// player had on, which is not a roster you dressed — it is four copies of one
+// seal. Left out, it is the slot exactly as it was, which is what the two
+// older callers want and what this checks first.
+{
+  const other = new THREE.Group();
+  scene.add(other);
+  const spare = createVisual('ship');
+  other.add(spare);
+  scene.updateMatrixWorld(true);
+
+  equipAccessory('accessoryHat');
+  const bySlot = dressBody(spare);
+  check('with no key it wears the slot', bySlot?.key === 'accessoryHat', bySlot?.key ?? 'nothing');
+  check('...as a child of the named bone', bySlot?.visual?.parent === spare.getObjectByName(hat.bone),
+    bySlot?.visual?.parent?.name ?? 'no parent');
+  bySlot?.remove();
+
+  // A DIFFERENT ACCESSORY FROM THE ONE IN THE SLOT — the whole point.
+  const want = Object.keys(CONFIG.accessories.items).find((k) => k !== 'accessoryHat' && CONFIG.accessories.items[k]?.bone);
+  if (!want) {
+    check('there is a second accessory to dress a second body in', false, 'only one in CONFIG');
+  } else {
+    const byKey = dressBody(spare, want);
+    check('a key dresses that body in THAT accessory', byKey?.key === want, byKey?.key ?? 'nothing');
+    check('...and left the slot alone', CONFIG.accessories.equipped === 'accessoryHat', CONFIG.accessories.equipped);
+    check('...on its own accessory\'s bone', byKey?.visual?.parent === spare.getObjectByName(CONFIG.accessories.items[want].bone),
+      byKey?.visual?.parent?.name ?? 'no parent');
+    // A caller that keeps the handle for a whole match needs to know whether it
+    // is holding the real mesh or the stand-in createVisual returns before the
+    // model has landed — nothing in dressBody will ever ask again.
+    check('...and says whether it came from the model or the stand-in', typeof byKey?.fromModel === 'boolean', `${byKey?.fromModel}`);
+    byKey?.remove();
+    check('remove() takes the mesh off the bone', !spare.getObjectByName(`accessory:${want}`));
+  }
+  // '' is BARE and not "the slot": a seat left undressed must not inherit the
+  // player's hat, which is exactly what `want ?? slot` would have done.
+  check('an empty key is bare, not the slot', dressBody(spare, '') === null);
+  scene.remove(other);
+}
 
 // Every accessory in CONFIG needs a full set of sliders, or it is a thing that
 // exists and cannot be placed.

@@ -60,7 +60,7 @@ export const DEATH_CAUSES = [
   { id: 'orca', label: 'the orca', threat: 'The orca', sources: ['bossOrca'] },
   { id: 'mosasaur', label: 'the mosasaur', threat: 'The mosasaur', sources: ['bossMosasaur'] },
   { id: 'squid', label: 'a squid or the kraken', threat: 'Squid', sources: ['squid', 'bossSquid'] },
-  { id: 'crab', label: 'a crab', threat: 'Crabs', sources: ['walkingCrab', 'emberCrab', 'bossCrab'] },
+  { id: 'crab', label: 'a crab', threat: 'Crabs', sources: ['walkingCrab', 'emberCrab', 'bossCrab', 'dancingcrab'] },
   // The only boss whose ATTACKS get their own cause, because they are the only
   // ones a player would name: 'boss:boatSalvo' and its two siblings are shells
   // off the trawler, and being shelled by the trawler is being killed by the
@@ -106,11 +106,11 @@ export const DEATH_CAUSES = [
   // Threats tab. A cause nobody has written a quip for falls back to the
   // general pool, which is a supported state, so this classifies the creature
   // (which is what tools/quip-test.mjs asks for) without inventing its words.
-  { id: 'jellyfish', label: 'lorem ipsum dolor', threat: 'Lorem ipsum', sources: ['jellyfish'] },
+  { id: 'jellyfish', label: 'jellyfish', threat: 'jellyfish', sources: ['jellyfish', 'moonjelly', 'combjelly', 'flowerhatjelly', 'spottedjelly', 'crownjelly'] },
   // The man o' war and its boss: the same kind of death as the jellyfish's
   // (a sting you swam into), kept as its own row so the two can read
   // differently. Words staged as lorem — see design/COPY-TODO.md.
-  { id: 'manowar', label: 'lorem ipsum dolor', threat: 'Lorem ipsum', sources: ['manowar', 'bossManOWar'] },
+  { id: 'manowar', label: "man o' war", threat: "Man O' War", sources: ['manowar', 'bossManOWar'] },
   // Kept although the dolphin no longer spawns as wildlife (CONFIG.enemies
   // .dolphin is weight 0 — see the note there): the body is still in the game
   // as the companion stub, and a cause that exists costs nothing while a
@@ -120,7 +120,7 @@ export const DEATH_CAUSES = [
   { id: 'oyster', label: 'an oyster', threat: 'Oysters', sources: ['oyster'] },
   // The small fry. Being nibbled to death by the things you were supposed to
   // be eating is one cause however many species are in the school.
-  { id: 'fish', label: 'the small fry', threat: 'Small fry', sources: ['fish', 'trout', 'tang', 'reeffish', 'fishPackA', 'fishPackB', 'fishPackC', 'fishesA', 'fishesB', 'fishesC', 'brownfish', 'clownfish', 'surgeonfish', 'tuna', 'lanternfish', 'glowTang', 'glowDarter'] },
+  { id: 'fish', label: 'the small fry', threat: 'Small fry', sources: ['fish', 'trout', 'tang', 'reeffish', 'fishPackA', 'fishPackB', 'fishPackC', 'fishesA', 'fishesB', 'fishesC', 'brownfish', 'clownfish', 'surgeonfish', 'tuna', 'lanternfish', 'glowTang', 'glowDarter', 'lizardfish', 'myllokunmingia'] },
   // Cross-cutting on purpose: dying to the megalodon boss is a shark death AND
   // a boss death, and a line written for either one should be allowed to fire.
   // `boss:` covers the attacks that come off a boss rather than out of its

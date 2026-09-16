@@ -13,7 +13,18 @@ const PROJECT = resolve(HERE, '../..');
 
 export default defineConfig({
   root: PROJECT,
-  base: './',
+  // ABSOLUTE, NOT './'. The lab lives at /tools/looks/accessory-lab.html, two
+  // directories deep, and every media path in the game is root-absolute —
+  // assetPath.js rewrites '/models/fedorahat.glb' to BASE + the rest, so a
+  // relative base resolved it against the DOCUMENT and asked for
+  // /tools/looks/models/fedorahat.glb. Which 404s, and a 404 model is a console
+  // warning and a built-in stand-in, never an error: every hat in the roster
+  // came out as the fallback cone. A lab drawing cones looks like a lab.
+  //
+  // serve.mjs mounts the build at '/' with public/models, /textures, /sprites
+  // and /flags beside it, so '/' is the truth for this server. Same fix, same
+  // reason, as vite.shaderlab.config.mjs and vite.versus.config.mjs.
+  base: '/',
   build: {
     target: 'esnext',
     outDir: resolve(PROJECT, 'dist-accessory-lab'),

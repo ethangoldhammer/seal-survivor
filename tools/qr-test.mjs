@@ -51,7 +51,7 @@ const check = (name, cond, detail = '') => {
 section('STRUCTURE — the code is shaped like a code');
 // ---------------------------------------------------------------------------
 
-const url = 'https://seal-survivor.pages.dev';
+const url = 'https://sealsurvivor.com';
 const qr = encodeQr(url, 'M');
 check('a URL encodes', !!qr);
 check('size matches the version', qr.size === qr.version * 4 + 17,
@@ -101,7 +101,7 @@ check('an unknown level falls back rather than failing', !!encodeQr(url, 'Z'));
 
 // UTF-8, because a boss name could end up in one of these one day and a
 // multi-byte character must be counted in BYTES, not characters.
-const wide = encodeQr('https://seal-survivor.pages.dev/🦭', 'M');
+const wide = encodeQr('https://sealsurvivor.com/🦭', 'M');
 check('multi-byte text encodes', !!wide);
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,9 @@
 // UNLOCKS — what the player has EARNED, across every run they have ever played,
 // and the one switch that decides whether earning is required at all.
 //
-// THE SWITCH. `GATE_DEFAULT` below is the whole public/private difference.
+// THE SWITCH. `GATE_DEFAULT` below is the whole public/private difference, and
+// it is read off the BUILD: a dev server is the unlocked game, a built bundle
+// is the gated one, and `?gate=0` / `?gate=1` overrides either.
 // On — the default now — a thing with a row in unlocks.csv is withheld until
 // that row's stat reaches its count. Off, every card is dealt and every
 // accessory is in the drawer, which is what a dev session asks for with
@@ -59,16 +61,31 @@ import { versusActive } from './versusFlag.js';
 import unlocksCsv from '../unlocks.csv?raw';
 import { parseUnlockCsv, buildUnlocks } from '../unlockTable.js';
 
-// THE TOGGLE. True is the public build: a thing with a row in unlocks.csv has
-// to be earned. Flipped on when the upgrade gates arrived — until then the
-// table was written but nothing read it, which meant a gate could be wrong for
-// months without anything noticing.
+// THE TOGGLE. On means the public build: a thing with a row in unlocks.csv has
+// to be earned. Off means the whole table is in the game from the first run.
 //
-// A DEV SESSION TURNS IT OFF WITH `?gate=0`, one page load at a time, and that
-// is deliberately the harder of the two directions now. The old default made
-// every local run the unlocked game, so the gated build was the one nobody
-// ever actually played.
-export const GATE_DEFAULT = true;
+// IT IS THE BUILD THAT DECIDES, not a constant somebody edits. A dev server is
+// the unlocked game and a built bundle is the gated one, because the two are
+// different jobs: on a dev server the question is "does this hat sit right on
+// the head", and answering it by first playing far enough to earn the hat is
+// not answering it. The public build is the one the gates are for.
+//
+// This was a hand-flipped `true` for both, with `?gate=0` as the dev escape —
+// one page load at a time, which is a toll paid on every reload of the one
+// build where the gates are in the way. The reasoning behind that `true` was
+// real and is worth keeping in mind: the gated build is the one nobody ever
+// plays, and a gate can be wrong for months if nothing local ever meets it.
+// The answer to that is `?gate=1` — the same escape, pointed the other way, so
+// the gated game is still one URL away — and tools/unlock-test.mjs, which
+// exercises the gates whatever the build thinks.
+//
+// FAIL-SAFE, AND THAT IS WHY IT IS WRITTEN AS A NEGATION. `import.meta.env` is
+// the bundler's and does not exist at all in a Node harness (see assetPath.js,
+// which says the same thing about BASE_URL) — so anything that cannot prove it
+// is a dev server is GATED. The worst case is a developer looking at the
+// earned game; the alternative's worst case is a public build shipping the
+// whole wardrobe, and those are not the same mistake.
+export const GATE_DEFAULT = !import.meta.env?.DEV;
 
 // Every stat recordUnlockStat is ever called with. A name ending in `.` is a
 // PREFIX: `boss.` is followed by an archetype id (boss.bossCrab) and `perk.` by
@@ -87,6 +104,7 @@ export const STATS = [
   'sharksDefeated',     // the `shark` spawn group subset of the above
   'chumEaten',          // MOUTHFULS, not kills — see onChumSwallowed
   'bubblesPopped',      // ambient seabed bubbles the seal took a breath from
+  'clamsCollected',     // attractive clams SWALLOWED, not merely spawned
   'baitBallsWiped',     // balls the player emptied to the last fish
   'airTimeSeconds',     // whole seconds spent out of the water
   'levelsGained',       // levels taken across every run, summed
@@ -160,6 +178,11 @@ export function rebuildUnlockGates(rows = null) {
 
 // --- the switch --------------------------------------------------------------
 
+/**
+ * `?gate=0` / `?gate=1` on the URL — either direction, and it beats the build.
+ * `?gate=1` is the one that matters now that a dev server is ungated by
+ * default: it is how the gated game gets played locally without building.
+ */
 function gateFromUrl() {
   try {
     const q = new URLSearchParams(globalThis.location?.search ?? '');

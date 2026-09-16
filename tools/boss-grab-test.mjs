@@ -36,13 +36,18 @@
 // ---------------------------------------------------------------------------
 
 import './dom-stub.mjs';
+// The boss models embed their textures and GLTFLoader decodes those through
+// createImageBitmap — without a stub the parse promise never settles and this
+// exits with no error at all. The jaw section below is the only part that loads
+// a real model; nothing here reads a pixel.
+globalThis.createImageBitmap = async () => ({ width: 1, height: 1, close() {} });
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { updateBounds, bounds } from '../path/src/arena.js';
 import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entities/player.js';
 import { enemies, spawnNamed, resetEnemies } from '../path/src/entities/enemies.js';
 import {
-  tryBossGrab, updateBossGrab, resetBossGrab, playerGrabbed, grabbedBy,
+  tryBossGrab, updateBossGrab, resetBossGrab, playerGrabbed, grabbedBy, grabbedBone, endBossGrab,
 } from '../path/src/systems/bossGrab.js';
 
 const scene = new THREE.Scene();
@@ -406,6 +411,177 @@ section('A NEW RUN DOES NOT START IN A MOUTH');
   check('a reset clears the hold', !playerGrabbed() && !boss.grabbing,
     'resetBossGrab runs beside resetBoss on every new run');
 }
+
+
+// ---------------------------------------------------------------------------
+section('THE SEAL RIDES THE JAW');
+// ---------------------------------------------------------------------------
+// CONFIG.bossGrab.followJaw: the mouth point travels with the animal's own jaw
+// instead of with a free-running sine. Three things have to hold and each has a
+// way of failing silently:
+//
+//   IT MOVES AT ALL. The jaw is deliberately held shut during a grab (see the
+//   `grabbing` gate on triggerBite), so a seal pinned to it and nothing else
+//   rides a bone that never turns — strictly worse than the sine, and it looks
+//   exactly like the parenting bug the sine exists to avoid. The crunch is what
+//   drives it.
+//
+//   IT MOVES IN TIME WITH THE CRUNCHES. That is the whole point: a sine is
+//   never in phase with the jaws. So the seal's speed has to PEAK near a crunch
+//   rather than wander independently of them.
+//
+//   IT IS NOT PARENTED. A bone's world scale carries the asset's `fit` times
+//   its `sizeMul`, so parenting would resize the seal by the boss — seven times
+//   over on the megalodon. The seal must stay a child of the scene.
+{
+  // The real rigs, because a bone is the subject — the stand-in procedural
+  // body every other section here uses has no skeleton at all.
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+  const { readFileSync, existsSync } = await import('node:fs');
+  const { resolve, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { ASSETS, installModel } = await import('../path/src/assets.js');
+  const { updateEnemies } = await import('../path/src/entities/enemies.js');
+  const HERE2 = dirname(fileURLToPath(import.meta.url));
+  const loader = new GLTFLoader();
+
+  // EVERY BODY THE ARCHETYPE CAN ROLL, not just the first. The orca sends a bull
+  // or a cow (`def.assets`), and installing only the bull leaves the cow as a
+  // primitive stand-in with no skeleton at all — so the grab falls back to the
+  // sine and this section reports the feature as not wired. It did exactly
+  // that, and the failure named the bone rather than the missing model.
+  const install = async (assetKey) => {
+    const model = ASSETS[assetKey]?.model;
+    const path = model ? resolve(HERE2, '..', 'public', model.replace(/^\//, '')) : null;
+    if (!path || !existsSync(path)) { check(`${assetKey}: model on disk`, false, model ?? 'none'); return false; }
+    const buf = readFileSync(path);
+    const gltf = await loader.parseAsync(
+      buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '');
+    installModel(assetKey, gltf.scene, gltf.animations);
+    return true;
+  };
+
+  // SEEDED, AND AVERAGED OVER SEEDS. Two things in here are random — which body
+  // the orca sends (bull or cow) and the per-instance speed roll — and the
+  // phase figure below swung from x1.47 to x0.62 between two runs of the
+  // identical code because of it. A flake in a correlation measurement is not
+  // something to lower the threshold for; it is a measurement that has to be
+  // taken more than once. See the seeding note in tools/spawn-smoke-test.mjs.
+  const seeded = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let x = Math.imul(a ^ (a >>> 15), 1 | a);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
+
+  for (const bossKey of ['bossOrca', 'bossShark']) {
+    const def = CONFIG.enemies[bossKey];
+    for (const a of (def.assets ?? [def.asset]).filter(Boolean)) await install(a);
+
+    let tookAll = true;
+    let boneName = null;
+    let travelSum = 0;
+    let crunchSum = 0;
+    let ratioSum = 0;
+    let ratioN = 0;
+    let parented = false;
+    let scaled = false;
+
+    for (const seed of SEEDS) {
+      const origRandom = Math.random;
+      Math.random = seeded(seed);
+      try {
+        resetEnemies(scene);
+        resetBossGrab();
+        resetPlayer();
+        const boss = spawnNamed(scene, bossKey, 0, { x: 4, y: bounds.surfaceY - 20 }, { ignoreCaps: true });
+        if (!boss) { tookAll = false; continue; }
+        boss.isBoss = true;
+        boss.invuln = 0;
+        player.mesh.position.set(4, bounds.surfaceY - 20, 0);
+        if (!tryBossGrab(boss)) { tookAll = false; continue; }
+        boneName = grabbedBone()?.name ?? boneName;
+
+        const path2 = [];
+        const crunches = [];
+        let crunchCount = 0;
+        for (let i = 0; i < 120 && playerGrabbed(); i++) {
+          const before = crunchCount;
+          updateBossGrab(1 / 60, { onPlayerHit: () => { crunchCount += 1; return 0; } });
+          updateEnemies(1 / 60, scene, player.mesh.position, () => {}, () => {});
+          path2.push({ x: player.mesh.position.x, y: player.mesh.position.y });
+          if (crunchCount > before) crunches.push(path2.length - 1);
+        }
+
+        // The first ~20 frames are the REEL pulling the seal in, not the jaw.
+        const steps = [];
+        for (let i = 21; i < path2.length; i++) {
+          steps.push(Math.hypot(path2[i].x - path2[i - 1].x, path2[i].y - path2[i - 1].y));
+        }
+        const total = steps.reduce((a, b) => a + b, 0);
+        travelSum += total;
+        crunchSum += crunches.length;
+        if (crunches.length >= 2 && total > 0) {
+          const mean = total / steps.length;
+          let near = 0;
+          let nearN = 0;
+          for (const c of crunches) {
+            for (let k = c; k < Math.min(path2.length - 1, c + 8); k++) {
+              const idx = k - 21;
+              if (idx >= 0 && idx < steps.length) { near += steps[idx]; nearN += 1; }
+            }
+          }
+          if (nearN && mean > 0) { ratioSum += (near / nearN) / mean; ratioN += 1; }
+        }
+        if (player.mesh.parent !== scene) parented = true;
+        if (Math.abs(player.mesh.scale.x - 1) > 1e-6) scaled = true;
+        endBossGrab(false);
+      } finally {
+        Math.random = origRandom;
+      }
+    }
+
+    check(`${bossKey}: the grab takes, on every seed`, tookAll === true);
+    check(`${bossKey}: ...on a real bone, resolved off the asset's grabBone`,
+      boneName != null, boneName ?? 'NO BONE — it fell back to the sine');
+    check(`${bossKey}: the seal is carried rather than welded on`,
+      travelSum / SEEDS.length > 0.2, `${(travelSum / SEEDS.length).toFixed(2)}u a hold, averaged`);
+    check(`${bossKey}: ...and the jaws actually work — more than one crunch`,
+      crunchSum / SEEDS.length >= 2, `${(crunchSum / SEEDS.length).toFixed(1)} crunches a hold`);
+    // A FLOOR RATHER THAN A TARGET, and it is low on purpose. The size of this
+    // effect is the clip's, not the code's: the orca's procedural jaw is a
+    // clean 36-degree snap, while the megalodon's authored "metarig|Bite" is a
+    // whole-body LUNGE whose jaw contributes 27 degrees against 59 in the tail
+    // — so its held seal moves mostly with the head and only a little with the
+    // chew. Measured with `npm run jaws`. What has to be true for both is that
+    // the motion is correlated with the crunches AT ALL; how strongly is the
+    // animation's business and belongs in the asset, not in a threshold here.
+    check(`${bossKey}: ...and the motion is IN TIME with them, not a free sine`,
+      ratioN > 0 && ratioSum / ratioN > 1.02,
+      `x${(ratioSum / Math.max(1, ratioN)).toFixed(2)} the average frame, over ${ratioN} seeds`);
+    check(`${bossKey}: the seal is never parented into the skeleton`,
+      !parented, 'a bone world scale would otherwise resize it');
+    check(`${bossKey}: ...so it keeps its own scale`, !scaled);
+  }
+
+  // ...and switching it off puts every boss back on the sine.
+  CONFIG.bossGrab.followJaw = false;
+  resetEnemies(scene);
+  resetBossGrab();
+  const off = spawnNamed(scene, 'bossOrca', 0, { x: 4, y: bounds.surfaceY - 20 }, { ignoreCaps: true });
+  off.invuln = 0;
+  player.mesh.position.set(4, bounds.surfaceY - 20, 0);
+  tryBossGrab(off);
+  check('switched off, no bone is used and the sine carries the seal',
+    grabbedBone() == null);
+  endBossGrab(false);
+  CONFIG.bossGrab.followJaw = true;
+}
+
 
 console.log(failures ? `\n${failures} failure(s)\n` : '\nall good\n');
 process.exit(failures ? 1 : 0);

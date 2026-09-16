@@ -40,10 +40,11 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import {
-  noteBallMomentum, claimBall, resetBallLook, updateBallLook, ballCredit, teamColor,
+  noteBallMomentum, claimBall, resetBallLook, updateBallLook, ballCredit, teamColor, ballEvent,
+  heldColor, starterColor,
 } from '../path/src/systems/ballLook.js';
 import {
-  updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit,
+  updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit, ballTrailProfile, burstBallBubbles,
 } from '../path/src/systems/ballTrail.js';
 
 const scene = new THREE.Scene();
@@ -143,29 +144,64 @@ section('THE SPLIT IS THE LEDGER — two colours, weighted by who is winning');
   const none = ballTrailSplit();
   check('an untouched ball draws ONE channel', none.colors.length === 1,
     `${none.colors.length} colour(s)`);
+  // The ball's colour AT ITS GLOW — what renderBall actually writes into the
+  // splats, and so the colour the untaken part of the body is wearing. Not
+  // look.color raw: mixing that in at tintMix would DIM the ball on the frame
+  // somebody first touched it. See starterColor.
   check('...in the ball\'s own colour',
-    none.colors[0] === CONFIG.versus.ball.look.color, hex(none.colors[0]));
+    none.colors[0] === starterColor(), hex(none.colors[0]));
 
-  // A CONTACT. Two channels, and they are the TEAMS' colours rather than
-  // anything written in the trail's own block.
+  // A CONTACT. Two channels — and the second is NOT the other team's colour.
+  // Until the other side has actually held this ball there is nothing of
+  // theirs on it: what green is taking over is the STARTER, which is what the
+  // first touch of a kickoff looks like.
   strike(0, 40);
   roll(40, 30);
   const one = ballTrailSplit();
   check('a struck ball draws TWO', one.colors.length === 2,
     one.colors.map(hex).join(' / '));
-  check('...and they are the two teams\' colours',
-    one.colors.includes(teamColor(0)) && one.colors.includes(teamColor(1)),
-    `${hex(teamColor(0))} vs ${hex(teamColor(1))}`);
+  check('...the striker\'s colour, taking over the starter',
+    one.colors[1] === teamColor(0) && one.colors[0] === starterColor(),
+    `${hex(one.colors[0])} \u2190 ${hex(one.colors[1])}`);
+  check('...and NOT the colour of a side that has not touched it',
+    !one.colors.includes(teamColor(1)), hex(teamColor(1)));
 
-  // ONE TEAM HAS IT ALL. The ledger's share marches over a few hundred ms, so
-  // the trail is asked about after it has arrived rather than on the frame of
-  // the touch — which is the behaviour, not a concession: a trail that changed
-  // hands on the contact frame would read as a rendering glitch.
+  // THE MARCH, AND THE FLIP IT REPLACED. The first contact of a match used to
+  // hand the striker the WHOLE ball on the frame it landed: the hand-over
+  // re-read the share from the incoming colour's end (`1 - share`), which is
+  // right between two teams and is `1 - 0` out of nobody. So the spread never
+  // ran — the ball flipped. It has to arrive somewhere between the two.
   const led = ballCredit();
   const lead = led.newest;
   const beaten = lead === 1 ? 0 : 1;
-  check('the ledger says team 0 owns it', lead === 0 && led.share > 0.9,
-    `newest ${lead}, share ${led.share.toFixed(3)}`);
+  check('the ledger says team 0 is taking it', lead === 0 && led.share > 0.5 && led.share < 0.95,
+    `newest ${lead}, share ${led.share.toFixed(3)} after half a second`);
+  // ONCE THE OTHER SIDE HAS HELD IT, the pair IS the two teams' colours — that
+  // is the question heldColor asks, and the starter is only the answer while
+  // nobody has taken anything off anybody.
+  {
+    strike(1, 60);
+    const two = ballTrailSplit();
+    check('...and once the other side has held it, the pair is the two teams',
+      two.colors.includes(teamColor(0)) && two.colors.includes(teamColor(1)),
+      two.colors.map(hex).join(' / '));
+    check('heldColor says so directly', heldColor(1) === teamColor(0), hex(heldColor(1)));
+  }
+  {
+    // ON THE CONTACT FRAME ITSELF there is barely any of the new colour yet —
+    // the check that would have caught the flip on its own. A full reset, not
+    // just the look's: `strike` books the speed a contact ADDED, and a strike
+    // to 40 on a ball already doing 40 adds nothing and is ignored.
+    reset();
+    strike(0, 40);
+    updateBallLook(dt);
+    check('...and owned almost none of it on the frame of the touch',
+      ballCredit().share < 0.1, `share ${ballCredit().share.toFixed(3)} on frame one`);
+    // Back to a ball only team 0 has touched, for the weight checks below.
+    reset();
+    strike(0, 40);
+    roll(40, 30);
+  }
 
   const s = ballTrailSplit();
   // Channel 1 is always the NEWEST colour — the same order ballLook writes into
@@ -179,7 +215,8 @@ section('THE SPLIT IS THE LEDGER — two colours, weighted by who is winning');
     `${Math.abs(s.lean[0]).toFixed(2)} against the 0.50 an even ball draws`);
   check('the winner is the team that struck it', s.colors[1] === teamColor(lead),
     `${hex(s.colors[1])} is team ${lead}`);
-  check('...and the loser the other one', s.colors[0] === teamColor(beaten));
+  check('...and the loser is what it is taking over', s.colors[0] === heldColor(lead),
+    `${hex(s.colors[0])}, team ${beaten} having never touched it`);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,8 +309,12 @@ section('THE GATE — speed, and which side of the line it is on');
   check('a ball at pace draws underwater', under.count > 0, `${under.count} particles`);
   check('...and nothing in the air at the same time',
     ballTrailStats('air').count === 0);
-  check('one plume per shed point', under.plumes === Math.round(T.sources),
-    `${under.plumes} plume(s) for ${T.sources} source(s)`);
+  // ONE cloud, and it is worth asserting rather than assuming: the engine
+  // builds a plume per source and tears down the surplus, so a shed point that
+  // came back would draw a second trail beside the first and nothing would say
+  // so — a twin reads as one trail rendered twice rather than as a bug.
+  check('it sheds from one point and one only', under.plumes === 1,
+    `${under.plumes} plume(s)`);
 
   reset();
   roll(T.fullSpeed, 40, { y: SKY });
@@ -305,15 +346,13 @@ section('IT SHEDS ASTERN, OFF THE DRAWN EDGE');
     const geo = p.children?.[0]?.geometry;
     if (geo) pts.push([geo.attributes.position.getX(0), geo.attributes.position.getY(0)]);
   }
-  check('the trail is drawn from two places', pts.length === Math.round(T.sources),
+  check('the trail is drawn from one place', pts.length === 1,
     `${pts.length} plume head(s)`);
-  const behind = pts.filter(([x]) => x < ball.x);
-  check('...both of them astern of the ball', behind.length === pts.length,
-    `ball at x ${ball.x.toFixed(1)}`);
-  const off = pts.map(([, y]) => y - ball.y);
-  check('...and thrown apart across the heading',
-    pts.length < 2 || Math.sign(off[0]) !== Math.sign(off[1]),
-    off.map((v) => v.toFixed(2)).join(' / '));
+  check('...astern of the ball', pts[0][0] < ball.x, `ball at x ${ball.x.toFixed(1)}`);
+  // DEAD astern, not off a shoulder: the shed point is on the line the ball
+  // came in on, so the head of the trail is where the body just was.
+  check('...and on the heading rather than off a shoulder',
+    Math.abs(pts[0][1] - ball.y) < 0.5, `${(pts[0][1] - ball.y).toFixed(2)}u across it`);
   const reach = Math.hypot(pts[0][0] - ball.x, pts[0][1] - ball.y);
   check('...on the drawn edge rather than at the centre',
     reach > 2.8 * T.atRadius * 0.6, `${reach.toFixed(2)}u out of a 2.80u body`);
@@ -345,9 +384,148 @@ section('THE BUBBLES — the water profile\'s other half');
   roll(Math.max(0.5, W.minSpeed - 2), 60);
   check('...and neither does one under the gate',
     ballTrailStats('water').bubbles === 0);
+
+  // A HIT BOILS IT — burstBallBubbles, fired from ballImpactFx so every touch
+  // the ball has pays it. The point of the test is the case the continuous
+  // shedding above cannot cover: a ball sitting STILL, smacked. Under the
+  // drive gate it boils nothing at all, so a burst that went through the same
+  // gate would be silently dropped on exactly the hit that most wants it.
+  reset();
+  roll(Math.max(0.5, W.minSpeed - 2), 30);
+  const before = ballTrailStats('water').bubbles;
+  burstBallBubbles(1);
+  roll(Math.max(0.5, W.minSpeed - 2), 2);
+  const after = ballTrailStats('water').bubbles;
+  check('a hit boils bubbles off a ball too slow to shed any', after - before >= Math.floor(W.bubbles.burst) - 1,
+    `${after - before} against a burst of ${W.bubbles.burst}`);
+  const settled = ballTrailStats('water').bubbles;
+  roll(Math.max(0.5, W.minSpeed - 2), 30);
+  check('...paid once rather than every frame after', ballTrailStats('water').bubbles === settled,
+    `${ballTrailStats('water').bubbles} against ${settled}`);
+
+  // Scaled by how hard: a dribble puffs a couple, a spike detonates.
+  reset();
+  roll(Math.max(0.5, W.minSpeed - 2), 30);
+  const soft0 = ballTrailStats('water').bubbles;
+  burstBallBubbles(0.2);
+  roll(Math.max(0.5, W.minSpeed - 2), 2);
+  const soft = ballTrailStats('water').bubbles - soft0;
+  check('a gentle touch puffs fewer than a hard one', soft > 0 && soft < after - before,
+    `${soft} at a fifth force against ${after - before} at full`);
+
+  // ...AND NOTHING IS BANKED IN THE AIR. A burst owed up there is forgotten
+  // rather than paid on splashdown, which would put a volley's worth of foam
+  // on a frame that already has its own event.
+  reset();
+  burstBallBubbles(1);
+  roll(T.fullSpeed, 10, { y: SKY });
+  reset();
+  roll(W.fullSpeed, 2);
+  const carried = ballTrailStats('water').bubbles;
+  roll(W.fullSpeed, 2);
+  check('a burst owed in the air is forgotten, not banked',
+    ballTrailStats('water').bubbles - carried <= Math.ceil(W.bubbles.perSecond / 60) + 1,
+    `${ballTrailStats('water').bubbles - carried} in two frames`);
 }
 
 // ---------------------------------------------------------------------------
+section('A SPIKE BLOWS THE TRAIL OPEN — a flare at the strike, not for the flight');
+// ---------------------------------------------------------------------------
+// Off the LOOK's decaying `spike` (systems/ballLook.js), not the ball's latched
+// one: what the trail is for here is saying WHERE it was hit. Held open for the
+// length of the flight it would only say that a spike happened somewhere, which
+// the ball's speed already says louder.
+{
+  const SK = W.spike ?? CONFIG.versus.ball.trail.spike;
+  const laid = (spike) => {
+    reset();
+    if (spike > 0) ballEvent('bounce', { force: 1, team: 0, spike });
+    roll(W.fullSpeed, 12);
+    return ballTrailStats('water').count;
+  };
+  const plain = laid(0);
+  const spiked = laid(1);
+  check('a spike lays down a denser head of cloud', spiked > plain,
+    `${plain} particles against ${spiked} over the same fifth of a second (emit x${SK.emit})`);
+
+  // AND IT RINGS DOWN. The same flight, measured a second later: whatever the
+  // spike bought has bled off and the trail is the trail again.
+  reset();
+  ballEvent('bounce', { force: 1, team: 0, spike: 1 });
+  roll(W.fullSpeed, 60);
+  const settled = ballTrailStats('water').count;
+  reset();
+  roll(W.fullSpeed, 60);
+  const control = ballTrailStats('water').count;
+  check('...and a second later it is laying down what it always did',
+    settled < control * (1 + (SK.emit - 1) * 0.35),
+    `${control} against ${settled} over a whole second`);
+
+  // IT REACHES BOTH PROFILES. A ball spiked out of the air and one spiked under
+  // it flare the same way — the boost is applied to the resolved copy of
+  // whichever profile is live, which is the one path the two already share.
+  reset();
+  ballEvent('bounce', { force: 1, team: 0, spike: 1 });
+  roll(T.fullSpeed, 12, { y: SKY });
+  const airSpiked = ballTrailStats('air').count;
+  reset();
+  roll(T.fullSpeed, 12, { y: SKY });
+  check('...and the air trail flares too, not only the water one',
+    airSpiked > ballTrailStats('air').count,
+    `${ballTrailStats('air').count} against ${airSpiked}`);
+
+  // AND THE AUTHORED NUMBERS ARE UNTOUCHED. `resolve` writes onto a copy that
+  // is rebuilt from the config every frame; a boost that reached CONFIG would
+  // put a permanently blown-open trail into the tuning file.
+  const before = CONFIG.versus.ball.trail.width;
+  reset();
+  ballEvent('bounce', { force: 1, team: 0, spike: 2 });
+  roll(W.fullSpeed, 6);
+  check('...and the boost never reaches the authored width',
+    CONFIG.versus.ball.trail.width === before, `${before} -> ${CONFIG.versus.ball.trail.width}`);
+  resetBallLook();
+}
+
+// ---------------------------------------------------------------------------
+section('THE BREACH DOES NOT RESTYLE THE TRAIL');
+{
+  // The ball crosses the surface several times a second, and both rigs are on
+  // screen at once. If the water override could reach a DRAWN key the same
+  // unbroken trail would change width, brightness and core at the water line
+  // every time — the thing that reads as the effect breaking rather than as the
+  // ball entering water. What the water is allowed to change is how the
+  // particles shed from that moment on MOVE.
+  const DRAWN = [
+    'width', 'growth', 'fade', 'glow', 'minIntensity',
+    'coreWidth', 'coreGain', 'haloGain', 'softness',
+    'samples', 'curveSmooth', 'headTaper', 'tailTaper', 'sealTaperMul',
+    'channelTrail', 'channelSpread', 'splitThrow', 'splitBias',
+  ];
+  const MOVED = ['emitPerSecond', 'life', 'maxNodes', 'blowOut', 'turbulence', 'turbSpeed', 'drag', 'inherit'];
+
+  const air = ballTrailProfile('air');
+  const water = ballTrailProfile('water');
+  const differ = DRAWN.filter((k) => air[k] !== water[k]);
+  check('the band is drawn the same on both sides of the line',
+    differ.length === 0, differ.length ? `differ: ${differ.join(', ')}` : `${DRAWN.length} drawn keys agree`);
+
+  // ...and it is not agreeing because the override is empty. A water block that
+  // changes nothing at all would pass the check above and mean nothing.
+  const moves = MOVED.filter((k) => air[k] !== water[k]);
+  check('...while the medium still changes how they move',
+    moves.length > 0, `${moves.length} of ${MOVED.length} differ: ${moves.join(', ')}`);
+
+  // The guard itself, not just today's config: set a drawn key on the override
+  // and the profile must still ignore it.
+  const block = CONFIG.versus.ball.trail.water;
+  const had = Object.prototype.hasOwnProperty.call(block, 'width') ? block.width : undefined;
+  block.width = 99;
+  check('...and a drawn key set on the override is dropped',
+    ballTrailProfile('water').width === ballTrailProfile('air').width,
+    `width stayed ${ballTrailProfile('water').width}`);
+  if (had === undefined) delete block.width; else block.width = had;
+}
+
 section('THE TWO PROFILES DO NOT BLEED');
 {
   reset();

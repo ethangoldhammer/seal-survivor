@@ -1,0 +1,394 @@
+<Rive version="1" kind="fragment">
+
+    <!-- =========================================================================
+         DATA — the assets, the converters and the view models both artboards
+         read. Root elements, never nested inside an artboard.
+
+         NAMES ARE THE PUBLIC SURFACE. The game sets these by name, `--data`
+         addresses them by name, and renaming one is a breaking change in a way
+         renumbering an id is not. Ids are private.
+         ========================================================================= -->
+
+    <FontAsset file="fonts/Orbitron.ttf" name="Orbitron" id="3:1"/>
+
+    <!-- A number bound into a text run needs a converter, and this one defaults
+         to SIX decimals: without round/decimals a score reads 0.000000. -->
+    <DataConverterToString round="true" decimals="0" name="Whole Number" id="3:90"/>
+    <DataConverterToString round="true" decimals="0" name="Percent" id="3:93"/>
+    <DataConverterBooleanNegate name="Not" id="3:91"/>
+
+    <!-- Possession 0-100 into the bar's 620px. The track's width is hard-coded
+         here because there is no way to bind against a layout-resolved size —
+         change the bar and change this with it. -->
+    <DataConverterRangeMapper minInput="0" maxInput="100" minOutput="0" maxOutput="620"
+                              clampLower="true" clampUpper="true" name="To Bar Width" id="3:92"/>
+
+    <!-- ---------------------------------------------------------------- seat -->
+    <ViewModel defaultInstanceId="3:19" name="SeatCard" id="3:10">
+        <ViewModelPropertyString  name="seatName" id="3:11"/>
+        <ViewModelPropertyColor   name="teamColor" id="3:12"/>
+        <ViewModelPropertyString  name="roleLabel" id="3:13"/>
+        <ViewModelPropertyString  name="readyLabel" id="3:14"/>
+        <!-- THE SAME Theme INSTANCE the stats page wears. Two view models, one
+             instance: a seat card styled out of its own copy would drift from
+             the page it sits beside the moment either was tuned. -->
+        <ViewModelPropertyViewModel viewModelReferenceId="3:300" name="theme" id="3:220"/>
+
+        <ViewModelPropertyBoolean name="hover" id="3:15"/>
+        <ViewModelPropertyBoolean name="ready" id="3:16"/>
+
+        <ViewModelInstance exports="true" name="Default" id="3:19">
+            <ViewModelInstanceString  propertyValue="Lorem ipsum"    viewModelPropertyId="3:11" name="Component" id="0:3421"/>
+            <ViewModelInstanceColor   propertyValue="FFF5B02E"       viewModelPropertyId="3:12" name="Component" id="0:3422"/>
+            <ViewModelInstanceString  propertyValue="dolor sit amet" viewModelPropertyId="3:13" name="Component" id="0:3423"/>
+            <ViewModelInstanceString  propertyValue="Lorem"          viewModelPropertyId="3:14" name="Component" id="0:3424"/>
+            <ViewModelInstanceViewModel propertyValue="3:310" viewModelPropertyId="3:220" id="0:5053"/>
+            <ViewModelInstanceBoolean propertyValue="false"          viewModelPropertyId="3:15" name="Component" id="0:3425"/>
+            <ViewModelInstanceBoolean propertyValue="false"          viewModelPropertyId="3:16" name="Component" id="0:3426"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+    <!-- -------------------------------------------------------------- a seat's
+         own line on the players tab. One of these per seat, held by MatchStats
+         as eight nested view models, so four a side has somewhere to land. -->
+    <ViewModel defaultInstanceId="3:110" name="PlayerStat" id="3:100">
+        <ViewModelPropertyString name="name"    id="3:101"/>
+        <ViewModelPropertyNumber name="goals"   id="3:102"/>
+        <ViewModelPropertyNumber name="assists" id="3:103"/>
+        <ViewModelPropertyNumber name="saves"   id="3:104"/>
+
+        <ViewModelInstance exports="true" name="Seat 1" id="3:110">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3427"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3428"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3429"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3430"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 2" id="3:111">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3431"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3432"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3433"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3434"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 3" id="3:112">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3435"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3436"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3437"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3438"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 4" id="3:113">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3439"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3440"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3441"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3442"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 5" id="3:114">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3443"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3444"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3445"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3446"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 6" id="3:115">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3447"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3448"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3449"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3450"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 7" id="3:116">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3451"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3452"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3453"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3454"/>
+        </ViewModelInstance>
+        <ViewModelInstance exports="true" name="Seat 8" id="3:117">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:101" name="Component" id="0:3455"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:102" name="Component" id="0:3456"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:103" name="Component" id="0:3457"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:104" name="Component" id="0:3458"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+
+    <!-- =========================================================================
+         THEME — every stroke, glow, shadow, dash and type size on the page, in
+         one block.
+
+         THIS IS THE TUNING SURFACE. Change a number here and every element
+         wearing it changes together; `npm run rive:watch` rebuilds on save, so
+         it is a slider you edit with a keyboard. `rive rive/blubberball
+         --data=theme/glowSpread=40 --screenshot=out.png` tries one without
+         touching the file at all.
+
+         WHAT IS HERE AND WHAT IS NOT, because the split is load-bearing: a
+         property is either BOUND to this or KEYFRAMED by a state, never both —
+         the timeline wins and the bind silently does nothing. So this holds the
+         STYLE (how thick, how soft, how big, how long a dash) and the state
+         machines hold the STATE (what colour right now, how far the outline has
+         drawn). Hovering a button changes its colour and its trim; it does not
+         change its thickness, and that is why thickness can live here.
+         ========================================================================= -->
+    <ViewModel defaultInstanceId="3:310" name="Theme" id="3:300">
+        <!-- Strokes. `glowWidth` is the feathered copy under the crisp one —
+             the feathered paint REPLACES the shape it is on, so a halo is
+             always two strokes and this is the lower of the two. -->
+        <ViewModelPropertyNumber name="strokeWidth" id="3:301"/>
+        <ViewModelPropertyNumber name="glowWidth"   id="3:302"/>
+        <ViewModelPropertyNumber name="glowSpread"  id="3:303"/>
+
+        <!-- The drop shadow: a second feathered stroke behind the button,
+             pushed down. Rive has no shadow primitive and a Feather inside a
+             Fill renders nothing at all, so a soft dark edge IS the shadow. -->
+        <ViewModelPropertyNumber name="shadowSpread" id="3:304"/>
+        <ViewModelPropertyNumber name="shadowDrop"   id="3:305"/>
+
+        <!-- The dashed edge. `dashOn`/`dashOff` alternate drawn and gap in path
+             units; `dashDrift` slides the whole pattern along the outline. -->
+        <ViewModelPropertyNumber name="dashOn"    id="3:306"/>
+        <ViewModelPropertyNumber name="dashOff"   id="3:307"/>
+        <!-- A STANDING offset for the edges that do NOT spin (the seat card, the
+             goal card). The four buttons on the stats page keyframe their own
+             offset instead and ignore this — a property is either bound or
+             keyframed, never both. -->
+        <ViewModelPropertyNumber name="dashDrift" id="3:308"/>
+        <ViewModelPropertyNumber name="edgeStart" id="3:309"/>
+
+        <!-- COLOURS THE STATES SHARE. A glow or a shadow now lives on a shape
+             of its own, so its COLOUR can be bound here while its OPACITY is
+             keyframed per state — which is the only way to have both, a
+             property being either bound or keyframed and never both. Change
+             the tint or the alpha here and every button follows; change how
+             far it fades on hover in the state's own animation. -->
+        <ViewModelPropertyColor  name="glowColor"   id="3:316"/>
+        <ViewModelPropertyColor  name="shadowColor" id="3:317"/>
+
+        <!-- Type. One number per ROLE rather than per element: every row
+             heading is `bodySize`, every tally is `numberSize`. -->
+        <ViewModelPropertyNumber name="titleSize"  id="3:311"/>
+        <ViewModelPropertyNumber name="labelSize"  id="3:312"/>
+        <ViewModelPropertyNumber name="bodySize"   id="3:313"/>
+        <ViewModelPropertyNumber name="numberSize" id="3:314"/>
+        <ViewModelPropertyNumber name="tracking"   id="3:315"/>
+
+        <ViewModelInstance exports="true" name="Default" id="3:310">
+            <ViewModelInstanceNumber propertyValue="2"    viewModelPropertyId="3:301" id="0:4669"/>
+            <ViewModelInstanceNumber propertyValue="3"    viewModelPropertyId="3:302" id="0:4670"/>
+            <ViewModelInstanceNumber propertyValue="16"   viewModelPropertyId="3:303" id="0:4671"/>
+            <ViewModelInstanceNumber propertyValue="14"   viewModelPropertyId="3:304" id="0:4672"/>
+            <ViewModelInstanceNumber propertyValue="7"    viewModelPropertyId="3:305" id="0:4673"/>
+            <ViewModelInstanceNumber propertyValue="22"   viewModelPropertyId="3:306" id="0:4674"/>
+            <ViewModelInstanceNumber propertyValue="9"    viewModelPropertyId="3:307" id="0:4675"/>
+            <ViewModelInstanceNumber propertyValue="0"    viewModelPropertyId="3:308"/>
+            <ViewModelInstanceNumber propertyValue="0"    viewModelPropertyId="3:309" id="0:4677"/>
+            <ViewModelInstanceColor  propertyValue="FF3FE0C8" viewModelPropertyId="3:316"/>
+            <ViewModelInstanceColor  propertyValue="A6000000" viewModelPropertyId="3:317"/>
+            <ViewModelInstanceNumber propertyValue="21"   viewModelPropertyId="3:311" id="0:4678"/>
+            <ViewModelInstanceNumber propertyValue="18"   viewModelPropertyId="3:312" id="0:4679"/>
+            <ViewModelInstanceNumber propertyValue="17"   viewModelPropertyId="3:313" id="0:4680"/>
+            <ViewModelInstanceNumber propertyValue="30"   viewModelPropertyId="3:314" id="0:4681"/>
+            <ViewModelInstanceNumber propertyValue="0.08" viewModelPropertyId="3:315" id="0:4682"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+
+    <!-- ---------------------------------------------------------- goal card
+         The card that pops after a goal: who scored, what set it up, and the
+         clock it happened on. Every field is the match's — nothing here is a
+         written line, so none of it is a uiText row. `line` arrives already
+         composed (systems/versus.js fills {name} into the versusAssist row),
+         because who assisted is a sentence the match builds and not a label
+         this artboard could look up. -->
+    <ViewModel defaultInstanceId="3:410" name="GoalCard" id="3:400">
+        <ViewModelPropertyString name="scorerName" id="3:401"/>
+        <ViewModelPropertyString name="goalLine"   id="3:402"/>
+        <ViewModelPropertyString name="goalClock"  id="3:403"/>
+        <ViewModelPropertyColor  name="goalColor"  id="3:404"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:300" name="theme" id="3:405"/>
+
+        <ViewModelInstance exports="true" name="Default" id="3:410">
+            <ViewModelInstanceString propertyValue="Lorem ipsum" viewModelPropertyId="3:401" id="0:5054"/>
+            <ViewModelInstanceString propertyValue="dolor sit amet" viewModelPropertyId="3:402" id="0:5055"/>
+            <ViewModelInstanceString propertyValue="0:00" viewModelPropertyId="3:403" id="0:5056"/>
+            <ViewModelInstanceColor  propertyValue="FFF5B02E" viewModelPropertyId="3:404" id="0:5057"/>
+            <ViewModelInstanceViewModel propertyValue="3:310" viewModelPropertyId="3:405" id="0:5058"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+    <!-- --------------------------------------------------------------- match -->
+    <ViewModel defaultInstanceId="3:59" name="MatchStats" id="3:30">
+        <ViewModelPropertyString  name="title"       id="3:31"/>
+        <ViewModelPropertyString  name="leftName"    id="3:32"/>
+        <ViewModelPropertyString  name="rightName"   id="3:33"/>
+        <ViewModelPropertyNumber  name="leftScore"   id="3:34"/>
+        <ViewModelPropertyNumber  name="rightScore"  id="3:35"/>
+
+        <ViewModelPropertyNumber  name="leftGoals"    id="3:36"/>
+        <ViewModelPropertyNumber  name="leftAssists"  id="3:37"/>
+        <ViewModelPropertyNumber  name="leftSaves"    id="3:38"/>
+        <ViewModelPropertyNumber  name="rightGoals"   id="3:42"/>
+        <ViewModelPropertyNumber  name="rightAssists" id="3:43"/>
+        <ViewModelPropertyNumber  name="rightSaves"   id="3:44"/>
+
+        <!-- Share of the ball, 0-100 each. The bar draws leftPossession over a
+             track in the right side's colour, so the split IS the colour. -->
+        <ViewModelPropertyNumber  name="leftPossession"  id="3:57"/>
+        <ViewModelPropertyNumber  name="rightPossession" id="3:58"/>
+
+        <ViewModelPropertyColor   name="leftColor"  id="3:40"/>
+        <ViewModelPropertyColor   name="rightColor" id="3:41"/>
+        <ViewModelPropertyColor   name="accent"     id="3:49"/>
+
+        <ViewModelPropertyString  name="goalsLabel"      id="3:45"/>
+        <ViewModelPropertyString  name="assistsLabel"    id="3:46"/>
+        <ViewModelPropertyString  name="savesLabel"      id="3:47"/>
+        <ViewModelPropertyString  name="possessionLabel" id="3:56"/>
+        <ViewModelPropertyString  name="versusLabel"     id="3:48"/>
+
+        <!-- Optional: no badge at all unless the match set one. -->
+        <ViewModelPropertyBoolean name="isRecord"    id="3:60"/>
+        <ViewModelPropertyString  name="recordLabel" id="3:61"/>
+
+        <!-- THE CHAMPION, folded onto this page. It was a DOM text box floating
+             over the artboard at the end of a match (.sv-versus-card-win in
+             systems/versus.js) — the result was the one thing on screen that
+             was not part of the page announcing it.
+
+             THE NAME COMES WITH THE LABEL. Who won is the side, not the seal
+             that scored the last goal, and the two runs are one line: the label
+             small and tracked, the name after it. The goal card still names the
+             SEAL, because that is what a goal is.
+
+             `hasChampion` is what shows it, and it SHARES THE BADGE BAND with
+             the record pill above — both sit under the title and neither is
+             laid out around the other, so the page must never be handed both.
+             ui/statsCard.js is where that is enforced; there is nothing in the
+             artboard that can stop it. A draw has no champion and sets none of
+             these, which is the same blank the DOM box had. -->
+        <ViewModelPropertyBoolean name="hasChampion"   id="3:232"/>
+        <ViewModelPropertyString  name="championLabel" id="3:230"/>
+        <ViewModelPropertyString  name="championName"  id="3:231"/>
+
+        <ViewModelPropertyString  name="tabTeamLabel"    id="3:62"/>
+        <ViewModelPropertyString  name="tabPlayersLabel" id="3:63"/>
+        <ViewModelPropertyBoolean name="showPlayers"     id="3:64"/>
+
+        <!-- How many seats this match was played with. A row past it is drawn
+             at zero opacity: a one-a-side match must not show six empty seats. -->
+        <ViewModelPropertyNumber  name="seatsPerSide" id="3:69"/>
+
+        <!-- THE PLAY-AGAIN PROMPT, folded into this page. It used to be a DOM
+             panel under the card, which the card covered.
+
+             `overCursor` is the ONE selection: a pad, a key and the pointer all
+             move the same number, so hover and D-pad cannot disagree about
+             which button is lit. `overPick` is the answer coming back — a
+             NUMBER rather than a trigger, because a number can be read by
+             `--data-dump` and therefore tested headlessly, and because the
+             match already polls this prompt every frame for the pads. -->
+        <ViewModelPropertyViewModel viewModelReferenceId="3:300" name="theme" id="3:210"/>
+
+        <ViewModelPropertyString  name="overTitle"    id="3:200"/>
+        <ViewModelPropertyString  name="rematchLabel" id="3:201"/>
+        <ViewModelPropertyString  name="menuLabel"    id="3:202"/>
+        <ViewModelPropertyNumber  name="overCursor"   id="3:203"/>
+        <ViewModelPropertyBoolean name="overShown"    id="3:204"/>
+        <ViewModelPropertyNumber  name="overPick"     id="3:205"/>
+
+        <ViewModelPropertyString  name="colName"    id="3:65"/>
+        <ViewModelPropertyString  name="colGoals"   id="3:66"/>
+        <ViewModelPropertyString  name="colAssists" id="3:67"/>
+        <ViewModelPropertyString  name="colSaves"   id="3:68"/>
+
+        <ViewModelPropertyBoolean name="row1Hover" id="3:50"/>
+        <ViewModelPropertyBoolean name="row2Hover" id="3:51"/>
+        <ViewModelPropertyBoolean name="row3Hover" id="3:52"/>
+        <ViewModelPropertyBoolean name="row4Hover" id="3:53"/>
+        <ViewModelPropertyBoolean name="tabTeamHover"    id="3:54"/>
+        <ViewModelPropertyBoolean name="tabPlayersHover" id="3:55"/>
+        <ViewModelPropertyBoolean name="p1Hover" id="3:120"/>
+        <ViewModelPropertyBoolean name="p2Hover" id="3:121"/>
+        <ViewModelPropertyBoolean name="p3Hover" id="3:122"/>
+        <ViewModelPropertyBoolean name="p4Hover" id="3:123"/>
+        <ViewModelPropertyBoolean name="p5Hover" id="3:124"/>
+        <ViewModelPropertyBoolean name="p6Hover" id="3:125"/>
+        <ViewModelPropertyBoolean name="p7Hover" id="3:126"/>
+        <ViewModelPropertyBoolean name="p8Hover" id="3:127"/>
+
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player1" id="3:70"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player2" id="3:71"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player3" id="3:72"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player4" id="3:73"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player5" id="3:74"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player6" id="3:75"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player7" id="3:76"/>
+        <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player8" id="3:77"/>
+
+        <ViewModelInstance exports="true" name="Default" id="3:59">
+            <ViewModelInstanceString propertyValue="lorem ipsum" viewModelPropertyId="3:31" name="Component" id="0:3459"/>
+            <ViewModelInstanceString propertyValue="Team 1" viewModelPropertyId="3:32" name="Component" id="0:3460"/>
+            <ViewModelInstanceString propertyValue="Team 2"   viewModelPropertyId="3:33" name="Component" id="0:3461"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:34" name="Component" id="0:3462"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:35" name="Component" id="0:3463"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:36" name="Component" id="0:3464"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:37" name="Component" id="0:3465"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:38" name="Component" id="0:3466"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:42" name="Component" id="0:3467"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:43" name="Component" id="0:3468"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:44" name="Component" id="0:3469"/>
+            <ViewModelInstanceNumber propertyValue="50" viewModelPropertyId="3:57" name="Component" id="0:3470"/>
+            <ViewModelInstanceNumber propertyValue="50" viewModelPropertyId="3:58" name="Component" id="0:3471"/>
+            <ViewModelInstanceColor  propertyValue="FFF5B02E" viewModelPropertyId="3:40" name="Component" id="0:3472"/>
+            <ViewModelInstanceColor  propertyValue="FF3EC7C2" viewModelPropertyId="3:41" name="Component" id="0:3473"/>
+            <ViewModelInstanceColor  propertyValue="FF3FE0C8" viewModelPropertyId="3:49" name="Component" id="0:3474"/>
+            <ViewModelInstanceString propertyValue="lorem"    viewModelPropertyId="3:45" name="Component" id="0:3475"/>
+            <ViewModelInstanceString propertyValue="ipsum"  viewModelPropertyId="3:46" name="Component" id="0:3476"/>
+            <ViewModelInstanceString propertyValue="dolor sit" viewModelPropertyId="3:47" name="Component" id="0:3477"/>
+            <ViewModelInstanceString propertyValue="consectetur"     viewModelPropertyId="3:56" name="Component" id="0:3478"/>
+            <ViewModelInstanceString propertyValue="lorem"       viewModelPropertyId="3:48" name="Component" id="0:3479"/>
+            <ViewModelInstanceBoolean propertyValue="false"      viewModelPropertyId="3:60" name="Component" id="0:3480"/>
+            <ViewModelInstanceString propertyValue="ipsum"       viewModelPropertyId="3:61" name="Component" id="0:3481"/>
+            <!-- true in the authored default so the block is on screen in
+                 `rive --screenshot` and in the editor, where a badge that only
+                 exists at the end of a real match is otherwise unreviewable. -->
+            <ViewModelInstanceBoolean propertyValue="false"       viewModelPropertyId="3:232" id="0:5300"/>
+            <ViewModelInstanceString propertyValue="lorem"        viewModelPropertyId="3:230" id="0:5301"/>
+            <ViewModelInstanceString propertyValue="dolor sit"    viewModelPropertyId="3:231" id="0:5302"/>
+            <ViewModelInstanceString propertyValue="lorem"       viewModelPropertyId="3:62" name="Component" id="0:3482"/>
+            <ViewModelInstanceString propertyValue="ipsum"       viewModelPropertyId="3:63" name="Component" id="0:3483"/>
+            <ViewModelInstanceBoolean propertyValue="false"      viewModelPropertyId="3:64" name="Component" id="0:3484"/>
+            <ViewModelInstanceNumber propertyValue="2" viewModelPropertyId="3:69" name="Component" id="0:3606"/>
+            <ViewModelInstanceViewModel propertyValue="3:310" viewModelPropertyId="3:210" id="0:4683"/>
+            <ViewModelInstanceString propertyValue="lorem" viewModelPropertyId="3:200" id="0:4684"/>
+            <ViewModelInstanceString propertyValue="ipsum" viewModelPropertyId="3:201" id="0:4685"/>
+            <ViewModelInstanceString propertyValue="dolor sit" viewModelPropertyId="3:202" id="0:4686"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:203" id="0:4687"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:204" id="0:4688"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:205" id="0:4689"/>
+            <ViewModelInstanceString propertyValue="lorem"       viewModelPropertyId="3:65" name="Component" id="0:3485"/>
+            <ViewModelInstanceString propertyValue="lorem"           viewModelPropertyId="3:66" name="Component" id="0:3486"/>
+            <ViewModelInstanceString propertyValue="ipsum"           viewModelPropertyId="3:67" name="Component" id="0:3487"/>
+            <ViewModelInstanceString propertyValue="dolor sit"           viewModelPropertyId="3:68" name="Component" id="0:3488"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:50" name="Component" id="0:3489"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:51" name="Component" id="0:3490"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:52" name="Component" id="0:3491"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:53" name="Component" id="0:3492"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:54" name="Component" id="0:3493"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:55" name="Component" id="0:3494"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:120" name="Component" id="0:3495"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:121" name="Component" id="0:3496"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:122" name="Component" id="0:3497"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:123" name="Component" id="0:3498"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:124" name="Component" id="0:3499"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:125" name="Component" id="0:3500"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:126" name="Component" id="0:3501"/>
+            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:127" name="Component" id="0:3502"/>
+            <ViewModelInstanceViewModel propertyValue="3:110" viewModelPropertyId="3:70" name="Component" id="0:3503"/>
+            <ViewModelInstanceViewModel propertyValue="3:111" viewModelPropertyId="3:71" name="Component" id="0:3504"/>
+            <ViewModelInstanceViewModel propertyValue="3:112" viewModelPropertyId="3:72" name="Component" id="0:3505"/>
+            <ViewModelInstanceViewModel propertyValue="3:113" viewModelPropertyId="3:73" name="Component" id="0:3506"/>
+            <ViewModelInstanceViewModel propertyValue="3:114" viewModelPropertyId="3:74" name="Component" id="0:3507"/>
+            <ViewModelInstanceViewModel propertyValue="3:115" viewModelPropertyId="3:75" name="Component" id="0:3508"/>
+            <ViewModelInstanceViewModel propertyValue="3:116" viewModelPropertyId="3:76" name="Component" id="0:3509"/>
+            <ViewModelInstanceViewModel propertyValue="3:117" viewModelPropertyId="3:77" name="Component" id="0:3510"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+</Rive>

@@ -149,6 +149,13 @@ class FakeCtx {
     return { numberOfChannels: ch, length: len, duration: len / this.sampleRate, getChannelData: () => new Float32Array(len) };
   }
   createBufferSource() { return new FakeSource(); }
+  // The bus's warble LFO — an oscillator running at zero depth for the whole
+  // session (see buildBus in systems/audio.js). Missing here it fails the way
+  // the note on createWaveShaper above describes, only worse: unlockAudio
+  // throws PAST `unlocked = true`, so every later call builds ANOTHER context,
+  // the module under test holds one instance while this file inspects a later
+  // one, and every check reports "nothing is playing" with no clue why.
+  createOscillator() { return node({ type: 'sine', frequency: new Param(440), detune: new Param(0), start() {}, stop() {} }); }
   // Tagged with the URL it came from, so a check can ask which clip a source
   // is actually playing rather than inferring it from timing. Durations are
   // per-file so the fade-clamping check has a genuinely short clip to work on.

@@ -130,8 +130,11 @@ function spawnBoss(heading = 0, at = [0, 0]) {
   resetEnemies(scene);
   resetBossHotSpots();
   resetParticles();
+  // `boss: true`, the way systems/boss.js spawns one — it is what arms the
+  // super-armor wrapper on the hp setter (see spawnOne), and a harness that
+  // set `isBoss` by hand alone was modelling a body the game never makes.
   const e = seeded(20260820, () => spawnNamed(scene, 'bossShark', 0, undefined, {
-    ignoreCaps: true, overfill: true,
+    ignoreCaps: true, overfill: true, boss: true,
   }));
   e.isBoss = true;
   e.mesh.position.set(at[0], at[1], 0);
@@ -217,6 +220,20 @@ function boundaryDeficit(cloud, x, y, reach) {
     if (support < best) best = support;
   }
   return best;
+}
+
+// One hit, taken the way the game takes it: hotSpotDamage decides what to hand
+// over and `e.hp -= that` is where the armor is actually spent. Returns the
+// three numbers that can disagree — what the setter was HANDED, what it
+// actually took off the body, and what the spot's pool was credited.
+function spotTake(e, spot, at, base) {
+  const pool0 = spot ? spot.taken : 0;
+  const hp0 = e.hp;
+  const handed = hotSpotDamage(e, at, base);
+  e.hp -= handed;
+  const out = { handed, hp: hp0 - e.hp, pooled: spot ? spot.taken - pool0 : 0 };
+  e.hp = hp0;
+  return out;
 }
 
 function lightUp(e, seed = 4242) {
@@ -518,6 +535,58 @@ section('4. Aimed damage crits, area damage does not');
   check('just inside the edge crits', inside > BASE, `${inside}`);
   check('just outside the edge does not', outside === BASE, `${outside}`);
 
+  // ------------------------------------------------------------------------
+  // SUPER ARMOR, AND WHY THE SPOT IS EXEMPT FROM IT.
+  // ------------------------------------------------------------------------
+  // CONFIG.boss.armor holds a committed boss's hp setter to a fraction of
+  // every decrement (armBossArmor in entities/enemies.js), so a lunge is a
+  // thing you move away from rather than a thing you out-damage. The spot is
+  // the one door left open — a lunge is when the spots are in front of you and
+  // the body is holding a line it cannot correct — and the only way to exempt
+  // something from a rule that lives in the SETTER is to hand the setter a
+  // number it will scale back to full. That is what hotSpotDamage returns.
+  //
+  // TWO NUMBERS THAT MUST NOT BE CONFUSED, and the reason this block is here
+  // rather than being taken on trust: what the caller hands the setter is
+  // `landed / armor`, and what actually lands is `landed`. The rupture pool
+  // wants the second. Crediting the first — which the first draft did — has a
+  // spot fill nearly seven times faster during a lunge than at any other
+  // moment of the fight and rupture on a hit worth a seventh of what its pool
+  // says it costs, with nothing on screen to say so.
+  {
+    const armorMul = CONFIG.boss?.armor?.committed ?? 1;
+    const at = { x: s.wx, y: s.wy };
+    e.isBoss = true;
+
+    e.lungeStage = null;
+    const takenCruising = spotTake(e, s, at, BASE);
+    e.lungeStage = 'strike';
+    const takenRunning = spotTake(e, s, at, BASE);
+    e.lungeStage = null;
+
+    check('a weak spot is worth the same on a committed boss as on a cruising one',
+      Math.abs(takenRunning.hp - takenCruising.hp) < Math.max(1e-6, takenCruising.hp * 1e-9),
+      `${takenRunning.hp.toFixed(1)} hp during the run, ${takenCruising.hp.toFixed(1)} cruising`);
+    check('...which is the armor being divided back out rather than not applying',
+      Math.abs(takenRunning.handed / takenCruising.handed - 1 / armorMul) < 1e-6,
+      `the setter was handed x${(takenRunning.handed / takenCruising.handed).toFixed(2)} to land the same damage`);
+    check('...and the rupture pool took what LANDED, not what was handed over',
+      Math.abs(takenRunning.pooled - takenCruising.pooled) < Math.max(1e-6, takenCruising.pooled * 1e-9),
+      `${takenRunning.pooled.toFixed(1)} vs ${takenCruising.pooled.toFixed(1)}`);
+
+    // The flank is NOT exempt, which is the other half of the claim — an armor
+    // that everything slipped past would pass every check above.
+    if (far) {
+      e.lungeStage = 'strike';
+      const body = spotTake(e, null, far, BASE);
+      e.lungeStage = null;
+      check('...but the FLANK is not exempt — that is the whole design',
+        Math.abs(body.hp / BASE - armorMul) < 1e-6,
+        `x${(body.hp / BASE).toFixed(2)} of a hit while it runs`);
+    }
+    e.isBoss = false;
+  }
+
   // An ordinary fish. Every damage source in the game calls this on every hit
   // it lands, so the no-boss path has to be exactly free of side effects.
   {
@@ -665,19 +734,38 @@ section('4c. A strike aimed into a spot is the one bite a ram has');
   // constant here: strike damage x the full-charge curve x the share x the
   // perfect multiplier x critMul.
   const charge = CONFIG.strike.charge.damageMulMax;
-  const want = CONFIG.strike.damage * charge * w.share * CONFIG.hotSpots.critMul;
+  // ...AND THE FRACTION OF THE BAR, taken the same way updateStrike takes it —
+  // a max(), not a sum. The flat line above is the floor and `maxHpFrac` is
+  // what keeps the bite worth landing at level 20, where the whole flat number
+  // is a third of one percent of a boss (see CONFIG.strike.weakSpot).
+  //
+  // IT WAS MISSING HERE, and nothing noticed because spawnBoss used to spawn
+  // the body WITHOUT `boss: true` — so it carried the wildlife megalodon's hp
+  // at difficulty 0 rather than the level ladder's, and at that size the flat
+  // term happened to be the larger of the two. A harness that gives a boss the
+  // wrong health measures a different branch of the game from the one that
+  // ships, and the giveaway is that the numbers agreed exactly.
+  const flat = (perfectMul) => CONFIG.strike.damage * charge * w.share * perfectMul * CONFIG.hotSpots.critMul;
+  const wantAt = (e, perfectMul = 1) => Math.max(
+    flat(perfectMul),
+    (w.maxHpFrac ?? 0) > 0 && e.maxHp > 0
+      ? e.maxHp * w.maxHpFrac * perfectMul * CONFIG.hotSpots.critMul : 0,
+  );
+  const probe = fresh().e;
+  const want = wantAt(probe);
 
   check('an on-beat ram into a spot lands the strike\'s whole damage, critted',
     Math.abs(onBeat - want) < 1e-6, `${onBeat.toFixed(1)} vs ${want.toFixed(1)}`);
   check('...and it is not zero, which is what a ram was worth before this',
     onBeat > 0, `${onBeat.toFixed(1)}`);
+  const wantPerfect = wantAt(probe, w.perfectMul);
   check('a PERFECT charge multiplies it',
-    Math.abs(perfect - want * w.perfectMul) < 1e-6,
-    `${perfect.toFixed(1)} vs ${(want * w.perfectMul).toFixed(1)} (x${w.perfectMul})`);
+    Math.abs(perfect - wantPerfect) < 1e-6,
+    `${perfect.toFixed(1)} vs ${wantPerfect.toFixed(1)} (x${w.perfectMul})`);
   // The point of the arming gate, and the frustration it removes: a full bar
   // steered into the mark pays whatever the release timing did.
   check('a perfect charge released OFF the beat still bites — the bank is enough',
-    Math.abs(chargeOnly - want * w.perfectMul) < 1e-6,
+    Math.abs(chargeOnly - wantPerfect) < 1e-6,
     `${chargeOnly.toFixed(1)}`);
   check('...but a mistimed release with nothing banked is still just a shove',
     neither === 0, `${neither}`);
@@ -1333,7 +1421,11 @@ section('5g. A rupture shoves the animal, out along the wound');
   // spots: applyKnockback owns the mass curve, the boss branch, the decay and
   // the skeleton flinch, and a second implementation would be a second copy of
   // every one of those rules.
-  const moved = applyKnockback(e, shove.dirX, shove.dirY, 1, { gain: shove.strength });
+  // `source: 'rupture'`, exactly as main.js spends the queue. A boss refuses a
+  // shove it cannot attribute (CONFIG.boss.tenacity.sources), so a stand-in
+  // that left the name off would measure the refusal rather than the burst.
+  const moved = applyKnockback(e, shove.dirX, shove.dirY, 1,
+    { gain: shove.strength, source: 'rupture' });
   check('the impulse reaches the boss', e.knockX !== 0 || e.knockY !== 0,
     `(${e.knockX.toFixed(2)}, ${e.knockY.toFixed(2)}) at ${moved.toFixed(1)} u/s`);
   const along = (e.knockX * nx + e.knockY * ny) / (Math.hypot(e.knockX, e.knockY) || 1);
@@ -1346,7 +1438,7 @@ section('5g. A rupture shoves the animal, out along the wound');
   // the burst reaches past what a ram can express.
   e.knockX = 0;
   e.knockY = 0;
-  const ram = applyKnockback(e, nx, ny, 1);
+  const ram = applyKnockback(e, nx, ny, 1, { source: 'ram' });
   check('...and it is stronger than a full-charge ram',
     Math.abs(moved / ram - CONFIG.hotSpots.burstKnock.strength) < 1e-6,
     `x${(moved / ram).toFixed(2)} of a ram`);

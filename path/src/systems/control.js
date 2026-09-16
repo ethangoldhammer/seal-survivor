@@ -116,9 +116,23 @@ function dazeCfg() {
   return CONFIG.boss?.control?.daze ?? {};
 }
 
-/** Is the daze switched on at all? Off means the old flat refusal, exactly. */
+/**
+ * Is a refused hold allowed to become a daze?
+ *
+ * TWO KEYS, and they ask different questions. `control.holdsDaze` is whether a
+ * HOLD buys one — it ships false, because a perfect strike into a lit weak
+ * spot should be the only thing in the game that stops a boss, and seven
+ * abilities buying the same window is how the expensive one stops being worth
+ * paying (see the note over it in config.js). `daze.enabled` is whether the
+ * MECHANISM exists at all, and it stays on: it is the debug door, and turning
+ * `holdsDaze` back on is the only honest way to see what the retirement
+ * changed.
+ *
+ * Off means the old flat refusal, exactly — which is what a boss did with
+ * every hold in the game before the daze was written.
+ */
 function dazeEnabled() {
-  return dazeCfg().enabled !== false;
+  return CONFIG.boss?.control?.holdsDaze === true && dazeCfg().enabled !== false;
 }
 
 /**

@@ -53,15 +53,48 @@ import { measureBossBody, bossBoomLead } from './bossBoom.js';
 // is tested against a radius.
 // ---------------------------------------------------------------------------
 
+// WHERE THE FRAME IS, handed in every update — see bladeReach. Held on the
+// module rather than threaded through updateHero because it is a property of
+// the SHOT, not of the light, and every part of the draw that ever needs to
+// know whether something is on screen will want the same answer.
+let framed = null;
+
 /** Where the light is right now. Read by the harness and the look sheet. */
 export const bossLightState = {
   /** Wall seconds since the light was raised, or -1 when there is none. */
   t: -1,
   /** The envelope, 0..1. What both halves are scaled by. */
   level: 0,
+  /** ...and the level actually drawn, which for a borrowed light breathes. */
+  lit: 0,
+  /** Where the shaft is standing — the seal, plus whatever the wander adds. */
+  atX: 0,
+  atY: 0,
   /** Is a subject body still being lit, or has it burst out from under us. */
   subject: false,
+  /**
+   * WHAT RAISED IT. 'kill' is the boss shutter this file was written for;
+   * 'goal' is a versus goal borrowing the hero half alone (see fireHeroLight).
+   * Null when nothing is lit.
+   */
+  mode: null,
 };
+
+// ---------------------------------------------------------------------------
+// THE HERO HALF, LENT OUT — see fireHeroLight.
+//
+// A versus goal wants exactly the shaft and the pool, on a seal that is not
+// necessarily player 1, on a beat that is not the kill shutter's. Everything
+// it needs is already here and none of it is the boss's: duplicating the cone
+// into a second module would give the game two shafts that agreed on the day
+// they were written and drifted the first time either was tuned.
+//
+// So: an override record, or null for the kill. It carries its own envelope,
+// its own subject (a getter, because the seal moves and this file must not
+// hold a reference to a body that can be swapped), and the two numbers that
+// make a borrowed light look like weather rather than a switch.
+// ---------------------------------------------------------------------------
+let override = null;
 
 let scene = null;
 
@@ -129,10 +162,17 @@ export function bossLightLead() {
 // smoothstep on the way in is what stops the shaft appearing as a hard-edged
 // wedge on one frame.
 function envelope(t) {
-  const c = cfg();
+  const c = override ?? cfg();
+  const delay = Math.max(0, c.delay ?? 0);
   const rise = Math.max(0.01, c.rise ?? 0.55);
   const hold = Math.max(0, c.hold ?? 0.9);
   const fall = Math.max(0.01, c.fall ?? 0.7);
+  // A DELAY BEFORE THE RISE, for a light that is meant to come up AFTER
+  // something else. The kill has none — it is racing a shutter and its lead is
+  // derived so that it is already at full when the smoke arrives. A goal is
+  // the other way round: the explosion is the event and the light is the
+  // thing that answers it, so it waits.
+  t -= delay;
   if (t <= 0) return 0;
   if (t < rise) {
     const u = t / rise;
@@ -146,8 +186,9 @@ function envelope(t) {
 
 /** How long the whole light lasts, in wall seconds. */
 export function bossLightSeconds() {
-  const c = cfg();
-  return Math.max(0.01, c.rise ?? 0.55)
+  const c = override ?? cfg();
+  return Math.max(0, c.delay ?? 0)
+    + Math.max(0.01, c.rise ?? 0.55)
     + Math.max(0, c.hold ?? 0.9)
     + Math.max(0.01, c.fall ?? 0.7);
 }
@@ -197,22 +238,49 @@ export function shaftAlpha(u, v) {
   // bright patch of empty water with a dark animal underneath. It still runs
   // out; it just arrives first.
   const end = Math.max(0, Math.min(1, c.endLevel ?? 0.45));
+  // ...AND THE FOOT IS NOT A CUT EITHER. `endLevel` is how much of the light
+  // survives to the landing, which is a brightness and not an ending: with the
+  // quad simply stopping there, the bottom of every blade was a straight line
+  // across the water at 45% alpha — the hard edge this whole bake exists to
+  // avoid, at the one end nobody thought to fade because the pool was assumed
+  // to cover it. It covers the last unit or two, not a lit edge.
+  //
+  // A FRACTION OF THE LENGTH, like the cap: the blades are no longer a fixed
+  // 30 units (see bladeReach), so an absolute fade would be most of a short
+  // one and invisible on a long one. Kept small enough to sit inside the pool
+  // at any length the reach asks for.
+  const foot = Math.max(0.001, c.footFade ?? 0.05);
   const y = Math.max(0, Math.min(1, v));
   const halfW = (topW + (botW - topW) * y) / 2;
-  const down = (end + (1 - end) * (1 - y) ** falloff) * Math.min(1, y / cap);
+  const down = (end + (1 - end) * (1 - y) ** falloff)
+    * Math.min(1, y / cap) * Math.min(1, (1 - y) / foot);
   const d = Math.min(1, Math.abs(u) / halfW);
   const across = (1 - d * d) ** 2;
   return Math.max(0, Math.min(1, across * down));
 }
 
+/**
+ * The baked cone, or NULL where there is no 2D canvas to bake it on.
+ *
+ * A Node harness's document stub returns null from getContext('2d') — see the
+ * note at shaftAlpha — and this used to reach straight through it and take the
+ * frame down from inside three.js with a message about createImageData, on a
+ * line that has nothing to do with what the caller was checking. The map is
+ * the LOOK; the geometry, the placement and the envelope are the mechanics,
+ * and there is no reason a harness should be unable to exercise those. Without
+ * a map the blades are plain additive quads: wrong to look at, right in every
+ * way anything headless can measure, and never on a screen because a browser
+ * always has the context.
+ */
 function shaftTexture() {
   if (SHAFT.tex) return SHAFT.tex;
   const W = 64;
   const H = 256;
-  const cv = document.createElement('canvas');
+  const cv = document.createElement?.('canvas');
+  const g = cv?.getContext?.('2d');
+  if (!g?.createImageData) return null;
   cv.width = W;
   cv.height = H;
-  const g = cv.getContext('2d');
   const img = g.createImageData(W, H);
   for (let y = 0; y < H; y++) {
     const v = y / (H - 1);
@@ -336,6 +404,8 @@ export function fireBossLight(e) {
   const c = cfg();
   if (c.enabled === false || !e) return false;
   const m = measureBossBody(e);
+  override = null;
+  bossLightState.mode = 'kill';
   bossLightState.t = 0;
   bossLightState.level = 0;
   bossLightState.subject = !!m;
@@ -363,6 +433,51 @@ export function fireBossLight(e) {
     const root = e.visual?.isObject3D ? e.visual : (e.mesh?.isObject3D ? e.mesh : null);
     subject.lift = root ? attachDamageGlow(root) : null;
   }
+  return true;
+}
+
+/**
+ * RAISE THE HERO HALF ALONE, on a seal of the caller's choosing and to the
+ * caller's own beat — the shaft and the pool and the lift on the hide, with no
+ * subject and no boss anywhere in it.
+ *
+ * WHY IT LIVES HERE. Every part of this is the kill light's: the baked cone,
+ * the blades split in front of and behind the animal, the landing hung by the
+ * bottom edge, the lift through the shared damage-glow handle. A second copy
+ * in versus.js would be a second shaft that agreed with this one until the
+ * first time either was tuned. What a goal actually needs is different TIMING
+ * and a different SUBJECT, and both of those are arguments.
+ *
+ * @param opts.follow  () => ({ pos, root }) — the seal to light, read every
+ *                     frame. A getter and not a body, because the scorer may
+ *                     be player 2, whose visual is rebuilt when its body is
+ *                     swapped, and this file must never hold that reference.
+ * @param opts.delay   wall seconds before the rise begins.
+ * @param opts.rise/hold/fall  the envelope, as CONFIG.boss.light's.
+ * @param opts.breathe how much the level wanders about itself, 0..1.
+ * @param opts.wander  how far the landing drifts off the seal, in world units.
+ * @param opts.lift    the lift on the seal's own hide, x the master.
+ */
+export function fireHeroLight(opts = {}) {
+  const c = cfg();
+  if (c.enabled === false || typeof opts.follow !== 'function') return false;
+  override = {
+    delay: Math.max(0, opts.delay ?? 0),
+    rise: Math.max(0.01, opts.rise ?? 0.6),
+    hold: Math.max(0, opts.hold ?? 1),
+    fall: Math.max(0.01, opts.fall ?? 0.9),
+    breathe: Math.max(0, Math.min(1, opts.breathe ?? 0.14)),
+    wander: Math.max(0, opts.wander ?? 1.2),
+    wanderSpeed: Math.max(0, opts.wanderSpeed ?? 0.55),
+    lift: Math.max(0, opts.lift ?? 1),
+    follow: opts.follow,
+  };
+  bossLightState.mode = 'goal';
+  bossLightState.t = 0;
+  bossLightState.level = 0;
+  bossLightState.subject = false;
+  subject.live = false;
+  subject.e = null;
   return true;
 }
 
@@ -425,7 +540,14 @@ export function dropBossLightSubject(e) {
  *                  player, exactly as systems/bossKill.js is handed its framing.
  * @param playerRoot the seal's body, for the lift. Optional.
  */
-export function updateBossLight(rawDt, playerPos, playerRoot) {
+/**
+ * @param view  world.framedView() — where the frame actually is, so the shaft
+ *              can be lengthened until its ORIGIN is off the top of it. Null
+ *              from a harness, which falls back to the authored length; see
+ *              bladeReach.
+ */
+export function updateBossLight(rawDt, playerPos, playerRoot, view = null) {
+  framed = view ?? null;
   if (bossLightState.t < 0) return;
   const c = cfg();
   if (c.enabled === false) { resetBossLight(); return; }
@@ -435,13 +557,98 @@ export function updateBossLight(rawDt, playerPos, playerRoot) {
   bossLightState.level = level;
   if (bossLightState.t >= bossLightSeconds()) { resetBossLight(); return; }
 
-  updateHero(level, playerPos, playerRoot);
+  // A BORROWED LIGHT BRINGS ITS OWN SUBJECT. Read every frame rather than
+  // captured at fire time: the seal it is on is swimming, and on player 2 the
+  // visual is a different object after a body swap.
+  let pos = playerPos;
+  let root = playerRoot;
+  if (override) {
+    const on = override.follow();
+    pos = on?.pos ?? null;
+    root = on?.root ?? null;
+  }
+  // WHERE THE LIGHT IS STANDING AND HOW BRIGHT IT IS, worked out here and
+  // PUBLISHED rather than computed inside the draw. Both are answers about the
+  // light — a harness with no 2D canvas can check them, and the workbench can
+  // read them — and a number that only exists as a local inside the function
+  // that positions a quad is a number nothing can ask about.
+  organics(level, pos);
+  updateHero(pos, root);
   updateSubject(level);
 }
 
-function updateHero(level, playerPos, playerRoot) {
+// THE ORGANIC HALF — see CONFIG.versus.goal.spotlight. Only a borrowed light
+// breathes; the kill's is racing a shutter and wants to be exactly as bright
+// as its envelope says on the frame the picture is taken.
+function organics(level, pos) {
+  bossLightState.lit = level;
+  bossLightState.atX = pos?.x ?? 0;
+  bossLightState.atY = pos?.y ?? 0;
+  if (!override || !pos) return;
+  const t = bossLightState.t;
+  // BREATHE. Three sines at rates sharing no common period, so the pattern
+  // does not repeat inside the few seconds anyone is looking at it — one sine
+  // reads as a pulse and a random walk reads as a fault in the renderer.
+  // Normalised so the sum can only pull the level DOWN: a light that
+  // overshoots its own envelope pops on the frame the hold begins.
+  const b3 = Math.sin(t * 0.83) + Math.sin(t * 1.47 + 1.7) + Math.sin(t * 2.31 + 4.1);
+  bossLightState.lit = level * (1 - override.breathe * (0.5 - b3 / 6));
+  // WANDER. Small — a couple of units on a thirty-unit shaft — because past
+  // that it stops being light moving and starts being a light aimed at the
+  // wrong animal. The blades and the pool both take it, or the pool detaches
+  // and the shaft is left pointing beside its own landing.
+  // BOTH TERMS START AT ZERO PHASE, and neither is a near-harmonic of the
+  // other. Phase-shifted, the second sine spends the light's whole life moving
+  // AGAINST the first: at the shipped rates that cancelled the drift down to a
+  // seventh of what it should have been, so the light sat a little off centre
+  // and never actually went anywhere. Zero phase also means the light starts
+  // exactly on the seal and drifts off it, rather than arriving beside it.
+  const w = override.wander;
+  const ws = override.wanderSpeed;
+  bossLightState.atX += (Math.sin(t * ws) + Math.sin(t * ws * 2.7) * 0.5) * w * 0.55;
+  bossLightState.atY += Math.sin(t * ws * 0.53) * w * 0.25;
+}
+
+/**
+ * HOW LONG A BLADE HAS TO BE FOR ITS ORIGIN TO BE OFF THE TOP OF THE FRAME.
+ *
+ * The authored `height` is a length in world units and the frame is not: the
+ * camera zooms from a kill shot pushed in on one animal out to a Blubberball
+ * pitch at 0.55, so the same thirty units is comfortably past the top edge in
+ * one shot and stops a third of the way up the screen in the other. A shaft
+ * whose top edge is in the crop reads as a quad, which is the one thing this
+ * whole bake is arranged to avoid — the cone's alpha fades in over `capFade`
+ * precisely so the start is not a line, and a fade that ENDS on screen is
+ * still a visible top to the light.
+ *
+ * THE LEAN IS WHY IT IS NOT JUST A SUBTRACTION. A blade is rotated about its
+ * foot, so a length h only reaches cos(lean) x h above where it lands — at the
+ * shipped rake that is most of it, and at any rake worth calling a rake it
+ * stops being negligible. `clearTop` is how far past the edge the origin sits,
+ * so a camera that pans up a little during the hold does not find it.
+ *
+ * @param atY      where the blade lands
+ * @param lean     radians, including this frame's sway
+ * @param authored what the config asked for, which is the FLOOR: a frame that
+ *                 happens to be short must not make the light stubby.
+ */
+export function bladeReach(atY, lean, authored, view = framed) {
+  const c = cfg().shaft ?? {};
+  if (!view || !(view.halfH > 0)) return authored;
+  const clear = Math.max(0, c.clearTop ?? 6);
+  const top = view.y + view.halfH;
+  // Guarded: a blade raked past about eighty degrees reaches almost nothing
+  // upward, and dividing by its cosine asks for a shaft the length of the
+  // arena. Nothing in the roster is near that, and the guard is what stops a
+  // tuning slider being able to ask for one.
+  const up = Math.max(0.2, Math.cos(lean));
+  return Math.max(authored, (top + clear - atY) / up);
+}
+
+function updateHero(playerPos, playerRoot) {
   const c = cfg();
   const s = c.shaft ?? {};
+  const level = bossLightState.lit;
   if (!scene || !playerPos || s.enabled === false) {
     if (hero) setHeroVisible(false);
     return;
@@ -458,25 +665,35 @@ function updateHero(level, playerPos, playerRoot) {
   // one place the light stands perfectly still.
   const t = bossLightState.t;
 
+  const lit = level;
+  const atX = bossLightState.atX;
+  const atY = bossLightState.atY;
+
   for (const b of hero.blades) {
     const row = b.row;
     const w = width * (row.width ?? 1);
-    const h = height * (row.height ?? 1);
     const sway = Math.sin(t * (row.swaySpeed ?? 0.9) + b.phase) * (row.sway ?? 0.12);
-    b.mesh.scale.set(w, h, 1);
     const lean = tilt * (row.lean ?? 1) + sway;
+    // PER BLADE, not once for the group. The rows are authored at different
+    // lengths on purpose, and a single base long enough for the shortest of
+    // them would stretch the long ones — the alpha profile runs along the
+    // quad, so a longer blade is a slower falloff and a different light.
+    // Lengthening only the rows that need it keeps every one of them at least
+    // as long as it asked to be and none of them ending on screen.
+    const h = bladeReach(atY, lean, height * (row.height ?? 1));
+    b.mesh.scale.set(w, h, 1);
     b.mesh.rotation.z = lean;
-    const c0 = bladeCentre(playerPos.x + (row.offsetX ?? 0) * width, playerPos.y, h, lean);
+    const c0 = bladeCentre(atX + (row.offsetX ?? 0) * width, atY, h, lean);
     b.mesh.position.set(c0.x, c0.y, row.z ?? -1);
-    b.mesh.material.opacity = level * (row.opacity ?? 0.5);
+    b.mesh.material.opacity = lit * (row.opacity ?? 0.5);
   }
 
   const p = c.pool ?? {};
   const pw = Math.max(0.5, p.width ?? 12);
   const ph = Math.max(0.5, p.height ?? 7);
   hero.pool.scale.set(pw, ph, 1);
-  hero.pool.position.set(playerPos.x, playerPos.y + (p.offsetY ?? 0), p.z ?? -0.9);
-  hero.pool.material.opacity = level * (p.opacity ?? 0.55);
+  hero.pool.position.set(atX, atY + (p.offsetY ?? 0), p.z ?? -0.9);
+  hero.pool.material.opacity = lit * (p.opacity ?? 0.55);
 
   // AND THE SEAL ITSELF. The shaft is light in the water; this is the light
   // arriving on the animal, and without it the seal is a silhouette standing in
@@ -489,7 +706,9 @@ function updateHero(level, playerPos, playerRoot) {
     heroLift = attachDamageGlow(root);
     heroRoot = root;
   }
-  heroLift?.set(level * Math.max(0, c.heroLift ?? 1), 'killLightHero');
+  // The hide takes the BREATHING level too, or the animal sits at a constant
+  // brightness inside a light that is visibly moving over it.
+  heroLift?.set(lit * Math.max(0, override?.lift ?? c.heroLift ?? 1), 'killLightHero');
 }
 
 /**
@@ -566,7 +785,10 @@ function updateSubject(level) {
 export function resetBossLight() {
   bossLightState.t = -1;
   bossLightState.level = 0;
+  bossLightState.lit = 0;
   bossLightState.subject = false;
+  bossLightState.mode = null;
+  override = null;
   setHeroVisible(false);
   heroLift?.release();
   subject.lift?.release();
@@ -608,6 +830,25 @@ export function bossLightMeshes() {
   }
   if (subject.mesh?.visible) out.push(subject.mesh);
   return out;
+}
+
+/**
+ * THE ENVELOPE THAT IS ACTUALLY RUNNING, in wall seconds.
+ *
+ * Not the same numbers as the tuning when a borrowed light is up: a goal's
+ * ramps are squeezed to fit the celebration (see spotlightScorer in
+ * versus.js), so CONFIG says what was asked for and this says what happened.
+ * The workbench reads it, and so does anything asserting the shape.
+ */
+export function bossLightShape() {
+  const c = override ?? cfg();
+  return {
+    delay: Math.max(0, c.delay ?? 0),
+    rise: Math.max(0.01, c.rise ?? 0.55),
+    hold: Math.max(0, c.hold ?? 0.9),
+    fall: Math.max(0.01, c.fall ?? 0.7),
+    borrowed: !!override,
+  };
 }
 
 /** For the harness. The envelope, so its shape can be asserted without a scene. */

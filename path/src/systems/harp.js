@@ -8,7 +8,7 @@ import { orbitTarget } from './orbit.js';
 import { aoe, targeting, abilityDamage, companionScale } from './scaling.js';
 import { canHold, canControl, charmEnemy } from './control.js';
 import { createNoteField, rollNoteColor } from './noteStorm.js';
-import { stoke, cool, glowLevel, damageGlowCfg } from './damageGlow.js';
+import { stoke, cool, glowLevel, glowHue, glowStir, damageGlowCfg } from './damageGlow.js';
 import { harpLevelStats } from '../levelStats.js';
 import { player } from '../entities/player.js';
 
@@ -146,6 +146,15 @@ export function resetHarp() {
  */
 export function harpNoteCount() {
   return notes?.count ?? 0;
+}
+
+/**
+ * The live notes on one host's ring — same audience as harpNoteCount above, and
+ * the same reason it has to come from in here: the field is deliberately not in
+ * `group`, and its instance slots are not stable between frames.
+ */
+export function harpAuraNotes(host) {
+  return notes?.hostNotes(host) ?? [];
 }
 
 /** Everything the ability's numbers do with a level, in one place. */
@@ -525,8 +534,22 @@ function tickAuras(dt, scene, enemiesList, hooks) {
     // whole card is about WHICH body is carrying the ring, and a field that
     // lit up everywhere would throw that away. Carried every frame; stoked
     // below by a tick that caught something.
+    //
+    // ALL THREE CHANNELS, the same set the garlic cloud and the calamari front
+    // take (systems/damageGlow.js) — brighter, hue swung toward the warm end of
+    // whatever this host rolled, and the ring itself turning faster. On this
+    // ability the spin is the one that carries: the ring is usually orbiting a
+    // shark somewhere off to the side of where the player is looking, and a
+    // change in how fast something is going is readable out at the edge of
+    // vision where a change in brightness is not.
     host.harpAuraHeat = cool(host.harpAuraHeat, 'harp', dt);
-    notes.heatHost(host, 1 + damageGlowCfg('harp').peak * glowLevel(host.harpAuraHeat, 'harp'));
+    const auraGlow = glowLevel(host.harpAuraHeat, 'harp');
+    notes.heatHost(
+      host,
+      1 + damageGlowCfg('harp').peak * auraGlow,
+      glowHue(host.harpAuraHeat, 'harp'),
+    );
+    notes.stirHost(host, glowStir(host.harpAuraHeat, 'harp'));
 
     host.harpAuraTick = (host.harpAuraTick ?? 0) - dt;
     if (host.harpAuraTick > 0) continue;

@@ -45,6 +45,7 @@ import {
   BEAT_DIVISIONS, divisionBeats, divisionSeconds, advanceCycles, phaseOffset,
   nearestDivision, updateBeatSync, beatsNow, beatsPerBar,
 } from '../path/src/systems/beatSync.js';
+import { beatGrid } from '../path/src/systems/music.js';
 
 let failures = 0;
 const section = (n) => console.log(`\n${n}`);
@@ -313,6 +314,44 @@ check('the Beat sync group prints an inventory', inventory.length > 3, `${invent
 }
 
 // --- what the tuner will actually print ------------------------------------
+// ---------------------------------------------------------------------------
+// FOUR TO THE BAR — the division systems/music.js's beatGrid makes, checked
+// against the bar lengths the library actually ships.
+//
+// beatGrid divides a bar by CONFIG.beatSync.beatsPerBar to get a quarter note,
+// and the team select's colour wheel pulses on it. That division is only
+// honest while every file in the game is in four: a loop added in three would
+// leave the wheel flashing on the off-beat with nothing throwing, which is the
+// kind of wrong that gets shipped.
+section('THE BAR DIVIDES INTO BEATS');
+{
+  const bpb = beatsPerBar();
+  const runBar = CONFIG.music.barSeconds ?? 2.265;
+  const matchBar = CONFIG.music.versusBarSeconds ?? 1.411765;
+  const runBpm = CONFIG.music.bpm;
+  const matchBpm = CONFIG.music.versusBpm ?? runBpm;
+  // The bar over the beat, both measured off the SHIPPED numbers rather than
+  // assumed: a bar is what the file is, and the bpm is what it is played at.
+  const beatsIn = (bar, atBpm) => bar / (60 / atBpm);
+  check('the match bank is in four', Math.abs(beatsIn(matchBar, matchBpm) - bpb) < 0.02,
+    `${beatsIn(matchBar, matchBpm).toFixed(3)} beats in a ${matchBar}s bar at ${matchBpm}bpm`);
+  // The RUN library is the one with two numbers for its tempo — `bpm` is the
+  // animation grid, tuned by ear and a fraction under the files' real 105.96 —
+  // so it is checked against the bar rather than against the tuned number,
+  // which is the whole reason beatGrid divides the bar instead of using bpm.
+  const trueRunBpm = 60 / (runBar / bpb);
+  check('...and so is the run library, at its own true tempo',
+    Math.abs(runBar / bpb - 60 / trueRunBpm) < 1e-9 && Math.abs(trueRunBpm - runBpm) < 4,
+    `${runBar}s / ${bpb} = ${(runBar / bpb).toFixed(4)}s a beat (${trueRunBpm.toFixed(2)}bpm, tuned grid says ${runBpm})`);
+  // A SILENT TRANSPORT IS STILL. beatGrid must not answer with a downbeat
+  // before the audio context has been unlocked — on a phone nobody has touched
+  // that is the whole screen pulsing to music that is not playing.
+  const g = beatGrid();
+  check('with no transport it reports not running, and no phase', g.running === false && g.phase === 0,
+    `running ${g.running}, phase ${g.phase}`);
+}
+
+// ---------------------------------------------------------------------------
 section('SAMPLE OUTPUT');
 for (const line of inventory) console.log(`  | ${line}`);
 {

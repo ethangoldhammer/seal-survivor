@@ -58,6 +58,20 @@ import { preloadAssets, createVisual } from '../../path/src/assets.js';
 import {
   updateAccessories, accessoryState, equipAccessory, accessoryTurn,
 } from '../../path/src/systems/accessories.js';
+import { setUnlockGate } from '../../path/src/systems/unlocks.js';
+
+// EVERY ACCESSORY IS AVAILABLE HERE, whatever the player has earned.
+//
+// equipAccessory refuses a key the unlock ledger has not granted, and the gate
+// defaults ON in a BUILT bundle — which this page is (see the note at the top
+// of systems/unlocks.js: a dev server is the ungated game, a build is the
+// gated one). So the lab could not put a single hat on the seal: every click
+// logged "not an unlocked accessory" and left the slot empty, which looks
+// exactly like an accessory that has no model.
+//
+// A placement lab is not a progression surface. Placing a hat is work that has
+// to happen before anyone can earn it.
+setUnlockGate(false);
 
 const $ = (id) => document.getElementById(id);
 const W = 560;

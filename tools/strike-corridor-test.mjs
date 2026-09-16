@@ -6,7 +6,7 @@
 // fed by the rig in cineCamera.js. Three claims worth failing over:
 //
 //   FORECAST the cone points at and ends where the dash would LAND.
-//            predictDash() in strike.js flies the whole dash — the halfway
+//            predictDash() in strike.js flies the whole dash — the launch
 //            launch, then the per-frame steer toward the stick, throttle,
 //            ceiling and drag, through dashSteer(), the very function
 //            updatePlayer runs — and main.js hands the camera that chord.
@@ -31,11 +31,12 @@
 //            came in from a direction nobody went, and the pile the player
 //            curved INTO was out of the lane. updatePlayer keeps it current.
 //
-//   HANDS    both of them steer, and the steering does not stop dead. The gate
-//            on the mid-dash steer was the MOVEMENT stick alone, while the
-//            thing being steered toward is the halfway point between the move
-//            and the aim — so a mouse player could swing the cursor ninety
-//            degrees mid-dash and turn the seal zero. And the takeover curve
+//   HANDS    both of them steer, and the steering does not stop dead. The
+//            stick steers while it is pushed; the aim steers through the
+//            dash's HELD aim, which only a gesture (input.aimMoved) rewrites
+//            — a pointer's live heading flips as the seal flies past the
+//            cursor, and steering by it turned the seal round with no hand
+//            on anything (THE OVERSHOOT below). And the takeover curve
 //            hands over the whole turn rate on the dash's LAST frame, after
 //            which nothing called dashSteer at all: measured at zero degrees
 //            of turn for the seven tenths of a second the momentum takes to
@@ -109,32 +110,23 @@ section('FORECAST — the cone ends where the dash would, stick and all');
     check('...to the frame', Math.abs(still.reach - x) < 1e-9, `${still.reach.toFixed(4)} vs ${x.toFixed(4)}`);
   }
 
-  // THE BALANCE. Swim east, aim north: the launch is the blend (45 deg at
-  // aimBlend 0.5), and the seal keeps steering toward that SAME blend for the
-  // whole flight — so it lands on it. It used to steer onto the raw stick and
-  // land at 0.7 deg, with the aim's half erased in two frames.
-  const wasBlend = CONFIG.strike.aimBlend;
-  CONFIG.strike.aimBlend = 0.5;
+  // THE HANDS. Swim east, aim north: the stick wins, so the launch is east
+  // and the seal keeps steering toward that same rule for the whole flight —
+  // so it lands east. It used to launch and land on an angular blend of the
+  // two, a heading neither hand had asked for.
   const launch = strikeDirection(unit(0), unit(90));
   const held = predictDash(unit(0), unit(90), 1, stats, 1);
   const landDeg = Math.atan2(held.dir.y, held.dir.x) * DEG;
-  check('swim east + aim north launches at 45', Math.abs(Math.atan2(launch.y, launch.x) * DEG - 45) < 1e-6);
-  check('...and LANDS at 45 — the split survives the flight', Math.abs(landDeg - 45) < 0.5,
+  check('swim east + aim north launches east — the stick wins', Math.abs(Math.atan2(launch.y, launch.x) * DEG) < 1e-6);
+  check('...and LANDS east — the aim never gets a vote while the stick is pushed', Math.abs(landDeg) < 0.5,
     `lands at ${landDeg.toFixed(2)} deg`);
-  // The slider is the lever, end to end.
-  CONFIG.strike.aimBlend = 0.25;
-  const quarter = predictDash(unit(0), unit(90), 1, stats, 1);
-  CONFIG.strike.aimBlend = 0.8;
-  const most = predictDash(unit(0), unit(90), 1, stats, 1);
-  const deg = (p) => Math.atan2(p.dir.y, p.dir.x) * DEG;
-  check('aimBlend 0.25 lands at 22.5', Math.abs(deg(quarter) - 22.5) < 0.5, `${deg(quarter).toFixed(2)}`);
-  check('aimBlend 0.8 lands at 72', Math.abs(deg(most) - 72) < 0.5, `${deg(most).toFixed(2)}`);
-  CONFIG.strike.aimBlend = wasBlend;
+  // No stick: the aim is the whole heading, and the forecast holds it.
+  const aimed = predictDash({ x: 0, y: 0 }, unit(90), 1, stats, 1);
+  check('no stick + aim north lands north', Math.abs(Math.atan2(aimed.dir.y, aimed.dir.x) * DEG - 90) < 0.5);
   // The turn rate still matters mid-flight: with the launch already ON the
-  // blend a straight dash has nothing to turn toward, so measure a dash that
-  // starts off it — a stick let go halfway is not the case; take the forecast
-  // as launched and confirm it holds its line rather than drifting.
-  check('a dash on the blend flies straight', Math.abs(Math.hypot(held.x, held.y) - held.reach) < 1e-9);
+  // stick a straight dash has nothing to turn toward; take the forecast as
+  // launched and confirm it holds its line rather than drifting.
+  check('a dash on the stick flies straight', Math.abs(Math.hypot(held.x, held.y) - held.reach) < 1e-9);
   // The chord and the endpoint agree.
   check('the chord is the endpoint', Math.abs(Math.hypot(held.x, held.y) - held.reach) < 1e-9
     && Math.abs(held.x / held.reach - held.dir.x) < 1e-9);
@@ -199,7 +191,7 @@ section('FORECAST — the cone ends where the dash would, stick and all');
     check('two pips: halfway there', Math.abs(steerAuthority(dc, 1, 2 * pip, stats) - 0.5) < 1e-12);
     check('three pips and up: all of it', steerAuthority(dc, 1, 3 * pip, stats) === 1 && steerAuthority(dc, 1, 1, stats) === 1);
     // Flown: swim east, aim north. One pip lands on the launch line (45, no
-    // steering to bend it — and since the launch IS the blend it lands there
+    // steering to bend it — and since the launch IS the stick it lands there
     // anyway); the difference shows with hands that disagree with the launch,
     // so hand the forecast a dash whose aim moved after the launch by testing
     // the step directly instead.
@@ -217,7 +209,8 @@ section('FORECAST — the cone ends where the dash would, stick and all');
 
   // WIRING. The seal runs the same step, and has no steering of its own left.
   const playerSrc = read('entities/player.js');
-  check('player.js steers through dashSteer, with both hands and the dash\'s progress', /dashSteer\(cur, v, input\.move\.x, input\.move\.y, input\.aim\.x, input\.aim\.y, combo, dt, s, progress, power, steerStep, follow\)/.test(playerSrc));
+  check('player.js steers through dashSteer, with the stick, the HELD aim and the dash\'s progress', /dashSteer\(cur, v, input\.move\.x, input\.move\.y, heldAim\.x, heldAim\.y, combo, dt, s, progress, power, steerStep, follow\)/.test(playerSrc));
+  check('...and the held aim comes from holdAim, never input.aim', /const heldAim = holdAim\(st, input\);/.test(playerSrc) && !/dashSteer\([^)]*input\.aim/.test(playerSrc));
   check('...progress read off the strike itself', /1 - st\.dashTimeLeft \/ st\.dashDuration/.test(playerSrc) /* `st` is the seal's strike state — player 1's or player 2's */);
   check('...and the power it was bought with', /const power = strike \? st\.power : 1;/.test(playerSrc) && /dt, s, progress, power, steerStep, follow\)/.test(playerSrc));
   check('no reader of the old bar-fraction gate is left', !/charge\.minFire\b/.test(read('main.js')) && !/charge\.minFire\b/.test(read('systems/strike.js')) && !/charge\.minFire\b/.test(read('systems/strikeRing.js')));
@@ -552,29 +545,89 @@ section('HANDS — both of them steer, and they are handed back rather than cut 
   const up = new THREE.Vector2(0, 1);
   const right = new THREE.Vector2(1, 0);
 
-  // THE MOUSE. `aimLive` is what input.js raises on any frame a real device
-  // wrote the aim — true every frame for a pointer, which is the case that had
-  // no steering at all.
-  const mouse = strike({ move: still, aim: up, aimLive: true });
-  check('the aim alone steers the dash', Math.abs(wrapDeg(mouse.heading)) > 45,
+  // THE MOUSE. `aimMoved` is what input.js raises on a frame the aim device
+  // actually GESTURED — the mouse moved, the thumb slid, the right stick is
+  // pushed. A gesture toward north mid-dash steers the dash north.
+  const mouse = strike({ move: still, aim: up, aimMoved: true });
+  check('a moving aim alone steers the dash', Math.abs(wrapDeg(mouse.heading)) > 45,
     `${mouse.heading.toFixed(0)} degrees off a launch at 0`);
 
-  // ...AND DOES NOT BRAKE IT. `stick` is the throttle, so a hand nobody is
-  // touching used to read as a demand for minSpeedMul the moment the aim was
-  // allowed through the gate.
-  const floor = player.stats.strikeDashSpeed * (CONFIG.strike.dashControl.minSpeedMul ?? 0.45);
-  check('...without the untouched movement stick braking it',
-    mouse.peakSpeed > floor + 8,
-    `peaked at ${mouse.peakSpeed.toFixed(1)} u/s, floor is ${floor.toFixed(1)}`);
+  // ...AND AN IDLE ONE DOES NOT. `aimLive` is true for a mouse every frame
+  // (the heading is re-derived from the cursor's position), and the dash used
+  // to read it: a cursor nobody touched, sitting north of the launch, turned
+  // the seal. Now the held aim is seeded on the launch line and only a
+  // gesture replaces it, so the same cursor with no hand on it buys nothing.
+  const idle = strike({ move: still, aim: up, aimLive: true, aimMoved: false });
+  check('an idle aim does not steer the dash', Math.abs(wrapDeg(idle.heading)) < 2,
+    `${idle.heading.toFixed(1)} degrees off the launch with the cursor 90 off and no gesture`);
+
+  // THE OVERSHOOT — the bug this whole arrangement exists for. A mouse aims at
+  // a POINT: put the cursor 8 units ahead on the launch line and re-derive the
+  // aim every frame as cursor-minus-seal, exactly as input.js does. A
+  // full-charge dash flies 22 units, so it passes the cursor a fifth of a
+  // second in and the aim flips to face backwards. Steering by the live aim
+  // turned the seal 92 degrees off its own launch (measured before the fix,
+  // no stick held); the held aim ignores the flip because no hand moved.
+  {
+    const cursor = new THREE.Vector3(HOME.x + 8, HOME.y, 0);
+    const liveAim = new THREE.Vector2(1, 0);
+    // Drive the seal for real so the position moves: no pin. The arena is
+    // wide enough for 8 units to the right of HOME.
+    resetPlayer(); resetStrike();
+    player.mesh.position.copy(HOME); player.velocity.set(0, 0, 0);
+    addCharge(1, player.stats); strikeState.pending = 1; strikeState.winding = true; strikeState.perfect = true;
+    tryStrike({ x: 1, y: 0 }, player.stats);
+    const sp = player.stats.strikeDashSpeed * (player.comboSpeedMul || 1);
+    player.velocity.set(sp, 0, 0); player.dashTimer = strikeState.dashDuration;
+    let flipped = false, worst = 0;
+    for (let t = 0; t < 1.0; t += dt) {
+      liveAim.set(cursor.x - player.mesh.position.x, cursor.y - player.mesh.position.y);
+      if (liveAim.lengthSq() > 1e-6) liveAim.normalize();
+      if (liveAim.x < 0) flipped = true;
+      // aimLive true (a mouse), aimMoved false (nobody touched it).
+      updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
+      updatePlayer(dt, { move: still, aim: liveAim, aimLive: true, aimMoved: false });
+      worst = Math.max(worst, Math.abs(wrapDeg(Math.atan2(player.velocity.y, player.velocity.x) * DEG)));
+    }
+    check('the dash flies past the cursor (the live aim really flips)', flipped);
+    check('...and an untouched mouse past the cursor does not turn the seal', worst < 2,
+      `${worst.toFixed(1)} degrees off the launch at worst`);
+
+    // THE FLICK. Same dash, same overshot cursor, and at the moment the aim
+    // has flipped the player flicks the mouse UP. What steers is the flick's
+    // direction (input.aimGesture), not the cursor's heading — so the seal
+    // goes up, and never toward the cursor behind it.
+    const upFlick = new THREE.Vector2(0, 1);
+    resetPlayer(); resetStrike();
+    player.mesh.position.copy(HOME); player.velocity.set(0, 0, 0);
+    addCharge(1, player.stats); strikeState.pending = 1; strikeState.winding = true; strikeState.perfect = true;
+    tryStrike({ x: 1, y: 0 }, player.stats);
+    player.velocity.set(sp, 0, 0); player.dashTimer = strikeState.dashDuration;
+    let minX = 1, flickedAt = null;
+    for (let t = 0; t < 1.0; t += dt) {
+      liveAim.set(cursor.x - player.mesh.position.x, cursor.y - player.mesh.position.y);
+      if (liveAim.lengthSq() > 1e-6) liveAim.normalize();
+      const past = liveAim.x < 0;
+      if (past && flickedAt === null) flickedAt = t;
+      // One frame of flick, once the cursor is behind the seal.
+      const flicking = past && t - flickedAt < dt * 0.5;
+      updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
+      updatePlayer(dt, { move: still, aim: liveAim, aimLive: true, aimMoved: flicking, aimGesture: flicking ? upFlick : new THREE.Vector2(0, 0) });
+      if (player.velocity.length() > 0.5) minX = Math.min(minX, player.velocity.x / player.velocity.length());
+    }
+    const endDeg = Math.atan2(player.velocity.y, player.velocity.x) * DEG;
+    check('a flick up past the cursor turns the seal up', endDeg > 45 && endDeg < 135, `${endDeg.toFixed(0)} degrees`);
+    check('...and never back toward the cursor behind it', minX > -0.1, `heading x component bottomed at ${minX.toFixed(2)}`);
+  }
 
   // A dash that is not steered at all still has to go where it was pointed.
-  const straight = strike({ move: right, aim: right, aimLive: true });
+  const straight = strike({ move: right, aim: right, aimMoved: true });
   check('both hands on the launch line leaves it straight',
     Math.abs(wrapDeg(straight.heading)) < 2, `${straight.heading.toFixed(1)} degrees`);
 
   // THE EXIT. Flown along the launch, then both hands swung ninety degrees on
   // the frame the dash ends — so every degree below is bought by the window.
-  const exitHands = [{ move: right, aim: right, aimLive: true }, { move: up, aim: up, aimLive: true }];
+  const exitHands = [{ move: right, aim: right, aimMoved: true }, { move: up, aim: up, aimMoved: true }];
   const exit = strike(exitHands[0], exitHands[1]);
   const bought = Math.abs(wrapDeg(exit.heading - exit.atEnd));
   // AGAINST THE SAME STRIKE WITH THE WINDOW SHUT, because ordinary swimming is
@@ -594,35 +647,34 @@ section('HANDS — both of them steer, and they are handed back rather than cut 
     `follow ${steerFollow().toFixed(2)} once the window has run out`);
   check('the window is tunable', /path: 'strike\.dashControl\.followThrough'/.test(read('config.js')));
 
-  // A RELEASED STICK IS NOT AN INSTRUCTION. strikeDirection hands the whole
-  // heading to whichever hand is still giving one, which is the only sane
-  // answer at the LAUNCH — a strike from a standstill has to go somewhere and
-  // the cursor is the only thing pointing — and the wrong one mid-flight: it
-  // made letting go of the stick swing the dash onto the cursor, which reads
-  // as a lurch and, at aimBlend 0, contradicts the whole point of the setting.
-  // dashSteer stands the seal's own heading in for the missing hand instead,
-  // so the target is unchanged at 0 and eases rather than jumping above it.
-  const wasBlend = CONFIG.strike.aimBlend;
-  CONFIG.strike.aimBlend = 0;
+  // A RELEASED STICK IS NOT AN INSTRUCTION. With the stick east and the
+  // cursor north the dash goes east (the stick wins); let go of the stick and
+  // the held aim — still on the launch line, since the mouse never moved —
+  // keeps it east. It used to hand the dash to the cursor on the release,
+  // which read as a lurch toward the pointer as a reward for taking a hand off.
   const swimOnlyHeld = strike({ move: right, aim: up, aimLive: true });
   const swimOnlyLet = strike({ move: right, aim: up, aimLive: true },
     { move: still, aim: up, aimLive: true });
-  CONFIG.strike.aimBlend = wasBlend;
-  check('aimBlend 0 keeps the dash on the movement stick',
+  check('the movement stick keeps the dash on the stick',
     Math.abs(wrapDeg(swimOnlyHeld.heading)) < 2,
     `${swimOnlyHeld.heading.toFixed(1)} degrees with the cursor 90 off`);
   check('...and letting the stick go does not hand the dash to the cursor',
     Math.abs(wrapDeg(swimOnlyLet.heading)) < 2,
     `${swimOnlyLet.heading.toFixed(1)} degrees after the stick was released`);
-  // ...while a standstill strike must still fire, at every blend: with no
-  // movement at all the cursor is the only direction there is.
-  for (const b of [0, 0.5, 1]) {
-    CONFIG.strike.aimBlend = b;
+  // ...while a gesture toward the cursor after the release DOES: a hand did
+  // something, and the seal goes where it pointed.
+  const swimThenAim = strike({ move: right, aim: up, aimLive: true },
+    { move: still, aim: up, aimLive: true, aimMoved: true });
+  check('...but a gesture toward the cursor after the release turns it',
+    Math.abs(wrapDeg(swimThenAim.heading)) > 20,
+    `${swimThenAim.heading.toFixed(1)} degrees after the mouse moved`);
+  // ...while a standstill strike must still fire: with no movement at all
+  // the cursor is the only direction there is.
+  {
     const d = strikeDirection({ x: 0, y: 0 }, { x: 0, y: 1 });
-    check(`a standstill strike still has a heading at aimBlend ${b}`,
+    check('a standstill strike still has a heading',
       Math.abs(d.y - 1) < 1e-6 && Math.abs(d.x) < 1e-6);
   }
-  CONFIG.strike.aimBlend = wasBlend;
 
   // THE CEILING, LET DOWN RATHER THAN DROPPED. The dash ends carrying about
   // 42 u/s into an ordinary ceiling of 34, and the clamp took the difference
@@ -646,7 +698,7 @@ section('HANDS — both of them steer, and they are handed back rather than cut 
     let worst = 0;
     for (let t = 0; t < 1.2; t += dt) {
       updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
-      updatePlayer(dt, { move: right, aim: right, aimLive: true });
+      updatePlayer(dt, { move: right, aim: right, aimMoved: true });
       pin();
       const now = player.velocity.length();
       worst = Math.max(worst, prev - now);
@@ -684,7 +736,7 @@ section('HANDS — both of them steer, and they are handed back rather than cut 
       const ended = !strikeState.active && player.dashTimer <= 0 && t > 0.05;
       if (ended && over < 0) over = t;
       updateStrike(dt, scene, player.mesh.position, player.stats, [], {});
-      updatePlayer(dt, { move: up, aim: up, aimLive: true });
+      updatePlayer(dt, { move: up, aim: up, aimMoved: true });
       pin();
       if (over >= 0 && t - over >= seconds) break;
     }

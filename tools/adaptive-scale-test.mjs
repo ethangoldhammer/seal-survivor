@@ -30,6 +30,19 @@ const check = (name, cond, detail = '') => {
 };
 
 const cfg = CONFIG.render.adaptive;
+
+// WHETHER THE CONTROLLER SHIPS ON IS NOT WHAT THIS FILE IS ABOUT. The subject
+// is its behaviour — the hysteresis, the streaks, the floor — and that has to
+// be assertable whichever way the ship decision goes. Read live, these checks
+// silently stopped exercising anything the day `enabled` went false: `tick`
+// returns on its first line, every scale reads 1.00x, and five checks fail
+// with no hint that the flag is why.
+//
+// Forced on HERE rather than per-section so the 'Turned off' section below —
+// which saves the value, clears it, and puts it back — stays the one place
+// that has an opinion about the flag at all.
+cfg.enabled = true;
+
 const SLOW = cfg.targetMs + 10;   // comfortably over budget
 const FAST = cfg.targetMs - 6;    // comfortably under
 

@@ -272,8 +272,20 @@ check('...and the blob reports the colour it is actually wearing',
 //              CONFIG.hotSpots.chum.tint), so assetBaseColor would hand back
 //              the meat's red-to-amber and undo the one tell that separates
 //              the two pickups. It reports the colour it was spawned with.
+//              ...and it does not go through feedback() any more: a chunk is
+//              absorbed in pieces now (systems/pickupAbsorb.js), which fires
+//              the same event with the same payload one layer down. So the
+//              anchor is the CALL that carries the colour, whichever of the
+//              two it is — pinning it to `feedback(` would have this pass by
+//              matching nothing the day the call was renamed.
 check('...and a piece off a weak spot reports the fuel tint it was spawned with',
-  /feedback\('hotSpotChumTaken'[\s\S]{0,400}?color:\s*chunk\.base/.test(MAIN));
+  /(?:feedback|absorbInPieces)\('hotSpotChumTaken'[\s\S]{0,400}?color:\s*chunk\.base/.test(MAIN));
+// AND THE MEAL ITSELF, which had no colour to report until it was absorbed in
+// pieces: the drip's per-piece blip is tinted by the chunk it came out of, so
+// the pieces of a fat amber chunk and a lean red one are told apart on the way
+// in exactly as the chunks were in the water.
+check('...and the meal reports the colour it rolled',
+  /absorbInPieces\('chumChunkEaten'[\s\S]{0,400}?color:\s*chunk\.base/.test(MAIN));
 
 // Every other feedback() call in the game must NOT. Comments are allowed to
 // discuss it; code isn't.
@@ -310,7 +322,11 @@ const callArgs = (code, fnName) => {
 const strayTints = [];
 for (const file of srcFiles) {
   const code = strip(fs.readFileSync(file, 'utf8'));
-  for (const args of [...callArgs(code, 'feedback'), ...callArgs(code, 'emit')]) {
+  // `absorbInPieces` is scanned alongside them: it IS a feedback call, one
+  // layer down (systems/pickupAbsorb.js), and leaving it out would have made
+  // the drip the one place in the game a hand-typed hex could be smuggled in.
+  for (const args of [...callArgs(code, 'feedback'), ...callArgs(code, 'emit'),
+    ...callArgs(code, 'absorbInPieces')]) {
     if (!/\bcolor:/.test(args)) continue;
     if (file.endsWith('main.js') && /assetBaseColor\(/.test(args)) continue; // the kill, and the three swallows
     // The clam's two moments, checked properly above. Matched on the EVENT the
@@ -332,6 +348,18 @@ for (const file of srcFiles) {
     // EVENT and the SOURCE, so main.js is not widened and a hand-typed hex
     // here would still fail.
     if (/^\s*'hotSpotChumTaken'/.test(args) && /\bcolor:\s*chunk\.base\b/.test(args)) continue;
+    // THE MEAL, on the same terms. It carries a colour now because it is
+    // absorbed in pieces and each piece is tinted by the chunk it came out of.
+    if (/^\s*'chumChunkEaten'/.test(args) && /\bcolor:\s*chunk\.base\b/.test(args)) continue;
+    // THE DRIP RELAYING ONE (systems/pickupAbsorb.js). Two calls in that file
+    // pass a colour and neither one CHOOSES it: the swallow's `at` is handed
+    // straight through, and the per-piece blip wears `at.color` so a piece is
+    // the colour of the thing it came out of. Both are held to the SOURCE
+    // being a relay — a hex typed in that file is still a failure, and so is a
+    // third call there that decides on a tint of its own.
+    if (file.endsWith('pickupAbsorb.js')
+      && /\bcolor:\s*at\.color\b/.test(args)) continue;
+    if (file.endsWith('pickupAbsorb.js') && /\.\.\.at\b/.test(args)) continue;
     // THE MUZZLE FLASH, which is the fourth odd one out and the first that is
     // not a pickup. The palette rule this check enforces — a burst's colour says
     // what KIND of event it was — is not being broken here so much as taken
@@ -376,6 +404,16 @@ for (const file of srcFiles) {
     // hand-typed hex here is still a failure. Held to the SOURCE — the emitter
     // is a config string (`captureEmit`), so the event half is the variable.
     if (/^\s*captureEmit\b/.test(args) && /\bcolor:\s*b\.tint\b/.test(args)) continue;
+    // THE SPIKE'S SMEAR (systems/versus.js), which is the same argument as the
+    // boss going up and the bolt coming apart. The smear is the BALL'S OWN GOO
+    // thrown along the shot — it is drawn by the same metaball group the body
+    // is drawn from, in whichever team colour currently owns it — so a stock
+    // tint would put the one part of a spike that is meant to read as the ball
+    // in a colour the ball is not. `ballTint()` is the shared resolver every
+    // other thing the ball does reads (it is what ballImpactFx uses for the
+    // splash underneath this very hit), not a hex. Held to the EVENT and the
+    // SOURCE, so a hand-typed colour on versusSpike is still a failure.
+    if (/^\s*'versusSpike'/.test(args) && /\bcolor:\s*ballTint\(\)\.getHex\(\)/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }
@@ -469,6 +507,27 @@ check('every particle is neutral white', nonWhite === 0, `${pearl.length} partic
 // Glowing, not merely white: the burst has no palette depth, so the overdrive
 // past 1.0 is the only thing making it bloom.
 check('and driven past white so it glows', dimmest > 1, `dimmest channel ${dimmest.toFixed(2)}`);
+
+// ===========================================================================
+// A WASH, NOT A DYE — `tintMix` on the emitter. The goal spray takes the
+// scorer's colour as a wash over its own hot palette: no particle is the
+// team's hue outright, and the burst as a whole leans toward it.
+resetParticles();
+const sprayDef = CONFIG.emitters.goalSpray;
+check('the goal spray fires on versusGoal', CONFIG.feedback.versusGoal?.emit === 'goalSpray', `${CONFIG.feedback.versusGoal?.emit}`);
+check('...and is a flash, not a lingering cloud', !!sprayDef && sprayDef.life[1] <= 0.5, `life up to ${sprayDef?.life?.[1]}s`);
+check('...no hotter than the global overdrive already makes everything', !!sprayDef && sprayDef.glow <= 1, `glow ${sprayDef?.glow}`);
+check('...and takes only a wash of the event colour', !!sprayDef && sprayDef.tintMix > 0 && sprayDef.tintMix < 1, `tintMix ${sprayDef?.tintMix}`);
+const hueDist = (i) => norm(i).reduce((d, v, k) => d + Math.abs(v - pinkNorm[k]), 0);
+const sprayPlain = burst('goalSpray', 0, -10, { glow: 1 });
+const plainMean = sprayPlain.reduce((d, i) => d + hueDist(i), 0) / Math.max(1, sprayPlain.length);
+resetParticles();
+const washed = burst('goalSpray', 0, -10, { color: PINK, glow: 1 });
+let onHue = 0;
+for (const i of washed) if (hueDist(i) < 1e-3) onHue++;
+const washedMean = washed.reduce((d, i) => d + hueDist(i), 0) / Math.max(1, washed.length);
+check('a washed burst is nowhere the caller\'s hue outright', washed.length > 0 && onHue === 0, `${onHue} of ${washed.length} on-hue`);
+check('...but leans toward it, against the same burst untinted', washedMean < plainMean * 0.85, `hue distance ${washedMean.toFixed(3)} washed vs ${plainMean.toFixed(3)} plain`);
 
 // ===========================================================================
 // THE CURRENT — the two copies of the field

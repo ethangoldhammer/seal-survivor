@@ -205,6 +205,28 @@ const fragmentShader = /* glsl */ `
   uniform float uChainR;       // the chain-window arc, outside the fuel ring
   uniform float uChainLeft;    // 0..1 of the window still to run, 0 = no chain
 
+  // --- THE AIR, as the outermost band --------------------------------------
+  // Blubberball only, and only on a seal a person is driving — see the note at
+  // the call site. A match is played on one screen by two or more people at
+  // once, and the HUD's air gauge is ONE gauge: whoever is not seat 0 had no
+  // reading of their own air anywhere, and seat 0's was in a corner nobody
+  // looks at while contesting a ball.
+  //
+  // IT DRAINS RATHER THAN FILLS, and it is the same grammar as the chain arc
+  // just inside it: both of these outer bands mean SOMETHING LEFT TO RUN OUT.
+  // The fuel wheel at r = 1 fills, the core fills outward — the two things you
+  // are building. The two things you are spending go round the outside and get
+  // shorter.
+  uniform float uAirR;         // radius, outboard of the chain arc
+  uniform float uAirLeft;      // 0..1 of the lungs still full
+  uniform float uAirGlow;      // 0 = not drawn at all, which is every run
+  uniform float uAirStrain;    // 0..1 of CONFIG.oxygen.fx.threshold crossed
+  uniform float uAirPulse;     // the strain's own throb, computed on the CPU
+  uniform float uAirEmpty;     // what the SPENT side of the circle is worth
+  uniform float uAirWalk;      // the share of the strain the colour walks over
+  uniform vec3  uAirColor;
+  uniform vec3  uAirLowColor;  // what it walks to as the strain comes on
+
   // --- THE TRACK, AND THE THREE THINGS IT SAYS ----------------------------
   // The empty ring at r = 1 that is left once the fuel wheel has moved to the
   // HUD column. It is the finish line the lead-in is closing on, the surface
@@ -666,6 +688,61 @@ const fragmentShader = /* glsl */ `
       }
     }
 
+    // THE AIR. Outboard of everything, and the last thing composited, so a
+    // scramble in front of a goal cannot bury it under the fuel wheel.
+    //
+    // THE EMPTY PART OF THE RING IS DRAWN TOO, at a fraction of the alpha.
+    // The chain arc above can afford to vanish — a window that is not open is
+    // not a thing you are watching — but air is a quantity you read as a
+    // PROPORTION, and an arc with no track behind it has nothing to be a
+    // proportion of: at a fifth of a lungful it would be a short stub of
+    // colour somewhere on a circle, and which fifth is unreadable.
+    if (uAirGlow > 0.0) {
+      float mAir = bandMask(r, uAirR, halfT * 0.5);
+      if (mAir > 0.001) {
+        float lit = step(ang / TAU, uAirLeft);
+        // Redder and throbbing as it runs out — the same crossing
+        // CONFIG.oxygen.fx.threshold drives everywhere else, so the ring goes
+        // at the moment the screen and the mix do.
+        // THE THROB IS A FADE, NOT A FLARE, and that is forced rather than
+        // chosen: this output is premultiplied, so a throb that multiplies the
+        // colour UP runs straight into the same clipping the division below
+        // exists to avoid — measured, a red band pulsed to rgb(249,163,240),
+        // which is pink. Dipping the coverage on the off-beat is the same
+        // rhythm with a ceiling of the colour as written.
+        float throb = 1.0 - uAirStrain * 0.25 * (1.0 - uAirPulse);
+        // PRE-DIVIDED BY uGlow, and that is the whole difference between this
+        // band saying something and this band being white.
+        //
+        // Everything in the accumulated colour is multiplied by uGlow on the
+        // way out — 2.2 in config, tuned higher by a bounce — and a colour whose
+        // channels all
+        // clip has no hue left. The low-air warning is the one cue here whose
+        // MEANING is its hue: at the wheel's glow a red (1.0, 0.42, 0.48) came
+        // out (1.0, 0.92, 1.0), a white band that reads as the meter breaking
+        // rather than as the seal drowning. Every other band in this file
+        // solves it by staying modest and leaning on geometry instead (see the
+        // traveller); this one cannot, because there is no geometry in "the
+        // same arc, but urgent".
+        //
+        // Dividing here makes uAirGlow this band's OWN brightness, in units
+        // where 1 is the colour as written, whatever the wheel is tuned to.
+        // THE COLOUR ARRIVES BEFORE THE STRAIN DOES. Walked over the FIRST
+        // part of the strain rather than all of it: the last third of the
+        // threshold is a second or two of swimming, and a warning that is
+        // still half its calm colour by then has spent the time it existed to
+        // buy. Under this the band was a mauve — a linear walk reads as
+        // neither colour for most of its range.
+        vec3 airCol = mix(uAirColor, uAirLowColor, smoothstep(0.0, uAirWalk, uAirStrain))
+          * (uAirGlow / max(uGlow, 0.0001));
+        col = mix(col, airCol, mAir * mix(0.55, 1.0, lit));
+        // ...and the alpha is a COVERAGE, capped at 1. The throb belongs in
+        // the colour above: a throb in the alpha of a premultiplied output
+        // brightens and clips in exactly the way the division just fixed.
+        alpha = max(alpha, min(1.0, mAir * mix(uAirEmpty, 0.9, lit) * throb));
+      }
+    }
+
     if (alpha <= 0.002) discard;
 
     gl_FragColor = vec4(col * uGlow * alpha, alpha);
@@ -680,6 +757,10 @@ const fragmentShader = /* glsl */ `
 // ---------------------------------------------------------------------------
 function makeRing() {
 let mesh = null;
+// The air band's own throb clock. Per ring, so four seals low on air are not
+// all pulsing on the same frame — they start whenever each one first crosses
+// the threshold.
+let airClock = 0;
 
 // ---------------------------------------------------------------------------
 // THE SPRING. Underdamped on purpose — a pip landing overshoots a little and
@@ -1434,6 +1515,15 @@ function createStrikeRing() {
       uShockWheel: { value: 1 },
       uChainR: { value: ring.chainRadiusMul ?? 1.14 },
       uChainLeft: { value: 0 },
+      uAirR: { value: ring.air?.radiusMul ?? 1.28 },
+      uAirLeft: { value: 1 },
+      uAirGlow: { value: 0 },
+      uAirStrain: { value: 0 },
+      uAirPulse: { value: 0 },
+      uAirEmpty: { value: ring.air?.emptyAlpha ?? 0.38 },
+      uAirWalk: { value: ring.air?.colorWalk ?? 0.7 },
+      uAirColor: { value: new THREE.Color(ring.air?.color ?? 0x7ad7ff) },
+      uAirLowColor: { value: new THREE.Color(ring.air?.lowColor ?? 0xff6b7a) },
       uTrackGlow: { value: 0 },
       uTrackW: { value: ring.track?.width ?? 0.055 },
       uTrackColor: { value: new THREE.Color(ring.color) },
@@ -1472,7 +1562,13 @@ function createStrikeRing() {
   return mesh;
 }
 
-function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
+/**
+ * @param air  `{ oxygen, max }` to draw the outer AIR band, or null for every
+ *             other caller — which is the whole game outside a Blubberball
+ *             match. Null rather than a flag so a caller that has no oxygen to
+ *             report cannot accidentally ask for a band and draw a full one.
+ */
+function updateStrikeRing(dt, playerPos, strikeState, running, stats = null, air = null) {
   if (!mesh) return;
   mesh.visible = running && CONFIG.strike.enabled;
   if (!mesh.visible) return;
@@ -1536,6 +1632,34 @@ function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
   // at a plausible, wrong rate. See chainWindowLeft in systems/strike.js.
   u.uChainLeft.value = chainWindowLeft(strikeState);
 
+  // THE AIR BAND. Off unless the caller handed over a reading — see the note
+  // on the uniforms and the one at the call site in systems/versus.js.
+  //
+  // THE STRAIN IS THIS SEAL'S OWN, computed here rather than read off
+  // systems/oxygenFx.js. That module keeps ONE strain, the player's, because
+  // everything it drives is a screen-wide effect — the CRT tearing, the
+  // band-pass on the mix — and a match has four seals with four sets of lungs.
+  // The threshold is shared, so the ring goes red at the same fraction of a
+  // bar the screen tears at; the value is per animal.
+  const a = ring.air ?? {};
+  if (air && (a.enabled ?? true) !== false) {
+    const max = Math.max(1, air.max ?? 1);
+    const left = Math.max(0, Math.min(1, (air.oxygen ?? max) / max));
+    u.uAirLeft.value = left;
+    u.uAirGlow.value = a.glow ?? 1;
+    const threshold = Math.max(1e-3, CONFIG.oxygen?.fx?.threshold ?? 0.125);
+    u.uAirStrain.value = Math.max(0, Math.min(1, 1 - left / threshold));
+    airClock += dt * (a.pulseHz ?? 3.4);
+    u.uAirPulse.value = Math.sin(airClock * Math.PI * 2) * 0.5 + 0.5;
+    u.uAirR.value = a.radiusMul ?? 1.28;
+    u.uAirColor.value.set(a.color ?? 0x7ad7ff);
+    u.uAirLowColor.value.set(a.lowColor ?? 0xff6b7a);
+    u.uAirEmpty.value = a.emptyAlpha ?? 0.38;
+    u.uAirWalk.value = a.colorWalk ?? 0.7;
+  } else {
+    u.uAirGlow.value = 0;
+  }
+
   updateNoise(u);
   updateCore(dt, strikeState, u, ring, fuelHere);
   updateTrack(dt, strikeState, u, ring, fuelHere);
@@ -1568,7 +1692,14 @@ function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
   // BLOOM: the bright pass thresholds LUMINANCE, which is 7% blue, so the cold
   // third of the wheel haloes visibly less than the warm third at the same
   // saturation. See npm run glow.
-  u.uComboColor.value.set(liveChain() > 0 ? chainHex(liveChain()) : ring.comboColor);
+  //
+  // THIS SEAL'S CHAIN, not the run's. It read the bare `liveChain()`, which is
+  // player 1's state however many rings are on screen — so in a match every
+  // seal's arc wore the human's chain colour, including the seals that had no
+  // chain at all. The parameter above is already the right state; this line
+  // was the one that did not ask for it.
+  const mine = liveChain(strikeState);
+  u.uComboColor.value.set(mine > 0 ? chainHex(mine) : ring.comboColor);
   u.uPipColor.value.set(ring.lastPipColor ?? ring.readyColor);
   // The spring's leftover energy comes out here rather than as fill, so a pip
   // landing BLOOMS instead of overshooting the bar it is landing in.
@@ -1597,14 +1728,16 @@ const ring0 = makeRing();
 export function pipAnim() { return ring0.pipAnim(); }
 export function resetStrikeRing() { return ring0.resetStrikeRing(); }
 export function createStrikeRing() { return ring0.createStrikeRing(); }
-export function updateStrikeRing(dt, playerPos, strikeState, running, stats = null) {
-  return ring0.updateStrikeRing(dt, playerPos, strikeState, running, stats);
+export function updateStrikeRing(dt, playerPos, strikeState, running, stats = null, air = null) {
+  return ring0.updateStrikeRing(dt, playerPos, strikeState, running, stats, air);
 }
 
 /**
  * A ring of its own for another seal: { mesh, update, reset, pipAnim,
  * dispose }. `update` takes what updateStrikeRing takes — the dt is REAL time,
- * the state is that seal's strike state (createStrikeState in strike.js).
+ * the state is that seal's strike state (createStrikeState in strike.js), and
+ * the last argument is that seal's own air, which only a Blubberball match
+ * hands over.
  */
 export function createStrikeRingInstance() {
   const r = makeRing();

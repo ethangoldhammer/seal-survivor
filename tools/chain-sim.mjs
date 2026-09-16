@@ -60,9 +60,23 @@ import { CONFIG } from '../path/src/config.js';
 import { player, initPlayer, resetPlayer, updatePlayer } from '../path/src/entities/player.js';
 import {
   strikeState, resetStrike, updateCharge, tryStrike, updateStrike, strikeLoaded,
-  feedChum, consumeStrikeLink, consumeChainLink, linkPips, pipCount, liveChain,
+  feedChum, consumeStrikeLink, consumeChainLinks, linkPips, pipCount, liveChain,
   minFire,
 } from '../path/src/systems/strike.js';
+
+// THE DEEPEST LINK OF WHATEVER THE LAST CALL SCORED, or 0 — which is exactly
+// what consumeChainLink() returned before it became consumeChainLinks().
+//
+// A HARNESS HELPER RATHER THAN AN EXPORT, deliberately. The GAME has to see
+// every link, because the banner is a number the player is asked to count and
+// one that skips is the bug the queue exists to fix; a check asking "did the
+// counter reach x2" does not, and giving the game back a reader that drops
+// links would be handing the bug back with it.
+const lastLink = (...a) => {
+  const links = consumeChainLinks(...a);
+  return links.length ? links[links.length - 1].chain : 0;
+};
+
 import {
   updatePickups, resetPickups, spawnXpOrb, pickups, gulpPickups,
 } from '../path/src/entities/pickups.js';
@@ -124,7 +138,7 @@ export function simulate(chumPerSec, seed, seconds = 60, hold = 'min', cadence =
   const eat = () => {
     feedChum(stats);
     stat.eaten++;
-    const chain = consumeChainLink();
+    const chain = lastLink();
     if (chain) {
       stat.links++;
       if (chain > stat.maxChain) stat.maxChain = chain;

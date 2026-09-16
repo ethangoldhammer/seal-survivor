@@ -114,7 +114,7 @@ import { isNameBuried } from '../systems/nameLedger.js';
 import { mountSplashTipJar } from './tipJar.js';
 import { mountBuildStamp } from './buildStamp.js';
 // The old name boiling out of the pill when the dice rolls — see nameSwap.js.
-import { swapWithNoise } from './nameSwap.js';
+import { swapWithNoise, NAME_SWAP_DEFAULTS } from './nameSwap.js';
 // The reel of names the pill flips through before the first one lands — see
 // nameScramble.js.
 import { runNameScramble } from './nameScramble.js';
@@ -203,6 +203,24 @@ export function mountRiveSplash({
   // the view-model number of the same name in SKY_FX_BINDINGS when it changes.
   // Undefined leaves the artboard's own defaults alone.
   skyFx,
+  // THE DICE'S TWO SOUNDS, as callbacks rather than as a feedback() call in
+  // here. `onRoll` fires on the press that throws a new name; `onSettle` fires
+  // once the old one has finished boiling out of the pill, which is
+  // `nameSwap.time` later and is read off that object rather than typed as a
+  // number — retuning the dissolve moves the sound with it.
+  //
+  // INJECTED FOR THE REASON EVERY OTHER CALLBACK HERE IS. This module is
+  // written to know nothing about the game under it (see the header), and
+  // systems/feedback.js reaches the particle system and three.js — importing it
+  // would put both into tools/hit/splash-hit.html, a page whose entire value is
+  // that it boots instantly with nothing behind it. ui.js names the events.
+  //
+  // The OPENING REEL is deliberately not wired to either: it runs on load with
+  // nobody having pressed anything, and a screen that announces itself before
+  // the player has touched it is the hazard tools/menu-sound-test.mjs exists to
+  // catch. Only a roll the player asked for makes a noise.
+  onRoll,
+  onSettle,
 } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'sv-riv';
@@ -246,6 +264,9 @@ export function mountRiveSplash({
   let onRandomTrigger = null;
   // What the cursor currently says, so it is only rewritten on change.
   let hoverOn = false;
+  // The pending settle, held so a second roll inside the dissolve replaces it
+  // rather than stacking a second landing on top of the first.
+  let settleTimer = 0;
   // The dissolve in flight, if any, so a second roll or the teardown can end it.
   let swap = null;
   // The opening reel, while it runs — see scrambleTo. The dice, the back
@@ -425,6 +446,11 @@ export function mountRiveSplash({
     for (const t of resettleTimers) clearTimeout(t);
     resettleTimers = [];
     clearTimeout(entrySettleTimer);
+    // A roll landing after the card has gone is a sound with nothing on screen
+    // to belong to — Start on the frame after a dice press is a real thing
+    // players do, and the dissolve is longer than the gap between them.
+    clearTimeout(settleTimer);
+    settleTimer = 0;
     clearInterval(skyTimer);
     for (const [target, type, fn] of inputListeners) target.removeEventListener(type, fn);
     // A reel still spinning stops where it is: the name on screen is the one
@@ -685,6 +711,30 @@ export function mountRiveSplash({
     }
   }
 
+  // WHEN THE NEW NAME HAS LANDED, which is not when it was written.
+  //
+  // showName writes the new text underneath immediately and photographs the old
+  // one on top of it; for the next `nameSwap.time` the pill is a dissolve with
+  // both names in it, and a settle fired on the write would land on top of the
+  // roll it is supposed to answer. So the sound waits out the reveal it belongs
+  // to, read off that reveal's own settings.
+  //
+  // With the swap off — `enabled: false`, or no settings at all — the text is a
+  // hard cut and there is nothing to wait for, so the settle follows on the next
+  // tick. Still deferred rather than called inline: two voices fired in the same
+  // synchronous block are one sound with a thick attack, which is precisely not
+  // the throw-and-land this pair is.
+  function scheduleSettle() {
+    if (!onSettle) return;
+    clearTimeout(settleTimer);
+    const swapping = !!nameSwap && nameSwap.enabled !== false;
+    const seconds = swapping ? (nameSwap.time ?? NAME_SWAP_DEFAULTS.time) : 0;
+    settleTimer = setTimeout(() => {
+      settleTimer = 0;
+      if (!destroyed) onSettle();
+    }, Math.max(0, seconds * 1000));
+  }
+
   // THE DICE, and the only way a name changes on this screen. Rolls one, holds
   // it, mirrors it to the artboard — and hands it back, so a caller driving
   // this by hand can see what landed.
@@ -704,6 +754,12 @@ export function mountRiveSplash({
   // out of the splash never files you under a name you rejected.
   function randomizeName() {
     if (destroyed) return '';
+    // THE THROW, on the press itself rather than on the name landing — this is
+    // the sound of the player's own gesture, and it has to be simultaneous with
+    // it or the dice reads as laggy. Fired before the roll for the same reason:
+    // sanitising and splitting a name is not free on a cold module.
+    onRoll?.();
+    scheduleSettle();
     // A press mid-reel is the player taking over: the reel stops and the dice
     // rolls from whatever it was showing.
     scramble?.cancel();
@@ -730,6 +786,13 @@ export function mountRiveSplash({
    */
   function previousName() {
     if (destroyed || historyAt <= 0) return currentName;
+    // THE SETTLE ALONE, and no throw: going back is not a roll. The pill still
+    // dissolves to a different name, so it still needs the full stop — but the
+    // dice's tumble over a name the player has already seen would be claiming
+    // something was rolled for when nothing was. Nothing sounds at all when
+    // there is nowhere to go back to, which is the line above: a button that
+    // does nothing should also say nothing.
+    scheduleSettle();
     scramble?.cancel();
     scramble = null;
     historyAt -= 1;

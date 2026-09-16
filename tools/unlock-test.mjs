@@ -129,11 +129,33 @@ check('every drop was warned about', ['noKind', 'noTarget', 'noStat'].every((id)
 section('THE SWITCH');
 resetUnlocks();
 check('?gate on the URL is read at import, before any ledger read', unlockGateOn() === true);
-// THE TRIPWIRE. It asserts the value rather than reading it, so flipping the
-// switch is always a deliberate edit in two files and never a side effect of
-// one. It changed direction when the upgrade gates went in: the public build
-// is the default now, and a dev session opts OUT with `?gate=0`.
-check('the default is the public build — earning is required', GATE_DEFAULT === true);
+// THE TRIPWIRE, and what it asserts is the FAIL-SAFE rather than a constant.
+//
+// The switch is read off the build now — a dev server is the unlocked game and
+// a built bundle is the gated one — and `import.meta.env` does not exist in a
+// harness, so this process is one of the "cannot prove it is a dev server"
+// cases. That it comes out GATED is the property worth pinning: the default
+// has to fall on the side of earning, because the two mistakes are not the
+// same size. A developer seeing the earned game is an inconvenience; a public
+// build shipping the whole wardrobe is the feature gone.
+//
+// It asserts the value rather than reading the expression back, so flipping
+// the sense of that expression is always a deliberate edit in two files and
+// never a side effect of one.
+check('anything that cannot prove it is a dev server is gated', GATE_DEFAULT === true);
+// ...AND THE OTHER HALF, WHICH THAT CHECK CANNOT SEE. The line above catches an
+// inversion written as `import.meta.env?.DEV` (undefined here, so it fails) but
+// NOT one written against a different flag: `!import.meta.env?.PROD` is `true`
+// in this process and `false` in a built bundle, which is a public build
+// shipping the whole wardrobe and a green suite. So the expression itself is
+// read — the flag has to be DEV, and it has to be negated.
+{
+  const fs2 = await import('node:fs');
+  const src = fs2.readFileSync(new URL('../path/src/systems/unlocks.js', import.meta.url), 'utf8');
+  const line = src.match(/export const GATE_DEFAULT = ([^;]+);/)?.[1] ?? '';
+  check('...because the switch is the DEV flag, negated — not some other flag that reads the same here',
+    /^!\s*import\.meta\.env\?\.DEV$/.test(line.trim()), line.trim() || 'no GATE_DEFAULT found');
+}
 setUnlockGate(false);
 check('...and the dev override turns it back off', unlockGateOn() === false);
 check('gate off: the hat is wearable with zero boats', accessoryUnlocked('accessoryHat'));
@@ -267,7 +289,7 @@ check('a hull going up is recorded in onBoatDestroyed, and announced', boatHook.
 check('the teardown every route shares collects what the run popped',
   /function resetArena\([^)]*\) \{[\s\S]{0,400}commitUnlocks\(\)/.test(main));
 check('...and a run still starts through it', /function startGame\([^)]*\) \{[\s\S]{0,200}resetArena\(/.test(main));
-check('...as does the way back to the menu', /function returnToMenu\([^)]*\) \{[\s\S]{0,900}resetArena\(/.test(main));
+check('...as does the way back to the menu', /function returnToMenu\([^)]*\) \{[\s\S]{0,1800}resetArena\(/.test(main));
 check('a run ending collects too, before the score screen', /commitUnlocks\(\);\s*showGameOver\(/.test(main));
 const shot = main.slice(main.indexOf('function updateBossShot('));
 check('a boss going down is recorded on the gained edge, with its archetype and perk',

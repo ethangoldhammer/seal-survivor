@@ -17,7 +17,11 @@ import tipsCsv from '../tips.csv?raw';
 import { parseQuipCsv, pickQuip } from '../quipTable.js';
 import { parseTipCsv } from '../tipTable.js';
 import { uiText } from '../uiTextTable.js';
-import { availableUpgrades, levelableUpgrades, player } from '../entities/player.js';
+// Whether this build has a room server at all — the online row is not drawn
+// without one. A leaf: it reads an inlined env var and touches no socket.
+import { roomsAvailable } from '../systems/online/room.js';
+import { isTextEntry } from './typing.js';
+import { availableUpgrades, levelableUpgrades, player, rerollsLeft, spendReroll, rerollEnabled, rerollsEverEarned } from '../entities/player.js';
 import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // The splash and the score card's turn are pure motion with no way to opt out
 // mid-play, so both honour the system setting by skipping entirely. The CSS
@@ -47,7 +51,17 @@ import { warmNameSwap } from './nameSwap.js';
 import { mountSplineSplash } from './splineSplash.js';
 import { splashChoice, splineSrcOverride, splinePanelWanted } from './splashChoice.js';
 import { tipJarLink, tipSheetOpen, closeTipSheet } from './tipJar.js';
+// THE PAD AND THE ARROW KEYS ON THE PLAIN PANELS — the sports list, the
+// leaderboard and the tip sheet. Registered from here rather than from each
+// panel's own module for tipJar's reason: that file is deliberately
+// dependency-free so it can be driven from a probe page, and a cursor that
+// reads menuInput would drag input.js and the audio graph in behind it. See
+// ui/panelNav.js.
+import { registerPanelNav } from './panelNav.js';
 import { titlePreviewRequested } from '../systems/titleSeal.js';
+// For the transition cover's watchdog only: a screen that had to be rescued
+// from itself belongs in the trail pulled off the phone, not just the console.
+import { mark } from '../systems/crashLog.js';
 import { initBossBarRive, updateBossBarRive } from './bossBarRive.js';
 import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareRunSheet, saveRunSheet, warmShareCards, warmRunSheet, canShareImages } from '../systems/bossShot.js';
 import { desktopSaveAvailable } from '../systems/desktopSave.js';
@@ -97,6 +111,9 @@ import { analyzeRun, sourceLabel } from '../systems/playtestAnalysis.js';
 import { primaryCause, threatLabel } from '../deathCauses.js';
 import { weaponName } from '../weaponName.js';
 import { playSfx, unlockAudio } from '../systems/audio.js';
+// The title card's own ambience — one loop, up under the wordmark and away
+// with the card. Ships with no clips in it; see CONFIG.splashBed.
+import { startSplashBed, stopSplashBed } from '../systems/splashBed.js';
 import { startCardRiser, stopCardRiser, stopAllCardRisers } from '../systems/cardRiser.js';
 // Which card is pointed at, announced on `document` for the seal that watches
 // the hand from under it (systems/levelUpSeal.js) — see ui/cardFocus.js.
@@ -205,6 +222,40 @@ const STYLES = `
   /* The gap the "Time" caption used to provide. Without it the score and the
      clock stack into one four-line block of digits. */
   .sv-hud-time { margin-top: 4px; opacity: 0.7; }
+
+  /* --- THE SCORE CORAL'S WINDOW ------------------------------------------
+     A multiplier and a clock, sitting directly under the number it multiplies.
+
+     NO LABEL, like everything else in this corner: "x7" over a running total
+     is already a sentence, and the only thing it could be multiplying is the
+     figure above it. See the note in the markup.
+
+     ITS COLOUR IS THE CORAL'S, read off the asset at draw time rather than
+     typed here — the pickup's tint is a Look-panel slider, and a badge in a
+     hardcoded green would be the one part of the effect that did not follow it.
+
+     THE TRACK IS THE SECONDS. A bar rather than a countdown in figures: the
+     corner already holds two numbers that have to be read exactly and a third
+     ticking one would be read instead of them. What the player needs off this
+     is "a lot left" or "nearly gone", which is a length.
+
+     display:none rather than visibility or opacity, so the clock above it
+     closes the gap when there is no window — a permanently reserved slot would
+     be a hole in the corner for the ninety per cent of a run with nothing in
+     it. */
+  .sv-score-mult { display: none; margin-top: 5px; align-items: center;
+    justify-content: flex-end; gap: 6px; }
+  .sv-hud-corner.sv-boosting .sv-score-mult { display: flex; }
+  .sv-score-mult b { font-weight: 700; font-variant-numeric: tabular-nums;
+    font-size: 15px; line-height: 1; color: var(--sv-score-mult, #5ef2a8); }
+  /* Fixed width, and in ch so it holds against the tuned font — see the memory
+     on px sizes assuming Inter. A track that shrank with the seconds would
+     move the digits beside it every frame. */
+  .sv-score-mult i { display: block; width: 5ch; height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.18); overflow: hidden; }
+  .sv-score-mult i b { display: block; height: 100%; width: 100%; border-radius: 2px;
+    background: var(--sv-score-mult, #5ef2a8);
+    transform-origin: right center; transform: scaleX(var(--sv-mult-left, 1)); }
   /* The read-outs, as one movable block. margin-left:auto is what pushes the
      group to the right-hand end of the HUD row, and it is the same declaration
      the score panel carried before this wrapper existed — so on a desktop it
@@ -1849,11 +1900,44 @@ const STYLES = `
      this borrows a keyframe that has a background in it. */
   @keyframes sv-stage-out { to { opacity: 0; } }
   .sv-comb-stage.sv-stage-going .sv-title,
+  .sv-comb-stage.sv-stage-going .sv-reroll-row,
   .sv-comb-stage.sv-stage-going .sv-sub { animation: sv-stage-out var(--sv-out-len, 0.42s) ease-in both; }
   /* The cards and the headline, over the comb. A stacking context of its own so
      the slots' bloom filters compose against the lattice rather than against
      whatever the comb's last cell happened to be. */
   .sv-comb-stage { position: relative; z-index: 1; text-align: center; color: #e8ecf3; max-width: 96vw; }
+  /* THE REROLL, under the hand. Margin rather than a gap on the stage: the
+     stage is not a flex container and the cards inside it are absolutely
+     placed, so this row's own box is the only thing there is to space off.
+     Its height is real and layOutCards subtracts it as chrome, which is what
+     keeps the hand from being pushed off a short window.
+     NO BACKTICKS ANYWHERE IN HERE. This whole stylesheet is a template literal
+     in ui.js, so one in a comment ends the string and the parse error lands on
+     a word in prose. */
+  .sv-reroll-row { position: relative; z-index: 2; margin-top: 14px; display: flex; justify-content: center; }
+  /* THE COUNT IS ITS OWN SPAN, so the digit can be given a tabular column of
+     its own — 3 → 2 → 1 must not shuffle the word beside it. ch rather than px:
+     the type here is Inter and one ch is one digit of it. */
+  .sv-reroll-n { display: inline-block; min-width: 1.2ch; margin-left: 0.5ch; font-variant-numeric: tabular-nums; }
+  /* SPENT, NOT GONE. The button stays on screen with its bank at zero rather
+     than disappearing — a control that vanishes reads as a bug, and the whole
+     point of leaving it there is that it says WHY it stopped working (see the
+     rerollNone row in uiText.csv). .sv-btn:disabled already carries the
+     opacity; this only stops it answering a hover it cannot act on. */
+  .sv-reroll-row .sv-btn:disabled { pointer-events: none; }
+  /* JUST PAID. Added for one arrival when the bank grew since the last hand,
+     because a resource earned during a fight is otherwise first noticed by a
+     player who was not looking for it. Opacity and transform only — this sits
+     over the comb, and a filter here would build a layer the size of the
+     screen for a button. */
+  @keyframes sv-reroll-new {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+  .sv-reroll-row.sv-reroll-new .sv-btn { animation: sv-reroll-new 0.5s cubic-bezier(.3,0,.2,1) 2; }
+  /* A thumb needs the same 48px minimum every other touch control gets. */
+  .sv-touch .sv-reroll-row .sv-btn { min-height: 48px; }
   /* THE CARDS ARE PLACED ON THE LATTICE, not laid out in a row. The flex rules
      below are still the fallback for a comb that is switched off; this class is
      added by the placement pass and the slots get left/top of their own. */
@@ -2797,6 +2881,14 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
       <div class="sv-hud-corner" id="svCorner">
         <div class="sv-panel">
           <div class="sv-value" id="svScore">0</div>
+          <!-- THE SCORE CORAL'S WINDOW. Under the score and not beside it: it
+               multiplies that number, and a badge to the left of a
+               right-aligned figure would be read as part of the figure.
+
+               NO LABEL either, for the reason the two numbers above have none
+               — "x7" against a running total says what it is, and a caption
+               would be a third line in a corner that is already two. -->
+          <div class="sv-score-mult" id="svScoreMult"><i><b></b></i><b id="svScoreMultValue">x1</b></div>
           <div class="sv-value sv-hud-time" id="svTime">0:00</div>
         </div>
       </div>
@@ -2823,6 +2915,17 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
            cards alone, so layOutCards's chrome sum is zero here. -->
       <div class="sv-comb-stage" id="svLevelUpBox">
         <div class="sv-cards" id="svCards"></div>
+        <!-- THROW THE HAND BACK. Hidden on any run that has never beaten a boss
+             — which is most of the level-ups in the game — so the screen is
+             still three cards and nothing else until the mechanic exists. It is
+             a sibling of .sv-cards rather than a fourth cell of the comb: the
+             lattice is the three CHOICES and a button in it would read as one.
+             layOutCards counts it as chrome and takes its height off the room
+             the hand is given, so a small window shrinks the cards rather than
+             pushing this off the bottom. -->
+        <div class="sv-reroll-row sv-hidden" id="svRerollRow">
+          <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svReroll" type="button"></button>
+        </div>
       </div>
     </div>
 
@@ -2987,8 +3090,10 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
 
   for (const id of [
     'svHud', 'svHpBar', 'svO2Bar', 'svXpBar', 'svLevel', 'svTime', 'svScore',
+    'svScoreMult', 'svScoreMultValue',
     'svHpGhost', 'svO2Ghost', 'svHpWrap', 'svO2Wrap', 'svBoostWrap', 'svBoostPips', 'svBoostSpend',
     'svLevelUpMenu', 'svLevelUpBox', 'svComb', 'svGameOverMenu', 'svCards', 'svGameOverStats',
+    'svRerollRow', 'svReroll',
     'svLeaderboard', 'svPlayerBars', 'svToastLayer',
     'svBossBar', 'svBossName', 'svBossFill',
     'svCorner',
@@ -3030,6 +3135,32 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
   // it appends its own overlay to `root`, and the order decides which sits on
   // top of which when two are somehow up at once.
   initPauseMenu({ root, reveal: runReveal, revealSeconds, onResume, onRestart: onPauseRestart, onMainMenu: onPauseMainMenu });
+
+  // THE TIP SHEET, WHICH A PAD CAN NOW OPEN AND SO HAD BETTER BE ABLE TO CLOSE.
+  // It is one of the main menu's own hexagons, and the hexagons are walked by a
+  // stick — so a pad player could put a modal over the whole screen with no
+  // stop on it and no B to leave by. Registered once here rather than each time
+  // the sheet is built: the spec is queried live, so it finds whichever sheet is
+  // up (openTipSheet closes any previous one) and answers an empty list when
+  // there is none.
+  //
+  // PRIORITY 10 — it is a modal over whatever opened it. The splash, the pause
+  // panel, the score card and the main menu are all screens it can appear over,
+  // and every one of them is still in the layout underneath.
+  //
+  // NO keyBack: tipJar.js owns Escape here, in capture, so it lands before the
+  // screen underneath reads it as "close the pause menu". A second handler would
+  // be one press closing two things.
+  registerPanelNav({
+    id: 'tipSheet',
+    priority: 10,
+    isOpen: tipSheetOpen,
+    controls: () => {
+      const sheet = document.querySelector('.sv-tip-sheet');
+      return sheet ? [...sheet.querySelectorAll('.sv-tip-tier'), ...sheet.querySelectorAll('.sv-tip-close')] : [];
+    },
+    onBack: closeTipSheet,
+  });
 
   // The hive goes into `root` rather than into .sv-hud — see the CSS for the
   // three separate reasons that flex row cannot hold it. main.js drives what it
@@ -3097,6 +3228,27 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
   // this button is the whole of the player's say in it, exactly as the dice is
   // on the splash — so a name is chosen the same way at both ends of a run.
   bindMenuSounds(el.svNextRoll).addEventListener('click', rollNextSeal);
+
+  // --- the reroll ----------------------------------------------------------
+  // The button under the hand. `bindMenuSounds` for the click, exactly like
+  // every other control here — the shove and the knock are CONFIG.feedback's
+  // `cardReroll`, fired from rerollHand once the spend has gone through, so a
+  // press against an empty bank makes the menu's noise and nothing else.
+  //
+  // AND THE SAME THING FROM A KEYBOARD. R rather than a nav stop: the hand is a
+  // lattice the arrow keys walk geometrically, and a fourth focusable element
+  // under it would be "down" from an unpredictable card (see menuInput.reroll
+  // in input.js for the same argument on a pad). `isTextEntry` because the name
+  // field is a real input on another screen and R is a letter.
+  bindMenuSounds(el.svReroll)?.addEventListener('click', () => { rerollHand(); });
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'r' && e.key !== 'R') return;
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isTextEntry(e.target)) return;
+    if (!rerollHand()) return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
 
   bindMenuSounds(el.svNameSubmit).addEventListener('click', submitPendingRun);
   el.svNameInput.addEventListener('keydown', (e) => {
@@ -3280,7 +3432,23 @@ export function showStartMenu() {
       nameScramble: CONFIG.reveals?.nameScramble,
       // The sky shader's knobs, by reference — see CONFIG.splashSky.
       skyFx: CONFIG.splashSky,
+      // THE DICE'S TWO SOUNDS. Named here rather than inside riveSplash for the
+      // reason its own note gives — that module must not reach systems/feedback
+      // — and written as literal event names because that is what
+      // tools/sfx-atlas.mjs greps for: an indirection here would list both
+      // voices as fired from nowhere.
+      onRoll: () => feedback('nameRoll'),
+      onSettle: () => feedback('nameSettle'),
     });
+    // AFTER THE MOUNT, not before: startSplashBed builds an AudioContext, and on
+    // a cold load that is competing with a 1.7MB .riv for the same first frames.
+    // The bed fades in over a couple of seconds and cannot be late in any way a
+    // player could notice; the card can.
+    //
+    // A no-op until a clip has been uploaded, which is the shipped state —
+    // CONFIG.splashBed.srcs is empty. See that block for what it can and cannot
+    // do before the player has pressed anything.
+    startSplashBed();
     return;
   }
 
@@ -3310,6 +3478,13 @@ export function showStartMenu() {
  * Only a reload puts the card back up.
  */
 function leaveSplash() {
+  // THE BED GOES WITH THE CARD. Called before the reveal rather than after it,
+  // so the fade-out runs UNDER the break-up instead of starting when it ends —
+  // and so the water is gone by the time the menu's music has come up, rather
+  // than the two holding the same second between them. A no-op on every route
+  // that never started one (reduced motion, `?title`, a second pass through
+  // showStartMenu).
+  stopSplashBed();
   if (callbacks.onMenu) {
     callbacks.onMenu();
     return;
@@ -3355,8 +3530,21 @@ function buildLeaderboardPanel() {
   `;
   root.appendChild(wrap);
   boardList = wrap.querySelector('#svBoardList');
-  bindMenuSounds(wrap.querySelector('#svBoardBack'))
-    .addEventListener('click', hideLeaderboard);
+  const back = wrap.querySelector('#svBoardBack');
+  bindMenuSounds(back).addEventListener('click', hideLeaderboard);
+  // A PAD OPENED THIS AND HAD NO WAY OUT OF IT. The board is reached off the
+  // main menu's hexagons, which a stick already walks — so before this the one
+  // thing a pad could do here was open it. One stop (Back) plus the board's own
+  // local/global switch when the heading builds one; the ROWS are not stops,
+  // because a row is a readout and a cursor that can land on one is a cursor
+  // that appears to have got stuck. See ui/panelNav.js.
+  registerPanelNav({
+    id: 'leaderboard',
+    isOpen: () => !!boardPanel && !boardPanel.classList.contains('sv-hidden'),
+    controls: () => [...wrap.querySelectorAll('.sv-lb-sw'), back],
+    onBack: () => back.click(),
+    keyBack: true,
+  });
   return wrap;
 }
 
@@ -3407,6 +3595,7 @@ export function hideLeaderboard() {
 // gate until it is written.
 let sportsPanel = null;
 let sportsBall = null;
+let sportsBallOnline = null;
 
 function buildSealSportsPanel() {
   const wrap = document.createElement('div');
@@ -3450,11 +3639,31 @@ function buildSealSportsPanel() {
     return b;
   };
   sportsBall = bindMenuSounds(sport('sportBall', uiText('sportBall')));
+  // THE SAME GAME, PLAYED WITH SOMEBODY FAR AWAY — a row rather than a mode on
+  // the one above, so the local path into Blubberball is byte for byte what it
+  // was. Drawn only when this build has a room server (VITE_ROOM_URL): with no
+  // backend there is nothing behind it, and a button that explains why it
+  // cannot work is worse than a list that never offered it.
+  if (roomsAvailable()) {
+    sportsBallOnline = bindMenuSounds(sport('sportBallOnline', uiText('sportBallOnline')));
+  }
   sport('sportFinball', uiText('sportFinball'), { soon: true });
   sport('sportSealitaire', uiText('sportSealitaire'), { soon: true });
 
   root.appendChild(wrap);
   bindMenuSounds(back).addEventListener('click', hideSealSports);
+  // THE SAME GAP, AND A WORSE ONE. This list is the only route into Blubberball,
+  // which is the mode a controller is for — and it was the one screen on that
+  // route a controller could not press a button on. The two "coming soon" rows
+  // are disabled buttons in the middle of the list and panelNav skips them, so
+  // the cursor walks the sports that exist and then onto Back.
+  registerPanelNav({
+    id: 'sealSports',
+    isOpen: () => !!sportsPanel && !sportsPanel.classList.contains('sv-hidden'),
+    controls: () => [...list.querySelectorAll('.sv-sport'), back],
+    onBack: () => back.click(),
+    keyBack: true,
+  });
   return wrap;
 }
 
@@ -3463,10 +3672,13 @@ function buildSealSportsPanel() {
  * panel itself on the way into the run (closeMainMenu in main.js hides every
  * panel the menu opened), so this does not.
  */
-export function showSealSports({ onBall } = {}) {
+export function showSealSports({ onBall, onBallOnline } = {}) {
   if (!root) return;
   if (!sportsPanel) sportsPanel = buildSealSportsPanel();
   sportsBall.onclick = typeof onBall === 'function' ? () => onBall() : null;
+  if (sportsBallOnline) {
+    sportsBallOnline.onclick = typeof onBallOnline === 'function' ? () => onBallOnline() : null;
+  }
   sportsPanel.classList.remove('sv-hidden');
 }
 
@@ -3632,20 +3844,79 @@ export function showHud() {
 // it doesn't change — it fades up over `seconds`, the run starts underneath
 // it, and it clears in a little over half that so the new run isn't played
 // blind.
+//
+// THIS IS THE ONE ELEMENT IN THE GAME THAT CAN END A SESSION BY ITSELF. It is
+// opaque, it is the size of the screen, and nothing behind it can be clicked
+// to get rid of it — so a cover that goes up and never comes down is not a
+// visual bug, it is a dead game with the music still playing. Two guards
+// below, because it has already happened once each way.
+//
+// GUARD ONE: THE FADE-IN IS AN INTENT, NOT A SCHEDULED FACT. The add below is
+// two frames late on purpose (see the comment on it), and `beginRestartTransition`
+// runs its callback SYNCHRONOUSLY when there is nothing dilated to come back
+// from — which is every route where the seal did not die: the pause menu's
+// Main Menu button, the pause menu's Restart. On those the hide landed in the
+// same tick as the show, so the remove ran against a class that was not on the
+// element yet, the add ran two frames later, and the screen went black with no
+// route left that would ever take it off. So every show takes a ticket and
+// every hide burns it: a hide that arrives before the frames do is still the
+// last word.
+let transTicket = 0;
+
+// GUARD TWO: THE COVER GIVES UP ON ITSELF. The ticket fixes the ordering bug
+// that is here now; the watchdog is for the ones that are not written yet — a
+// throw on the far side of the show, a new route that forgets the hide, a
+// callback that is waiting on something that never arrives. Whatever the
+// reason, after this long a full-screen black rectangle is no longer a
+// transition, and the game is better off with the frame back and a line in the
+// crash trail than with a player staring at nothing.
+let transWatchdog = 0;
+
+// Generous, because a false rescue mid-fade is its own ugly bug: the honest
+// lifetime is `seconds` of fade plus a beat of run plus the clear, so six
+// times that (floored at six seconds) is only reached by something that is
+// genuinely never coming back.
+function armTransitionWatchdog(seconds) {
+  if (transWatchdog) window.clearTimeout(transWatchdog);
+  transWatchdog = window.setTimeout(() => {
+    transWatchdog = 0;
+    if (el.svTransition?.classList.contains('sv-hidden')) return;
+    mark('transition:stuck', { seconds });
+    console.warn('[ui] the restart cover was still up after ' +
+      `${Math.max(6, seconds * 6)}s — clearing it so the screen comes back.`);
+    clearRestartTransition();
+  }, Math.max(6, seconds * 6) * 1000);
+}
+
+function disarmTransitionWatchdog() {
+  if (!transWatchdog) return;
+  window.clearTimeout(transWatchdog);
+  transWatchdog = 0;
+}
+
 export function showRestartTransition(seconds = 0.9) {
   if (!el.svTransition) return;
+  const ticket = ++transTicket;
   el.svTransition.style.setProperty('--sv-trans', `${seconds}s`);
   el.svTransition.classList.remove('sv-hidden');
   // Two frames, not one: the element was display:none a moment ago, and a
   // class added in the same frame it becomes visible has no starting value to
   // transition from, so it snaps to opaque instead of fading.
   requestAnimationFrame(() => requestAnimationFrame(() => {
+    // A hide already came and went while these two frames were in flight —
+    // see GUARD ONE. Putting the cover up now would be putting it up forever.
+    if (ticket !== transTicket) return;
     el.svTransition?.classList.add('sv-trans-in');
   }));
+  armTransitionWatchdog(seconds);
 }
 
 export function hideRestartTransition(seconds = 0.5) {
   if (!el.svTransition) return;
+  // Burns the ticket first, so a fade-in still waiting on its two frames is
+  // cancelled rather than landing after this and sticking.
+  transTicket++;
+  disarmTransitionWatchdog();
   el.svTransition.style.setProperty('--sv-trans', `${seconds}s`);
   el.svTransition.classList.remove('sv-trans-in');
   // Hidden again once it's clear rather than left at opacity 0 — it covers the
@@ -3657,6 +3928,19 @@ export function hideRestartTransition(seconds = 0.5) {
       el.svTransition?.classList.add('sv-hidden');
     }
   }, seconds * 1000 + 60);
+}
+
+/**
+ * The cover, off, now — no fade, no pending anything. The watchdog's hammer,
+ * and the one call for any code that needs to KNOW the screen is visible
+ * rather than ask for it politely. Safe to call when there is no cover up.
+ */
+export function clearRestartTransition() {
+  transTicket++;
+  disarmTransitionWatchdog();
+  if (!el.svTransition) return;
+  el.svTransition.classList.remove('sv-trans-in');
+  el.svTransition.classList.add('sv-hidden');
 }
 
 /**
@@ -3710,6 +3994,16 @@ export function hideAllMenus() {
   closeHiveView();
   unwatchCardSize();
   levelUpCards = [];
+  // The reroll row's two pieces of memory. `handIds` is what a reroll deals
+  // around and belongs to a hand that no longer exists; `rerollShown` is what
+  // the row last printed, and leaving it behind would open the next run's first
+  // level-up with the last run's bank on screen — the button is hidden until a
+  // boss has been beaten, and a stale number is exactly how it would appear
+  // before one has.
+  handIds = [];
+  rerollShown = -1;
+  el.svRerollRow?.classList.add('sv-hidden');
+  el.svRerollRow?.classList.remove('sv-reroll-new');
 }
 
 // ---------------------------------------------------------------------------
@@ -5609,7 +5903,113 @@ function deepenable() {
   return out;
 }
 
-export function showLevelUp() {
+// ---------------------------------------------------------------------------
+// THE REROLL — throwing the hand back for another one.
+//
+// The button under the cards, the bank it spends and the deal it asks for. What
+// it COSTS and where the currency comes from is CONFIG.upgradeReroll and the
+// boss kill in main.js; this file owns pressing it.
+// ---------------------------------------------------------------------------
+
+// The ids on the table right now. Kept so a reroll can deal AROUND them — see
+// `avoid` in showLevelUp — and cleared by the pick, because the hand stops
+// being a hand the moment one is taken.
+let handIds = [];
+// What the bank held when the LAST hand was dealt, so the arrival can tell "you
+// earned one during that fight" from "you have been carrying this for a while".
+// -1 is "no hand has been dealt yet", which is not the same as 0.
+let rerollShown = -1;
+
+/**
+ * The button's line and its state, re-derived from the bank.
+ *
+ * CALLED ON EVERY DEAL rather than only when the count changes, because the
+ * count is not the only thing that moves: a run's first boss switches the whole
+ * row on, and the row has to appear on the next level-up rather than the one
+ * after it.
+ */
+function updateRerollButton({ pulse = false } = {}) {
+  const row = el.svRerollRow;
+  const btn = el.svReroll;
+  if (!row || !btn) return;
+
+  // NEVER SEEN ON A RUN THAT HAS NOT EARNED ONE — every level-up before the
+  // first boss goes down, which is most of them. An always-visible button
+  // reading zero would put a dead control on the busiest screen in the game for
+  // the first ten minutes of every run.
+  //
+  // ...AND NEVER TAKEN AWAY AGAIN ONCE IT HAS. `rerollsEverEarned` rather than
+  // the bank, because the bank is empty exactly when the row is doing its most
+  // useful work: a player who has just spent their last one needs to be told
+  // the button stopped working, not shown it vanishing. (It also covers the
+  // switch, so this is one read and not two.)
+  const left = rerollsLeft();
+  const show = rerollsEverEarned() || left > 0;
+  row.classList.toggle('sv-hidden', !show);
+  if (!show) return;
+
+  // Two lines, and the empty one is a line rather than an absence — see the
+  // rerollNone row in uiText.csv for the argument.
+  btn.textContent = '';
+  const word = document.createElement('span');
+  word.textContent = left > 0 ? uiText('rerollButton') : uiText('rerollNone');
+  btn.appendChild(word);
+  if (left > 0) {
+    const n = document.createElement('span');
+    n.className = 'sv-reroll-n';
+    n.textContent = String(left);
+    btn.appendChild(n);
+  }
+  btn.disabled = left <= 0;
+
+  // Restarted rather than merely added: the class may still be on the row from
+  // the last deal, and a CSS animation does not replay for an element that
+  // already carries it. Reading offsetWidth between the two is what forces the
+  // style to be resolved in the middle.
+  row.classList.remove('sv-reroll-new');
+  if (pulse) {
+    void row.offsetWidth;
+    row.classList.add('sv-reroll-new');
+  }
+}
+
+/**
+ * Spend one and deal again.
+ *
+ * REFUSES QUIETLY on every path that is not a real press: no bank, a menu still
+ * dealing itself out (the cards are half-arrived and the hand under them is not
+ * the hand the player has seen), or no hand at all. Returns whether it went, so
+ * the pad and the keyboard can leave the event alone when it did not.
+ */
+function rerollHand() {
+  if (menuLocked || !levelUpCards.length) return false;
+  // AND NOT ON THE PRESS THAT CUT THE ARRIVAL SHORT. bindSlamSkip listens on
+  // window IN CAPTURE, so a key or a click that skips the slam reaches this
+  // handler afterwards with the menu already unlocked — one press would skip
+  // the hand's arrival and then throw that hand away, which is the same
+  // mistake updateMenuNav refuses for the pad. `reelRolling` is the other
+  // arrival, for the deals that use the reel instead.
+  if (slamPending.length || reelRolling()) return false;
+  if (el.svLevelUpMenu?.classList.contains('sv-hidden')) return false;
+  // The spend happens FIRST and the deal is conditional on it, so a bank that
+  // says no can never hand out a free look — see spendReroll.
+  if (!spendReroll()) return false;
+  feedback('cardReroll');
+  // The old hand leaves under the new one's arrival: showLevelUp clears the
+  // container and revealUpgradesIn rebuilds the comb, which is the same
+  // ceremony a first deal gets. Deliberately NOT a quieter variant of it — the
+  // whole thing the player paid for is another deal, and a reroll that arrived
+  // more discreetly than the hand it replaced would read as a lesser one.
+  showLevelUp({ avoid: handIds });
+  return true;
+}
+
+/**
+ * @param {{ avoid?: string[] }} [opts]
+ *   `avoid` names the ids a reroll is replacing, so the new hand is dealt
+ *   around them where the pool can afford it. Empty for a first deal.
+ */
+export function showLevelUp({ avoid = [] } = {}) {
   // WHAT THE RUN HAS NOT GOT YET. availableUpgrades() deals new cards only —
   // a card already held is bought deeper on the hive and off the level blob,
   // not here (see entities/player.js).
@@ -5625,8 +6025,25 @@ export function showLevelUp() {
   // a stack is only ever offered here when there is nothing new left in the
   // game to offer, which is a state most runs never see.
   const fresh = availableUpgrades();
-  const pool = fresh.length ? fresh : deepenable();
+  let pool = fresh.length ? fresh : deepenable();
+
+  // A REROLL DEALS AROUND THE HAND IT REPLACED, where the deck can afford to.
+  //
+  // Without this a reroll can legally hand back a card that was just refused —
+  // on a thinned late pool, sometimes all three — and a resource that can
+  // visibly do nothing is one nobody spends again. The exclusion is DROPPED
+  // rather than honoured down to two cards: a short hand is a worse outcome
+  // than a repeat, and the floor under an empty screen (see the note above) is
+  // the same argument one step further along.
+  if (avoid.length && CONFIG.upgradeReroll?.freshHand !== false) {
+    const without = pool.filter((u) => !avoid.includes(u.id));
+    if (without.length >= CONFIG.upgradeChoices) pool = without;
+  }
   const picks = drawUpgrades(pool, CONFIG.upgradeChoices);
+  // WHAT IS ON THE TABLE, for the next reroll to deal around. Read off `picks`
+  // rather than off the DOM because the cards do not exist yet, and stored as
+  // ids because the entries below are shallow copies carrying a rolled tier.
+  handIds = picks.map((u) => u.id);
 
   // WHAT THE REEL ROLLS THROUGH, when the reel is the arrival in use — the rest
   // of the live offer, so every face that blurs past is an upgrade this run
@@ -5770,6 +6187,11 @@ export function showLevelUp() {
       // has a note about the same array for the same reason.)
       const takenAt = levelUpCards.indexOf(card);
       levelUpCards = [];
+      // Same reason, one line down: there is no hand for a reroll to deal
+      // around any more, and the button goes with it (the menu is on its way
+      // off, but a second level pending in the same wave re-deals into this
+      // container within the frame).
+      handIds = [];
       // WHERE THE CARD IS, read before anything is allowed to move it. The
       // dissolve below starts taking it off the screen and the next deal may
       // replace the whole row within the same frame, so this box has to be
@@ -5821,6 +6243,18 @@ export function showLevelUp() {
     slot.appendChild(card);
     el.svCards.appendChild(slot);
   }
+  // BEFORE THE REVEAL, because the row's height is chrome and layOutCards
+  // subtracts it from the room the hand is given (see `chrome` there). Built
+  // after the cards so a first deal that has nothing to show simply leaves the
+  // row hidden and the stage the shape it has always been.
+  //
+  // The pulse is the RISING EDGE of the bank, which is what makes the row
+  // announce a reroll earned during the fight that just ended and stay still
+  // for one being carried. A reroll's own deal moves the bank the other way, so
+  // it never pulses at itself.
+  updateRerollButton({ pulse: rerollsLeft() > rerollShown });
+  rerollShown = rerollsLeft();
+
   // Reveal first: the cards have no layout while the menu is display:none, so
   // measuring before this point reads zeroes.
   el.svLevelUpMenu.classList.remove('sv-hidden');
@@ -6129,6 +6563,16 @@ export function updateMenuNav() {
   // the first card before it has finished arriving.
   if (menuLocked) return;
 
+  // Y / TRIANGLE THROWS THE HAND BACK, and it is checked before anything else
+  // on this screen for two reasons. It must not be under the "nothing is
+  // selected yet" branch below, which returns — a player who has touched
+  // nothing is exactly the one most likely to want a different hand. And it
+  // replaces what every other input here acts on, so stepping a selection onto
+  // a card that is about to be deleted, or confirming one on the frame it is
+  // rerolled, would be the same frame disagreeing with itself about which hand
+  // is on the table.
+  if (menuInput.reroll && rerollHand()) return;
+
   // Tab or a click can move focus without going through selectCard, so adopt
   // whatever the player is actually on before stepping off it.
   const focused = levelUpCards.indexOf(document.activeElement);
@@ -6199,25 +6643,23 @@ function overflowsBox(content, lines) {
   return lines.some((line) => line.scrollWidth > line.clientWidth + 1);
 }
 
-/**
- * A world point in CSS pixels: { x, y }. The same projection the toasts and
- * the seal's floating bars use, exported so ui/callout.js can put an arrow on
- * a piece of chum without a second copy of this arithmetic drifting away from
- * this one. Writes into a caller-owned `out` — this runs a few times a frame.
- */
-export function worldToScreen(camera, x, y, out = { x: 0, y: 0 }) {
-  PROJECT_V.set(x, y, 0);
-  return projectToScreen(camera, PROJECT_V, out);
-}
+// THE PROJECTION MOVED TO A LEAF — ui/project.js — and is re-exported here so
+// the files that import it from this module did not have to change. It went
+// because systems/versus.js wants it for the names over the seals, and a match
+// importing this module pulls the Rive artboard into its graph (a Node harness
+// cannot load a .riv at all). See the note there.
+//
+// IMPORTED *AND* RE-EXPORTED, and the difference is a crash. `export { x } from
+// './y.js'` forwards the name to this module's consumers and creates NO LOCAL
+// BINDING — so the ten call sites BELOW, inside this file, were left calling a
+// `projectToScreen` that no longer existed in their scope. Nothing catches that
+// statically: the build is happy, every harness is happy (none of them runs this
+// file's frame path), and the game throws a ReferenceError on every frame from
+// the first one, which reads as the picture being frozen while the audio and
+// the toasts carry on.
+import { worldToScreen, projectToScreen } from './project.js';
 
-// Projects a world position to CSS pixels. The renderer canvas fills the
-// viewport, so NDC maps straight onto window dimensions.
-function projectToScreen(camera, worldPos, out) {
-  PROJECT_V.copy(worldPos).project(camera);
-  out.x = (PROJECT_V.x * 0.5 + 0.5) * window.innerWidth;
-  out.y = (-PROJECT_V.y * 0.5 + 0.5) * window.innerHeight;
-  return out;
-}
+export { worldToScreen, projectToScreen };
 
 /**
  * The inverse: a point in CSS pixels back to the world, on the z = 0 plane the
@@ -6763,7 +7205,7 @@ export function applyBarPlacement(mode = barPlacement()) {
  * can be driven frame by frame from a harness — see tools/player-bars-test.mjs;
  * a curve nobody can step is a curve nobody can check.
  */
-export function updateHUD(gameState, player, strikeState = null, rapidFireTimer = 0, camera = null, dt = 1 / 60) {
+export function updateHUD(gameState, player, strikeState = null, rapidFireTimer = 0, camera = null, dt = 1 / 60, scoreBoost = null) {
   // A FRACTION, not a width. The level meter runs left-to-right across the top
   // of a desktop screen and bottom-to-top up the left edge of a phone (see the
   // responsive block in STYLES), and which axis it fills is a layout question
@@ -6774,6 +7216,33 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   el.svXpBar.style.setProperty('--sv-xp', Math.max(0, Math.min(1, gameState.xp / gameState.xpToNext)));
   el.svLevel.textContent = gameState.level;
   el.svScore.textContent = Math.floor(gameState.score ?? 0).toLocaleString();
+  // THE SCORE CORAL'S WINDOW, under the number it multiplies. Null (every
+  // caller that predates it, and the frame the score card is drawn on) reads
+  // as "nothing running" rather than throwing — see systems/scoreBoost.js.
+  //
+  // The class goes on the CORNER rather than on the badge because the badge is
+  // what it hides: a rule that showed an element by matching a class on itself
+  // would need the class written to the hidden thing, which is the arrangement
+  // where a stale class leaves the badge on screen after the window ends.
+  {
+    const live = scoreBoost && scoreBoost.mult > 1;
+    el.svCorner?.classList.toggle('sv-boosting', !!live);
+    if (live) {
+      el.svScoreMultValue.textContent = `x${scoreBoost.mult}`;
+      // The coral's own tint, resolved the SAME WAY createCoralOrb resolves it
+      // — the Look panel's saved tint, falling back to the species' own colour
+      // — so a slider drag moves the badge and the pickup together. Read out of
+      // CONFIG rather than through assetBaseColor because that lives in
+      // assets.js, and pulling the asset pipeline into the HUD to answer one
+      // colour would put the whole loader behind every ui.js harness.
+      //
+      // Written as a custom property because two rules read it (the digits and
+      // the track's fill) and one writer is the whole point.
+      const tint = CONFIG.assetLooks?.scoreOrb?.tint ?? CONFIG.scorePickup?.coral?.color ?? 0x5ef2a8;
+      el.svScoreMult.style.setProperty('--sv-score-mult', `#${(tint >>> 0).toString(16).padStart(6, '0')}`);
+      el.svScoreMult.style.setProperty('--sv-mult-left', scoreBoost.frac.toFixed(3));
+    }
+  }
   el.svTime.textContent = formatTime(gameState.time);
 
   const o2Frac = Math.max(0, Math.min(1, player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max)));
@@ -7253,6 +7722,53 @@ function rgbTriple(n) {
   return `${(v >> 16) & 255},${(v >> 8) & 255},${v & 255}`;
 }
 
+// ---------------------------------------------------------------------------
+// THE COUNT STEPS, IT DOES NOT JUMP.
+//
+// The banner is ONE node and its count is rewritten in place, so two links
+// landing on the same frame both write before the browser paints and the
+// player sees x3 and then x5 — a number that skipped, on the one read-out in
+// the game whose whole job is to be counted.
+//
+// Two links on one frame is not a corner case. A magnet sweep or the release
+// gulp swallows several orbs before the browser paints and each of them can
+// score; a breach with Porpoising stacked is worth a link per stack in a
+// single call; and a school emptied lands alongside whatever the seal was
+// eating when it died. The scoring was right through all of it —
+// systems/strike.js queues every link now, and this is the other half of the
+// same fix, because two correct numbers written to one node in one frame are
+// still only drawn once.
+//
+// So arrivals queue here and drain on a floor, which turns a burst into an
+// ascending run. The same treatment the meter's pip ticks get (`pipQueue` in
+// systems/strike.js) for the same reason: six of anything on one frame is a
+// chord, and each of them has exactly one thing to say.
+//
+// THE FIRST OF A BURST DOES NOT WAIT. A link arriving on an empty queue draws
+// on the frame it scored, so an ordinary chain — a link at a time, seconds
+// apart — behaves precisely as it did.
+// ---------------------------------------------------------------------------
+const chainCountQueue = [];
+let chainCountTimer = 0;
+
+const chainCountGap = () => Math.max(0, CONFIG.strike?.foodChain?.countGap ?? 0.07);
+const chainCountCap = () => Math.max(1, CONFIG.strike?.foodChain?.maxPendingLinks ?? 24);
+
+/**
+ * Draw the next number waiting, and start the floor before the one after it.
+ *
+ * Reads `chainPin` for placement exactly as the spawn always did — which is
+ * last frame's anchor when this is called from the gameplay path and this
+ * frame's when updateToasts drains it, and neither matters: pinChainBanner
+ * rewrites the position every frame before the browser paints.
+ */
+function stepChainCount() {
+  if (!chainCountQueue.length) return;
+  const chain = chainCountQueue.shift();
+  chainCountTimer = chainCountGap();
+  chainToastAt(chainPin.x, chainPin.y, chain);
+}
+
 /**
  * A link landed. `chain` is the new depth.
  *
@@ -7261,10 +7777,21 @@ function rgbTriple(n) {
  * be — is not where the announcement belongs. Placement is written on the same
  * frame by updateToasts, before the browser paints, so there is no frame where
  * this sits at the origin waiting to be told.
+ *
+ * QUEUED, and drawn immediately when nothing is ahead of it — see the note
+ * above. main.js calls this once per link now rather than once per event, so
+ * the burst this has to survive arrives as several calls inside one frame
+ * rather than as one call carrying a number that jumped.
  */
 export function spawnChainToast(chain) {
   if (!el.svToastLayer) return;
-  chainToastAt(chainPin.x, chainPin.y, chain);
+  chainCountQueue.push(chain);
+  // DROPPED FROM THE FRONT, like the pip queue's backlog: if numbers have to
+  // be lost, the ones worth keeping are the ones nearest the count the chain
+  // is actually at, so the run always ends on the truth.
+  const cap = chainCountCap();
+  if (chainCountQueue.length > cap) chainCountQueue.splice(0, chainCountQueue.length - cap);
+  if (chainCountTimer <= 0) stepChainCount();
 }
 
 // THE COLOUR WALKS THE HUE WHEEL, one step per link, and comes back to the
@@ -7696,12 +8223,21 @@ const procToasts = new Map();
  *              coordinates, and rising off wherever the seal happened to be
  *              standing is the same "a number that has to be found" problem
  *              that got the chain banner pinned.
+ * @param pinDy WHERE IN THAT STACK, in screen pixels off the shared anchor,
+ *              positive being down. A boss pays its pellet and its reroll on
+ *              the same frame and both are pinned — with one anchor and no
+ *              offset the second is written on top of the first, which is two
+ *              receipts and one legible line. The slot is the event's
+ *              (`toastPinDy` in CONFIG.feedback); the DRIFT that carries them
+ *              both off the seal afterwards is the block's
+ *              (CONFIG.textMotion.proc.pinDrift), because it is the same
+ *              gesture for every pinned line.
  * @param wave  RIPPLE THE LABEL IN AND OUT. Splits it into per-glyph spans and
  *              runs one crest along the line as it arrives and one back the
  *              other way as it leaves — see the wave block in updateToasts.
  *              Off by default, so every existing proc is still one text node.
  */
-export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0, pin = false, wave = false }) {
+export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0, pin = false, pinDy = 0, wave = false }) {
   if (!el.svToastLayer || !camera) return null;
   PROJECT_V.set(x, y, 0);
   projectToScreen(camera, PROJECT_V, screenPt);
@@ -7748,6 +8284,9 @@ export function spawnProcToast(camera, { key, label, value, x, y, minGap = 0, pi
   t.charText = '';
   t.procKey = key;
   t.follow = !!pin;
+  // The same slot the damage readout uses, so the followers of one anchor are
+  // all describing their position the same way.
+  t.pinDy = pinDy;
   splitWord(t, label, !!wave, 'sv-proc-ch');
   procToasts.set(key, t);
   return t;
@@ -7784,6 +8323,22 @@ export function updateToasts(dt, camera = null, pin = null) {
   // below), so a flash driven off it would stop the instant the thing it is
   // warning about started mattering.
   chainPin.clock += dt;
+
+  // ---- THE NUMBERS STILL WAITING TO BE SHOWN -------------------------------
+  //
+  // REAL SECONDS, the same clock the strip's blink runs on and for the same
+  // reason: a hit-stop is triggered BY a deep link, and a count that stopped
+  // stepping for the duration of its own celebration would arrive after it.
+  //
+  // A BACKLOG DIES WITH THE WINDOW. `live` is false once chainWindowLeft()
+  // reaches 0, and a queued number popping after that would re-pop a banner
+  // for a chain that has ended — a read-out lying about the present, which is
+  // worse than the skipped number this whole queue exists to prevent. Dropped
+  // rather than flushed: the links were announced by everything else that
+  // fires on one, and what is stale here is only the drawing.
+  if (chainCountTimer > 0) chainCountTimer = Math.max(0, chainCountTimer - dt);
+  if (!chainPin.live && chainToast) chainCountQueue.length = 0;
+  else if (chainCountTimer <= 0) stepChainCount();
   // ALMOST OUT. Below `flashAt` the strip pulses, and the pulse is written as a
   // number rather than left to a CSS animation for the same reason the popups'
   // motion is: it stops when the game does. Squared so the bar sits mostly dark
@@ -7914,14 +8469,32 @@ export function updateToasts(dt, camera = null, pin = null) {
       // 34px a second, which is the pin failing slowly instead of visibly.
       //
       // `pinDy` is an offset in SCREEN pixels off that one anchor, so two
-      // followers can share it without stacking on top of each other. The proc
-      // receipt leaves it undefined and sits exactly where it always did; the
+      // followers can share it without stacking on top of each other. The
       // damage readout lifts itself clear (CONFIG.fx.playerDamage.readout
-      // .pinOffset), because that slot already holds the receipt, the chain
+      // .pinOffset), because that slot already holds the receipts, the chain
       // banner and the STRIKE NOW! prompt, and the number that says you are
-      // dying should not have to queue behind three of them.
+      // dying should not have to queue behind four of them; a boss's two
+      // payouts take a slot each below it (`toastPinDy` in CONFIG.feedback),
+      // because they fire on the same frame and would otherwise be written to
+      // the same point.
+      //
+      // ...AND `pinDrift` IS THE REST OF THE MOTION. Zeroing the velocity is
+      // what stops the line climbing away from the seal, and with nothing in
+      // its place a receipt is stapled to the animal for its whole life — it
+      // rides every dodge of the victory lap and the pair of them sits there
+      // like part of the HUD. So the climb is put back as an OFFSET off the
+      // anchor rather than as a velocity: still written every frame, so it
+      // still tracks the seal sideways and still comes back when the seal does,
+      // but leaving upward the whole time. Multiplied by `age`, which is this
+      // toast's own clock and is wound back on a re-pop — a receipt that
+      // re-announces itself comes back to the seal and leaves again, which is
+      // the right answer for a line whose arrival IS the feedback.
+      //
+      // Per KIND, off the same block the rise and the gravity come from, so
+      // only the popups that are actually pinned have it: textMotion.dmg has no
+      // `pinDrift`, and the damage readout holds station exactly as it did.
       t.x = sealPin.x;
-      t.y = sealPin.y + (t.pinDy ?? 0);
+      t.y = sealPin.y + (t.pinDy ?? 0) - (m.pinDrift ?? 0) * t.age;
       t.vx = 0;
       t.vy = 0;
     } else {
@@ -8057,7 +8630,30 @@ export function popupPose(kind, age, lifeOverride = null) {
 // This lives here rather than in the panel because what "show the score card"
 // safely means is this module's business, not a tuning panel's — see the run
 // that is deliberately made unpostable below.
-export const PREVIEW_SCREENS = ['clear', 'HUD', 'cards', 'score card'];
+// `menu` is the way back to the title. The Rive splash is a card at z-index 20
+// inside .sv-ui — over every menu (8) and over the match HUD's preview (11) —
+// and it does not come down with hideAllMenus, because in the game it comes
+// down once, on the first press, and never returns. So every other pick here
+// hides its wrapper, or the surface you asked for is styled, measured and
+// invisible behind a picture; `menu` puts it back.
+export const PREVIEW_SCREENS = ['clear', 'menu', 'HUD', 'cards', 'score card'];
+
+// SCREENS THAT LIVE IN OTHER MODULES. The Blubberball HUD is systems/versus.js's
+// and the team select is ui/teamSelect.js's, and this module imports neither —
+// nor should it, since both import from here. So a screen is REGISTERED
+// (main.js does it, at boot, under DEV_UI) with a `show` and a `hide`, and the
+// picker lists it after the four above. Every registered screen's `hide` runs
+// on every switch, so a surface put up by one chip cannot survive the next.
+const extraScreens = new Map();
+
+export function registerPreviewScreen(name, { show, hide }) {
+  extraScreens.set(name, { show, hide });
+}
+
+/** Every name the picker offers: the built-in four, then the registered ones. */
+export function previewScreenNames() {
+  return [...PREVIEW_SCREENS, ...extraScreens.keys()];
+}
 
 export function previewScreen(name) {
   if (!el.svHud) return;
@@ -8065,8 +8661,16 @@ export function previewScreen(name) {
   // no two screens can end up on top of each other.
   hideAllMenus();
   el.svHud.classList.add('sv-hidden');
+  for (const screen of extraScreens.values()) screen.hide?.();
+  // The title card — see the note on PREVIEW_SCREENS. Only present until the
+  // first press of a session; a missing wrapper is a session past it.
+  const riv = document.querySelector('.sv-riv');
+  if (riv) riv.hidden = name !== 'menu';
 
-  if (name === 'HUD') {
+  const extra = extraScreens.get(name);
+  if (extra) {
+    extra.show?.();
+  } else if (name === 'HUD') {
     showHud();
   } else if (name === 'cards') {
     // A real deal, the same one Shift+L gives: the tiers are rolled for the
@@ -8185,6 +8789,10 @@ export function hidePlayerBars() {
 
 export function clearToasts() {
   while (toasts.length) removeToast(0);
+  // The unshown counts go with them. A queue surviving a restart would spend
+  // the first frames of the next run drawing the last run's chain.
+  chainCountQueue.length = 0;
+  chainCountTimer = 0;
   // The pin goes with them. `live` left true across a restart would hold the
   // first banner of the next run at the last frame's anchor — which is wherever
   // the previous seal died — until its first update, and `left` would draw a

@@ -38,8 +38,10 @@
 //
 // Everything expected is derived from CONFIG rather than typed, because saved
 // tuning is merged over the defaults at import (see imported-tuning.json): a
-// hardcoded 0.15 here would be a test of the tuning file rather than of the
-// code.
+// hardcoded 0.35 here would be a test of the tuning file rather than of the
+// code. The one literal is 15% of the bar, which is not a config value — it is
+// where this effect used to begin, kept as a fixed landmark so the widened band
+// cannot quietly become a long ramp that never arrives.
 //
 // What it cannot tell you: whether the vignette LOOKS like anything. A Node
 // harness cannot see a fragment shader at all. That is `npm run looks:hurt`,
@@ -65,7 +67,7 @@ const check = (name, cond, detail = '') => {
   if (!cond) failures++;
 };
 
-const CFG = CONFIG.fx.lowHealth;
+const CFG = CONFIG.fx.nearDeath;
 const THRESHOLD = CFG.threshold;
 
 /** A player at a given fraction of a given bar. */
@@ -121,16 +123,55 @@ check('it only ever gets worse as the bar empties',
   walk.every((w, i) => i === 0 || w.v > walk[i - 1].v - 1e-9),
   walk.filter((_, i) => i % 5 === 0).map((w) => w.v.toFixed(2)).join(' → ') + ` → ${walk.at(-1).v.toFixed(2)}`);
 
-// THE CURVE, and the reason it is below 1. Health can drop 50% in one bite, so
-// the crossing itself has to be the moment the player notices — an effect that
-// is still at 3% of its strength a third of the way down the last sliver has
-// spent the crossing on nothing. Measured at the MIDPOINT of the band because
-// that is where the two curve directions differ most.
+// THE CURVE, and the reason it is now ABOVE 1. This assertion is the reverse of
+// the one it replaces, and the reversal is the point: the band used to be 15%
+// of the bar and is now a third of it, which is far too much screen to hand the
+// player the moment they cross into it. An alarm that is usually on is not an
+// alarm.
+//
+// So the two ends are checked separately. Measured at the MIDPOINT of the band
+// because that is where the two curve directions differ most.
 resetLowHealthFx();
 settle(THRESHOLD * 0.5, 6);
 const half = lowHealthVignette();
-check('half way through the last sliver is already well past subtle', half > 0.45,
+check('half way through the band is still well short of full', half < 0.45,
   `${(half * 100).toFixed(0)}% of full at ${(THRESHOLD * 50).toFixed(1)}% health`);
+
+// The crossing itself has to be nearly nothing, or "start it earlier" has just
+// moved the wall rather than removed it.
+resetLowHealthFx();
+settle(THRESHOLD * 0.92, 6);
+const entering = lowHealthVignette();
+check('...and crossing in is barely there at all', entering > 0 && entering < 0.06,
+  `${(entering * 100).toFixed(1)}% of full at ${(THRESHOLD * 92).toFixed(1)}% health`);
+
+// ...but the old threshold — the last sliver, where this effect used to START —
+// now has to be unmistakable, or widening the band has traded the moment that
+// matters for a long quiet ramp.
+resetLowHealthFx();
+settle(0.15, 6);
+const sliver = lowHealthVignette();
+// 0.4 rather than something rounder: this is the number a power curve can
+// actually reach while still crossing in under 2%, and it is the constraint
+// that pins `rampCurve` from the other side. Going gentler than the current
+// 1.45 fails this, which is the trade being guarded — see rampCurve in
+// config.js.
+check('...while the last sliver is unmistakable', sliver > 0.4,
+  `${(sliver * 100).toFixed(0)}% of full at 15% health, where this used to begin`);
+
+// Gradual, not stepped: no 5% slice of the bar may deliver a big chunk of the
+// effect. This is the shape "ease into it" actually asks for, and it is the one
+// thing neither end-point check can see.
+resetLowHealthFx();
+const slices = [];
+for (let hp = THRESHOLD; hp > 0; hp -= 0.01) {
+  resetLowHealthFx();
+  settle(Math.max(0, hp), 6);
+  slices.push(lowHealthVignette());
+}
+const jump = Math.max(...slices.map((v, i) => (i ? v - slices[i - 1] : 0)));
+check('no single point of health carries a jump in it', jump < 0.09,
+  `biggest step over 1% of the bar is ${(jump * 100).toFixed(1)} points`);
 
 // ---------------------------------------------------------------------------
 section('A FRACTION OF THE BAR, NOT A DAMAGE NUMBER');
@@ -305,7 +346,7 @@ const wasEnabled = CFG.enabled;
 CFG.enabled = false;
 resetLowHealthFx();
 settle(0, 6);
-check('CONFIG.fx.lowHealth.enabled false costs nothing at all',
+check('CONFIG.fx.nearDeath.enabled false costs nothing at all',
   lowHealthFxState.strain === 0 && lowHealthVignette() === 0 && lowHealthFxState.beat === 0);
 CFG.enabled = wasEnabled;
 

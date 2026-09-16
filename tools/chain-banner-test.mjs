@@ -402,10 +402,17 @@ section('One colour, so it is always legible');
   // step per link, which is right for a band on a lit meter and wrong for type
   // over open water — a couple of depths a lap sank into the sea, and which
   // ones depended on the time of day.
+  //
+  // A FRAME LONG ENOUGH TO DRAW EACH ONE. The count is queued and drains on a
+  // floor now (CONFIG.strike.foodChain.countGap — see the section below), so
+  // six depths a sixtieth of a second apart would leave five of them waiting
+  // and this loop would be sampling one colour six times. Stepping by the gap
+  // is what makes each spawn reach the plate, which is what this is about.
+  const step = (CONFIG.strike.foodChain.countGap ?? 0.07) + 1 / 60;
   const seen = new Set();
   for (const depth of [1, 3, 6, 9, 14, 27]) {
     ui.spawnChainToast(depth);
-    ui.updateToasts(1 / 60, camera, pinAt());
+    ui.updateToasts(step, camera, pinAt());
     seen.add(banner().style.color);
   }
   check('every depth wears one colour', seen.size === 1, [...seen].join(' / '));
@@ -738,6 +745,69 @@ section('The neon edge has a colour to be');
   // whole banner orange at every flash.
   check('...and the strip is a sibling of the words, so the plate keeps its own',
     strip().parentElement === banner() && !word().contains(strip()), '');
+}
+
+// ---------------------------------------------------------------------------
+section('Every link is shown, one number at a time');
+{
+  // WHY THIS EXISTS. Two links can land on the same frame — a magnet sweep or
+  // the release gulp swallows several orbs before the browser paints and each
+  // of them can score, a breach with Porpoising stacked is worth a link per
+  // stack in one call, and a school emptied arrives alongside whatever the seal
+  // was eating. The banner is ONE node whose count is rewritten in place, so
+  // both writes landed before the paint and the player was shown x3 and x5.
+  //
+  // The scoring was never wrong. What was wrong was that a number the player is
+  // asked to count appeared to skip, which is the one thing a combo read-out
+  // may not do. systems/strike.js queues every link; this is the other half.
+  ui.clearToasts();
+  openWindow();
+  const gap = CONFIG.strike.foodChain.countGap ?? 0.07;
+
+  // Six links inside one frame, exactly as a sweep delivers them.
+  for (const depth of [1, 2, 3, 4, 5, 6]) ui.spawnChainToast(depth);
+  check('a burst shows its FIRST number, not its last', count().textContent === '×1',
+    count().textContent);
+
+  // ...and the rest arrive in order, one per `countGap`, without the caller
+  // saying anything more. Sampled by stepping the clock rather than by counting
+  // frames, because the floor is in seconds and a frame is whatever it is.
+  const shown = [count().textContent];
+  for (let i = 0; i < 5; i++) {
+    ui.updateToasts(gap + 1e-4, camera, pinAt());
+    shown.push(count().textContent);
+  }
+  check('...then every number after it, in order', shown.join(' ') === '×1 ×2 ×3 ×4 ×5 ×6',
+    shown.join(' '));
+
+  // AND THE FIRST OF A BURST IS NEVER MADE TO WAIT. The gap is between the
+  // second number and the first, not a delay in front of the first — an
+  // ordinary chain, a link at a time seconds apart, draws on the frame it
+  // scored exactly as it always did.
+  ui.updateToasts(1, camera, pinAt());
+  ui.spawnChainToast(7);
+  check('a link on an empty queue draws immediately', count().textContent === '×7',
+    count().textContent);
+
+  // A BACKLOG DIES WITH THE WINDOW. A queued number popping after the chain has
+  // lapsed would re-pop a banner for a chain that has ended — a read-out lying
+  // about the present, which is worse than the skipped number the queue is here
+  // to prevent.
+  for (const depth of [8, 9, 10]) ui.spawnChainToast(depth);
+  strike.strikeState.chainTimer = 0;
+  ui.updateToasts(gap + 1e-4, camera, pinAt());
+  const afterLapse = count().textContent;
+  ui.updateToasts(gap + 1e-4, camera, pinAt());
+  check('...and a dead window drops the numbers still waiting',
+    count().textContent === afterLapse, `${afterLapse} -> ${count().textContent}`);
+
+  // ...AND A RESTART TAKES THEM WITH IT. A queue surviving clearToasts would
+  // spend the first frames of the next run drawing the last run's chain.
+  openWindow();
+  for (const depth of [11, 12, 13]) ui.spawnChainToast(depth);
+  ui.clearToasts();
+  ui.updateToasts(gap + 1e-4, camera, pinAt());
+  check('...and nothing is left queued across a restart', !banner(), 'the layer stays empty');
 }
 
 // ---------------------------------------------------------------------------

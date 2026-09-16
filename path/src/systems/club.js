@@ -1119,7 +1119,10 @@ function shockwave(scene, x, y, radius, damage, knock, enemiesList, hooks) {
     // mass argument: the flight follows the club's own rule, and letting the
     // shove pile the ram's heavy-survivor boost on top would invert it.
     const flying = !!flightFor(e);
-    if (knock > 0 && d > 1e-4 && !flying) applyKnockback(e, dx / d, dy / d, knock * (0.4 + 0.6 * falloff));
+    // `source: 'club'` — melee, and one of the three things a boss still
+    // answers to (CONFIG.boss.tenacity.sources). On everything else in the
+    // roster the argument does nothing.
+    if (knock > 0 && d > 1e-4 && !flying) applyKnockback(e, dx / d, dy / d, knock * (0.4 + 0.6 * falloff), { source: 'club' });
     hurt(scene, e, damage * (0.5 + 0.5 * falloff), enemiesList, hooks);
   }
   hooks.onShock?.(x, y, radius, caught.length);
@@ -1866,7 +1869,8 @@ export function updateClub(dt, scene, playerPos, levels, enemiesList, motion = {
       if (!canHold(e)) {
         if (c.knock > 0) {
           applyKnockback(e, throwX, throwY,
-            c.knock * clubKnock() * hitPower * (teed ? (tc.launchMul ?? 1) : 1));
+            c.knock * clubKnock() * hitPower * (teed ? (tc.launchMul ?? 1) : 1),
+            { source: 'club' });
         }
         continue;
       }
@@ -2005,7 +2009,7 @@ function updateFlights(dt, scene, enemiesList, level, blast, ice, zap, hooks) {
       // mass actually arrived from. Full strength rather than power-scaled:
       // the flight has no swing of its own to read, and what it has instead is
       // a whole body's momentum.
-      if (c.knock > 0) applyKnockback(other, f.vx, f.vy, c.knock * clubKnock());
+      if (c.knock > 0) applyKnockback(other, f.vx, f.vy, c.knock * clubKnock(), { source: 'club' });
       // Both bodies pay. The one that was standing there takes the collision;
       // the one being thrown takes a smaller share of it, so a long carom
       // eventually kills the projectile too rather than leaving one

@@ -8,6 +8,7 @@ import {
   makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
 } from './organicRing.js';
 import { retireMaterial } from './programPin.js';
+import { bossArmorMul } from '../entities/enemies.js';
 
 // ---------------------------------------------------------------------------
 // WEAK SPOTS ON A BOSS
@@ -1686,8 +1687,27 @@ export function hotSpotDamage(e, at, dmg, where = null) {
   // The BAND multiplier itself is NOT applied here — it lands in the hp setter
   // that every damage path already runs through, so applying it again would
   // charge it twice. This is only the extra.
+  // ...AND IT GOES THROUGH SUPER ARMOR. While a boss is committed its hp
+  // setter takes CONFIG.boss.armor.committed of every decrement (see
+  // armBossArmor in entities/enemies.js), and the spot is the one thing the
+  // armor is meant to leave open: a lunge is when the spots are in front of
+  // you and the body is holding a straight line, so the answer to a committed
+  // boss is the spot rather than the flank. Divided back out here because the
+  // setter is going to re-apply it a line later in the caller — exactly the
+  // bargain the BAND multiplier already lives under, two paragraphs up, and
+  // single-sourced in `bossArmorMul` so the two cannot drift apart.
+  const armor = Math.max(1e-4, bossArmorMul(e));
   const mul = Math.max(1, c.critMul ?? 2.2) * hotSpotZoneBonus(e);
-  const out = dmg * mul;
+  // WHAT ACTUALLY LANDS, and what the caller has to HAND the setter to make it
+  // land, are two different numbers while the armor is up — and everything
+  // below wants the first one. `out` is returned for `e.hp -= out`, where the
+  // armor scales it straight back down to `landed`; `landed` is what fills the
+  // pool, and getting that wrong is not a rounding error: at committed 0.15 a
+  // spot would have filled nearly seven times faster during a lunge than at
+  // any other moment of the fight, and ruptured on a hit worth a seventh of
+  // what the pool says it costs.
+  const landed = dmg * mul;
+  const out = landed / armor;
 
   // THE POOL TAKES THE CRIT DAMAGE, not the raw damage. Two reasons and they
   // point the same way: a spot should burst on the strength of what actually
@@ -1695,7 +1715,7 @@ export function hotSpotDamage(e, at, dmg, where = null) {
   // silently mean `ruptureFraction / critMul` of the bar — a second number
   // hidden inside the first, which is exactly the kind of coupling that makes
   // a CSV row stop meaning what it says.
-  spot.taken += out;
+  spot.taken += landed;
   spot.flash = 1;
 
   // HOW CLOSE IT NOW IS TO GOING, read AFTER the damage lands so the hit that

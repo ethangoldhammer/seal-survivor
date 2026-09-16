@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { TEXT_ROLES, CASE_CSS, FONT_GLOBAL } from '../textRoles.js';
+import { TEXT_ROLES, CASE_CSS, FONT_GLOBAL, roleUnit } from '../textRoles.js';
 import { fontForStack } from '../fonts.js';
 
 // THE GAME'S STYLESHEET FOR TEXT, compiled from CONFIG rather than written out.
@@ -89,6 +89,36 @@ function ensureSheet(id, staticCss = '') {
     if (staticCss) el.textContent = staticCss;
     document.head.appendChild(el);
   }
+  return el;
+}
+
+/**
+ * A STYLESHEET THAT ARRIVES AFTER THE ROLE SHEET, filed underneath it.
+ *
+ * The role sheet wins against ui.js's rules by being later in the document,
+ * and that is the whole mechanism — there is no !important anywhere in it.
+ * ui.js injects at boot, before initTypography, so the order takes care of
+ * itself. A surface that builds its own <style> LATER (the Blubberball HUD
+ * mounts on the first match, the team select on its first open) would land
+ * after the role sheet, and a rule of the same specificity there beats the
+ * role rule for the same selector: the Text panel writes a size, saves it,
+ * and the match keeps drawing its own — silently, which is the failure this
+ * module's header describes for the font picker.
+ *
+ * So a late sheet is inserted BEFORE the role sheet when there is one, and
+ * appended when there is not yet (a harness with no typography, say). By id,
+ * and idempotent, for the hot-reload reason ensureSheet gives: a module that
+ * re-executes must adopt the sheet it already made rather than add a second.
+ */
+export function installStyleBelowRoles(id, css) {
+  let el = document.getElementById(id);
+  if (el) return el;
+  el = document.createElement('style');
+  el.id = id;
+  el.textContent = css;
+  const roles = document.getElementById('svTypographyRoles');
+  if (roles) document.head.insertBefore(el, roles);
+  else document.head.appendChild(el);
   return el;
 }
 
@@ -227,7 +257,14 @@ function roleCss(role, t) {
   // viewport rule in ui.js, and the size a role asks for is still the size it
   // gets on a desktop, where the variable is unset and the term is 1.
   const compact = role.compact ? ' * var(--sv-tipScale, 1)' : '';
-  decls.push(`font-size: calc(${Number(s.size) || 0}px * var(--sv-scale)${fit}${compact})`);
+  // A ROLE SIZED TO THE SCREEN. The Blubberball countdown and goal card were
+  // authored in vmin (see `unit` in textRoles.js) and stay in it — the slider
+  // is in vmin too, and the global scale multiplies exactly as it does px.
+  // `floor` is a px minimum: a button that is 2.6vmin on a phone in
+  // landscape is under the 44px tap target, so it is max()ed with one.
+  const size = `calc(${Number(s.size) || 0}${roleUnit(role)} * var(--sv-scale)${fit}${compact})`;
+  const floor = role.unit === 'vmin' && Number(role.floor) > 0 ? Number(role.floor) : 0;
+  decls.push(`font-size: ${floor ? `max(${floor}px, ${size})` : size}`);
   decls.push(`font-weight: ${Number(s.weight) || 400}`);
   decls.push(`letter-spacing: ${Number(s.tracking) || 0}em`);
   decls.push(`text-transform: ${CASE_CSS[s.case] ?? 'none'}`);

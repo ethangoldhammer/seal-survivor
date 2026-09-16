@@ -69,6 +69,10 @@ export function hitPopFor(radius, mul = 1) {
 
 let grid = null;
 let hitstopCooldown = 0;
+// The depth of the freeze currently running, when the event that started it
+// asked for one of its own. Null is `fx.hitstopScale`. See the note where it
+// is set.
+let stopScale = null;
 
 // WHERE A `toast` CHANNEL GOES. Injected rather than imported, for the same
 // reason `grid` is: this module is reached by half a dozen Node harnesses that
@@ -99,6 +103,7 @@ export function initFeedback(gridSystem) {
   feedbackState.shake = 0;
   feedbackState.sustainShake = 0;
   feedbackState.hitstop = 0;
+  stopScale = null;
   feedbackState.glowPulse = 0;
   hitstopCooldown = 0;
   sfxGaps.clear();
@@ -107,7 +112,8 @@ export function initFeedback(gridSystem) {
 /**
  * @param {string} event key in CONFIG.feedback
  * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, sizeMul, speedMul,
- *                         gooSizeMul, gooSpeedMul, color, toastValue }
+ *                         gooSizeMul, gooSpeedMul, color, toastValue, toastLabel,
+ *                         onCapture }
  *                       `scale` reaches COUNT alone; `sizeMul`/`speedMul` are
  *                       the pair that makes a burst bigger, and they reach the
  *                       spray and the goo alike. `gooSizeMul`/`gooSpeedMul`
@@ -115,6 +121,16 @@ export function initFeedback(gridSystem) {
  *                       `toastValue` is the number a `toast` channel prints
  *                       beside its label — what this proc was worth, which is
  *                       the one part of the line the table cannot author.
+ *                       `toastLabel` replaces the label itself, for a receipt
+ *                       whose words are not an upgrade's name — see the note
+ *                       on the toast channel below.
+ *                       `onCapture(taken, count, x, y, last)` rides the event's
+ *                       `goo` home when the burst is sucked into the seal, and
+ *                       is what lets a pickup pay out as its goo ARRIVES
+ *                       rather than on the frame it was touched. Called once
+ *                       per blob; called once with (1, 1) if the suck could
+ *                       not run, so the payout is never simply lost. See
+ *                       systems/gooSuck.js.
  *                       `color` is for DEATHS only — a kill burst is always the
  *                       dying creature's own emissive, never a generic palette.
  *                       Every other burst leaves it off and takes the emitter's
@@ -316,7 +332,7 @@ export function shakeAllowed(event) {
 }
 
 // ============================================================================
-// THE HIT-STOP GUEST LIST — CONFIG.fx.hitstopOnly.
+// THE HIT-STOP GUEST LIST — CONFIG.fx.hitstopEvents (was hitstopOnly).
 // ============================================================================
 // The same idea as the shake list above, one channel over, and the argument for
 // it is stronger rather than merely analogous: a shake that fires everywhere is
@@ -346,7 +362,11 @@ let _stopSrc = null;
 let _stopSet = null;
 
 export function hitstopAllowed(event) {
-  const only = CONFIG.fx?.hitstopOnly;
+  // `hitstopEvents` is the live list; `hitstopOnly` is the name it had before a
+  // saved snapshot proved that re-defaulting a key nobody can edit reaches
+  // nobody. See the note on the rename in config.js. The fallback keeps a build
+  // or a harness that predates the rename behaving exactly as it did.
+  const only = CONFIG.fx?.hitstopEvents ?? CONFIG.fx?.hitstopOnly;
   if (!Array.isArray(only) || only.length === 0) return true;
   if (only !== _stopSrc) { _stopSrc = only; _stopSet = new Set(only); }
   return _stopSet.has(event);
@@ -413,10 +433,45 @@ export function feedback(event, at = {}) {
     // through to the ordinary burst rather than going missing.
     const suck = (def.gooSuck || at.gooSuck) && spawnSuckGoo(def.goo, x, y, gooAt);
     if (!suck) emit(def.goo, x, y, gooAt);
+    // A PAYLOAD IS A PROMISE, AND IT IS KEPT EITHER WAY. `at.onCapture` says
+    // this firing is carrying something home on its goo — health, boost — and
+    // spawnSuckGoo returning 0 means the suck could not run at all (the
+    // feature is off, the reserve is empty). The payout must not go with it,
+    // so it lands here in one piece, which is exactly the behaviour the
+    // drip replaced. See the note on payloads in systems/gooSuck.js.
+    if (!suck && typeof at.onCapture === 'function') {
+      try { at.onCapture(1, 1, x, y, true); }
+      catch (err) { console.warn('[feedback] payload failed', err); }
+    }
   }
 
   if (def.ripple && grid) {
     grid.ripple(x, y, def.ripple.strength * scale, def.ripple.radius);
+    // MORE THAN ONE, for the events that are a shock rather than a tap.
+    //
+    // One ripple is one expanding circle on the shader's own clock, and there
+    // is exactly one shape it can make. A body check is two animals colliding
+    // and what it should do to the water is a set of rings LEAVING the point of
+    // impact — so `rings` fires further ripples at the same origin, each one
+    // wider than the last and weaker for it. They are born on the same frame
+    // and expand at the same rate, which is what spreads them: the shader ages
+    // a ripple against its own radius, so a wider one is at an earlier stage of
+    // its life at any given moment and trails the tight one outward.
+    //
+    // Fired here rather than by the caller because the caller is a physics
+    // function that has no business knowing how many rings a shove is worth,
+    // and because doing it here means the whole thing is one authored row in
+    // CONFIG.feedback that the tuner can already see.
+    const rings = Math.min(6, Math.max(0, (def.ripple.rings ?? 1) - 1));
+    const grow = def.ripple.ringGrow ?? 1.55;
+    const fade = def.ripple.ringFade ?? 0.62;
+    let r = def.ripple.radius;
+    let k = def.ripple.strength * scale;
+    for (let i = 0; i < rings; i++) {
+      r *= grow;
+      k *= fade;
+      grid.ripple(x, y, k, r);
+    }
   }
 
   if (def.shake && !replay && shakeAllowed(event)) {
@@ -439,7 +494,22 @@ export function feedback(event, at = {}) {
   // stop already running when the switch flips finishes — it is 90ms at the
   // very worst, and cutting it mid-freeze is itself a hitch.
   if (def.hitstop && !replay && hitstopAllowed(event) && CONFIG.fx.hitstopEnabled && hitstopCooldown <= 0) {
-    feedbackState.hitstop = Math.max(feedbackState.hitstop, def.hitstop);
+    // HOW LONG, scaled by how hard where the caller knows — a spike struck flat
+    // out and one that barely cleared the angle are the same EVENT and should
+    // not be the same freeze. `hitstopScales` opts in per event, because for
+    // everything else the authored duration IS the event and scaling it would
+    // quietly shorten thirty freezes that were tuned as constants.
+    const stop = def.hitstopScales ? def.hitstop * scale : def.hitstop;
+    feedbackState.hitstop = Math.max(feedbackState.hitstop, stop);
+    // ...AND HOW DEEP. There is one global `fx.hitstopScale` and it is the
+    // right default — a freeze that varied per event would make the game's
+    // punctuation inconsistent. An event may override it anyway, and exactly
+    // one does: a spike is the hardest thing that happens in a match and the
+    // difference between it and a body check should be legible in the FREEZE
+    // and not only in its length. Held beside the clock rather than looked up
+    // when the clock is read, so a stop that is already running keeps the depth
+    // it began with even if a lesser event fires inside it.
+    stopScale = def.hitstopScale ?? null;
     hitstopCooldown = CONFIG.fx.hitstopCooldown;
   }
   // opts.sfxOpts lets a caller shape the sound for this specific instance
@@ -510,6 +580,15 @@ export function feedback(event, at = {}) {
   // once. A `toast` that matches no upgrade id is printed as written, which is
   // what a proc that is not an upgrade would want.
   //
+  // ...AND `toastLabel` ON THE PAYLOAD IS THE THIRD CASE: a receipt for
+  // something that is not an upgrade AND must not be written in this file. The
+  // reroll a boss banks has no upgrades.csv row to read its name off, and a
+  // literal here would be a player-facing line living in a .js file — the one
+  // thing uiText.csv exists to stop. So the call site looks the line up in that
+  // table itself and passes the words in, and `toast` below is left holding the
+  // KEY alone. Same shape as `toastUpgrade`
+  // and for the same reason: only the call site can know.
+  //
   // The VALUE is per call — `toastValue` on the payload — because it is what
   // the proc was actually worth this time, and only the call site knows that.
   //
@@ -535,7 +614,7 @@ export function feedback(event, at = {}) {
       // repeat, so two different upgrades sharing one key would put the second
       // one's level under the first one's name.
       key: at.toastUpgrade ? `${event}:${id}` : event,
-      label: card?.name ?? id,
+      label: at.toastLabel ?? card?.name ?? id,
       value: at.toastValue ?? null,
       x,
       y,
@@ -547,6 +626,13 @@ export function feedback(event, at = {}) {
       // `toastUpgrade` above are what this particular one was worth. See
       // spawnProcToast in ui/ui.js for both.
       pin: !!def.toastPin,
+      // WHERE IN THE PINNED STACK, in screen pixels off the shared anchor. On
+      // the def for the same reason `pin` is: two receipts that always fire
+      // together always want the same two slots, and which slot a line takes is
+      // a fact about the EVENT rather than about this firing of it. Without it
+      // a boss's pellet and reroll are written to the same point on the same
+      // frame and one is drawn over the other.
+      pinDy: def.toastPinDy ?? 0,
       wave: !!def.toastWave,
     });
   }
@@ -587,7 +673,8 @@ export function updateFeedback(realDt) {
 
   if (feedbackState.hitstop > 0) {
     feedbackState.hitstop = Math.max(0, feedbackState.hitstop - realDt);
-    return CONFIG.fx.hitstopScale;
+    return stopScale ?? CONFIG.fx.hitstopScale;
   }
+  stopScale = null;
   return 1;
 }

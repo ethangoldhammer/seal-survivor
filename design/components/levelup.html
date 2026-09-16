@@ -98,6 +98,22 @@ html, body { margin: 0; height: 100%; }
                left/top here stand in for that. -->
           <div class="sv-card-fx sv-fx-on" style="left:50%; top:calc(100% - 10px); transform:translateX(-50%);">Oxygen 100 → 120</div>
         </div>
+
+        <!-- THE REROLL, under the hand. Not part of the comb: the lattice is
+             the three CHOICES, and a button in it would read as a fourth one.
+             It is a sibling of .sv-cards so layOutCards counts its height as
+             chrome and shrinks the hand on a short window rather than pushing
+             this off the bottom.
+             HIDDEN ON MOST LEVEL-UPS. The row only exists once a run has beaten
+             a boss — see CONFIG.upgradeReroll and updateRerollButton in ui.js —
+             so a run's first ten minutes see three cards and nothing else. The
+             count comes off the bank and sits in its own tabular span so 3 → 2
+             → 1 does not shuffle the word beside it; once the bank is empty the
+             button stays, disabled, reading the rerollNone line instead of
+             vanishing. -->
+        <div class="sv-reroll-row" id="svRerollRow">
+          <button class="sv-btn sv-btn-sm sv-btn-ghost" id="svReroll" type="button">Reroll<span class="sv-reroll-n">2</span></button>
+        </div>
       </div>
     </div>
   </div>

@@ -21,8 +21,10 @@ import { ease } from '../ease.js';
 //
 // ONE RULE, THREE SURFACES, and it has to stay that way: an aura that flares
 // on its own numbers is a fourth thing to learn. `CONFIG.damageGlow` carries
-// the shared envelope and one row per source for the two things that genuinely
-// differ — how bright the peak is, and what colour it goes.
+// the shared envelope and one row per source for the handful of things that
+// genuinely differ — how bright the peak is, what colour it goes, and for a
+// FIELD (see the second block below) how hard its noise stirs and how far its
+// hue swings.
 //
 // THE HEAT IS PURE ARITHMETIC (stoke/cool/glowLevel), which is what lets the
 // harness assert the envelope with no renderer and no model in it — see the
@@ -49,6 +51,8 @@ export function damageGlowCfg(source) {
     peak: row.peak ?? b.peak ?? 2,
     curve: row.curve ?? b.curve ?? 'outCubic',
     color: row.color ?? b.color ?? 0xffffff,
+    stir: row.stir ?? b.stir ?? 1.6,
+    hue: row.hue ?? b.hue ?? 26,
   };
 }
 
@@ -83,6 +87,164 @@ export function glowLevel(heat, source) {
   const c = damageGlowCfg(source);
   if (!c.enabled) return 0;
   return ease(c.curve, Math.max(0, Math.min(1, heat ?? 0)));
+}
+
+// ============================================================================
+// THE OTHER TWO CHANNELS — for the fields, which have somewhere to put them.
+//
+// Brightness alone is one axis, and on an additive cloud it is the axis the
+// bright pass is already using for everything else in the frame: a garlic aura
+// grinding a school and a garlic aura sitting in a bloom-heavy patch of water
+// look the same from the corner of the eye. A field has two more channels no
+// model has, and they cost nothing to drive:
+//
+//   STIR   how fast the value noise crawls. A cloud that is working churns.
+//          This is the one a player reads without looking directly at it,
+//          because motion is peripheral and brightness is not.
+//   HUE    a rotation, NOT a wash toward the hot colour. The aura stays its own
+//          colour — garlic is still green, the calamari front is still pink —
+//          it just swings toward the hot end of itself. A wash would recolour
+//          the ability, and the player would have to learn a second thing.
+//
+// WHY A ROTATION AND NOT A LERP TO `color`: `color` is what a MODEL's emissive
+// goes (attachDamageGlow), where the body's own albedo is still underneath it.
+// A flat additive disc has nothing underneath, so the same lerp there replaces
+// the aura outright at full heat. Rotating keeps saturation and identity and
+// still moves far enough to be seen beside a cold ring on the same screen.
+// ============================================================================
+
+/**
+ * How much faster this field's noise should crawl right now, as a MULTIPLIER
+ * on its resting rate — 1 when cold.
+ *
+ * NEVER MULTIPLY AN ACCUMULATED CLOCK BY THIS. `uTime * uSwirl` in a shader,
+ * or `n.t * spin * rate` on an orbit, both teleport the moment the rate moves:
+ * the phase is rate x elapsed, so raising the rate rewrites where the field has
+ * ALWAYS been, and a stir that was meant to read as churn reads as the cloud
+ * jumping. Every caller here integrates a phase instead — `flow += dt * rate *
+ * stir` — which is why garlic and calamari carry a `uFlow` rather than a
+ * `uTime`.
+ */
+export function glowStir(heat, source) {
+  const c = damageGlowCfg(source);
+  if (!c.enabled) return 1;
+  return 1 + c.stir * glowLevel(heat, source);
+}
+
+/** Degrees of hue rotation at this heat. Signed; 0 when cold. */
+export function glowHue(heat, source) {
+  const c = damageGlowCfg(source);
+  if (!c.enabled) return 0;
+  return c.hue * glowLevel(heat, source);
+}
+
+const _hot = new THREE.Color();
+
+// The luminance the bright pass thresholds on — Rec. 709, see CONFIG.bloom.
+// Blue is worth 7% of green to it, which is the fact the rotation below is
+// built around.
+const LR = 0.2126;
+const LG = 0.7152;
+const LB = 0.0722;
+
+// AN ORTHONORMAL BASIS FOR THE ZERO-LUMINANCE PLANE — the two directions you
+// can move a colour in without changing what it weighs. Built once from the
+// weights above: (1,0,0) and (0,0,1) each with their own luminance subtracted
+// off the grey axis, then Gram-Schmidt'd so a rotation in this basis is an
+// actual rotation rather than a shear.
+const [HUE_U, HUE_V] = (() => {
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const norm = (a) => { const n = Math.hypot(...a); return [a[0] / n, a[1] / n, a[2] / n]; };
+  const u = norm([1 - LR, -LR, -LR]);
+  let v = [-LB, -LB, 1 - LB];
+  const k = dot(v, u);
+  v = norm([v[0] - k * u[0], v[1] - k * u[1], v[2] - k * u[2]]);
+  return [u, v];
+})();
+
+/**
+ * ROTATE A COLOUR'S HUE, IN DEGREES, WITHOUT CHANGING WHAT IT WEIGHS.
+ *
+ * POSITIVE GOES UP THE WHEEL — red toward yellow toward green — the same
+ * direction SVG's hueRotate turns, so a number can be carried between the two.
+ *
+ * WHICH WAY IS "HOTTER" IS THEREFORE PER AURA, and the source rows in
+ * CONFIG.damageGlow are signed for exactly that reason: red is at BOTH ends of
+ * this range, so the garlic cloud's green warms by turning DOWN the wheel
+ * toward yellow while the harp's and the calamari's pinks warm by turning UP it
+ * toward red. One shared sign would send one of them the wrong way, and the
+ * wrong way still looks like a deliberate colour.
+ *
+ * THE DEGREES ARE NOT HSL DEGREES. This turns the chroma in linear light, where
+ * HSL's wheel is a hexagon over gamma-encoded channels; 30 here is in the
+ * neighbourhood of 30 there and is not equal to it. Tune by eye, not by
+ * matching a number out of a colour picker.
+ *
+ * Two reasons this is a rotation in the zero-luminance plane rather than
+ * getHSL/setHSL:
+ *
+ * HSL CANNOT HOLD THESE COLOURS. Half the values that arrive here are already
+ * above 1 — an aura overdriven into the bright pass, a note colour rolled with
+ * deliberate headroom (rollNoteColor) — and a round trip through HSL clamps
+ * exactly the headroom that gives them their halo.
+ *
+ * AND HSL'S L IS NOT LUMINANCE. A rotation that held L constant would swing how
+ * hard the aura BLOOMS while claiming to move only its hue, and the brightness
+ * channel would stop meaning one thing. Splitting the colour into its grey and
+ * its chroma and turning only the chroma holds the luminance fixed to the last
+ * bit, which is what keeps the two channels independent — drive both and you
+ * get both, drive one and you get exactly one.
+ */
+export function rotateHue(c, deg) {
+  if (!deg) return c;
+  // Negated because the basis above comes out left-handed about the grey axis;
+  // this is what puts a positive `deg` back on the wheel's own direction.
+  const a = (-deg * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const y = c.r * LR + c.g * LG + c.b * LB;
+  // What is left after the grey is taken out weighs nothing, so it lies in the
+  // plane HUE_U and HUE_V span — exactly, not approximately.
+  const dr = c.r - y;
+  const dg = c.g - y;
+  const db = c.b - y;
+  const p = dr * HUE_U[0] + dg * HUE_U[1] + db * HUE_U[2];
+  const q = dr * HUE_V[0] + dg * HUE_V[1] + db * HUE_V[2];
+  const p2 = p * cos - q * sin;
+  const q2 = p * sin + q * cos;
+  c.r = y + p2 * HUE_U[0] + q2 * HUE_V[0];
+  c.g = y + p2 * HUE_U[1] + q2 * HUE_V[1];
+  c.b = y + p2 * HUE_U[2] + q2 * HUE_V[2];
+  // A far enough turn on a saturated colour lands a channel below zero.
+  // Negative light is not a thing, and an additive blend would subtract it.
+  c.r = Math.max(0, c.r);
+  c.g = Math.max(0, c.g);
+  c.b = Math.max(0, c.b);
+  return c;
+}
+
+/**
+ * THE WHOLE FLARE FOR A FLAT FIELD, in one call: the aura's resting colour,
+ * rotated by the hue channel and then overdriven by the brightness one.
+ *
+ * One function rather than three lines at each call site, for the reason the
+ * GLOW_SOURCE constants exist: three fields each doing their own arithmetic is
+ * three auras that drift apart, and the drift looks like tuning.
+ *
+ * @param out    a THREE.Color to write (allocation-free callers)
+ * @param cold   the aura's resting colour, hex or THREE.Color
+ * @param heat   raw heat 0..1 — the curve is applied in here
+ * @param source the row in CONFIG.damageGlow.sources
+ */
+export function hotFieldColor(out, cold, heat, source) {
+  const c = damageGlowCfg(source);
+  const target = out ?? _hot;
+  if (typeof cold === 'number') target.set(cold); else target.copy(cold);
+  if (!c.enabled) return target;
+  const level = glowLevel(heat, source);
+  if (level <= 0) return target;
+  rotateHue(target, c.hue * level);
+  return target.multiplyScalar(1 + c.peak * level);
 }
 
 /**

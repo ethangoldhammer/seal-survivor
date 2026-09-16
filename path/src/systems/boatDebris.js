@@ -6,6 +6,7 @@ import { makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb } from '../entities/pickups.js';
 import { retireMaterial } from './programPin.js';
+import { versusDrops } from './versusFlag.js';
 
 // What's left of a hull that lost. A destroyed boat used to be removed from
 // the scene on the frame it died, so the biggest target in the game vanished
@@ -433,11 +434,17 @@ function dispose(scene, d) {
 
 // What was in the crate. Weighted, and each entry checks the system it feeds
 // is actually switched on — a rapid-fire orb dropping into a run with the
-// pickup disabled is an orb that does nothing when you swim over it.
+// pickup disabled is an orb that does nothing when you swim over it. A match
+// refuses the same entries the water's own spawners do (CONFIG.versus.drop),
+// so shooting a crate cannot smuggle one onto the pitch by the side door.
+//
+// REFUSED BY DROPPING OUT OF THE TABLE, not by rolling and discarding: the
+// weights are re-normalised over what is left, so a match's crate is always
+// carrying something rather than sometimes coming up empty.
 function rollDrop(scene, x, y) {
   const table = cfg().drops ?? {};
   const options = [
-    ['rapidFire', table.rapidFire ?? 1, CONFIG.rapidFirePickup?.enabled !== false],
+    ['rapidFire', table.rapidFire ?? 1, CONFIG.rapidFirePickup?.enabled !== false && !versusDrops('rapidFire')],
     ['strike', table.strike ?? 1.4, CONFIG.strike?.enabled !== false],
     ['bubble', table.bubble ?? 1.2, CONFIG.oxygen?.enabled !== false],
     ['chum', table.chum ?? 3, true],

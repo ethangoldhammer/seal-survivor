@@ -1131,9 +1131,26 @@ section('TEED UP — the club collects on every hold in the game');
     return 1e6 - boss.hp;
   };
   const awake = bossHit(false);
+  // WITH THE DAZE DOOR HELD OPEN. `CONFIG.boss.control.holdsDaze` ships false
+  // now — a hold on a boss is refused outright and buys nothing, because a
+  // perfect strike into a lit weak spot should be the only thing in the game
+  // that stops one (see the note over that key, and npm run test:bossthreat).
+  //
+  // The club's own claim is unchanged and still worth holding: a body that is
+  // not swimming away takes more of the swing. That is a fact about the club's
+  // reach against a slowed body, and the daze is simply the only way to put a
+  // BOSS in that state, so it is the state this measures in. Deleting the case
+  // would leave the club's behaviour against a slowed boss unmeasured the day
+  // anything else slows one — the chill already does.
+  const clubHoldsDaze = CONFIG.boss.control.holdsDaze;
+  CONFIG.boss.control.holdsDaze = true;
   const dazed = bossHit(true);
-  check('...and a dazed boss, which is what a hold on a boss becomes',
-    dazed > awake * 1.5, `${awake.toFixed(1)} awake vs ${dazed.toFixed(1)} dazed`);
+  CONFIG.boss.control.holdsDaze = clubHoldsDaze;
+  check('...and a boss that has been slowed, which is the club reaching a body that is not leaving',
+    dazed > awake * 1.5, `${awake.toFixed(1)} awake vs ${dazed.toFixed(1)} slowed`);
+  check('...but a hold buys none of that in the shipped game — it is refused outright',
+    CONFIG.boss.control.holdsDaze === false && Math.abs(bossHit(true) - awake) < awake * 0.25,
+    `${bossHit(true).toFixed(1)} with a hold thrown at it vs ${awake.toFixed(1)} without`);
 
   // ...AND IT LEAVES HARDER. A body that is not swimming away from the blow
   // puts all of it into the throw, which is what makes a carom off a racked

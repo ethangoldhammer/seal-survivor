@@ -65,6 +65,22 @@ const DEG = Math.PI / 180;
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const smooth = (t) => t * t * (3 - 2 * t);
+// How far past the frame's edge a seam is held, in WORLD UNITS. The slide
+// starts easing in a hair before the seam reaches the edge and passes through
+// zero there, which is what makes the correction continuous: it grows from
+// nothing as the seam approaches instead of appearing at full size on the
+// frame it crosses.
+//
+// A world distance and not a share of the frame, which it was for one round:
+// a share reads as five percent of the half-width, which on a wide shot is
+// half a world unit — and half a unit is what one extra pass of the loop then
+// moved the picture by, on whichever frames the wall clamp made it take one.
+const SEAM_MARGIN = 0.05;
+
+/** The frame's half-width at the look-at's plane, for the seam maths. */
+function seamHalfW(out, aspect) {
+  return out.pos.distanceTo(out.at) * Math.tan((out.fov * DEG) / 2) * aspect;
+}
 
 const cfg = () => CONFIG.versus?.replay?.cams ?? {};
 
@@ -91,9 +107,15 @@ export const poolState = {
   focus: new THREE.Vector3(), // the primary target, world
   focusUv: { x: 0.5, y: 0.5 }, // ...projected, for the lens
   lens: { defocus: 0, focusRadius: 1, focusFeather: 1 },
+  snap: true,          // the next frame is taken outright, not followed onto — a cut
+
+  // The seam slide the RENDERED shot is carrying, eased frame to frame — see
+  // the note at the end of poseShot. Per shot, so a cut starts it clean.
+  seam: { slid: null, side: 0, dt: 0 },
 };
 
 const _goal = makePose();
+const _want = makePose();
 const _cam = new THREE.PerspectiveCamera();
 const _v = new THREE.Vector3();
 const _off = new THREE.Vector3();
@@ -114,6 +136,8 @@ export function resetPool(aspect = 16 / 9) {
   st.blendDur = 0;
   st.scores = shots.map(() => -Infinity);
   st.fovPush = 0;
+  st.seam.slid = null; st.seam.side = 0; st.seam.dt = 0;
+  st.snap = true;
   st.camera.aspect = aspect;
   st.camera.updateProjectionMatrix();
 }
@@ -148,7 +172,7 @@ function primaryOf(shot, pois) {
  * Where shot `i` would put the camera this frame, into `out` — and the fov,
  * with the push-in and the dolly for `held` seconds on the shot.
  */
-function poseShot(shot, pois, side, held, bounds, out, aspect = 16 / 9) {
+function poseShot(shot, pois, side, held, bounds, out, aspect = 16 / 9, ease = null) {
   const c = cfg();
   lookAtOf(shot, pois, out.at);
   // Flatten toward the plane as the look-at nears a wall: an angled look at
@@ -267,28 +291,110 @@ function poseShot(shot, pois, side, held, bounds, out, aspect = 16 / 9) {
     // several units OUTSIDE the mouth, so there is a slide that holds one and
     // hides the other. The fov only gives once the slide has run out of room.
     let slid = 0;
+    let slideSide = 0;
+    const atX0 = out.at.x;
+    const posX0 = out.pos.x;
     const slideMax = c.seamSlide ?? 12;
-    for (let n = 0; n < 14; n++) {
+    // The target: the seam sits at least SEAM_MARGIN of world outside the
+    // frame's edge. Expressed in NDC against the current half-width, which is
+    // what the projection above reports in.
+    let prevS = 0;
+    let prevInside = null;
+    for (let n = 0; n < 8; n++) {
       _cam.fov = out.fov; _cam.aspect = aspect; _cam.near = 0.5; _cam.far = 600;
       _cam.position.copy(out.pos); _cam.up.set(0, 1, 0); _cam.lookAt(out.at);
       _cam.updateMatrixWorld(); _cam.updateProjectionMatrix();
+      // HOW FAR INSIDE THE FRAME the worse seam is, as a share of the
+      // half-width: positive is in shot, negative is safely off it. A NUMBER
+      // and not the in-frame/out-of-frame boolean this used to test, because
+      // the boolean is what made the camera jutter.
       let seamSide = 0;
+      let inside = -Infinity;
       for (const sd of [-1, 1]) {
         const fx = (sd < 0 ? bounds.left : bounds.right) + sd * (past + 1);
         _q.set(fx, out.at.y, 0).project(_cam);
-        if (_q.z < 1 && Math.abs(_q.x) <= 1 && Math.abs(_q.y) <= 1) seamSide = sd;
+        if (!(_q.z < 1)) continue;
+        const how = 1 - Math.abs(_q.x);
+        if (how > inside) { inside = how; seamSide = sd; }
       }
-      if (!seamSide) break;
-      if (slid < slideMax) {
-        const step = Math.min(1.5, slideMax - slid);
-        slid += step;
-        out.at.x -= seamSide * step;
-        out.pos.x -= seamSide * step;
-        out.pos.x = Math.max(bounds.left + inset, Math.min(bounds.right - inset, out.pos.x));
+      const halfW = seamHalfW(out, aspect);
+      const want = -SEAM_MARGIN / Math.max(1e-6, halfW);   // the NDC we are solving for
+      if (!seamSide || inside <= want) break;
+      if (slid >= slideMax) {
+        // Out of room to slide: the fov gives instead, by the ratio it needs
+        // rather than the flat fifteen percent it used to take — same step, in
+        // the one axis a viewer reads as the zoom snapping.
+        if (out.fov <= (c.fovMin ?? 12)) break;
+        out.fov = Math.max(c.fovMin ?? 12, out.fov * Math.max(0.6, Math.min(0.999, 1 - inside)));
+        prevInside = null;
         continue;
       }
-      if (out.fov <= (c.fovMin ?? 12)) break;
-      out.fov = Math.max(c.fovMin ?? 12, out.fov * 0.85);
+      // HOW FAR TO SLIDE, SOLVED RATHER THAN GUESSED — and this is the whole
+      // of the fix for a camera that juttered.
+      //
+      // The step used to be a flat 1.5 units, recomputed each frame against a
+      // hard in/out test: a seam drifting across the frame's edge as the push
+      // slowly closed moved the look-at a whole 1.5 units on one frame and put
+      // it back on the next. On a shot eight units from its subject that is the
+      // picture jumping sideways and returning, for as long as the seam sat
+      // near the edge.
+      //
+      // Sizing the step from the frontal half-width was not enough on its own.
+      // These shots are steeply pitched and yawed, so the seam's NDC moves at a
+      // quarter of what a frontal estimate predicts — the loop under-stepped,
+      // ran out of iterations before it converged, and the total it happened to
+      // reach depended on where it started. That IS a jutter, just a smaller
+      // one: 1.5 units became 0.22.
+      //
+      // So the response is MEASURED. The first pass uses the frontal estimate;
+      // every pass after it has two samples and takes the secant through them,
+      // which is the actual d(ndc)/d(slide) for this camera at this angle. It
+      // converges in two or three passes on any shot, so the answer no longer
+      // depends on the iteration cap — which is what makes it the same answer
+      // on consecutive frames.
+      let step;
+      if (prevInside === null || Math.abs(inside - prevInside) < 1e-9 || slid === prevS) {
+        step = (inside - want) * halfW;
+      } else {
+        const slope = (inside - prevInside) / (slid - prevS);   // per unit slid, negative
+        step = slope < -1e-9 ? (inside - want) / -slope : (inside - want) * halfW;
+      }
+      step = Math.min(Math.max(step, 0), slideMax - slid);
+      if (!(step > 1e-4)) break;
+      prevS = slid;
+      prevInside = inside;
+      slideSide = seamSide;
+      slid += step;
+      out.at.x -= seamSide * step;
+      out.pos.x -= seamSide * step;
+      out.pos.x = Math.max(bounds.left + inset, Math.min(bounds.right - inset, out.pos.x));
+    }
+    // ...AND THE ANSWER IS EASED ONTO THE SHOT, which is the last thing that
+    // had to happen before this stopped juttering.
+    //
+    // Everything above makes the slide the right SIZE and continuous in where
+    // the seam is. That is still not enough, because the seam does not cross
+    // the frame's edge slowly: a push closing half a degree a frame walks it
+    // over the edge in one, so the slide the geometry asks for goes from a
+    // fifth of a unit to nothing between two frames however exactly it is
+    // solved. A corrective move has to be smoothed in TIME, not just sized
+    // correctly — so the pose carries the eased figure and the solve above is
+    // only the target it is heading for.
+    //
+    // Only the shot actually being rendered eases (updatePool hands `ease` to
+    // that one call). The scoring passes take the raw answer, which is what
+    // they want: how well the shot WOULD frame the action, not how far a
+    // smoothing filter has got.
+    if (ease) {
+      const rate = 1 - Math.exp(-(ease.dt ?? 0) / Math.max(0.01, c.seamEase ?? 0.25));
+      ease.slid = lerp(ease.slid ?? slid, slid, ease.dt ? rate : 1);
+      const side = slideSide || (ease.side ?? 0);
+      ease.side = side;
+      if (side) {
+        out.at.x = atX0 - side * ease.slid;
+        out.pos.x = posX0 - side * ease.slid;
+        out.pos.x = Math.max(bounds.left + inset, Math.min(bounds.right - inset, out.pos.x));
+      }
     }
   }
   return out;
@@ -380,18 +486,40 @@ export function updatePool(ctx) {
 
   // Pose the current shot, blend if one is running, and write the camera.
   const shot = shots[st.shot];
-  poseShot(shot, pois, side, st.onShot, bounds, _goal, aspect);
+  st.seam.dt = dt;
+  poseShot(shot, pois, side, st.onShot, bounds, _goal, aspect, st.seam);
+  // WHERE THE SHOT WANTS TO BE THIS FRAME, blended if one is running.
   if (st.blendT < 1) {
     st.blendT = Math.min(1, st.blendT + dt / Math.max(0.01, st.blendDur));
     const e = smooth(st.blendT);
-    st.cur.pos.lerpVectors(st.from.pos, _goal.pos, e);
-    st.cur.at.lerpVectors(st.from.at, _goal.at, e);
-    st.cur.fov = lerp(st.from.fov, _goal.fov, e);
+    _want.pos.lerpVectors(st.from.pos, _goal.pos, e);
+    _want.at.lerpVectors(st.from.at, _goal.at, e);
+    _want.fov = lerp(st.from.fov, _goal.fov, e);
   } else {
-    st.cur.pos.copy(_goal.pos);
-    st.cur.at.copy(_goal.at);
-    st.cur.fov = _goal.fov;
+    _want.pos.copy(_goal.pos);
+    _want.at.copy(_goal.at);
+    _want.fov = _goal.fov;
   }
+  // ...AND THE CAMERA FOLLOWS IT RATHER THAN BEING IT.
+  //
+  // Every shot here is of things that move, and it was tracking them one for
+  // one — so a subject that stopped, stopped the picture with it. A dash ends
+  // in a frame, and the striker is a weighted target of three of the seven
+  // shots: the look-at raced across the pitch at two units a frame behind it
+  // and then halted dead, which is exactly the tracking glitch it looks like.
+  // A pool of virtual cameras is the one part of this that should behave like
+  // a rig with weight in it.
+  //
+  // A CUT SNAPS, on purpose: `snap` is set when a shot is entered hard, so the
+  // first frame of a new angle is the angle and not a smear off the last one.
+  // A blend is smoothed on top of its own easing, which is why the constant is
+  // short — long enough to take the corner off a subject's jolt, too short to
+  // let a target drift out of a frame the keep-in-frame dolly is holding.
+  const follow = st.snap ? 1 : 1 - Math.exp(-dt / Math.max(1e-4, cfg().trackEase ?? 0.09));
+  st.snap = false;
+  st.cur.pos.lerp(_want.pos, follow);
+  st.cur.at.lerp(_want.at, follow);
+  st.cur.fov = lerp(st.cur.fov, _want.fov, follow);
   const cam = st.camera;
   cam.position.copy(st.cur.pos);
   cam.up.set(0, 1, 0);
@@ -435,9 +563,14 @@ function switchTo(i, shots, pois, side, bounds, pool) {
   st.shot = i;
   st.shotName = next.name ?? String(i);
   st.onShot = 0;
+  // A new shot is a new frame: the last one's seam correction is not its.
+  st.seam.slid = null; st.seam.side = 0;
   if (cut || prev < 0) {
     st.cuts++;
     st.blendT = 1;
+    // A hard cut is a hard cut: the follow above takes the new pose outright
+    // for one frame rather than sliding onto it from the shot just left.
+    st.snap = true;
   } else {
     st.blends++;
     st.from.pos.copy(st.cur.pos);

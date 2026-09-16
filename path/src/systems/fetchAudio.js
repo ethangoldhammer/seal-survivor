@@ -34,6 +34,8 @@
 // [[pages-spa-fallback-hides-404s]]: there a 200 was the lie, here a 0 is.
 // ============================================================================
 
+import { assetUrl } from '../assetPath.js';
+
 /**
  * The bytes of an audio file, or a throw naming what went wrong.
  *
@@ -41,7 +43,9 @@
  * @param label the caller's tag for the warning it will log ('audio', 'music')
  */
 export async function fetchAudioBytes(src) {
-  const res = await fetch(src);
+  // Not three.js, so DefaultLoadingManager's rewrite cannot reach this one —
+  // see assetPath.js. A no-op on every build served from the host root.
+  const res = await fetch(assetUrl(src));
   // status 0 is the native shell's media path — see above. Anything else that
   // is not ok is a real failure and still throws.
   if (!res.ok && res.status !== 0) throw new Error(`HTTP ${res.status}`);

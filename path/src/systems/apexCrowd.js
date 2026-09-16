@@ -117,6 +117,32 @@ export function assignFeedingSlots(crowd, target, dt, cfg) {
     e._rank = Math.sqrt(dx * dx + dy * dy);
     // The bonus only applies while this one's turn has time left on it.
     if (e.feeding && (e.feedTimer ?? 0) > 0) e._rank -= bonus;
+    // ---------------------------------------------------------------------
+    // A BOSS DOES NOT QUEUE BEHIND ITS OWN ESCORTS.
+    // ---------------------------------------------------------------------
+    // The ranking is pure distance, and a boss is systematically the FURTHEST
+    // apex body in the water: a lunging boss deliberately holds the ring
+    // outside its own `minRange` (times lungeRules.standoffMul, so eight or
+    // nine units) precisely so it can open the gap a run needs, while a plain
+    // shark circles at the standoff of about seven. So the one body in the
+    // arena whose whole job is to attack you was ranked last by the rule that
+    // decides who may, every frame, forever.
+    //
+    // MEASURED, because the comment in lungeChase asserted the opposite ("a
+    // single boss always holds a slot") and it was true only of a boss alone
+    // in an empty arena — which is not a state a boss fight is ever in, since
+    // the spawner narrows the pool to escorts and keeps sending them. With
+    // five apex bodies around it, `npm run gates -- --escorts 5` had the four
+    // lunging bosses refused on this gate for 75-85% of the fight and their
+    // run rate halved: bossShark 6.2 committed runs a minute down to 3.0,
+    // bossOrca 8.7 down to 4.3. That is the whole of "the boss never commits".
+    //
+    // It is seated rather than exempted. Taking it out of the list would also
+    // take it out of `crowdAvoid`, so the escorts would stop steering around
+    // the biggest body in the water — and it still SPENDS a slot, because the
+    // ring's legibility is the point of the mechanism: two bodies pressing and
+    // the rest circling. With a boss up, one of the two is always the boss.
+    if (e.boss === true) e._rank = -Infinity;
   }
   crowd.sort((a, b) => a._rank - b._rank);
 

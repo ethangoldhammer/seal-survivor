@@ -175,6 +175,28 @@ export function createPoseRig(instance, label = 'pose') {
   ])].filter((b) => !mixerOwns(b));
   const entryQ = posedBones.map((b) => b.quaternion.clone());
 
+  // ...AND THE SAME GUARD, ONE FRAME AT A TIME. `restore()` above puts the
+  // bones back to where the animal was when the performance STARTED, which is
+  // the right thing to do once — on the way out — and the wrong thing to do
+  // every frame, because it also throws away everything the mixer and the aim
+  // rig wrote THIS frame. A performance built on it is a performance the
+  // animal's own motion cannot reach: the seal swims, turns and aims
+  // underneath a pose pinned to a snapshot a second and a half old.
+  //
+  // `sync()` is the same idea done live. Per bone, per frame: if the bone
+  // still holds EXACTLY what we left on it, nothing else wrote it and it is
+  // put back to the last value that came from somewhere else; if it has
+  // changed, something else did write it and that is the new reference. So an
+  // unkeyed flipper cannot walk (which is what the ratchet was), and a keyed
+  // one keeps every bit of the clip and the aim underneath the pose.
+  //
+  // Exact equality is the right test for the same reason it is in
+  // ikChain.restoreReference: a mixer writing this bone produces its own
+  // value, and an untouched bone still holds the exact float we stored.
+  const liveQ = posedBones.map((b) => b.quaternion.clone());
+  const wroteQ = posedBones.map((b) => b.quaternion.clone());
+  let hasWritten = false;
+
   return {
     fins,
     head,
@@ -203,12 +225,45 @@ export function createPoseRig(instance, label = 'pose') {
 
     /** Remember where the animal is, as the pose's zero. */
     capture() {
-      for (let i = 0; i < posedBones.length; i++) entryQ[i].copy(posedBones[i].quaternion);
+      for (let i = 0; i < posedBones.length; i++) {
+        entryQ[i].copy(posedBones[i].quaternion);
+        liveQ[i].copy(posedBones[i].quaternion);
+        wroteQ[i].copy(posedBones[i].quaternion);
+      }
+      hasWritten = false;
     },
 
-    /** Put it back there. Call before posing, every frame. */
+    /**
+     * Put the animal back where the performance found it. ONCE, on the way
+     * out — see sync() for why every frame is the wrong cadence.
+     */
     restore() {
       for (let i = 0; i < posedBones.length; i++) posedBones[i].quaternion.copy(entryQ[i]);
+    },
+
+    /**
+     * THE POSE THE ANIMATION IS ASKING FOR, THIS FRAME. Call at the top of
+     * every posing frame, in place of restore(). See the note above.
+     */
+    sync() {
+      if (!hasWritten) {
+        for (let i = 0; i < posedBones.length; i++) liveQ[i].copy(posedBones[i].quaternion);
+        return;
+      }
+      for (let i = 0; i < posedBones.length; i++) {
+        const q = posedBones[i].quaternion;
+        if (q.equals(wroteQ[i])) q.copy(liveQ[i]);
+        else liveQ[i].copy(q);
+      }
+    },
+
+    /**
+     * What we are leaving on the bones — next frame's test for whether
+     * anything else has had a say. Call at the BOTTOM of every posing frame.
+     */
+    note() {
+      for (let i = 0; i < posedBones.length; i++) wroteQ[i].copy(posedBones[i].quaternion);
+      hasWritten = true;
     },
 
     /**
@@ -222,6 +277,9 @@ export function createPoseRig(instance, label = 'pose') {
       for (const { chain } of fins) chain.primed = false;
       if (head) head.primed = false;
       if (tail) tail.primed = false;
+      // ...and the live reference with it. A rig that kept `hasWritten` across
+      // a teardown would test this run's bones against last run's output.
+      hasWritten = false;
     },
 
     // What actually resolved, for the tests: bone lookup drops names that miss

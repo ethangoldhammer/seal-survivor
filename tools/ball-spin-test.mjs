@@ -27,7 +27,7 @@ import { strikeEnglish, strikeState, tryStrike, resetStrike } from '../path/src/
 import {
   ball, initBallAlone, stepBallAlone, strikeBallFrom, resetBall, renderBall, rimRadiusAt, releaseP2, p2,
 } from '../path/src/systems/versus.js';
-import { streaks, arcFor, updateBallSpin, renderBallSpin, ballSpinState, initBallSpin } from '../path/src/systems/ballSpin.js';
+import { streaks, arcFor, updateBallSpin, renderBallSpin, ballSpinState, initBallSpin, recordBallSpin, poseBallSpin, SPIN_REC } from '../path/src/systems/ballSpin.js';
 import { overlayScene } from '../path/src/systems/post.js';
 
 const realWarn = console.warn;
@@ -371,6 +371,31 @@ for (let i = 0; i < 10; i++) stepBallAlone(dt);
 check('stepBallAlone feeds them (the lab needs no extra call)', streaks.length === SS.count && streaks[0].arc > 0.1);
 initBallSpin(overlayScene);
 check('re-init keeps one mesh', overlayScene.children.filter((c) => c.name === 'ballSpinStreaks').length === 1);
+
+// ---------------------------------------------------------------------------
+// THE RECORD — a replay poses the strokes from what the recorder kept, so a
+// set written out and posed back has to be the same set.
+CONFIG.versus.ball.spinStrokes.enabled = true;
+streaks.length = 0;
+for (let i = 0; i < 20; i++) updateBallSpin(8, 1 / 60);
+const recA = recordBallSpin(new Float32Array(SPIN_REC));
+const setA = streaks.map((s) => ({ ...s }));
+for (let i = 0; i < 20; i++) updateBallSpin(8, 1 / 60);
+const recB = recordBallSpin(new Float32Array(SPIN_REC));
+const setB = streaks.map((s) => ({ ...s }));
+check('the record holds every live stroke', recA[0] === setA.length && setA.length > 0, `${recA[0]} of ${setA.length}`);
+poseBallSpin(8, recA, recA, 0);
+check('posed back, the set is the one recorded', streaks.length === setA.length && streaks.every((s, i) => Math.abs(s.phase - setA[i].phase) < 1e-6 && Math.abs(s.arc - setA[i].arc) < 1e-6 && Math.abs(s.fade - setA[i].fade) < 1e-6 && s.lane === setA[i].lane && s.dying === setA[i].dying));
+poseBallSpin(8, recA, recB, 0.5);
+check('...and halfway between two records of one set, each stroke is halfway', streaks.length === setA.length && streaks.every((s, i) => Math.abs(s.phase - (setA[i].phase + setB[i].phase) / 2) < 1e-6 && Math.abs(s.arc - (setA[i].arc + setB[i].arc) / 2) < 1e-6), streaks.map((s) => s.phase.toFixed(3)).join(' '));
+const unrec = new Float32Array(SPIN_REC); unrec[0] = -1;
+const nBefore = streaks.length;
+check('an unrecorded frame poses nothing and says so', poseBallSpin(8, unrec, recB, 0.5) === false && streaks.length === nBefore);
+const empty = new Float32Array(SPIN_REC);
+poseBallSpin(8, empty, empty, 0);
+check('a recorded EMPTY set clears the strokes — no strokes was the truth', streaks.length === 0);
+poseBallSpin(-8, recA, recB, 0.5);
+check('the posed spin sets the direction the strokes draw in', ballSpinState().spin === -8);
 
 // ---------------------------------------------------------------------------
 console.log(failures ? `\n${failures} check(s) FAILED.` : '\nAll spin checks passed.');

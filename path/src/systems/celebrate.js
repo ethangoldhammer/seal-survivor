@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { applyChainToPoint, smoothstep } from './ikChain.js';
+import { applyChainToPoint, smoothstep, tipWorld, measureReach } from './ikChain.js';
 import { createPoseRig, poseTarget as finTarget } from './poseRig.js';
 import { snapshotMoment } from './bossKill.js';
 import { feedback } from './feedback.js';
@@ -86,6 +86,9 @@ import { setSfxEcho } from './audio.js';
 
 // Scratch, module-level so posing allocates nothing per frame.
 const _target = new THREE.Vector3();
+const _wasFore = new THREE.Vector3();
+const _wasAt = new THREE.Vector3();
+const _step = new THREE.Vector3();
 
 /**
  * The performance in flight, shared by the player's driver and the escorts.
@@ -482,6 +485,169 @@ export function createCelebrationDriver(instance, tag = null) {
   // putting back.
   let entrySeq = -1;
 
+  // ---------------------------------------------------------------------
+  // THE ANIMAL'S OWN MOTION, measured off the body this rig is posing rather
+  // than handed in.
+  //
+  // A celebration is something a seal does WHILE swimming, and every pose in
+  // this file is written in the body's own frame — so without this the animal
+  // holds an identical, rigid shape whether it is coasting, sprinting or
+  // carving a turn, and the performance reads as a puppet dropped over the top
+  // of the game rather than as the animal doing something.
+  //
+  // MEASURED, NOT PASSED IN. The alternative is a `motion` argument threaded
+  // through main.js, versus.js and both escort call sites, and entities/ does
+  // not import from systems/ so it would arrive as loose numbers at every one.
+  // The body's world transform already carries all of it: how far its origin
+  // moved is speed, and how far its forward axis turned is the turn rate. One
+  // place, no callers, and it is right for any creature that ever gets a
+  // driver.
+  //
+  // SMOOTHED HARD. A single frame's delta is mostly noise — a 16ms sample of a
+  // body being pushed around by knockback, a dash and a soft-body ball — and a
+  // limb posed off raw frame deltas is a limb that judders.
+  let speed01 = 0;    // 0..1 of momentum.speedRef
+  let turn = 0;       // -1..1 of momentum.turnRef, signed about the lateral axis
+  let primedMotion = false;
+
+  function readMotion(rawDt) {
+    const m = cfg().momentum ?? {};
+    if (m.enabled === false || rawDt <= 0) { speed01 = 0; turn = 0; return; }
+    // refreshBasis has already run, so `origin` and `fore` are this frame's.
+    const b = rig.basis;
+    if (!primedMotion) {
+      _wasAt.copy(b.origin);
+      _wasFore.copy(b.fore);
+      primedMotion = true;
+      return;
+    }
+    const speed = _step.copy(b.origin).sub(_wasAt).length() / rawDt;
+    // The turn, SIGNED and about the lateral axis, so a seal carving one way
+    // banks its limbs the other. The cross product of last frame's forward
+    // with this frame's carries the axis and the sine of the angle together;
+    // projecting it onto `lat` picks out the component that happens in the
+    // screen plane, which is the only one a profile view can show.
+    const swing = _step.crossVectors(_wasFore, b.fore).dot(b.lat) / rawDt;
+    _wasAt.copy(b.origin);
+    _wasFore.copy(b.fore);
+    const k = 1 - Math.exp(-(m.smoothing ?? 8) * rawDt);
+    const wantSpeed = Math.min(1, speed / Math.max(0.01, m.speedRef ?? 34));
+    const wantTurn = Math.max(-1, Math.min(1, swing / Math.max(0.01, m.turnRef ?? 4)));
+    speed01 += (wantSpeed - speed01) * k;
+    turn += (wantTurn - turn) * k;
+  }
+
+  // WHERE EACH LIMB WOULD BE IF NOTHING WERE POSING IT — read once a frame,
+  // before anything is solved, off a skeleton that is holding exactly the
+  // animation's pose (rig.sync has just put it there).
+  //
+  // THIS IS THE REFERENCE, AND IT CANNOT BE THE LIVE TIP. Reading the tip
+  // inside the solve reads a bone the solver has already been moving toward
+  // this same target, so a target defined as "part of the way toward where the
+  // limb is" is a target chasing its own output: the fixed point is the pose
+  // in full, and the only thing the term buys is lag. Read BEFORE the solve,
+  // off the animation's own pose, it is an independent quantity — which is
+  // what lets a share of it survive at full weight instead of being absorbed.
+  const animTip = new Map();
+  function readTips() {
+    // Nothing to read for a pose that has opted out of both target bends (the
+    // clap does) — and not merely as a saving: this walks every chain's world
+    // matrix a second time, and a pose whose contact is its whole read should
+    // reach the solver through exactly the path it always did.
+    const p = cfg().poses?.[celebrationState.variant] ?? {};
+    const wantsFrom = (p.blendFrom ?? cfg().blendFrom ?? 1) > 0;
+    const wantsFollow = (p.follow ?? cfg().follow ?? 0.25) > 0;
+    if (!wantsFrom && !wantsFollow) return;
+    for (const { chain } of rig.fins) tip(chain);
+    if (rig.head) tip(rig.head);
+    if (rig.tail) tip(rig.tail);
+  }
+  function tip(chain) {
+    let v = animTip.get(chain);
+    if (!v) { v = new THREE.Vector3(); animTip.set(chain, v); }
+    chain.bones[0].updateWorldMatrix(true, true);
+    tipWorld(chain, v, 1);
+    return v;
+  }
+
+  /**
+   * WHERE THE POSE ACTUALLY ASKS FOR, once the animal's own motion and its
+   * live pose have had their say. Every pose in POSES writes a target into
+   * `_target`; this is the one place that target is bent, so a pose never has
+   * to know any of this exists.
+   *
+   *   MOMENTUM — the limbs stream BACK along the body and rise a little at
+   *   speed (a flipper held up at a sprint is a flipper in a current) and
+   *   swing to the OUTSIDE of a turn. Both in fractions of the chain's own
+   *   reach, like every other distance in this file, so they are right on both
+   *   flippers — which do not have the same reach — and on any other animal
+   *   that ever gets a driver.
+   *
+   *   THE BLEND FROM WHERE IT IS — the target starts at the limb's LIVE TIP
+   *   and travels to the pose over the envelope, so the performance grows out
+   *   of the animal's real pose instead of being a fixed destination the
+   *   solver races toward from wherever it happens to be. That is what makes
+   *   an entry read as the seal lifting its own flipper rather than as a pose
+   *   being switched on, and what makes the release hand the limb back to the
+   *   swim cycle it is in on THAT frame rather than the one it was in when the
+   *   boss died.
+   */
+  function bend(chain, target, weight, reach) {
+    const m = cfg().momentum ?? {};
+    if (m.enabled !== false) {
+      const b = rig.basis;
+      target
+        .addScaledVector(b.fore, -(m.drag ?? 0.35) * speed01 * reach)
+        .addScaledVector(b.up, (m.lift ?? 0.1) * speed01 * reach)
+        .addScaledVector(b.lat, (m.bank ?? 0.3) * turn * reach);
+    }
+    // BOTH TARGET BENDS ARE OVERRIDABLE PER POSE, and one pose overrides both.
+    //
+    // Most of these are shapes a limb is HELD in: growing out of where the
+    // animal actually was and keeping a share of its stroke inside the hold is
+    // the whole point of the feature. The CLAP is not. It is two limbs
+    // MEETING, the contact is the entire read, and it lands on the one frame
+    // the trophy is taken — so anything that holds the target back early or
+    // keeps part of the open pose at the peak costs it that contact. Measured:
+    // `follow` at the block's 0.25 left the flippers 59% of rest apart against
+    // the 53% they close to, 0.06 left them at 56%, and `blendFrom` alone —
+    // which is a no-op ON the contact frame — still cost 3% by entering the
+    // final swing from further out.
+    //
+    // So the clap keeps its absolute target and the animal's motion reaches it
+    // through `momentum` alone, which is the one of the three that does not
+    // touch the trajectory's shape.
+    const pose = cfg().poses?.[celebrationState.variant] ?? {};
+    const from = pose.blendFrom ?? cfg().blendFrom ?? 1;
+    const follow = Math.min(0.9, Math.max(0, pose.follow ?? cfg().follow ?? 0.25));
+    if (from > 0 || follow > 0) {
+      const ref = animTip.get(chain) ?? tip(chain);
+      // THE ENTRY, ON ITS OWN FASTER CURVE — not on the envelope weight
+      // directly, and that is the whole difficulty of doing this at all.
+      //
+      // The bone blend at the bottom of applyChainToPoint ALREADY scales by
+      // `weight`. Sliding the target by the same number multiplies the two, so
+      // a pose at half weight only asks for a quarter of itself — invisible on
+      // the boss kill, which has a second and a half to get there, and plainly
+      // wrong on the level-up salute, which peaks in a fraction of that and
+      // came up 0.04 short of closing a clap it used to close.
+      //
+      // So the target reaches the pose by `blendSpan` of the way up the
+      // envelope and everything above that is the bone weight alone.
+      const w = Math.min(1, Math.max(0, weight));
+      const span = Math.max(0.01, cfg().blendSpan ?? 0.5);
+      let t = 1 - from * (1 - smoothstep(0, 1, Math.min(1, w / span)));
+      // ...AND IT NEVER ARRIVES ALL THE WAY. `follow` is the share of the
+      // limb's own animated pose the target keeps at FULL extension — the
+      // difference between a seal holding a pose and a seal holding a pose
+      // while it swims. Without it the performance is rigid from the peak
+      // onward however much it grew out of the animal on the way in.
+      t = Math.min(t, 1 - follow);
+      target.lerpVectors(ref, target, t);
+    }
+    return target;
+  }
+
   return {
     /**
      * Pose this frame. MUST run after the animation controller and after the
@@ -503,6 +669,7 @@ export function createCelebrationDriver(instance, tag = null) {
         if (entrySeq !== -1) {
           rig.restore();
           entrySeq = -1;
+          primedMotion = false;
         }
         return;
       }
@@ -511,23 +678,35 @@ export function createCelebrationDriver(instance, tag = null) {
       const ik = cfg().ik ?? {};
       const { phase, weight } = envelope();
 
-      // First frame of this celebration: remember where the animal was. After
-      // that, put it back there before posing — see systems/poseRig.js for why
-      // this is load-bearing rather than housekeeping.
+      // First frame of this celebration: remember where the animal was, as the
+      // pose's zero and as the place the bones go back to when it ends.
+      //
+      // AFTER THAT, `sync` RATHER THAN `restore` — see systems/poseRig.js. The
+      // entry snapshot is still the guard against an unkeyed flipper walking,
+      // but it is now applied PER BONE and only to the bones nothing else
+      // wrote this frame, so the swim cycle, the aim and the body's own turn
+      // all stay under the pose instead of being erased by it every frame.
       if (entrySeq !== celebrationState.seq) {
         entrySeq = celebrationState.seq;
         rig.capture();
+        primedMotion = false;
       } else {
-        rig.restore();
+        rig.sync();
       }
 
       if (weight <= 0.001 && celebrationState.clock > celebrationState.peakAt) return;
 
       rig.refreshBasis();
+      readMotion(rawDt);
+      // Before a single chain is solved — see readTips.
+      readTips();
 
       ctx.phase = phase;
-      ctx.solve = (chain, target) => applyChainToPoint(chain, rawDt, ik, weight, 1, target);
+      ctx.solve = (chain, target) => applyChainToPoint(
+        chain, rawDt, ik, weight, 1, bend(chain, target, weight, measureReach(chain, 1)),
+      );
       pose(ctx);
+      rig.note();
     },
 
     /**
@@ -539,7 +718,15 @@ export function createCelebrationDriver(instance, tag = null) {
      */
     reset() {
       rig.unprime();
+      primedMotion = false;
+      speed01 = 0;
+      turn = 0;
     },
+
+    // The animal's own motion as the pose is reading it, for the tuner and the
+    // tests: a momentum term that has quietly stopped moving looks exactly
+    // like a taste decision from the outside.
+    motion: () => ({ speed01, turn }),
 
     // What actually resolved, for the tests: bone lookup drops names that miss
     // silently, so this is the only way to tell "two flippers" from "two

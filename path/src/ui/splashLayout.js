@@ -32,19 +32,48 @@
 //                           on the strip's bottom edge: dice 80, pill 132,
 //                           start 80, all x scale (numEntryScale drives each
 //                           through a formula converter — see riveContract.js).
-//   Title Slot  (1-138828)  absolute, width 100%, height 57%, top 0, padding
-//                           1.5% a side; holds `SR Wordmark` (1920x640) fitted
-//                           CONTAIN and centred.
+//   Title Slot  (1-138828)  absolute, width 100%, height 32%, top 0, padding
+//                           1.5% a side, alignment BOTTOM-centre; holds
+//                           `SR Wordmark` (1920x360) fitted CONTAIN and
+//                           bottom-aligned.
+//
+// THE TITLE IS PINNED TO THE HORIZON, and that is what the 32% is. `Sky`
+// (1-138785) is 32% of the screen tall and `Sea` fills the rest, so the
+// waterline sits at 0.32*H at every size. The Title Slot is the SAME 32%,
+// which makes its bottom edge the horizon exactly, and the wordmark is
+// bottom-aligned in it — so the wordmark's own bottom edge lands ON the
+// waterline whatever the browser is.
+//
+// `SR Wordmark` is 1920x360 and its art HANGS OUT THE BOTTOM (the artboard's
+// clip is off): SEAL sits inside the box, SURVIVOR and the fin spill below
+// y=360 and therefore below the waterline. THAT IS THE CONTROL. The distance
+// from the words to the horizon is where the art sits inside those 360 units
+// — set it once in the Rive editor and it holds at every viewport, because
+// the whole wordmark scales as one piece about a bottom edge that is always
+// the horizon.
+//
+// It used to be a 57%-tall slot holding a 1920x640 artboard fitted CONTAIN and
+// CENTRED, which anchored the title to nothing: the box floated in the middle
+// of a slot whose height AND whose letterboxing both moved with the viewport,
+// so the waterline crossed the wordmark at a different place on every screen.
+// Measured before the change: the ink ended 270px below the horizon at
+// 1920x1080, 179 at 1280x800, 118 on a portrait iPad and 34 on a phone — the
+// fin drifting from mid-SURVIVOR to above the S. 0.57/640 and 0.32/360 are
+// within 0.2% of each other, so the wordmark's SIZE at any given viewport is
+// unchanged; only where it is anchored moved.
 //
 // and the wordmark's INK — where its pixels actually are inside its own
-// 1920x640 artboard, which is not its text boxes (the SEAL/SURVIVOR runs are
+// artboard, which is not its text boxes (the SEAL/SURVIVOR runs are
 // 1846 wide with the glyphs centred in them, and the fin between SUR and
 // VIVOR is an image that hangs to the bottom edge). Scanned off three
 // rendered frames at different fits (desktop, laptop, iPad mini) and rounded
 // outward; all three agreed within a few units. If the wordmark is redrawn,
 // re-scan: render the probe (`npm run looks:splash`) at 1920x1080, where the
-// artboard sits at scale 0.962 and x 36.5, and find the extent of its
-// white / grey / purple pixels above the entry column.
+// fit is exactly 0.96 and the box runs x 38.4..1881.6, y 0..345.6, and take
+// the extent of every pixel brighter than the sea that is not the sun. Done
+// that way on 2026-09-11 and stable from luma>100 to luma>200, which is what
+// the numbers below are. `bottom` is past 360 because the art hangs below the
+// waterline — that is the design, not a stale measurement.
 // ---------------------------------------------------------------------------
 
 export const SPLASH_GEOMETRY = Object.freeze({
@@ -59,13 +88,33 @@ export const SPLASH_GEOMETRY = Object.freeze({
                        // estimate for the frame before the artboard has
                        // reported a real width
   }),
-  title: Object.freeze({ heightFrac: 0.57, padFrac: 0.015 }),
+  // `heightFrac` is the HORIZON, not a title area: Sky is this tall, Sea is
+  // the rest, and the Title Slot is the same height so its bottom edge is the
+  // waterline. Move it and the sea level moves with the title.
+  // `padFrac` is 0 AND THE ARTBOARD'S 1.5% IS NOT A MISTAKE. The Title Slot
+  // really does carry 1.5% padding a side, but the nested artboard inside it
+  // fits the slot's BORDER box and ignores it — measured, not assumed: across
+  // thirteen viewports the rendered wordmark comes out at exactly
+  // min(W/1920, 0.32*H/360), binding ratio 1.0000 either way round, and 0.97
+  // misses by 3% on every screen where the width binds. It was 0.015 here from
+  // the day this file was written, which made the model put the title 3%
+  // smaller — and so slightly higher — than it draws.
+  title: Object.freeze({ heightFrac: 0.32, padFrac: 0 }),
   wordmark: Object.freeze({
     width: 1920,
-    height: 640,
-    ink: Object.freeze({ left: 185, top: 88, right: 1760, bottom: 640 }),
+    // The ARTBOARD's height, which is shorter than its art: the box ends at
+    // the horizon and SURVIVOR hangs below it. `ink.bottom` is past this on
+    // purpose — see the header.
+    height: 360,
+    ink: Object.freeze({ left: 225, top: 0, right: 1715, bottom: 628 }),
   }),
 });
+
+/** The waterline, in CSS pixels down the screen. Sky is this tall; Sea is the
+ * rest; the wordmark's bottom edge sits exactly here. */
+export function horizonY(H, g = SPLASH_GEOMETRY) {
+  return H * g.title.heightFrac;
+}
 
 /** Every part of the entry column, added up at scale 1. */
 export function entryColumnHeight(g = SPLASH_GEOMETRY) {
@@ -74,11 +123,12 @@ export function entryColumnHeight(g = SPLASH_GEOMETRY) {
 }
 
 /**
- * The wordmark's ink, on screen. `SR Wordmark` is a 1920x640 artboard fitted
- * CONTAIN inside the title slot (the top 57% of the screen, less 1.5% padding
- * a side) and centred in it, so its scale is whichever axis binds and its box
- * floats in the middle of the slot. The ink rectangle inside that box is the
- * measured constant above.
+ * The wordmark's ink, on screen. `SR Wordmark` is a 1920x360 artboard fitted
+ * CONTAIN inside the title slot (the top 32% of the screen, less 1.5% padding
+ * a side) and BOTTOM-aligned in it, so whichever axis binds the scale, the
+ * box's bottom edge lands on the slot's — which is the horizon. The ink
+ * rectangle is the measured constant above, and its bottom is past the box's
+ * because the art hangs below the waterline.
  */
 export function wordmarkRect(W, H, g = SPLASH_GEOMETRY) {
   const slotW = W * (1 - 2 * g.title.padFrac);
@@ -87,7 +137,9 @@ export function wordmarkRect(W, H, g = SPLASH_GEOMETRY) {
   const boxW = g.wordmark.width * s;
   const boxH = g.wordmark.height * s;
   const left = (W - boxW) / 2;
-  const top = (slotH - boxH) / 2;
+  // Bottom-aligned, not centred: the slot's bottom edge is the horizon, so
+  // this is the one line that pins the title to the waterline.
+  const top = slotH - boxH;
   const ink = g.wordmark.ink;
   return {
     left: left + ink.left * s,

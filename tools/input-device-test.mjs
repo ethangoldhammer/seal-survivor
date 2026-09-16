@@ -333,5 +333,96 @@ section('the shoulders are the dice');
   updateInput(camera, origin);
 }
 
+// ---------------------------------------------------------------------------
+section('a pad that is there and is not being read');
+// ---------------------------------------------------------------------------
+// EVERY FAILURE HERE IS "MY CONTROLLER IS CONNECTED AND THE GAME IGNORES IT",
+// which is the one gamepad report that cannot be reproduced by looking at the
+// game: the pad is paired, the console says it connected, and the seal does
+// not move. All three of these produced exactly that and all three were
+// permanent for the rest of the session.
+function padEvent(type, gamepad) {
+  const ev = new dom.window.Event(type);
+  Object.defineProperty(ev, 'gamepad', { value: gamepad });
+  window.dispatchEvent(ev);
+}
+const padN = (index) => ({ ...padAt(), index, id: `test pad ${index}` });
+
+{
+  // THE LATCH. One throw out of getGamepads used to stop the poll for good —
+  // and the two things that can set it (a permissions read at boot, and a
+  // single throw) are both guesses about a page, not facts about a pad.
+  dom.window.navigator.getGamepads = () => { throw new Error('blocked'); };
+  updateInput(camera, origin);
+  check('a throwing getGamepads stops the poll', inputStatus.gamepadBlocked === true);
+  check('...and reads no pad', inputStatus.padIndex === -1);
+
+  // A pad announcing itself is not a guess. It outranks both of them.
+  setPad(padAt());
+  padEvent('gamepadconnected', padAt());
+  check('a pad connecting lets go of the latch', inputStatus.gamepadBlocked === false);
+  updateInput(camera, origin);
+  check('...and the pad is read again', inputStatus.padIndex === 0, `slot ${inputStatus.padIndex}`);
+}
+
+{
+  // ...AND WITHOUT THE EVENT. A connect event fires once, at a moment this
+  // page may not have been listening yet, and Safari holds it until the page
+  // has been touched — so the latch cannot be left depending on one. It is
+  // retried on a clock as well, which is what the frames below are.
+  dom.window.navigator.getGamepads = () => { throw new Error('blocked'); };
+  updateInput(camera, origin);
+  check('latched again', inputStatus.gamepadBlocked === true);
+
+  setPad(padAt());
+  updateInput(camera, origin);
+  check('...and the very next frame does not pay for the retry',
+    inputStatus.gamepadBlocked === true && inputStatus.padIndex === -1);
+
+  const realNow = performance.now.bind(performance);
+  const skew = 2500;
+  performance.now = () => realNow() + skew;
+  updateInput(camera, origin);
+  performance.now = realNow;
+  check('a couple of seconds later it asks again, and the pad is back',
+    inputStatus.gamepadBlocked === false && inputStatus.padIndex === 0);
+  setPad(null);
+  updateInput(camera, origin);
+}
+
+{
+  // TWO ENTRIES, ONE HAND. A receiver, an 8BitDo's second node, or a pad that
+  // naps: one of them going away used to clear "a controller is connected"
+  // outright, with the live one still being held.
+  dom.window.navigator.getGamepads = () => [padN(0), padN(1)];
+  updateInput(camera, origin);
+  check('both pads are counted', inputStatus.padCount === 2, String(inputStatus.padCount));
+
+  dom.window.navigator.getGamepads = () => [padN(0)];
+  padEvent('gamepaddisconnected', padN(1));
+  check('one of two leaving does not mean no controller',
+    inputStatus.gamepadConnected === true);
+
+  dom.window.navigator.getGamepads = () => [];
+  padEvent('gamepaddisconnected', padN(0));
+  check('...and the last one leaving does', inputStatus.gamepadConnected === false);
+}
+
+{
+  // THE COUNT IS A READOUT SOMEBODY CHECKS. It has to fall to zero on the
+  // frame the pads go, not hold the last number it happened to be written.
+  setPad(null);
+  updateInput(camera, origin);
+  check('an empty list reads as no pads', inputStatus.padCount === 0);
+  check('...and as nothing connected', inputStatus.gamepadConnected === false);
+
+  setPad(padAt());
+  updateInput(camera, origin);
+  check('a pad in the list is connected again', inputStatus.gamepadConnected === true);
+  check('...and is the one being read', inputStatus.padIndex === 0);
+  setPad(null);
+  updateInput(camera, origin);
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nall good');
 process.exit(failures ? 1 : 0);

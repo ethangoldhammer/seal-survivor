@@ -1,0 +1,328 @@
+<Rive version="1" kind="fragment">
+
+    <!-- =========================================================================
+         SEAT CARD — one seal's slot on the Blubberball team select.
+         Every word is bound, so uiText.csv and rosterCast.js keep owning the
+         copy; the literals here are lorem and are only what shows before the
+         game pushes anything in.
+
+         Hover lifts the ground and lights a FEATHERED STROKE. The feather has
+         to be on a stroke: inside a Fill it renders nothing at all, with a
+         clean build and an empty problems list.
+         ========================================================================= -->
+    <Artboard viewModelId="3:10" viewModelInstanceId="3:19" defaultStateMachineId="1:71"
+              x="0" y="0" width="420" height="132" styleId="1:80" name="Seat Card" id="0:2">
+
+        <LayoutComponentStyle name="Style" id="1:80"/>
+
+        <!-- Declared first paints on top. -->
+
+        <!-- READY STAMP -->
+        <Text x="356" y="34" sizingValue="autoWidth" originX="0.5" originY="0.5"
+              name="Ready Label" id="1:50">
+            <TextStylePaint fontSize="13" letterSpacing="0.08" fontAssetId="3:1" name="Stamp" id="1:51">
+                <Fill name="Fill" id="0:3512"><SolidColor colorValue="FF0E1419" name="C" id="0:3513"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:51" text="Lorem" name="Run" id="1:52">
+                <DataBindContext sourcePathIds="3:10-3:14" propertyKey="268" id="0:3514"/>
+            </TextValueRun>
+        </Text>
+
+        <Shape x="276.0" y="34" rotation="0.34" name="Glare" id="1:331">
+            <Rectangle width="30" height="70" originX="0.5" originY="0.5" name="Path" id="0:5120"/>
+            <Fill name="Fill" id="0:5121">
+                <LinearGradient startX="-15" startY="0" endX="15" endY="0" name="G" id="0:5122">
+                    <GradientStop colorValue="00FFFFFF" position="0" name="A" id="0:5123"/>
+                    <GradientStop colorValue="45FFFFFF" position="0.5" name="B" id="0:5124"/>
+                    <GradientStop colorValue="00FFFFFF" position="1" name="C" id="0:5125"/>
+                </LinearGradient>
+            </Fill>
+            <ClippingShape sourceId="1:40" name="Clip" id="0:5126"/>
+        </Shape>
+        <Shape x="356" y="34" name="Ready Pill" id="1:40">
+            <Rectangle width="92" height="26" originX="0.5" originY="0.5"
+                       cornerRadiusTL="13" cornerRadiusTR="0" cornerRadiusBL="0" cornerRadiusBR="0"
+                       name="Path" id="1:41"/>
+            <Stroke name="Edge" id="0:5127"><DataBindContext sourcePathIds="3:10-3:220-3:301" propertyKey="47" id="0:5128"/>
+                <SolidColor colorValue="3D3F5568" name="C" id="1:333"/>
+                <TrimPath start="0" end="0" modeValue="sequential" name="Trim" id="1:330"><DataBindContext sourcePathIds="3:10-3:220-3:309" propertyKey="116" id="0:5129"/></TrimPath>
+                <DashPath name="Dashes" id="0:5130"><DataBindContext sourcePathIds="3:10-3:220-3:308" propertyKey="690" id="0:5131"/>
+                    <Dash name="On" id="0:5132"><DataBindContext sourcePathIds="3:10-3:220-3:306" propertyKey="692" id="0:5133"/></Dash>
+                    <Dash name="Off" id="0:5134"><DataBindContext sourcePathIds="3:10-3:220-3:307" propertyKey="692" id="0:5135"/></Dash>
+                </DashPath>
+            </Stroke>
+            <Fill name="Fill" id="0:3515">
+                <SolidColor colorValue="FFF5B02E" name="C" id="1:42">
+                    <DataBindContext sourcePathIds="3:10-3:12" propertyKey="37" id="0:3516"/>
+                </SolidColor>
+            </Fill>
+        </Shape>
+        <Shape x="356" y="34" name="Shadow" id="1:332">
+            <Rectangle width="92" height="26" originX="0.5" originY="0.5" cornerRadiusTL="13" name="Path" id="0:5136"/>
+            <Stroke name="Shadow" id="0:5137"><DataBindContext sourcePathIds="3:10-3:220-3:304" propertyKey="47" id="0:5138"/>
+                <SolidColor colorValue="A6000000" name="C" id="0:5139"/>
+                <Feather name="F" id="0:5140"><DataBindContext sourcePathIds="3:10-3:220-3:304" propertyKey="749" id="0:5141"/><DataBindContext sourcePathIds="3:10-3:220-3:305" propertyKey="751" id="0:5142"/></Feather>
+            </Stroke>
+        </Shape>
+
+        <!-- ROLE LINE — captain / locked / cpu, whichever this seat is -->
+        <Text x="42" y="88" sizingValue="autoWidth" name="Role" id="1:30">
+            <TextStylePaint letterSpacing="0.06" fontAssetId="3:1" name="Role Style" id="1:31">
+                <DataBindContext sourcePathIds="3:10-3:220-3:313" propertyKey="274" id="0:4691"/>
+                <Fill name="Fill" id="0:3517"><SolidColor colorValue="FF7A8896" name="C" id="0:3518"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:31" text="dolor sit amet" name="Run" id="1:32">
+                <DataBindContext sourcePathIds="3:10-3:13" propertyKey="268" id="0:3519"/>
+            </TextValueRun>
+        </Text>
+
+        <!-- THE NAME — cast off sealNames.csv by systems/rosterCast.js -->
+        <Text x="42" y="38" sizingValue="autoWidth" name="Seat Name" id="1:20">
+            <TextStylePaint fontSize="31" fontAssetId="3:1" name="Name Style" id="1:21">
+                <Fill name="Fill" id="0:3520"><SolidColor colorValue="FFF2F6FA" name="C" id="0:3521"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:21" text="Lorem ipsum" name="Run" id="1:22">
+                <DataBindContext sourcePathIds="3:10-3:11" propertyKey="268" id="0:3522"/>
+            </TextValueRun>
+        </Text>
+
+        <!-- TEAM COLOUR BAR — the captain's pick off the wheel -->
+        <Shape x="8" y="8" name="Team Bar" id="1:10">
+            <Rectangle width="14" height="116" originX="0" originY="0"
+                       name="Path" id="1:11"/>
+            <Fill name="Fill" id="0:3523">
+                <SolidColor colorValue="FFF5B02E" name="C" id="1:12">
+                    <DataBindContext sourcePathIds="3:10-3:12" propertyKey="37" id="0:3524"/>
+                </SolidColor>
+            </Fill>
+        </Shape>
+
+        <!-- CARD GROUND — also the hit target. Pointer input is not offered on
+             the artboard itself, so the thing that covers it has to be a shape. -->
+        <Shape x="-34.0" y="66.0" rotation="0.34" name="Glare" id="1:301">
+            <Rectangle width="30" height="176" originX="0.5" originY="0.5" name="Path" id="0:5143"/>
+            <Fill name="Fill" id="0:5144">
+                <LinearGradient startX="-15" startY="0" endX="15" endY="0" name="G" id="0:5145">
+                    <GradientStop colorValue="00FFFFFF" position="0" name="A" id="0:5146"/>
+                    <GradientStop colorValue="45FFFFFF" position="0.5" name="B" id="0:5147"/>
+                    <GradientStop colorValue="00FFFFFF" position="1" name="C" id="0:5148"/>
+                </LinearGradient>
+            </Fill>
+            <ClippingShape sourceId="1:60" name="Clip" id="0:5149"/>
+        </Shape>
+        <Shape x="8" y="8" name="Card" id="1:60">
+            <Rectangle width="404" height="116" originX="0" originY="0"
+                       cornerRadiusTL="10" cornerRadiusTR="0" cornerRadiusBL="0" cornerRadiusBR="0"
+                       name="Path" id="0:3525"/>
+            <Stroke name="Glow" id="0:3526"><DataBindContext sourcePathIds="3:10-3:220-3:302" propertyKey="47" id="0:4692"/>
+                <SolidColor colorValue="00000000" name="C" id="1:62"/>
+                <Feather name="F" id="0:3527"><DataBindContext sourcePathIds="3:10-3:220-3:303" propertyKey="749" id="0:4693"/></Feather>
+            </Stroke>
+            <Stroke name="Edge" id="0:5150"><DataBindContext sourcePathIds="3:10-3:220-3:301" propertyKey="47" id="0:5151"/>
+                <SolidColor colorValue="3D3F5568" name="C" id="1:303"/>
+                <TrimPath start="0" end="0" modeValue="sequential" name="Trim" id="1:300"><DataBindContext sourcePathIds="3:10-3:220-3:309" propertyKey="116" id="0:5152"/></TrimPath>
+                <DashPath name="Dashes" id="0:5153"><DataBindContext sourcePathIds="3:10-3:220-3:308" propertyKey="690" id="0:5154"/>
+                    <Dash name="On" id="0:5155"><DataBindContext sourcePathIds="3:10-3:220-3:306" propertyKey="692" id="0:5156"/></Dash>
+                    <Dash name="Off" id="0:5157"><DataBindContext sourcePathIds="3:10-3:220-3:307" propertyKey="692" id="0:5158"/></Dash>
+                </DashPath>
+            </Stroke>
+            <Fill name="Fill" id="0:3528"><SolidColor colorValue="FF16202B" name="C" id="1:61"/></Fill>
+        </Shape>
+        <Shape x="210.0" y="66.0" name="Shadow" id="1:302">
+            <Rectangle width="404" height="116" originX="0.5" originY="0.5" cornerRadiusTL="10" name="Path" id="0:5159"/>
+            <Stroke name="Shadow" id="0:5160"><DataBindContext sourcePathIds="3:10-3:220-3:304" propertyKey="47" id="0:5161"/>
+                <SolidColor colorValue="A6000000" name="C" id="0:5162"/>
+                <Feather name="F" id="0:5163"><DataBindContext sourcePathIds="3:10-3:220-3:304" propertyKey="749" id="0:5164"/><DataBindContext sourcePathIds="3:10-3:220-3:305" propertyKey="751" id="0:5165"/></Feather>
+            </Stroke>
+        </Shape>
+
+        <!-- One hold key per state. The runtime mixes between two states over the
+             transition's duration, so two one-key timelines ARE the cross-fade. -->
+        <LinearAnimation duration="1" name="Card Rest" id="1:90">
+            <KeyedObject objectId="1:61" id="0:3529">
+                <KeyedProperty propertyKey="37" id="0:3530"><KeyFrameColor value="FF16202B" id="0:3531"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:62" id="0:3532">
+                <KeyedProperty propertyKey="37" id="0:3533"><KeyFrameColor value="00000000" id="0:3534"/></KeyedProperty>
+            </KeyedObject>
+                    <KeyedObject objectId="1:300" id="0:5166">
+                <KeyedProperty propertyKey="115" id="0:5167"><KeyFrameDouble value="0.0" id="0:5168"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:303" id="0:5169">
+                <KeyedProperty propertyKey="37" id="0:5170"><KeyFrameColor value="3D3F5568" id="0:5171"/></KeyedProperty>
+            </KeyedObject>
+</LinearAnimation>
+        <LinearAnimation duration="1" name="Card Hover" id="1:91">
+            <KeyedObject objectId="1:61" id="0:3535">
+                <KeyedProperty propertyKey="37" id="0:3536"><KeyFrameColor value="FF1E2D3C" id="0:3537"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:62" id="0:3538">
+                <KeyedProperty propertyKey="37" id="0:3539"><KeyFrameColor value="FF3FE0C8" id="0:3540"/></KeyedProperty>
+            </KeyedObject>
+                    <KeyedObject objectId="1:300" id="0:5172">
+                <KeyedProperty propertyKey="115" id="0:5173"><KeyFrameDouble value="1.0" id="0:5174"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:303" id="0:5175">
+                <KeyedProperty propertyKey="37" id="0:5176"><KeyFrameColor value="FF5FF0DC" id="0:5177"/></KeyedProperty>
+            </KeyedObject>
+</LinearAnimation>
+
+        <LinearAnimation duration="1" name="Ready Off" id="1:92">
+            <KeyedObject objectId="1:40" id="0:3541">
+                <KeyedProperty propertyKey="18" id="0:3542"><KeyFrameDouble value="0" id="0:3543"/></KeyedProperty>
+                <KeyedProperty propertyKey="16" id="0:3544"><KeyFrameDouble value="0.7" id="0:3545"/></KeyedProperty>
+                <KeyedProperty propertyKey="17" id="0:3546"><KeyFrameDouble value="0.7" id="0:3547"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:50" id="0:3548">
+                <KeyedProperty propertyKey="18" id="0:3549"><KeyFrameDouble value="0" id="0:3550"/></KeyedProperty>
+            </KeyedObject>
+                    <KeyedObject objectId="1:330" id="0:5178">
+                <KeyedProperty propertyKey="115" id="0:5179"><KeyFrameDouble value="0.0" id="0:5180"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:333" id="0:5181">
+                <KeyedProperty propertyKey="37" id="0:5182"><KeyFrameColor value="3D3F5568" id="0:5183"/></KeyedProperty>
+            </KeyedObject>
+</LinearAnimation>
+        <LinearAnimation duration="1" name="Ready On" id="1:93">
+            <KeyedObject objectId="1:40" id="0:3551">
+                <KeyedProperty propertyKey="18" id="0:3552"><KeyFrameDouble value="1" id="0:3553"/></KeyedProperty>
+                <KeyedProperty propertyKey="16" id="0:3554"><KeyFrameDouble value="1" id="0:3555"/></KeyedProperty>
+                <KeyedProperty propertyKey="17" id="0:3556"><KeyFrameDouble value="1" id="0:3557"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:50" id="0:3558">
+                <KeyedProperty propertyKey="18" id="0:3559"><KeyFrameDouble value="1" id="0:3560"/></KeyedProperty>
+            </KeyedObject>
+                    <KeyedObject objectId="1:330" id="0:5184">
+                <KeyedProperty propertyKey="115" id="0:5185"><KeyFrameDouble value="1.0" id="0:5186"/></KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:333" id="0:5187">
+                <KeyedProperty propertyKey="37" id="0:5188"><KeyFrameColor value="FF5FF0DC" id="0:5189"/></KeyedProperty>
+            </KeyedObject>
+</LinearAnimation>
+
+        <LinearAnimation loopValue="loop" duration="260" name="Glare Sweep" id="1:400">
+            <KeyedObject objectId="1:301" id="0:5190">
+                <KeyedProperty propertyKey="13" id="0:5191">
+                    <KeyFrameDouble value="-34.0" interpolationType="linear" frame="0" id="0:5192"/>
+                    <KeyFrameDouble value="454.0" interpolationType="linear" frame="54" id="0:5193"/>
+                    <KeyFrameDouble value="454.0" interpolationType="linear" frame="260" id="0:5194"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="1:331" id="0:5195">
+                <KeyedProperty propertyKey="13" id="0:5196">
+                    <KeyFrameDouble value="276.0" interpolationType="linear" frame="0" id="0:5197"/>
+                    <KeyFrameDouble value="436.0" interpolationType="linear" frame="54" id="0:5198"/>
+                    <KeyFrameDouble value="436.0" interpolationType="linear" frame="260" id="0:5199"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+        <LinearAnimation duration="60" name="Idle" id="1:70"/>
+
+        <StateMachine name="State Machine 1" id="1:71">
+
+            <!-- HOVER: pointer in and out of the card -->
+            <StateMachineListenerSingle targetId="1:60" listenerTypeValue="enter" name="In" id="1:120">
+                <ListenerViewModelChange id="0:3561">
+                    <BindablePropertyBoolean propertyValue="true" id="0:3562">
+                        <DataBindContext sourcePathIds="3:10-3:15" propertyKey="634" direction="true" id="0:3563"/>
+                    </BindablePropertyBoolean>
+                </ListenerViewModelChange>
+            </StateMachineListenerSingle>
+            <StateMachineListenerSingle targetId="1:60" listenerTypeValue="exit" name="Out" id="1:121">
+                <ListenerViewModelChange id="0:3564">
+                    <BindablePropertyBoolean propertyValue="false" id="0:3565">
+                        <DataBindContext sourcePathIds="3:10-3:15" propertyKey="634" direction="true" id="0:3566"/>
+                    </BindablePropertyBoolean>
+                </ListenerViewModelChange>
+            </StateMachineListenerSingle>
+
+            <!-- CLICK: read `ready`, negate it, write it back. Three load-bearing
+                 parts — the read context carries the id fromDataBindId names, the
+                 write context carries direction, and fromViewModelProperty says
+                 the value comes from a property rather than a literal. -->
+            <StateMachineListenerSingle targetId="1:60" listenerTypeValue="click" name="Toggle Ready" id="1:122">
+                <ListenerViewModelChange fromViewModelProperty="true" fromDataBindId="1:123" id="0:3567">
+                    <BindablePropertyBoolean id="0:3568">
+                        <DataBindContext sourcePathIds="3:10-3:16" propertyKey="634" id="1:123" converterId="3:91"/>
+                        <DataBindContext sourcePathIds="3:10-3:16" propertyKey="634" direction="true" id="0:3569"/>
+                    </BindablePropertyBoolean>
+                </ListenerViewModelChange>
+            </StateMachineListenerSingle>
+
+
+            <StateMachineLayer name="Glare" id="1:401">
+                <AnyState x="900" y="-120" id="0:5200"/>
+                <ExitState x="1060" y="-120" id="0:5201"/>
+                <EntryState id="0:5202"><StateTransition stateToId="1:402" id="0:5203"/></EntryState>
+                <AnimationState x="900" animationId="1:400" id="1:402"/>
+            </StateMachineLayer>
+            <StateMachineLayer name="Layer 1" id="1:72">
+                <AnyState x="200" y="-120" id="0:3570"/>
+                <ExitState x="400" y="-120" id="0:3571"/>
+                <EntryState id="0:3572"><StateTransition stateToId="1:73" id="0:3573"/></EntryState>
+                <AnimationState x="200" animationId="1:70" id="1:73"/>
+            </StateMachineLayer>
+
+            <StateMachineLayer name="Hover" id="1:100">
+                <AnyState x="520" y="-120" id="0:3574"/>
+                <ExitState x="700" y="-120" id="0:3575"/>
+                <EntryState id="0:3576"><StateTransition stateToId="1:101" id="0:3577"/></EntryState>
+                <AnimationState x="520" animationId="1:90" id="1:101">
+                    <StateTransition stateToId="1:102" duration="140" id="0:3578">
+                        <TransitionViewModelCondition id="0:3579">
+                            <TransitionPropertyViewModelComparator id="0:3580">
+                                <BindablePropertyBoolean id="0:3581">
+                                    <DataBindContext sourcePathIds="3:10-3:15" propertyKey="634" id="0:3582"/>
+                                </BindablePropertyBoolean>
+                            </TransitionPropertyViewModelComparator>
+                            <TransitionValueBooleanComparator value="true" id="0:3583"/>
+                        </TransitionViewModelCondition>
+                    </StateTransition>
+                </AnimationState>
+                <AnimationState x="700" animationId="1:91" id="1:102">
+                    <StateTransition stateToId="1:101" duration="180" id="0:3584">
+                        <TransitionViewModelCondition id="0:3585">
+                            <TransitionPropertyViewModelComparator id="0:3586">
+                                <BindablePropertyBoolean id="0:3587">
+                                    <DataBindContext sourcePathIds="3:10-3:15" propertyKey="634" id="0:3588"/>
+                                </BindablePropertyBoolean>
+                            </TransitionPropertyViewModelComparator>
+                            <TransitionValueBooleanComparator value="false" id="0:3589"/>
+                        </TransitionViewModelCondition>
+                    </StateTransition>
+                </AnimationState>
+            </StateMachineLayer>
+
+            <StateMachineLayer name="Ready" id="1:110">
+                <AnyState x="520" y="60" id="0:3590"/>
+                <ExitState x="700" y="60" id="0:3591"/>
+                <EntryState id="0:3592"><StateTransition stateToId="1:111" id="0:3593"/></EntryState>
+                <AnimationState x="520" animationId="1:92" id="1:111">
+                    <StateTransition stateToId="1:112" duration="160" id="0:3594">
+                        <TransitionViewModelCondition id="0:3595">
+                            <TransitionPropertyViewModelComparator id="0:3596">
+                                <BindablePropertyBoolean id="0:3597">
+                                    <DataBindContext sourcePathIds="3:10-3:16" propertyKey="634" id="0:3598"/>
+                                </BindablePropertyBoolean>
+                            </TransitionPropertyViewModelComparator>
+                            <TransitionValueBooleanComparator value="true" id="0:3599"/>
+                        </TransitionViewModelCondition>
+                    </StateTransition>
+                </AnimationState>
+                <AnimationState x="700" animationId="1:93" id="1:112">
+                    <StateTransition stateToId="1:111" duration="160" id="0:3600">
+                        <TransitionViewModelCondition id="0:3601">
+                            <TransitionPropertyViewModelComparator id="0:3602">
+                                <BindablePropertyBoolean id="0:3603">
+                                    <DataBindContext sourcePathIds="3:10-3:16" propertyKey="634" id="0:3604"/>
+                                </BindablePropertyBoolean>
+                            </TransitionPropertyViewModelComparator>
+                            <TransitionValueBooleanComparator value="false" id="0:3605"/>
+                        </TransitionViewModelCondition>
+                    </StateTransition>
+                </AnimationState>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+</Rive>

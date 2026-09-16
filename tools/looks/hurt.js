@@ -3,9 +3,12 @@
 //
 //   npm run looks:hurt
 //
-// What the last 15% of the health bar does to the picture: the frame closing in
-// and going bloody, breathing on a heartbeat that quickens as the bar empties.
-// See CONFIG.fx.lowHealth, the ramp in systems/lowHealthFx.js and
+// What the last third of the health bar does to the picture: the frame closing
+// in and going bloody, scan lines crawling over the whole of it, all of it
+// breathing on a heartbeat that quickens as the bar empties. The band is wide
+// and the curve is slow, so most of what this sheet shows is the QUIET end —
+// which is the part that is hard to judge and easy to get wrong.
+// See CONFIG.fx.nearDeath, the ramp in systems/lowHealthFx.js and
 // `applyLowHealthVignette` in systems/post.js.
 //
 // WHY A PAGE AND NOT A NODE HARNESS. Every number this effect produces is a
@@ -23,6 +26,12 @@
 //                   the cheapest settings still has to see themselves dying.
 //   THE HEARTBEAT   one cycle at a fixed strain, so the squeeze can be read as
 //                   a shape rather than inferred from a single frame.
+//
+// A fourth row is the SCAN LINES on their own, with the blood switched off, for
+// the one reason a sheet like this exists: the lines are a darkening and the
+// blood is a darkening, and measured on a composited frame each is a perfectly
+// good explanation of the other. Separating them is the only way the page can
+// say which of the two is actually running.
 //
 // THE MEASUREMENTS ARE ALL OFF THE COMPOSITED PIXELS, never off the uniforms.
 // A uniform being set is not the same as it reaching the screen, and that gap
@@ -157,7 +166,12 @@ const pctx = probe.getContext('2d', { willReadFrequently: true });
  * so a frame can be pinned to a chosen point in the heartbeat instead of
  * whichever one the render happened to land on.
  */
-function grab(strain, { beatPhase = 0.5, postEnabled = true, bloom = true } = {}) {
+function grab(strain, { beatPhase = 0.5, postEnabled = true, bloom = true, scan = true } = {}) {
+  // The scan lines can be switched off for one frame so the sheet can ask which
+  // of the two darkenings is doing the work — see the note at the top. Restored
+  // before this returns, so no later frame inherits it.
+  const wasScan = CONFIG.fx.nearDeath.scan;
+  if (!scan) CONFIG.fx.nearDeath.scan = 0;
   const wasPost = CONFIG.post.enabled;
   const wasBloom = CONFIG.bloom.enabled;
   CONFIG.post.enabled = postEnabled;
@@ -169,8 +183,50 @@ function grab(strain, { beatPhase = 0.5, postEnabled = true, bloom = true } = {}
   post.render(scene, camera, DT);
   CONFIG.post.enabled = wasPost;
   CONFIG.bloom.enabled = wasBloom;
+  CONFIG.fx.nearDeath.scan = wasScan;
   pctx.drawImage(gl.domElement, 0, 0);
   return pctx.getImageData(0, 0, probe.width, probe.height);
+}
+
+/**
+ * How strongly a horizontal stripe pattern is sitting in a box: the mean
+ * absolute difference in luminance between neighbouring ROWS, over the box's
+ * own mean luminance.
+ *
+ * Row-to-row difference rather than the variance of the box, which is the
+ * obvious version and is useless here — rocks, orbs and the water's own
+ * gradient all have variance, and a frame with no lines in it scores high on
+ * it. Neighbouring rows are the one statistic a scan line has and the picture
+ * underneath mostly does not, because the scene's features are many pixels tall
+ * and a line is one.
+ *
+ * DIVIDED BY THE MEAN, and that is not a detail. The lines are a MULTIPLY, so
+ * the absolute size of the wobble they produce is proportional to how bright
+ * the picture under them already was — and this effect's other half spends its
+ * time dimming the corners. Unnormalised, the deeper lines out in the band
+ * measure SMALLER than the shallow ones in the middle, purely because the
+ * vignette took the brightness they were modulating. That reads as scanCore
+ * being ignored when it is working exactly as configured.
+ */
+function stripeEnergy(img, x0, y0, x1, y1) {
+  const { data, width, height } = img;
+  const xa = Math.floor(x0 * width);
+  const xb = Math.floor(x1 * width);
+  const ya = Math.floor(y0 * height);
+  const yb = Math.floor(y1 * height);
+  let sum = 0;
+  let mean = 0;
+  let n = 0;
+  for (let y = ya; y < yb - 1; y++) {
+    for (let x = xa; x < xb; x++) {
+      const i = (y * width + x) * 4;
+      const j = ((y + 1) * width + x) * 4;
+      sum += Math.abs(lum(data, i) - lum(data, j));
+      mean += lum(data, i);
+      n++;
+    }
+  }
+  return n ? (sum / n) / Math.max(mean / n, 1e-4) : 0;
 }
 
 const lum = (d, i) => (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
@@ -282,11 +338,13 @@ function cell(into, title, caption, picked = false) {
   }, 'image/png')));
 }
 
-const c = CONFIG.fx.lowHealth;
+const c = CONFIG.fx.nearDeath;
 log(`threshold ${(c.threshold * 100).toFixed(0)}% of the bar   ramp strain^${c.rampCurve}`, 'dim');
 log(`strength ${c.strength}   colour #${c.color.toString(16).padStart(6, '0')}   blood ${c.glow}`
   + `   keep ${c.keep}   drain ${c.drain}   band ${c.inner} → ${c.outer}`, 'dim');
 log(`heart ${c.beatFar}s → ${c.beatNear}s   pulse +${c.pulse}   squeeze -${c.close}`, 'dim');
+log(`scan ${c.scan} at the edge / x${c.scanCore} in the middle   ${c.scanCount} lines`
+  + `   drifting ${c.scanDrift}/s`, 'dim');
 log('');
 
 // The vignette is driven by the RAMPED strain, which is what post.js is handed
@@ -295,6 +353,10 @@ log('');
 const ramp = (strain) => Math.pow(strain, c.rampCurve);
 const hpAt = (strain) => c.threshold * (1 - strain) * 100;
 
+// Evenly spaced in STRAIN, which after the band widened means evenly spaced in
+// HEALTH — 35% down to empty in five steps. Not evenly spaced in the effect,
+// deliberately: the curve is the thing being looked at, so the sheet has to
+// show what each slice of the bar buys rather than flatten it out.
 const STRAINS = [0, 0.25, 0.5, 0.75, 1];
 const onFrames = [];
 const shipped = row('The ramp', 'on the crt preset — what a player sees');
@@ -325,6 +387,19 @@ for (const p of [0, 0.26, 0.6]) {
   cell(beats, `phase ${p.toFixed(2)}`,
     `beat ${heartbeat(p).toFixed(2)} — ${p === 0 ? 'the lub' : p === 0.26 ? 'the dub' : 'the rest between beats'}`,
     p === 0.6);
+}
+
+// The lines on their own, over a clean picture, at the two ends of the ramp.
+// Blood off, so what is on screen is only the scan lines — this is the row that
+// says which of the two darkenings a measurement is looking at.
+const lineFrames = [];
+const lines = row('The scan lines alone', 'the blood switched off, so only the lines are running');
+for (const [s, scan] of [[1, false], [0.5, true], [1, true]]) {
+  lineFrames.push(grab(ramp(s), { postEnabled: false, bloom: false, scan }));
+  cell(lines, scan ? `lines on, hp ${hpAt(s).toFixed(1)}%` : `lines OFF, hp ${hpAt(s).toFixed(1)}%`,
+    scan ? `${c.scanCount} lines, x${c.scanCore} of full through the middle`
+      : 'the same frame with scan 0 — the baseline the lines are measured against',
+    !scan);
 }
 
 // --- what the frames say ----------------------------------------------------
@@ -378,13 +453,34 @@ check('it only ever gets worse as the bar empties',
   walk.every((v, i) => i === 0 || v > walk[i - 1] - 0.002),
   walk.map((v) => (v * 100).toFixed(1)).join('% → ') + '%');
 
-// The crossing itself has to be visible, which is what rampCurve < 1 buys. A
-// quarter of the way into the last sliver is 13% health — still a fight you
-// can win, and exactly when the warning is worth having.
+// THE EASE, which is the reverse of what this check used to assert and is the
+// reason the curve went above 1. The band is a third of the bar now, so a
+// quarter of the way into it is still 26% health — a fight you are winning, and
+// a frame that is already a quarter red there is an alarm that is usually on.
 const quarter = corners(onFrames[1], redness) - redClean;
 const full = redGone - redClean;
-check('a quarter of the way in already reads', quarter > full * 0.25,
+check('a quarter of the way in is still only a hint', quarter < full * 0.3,
   `${((quarter / full) * 100).toFixed(0)}% of the full effect at ${hpAt(0.25).toFixed(1)}% health`);
+
+// ...and it must not be nothing either, or "starts earlier" has bought a
+// stretch of bar where the effect is switched on and invisible.
+check('...but it is a hint rather than nothing', quarter > full * 0.05,
+  `${(quarter * 100).toFixed(1)} points of corner redness at ${hpAt(0.25).toFixed(1)}% health`);
+
+// The landmark: 15% health is where this effect used to BEGIN, and after
+// widening the band it has to be unmistakable there rather than just underway.
+// Measured off its own frame, not interpolated between the sheet's.
+const sliverFrame = grab(ramp((c.threshold - 0.15) / c.threshold));
+const sliver = corners(sliverFrame, redness) - redClean;
+// 0.3 of the FULL FRAME'S redness, which is a lower number than the same claim
+// makes in tools/low-health-test.mjs (44% there). The two are not in
+// disagreement: that harness reads the uniform, and this reads pixels that have
+// been through an additive blood term and a soft shoulder, neither of which is
+// linear in the uniform. The uniform claim belongs to the harness; what this
+// can say is that the corners are a long way past a hint by the point the
+// effect used to start.
+check('by the old threshold the frame is unmistakably in trouble', sliver > full * 0.3,
+  `${((sliver / full) * 100).toFixed(0)}% of the frame's full redness at 15% health`);
 
 // The effect is the seal's only near-death visual, so it must not depend on
 // anything a player can switch off in the pause menu.
@@ -407,6 +503,60 @@ const restLum = middle(beatFrames[2]);
 check('...without the beat reaching the middle of the screen',
   Math.abs(lubLum - restLum) < 0.01,
   `middle ${(restLum * 100).toFixed(1)}% → ${(lubLum * 100).toFixed(1)}%`);
+
+// --- the scan lines ---------------------------------------------------------
+// Measured against the SAME frame with `scan` at 0 rather than against a clean
+// one, because the blood is a darkening too: a difference taken against an
+// untouched frame is a perfectly good measurement of the vignette and would
+// pass with the lines deleted.
+log('');
+const noLines = lineFrames[0];
+const halfLines = lineFrames[1];
+const allLines = lineFrames[2];
+// Well out in the corner, where the band mask is ~0.94 and the lines are close
+// to their full depth. Pulled in from the very edge so the box is all water and
+// not a row of clamped pixels.
+const BAND = [0.02, 0.02, 0.20, 0.20];
+const stripeOff = stripeEnergy(noLines, ...BAND);
+const stripeOn = stripeEnergy(allLines, ...BAND);
+check('the frame actually gets scan lines in it', stripeOn > stripeOff * 1.5,
+  `row-to-row contrast ${(stripeOff * 100).toFixed(2)}% → ${(stripeOn * 100).toFixed(2)}%`);
+
+// ...and across the MIDDLE too, which is the one thing the lines are allowed to
+// do that the blood is not. scanCore is what buys this, and at 0 the effect
+// would be a textured vignette rather than a picture failing.
+const midOff = stripeEnergy(noLines, 0.4, 0.4, 0.6, 0.6);
+const midOn = stripeEnergy(allLines, 0.4, 0.4, 0.6, 0.6);
+check('...including across the clean middle of the screen', midOn > midOff * 1.3,
+  `middle ${(midOff * 100).toFixed(2)}% → ${(midOn * 100).toFixed(2)}%`);
+
+// ...but NOT as hard as at the edge. If these came out equal, `scanCore` is
+// being ignored and the band mask never reached the lines.
+const edgeGain = stripeOn - stripeOff;
+const midGain = midOn - midOff;
+// The expected ratio is not `scanCore` flat: the corner box sits at a band mask
+// of about 0.94, not 1, so what the shader mixes to there is a hair under full.
+// Bounded rather than pinned for that reason — what is being ruled out is the
+// mask never reaching the lines at all, which reads as 100%.
+check('...more faintly there than out in the band', midGain < edgeGain * 0.95,
+  `middle is ${((midGain / Math.max(edgeGain, 1e-9)) * 100).toFixed(0)}% of the edge`
+  + `, config's floor is ${(c.scanCore * 100).toFixed(0)}%`);
+
+// They ride the strain like everything else here: half way down the bar is
+// fainter than empty, or the lines snap to full at the crossing.
+const halfGain = stripeEnergy(halfLines, ...BAND) - stripeOff;
+check('they come in with the rest of it rather than snapping on',
+  halfGain > 0 && halfGain < edgeGain * 0.95,
+  `${((halfGain / Math.max(edgeGain, 1e-9)) * 100).toFixed(0)}% of full at ${hpAt(0.5).toFixed(1)}% health`);
+
+// The middle must still be a window. The lines are allowed across it; making it
+// unreadable is not the same permission, and the corner-orb check above only
+// speaks for the band.
+const midLumOff = boxLum(noLines, 0.4, 0.4, 0.6, 0.6);
+const midLumOn = boxLum(allLines, 0.4, 0.4, 0.6, 0.6);
+check('...and the middle is still a window you can see the fight through',
+  midLumOn > midLumOff * 0.8,
+  `middle brightness ${(midLumOff * 100).toFixed(1)}% → ${(midLumOn * 100).toFixed(1)}%`);
 
 check('no shader failed to compile', shaderErrors.length === 0, shaderErrors[0] ?? '');
 

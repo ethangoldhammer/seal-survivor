@@ -118,6 +118,14 @@ const FONT_TIP = "'Inter', system-ui, sans-serif";
  * fit       true only for the upgrade cards: their type is additionally scaled
  *           per card by --sv-fit so a long name shrinks to fit the hex
  *           (ui.js, fitCardText). Multiplied in rather than replacing scale.
+ * unit      'vmin' on a role whose size is a share of the screen rather than
+ *           px — see the Blubberball roles. The slider is in that unit.
+ * floor     px the size never drops under (only with unit: 'vmin').
+ * plate     'glass' draws the specimen on a frosted pane, for type that is
+ *           black on glass and would vanish on the panel's dark strip.
+ * sampleFrom  a uiText.csv id the specimen's words come from, so the line on
+ *           the panel is the line the player reads; `{name}` in it is filled
+ *           with the longest seal name the roster can cast.
  * ownFont   the family a role falls back to when its `font` is the `global`
  *           sentinel, instead of CONFIG.typography.family. Only the two
  *           tooltips carry one — see FONT_TIP above for why.
@@ -351,7 +359,152 @@ export const TEXT_ROLES = [
   { key: 'strikeNow', label: 'Strike prompt', selector: '.sv-callout-strike', section: 'Popups',
     sample: 'STRIKE NOW!', inlineColor: true, motion: 'strikeNow',
     style: { font: FONT_GLOBAL, size: 14, weight: 900, tracking: 0.14, case: 'UPPER', useInk: false, color: 0xffe066, alpha: 1, shadow: 6, glow: 14, scan: 0, scanGap: 3, scanGlow: 0 } },
+
+  // --- Blubberball: the match --------------------------------------------
+  // Every line the two-seal ball game puts up (systems/versus.js). These were
+  // hard-coded px and vmin in that file's own stylesheet, which meant the one
+  // panel built for designing type could not reach a single word of the mode.
+  //
+  // `unit: 'vmin'` — THE SIZE SLIDER IS IN VMIN, NOT PX, on the roles that
+  // are sized to the screen. The countdown numeral and the goal card were
+  // authored in vmin on purpose (a "3" that is 26% of the shorter edge on a
+  // phone and on a monitor), and converting them to px would trade a
+  // responsive design for a slider. The global scale still multiplies.
+  // `floor` is the px the size can never drop under — the prompt after a
+  // match has to stay a tap target in a phone held sideways, where vmin alone
+  // shrinks it under 44px. Both are constants of the role, like `fit`.
+  //
+  // `plate: 'glass'` — THE SPECIMEN IS DRAWN ON THE PANE IT IS READ ON. The
+  // goal card and the replay tag are BLACK type on a light frosted pane
+  // (see the .sv-glass block in versus.js); on the Text panel's dark strip
+  // that is invisible, and a role you cannot see is a role you tune blind.
+  //
+  // `sampleFrom` — the specimen's words are that row of uiText.csv, filled
+  // by the panel rather than typed here (this file has no imports). The line
+  // Ethan writes is the line the specimen shows, and a lorem row shows as
+  // lorem, which is the point. `{name}` in the row is filled with the longest
+  // name sealNames.csv can produce, because the worst case is the case that
+  // decides the type.
+  //
+  // THE TEAM COLOUR IS INLINE. The score strip's two sides and the READY
+  // stamp are painted in whichever colour each side picked on the team
+  // select — written per element (style.color on the side, var(--team) on
+  // the stamp), so those roles are `inlineColor` and the swatch here is only
+  // what P1 wears before anybody picks. `colorFrom` points the specimen at
+  // the shipped P1 colour so it is at least a colour the game draws.
+  { key: 'vsScore', label: 'Match score', selector: '.sv-versus-score', section: 'Blubberball',
+    sample: '3', inlineColor: true, colorFrom: 'versus.teams.0.color',
+    style: { font: FONT_GLOBAL, size: 34, weight: 700, tracking: 0, case: 'as typed', useInk: false, color: 0x3ddc63, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'vsClock', label: 'Match clock', selector: '.sv-versus-clock', section: 'Blubberball',
+    sample: '2:47',
+    style: { font: FONT_GLOBAL, size: 22, weight: 700, tracking: 0.02, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.92, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // The kickoff count. Two roles on one node: the numerals, and the whistle
+  // line that follows them (`.sv-versus-go` is added for the last pop). The
+  // whistle's selector is two classes deep so it beats the numeral's rule on
+  // the same element — same trick as the score card quip above.
+  { key: 'vsCount', label: 'Kickoff countdown', selector: '.sv-versus-count', section: 'Blubberball',
+    sample: '3', unit: 'vmin',
+    style: { font: FONT_GLOBAL, size: 26, weight: 800, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 16, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'vsGo', label: 'Kickoff whistle', selector: '.sv-versus-count.sv-versus-go', section: 'Blubberball',
+    sampleFrom: 'versusGo', sample: 'Go!', unit: 'vmin',
+    style: { font: FONT_GLOBAL, size: 16, weight: 800, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 16, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // THE MATCHUP CARD under the count on the opening kickoff. The names are
+  // painted in each side's own kit colour, written per element the way the
+  // score is — so this role is `inlineColor` too, and its swatch is only what
+  // P1 wears before anybody picks.
+  { key: 'vsTeamName', label: 'Kickoff team name', selector: '.sv-versus-teams-name', section: 'Blubberball',
+    sample: 'Green Blubberbusters', unit: 'vmin', floor: 15, inlineColor: true, colorFrom: 'versus.teams.0.color',
+    style: { font: FONT_GLOBAL, size: 3.4, weight: 800, tracking: 0.02, case: 'as typed', useInk: false, color: 0x3ddc63, alpha: 1, shadow: 14, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'vsTeamVs', label: 'Kickoff matchup word', selector: '.sv-versus-teams-vs', section: 'Blubberball',
+    sampleFrom: 'versusKickoffVs', sample: 'vs', unit: 'vmin', floor: 11,
+    style: { font: FONT_GLOBAL, size: 2, weight: 700, tracking: 0.1, case: 'upper', useInk: true, color: 0xe8ecf3, alpha: 0.8, shadow: 12, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // THE GOAL CARD — three lines of black type on the scoring team's glass.
+  // No shadow on any of them: a dark shadow under black type on a light pane
+  // reads as dirt, which is the first thing the glass was built to get rid of.
+  //
+  // THERE WAS A FOURTH, `vsCardWin`: the winner line this card turned into at
+  // the final whistle. The result is on the stats page now (the champion block
+  // in rive/blubberball/stats-page.rml), and type inside a Rive artboard has no
+  // DOM node for a role to measure — its sizes are the Theme view model in
+  // data.rml instead. So the role is gone rather than pointing at a selector
+  // nothing builds, which is a specimen that silently measures zero.
+  { key: 'vsCardName', label: 'Goal card — scorer', selector: '.sv-versus-card-name', section: 'Blubberball',
+    sample: '{name}', unit: 'vmin', plate: 'glass',
+    style: { font: FONT_GLOBAL, size: 3.6, weight: 700, tracking: 0.02, case: 'as typed', useInk: false, color: 0x05070a, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'vsCardLine', label: 'Goal card — assist line', selector: '.sv-versus-card-line', section: 'Blubberball',
+    sampleFrom: 'versusAssist', sample: 'Assisted by {name}', unit: 'vmin', plate: 'glass',
+    style: { font: FONT_GLOBAL, size: 2.4, weight: 600, tracking: 0.02, case: 'as typed', useInk: false, color: 0x05070a, alpha: 0.88, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'vsCardTime', label: 'Goal card — clock', selector: '.sv-versus-card-time', section: 'Blubberball',
+    sample: '1:52', unit: 'vmin', plate: 'glass',
+    style: { font: FONT_GLOBAL, size: 2.4, weight: 600, tracking: 0.02, case: 'as typed', useInk: false, color: 0x05070a, alpha: 0.74, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // THE PROMPT AFTER THE MATCH, over the highlight reel. Floored, because
+  // the buttons are the tap targets — see the note on `floor` above.
+  { key: 'vsOverTitle', label: 'After-match heading', selector: '.sv-versus-over-title', section: 'Blubberball',
+    sampleFrom: 'versusOverTitle', sample: 'Again?', unit: 'vmin', floor: 30,
+    style: { font: FONT_GLOBAL, size: 6, weight: 700, tracking: 0.05, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.95, shadow: 14, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // Dark on the pale button fill, like `button` above — and its own role
+  // because it is twice that size and beats it on specificity in versus.js.
+  { key: 'vsOverButton', label: 'After-match buttons', selector: '.sv-versus-over .sv-btn', section: 'Blubberball',
+    sampleFrom: 'versusRematch', sample: 'Rematch', unit: 'vmin', floor: 18,
+    style: { font: FONT_GLOBAL, size: 2.6, weight: 700, tracking: 0.03, case: 'as typed', useInk: false, color: 0x0a0c12, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // THE CORNER TAG — on the instant replay, and (reel) on the highlight reel
+  // under the prompt, where it is smaller and has no skip line under it.
+  { key: 'vsReplayTag', label: 'Replay tag', selector: '.sv-versus-replay-tag', section: 'Blubberball',
+    sampleFrom: 'versusReplay', sample: 'Replay', plate: 'glass',
+    style: { font: FONT_GLOBAL, size: 18, weight: 700, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x05070a, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // Alpha 1 here on purpose: the skip line's opacity is written per frame by
+  // versus.js (paintSkip) — it brightens from 0.7 to 1 as the hold registers,
+  // which is the mechanic's feedback and not the type's — and an alpha in the
+  // colour on top of that would dim the rest state twice.
+  { key: 'vsReplaySkip', label: 'Replay skip prompt', selector: '.sv-versus-replay-skip', section: 'Blubberball',
+    sampleFrom: 'versusReplaySkip', sample: 'Hold to skip', plate: 'glass',
+    style: { font: FONT_GLOBAL, size: 12, weight: 600, tracking: 0, case: 'as typed', useInk: false, color: 0x05070a, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'vsReelTag', label: 'Highlight reel tag', selector: '.sv-versus-reel .sv-versus-replay-tag', section: 'Blubberball',
+    sampleFrom: 'versusReelCheck', sample: 'Blubber check', unit: 'vmin', floor: 13, plate: 'glass',
+    style: { font: FONT_GLOBAL, size: 1.6, weight: 700, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x05070a, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+
+  // --- Blubberball: the team select -------------------------------------
+  // The screen before the match (ui/teamSelect.js). Its heading is `title`
+  // and its Back / Start are `button`, so neither is repeated here; these are
+  // the lines that are its own.
+  { key: 'tsHint', label: 'Team select hint', selector: '.sv-teams-hint', section: 'Team select',
+    sampleFrom: 'teamSelectHint', sample: 'Select Team',
+    style: { font: FONT_GLOBAL, size: 12, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.6, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'tsChip', label: 'Team select device chip', selector: '.sv-teams-chip', section: 'Team select',
+    sampleFrom: 'teamKeyboard', sample: 'Keyboard',
+    style: { font: FONT_GLOBAL, size: 13, weight: 600, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'tsStamp', label: 'Team select READY stamp', selector: '.sv-teams-stamp', section: 'Team select',
+    sampleFrom: 'teamReady', sample: 'Ready', inlineColor: true, colorFrom: 'versus.teams.0.color',
+    style: { font: FONT_GLOBAL, size: 10, weight: 400, tracking: 0.08, case: 'UPPER', useInk: false, color: 0x3ddc63, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // A seal's name on a slot: the captain's row is a size up from the bench.
+  // Two roles, because that step IS the hierarchy of the column.
+  { key: 'tsCaptainName', label: 'Team select captain name', selector: '.sv-teams-captain .sv-teams-name-text', section: 'Team select',
+    sample: '{name}',
+    style: { font: FONT_GLOBAL, size: 13, weight: 600, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'tsSlotName', label: 'Team select bench name', selector: '.sv-teams-name-text', section: 'Team select',
+    sample: '{name}',
+    style: { font: FONT_GLOBAL, size: 12, weight: 400, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.85, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'tsLocked', label: 'Team select locked slot', selector: '.sv-teams-slot.sv-teams-locked', section: 'Team select',
+    sampleFrom: 'teamLocked', sample: 'Locked',
+    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.06, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.35, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // The two settings rows under the board — "Per side", "on the clock" —
+  // one role for both, because they are one register: a label beside a
+  // number beside a pair of steppers.
+  { key: 'tsRow', label: 'Team select settings row', selector: '.sv-teams-roster', section: 'Team select',
+    sampleFrom: 'teamRoster', sample: 'Per side',
+    style: { font: FONT_GLOBAL, size: 12, weight: 400, tracking: 0.04, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.75, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  { key: 'tsNoPads', label: 'Team select no-pads line', selector: '.sv-teams-nopads', section: 'Team select',
+    sampleFrom: 'teamNoPads', sample: 'Press a key/button.',
+    style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.55, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
 ];
+
+/**
+ * The CSS size unit a role's `size` is in. 'px' unless the role says
+ * otherwise — see `unit` on the Blubberball roles.
+ */
+export function roleUnit(role) {
+  return role?.unit === 'vmin' ? 'vmin' : 'px';
+}
 
 export const TEXT_ROLE_KEYS = TEXT_ROLES.map((r) => r.key);
 

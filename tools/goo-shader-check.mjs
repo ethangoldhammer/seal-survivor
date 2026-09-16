@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gooFragmentShader } from '../path/src/systems/post.js';
+import { POSSESSION_FIELD_GLSL, POSSESSION_UNIFORMS_GLSL } from '../path/src/systems/possessionGlsl.js';
 
 let bad = 0;
 const lines = [];
@@ -62,7 +63,12 @@ check('the possession lobes are summed into one field and thresholded together',
   (gooFragmentShader.split('dens += f * f * f;').length - 1) >= 2
     && /smoothstep\(0\.22, 0\.5, dens\)/.test(gooFragmentShader));
 check('...on a ring that rolls, so they spin as well as grow',
-  /float roll = uTime \* uSpin;/.test(gooFragmentShader));
+  /float roll = t \* uSpin;/.test(gooFragmentShader)
+    // ...and this pass hands it ITS clock. The field takes the roll clock as
+    // an argument because the backdrop lattice includes the same function on a
+    // clock of its own; a hardcoded uTime in there would have compiled here and
+    // failed to compile over there, which is a shader that renders nothing.
+    && /possessionMix\(d, uTime\)/.test(gooFragmentShader));
 check('...born on the rim at the contact and walking in as the share grows',
   /vec2 at = seedP \* \(1\.0 - sh\) \+ uDrift;/.test(gooFragmentShader));
 // THE SKIN HOLDS THEM IN, and it reads the body rather than assuming a circle
@@ -70,11 +76,20 @@ check('...born on the rim at the contact and walking in as the share grows',
 // READS: a cell that could write back into the density field would be a look
 // changing the shape and the path of the thing it is a look on.
 check('the cells are held inside the body by the body itself, not by a circle',
-  /vec2 hold\(vec2 lp, float rim\)/.test(gooFragmentShader)
+  /vec2 posHold\(vec2 lp, float rim\)/.test(gooFragmentShader)
     && /float body = texture2D\(tDiffuse, uvAt\)\.a;/.test(gooFragmentShader)
     // The mass's own centre AND every lobe go through it, or the one that
     // does not is the one that pokes out of the ball.
-    && (gooFragmentShader.split('hold(').length - 1) >= 3);
+    && (gooFragmentShader.split('posHold(').length - 1) >= 3);
+// ...AND IT IS THE SHARED FIELD, not a copy of it. The backdrop lattice paints
+// the dents the ball springs into the grid with this same function
+// (systems/possessionGlsl.js), which is the only reason a streak through the
+// hexes reads as the same ball. A copy pasted back in here would look identical
+// on the day it was pasted and drift the first time a lobe was retuned, so the
+// string this pass ships is compared against the module both of them include.
+check('the field is the shared one, so the grid and the ball cannot drift apart',
+  gooFragmentShader.includes(POSSESSION_FIELD_GLSL.trim())
+    && gooFragmentShader.includes(POSSESSION_UNIFORMS_GLSL.trim()));
 check('...and the mass is sloshed by the flight rather than moving on its own',
   /uniform vec2 uDrift;/.test(gooFragmentShader)
     && (gooFragmentShader.split('uDrift').length - 1) >= 2);

@@ -255,6 +255,17 @@ export function mountSplineSplash({
   // the wrapper — so this is what shows through a scene with alpha in it,
   // rather than the letterbox around a `Fit.Contain` artboard.
   background = '#05070d',
+  // THE DICE'S TWO SOUNDS, matching the Rive card's options so ui.js still hands
+  // one object to both — see the note there about a treatment that only wins by
+  // quietly skipping one of these.
+  //
+  // The pair lands differently here, and honestly so: this screen has a text
+  // field and no dissolve, so a rolled name is a hard cut and there is no reveal
+  // for the settle to wait out. It follows on the next tick instead — deferred
+  // rather than inline, because two voices fired in one synchronous block are
+  // one sound with a thick attack rather than a throw and a landing.
+  onRoll,
+  onSettle,
 } = {}) {
   const route = routeFor(src);
 
@@ -403,6 +414,9 @@ export function mountSplineSplash({
   }
 
   let destroyed = false;
+  // The pending settle — see randomizeName. Held so a second roll replaces it
+  // rather than stacking a second landing on the first.
+  let settleTimer = 0;
   let loaded = false;
   const mountedAt = performance.now();
   // Whether the press being released began on the splash — a pointerup on its
@@ -416,6 +430,9 @@ export function mountSplineSplash({
 
     for (const [target, type, fn] of listeners) target.removeEventListener(type, fn);
     clearTimeout(panelTimer);
+    // A landing after the screen has gone is a sound with nothing to belong to.
+    clearTimeout(settleTimer);
+    settleTimer = 0;
 
     // BANKED ON THE WAY OUT, whatever ended the screen — not per keystroke
     // (savePlayerName writes to localStorage and a write per character is what
@@ -472,6 +489,12 @@ export function mountSplineSplash({
   // returns the name already on screen reads as a button that did nothing.
   function randomizeName() {
     if (destroyed) return '';
+    onRoll?.();
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = 0;
+      if (!destroyed) onSettle?.();
+    }, 0);
     const name = randomPlayerName(nameInput.value);
     nameInput.value = name;
     return name;

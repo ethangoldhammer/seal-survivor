@@ -313,7 +313,17 @@ section('Seal sports is a panel of one working game and two promises');
   const panel = document.getElementById('svSportsPanel');
   check('the panel is mounted and shown', !!panel && !panel.classList.contains('sv-hidden'));
   const buttons = [...(panel?.querySelectorAll('.sv-sport') ?? [])];
+  // THREE, not four. There is a fourth row — the same ball game played with
+  // somebody far away — and it is drawn only when the build has a room server
+  // (VITE_ROOM_URL, roomsAvailable in systems/online/room.js). This harness has
+  // no Vite and so no env, which is exactly the shape of a build with no
+  // backend: the row must not be there at all. A button that opened a screen
+  // and then explained it could not work is worse than a list that never
+  // offered it.
   check('it lists three sports', buttons.length === 3, String(buttons.length));
+  check('...and no online row without a room server',
+    !buttons.some((b) => b.dataset.sport === 'sportBallOnline'),
+    buttons.map((b) => b.dataset.sport).join(' / '));
   const ball = buttons.find((b) => b.dataset.sport === 'sportBall');
   check('the ball game is the one that can be pressed', !!ball && !ball.disabled);
   ball?.click();
@@ -335,13 +345,65 @@ section('Seal sports is a panel of one working game and two promises');
   // The main menu wires the ball game to a mode switch, and the switch has to
   // rebuild the arena when the flag changes — the walls are measured off it.
   const main = readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
+  // The flag and the rebuild moved into setModeWorld when the team select grew
+  // a pitch behind it: the SCREEN needs the match's arena as much as the match
+  // does, and two copies of "switch the flag, resize, reseat" is one of them
+  // going stale. Both halves are checked — the rebuild follows the flag, and
+  // enterMode still does it before the run is built.
+  check('the flag and the arena rebuild are one function',
+    /function setModeWorld\(versus\)[\s\S]{0,600}enableVersus\([\s\S]{0,200}world\.resize\(\)[\s\S]{0,300}reseatSeabed\(/.test(main));
   check('main.js switches the flag and rebuilds the arena before the run',
-    /function enterMode\(versus\)[\s\S]{0,600}enableVersus\([\s\S]{0,200}world\.resize\(\)[\s\S]{0,400}startGame\(\)/.test(main));
+    /function enterMode\(versus\) \{[\s\S]{0,200}setModeWorld\(versus\)[\s\S]{0,200}startGame\(\)/.test(main));
   check('...and the menu no longer reads a ?versus URL flag', !/has\('versus'\)/.test(main));
-  check('closeMainMenu hides the sports panel with the board', /function closeMainMenu[\s\S]{0,300}hideSealSports\(\)/.test(main));
-  check('...and the team select', /function closeMainMenu[\s\S]{0,300}hideTeamSelect\(\)/.test(main));
+  check('closeMainMenu hides the sports panel with the board', /function closeMainMenu[\s\S]{0,900}hideSealSports\(\)/.test(main));
+  check('...and the team select', /function closeMainMenu[\s\S]{0,900}hideTeamSelect\(\)/.test(main));
+  // ...AND IT SWEEPS THEM WHETHER OR NOT A MENU IS UP. The team select disposes
+  // the menu on its way in (it needs the body and the camera), so by the time
+  // Start reaches this there is none — and an early return would leave four DOM
+  // panels, each with its own Escape handler and pointer capture, standing over
+  // a live match.
+  {
+    const fn = main.slice(main.indexOf('function closeMainMenu() {'), main.indexOf('\n}', main.indexOf('function closeMainMenu() {')));
+    check('...and it sweeps them even with no menu to release',
+      !/if \(!mainMenuActive\(\)\) return;/.test(fn) && /if \(mainMenuActive\(\)\) mainMenu\(\)\?\.release\(\)/.test(fn),
+      fn.includes('!mainMenuActive()) return') ? 'it still bails when no menu is up' : '');
+  }
   check('Blubberball opens the team select, and Start is what enters the mode',
-    /showTeamSelect\(\{[\s\S]{0,200}onStart: \(\) => enterMode\(true\)/.test(main));
+    /showTeamSelect\(\{[\s\S]{0,900}onStart: \(\) => \{[\s\S]{0,160}enterMode\(true\)/.test(main));
+  // ...AND THE SCREEN HAS A PITCH BEHIND IT. It used to sit over the main menu
+  // — a bust of one seal in a crop of water, while the panel in front of it was
+  // about two teams, so the thing the screen is for was the one thing it could
+  // not show. The menu is dropped, the world flips to a match's arena and the
+  // roster is stood up on it; Back puts all three back.
+  check('...opening it stands the roster up in the arena instead of the bust',
+    /function enterTeamSelectPitch\(\) \{[\s\S]{0,400}mainMenu\(\)\?\.dispose\(\)[\s\S]{0,600}setModeWorld\(true\)[\s\S]{0,200}showRosterPreview\(/.test(main));
+  check('...and Back takes the pitch down and the menu back up',
+    /function leaveTeamSelectPitch\(\) \{[\s\S]{0,400}hideRosterPreview\(\)[\s\S]{0,300}setModeWorld\(false\)[\s\S]{0,500}showMainMenu\(\)/.test(main));
+  // THROUGH rosterPreviewChanged, not straight to refreshRosterPreview: a seat
+  // that changes the ROSTER'S SIZE also re-carves the shore, because the goal
+  // mouths are cut at build and a live light would follow a mouth the boulders
+  // no longer have. So the assertion is the whole chain — the screen calls the
+  // wrapper, and the wrapper is what reaches the preview.
+  check('...and every change on the screen is re-read by the pitch',
+    /onChange: \(\) => rosterPreviewChanged\(\)/.test(main)
+    && /function rosterPreviewChanged\(\) \{[\s\S]{0,200}refreshRosterPreview\(\)/.test(main));
+  // THE MATCH'S OWN MUSIC, from the screen rather than from the whistle — and
+  // startGame then leaves what is playing alone, or the whistle would cut the
+  // bank back to the top of Loop00 on the one frame this route is trying hard
+  // not to cut anything on.
+  check('...and the match\'s music starts on the screen, at the match\'s tempo',
+    /function enterTeamSelectPitch\(\) \{[\s\S]{0,1400}startVersusMusic\(\)/.test(main));
+  check('...which the whistle then does not restart',
+    /if \(!versusMusicActive\(\)\) startVersusMusic\(\)/.test(main));
+  // THE MAIN MENU'S ACCESSORY DRAWER GOES WITH THE MENU. It is mounted by
+  // mainMenu.js and destroyed in its teardown, so disposing the menu is what
+  // takes the strip of tiles off the bottom of this screen — the team select
+  // has its own per-seat pickers and two ways to dress a seal on one screen is
+  // two answers to the same question.
+  check('...and the menu\'s own accessory drawer is destroyed with it',
+    /drawer\?\.destroy\(\)/.test(readFileSync(new URL('../path/src/systems/mainMenu.js', import.meta.url), 'utf8')));
+  check('...which is ticked on the wall clock beside the menu\'s own',
+    /rosterPreviewOn\(\)\) updateRosterPreview\(realDt\)/.test(main));
   check('the team select is polled every frame beside the pause menu', /updatePauseNav\(\);[\s\S]{0,300}updateTeamSelect\(\);/.test(main));
 
   // A MATCH CUTS, so the menu does not glide out over it. updateVersusCamera

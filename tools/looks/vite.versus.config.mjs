@@ -12,7 +12,17 @@ const PROJECT = resolve(HERE, '../..');
 
 export default defineConfig({
   root: PROJECT,
-  base: './',
+  // ROOT-ABSOLUTE, not './'. Every media path in the game is written '/models/…'
+  // and assetPath.js rewrites it through import.meta.env.BASE_URL — so a base of
+  // './' turns it into a path relative to THE DOCUMENT, and this page's document
+  // lives at /tools/looks/versus-goal.html. Every model then 404s at
+  // /tools/looks/models/… and loads its built-in stand-in instead: the seals in
+  // the last section came out as blue triangles and nothing said why, because a
+  // missing model is a warning and a shape, never an error.
+  //
+  // serve.mjs mounts the build at '/' and public/models, /textures, /sprites
+  // and /flags beside it, so '/' is the truth for this server.
+  base: '/',
   build: {
     target: 'esnext',
     outDir: resolve(PROJECT, 'dist-versus-look'),

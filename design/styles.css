@@ -681,6 +681,14 @@
      card row itself. It is absolutely positioned, so it takes no part in the
      flex layout and cannot push a card onto a second line. */
   .sv-cards { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; max-width: min(760px, 92vw); position: relative; }
+  /* THE REROLL, under the hand. Its height is real chrome — layOutCards
+     subtracts it from the room the cards are given, so a short window shrinks
+     the hexagons rather than pushing this off the bottom. */
+  .sv-reroll-row { position: relative; z-index: 2; margin-top: 14px; display: flex; justify-content: center; }
+  /* The count in its own tabular column, so 3 → 2 → 1 does not shuffle the word
+     beside it. */
+  .sv-reroll-n { display: inline-block; min-width: 1.2ch; margin-left: 0.5ch; font-variant-numeric: tabular-nums; }
+  .sv-reroll-row .sv-btn:disabled { pointer-events: none; }
   /* Cards are hexagons matching the background art exactly. The vertex
      percentages below were measured off the art itself (flat-top hex: points
      at 5.7%/93.9% horizontally, flat top/bottom edges spanning 27.1%-72.3%,

@@ -8,6 +8,7 @@ import { cineLens } from './cineCamera.js';
 import { gooLayer, activeGooGroups, gooGroupInfo, setGooDivisor } from '../entities/particles.js';
 import { renderFrontLayer } from './frontLayer.js';
 import { bounds, WAVE, sea, waveTimeNow } from '../arena.js';
+import { POSSESSION_UNIFORMS_GLSL, POSSESSION_FIELD_GLSL } from './possessionGlsl.js';
 
 // THE OVERLAY — a scene drawn AFTER the goo has been laid over the picture and
 // BEFORE the bloom, in the scene camera. Anything that has to sit on top of a
@@ -185,6 +186,10 @@ const fragmentShader = /* glsl */ `
   uniform float uHurtGlow;
   uniform float uHurtInner;
   uniform float uHurtOuter;
+  uniform float uHurtScan;
+  uniform float uHurtScanCore;
+  uniform float uHurtScanCount;
+  uniform float uHurtScanDrift;
 
   // --- the cinematic lens ---------------------------------------------------
   // All three are gated to zero when the cinematic camera is off, and the
@@ -549,7 +554,12 @@ const fragmentShader = /* glsl */ `
     // 1.41 in any corner, whatever shape the screen is.
     if (uHurt > 0.0) {
       float r = length((uv - 0.5) * 2.0);
-      float m = smoothstep(uHurtInner, uHurtOuter, r) * uHurt;
+      // The band on its own, BEFORE the strain scales it. The blood wants the
+      // scaled version; the scan lines want the SHAPE, so that how far into the
+      // frame they reach is a fixed thing about the composition and only their
+      // depth rides the strain.
+      float band = smoothstep(uHurtInner, uHurtOuter, r);
+      float m = band * uHurt;
       float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
 
       // THE PICTURE FIRST, and it is only ever dimmed and drained — never
@@ -571,6 +581,27 @@ const fragmentShader = /* glsl */ `
       // also the truer picture — blood in the water is something ARRIVING,
       // not the water changing its mind about what colour it is.
       color = drained + uHurtColor * (m * uHurtGlow);
+
+      // THE SIGNAL GOING. Last thing in the block, so the lines run over the
+      // blood as well as over the picture — the alternative (scanning first,
+      // then adding the tint) leaves a clean red wash sitting on top of a
+      // broken image, which reads as two effects rather than as one frame in
+      // trouble.
+      //
+      // uHurtScanCore is a FLOOR on the band rather than a multiply by it: the
+      // lines are the one part of this allowed across the whole frame, because
+      // a failing signal that stops at an invisible circle reads as a textured
+      // vignette instead of as the picture failing.
+      //
+      // The drift is in LINES per second, so it stays the same visible speed
+      // when the count changes: one line is one period of s*s, which is
+      // 1/uHurtScanCount of the frame's height.
+      if (uHurtScan > 0.0) {
+        float lines = max(uHurtScanCount, 1.0);
+        float y = uv.y + uTime * uHurtScanDrift / lines;
+        float s = sin(y * lines * 3.14159265);
+        color *= 1.0 - uHurtScan * mix(uHurtScanCore, 1.0, band) * s * s;
+      }
     }
 
     // ------------------------------------------------------------------
@@ -726,16 +757,12 @@ export const gooFragmentShader = /* glsl */ `
   // has a clock of its own, so a share that stops moving is a mass that stops
   // spreading, and the two can never disagree about how much of the ball is
   // whose.
-  uniform vec3 uTeamA;      // the colour that HELD the ball
-  uniform vec3 uTeamB;      // ...and the one marching in from the contact
-  uniform float uShare;     // how much of the body B has taken, 0..1
-  uniform float uSeed;      // the contact's world angle, radians
-  uniform float uLobes;     // satellites riding the mass, 0..7
-  uniform float uLobeSize;  // ...how big each is, x the mass's own kernel
-  uniform float uWobble;    // ...and how far out they are thrown
-  uniform float uSpin;      // how fast their ring rolls, rad/s
-  uniform float uBreathe;   // how hard each swells and shrinks on its own clock
-  uniform vec2 uDrift;      // the slosh: how far the mass is left behind, in ball radii
+  //
+  // THE FIELD ITSELF IS SHARED, and these are its uniforms —
+  // systems/possessionGlsl.js, which the backdrop lattice includes too so the
+  // dents the ball springs into the grid are lit by the same drop this paints
+  // the body with. See the header there.
+  ${POSSESSION_UNIFORMS_GLSL}
   uniform vec2 uBallAt;     // the ball's centre, in this pass's uv
   uniform float uBallR;     // ...and its radius, in uv
   uniform float uBallAspect; // width / height, so the field is round on screen
@@ -817,7 +844,11 @@ export const gooFragmentShader = /* glsl */ `
   // One fetch per point and no branch. The correction is proportional to how
   // far short of the isoline the body is there, so a shallow dent nudges and
   // a deep one shoves, and a point already well inside is untouched.
-  vec2 hold(vec2 lp, float rim) {
+  //
+  // THE NAME IS THE CONTRACT. possessionGlsl.js calls posHold and does not
+  // care what holds: here it is the ball's own solved body, and in the grid it
+  // is a bare clamp to the circle, because a dent in the water has no skin.
+  vec2 posHold(vec2 lp, float rim) {
     float len = length(lp);
     if (len > rim) lp *= rim / max(len, 1e-5);
     vec2 uvAt = uBallAt + lp / vec2(uBallAspect, 1.0) * uBallR;
@@ -825,6 +856,8 @@ export const gooFragmentShader = /* glsl */ `
     float out_ = clamp((uIso - body) / max(uIso, 1e-4), 0.0, 1.0);
     return mix(lp, lp * 0.55, out_);
   }
+
+  ${POSSESSION_FIELD_GLSL}
 
   void main() {
     // The warp, before anything reads the field. uWarp is in texels so the
@@ -875,67 +908,13 @@ export const gooFragmentShader = /* glsl */ `
     if (uBallR > 0.0) {
       // Ball-local, in radii: the centre is 0 and the drawn edge is about 1.
       vec2 d = (vUv - uBallAt) * vec2(uBallAspect, 1.0) / max(uBallR, 1e-5);
-      // THE SAME DROP THE BOOST METER IS MADE OF (systems/strikeRing.js): one
-      // blob with lobes riding a slowly rolling ring around it, each breathing
-      // on a rate that shares no factor with the roll, the lot summed into one
-      // field and thresholded once. That is what makes them grow, spin and
-      // FUSE — the welds between the lobes and the core are field, not
-      // geometry, so two that have only just met join with a waist and the
-      // outline never settles into a repeating shape.
-      //
-      // WHERE IT STARTS AND WHERE IT ENDS. The mass is born ON THE RIM at the
-      // contact and walks in to the middle as it grows, so the colour arrives
-      // from the touch rather than blooming out of the centre; at a full share
-      // it is centred and big enough to have swallowed the body.
-      vec2 seedP = vec2(cos(uSeed), sin(uSeed));
-      float sh = clamp(uShare, 0.0, 1.0);
-      // ...AND IT IS SLOSHED BY THE FLIGHT. uDrift is the ball's velocity
-      // MINUS a lagged copy of it (systems/ballLook.js), in ball radii: when
-      // the ball is struck the mass is left behind and piles against the
-      // trailing skin, and it catches up as the lag does. The cells inherit
-      // the ball's motion; they do not have a motion of their own.
-      vec2 at = seedP * (1.0 - sh) + uDrift;
-      // The kernel radius that puts the SURFACE where it is wanted: a blob of
-      // kernel radius k has its isoline at about 0.55 k for this cubic, so the
-      // mass reaches the far rim at a share of 1 without the guard below
-      // having to paper over it.
-      float k = (0.35 + 1.9 * sh) * 0.9;
-      at = hold(at, 0.85);
-      float dens = 0.0;
-      {
-        vec2 q = d - at;
-        float u = dot(q, q) / max(k * k, 1e-6);
-        if (u < 1.0) { float f = 1.0 - u; dens += f * f * f; }
-      }
-      // THE LOBES ARE WHAT MAKE IT LIQUID. A circle grown from a point is a
-      // dial; a circle with things moving under its skin is a substance.
-      float roll = uTime * uSpin;
-      float thrown = k * uWobble;
-      for (int i = 0; i < 7; i++) {
-        if (float(i) >= uLobes) break;
-        // The even slot plus a fixed per-lobe offset, hashed off the index so
-        // the drop is the same drop every frame and every run. Without the
-        // offset the lobes sit on a perfect polygon, and an even spray is the
-        // one arrangement a liquid never makes.
-        float a = roll + 6.2831853 * float(i) / max(uLobes, 1.0)
-                + sin(float(i) * 12.9898) * 0.4;
-        float b = 1.0 + uBreathe * sin(uTime * 1.7 + float(i) * 2.399);
-        // TRAPPED BY THE SKIN. The lobe is walked back inside the body before
-        // it is drawn, so a dent in the ball is a dent in the mass and nothing
-        // ever pokes out through the rim.
-        vec2 lp = hold(at + vec2(sin(a), cos(a)) * (thrown * b), 0.95);
-        float lr = k * uLobeSize * b;
-        vec2 q = d - lp;
-        float u = dot(q, q) / max(lr * lr, 1e-6);
-        if (u < 1.0) { float f = 1.0 - u; dens += f * f * f; }
-      }
-      // One threshold over the summed field, the same shape the body above
-      // uses — which is why the two read as the same substance.
-      float kk = smoothstep(0.22, 0.5, dens);
-      // ...and the ends are absolute. Nothing of B at a share of 0, and ALL of
-      // it at 1: a ball one team owns outright has to be that team's colour
-      // and not a colour with a lobe missing out of it.
-      kk = mix(0.0, mix(kk, 1.0, smoothstep(0.9, 1.0, sh)), step(0.0001, sh));
+      // THE DROP, and it is not written here — systems/possessionGlsl.js is,
+      // and the backdrop lattice paints its dents with the same function. A
+      // second copy of this arithmetic would agree on the day it was written
+      // and drift the first time a lobe was retuned, and what breaks then is
+      // the read the whole thing exists for: the streak through the grid is
+      // MY ball because it is the same picture as the ball.
+      float kk = possessionMix(d, uTime);
       col = mix(col, mix(uTeamA, uTeamB, kk), uTintMix);
     } else {
       col = mix(col, uTint, uTintMix);
@@ -1192,6 +1171,10 @@ export function createPost(renderer) {
     uHurtGlow: { value: 0.62 },
     uHurtInner: { value: 0.45 },
     uHurtOuter: { value: 1.25 },
+    uHurtScan: { value: 0 },
+    uHurtScanCore: { value: 0.5 },
+    uHurtScanCount: { value: 190 },
+    uHurtScanDrift: { value: 0.9 },
     uKnee: { value: 0 },
   };
   const finalPass = makeFullscreenPass(fragmentShader, finalUniforms);
@@ -1398,11 +1381,16 @@ export function createPost(renderer) {
   // frame that returned early here would leave the last value it wrote on
   // screen — the seal heals to full and the corners stay red forever.
   function applyLowHealthVignette(amount, beat = 0) {
-    const c = CONFIG.fx?.lowHealth ?? {};
+    const c = CONFIG.fx?.nearDeath ?? {};
     const u = finalUniforms;
     const k = Math.max(0, Math.min(1, amount));
     if (k <= 0) {
       u.uHurt.value = 0;
+      // Zeroed alongside it even though the shader's `if (uHurt > 0.0)` already
+      // skips the whole block: a harness reads these uniforms to ask what the
+      // effect is doing, and one left at its last value says the lines are
+      // still running.
+      u.uHurtScan.value = 0;
       return;
     }
     // Both halves of the beat are scaled by `k` as well as by the beat itself,
@@ -1428,6 +1416,15 @@ export function createPost(renderer) {
     // Read every frame rather than at boot, so dragging the swatch in the
     // tuner is live.
     u.uHurtColor.value.set(c.color ?? 0x8e0f14);
+
+    // The scan lines. Scaled by `k` and NOT by the beat: the heart already owns
+    // one pulsing channel, and a second thing breathing at the same rate turns
+    // a heartbeat into a strobe. These are the steady half — the signal is
+    // simply worse than it was, and stays worse.
+    u.uHurtScan.value = Math.max(0, c.scan ?? 0.16) * k;
+    u.uHurtScanCore.value = Math.max(0, Math.min(1, c.scanCore ?? 0.5));
+    u.uHurtScanCount.value = Math.max(1, c.scanCount ?? 190);
+    u.uHurtScanDrift.value = c.scanDrift ?? 0.9;
   }
 
   function applyCineLens() {

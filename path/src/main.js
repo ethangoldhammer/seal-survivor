@@ -13,9 +13,9 @@ import { markDeathSite, plantGraves, updateGravesites, reseatGraves, restyleGrav
 import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
-  initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput,
+  initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput, holdInput,
 } from './input.js';
-import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer, sealBite } from './entities/player.js';
+import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer, sealBite, grantRerolls, startingRerolls, setJoltWallDt, setJoltPaused } from './entities/player.js';
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
@@ -24,11 +24,15 @@ import { FLIPPER_SIDES } from './flipperSide.js';
 import { updateFinLights, resetFinLights, finLightColor } from './systems/finLights.js';
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
-import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal, spawnOpeningBaitBalls } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, hitReactionMul, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal, spawnOpeningBaitBalls, drainSpawnTells } from './entities/enemies.js';
 import { noteBaitLoss, baitBallFor } from './systems/baitBall.js';
 import { inSpawnGroup } from './enemyTable.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
 import { updateAttractorStorm, resetAttractorStorm } from './systems/attractorStorm.js';
+import {
+  attackTraceOn, noteBite, tickAttackTrace, resetAttackTrace, attackStudy,
+} from './systems/attackTrace.js';
+import { initAttackDebug, updateAttackDebug } from './ui/attackDebug.js';
 import { tryBossGrab, updateBossGrab, resetBossGrab } from './systems/bossGrab.js';
 import { noteShove, updateSlam, resetSlam } from './systems/slam.js';
 import { capPlayerDamage, resetPlayerDamageCap } from './systems/playerDamageCap.js';
@@ -36,13 +40,19 @@ import { updateDodge, resetDodge } from './systems/dodge.js';
 import { projectiles, spawnProjectile, updateProjectiles, resetProjectiles, flushProjectileInstances } from './entities/projectiles.js';
 import { isLaser, latticePayload } from './loadout.js';
 import { LASER_ASSET, applyBoltLook, boltColor, updateBoltGlow, disposeFinLaser } from './systems/finLaser.js';
-import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks, bubbleOrbs } from './entities/pickups.js';
+import { updatePickups, resetPickups, spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb, spawnScoreOrb, spawnLevelOrb, spawnChumChunk, gulpPickups, setChumDifficulty, flushPickupInstances, nearestChum, nearestPickup, pickupTypeInWater, countFloorPickups, chumRadiusOf, pickupEntry, pickupEntryAlive, chumEntry, chumEntryAlive, nearestFloorPickup, bubbleBirthPoint, pickups, chumChunks, bubbleOrbs } from './entities/pickups.js';
 import { stepBubbleSpawner, rollBubbleSpawnDelay } from './systems/oxygenBubble.js';
 import { levelOrbColor } from './systems/levelOrb.js';
 import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChunkSpawner.js';
+// The score coral's window — see systems/scoreBoost.js.
+import { startScoreBoost, updateScoreBoost, resetScoreBoost, scoreMul, scoreBoostState } from './systems/scoreBoost.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
 import { setGooSuckTarget, updateGooSuck, resetGooSuck } from './systems/gooSuck.js';
-import { replayRenderCamera, enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir, versusSeals } from './systems/versus.js';
+// A big pickup comes apart and is vacuumed in, paying as each piece lands.
+// See systems/pickupAbsorb.js.
+import { absorbInPieces } from './systems/pickupAbsorb.js';
+import { versusDrops } from './systems/versusFlag.js';
+import { replayRenderCamera, replayHoldsInput, replaySpeed, enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir, versusSeals, versusMixDepth, matchBodies, versusPlayerAir, updateNameTags } from './systems/versus.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
 import { initFeedback, feedback, updateFeedback, feedbackState, addSustainedShake, bossVoice, setToastSink, onFeedback } from './systems/feedback.js';
@@ -70,7 +80,7 @@ import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeEnglish } from './systems/strike.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLink, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
+import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -120,9 +130,10 @@ import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/s
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
-import { play as playMusic, stop as stopMusic, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
+import { play as playMusic, startVersusMusic, versusMusicActive, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
 import { shotDue, resetShotGrid, tickInterval, finSplit, dealTick } from './systems/shotGrid.js';
 import { startAmbient, stopAmbient, preloadAmbient, ambientBankBytes } from './systems/ambient.js';
+import { splashBedBytes } from './systems/splashBed.js';
 import { computeKillPoints, comboMultiplierFor } from './systems/scoring.js';
 import { updateCrabSpawner, resetCrabSpawner, summonDeathPile, updateDeathPile } from './systems/crabSpawner.js';
 import { spawnSeagull, updateSeagulls, resetSeagulls, kickGull } from './systems/seagull.js';
@@ -144,7 +155,7 @@ import { firePearl, burstPearl, updateOyster, resetOyster } from './systems/oyst
 import { razorClamVolley, razorClamRoll } from './systems/razorClam.js';
 import { createOctoGrabber, updateOctoGrab, resetOctoGrab, rebuildOctoGrabber } from './systems/octoGrab.js';
 import { updateOrcaPod, resetOrcaPod, rebuildOrcaPod } from './systems/orca.js';
-import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines } from './systems/outlines.js';
+import { applyPlayerOutline, updatePlayerOutline, flarePlayerOutline, resetPlayerOutlineCharge, initCreatureOutlines, applyCreatureOutlines, applyCompanionOutlines, updateOutlineScale } from './systems/outlines.js';
 import { deathState, startDeathDive, updateDeathDive, resetDeathDive, beginRestartTransition } from './systems/deathDive.js';
 import { levelUpState, startLevelUpTime, updateLevelUpTime, endLevelUpTime, resetLevelUpTime, cardsArriveAt, saluteEnabled } from './systems/levelUpTime.js';
 // The seal that swims up under the cards and watches you pick — a second
@@ -215,16 +226,27 @@ import { initGraveLabel, updateGraveLabel, clearGraveLabel } from './ui/graveLab
 import { initGraveBeam, updateGraveBeam, clearGraveBeam } from './systems/graveBeam.js';
 import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
+// The one cursor the plain DOM panels share — see ui/panelNav.js.
+import { updatePanelNav, panelNavOpen } from './ui/panelNav.js';
 import { uiText } from './uiTextTable.js';
 // The goal lights' live refresh, for the F panel (systems/wallRocks.js).
 import { refreshGoalGlow } from './systems/wallRocks.js';
 import { showTeamSelect, hideTeamSelect, updateTeamSelect } from './ui/teamSelect.js';
+import { showRoomLobby, hideRoomLobby, updateRoomLobby } from './ui/roomLobby.js';
+import { roomsAvailable } from './systems/online/room.js';
+import { showRosterPreview, refreshRosterPreview, hideRosterPreview, updateRosterPreview, rosterPreviewOn } from './systems/versus.js';
+import { publishBallGrid } from './systems/ballGrid.js';
+import { resetRoster } from './systems/sealRoster.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
 import { isTextEntry, isTypingTarget } from './ui/typing.js';
 import { initTuner, refreshTuner, setTunerMeta } from './ui/tuner.js';
 import { initTexturePanel } from './ui/textures.js';
 import { initTypography, applyTypography } from './ui/typography.js';
 import { initTextPanel, refreshTextSpecimen } from './ui/textPanel.js';
+// The Text panel's screen picker, extended with the match's surfaces — see the
+// DEV_UI block in init.
+import { registerPreviewScreen } from './ui/ui.js';
+import { ensureVersusStyle, applyGlassStyle, previewVersusUi, hideVersusPreview, PREVIEW_MATCH_SCREENS } from './systems/versus.js';
 import { initGamepadDebug, updateGamepadDebug } from './ui/gamepadDebug.js';
 import { initSfxDebug, updateSfxDebug } from './ui/sfxDebug.js';
 import { initUpgradeDebug } from './ui/upgradeDebug.js';
@@ -291,6 +313,20 @@ const DEV_UI = !!import.meta.env?.DEV
 // nothing reads the URL here.
 // Player 2's dash kills through the run's own kill path — see versusHooks.
 versusHooks.onKill = (e) => { onEnemyKilledFeedback(e); };
+// EVERY SEAL'S STRIKE POPS, not only the one this file drives. The splash queue
+// and the knock are this file's, so the call comes to them — the same shape as
+// the kill hook above. See fireStrikeBurst.
+versusHooks.onStrikeBurst = (pos, stats, st, ramp) => fireStrikeBurst(pos, stats, st, ramp);
+// ...and one seal's air time: the ramp, the arrival window, the slam under it
+// and the splash. `cache: false` — the ramp singleton is the run's own seal.
+versusHooks.onSealAir = (seal, stats, st) => stepSealAir(seal, stats, st, false);
+// ...and every seal's fired release hoovers the chum around it, at the gulp
+// radius the stats give it. collectChum is this file's too (it is where a
+// mouthful becomes xp, a heal and a chain link).
+versusHooks.onReleaseGulp = (pos, stats) => {
+  if (CONFIG.strike.charge.gulp?.blockEating === false) return;
+  gulpPickups(world.scene, pos.x, pos.y, stats.chumGulpRadius, collectChum);
+};
 // ...and a hull sunk by the BALL, which scores and rings the grid like one
 // sunk by anything else. Same hook damageBoat takes from updateBoats below.
 versusHooks.onBoatDestroyed = (b, chum) => onBoatDestroyed(b, chum);
@@ -410,6 +446,7 @@ let rapidFireTimer = 0; // seconds remaining on an active rapid-fire pickup
 let chargeHapticTimer = 0; // counts down between wind-up rumble pulses
 let bubbleSpawnTimer = 0;
 let rapidFireSpawnTimer = 0;
+let scoreOrbSpawnTimer = 0;
 let levelOrbSpawnTimer = 0;
 // SECONDS SINCE THE LAST CARD WAS TAKEN, and Infinity until the first one is.
 // The first-run tip that points out the hive is offered in the window after a
@@ -839,6 +876,24 @@ async function boot() {
   // The Text panel (Y) — the third tuning surface, alongside ` and T. Same
   // change handler as the tuner: a text row is an ordinary schema row, and the
   // routing below turns any textStyles/textMotion path into a restyle.
+  if (DEV_UI) {
+    // THE BLUBBERBALL SURFACES, in the Text panel's screen picker. ui.js owns
+    // the picker and imports neither the match HUD nor the team select (both
+    // import from it), so they are registered from here — the one module that
+    // already knows all three. The HUD's stylesheet goes in NOW rather than
+    // on the first match: the panel's specimen wears the goal card's glass,
+    // and needs the sheet in the head before a match has been played.
+    ensureVersusStyle();
+    for (const name of PREVIEW_MATCH_SCREENS) {
+      registerPreviewScreen(name, { show: () => previewVersusUi(name), hide: hideVersusPreview });
+    }
+    registerPreviewScreen('team select', {
+      // The screen alone, without the pitch behind it: Start and Back both
+      // just put it away, since there is no match to walk into from here.
+      show: () => showTeamSelect({ parent: uiRoot(), onStart: hideTeamSelect, onBack: hideTeamSelect }),
+      hide: hideTeamSelect,
+    });
+  }
   if (DEV_UI) initTextPanel(handleTunerChange);
   if (DEV_UI) initTexturePanel((key) => {
     // Recycled creature bodies were built from the asset as it WAS. A model
@@ -887,6 +942,14 @@ async function boot() {
   // the clock: both are locals here, and handing over accessors keeps the panel
   // from importing the game loop's state.
   if (DEV_UI) initUpgradeDebug(() => gameState.time, () => ({ scene: world.scene, gameState }));
+  // The attack panel — V. Same getter contract as the line above: it needs a
+  // scene to spawn a boss into and the run's level to spawn it against, and
+  // both are locals here.
+  // The camera is in there as well as the scene: the panel pins its readouts to
+  // the bodies they describe by projecting world positions to the screen, and a
+  // panel that reached into the world module for that would be a UI file
+  // holding the renderer. See drawTags.
+  if (DEV_UI) initAttackDebug(() => ({ scene: world.scene, camera: world.camera, gameState }));
   mountUnlockToasts(uiRoot());
   // THE LEDGER'S WRITE IS THROTTLED (see systems/unlocks.js), so a tab closed
   // between two flushes would drop up to a second and a half of counting.
@@ -1392,6 +1455,12 @@ function handleTunerChange(path) {
   // the constellations and the shore on every step of the slider, which is
   // both wasteful and misleading — the frame rate you are sweeping for would
   // be measured against a rebuild that never happens in a real run.
+  // THE GLASS IS CSS CUSTOM PROPERTIES, so a slider on it writes the document
+  // rather than any object the frame reads — nothing repaints it on its own.
+  // Cheap enough to run on every step of a drag: eight setProperty calls, and
+  // the panes already on screen inherit them without being rebuilt (which is
+  // the point — rebuilding the rule would restart the sheen mid-drag).
+  if (path === '*' || path.startsWith('glass')) applyGlassStyle();
   if (path === '*' || path.startsWith('render')) world.applyRenderScale();
   if (path === '*' || path.startsWith('grid')) world.grid.build();
   // The shore is geometry, not uniforms, so every knob on it needs a rebuild.
@@ -1619,12 +1688,70 @@ function openSealSports() {
   showSealSports({
     onBall: () => {
       hideSealSports();
+      // THE PITCH GOES UP BEHIND THE SCREEN, not the bust — see
+      // enterTeamSelectPitch. Everything the team select decides is a thing you
+      // can now watch happen in the water in front of you.
+      enterTeamSelectPitch();
       showTeamSelect({
         parent: uiRoot(),
-        onStart: () => enterMode(true),
-        onBack: openSealSports,
+        // START LEAVES THE TEARDOWN TO THE MATCH. `keep` means "somebody else
+        // is about to take this down": startGame runs resetArena, which runs
+        // resetVersus, which disposes the roster — so doing it here as well is
+        // the same work twice, the second half of it on bodies that have
+        // already gone.
+        onStart: () => { hideRosterPreview({ keep: true }); enterMode(true); },
+        onBack: () => { leaveTeamSelectPitch(); openSealSports(); },
+        // A SEAT ADDED, A COLOUR PICKED, A NAME ROLLED, A HAT CYCLED — the
+        // pitch is re-read on every one of them, which is what makes this a
+        // team select and not a form.
+        onChange: () => rosterPreviewChanged(),
       });
     },
+    // THE SAME MATCH, WITH SOMEBODY FAR AWAY. The room screen comes first,
+    // because who is present is what decides what the seats can be — and the
+    // pitch stays down behind it, unlike the team select: there is nothing to
+    // preview until both players are in the room.
+    onBallOnline: () => {
+      hideSealSports();
+      openRoomLobby();
+    },
+  });
+}
+
+/**
+ * The room screen, and the two ways out of it.
+ *
+ * THE HOST GOES ON TO THE ORDINARY TEAM SELECT — the same screen, the same
+ * writeSetup, the same preview — because the host is picking for both players
+ * and there is nothing about that choice that an online match makes different.
+ * The guest never sees it; it waits in the room until the start arrives.
+ */
+function openRoomLobby() {
+  // The row that leads here is not drawn without a room server, so this is a
+  // second lock on the same door — but a route that could silently open an
+  // unusable screen is worth locking twice, and the list to fall back to is
+  // still up.
+  if (!roomsAvailable()) { openSealSports(); return; }
+  showRoomLobby({
+    parent: uiRoot(),
+    onBack: () => openSealSports(),
+    onHosting: () => {
+      hideRoomLobby();
+      enterTeamSelectPitch();
+      showTeamSelect({
+        parent: uiRoot(),
+        // PHASE 3 SENDS THE MATCH HERE — the setup, the rules and the resolved
+        // cast, so the guest builds the same match rather than rolling its own.
+        // Until it does, this is an ordinary local match with a room open
+        // beside it, which is exactly what the milestone is for.
+        onStart: () => { hideRosterPreview({ keep: true }); enterMode(true); },
+        onBack: () => { leaveTeamSelectPitch(); openRoomLobby(); },
+        onChange: () => rosterPreviewChanged(),
+      });
+    },
+    // The host has started. Phase 3 applies the payload it carries; today it
+    // is the signal and nothing more.
+    onGuestStart: () => {},
   });
 }
 
@@ -1646,7 +1773,7 @@ function openSealSports() {
  *
  * @param versus  true for the ball game, false for the ordinary run.
  */
-function enterMode(versus) {
+function setModeWorld(versus) {
   if (versusActive() !== !!versus) {
     enableVersus(!!versus);
     world.resize();
@@ -1659,8 +1786,81 @@ function enterMode(versus) {
     // may have picked differently. One merge of the shore; cheap.
     world.wallRocks.build();
   }
+}
+
+function enterMode(versus) {
+  setModeWorld(versus);
   showHud();
   startGame();
+}
+
+// ---------------------------------------------------------------------------
+// THE TEAM SELECT'S PITCH — the arena, standing, with the roster on it.
+//
+// The team select used to be a panel over the MAIN MENU: one seal held up in a
+// crop of water, while the screen in front of it was about two teams. So the
+// thing the screen is FOR — who is on the pitch, on which side, in what colour
+// and wearing what — was the one thing it could not show you.
+//
+// THREE THINGS HAPPEN, and the order matters. The main menu goes first, because
+// it is holding a pose on the body that is about to be seat 0 and a claim on
+// the camera that is about to be the pitch's; then the world flips to a match's
+// arena (the narrower pitch, the goal mouths cut into the shore); then the
+// roster is stood up on it.
+//
+// DROPPED, NOT RELEASED. `release` is the glide into a run and there is no run
+// here — it would ease the bust's crop out over the second after the pitch had
+// already been built underneath it. `dispose` takes it in one frame, which is
+// what a screen CHANGE looks like.
+//
+// NO CAMERA WORK. With the menu's claim gone the rig falls back to the arena's
+// own framing, and a match's arena IS the pitch — so the shot this wants is
+// the shot there already is.
+// ---------------------------------------------------------------------------
+/**
+ * A SEAT MOVED — the pitch re-reads itself, and if the ROSTER's size is what
+ * changed the shore is re-carved with it. The goal mouths grow with the number
+ * of seals a side (systems/goalBand.js), and the rock is cut at build: the
+ * light follows a new mouth live, the hole in the boulders does not. One merge
+ * per seat added or removed, which is a button press and not the colour
+ * wheel's several a second — refreshRosterPreview returns false for everything
+ * else for exactly that reason.
+ */
+function rosterPreviewChanged() {
+  if (refreshRosterPreview()) world.wallRocks.build();
+}
+
+function enterTeamSelectPitch() {
+  mainMenu()?.dispose();
+  // THE ROSTER FIRST, THEN THE WORLD. setModeWorld carves the shore, and the
+  // mouths it cuts are sized off the roster — so a screen opening on anything
+  // but the roster left over from last time would be carved a size behind and
+  // only catch up on the first seat somebody moved.
+  resetRoster();
+  setModeWorld(true);
+  showRosterPreview(world.scene);
+  // THE MATCH'S OWN MUSIC, AT THE MATCH'S OWN TEMPO, from here rather than from
+  // the whistle. This screen is the pitch: the menu's loop — half speed under a
+  // 500Hz lid, which is what a screen that is WAITING sounds like — is the
+  // wrong piece of music to pick a team to. startVersusMusic lifts the lid and
+  // the half speed in one step (setMusicRateScale(1, 0)), so there is no
+  // dilation on this screen at all, and startGame then leaves what is playing
+  // alone rather than cutting it back to the top.
+  startVersusMusic();
+}
+
+/**
+ * Back out of it: the pitch comes down, the arena goes back to a run's, and the
+ * menu is put up again with the sports list over it — which is the screen the
+ * player pressed Blubberball from.
+ */
+function leaveTeamSelectPitch() {
+  hideRosterPreview();
+  setModeWorld(false);
+  // ...and the music goes back under the menu's lid with it — showMainMenu
+  // calls startMusicAtRest, which is the half speed and the 500Hz cap this
+  // screen just spent a minute out from under.
+  showMainMenu();
 }
 
 // ---------------------------------------------------------------------------
@@ -1688,13 +1888,40 @@ function leaveForMenu() {
   showRestartTransition(seconds);
   unlockAudio();
   beginRestartTransition(() => {
-    returnToMenu();
-    hideRestartTransition(seconds * 0.6);
+    // THE HIDE IS OWED WHETHER OR NOT THE RETURN WORKS. The cover is opaque
+    // and full-screen, and nothing behind it is clickable — so a throw
+    // anywhere in resetArena or showMainMenu used to leave the player looking
+    // at black with the music playing and no way out. ui.js has a watchdog for
+    // the cases nobody thought of; this is the one that WAS thought of, and it
+    // costs a `finally`.
+    try {
+      returnToMenu();
+    } finally {
+      hideRestartTransition(seconds * 0.6);
+    }
   });
 }
 
 function returnToMenu() {
   crumb('run:menu');
+  // THE MATCH FLAG COMES OFF WITH THE MATCH, and until 2026-09-13 it did not.
+  // `enableVersus(true)` is set by enterTeamSelectPitch and cleared by exactly
+  // two routes — backing out of the team select, and the next survivor run
+  // through enterMode(false). Leaving a MATCH for the main menu was neither, so
+  // versusActive() stayed true for as long as the player sat on that menu.
+  //
+  // WHAT THAT BREAKS IS THE PAD, ENTIRELY. getGamepad() has a versus branch
+  // (see input.js): with a match on and no captain written, ONE connected
+  // controller resolves to `null` rather than be shared between two seals. So
+  // every menuInput cursor in the game — the menu's own hexagons, the sports
+  // list, the leaderboard, the level-up hand, the pause menu — went dead after
+  // a Blubberball match and stayed dead, on a screen with no match in sight.
+  // It reads as "the controller stopped working", which is why it took a
+  // report about one panel to find.
+  //
+  // BEFORE resetArena, not after: the arena's width reads this flag when the
+  // walls are measured, which is the same ordering enterMode depends on.
+  setModeWorld(false);
   // The bars go with the run. resetArena hides every MENU, but the HUD is not
   // a menu — it is the run's own furniture, and the score card is what
   // normally takes it down. Nothing takes it down on this route.
@@ -1764,7 +1991,14 @@ function publishSealWakes() {
 }
 
 function closeMainMenu() {
-  if (!mainMenuActive()) return;
+  // THE SWEEP IS UNCONDITIONAL; only the menu's own glide is not.
+  //
+  // This used to return early when no menu was up, which was true of every
+  // route into a run until the team select grew a pitch behind it: that screen
+  // DISPOSES the menu on its way in, so by the time Start reaches here there is
+  // no menu and the four panels below would have been left standing over a live
+  // match. Each of them is a DOM surface with its own Escape handler and its own
+  // pointer capture, which is the whole reason this list exists.
   hideLeaderboard();
   hideSealSports();
   hideTeamSelect();
@@ -1774,7 +2008,7 @@ function closeMainMenu() {
   // surface with its own Escape handler, and nothing about a run starting
   // takes it down.
   closeTipSheet();
-  mainMenu()?.release();
+  if (mainMenuActive()) mainMenu()?.release();
 }
 
 function restartRun() {
@@ -1791,9 +2025,14 @@ function restartRun() {
   // used it). Clears faster than it arrived: the far side of a transition is a
   // live run, and the first second of one shouldn't be played blind.
   beginRestartTransition(() => {
-    showHud();
-    startGame();
-    hideRestartTransition(seconds * 0.6);
+    // Same `finally` as leaveForMenu, for the same reason: a throw out of
+    // startGame must not also cost the screen.
+    try {
+      showHud();
+      startGame();
+    } finally {
+      hideRestartTransition(seconds * 0.6);
+    }
   });
 }
 
@@ -1935,6 +2174,9 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // a run that ended in a boss's mouth must not start in one. Torn up rather
   // than released — there is nothing left to be thrown by.
   resetBossGrab();
+  // The attack ledger is per FIGHT, so a panel left open across a run boundary
+  // reads this run rather than an average of two. See systems/attackTrace.js.
+  resetAttackTrace();
   updateBossBar(null);
   resetProjectiles(world.scene);
   // A staged attractor storm is a dev thing and does not survive a run — its
@@ -2263,11 +2505,21 @@ function buildRun(resume = null) {
   // camera's opening move, and restarts the loop underneath only if what is
   // playing is not what this run opens on (see releaseMusicIntoRun — dying to
   // a boss leaves the fight's rotation up, where the menu never does).
-  // NOT IN VERSUS — no music (a match has none yet; it is Ethan's to add),
-  // and no opening shot: the match camera cuts straight to its own framing.
+  // IN VERSUS the match has its own bank — CONFIG.music.versusSrc, cycling
+  // 00 → 01 → 02 → 00 on the same transport at its own tempo, nothing in the
+  // match driving it yet. It takes the transport in one step rather than
+  // through a release, because there is no opening shot for a move to be
+  // choreographed against: the match camera cuts straight to its own framing.
   // See CONFIG.versus.drop for the list of what a match does without.
   if (versusActive()) {
-    stopMusic();
+    // ...AND THE TEAM SELECT HAS USUALLY STARTED IT ALREADY. That screen is the
+    // pitch with the roster on it, and it plays the match's own bank at the
+    // match's own tempo while you pick sides — so a second start here would cut
+    // the music back to the top of Loop00 on the frame of the whistle, which is
+    // the one thing this route is trying not to do to the camera either.
+    // Cold routes (a rematch off the score card, `?versus`) find nothing
+    // playing and start it as they always did.
+    if (!versusMusicActive()) startVersusMusic();
   } else {
     if (!releaseMusicIntoRun(gameState.level)) playMusic(gameState.level);
     // The opening shot: wide and barely tracking, easing into the normal follow
@@ -2301,6 +2553,8 @@ function buildRun(resume = null) {
   rapidFireTimer = 0;
   bubbleSpawnTimer = rollBubbleSpawnDelay();
   rapidFireSpawnTimer = randomBetween(CONFIG.rapidFirePickup.spawnMin, CONFIG.rapidFirePickup.spawnMax);
+  scoreOrbSpawnTimer = randomBetween(CONFIG.scorePickup.spawnMin, CONFIG.scorePickup.spawnMax);
+  resetScoreBoost();
   levelOrbSpawnTimer = randomBetween(CONFIG.levelPickup.spawnMin, CONFIG.levelPickup.spawnMax);
   sinceUpgrade = Infinity;
   resetChumChunkSpawner();
@@ -2406,6 +2660,8 @@ function captureRunSnapshot() {
     score: gameState.score,
     humansEaten: player.humansEaten,
     bosses: bossState.defeated,
+    rerolls: player.rerolls,
+    rerollsEarned: player.rerollsEarned,
     hp: player.hp,
     oxygen: player.oxygen,
     pendingLevels,
@@ -2438,6 +2694,20 @@ function applyRunSnapshot(snap) {
   player.level = snap.level;
   player.humansEaten = snap.humansEaten;
   player.bossesDefeated = snap.bosses;
+  // THE BANK, as it stood — not re-paid from `bosses` above. Every reroll those
+  // bosses bought was banked in the session that died, and some of them may
+  // already have been spent; deriving it here would hand a resumed run its
+  // whole boss count back as fresh rerolls. Same argument as `bossesPaid`
+  // further down, and the same failure if it is skipped: resetPlayer opened
+  // this run at CONFIG.upgradeReroll.start, which is not where it left off.
+  //
+  // Falls back to the starting bank rather than to 0, so a snapshot written by
+  // a build that predates the field resumes at whatever a fresh run gets.
+  player.rerolls = Number.isFinite(snap.rerolls) ? snap.rerolls : startingRerolls();
+  // FLOORED AT THE BANK, so a snapshot from a build that predates this field
+  // still puts the button back on a run that is carrying rerolls — otherwise a
+  // resumed run would hold two of them with nothing on screen to spend them on.
+  player.rerollsEarned = Math.max(snap.rerollsEarned ?? 0, player.rerolls);
   // BEFORE the first recompute, because Iron Lung reads it — and it is
   // deliberately the raw stored value rather than a clamped one, since the cap
   // it would be clamped against does not exist until the line below has run.
@@ -3183,7 +3453,43 @@ function updateBossShot() {
   // rather than off a cached x/y for the reason enemies have none: the
   // position IS the mesh.
   if (gained && player.mesh) {
-    feedback('bossPellet', { x: player.mesh.position.x, y: player.mesh.position.y });
+    // THE WORDS ARE THE LOADOUT'S, and they are uiText.csv's on either one.
+    // A run can be throwing stones or firing light, and a receipt that says
+    // "pebbles" on a laser run is the same lie weaponName.js exists to stop —
+    // so the line is chosen here, because this is the only place that knows
+    // which gun the run rolled. Both ids are written out as literals rather
+    // than built from the loadout key: npm run test:uitext matches them
+    // statically, and a computed id is a row nothing can prove is shown.
+    feedback('bossPellet', {
+      x: player.mesh.position.x,
+      y: player.mesh.position.y,
+      toastLabel: isLaser(player.loadout)
+        ? uiText('bossPelletLaser')
+        : uiText('bossPelletPebbles'),
+    });
+  }
+  // A REROLL, BANKED. The other thing a boss pays, beside the dividend and the
+  // pellet — see CONFIG.upgradeReroll for why a boss is the only source.
+  //
+  // Announced only if it was actually banked: grantRerolls returns what the cap
+  // let through, and a kill against a full bank must not put a receipt up for a
+  // reward the player did not receive. Same frame as the pellet, and the pair is
+  // deliberate — both are "the kill made you permanently better", and the two
+  // receipts stack in the toast layer rather than competing for one slot.
+  if (gained) {
+    const banked = grantRerolls(CONFIG.upgradeReroll?.perBoss ?? 1);
+    if (banked > 0 && player.mesh) {
+      feedback('rerollEarned', {
+        x: player.mesh.position.x,
+        y: player.mesh.position.y,
+        // The WORDS come from here rather than from CONFIG.feedback, because a
+        // player-facing line in a .js file is the thing uiText.csv exists to
+        // stop — and asking for it by id here is also what npm run test:uitext
+        // reads to prove the row is shown by something.
+        toastLabel: uiText('rerollEarned'),
+        toastValue: `+${banked}`,
+      });
+    }
   }
 }
 
@@ -3481,9 +3787,17 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
   // hit reaction — the spring that gives it its swim lag absorbs the kick and
   // carries it down the body. Damage-scaled and capped so a chip of splash
   // twitches it and a big hit visibly buckles it.
-  if (dir && e.anim?.hasSpring) {
+  //
+  // ...unless it is a BOSS, which takes CONFIG.boss.tenacity.flinch of this and
+  // ships at none of it. A boss is the one body in the water that is always
+  // being shot at, and a buckle per pellet is a creature that never gets to
+  // finish anything — see the note on that block. The flash below, the spark,
+  // the weak spot's own light and every other channel that says the shot
+  // landed are untouched; what goes is the fraction of a second of its turn.
+  const react = hitReactionMul(e);
+  if (dir && e.anim?.hasSpring && react > 0) {
     const spring = CONFIG.animation.spring;
-    const strength = Math.min(spring.impulseMax, dmg * spring.impulsePerDamage);
+    const strength = Math.min(spring.impulseMax, dmg * spring.impulsePerDamage) * react;
     impulseDir.set(dir.x, dir.y, 0);
     if (impulseDir.lengthSq() > 1e-8) e.anim.impulse(impulseDir.normalize(), strength);
   }
@@ -3721,6 +4035,21 @@ function processPendingSplashes() {
  * them is the one that gets through.
  */
 function onPlayerHit(dmg, dir, source = 'unknown', channel = 'attack', iFrames = 0) {
+  // THE ATTACK PANEL'S STUDY SWITCH, and it sits at the very top on purpose.
+  //
+  // Everything the panel is for takes minutes of watching — a lunge cycle is
+  // five to eight seconds and the gate you are hunting may be one refusal in
+  // twenty — and no archetype worth studying leaves the seal alive for that
+  // long. Above the i-frame window rather than below it so a swallowed blow
+  // does not spend the seal's only defence either: a study where every fourth
+  // bite is refused by a window the player never earned is a study of a
+  // different fight.
+  //
+  // The bite was already counted as LANDED by then (see onPlayerBite), so the
+  // ledger still reports the real fight's numbers, and the panel says in so
+  // many words that the switch is on. Dev only — attackStudy.noDamage is set by
+  // ui/attackDebug.js and by nothing else.
+  if (attackStudy.noDamage) return 0;
   // ---------------------------------------------------------------------------
   // THE I-FRAME WINDOW, and the one place it is spent. See
   // CONFIG.player.hitIFrames for the argument; the short version is that this
@@ -3972,13 +4301,31 @@ function onPlayerBite(e) {
   const striking = e.lungeStage === 'strike' && e.def?.lunge;
   const mul = striking ? (e.def.lunge.strikeBiteMul ?? CONFIG.lungeRules?.strikeBiteMul ?? 1) : 1;
   const dmg = (e.biteDamage ?? 0) * mul;
-  if (!(dmg > 0) || isInvulnerable()) return;
-
+  // THE THREE WAYS A SNAP BILLS NOTHING, each reported separately.
+  //
+  // They are indistinguishable on screen — the jaws close, the chomp plays, and
+  // the bar does not move — and they want three different fixes: a blank
+  // `biteDamage` column, the seal's dash i-frames, and the reach. Reporting
+  // "it missed" for all three is what made "the bites pass through" an
+  // unanswerable bug report. See systems/attackTrace.js.
   const reach = (e.radius ?? 1) * (CONFIG.bite?.mouthReach ?? 0.55)
     + (player.stats?.hitRadius ?? 0.5);
   const mx = e.mesh.position.x - player.mesh.position.x;
   const my = e.mesh.position.y - player.mesh.position.y;
-  if (mx * mx + my * my > reach * reach) return;
+  const gap = Math.hypot(mx, my);
+  if (!(dmg > 0)) {
+    if (attackTraceOn()) noteBite(e, { dmg, dist: gap, reach, why: 'no biteDamage on the row' });
+    return;
+  }
+  if (isInvulnerable()) {
+    if (attackTraceOn()) noteBite(e, { dmg, dist: gap, reach, why: 'you were invulnerable' });
+    return;
+  }
+  if (gap > reach) {
+    if (attackTraceOn()) noteBite(e, { dmg, dist: gap, reach, why: 'out of reach' });
+    return;
+  }
+  if (attackTraceOn()) noteBite(e, { dmg, dist: gap, reach, striking });
 
   // A CLEAN BITE FROM A BOSS THAT HOLDS. Inside this gate and nowhere else,
   // which is the whole contract of systems/bossGrab.js: the grab is earned by
@@ -4066,11 +4413,16 @@ function onEnemyKilledFeedback(e, killEvent = null) {
 
   const combo = comboMultiplierFor(strikeState);
   const { points, schoolWipe } = computeKillPoints(e, enemies, combo);
-  gameState.score += points;
+  // THE SCORE CORAL'S WINDOW, applied at the bank rather than inside
+  // computeKillPoints: that function answers what a CREATURE is worth, and
+  // this is about when you happened to kill it. 1 when nothing is running, so
+  // there is no branch here. See systems/scoreBoost.js.
+  const banked = Math.round(points * scoreMul());
+  gameState.score += banked;
   // `points` is already multiplied, so the toast shows what actually got
   // banked. The factor is still passed, but only to colour the toast as a
   // combo kill — it is no longer printed alongside the number.
-  if (!versusActive()) spawnScoreToast(world.camera, e.mesh.position.x, e.mesh.position.y, points, combo);
+  if (!versusActive()) spawnScoreToast(world.camera, e.mesh.position.x, e.mesh.position.y, banked, combo);
 
   // A BOSS COMES APART. Here rather than in systems/boss.js, which is where
   // every other part of the aftermath lives: that module finds out a boss died
@@ -4561,9 +4913,23 @@ function subjectAt(handle) {
   return null;
 }
 
-function chainFrom(source, links = 1) {
-  const chain = chainStrike(source, links);
-  if (chain) onChainHit(chain, source);
+function chainFrom(source, links = 1, st = strikeState) {
+  const chain = chainStrike(source, links, st);
+  // DRAINED WHATEVER THIS SEAL IS. A match seal's links are real — they move
+  // that seal's counter and its speed — and leaving them queued because nobody
+  // announces them would hand a CPU's combo to whichever caller asked next.
+  // Reading and discarding is the whole of "not on this screen".
+  const scored = consumeChainLinks(st);
+  if (!chain || st !== strikeState) return;
+  // ONE onChainHit PER LINK. `links` can be more than one — Porpoising is
+  // worth a link per stack on every breach — and reporting only chainStrike's
+  // return value announced the deepest of them and silently swallowed the
+  // rest, which on screen is a banner counting 4, 6, 8.
+  //
+  // `link.source` rather than `source`: they are the same on this path, and
+  // quoting the entry is what keeps that true if a drain ever picks up a link
+  // some other producer left behind.
+  for (const link of scored) onChainHit(link.chain, link.source || source);
 }
 
 // ---------------------------------------------------------------------------
@@ -4659,6 +5025,250 @@ function onCelestialPass(which, at) {
   }
 }
 
+/**
+ * THE POP — the strike's damage, all of it, at the point the button came up.
+ * See strikeBurst() and CONFIG.strike.burst for why it lives on the release
+ * rather than on whatever the dash clips.
+ *
+ * Queued through the same splash path every blast in the game uses, so it
+ * breaks wreckage and takes people off decks exactly like a pearl or a seagull
+ * bomb does, and so the damage lands after the loops that are mid-iteration
+ * over `enemies` (see processPendingSplashes).
+ *
+ * Taken at the seal's position as it is RIGHT NOW. The dash impulse has set the
+ * velocity but nothing has integrated it yet (updatePlayer runs later in the
+ * frame), so this is still the point the seal released at rather than somewhere
+ * the dash has already carried it — which is the whole promise of the mechanic.
+ *
+ * A FUNCTION BECAUSE EVERY SEAL FIRES ONE. It was inline in the release
+ * handler, which is the same thing while there is one seal in the water — and
+ * in a match it meant a CPU seal's strike did no damage and shoved nothing at
+ * all. systems/versus.js reaches it through `versusHooks.onStrikeBurst`, the
+ * same way a match's kills reach onEnemyKilledFeedback: the splash queue is
+ * this file's, so the call comes to it rather than the queue going out.
+ */
+function fireStrikeBurst(pos, stats, st, ramp = undefined) {
+
+    const burst = strikeBurst(stats);
+    // THE ENTOURAGE, ON A PERFECT RELEASE ONLY. Folded into the burst
+    // rather than spawned as separate hits at each companion, because the
+    // companions are scattered across the arena and six numbers in six
+    // places is not a read — see systems/companionStrike.js. Zero on any
+    // release that wasn't perfect, and zero for a run with no companions,
+    // so the ordinary strike is untouched.
+    //
+    // Measured against `burst.damage` for its ceiling and added AFTER, so
+    // the cap is on the bonus and the strike's own damage is never capped
+    // by a rule about its friends.
+    //
+    // Asked INSIDE the gate, not before it: strikeBurst() returns zero
+    // damage for a release off the beat, and a companion share measured
+    // against a zero strike has no ceiling to be capped by. The
+    // companions join a strike that BIT; they do not carry one that
+    // missed.
+    if (burst.damage > 0 && burst.radius > 0) {
+      const lent = companionStrikeBonus(stats, st.perfectStrike, burst.damage);
+      const bx = pos.x;
+      const by = pos.y;
+      pendingSplashes.push({
+        x: bx, y: by,
+        // Air time on the strike's own damage, like the gun's. Damage
+        // only, not radius: reach is what the player is aiming with, and
+        // a blast that silently grew every time they were high up would
+        // make the one number they aim by unpredictable.
+        //
+        // The companions' share rides it too: they hit on the same frame
+        // and through the same blast, and a bonus that ignored air time
+        // would make a breach strike quietly worse the more friends you
+        // had.
+        // THE SEAL'S OWN AIR, not the run's cached ramp — see the note on
+        // airDamageMul. The default is the singleton, which is the person's;
+        // a match hands over the arc the seal firing this is actually on.
+        damage: (burst.damage + lent) * airDamageMul(ramp),
+        radius: burst.radius,
+        exclude: null,
+        source: 'strike',
+        // Its own event, not the splash queue's `bigKill`: this fires on
+        // EVERY strike, and bigKill is a heavy, hit-stopping bang meant
+        // for something dying.
+        feedback: false,
+      });
+      feedback('strikeBurst', {
+        x: bx, y: by,
+        // Bigger when the entourage came in, and sized off what they
+        // actually lent rather than off how many there are: a blast that
+        // hits three times as hard has to LOOK like it, and a run with
+        // one escort should not get the same flash as a run with nine
+        // bodies behind it.
+        scale: (0.6 + st.power * 0.9) * (1 + Math.min(1, lent / Math.max(1, burst.damage)) * 0.5),
+      });
+      // AND IT SAYS SO. An invisible passive is an invisible passive —
+      // the companions' damage arrives inside a number the player never
+      // sees, so without this the card is a strictly better strike with
+      // nothing on screen to explain why. See CONFIG.feedback for the
+      // toast channel.
+      if (lent > 0) {
+        feedback('companionStrike', {
+          x: bx, y: by,
+          toastValue: companionStrikeCount(stats),
+        });
+      }
+      // Bodies caught in it are thrown OUTWARD, which is the difference
+      // between a detonation and damage happening in a circle. Separate
+      // from the ram's shove, which runs along the dash instead.
+      knockOutward(bx, by, burst.radius, (CONFIG.strike.burst.knock ?? 0) * st.power);
+    }
+  
+}
+
+/**
+ * ONE SEAL'S AIR TIME: the ramp, the arrival, and what the arrival is worth.
+ *
+ * Every line of this used to sit inline in the frame, which is the same thing
+ * while there is one seal in the water. In a match there are up to eight, and
+ * a CPU seal had no ramp, no slam, no arrival window and no splash — it simply
+ * fell back in. Blubberball is a game about breaching, so that was the widest
+ * gap between a person's seal and the computer's.
+ *
+ * `cache` is the air ramp's module singleton (systems/airborne.js) and belongs
+ * to the run's own seal alone: the handful of call sites that read a ramp
+ * without a body in their hand are about the person playing. Everybody else
+ * passes false and is paid off their OWN arc, through the ramp this returns.
+ *
+ * What is deliberately NOT in here: the camera's breach nudge, the water on
+ * the lens and the celestial pass. Those are the viewpoint, and the viewpoint
+ * follows one seal however many are in the air.
+ */
+function stepSealAir(seal, stats, st, cache = false) {
+  // AIR TIME. updatePlayer has just integrated the arc and set breachDir, so
+  // this is the first moment the ramp can be current — and it must be current
+  // before ANYTHING below reads a multiplier off it: the guns fire further
+  // down this same block, and a ramp one frame stale would pay the bonus for
+  // an arc the seal has already landed from. See systems/airborne.js.
+  updateAirborne(seal, cache);
+
+  // ...AND WHAT IT BOUGHT, cashed on the way back through the water line.
+  //
+  // Deliberately before the Porpoising check below rather than folded into
+  // it: the two are different rewards for different halves of the same jump.
+  // Porpoising pays for LEAVING (upward crossings, gated on a card); this
+  // pays for what you did once you were up there, it is base-game, and it
+  // lands on the way DOWN.
+  // The event fires on EVERY downward crossing; only the blast underneath it
+  // is conditional. Splitting those two was the point — player.js used to
+  // fire one `breach` in both directions, so the seal leaving the water and
+  // the seal arriving back through it were literally the same event, and the
+  // most athletic thing in the game had no landing. It now owns the upward
+  // half and this owns the downward one.
+  if (seal.breachDir < 0) {
+    // Downward speed at the water line, as a positive number. Read here
+    // rather than inside slamFor so the system stays free of the velocity
+    // vector — it is handed numbers, like the rest of it.
+    const impact = Math.max(0, -seal.velocity.y);
+    const slam = slamFor(seal, impact);
+    const sx = seal.mesh.position.x;
+    const sy = bounds.surfaceY;
+
+    // THE ARRIVAL WINDOW — see CONFIG.airborne.slam.invuln.
+    //
+    // A breach lands where the seal took off from, into whatever swam into
+    // that space while it was gone, at a downward speed the player was
+    // rewarded for maximising and with no steering on the way in. Every body
+    // in the landing zone is already inside the hit radius on the frame the
+    // seal arrives, so the most athletic thing in the game was also the most
+    // reliable way to be bitten by three animals at once.
+    //
+    // GATED ON `slam` AND NOT ON THE CROSSING. slamFor returns null under
+    // `minRamp`, so a seal porpoising along the surface skims and buys
+    // nothing — the price of the window is real air time, which is spent out
+    // of the water where nothing can reach you anyway.
+    //
+    // Before the blast is queued rather than after, so the ordering on the
+    // frame reads the way the event does: the seal is safe, and then the
+    // water it landed in goes off.
+    if (slam) {
+      seal.invuln = Math.max(seal.invuln, CONFIG.airborne.slam?.invuln ?? 0);
+    }
+
+    if (slam && slam.damage > 0 && slam.radius > 0) {
+      // Through the same queue every blast in the game uses, so the slam
+      // breaks wreckage and takes crew off decks exactly like a pearl or a
+      // seagull bomb — and so the damage lands after the loops currently
+      // iterating `enemies` (see processPendingSplashes).
+      pendingSplashes.push({
+        x: sx,
+        y: sy,
+        damage: slam.damage,
+        radius: slam.radius,
+        exclude: null,
+        source: 'reentry',
+        // NOT the default `bigKill`. A blast queued with no `feedback` fires
+        // that one (see processPendingSplashes), and it is the KILL event —
+        // it carries `killGoo`, so every landing left a cloud of blood in
+        // clean water. `waterBlast` is the same weight and the same sound
+        // with whitewater in place of the gore.
+        feedback: 'waterBlast',
+      });
+    }
+
+    // A crossing under `slam.minRamp` still lands — it just lands as water
+    // rather than as an event. Falling back to a speed-only scale rather
+    // than skipping the feedback: a seal that dips a flipper through the
+    // surface must still make a noise, or the mechanic reads as the splash
+    // being broken on small jumps.
+    const power = slam ? slam.power : 0;
+    // Pitched DOWN by how much air was banked, the same trick the kill
+    // sounds use to say how big the thing that died was: a full arc lands
+    // audibly heavier than a skim rather than merely louder.
+    feedback('reentry', {
+      x: sx,
+      y: sy,
+      dirX: 0,
+      dirY: 1,
+      vx: seal.velocity.x,
+      vy: Math.abs(seal.velocity.y),
+      scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
+      sfxOpts: { pitch: 1 / (0.85 + power * 0.4), decayMul: 1 + power * 0.5 },
+    });
+
+    // ...AND THE REST OF THE SPLASH. `feedback` above is the impact frame —
+    // the spray and the crown of foam, both thrown upward. This is the hole
+    // punched under them and the column the hole throws back out of itself a
+    // fifth of a second later, which is the half of a splash the game has
+    // never had. Same numbers, deliberately: it is the same event, and the
+    // one thing worse than a landing with no jet is a landing whose jet
+    // disagrees with its own crown about how hard it was.
+    //
+    // Fired here rather than from a `stages` key on the feedback entry
+    // because it is the only effect in the game that is not instantaneous,
+    // and the feedback table has no clock — see systems/reentrySplash.js.
+    fireReentrySplash({
+      x: sx,
+      y: sy,
+      vx: seal.velocity.x,
+      vy: Math.abs(seal.velocity.y),
+      scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
+      // THE SHAPE THE WATER LEAVES FROM. A world-space box, so the seal's
+      // aim rotation is already in it — a body entering nose-down measures
+      // tall and narrow, one belly-flopping measures wide and flat, and the
+      // ring of foam is the right shape in both without this having to know
+      // which. Measured here rather than inside the system so that module
+      // keeps importing CONFIG and emit and nothing else.
+      body: measurePlayerExtent(seal),
+    });
+  }
+
+  // Porpoising: leaving the water extends the food chain. Upward crossings
+  // only — coming back down is the same surface a second time, and counting
+  // it would make every jump worth two links for no extra skill. The
+  // cooldown in CONFIG.strike.chainOn is what stops a seal skimming the
+  // water line from farming it; the ceiling is meant to be how often you can
+  // get properly out of the water.
+  if (seal.breachDir > 0 && stats.breachChainLevel > 0) {
+    chainFrom('breach', CONFIG.strike.breachChain.linksPerLevel * stats.breachChainLevel, st);
+  }
+}
+
 // A chum orb swallowed. Inside a live combo it goes into the charge meter, and
 // the mouthful that tops the meter off scores a FOOD CHAIN link — the cycle
 // the whole strike system is built around: charge, strike, eat, strike again.
@@ -4685,10 +5295,21 @@ function onChumSwallowed(x, y) {
   // ticks the number up. Read before the `filled` branch below and outside it,
   // because a link no longer has anything to do with the bar reaching full —
   // that is a separate, rarer event that happens to share this funnel.
-  const chain = consumeChainLink();
-  if (chain) {
-    playtest.recordChainLink(chain);
-    onChainHit(chain, 'chumEaten');
+  //
+  // DRAINED AS A QUEUE even though one mouthful is one pip and one pip buys at
+  // most one link, so this reads a list of one on every orb it reads anything
+  // at all. Two reasons it is not written as "the link, if there was one":
+  // the loop in noteChainMouthful is PRICED to pay more than one out of a fill
+  // that crosses more than one pip, and that is one card away from happening;
+  // and a producer that does not drain leaves its links for whoever asks next.
+  //
+  // What this site does fix is the FRAME. A magnet sweep or the release gulp
+  // swallows several orbs before the browser paints — each its own call
+  // through here — and every one of those links now reaches the banner as its
+  // own number instead of the last one overwriting the rest.
+  for (const link of consumeChainLinks()) {
+    playtest.recordChainLink(link.chain);
+    onChainHit(link.chain, link.source || 'chumEaten');
   }
 
   if (!filled) return;
@@ -5571,7 +6192,7 @@ function noteDamageDealt(dmg) {
 }
 
 function onBoatDestroyed(boat, chum) {
-  gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1));
+  gameState.score += Math.round(CONFIG.boats.xp * CONFIG.points.predatorMultiplier * (boat.isTrawler ? 2 : 1) * scoreMul());
   // The lifetime ledger — "destroy 50 boats" is counted here, once per hull,
   // whoever sank it — and the toast for any gate this hull popped.
   announceUnlocks(recordBoatDestroyed(boat));
@@ -6225,10 +6846,10 @@ function runFrame(now) {
         const shotBytes = bossShotBytes();
         crumb('mem', `${censusLine(censusReport({
           items: [world.scene, assetCensusItems()],
-          audioBytes: audioBankBytes() + musicBankBytes() + ambientBankBytes(),
+          audioBytes: audioBankBytes() + musicBankBytes() + ambientBankBytes() + splashBedBytes(),
           // ...and the same three separately, so the trail says WHICH bank is
           // holding it. See the note over censusReport.
-          audioParts: { sfx: audioBankBytes(), music: musicBankBytes(), ambient: ambientBankBytes() },
+          audioParts: { sfx: audioBankBytes(), music: musicBankBytes(), ambient: ambientBankBytes(), titleBed: splashBedBytes() },
           targetBytes: post.targetBytes?.() ?? 0,
           // THE TWO BLOCKS THE SCENE WALK CANNOT REACH, and the reason this
           // line was reading a flat 366MB through three sessions that iOS
@@ -6548,11 +7169,32 @@ function runFrame(now) {
   // gameplay delta below, or the shot would be a slow-motion ocean with a
   // full-speed seal in the middle of it.
   const realDt = rawDt * deathScale * levelScale * stageScale * killScale * versusScale;
+  // THE EFFECTS' CLOCK, which during a goal replay is NOT the gameplay one.
+  //
+  // The shutter pins versusScale at freezeScale (four percent) for the whole
+  // replay, and the particle system is a single clock — so every burst the
+  // replay's event track re-fired aged at four percent and hung in the air as
+  // a static blob. A 0.4-second spray took ten seconds of wall time to die,
+  // over footage running at half speed. Same for the lattice's ripples and the
+  // impact flashes.
+  //
+  // Given the replay's own playback rate instead: the picture is slow motion,
+  // so the smoke in it is too, and a burst lasts as long relative to the
+  // action as it did when it was live. The water and the sky stay on realDt —
+  // the world under a replay is frozen on purpose.
+  const fxDt = replayHoldsInput() ? rawDt * replaySpeed() : realDt;
 
   // Shake and hit-stop run on real time; gameplay runs on scaled time. Fed the
   // RAW delta, not the dilated one: a hit-stop is measured in wall-clock
   // milliseconds by definition, and the death dive's own dilation would
   // otherwise stretch the kill's 70ms freeze into most of a second.
+  // WHAT A WALL SECOND WAS THIS FRAME, for the one system that must not be
+  // dilated with the world: the ragdoll a shove leaves behind. See joltDelta in
+  // entities/player.js — the goal blast fires on the frame the match freezes to
+  // four percent, and a tumble spending the water's seconds there ran for forty
+  // of ours. Published before anything is stepped, and every frame, so it
+  // cannot be read stale.
+  setJoltWallDt(rawDt);
   const timeScale = updateFeedback(rawDt);
   // The gap between two hits being SHOWN, on the same raw clock and for the
   // same reason: this system is what fires the 60ms hit-stop, so a gap
@@ -6573,7 +7215,37 @@ function runFrame(now) {
   // is a hole in the first tenth of the shot.
   const dt = deathState.active || levelUpState.active || bossKillState.active ? realDt : realDt * timeScale;
 
+  // The trace's own clock, on the SCALED dt — every dwell figure it reports is
+  // read against the wind-up and cooldown numbers on the sliders beside it, and
+  // those are in the same seconds the behaviours integrate against. A no-op
+  // unless the V panel is open.
+  tickAttackTrace(dt);
   updateInput(world.camera, player.mesh.position);
+  // A REPLAY IS NOT PLAY, and this is the line that says so.
+  //
+  // Nothing else in this loop knows a replay is on screen — the goal's shutter
+  // only dilates the clock, so the entire gameplay frame kept running at four
+  // percent on live input. The seal was steered, the charge meter filled and
+  // sang, and a released trigger banked a real dash that fired the instant the
+  // replay ended. None of it was VISIBLE, because poseReplay overwrites the
+  // body from the recording a moment later — which is exactly why it survived:
+  // every consequence landed and nothing on screen admitted to it.
+  //
+  // Taken away at the source rather than at each of the ten-odd consumers; see
+  // holdInput. AFTER updateInput, so the poll still feeds the menus and the
+  // device tracking, and after the pad snapshot the debug view below reads.
+  // The pause menu (menuInput) and the replay's own skip (anyButtonHeld, its
+  // own listeners and its own poll) are untouched — those two are what a
+  // viewer is allowed to do.
+  const onReplay = replayHoldsInput();
+  if (onReplay) holdInput(input);
+  // ...AND THE RAGDOLL IS HELD BY THE SAME RULE, for the same reason one line
+  // up: a replay is footage of a moment that has not happened yet on the tape,
+  // and the live tumble a goal left on these bodies was playing itself out
+  // over it — limp skeletons hanging through a shot of eight seals swimming.
+  // See setJoltPaused. Set every frame rather than on the edges, so a replay
+  // that ends any of its four ways cannot leave it parked.
+  setJoltPaused(onReplay);
   // Reads the pad snapshot updateInput just took, so it must follow it. No-op
   // unless G is held.
   updateGamepadDebug();
@@ -6596,12 +7268,26 @@ function runFrame(now) {
   // row never sees the same frame's input. Both are menus driven off the same
   // poll and both would answer a confirm — the boss reward is the one that is
   // actually on screen, since the ramp it rides on locks a level-up out.
-  if (!updateHiveRewardNav()) updateMenuNav();
-  // The pause menu's own cursor, on the same poll and for the same reason.
-  updatePauseNav();
+  // THE PLAIN PANELS TAKE THE FRAME FIRST, and they take it whole. The sports
+  // list, the leaderboard and the tip sheet are boxes drawn OVER whatever
+  // opened them — every one of those screens is still in the layout underneath
+  // and still answering the same poll — so a panel that is up has to stop the
+  // frame here rather than share it. The tip sheet over the splash is the case
+  // that made this a bug and not a tidiness: `anyPress` starts the run, and a
+  // pad button pressed at a tier panel started it behind the panel.
+  // See ui/panelNav.js.
+  if (!updatePanelNav()) {
+    if (!updateHiveRewardNav()) updateMenuNav();
+    // The pause menu's own cursor, on the same poll and for the same reason.
+    updatePauseNav();
+  }
   // The team select reads EVERY pad, not the one input.js chose — each
   // controller is a person on that screen. No-op unless it is up.
   updateTeamSelect();
+  // ...and so does the room screen, for the same reason and on the same poll.
+  // It also repaints the round trip here, which moves on the wire's clock
+  // rather than on a message landing. No-op unless it is up.
+  updateRoomLobby();
 
   // Refill the seal before anything can hurt it, not after. `player.hp <= 0`
   // is tested inline at three points INSIDE this block — the damage handler,
@@ -6647,6 +7333,10 @@ function runFrame(now) {
     seagullCooldown -= dt;
     simClock += dt;
     if (rapidFireTimer > 0) rapidFireTimer -= dt;
+    // The score coral's window, on the water's clock like the one above it: a
+    // hit-stop freezes the fight, and a window that kept running through one
+    // would be paying for seconds nobody got to fight in.
+    updateScoreBoost(dt);
     // How long ago the last card was taken. Left at Infinity until the first
     // one, and never reset by anything else — the hive tip's window is about a
     // PICK, not about a level or a menu opening.
@@ -6696,133 +7386,11 @@ function runFrame(now) {
     // against a position the frame went on to overwrite.
     updateSlam(dt, enemies, { onPlayerHit });
 
-    // AIR TIME. updatePlayer has just integrated the arc and set breachDir, so
-    // this is the first moment the ramp can be current — and it must be current
-    // before ANYTHING below reads a multiplier off it: the guns fire further
-    // down this same block, and a ramp one frame stale would pay the bonus for
-    // an arc the seal has already landed from. See systems/airborne.js.
-    updateAirborne(player);
-
-    // ...AND WHAT IT BOUGHT, cashed on the way back through the water line.
-    //
-    // Deliberately before the Porpoising check below rather than folded into
-    // it: the two are different rewards for different halves of the same jump.
-    // Porpoising pays for LEAVING (upward crossings, gated on a card); this
-    // pays for what you did once you were up there, it is base-game, and it
-    // lands on the way DOWN.
-    // The event fires on EVERY downward crossing; only the blast underneath it
-    // is conditional. Splitting those two was the point — player.js used to
-    // fire one `breach` in both directions, so the seal leaving the water and
-    // the seal arriving back through it were literally the same event, and the
-    // most athletic thing in the game had no landing. It now owns the upward
-    // half and this owns the downward one.
-    if (player.breachDir < 0) {
-      // Downward speed at the water line, as a positive number. Read here
-      // rather than inside slamFor so the system stays free of the velocity
-      // vector — it is handed numbers, like the rest of it.
-      const impact = Math.max(0, -player.velocity.y);
-      const slam = slamFor(player, impact);
-      const sx = player.mesh.position.x;
-      const sy = bounds.surfaceY;
-
-      // THE ARRIVAL WINDOW — see CONFIG.airborne.slam.invuln.
-      //
-      // A breach lands where the seal took off from, into whatever swam into
-      // that space while it was gone, at a downward speed the player was
-      // rewarded for maximising and with no steering on the way in. Every body
-      // in the landing zone is already inside the hit radius on the frame the
-      // seal arrives, so the most athletic thing in the game was also the most
-      // reliable way to be bitten by three animals at once.
-      //
-      // GATED ON `slam` AND NOT ON THE CROSSING. slamFor returns null under
-      // `minRamp`, so a seal porpoising along the surface skims and buys
-      // nothing — the price of the window is real air time, which is spent out
-      // of the water where nothing can reach you anyway.
-      //
-      // Before the blast is queued rather than after, so the ordering on the
-      // frame reads the way the event does: the seal is safe, and then the
-      // water it landed in goes off.
-      if (slam) {
-        player.invuln = Math.max(player.invuln, CONFIG.airborne.slam?.invuln ?? 0);
-      }
-
-      if (slam && slam.damage > 0 && slam.radius > 0) {
-        // Through the same queue every blast in the game uses, so the slam
-        // breaks wreckage and takes crew off decks exactly like a pearl or a
-        // seagull bomb — and so the damage lands after the loops currently
-        // iterating `enemies` (see processPendingSplashes).
-        pendingSplashes.push({
-          x: sx,
-          y: sy,
-          damage: slam.damage,
-          radius: slam.radius,
-          exclude: null,
-          source: 'reentry',
-          // NOT the default `bigKill`. A blast queued with no `feedback` fires
-          // that one (see processPendingSplashes), and it is the KILL event —
-          // it carries `killGoo`, so every landing left a cloud of blood in
-          // clean water. `waterBlast` is the same weight and the same sound
-          // with whitewater in place of the gore.
-          feedback: 'waterBlast',
-        });
-      }
-
-      // A crossing under `slam.minRamp` still lands — it just lands as water
-      // rather than as an event. Falling back to a speed-only scale rather
-      // than skipping the feedback: a seal that dips a flipper through the
-      // surface must still make a noise, or the mechanic reads as the splash
-      // being broken on small jumps.
-      const power = slam ? slam.power : 0;
-      // Pitched DOWN by how much air was banked, the same trick the kill
-      // sounds use to say how big the thing that died was: a full arc lands
-      // audibly heavier than a skim rather than merely louder.
-      feedback('reentry', {
-        x: sx,
-        y: sy,
-        dirX: 0,
-        dirY: 1,
-        vx: player.velocity.x,
-        vy: Math.abs(player.velocity.y),
-        scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
-        sfxOpts: { pitch: 1 / (0.85 + power * 0.4), decayMul: 1 + power * 0.5 },
-      });
-
-      // ...AND THE REST OF THE SPLASH. `feedback` above is the impact frame —
-      // the spray and the crown of foam, both thrown upward. This is the hole
-      // punched under them and the column the hole throws back out of itself a
-      // fifth of a second later, which is the half of a splash the game has
-      // never had. Same numbers, deliberately: it is the same event, and the
-      // one thing worse than a landing with no jet is a landing whose jet
-      // disagrees with its own crown about how hard it was.
-      //
-      // Fired here rather than from a `stages` key on the feedback entry
-      // because it is the only effect in the game that is not instantaneous,
-      // and the feedback table has no clock — see systems/reentrySplash.js.
-      fireReentrySplash({
-        x: sx,
-        y: sy,
-        vx: player.velocity.x,
-        vy: Math.abs(player.velocity.y),
-        scale: slam ? slam.scale : Math.min(1, 0.3 + impact / 30),
-        // THE SHAPE THE WATER LEAVES FROM. A world-space box, so the seal's
-        // aim rotation is already in it — a body entering nose-down measures
-        // tall and narrow, one belly-flopping measures wide and flat, and the
-        // ring of foam is the right shape in both without this having to know
-        // which. Measured here rather than inside the system so that module
-        // keeps importing CONFIG and emit and nothing else.
-        body: measurePlayerExtent(player),
-      });
-    }
-
-    // Porpoising: leaving the water extends the food chain. Upward crossings
-    // only — coming back down is the same surface a second time, and counting
-    // it would make every jump worth two links for no extra skill. The
-    // cooldown in CONFIG.strike.chainOn is what stops a seal skimming the
-    // water line from farming it; the ceiling is meant to be how often you can
-    // get properly out of the water.
-    if (player.breachDir > 0 && player.stats.breachChainLevel > 0) {
-      chainFrom('breach', CONFIG.strike.breachChain.linksPerLevel * player.stats.breachChainLevel);
-    }
+    // AIR TIME — the ramp, the landing, and what the landing is worth. One
+    // function because EVERY seal has an arc: see stepSealAir. `cache: true`
+    // here and nowhere else, because the singleton the multipliers fall back
+    // to is the run's own seal.
+    stepSealAir(player, player.stats, strikeState, true);
 
     // Water on the glass, on the way OUT of the sea only. Outside the
     // Porpoising gate above on purpose: the lens gets wet whether or not the
@@ -6853,10 +7421,16 @@ function runFrame(now) {
     // Water muffles the mix: the low-pass tracks how deep the player is,
     // opening up as they breach. Inside the pause gate on purpose — while
     // the upgrade screen has it ducked, depth must not sweep it back open.
-    updateMusicDepth(player.mesh.position.y);
+    //
+    // IN A MATCH IT IS THE BALL'S DEPTH, not a seal's. There are two seals in
+    // two places and the camera is on neither — it is on the ball — so player
+    // 1's Y would muffle both players' mix from one side of a shared screen
+    // while the picture was somewhere else. See versusMixDepth.
+    const mixY = versusActive() ? versusMixDepth() : player.mesh.position.y;
+    updateMusicDepth(mixY);
     // Same idea for the SFX bus, on its own narrower range — see
     // CONFIG.audio.bus.depth. No-op while depth tracking is switched off.
-    updateBusDepth(player.mesh.position.y);
+    updateBusDepth(mixY);
     // Where the ear is, for the voice budget to rank sounds by how close they
     // happened. The seal rather than the camera, for the reason the mussel's
     // pan gives below: the camera lags behind it, and a lagging listener would
@@ -6925,10 +7499,26 @@ function runFrame(now) {
       if (step.spawn) spawnBubbleOrb(world.scene, bubbleBirthPoint());
     }
     // The rapid-fire orb keeps its own plain interval.
+    //
+    // NOT IN A MATCH. There is no autofire in versus (see wantsToFire below),
+    // so the coral's whole payload is a faster gun nobody is holding — see
+    // CONFIG.versus.drop for the rest of the list.
     rapidFireSpawnTimer -= dt;
-    if (rapidFireSpawnTimer <= 0 && CONFIG.rapidFirePickup.enabled) {
+    if (rapidFireSpawnTimer <= 0 && CONFIG.rapidFirePickup.enabled && !versusDrops('rapidFire')) {
       rapidFireSpawnTimer = randomBetween(CONFIG.rapidFirePickup.spawnMin, CONFIG.rapidFirePickup.spawnMax);
       spawnRapidFireOrb(world.scene, randomArenaPoint());
+    }
+    // ...and so does the score coral. No gate on the run's state, unlike the
+    // level blob below: what this pays out is a multiplier on a scoreboard,
+    // which every run has from its first second, so there is never a moment
+    // when the water cannot keep the promise.
+    //
+    // A MATCH IS THE ONE EXCEPTION, and for exactly that reason: versus keeps
+    // goals, not a score, so the promise is one it cannot keep.
+    scoreOrbSpawnTimer -= dt;
+    if (scoreOrbSpawnTimer <= 0 && CONFIG.scorePickup.enabled && !versusDrops('score')) {
+      scoreOrbSpawnTimer = randomBetween(CONFIG.scorePickup.spawnMin, CONFIG.scorePickup.spawnMax);
+      spawnScoreOrb(world.scene, randomArenaPoint());
     }
     // THE LEVEL BLOB. Its timer runs from the start of the run like the others,
     // but the spawn itself waits for there to be something to level: the whole
@@ -6938,7 +7528,7 @@ function runFrame(now) {
     // which on a slow opening is most of a run — so the blob arrives on the
     // next frame after the player takes anything.
     levelOrbSpawnTimer -= dt;
-    if (levelOrbSpawnTimer <= 0 && CONFIG.levelPickup.enabled && levelableUpgrades().length) {
+    if (levelOrbSpawnTimer <= 0 && CONFIG.levelPickup.enabled && !versusDrops('level') && levelableUpgrades().length) {
       levelOrbSpawnTimer = randomBetween(CONFIG.levelPickup.spawnMin, CONFIG.levelPickup.spawnMax);
       spawnLevelOrb(world.scene, randomArenaPoint());
     }
@@ -7030,7 +7620,14 @@ function runFrame(now) {
       // The clam being swallowed. It answers the coach's `attractorOrb` tip the
       // same way swimming into any other pickup answers its own — that tip used
       // to have no answer at all, because the clam could not be collected.
-      onAttractorTaken: () => noteTutorialEvent('attractorOrb'),
+      onAttractorTaken: () => {
+        noteTutorialEvent('attractorOrb');
+        // ...and the lifetime count the cloche is gated on. Filed here rather
+        // than inside attractiveClam.js for the same reason every other
+        // recordUnlockStat call is at its event's edge: this is the one place
+        // that knows a clam was SWALLOWED rather than merely spawned or drawn.
+        recordUnlockStat('clamsCollected');
+      },
       // For the attractive clam's beat-synced waves only — everything else in
       // there runs on the water's dilated clock. See updateAttractiveClam.
       rawDt,
@@ -7079,6 +7676,13 @@ function runFrame(now) {
     // release check below, so a press and release inside one frame still banks
     // that frame's charge.
     updateCharge(dt, input.strikeHeld, player.stats);
+    // TURBO — a wind-up held with the stick pushed is a faster swim. Right
+    // after updateCharge because it reads this frame's `charging`, and the
+    // blend goes onto the player as a plain field (like chargeThrustMul) for
+    // updatePlayer, which runs earlier in the frame and will read it next
+    // frame — one frame of latency on a 0.18s ramp, and entities/ does not
+    // import from systems/.
+    player.turbo = updateTurbo(dt, input.move.length());
 
     // Winding one up is felt as well as seen: a tremble that grows with the
     // power banked so far, and a rumble re-triggered on an interval because a
@@ -7214,74 +7818,12 @@ function runFrame(now) {
         // (updatePlayer runs later in the frame), so this is still the point
         // the player released at rather than somewhere the dash has already
         // carried them — which is the whole promise of the mechanic.
-        {
-          const burst = strikeBurst(player.stats);
-          // THE ENTOURAGE, ON A PERFECT RELEASE ONLY. Folded into the burst
-          // rather than spawned as separate hits at each companion, because the
-          // companions are scattered across the arena and six numbers in six
-          // places is not a read — see systems/companionStrike.js. Zero on any
-          // release that wasn't perfect, and zero for a run with no companions,
-          // so the ordinary strike is untouched.
-          //
-          // Measured against `burst.damage` for its ceiling and added AFTER, so
-          // the cap is on the bonus and the strike's own damage is never capped
-          // by a rule about its friends.
-          //
-          // Asked INSIDE the gate, not before it: strikeBurst() returns zero
-          // damage for a release off the beat, and a companion share measured
-          // against a zero strike has no ceiling to be capped by. The
-          // companions join a strike that BIT; they do not carry one that
-          // missed.
-          if (burst.damage > 0 && burst.radius > 0) {
-            const lent = companionStrikeBonus(player.stats, strikeState.perfectStrike, burst.damage);
-            const bx = player.mesh.position.x;
-            const by = player.mesh.position.y;
-            pendingSplashes.push({
-              x: bx, y: by,
-              // Air time on the strike's own damage, like the gun's. Damage
-              // only, not radius: reach is what the player is aiming with, and
-              // a blast that silently grew every time they were high up would
-              // make the one number they aim by unpredictable.
-              //
-              // The companions' share rides it too: they hit on the same frame
-              // and through the same blast, and a bonus that ignored air time
-              // would make a breach strike quietly worse the more friends you
-              // had.
-              damage: (burst.damage + lent) * airDamageMul(),
-              radius: burst.radius,
-              exclude: null,
-              source: 'strike',
-              // Its own event, not the splash queue's `bigKill`: this fires on
-              // EVERY strike, and bigKill is a heavy, hit-stopping bang meant
-              // for something dying.
-              feedback: false,
-            });
-            feedback('strikeBurst', {
-              x: bx, y: by,
-              // Bigger when the entourage came in, and sized off what they
-              // actually lent rather than off how many there are: a blast that
-              // hits three times as hard has to LOOK like it, and a run with
-              // one escort should not get the same flash as a run with nine
-              // bodies behind it.
-              scale: (0.6 + strikeState.power * 0.9) * (1 + Math.min(1, lent / Math.max(1, burst.damage)) * 0.5),
-            });
-            // AND IT SAYS SO. An invisible passive is an invisible passive —
-            // the companions' damage arrives inside a number the player never
-            // sees, so without this the card is a strictly better strike with
-            // nothing on screen to explain why. See CONFIG.feedback for the
-            // toast channel.
-            if (lent > 0) {
-              feedback('companionStrike', {
-                x: bx, y: by,
-                toastValue: companionStrikeCount(player.stats),
-              });
-            }
-            // Bodies caught in it are thrown OUTWARD, which is the difference
-            // between a detonation and damage happening in a circle. Separate
-            // from the ram's shove, which runs along the dash instead.
-            knockOutward(bx, by, burst.radius, (CONFIG.strike.burst.knock ?? 0) * strikeState.power);
-          }
-        }
+        // THE POP, through the one function every seal's fires through — see
+        // fireStrikeBurst. It was written inline here, which is the same thing
+        // while there is one seal in the water; in a match it meant a CPU
+        // seal's strike did no damage and shoved nothing, and the pop that is
+        // the whole point of the mechanic was the human's alone.
+        fireStrikeBurst(player.mesh.position, player.stats, strikeState);
 
         // The full-charge payoff. Reads `power` — the banked amount this dash
         // was actually bought with — rather than the meter, which tryStrike
@@ -7531,7 +8073,18 @@ function runFrame(now) {
     // life away with its traffic, and the seal is what an effect is being
     // judged against, not an empty tank. Clear on the panel empties it.
     // A versus match drops its own docile bait balls instead (systems/versus.js).
-    if (!isStaging() && !versusActive()) updateSpawning(dt, gameState, world.scene);
+    // The player's position is the fourth argument and it is not optional here:
+    // it is what puts a wave at the edge of the PICTURE rather than at the
+    // arena wall two screens away. See CONFIG.spawn.rush.frame — a caller that
+    // passes nothing gets the wall, which is every harness in tools/.
+    if (!isStaging() && !versusActive()) updateSpawning(dt, gameState, world.scene, player.mesh.position);
+    // A BIG WAVE ANNOUNCES ITSELF, a beat before the bodies are placed — the
+    // spawner postpones the tick it warns about (see CONFIG.spawn.rush.tell)
+    // and queues the warning here rather than playing it, because
+    // entities/enemies.js owns creatures and every sound, shake and ripple in
+    // the game is placed from this file. Same contract as the chum and bite
+    // callbacks beside it.
+    for (const t of drainSpawnTells()) feedback('spawnSurge', { x: t.x, y: t.y });
     // Right after the ordinary spawner, and on the same terms: it is a spawn
     // trigger, it only fires while the run is actually running, and it stops
     // with everything else when the level-up cards are up.
@@ -7707,6 +8260,11 @@ function runFrame(now) {
     // The tells on this frame's lunge stages — after the behaviour, so the
     // ring draws the stage the body is actually in.
     updateLungeTells(dt, world.scene);
+    // THE ATTACK PANEL — V. Here rather than with the other UI updates because
+    // its overlay draws the gates around the bodies this pass has just moved,
+    // and a frame of lag on a ring around a boss mid-lunge is exactly the frame
+    // it exists to show. A no-op while the panel is closed.
+    if (DEV_UI) updateAttackDebug(rawDt);
     perfPhase('enemies', performance.now() - _tenemies);
 
     // THE PHYSICS FRAME. Everything that owns a body (the boats above, the sea
@@ -8572,10 +9130,9 @@ function runFrame(now) {
         // One pickup, one mouthful — so it links exactly like a chum orb does
         // inside an armed chain. Without this the one pickup that hands over a
         // whole bar would be the one that could not extend the chain.
-        const orbChain = consumeChainLink();
-        if (orbChain) {
-          playtest.recordChainLink(orbChain);
-          onChainHit(orbChain, 'chumEaten');
+        for (const link of consumeChainLinks()) {
+          playtest.recordChainLink(link.chain);
+          onChainHit(link.chain, link.source || 'chumEaten');
         }
         if (filled) chainFrom('chumFull');
         // An orb fills the bar outright, so it crosses to full unless it
@@ -8648,12 +9205,14 @@ function runFrame(now) {
         // the chunk stays a thing that is collected and this stays the one
         // place that decides what collecting it is worth.
         if (chunk.pips > 0) {
-          // Through addCharge like the bubble and the coral, NOT feedChum: it
-          // fills the bar without booking mouthfuls. A piece worth three pips
-          // routed through the food path would score three FOOD CHAIN links
-          // for one pickup, which would make shooting the light the fastest way
-          // to a deep chain and the eating beside the point.
-          if (addCharge(chunk.pips * pipValue(player.stats), player.stats)) chargeCrossed();
+          // IN PIECES, like the health chunk below — see the note there and
+          // systems/pickupAbsorb.js. Through addCharge like the bubble and the
+          // coral, NOT feedChum: it fills the bar without booking mouthfuls. A
+          // piece worth three pips routed through the food path would score
+          // three FOOD CHAIN links for one pickup, which would make shooting
+          // the light the fastest way to a deep chain and the eating beside
+          // the point.
+          const pips = chunk.pips * pipValue(player.stats);
           // The swallow family's event, not the meat's: this is the blue orb's
           // promise at a smaller size, and giving it the health chunk's wet
           // gulp would say "health" over a pickup that pays none. Scaled by
@@ -8663,10 +9222,12 @@ function runFrame(now) {
           // assetBaseColor cannot answer for because the asset is the meat.
           // Same reading the level blob's swallow takes, and the pickup goo is
           // one shared emitter precisely so the colour is what separates them.
-          feedback('hotSpotChumTaken', {
+          absorbInPieces('hotSpotChumTaken', {
             x, y,
             scale: 0.85 + 0.5 * chunk.t,
             color: chunk.base,
+          }, (share) => {
+            if (addCharge(pips * share, player.stats)) chargeCrossed();
           });
           pickupStruck(x, y, 'chumChunk', chunk.base);
           return;
@@ -8674,15 +9235,29 @@ function runFrame(now) {
         // The tip is the HEALTH chunk's ("a real deal seal meal") and is spent
         // by eating one, so a piece of fuel must not mark it off.
         noteTutorialEvent('chumChunk');
-        player.hp = Math.min(player.stats.maxHp, player.hp + player.stats.maxHp * chunk.healFrac);
-        feedback('chumChunkEaten', {
+        // IN PIECES. The heal rides home on the swallow's own goo, a share per
+        // blob, and the bar climbs as the pieces land — see
+        // systems/pickupAbsorb.js for why, and for the promise that every
+        // share is paid exactly once even if the goo never arrives.
+        //
+        // ...UNLESS THE RUN HAS ENDED UNDER IT. A chunk taken on the frame the
+        // seal dies has pieces still in the water afterwards, and healing a
+        // corpse would put a moving bar on the death screen. The pieces stop
+        // paying; they do not stop arriving, because the goo is a picture and
+        // the picture is not wrong.
+        const heal = player.stats.maxHp * chunk.healFrac;
+        absorbInPieces('chumChunkEaten', {
           x, y,
           scale: 0.7 + 1.3 * chunk.t,
+          color: chunk.base,
           // Bigger chunks land lower. Same reading the bubble uses, and it is
           // the size of the piece rather than the size of the need: what a
           // chunk sounds like is a property of the chunk, and the player has
           // already been told which one this is by looking at it.
           sfxOpts: { pitch: 1.2 - 0.4 * chunk.t },
+        }, (share) => {
+          if (!gameState.running) return;
+          player.hp = Math.min(player.stats.maxHp, player.hp + heal * share);
         });
         pickupStruck(x, y, 'chumChunk', chunk.base);
       },
@@ -8701,6 +9276,37 @@ function runFrame(now) {
         // positional argument: the four above it are already at the edge of
         // what a call site can be read at a glance, and every harness that
         // calls updatePickups with four handlers keeps working untouched.
+        // THE SCORE CORAL GOING DOWN. What it pays was rolled at spawn and is
+        // worn on the orb (see spawnScoreOrb), so nothing is decided here —
+        // this hands the window to systems/scoreBoost.js and says what
+        // happened. Alongside the level blob in `opts` for the same reason.
+        onScoreOrb: (x, y, orb) => {
+          noteTutorialEvent('scoreOrb');
+          sealBite('orb');
+          // The window it actually opened, which is not always the one the
+          // coral was carrying — a smaller multiplier taken while a bigger one
+          // is running refreshes the clock instead of replacing the number
+          // (see startScoreBoost), and the toast has to report what is TRUE
+          // rather than what was on the pickup.
+          const live = startScoreBoost(orb?.mult ?? 1, orb?.seconds ?? 0);
+          // Same top-up every other floating pickup pays into the strike
+          // meter, so taking one is never a straight loss of tempo.
+          if (addCharge(CONFIG.strike.orbPipRefill?.rapidFire ?? 0.35, player.stats)) chargeCrossed();
+          feedback('scoreCoralTaken', {
+            x, y,
+            // Bigger corals land louder AND lower, the chunk's reading: what
+            // this one is worth is a property of the pickup, and the player has
+            // already been told which one it is by looking at it.
+            scale: 0.9 + 0.7 * (orb?.t ?? 0),
+            color: assetBaseColor('scoreOrb'),
+            sfxOpts: { pitch: 1.25 - 0.35 * (orb?.t ?? 0) },
+            // The two numbers, measured off the window that is actually
+            // running. The toast's words are the table's; this is the part
+            // only the call site can know.
+            toastValue: `x${live.mult} · ${Math.round(live.left)}s`,
+          });
+          pickupStruck(x, y, 'scoreOrb', assetBaseColor('scoreOrb'));
+        },
         onLevelOrb: (x, y, orb) => {
           noteTutorialEvent('levelOrb');
           sealBite('orb');
@@ -8774,7 +9380,7 @@ function runFrame(now) {
 
     // rawDt, not dt: the hp/air gauges are the player's read-out and must not
     // be dilated along with the water. See the note on updateHUD.
-    updateHUD(gameState, player, strikeState, rapidFireTimer, world.camera, rawDt);
+    updateHUD(gameState, player, strikeState, rapidFireTimer, world.camera, rawDt, scoreBoostState());
     // Null while there is no boss, which is most of a run — the bar hides
     // itself rather than the loop having to know it exists.
     updateBossBar(bossBanner());
@@ -9348,7 +9954,12 @@ function runFrame(now) {
   // `player.stats` so the ring knows how many pips the bar is cut into —
   // Coiled Spring changes that mid-run, and a ring reading the CONFIG default
   // would keep drawing five segments on a bar that now fills in three.
-  updateStrikeRing(realDt, player.mesh.position, strikeState, gameState.running, player.stats);
+  // ...and, in a Blubberball match, seat 0's own air as the ring's outer band.
+  // Null in an ordinary run, where the HUD's air gauge is the reading and a
+  // second one on the animal would be the same number twice. See
+  // CONFIG.strike.ring.air.
+  updateStrikeRing(realDt, player.mesh.position, strikeState, gameState.running, player.stats,
+    versusActive() ? versusPlayerAir() : null);
   // The seal's own rim, throbbing through a wind-up and flaring on the release.
   // Outside the pause gate alongside the ring, and on real time for the same
   // reason: the pulse is a readout of a button being held, and a hit-stop
@@ -9504,7 +10115,7 @@ function runFrame(now) {
   //
   // No run means nothing to interrupt, so nothing to mute.
   setJetBedsMuted(gameState.running && gameState.paused);
-  updateImpactFlashes(realDt);
+  updateImpactFlashes(fxDt);
   // Real time too, and for a sharper version of the flashes' reason: the shell
   // is the thing the hit-stop is being taken FOR. A mussel landing sets 45ms of
   // hitstop (CONFIG.feedback.missileImpact), which is a fifth of this effect's
@@ -9546,7 +10157,11 @@ function runFrame(now) {
   updateBossBooms(rawDt);
   // The versus goal's jet, on the same clock for the same reason: it fires
   // into the goal shutter's freeze. systems/goalJet.js.
-  updateGoalJets(rawDt);
+  //
+  // HANDED THE SEALS, because the goo collides with them. goalJet.js must not
+  // import the match (versus.js imports IT), and an empty list is exactly what
+  // the F panel firing one on an empty ocean should get.
+  updateGoalJets(rawDt, versusActive() ? matchBodies() : null);
   // And the light it goes up in front of. The WALL clock again, and for the
   // same reason: the key has to be at full while the water is held at a tenth
   // speed, and a rise on the world's clock would be at a tenth brightness in
@@ -9554,7 +10169,11 @@ function runFrame(now) {
   // exactly as systems/bossKill.js is handed its framing — `player.body` is the
   // visual with materials on it, where `player.mesh` is the container that
   // carries the position.
-  updateBossLight(rawDt, player.mesh?.position, player.body);
+  // ...and where the frame is, so the shaft can be grown until its origin is
+  // off the top of it whatever the camera is doing. framedView() is the banked
+  // framing rather than camera.position — the shake is added after this, and a
+  // light that chased it would swim against every explosion.
+  updateBossLight(rawDt, player.mesh?.position, player.body, world.framedView());
   updateHitShapeDebug();
   // The lock-on reticles. Real time, like the flashes above: a mark is a
   // countdown the player is reading off the screen, and a hit-stop that froze
@@ -9639,7 +10258,11 @@ function runFrame(now) {
     // Full power, and the burst's own strength on top: a rupture has no
     // charge to bank the way a strike does — it is either happening or it is
     // not — so the variable half is the one number the CSV owns.
-    applyKnockback(shove.e, shove.dirX, shove.dirY, 1, { gain: shove.strength });
+    // NAMED, because a boss refuses a shove it cannot attribute — see the
+    // tenacity block in applyKnockback. This one is the animal's own weak spot
+    // going off inside it, which is one of exactly two things allowed to move
+    // a boss at all.
+    applyKnockback(shove.e, shove.dirX, shove.dirY, 1, { gain: shove.strength, source: 'rupture' });
   }
   // ...and the streak behind whatever is already in flight. After the spill so
   // a piece born this frame lays its first blob at its birth point rather than
@@ -9666,13 +10289,13 @@ function runFrame(now) {
   // it fires, because the two are one clock: the stage table schedules bursts
   // against how far the cavity's own arc has run, and the cavity is solved on
   // this one. See systems/reentrySplash.js.
-  updateReentrySplash(realDt);
+  updateReentrySplash(fxDt);
   const _tparticles = performance.now();
-  updateParticles(realDt);
+  updateParticles(fxDt);
   // The blast goo coming home, on the same clock as the particles it lives
   // among. The target is the seal as drawn this frame. See systems/gooSuck.js.
   setGooSuckTarget(player.mesh.position.x, player.mesh.position.y);
-  updateGooSuck(realDt);
+  updateGooSuck(fxDt);
   // The versus ball, written into the goo pass beside the suck blobs.
   if (versusActive()) renderVersus();
   perfPhase('particles', performance.now() - _tparticles);
@@ -9690,7 +10313,21 @@ function runFrame(now) {
   // player's own dent — spending a slot on it buys nothing, while the one that
   // has broken away up the pitch is the one with a hole of its own to make.
   publishSealWakes();
-  world.grid.update(realDt, player.mesh.position, player.velocity, {
+  // ...AND THE BALL DENTS IT TOO, dragged along the line it is flying (a beat
+  // behind the flight, so a turn shows), with the water it has already been
+  // through still springing out behind it. Published
+  // here beside every other body on the water rather than from the match loop,
+  // because the failure mode of a channel only a live match publishes is a
+  // streak of somebody's colour left across the backdrop of the next kickoff.
+  // The chain itself is advanced on the wall clock in versus.js; this hands the
+  // lattice whatever it currently holds, and nothing at all when there is no
+  // ball, which is how the whole channel switches off outside Blubberball.
+  publishBallGrid(world.grid);
+  // On the effects' clock, not the gameplay one: the lattice carries the
+  // ripples feedback() injects, and a replayed event's ripple integrated at
+  // four percent takes twenty-five times as long to expand as it did live —
+  // still spreading when the replay ends.
+  world.grid.update(fxDt, player.mesh.position, player.velocity, {
     camera: world.camera,
     charging: strikeState.charging,
     charge: strikeState.pending,
@@ -9756,10 +10393,27 @@ function runFrame(now) {
   // is already spending the pad's confirm on that frame, and one press must not
   // also squash the hexagon behind the row being read.
   // The pad is off while ANY panel this menu opened is in front of it — the
-  // settings panel and now the tip sheet. Both take the one confirm button, so
-  // leaving the pad on presses the hexagon behind whatever the player is
-  // actually looking at.
-  if (mainMenuActive()) mainMenu()?.update(realDt, { pad: !isPauseOpen() && !tipSheetOpen() });
+  // settings panel, the tip sheet, the sports list, the leaderboard. Every one
+  // of them takes the one confirm button, so leaving the pad on presses the
+  // hexagon behind whatever the player is actually looking at.
+  //
+  // panelNavOpen covers three of those four and answers for any panel that
+  // registers later; the settings panel is the pause menu's and has a cursor
+  // that predates this one. tipSheetOpen is left in the test because it is what
+  // this line already said and it costs a boolean — the sheet is registered
+  // with panelNav too, so either half is enough.
+  if (mainMenuActive()) mainMenu()?.update(realDt, { pad: !isPauseOpen() && !tipSheetOpen() && !panelNavOpen() });
+  // THE TEAM SELECT'S PITCH — the roster standing in the arena behind that
+  // screen, breathing. On the WALL clock and outside the run gate for the same
+  // reason the menu above is: there is no run while this is up, so the
+  // gameplay delta is zero and a seal stepped on it would be a photograph.
+  if (rosterPreviewOn()) updateRosterPreview(realDt);
+  // THE NAMES OVER THE SEALS, moved to wherever their animal ended up. AFTER
+  // the cameras have been settled for this frame and through the camera the
+  // frame is actually DRAWN with — a replay is filmed by its own, and tags
+  // projected through the match's would slide off the seals the shot is
+  // looking at. Real time: a label is not in the water.
+  updateNameTags(replayRenderCamera() ?? world.camera);
   // The seal under the cards, on the wall clock: it is a screen element, not
   // a body in the dilated water, and it draws to its own canvas.
   updateLevelUpSeal(realDt);
@@ -9870,6 +10524,21 @@ function runFrame(now) {
     `${Math.round(1 / Math.max(realDt, 0.0001))} fps · worst ${pw.worstMs.toFixed(0)}ms · ${pw.hitches} drops · ${info.calls} draws · ${mpix.toFixed(1)} Mpix${world.adaptiveScale() < 1 ? ` (auto ${world.adaptiveScale().toFixed(1)}x)` : ''} · ${enemies.length} enemies · ${projectiles.length} shots · ${particleCount()} bits · ${flightVoiceCount()} voices`
   );
   const _trender = performance.now();
+  // ON THE LINE BEFORE THE DRAW, and that is the whole of why it is here rather
+  // than up beside updateParticleScale where it belongs by subject. Every
+  // outline width in CONFIG is a world number authored at the run's un-zoomed
+  // framing; this converts it to the framing being drawn, so the rim holds its
+  // PIXELS through a death dive's push-in, a menu crop or a replay close-up.
+  // The factor is one uniform SHARED by every outline material in the game (see
+  // assets.js setOutlineViewFactor), so it belongs to whichever pass wrote it
+  // last — and the level-up bust renders its own canvas earlier in this same
+  // frame and resets it. Anything drawn between this and post.render would take
+  // the arena's factor with it.
+  //
+  // The reference is world.camera's frame at zoom 1 even while a replay is
+  // filming through a perspective camera, because that is the framing every
+  // rim width was tuned against.
+  updateOutlineScale(renderCamera, world.halfExtents(1).h * 2);
   post.render(world.scene, renderCamera, realDt);
   perfPhase('render', performance.now() - _trender);
 

@@ -11,6 +11,7 @@ import { emit } from '../entities/particles.js';
 import { isDazed } from './control.js';
 import { applyBossLook, clearBossLook, bossSparkColor } from './bossLook.js';
 import { startAttractorStorm, stopAttractorStorm } from './attractorStorm.js';
+import { attackTraceOn, noteShotFired } from './attackTrace.js';
 
 // ===========================================================================
 // BOSS PERKS — the one special thing a boss can do.
@@ -295,6 +296,11 @@ export function attachBossPerk(scene, enemy, perk, difficulty = 0) {
     // untouched by this.
     damage: perk.damage == null && perk.damagePerDifficulty == null ? undefined
       : (perk.damage ?? 0) + (perk.damagePerDifficulty ?? 0) * Math.max(0, difficulty),
+    // ...and the run's difficulty itself, banked for the same reason and read
+    // by exactly one thing: how much fire it takes to shoot this boss's volley
+    // out of the air (CONFIG.enemyShot.hpPerDifficulty). A shot's toughness has
+    // to be the fight's, not the minute the shot happened to be fired in.
+    difficulty: Math.max(0, difficulty),
   };
 
   const fx = CONFIG.boss?.perkFx ?? {};
@@ -1422,6 +1428,10 @@ function fireVolley(scene, e, r, dirX, dirY, dist) {
       damage: active.damage ?? 10,
       speed: p.speed ?? 16,
       life: fuseFor(origin),
+      // The range the PERK is allowed to open up at, which is the gap this shot
+      // has to be able to cross. See CONFIG.enemyShot.
+      range: p.range ?? 0,
+      difficulty: active.difficulty ?? 0,
       blastRadius: p.radius ?? 3.4,
       turnRate: p.mul ?? undefined,
       // Filed against the perk, not the species, so a playtest report can say
@@ -1455,15 +1465,36 @@ export function bossGun(id) {
  */
 export function fireBossShot(scene, {
   gun, origin, dirX, dirY, damage, speed, life, blastRadius = 0, turnRate, chase = null, source,
+  // THE RANGE THE GUN FIRED FROM, which is what the flight is sized against.
+  // See CONFIG.enemyShot: `life` on its own never knew whether it was enough to
+  // cross the gap the shot was launched over, and on the boat's fish tier it
+  // was not. 0 (or a gun with no range at all) keeps the row's own life.
+  range = 0,
+  // ...and how much difficulty the shot's toughness is priced at. Resolved by
+  // the caller because the two callers get it from different places — the perk
+  // banks it at attach, the boat is handed it per frame.
+  difficulty = 0,
 }) {
   _shotDir.set(dirX, dirY, 0);
+  const es = CONFIG.enemyShot ?? {};
+  // A FUSED SHOT IS EXEMPT. A barrel's fuse is cut to the flight time to where
+  // the player was standing — stretching it would put the blast well behind
+  // them, which is the bug fuseFor exists to fix.
+  const flight = gun.fuse || !(range > 0) || !(speed > 0)
+    ? life
+    : Math.max(life, (range * (es.reachMul ?? 2.4)) / speed);
+  const hp = es.destructible === false ? 0
+    : Math.max(0, (es.hp ?? 0)
+      + (es.hpPerDifficulty ?? 0) * Math.max(0, difficulty)
+      + (es.hpPerDamage ?? 0) * Math.max(0, damage ?? 0));
   spawnProjectile(scene, {
     origin,
     dir: _shotDir,
     faction: 'enemy',
     damage,
     speed,
-    life,
+    life: flight,
+    hp,
     radius: gun.radius,
     asset: gun.asset,
     scale: gun.scale,
@@ -1495,6 +1526,16 @@ export function fireBossShot(scene, {
 
   // Fused shots are watched after launch so the blast goes off where the barrel
   // actually IS rather than where it was aimed. See updateOrdnance.
+  if (attackTraceOn()) {
+    const label = gun.asset ?? source ?? 'shot';
+    noteShotFired(label, { life: flight, speed, hp, authored: life, range });
+    // Stamped on the record so the END of this shot can be filed under the same
+    // name it was fired under. Set here rather than passed through
+    // spawnProjectile because it is diagnostics, not a projectile property —
+    // exactly how `boatShot` is attached in systems/boats.js.
+    const born = projectiles[projectiles.length - 1];
+    if (born) born.traceLabel = label;
+  }
   if (!gun.fuse) return;
   const live = projectiles[projectiles.length - 1];
   // `burst` and `blastColor` ride on the RECORD rather than being looked up in

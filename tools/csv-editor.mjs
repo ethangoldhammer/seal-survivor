@@ -154,6 +154,10 @@ const SEAL_NAME_SLOTS = (() => {
   const extras = extractStringArray(src, 'SEAL_NAME_SLOTS');
   return [...built, ...extras.filter((s) => !built.includes(s))];
 })();
+// The team name table's slots. A plain literal there, so one read does it —
+// and it degrades to today's four rather than to an empty dropdown.
+const TEAM_NAME_SLOTS = orToday(extractStringArray(readSrc('teamNameTable.js'), 'TEAM_NAME_SLOTS'),
+  ['colour', 'noun', 'shape', 'full']);
 // ...and the boss archetypes, read out of bosses.csv itself, so the `bosses`
 // column offers what is actually in the roster today.
 const idsFromCsv = (rel) => {
@@ -366,6 +370,15 @@ const DOCS = {
     weight: 'Likelihood relative to the other rows IN THE SAME SLOT. Blank = 1, 0 is never used.',
     notes: 'Free text — nothing reads it.',
   },
+  'teamNames.csv': {
+    id: 'A short handle for the row. Never shown to the player — it exists so a reworded part keeps its identity in a diff.',
+    slot: 'Which PART this is. colour is a word for a kit colour and needs a `hue`; noun is what a side is called collectively, plural; shape is the GRAMMAR that puts them together; full is a whole team name written out. Any other value is ignored, loudly.',
+    text: 'The part itself, with exactly the capitalisation typed here. On a `shape` row it is a template rather than words: {colour} {noun} {seal} {nickname} {adjective} — where the three seal tokens all come from the SAME member, and a shape whose tokens cannot all be filled is left out of that match rather than rendered with a hole in it.',
+    hue: 'COLOUR ROWS ONLY: where on the hue circle this band sits, in degrees (0 red, 120 green, 240 blue). A match takes the band NEAREST to the colour its captain picked, so the wheel\u2019s hexes can be nudged without touching this file. Several rows may share a hue \u2014 that is one band with more than one word in it. Blank, or "neutral", is the band for white, grey and anything else with no colour in it.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows IN ITS POOL \u2014 the rows in the same band, the other nouns, the other shapes. Blank = 1, 0 is never used.',
+    notes: 'Free text \u2014 nothing reads it.',
+  },
   'tips.csv': {
     id: 'A short handle for the row. Never shown to the player \u2014 it exists so a repriced or reworded tier keeps its identity in a diff.',
     price: 'Whole dollars \u2014 the number the player is agreeing to. A row with no usable price is dropped rather than shown with a blank in it, and a $0 tier reads as a bug in the panel rather than as a gift, so the floor is 1.',
@@ -525,6 +538,7 @@ const BLANK_MEANS = {
   'greetings.csv': { enabled: 'enabled', weight: '1', causes: 'any death', when: 'either run' },
   'kickers.csv': { enabled: 'enabled', weight: '1' },
   'sealNames.csv': { enabled: 'enabled', weight: '1', notes: '—' },
+  'teamNames.csv': { enabled: 'enabled', weight: '1', notes: '—', hue: 'neutral  (no colour in it)' },
   'tips.csv': { enabled: 'enabled', order: 'sorts last', desc: 'no line under the label', tag: 'no tag to type', notes: '\u2014' },
   // No blank has a meaning here: a row with no `text` is dropped, because the
   // alternative is a heading that renders as nothing and gets chased as a
@@ -588,6 +602,12 @@ export const TABLES = [
     file: 'path/src/sealNames.csv',
     label: 'Seal names',
     blurb: 'What the dice button on the splash calls the player. PARTS, like the boss names — an adjective and a nickname are drawn separately, so "Fat" and "Tony" is thirty rows and five hundred seals. A `full` row is a whole name written out, for the ones the halves could never build. Whatever is rolled lands in the name field, where the player can edit it or roll again.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/teamNames.csv',
+    label: 'Team names',
+    blurb: 'What a Blubberball side is called \u2014 built at the whistle out of the colour its captain picked off the wheel and the seals sitting in its seats. PARTS again: a colour word, a collective noun, and a `shape` row saying how to put them together ({colour} {noun}, {nickname}\u2019s {noun}). A colour row names a HUE rather than a hex, so a match takes the nearest band and the wheel can be re-coloured without touching this file; blank hue is the band for white and grey. A `full` row is a whole team name written out, for the ones the parts could never build.',
     addRows: true,
   },
   {
@@ -826,6 +846,33 @@ function columnSpec(file, name, rows) {
       },
     };
   }
+  // Closed for the same reason the two name tables' slots are.
+  if (file === 'path/src/teamNames.csv') {
+    if (name === 'slot') {
+      return {
+        ...base,
+        type: 'enum',
+        options: TEAM_NAME_SLOTS,
+        labels: {
+          colour: 'colour  (a word for a kit colour \u2014 needs a hue)',
+          noun: 'noun  (what a side is called, plural)',
+          shape: 'shape  (the grammar: {colour} {noun})',
+          full: 'full  (a whole team name, written out)',
+        },
+      };
+    }
+    // A COMBO, not a closed list and not a bare number. The hues that exist are
+    // the bands the file has today and picking one is how a second word joins a
+    // band \u2014 but a new band is legal and is a matter of typing a number, and
+    // "neutral" is a word rather than a point on the circle.
+    if (name === 'hue') {
+      const seen = [...new Set(rows.map((r) => (r.hue || '').trim()).filter(Boolean))]
+        .sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
+      return { ...base, type: 'combo', options: [...new Set([...seen, 'neutral'])] };
+    }
+    if (name === 'text') return { ...base, type: 'text', wide: true };
+  }
+
   // A closed list, unlike enemies.csv's spawnGroup combo above: an unknown
   // slot is not a new kind of name part, it is a part that never appears.
   if (file === 'path/src/bossNames.csv' && name === 'slot') {

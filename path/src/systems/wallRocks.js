@@ -5,6 +5,7 @@ import { CONFIG } from '../config.js';
 import { ASSETS, getAssetSizeMultiplier } from '../assets.js';
 import { bounds, seabedTopY, maxWaveExcursion, midWater } from '../arena.js';
 import { versusActive } from './versusFlag.js';
+import { mouthHalfHeight } from './goalBand.js';
 import { goalColors } from './ballLook.js';
 import { NOISE_FIELD_GLSL } from './noiseGlsl.js';
 
@@ -142,19 +143,27 @@ export function shoreOverscan() {
 }
 
 // THE GOAL MOUTHS — a versus match cuts a hole in each wall. The band is
-// read off the same two numbers systems/versusGoal.js publishes (goal.halfHeight
-// about midwater); it is not imported from there because that module reads
-// shoreOverscan() from this one, and the shore is built before a match starts.
-// Null in every other mode, so nothing below changes for the ordinary game.
+// mouthHalfHeight() about midwater, which is the same function the ball's
+// posts and the seals' clamp read (systems/goalBand.js — a leaf under both
+// this and systems/versusGoal.js, which cannot be imported from here because
+// it reads shoreOverscan() out of this file). It is a formula now rather than
+// a config read: the mouth grows with the roster, so the carve and the rule
+// have to come out of one place or a 4-a-side goal is drawn one size and
+// played another. Null in every other mode, so nothing below changes for the
+// ordinary game.
 function goalMouth() {
   if (!versusActive()) return null;
   const g = CONFIG.versus?.goal ?? {};
   if (g.holes === false) return null;
-  const h = g.halfHeight ?? 7;
+  const h = mouthHalfHeight();
   const gy = midWater();
   return {
     lo: gy - h, hi: gy + h, tunnel: Math.max(1, g.tunnel ?? 14),
     glow: Math.max(0, g.glow ?? 3), spill: Math.max(0, g.spill ?? 6), feather: Math.max(0.05, Math.min(1, g.feather ?? 0.55)),
+    // How far the light carries OUT INTO THE WATER — the other axis of the
+    // one falloff, and a different distance from the fade past the lips. See
+    // GOAL_FALLOFF_GLSL and the note in config.
+    spillOut: Math.max(0, g.spillOut ?? g.spill ?? 6),
     noise: g.noise ?? {},
     swim: g.swim ?? {},
     // The whole block, for the knobs read straight off it (applyGlowThrow).
@@ -182,16 +191,22 @@ function goalMouth() {
  * behind it, so the two can never end in different places and show a seam
  * where one stops.
  *
- * It runs from `spill` in front of the drawn face to a whole camera reach past
- * the tunnel's BACK, and `spill` past each lip. Every one of those four rims
- * is where the falloff (goalFalloff in the shader) has already reached zero,
- * so the quad has no edge anywhere — including the far end, which is off the
- * frame besides.
+ * It runs from `spillOut` in front of the drawn face to a whole camera reach
+ * past the tunnel's BACK, and `spill` past each lip. Every one of those four
+ * rims is where the falloff (goalFalloff in the shader) has already reached
+ * zero, so the quad has no edge anywhere — including the far end, which is off
+ * the frame besides.
+ *
+ * THE FRONT RIM IS THE OUTWARD REACH and the side rims are the lip fade: two
+ * numbers now, because they are two distances (see config). Reading the quad
+ * off `spill` alone is what capped how far the light could ever be thrown into
+ * the water — past it the quad simply ended, and the falloff was cut off with
+ * a straight edge at the one place the camera is pointed.
  */
 function goalQuad(mouth, faceX, side) {
   const midY = (mouth.lo + mouth.hi) * 0.5;
   const halfH = (mouth.hi - mouth.lo) * 0.5;
-  const inner = faceX - side * mouth.spill;
+  const inner = faceX - side * mouth.spillOut;
   const end = faceX + side * (mouth.tunnel + mouth.reach + mouth.spill);
   return {
     w: Math.abs(end - inner),
@@ -202,8 +217,17 @@ function goalQuad(mouth, faceX, side) {
   };
 }
 
-/** goalQuad's numbers onto a light's or a slab's uniforms. */
-function applyGoalShape(u, q, side, mouth) {
+/**
+ * goalQuad's numbers onto a light's or a slab's uniforms.
+ *
+ * `out` is the outward reach this surface uses, and the SLAB PASSES THE SHORT
+ * ONE. The light is thrown as far into the water as it likes; the slab behind
+ * it is the team's colour at `backShade` and its only job is to stop the open
+ * corridor being a window onto the seabed. Carried out with the light it would
+ * be a dark wash standing in the open water in front of every goal — which is
+ * the thing the note on goalBackMaterial says it must not be.
+ */
+function applyGoalShape(u, q, side, mouth, out = mouth.spillOut) {
   u.uSide.value = side;
   u.uFaceX.value = q.faceX;
   // THE SOURCE PLANE, for the light's throw: the tunnel's BACK, not the
@@ -217,6 +241,7 @@ function applyGoalShape(u, q, side, mouth) {
   u.uMidY.value = q.midY;
   u.uHalfH.value = q.halfH;
   u.uSpill.value = Math.max(1e-3, mouth.spill);
+  u.uOut.value = Math.max(1e-3, out);
   u.uFeather.value = mouth.feather;
 }
 
@@ -444,7 +469,10 @@ export function refreshGoalGlow() {
   if (!mouth) return 0;
   for (const { mesh, side } of goalBacks) {
     const q = goalQuad(mouth, mesh.userData.faceX, side);
-    applyGoalShape(mesh.material.uniforms, q, side, mouth);
+    // The slab on the SHORT reach — see applyGoalShape. The quad is the
+    // light's, so past its own reach the slab is already at zero and the extra
+    // width is slack it never paints.
+    applyGoalShape(mesh.material.uniforms, q, side, mouth, mouth.spill);
     fitGoalQuad(mesh, q);
   }
   for (const { mesh, side } of goalGlows) {
@@ -464,6 +492,7 @@ export function refreshGoalGlow() {
 function applyGlowNoise(u, n = {}) {
   u.uNoiseOn.value = n.enabled === false ? 0 : 1;
   u.uNoiseAmount.value = Math.max(0, Math.min(1, n.amount ?? 0.55));
+  u.uNoiseEdge.value = Math.max(0, Math.min(1, n.edge ?? 0));
   u.uNoiseScale.value = Math.max(0.1, n.scale ?? 6);
   u.uNoiseSpeed.value = n.speed ?? 0.35;
   u.uNoiseDrift.value.set(n.driftX ?? 0.6, n.driftY ?? 0.25);
@@ -474,6 +503,13 @@ function applyGlowNoise(u, n = {}) {
 function applyGlowThrow(u, g = {}) {
   const want = g.tunnelFalloff;
   u.uThrow.value = want == null ? 1 : Math.max(0.001, Math.min(1, want));
+  // THE TRIM, as the tail's power. `trim` is how far the light carries, with 1
+  // the tuned default — so the slider runs the way a distance does and the
+  // exponent it becomes stays out of the panel. 2 is the square that was
+  // hard-coded before this existed, which is why 1 maps to it exactly; above 1
+  // the power drops toward 1 and the light carries further than it used to.
+  const trim = g.trim;
+  u.uTail.value = 2 / Math.max(0.05, Math.min(4, trim == null ? 1 : trim));
   const b = g.ball ?? {};
   u.uBallOver.value = b.enabled === false ? 0 : Math.max(0, b.overdrive ?? 2.2);
   u.uBallBoil.value = b.enabled === false ? 0 : Math.max(0, b.boil ?? 6);
@@ -486,6 +522,8 @@ function applyGlowSwim(u, s = {}) {
   u.uSwimSwirl.value = s.swirl ?? 1.2;
   u.uSwimDrag.value = s.drag ?? 0.05;
   u.uSwimChurn.value = s.churn ?? 1.8;
+  u.uDefendPush.value = Math.max(0, s.defendPush ?? 1.8);
+  u.uDefendChurn.value = Math.max(0, s.defendChurn ?? 5);
   u.uPulseSpeed.value = Math.max(0, s.ringSpeed ?? 30);
   u.uPulseLife.value = Math.max(1e-3, s.ringLife ?? 1.2);
   u.uPulseWidth.value = Math.max(0.1, s.ringWidth ?? 5);
@@ -509,10 +547,14 @@ function applyGlowSwim(u, s = {}) {
 const SWIMMERS = 2;
 const _swimColor = new THREE.Color();
 const PULSES = 4;
-const swimmers = Array.from({ length: SWIMMERS }, () => ({ x: 0, y: 0, vx: 0, vy: 0, reach: 0, speed: 0, r: 0, g: 0, b: 0, tint: 0 }));
-// The ball, if it is in a light at all. `amount` is how much of it overlaps —
-// versus.js's business, because it is the only module that has a ball.
-const ballStir = { x: 0, y: 0, reach: 0, amount: 0 };
+const swimmers = Array.from({ length: SWIMMERS }, () => ({ x: 0, y: 0, vx: 0, vy: 0, reach: 0, speed: 0, r: 0, g: 0, b: 0, tint: 0, defend: 0 }));
+// The ball, if it is near a light at all. `amount` is how much of it overlaps
+// and `tint` how far the shooter's colour has taken the light over — both
+// versus.js's business, because it is the only module that has a ball, knows
+// where the goal line is and knows who last hit it. `side` is which mouth it
+// is at: the other one is handed a parked slot, so a ball on the line cannot
+// light up the goal at the far end of the pitch.
+const ballStir = { x: 0, y: 0, reach: 0, amount: 0, side: 0, r: 0, g: 0, b: 0, tint: 0 };
 const pulses = Array.from({ length: PULSES }, () => ({ x: 0, y: 0, t0: -1e9, strength: 0 }));
 let pulseNext = 0;
 
@@ -533,12 +575,16 @@ export function setGoalSwimmers(list = []) {
   for (let i = 0; i < SWIMMERS; i++) {
     const src = list[i];
     const w = swimmers[i];
-    if (!src) { w.reach = 0; w.speed = 0; w.tint = 0; continue; }
+    if (!src) { w.reach = 0; w.speed = 0; w.tint = 0; w.defend = 0; continue; }
     w.x = src.x ?? 0; w.y = src.y ?? 0;
     w.vx = src.vx ?? 0; w.vy = src.vy ?? 0;
     w.reach = reach;
     if (src.color != null) { _swimColor.set(src.color); w.r = _swimColor.r; w.g = _swimColor.g; w.b = _swimColor.b; }
     w.tint = Math.max(0, Math.min(1, src.tint ?? 0)) * tintCap;
+    // HOW HARD THIS SEAL IS CONTESTING — 0 for anyone who is not a keeper
+    // with a shot coming at them. It is not scaled by tintCap: turning the
+    // colour take-over down should not also take the shove out of a keeper.
+    w.defend = Math.max(0, Math.min(1, src.defend ?? 0));
     // Normalised on the burst threshold and capped at 1, so `churn` is a
     // number in the field's own units rather than one that has to be retuned
     // every time a seal's top speed moves.
@@ -548,16 +594,37 @@ export function setGoalSwimmers(list = []) {
 }
 
 /**
- * The ball, where it overlaps a goal's light. `amount` 0..1 is how much of it
- * is inside — pass 0 (or nothing) for a ball out in the water, which parks it.
- * `reach` comes off the tuning.
+ * The ball, where it is near a goal's light.
+ *
+ *   `amount` 0..1  how much of it is INSIDE the light — the overdrive and the
+ *                  boil, which only happen once it is in the mouth.
+ *   `tint`   0..1  how far the SHOOTER'S colour has taken the light over,
+ *                  which starts while the ball is still out in the water and
+ *                  is full by the goal line. `color` is whose.
+ *   `side`         which mouth it is at.
+ *
+ * All of it is worked out in versus.js: this module has never heard of a ball,
+ * of a goal line, or of who last hit it. Pass nothing for a ball that is doing
+ * neither, which parks the slot.
  */
 export function setGoalBall(ball = null) {
   const b = CONFIG.versus?.goal?.ball ?? {};
-  const amount = ball ? Math.max(0, Math.min(1, ball.amount ?? 0)) : 0;
-  ballStir.amount = b.enabled === false ? 0 : amount;
-  ballStir.reach = ballStir.amount > 0 ? Math.max(0, b.reach ?? 20) : 0;
-  if (ball) { ballStir.x = ball.x ?? 0; ballStir.y = ball.y ?? 0; }
+  const off = b.enabled === false;
+  const amount = ball && !off ? Math.max(0, Math.min(1, ball.amount ?? 0)) : 0;
+  const tint = ball && !off ? Math.max(0, Math.min(1, ball.tint ?? 0)) : 0;
+  ballStir.amount = amount;
+  ballStir.tint = tint;
+  // The reach is what the tint is LOCAL to while the ball is still coming, so
+  // it has to be live for a ball that is only tinting and not yet overlapping
+  // — parked on the overlap alone, the colour would arrive from nowhere the
+  // instant the ball crossed the face.
+  ballStir.reach = (amount > 0 || tint > 0) ? Math.max(0, b.reach ?? 20) : 0;
+  if (ball) {
+    ballStir.x = ball.x ?? 0;
+    ballStir.y = ball.y ?? 0;
+    ballStir.side = ball.side ?? (ball.x < 0 ? -1 : 1);
+    if (ball.color != null) { _swimColor.set(ball.color); ballStir.r = _swimColor.r; ballStir.g = _swimColor.g; ballStir.b = _swimColor.b; }
+  }
   return ballStir;
 }
 
@@ -579,9 +646,9 @@ export const goalGlowState = { swimmers, pulses, ball: ballStir, scored: scoredF
 
 /** Everything the seals put in the field, gone — a match starting or ending. */
 export function resetGoalStir() {
-  for (const w of swimmers) { w.reach = 0; w.speed = 0; w.tint = 0; }
+  for (const w of swimmers) { w.reach = 0; w.speed = 0; w.tint = 0; w.defend = 0; }
   for (const p of pulses) { p.strength = 0; p.t0 = -1e9; }
-  ballStir.reach = 0; ballStir.amount = 0;
+  ballStir.reach = 0; ballStir.amount = 0; ballStir.tint = 0;
   pulseNext = 0;
   scoredFlash.team = -1;
   scoredFlash.t = 0;
@@ -596,7 +663,7 @@ export function tickGoalGlow(dt) {
   if (!(dt > 0)) return glowClock;
   glowClock += dt;
   if (scoredFlash.team >= 0) scoredFlash.t += dt;
-  for (const { mesh } of goalGlows) {
+  for (const { mesh, side } of goalGlows) {
     const u = mesh.material.uniforms;
     u.uTime.value = glowClock;
     for (let i = 0; i < SWIMMERS; i++) {
@@ -604,12 +671,19 @@ export function tickGoalGlow(dt) {
       u.uSwim.value[i].set(w.x, w.y, w.reach, w.speed);
       u.uSwimVel.value[i].set(w.vx, w.vy);
       u.uSwimTint.value[i].set(w.r, w.g, w.b, w.tint);
+      u.uSwimDefend.value[i] = w.defend;
     }
     for (let i = 0; i < PULSES; i++) {
       const p = pulses[i];
       u.uPulse.value[i].set(p.x, p.y, p.t0, p.strength);
     }
-    u.uBall.value.set(ballStir.x, ballStir.y, ballStir.reach, ballStir.amount);
+    // ONE MOUTH AT A TIME. The take-over widens to cover the whole light as
+    // the ball closes, and a light on the far side of the pitch would widen
+    // with it — so the other mouth is handed a parked slot rather than being
+    // left to the falloff, which by then is not doing the work.
+    const atThisMouth = side === ballStir.side;
+    u.uBall.value.set(ballStir.x, ballStir.y, atThisMouth ? ballStir.reach : 0, ballStir.amount);
+    u.uBallTint.value.set(ballStir.r, ballStir.g, ballStir.b, atThisMouth ? ballStir.tint : 0);
   }
   // The flash is a colour and an overdrive, and both move every frame it is
   // running — one repaint while it is, none at all when it is not.
@@ -631,10 +705,29 @@ export function tickGoalGlow(dt) {
 // it likes: lengthening it moves only `uEndX`, a whole camera reach past the
 // tunnel's back and therefore off the frame.
 //
-// Flat at 1 across the whole mouth and the whole corridor, then `uSpill` units
-// of falloff on each side — `uFeather` of that spill is the fade and the rest
-// holds. The three edges are: out into the water in front of the face, up and
-// down past the lips into the rock, and the far end down the corridor.
+// Flat at 1 across the whole mouth and the whole corridor, then a falloff
+// measured as ONE DISTANCE FROM THE OPENING — `uOut` units of it out into the
+// water in front of the face, `uSpill` units up and down past the lips into
+// the rock — plus the far end down the corridor, which is off the frame.
+// `uFeather` is the share of that reach which fades; the rest holds.
+//
+// A DISTANCE, NOT TWO FADES MULTIPLIED. It used to be the outward fade times
+// the lip fade, and a product of two axis fades is a RECTANGLE with its
+// corners rounded off — full brightness right out to the lip, then an edge
+// running straight down the water in front of the mouth. What came out of
+// pushing that was a slab of glow the shape of the quad, and the only
+// variation in it was the noise, so the light read as a field of feathery
+// shapes with no falloff to be seen.
+//
+// Each axis is divided by its OWN reach and the two taken together, which
+// makes the level sets ellipses round the mouth: the light leaves the hole as
+// a rounded spill that wraps the lips and dies with distance from the opening
+// — near the lips it is already halfway out, straight ahead it carries the
+// whole way — and the two reaches stay independent, which is the point of
+// their being two numbers.
+//
+// The corridor is untouched by this: behind the face `out` is zero and the
+// distance is the lip fade alone, exactly as it was.
 const GOAL_FALLOFF_GLSL = `
   uniform float uFeather;
   uniform float uSide;
@@ -643,13 +736,20 @@ const GOAL_FALLOFF_GLSL = `
   uniform float uMidY;
   uniform float uHalfH;
   uniform float uSpill;
+  uniform float uOut;
   float goalFalloff(vec2 world) {
-    float hold = uSpill * (1.0 - uFeather);
-    float inward = max(0.0, (uFaceX - world.x) * uSide);
-    float pastLip = max(0.0, abs(world.y - uMidY) - uHalfH);
+    // Both in units of their own reach, so 1 is the rim on either axis.
+    // Named toWater rather than the obvious thing: out is a parameter
+    // qualifier in GLSL and a variable of that name fails to compile, which
+    // renders nothing at all. No backtick in here either — it would end this
+    // template literal and the error would point at a comment.
+    float toWater = max(0.0, (uFaceX - world.x) * uSide) / max(1e-4, uOut);
+    float pastLip = max(0.0, abs(world.y - uMidY) - uHalfH) / max(1e-4, uSpill);
+    float d = length(vec2(toWater, pastLip));
+    float a = 1.0 - smoothstep(1.0 - uFeather, 1.0, d);
+    // The far end, in world units still: it is the quad running out past the
+    // tunnel's back, not a rim of the mouth, and a camera never reaches it.
     float toEnd = max(0.0, (uEndX - world.x) * uSide);
-    float a = 1.0 - smoothstep(hold, uSpill, inward);
-    a *= 1.0 - smoothstep(hold, uSpill, pastLip);
     a *= smoothstep(0.0, uSpill, toEnd);
     return a;
   }
@@ -665,6 +765,7 @@ function goalShapeUniforms(side) {
     uMidY: { value: 0 },
     uHalfH: { value: 1 },
     uSpill: { value: 6 },
+    uOut: { value: 6 },
   };
 }
 
@@ -737,10 +838,12 @@ const GOAL_THROW_GLSL = `
     // the tunnel's back — all of it off the frame — sits at full brightness:
     // that is the light coming from somewhere rather than starting somewhere.
     float d = (world.x - uThrowFrom) * (-uSide);
-    // Clamped half a corridor past the face so the spill into the water keeps
-    // dimming and then stops — pow of a big exponent is a denormal, and the
-    // rim is already faded to nothing by goalFalloff out there anyway.
-    return pow(max(1e-4, uThrow), clamp(d / span, 0.0, 1.5));
+    // STOPS AT THE FACE. The CORRIDOR is what absorbs; past the mouth the
+    // light is in open water and the spill's own falloff is what shapes it.
+    // Let it keep decaying out there and the bleed into the water in front of
+    // the goal goes with it — which is a thing the light had before this and
+    // is not what a throw down a tunnel means.
+    return pow(max(1e-4, uThrow), clamp(d / span, 0.0, 1.0));
   }
 `;
 
@@ -753,6 +856,7 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       ...goalShapeUniforms(side),
       uNoiseOn: { value: 1 },
       uNoiseAmount: { value: 0.55 },
+      uNoiseEdge: { value: 0 },
       uNoiseScale: { value: 6 },
       uNoiseSpeed: { value: 0.35 },
       uNoiseDrift: { value: new THREE.Vector2(0.6, 0.25) },
@@ -766,6 +870,14 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uSwimVel: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector2()) },
       // rgb is that seal's team colour, w how far it has taken the light over.
       uSwimTint: { value: Array.from({ length: SWIMMERS }, () => new THREE.Vector4()) },
+      // How hard each seal is CONTESTING a shot at the goal it keeps — see
+      // THE KEEPER PUSHES BACK in the shader. A plain float array, not packed
+      // into a spare lane of one of the vectors above, because a lane that
+      // means something unrelated to its neighbours is how a uniform ends up
+      // written by the wrong line.
+      uSwimDefend: { value: new Array(SWIMMERS).fill(0) },
+      uDefendPush: { value: 1.8 },
+      uDefendChurn: { value: 5 },
       uSwimPush: { value: 3.4 },
       uSwimSwirl: { value: 1.2 },
       uSwimDrag: { value: 0.05 },
@@ -783,8 +895,15 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       // THE BALL IN THE LIGHT — xy where it is, z how far it reaches, w how
       // much of it is actually inside the light (versus.js works that out).
       uBall: { value: new THREE.Vector4(0, 0, 0, 0) },
+      // rgb is the SHOOTER's colour, w how far it has taken this light over.
+      uBallTint: { value: new THREE.Vector4() },
       uBallOver: { value: 2.2 },
       uBallBoil: { value: 6 },
+      // THE TAIL — 2 is the square this used to do unconditionally, so an
+      // untouched build renders what it always did. Written by applyGlowThrow;
+      // the SLAB has no such uniform and is not shaped this way, because its
+      // one job is to stay opaque across the corridor.
+      uTail: { value: 2 },
     },
     vertexShader: `
       varying vec2 vUv;
@@ -803,6 +922,7 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uniform float uTime;
       uniform float uNoiseOn;
       uniform float uNoiseAmount;
+      uniform float uNoiseEdge;
       uniform float uNoiseScale;
       uniform float uNoiseSpeed;
       uniform vec2 uNoiseDrift;
@@ -811,6 +931,9 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uniform vec4 uSwim[${SWIMMERS}];
       uniform vec2 uSwimVel[${SWIMMERS}];
       uniform vec4 uSwimTint[${SWIMMERS}];
+      uniform float uSwimDefend[${SWIMMERS}];
+      uniform float uDefendPush;
+      uniform float uDefendChurn;
       uniform float uSwimPush;
       uniform float uSwimSwirl;
       uniform float uSwimDrag;
@@ -822,8 +945,10 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       uniform float uPulsePush;
       uniform float uPulseLight;
       uniform vec4 uBall;
+      uniform vec4 uBallTint;
       uniform float uBallOver;
       uniform float uBallBoil;
+      uniform float uTail;
       varying vec2 vUv;
       varying vec2 vWorld;
       ${GOAL_FALLOFF_GLSL}
@@ -831,10 +956,36 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
       ${NOISE_FIELD_GLSL}
       void main() {
         // See GOAL_FALLOFF_GLSL: 1 across the mouth and the corridor, falling
-        // to 0 over the spill in front of the face and past the lips. Squared,
-        // so the tail that bleeds into the water is the softer half of it.
+        // to 0 over the spill in front of the face and past the lips. Then the
+        // TAIL, which used to be a hard-coded square here and is the trim.
+        //
+        // HOW FAR THE LIGHT REACHES AND HOW SOFT ITS EDGE IS ARE THE SAME
+        // NUMBER, as long as the falloff is the geometry. A curve that starts
+        // at 1 and lands on 0 over some distance has a slope of about one
+        // over that distance — so shortening it steepens it, every time, and
+        // that is true of feather and spill alike. There is nothing to tune
+        // your way out of: it is what those two knobs ARE.
+        //
+        // What breaks the tie is the CURVE, not the distance. Raise the
+        // falloff to a power and the tail comes in hard while the shoulder
+        // goes flatter — the light stops carrying so far and the edge it
+        // stops at is softer than the one it had, not sharper. And it can
+        // never put a line anywhere: smoothstep arrives at both ends with
+        // zero slope, and a power of something with zero slope still has
+        // zero slope. The edge is smooth by construction at every setting,
+        // which is not a thing you have to be careful about here.
+        //
+        // uTail is 2 at the tuned default, which is the square this replaced,
+        // to the pixel. See applyGlowThrow for the mapping off the trim in
+        // CONFIG: bigger power, shorter light, so the number a person moves
+        // reads as distance rather than as an exponent.
         float a = goalFalloff(vWorld);
-        a *= a;
+        a = pow(max(a, 0.0), uTail);
+        // ...and kept, because the noise below is weighted on it: how far the
+        // light has already died is the one thing that says whether a point is
+        // the mouth or the tail. Taken before anything brightens it, so a ball
+        // or a burst blazing in the mouth cannot move where the break-up bites.
+        float envelope = a;
         // THE SEALS AND THEIR BURSTS — see CONFIG.versus.goal.swim. Four
         // things come out of this block and each goes somewhere different:
         // warp displaces where the field is sampled (the distortion), stir
@@ -863,10 +1014,18 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
         // it. Squared falloff like a seal's, times how much of the ball is
         // actually inside the light at all (uBall.w, worked out in versus.js
         // — this module has never heard of a ball).
+        // ballNear is the SHAPE round the ball and nothing else; ballF is
+        // that times how much of the ball is inside the light. The two are
+        // separate because the colour starts while the ball is still out in
+        // the water, where the overlap is flatly zero — folded together, the
+        // shooter's colour would arrive out of nowhere the instant the ball
+        // crossed the face instead of coming in ahead of it.
+        float ballNear = 0.0;
         float ballF = 0.0;
-        if (uBall.z > 0.0 && uBall.w > 0.0) {
-          ballF = 1.0 - smoothstep(0.0, uBall.z, length(vWorld - uBall.xy));
-          ballF *= ballF * uBall.w;
+        if (uBall.z > 0.0) {
+          ballNear = 1.0 - smoothstep(0.0, uBall.z, length(vWorld - uBall.xy));
+          ballNear *= ballNear;
+          ballF = ballNear * uBall.w;
         }
         if (uSwimOn > 0.5) {
           for (int i = 0; i < ${SWIMMERS}; i++) {
@@ -882,9 +1041,21 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
             // a seal leaves a curl behind it rather than a bubble.
             float ang = uSwimSwirl * f;
             float cs = cos(ang); float sn = sin(ang);
-            warp += vec2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs) * uSwimPush * f;
+            // THE KEEPER PUSHES BACK. A seal standing in the goal a shot is
+            // coming into shoves harder and boils harder the more of the
+            // light that shot has taken over — so the two disturbances meet
+            // in the field rather than the incoming one simply winning.
+            //
+            // ADDITIVE, in the same three sums everything else uses: the
+            // keeper's shove goes into the same warp the ball's ring and the
+            // swimmers' curls do, its boil into the same stir, its colour
+            // into the same weighted mean. Nothing here subtracts the ball's
+            // contribution — a push back is another push, and the place they
+            // argue is the field.
+            float def = uSwimDefend[i];
+            warp += vec2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs) * uSwimPush * f * (1.0 + uDefendPush * def);
             warp -= uSwimVel[i] * uSwimDrag * f;
-            stir += uSwimChurn * f * uSwim[i].w;
+            stir += uSwimChurn * f * uSwim[i].w + uDefendChurn * f * def;
             // THE COLOUR CHANGES HANDS. A seal in the goal it is attacking
             // brings its own team's colour in with it, strongest where the
             // seal is and deeper the further in it swims (versus.js works out
@@ -909,13 +1080,36 @@ export function goalGlowMaterial(color, glow, feather, noise = {}, side = 1, swi
             lift += uPulseLight * k;
           }
         }
+        // THE SHOT COMING IN — outside the seals' gate, because this is the
+        // ball's and turning the swimmers off must not take it with them.
+        //
+        // The shooter's colour takes the light over as the ball nears the
+        // goal line, and it SPREADS as well as deepens: local to the ball
+        // while the shot is still travelling, the whole mouth by the time it
+        // is on the line. Which is why the weight mixes toward 1 with the
+        // amount rather than being the falloff times it — a take-over that
+        // stayed a disc round the ball would read as a light following it
+        // about rather than as a goal about to happen.
+        if (uBallTint.a > 0.0) {
+          float bw = uBallTint.a * mix(ballNear, 1.0, uBallTint.a);
+          tintSum += uBallTint.rgb * bw;
+          tintW += bw;
+        }
         if (uNoiseOn > 0.5) {
           vec2 q = (vWorld + warp + uNoiseDrift * uTime) / uNoiseScale;
           float n = noiseFbm(vec3(q, uTime * uNoiseSpeed + stir + uBallBoil * ballF + uSide * 17.3));
           n = clamp(n * 0.5 + 0.5, 0.0, 1.0);
           n = clamp(0.5 + (n - 0.5) * uNoiseContrast, 0.0, 1.0);
           n = clamp(n + lift, 0.0, 1.0);
-          a *= mix(1.0, n, uNoiseAmount);
+          // WHERE IT BITES — see CONFIG.versus.goal.noise.edge. At 0 the cut
+          // is even, which is how this shipped: a trough at the mouth is as
+          // black as a trough out in the water, so turned up the light is a
+          // field of feathery shapes and the falloff underneath it cannot be
+          // read at all. Weighted by how far the light has already died, the
+          // mouth stays solid and only the tail breaks up — the falloff
+          // survives the break-up instead of being replaced by it.
+          float bite = uNoiseAmount * mix(1.0, 1.0 - envelope, uNoiseEdge);
+          a *= mix(1.0, n, bite);
         }
         vec3 col = uColor;
         if (tintW > 0.0) col = mix(uColor, tintSum / tintW, min(1.0, tintW));
@@ -1227,7 +1421,7 @@ export function createWallRocks(scene) {
             new THREE.PlaneGeometry(q.w, q.h),
             goalBackMaterial(color, mouth.backShade, side),
           );
-          applyGoalShape(back.material.uniforms, q, side, mouth);
+          applyGoalShape(back.material.uniforms, q, side, mouth, mouth.spill);
           back.position.set(q.cx, q.cy, (cfg.z ?? -2.2) - 1.6);
           back.userData.faceX = faceX;
           back.userData.goalPart = 'back';

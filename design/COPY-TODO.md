@@ -371,3 +371,49 @@ lorem beside the jellyfish's (whose own `label` is still lorem, so the two are
 worth writing together). It covers the surface creature and the boss. Same
 shape as the jellyfish brief above: `label` a lowercase noun phrase with its
 article, `threat` a title-case plural for the score screen's Threats tab.
+
+## The reroll (uiText.csv, group "level-up card") — added 2026-09-09
+
+Three lines, all staged as `[DRAFT]` and failing `npm run test:copy` until they
+are written. Each row's `notes` column carries its own brief; the short version:
+
+- `rerollButton` — the button under the three cards. A number is printed after
+  it ("___ 2"), so it has to read correctly with one following. One or two
+  words, and it should say *these three, again* rather than *undo*.
+- `rerollNone` — the same button once the bank is empty. It stays on screen,
+  greyed, so this is the line that says why it stopped working. The answer is
+  "beat another boss"; it has room to imply that, not to say it.
+- `rerollEarned` — the receipt that rises off the seal on the frame a boss dies,
+  printed as "___ +1" beside the pebble receipt that fires on the same frame.
+  The only place the mechanic introduces itself.
+
+## The score coral's toast (config.js `feedback.scoreCoralTaken`) — added 2026-09-09
+
+One line, staged as `Lorem ipsum!` and failing `npm run test:copy` until it is
+written. It sits in `CONFIG.feedback.scoreCoralTaken.toast`, beside the
+fire-rate coral's "Rapid fire!" and the strike orb's "Boost!" — the same
+channel, so it wants the same register and the same length.
+
+What it has to convey: **for the next few seconds everything you kill is worth
+several times more.** It is printed with the numbers already beside it — the
+call site passes `toastValue` as `x7 · 18s`, measured off the window that is
+actually running — so the line must NOT name the multiplier or the duration.
+Those are handed to it. What is left for the words is the *feeling* of the
+window, in the two or three that the toast has room for.
+
+The player sees it the instant the coral goes down, mid-fight, while a green
+badge appears under the score. It fires at most once every 0.6s.
+
+**Where to write it.** In `config.js` and nowhere else, now. Until 2026-09-13
+`imported-tuning.json` carried its own copy of every `toast` string and that
+copy won the merge, so a line written in source was dead text — the snapshot
+went on showing whatever it had been saved with. `FEEDBACK_CODE_OWNED` strips
+`toast` (and `emit`) on the way in AND on the way out, so config.js owns the
+words outright and a save can no longer put an older draft back.
+
+Two lines had already drifted apart that way. `clamDrop` was showing
+"Clam jam!" — the SWALLOW's line — over the "A clam!" written in source, so the
+arena said the same thing twice, once when the clam dropped and once when the
+seal ate it. The drop's toast is gone entirely now rather than rewritten: a
+receipt answers "what did that just give me", and the drop has given nothing
+yet. `clamGrab` keeps the words because it has the payout.

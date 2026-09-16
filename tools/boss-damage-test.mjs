@@ -144,7 +144,16 @@ section('OVERLAP IS CHIP');
   const ceiling = HP * cap.contactPerSecond;
   const rate = CONFIG.spawn.ramp.damage;
   const perSec = CONFIG.spawn.difficultyPerSecond;
-  const FLOOR = 40;
+  // 40 -> 30 when CONFIG.spawn.ramp.damage was steepened (0.048 -> 0.06): the
+  // crossover is a function of that rate, so every row on this list moved
+  // earlier by the same proportion and the three 14.8 rows went from 44s to
+  // 35s. The claim is unchanged — the authored number has to be live for a
+  // real stretch of the opening, not merely for the spawn frame — and 30s is
+  // still that. What it is NOT is a claim about the first FIGHT: a boss
+  // arrives at about 54s (level 5, tools/xp-economy-test.mjs), so a row that
+  // crosses before then is already at the ceiling by the time anything can
+  // touch it. Five of the nine were in that position before this moved.
+  const FLOOR = 30;
   for (const { id, def } of CONTACT_BOSSES) {
     const base = def.contactDamage;
     const at = base >= ceiling ? 0 : Math.log(ceiling / base) / Math.log(1 + rate) / perSec;

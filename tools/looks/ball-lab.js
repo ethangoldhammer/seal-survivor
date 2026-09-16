@@ -37,6 +37,8 @@ import { enableVersus } from '../../path/src/systems/versusFlag.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { ballEvent, setBallDrive, updateBallLook, resetBallLook, teamColor, ballCredit } from '../../path/src/systems/ballLook.js';
 import { updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit } from '../../path/src/systems/ballTrail.js';
+import { updateBallGrid, publishBallGrid, resetBallGrid, ballGridState } from '../../path/src/systems/ballGrid.js';
+import { createGrid } from '../../path/src/systems/grid.js';
 import {
   initParticles, updateParticles, updateParticleScale,
 } from '../../path/src/entities/particles.js';
@@ -257,8 +259,6 @@ const CONFIG_SLIDERS = [
   // live off the possession ledger. Use the 1 / 2 buttons to hand the ball
   // over and watch the split march.
   ['the trail: where and when', null],
-  ['versus.ball.trail.sources', 'shed points', 1, 2, 1],
-  ['versus.ball.trail.shoulder', 'thrown apart (rad)', 0, 1.6, 0.02],
   ['versus.ball.trail.atRadius', 'on the edge (x radius)', 0.2, 1.4, 0.02],
   ['versus.ball.trail.minSpeed', 'nothing under u/s', 0, 30, 0.5],
   ['versus.ball.trail.fullSpeed', 'full at u/s', 5, 100, 1],
@@ -300,23 +300,19 @@ const CONFIG_SLIDERS = [
   ['versus.ball.trail.inherit', 'keeps ball velocity', 0, 1, 0.02],
   ['versus.ball.trail.drag', 'gives it up /s', 0, 8, 0.05],
   ['versus.ball.trail.foldSafety', 'fold guard', 0.2, 1, 0.01],
-  ['the trail: underwater (overrides)', null],
-  ['versus.ball.trail.water.width', 'width', 0.05, 3, 0.01],
-  ['versus.ball.trail.water.growth', 'opens up x by death', 0, 5, 0.05],
-  ['versus.ball.trail.water.glow', 'glow', 0, 5, 0.05],
+  // UNDERWATER: THE MEDIUM, NOT THE LOOK. There are deliberately no water
+  // sliders for width, glow, the core/halo or the sampling — the band is
+  // drawn the same above and below the line, and systems/ballTrail.js drops
+  // any look key set on the override. See the note there.
+  ['the trail: underwater (how it moves)', null],
   ['versus.ball.trail.water.emitPerSecond', 'particles /s', 5, 200, 1],
   ['versus.ball.trail.water.life', 'lifetime s', 0.1, 3, 0.02],
   ['versus.ball.trail.water.maxNodes', 'particle ceiling', 10, 400, 5],
-  ['versus.ball.trail.water.samples', 'curve samples', 16, 400, 4],
-  ['versus.ball.trail.water.coreWidth', 'core half-width', 0.01, 0.5, 0.01],
-  ['versus.ball.trail.water.coreGain', 'core brightness', 0, 3, 0.05],
-  ['versus.ball.trail.water.haloGain', 'halo brightness', 0, 3, 0.05],
   ['versus.ball.trail.water.blowOut', 'thrown off the line u/s', 0, 6, 0.05],
   ['versus.ball.trail.water.turbulence', 'turbulence u/s²', 0, 12, 0.1],
   ['versus.ball.trail.water.turbSpeed', 'field churn /s', 0, 3, 0.05],
   ['versus.ball.trail.water.drag', 'gives it up /s', 0, 8, 0.05],
   ['versus.ball.trail.water.inherit', 'keeps ball velocity', 0, 1, 0.02],
-  ['versus.ball.trail.water.minIntensity', 'floor under the ramp', 0, 1, 0.02],
   ['versus.ball.trail.water.z', 'depth', -0.4, 0.4, 0.01],
   ['the trail: bubbles (underwater)', null],
   ['versus.ball.trail.water.bubbles.perSecond', 'bubbles /s', 0, 60, 1],
@@ -325,6 +321,42 @@ const CONFIG_SLIDERS = [
   ['versus.ball.trail.water.bubbles.speedMul', 'thrown x', 0.2, 4, 0.1],
   ['versus.ball.trail.water.bubbles.tint', 'tinted by who owns it', 0, 1, 0.02],
   ['versus.ball.trail.water.bubbles.color', 'bubble colour', 'color'],
+
+  // THE BACKDROP — systems/ballGrid.js, drawn by the game's own lattice
+  // (systems/grid.js) behind this ball. The chain of dents can only really be
+  // judged by watching ONE hit go through it, which is the one thing a match
+  // never lets you do: here the same strike can be fired over and over off the
+  // `R` key until the spring and the spacing are right.
+  //
+  // The colour on those dents is the possession field itself — the same
+  // function that paints the two colours across the body — so the team buttons
+  // move the trail exactly as they move the ball.
+  ['the backdrop: how hard', null],
+  ['versus.ball.grid.amount', 'overall', 0, 4, 0.05],
+  ['versus.ball.grid.base', 'sitting still', 0, 2, 0.05],
+  ['versus.ball.grid.bySpeed', 'plus, at the speed cap', 0, 3, 0.05],
+  ['versus.ball.grid.byPulse', 'plus, per unit of contact', 0, 3, 0.05],
+  ['versus.ball.grid.hitScale', 'the mark left AT a contact x', 1, 5, 0.1],
+  ['the backdrop: the shape of a dent', null],
+  ['versus.ball.grid.drive', 'drag along the flight', 0, 6, 0.05],
+  ['versus.ball.grid.radial', 'shove outward', 0, 4, 0.05],
+  ['versus.ball.grid.swirl', 'shear around it', 0, 4, 0.05],
+  ['versus.ball.grid.stretch', 'smear down the flight', 1, 8, 0.1],
+  ['versus.ball.grid.headingLag', 'drag swings to new flight /s', 0.2, 20, 0.2],
+  ['versus.ball.grid.reach', "the ball's dent x radii", 0.5, 10, 0.1],
+  ['versus.ball.grid.echoReach', "...and an echo's", 0.5, 10, 0.1],
+  ['the backdrop: the spring and the chain', null],
+  ['versus.ball.grid.springHz', 'springs back at Hz', 0, 10, 0.1],
+  ['versus.ball.grid.damp', 'ringing dies at', 0.1, 10, 0.1],
+  ['versus.ball.grid.life', 'an echo lives s', 0.1, 6, 0.1],
+  ['versus.ball.grid.spacing', 'one echo every x radii', 0.1, 4, 0.05],
+  ['versus.ball.grid.gain', 'possession colour', 0, 4, 0.05],
+  ['versus.ball.grid.alpha', 'extra opacity', 0, 2, 0.05],
+  // The lattice itself is NOT on this panel, deliberately. CONFIG.grid is the
+  // whole game's backdrop and this page's save path (tools/apply-ball-lab.mjs)
+  // only writes CONFIG.versus and CONFIG.fx — a row here would be a slider that
+  // silently does not save. It is drawn at whatever the game has it at, which
+  // is the honest thing to tune a dent against anyway.
 
   ['the pitch', null],
   ['versus.widthScale', 'pitch width x frame', 1, 3, 0.05],
@@ -450,9 +482,21 @@ const sky = new THREE.Mesh(
 sky.position.set(0, 150, -4);
 scene.add(sky);
 
+// THE GAME'S OWN BACKDROP LATTICE, because the dents the ball springs into it
+// are half of what this page is now for. It is the shipped module drawn into
+// the shipped scene: the hexes, the ripples, the water-line clip. Nothing here
+// publishes a seal, a hull or a finger into it, so the only thing moving it is
+// the ball — which is exactly the isolation a match cannot give you.
+const grid = createGrid(scene);
+// Nowhere near the pitch, at zero strength: grid.update wants a body to hang
+// slot 0's wake on and there is no seal on this page.
+const NO_SEAL = { x: 0, y: -1e5 };
+
 // The pitch: its walls, floor and ceiling as a line, rebuilt when the width changes.
 let pitchLine = null;
 function layoutPitch() {
+  // The lattice is generated across `bounds`, so it is rebuilt with them.
+  grid.build();
   if (pitchLine) scene.remove(pitchLine);
   const pts = [
     new THREE.Vector3(bounds.left, bounds.bottom, 0), new THREE.Vector3(bounds.right, bounds.bottom, 0),
@@ -708,6 +752,20 @@ function readout() {
     const wat = ballTrailStats('water');
     lines.push(`  trail: ${sp.colors.map((c, i) => `${hex(c)} lean ${sp.lean[i].toFixed(2)} x${sp.gain[i].toFixed(2)}`).join('   ')}`);
     lines.push(`  cloud: ${wat.count} under / ${air.count} over   ${wat.plumes} plume(s)`);
+    // THE BACKDROP'S CHAIN. How many dents are live, what the newest one is
+    // doing and which way it is being dragged — the spring is a signed number
+    // that spends half its life negative, and a picture of the lattice cannot
+    // tell you whether a dent is on its way out or on its way back.
+    const bg = ballGridState();
+    const head = bg.dents[0];
+    // ...and the LAG, as the angle between the two. A drag that has come round
+    // already and one that never lags at all draw the same still frame; the
+    // number between them is the whole of what headingLag does.
+    const sp2 = Math.hypot(ball.vx, ball.vy);
+    const lagDeg = sp2 > 1e-3
+      ? (Math.acos(Math.max(-1, Math.min(1, (bg.heading.x * ball.vx + bg.heading.y * ball.vy) / sp2))) * 180 / Math.PI)
+      : 0;
+    lines.push(`  backdrop: ${bg.live} dent(s)   head amp ${head.amp.toFixed(2)} (born ${head.amp0.toFixed(2)})   along ${head.dirX.toFixed(2)}, ${head.dirY.toFixed(2)}   lag ${lagDeg.toFixed(0)}°`);
   }
   if (lastStrike?.hit) {
     const h = lastStrike.hit;
@@ -728,7 +786,7 @@ b('bStrike').addEventListener('click', randomStrike);
 b('bThrow').addEventListener('click', throwBall);
 b('bAuto').addEventListener('click', () => { auto = !auto; b('bAuto').classList.toggle('on', auto); });
 b('bFreeze').addEventListener('click', () => { frozen = !frozen; b('bFreeze').classList.toggle('on', frozen); });
-b('bReset').addEventListener('click', () => { resetBall(); clearBallTrail(scene); });
+b('bReset').addEventListener('click', () => { resetBall(); clearBallTrail(scene); resetBallGrid(); });
 b('bOverlay').addEventListener('click', () => { overlay = !overlay; b('bOverlay').classList.toggle('on', overlay); });
 b('bOverlay').classList.toggle('on', overlay);
 b('bSave').addEventListener('click', () => writePreset());
@@ -749,7 +807,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') throwBall();
   if (e.key === 'a' || e.key === 'A') b('bAuto').click();
   if (e.key === 'f' || e.key === 'F') b('bFreeze').click();
-  if (e.key === 'r' || e.key === 'R') { resetBall(); clearBallTrail(scene); }
+  if (e.key === 'r' || e.key === 'R') { resetBall(); clearBallTrail(scene); resetBallGrid(); }
   if (e.key === 'o' || e.key === 'O') b('bOverlay').click();
   if (e.key === 'W') writePreset();
   if (e.key === '[') ball.spin -= lab.spinNudge;
@@ -817,6 +875,13 @@ function step(dt) {
   // two-colour split can be judged, because what it splits into is a possession
   // ledger and the lab is the only place that hands the ball over on a button.
   updateBallTrail(dt, scene, ball, { radiusAt: ballHitRadiusAt });
+  // ...AND THE BACKDROP'S CHAIN OF DENTS, on the same clock and in the same
+  // order the match drives them (updateVersusClock, then main.js's publish).
+  // The lattice gets no seal and no fingers here — see NO_SEAL — so everything
+  // moving in it is the ball.
+  updateBallGrid(dt);
+  publishBallGrid(grid);
+  grid.update(dt, NO_SEAL, null, { camera: cam, wake: 0 });
   if (trace) traceStep();
   updateParticles(dt);
   if (markFade > 0) {
@@ -869,6 +934,13 @@ window.__step = (n = 1) => { for (let i = 0; i < n; i++) step(DT); readout(); re
 window.__preset = preset;
 window.__trace = (on = true) => { trace = on; clearTrace(); };
 window.__spinState = ballSpinState;
+// The lattice and the chain, for a harness driving this page from outside —
+// tools/looks/serve.mjs shoots frames off it and there is no other way to ask
+// whether a dent was actually published.
+window.__grid = grid;
+window.__gridState = ballGridState;
+window.__scene = scene;
+window.__bounds = bounds;
 
 // `?shots` posts a strip: the ball at rest, then a glancing strike a few frames in.
 if (q.has('shots')) {

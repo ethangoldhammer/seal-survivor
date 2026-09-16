@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { createInstancedPool } from './instancedPool.js';
 import { retireMaterial } from './programPin.js';
+import { rotateHue } from './damageGlow.js';
 
 // ===========================================================================
 // THE NOTE FIELD — every music note on screen, in eight draw calls.
@@ -273,6 +274,11 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
     transparent: false,
     toneMapped: false,
   });
+  // Scratch for heatHost's rotation. Module-scope would be shared between two
+  // fields; this one is per createNoteField, which is what the rest of this
+  // closure already is.
+  const _hot = new THREE.Color();
+
   // Live notes. A plain array with swap-removal rather than a free list: the
   // pool underneath already swap-removes, and keeping the two in the same order
   // is what lets a note's slot be found without a second index.
@@ -301,6 +307,19 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
       // shared roll handed to every note in the ring.
       color: { r: color.r, g: color.g, b: color.b },
       tint: 1,
+      // The last brightness/hue pair actually uploaded, so a ring holding
+      // steady pays for no buffer writes — see heatHost.
+      hue: 0,
+      // THE ORBIT PHASE, ACCUMULATED. It used to be `t * spin * rate` read
+      // fresh each frame, which is the same circle until the rate moves: the
+      // angle is rate x elapsed, so a ring told to spin faster because it just
+      // bit something JUMPS to wherever it would have been if it had always
+      // been spinning that fast — seconds of travel, on the one frame the
+      // player was meant to look at it. Integrated, the speed change is a
+      // speed change. See glowStir() in systems/damageGlow.js.
+      orbit: 0,
+      // 1 when cold; raised while the host's ring is grinding.
+      stir: 1,
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
       host: null, phase: 0, radius: 0, height: 0, rate: 1, preset: null, lane: 0,
     };
@@ -377,6 +396,11 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
       n.preset = p;
       n.host = host;
       n.t = 0;
+      // Beside `t` rather than left to take(), so the day these notes come off a
+      // free list a recycled one starts its orbit at the top of the circle
+      // instead of wherever the last ring had wound to.
+      n.orbit = 0;
+      n.stir = 1;
       n.life = Infinity;
       n.baseScale = scale;
       n.rot = rng() * Math.PI * 2;
@@ -458,10 +482,12 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
   function placeBound(n, dt) {
     const p = n.preset;
     const hp = n.host.mesh.position;
+    // Both shapes below run off this, never off `n.t` — see `orbit` in take().
+    n.orbit += p.spin * n.rate * n.stir * dt;
     if (p.kind === 'staff') {
       // A scroll, not an orbit. The note crosses the body from one side to the
       // other on its lane and wraps, and `spin` is how fast it crosses.
-      const u = ((n.t * p.spin * n.rate + n.phase) / (Math.PI * 2)) % 1;
+      const u = ((n.orbit + n.phase) / (Math.PI * 2)) % 1;
       n.x = hp.x + (u * 2 - 1) * n.radius;
       n.y = hp.y + n.height + Math.sin(n.t * 3 + n.phase) * p.bob;
       n.z = hp.z + Math.sin(u * Math.PI) * n.radius * p.tilt;
@@ -470,7 +496,7 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
       n.scale = Math.sin(u * Math.PI) ** 0.5;
       return;
     }
-    const a = n.t * p.spin * n.rate + n.phase;
+    const a = n.orbit + n.phase;
     n.x = hp.x + Math.cos(a) * n.radius;
     n.y = hp.y + Math.sin(a) * n.radius * p.squash + n.height
       + Math.sin(n.t * 2.6 + n.phase) * p.bob;
@@ -491,27 +517,70 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
   }
 
   /**
-   * Brighten every note bound to this host — the ring going hot while it is
-   * actually grinding something (systems/damageGlow.js).
+   * THE RING GOING HOT while it is actually grinding something
+   * (systems/damageGlow.js). Three channels, and this call carries two of them:
    *
-   * Through the POOL's per-instance colour, which is why this is possible at
-   * all: every note shares one material, so anything written there would
-   * brighten the whole field including the notes still in flight from other
-   * hosts. instanceColor is the one per-note channel there is, and the
-   * multiplier rides on the note's own rolled colour so a hot ring is a
-   * brighter version of itself rather than a wash toward white.
+   *   mul  brightness, as a multiplier on the note's own rolled colour — a hot
+   *        ring is a brighter version of itself rather than a wash toward
+   *        white.
+   *   deg  hue rotation, in degrees, luma-preserving. The notes keep the hue
+   *        this host rolled; they swing toward the warm end of it. See
+   *        rotateHue() for why this is a matrix and not an HSL round trip —
+   *        rollNoteColor returns channels ABOVE 1 on purpose, and HSL would
+   *        clamp away exactly the headroom that gives a note its halo.
    *
-   * Written only when the multiplier actually moved: this runs per host per
-   * frame, and a ring that has been sitting cold for four seconds should not
-   * be paying for a buffer upload to say so.
+   * The third, the SPIN, is `stirHost` below: it is per frame and continuous
+   * where these two are a write-on-change, so pushing it through here would
+   * mean the colour upload could never be skipped.
+   *
+   * Through the POOL's per-instance colour, which is why any of this is
+   * possible: every note shares one material, so anything written there would
+   * light the whole field including the notes still in flight from other hosts.
+   * instanceColor is the one per-note channel there is.
+   *
+   * Written only when something actually moved: this runs per host per frame,
+   * and a ring that has been sitting cold for four seconds should not be paying
+   * for a buffer upload to say so.
    */
-  function heatHost(host, mul) {
+  function heatHost(host, mul, deg = 0) {
     const m = Math.max(0, mul);
     for (const n of notes) {
-      if (n.host !== host || n.tint === m) continue;
+      if (n.host !== host || (n.tint === m && n.hue === deg)) continue;
       n.tint = m;
-      pool.setColorRGB(n.mesh, n.color.r * m, n.color.g * m, n.color.b * m);
+      n.hue = deg;
+      _hot.setRGB(n.color.r * m, n.color.g * m, n.color.b * m);
+      rotateHue(_hot, deg);
+      pool.setColorRGB(n.mesh, _hot.r, _hot.g, _hot.b);
     }
+  }
+
+  /**
+   * How fast this host's ring turns, as a multiplier on its resting rate. The
+   * motion half of the same heat — and the half a player reads without looking
+   * straight at it, which on a ring orbiting a body off to one side of the
+   * screen is most of the time.
+   *
+   * Stored rather than applied: placeBound integrates the phase from it every
+   * frame, so a ring told to spin faster speeds up from where it is instead of
+   * jumping to where it would have been. See `orbit` in take().
+   */
+  function stirHost(host, mul) {
+    const m = Math.max(0, mul);
+    for (const n of notes) if (n.host === host) n.stir = m;
+  }
+
+  /**
+   * The live notes bound to one host. Diagnostics and harnesses only.
+   *
+   * There is no other way to ask: every note in the game — a host's ring and
+   * every burst still in flight — shares one instanced pool, and the pool
+   * swap-removes, so an instance SLOT belongs to a different note from one
+   * frame to the next. A harness that picked slot 0 and watched it turn would
+   * be watching a free note drift for half its samples, which reads as the ring
+   * having stopped.
+   */
+  function hostNotes(host) {
+    return notes.filter((n) => n.host === host);
   }
 
   function reset() {
@@ -525,7 +594,7 @@ export function createNoteField(scene, { max = 320, rng = Math.random } = {}) {
   }
 
   return {
-    burst, attach, detach, update, reset, dispose, scaleHost, heatHost,
+    burst, attach, detach, update, reset, dispose, scaleHost, heatHost, stirHost, hostNotes,
     stats: pool.stats,
     get count() { return notes.length; },
     _notes: notes,

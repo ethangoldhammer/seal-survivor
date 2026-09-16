@@ -72,10 +72,29 @@ export function updateGamepadDebug() {
     return;
   }
 
+  // Nothing to press a button at. Said first and said differently, because
+  // "press any button now" is a lie on a page that cannot read one.
+  if (!inputStatus.gamepadApi) {
+    panel.textContent =
+      'GAMEPAD\n\nNo Gamepad API on this page.\n'
+      + `\nsecure   ${window.isSecureContext ? 'yes' : 'NO — http, not localhost'}`
+      + `\norigin   ${trim(location.host, 24)}`;
+    return;
+  }
+
   if (inputStatus.padIndex < 0) {
+    // THE TWO ROWS UNDER IT ARE THE DIAGNOSIS. "Press a button" is the answer
+    // most of the time and is useless the rest of it, because a pad that is
+    // already in the list (padCount) has been pressed, and a window that is
+    // not focused will never be handed a press no matter how many times it is
+    // pressed. Both are states you cannot see from the couch and both look
+    // exactly like a dead controller.
     panel.textContent =
       'GAMEPAD\n\nNo pad visible.\n\nBrowsers hide a controller until\nyou press one of its buttons —\npress any button now.\n' +
-      (inputStatus.gamepadName ? `\nLast seen: ${inputStatus.gamepadName}` : '');
+      `\nslots    ${inputStatus.padSlots}` +
+      `\nin list  ${inputStatus.padCount}` +
+      `\nfocus    ${inputStatus.pageFocused ? 'yes' : 'NO'}` +
+      (inputStatus.gamepadName ? `\nlast     ${trim(inputStatus.gamepadName, 22)}` : '');
     return;
   }
 
@@ -84,7 +103,8 @@ export function updateGamepadDebug() {
     '',
     trim(inputStatus.gamepadName, 30),
     `slot ${inputStatus.padIndex}  ·  ${inputStatus.padMapping}` +
-      (inputStatus.padCount > 1 ? `  ·  ${inputStatus.padCount} connected` : ''),
+      (inputStatus.padCount > 1 ? `  ·  ${inputStatus.padCount} connected` : '') +
+      (inputStatus.pageFocused ? '' : '  ·  UNFOCUSED'),
     '',
   ];
 

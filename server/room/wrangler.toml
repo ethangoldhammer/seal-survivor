@@ -1,0 +1,23 @@
+name = "seal-survivor-room"
+main = "room-worker.js"
+compatibility_date = "2025-01-01"
+
+# One Durable Object per room code — `idFromName(code)` in room-worker.js is
+# the whole lookup. No KV here, unlike the two workers next door: a room is a
+# rendezvous between two sockets, which is the one thing KV has no place for.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+# `new_sqlite_classes` AND NOT `new_classes`, and this is load-bearing rather
+# than a style choice: Durable Objects are on the Workers FREE plan only with
+# the SQLite storage backend. The key-value backend is paid-plan-only, and the
+# difference between the two is this one word — a migration written the other
+# way deploys fine and then bills.
+#
+# A migration cannot be edited after it has been applied. If this ever needs to
+# change, it is a new [[migrations]] entry with the next tag, never a rewrite
+# of this one.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

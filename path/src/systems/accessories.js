@@ -242,9 +242,13 @@ function placeAccessory(visual, bone, boneName, item, cfg, warn = {}) {
  * when the slot is empty or the body has no such bone, and a handle with
  * `remove()` otherwise.
  */
-export function dressBody(body) {
+export function dressBody(body, want = undefined) {
   const cfg = CONFIG.accessories;
-  const key = cfg?.enabled ? (cfg.equipped ?? '') : '';
+  // `want` NAMES THE ACCESSORY, for a body that is not the player's — the
+  // seals in a Blubberball roster each wear their own (systems/rosterCast.js),
+  // and the one slot on CONFIG is only ever the player's. Left out, this is the
+  // slot exactly as it was, which is what the level-up seal and the ghost want.
+  const key = cfg?.enabled ? (want === undefined ? (cfg.equipped ?? '') : (want || '')) : '';
   const item = key ? cfg.items?.[key] : null;
   if (!item || !body) return null;
   const bone = item.bone ? body.getObjectByName(item.bone) : null;
@@ -256,6 +260,13 @@ export function dressBody(body) {
   placeAccessory(visual, bone, item.bone, item, cfg, {});
   return {
     key,
+    // WAS THIS BUILT FROM THE REAL MODEL, or from the stand-in primitive
+    // createVisual hands back before preloadAssets has landed the file? A
+    // caller that keeps the handle for the length of a match needs to know,
+    // because nothing in here will ever ask again — updateAccessories rebuilds
+    // on the frame the model arrives and this, being a one-off placement,
+    // cannot. See the roster's re-dress in systems/versus.js.
+    fromModel: isAssetLoaded(key),
     visual,
     remove() { visual.parent?.remove(visual); },
   };

@@ -98,6 +98,18 @@ export function packRun(src = {}) {
     // The four things computeStats reads that are not picks or level.
     humansEaten: num(src.humansEaten, 0),
     bosses: num(src.bosses, 0),
+    // REROLLS BANKED AND NOT YET SPENT. Not derivable from `bosses` above —
+    // the bank is paid into per kill and drawn on per level-up, so the two
+    // numbers only agree on a run that has never pressed the button. Dropping
+    // it would hand a resumed run back its bosses and quietly take the rerolls
+    // it had not spent yet.
+    rerolls: Math.max(0, Math.round(num(src.rerolls, 0))),
+    // ...and how many the run has ever been paid, which is what decides whether
+    // the button is on the level-up screen at all. Not the same fact as the one
+    // above and not derivable from it: a run that has earned three and spent
+    // three still shows the button, greyed, and a resume that dropped this
+    // would take it away mid-run.
+    rerollsEarned: Math.max(0, Math.round(num(src.rerollsEarned, 0))),
     hp: num(src.hp, 0),
     oxygen: num(src.oxygen, 0),
     // CARDS OWED AND NOT YET TAKEN. The level-up screen is one of the two

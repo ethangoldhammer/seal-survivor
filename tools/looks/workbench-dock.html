@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>The F panel, docked — what it leaves you of the screen</title>
+    <style>
+      html, body { margin: 0; background: #05070d; color: #cfe6ff;
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #log { padding: 10px; white-space: pre-wrap; position: relative; z-index: 40; }
+      .ok { color: #7fe6a0; } .bad { color: #ff8b7a; }
+      /* The pitch this thing is meant to leave visible, stood in for by a grid
+         with the two goal mouths marked. The panel is measured AGAINST these,
+         so a dock that covers a mouth fails rather than looks fine. */
+      #pitch { position: fixed; inset: 0; z-index: 1;
+        background:
+          linear-gradient(90deg, rgba(122,215,255,0.5) 0 3px, transparent 3px) 0 0/25% 100%,
+          linear-gradient(180deg, #0a1a2c, #061019); }
+      .mouth { position: fixed; width: 26px; z-index: 2; background: rgba(255,143,177,0.55);
+        border: 1px solid #ff8fb1; }
+      #shots { position: relative; z-index: 40; }
+      .cell { background: #070b14; border: 1px solid #16233a; border-radius: 6px;
+              overflow: hidden; margin: 4px 10px 10px; }
+      .cell img { display: block; width: 100%; height: auto; }
+      .cap { padding: 7px 9px 9px; color: #7f9dc4; }
+      .cap b { color: #cfe6ff; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="pitch"></div>
+    <div id="log"></div>
+    <div id="shots"></div>
+    <!-- THE PANE SUSPENDS rAF. This page is measured from a Browser pane that
+         is usually hidden, where requestAnimationFrame never fires — and both
+         this page's settle() and the panel's own fitToStageBar wait on one. A
+         timer stands in, installed before the module graph loads so workbench.js
+         picks up the shim rather than the dead original. -->
+    <script>
+      window.requestAnimationFrame = (fn) => window.setTimeout(() => fn(performance.now()), 16);
+      window.cancelAnimationFrame = (id) => window.clearTimeout(id);
+    </script>
+    <script type="module" src="./workbench-dock.js"></script>
+  </body>
+</html>

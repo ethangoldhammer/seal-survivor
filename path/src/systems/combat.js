@@ -2,9 +2,10 @@ import { CONFIG } from '../config.js';
 import { isInvulnerable } from './strike.js';
 import { feedback } from './feedback.js';
 import { boats, damageBoat, hitsBoat } from './boats.js';
+import { boatImpactFlash } from './boatShotFx.js';
 import { damageDebris } from './boatDebris.js';
 import { damageCrew } from './crew.js';
-import { enemies, removeEnemy, applyKnockback } from '../entities/enemies.js';
+import { enemies, removeEnemy, applyKnockback, isCommittedRun, committedDamageMul } from '../entities/enemies.js';
 import { projectiles, despawn, chainToEnemy, deflectProjectile, spendBounce } from '../entities/projectiles.js';
 import { player } from '../entities/player.js';
 import { applyElementalHit, chillEnemy, activeElement, arcChain } from './elements.js';
@@ -15,6 +16,7 @@ import { pinchReach, clawSetting } from './crabClaw.js';
 import { trySplit, LASER_ASSET, boltHitEnds } from './finLaser.js';
 import { zap, releaseBurn } from './burnGlow.js';
 import { spawnProjectile } from '../entities/projectiles.js';
+import { attackTraceOn, noteShotEnd } from './attackTrace.js';
 
 // Where the last hit landed on the body, refilled by every hitCreature call
 // that passes. One shared object rather than one per test: this is the hottest
@@ -179,7 +181,11 @@ export function resolveCombat(dt, scene, hooks) {
       // bullet's own heading, so a body leaves the way the thing that hit it
       // was travelling, and before the death check so a shot that finishes a
       // fish still throws the corpse rather than dropping it on the spot.
-      if (b.knockback > 0) applyKnockback(e, b.dir.x, b.dir.y, b.knockback);
+      // `source: 'shot'` — every projectile in the game, under one name. A
+      // boss is NOT on the receiving end of this (CONFIG.boss.tenacity): a
+      // three-tonne animal leaning away from a stream of pellets is the thing
+      // that block exists to stop. Wildlife is unaffected.
+      if (b.knockback > 0) applyKnockback(e, b.dir.x, b.dir.y, b.knockback, { source: 'shot' });
 
       // A note from the harp. Also before the death check, and for a reason
       // that is not cosmetic here: a note that KILLS what it charmed has to
@@ -237,6 +243,68 @@ export function resolveCombat(dt, scene, hooks) {
     }
   }
 
+  // --- player bullets vs enemy bullets --------------------------------------
+  //
+  // A HOSTILE SHOT IS A TARGET. Until CONFIG.enemyShot it was the one thing in
+  // the water the player could not answer: you dodged it or you wore it, and a
+  // volley of five arriving spread out had exactly one counterplay, which is
+  // the same counterplay as a volley of one. Now every shot a boss or a deck
+  // gun throws carries hp priced off the fight's difficulty and what the shot
+  // itself is worth, and pellets clear it.
+  //
+  // IT IS ITS OWN PASS RATHER THAN A BRANCH IN THE ENEMY LOOP, because a
+  // projectile is not an enemy: it has no `hits` membership to consume, no
+  // element, no knockback, no hit shape, no death hook and no place in the
+  // playtest ledger. Threading six `if (isShot)` tests through the hottest loop
+  // in the game to save one iteration of a much shorter list is the trade the
+  // wrong way round.
+  //
+  // ABOVE the enemy-bullets-vs-player pass on purpose: a pellet and a shell
+  // arriving on the same frame should have the pellet win. Below it, the shell
+  // would bill the seal and THEN be shot down, which is the counterplay
+  // arriving one frame too late every time it matters most.
+  if (CONFIG.enemyShot?.destructible !== false) {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const b = projectiles[i];
+      if (b.faction !== 'player') continue;
+      if (b.hitLock > 0) continue;
+      for (let j = projectiles.length - 1; j >= 0; j--) {
+        if (j === i) continue;
+        const t = projectiles[j];
+        if (t.faction !== 'enemy' || !(t.hp > 0)) continue;
+        if (b.hits.has(t)) continue;
+        const reach = b.radius + t.radius;
+        const dx = t.mesh.position.x - b.mesh.position.x;
+        const dy = t.mesh.position.y - b.mesh.position.y;
+        if (dx * dx + dy * dy > reach * reach) continue;
+        b.hits.add(t);
+        t.hp -= b.damage;
+        const dead = t.hp <= 0;
+        hooks.onEnemyShotHit?.(t, b.damage, t.mesh.position.x, t.mesh.position.y, dead, b);
+        if (dead && attackTraceOn()) {
+          noteShotEnd(t.traceLabel ?? t.source ?? 'shot', 'shot', { hp: t.hpMax, by: b.source ?? null });
+        }
+        if (dead) {
+          // Despawned by INDEX, and the two indices are into the same list — so
+          // removing the target first would leave `i` pointing at whatever slid
+          // into its slot. The outer loop counts down, so a target below `i` is
+          // safe and one above it is not; taking the target out and then
+          // re-reading the pellet's own index is the only version of this that
+          // is correct for both.
+          despawn(scene, j);
+          if (j < i) i -= 1;
+        }
+        // Spent on the shot unless it pierces, exactly as it is on a hull or a
+        // chunk of wreckage. `pierceCost` is what stops one piercing pellet
+        // sweeping a whole volley for free.
+        const cost = CONFIG.enemyShot?.pierceCost ?? 1;
+        if (b.pierce >= cost && cost > 0) { b.pierce -= cost; continue; }
+        if (!tryChain(b, enemies, null, hooks)) despawn(scene, i);
+        break;
+      }
+    }
+  }
+
   // --- enemy bullets vs player ---------------------------------------------
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const b = projectiles[i];
@@ -260,6 +328,17 @@ export function resolveCombat(dt, scene, hooks) {
     if (!isInvulnerable()) {
       hooks.onPlayerHit(b.damage, b.dir, b.source ?? 'enemy shot', 'strike');
     }
+    // A DECK GUN'S SHOT GOES OFF WHERE IT LANDED. Only the boats' ordnance
+    // (`boatShot`, set in volley) — every other enemy shot in the game already
+    // has its own answer to "what hit me", and a burst added to all of them
+    // here would be a second, louder one over the top of each.
+    //
+    // Fired whether or not the damage was refused: the i-frame window is the
+    // reason a hit did nothing, and a shot that visibly struck you and produced
+    // NOTHING reads as the hit detection being broken rather than as mercy.
+    // At the BULLET, so a shot clipped on the edge pops on the edge it clipped.
+    if (b.boatShot) boatImpactFlash(scene, b.mesh.position.x, b.mesh.position.y, b.mesh.position.z);
+    if (attackTraceOn()) noteShotEnd(b.traceLabel ?? b.source ?? 'shot', 'player', { damage: b.damage });
     despawn(scene, i);
   }
 
@@ -629,11 +708,30 @@ export function resolveCombat(dt, scene, hooks) {
         continue;
       }
 
+      // A COMMITTED RUN IS AN ATTACK, and asking `isCommittedRun` rather than
+      // `e.ramming` is the whole of the fix. Every other rule about a boss
+      // already reads that function — tenacity refuses the flinch through it,
+      // applyKnockback refuses the shove through it — and this one line was
+      // the last place still asking the narrower question. `ramming` is set by
+      // the kraken, the anglerfish and the lunge PERK; the telegraphed pass
+      // that the four chasing bosses actually do sets `lungeStage = 'strike'`
+      // and nothing else, so the most readable attack in the game was billed
+      // on the chip channel and held to `contactPerSecond`. A boss shark's
+      // 1.2-second run at 3.8x its swimming speed was worth exactly as much as
+      // drifting into its tail fin.
+      //
+      // ...AND IT IS WORTH MORE WHILE IT RUNS. The perk lunge has always
+      // multiplied contact for its dash (bossPerks.csv `damage`, x2); the
+      // body's own lunge had no such number, so promoting the channel alone
+      // would have moved the ceiling without moving what hits it.
+      // `committedDamageMul` is that number, authored per lunge block.
+      const committed = isCommittedRun(e);
       hooks.onPlayerHit(
-        (e.contactDamage ?? e.def.contactDamage) * contactMul * dt, // per second on contact
+        (e.contactDamage ?? e.def.contactDamage) * contactMul
+          * (committed ? committedDamageMul(e) : 1) * dt, // per second on contact
         { x: -dx, y: -dy },
         e.type,
-        e.ramming ? 'attack' : 'contact',
+        committed ? 'attack' : 'contact',
       );
     }
   }

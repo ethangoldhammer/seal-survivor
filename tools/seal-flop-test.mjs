@@ -90,6 +90,7 @@ import { CONFIG } from '../path/src/config.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import {
   player, initPlayer, resetPlayer, rebuildShipBody, updateAimRig, FLOP_ROLE,
+  updatePlayer, tumbleSeal,
 } from '../path/src/entities/player.js';
 import { ASSETS, installModel } from '../path/src/assets.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
@@ -846,6 +847,60 @@ section('THE SKELETON — on the real seal, the limbs actually move');
     // of the next run.
     resetDeathDive();
     check('the skeleton is handed back for the next run', !player.anim.isLimp());
+
+    // -----------------------------------------------------------------------
+    // THE LIVING RAGDOLL — a shove in a match, not a death. Same five chains,
+    // same solver, a fraction of the length: tumbleSeal opens a limp window
+    // (systems/versus.js's jostle and goalBlast are the two callers) and
+    // syncJoltLimp cuts the skeleton loose inside it.
+    //
+    // THE CLAIM IS THAT THE BONES MOVE, and it needs a control for the same
+    // reason the death dive's does: the mixer and the aim rig move these bones
+    // every frame anyway, so "it moved" proves nothing — "it moves more,
+    // because it is limp" is the thing that was broken. A goal explosion threw
+    // the bodies on a perfectly good arc with rigid animals inside them.
+    // -----------------------------------------------------------------------
+    {
+      const AIM_INPUT = { move: new THREE.Vector2(1, 0), aim: new THREE.Vector2(1, 0) };
+      const shove = (seconds, kick) => {
+        reseed();
+        resetDeathDive();
+        resetPlayer();
+        player.mesh.position.set(0, bounds.frameTop - 8, 0);
+        player.velocity.set(6, 0);
+        // Settle first, so the swim clip is running and the bones are where a
+        // live animal's are — a measurement from the bind pose would count the
+        // seal starting to swim as the ragdoll.
+        for (let i = 0; i < 30; i++) { updatePlayer(DT, AIM_INPUT); updateAimRig(DT, AIM_INPUT.aim, false, 0, false); }
+        const start = watch.map((b) => b.quaternion.clone());
+        const peak = watch.map(() => 0);
+        if (seconds > 0) tumbleSeal(player, 4, 3, seconds, 1, 0, kick);
+        let wasLimp = false;
+        for (let i = 0; i < 90; i++) {
+          updatePlayer(DT, AIM_INPUT);
+          if (player.anim.isLimp()) wasLimp = true;
+          watch.forEach((b, j) => { peak[j] = Math.max(peak[j], start[j].angleTo(b.quaternion)); });
+        }
+        return { peak, wasLimp, limp: player.anim.isLimp(), free: player.jolt.free };
+      };
+      const held = shove(0, 0);
+      const thrown = shove(0.6, 10);
+      note(`swimming: ${held.peak.map(deg).join(', ')} deg   ragdolled: ${thrown.peak.map(deg).join(', ')} deg`);
+      check('a shove cuts the live skeleton loose', thrown.wasLimp && !held.wasLimp);
+      check('...and every watched limb swings further for it',
+        thrown.peak.every((v, i) => v > held.peak[i] + 0.05),
+        watch.map((b, i) => `${b.name} ${deg(held.peak[i])} -> ${deg(thrown.peak[i])}`).join('; '));
+      check('...and the skeleton is handed back when the window closes',
+        !thrown.limp && thrown.free === 0, `free ${thrown.free.toFixed(2)}s`);
+      // THE KICK IS WHAT MAKES IT FLY. Limp with nothing thrown at it is a
+      // frozen pose the springs have no reason to leave — which is the bug this
+      // is here to keep out, because it looks exactly like the ragdoll working.
+      const still = shove(0.6, 0);
+      check('a limp body with no kick in it barely moves — the reason the kick exists',
+        Math.max(...thrown.peak) > Math.max(...still.peak) + 0.05,
+        `${deg(Math.max(...still.peak))} deg unkicked against ${deg(Math.max(...thrown.peak))} deg`);
+      resetPlayer();
+    }
   }
 }
 

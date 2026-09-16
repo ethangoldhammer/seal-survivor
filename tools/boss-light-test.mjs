@@ -59,7 +59,7 @@ import { bossBoomLead } from '../path/src/systems/bossBoom.js';
 import {
   bossLightState, bossLightLead, bossLightSeconds, bossLightEnvelope,
   fireBossLight, updateBossLight, resetBossLight, dropBossLightSubject,
-  bossLightSubject, shaftAlpha, bladeCentre,
+  bossLightSubject, shaftAlpha, bladeCentre, bladeReach,
 } from '../path/src/systems/bossLight.js';
 import { attachHitShape, tickHitShapes } from '../path/src/systems/hitShape.js';
 
@@ -287,6 +287,10 @@ section('the shaft');
   };
   check('the middle is the brightest part of a row',
     shaftAlpha(0, 0.5) > shaftAlpha(0.2, 0.5) && shaftAlpha(0.2, 0.5) > shaftAlpha(0.45, 0.5));
+  check('and no edge at the foot either', shaftAlpha(0, 1) < 0.02,
+    `${shaftAlpha(0, 1).toFixed(4)} at the very bottom — `
+    + 'endLevel is a brightness at the landing, not an ending, and a quad that '
+    + 'stops there draws a straight line across the water at that alpha');
   check('it has no edge', shaftAlpha(0.499, 0.5) < 0.02,
     `${shaftAlpha(0.499, 0.5).toFixed(4)} at the quad's own edge — anything visible here is a `
     + 'rectangle with a gradient in it');
@@ -304,9 +308,18 @@ section('the shaft');
   // physically honest one and it is the wrong picture: the cone is brightest
   // thirty units above the seal and spent by the time it reaches it, so the
   // hero light is a lit patch of empty water with a dark animal under it.
+  //
+  // MEASURED JUST ABOVE THE FOOT, not on the last texel, and the distinction
+  // is the whole of `footFade`: the light ARRIVING (endLevel) and the quad
+  // ENDING are two different questions, and they used to be answered by the
+  // same sample. Answering them together is what left a straight line across
+  // the water at 45% alpha under every blade — the check read it as the light
+  // being healthy, which it was, right up to the edge it was cut off at.
+  const foot = s.footFade ?? 0.05;
+  const landing = shaftAlpha(0, 1 - foot * 1.4);
   check('the light is still there when it lands',
-    shaftAlpha(0, 1) > shaftAlpha(0, 0.2) * 0.3,
-    `${shaftAlpha(0, 1).toFixed(3)} at the landing vs ${shaftAlpha(0, 0.2).toFixed(3)} near the `
+    landing > shaftAlpha(0, 0.2) * 0.3,
+    `${landing.toFixed(3)} just above the foot vs ${shaftAlpha(0, 0.2).toFixed(3)} near the `
     + 'top — CONFIG.boss.light.shaft.endLevel is the number that decides this');
 }
 
@@ -370,6 +383,87 @@ section('no real light');
     + 'does nothing whatever to the unlit half (see systems/beams.js)');
   check('...and the glow is additive geometry',
     src.includes('AdditiveBlending'), 'nothing here would reach an unlit body');
+}
+
+// ---------------------------------------------------------------------------
+// THE ORIGIN IS OFF THE TOP OF THE FRAME, ALWAYS.
+//
+// A shaft whose top edge is inside the crop reads as a quad, and the cone's
+// whole bake is arranged around not having a visible start: the alpha fades in
+// over `capFade` so the beginning is not a line. A fade that ENDS on screen is
+// still a beginning you can see, so the length has to answer to the FRAME
+// rather than to a number in world units.
+//
+// It could not, and that is the bug: the camera runs from a kill shot pushed
+// in on one animal out to a Blubberball pitch at 0.55 zoom, and the authored
+// thirty units is comfortably past the top edge in the first and stops a third
+// of the way up the screen in the second. Every failure is silent — a light
+// with a visible top looks like a light somebody drew that way.
+console.log('\nthe shaft starts off the top of the frame, at any framing');
+{
+  const s = CONFIG.boss.light.shaft;
+  const clear = s.clearTop ?? 6;
+  // The framings the game actually reaches: a kill shot pushed in, the default,
+  // and a match zoomed out to its floor. `halfH` is what world.framedView()
+  // reports, which is the frustum's half height AT THIS ZOOM.
+  const views = [
+    ['a kill shot pushed in', { y: 0, halfH: 26 / 2.2 }],
+    ['the default framing', { y: 0, halfH: 26 }],
+    ['a Blubberball pitch at its zoom floor', { y: 0, halfH: 26 / 0.55 }],
+    // ...and the case the authored length was quietly failing: the seal near
+    // the BOTTOM of a wide frame, which is the longest reach the light is ever
+    // asked for.
+    ['a seal at the bottom of a wide frame', { y: 18, halfH: 26 / 0.55 }],
+  ];
+  const tilt = s.tilt ?? 0.17;
+  for (const [name, view] of views) {
+    let worst = Infinity;
+    let worstRow = -1;
+    for (let i = 0; i < (s.blades ?? []).length; i++) {
+      const row = s.blades[i];
+      // The sway is added to the lean every frame, so the check has to hold at
+      // BOTH ends of it — a blade leaned further over reaches less far up, and
+      // a length that only clears at the sway's midpoint dips into frame twice
+      // a second.
+      for (const sway of [-(row.sway ?? 0.12), 0, row.sway ?? 0.12]) {
+        const lean = tilt * (row.lean ?? 1) + sway;
+        const h = bladeReach(0, lean, (s.height ?? 30) * (row.height ?? 1), view);
+        const top = 0 + Math.cos(lean) * h;   // the foot is at atY = 0
+        const past = top - (view.y + view.halfH);
+        if (past < worst) { worst = past; worstRow = i; }
+      }
+    }
+    check(`${name}: every blade starts past the top edge`, worst >= clear - 1e-6,
+      `worst row ${worstRow} clears by ${worst.toFixed(2)} of a wanted ${clear}`);
+  }
+
+  // AND THE AUTHORED LENGTH IS A FLOOR. A frame that happens to be short must
+  // not make the light stubby — the reach only ever grows a blade.
+  const tight = { y: 0, halfH: 2 };
+  for (let i = 0; i < (s.blades ?? []).length; i++) {
+    const row = s.blades[i];
+    const authored = (s.height ?? 30) * (row.height ?? 1);
+    const h = bladeReach(0, tilt * (row.lean ?? 1), authored, tight);
+    check(`row ${i} keeps its authored length in a tight frame`, h >= authored - 1e-6,
+      `${h.toFixed(2)} vs an authored ${authored.toFixed(2)}`);
+  }
+
+  // ...AND A HARNESS THAT HANDS OVER NO FRAME GETS EXACTLY WHAT IT ASKED FOR.
+  // Null is every Node caller in this project, and a reach that invented a
+  // frame would make each of them measure a length nothing in the game uses.
+  check('no frame means the authored length, unchanged',
+    bladeReach(0, 0.17, 30, null) === 30, `${bladeReach(0, 0.17, 30, null)}`);
+
+  // THE ROWS STAY DIFFERENT LENGTHS. They are authored that way — the alpha
+  // profile runs along the quad, so a blade stretched to match its neighbour
+  // is a different falloff and a different light. Growing only the rows that
+  // need it is what keeps that true, and a single shared base would not.
+  const wide = { y: 0, halfH: 26 / 0.55 };
+  const lens = (s.blades ?? []).map((row) => bladeReach(
+    0, tilt * (row.lean ?? 1), (s.height ?? 30) * (row.height ?? 1), wide,
+  ));
+  check('...without flattening the rows to one length', new Set(lens.map((v) => v.toFixed(2))).size > 1,
+    lens.map((v) => v.toFixed(1)).join(', '));
 }
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);

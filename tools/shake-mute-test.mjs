@@ -138,22 +138,22 @@ section('3. a mute takes the camera and nothing else');
     // as well. Forced on for this one assertion and put back after, because
     // what is under test is the gate, not the preference.
     //
-    // AND THE FREEZE NOW HAS A GUEST LIST OF ITS OWN (CONFIG.fx.hitstopOnly,
+    // AND THE FREEZE NOW HAS A GUEST LIST OF ITS OWN (CONFIG.fx.hitstopEvents,
     // covered by tools/hitstop-mute-test.mjs), which almost certainly does not
     // name this subject — so the second gate is emptied here too. Otherwise
     // this check reads "the shake mute took the hit-stop" when what really
     // happened is the hit-stop list correctly declined it, and the two mutes
     // become impossible to tell apart from a failure message.
     const was = CONFIG.fx.hitstopEnabled;
-    const wasOnly = CONFIG.fx.hitstopOnly;
+    const wasOnly = CONFIG.fx.hitstopEvents;
     CONFIG.fx.hitstopEnabled = true;
-    CONFIG.fx.hitstopOnly = [];
+    CONFIG.fx.hitstopEvents = [];
     initFeedback(null);
     feedback(stopper, { x: 0, y: 0 });
     check(`"${stopper}" keeps its hit-stop while shake-muted`, feedbackState.hitstop > 0,
       `${feedbackState.hitstop.toFixed(3)}s, shake ${feedbackState.shake}`);
     CONFIG.fx.hitstopEnabled = was;
-    CONFIG.fx.hitstopOnly = wasOnly;
+    CONFIG.fx.hitstopEvents = wasOnly;
   }
 }
 

@@ -77,7 +77,7 @@ const ALLOWED = [
     why: 'ui/tipJar.js opens it in the system browser on a click; the desktop shell routes it through shell.openExternal',
   },
   {
-    host: 'seal-survivor.pages.dev',
+    host: 'sealsurvivor.com',
     why: 'share text in systems/bossShot.js — a string handed to the OS, not a request',
     note: 'should become the Steam store URL in a Steam build',
   },
@@ -132,6 +132,14 @@ const VERIFIED = [
   {
     host: 'seal-survivor-leaderboard.ethan-goldhammer.workers.dev',
     why: 'VITE_LEADERBOARD_URL. Fetched, but aborts at 6s and falls through to the local board',
+  },
+  {
+    // Listed ahead of the deploy, so the audit does not go red on the day the
+    // URL lands in .env.production rather than on a day anything changed. The
+    // name is already fixed by `name` in server/room/wrangler.toml.
+    host: 'seal-survivor-room.ethan-goldhammer.workers.dev',
+    why: "VITE_ROOM_URL. Blubberball's online rooms. Reached only when a player asks to host or join — an offline build has roomsAvailable() false and never draws the buttons, and every other mode is untouched",
+    caveat: 'the same store-page disclosure question as the playtest collection, if a Steam build ever ships online play',
   },
 ];
 

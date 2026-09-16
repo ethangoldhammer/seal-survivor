@@ -43,7 +43,7 @@ import { spawnSeagull, updateSeagulls, resetSeagulls, seagullCount, kickGull } f
 import { updateShrimpRing, createShrimpRingVisual, resetShrimpRing } from '../path/src/systems/shrimpRing.js';
 import { shrimpRingLevelStats } from '../path/src/levelStats.js';
 import { createGarlicVisual, updateGarlic, resetGarlic } from '../path/src/systems/garlic.js';
-import { stoke, cool, glowLevel, damageGlowCfg, attachDamageGlow } from '../path/src/systems/damageGlow.js';
+import { stoke, cool, glowLevel, glowStir, glowHue, rotateHue, damageGlowCfg, attachDamageGlow } from '../path/src/systems/damageGlow.js';
 import { weatherState } from '../path/src/systems/weather.js';
 import {
   createBakalarBoat, updateBakalar, resetBakalar, suctionAt, netGeometry,
@@ -57,7 +57,7 @@ import { strikeState, pipCount, chainStrike, resetStrike } from '../path/src/sys
 import {
   isDazed, dazeReady, canControl, canHold, charmEnemy, holdEnemy, tickDaze, clearDaze, dazeSpeedMul,
 } from '../path/src/systems/control.js';
-import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats, harpNoteCount } from '../path/src/systems/harp.js';
+import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats, harpNoteCount, harpAuraNotes } from '../path/src/systems/harp.js';
 import { installNoteGlyphs } from '../path/src/systems/noteStorm.js';
 import { bounds, seabedTopY } from '../path/src/arena.js';
 
@@ -1406,12 +1406,25 @@ check('a boss alone is still played at', projectiles.length === 1, `${projectile
 
 // --- the charm and its ring ------------------------------------------------
 const payload = projectiles[0].charm;
-// A BOSS TAKES THE DAZE, NOT THE CHARM. Three separate claims in one moment,
-// and the ability is broken in a different way if any of them slips: charmed
-// would mean a boss fighting for you, an aura would mean a grinder on the one
-// body that should never carry one, and nothing at all is the bug this change
-// exists to fix.
-check('a boss note lands as a daze', applyHarpCharm(bossFish, payload) === true);
+// A BOSS IS NEVER CHARMED. Charmed would mean a boss fighting for you, and an
+// aura would mean a grinder on the one body that should never carry one —
+// those two claims are permanent and are the two below.
+//
+// WHAT THE REFUSAL BECOMES has changed under this check. A hold on a boss used
+// to convert into a daze and report true, so the caller could spend its
+// charge; `CONFIG.boss.control.holdsDaze` ships false now, because a perfect
+// strike into a lit weak spot should be the only thing in the game that stops
+// a boss — see the note over that key and npm run test:bossthreat.
+//
+// So both branches are checked, and the daze one runs with the door held open,
+// because the mechanism is still there and still tuned behind it. A harness
+// that only tested whichever way the boolean happens to point would go quiet
+// about half of what this ability can do.
+check('a boss note is refused in the shipped game — a charm does not stop a boss',
+  CONFIG.boss.control.holdsDaze === false && applyHarpCharm(bossFish, payload) === false);
+const harpHoldsDaze = CONFIG.boss.control.holdsDaze;
+CONFIG.boss.control.holdsDaze = true;
+check('a boss note lands as a daze with the daze door open', applyHarpCharm(bossFish, payload) === true);
 check('...it is not charmed and grows no ring',
   !(bossFish.charmTimer > 0) && !(bossFish.harpAura > 0),
   `charm ${bossFish.charmTimer}, aura ${bossFish.harpAura}`);
@@ -1442,6 +1455,9 @@ check('...and the daze is measured in a couple of seconds',
     charmEnemy(bossFish, 3) === true && isDazed(bossFish), `${bossFish.dazeTimer.toFixed(2)}s`);
   clearDaze(bossFish);
 }
+// ...and the door is shut again, so nothing below measures a game that ships
+// with the daze reachable.
+CONFIG.boss.control.holdsDaze = harpHoldsDaze;
 
 check('an ordinary body takes both halves', (() => {
   applyHarpCharm(shark, payload);
@@ -1496,6 +1512,132 @@ check('two charmed bodies leave each other alone', victim.hp === pairHp,
 tickHarp(Math.ceil((payload.auraDuration + 0.5) / dt));
 check('the ring wears off', !(host.harpAura > 0), `${host.harpAura}s left`);
 check('...and its notes go with it', harpNoteCount() === 0, `${harpNoteCount()} live note(s)`);
+
+// --- the ring going hot ----------------------------------------------------
+// All three channels of the shared envelope, on the one aura that carries them
+// as an ORBIT rather than as a noise field. Read off the instance buffers,
+// because that is the only place this ability's picture exists: every note
+// shares one material, so a check on a material would be checking the whole
+// field at once and would pass whatever the ring was doing.
+{
+  // The host sits at the origin and never moves, so its centre is a constant
+  // rather than something read back per frame from a body the ring might have
+  // outlived.
+  const hostX = 0;
+  const hostY = 0;
+  // ITS OWN HOST AND ITS OWN VICTIM, built after the ring above has expired.
+  // Sharing them would mean this block's two seconds of grinding came out of
+  // the aura duration the checks above are measuring, and one of the two would
+  // fail on a number the other spent.
+  enemies.length = 0;
+  const ringHost = fakeEnemy(hostX, hostY, 2.2, 9999);
+  ringHost.def.radius = 2.2;
+  const ringVictim = fakeEnemy(30, 0, 0.4, 9999);
+  enemies.push(ringHost, ringVictim);
+  applyHarpCharm(ringHost, payload);
+  // A FRAME FIRST, then take hold of ONE note on this host's ring and follow
+  // that one. Not an instance slot: every note in the game shares one pool and
+  // the pool swap-removes, so slot 0 is a different note from frame to frame —
+  // half the samples would be a burst note drifting away, which reads as the
+  // ring having stopped.
+  tickHarp(1);
+  const tracked = harpAuraNotes(ringHost)[0];
+  // Its world position, as the angle it sits at around its host — which is what
+  // "the ring turned" actually means. The position is the one the pool draws
+  // from (proxy transforms are world), so this is the picture and not a number
+  // beside it.
+  const angleAt = () => Math.atan2(
+    tracked.mesh.position.y - hostY, tracked.mesh.position.x - hostX,
+  );
+  // ...and the instance colour at ITS slot, for the same reason. MATCHED ON
+  // GEOMETRY, because the pool keys its groups by geometry and the note field
+  // ships EIGHT glyphs — so there are up to eight `notes:` InstancedMeshes in
+  // the scene at once, and taking whichever one the traversal happened to reach
+  // last reads a different note's colour while looking exactly like this one's.
+  let field = null;
+  scene.traverse((o) => {
+    if (o.isInstancedMesh && o.geometry === tracked?.mesh.geometry) field = o;
+  });
+  // Shortest way round, so a note crossing the -pi seam doesn't read as most of
+  // a turn backwards — which at this spin rate happens every second or so.
+  const step = (a, b) => {
+    let d = b - a;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return Math.abs(d);
+  };
+  const rgbAt = () => {
+    const c = field.instanceColor.array;
+    const i = tracked.mesh.userData.__poolSlot * 3;
+    return { r: c[i], g: c[i + 1], b: c[i + 2] };
+  };
+
+  check('the note field is on the scene as instances', !!field?.instanceColor);
+  check('...with a note of this host\'s ring to follow', !!tracked);
+
+  if (field?.instanceColor && tracked) {
+    // COLD FIRST, with the victim well out of reach. The ring has to already be
+    // turning before any of this means anything.
+    const coldA = angleAt();
+    tickHarp(1);
+    const coldStep = step(coldA, angleAt());
+    const coldRgb = rgbAt();
+    check('a cold ring is already turning', coldStep > 1e-5,
+      `${coldStep.toFixed(5)} rad/frame`);
+
+    // ...then bring the victim into the ring and let it grind.
+    ringVictim.mesh.position.x = ringHost.harpAuraRadius * 0.6;
+    tickHarp(Math.ceil((CONFIG.harp.auraTick * 2.2) / dt));
+    const hotBefore = angleAt();
+    tickHarp(1);
+    const hotStep = step(hotBefore, angleAt());
+    const hotRgb = rgbAt();
+
+    check('...and a grinding one turns faster', hotStep > coldStep * 1.05,
+      `${coldStep.toFixed(5)} -> ${hotStep.toFixed(5)} rad/frame`);
+    check('...brighter', hotRgb.r + hotRgb.g + hotRgb.b > (coldRgb.r + coldRgb.g + coldRgb.b) * 1.1,
+      `${(coldRgb.r + coldRgb.g + coldRgb.b).toFixed(2)} -> ${(hotRgb.r + hotRgb.g + hotRgb.b).toFixed(2)}`);
+    // Warmer, not merely different. Every colour a note can be rolled as sits
+    // between amber and cyan (NOTE_HUES), so warming is one direction for all
+    // of them and red climbing against green is the reading — whichever hue
+    // this particular host happened to draw.
+    check('...and warmer, not merely different',
+      hotRgb.r / Math.max(1e-6, hotRgb.g) > coldRgb.r / Math.max(1e-6, coldRgb.g) + 0.01,
+      `r/g ${(coldRgb.r / coldRgb.g).toFixed(3)} -> ${(hotRgb.r / hotRgb.g).toFixed(3)}`);
+
+    // THE ONE THAT FAILS SILENTLY. The orbit phase is integrated rather than
+    // recomputed as spin x elapsed, and the difference only shows the instant
+    // the rate MOVES: recomputed, a ring told to spin 2.1x faster four seconds
+    // in jumps to where it would have been if it had always been spinning that
+    // fast — four seconds of travel, on the one frame the player was meant to
+    // look at it. A still frame of either looks perfect.
+    let worst = 0;
+    let prev = angleAt();
+    for (let i = 0; i < 60; i++) {
+      tickHarp(1);
+      const a = angleAt();
+      worst = Math.max(worst, step(prev, a));
+      prev = a;
+    }
+    check('...and it speeds up from where it is rather than jumping',
+      worst < hotStep * 3,
+      `worst frame ${worst.toFixed(5)} against a hot step of ${hotStep.toFixed(5)}`);
+
+    // And all of it hands back. A ring stuck hot is the same failure as one
+    // that never went hot, arriving from the other side.
+    enemies.length = 0;
+    enemies.push(ringHost);
+    tickHarp(Math.ceil((damageGlowCfg('harp').fade + 0.2) / dt));
+    check('...with the ring still alive to be read',
+      ringHost.harpAura > 0, `${(ringHost.harpAura ?? 0).toFixed(2)}s left`);
+    const backRgb = rgbAt();
+    check('...then cools all the way back to its own colour',
+      Math.abs(backRgb.r - coldRgb.r) < 0.01 && Math.abs(backRgb.g - coldRgb.g) < 0.01,
+      `${coldRgb.r.toFixed(3)} vs ${backRgb.r.toFixed(3)} on red`);
+  }
+  resetHarp();
+  enemies.length = 0;
+}
 
 // --- ENTOURAGE: a ring of harps, not one -----------------------------------
 //
@@ -1901,9 +2043,25 @@ check('a bigger catch runs hotter than a single body',
     updateGarlic(dt, scene, garlicPlayer, 3, enemies, { onTick: () => { ticks++; } });
   }
   const hot = garlic.material.uniforms.uColor.value.clone();
+  const hotFlow = garlic.material.uniforms.uFlow.value;
   check('the garlic cloud ticks through a crowd', ticks > 0, `${ticks} tick(s)`);
   check('...and grinding brightens it', hot.r > cold.r,
     `${cold.r.toFixed(2)} -> ${hot.r.toFixed(2)} on red`);
+  // THE HUE, SEPARATELY FROM THE BRIGHTNESS. Both land on the same three
+  // channels, so "it got brighter" is not evidence that the hue moved at all —
+  // a pure brightness lift scales every channel by the SAME factor, and the
+  // only thing that can tell the two apart is the ratio between them.
+  check('...and swings its hue, not just its level',
+    Math.abs((hot.g / Math.max(1e-6, hot.r)) - (cold.g / Math.max(1e-6, cold.r))) > 0.01,
+    `g/r ${(cold.g / cold.r).toFixed(3)} -> ${(hot.g / hot.r).toFixed(3)}`);
+  // AND TOWARD THE WARM END. The direction is per aura and signed in config —
+  // red sits at both ends of the wheel, so the green cloud warms by turning one
+  // way and the two pink fields warm by turning the other. This is the check
+  // that catches a row whose sign was copied from a neighbour: a hue moving the
+  // wrong way is still a hue moving, and every other check here would pass.
+  check('...toward the warm end rather than away from it',
+    hot.r / Math.max(1e-6, hot.g) > cold.r / Math.max(1e-6, cold.g),
+    `r/g ${(cold.r / cold.g).toFixed(3)} -> ${(hot.r / hot.g).toFixed(3)}`);
   // ...and goes back down. A cloud that stayed hot would be the brightest
   // thing on screen for the rest of the run.
   enemies.length = 0;
@@ -1913,15 +2071,87 @@ check('a bigger catch runs hotter than a single body',
   const cooled = garlic.material.uniforms.uColor.value.clone();
   check('...and cools back to where it started',
     Math.abs(cooled.r - cold.r) < 0.001, `${cooled.r.toFixed(3)} vs ${cold.r.toFixed(3)}`);
+  check('...on the hue as well as the level',
+    Math.abs((cooled.g / cooled.r) - (cold.g / cold.r)) < 0.001,
+    `g/r ${(cooled.g / cooled.r).toFixed(3)} vs ${(cold.g / cold.r).toFixed(3)}`);
+  // THE STIR. The scroll phase is integrated on the CPU rather than derived
+  // from a clock, and the whole reason is that it must never jump: a hot cloud
+  // crawls FASTER from where it already is. Both halves are asserted, because
+  // each fails invisibly on its own — a flow that never moves is a frozen
+  // cloud, and one that is recomputed as rate x elapsed looks identical in a
+  // still frame and teleports in motion.
+  const coldFlowStep = garlic.material.uniforms.uFlow.value - hotFlow;
+  check('a cold cloud still crawls', coldFlowStep > 0);
+  check('...and the scroll phase only ever goes forward',
+    garlic.material.uniforms.uFlow.value >= hotFlow,
+    `${hotFlow.toFixed(3)} -> ${garlic.material.uniforms.uFlow.value.toFixed(3)}`);
+  check('...faster while it is grinding than after it has cooled',
+    glowStir(1, 'garlic') > glowStir(0, 'garlic'),
+    `x${glowStir(1, 'garlic').toFixed(2)} at full heat`);
   resetGarlic();
   scene.remove(garlic);
   enemies.length = 0;
+}
+
+// THE HUE OPERATOR ITSELF. Every field aura goes through it, and it is the one
+// piece here that can be wrong while every picture still looks fine: a rotation
+// that quietly changed a colour's WEIGHT would swing how hard the aura crosses
+// the bright pass, and the brightness channel would stop meaning one thing.
+{
+  const luma = (c) => c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+  const c = new THREE.Color(0.2, 0.9, 0.35);
+  const before = luma(c);
+  const was = c.clone();
+  rotateHue(c, 34);
+  // On the RATIOS, not on one channel. A green rotated a third of the way to
+  // yellow barely moves its green — the movement is in the other two — and a
+  // check on `g` alone would read a working rotation as a dead one.
+  check('a hue rotation moves the colour',
+    Math.abs(c.r / c.b - was.r / was.b) > 0.05,
+    `r/b ${(was.r / was.b).toFixed(3)} -> ${(c.r / c.b).toFixed(3)}`);
+  check('...without changing what it weighs to the bright pass',
+    Math.abs(luma(c) - before) < 1e-6,
+    `${before.toFixed(6)} -> ${luma(c).toFixed(6)}`);
+  // WHICH WAY IS UP. Signed per source in config, so the operator itself has to
+  // have a direction that can be relied on: red turns toward yellow.
+  const dir = new THREE.Color(0.9, 0.1, 0.1);
+  rotateHue(dir, 40);
+  check('...turning up the wheel on a positive angle', dir.g > 0.1);
+  check('...and never into negative light',
+    c.r >= 0 && c.g >= 0 && c.b >= 0);
+  // HDR IN, HDR OUT. Half the colours handed to this are already above 1 — an
+  // overdriven aura, a note colour rolled with deliberate headroom — and an
+  // HSL round trip would clamp away exactly the headroom that haloes.
+  const bright = new THREE.Color(2.4, 1.1, 1.9);
+  rotateHue(bright, 22);
+  check('...and keeps HDR headroom rather than clamping it',
+    Math.max(bright.r, bright.g, bright.b) > 1.5,
+    `peak ${Math.max(bright.r, bright.g, bright.b).toFixed(2)}`);
+  // A full turn is the identity, which is the cheapest check that the matrix
+  // is a rotation at all rather than three plausible rows of numbers.
+  const round = new THREE.Color(0.3, 0.55, 0.8);
+  rotateHue(round, 360);
+  check('...and a full turn comes back to where it started',
+    Math.abs(round.r - 0.3) < 1e-4 && Math.abs(round.b - 0.8) < 1e-4);
 }
 
 // Every aura reads the same table, which is the point of there being a table.
 check('every aura is on the one envelope',
   ['shrimpRing', 'garlic', 'harp'].every((k) => CONFIG.damageGlow.sources[k]),
   Object.keys(CONFIG.damageGlow.sources).join(', '));
+// EVERY FIELD DRIVES ALL THREE. The fields are the auras with somewhere to put
+// a stir and a hue, and a row that quietly resolves to zero on either is an
+// aura back to saying one thing — which is the failure this whole block exists
+// to prevent, arriving as a tuning value rather than as missing code.
+for (const k of ['garlic', 'harp', 'calamari']) {
+  const row = damageGlowCfg(k);
+  check(`${k} stirs while it is working`, row.stir > 0 && glowStir(1, k) > 1,
+    `x${glowStir(1, k).toFixed(2)}`);
+  check(`...and swings its hue`, Math.abs(row.hue) > 0 && Math.abs(glowHue(1, k)) > 0,
+    `${glowHue(1, k).toFixed(1)} deg`);
+  check(`...and both are back to nothing when it is cold`,
+    glowStir(0, k) === 1 && glowHue(0, k) === 0);
+}
 check('...and heat is off entirely when the block is',
   (() => {
     const was = CONFIG.damageGlow.enabled;

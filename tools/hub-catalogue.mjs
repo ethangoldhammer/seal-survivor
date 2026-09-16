@@ -105,6 +105,10 @@ const GROUP_BY_NAME = {
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   notex: 'Audits',
+  // Generates candidate colour wheels and screens them — it writes nothing and
+  // the output is hex rows to paste, so it reads as authoring rather than as an
+  // asset job.
+  wheel: 'Authoring',
   // Reports by default and only rewrites files with --write, so it reads as
   // an audit until you ask it not to.
   'sfx:trim': 'Audits',

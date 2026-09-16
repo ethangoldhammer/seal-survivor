@@ -10,6 +10,7 @@ import { isMarked, markWeight, markedTargets } from '../systems/marks.js';
 import { facingHotSpots, hotSpotPoint } from '../systems/bossHotSpots.js';
 import { projectileLife } from '../systems/scaling.js';
 import { releaseLatticeChild, resetLattice } from '../loadout.js';
+import { attackTraceOn, noteShotEnd } from '../systems/attackTrace.js';
 
 // One list for both sides — `faction` decides who a bullet can hurt. Two
 // optional behaviors layer on top of the base fly-in-a-straight-line bullet:
@@ -118,6 +119,12 @@ export function projectileInstanceStats() {
 
 export function spawnProjectile(scene, {
   origin, dir, faction, damage, speed, life, radius, pierce = 0, asset, source = null,
+  // HOW MUCH FIRE IT TAKES TO SWAT THIS OUT OF THE AIR, or 0 for a shot that
+  // cannot be — which is every player pellet and every hostile shot that
+  // existed before CONFIG.enemyShot. Only enemy shots are swept for (see the
+  // pass in systems/combat.js); a value on a player shot is carried and never
+  // read, because nothing in the water shoots back at pellets.
+  hp = 0,
   homing = false, turnRate = 4, acquireRadius = Infinity, targetType = null, homingDelay = 0,
   // HOW MUCH A BIG TARGET COUNTS AS A NEAR ONE. 0 (every seeker that existed
   // before Sonar Teeth) is plain nearest-wins. See updateHoming for the curve
@@ -327,6 +334,13 @@ export function spawnProjectile(scene, {
     // has no business inheriting the seal's upgrades.
     life: faction === 'player' ? projectileLife(life) : life,
     radius,
+    // Both, and the max is what the hit flash and any future readout are sized
+    // against — a shot at 3 of 12 should look more broken than one at 3 of 4.
+    hp,
+    hpMax: hp,
+    // What it was GIVEN, kept alongside what is left. Only the trace reads it,
+    // and only to say how far a shot that ran out could ever have flown.
+    lifeMax: faction === 'player' ? projectileLife(life) : life,
     pierce,
     finElement,
     finSide,
@@ -1031,7 +1045,17 @@ export function updateProjectiles(dt, scene, enemiesList = [], onBounce = null, 
     // side of the world must not crack open out there: the bomblets would deal
     // damage the player can neither see nor have aimed.
     if (p.life <= 0 && !outside) onExpire?.(p);
-    if (p.life <= 0 || outside) despawn(scene, i);
+    if (p.life <= 0 || outside) {
+      // WHICH of the two it was, recorded separately. "The shots vanish" is
+      // either a fuse that cannot cross the gun's own range or a volley aimed
+      // past the arena, and those want opposite fixes — see CONFIG.enemyShot
+      // and systems/attackTrace.js.
+      if (p.faction === 'enemy' && attackTraceOn()) {
+        noteShotEnd(p.traceLabel ?? p.source ?? 'shot', outside ? 'arena' : 'expired',
+          { flew: p.speed * (p.lifeMax ?? 0) });
+      }
+      despawn(scene, i);
+    }
   }
 }
 

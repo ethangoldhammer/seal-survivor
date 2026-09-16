@@ -4,9 +4,23 @@ import { CONFIG } from '../path/src/config.js';
 import {
   strikeState, resetStrike, updateCharge, tryStrike, feedChum, updateStrike,
   strikeLoaded, sweetHalfWidth, sweetOffset, inSweetSpot, perfectCrossed,
-  consumeChainLink, liveChain, cancelDash,
+  consumeChainLinks, liveChain, cancelDash,
   minFire,
 } from '../path/src/systems/strike.js';
+
+// THE DEEPEST LINK OF WHATEVER THE LAST CALL SCORED, or 0 — which is exactly
+// what consumeChainLink() returned before it became consumeChainLinks().
+//
+// A HARNESS HELPER RATHER THAN AN EXPORT, deliberately. The GAME has to see
+// every link, because the banner is a number the player is asked to count and
+// one that skips is the bug the queue exists to fix; a check asking "did the
+// counter reach x2" does not, and giving the game back a reader that drops
+// links would be handing the bug back with it.
+const lastLink = (...a) => {
+  const links = consumeChainLinks(...a);
+  return links.length ? links[links.length - 1].chain : 0;
+};
+
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from '../path/src/systems/strikeRing.js';
 
 const stats = {
@@ -25,7 +39,7 @@ const half = sweetHalfWidth(stats);
 // tryStrike actually measured.
 function trial(DT, holdFrames) {
   resetStrike();
-  for (let i = 0; i < 5; i++) { feedChum(stats); consumeChainLink(); } // fill the tank
+  for (let i = 0; i < 5; i++) { feedChum(stats); lastLink(); } // fill the tank
   let seen = -Infinity, tellFrame = -1, loadedFrame = -1;
   for (let f = 0; f < holdFrames; f++) {
     updateCharge(DT, true, stats);
@@ -37,7 +51,7 @@ function trial(DT, holdFrames) {
   const measured = sweetOffset();
   const sweet = inSweetSpot(stats);
   const fired = tryStrike(DIR, stats);
-  feedChum(stats); consumeChainLink();          // one chum swum through
+  feedChum(stats); lastLink();          // one chum swum through
   const chain = liveChain();
   cancelDash();
   return { seen, measured, sweet, fired, chain, tellFrame, loadedFrame };
@@ -87,7 +101,7 @@ const ORIGIN = { x: 0, y: 0, z: 0 };
 
 function auditLead(DT, label) {
   resetStrike(); resetStrikeRing();
-  for (let i = 0; i < 5; i++) { feedChum(stats); consumeChainLink(); }
+  for (let i = 0; i < 5; i++) { feedChum(stats); lastLink(); }
   const rows = [];
   let disagreements = 0;
   for (let f = 0; f < Math.round(1.6 / DT); f++) {
@@ -136,7 +150,7 @@ console.log(bad === 0 ? '\nlead-in verified' : `\n${bad} DISAGREEMENTS`);
 // ---------------------------------------------------------------------------
 function armsAt(lateMs) {
   resetStrike();
-  for (let i = 0; i < 5; i++) { feedChum(stats); consumeChainLink(); }
+  for (let i = 0; i < 5; i++) { feedChum(stats); lastLink(); }
   const DT2 = 1 / 60;
   let guard = 0;
   while (!strikeLoaded() && guard++ < 2000) updateCharge(DT2, true, stats);
@@ -144,7 +158,7 @@ function armsAt(lateMs) {
   updateCharge(DT2, false, stats);
   const sweet = inSweetSpot(stats);
   tryStrike(DIR, stats);
-  feedChum(stats); consumeChainLink();
+  feedChum(stats); lastLink();
   const chain = liveChain();
   cancelDash();
   return { sweet, chain };
@@ -164,12 +178,12 @@ for (const late of [0, 50, 120, 250, 500]) {
 // have to actually do rather than something that happens on every button press.
 {
   resetStrike();
-  for (let i = 0; i < 5; i++) { feedChum(stats); consumeChainLink(); }
+  for (let i = 0; i < 5; i++) { feedChum(stats); lastLink(); }
   const DT2 = 1 / 60;
   for (let i = 0; i < 30; i++) updateCharge(DT2, true, stats);  // half a wind-up
   updateCharge(DT2, false, stats);
   tryStrike(DIR, stats);
-  feedChum(stats); consumeChainLink();
+  feedChum(stats); lastLink();
   const chain = liveChain();
   cancelDash();
   const ok = chain === 0;

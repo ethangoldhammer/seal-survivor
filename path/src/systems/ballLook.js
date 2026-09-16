@@ -81,6 +81,11 @@ const state = {
   // THE LEDGER — see noteBallMomentum. How much of the speed the ball is
   // travelling at right now each team actually put there, in u/s.
   credit: [0, 0],
+  // HAS THIS TEAM EVER TOUCHED IT? Not the same question as `credit`, which is
+  // renormalised every frame and can be argued down to nothing — this is a
+  // latch, and it is what says whether the colour being TAKEN FROM is a team's
+  // or the ball's own. See heldColor.
+  touched: [false, false],
   newest: -1,       // whose colour is marching in
   share: 0,         // ...and how much of the body it has taken, smoothed
   seed: 0,          // the world angle it came in at
@@ -89,16 +94,81 @@ const state = {
   // A LAGGED COPY of the ball's velocity. The difference between it and the
   // real one is the slosh: see the drift below.
   lagVx: 0, lagVy: 0,
+  // THE SPIKE STILL RINGING — how much of one the last shot was (see
+  // spikeStrength in systems/versus.js), decaying on `spikeDecay`.
+  //
+  // It is HERE rather than read off the ball because the two things that want
+  // it are the backdrop (systems/ballGrid.js) and the cloud trail
+  // (systems/ballTrail.js), and neither of those may import the match: one is
+  // driven from the frame loop and the other runs in the lab with no match at
+  // all. This module is already the channel between "something happened to the
+  // ball" and "the look reacts", and a spike is exactly that kind of fact.
+  //
+  // DECAYING RATHER THAN LATCHED, unlike ball.spike, which belongs to the
+  // flight and is cleared by whatever ends it. What the LOOK wants is the
+  // moment: a trail that stayed blown open for the whole length of a spike's
+  // flight would be a trail that says nothing about where it was struck.
+  spike: 0,
 };
 
+/**
+ * THE POSSESSION FIELD, as the numbers a shader needs — filled by
+ * updateBallLook and handed to the goo group every frame.
+ *
+ * ONE OBJECT, shared by reference, because there are two passes painting with
+ * it now: systems/post.js puts it on the ball's body and systems/grid.js puts
+ * it on the water the ball has been through, and a streak through the backdrop
+ * only reads as THIS ball while the two are the same picture. Both copy the
+ * values into uniforms the frame they read them, so mutating in place is safe
+ * and is what keeps this off the frame's allocation budget.
+ *
+ * `wr` of 0 is the switch: no ball, no field. Both consumers check it.
+ */
+const teams = { a: 0xffffff, b: 0xffffff, share: 0, seed: 0, lobes: 5, lobeSize: 0.62,
+  wobble: 0.7, spin: 0.5, breathe: 0.25, driftX: 0, driftY: 0, wx: 0, wy: 0, wr: 0 };
+
+/** The possession field, live — null until a ball exists to have one. */
+export function ballTeams() { return teams.wr > 0 ? teams : null; }
+
+/**
+ * HOW MANY CONTACTS THIS BALL HAS HAD — a count, and nothing else.
+ *
+ * A COUNT AND NOT A TIMESTAMP, because the only question anybody asks of it is
+ * "has one happened since I last looked", and that question has exactly one
+ * honest answer shape: an edge. A consumer polling a magnitude cannot tell one
+ * hard strike from the same strike seen twice, and a window measured in frames
+ * counts a frozen number over and over — which this game has done before, 182
+ * times in a row.
+ *
+ * Stepped by every path that changes the ball's velocity: a seal
+ * (noteBallMomentum) and a goal (claimBall). Read by systems/ballGrid.js, which
+ * marks the water where a contact happened.
+ */
+let contacts = 0;
+
+/** The running count — see above. */
+export function ballContacts() { return contacts; }
+
 export function resetBallLook() {
+  // `contacts` is NOT reset. Its only use is telling one contact from the next,
+  // and a consumer holding the last value it saw would read a rewind to zero as
+  // a fresh contact — a kickoff that punches the water on the frame the ball is
+  // put back.
+  // ...and the field goes dark rather than keeping the last frame it held. It
+  // is republished from scratch on the next updateBallLook; what this stops is
+  // the gap in between, where a consumer polling ballTeams() would be handed a
+  // description of a ball that is no longer on the pitch.
+  teams.wr = 0;
   state.owner = -1;
   state.pulse = 0;
+  state.spike = 0;
   state.speed01 = 0;
   state.charge01 = 0;
   state.mix = 0;
   state.credit[0] = 0;
   state.credit[1] = 0;
+  state.touched[0] = false;
+  state.touched[1] = false;
   state.newest = -1;
   state.share = 0;
   state.seed = 0;
@@ -152,6 +222,9 @@ export function noteBallMomentum(team, v0x, v0y, v1x, v1y, angle) {
   const s1 = Math.hypot(v1x, v1y);
   const added = Math.hypot(v1x - v0x, v1y - v0y);
   if (!(added > 1e-3)) return;
+  // ...and that a contact happened at all, for whoever is only watching for the
+  // edge. See ballContacts.
+  contacts += 1;
   // How much of what was already there is still going the way the ball is now
   // going. Projected rather than compared by length: a shot sent back the way
   // it came kept its speed and none of its direction, and the seal that did
@@ -162,15 +235,7 @@ export function noteBallMomentum(team, v0x, v0y, v1x, v1y, angle) {
   state.credit[0] *= keep;
   state.credit[1] *= keep;
   state.credit[team] += added;
-  // A NEW TEAM MARCHING IN. The share is described from the newest colour's
-  // side, so when possession changes hands the SAME picture is re-read from
-  // the other end — 1 - share — and the lerp carries on from there. Setting
-  // it to zero instead would blink the ball back to one colour on the frame
-  // of every touch.
-  if (team !== state.newest) {
-    state.share = 1 - state.share;
-    state.newest = team;
-  }
+  handOver(team);
   state.seed = angle ?? state.seed;
   state.owner = team;
 }
@@ -190,17 +255,155 @@ export function claimBall(team, angle = null) {
   // scale and a frame where the speed is still non-zero cannot undo it.
   state.credit[team] = Math.max(1, state.credit[team] + state.credit[other]);
   state.credit[other] = 0;
-  if (team !== state.newest) {
-    state.share = 1 - state.share;
-    state.newest = team;
-  }
+  // A goal is a contact as far as anything watching for one is concerned — it
+  // is the loudest thing that happens to a ball — so the water gets its mark.
+  contacts += 1;
+  handOver(team);
   if (angle != null) state.seed = angle;
   state.owner = team;
 }
 
+
+/**
+ * POSSESSION CHANGES HANDS, and the two cases are NOT the same picture.
+ *
+ * FROM ANOTHER TEAM the same body is re-read from the other end: the share is
+ * described from the newest colour's side, so `1 - share` is the identical
+ * arrangement of colour seen from the incoming one, and the lerp carries on
+ * from there. Zeroing it instead would blink the ball back to one colour on
+ * the frame of every touch.
+ *
+ * FROM NOBODY it is a takeover of the ball's OWN colour, and there is no
+ * picture to re-read — the body is all starter and none of anybody's. So the
+ * share starts at ZERO and the colour marches in out of the contact, which is
+ * what the first touch of a kickoff is supposed to look like.
+ *
+ * The inversion used to run in both cases, and `1 - 0` is 1: the very first
+ * touch of every match handed the striker the whole ball on the frame it
+ * landed. That is the flip. The march was never wrong; it never ran.
+ */
+function handOver(team) {
+  if (team === state.newest) { state.touched[team] = true; return; }
+  state.share = state.newest >= 0 ? 1 - state.share : 0;
+  state.newest = team;
+  state.touched[team] = true;
+}
+
+/**
+ * THE COLOUR BEING TAKEN FROM — what the part of the body the newest colour
+ * has NOT reached is painted with.
+ *
+ * The other team's, once they have actually put something into this ball; the
+ * BALL'S OWN otherwise. It was unconditionally the other team's, which meant
+ * the first touch of a kickoff painted most of the body in the colour of the
+ * side that had not touched it — a ball hit by green went red, then filled
+ * green out of the contact. Nobody had taken anything from anybody: what green
+ * is taking over is the starter colour.
+ *
+ * `touched` and not `credit`: the ledger is renormalised every frame and a
+ * team that has been argued down to nothing has still HELD the ball, so the
+ * colour it left behind is still what is being taken back off it.
+ */
+export function heldColor(team = state.newest) {
+  const other = team === 1 ? 0 : 1;
+  if (team < 0) return starterColor();
+  return state.touched[other] ? teamColor(other) : starterColor();
+}
+
+/**
+ * THE BALL'S COLOUR BEFORE ANYBODY HAS TOUCHED IT — the colour AT THE GLOW,
+ * which is what renderBall actually writes into the splats (see ballTint).
+ *
+ * The glow matters here and it is not decoration: this colour is mixed into
+ * the body at `tintMix`, so a starter without it would DIM the untaken part of
+ * the ball by whatever the glow is worth the instant somebody first touched
+ * it — a body that goes matte on contact, which is a strange thing for a hit
+ * to do. At the shipped glow the channels clamp on the way into a packed
+ * integer, which is why this reads as white rather than as cream.
+ */
+export function starterColor() {
+  return ballTint(_starter).getHex();
+}
+
+const _starter = new THREE.Color();
+
+// ---------------------------------------------------------------------------
+// THE RECORD — this state, as a row of floats a replay frame can hold.
+//
+// The replay poses the ball from the recorder's frames, and until this
+// existed the ball's COLOUR was whatever the goal froze it at: claimBall had
+// handed the whole body to the scorer and the share had marched to a full
+// takeover during the shutter, so the replay showed a ball that was already
+// the scorer's a second before the shot, with none of the march out of the
+// contact that the player had just watched. The warp had decayed off too.
+//
+// So the recorder keeps this whole machine per frame (recordBallLook) and the
+// poser puts it back (poseBallLook), the way it does the ball's position. The
+// group uniforms are re-derived from the restored state by updateBallLook
+// itself, which is what keeps this one description of the look.
+// ---------------------------------------------------------------------------
+
+/** Floats per record. Slot 0 is the flag: 0 is a frame that never recorded one. */
+export const LOOK_REC = 15;
+const L_HAS = 0, L_OWNER = 1, L_NEWEST = 2, L_TOUCH0 = 3, L_TOUCH1 = 4, L_CRED0 = 5, L_CRED1 = 6,
+  L_SHARE = 7, L_SEED = 8, L_MIX = 9, L_PULSE = 10, L_LAGVX = 11, L_LAGVY = 12, L_SPEED01 = 13, L_CHARGE01 = 14;
+
+/** Write the state into `out` (a Float32Array of LOOK_REC or more). */
+export function recordBallLook(out) {
+  if (!out || out.length < LOOK_REC) return out;
+  out[L_HAS] = 1;
+  out[L_OWNER] = state.owner;
+  out[L_NEWEST] = state.newest;
+  out[L_TOUCH0] = state.touched[0] ? 1 : 0;
+  out[L_TOUCH1] = state.touched[1] ? 1 : 0;
+  out[L_CRED0] = state.credit[0];
+  out[L_CRED1] = state.credit[1];
+  out[L_SHARE] = state.share;
+  out[L_SEED] = state.seed;
+  out[L_MIX] = state.mix;
+  out[L_PULSE] = state.pulse;
+  out[L_LAGVX] = state.lagVx;
+  out[L_LAGVY] = state.lagVy;
+  out[L_SPEED01] = state.speed01;
+  out[L_CHARGE01] = state.charge01;
+  return out;
+}
+
+/**
+ * Put a recorded state back, `u` of the way from record `a` to record `b`.
+ * The continuous numbers are lerped; the discrete ones (who owns it, whose
+ * colour is marching in, the angle it came in at) are taken from the nearer
+ * record — and when possession CHANGED between the two, everything is, because
+ * handOver re-reads the share from the other end on the frame it flips and a
+ * lerp across that flip would paint the body backwards for a frame.
+ * Returns false, touching nothing, when either record is unrecorded.
+ */
+export function poseBallLook(a, b, u = 0) {
+  if (!a || !b || !a[L_HAS] || !b[L_HAS]) return false;
+  u = Math.max(0, Math.min(1, u));
+  const near = u < 0.5 ? a : b;
+  const flipped = a[L_NEWEST] !== b[L_NEWEST] || a[L_OWNER] !== b[L_OWNER];
+  const mix = (i) => (flipped ? near[i] : a[i] + (b[i] - a[i]) * u);
+  state.owner = near[L_OWNER];
+  state.newest = near[L_NEWEST];
+  state.touched[0] = near[L_TOUCH0] > 0.5;
+  state.touched[1] = near[L_TOUCH1] > 0.5;
+  state.credit[0] = mix(L_CRED0);
+  state.credit[1] = mix(L_CRED1);
+  state.share = mix(L_SHARE);
+  state.seed = near[L_SEED];
+  state.mix = mix(L_MIX);
+  state.pulse = mix(L_PULSE);
+  state.lagVx = mix(L_LAGVX);
+  state.lagVy = mix(L_LAGVY);
+  state.speed01 = mix(L_SPEED01);
+  state.charge01 = mix(L_CHARGE01);
+  return true;
+}
+
 /** For the harness and the lab: what the ledger currently holds. */
 export function ballCredit() {
-  return { credit: [...state.credit], newest: state.newest, share: state.share, seed: state.seed };
+  return { credit: [...state.credit], touched: [...state.touched], newest: state.newest, share: state.share, seed: state.seed };
 }
 
 /**
@@ -218,6 +421,10 @@ export function ballEvent(kind, opts = {}) {
   const force = Math.max(0, Math.min(1, opts.force ?? 1));
   state.pulse = Math.min(look.pulseMax ?? 3, state.pulse + amount * force);
   if (opts.team != null && opts.team >= 0) state.owner = opts.team;
+  // THE BIGGEST SPIKE WINS rather than the newest, and it is not summed: this
+  // is "how much of a spike the thing that just happened was", and a second
+  // touch a frame later is a different shot rather than more of this one.
+  if (opts.spike > (state.spike ?? 0)) state.spike = opts.spike;
 }
 
 /** Continuous inputs, pushed every frame by whoever is simulating the ball. */
@@ -258,6 +465,11 @@ export function updateBallLook(dt) {
   // Events decay toward nothing; the continuous term is what is left.
   const decay = Math.max(0.01, look.pulseDecay ?? 2.4);
   state.pulse = Math.max(0, state.pulse - state.pulse * decay * dt);
+  // The spike rings down on its own clock — faster than the pulse, because it
+  // is describing the moment of the hit and not the energy in the body.
+  const sd = Math.max(0.01, look.spikeDecay ?? 4.5);
+  state.spike = Math.max(0, state.spike - state.spike * sd * dt);
+  if (state.spike < 1e-3) state.spike = 0;
 
   const drive = (look.bySpeed ?? 0.6) * state.speed01
     + (look.byCharge ?? 0.4) * state.charge01;
@@ -324,23 +536,30 @@ export function updateBallLook(dt) {
   group.tintMix = state.mix;
   // The two-colour field. A radius of zero is the switch that leaves every
   // other group — and this one, before a ball exists — on the single tint.
-  const other = state.newest === 1 ? 0 : 1;
-  group.teams = {
-    a: state.newest >= 0 ? teamColor(other) : 0xffffff,
-    b: state.newest >= 0 ? teamColor(state.newest) : 0xffffff,
-    share: state.share,
-    seed: state.seed,
-    lobes: look.lobes ?? 5,
-    lobeSize: look.lobeSize ?? 0.62,
-    wobble: look.wobble ?? 0.7,
-    spin: look.spin ?? 0.5,
-    breathe: look.breathe ?? 0.25,
-    driftX: dvx,
-    driftY: dvy,
-    wx: state.bx ?? 0,
-    wy: state.by ?? 0,
-    wr: state.newest >= 0 ? (state.br ?? 0) : 0,
-  };
+  // THE TWO-COLOUR FIELD, written into the shared object rather than a fresh
+  // literal — two passes paint with it now (the goo pass and the backdrop
+  // lattice) and they have to be painting the same frame's description, not
+  // one each. A radius of zero is the switch that leaves every other goo group
+  // — and this one, before a ball exists — on the single tint.
+  //
+  // WHAT IS BEING TAKEN OVER, and what is taking it — see heldColor. The first
+  // is the ball's own colour until the other side has actually held this ball,
+  // because until then nothing is being taken off anybody.
+  teams.a = state.newest >= 0 ? heldColor() : 0xffffff;
+  teams.b = state.newest >= 0 ? teamColor(state.newest) : 0xffffff;
+  teams.share = state.share;
+  teams.seed = state.seed;
+  teams.lobes = look.lobes ?? 5;
+  teams.lobeSize = look.lobeSize ?? 0.62;
+  teams.wobble = look.wobble ?? 0.7;
+  teams.spin = look.spin ?? 0.5;
+  teams.breathe = look.breathe ?? 0.25;
+  teams.driftX = dvx;
+  teams.driftY = dvy;
+  teams.wx = state.bx ?? 0;
+  teams.wy = state.by ?? 0;
+  teams.wr = state.newest >= 0 ? (state.br ?? 0) : 0;
+  group.teams = teams;
   return {
     warp, tint: group.tint, tintMix: state.mix, owner: state.owner,
     share: state.share, newest: state.newest, seed: state.seed,
@@ -349,6 +568,13 @@ export function updateBallLook(dt) {
 }
 
 /** For the shader lab and the tests — what the state machine currently holds. */
+/**
+ * WHICH TEAM LAST STRUCK THE BALL — the shooter. -1 is nobody, which is what a
+ * ball at a kickoff is. Exported apart from ballLookState() because that
+ * builds two objects to answer it and this is read every frame.
+ */
+export function ballOwner() { return state.owner; }
+
 export function ballLookState() {
   return { ...state };
 }

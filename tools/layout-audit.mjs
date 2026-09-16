@@ -393,6 +393,7 @@ function printReport({ results, total, silent, stalled }) {
 
 function describe(f) {
   if (f.type === 'tap') return `${f.what} — tap target ${f.w}x${f.h}, under 44`;
+  if (f.type === 'empty') return `${f.what} built nothing this sweep can see — ${f.n} element(s) measured`;
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
   if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;

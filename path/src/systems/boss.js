@@ -56,6 +56,7 @@ import bossesCsv from '../bosses.csv?raw';
 import bossPerksCsv from '../bossPerks.csv?raw';
 import { ease } from '../ease.js';
 import { parseBossNameCsv, rollBossName } from '../bossNameTable.js';
+import { newNameMemory } from '../namePool.js';
 import { parseBossCsv, newBossBag, nextBoss, FALLBACK_BOSS } from '../bossTable.js';
 import { parseBossPerkCsv, rollBossPerk } from '../bossPerkTable.js';
 import { attachBossPerk, resetBossPerks, updateBossPerks, activeBossPerk } from './bossPerks.js';
@@ -189,6 +190,13 @@ const NAME_PARTS = parseBossNameCsv(bossNamesCsv, console.warn, {
   // pool for it. See bosses.csv's ownNames column.
   exclusive: ROSTER.filter((b) => b.ownNames).map((b) => b.id),
 });
+
+// WHAT THE LAST FEW BOSSES WERE CALLED. Without it the fourth boss of a run can
+// be "Grimjaw" after "Grimtide" -- independent draws have no memory, and the
+// repeat reads as a small table rather than as chance. Lives here rather than
+// inside bossNameTable so the roll stays a function of its arguments; see
+// namePool.js.
+const NAME_MEMORY = newNameMemory();
 
 // Whether this archetype draws only from its own vocabulary. Looked up rather
 // than passed around: every caller that rolls a name has the id, and only this
@@ -1305,6 +1313,10 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // guaranteed to land in it — the name is the only warning the player gets
   // that this one teleports. See rollBossName.
   bossState.name = rollBossName(NAME_PARTS, {
+    // What the last few bosses were called, so the fourth one of a run is not
+    // "Grimjaw" after "Grimtide". Owned here rather than inside the table so
+    // the roll stays a function of its arguments -- see namePool.js.
+    memory: NAME_MEMORY,
     boss: archetype.id,
     perk: perk?.id ?? null,
     exclusive: archetype.ownNames,
@@ -1537,6 +1549,7 @@ export function forceBoss(scene, gameState, opts = {}) {
     bossState.perk = want;
     attachBossPerk(scene, e, want, gameState.difficulty ?? 0);
     bossState.name = rollBossName(NAME_PARTS, {
+      memory: NAME_MEMORY,
       boss: bossState.archetype?.id ?? null,
       perk: want?.id ?? null,
       exclusive: !!bossState.archetype?.ownNames,

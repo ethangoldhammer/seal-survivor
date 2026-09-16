@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { nearestFloatingCrew, crewPosition } from '../systems/crew.js';
-import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul, bossDifficulty } from '../config.js';
+import { CONFIG, difficultyRamp, xpToughnessMul, lateGameMul, enemyPaceMul, bossDifficulty, bossHpRamp } from '../config.js';
 import { acquireVisual, releaseVisual, bodyPending } from '../assets.js';
 import { spawnProjectile } from './projectiles.js';
 import {
@@ -47,10 +47,25 @@ import { player } from './player.js';
 import { feedback, hitPopFor } from '../systems/feedback.js';
 import { damageZoneMul } from '../systems/damageZones.js';
 import { createTentacleRig } from '../systems/tentacleRig.js';
+// The lunge's own diagnostics. Every call below is guarded by attackTraceOn()
+// at the CALL SITE rather than inside the hook, so a gate report allocates its
+// detail object only while the V panel is open — this runs for every shark in
+// the water, sixty times a second. See systems/attackTrace.js.
+import {
+  attackTraceOn, noteLungeGate, noteLungeStage, noteLungePlan, noteLungeDistance, noteReaimAbort,
+} from '../systems/attackTrace.js';
 
 export const enemies = [];
 
 let spawnTimer = 0;
+// THE TELL — a big tick announces itself and then arrives a beat later. See
+// CONFIG.spawn.rush.tell. `tellArmed` is "the tick about to run is the one that
+// was announced", which is what stops a postponed tick announcing itself again
+// and postponing forever; `tellCooldown` is the gap between announcements, so a
+// run of big ticks is one warning rather than a stutter.
+let tellArmed = false;
+let tellCooldown = 0;
+const tellQueue = [];
 let nextSchoolId = 1;
 
 // THE HELD BREATH. Seconds for which nothing new may arrive, from any source.
@@ -126,6 +141,131 @@ export function setStrikeThreat(t = null) {
  *   implementation would be a second copy of every one of them. Defaults to 1,
  *   so every existing caller is untouched.
  */
+/**
+ * IS THIS BODY MID-COMMITTED-RUN?
+ *
+ * The five ways a boss commits, in one place: the shared lunge's own `strike`
+ * stage, and the `ramming` flag the lunge perk, the kraken and the anglerfish
+ * all raise. Two fields, one answer.
+ *
+ * IT LIVES HERE BECAUSE TWO SYSTEMS ASK IT. systems/dodge.js pays the player
+ * for a run that ended in empty water, and CONFIG.boss.tenacity refuses to let
+ * one be nudged off its line — and those are the same question about the same
+ * moment. Two copies of it is the failure this codebase has already had once
+ * with the crab's claw: one end retuned, both ends still passing their own
+ * tests, and a mechanic that silently stopped lining up. One reach, asked
+ * twice.
+ *
+ * `perkDrive` is deliberately NOT in here. It means a perk is writing this
+ * body's velocity directly, which is broader than a run — the turtle escort is
+ * driven and is not charging anybody — so the callers that want it say so.
+ */
+export function isCommittedRun(e) {
+  return e?.ramming === true || e?.lungeStage === 'strike';
+}
+
+/**
+ * WHAT A COMMITTED RUN IS WORTH, as a multiplier on the body's own
+ * `contactDamage` for as long as it is running.
+ *
+ * The perk lunge has carried one of these since it shipped — bossPerks.csv's
+ * `damage` cell, x2 — and it applies it by writing `e.contactDamage` for the
+ * duration of the dash and restoring it after (see updateLunge in
+ * systems/bossPerks.js). That is why this returns 1 for `ramming`: the three
+ * systems that set that flag have already multiplied the number this would
+ * multiply again, and charging both would silently double every one of them.
+ *
+ * The BODY's own lunge — `lungeStage`, the telegraphed pass the four chasing
+ * bosses and the six apex sharks do — never had one. It was the same contact
+ * drain as cruising, on the same chip channel, which made the most readable
+ * attack in the game the cheapest thing the animal could do to you. See the
+ * note at the contact call in systems/combat.js.
+ *
+ * PER LUNGE BLOCK rather than one number here, because the spread is real: a
+ * barracuda's pass is a 1.1-second habit and a mosasaur's is a 1.4-second
+ * wind-up you were given time to read. A species with no number takes
+ * CONFIG.enemies-level 1, which is exactly what every one of them was worth
+ * before this existed — so this cannot change a creature nobody has authored.
+ */
+export function committedDamageMul(e) {
+  if (!e || e.ramming === true) return 1;
+  if (e.lungeStage !== 'strike') return 1;
+  const mul = e.def?.lunge?.damageMul;
+  return mul > 0 ? mul : 1;
+}
+
+/**
+ * HOW MUCH OF THE ORDINARY HIT REACTION THIS BODY TAKES — 1 for every creature
+ * in the game, and CONFIG.boss.tenacity.flinch for a boss.
+ *
+ * One number for both channels the hit reaction has (the skeleton shove in
+ * main.js and the bone twitch in systems/animation.js) so a body cannot end up
+ * buckling without twitching or the reverse. Read by both, and by nothing else.
+ *
+ * Zero while a boss is COMMITTED whatever the number says, for the same reason
+ * applyKnockback returns early there: the run is the moment the boss is most
+ * shot at, and a flinch per pellet is the answer to a lunge that costs nothing.
+ */
+export function hitReactionMul(e) {
+  if (!e?.isBoss) return 1;
+  const ten = CONFIG.boss?.tenacity ?? {};
+  if (ten.enabled === false) return 1;
+  if (ten.committed !== false && (e.perkDrive || isCommittedRun(e))) return 0;
+  return Math.max(0, Math.min(1, ten.flinch ?? 0));
+}
+
+/**
+ * THE ONE THING THAT STAGGERS A BOSS: a perfect strike into a lit weak spot.
+ *
+ * Called from systems/strike.js, which is the only caller there is meant to be
+ * — see CONFIG.strike.weakSpot.stagger for why the door is exactly this narrow,
+ * and CONFIG.boss.tenacity for everything it is the exception to.
+ *
+ * Lands on the SAME `staggerTimer` the heavy knock uses, so the integrator
+ * needs no second branch and a boss cannot be staggered twice over by two
+ * systems that do not know about each other. It carries its own `staggerSlow`
+ * because a boss stopped by a perfect ram and a shark knocked off its line are
+ * not the same depth of event.
+ *
+ * @returns true if it landed — false when it was refused by the cooldown,
+ *   which the caller may want to know so that a refused stagger does not
+ *   announce itself as one.
+ */
+export function staggerBoss(e) {
+  const c = CONFIG.strike?.weakSpot?.stagger ?? {};
+  if (!e || c.enabled === false) return false;
+  if ((e.staggerCool ?? 0) > 0) return false;
+  const secs = Math.max(0, c.seconds ?? 0);
+  if (!(secs > 0)) return false;
+
+  // Taken as the LONGER of what it already had rather than added, the same
+  // rule the heavy knock's stagger follows: two of these inside one window
+  // stagger it twice, they do not hold it still for two and a half seconds.
+  e.staggerTimer = Math.max(e.staggerTimer ?? 0, secs);
+  e.staggerFor = e.staggerTimer;
+  e.staggerSlow = Math.max(0, Math.min(1, c.slow ?? 0.9));
+  // The cooldown runs from the END of the stagger, not from its start — the
+  // same anti-lock shape as the daze's, and the reason the two numbers are
+  // added rather than compared.
+  e.staggerCool = e.staggerTimer + Math.max(0, c.cooldown ?? 0);
+
+  // AND IT BREAKS THE RUN. `perkDrive` is exempt: a scripted move writes the
+  // body's position itself and nothing here steers it, so breaking one would
+  // desync the perk rather than stop the boss.
+  if (c.breaksLunge !== false && e.lungeStage && e.lungeStage !== 'rest' && !e.perkDrive) {
+    const lc = e.def?.lunge ?? {};
+    e.lungeStage = 'rest';
+    e.lungeClock = lc.cooldown ?? 3.2;
+    e.lungeStageTime = e.lungeClock;
+    e.lungePlan = null;
+    e.lungeStep = 0;
+    e.lungeVeer = null;
+    e.lungeVeerLeft = 0;
+    e.animState = null;
+  }
+  return true;
+}
+
 export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   const k = CONFIG.strike?.knockback ?? {};
   if (k.enabled === false || !e) return 0;
@@ -171,7 +311,34 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   // skeleton flinch and the figure this returns, which is what feedback is
   // priced off. A bigger push arriving with the same flinch reads as the
   // animal absorbing it.
-  const gain = Math.max(0, opts?.gain ?? 1);
+  let gain = Math.max(0, opts?.gain ?? 1);
+
+  // TENACITY. A boss does not answer to being shot at — see CONFIG.boss
+  // .tenacity, which is where the argument and the list live. A caller names
+  // itself (`opts.source`) and the three on that list still move a boss: the
+  // seal's own body, a weak spot bursting inside it, and a swung club.
+  // Everything else — every projectile, a headstone, a release burst, a pickup
+  // blast, a versus hit — reaches a boss through `tenacity.shove`, which ships
+  // at 0. An unnamed caller is one of those.
+  //
+  // The strict answer on purpose: the failure lands on the new weapon that
+  // forgot to say what it is, rather than on the boss.
+  if (onBoss) {
+    const ten = CONFIG.boss?.tenacity ?? {};
+    if (ten.enabled !== false) {
+      const src = opts?.source ?? null;
+      const allowed = ten.sources ?? ['ram', 'rupture', 'club'];
+      const owned = !!src && allowed.includes(src);
+      // COMMITTED MEANS COMMITTED: mid-run or mid-perk it takes none of it,
+      // from anything, at any weight. The run crosses where you were.
+      if (ten.committed !== false && (e.perkDrive || isCommittedRun(e))) return 0;
+      if (!owned) {
+        const mul = Math.max(0, ten.shove ?? 0);
+        if (!(mul > 0)) return 0;
+        gain *= mul;
+      }
+    }
+  }
 
   // A body takes it as a REAL impulse instead: it keeps the velocity (rather
   // than the decaying position offset below), it tumbles, it bounces off the
@@ -368,6 +535,11 @@ function plowThrough(e, dt) {
 
 export function resetEnemies(scene) {
   spawnLevel = 1;
+  // The seal is about to be somewhere else entirely. Without this the first
+  // frame of the new run measures the jump from the old run's last position as
+  // the seal's velocity, and every lunge in the opening seconds leads a target
+  // travelling at several hundred units a second.
+  resetQuarrySpeed();
   for (const e of enemies) {
     if (e.body) removeBody(e.body);
     // Same as removeEnemy: a run ending is the biggest single handover there
@@ -377,6 +549,9 @@ export function resetEnemies(scene) {
   }
   enemies.length = 0;
   spawnTimer = 0;
+  tellArmed = false;
+  tellCooldown = 0;
+  tellQueue.length = 0;
   nextSchoolId = 1;
   spawnHold = 0;
   // Spawner state like the two above it: a new run's first boss should get the
@@ -694,7 +869,20 @@ function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1, turnLimit = nu
     // mirror with no hold turned that into a shark vibrating in place at
     // half speed with its yaw never finishing.
     if (e.flipHold > 0) e.flipHold -= dt;
-    if (lat && e.lungeStage !== 'wind' && e.lungeStage !== 'reaim'
+    // NOT DURING A WIND-UP, and `reaim` USED TO BE ON THAT LIST TOO. The
+    // wind-up's exclusion is the one the comment above is about: the tell is
+    // the line the body visibly turned onto, and mirroring it mid-tell would
+    // be a lock onto a line nobody watched it take.
+    //
+    // A RE-AIM IS THE OPPOSITE CASE and the exclusion was quietly costing the
+    // whole mechanic. A re-aim is a body that has just blown past the seal at
+    // three times its cruise and has to come round — which is the one
+    // manoeuvre this block exists for, refused at exactly the moment it was
+    // needed. Left with an arc at its own turn rate over `reaimTime`, a boss
+    // shark got 27 degrees of the up-to-180 it wanted and then committed
+    // anyway: measured at a median 107 degrees off the player, past 90 two
+    // times in three. See npm run test:lungeaim.
+    if (lat && e.lungeStage !== 'wind'
       && Math.abs(diff) > (lat.flipAngle ?? lc.flipAngle ?? 2.0)) {
       if (e.flipHold > 0) {
         // Mid come-about and asked to reverse AGAIN: hold the line instead.
@@ -1091,6 +1279,12 @@ function crowdSelf(e) {
   v.y = e.mesh.position.y;
   v.radius = e.radius;
   v.feeding = e.feeding === true;
+  // LIVE, not baked at spawn, for the same reason `inCrowd` above is: `isBoss`
+  // is a flag the boss system writes and clears on a body that is already in
+  // the water (the tuner's disable path, the corpse hold), and a view that
+  // cached it would keep seating a corpse ahead of everything else. See the
+  // boss branch in assignFeedingSlots.
+  v.boss = e.isBoss === true;
   v.orbitDir = e.orbitDir;
   v.standoffDist = e.standoffDist;
   v.feedTimer = e.feedTimer ?? 0;
@@ -1254,11 +1448,11 @@ function rollLungePlan(c) {
 //
 // The sailfish and anything else that runs the lunge as its whole behaviour
 // (`ownCruise`) keeps the old gate: it is not a lateral animal.
-function lungeLineOpen(e, ctx, c) {
-  if (!e.def.hunt?.lateral) return true;
+function lungeLineGate(e, ctx, c) {
+  if (!e.def.hunt?.lateral) return 'open';
   const rules = CONFIG.lungeRules ?? {};
   const pitch = Math.abs(Math.atan2(ctx.dirY, Math.abs(ctx.dirX)));
-  if (pitch > (c.maxPitch ?? rules.maxPitch ?? 1.0)) return false;
+  if (pitch > (c.maxPitch ?? rules.maxPitch ?? 1.0)) return 'pitch';
   let diff = Math.atan2(ctx.dirY, ctx.dirX) - (e.heading ?? 0);
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
@@ -1271,8 +1465,77 @@ function lungeLineOpen(e, ctx, c) {
   // because the last of any turn is spent settling rather than sweeping.
   const turnRate = e.turnRate ?? e.def.turnRate ?? 3;
   const budget = turnRate * (c.windup ?? 0.45) * 0.8;
-  return Math.abs(diff) <= Math.min(c.commitCone ?? rules.commitCone ?? 1.75, budget);
+  const cone = c.commitCone ?? rules.commitCone ?? 1.75;
+  const off = Math.abs(diff);
+  if (off <= Math.min(cone, budget)) return 'open';
+  // WHICH of the two ceilings shut it, told apart rather than merged. They are
+  // the same refusal from the player's seat and completely different edits: a
+  // `cone` refusal is a tuned choice about where a pass may come from, and a
+  // `budget` refusal is the wind-up being too short for this body's turn rate,
+  // which is a number nobody chose — it falls out of `windup` x `turnRate` and
+  // on a slow boss it is the tighter of the two by a long way. The trace names
+  // them separately so the panel can say which one is actually holding the
+  // fight up. See systems/attackTrace.js.
+  return off > cone ? 'cone' : 'budget';
 }
+
+// ---------------------------------------------------------------------------
+// WHERE TO AIM A RUN — the seal, or where the seal is going to be.
+// ---------------------------------------------------------------------------
+// A lunge used to steer at `ctx.dirX/dirY`, which is where the seal IS. Nothing
+// anywhere in it led a moving target, and that is the whole of why a committed
+// run misses a player who is doing anything at all.
+//
+// MEASURED, with `npm run aim`, against a seal that breaks on the tell:
+//
+//                     closest approach   connects   (bite reach)
+//   shark      as-is        3.32u            0%        1.66u
+//              led          1.02u          100%
+//   bossShark  as-is        7.18u            3%        2.21u
+//              led          2.18u           51%
+//
+// The wind-up is NOT the problem and never was: it converges to a median 0
+// degrees off the seal on every archetype. The body is perfectly aimed at the
+// moment it commits — at a point the seal has already left by the time 22 units
+// a second of run gets there, and `strikeTurnRate` x `strikeTime` is ten to
+// seventeen degrees of correction across the entire roster, which cannot cover
+// it. There is nothing wrong with the aim. There was no aim.
+//
+// A FRACTION, NEVER THE WHOLE INTERCEPT. At `lead` 1 the shark is a homing
+// missile — 100% on the table above — and "a run that misses BY A BODY is the
+// fight working" stops being true. The fraction is the dial between "you can
+// stand still and be safe" and "you cannot dodge", and both ends are wrong.
+//
+// APPLIED DURING THE WIND-UP rather than snapped on at the commit frame. Two
+// reasons, and the second is the important one: a snap is a visible flick on
+// the one frame the player is watching hardest, and steering at the lead point
+// for the whole tell means the animal is VISIBLY aiming ahead of you — which is
+// a better tell than the old one, not a worse one. You can read where it thinks
+// you are going and make it wrong.
+//
+// The run itself still corrects toward the LIVE seal at `strikeTurnRate`, which
+// is what the table above measured and is unchanged.
+function leadPoint(e, ctx, c, speedMul, out) {
+  const lead = c.lead ?? CONFIG.lungeRules?.lead ?? 0;
+  out.x = ctx.dirX;
+  out.y = ctx.dirY;
+  if (!(lead > 0)) return out;
+  const speed = (e.speed ?? 0) * speedMul;
+  if (!(speed > 0)) return out;
+  // Time of flight to where the seal is now — one iteration, not a solve. The
+  // closed-form intercept is a quadratic that goes imaginary whenever the
+  // target is faster than the shot, and a lunge at 22 u/s against a seal at 9
+  // is never in that case; what it IS sometimes in is a case where the exact
+  // answer is far more precision than a fraction of it is going to use.
+  const tof = ctx.dist / speed;
+  const x = ctx.dirX * ctx.dist + quarryVel.x * tof * lead;
+  const y = ctx.dirY * ctx.dist + quarryVel.y * tof * lead;
+  const len = Math.hypot(x, y);
+  if (len > 1e-6) { out.x = x / len; out.y = y / len; }
+  return out;
+}
+
+const _lead = { x: 0, y: 0 };
 
 function lungeChase(e, dt, ctx, ownCruise = true) {
   const c = e.def.lunge ?? {};
@@ -1286,12 +1549,39 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     // greps this file for the assignment.
     if (step.stage === 'strike') e.lungeStage = 'strike';
     else e.lungeStage = 'reaim';
-    e.lungeClock = step.time;
-    e.lungeStageTime = step.time;
+    let time = step.time;
+    if (step.stage === 'reaim') {
+      // AS LONG AS THE TURN ACTUALLY TAKES, floored at the row's own number and
+      // capped at `reaimMax`. The step's `time` is a floor, not a length: what
+      // a body needs between two runs is however long it takes to come round
+      // onto the seal, and that is up to 180 degrees over a turn rate that
+      // spans 3.4 rad/s down to 1.05.
+      //
+      // A flat 0.45s gave a boss shark 27 degrees of turn after a run that had
+      // just carried it past the player at 3.8x its cruise — so it re-aimed by
+      // a fifteenth of what it needed and committed anyway. Measured in
+      // npm run test:lungeaim: a median 107 degrees off, past 90 two times in
+      // three, on 60% of that archetype's lunges.
+      let diff = Math.atan2(ctx.dirY, ctx.dirX) - (e.heading ?? 0);
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const rate = e.turnRate ?? e.def.turnRate ?? 0;
+      if (rate > 0) {
+        time = Math.min(c.reaimMax ?? rules.reaimMax ?? 1.3,
+          Math.max(time, Math.abs(diff) / rate));
+      }
+    }
+    e.lungeClock = time;
+    e.lungeStageTime = time;
     e.animState = step.stage === 'strike' ? 'boost' : 'swim';
+    if (attackTraceOn()) {
+      noteLungeStage(e, e.lungeStage,
+        { dist: ctx.dist, time, step: e.lungeStep, of: e.lungePlan?.length ?? 1 });
+    }
   };
   // The plan is spent. Into the cooldown, veering off.
   const finish = (diff) => {
+    if (attackTraceOn()) noteLungeStage(e, 'rest', { dist: ctx.dist });
     e.lungeStage = 'rest';
     // Jitter only ever LENGTHENS the gap, so a tuned cooldown is a floor a
     // player can rely on and the rhythm is still not a metronome. The shared
@@ -1390,6 +1680,10 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
   // field the CSV can blank.
   if (e.lungeStage === 'strike') {
     e.animState = 'boost';
+    // The run's score, sampled every frame it owns. See the note on the closest
+    // approach in systems/attackTrace.js — this is the only honest answer to
+    // "was it aiming at me", and it cannot be taken at the launch.
+    if (attackTraceOn()) noteLungeDistance(e, ctx.dist);
     const step = e.lungePlan?.[e.lungeStep] ?? { speedMul: c.speedMul ?? 3.6 };
     let diff = Math.atan2(ctx.dirY, ctx.dirX) - e.heading;
     while (diff > Math.PI) diff -= Math.PI * 2;
@@ -1417,8 +1711,34 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
   // player has already been told once this cycle.
   if (e.lungeStage === 'reaim') {
     e.animState = 'swim';
-    steerTo(e, ctx.dirX, ctx.dirY, dt, 6, c.windSpeedMul ?? 0.4);
+    // Led exactly as the wind-up is, and for the same reason: this is the tell
+    // for the run that follows it. The step it is aiming for is the NEXT one in
+    // the plan, so the speed comes from there rather than from the block.
+    const next = e.lungePlan?.[(e.lungeStep ?? 0) + 1];
+    leadPoint(e, ctx, c, next?.speedMul ?? c.speedMul ?? 3.6, _lead);
+    steerTo(e, _lead.x, _lead.y, dt, 6, c.windSpeedMul ?? 0.4);
     if (e.lungeClock <= 0) {
+      // ...AND IF IT STILL IS NOT POINTED AT YOU, IT DOES NOT GO. The re-aim
+      // above takes as long as the turn needs, but `reaimMax` is a real
+      // ceiling and a body that has been shoved, chilled or simply out-turned
+      // can reach the end of one still facing the wrong way.
+      //
+      // A committed run is the most expensive thing one of these does — it is
+      // unshovable, it is armoured, and on a boss it carries four times its
+      // contact damage — and a player who dodged one has earned the miss.
+      // What they have not earned is watching it charge empty water on the far
+      // side of the arena, which is what the report "it is aiming at nothing"
+      // actually is. So the plan ends here instead: cooldown, veer off, exactly
+      // as a finished pass does.
+      let diff = Math.atan2(ctx.dirY, ctx.dirX) - (e.heading ?? 0);
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const cone = c.reaimCone ?? rules.reaimCone ?? Infinity;
+      if (Math.abs(diff) > cone) {
+        if (attackTraceOn()) noteReaimAbort(e, Math.abs(diff), cone);
+        finish(diff);
+        return true;
+      }
       e.lungeStep = (e.lungeStep ?? 0) + 1;
       if (e.lungePlan && e.lungeStep < e.lungePlan.length) enterStep();
       else finish(0);
@@ -1439,13 +1759,27 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     // roll, and a wind-up that flickers between the swim and idle takes is the
     // one second of this creature the player has to be able to read.
     e.animState = 'swim';
-    steerTo(e, ctx.dirX, ctx.dirY, dt, 6, c.windSpeedMul ?? 0.4);
+    // AT WHERE YOU ARE GOING, not at where you are — see leadPoint. Sized
+    // against the speed the run will actually travel at, which for a plan that
+    // has not been rolled yet is the block's own `speedMul`: every pattern
+    // opens at that speed except the `feint`'s jab, and a tell that aimed
+    // differently depending on a roll nobody has made yet would be the gather
+    // saying which plan is coming.
+    leadPoint(e, ctx, c, c.speedMul ?? 3.6, _lead);
+    steerTo(e, _lead.x, _lead.y, dt, 6, c.windSpeedMul ?? 0.4);
     if (e.lungeClock <= 0) {
       // The pattern is rolled HERE, at the end of the tell, so every plan
       // opens with the same wind-up and nothing about the gather says which
       // one is coming.
       e.lungePlan = rollLungePlan(c);
       e.lungeStep = 0;
+      if (attackTraceOn()) {
+        // Named off the SHAPE of the plan rather than off the roll, so the log
+        // says what the body is about to do even if rollLungePlan grows a
+        // fourth pattern that this file never hears about.
+        const n = e.lungePlan.length;
+        noteLungePlan(e, n === 1 ? 'pass' : (e.lungePlan[0].time < e.lungePlan[2].time ? 'feint' : 'double'), n);
+      }
       enterStep();
     }
     return true;
@@ -1488,6 +1822,7 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
   // the gate never opens again.
   const range = c.range ?? 12;
   if (ctx.dist < (c.minRange ?? 6)) {
+    if (attackTraceOn()) noteLungeGate(e, dt, 'minRange', { dist: ctx.dist, floor: c.minRange ?? 6 });
     // A hunter does NOT back off here, and does not need to: `hunt` already
     // holds a standoff distance of its own (see pickStandoff / approachVector),
     // so the gap this floor is waiting for opens by itself. Backing off as well
@@ -1502,15 +1837,40 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
   // and for a lunging hunter it is the right to run. Two bosses' worth of apex
   // bodies around the seal therefore run one or two at a time, never all at
   // once. A single boss always holds a slot.
+  // A boss always holds a slot — see the boss branch in assignFeedingSlots for
+  // why that had to be made true rather than assumed, and what it cost while it
+  // was only assumed.
   const myTurn = ownCruise || e.crowdView?.inCrowd !== true || e.feeding !== false;
   // Never mid come-about (systems/fishTurn.js is still yawing the body):
   // it turns, THEN it gathers. A wind-up that opened on the frame the heading
   // mirrored had the ring drawing in on a body still facing the other way.
   const settled = !(e.__turnT < 1);
-  if (myTurn && settled && ctx.dist <= range && lungeLineOpen(e, ctx, c)) {
+  // The gate is resolved to a NAME rather than to a boolean, so the one branch
+  // below can both commit and say what stopped it. Evaluated in the order the
+  // condition used to short-circuit in, which is what makes "minRange held this
+  // fight up for 40 seconds" a true statement rather than the first of several
+  // reasons that happened to be tested first.
+  const gate = !myTurn ? 'crowd'
+    : !settled ? 'turning'
+      : ctx.dist > range ? 'range'
+        : lungeLineGate(e, ctx, c);
+  if (attackTraceOn()) {
+    noteLungeGate(e, dt, gate,
+      gate === 'range' ? { dist: ctx.dist, range }
+        : gate === 'pitch' || gate === 'cone' || gate === 'budget'
+          ? {
+            dist: ctx.dist,
+            off: Math.abs(wrapAngle(Math.atan2(ctx.dirY, ctx.dirX) - (e.heading ?? 0))),
+            cone: c.commitCone ?? CONFIG.lungeRules?.commitCone ?? 1.75,
+            budget: (e.turnRate ?? e.def.turnRate ?? 3) * (c.windup ?? 0.45) * 0.8,
+          }
+          : { dist: ctx.dist });
+  }
+  if (gate === 'open') {
     e.lungeStage = 'wind';
     e.lungeClock = c.windup ?? 0.45;
     e.lungeStageTime = e.lungeClock;
+    if (attackTraceOn()) noteLungeStage(e, 'wind', { dist: ctx.dist, windup: e.lungeClock });
   }
   // The wind-up starts on the NEXT frame either way. That matters to the
   // overlay: returning true here would hand back a frame in which nothing was
@@ -2785,6 +3145,210 @@ function entranceCfg() {
   return CONFIG.spawn?.entrance ?? {};
 }
 
+// ---------------------------------------------------------------------------
+// THE RUSH — where a wave enters, and what it does once it is in. The whole
+// argument is over CONFIG.spawn.rush; this is the machinery.
+// ---------------------------------------------------------------------------
+function rushCfg() {
+  return CONFIG.spawn?.rush ?? {};
+}
+
+/**
+ * WHERE THE SPAWNER IS AIMING THIS TICK — the player's position, or null.
+ *
+ * Set at the top of updateSpawning and cleared at the bottom of it, rather than
+ * cached across frames. A module-level position that outlives the call is a
+ * stale read waiting to happen — the seal stops being updated the moment a run
+ * ends and anything reading the leftover would place a wave around a corpse —
+ * and the window this is live for is exactly the synchronous stretch in which
+ * spawnPicked runs. Outside it the value is null and edgeSpawnPoint falls back
+ * to the arena wall, which is what every direct spawnNamed caller wants and
+ * what every harness in tools/ already gets.
+ */
+let spawnFocus = null;
+
+/**
+ * How much charge the creatures placed by THIS tick are born with, 0..1. Same
+ * lifetime as `spawnFocus` above and for the same reason.
+ */
+let spawnRush = 0;
+
+/**
+ * How much rush this difficulty has bought, 0..1.
+ *
+ * ONE NUMBER FOR BOTH HALVES of the charge (see CONFIG.spawn.rush.ramp): a
+ * half-strength rush is a shorter, gentler close, not a full one that happens
+ * half the time. The second reads as the spawner glitching rather than as the
+ * water getting meaner, which is the same reason every ramp in this file
+ * scales a value instead of rolling a chance.
+ *
+ * Returns 0 below the ramp's own floor, so a rush that would be a frame of
+ * jitter is no rush at all.
+ */
+export function rushStrength(difficulty) {
+  const c = rushCfg();
+  if (c.enabled === false) return 0;
+  const r = c.ramp ?? {};
+  const over = (difficulty ?? 0) - (r.from ?? 0);
+  if (!(over > 0)) return 0;
+  const want = Math.min(r.max ?? 1, over * (r.perDifficulty ?? 0));
+  return want >= (r.min ?? 0) ? want : 0;
+}
+
+/**
+ * Half the width of the picture, in world units.
+ *
+ * BY ARITHMETIC RATHER THAN BY ASKING world.js, which owns a camera, a
+ * renderer and a three-case clamp and cannot be reached from a Node harness —
+ * and which this module deliberately does not import (it is imported BY most
+ * of the game, and the cycle would be real). The assumption is zoom 1 and no
+ * overscan, which is the framing a run actually plays at; tools/rush-test.mjs
+ * asserts this against the real frame rather than trusting it.
+ */
+function halfFrameWidth() {
+  const a = CONFIG.arena ?? {};
+  const w = (a.viewHeight ?? 52) * (a.referenceAspect ?? 16 / 9);
+  return w * (rushCfg().frame?.halfFrames ?? 0.5);
+}
+
+/**
+ * The x a wave enters at on `side`, given where the spawner is aiming.
+ *
+ * CLAMPED INTO THE ARENA, and that clamp is the whole reason the old entrance
+ * survives rather than being replaced. Near a wall the camera has already
+ * stopped panning, so the wall IS the edge of the picture and placing a body
+ * at `player +/- half a frame` would put it in open water INSIDE the shot —
+ * pop-in with a swim on it. Clamping hands those spawns straight back to the
+ * wall, which is where they always belonged.
+ */
+/**
+ * Give a newly-placed body its arrival charge.
+ *
+ * STRENGTH SCALES DURATION AND SPEED TOGETHER. A half-strength rush is a
+ * shorter, gentler close — never a full-strength one that fires half the time,
+ * which reads as the spawner glitching rather than as the water getting meaner.
+ *
+ * NOT FOR A CREATURE THAT CANNOT SWIM AT THE PLAYER. A crawler is on the
+ * seabed and a trap is bolted to it; driving either at the seal would be a
+ * body sliding across the floor toward you, which is a different animal from
+ * the one that was authored. They still get the new ENTRANCE — arriving at the
+ * edge of the picture is about where the wave comes from, not about what it
+ * then does.
+ */
+function armRush(e, strength) {
+  const c = rushCfg().charge ?? {};
+  if (c.enabled === false || !(strength > 0) || !e) return;
+  const beh = e.def?.behavior;
+  if (beh === 'crawl' || beh === 'trap' || e.def?.floorSpawn) return;
+  // SIZED ON THE FIRST FRAME, not here: what a charge has to be worth is how
+  // far this body has to swim, and the position is not settled until spawnOne
+  // has pushed it out to the entrance line. -1 is "not sized yet".
+  e.rushTimer = -1;
+  e.rushFor = 0;
+  e.rushStrength = Math.max(0, Math.min(1, strength));
+  // 1 at no strength and `speedMul` at full, so the ramp's early values are a
+  // body arriving a little briskly rather than a body arriving at a fraction
+  // of its own cruise.
+  e.rushMul = 1 + ((c.speedMul ?? 1) - 1) * strength;
+}
+
+/**
+ * Spend one frame of it. Returns whether the charge wrote this frame's
+ * velocity, so the caller can skip the creature's own behaviour — a charge and
+ * a boid steering the same body on the same frame is the boid winning, because
+ * it runs second.
+ *
+ * IT ENDS ON ARRIVAL AS WELL AS ON THE CLOCK. Without the distance test a
+ * school barges through the seal at 2.3x and out the far side, which reads as
+ * a bug rather than as an attack and — worse — leaves the wave BEHIND you,
+ * which is the exact problem this whole block exists to fix.
+ */
+function spendRush(e, dt, ctx) {
+  if (!(e.rushTimer > 0) && e.rushTimer !== -1) return false;
+  const c = rushCfg().charge ?? {};
+
+  // THE FIRST FRAME SIZES IT, against the swim rather than against the clock.
+  //
+  // A fixed number of seconds cannot work here and it took a measurement to
+  // see why: the charge is a TIME and the crossing is a DISTANCE. Every body
+  // enters the same half-frame out, so at a shared 2.6s the sardines arrived
+  // and the jellyfish — 1.6 to 2.6 units a second — covered a sixth of the gap
+  // and were handed back still off screen. Measured, `drift` reached the
+  // player 30% of the time against `swarm`'s 100%, and the average across the
+  // roster hid it completely.
+  //
+  // So the charge lasts as long as the swim takes, to a ceiling. A fast fish
+  // gets a short one and a jellyfish gets the whole allowance, and both are
+  // doing the same thing: arriving.
+  if (e.rushTimer === -1) {
+    const strength = e.rushStrength ?? 1;
+    e.rushMul = 1 + ((c.speedMul ?? 1) - 1) * strength;
+    const speed = Math.max(0.1, (e.speed ?? e.def?.speed ?? 1) * e.rushMul);
+    const need = Math.max(0, ctx.dist - (c.arriveAt ?? 0)) / speed;
+    // The ceiling is what keeps this an arrival rather than a personality, and
+    // `strength` shortens it so an early rush is a shorter close rather than a
+    // full one that fires half the time.
+    e.rushTimer = Math.min(Math.max(0, c.seconds ?? 0), need) * strength;
+    e.rushFor = e.rushTimer;
+    if (!(e.rushTimer > 0)) return false;
+  }
+  e.rushTimer = Math.max(0, e.rushTimer - dt);
+  if (ctx.dist <= (c.arriveAt ?? 0)) { e.rushTimer = 0; return false; }
+  if (!(e.rushTimer > 0)) return false;
+  // The ease-out, so the hand-back is a body slowing into its own swimming
+  // rather than a multiplier switched off on one frame. Measured as a fraction
+  // of the charge this body was BORN with (`rushFor`), not of the config's
+  // seconds — a half-strength charge should ease over half as long, not spend
+  // most of itself easing.
+  const left = e.rushFor > 0 ? e.rushTimer / e.rushFor : 0;
+  const tail = Math.max(1e-3, c.easeOut ?? 0);
+  const ease = left >= tail ? 1 : left / tail;
+  const mul = 1 + (e.rushMul - 1) * ease;
+  steerTo(e, ctx.dirX, ctx.dirY, dt, c.responsiveness ?? 9, mul);
+  return true;
+}
+
+/**
+ * Where the picture is CENTRED when the seal is at `x`.
+ *
+ * NOT THE SEAL'S OWN X, and the difference is the whole of what this function
+ * is for. The camera stops panning a half-frame from each wall (clampFocus in
+ * world.js) so that the shot never contains anything outside the arena — which
+ * means that near a wall the seal walks toward the edge of a stationary
+ * picture, and "half a frame to the left of the seal" stops being the left
+ * edge of the shot.
+ *
+ * Measured, in npm run test:rush: with the seal 92% of the way to the right
+ * wall, the player-relative entrance put the LEFT half of every tick at x=32
+ * against a frame whose left edge was at x=0 — thirty units inside the
+ * picture, in open water, in plain sight. Every other check still passed,
+ * because every other check was about the right-hand side.
+ *
+ * The clamp is deliberately the simple one: zoom 1, no overscan. That is the
+ * framing a run actually plays at, and the test asserts this agrees with the
+ * real frame rather than trusting it.
+ */
+function cameraCentreX(x) {
+  const half = halfFrameWidth();
+  const lo = bounds.left + half;
+  const hi = bounds.right - half;
+  if (lo > hi) return (bounds.left + bounds.right) / 2;
+  return Math.min(hi, Math.max(lo, x));
+}
+
+function frameEdgeX(side, radius = 0) {
+  const wall = offscreenX(radius);
+  const c = rushCfg();
+  const f = c.frame ?? {};
+  // The master switch as well as the block's own: `rush.enabled` false is the
+  // game before any of this, and a frame entrance that survived it would make
+  // the A/B in npm run test:rush measure two halves of the same thing.
+  if (c.enabled === false || f.enabled === false || !spawnFocus) return side * wall;
+  const want = cameraCentreX(spawnFocus.x) + side * (halfFrameWidth() + (f.margin ?? 7) + radius);
+  if (f.wallFallback === false) return want;
+  return side > 0 ? Math.min(want, wall) : Math.max(want, -wall);
+}
+
 // The first x, on either side, that no frame can reach. The frame may drift
 // `shoreOverscan()` units past the wall (see clampFocus in world.js), so that
 // is where the picture actually ends — plus the body's own reach, because a
@@ -2868,8 +3432,13 @@ function edgeSpawnPoint(def = null) {
   // reading only the coordinates sees an ordinary creature in open water and
   // pops it into existence at the edge of frame. Which entrance a spawn is
   // making is a decision, and decisions survive being scattered.
-  if (r < 0.45) return { x: -out, y: depth, side: -1 };
-  if (r < 0.9) return { x: out, y: depth, side: 1 };
+  // frameEdgeX, not `out`: a wave enters at the edge of the picture around the
+  // player and falls back to the wall when the camera is already against one.
+  // See CONFIG.spawn.rush.frame, and note that this is only ever different
+  // from `out` inside updateSpawning — every other spawn in the game has no
+  // focus to measure from and gets exactly the entrance it always had.
+  if (r < 0.45) return { x: frameEdgeX(-1, def?.radius ?? 0), y: depth, side: -1 };
+  if (r < 0.9) return { x: frameEdgeX(1, def?.radius ?? 0), y: depth, side: 1 };
   // FROM THE DEEP, which is now literally that: the body starts under the
   // seabed and climbs out of it. `deep` is a request rather than a position —
   // how far under it has to start depends on how big it is, and that is not
@@ -2884,7 +3453,7 @@ function edgeSpawnPoint(def = null) {
   // again. It comes in from a wing instead, along the floor.
   if (def?.floorSpawn) {
     const side = Math.random() < 0.5 ? -1 : 1;
-    return { x: side * out, y: depth, side };
+    return { x: frameEdgeX(side, def?.radius ?? 0), y: depth, side };
   }
   return { x: bounds.left + Math.random() * bounds.width, y: bounds.bottom, deep: true };
 }
@@ -2983,9 +3552,21 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // ones at the start. Capped by `maxGrowth`, or a long run ends up with
   // crabs the size of the arena — and because the hitbox is derived from the
   // visual scale below, an uncapped multiplier would inflate the hitbox too.
+  //
+  // Two terms, multiplied: the species' own linear one, and the roster-wide
+  // compounding CONFIG.spawn.ramp.size that every creature reads — the same
+  // shape as the hp and damage ramps, and the only one of the four the player
+  // can see. `maxGrowth` caps the PRODUCT, so a row that authored a ceiling
+  // still has exactly the ceiling it authored.
+  //
+  // A boss is exempt. Its size is authored per archetype in bosses.csv and the
+  // entrance, the framing and the bar are all measured against that; a
+  // clock-keyed multiplier on top would make the same fight a different shape
+  // depending on how long the player took to get there.
   const growth = Math.min(
     def.maxGrowth ?? Infinity,
-    1 + (def.scalePerDifficulty ?? 0) * difficulty
+    (1 + (def.scalePerDifficulty ?? 0) * difficulty)
+      * (boss ? 1 : difficultyRamp('size', difficulty))
   );
   // Per-individual size jitter on top of the run's growth. A crowd of one
   // species at one size reads as a repeated sprite, and since the hitbox is
@@ -3059,7 +3640,16 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // Outward ONLY: a body already further out keeps its distance, so the shape
   // of an arriving school is preserved and only its innermost are moved.
   if (arriving) {
-    container.position.x = at.side * Math.max(Math.abs(container.position.x), offscreenX(radius));
+    // TO THE LINE THE PICKER CHOSE, not to the arena wall. `frameEdgeX` is the
+    // edge of the PICTURE when a tick knows where the player is and the wall
+    // otherwise, so this is the same one clamp it always was — it just knows
+    // which line it is clamping to now. Clamping to the wall here is what
+    // silently undid the camera-relative entrance the first time: the picker
+    // placed a body half a screen out and this pushed it straight back to 92,
+    // and nothing failed, the wave simply carried on entering where it always
+    // had. Measured in npm run test:rush section 2.
+    const line = Math.abs(frameEdgeX(at.side, radius));
+    container.position.x = at.side * Math.max(Math.abs(container.position.x), line);
   }
   if (deep) container.position.y = Math.min(container.position.y, offscreenY(radius));
   // A SURFACE BODY IS EXEMPT FROM BOTH, and this is a SECOND place that has to
@@ -3131,10 +3721,22 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
   // three factors below are the same three factors; only what goes into them
   // changed. The level surcharge is dropped for a boss because the axis it
   // exists to add is now the only axis there is.
+  //
+  // ...and a boss pays one more factor that nothing else does: the flat
+  // spawn.bossHp.mul, which scales the whole ladder at once. It is outside the
+  // axis rather than folded into `first` because the ramp is capped and a
+  // bigger axis stops buying health near the end of a run — see the note in
+  // config.js.
   const bossAxis = boss ? bossDifficulty(spawnLevel) : null;
   const hpAxis = bossAxis ?? difficulty;
-  const hp = (def.hp + def.hpPerDifficulty * hpAxis) * difficultyRamp('hp', hpAxis)
-    * (bossAxis == null ? lateGameMul('hp', spawnLevel) : 1) * enemyPaceMul('hp');
+  const bossHpMul = bossAxis == null ? 1 : (CONFIG.spawn?.bossHp?.mul ?? 1);
+  // A BOSS RIDES ITS OWN CEILING on the same rate — see bossHpRamp in
+  // config.js. Identical to difficultyRamp('hp', …) until spawn.bossHp.rampMax
+  // is set, which is what lets the boss ladder be steepened without lifting
+  // the cap on how tough the WATER gets.
+  const hpRamp = bossAxis == null ? difficultyRamp('hp', hpAxis) : bossHpRamp(hpAxis);
+  const hp = (def.hp + def.hpPerDifficulty * hpAxis) * hpRamp
+    * (bossAxis == null ? lateGameMul('hp', spawnLevel) : bossHpMul) * enemyPaceMul('hp');
   // Damage and speed ramp with the run the same way hp always has. All three
   // are baked per-instance at spawn rather than read from the shared def
   // every frame: `def` is one object for the whole species, so scaling it in
@@ -3498,6 +4100,24 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     // clipped to the same quarter-bar-per-second as drifting into a tail fin,
     // which is the whole reason the multiplier stopped meaning anything.
     ramming: false,
+    // THE ARRIVAL CHARGE. Seconds of committed travel at the player before this
+    // body is handed back to whatever it actually is — see CONFIG.spawn.rush
+    // .charge and the branch that spends it in updateEnemies.
+    //
+    // BAKED PER INSTANCE, like hp, damage, speed and the hunter ramp, and for
+    // the same reason spelled out over those: `def` is one object shared by the
+    // whole species. So a fish keeps the arrival it was BORN with — a wave that
+    // is already closing does not get re-tuned mid-swim by the difficulty
+    // ticking over, and the run gets meaner by sending meaner new ones.
+    //
+    // Zero for everything not placed by a rushing tick, which is every direct
+    // spawnNamed in the game: the escorts, the bait balls, the opening shoal,
+    // the tuner's workbench and every harness. A creature with no charge takes
+    // the branch it always took, on the frame it always took it.
+    rushTimer: 0,
+    rushFor: 0,
+    rushMul: 1,
+    rushStrength: 0,
     biteCooldown: 0,
     // How soon this animal's BODY may bill again, for the species that carry
     // `contactBite` in enemies.csv and take their contact damage as one whole
@@ -3662,6 +4282,11 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     knockDecay: 0,
     staggerTimer: 0,
     staggerFor: 0,
+    // How much propulsion the LIVE stagger takes, and the gap before another
+    // may land. Both null/0 for everything that is not a boss holding one —
+    // see staggerBoss.
+    staggerSlow: null,
+    staggerCool: 0,
     bumpCooldown: 0,
     // Rest pose, rolled once per individual (see the crowd-variation block on
     // enemies.walkingCrab). `restLean` is the angle the locked broadside
@@ -3695,8 +4320,23 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     hitShape: def.hitShape ? attachHitShape(visual, assetKey) : null,
   });
 
+  // ...and the charge, if this tick is sending one. `spawnRush` is live only
+  // inside updateSpawning (see its note), so this is zero for every other
+  // spawn in the game without anything having to ask.
+  if (spawnRush > 0) armRush(enemies[enemies.length - 1], spawnRush);
+
   if (def.invincible) makeInvincible(enemies[enemies.length - 1]);
   if (def.damageZones) armDamageZones(enemies[enemies.length - 1]);
+  // AT THE SPAWN, and AFTER the zone grade so the two compose in series on a
+  // body that is both (the man o' war). Off the `boss` argument rather than
+  // off `e.isBoss`, which systems/boss.js only sets later — and that ordering
+  // is not a detail: hotSpotDamage divides the armor back out so a weak spot
+  // lands at full through it, so a body that has the EXEMPTION without the
+  // ARMOR takes 6.7x from every spot hit. Arming it here means every boss body
+  // carries the wrapper the moment it exists, however it got into the water —
+  // the tuner's force-spawn, a harness, whatever spawns one next. It was armed
+  // in deployBoss first, and this test caught exactly that gap.
+  if (boss) armBossArmor(enemies[enemies.length - 1]);
   if (def.rigidBody) attachRigidBody(enemies[enemies.length - 1], def.rigidBody);
 }
 
@@ -3773,6 +4413,94 @@ function armDamageZones(e) {
   // A plain marker beside it, the way `invincible` is, so the damage ledger and
   // anything else that should know can ask without probing the descriptor.
   e.damageZones = true;
+}
+
+/**
+ * SUPER ARMOR — what hitting a boss that is COMMITTED is worth.
+ *
+ * The one thing `tenacity` never covered. It already refuses the flinch and
+ * the shove during a committed run, on the argument that a lunge is the moment
+ * the boss is most shot at and a body that buckles per pellet is a wind-up the
+ * player can refuse for free. But the DAMAGE went through untouched, so the
+ * answer to a two-tonne animal winding up was still "hold the trigger down" —
+ * the flinch stopped being the reward for that and the damage never did.
+ *
+ * So a committed boss is a boss you are meant to MOVE away from. The body
+ * takes `armor.committed` of what you deal it for as long as the run lasts,
+ * and the pellets spark off it.
+ *
+ * A LIT WEAK SPOT IS EXEMT, and that exemption is the whole design rather than
+ * a softener. A lunge is when the spots are in front of you and the animal is
+ * holding a straight line — it is the best shot at one the fight ever offers —
+ * so the armor does not close the fight down, it says WHERE to hit. The
+ * answer to a lunge is the spot, not the flank; see hotSpotDamage in
+ * systems/bossHotSpots.js for the one line that spends this.
+ *
+ * BY WRAPPING THE hp SETTER, for exactly the reason armDamageZones and
+ * makeInvincible do, spelled out over both: eighteen systems own the line
+ * `e.hp -= something` and a test written into resolveCombat would grade the
+ * pellets and nothing else. This wraps whatever descriptor is already there
+ * rather than replacing it, so a body that is BOTH a boss and graded by angle
+ * (the man o' war is both) takes the two multipliers in series and neither
+ * needs to know about the other.
+ *
+ * A DECREMENT IS GRADED AND AN INCREMENT IS NOT, the same rule as the zones':
+ * healing and the ramp re-resolving a pool are not attacks.
+ */
+export function armBossArmor(e) {
+  // ONE WRAPPER PER BODY. `isBoss` is cleared and set again on a creature still
+  // in the water (the tuner's disable path, the corpse hold — see the note on
+  // isBossDef in systems/boss.js), and a second wrapper over the first would
+  // square the multiplier: a committed boss would take 2% of a hit instead of
+  // 15% and nothing would say so.
+  if (e.bossArmor) return;
+  const prev = Object.getOwnPropertyDescriptor(e, 'hp');
+  // Whatever is already in place — the plain value on an ordinary body, or the
+  // zone grade on the man o' war. Both are read and written through here.
+  let plain = prev?.get ? null : e.hp;
+  const read = prev?.get ? prev.get : () => plain;
+  const write = prev?.set ? prev.set : (v) => { plain = v; };
+  Object.defineProperty(e, 'hp', {
+    get: read,
+    set: (v) => {
+      const hp = read();
+      if (v < hp) {
+        write(hp - (hp - v) * bossArmorMul(e));
+        return;
+      }
+      write(v);
+    },
+    configurable: true,
+    enumerable: true,
+  });
+  e.bossArmor = true;
+}
+
+/**
+ * The multiplier armBossArmor is spending — 1 unless this body is committed.
+ *
+ * Exported because hotSpotDamage has to divide it back out: the spot's damage
+ * is written through the same setter as everything else, so the only way to
+ * exempt it is to hand the setter a number it will scale back to full. That is
+ * the same bargain the crit already lives under (the BAND multiplier is
+ * applied in the setter and deliberately not at the spot), and it is single-
+ * sourced here so the two can never drift.
+ */
+export function bossArmorMul(e) {
+  // BOTH FLAGS, and the pairing is the point. `bossArmor` says the hp setter
+  // is actually wrapped; `isBoss` says the body is a boss right now (the
+  // tuner's disable path clears it on a creature still in the water). Asking
+  // only the second is what the weak-spot check in tools/boss-hotspot-test.mjs
+  // caught: hotSpotDamage divides this back out so a spot lands at full
+  // THROUGH the armor, so a body with the exemption and no armor behind it
+  // takes 6.7x from every spot hit. Reading the wrapper's own marker means the
+  // two cannot disagree — an unarmed body returns 1, the division is by 1, and
+  // nothing is compensated for that was never charged.
+  if (!e?.isBoss || !e.bossArmor) return 1;
+  const a = CONFIG.boss?.armor ?? {};
+  if (a.enabled === false) return 1;
+  if (!(e.perkDrive || isCommittedRun(e))) return 1;
+  return Math.max(0, Math.min(1, a.committed ?? 1));
 }
 
 function makeInvincible(e) {
@@ -4442,11 +5170,46 @@ export function spawnOpeningShoal(scene, at = null) {
 // without a run around it reads exactly the pre-lateGame numbers — the
 // surcharge cannot silently colour a test that never opted into it.
 let spawnLevel = 1;
+/**
+ * Take the wave warnings queued since the last call — `{ x, y, count }` each.
+ *
+ * A NEW ARRAY EACH TIME and cleared as it hands them over, so a caller that
+ * forgets to drain cannot replay an old one and a harness that never drains
+ * leaks nothing but a couple of small objects. Same contract as
+ * drainHotSpotChum, and for the same reasons.
+ */
+export function drainSpawnTells() {
+  if (!tellQueue.length) return [];
+  return tellQueue.splice(0, tellQueue.length);
+}
+
 export function setSpawnLevel(level) { spawnLevel = Math.max(1, Math.floor(level ?? 1)); }
 export function currentSpawnLevel() { return spawnLevel; }
 
-export function updateSpawning(dt, gameState, scene) {
+export function updateSpawning(dt, gameState, scene, playerPos = null) {
   const d = gameState.difficulty;
+
+  // WHERE THIS TICK IS AIMING. Set for the synchronous stretch below and
+  // cleared in the `finally` at the bottom, never cached across frames — see
+  // the note on `spawnFocus`. A caller that hands nothing over gets the arena
+  // wall, which is the entrance every spawn in the game had before this: the
+  // failure lands on the new caller rather than silently moving every harness
+  // in tools/, the same bargain `channel` makes in main.js's onPlayerHit.
+  spawnFocus = playerPos ? { x: playerPos.x, y: playerPos.y } : null;
+  // ...and how much rush this difficulty has bought, read ONCE for the tick so
+  // every body in one wave arrives with the same commitment. Read per spawn it
+  // would be identical anyway today, and would quietly stop being the day
+  // anything makes the ramp non-monotonic mid-tick.
+  spawnRush = rushStrength(d);
+  try {
+    return spawnTick(dt, gameState, scene, d);
+  } finally {
+    spawnFocus = null;
+    spawnRush = 0;
+  }
+}
+
+function spawnTick(dt, gameState, scene, d) {
 
   // The wave clock rides this function's own dt rather than main.js's frame
   // loop, so it advances in lockstep with the spawn timer below and cannot
@@ -4455,6 +5218,11 @@ export function updateSpawning(dt, gameState, scene) {
   // It has to tick every frame, above the timer's early return, or a slow
   // stretch of the cycle would also slow down the cycle itself.
   updateWaves(dt, d);
+  // Above the spawn timer's early return, for the same reason the wave clock
+  // is: a gap that only counted down on the frames a tick happened to fire
+  // would be measured in ticks rather than in seconds, which is not what the
+  // row says.
+  if (tellCooldown > 0) tellCooldown = Math.max(0, tellCooldown - dt);
   const wave = waveSpawn();
 
   // THE HELD BREATH, ticked here rather than on main.js's frame delta so it
@@ -4536,6 +5304,45 @@ export function updateSpawning(dt, gameState, scene) {
   if (bossFood !== 1) {
     roomFor = Math.min(roomFor, Math.max(1, Math.round(CONFIG.boss?.clearOut?.foodMaxAlive ?? 9)));
   }
+  // THE TELL, and it POSTPONES the tick it announces. A warning that lands with
+  // the wave is a sound effect; the only way to make it a warning is for the
+  // bodies to arrive after it, which means this tick gives up its turn and
+  // comes back in `lead` seconds.
+  //
+  // Armed on the budget rather than on the wave clock's pressure, because what
+  // the player is being warned about is how many creatures are about to be in
+  // the water — and the budget is that number, after the crest, the boss
+  // throttle and the lull have all had their say.
+  //
+  // `tellArmed` is what stops the postponed tick announcing itself and
+  // postponing again, which is a wave that never arrives and a tell on a loop.
+  {
+    const t = rushCfg().tell ?? {};
+    // ON WHAT THIS TICK CAN ACTUALLY PLACE, not on its budget. `roomFor` is
+    // settled above and a full arena eats the difference — measured, six
+    // warnings in a late run produced one wave, because the headcount cap
+    // refused the other five the moment they came due and the player got a
+    // swell followed by nothing. A warning about a wave that cannot arrive is
+    // worse than no warning: it teaches the player to ignore the one that can.
+    const room = Math.min(budget, roomFor - enemies.length);
+    if (t.enabled !== false && !tellArmed && tellCooldown <= 0
+        && rushStrength(d) > 0 && room >= (t.minCount ?? Infinity)) {
+      tellArmed = true;
+      tellCooldown = Math.max(0, t.gap ?? 0);
+      spawnTimer = Math.max(0, t.lead ?? 0);
+      // QUEUED, NOT PLAYED. This module owns creatures; every sound, particle
+      // and screen shake in the game is main.js's to place — the same rule the
+      // chum and bite callbacks above follow, and the same shape
+      // drainHotSpotChum uses for the same reason.
+      tellQueue.push({ x: spawnFocus?.x ?? 0, y: spawnFocus?.y ?? 0, count: room });
+      return;
+    }
+    // Either this tick is the one that was announced, or it was never worth
+    // announcing. Both end the arming.
+    tellArmed = false;
+  }
+
+
   let guard = 12;
   while (budget > 0 && guard-- > 0 && enemies.length < roomFor) {
     const made = spawnPicked(scene, d, gameState.level ?? 1, wave);
@@ -4661,6 +5468,53 @@ const MAX_ANIM_DT = 0.05;
 // gate in them — aggro, orbit distance, the bite reach — releases on its own
 // as the distance grows, with nothing to add to any of them.
 //
+// ---------------------------------------------------------------------------
+// HOW FAST THE SEAL IS GOING, AND WHICH WAY — measured, not asked for.
+// ---------------------------------------------------------------------------
+// The lunge leads its target (see leadPoint), and to lead something you have to
+// know how it is moving. This is taken from the OBSERVED motion of the position
+// updateEnemies is handed rather than from `player.velocity`, and that is the
+// whole reason it exists:
+//
+//   * every harness in tools/ drives updateEnemies with a Vector3 it moves
+//     itself and never touches the player module, so a lead read off
+//     player.velocity would measure zero in every test and the feature would be
+//     untestable — and would read as correct while doing nothing.
+//   * the seal's velocity is not the same thing as how its POSITION is moving:
+//     updatePlayer clamps to the arena, snares, knockback and the grab all
+//     write the position after the fact.
+//
+// Smoothed, because a raw per-frame delta at 60fps is mostly noise and a lead
+// computed off noise points somewhere new every frame — which on a wind-up is a
+// tell that visibly jitters instead of aiming. The constant is a quarter of a
+// second of memory: long enough to ignore a frame, short enough that a real
+// change of direction is in it before the wind-up ends.
+const quarryVel = { x: 0, y: 0 };
+const _lastQuarry = { x: 0, y: 0, has: false };
+function trackQuarrySpeed(playerPos, dt) {
+  if (!(dt > 0)) return;
+  if (!_lastQuarry.has) {
+    _lastQuarry.x = playerPos.x;
+    _lastQuarry.y = playerPos.y;
+    _lastQuarry.has = true;
+    return;
+  }
+  const vx = (playerPos.x - _lastQuarry.x) / dt;
+  const vy = (playerPos.y - _lastQuarry.y) / dt;
+  _lastQuarry.x = playerPos.x;
+  _lastQuarry.y = playerPos.y;
+  const k = 1 - Math.exp(-dt / 0.25);
+  quarryVel.x += (vx - quarryVel.x) * k;
+  quarryVel.y += (vy - quarryVel.y) * k;
+}
+
+/** Forget the last frame's position. A new run's first frame is not a move. */
+function resetQuarrySpeed() {
+  _lastQuarry.has = false;
+  quarryVel.x = 0;
+  quarryVel.y = 0;
+}
+
 // The BEARING is banked per creature on the frame it lets go, not recomputed:
 // read live off the velocity it would curve as the body curves, which is a
 // dog chasing its own tail rather than an animal losing interest.
@@ -4735,6 +5589,8 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
   // Advanced once per frame, and the phase every creature's animation stride
   // is measured against. See the LOD note further down.
   animFrame++;
+  // Before anything steers: the lunge's lead is read off this. See trackQuarrySpeed.
+  trackQuarrySpeed(playerPos, dt);
   clock += dt;
 
   // Pile sizes for the whole frame, so every scavenging crab reads one shared
@@ -4923,8 +5779,16 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
       // own steering on top would overwrite both. It sits above `leaving`
       // rather than below it because the only creature that can carry it is
       // the boss, and a boss is never leaving.
+      // ...AND THE ARRIVAL CHARGE SITS BETWEEN `leaving` AND THE BEHAVIOUR.
+      // Below `leaving` because a creature on its way out is not arriving, and
+      // above the behaviour because the two cannot share a frame: whichever
+      // runs second writes the velocity, and a boid running after a charge is
+      // a charge that does nothing. `spendRush` reports whether it wrote, so
+      // the hand-back on the frame it expires is the behaviour's, not a frame
+      // of nothing.
       if (e.perkDrive) { /* velocity is the perk's this frame — see systems/bossPerks.js */ }
       else if (e.leaving) steerOut(e, dt);
+      else if (spendRush(e, dt, ctx)) { /* arriving — see CONFIG.spawn.rush.charge */ }
       else (BEHAVIORS[e.def.behavior] ?? BEHAVIORS.chase)(e, dt, ctx);
       // Crawlers fall. Nothing else in the game does — everything else swims,
       // and a swimmer's steering IS its vertical position. A crab's isn't: it
@@ -5012,8 +5876,17 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
     if (e.staggerTimer > 0) {
       e.staggerTimer = Math.max(0, e.staggerTimer - dt);
       const share = e.staggerFor > 0 ? e.staggerTimer / e.staggerFor : 0;
-      stagger = 1 - (CONFIG.strike?.knockback?.heavy?.staggerSlow ?? 0.85) * share;
+      // The depth of it comes from the EVENT when the event stated one — a
+      // boss stopped by a perfect weak-spot ram (staggerBoss) is not the same
+      // thing as a shark knocked off its line, and one shared constant would
+      // have made them identical. Falls back to the heavy knock's number,
+      // which is every other stagger in the game.
+      const depth = e.staggerSlow ?? CONFIG.strike?.knockback?.heavy?.staggerSlow ?? 0.85;
+      stagger = 1 - depth * share;
     }
+    // Runs down whether or not one is live: it is the gap AFTER the stagger,
+    // and a timer that only ticked while staggered would never reach zero.
+    if (e.staggerCool > 0) e.staggerCool = Math.max(0, e.staggerCool - dt);
     e.mesh.position.x += e.vx * chill * daze * stagger * dt;
     e.mesh.position.y += e.vy * chill * daze * stagger * dt;
 
@@ -5506,7 +6379,12 @@ export function updateEnemies(dt, scene, playerPos, onChumEaten, onChumHoover, o
         e.anim.update(
           Math.min(e.animDt, MAX_ANIM_DT),
           e.animState ?? stateForSpeed(speed),
-          e.hitThisFrame,
+          // The TWITCH half of the hit reaction, and a boss takes
+          // CONFIG.boss.tenacity.flinch of it — which ships at none. The pose
+          // is still FORCED on the frame a boss is hit (see `forced` above):
+          // dropping the twitch is not the same as dropping the frame, and the
+          // flash, the spark and the weak spot all still land on it.
+          hitReactionMul(e) > 0 ? e.hitThisFrame : false,
         );
         e.animDt = 0;
         // Only on a frame that actually posed, so a hit landing on a skipped

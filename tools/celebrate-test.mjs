@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
 import { installModel, createVisual } from '../path/src/assets.js';
 import { createAnimationController } from '../path/src/systems/animation.js';
+import { createAimRig } from '../path/src/systems/aimRig.js';
 import {
   celebrationState, startCelebration, playCelebration, updateCelebration, resetCelebration,
   createCelebrationDriver, snapshotMoment, celebrationSpin, CELEBRATION_VARIANTS,
@@ -104,16 +105,37 @@ const rest = {
 };
 
 const DT = 1 / 60;
+
+// THE VIRGIN SKELETON, taken before anything has posed it.
+//
+// Every block below drives the SAME `body`, and the flippers are among the
+// bones the swim clip never keys — so a pose left in them by one block is
+// still there for the next one, and each block was measuring the residue of
+// the four before it as well as its own pose. (That is a real property of the
+// rig rather than a quirk of the harness; the ratchet block further down
+// builds two fresh seals for exactly this reason, and says so.)
+//
+// It shows up as a threshold that drifts a couple of points whenever an
+// EARLIER pose changes — the clap's contact moved from 53% of rest to 55%
+// when the poses above it started layering, on a clap that is identical to the
+// float on a seal that has not been posed before. Restoring this before each
+// run makes every block measure its own pose against the same zero the `rest`
+// baseline was taken at.
+const virginQ = new Map();
+body.traverse((o) => { if (o.isBone) virginQ.set(o, o.quaternion.clone()); });
+const unpose = () => { for (const [bone, q] of virginQ) bone.quaternion.copy(q); };
 // Drive one variant to a given wall-clock moment and hand back the pose. The
 // animation controller runs alongside it exactly as it does in the game, so
 // these are measurements of the celebration layered OVER the swim cycle rather
 // than of a pose sitting on a bind skeleton by itself.
-function runTo(variant, seconds, { locomotion = 'swim' } = {}) {
+function runTo(variant, seconds, { locomotion = 'swim', peakAt = null } = {}) {
   resetCelebration();
   driver.reset();
+  unpose();
   // Force the variant rather than rolling for it: a test at the mercy of a
   // coin flip is a test that fails on somebody else's machine.
-  startCelebration(fixedRng(variant));
+  if (peakAt) playCelebration({ variant, peakAt, escorts: false });
+  else startCelebration(fixedRng(variant));
   let t = 0;
   while (t < seconds) {
     anim.update(DT, locomotion, false);
@@ -181,10 +203,52 @@ console.log('\nclap — the flippers are TOGETHER on the shutter, not wide open'
   const gapAtPeak = Math.abs(atPeak.handL.z - atPeak.handR.z);
   const restGap = Math.abs(rest.handL.z - rest.handR.z);
   check('the flippers closed', gapAtPeak < restGap, `${gapAtPeak.toFixed(3)} vs ${restGap.toFixed(3)} at rest`);
-  // The half-integer `beats` is what puts a contact on the shutter — this is
-  // the assertion that catches somebody rounding it to 2.
-  check('they are near contact on the trophy frame', gapAtPeak < restGap * 0.55,
-    `closed to ${(100 * gapAtPeak / restGap).toFixed(0)}% of rest`);
+  // The half-integer `beats` is what puts a contact ON the shutter, and this
+  // is the assertion that catches somebody rounding it to 2.
+  //
+  // AGAINST THE CEILING THIS RIG ACTUALLY CLOSES TO, measured, the way the
+  // salute block further down does it — not against a hand-typed fraction of
+  // rest. The flippers spread along the camera axis and the solver eases
+  // toward its target rather than arriving, so a clap is asymptotic and how
+  // far it gets depends on the swim phase it started from. The old 0.55 was
+  // not measuring that: it was measuring the RESIDUE of the four poses this
+  // file runs before this one (the flippers are unkeyed, so each block
+  // inherited the last one's pose), and it moved from 53% to 55% of rest when
+  // those earlier poses changed — on a clap identical to the float.
+  //
+  // The honest question is the one the beat count decides: does the contact
+  // land on the trophy frame, or a beat either side of it.
+  const ceiling = (() => {
+    const long = runTo('clap', 4, { peakAt: 4 });
+    return Math.abs(long.handL.z - long.handR.z);
+  })();
+  check('they are near contact on the trophy frame', gapAtPeak < ceiling * 1.12,
+    `${gapAtPeak.toFixed(3)} on the shutter against a measured ${ceiling.toFixed(3)} ceiling (${(100 * gapAtPeak / restGap).toFixed(0)}% of rest)`);
+  // ...AND THE BEAT COUNT ITSELF, exactly, which is the half of it a measured
+  // ceiling cannot say. The ceiling is taken with the same `beats`, so a
+  // rounded one moves both numbers together and the comparison above is happy
+  // with a clap that is wide open on the shutter. `close` at full phase is
+  // (1 - cos(2*pi*beats)) / 2 — 1 on a half-integer, 0 on a whole one.
+  // ...OFF THE MERGED CONFIG, which is the value the game will actually use.
+  // `celebrate` was a full copy in imported-tuning.json until this was
+  // written, and a saved block REPLACES what config.js declares leaf by leaf —
+  // so every number in the celebrate block was dead text, and a `beats`
+  // retuned here would not have moved the game at all. The snapshot's copy has
+  // been dropped and the check below is on the merged value, which is true
+  // either way.
+  const beats = CONFIG.celebrate.poses.clap.beats;
+  check('...because the beat count puts a contact ON the shutter',
+    (1 - Math.cos(Math.PI * 2 * beats)) / 2 > 0.98,
+    `beats ${beats} closes to ${((1 - Math.cos(Math.PI * 2 * beats)) / 2).toFixed(2)} at the peak`);
+  // ...and nothing may shadow the block again. A `celebrate` key in the
+  // snapshot is not a tuning, it is config.js's own numbers copied out and
+  // frozen: the first edit to any of them after that is a change nobody can
+  // see happen. Same failure as the replay camera pool's `shots` array.
+  {
+    const snap = JSON.parse(readFileSync(resolve(HERE, '../path/src/imported-tuning.json'), 'utf8'));
+    check('no tuning snapshot is shadowing the celebration block',
+      snap?.celebrate === undefined, 'imported-tuning.json holds a `celebrate` block');
+  }
   check('and they came up into frame first', dorsal(atPeak.handL) > dorsal(rest.handL),
     `+${(dorsal(atPeak.handL) - dorsal(rest.handL)).toFixed(3)} dorsal`);
 
@@ -568,6 +632,201 @@ console.log('\nthe escorts\' authored clap');
 
   eAnim.trigger('celebrate');
   check('triggering it takes over the pose', eAnim.isPlayingOneShot() === true);
+}
+
+// ---------------------------------------------------------------------------
+// THE POSE IS ADDITIVE — the animal underneath is still moving, and its own
+// momentum reaches the performance.
+//
+// Both properties fail SILENTLY and both look like taste from the outside: a
+// pose that has stopped layering is just a stiffer pose, and a momentum term
+// that has stopped reaching is just a rigid one. The numbers are the only way
+// to tell either from a decision.
+//
+// EVERY MEASUREMENT IS AGAINST A CONTROL SEAL, for the same reason the ratchet
+// check is: the swim clip is running underneath the whole time, so a bone is
+// somewhere different every frame for reasons that have nothing to do with the
+// celebration.
+console.log('\nthe celebration is additive, not a replacement');
+{
+  const POSED = ['hand_L_014', 'hand_R_018', 'head_07', 'tail02_023'];
+  const at = (root, name) => root.worldToLocal(root.getObjectByName(name).getWorldPosition(new THREE.Vector3()));
+
+  // One seal, driven for `seconds` with the animal moving as told, sampling
+  // every posed bone once the pose is at full weight.
+  //
+  // `speed` and `turnRate` are written onto the BODY, not passed to the
+  // driver — which is the contract: the driver measures the animal's motion
+  // off its own world transform, so a test that handed it numbers would be
+  // testing a path the game never takes.
+  function run({ variant = null, seconds = 1.6, speed = 0, turnRate = 0, sampleFrom = 0.6, settle = 60, aim = [1, 0], aimAfter = null } = {}) {
+    const seal = createVisual('ship');
+    const sc = new THREE.Scene();
+    sc.add(seal);
+    sc.updateMatrixWorld(true);
+    const a = createAnimationController(seal);
+    // THE AIM RIG, in the order the game runs it: mixer, aim, then the pose.
+    // It is what writes the flippers in a run, and the celebration layering
+    // over it (or not) is the whole subject below.
+    const r = createAimRig(seal);
+    const dir = new THREE.Vector2(aim[0], aim[1]).normalize();
+    const after = aimAfter ? new THREE.Vector2(aimAfter[0], aimAfter[1]).normalize() : null;
+    // The aim swings only once the performance is under way, so both runs
+    // enter it from the same pose — see the note below.
+    const tick = () => r?.update(DT, (after && celebrationState.active) ? after : dir,
+      { engaged: true, faceOut: 0, limp: false, charge: 0, suppressed: false });
+    const d = createCelebrationDriver(seal);
+    resetCelebration();
+    d.reset();
+    // Settle, so nothing below is measuring the controller's opening crossfade.
+    // `settle` is also how the swim cycle is put at a different PHASE for the
+    // layering check below — same clip, same seal, a different frame of it.
+    for (let i = 0; i < settle; i++) { a.update(DT, 'swim', false); tick(); d.update(DT); }
+    if (variant) startCelebration(fixedRng(variant));
+    const path = POSED.map(() => 0);
+    const last = POSED.map(() => null);
+    let t = 0;
+    while (t < seconds) {
+      seal.rotation.z = turnRate * t;
+      seal.position.x += Math.cos(seal.rotation.z) * speed * DT;
+      seal.position.y += Math.sin(seal.rotation.z) * speed * DT;
+      a.update(DT, 'swim', false);
+      tick();
+      updateCelebration(DT);
+      d.update(DT);
+      sc.updateMatrixWorld(true);
+      if (t >= sampleFrom) {
+        POSED.forEach((n, i) => {
+          const p = at(seal, n);
+          if (last[i]) path[i] += p.distanceTo(last[i]);
+          last[i] = p;
+        });
+      }
+      t += DT;
+    }
+    return { path, end: last, motion: d.motion() };
+  }
+
+  // 1. THE CLIP UNDERNEATH REACHES THE POSE.
+  //
+  //    NOT "the bones are still moving" — a held pose has motion of its own
+  //    (finsUp trembles) and would pass that while replacing the clip
+  //    entirely. NOR "two celebrations at different swim phases land
+  //    differently", which is the check that looks right and is not: an entry
+  //    snapshot taken at a different phase IS different, so a frozen reference
+  //    passes it too. (It did. That is why this one is written the way it is.)
+  //
+  //    NOR "the mixer stops being ticked mid-performance", which is the check
+  //    that looks decisive and measures nothing on this rig: the swim clip
+  //    does not key the flippers at ALL, so with nothing else writing them the
+  //    frozen reference and the live one hold the same value by definition and
+  //    agree to the float.
+  //
+  //    THE THING THAT WRITES THOSE BONES IN A RUN IS THE AIM RIG, which is
+  //    ticked every frame and runs immediately before this driver. (That is
+  //    also why it is in this loop at all: a seal nothing aims is not a state
+  //    the game has.)
+  //
+  //    So: two runs that are IDENTICAL up to the moment the celebration
+  //    starts — same clip, same phase, same aim, so the same entry pose — and
+  //    then the seal is pointed somewhere else in one of them and not the
+  //    other. Anything the pose reads off a frozen snapshot cannot see that;
+  //    anything it reads live moves with it. Comparing two runs that were
+  //    aimed differently from the START proves nothing, because the snapshot
+  //    itself differs then and a frozen reference passes too.
+  const HOLD = 1.5;
+  resetCelebration();
+  const aimHeld = run({ variant: 'finsUp', seconds: HOLD, sampleFrom: HOLD - DT * 2, aim: [1, 0] });
+  resetCelebration();
+  const aimSwung = run({ variant: 'finsUp', seconds: HOLD, sampleFrom: HOLD - DT * 2, aim: [1, 0], aimAfter: [-1, 0.6] });
+  const byAim = POSED.map((n, i) => aimHeld.end[i].distanceTo(aimSwung.end[i]));
+  check('the aim underneath still reaches the posed bones, at full extension',
+    Math.max(...byAim) > 0.02, POSED.map((n, i) => `${n} ${byAim[i].toFixed(3)}`).join(', '));
+  // ...on the FLIPPERS in particular. They are the bones the swim clip never
+  // keys, so the aim rig is the only thing writing them and a frozen reference
+  // held them hardest — and they are the bones the whole pose is made of.
+  check('...including the flippers, which only the aim rig writes',
+    Math.min(byAim[0], byAim[1]) > 0.02, `L ${byAim[0].toFixed(3)}, R ${byAim[1].toFixed(3)}`);
+  // AND IT IS `follow` THAT BUYS THAT. Toggled here rather than asserted about
+  // in prose: at 0 the target is the pose in full from the peak onward and the
+  // performance is the same shape whatever the animal is doing under it.
+  const savedFollow = CONFIG.celebrate.follow;
+  CONFIG.celebrate.follow = 0;
+  resetCelebration();
+  const rigidHeld = run({ variant: 'finsUp', seconds: HOLD, sampleFrom: HOLD - DT * 2, aim: [1, 0] });
+  resetCelebration();
+  const rigidSwung = run({ variant: 'finsUp', seconds: HOLD, sampleFrom: HOLD - DT * 2, aim: [1, 0], aimAfter: [-1, 0.6] });
+  CONFIG.celebrate.follow = savedFollow;
+  const rigidByAim = POSED.map((n, i) => rigidHeld.end[i].distanceTo(rigidSwung.end[i]));
+  check('...and `follow` is what buys it at full extension',
+    Math.max(...byAim) > Math.max(...rigidByAim) * 1.3,
+    `${Math.max(...byAim).toFixed(3)} with follow ${savedFollow}, ${Math.max(...rigidByAim).toFixed(3)} with it off`);
+
+  // THE HEAD IS THE ONE THAT PROVES THE REFERENCE IS LIVE, and it is worth
+  // singling out because it is the bone the old frozen snapshot held hardest.
+  // The flippers are unkeyed, so the aim rig is the only thing writing them
+  // and their chain ROOT still moves with the body either way — a world
+  // measurement on them shifts even with a frozen reference. The head chain
+  // starts at neck01_05, which the swim clip keys with a SINGLE keyframe: a
+  // constant, so the mixer stops writing it and poseRig counted it among the
+  // bones to put back. Frozen, the neck could not follow the aim at all.
+  check('the head chain follows the aim rather than a snapshot', byAim[2] > 0.15,
+    `head_07 ${byAim[2].toFixed(3)} when the seal looks somewhere else mid-performance`);
+
+  // 2. THE ANIMAL'S OWN MOTION REACHES IT. Same variant, same clock, three
+  //    different things for the seal to be doing.
+  resetCelebration();
+  const still = run({ variant: 'finsUp', seconds: 1.4, sampleFrom: 1.3 });
+  resetCelebration();
+  const sprint = run({ variant: 'finsUp', seconds: 1.4, speed: CONFIG.player.maxSpeed, sampleFrom: 1.3 });
+  resetCelebration();
+  const carve = run({ variant: 'finsUp', seconds: 1.4, speed: 20, turnRate: 3, sampleFrom: 1.3 });
+
+  check('a still seal reads no momentum at all', Math.abs(still.motion.speed01) < 0.01 && Math.abs(still.motion.turn) < 0.01,
+    `speed01 ${still.motion.speed01.toFixed(3)}, turn ${still.motion.turn.toFixed(3)}`);
+  check('a sprinting one reads its own top speed as full', sprint.motion.speed01 > 0.9,
+    `speed01 ${sprint.motion.speed01.toFixed(3)}`);
+  check('a carving one reads a signed turn', Math.abs(carve.motion.turn) > 0.5,
+    `turn ${carve.motion.turn.toFixed(3)}`);
+
+  // ...and that reading has to reach the BONES, which is the half a state
+  // readout cannot promise.
+  const moved = (a, b) => POSED.map((n, i) => a.end[i].distanceTo(b.end[i]));
+  const bySprint = moved(still, sprint);
+  const byCarve = moved(still, carve);
+  check('the pose rides a sprint', Math.max(...bySprint) > 0.05,
+    POSED.map((n, i) => `${n} ${bySprint[i].toFixed(3)}`).join(', '));
+  check('...and rides a carve', Math.max(...byCarve) > 0.05,
+    POSED.map((n, i) => `${n} ${byCarve[i].toFixed(3)}`).join(', '));
+  // ...to somewhere DIFFERENT, not merely further. The two terms are separate
+  // axes — drag runs along the body and bank across it — and a build where one
+  // of them had quietly stopped reaching would still pass both checks above.
+  const sprintVsCarve = POSED.map((n, i) => sprint.end[i].distanceTo(carve.end[i]));
+  check('...and the two are different displacements, not one term twice',
+    Math.max(...sprintVsCarve) > 0.05,
+    POSED.map((n, i) => `${n} ${sprintVsCarve[i].toFixed(3)}`).join(', '));
+  // The limbs must not be thrown so far by momentum that the pose stops being
+  // the pose. A whole reach of displacement is a flipper somewhere else.
+  check('...without the momentum swamping the pose', Math.max(...byCarve) < 1.2,
+    `${Math.max(...byCarve).toFixed(3)} at a hard carve`);
+
+  // 3. AND IT STILL ARRIVES. The target now starts at the limb's live tip, so
+  //    it is scaled on the way in — and the bone blend scales it again. Doing
+  //    both on the same curve costs the pose its reach (it cost the level-up
+  //    salute 0.04 of a clap it used to close), which is what `blendSpan` is
+  //    for: the target is the pose in full by halfway up the envelope.
+  check('the target finishes travelling before the peak does', (CONFIG.celebrate.blendSpan ?? 0.5) < 1,
+    `blendSpan ${CONFIG.celebrate.blendSpan}`);
+  const savedFrom = CONFIG.celebrate.blendFrom;
+  CONFIG.celebrate.blendFrom = 0;   // the old behaviour: a fixed destination
+  resetCelebration();
+  const fixed = run({ variant: 'finsUp', seconds: 1.4, sampleFrom: 1.3 });
+  CONFIG.celebrate.blendFrom = savedFrom;
+  resetCelebration();
+  const blended = run({ variant: 'finsUp', seconds: 1.4, sampleFrom: 1.3 });
+  const short = POSED.map((n, i) => fixed.end[i].distanceTo(blended.end[i]));
+  check('blending from the live pose costs the peak nothing', Math.max(...short) < 0.06,
+    POSED.map((n, i) => `${n} ${short[i].toFixed(3)}`).join(', '));
 }
 
 console.log('');

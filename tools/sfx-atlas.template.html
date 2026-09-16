@@ -1118,6 +1118,25 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
       ambCard.appendChild(el("p", "note", "With one clip loaded there is nothing to cross into, so it simply sustains on a seamless loop. Add a second in the Sound tab and the rotation starts."));
     }
 
+    var bed = A.continuous.splashBed;
+    var bedClips = el("div", "chiplist");
+    bed.clips.forEach(function (f) {
+      bedClips.appendChild(el("span", "k", base(f.path) + " \u00b7 " + secs(f.seconds)));
+    });
+    var bedCard = card("Title bed", "ambient", bed.clips.length ? (bed.enabled ? "playing" : "off") : "empty",
+      "One loop under the splash and nothing else \u2014 no rotation, because the card is on screen for seconds rather than for a run. It fades up when the name card mounts and away when the card breaks up. Runs through the SFX bus like the ambient bed above.",
+      [
+        ["clips", bed.clips.length + " of " + bed.slots + " slots"],
+        ["fade in", fmt(bed.fadeIn, 1) + "s, squared so it creeps in"],
+        ["fade out", fmt(bed.fadeOut, 1) + "s, under the card breaking up"],
+        ["pitch vary", "\u00b1" + Math.round(bed.pitchVary * 100) + "% per page load"],
+        ["volume", fmt(bed.volume)]
+      ], bed.clips.length ? bedClips : null);
+    if (!bed.clips.length) {
+      bedCard.appendChild(el("p", "note", "No clip assigned, so the splash is silent. Upload one in the Sound tab under \u201cTitle bed\u201d and it plays from the next splash."));
+    }
+    bedCard.appendChild(el("p", "note", "A browser will not play audio before the player has pressed something, and the presses on the splash are the dice, Start and a tap on open water \u2014 so the bed starts on mount and sounds from the first gesture, whichever one that is."));
+
     A.continuous.flight.forEach(function (v) {
       card("Flight voice: " + v.name, "flight", v.enabled ? "live" : "off",
         "Not a one-shot at all: a little synth per projectile whose pitch, brightness, pan and level are rewritten every frame from what that shell is doing. It fills the gap between the launch thump and the impact crack.",

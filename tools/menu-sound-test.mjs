@@ -562,6 +562,116 @@ nameInput.value = 'SEA'; // one character shorter — a backspace
 nameInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 check('backspace ticks too', only(drain(), 'uiType') === 1);
 
+section('The splash dice');
+// The only two sounds the title screen makes. Driven the way a PAD drives them
+// — menuInput.nameNext through updateMenuNav — because that is a real route
+// through ui.js into ui/riveSplash.js, and it needs no Rive artboard to have
+// loaded. The artboard's own dice button, the space key and this all land on
+// the same randomizeName, so voicing it once covers all three.
+//
+// THE DISSOLVE IS SHORTENED, not switched off. The settle waits out
+// CONFIG.reveals.nameSwap.time by design (see scheduleSettle in riveSplash),
+// and waiting out the real 0.45s per roll would put seconds of sleep in this
+// file for nothing. Switching the reveal off instead would test the OTHER
+// branch and leave the one the game actually takes unexercised.
+{
+  const swap = (CONFIG.reveals ??= {}).nameSwap ??= {};
+  swap.enabled = true;
+  swap.time = 0.04;
+  const settleMs = swap.time * 1000 + 60;
+
+  settle();
+  ui.showStartMenu();
+  // THE CARD MUST ARRIVE SILENT. A new player's name is rolled on load by the
+  // opening reel (scrambleTo), and if that were wired to these voices the game
+  // would open by announcing itself — the same hazard as showLevelUp's
+  // selectCard(0) above, on the one screen where nobody has pressed anything
+  // yet.
+  await sleep(settleMs);
+  check('mounting the splash is silent', drain().length === 0);
+
+  settle();
+  menuInput.nameNext = true;
+  ui.updateMenuNav();
+  menuInput.nameNext = false;
+  let rolled = drain();
+  check('the dice throws on the press', only(rolled, 'nameRoll') === 1, `x${only(rolled, 'nameRoll')}`);
+  // The whole point of two voices: the landing must not be in the same breath
+  // as the throw, or it is one sound with a thick attack.
+  check('and the landing has not happened yet', only(rolled, 'nameSettle') === 0,
+    `x${only(rolled, 'nameSettle')}`);
+
+  await sleep(settleMs);
+  const landed = drain();
+  check('the name lands once the dissolve is over', only(landed, 'nameSettle') === 1,
+    `x${only(landed, 'nameSettle')}`);
+  check('and the throw is not repeated', only(landed, 'nameRoll') === 0);
+
+  // ROLLING AGAIN INSIDE THE DISSOLVE. A player thumbing the dice does this
+  // constantly, and a settle per press would stack two landings after the
+  // second throw — one for a name that is no longer on screen.
+  settle();
+  menuInput.nameNext = true;
+  ui.updateMenuNav();
+  menuInput.nameNext = false;
+  ui.updateMenuNav(); // a frame in between, with the button released
+  // ...and a frame of the FEEDBACK clock with it. `nameRoll` has an sfxMinGap,
+  // and without this the second press is thrown away as a repeat inside the
+  // same frame — which looks exactly like the roll not being voiced at all.
+  updateFeedback(0.2);
+  menuInput.nameNext = true;
+  ui.updateMenuNav();
+  menuInput.nameNext = false;
+  await sleep(settleMs);
+  const twice = drain();
+  check('two rolls throw twice', only(twice, 'nameRoll') === 2, `x${only(twice, 'nameRoll')}`);
+  check('but land once', only(twice, 'nameSettle') === 1, `x${only(twice, 'nameSettle')}`);
+
+  // BACK ONE NAME is the pad's left shoulder. It changes the pill, so it lands
+  // — but nothing was rolled for, so nothing is thrown.
+  settle();
+  menuInput.namePrev = true;
+  ui.updateMenuNav();
+  menuInput.namePrev = false;
+  const back = drain();
+  check('going back throws nothing', only(back, 'nameRoll') === 0, `x${only(back, 'nameRoll')}`);
+  await sleep(settleMs);
+  check('but it does land', only(drain(), 'nameSettle') === 1);
+
+  // AND AT THE FAR END OF THE HISTORY, nothing at all: previousName is a no-op
+  // there (see its note), and a button that does nothing must also say nothing.
+  settle();
+  for (let i = 0; i < 8; i++) {
+    menuInput.namePrev = true;
+    ui.updateMenuNav();
+    menuInput.namePrev = false;
+    ui.updateMenuNav();
+  }
+  await sleep(settleMs);
+  drain();
+  settle();
+  menuInput.namePrev = true;
+  ui.updateMenuNav();
+  menuInput.namePrev = false;
+  await sleep(settleMs);
+  check('the start of the history is silent', drain().length === 0);
+
+  // A SETTLE THAT OUTLIVES THE SCREEN. Pressing Start on the frame after a roll
+  // is a real thing players do, and the dissolve is longer than the gap between
+  // the two presses — so the landing would otherwise arrive over the menu.
+  settle();
+  menuInput.nameNext = true;
+  ui.updateMenuNav();
+  menuInput.nameNext = false;
+  drain();
+  menuInput.anyPress = true;
+  ui.updateMenuNav();
+  menuInput.anyPress = false;
+  await sleep(settleMs);
+  check('a landing pending when the card is dismissed never sounds',
+    only(drain(), 'nameSettle') === 0);
+}
+
 section('The sounds exist');
 check('uiHover has takes', (CONFIG.sfx.uiHover?.srcs ?? []).length >= 2,
   `${(CONFIG.sfx.uiHover?.srcs ?? []).length} takes`);
@@ -596,7 +706,30 @@ check('typing is short', CONFIG.sfx.uiType.decay <= 0.06, `${CONFIG.sfx.uiType.d
   check('...and a held key still reads as separate taps',
     pulses.every((x) => ms(x) <= gap * 1.2), `${gap.toFixed(0)}ms between ticks`);
 }
+check('the dice voices exist', Boolean(CONFIG.sfx.nameRoll) && Boolean(CONFIG.sfx.nameSettle));
+// The throw is the player's gesture and the landing is the screen answering, so
+// the pair has to be ordered the same way hover/click is — a landing louder than
+// the roll turns a dice press into an announcement.
+check('the landing sits below the throw', CONFIG.sfx.nameSettle.gain < CONFIG.sfx.nameRoll.gain,
+  `${CONFIG.sfx.nameSettle.gain} vs ${CONFIG.sfx.nameRoll.gain}`);
+// The dice is the only control on the splash, so it is pressed in runs. A take
+// repeated identically at that rate reads as a stuck key rather than as variety.
+check('the throw varies its pitch', CONFIG.sfx.nameRoll.pitchVary >= 0.1,
+  `${CONFIG.sfx.nameRoll.pitchVary}`);
+// ...and the landing deliberately does NOT, for the reason bossArrive doesn't:
+// it is a cue, and a cue that changes shape every time stops being one.
+check('the landing keeps its shape', CONFIG.sfx.nameSettle.pitchVary <= 0.06,
+  `${CONFIG.sfx.nameSettle.pitchVary}`);
+// Both must end well inside the dissolve they sit either side of, or a fast
+// roller hears them overlap into a smear.
+check('both are short enough to roll on', CONFIG.sfx.nameRoll.decay <= 0.25 && CONFIG.sfx.nameSettle.decay <= 0.25,
+  `${CONFIG.sfx.nameRoll.decay}s / ${CONFIG.sfx.nameSettle.decay}s`);
 check('neither throws particles into the world', !CONFIG.feedback.uiHover.emit && !CONFIG.feedback.uiClick.emit);
+check('nor do the dice voices', !CONFIG.feedback.nameRoll.emit && !CONFIG.feedback.nameSettle.emit);
+// Nothing on the title screen has started yet, so nothing on it earns a buzz —
+// `uiClick` is where the haptic lives and Start is the press that earns it.
+check('and neither buzzes the phone on a screen nothing has started on',
+  !CONFIG.feedback.nameRoll.haptic && !CONFIG.feedback.nameSettle.haptic);
 check('nor does typing', !CONFIG.feedback.uiType.emit);
 check('nor shakes the camera for a menu', !CONFIG.feedback.uiHover.shake && !CONFIG.feedback.uiClick.shake);
 

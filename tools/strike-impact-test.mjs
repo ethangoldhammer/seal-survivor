@@ -493,7 +493,12 @@ resetEnemies(scene);
 {
   const impostor = spawnAt('shark', 0, -20);
   impostor.isBoss = true;
-  applyKnockback(impostor, 1, 0, 1);
+  // `source: 'ram'` — a boss only answers to a caller that names itself, and
+  // the ram is one of the three that may (CONFIG.boss.tenacity.sources). This
+  // harness is standing in for the call in systems/strike.js, so it has to
+  // stand in for the whole call; tools/boss-tenacity-test.mjs is what checks
+  // that the real one still passes it.
+  applyKnockback(impostor, 1, 0, 1, { source: 'ram' });
   check('a boss is shoved but never staggered',
     impostor.staggerTimer === 0 && impostor.knockX > 0,
     `knock ${impostor.knockX.toFixed(1)} u/s`);
@@ -535,7 +540,14 @@ function bossTravel(id, { knocked, seconds = 0.5, seed = 2468 }) {
   // from its spawn frame is really being asked which way it was pointed.
   for (let i = 0; i < 30; i++) updateEnemies(dt, scene, playerPos, () => {}, () => {});
   const startX = e.mesh.position.x;
-  const push = knocked ? applyKnockback(e, 1, 0, 1) : 0;
+  // NOT MID-RUN. A committed boss takes no shove at all (CONFIG.boss.tenacity
+  // .committed), which is a rule this section is not about — and the warm-up
+  // above is long enough that one of the four lunging archetypes can be in its
+  // `strike` stage when the ram lands, which would make this measure the
+  // commitment on some runs and the mass curve on others.
+  e.lungeStage = 'rest';
+  e.ramming = false;
+  const push = knocked ? applyKnockback(e, 1, 0, 1, { source: 'ram' }) : 0;
   const decay = e.knockDecay || CONFIG.strike.knockback.decay;
   for (let i = 0; i < Math.round(seconds / dt); i++) {
     updateEnemies(dt, scene, playerPos, () => {}, () => {});
@@ -689,7 +701,14 @@ check('...and takes the paint', markTarget(hull, { isBoat: true, radius: hull.ha
 section('WIRING — the release really is what spends the damage');
 {
   const main = readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
-  check('main.js asks strikeBurst for the numbers', main.includes('strikeBurst(player.stats)'));
+  // THE POP IS A FUNCTION NOW, because every seal in a match fires one — it was
+  // inline in the release handler, which is the same thing while there is one
+  // seal in the water. Two halves to check: the release calls it, and it is
+  // still strikeBurst that answers what the blast is worth.
+  check('the release fires the pop', /fireStrikeBurst\(player\.mesh\.position, player\.stats, strikeState\)/.test(main));
+  check('...and a match seal\'s release reaches the same function',
+    main.includes('versusHooks.onStrikeBurst'));
+  check('main.js asks strikeBurst for the numbers', /function fireStrikeBurst[^]*?strikeBurst\(stats\)/.test(main));
   check('...and queues it through the shared splash path, tagged as the strike',
     /pendingSplashes\.push\(\{[^}]*source: 'strike'/s.test(main));
   check('...with its own feedback rather than the splash queue\'s big bang',

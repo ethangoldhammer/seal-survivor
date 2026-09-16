@@ -50,6 +50,7 @@ import { CONFIG } from '../../path/src/config.js';
 import { initTypography } from '../../path/src/ui/typography.js';
 import { initUI, showLevelUp } from '../../path/src/ui/ui.js';
 import { combSize } from '../../path/src/ui/upgradeComb.js';
+import { player } from '../../path/src/entities/player.js';
 import { setHiveUpgrades, toggleHive } from '../../path/src/ui/upgradeHive.js';
 // THE SEAL UNDER THE HAND — the one part of this screen that is not DOM. It
 // draws to a canvas of its own between the comb and the cards, from a scene of
@@ -551,6 +552,15 @@ window.addEventListener('message', (e) => {
 // What has been picked so far, so the corner fills up the way it does in a run
 // and every flight after the first has a hive that has already made room.
 const taken = [];
+
+// A REROLL IN THE BANK, so the button under the hand is on this page at all.
+// It is hidden on a run that has never beaten a boss (see updateRerollButton in
+// ui/ui.js), which is the correct default and would mean the one surface where
+// this screen is DESIGNED never shows the row. Topped back up after every deal
+// below rather than granted once — pressing it here should be able to go on
+// being pressed, since watching the hand come back is the whole reason to look.
+// ?reroll=0 takes it away again, for judging the screen without it.
+const REROLLS = Number(new URLSearchParams(location.search).get('reroll') ?? 2);
 const WANT_SEAL = new URLSearchParams(location.search).get('seal') !== '0';
 
 initTypography();
@@ -587,6 +597,9 @@ initUI({
 
 function deal() {
   seedRandom();
+  // Topped up BEFORE the deal, because the count is written as the hand is
+  // built — see updateRerollButton, which is called from showLevelUp.
+  player.rerolls = REROLLS;
   showLevelUp();
   Math.random = nativeRandom;
   // The seal comes up with the cards, as the ramp's callback has it in main.js.

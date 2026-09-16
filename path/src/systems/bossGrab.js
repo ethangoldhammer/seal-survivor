@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { enemies } from '../entities/enemies.js';
 import { player, snarePlayer, applyPlayerKnockback } from '../entities/player.js';
@@ -54,6 +55,49 @@ import { feedback } from './feedback.js';
 // second grab arriving mid-grab is a bug rather than a case to handle.
 let held = null;
 
+// ---------------------------------------------------------------------------
+// RIDING THE JAW — see CONFIG.bossGrab.followJaw for the argument.
+// ---------------------------------------------------------------------------
+// The mouth point is unchanged: `mouthOffset` still decides where the seal is
+// caught. What changes is that the point then travels with the animal's own jaw
+// instead of with a sine that is never in time with it.
+//
+// CAPTURED IN THE BONE'S LOCAL SPACE, ONCE, on the frame of the grab, and read
+// back out of it every frame after. That is the whole mechanism, and it is
+// deliberately not `bone.add(player.mesh)`:
+//
+//   A BONE'S WORLD SCALE IS NOT 1. It carries the asset's `fit` times the
+//   archetype's `sizeMul` — seven times over on the megalodon — so parenting
+//   the seal into the skeleton would resize it by the boss, and release would
+//   have to decompose the world matrix to put it back. Round-tripping a point
+//   through worldToLocal/localToWorld applies that scale and then undoes it, so
+//   the offset survives and the seal inherits nothing.
+//
+//   IT ALSO KEEPS THE SEAL IN THE SCENE, which everything else assumes: the
+//   arena clamp, the HUD's projection, the camera and combat.js all read
+//   `player.mesh.position` as a WORLD position and would every one of them
+//   quietly start reading a bone-local one.
+//
+// ONE FRAME BEHIND, knowingly — exactly as the claw grab below already is, and
+// for the same reason: the rig is posed in updateEnemies, which runs long after
+// this (main.js calls updateBossGrab at the top of the frame). The reel absorbs
+// it; at 60fps the seal trails the jaw by a sixtieth of its swing.
+const _boneAnchor = new THREE.Vector3();
+
+/**
+ * The bone this creature's held seal should ride, or null for the synthetic
+ * carry. `grabBone` on the asset, which falls back to whatever the procedural
+ * jaw driver hinges — see the note in assets.js.
+ */
+function grabBoneOf(e) {
+  if (CONFIG.bossGrab?.followJaw === false) return null;
+  const name = e?.visual?.userData?.grabBone;
+  if (!name) return null;
+  // Resolved through the VISUAL rather than the mesh: the skeleton lives under
+  // the instance createVisual built, and `e.mesh` is only the container.
+  return e.visual.getObjectByName(name) ?? null;
+}
+
 // Scratch for the claw anchor, so a grab costs no allocation per frame.
 const _anchor = { x: 0, y: 0, z: 0 };
 
@@ -82,6 +126,16 @@ export function resetBossGrab() {
  */
 export function endBossGrab(thrown = true) {
   release(thrown);
+}
+
+/**
+ * The bone the held seal is riding, or null when the carry is the synthetic
+ * one. Diagnostics only — a harness cannot otherwise tell "pinned to the jaw"
+ * from "pinned to a point that happens to be moving", and those fail
+ * differently.
+ */
+export function grabbedBone() {
+  return held?.bone ?? null;
 }
 
 /** Is the seal in something's mouth right now? For the readouts and harnesses. */
@@ -149,7 +203,36 @@ export function tryBossGrab(e, hooks = {}, claw = null) {
     // is filled in by the crab as it lets go, so the release throws along the
     // arm's own swing rather than along the body's heading.
     claw,
+    // The jaw this hold rides, and the mouth point expressed in that bone's own
+    // space. Both null on a body with no bone for it, which keeps the synthetic
+    // carry below exactly as it was.
+    bone: null,
+    boneLocal: null,
   };
+  // WHERE THE MOUTH IS, CONVERTED ONCE. The point itself is the same one the
+  // synthetic carry would have used on this frame — `mouthOffset` along the
+  // heading — so a grab is caught in the same place whether or not the body has
+  // a jaw to ride. Only what happens for the two seconds afterwards differs.
+  if (!claw) {
+    const bone = grabBoneOf(e);
+    if (bone) {
+      const r = e.radius ?? 2;
+      const head = e.heading ?? Math.atan2(e.vy ?? 0, e.vx ?? 1);
+      _boneAnchor.set(
+        e.mesh.position.x + Math.cos(head) * r * (c.mouthOffset ?? 0.5),
+        e.mesh.position.y + Math.sin(head) * r * (c.mouthOffset ?? 0.5),
+        e.mesh.position.z,
+      );
+      // The bone's matrixWorld is last frame's (see the note above). Good
+      // enough for a conversion that only has to be right to within a sixtieth
+      // of a swing, and the reel covers the rest — but it has to be BUILT, or
+      // a body that has never been rendered converts against an identity and
+      // puts the seal at the world origin.
+      bone.updateWorldMatrix(true, false);
+      held.bone = bone;
+      held.boneLocal = bone.worldToLocal(_boneAnchor.clone());
+    }
+  }
   e.grabbing = true;
   e.grabCooldown = claw?.cooldown ?? c?.cooldown ?? 9;
 
@@ -339,18 +422,38 @@ export function updateBossGrab(dt, hooks = {}) {
   const fy = Math.sin(head);
   const r = e.radius ?? 2;
 
-  // THE SHAKE. Swung across the animal's own heading rather than along it: a
-  // side-to-side worry is what a predator does with something in its jaws, and
-  // a fore-and-aft one would just read as the seal sliding in and out of the
-  // mouth. Amplitude is a fraction of the boss's radius so it scales with the
-  // body, and this is the difference between being carried and being welded on
-  // — a passenger held perfectly still relative to a moving animal looks like a
-  // parenting bug, however good the animation under it is.
-  held.thrash += dt * (c.thrashRate ?? 11);
-  const swing = Math.sin(held.thrash) * r * (c.thrashAmp ?? 0.4);
-
-  const mx = bp.x + fx * r * (c.mouthOffset ?? 0.5) - fy * swing;
-  const my = bp.y + fy * r * (c.mouthOffset ?? 0.5) + fx * swing;
+  let mx;
+  let my;
+  // RIDING THE JAW, where the body has one — see CONFIG.bossGrab.followJaw and
+  // the note at the top of this file. The seal goes wherever the mouth point
+  // has been carried to, which through a bite is the jaw working: on the orca
+  // that is 36 degrees of sweep, on the megalodon 27 plus half a unit of carry
+  // as the whole head drives forward. No sine, because the jaws are the thing
+  // that should be setting the rhythm.
+  //
+  // The bone can stop existing mid-hold — a deferred body swapped out, a visual
+  // released back to the pool — so this falls through to the synthetic carry
+  // rather than trusting a stale reference. `parent` is the test because that
+  // is what release puts to null.
+  if (held.bone && held.boneLocal && held.bone.parent) {
+    held.bone.updateWorldMatrix(true, false);
+    _boneAnchor.copy(held.boneLocal).applyMatrix4(held.bone.matrixWorld);
+    mx = _boneAnchor.x;
+    my = _boneAnchor.y;
+  } else {
+    // THE SHAKE, for a body with no jaw to ride. Swung across the animal's own
+    // heading rather than along it: a side-to-side worry is what a predator
+    // does with something in its jaws, and a fore-and-aft one would just read
+    // as the seal sliding in and out of the mouth. Amplitude is a fraction of
+    // the boss's radius so it scales with the body, and this is the difference
+    // between being carried and being welded on — a passenger held perfectly
+    // still relative to a moving animal looks like a parenting bug, however
+    // good the animation under it is.
+    held.thrash += dt * (c.thrashRate ?? 11);
+    const swing = Math.sin(held.thrash) * r * (c.thrashAmp ?? 0.4);
+    mx = bp.x + fx * r * (c.mouthOffset ?? 0.5) - fy * swing;
+    my = bp.y + fy * r * (c.mouthOffset ?? 0.5) + fx * swing;
+  }
 
   // REELED, NOT SNAPPED. An exponential approach on the remaining gap, so the
   // first frame moves the seal a little way toward the jaws and the rest of the
@@ -406,6 +509,28 @@ export function updateBossGrab(dt, hooks = {}) {
       // being broken. It is bounded by its own `crushEvery` and by
       // CONFIG.boss.damageCap, which are the two ceilings that matter here.
       hooks.onPlayerHit?.(dmg, { x: -fx, y: -fy }, 'boss:grab', 'attack');
+    }
+    // ...AND THE JAWS CLOSE ON IT, which is what makes the seal move.
+    //
+    // WITHOUT THIS THE WHOLE ATTACHMENT IS STILL. The jaw is deliberately not
+    // animated during a grab — entities/enemies.js refuses `triggerBite` on a
+    // creature whose `grabbing` is set, on the correct argument that the jaws
+    // are already shut and a chomp playing over the top would re-open them on
+    // screen and offer main.js a second bite to bill. So a seal pinned to the
+    // jaw and nothing else would ride a bone that never moves: strictly worse
+    // than the sine it replaced, and it would look exactly like the parenting
+    // bug the sine exists to avoid.
+    //
+    // A CRUNCH IS THE ANIMAL CHEWING, and the jaw belongs on that edge rather
+    // than on a clock of its own — the damage, the sound and the shake are then
+    // one event three ways. The same pair triggerBite uses, and in the same
+    // order: the authored clip if the model has one (the megalodon), the
+    // procedural driver if it does not (the orca). Its own eat cooldown is
+    // deliberately NOT consulted — that gate is about how often this predator
+    // may take a new meal, and this is the meal it already has.
+    if (CONFIG.bossGrab?.followJaw !== false) {
+      const played = e.anim?.trigger('bite') ?? false;
+      if (!played) e.jaw?.bite();
     }
     feedback('bossThrash', {
       x: pos.x, y: pos.y, vx: e.vx, vy: e.vy, scale: 0.9,

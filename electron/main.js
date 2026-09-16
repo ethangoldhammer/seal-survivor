@@ -14,6 +14,7 @@ import { registerSaveIpc, flush } from './save.js';
 import { registerSaveImageIpc } from './saveImage.js';
 import { registerPlaytestIpc } from './playtest.js';
 import { initSteam, registerSteamIpc, steamStatus } from './steam.js';
+import { registerCapture } from './capture.js';
 
 // Before whenReady, necessarily — see registerScheme's note.
 registerScheme();
@@ -27,6 +28,13 @@ function createWindow() {
     height: 800,
     minWidth: 960,
     minHeight: 600,
+    // CENTRED ON OPEN. Without it macOS cascades each new window down and to
+    // the right of the last one, so a 1280x800 window on a laptop opens with
+    // its lower-right corner past the edge of the screen — and on a build whose
+    // whole point is a frame you are going to film, "somewhere near the middle"
+    // is not good enough. capture.js re-centres on every snap for the same
+    // reason: setContentSize grows from the origin.
+    center: true,
     // Matches index.html's own background and capacitor.config.json's. Without
     // it the window paints white for a frame or two before the page's own
     // background lands, which on a game this dark reads as a flash of damage.
@@ -45,6 +53,11 @@ function createWindow() {
 
   win.once('ready-to-show', () => win.show());
   win.loadURL(`${ORIGIN}/`);
+
+  // 16:9 ON DEMAND, for filming. Registered here rather than in whenReady
+  // because it is a property of this window — see electron/capture.js for why
+  // fullscreen is not the answer and why there is no menu item for it.
+  registerCapture(win);
 
   // EXTERNAL LINKS GO TO THE SYSTEM BROWSER, never into the game window.
   //

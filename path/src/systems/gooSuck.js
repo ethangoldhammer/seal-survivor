@@ -25,6 +25,19 @@
 // splat marks the swallow (`captureEmit`). One that never arrives — the seal
 // dashed off — melts on its own clock (`life`) like any goo.
 //
+// A BURST CAN CARRY A PAYLOAD. `at.onCapture` makes the blobs the DELIVERY of
+// something — the chunk's health and pips ride home on them, a share per blob,
+// and the bar climbs as the goo arrives instead of jumping on the frame the
+// pickup was touched (see absorbChunk in main.js). This file still knows
+// nothing about what is being paid: it counts the arrivals and calls back.
+//
+// THE PROMISE IS THAT EVERY SHARE IS PAID, exactly once, and that the last one
+// says so. A blob that melts unclaimed pays on the way out rather than taking
+// its share with it — the seal ate the chunk, and losing a fifth of a heal
+// because the goo could not catch up would be a pickup that lies about what it
+// gave. Only a reset drops a payload unpaid, because a run that is over has
+// nothing left to pay into.
+//
 // HOW IT DRAWS. These are DRIVEN particle slots (entities/particles.js) — the
 // same buffer, the same goo pass, the same look — with their positions written
 // from here every frame. So the pickup goo group's surface in the F panel
@@ -180,18 +193,43 @@ function flowAt(rx, ry, rz, c, wts, out) {
  * speed, size and palette, with `at.scale` / `sizeMul` / `speedMul` / `color`
  * honoured exactly as emit() honours them.
  *
- * Returns false when it could not — the feature is off, the emitter is unknown,
- * or the driven reserve is empty — so the caller can fall back to emit() and
- * the goo is never simply missing.
+ * Returns HOW MANY BLOBS it put in the water, and 0 when it could not — the
+ * feature is off, the emitter is unknown, or the driven reserve is empty — so
+ * the caller can fall back to emit() and the goo is never simply missing. The
+ * count matters to a caller carrying a payload: it is how many shares the
+ * thing being delivered has to be cut into, and it is not knowable until the
+ * reserve has been asked.
+ *
+ * `at.onCapture(taken, count, x, y, last)` is that payload's callback — see
+ * the header. Called once per blob, in arrival order, wherever the blob was
+ * when it landed.
+ *
+ * `at.holdStagger` seconds spreads the START of the pull across the blobs, so
+ * the mass is drawn in as a STREAM rather than as one lump. The blast's own
+ * `holdAt` is a single beat shared by every blob, which is right for a splat
+ * being yanked back — one body of goo under one law — and wrong for a pickup
+ * being absorbed piece by piece, where the arrivals ARE the feedback. 0 (the
+ * default) is exactly the behaviour every existing burst has.
+ *
+ * `at.countClamp` is a [min, max] on how many blobs the burst may be, applied
+ * AFTER the emitter's count and the look multiplier. It is for a caller that
+ * has to LIVE with the number — a payload cut into forty shares arrives as a
+ * buzz however good the splat looks — and it deliberately clamps rather than
+ * replaces, so the tuner still owns the count inside the range it leaves.
  */
 export function spawnSuckGoo(emitterName, x, y, at = {}) {
   const c = cfg();
-  if (c.enabled === false) return false;
+  if (c.enabled === false) return 0;
   const def = CONFIG.emitters[emitterName];
-  if (!def) return false;
-  const count = Math.max(1, Math.round((def.count ?? 8) * (at.scale ?? 1) * (c.countMul ?? 1)));
+  if (!def) return 0;
+  let count = Math.max(1, Math.round((def.count ?? 8) * (at.scale ?? 1) * (c.countMul ?? 1)));
+  if (Array.isArray(at.countClamp)) {
+    const lo = Math.max(1, Math.round(at.countClamp[0] ?? 1));
+    const hi = Math.max(lo, Math.round(at.countClamp[1] ?? count));
+    count = Math.max(lo, Math.min(hi, count));
+  }
   const slots = claimDriven(count);
-  if (!slots.length) return false;
+  if (!slots.length) return 0;
 
   // Its OWN goo group when the config names one that exists, so the isoline
   // can be animated without touching the swallow splat's surface; otherwise the
@@ -212,8 +250,23 @@ export function spawnSuckGoo(emitterName, x, y, at = {}) {
   // Which way this blast orbits. Per blast, like the phase: a splat that
   // spiralled both ways at once would be two splats.
   const spin = Math.random() < 0.5 ? -1 : 1;
+  // ONE PAYLOAD OBJECT SHARED BY THE WHOLE BURST, not a copy per blob: the
+  // count and the running total are facts about the blast, and a per-blob copy
+  // is how you get a delivery that pays its last share twice. `slots.length`
+  // rather than `count` — the reserve can hand back fewer than were asked for,
+  // and cutting the heal into more shares than there are blobs to carry them
+  // would quietly drop the remainder.
+  const payload = typeof at.onCapture === 'function'
+    ? { fn: at.onCapture, count: slots.length, taken: 0 }
+    : null;
 
-  for (const slot of slots) {
+  // Spread across the burst in claim order, first blob at 0 and last at the
+  // full stagger — a ramp rather than a per-blob roll, because a roll would
+  // put two arrivals on the same frame and leave a hole later, and the whole
+  // read here is one-after-another.
+  const stagger = Math.max(0, at.holdStagger ?? 0);
+  const span = slots.length > 1 ? slots.length - 1 : 1;
+  slots.forEach((slot, index) => {
     const angle = cone > 0 ? baseAngle + (Math.random() - 0.5) * cone * 2 : Math.random() * Math.PI * 2;
     const speed = rand(def.speed, 6) * speedMul;
     blobs.push({
@@ -225,7 +278,11 @@ export function spawnSuckGoo(emitterName, x, y, at = {}) {
       // lanes through the same formula.
       z: (Math.random() * 2 - 1) * (c.zSpread ?? 1),
       age: 0,
-      life,
+      // ...plus its own wait, so the last blob in a staggered burst gets the
+      // same seconds of travel the first one did rather than melting on the
+      // spot. Without this a long stagger silently pays its tail out through
+      // the melt path instead of at the seal.
+      life: life + stagger * (index / span),
       size: rand(def.size, 0.15) * sizeMul,
       rgb: drivenColor(def, tint, new THREE.Color()),
       tint: tint ? tint.getHex() : null,
@@ -235,10 +292,38 @@ export function spawnSuckGoo(emitterName, x, y, at = {}) {
       burst,
       spin,
       seed: Math.random(),
+      payload,
+      holdAdd: stagger * (index / span),
     });
-  }
-  keepGooAlive(group.name, life);
-  return true;
+  });
+  // Long enough to cover the last blob's wait as well as its flight, or a
+  // staggered burst melts its tail before the pull has begun on it.
+  keepGooAlive(group.name, life + stagger);
+  return slots.length;
+}
+
+/**
+ * A blob leaving the water for any reason other than a reset — swallowed,
+ * melted, or gone non-finite — hands its share over on the way out.
+ *
+ * Guarded on `taken < count` rather than trusted: this is called from three
+ * places in the walk below, and a share paid twice is a heal the player was
+ * never promised. The callback is wrapped because it runs game logic from
+ * inside a particle loop, and a throw there would strand every blob still in
+ * flight with its slot still claimed.
+ */
+function settle(b) {
+  const p = b.payload;
+  if (!p || p.taken >= p.count) return;
+  // WHEN, so the capture site can keep two arrivals off one frame. Stamped
+  // here rather than there because a melt or a reset is an arrival too — it
+  // fires the same per-piece event — and the point is one BLIP per frame, not
+  // one capture. `time` is the pass clock, identical for every blob stepped in
+  // the same updateGooSuck call, so it identifies the frame exactly.
+  p.lastSettleAt = time;
+  p.taken++;
+  try { p.fn(p.taken, p.count, b.x, b.y, p.taken >= p.count); }
+  catch (err) { console.warn('[gooSuck] payload failed', err); }
 }
 
 /**
@@ -304,7 +389,10 @@ export function updateGooSuck(dt) {
   for (let i = blobs.length - 1; i >= 0; i--) {
     const b = blobs[i];
     b.age += dt;
-    if (b.age >= b.life) { releaseDriven(b.slot); blobs[i] = blobs[blobs.length - 1]; blobs.pop(); continue; }
+    // MELTED, unclaimed. It still pays — see the header. The seal ate the
+    // pickup; the goo is how the payout is drawn, not a second chance to lose
+    // it.
+    if (b.age >= b.life) { settle(b); releaseDriven(b.slot); blobs[i] = blobs[blobs.length - 1]; blobs.pop(); continue; }
 
     let near = 0;
     // THE LEAN toward the blast's own mass, in every act. Its weight is the
@@ -322,7 +410,9 @@ export function updateGooSuck(dt) {
         }
       }
     }
-    if (b.age < hold || !target.set) {
+    // Its own wait on top of the blast's — see `holdStagger` in spawnSuckGoo.
+    const bHold = hold + (b.holdAdd ?? 0);
+    if (b.age < bHold || !target.set) {
       // ACT ONE: the wall of drag. Closed form per frame so the stop is the
       // same at any frame rate.
       const f = Math.exp(-burstK * dt);
@@ -331,8 +421,24 @@ export function updateGooSuck(dt) {
       const dx = target.x - b.x;
       const dy = target.y - b.y;
       const d = Math.hypot(dx, dy) || 1e-4;
-      if (d < capture) {
+      // ONE ARRIVAL PER FRAME, per payload. `holdStagger` spreads the STARTS
+      // evenly, but each blob then flies its own random angle, speed and
+      // z-lane, and that jitter re-bunches the ARRIVALS: measured over 40
+      // absorptions, 13.9% of arrival frames carried more than one piece and
+      // the minimum gap was 0. Two pieces on one frame is two blips at once,
+      // which reads as one blip at the wrong pitch — the exact thing the
+      // stream is for. So a blob that would land on a frame this payload has
+      // already paid on waits, and falls through to the pull below instead of
+      // being swallowed. One frame is 17ms and invisible; the tail cost is
+      // bounded by the collision rate, which the melt-clock check covers.
+      const sharing = b.payload && b.payload.lastSettleAt === time
+        && b.payload.taken < b.payload.count;
+      if (d < capture && !sharing) {
         // SWALLOWED. The slot goes back and a tinted fleck marks the arrival.
+        // The payload first: whatever this blob was carrying is delivered on
+        // the frame it touches the body, which is the whole point of a burst
+        // that carries one.
+        settle(b);
         releaseDriven(b.slot);
         blobs[i] = blobs[blobs.length - 1]; blobs.pop();
         if (captureEmit && CONFIG.emitters[captureEmit]) {
@@ -349,7 +455,7 @@ export function updateGooSuck(dt) {
       }
       // ACT THREE: the suck. The pull ramps in over `rampTime` from the end of
       // the hold, so the goo is drawn rather than yanked.
-      const s = smooth((b.age - hold) / ramp);
+      const s = smooth((b.age - bHold) / ramp);
       if (s > suction) suction = s;
       near = clamp01(1 - d / nearR);
       if (b.phase !== lastPhase) {
@@ -386,6 +492,7 @@ export function updateGooSuck(dt) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) {
+      settle(b);
       releaseDriven(b.slot); blobs[i] = blobs[blobs.length - 1]; blobs.pop(); continue;
     }
     // Shrinking into the body as it arrives — the goo is going IN, not landing
@@ -427,7 +534,15 @@ export function gooSuckOverride() {
   return overriddenGroup;
 }
 
-/** Everything in flight, gone, and its slots returned. Call BEFORE resetParticles(). */
+/**
+ * Everything in flight, gone, and its slots returned. Call BEFORE
+ * resetParticles().
+ *
+ * PAYLOADS ARE DROPPED UNPAID, and that is the one place they are. A reset is
+ * a run ending or restarting, and paying health into the seal that just died —
+ * or into the next run's — is worse than losing a share of a chunk that is
+ * itself about to be deleted.
+ */
 export function resetGooSuck() {
   for (const b of blobs) releaseDriven(b.slot);
   blobs.length = 0;

@@ -114,6 +114,10 @@ export function createBoneSpring(bones, { tipAxis = new THREE.Vector3(0, 1, 0), 
   const dir = Array.from({ length: n }, () => new THREE.Vector3());
   const vel = Array.from({ length: n }, () => new THREE.Vector3());
   let primed = false;
+  // What the chain bent, in total, last frame — the chain budget's feedback
+  // term. See `chainMax` in update(). Zero is "no budget in force yet", which
+  // is what an uncapped solve leaves it at forever.
+  let spentLast = 0;
   // Flesh per bone, as a ratio of the bone's length — null until measured, and
   // a chain nobody has measured is held by its bare tips. See measureRadii.
   let radii = null;
@@ -123,6 +127,7 @@ export function createBoneSpring(bones, { tipAxis = new THREE.Vector3(0, 1, 0), 
 
     reset() {
       primed = false;
+      spentLast = 0;
       for (const v of vel) v.set(0, 0, 0);
     },
 
@@ -220,7 +225,7 @@ export function createBoneSpring(bones, { tipAxis = new THREE.Vector3(0, 1, 0), 
     },
 
     /**
-     * @param cfg    { stiffness, damping, tipLooseness, maxLag, softness, snapAngle }
+     * @param cfg    { stiffness, damping, tipLooseness, maxLag, softness, snapAngle, chainMax }
      * @param weight 0..1 blend of the lagged pose over whatever wrote the pose
      * @param floor  optional { y, friction } — a world-space plane no bone tip
      *               may pass below (see the note at the top). `friction` is
@@ -248,6 +253,52 @@ export function createBoneSpring(bones, { tipAxis = new THREE.Vector3(0, 1, 0), 
 
       const soft = cfg.softness ?? 1;
       const snapDot = Math.cos(cfg.snapAngle ?? Math.PI);
+      // THE WHOLE CHAIN'S BUDGET, and without it `maxLag` does not bound
+      // anything you can see.
+      //
+      // `maxLag` is measured from the direction the bone is being PULLED
+      // toward — and on every bone but the first, that direction has already
+      // been displaced by its parent, because this solver deliberately
+      // measures each bone after the one above it has moved (that is what
+      // turns per-bone lag into a travelling wave). So the deviations COMPOUND:
+      // three bones at 2.1 each is a limb 6.3 radians from where it started,
+      // and the cap reads as though it forbade that.
+      //
+      // Measured on the seal's ragdoll at the shipped numbers: `hand_L_014`
+      // reached 3.02 rad and `leg_L_021` 3.05 — 173° and 175° — in the BODY'S
+      // OWN FRAME, so not the tumble. A flipper pointing backwards through the
+      // animal is the mesh tearing, and it is the thing `maxLag` looked like it
+      // was there to prevent.
+      //
+      // So the chain gets a budget as well: a ceiling on the SUM of what its
+      // bones are allowed to bend.
+      //
+      // SPENT IN PROPORTION, NOT ROOT FIRST. Root first is the obvious
+      // implementation and it is wrong, because it starves the end of the limb
+      // — which is the end that is supposed to move. tipLooseness makes the tip
+      // the loosest joint and `impulse`'s tipBias puts most of a shove there on
+      // purpose: a body whose nose whips as hard as its tail reads as a
+      // cardboard cutout being shaken. Measured, root-first took the seal's
+      // ragdoll down to 25 degrees of head swing against 24 for a live animal,
+      // and made the kick that exists to stop a limp body sitting perfectly
+      // still worth one degree (tools/seal-flop-test.mjs holds both).
+      //
+      // Proportionally, every joint gives back the same SHARE, so the shape of
+      // the fold survives being bounded — the tip is still the part that whips,
+      // there is just less of it. The scale comes from what the chain spent
+      // LAST frame, because this solver is one pass root-to-tip and each bone's
+      // target is only known after its parent has moved: a proportional scale
+      // computed up front would need a second pass. One frame of lag on a value
+      // that moves slowly, which is the same bargain the speed clamp makes with
+      // the combo multiplier a few files over.
+      //
+      // ABSENT IS UNCAPPED, which is every other creature in the game: this is
+      // secondary motion of a few degrees on a swimming fish, where nothing
+      // compounds far enough to matter and a budget would only take the flick
+      // off the end of a tail.
+      const chainMax = cfg.chainMax > 0 ? cfg.chainMax : Infinity;
+      const give = spentLast > chainMax ? chainMax / spentLast : 1;
+      let spent = 0;
 
       // Running parent transform, advanced one bone at a time.
       if (chainParent) {
@@ -315,7 +366,12 @@ export function createBoneSpring(bones, { tipAxis = new THREE.Vector3(0, 1, 0), 
 
         const lag = _dir.angleTo(state);
         _q.setFromUnitVectors(_dir, state);
-        _qc.copy(IDENTITY).rotateTowards(_q, softClamp(lag, cfg.maxLag, soft));
+        // What this bone may spend: its own cap, narrowed by the chain's share.
+        // Through softClamp either way, so a chain that has just come under the
+        // budget eases into its new ceiling instead of stopping at it.
+        const applied = softClamp(lag, cfg.maxLag * give, soft);
+        spent += applied;
+        _qc.copy(IDENTITY).rotateTowards(_q, applied);
         // ...and on what is actually written. `maxLag` is measured from the
         // pose the chain is pulled toward, and a corpse's frozen pose can point
         // a limb straight into the seabed: the cap would then hold the bone
@@ -344,6 +400,7 @@ export function createBoneSpring(bones, { tipAxis = new THREE.Vector3(0, 1, 0), 
       }
 
       primed = true;
+      spentLast = spent;
     },
   };
 }

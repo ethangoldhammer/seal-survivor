@@ -1,9 +1,12 @@
+import { CONFIG } from '../config.js';
+
 // ---------------------------------------------------------------------------
 // VERSUS — the one bit every other system may ask.
 //
-// A leaf on purpose: nothing here imports anything, so arena.js, input.js and
-// boats.js can each ask "is this a versus run?" without pulling the whole
-// mode (systems/versus.js, which imports half the game) into their graph.
+// A leaf on purpose: the only thing it imports is CONFIG — which arena.js,
+// input.js and boats.js all import anyway — so each of them can ask "is this
+// a versus run?" without pulling the whole mode (systems/versus.js, which
+// imports half the game) into their graph.
 //
 // WHY A GATE AND NOT A CONFIG OVERRIDE. The obvious way to stage this mode is
 // `CONFIG.boss.enabled = false; CONFIG.arena.widthScale = 1; ...` at boot.
@@ -30,6 +33,28 @@ export function enableVersus(on = true) {
 
 export function versusActive() {
   return versusFlag.enabled;
+}
+
+// ---------------------------------------------------------------------------
+// WHAT A MATCH DOES WITHOUT — the survivor pickups a match refuses.
+//
+// One question asked at every spawner that pours something into the water, so
+// the list of what versus goes without is readable in one place rather than
+// as a `!versusActive()` scattered through four files. CONFIG.versus.drop is
+// that list and carries the reasoning; this is only the read.
+//
+// FALSE OUTSIDE A MATCH, always: an ordinary run drops nothing, so a spawner
+// can ask this unconditionally and does not need its own mode check first.
+//
+// @param {string} what one of the keys in CONFIG.versus.drop
+// @returns true when a match is on AND that key is switched on
+// ---------------------------------------------------------------------------
+export function versusDrops(what) {
+  if (!versusFlag.enabled) return false;
+  // A missing key drops nothing. The list is a deliberate opt-in — a typo at
+  // the call site should leave the water as it was, not silently switch off a
+  // pickup nobody meant to touch.
+  return CONFIG.versus?.drop?.[what] === true;
 }
 
 // ---------------------------------------------------------------------------

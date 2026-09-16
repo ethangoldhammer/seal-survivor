@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-09-01T00:32:10.176Z",
+  "generatedAt": "2026-09-13T04:19:35.231Z",
   "counts": {
-    "sounds": 158,
-    "sampled": 87,
-    "synth": 71,
-    "events": 201,
-    "eventsWithSound": 188,
-    "silentEvents": 13,
-    "callSites": 186,
-    "files": 234,
-    "orphanFiles": 66,
-    "unreferencedSounds": 8
+    "sounds": 184,
+    "sampled": 104,
+    "synth": 80,
+    "events": 242,
+    "eventsWithSound": 221,
+    "silentEvents": 21,
+    "callSites": 246,
+    "files": 243,
+    "orphanFiles": 50,
+    "unreferencedSounds": 10
   },
   "bus": {
     "masterVolume": 0.2,
@@ -24,7 +24,7 @@
     "depth": {
       "enabled": true,
       "surfaceHz": 20000,
-      "deepHz": 200,
+      "deepHz": 500,
       "smoothing": 0.66
     },
     "comp": {
@@ -33,8 +33,8 @@
       "knee": 12,
       "ratio": 3,
       "attack": 0.044,
-      "release": 0.18,
-      "makeup": 2.371373705661655,
+      "release": 0.23,
+      "makeup": 1.1885022274370185,
       "ceiling": 0.95,
       "ceilingKnee": 0.6,
       "oversample": "2x"
@@ -240,7 +240,7 @@
         "filter": 2000,
         "noise": null,
         "decay": 1,
-        "gain": 0.2,
+        "gain": 1.4125375446227544,
         "pitchVary": 0,
         "filterVary": 0,
         "detune": 0
@@ -270,7 +270,37 @@
         "filter": 2000,
         "noise": null,
         "decay": 1,
-        "gain": 0.28183829312644537,
+        "gain": 0.5011872336272722,
+        "pitchVary": 0,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [],
+      "directSites": [],
+      "minGap": null,
+      "orphaned": true
+    },
+    {
+      "name": "swirlBed",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/HGUI_s37_BubbleBeam_04_lo.mp3",
+          "exists": true,
+          "bytes": 38592,
+          "seconds": 2.376
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 2000,
+        "noise": null,
+        "decay": 1,
+        "gain": 0.2,
         "pitchVary": 0,
         "filterVary": 0,
         "detune": 0
@@ -369,7 +399,8 @@
         "detune": 2
       },
       "firedBy": [
-        "kill"
+        "kill",
+        "killFrozen"
       ],
       "directSites": [],
       "minGap": 0.05,
@@ -411,6 +442,7 @@
       },
       "firedBy": [
         "bigKill",
+        "bigKillFrozen",
         "crabSlam",
         "waterBlast"
       ],
@@ -441,7 +473,7 @@
         "filter": 3200,
         "noise": 0.7,
         "decay": 0.6,
-        "gain": 0.8912509381337456,
+        "gain": 0.5956621435290105,
         "pitchVary": 0.25,
         "filterVary": 0.18,
         "detune": 0
@@ -587,6 +619,7 @@
         "detune": 0
       },
       "firedBy": [
+        "bossDeflect",
         "bossHitShell"
       ],
       "directSites": [],
@@ -644,8 +677,8 @@
         "filter": 3200,
         "noise": 0.35,
         "decay": 0.16,
-        "gain": 1.333521432163324,
-        "pitchVary": 0.16,
+        "gain": 0.7079457843841379,
+        "pitchVary": 0.33,
         "filterVary": 0.2,
         "detune": 0
       },
@@ -1685,44 +1718,14 @@
           "seconds": 0.470167
         },
         {
-          "path": "/sfx/Seal_PlayerHit_08.mp3",
-          "exists": true,
-          "bytes": 10344,
-          "seconds": 0.835917
-        },
-        {
           "path": "/sfx/Seal_PlayerHit__09.mp3",
           "exists": true,
           "bytes": 6896,
           "seconds": 0.548583
-        },
-        {
-          "path": "/sfx/EliArf_TakeDamage_01.mp3",
-          "exists": true,
-          "bytes": 9717,
-          "seconds": 0.783667
-        },
-        {
-          "path": "/sfx/EliArf_TakeDamage_02.mp3",
-          "exists": true,
-          "bytes": 6269,
-          "seconds": 0.496333
-        },
-        {
-          "path": "/sfx/Seal_Paps_takeDamage_02.mp3",
-          "exists": true,
-          "bytes": 5642,
-          "seconds": 0.444083
-        },
-        {
-          "path": "/sfx/Seal_Paps_takeDamage_03.mp3",
-          "exists": true,
-          "bytes": 7836,
-          "seconds": 0.626917
         }
       ],
       "missing": [],
-      "variations": 13,
+      "variations": 8,
       "synth": {
         "type": "boom",
         "wave": null,
@@ -1733,14 +1736,15 @@
         "filter": 3420,
         "noise": 0.62,
         "decay": 0.49,
-        "gain": 4.731512589614805,
-        "pitchVary": 0.19,
+        "gain": 1.4125375446227544,
+        "pitchVary": 0.29,
         "filterVary": 0.15,
         "detune": 0
       },
       "firedBy": [
         "playerHit",
         "playerPinned",
+        "stingPoison",
         "bossThrash"
       ],
       "directSites": [],
@@ -1991,6 +1995,7 @@
         "clamDrop",
         "strikeOrbTaken",
         "coralTaken",
+        "scoreCoralTaken",
         "levelOrbTaken"
       ],
       "directSites": [
@@ -2102,6 +2107,7 @@
         "detune": 0
       },
       "firedBy": [
+        "rerollEarned",
         "maneaterProc",
         "companionStrike",
         "bossPellet"
@@ -2205,6 +2211,34 @@
       },
       "firedBy": [
         "chumChunkEaten"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "chumMorsel",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "blip",
+        "wave": "sine",
+        "freq": [
+          640,
+          980
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.11,
+        "gain": 0.12,
+        "pitchVary": 0.01,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "chumMorsel"
       ],
       "directSites": [],
       "minGap": 0,
@@ -2453,7 +2487,8 @@
         "detune": 0
       },
       "firedBy": [
-        "breach"
+        "breach",
+        "versusBallBreach"
       ],
       "directSites": [],
       "minGap": 0,
@@ -2461,10 +2496,17 @@
     },
     {
       "name": "surfacing",
-      "mode": "synth",
-      "files": [],
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_PlayerHit_08.mp3",
+          "exists": true,
+          "bytes": 10344,
+          "seconds": 0.835917
+        }
+      ],
       "missing": [],
-      "variations": 0,
+      "variations": 1,
       "synth": {
         "type": "noise",
         "wave": null,
@@ -2472,7 +2514,7 @@
         "filter": 900,
         "noise": null,
         "decay": 0.5,
-        "gain": 0.13,
+        "gain": 0.6683439175686147,
         "pitchVary": 0.16,
         "filterVary": 0.3,
         "detune": 0
@@ -2489,10 +2531,10 @@
       "mode": "sample",
       "files": [
         {
-          "path": "/sfx/FF_AS_fish_splash_tone.mp3",
+          "path": "/sfx/Seal_Huff.mp3",
           "exists": true,
-          "bytes": 16613,
-          "seconds": 1.358333
+          "bytes": 15673,
+          "seconds": 1.28
         }
       ],
       "missing": [],
@@ -2513,7 +2555,8 @@
         "detune": 0
       },
       "firedBy": [
-        "reentry"
+        "reentry",
+        "versusBallReentry"
       ],
       "directSites": [],
       "minGap": 0,
@@ -3504,6 +3547,547 @@
       "orphaned": false
     },
     {
+      "name": "bodyCheck",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/EliArf_TakeDamage_01.mp3",
+          "exists": true,
+          "bytes": 9717,
+          "seconds": 0.783667
+        },
+        {
+          "path": "/sfx/ESM_MG3_fx_foley_slime_smash_squish_splat_01c.mp3",
+          "exists": true,
+          "bytes": 7836,
+          "seconds": 0.626917
+        },
+        {
+          "path": "/sfx/HGUI_s37_Smack_07_lo.mp3",
+          "exists": true,
+          "bytes": 8064,
+          "seconds": 0.468
+        }
+      ],
+      "missing": [],
+      "variations": 3,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          240,
+          60
+        ],
+        "filter": 1100,
+        "noise": 0.6,
+        "decay": 0.24,
+        "gain": 4.731512589614805,
+        "pitchVary": 0.14,
+        "filterVary": 0.25,
+        "detune": 0
+      },
+      "firedBy": [
+        "bodyCheck"
+      ],
+      "directSites": [],
+      "minGap": 0.05,
+      "orphaned": false
+    },
+    {
+      "name": "versusBurst",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          200,
+          34
+        ],
+        "filter": 900,
+        "noise": 0.78,
+        "decay": 0.36,
+        "gain": 0.4,
+        "pitchVary": 0.1,
+        "filterVary": 0.3,
+        "detune": 0
+      },
+      "firedBy": [
+        "sealBurst"
+      ],
+      "directSites": [],
+      "minGap": 0.1,
+      "orphaned": false
+    },
+    {
+      "name": "versusRespawn",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "blip",
+        "wave": "sine",
+        "freq": [
+          300,
+          900
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.22,
+        "gain": 0.18,
+        "pitchVary": 0.05,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusRespawn"
+      ],
+      "directSites": [],
+      "minGap": 0.1,
+      "orphaned": false
+    },
+    {
+      "name": "versusGoal",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/FF_ES_fx_explosion_lightning.mp3",
+          "exists": true,
+          "bytes": 118491,
+          "seconds": 9.848167
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          160,
+          36
+        ],
+        "filter": 800,
+        "noise": 0.7,
+        "decay": 0.55,
+        "gain": 1.2589254117941673,
+        "pitchVary": 0.39,
+        "filterVary": 0.47,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusGoal"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "versusGoalCheer",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/OLIVER_DWILLY_FX_planet_killer_sub_impact.mp3",
+          "exists": true,
+          "bytes": 62380,
+          "seconds": 5.17225
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "blip",
+        "wave": "square",
+        "freq": [
+          440,
+          880
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.5,
+        "gain": 4.216965034285822,
+        "pitchVary": 0.14,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusGoalCheer"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "versusPost",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          900,
+          260
+        ],
+        "filter": 2600,
+        "noise": 0.5,
+        "decay": 0.11,
+        "gain": 0.3,
+        "pitchVary": 0.1,
+        "filterVary": 0.2,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusPost"
+      ],
+      "directSites": [],
+      "minGap": 0.04,
+      "orphaned": false
+    },
+    {
+      "name": "versusBallHit",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_Smack_01.mp3",
+          "exists": true,
+          "bytes": 1880,
+          "seconds": 0.130583
+        },
+        {
+          "path": "/sfx/Seal_Smack_02.mp3",
+          "exists": true,
+          "bytes": 2821,
+          "seconds": 0.209
+        },
+        {
+          "path": "/sfx/Seal_Smack_03.mp3",
+          "exists": true,
+          "bytes": 2507,
+          "seconds": 0.182833
+        },
+        {
+          "path": "/sfx/EG_FlickPlop_04.mp3",
+          "exists": true,
+          "bytes": 4388,
+          "seconds": 0.339583
+        },
+        {
+          "path": "/sfx/EG_FlickPlop_08.mp3",
+          "exists": true,
+          "bytes": 3134,
+          "seconds": 0.235083
+        },
+        {
+          "path": "/sfx/EG_FlickPlop_11.mp3",
+          "exists": true,
+          "bytes": 4702,
+          "seconds": 0.36575
+        }
+      ],
+      "missing": [],
+      "variations": 6,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          420,
+          110
+        ],
+        "filter": 1800,
+        "noise": 0.65,
+        "decay": 0.18,
+        "gain": 12.589254117941675,
+        "pitchVary": 0.27,
+        "filterVary": 0.25,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusBallHit"
+      ],
+      "directSites": [],
+      "minGap": 0.05,
+      "orphaned": false
+    },
+    {
+      "name": "versusBallWall",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/OLIVER_DWILLY_105_FX_german_electro_dancing_lazer_bubbles.mp3",
+          "exists": true,
+          "bytes": 22883,
+          "seconds": 1.880833
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          260,
+          70
+        ],
+        "filter": 1200,
+        "noise": 0.6,
+        "decay": 0.2,
+        "gain": 1.2589254117941673,
+        "pitchVary": 0.12,
+        "filterVary": 0.2,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusBallWall"
+      ],
+      "directSites": [],
+      "minGap": 0.05,
+      "orphaned": false
+    },
+    {
+      "name": "versusBlock",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_bleh.mp3",
+          "exists": true,
+          "bytes": 6269,
+          "seconds": 0.496333
+        },
+        {
+          "path": "/sfx/Seal_Shoot_06.mp3",
+          "exists": true,
+          "bytes": 3448,
+          "seconds": 0.26125
+        }
+      ],
+      "missing": [],
+      "variations": 2,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          300,
+          78
+        ],
+        "filter": 1300,
+        "noise": 0.72,
+        "decay": 0.16,
+        "gain": 0.34,
+        "pitchVary": 0.12,
+        "filterVary": 0.28,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusBlock"
+      ],
+      "directSites": [],
+      "minGap": 0.06,
+      "orphaned": false
+    },
+    {
+      "name": "versusPierce",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 1700,
+        "noise": null,
+        "decay": 0.26,
+        "gain": 0.24,
+        "pitchVary": 0.12,
+        "filterVary": 0.38,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusPierce"
+      ],
+      "directSites": [],
+      "minGap": 0.06,
+      "orphaned": false
+    },
+    {
+      "name": "versusSave",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/OLIVER_DWILLY_FX_ukg_lazer_beam.mp3",
+          "exists": true,
+          "bytes": 38870,
+          "seconds": 3.213083
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "blip",
+        "wave": "triangle",
+        "freq": [
+          520,
+          1040
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.26,
+        "gain": 0.47315125896148047,
+        "pitchVary": 0.03,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusSave"
+      ],
+      "directSites": [],
+      "minGap": 0.2,
+      "orphaned": false
+    },
+    {
+      "name": "versusCountdown",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/EG_FlickPlop_15.mp3",
+          "exists": true,
+          "bytes": 3448,
+          "seconds": 0.26125
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "blip",
+        "wave": "sine",
+        "freq": [
+          660,
+          640
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.14,
+        "gain": 2.113489039836647,
+        "pitchVary": 0,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusCountdown"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "versusKickoff",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/EG_FlickPlop_13.mp3",
+          "exists": true,
+          "bytes": 5642,
+          "seconds": 0.444083
+        },
+        {
+          "path": "/sfx/EG_FlickPlop_06.mp3",
+          "exists": true,
+          "bytes": 3134,
+          "seconds": 0.235083
+        }
+      ],
+      "missing": [],
+      "variations": 2,
+      "synth": {
+        "type": "blip",
+        "wave": "sine",
+        "freq": [
+          880,
+          1320
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.4,
+        "gain": 3.548133892335755,
+        "pitchVary": 0,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusKickoff"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "versusWin",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "blip",
+        "wave": "triangle",
+        "freq": [
+          523,
+          1046
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.75,
+        "gain": 0.3,
+        "pitchVary": 0,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusWin"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "versusLose",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/OLIVER_DWILLY_FX_retro_laser_shutdown.mp3",
+          "exists": true,
+          "bytes": 100937,
+          "seconds": 8.385333
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "blip",
+        "wave": "sine",
+        "freq": [
+          392,
+          131
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.9,
+        "gain": 2.8183829312644537,
+        "pitchVary": 0,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusLose"
+      ],
+      "directSites": [],
+      "minGap": 0,
+      "orphaned": false
+    },
+    {
       "name": "sealLunge",
       "mode": "sample",
       "files": [
@@ -3689,6 +4273,31 @@
       ],
       "directSites": [],
       "minGap": 0.06,
+      "orphaned": false
+    },
+    {
+      "name": "sardineHit",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 5200,
+        "noise": null,
+        "decay": 0.035,
+        "gain": 0.075,
+        "pitchVary": 0.22,
+        "filterVary": 0.3,
+        "detune": 0
+      },
+      "firedBy": [
+        "sardineHit"
+      ],
+      "directSites": [],
+      "minGap": 0.09,
       "orphaned": false
     },
     {
@@ -3916,6 +4525,31 @@
       ],
       "directSites": [],
       "minGap": 0.06,
+      "orphaned": false
+    },
+    {
+      "name": "clubZap",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 5200,
+        "noise": null,
+        "decay": 0.06,
+        "gain": 0.11,
+        "pitchVary": 0.28,
+        "filterVary": 0.3,
+        "detune": 0
+      },
+      "firedBy": [
+        "clubZap"
+      ],
+      "directSites": [],
+      "minGap": 0.12,
       "orphaned": false
     },
     {
@@ -4560,10 +5194,16 @@
           "exists": true,
           "bytes": 10031,
           "seconds": 0.809833
+        },
+        {
+          "path": "/sfx/Razor_Hit_01.mp3",
+          "exists": true,
+          "bytes": 4702,
+          "seconds": 0.36575
         }
       ],
       "missing": [],
-      "variations": 1,
+      "variations": 2,
       "synth": {
         "type": "blip",
         "wave": "sawtooth",
@@ -4574,7 +5214,7 @@
         "filter": 5200,
         "noise": 0.35,
         "decay": 0.19,
-        "gain": 0.13,
+        "gain": 0.5308844442309884,
         "pitchVary": 0.1,
         "filterVary": 0.2,
         "detune": 0
@@ -4626,10 +5266,10 @@
       "mode": "sample",
       "files": [
         {
-          "path": "/sfx/HG_FLY_Beach_003.mp3",
+          "path": "/sfx/FF_AS_fish_splash_low_drop.mp3",
           "exists": true,
-          "bytes": 18807,
-          "seconds": 0.470175
+          "bytes": 18808,
+          "seconds": 1.54125
         }
       ],
       "missing": [],
@@ -4644,7 +5284,7 @@
         "filter": null,
         "noise": null,
         "decay": 0.18,
-        "gain": 9.440608762859233,
+        "gain": 1.8836490894898006,
         "pitchVary": 0.16,
         "filterVary": 0,
         "detune": 0
@@ -4810,14 +5450,20 @@
       "mode": "sample",
       "files": [
         {
-          "path": "/sfx/DS_SCB_foley_one_shot_water_droplet_echo.mp3",
+          "path": "/sfx/HG_SF_FX_beboplex_2.mp3",
           "exists": true,
-          "bytes": 15673,
-          "seconds": 1.28
+          "bytes": 73869,
+          "seconds": 2.088
+        },
+        {
+          "path": "/sfx/ESM_Fast_Mechanical_Computer_Program_Particle_Sci_Fi_Abstract_Loading_Particle_Military.mp3",
+          "exists": true,
+          "bytes": 39810,
+          "seconds": 3.291417
         }
       ],
       "missing": [],
-      "variations": 1,
+      "variations": 2,
       "synth": {
         "type": "blip",
         "wave": "triangle",
@@ -4834,7 +5480,8 @@
         "detune": 0
       },
       "firedBy": [
-        "uiClick"
+        "uiClick",
+        "unlock"
       ],
       "directSites": [],
       "minGap": 0,
@@ -4971,6 +5618,204 @@
       ],
       "directSites": [],
       "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "sealPeek",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_Wa_01.mp3",
+          "exists": true,
+          "bytes": 7836,
+          "seconds": 0.626917
+        },
+        {
+          "path": "/sfx/Seal_Wa_02.mp3",
+          "exists": true,
+          "bytes": 7523,
+          "seconds": 0.600833
+        },
+        {
+          "path": "/sfx/Seal_07.mp3",
+          "exists": true,
+          "bytes": 10971,
+          "seconds": 0.888167
+        },
+        {
+          "path": "/sfx/Seal_13.mp3",
+          "exists": true,
+          "bytes": 10658,
+          "seconds": 0.862083
+        },
+        {
+          "path": "/sfx/Seal_56.mp3",
+          "exists": true,
+          "bytes": 16613,
+          "seconds": 1.358333
+        },
+        {
+          "path": "/sfx/Seal_Call_02.mp3",
+          "exists": true,
+          "bytes": 19121,
+          "seconds": 1.567333
+        },
+        {
+          "path": "/sfx/Seal_Weddell_07.mp3",
+          "exists": true,
+          "bytes": 9090,
+          "seconds": 0.731417
+        }
+      ],
+      "missing": [],
+      "variations": 7,
+      "synth": {
+        "type": null,
+        "wave": null,
+        "freq": null,
+        "filter": null,
+        "noise": null,
+        "decay": null,
+        "gain": 1.333521432163324,
+        "pitchVary": 0.09,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "sealPeek"
+      ],
+      "directSites": [],
+      "minGap": 0.25,
+      "orphaned": false
+    },
+    {
+      "name": "sealNose",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_PlayerHit_FoodChain_03.mp3",
+          "exists": true,
+          "bytes": 8150,
+          "seconds": 0.653083
+        },
+        {
+          "path": "/sfx/Seal_13.mp3",
+          "exists": true,
+          "bytes": 10658,
+          "seconds": 0.862083
+        },
+        {
+          "path": "/sfx/Seal_Weddell_06.mp3",
+          "exists": true,
+          "bytes": 9090,
+          "seconds": 0.731417
+        },
+        {
+          "path": "/sfx/Seal_07.mp3",
+          "exists": true,
+          "bytes": 10971,
+          "seconds": 0.888167
+        },
+        {
+          "path": "/sfx/Seal_05.mp3",
+          "exists": true,
+          "bytes": 15046,
+          "seconds": 1.22775
+        },
+        {
+          "path": "/sfx/Seal_58.mp3",
+          "exists": true,
+          "bytes": 13479,
+          "seconds": 1.097167
+        },
+        {
+          "path": "/sfx/Seal_Weddell_03.mp3",
+          "exists": true,
+          "bytes": 7836,
+          "seconds": 0.626917
+        },
+        {
+          "path": "/sfx/Seal_FoodChain_01.mp3",
+          "exists": true,
+          "bytes": 9090,
+          "seconds": 0.731417
+        },
+        {
+          "path": "/sfx/Seal_Weddell_05.mp3",
+          "exists": true,
+          "bytes": 8150,
+          "seconds": 0.653083
+        }
+      ],
+      "missing": [],
+      "variations": 9,
+      "synth": {
+        "type": null,
+        "wave": null,
+        "freq": null,
+        "filter": null,
+        "noise": null,
+        "decay": null,
+        "gain": 1.7782794100389228,
+        "pitchVary": 0.01,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "sealNose"
+      ],
+      "directSites": [],
+      "minGap": 0.12,
+      "orphaned": false
+    },
+    {
+      "name": "sealBolt",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/Seal_Call_01.mp3",
+          "exists": true,
+          "bytes": 18181,
+          "seconds": 1.489
+        },
+        {
+          "path": "/sfx/Seal_Call_02.mp3",
+          "exists": true,
+          "bytes": 19121,
+          "seconds": 1.567333
+        },
+        {
+          "path": "/sfx/fluteseal_01.mp3",
+          "exists": true,
+          "bytes": 27840,
+          "seconds": 0.696
+        },
+        {
+          "path": "/sfx/Seal_21.mp3",
+          "exists": true,
+          "bytes": 4702,
+          "seconds": 0.36575
+        }
+      ],
+      "missing": [],
+      "variations": 4,
+      "synth": {
+        "type": null,
+        "wave": null,
+        "freq": null,
+        "filter": null,
+        "noise": null,
+        "decay": null,
+        "gain": 1.8836490894898006,
+        "pitchVary": 0.07,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "sealBolt"
+      ],
+      "directSites": [],
+      "minGap": 0.2,
       "orphaned": false
     },
     {
@@ -5174,6 +6019,59 @@
       ],
       "directSites": [],
       "minGap": 0.03,
+      "orphaned": false
+    },
+    {
+      "name": "nameRoll",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 2400,
+        "noise": null,
+        "decay": 0.17,
+        "gain": 0.2,
+        "pitchVary": 0.16,
+        "filterVary": 0.3,
+        "detune": 0
+      },
+      "firedBy": [
+        "nameRoll"
+      ],
+      "directSites": [],
+      "minGap": 0.05,
+      "orphaned": false
+    },
+    {
+      "name": "nameSettle",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "blip",
+        "wave": "triangle",
+        "freq": [
+          560,
+          750
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.15,
+        "gain": 0.1,
+        "pitchVary": 0.04,
+        "filterVary": 0,
+        "detune": 0
+      },
+      "firedBy": [
+        "nameSettle"
+      ],
+      "directSites": [],
+      "minGap": 0.05,
       "orphaned": false
     },
     {
@@ -5610,11 +6508,91 @@
         "filterVary": 0.22,
         "detune": 0
       },
+      "firedBy": [],
+      "directSites": [],
+      "minGap": null,
+      "orphaned": true
+    },
+    {
+      "name": "pickupBlast",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/FF_AS_fish_splash_low_drop.mp3",
+          "exists": true,
+          "bytes": 18808,
+          "seconds": 1.54125
+        }
+      ],
+      "missing": [],
+      "variations": 1,
+      "synth": {
+        "type": "blip",
+        "wave": "triangle",
+        "freq": [
+          1800,
+          2600
+        ],
+        "filter": null,
+        "noise": null,
+        "decay": 0.18,
+        "gain": 2.8183829312644537,
+        "pitchVary": 0.2,
+        "filterVary": 0,
+        "detune": 0
+      },
       "firedBy": [
-        "bossHit"
+        "pickupBlast"
       ],
       "directSites": [],
-      "minGap": 0.11,
+      "minGap": 0.06,
+      "orphaned": false
+    },
+    {
+      "name": "spawnSurge",
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/OLIVER_DWILLY_FX_hiphop_midnight_riser.mp3",
+          "exists": true,
+          "bytes": 94667,
+          "seconds": 7.862833
+        },
+        {
+          "path": "/sfx/OLIVER_DWILLY_FX_white_noise_impact_basic.mp3",
+          "exists": true,
+          "bytes": 68649,
+          "seconds": 5.694667
+        },
+        {
+          "path": "/sfx/OLIVER_DWILLY_FX_swell_glitter_elite.mp3",
+          "exists": true,
+          "bytes": 77426,
+          "seconds": 6.426083
+        }
+      ],
+      "missing": [],
+      "variations": 3,
+      "synth": {
+        "type": "boom",
+        "wave": "sine",
+        "freq": [
+          70,
+          210
+        ],
+        "filter": 640,
+        "noise": 0.7,
+        "decay": 1.2,
+        "gain": 1,
+        "pitchVary": 0.08,
+        "filterVary": 0.18,
+        "detune": 0
+      },
+      "firedBy": [
+        "spawnSurge"
+      ],
+      "directSites": [],
+      "minGap": 0,
       "orphaned": false
     }
   ],
@@ -5631,11 +6609,11 @@
         "strength": 0.5,
         "radius": 4
       },
-      "haptic": "19ms @ 0.69 + 4ms @ 0.40",
+      "haptic": null,
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4751
+          "line": 6174
         }
       ]
     },
@@ -5651,7 +6629,7 @@
         "strength": 0.5,
         "radius": 4
       },
-      "haptic": "6ms",
+      "haptic": null,
       "sites": []
     },
     {
@@ -5670,7 +6648,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4275
+          "line": 5623
         }
       ]
     },
@@ -5690,7 +6668,7 @@
       "sites": [
         {
           "file": "path/src/systems/beams.js",
-          "line": 789
+          "line": 799
         }
       ]
     },
@@ -5730,7 +6708,7 @@
       "sites": [
         {
           "file": "path/src/systems/bubbleJet.js",
-          "line": 1012
+          "line": 1047
         }
       ]
     },
@@ -5750,7 +6728,7 @@
       "sites": [
         {
           "file": "path/src/systems/bubbleJet.js",
-          "line": 896
+          "line": 931
         }
       ]
     },
@@ -5767,7 +6745,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossAngler.js",
-          "line": 912
+          "line": 919
         }
       ]
     },
@@ -5787,7 +6765,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossAngler.js",
-          "line": 647
+          "line": 651
         }
       ]
     },
@@ -5807,7 +6785,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossAngler.js",
-          "line": 661
+          "line": 665
         }
       ]
     },
@@ -5827,7 +6805,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossAngler.js",
-          "line": 638
+          "line": 642
         }
       ]
     },
@@ -5847,15 +6825,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2668
+          "line": 3787
         },
         {
           "file": "path/src/main.js",
-          "line": 6443
+          "line": 8145
         },
         {
           "file": "path/src/main.js",
-          "line": 6447
+          "line": 8149
         }
       ]
     },
@@ -5872,7 +6850,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6498
+          "line": 8214
         }
       ]
     },
@@ -5892,7 +6870,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1880
+          "line": 2820
         }
       ]
     },
@@ -5912,6 +6890,36 @@
       "sites": []
     },
     {
+      "name": "killFrozen",
+      "sfx": "kill",
+      "sfxMinGap": 0.05,
+      "emit": "iceShatter",
+      "shake": 0.22,
+      "hitstop": 0,
+      "glow": 0.6,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 10
+      },
+      "haptic": "18ms",
+      "sites": []
+    },
+    {
+      "name": "bigKillFrozen",
+      "sfx": "bigKill",
+      "sfxMinGap": 0,
+      "emit": "iceShatter",
+      "shake": 0.7,
+      "hitstop": 0.07,
+      "glow": 1.2,
+      "ripple": {
+        "strength": 4.5,
+        "radius": 18
+      },
+      "haptic": "30ms / 25ms / 45ms",
+      "sites": []
+    },
+    {
       "name": "lightningStrike",
       "sfx": "thunderCrack",
       "sfxMinGap": 0,
@@ -5927,7 +6935,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3804
+          "line": 5146
         }
       ]
     },
@@ -5944,7 +6952,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3805
+          "line": 5147
         }
       ]
     },
@@ -6028,7 +7036,39 @@
       "sites": [
         {
           "file": "path/src/systems/dodge.js",
-          "line": 175
+          "line": 180
+        }
+      ]
+    },
+    {
+      "name": "stingPoison",
+      "sfx": "playerHit",
+      "sfxMinGap": 0.7,
+      "emit": "venom",
+      "shake": 0.03,
+      "hitstop": 0,
+      "glow": 0.25,
+      "ripple": null,
+      "haptic": "14ms @ 0.25",
+      "sites": []
+    },
+    {
+      "name": "bossDeflect",
+      "sfx": "bossHitShell",
+      "sfxMinGap": 0.25,
+      "emit": null,
+      "shake": 0.1,
+      "hitstop": 0,
+      "glow": 0.4,
+      "ripple": {
+        "strength": 1.4,
+        "radius": 7
+      },
+      "haptic": "30ms @ 0.60",
+      "sites": [
+        {
+          "file": "path/src/entities/enemies.js",
+          "line": 4258
         }
       ]
     },
@@ -6112,7 +7152,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossCrab.js",
-          "line": 750
+          "line": 751
         }
       ]
     },
@@ -6132,7 +7172,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossCrab.js",
-          "line": 769
+          "line": 770
         }
       ]
     },
@@ -6152,7 +7192,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossCrab.js",
-          "line": 727
+          "line": 728
         }
       ]
     },
@@ -6202,7 +7242,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1981
+          "line": 2921
         }
       ]
     },
@@ -6222,9 +7262,69 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6386
+          "line": 8083
         }
       ]
+    },
+    {
+      "name": "lungeWind",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": {
+        "strength": 1.2,
+        "radius": 6
+      },
+      "haptic": null,
+      "sites": []
+    },
+    {
+      "name": "lungeStrike",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": {
+        "strength": 2,
+        "radius": 8
+      },
+      "haptic": null,
+      "sites": []
+    },
+    {
+      "name": "bossLungeWind",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0.05,
+      "hitstop": 0,
+      "glow": 0.2,
+      "ripple": {
+        "strength": 2,
+        "radius": 11
+      },
+      "haptic": "10ms",
+      "sites": []
+    },
+    {
+      "name": "bossLungeStrike",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0.18,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 3.2,
+        "radius": 14
+      },
+      "haptic": "40ms @ 0.60",
+      "sites": []
     },
     {
       "name": "preyEaten",
@@ -6242,11 +7342,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7150
+          "line": 8906
         },
         {
           "file": "path/src/main.js",
-          "line": 7417
+          "line": 9254
         }
       ]
     },
@@ -6266,7 +7366,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7162
+          "line": 8918
         }
       ]
     },
@@ -6286,7 +7386,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3784
+          "line": 5126
         }
       ]
     },
@@ -6302,15 +7402,15 @@
         "strength": 0.2,
         "radius": 3
       },
-      "haptic": "10ms @ 0.33",
+      "haptic": "77ms @ 0.80",
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6376
+          "line": 8073
         },
         {
           "file": "path/src/main.js",
-          "line": 7386
+          "line": 9223
         }
       ]
     },
@@ -6327,11 +7427,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6381
+          "line": 8078
         },
         {
           "file": "path/src/main.js",
-          "line": 7388
+          "line": 9225
         }
       ]
     },
@@ -6351,7 +7451,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2124
+          "line": 3088
         }
       ]
     },
@@ -6371,7 +7471,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4173
+          "line": 4673
         }
       ]
     },
@@ -6391,7 +7491,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4230
+          "line": 4730
         }
       ]
     },
@@ -6408,7 +7508,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4767
+          "line": 5468
         }
       ]
     },
@@ -6488,7 +7588,44 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4222
+          "line": 4722
+        }
+      ]
+    },
+    {
+      "name": "cardReroll",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0.09,
+      "hitstop": 0,
+      "glow": 0.3,
+      "ripple": {
+        "strength": 1.4,
+        "radius": 10
+      },
+      "haptic": "30ms @ 0.55",
+      "sites": [
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 5997
+        }
+      ]
+    },
+    {
+      "name": "rerollEarned",
+      "sfx": "procGain",
+      "sfxMinGap": 0.12,
+      "emit": "procGain",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.5,
+      "ripple": null,
+      "haptic": "22ms @ 0.40",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 3453
         }
       ]
     },
@@ -6508,7 +7645,58 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4385
+          "line": 4910
+        }
+      ]
+    },
+    {
+      "name": "sealPeek",
+      "sfx": "sealPeek",
+      "sfxMinGap": 0.25,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/systems/levelUpSeal.js",
+          "line": 1374
+        }
+      ]
+    },
+    {
+      "name": "sealNose",
+      "sfx": "sealNose",
+      "sfxMinGap": 0.12,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/systems/levelUpSeal.js",
+          "line": 1505
+        }
+      ]
+    },
+    {
+      "name": "sealBolt",
+      "sfx": "sealBolt",
+      "sfxMinGap": 0.2,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/systems/levelUpSeal.js",
+          "line": 1381
         }
       ]
     },
@@ -6528,7 +7716,7 @@
       "sites": [
         {
           "file": "path/src/systems/celebrate.js",
-          "line": 202
+          "line": 213
         }
       ]
     },
@@ -6548,7 +7736,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4802
+          "line": 6225
         }
       ]
     },
@@ -6565,12 +7753,19 @@
         "radius": 12
       },
       "haptic": "18ms / 26ms / 30ms",
-      "sites": [
-        {
-          "file": "path/src/main.js",
-          "line": 7283
-        }
-      ]
+      "sites": []
+    },
+    {
+      "name": "chumMorsel",
+      "sfx": "chumMorsel",
+      "sfxMinGap": 0,
+      "emit": "chumMorsel",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.04,
+      "ripple": null,
+      "haptic": null,
+      "sites": []
     },
     {
       "name": "uiHover",
@@ -6585,55 +7780,83 @@
       "sites": [
         {
           "file": "path/src/systems/mainMenu.js",
-          "line": 818
+          "line": 1001
         },
         {
           "file": "path/src/systems/mainMenu.js",
-          "line": 1033
+          "line": 1226
+        },
+        {
+          "file": "path/src/systems/mainMenu.js",
+          "line": 1260
+        },
+        {
+          "file": "path/src/ui/accessoryDrawer.js",
+          "line": 507
+        },
+        {
+          "file": "path/src/ui/accessoryDrawer.js",
+          "line": 519
         },
         {
           "file": "path/src/ui/hiveReward.js",
           "line": 277
         },
         {
-          "file": "path/src/ui/pauseMenu.js",
-          "line": 382
+          "file": "path/src/ui/panelNav.js",
+          "line": 196
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 433
+          "line": 402
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 445
+          "line": 463
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 507
+          "line": 475
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 677
+          "line": 537
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 710
+          "line": 707
+        },
+        {
+          "file": "path/src/ui/pauseMenu.js",
+          "line": 740
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 468
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 613
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 642
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 127
+          "line": 150
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 2937
+          "line": 3128
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 5435
+          "line": 6308
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 5584
+          "line": 6459
         }
       ]
     },
@@ -6650,11 +7873,15 @@
       "sites": [
         {
           "file": "path/src/systems/mainMenu.js",
-          "line": 919
+          "line": 1109
         },
         {
           "file": "path/src/systems/mainMenu.js",
-          "line": 1038
+          "line": 1265
+        },
+        {
+          "file": "path/src/ui/accessoryDrawer.js",
+          "line": 386
         },
         {
           "file": "path/src/ui/hiveReward.js",
@@ -6662,43 +7889,132 @@
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 384
+          "line": 404
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 436
+          "line": 466
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 447
+          "line": 477
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 630
+          "line": 660
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 668
+          "line": 698
         },
         {
           "file": "path/src/ui/pauseMenu.js",
-          "line": 729
+          "line": 759
+        },
+        {
+          "file": "path/src/ui/roomLobby.js",
+          "line": 225
+        },
+        {
+          "file": "path/src/ui/roomLobby.js",
+          "line": 255
+        },
+        {
+          "file": "path/src/ui/roomLobby.js",
+          "line": 277
+        },
+        {
+          "file": "path/src/ui/roomLobby.js",
+          "line": 293
+        },
+        {
+          "file": "path/src/ui/roomLobby.js",
+          "line": 298
+        },
+        {
+          "file": "path/src/ui/roomLobby.js",
+          "line": 309
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 426
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 475
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 560
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 573
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 576
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 584
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 656
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 670
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 678
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 802
+        },
+        {
+          "file": "path/src/ui/teamSelect.js",
+          "line": 834
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 128
+          "line": 151
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 2938
+          "line": 3129
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3374
+          "line": 3745
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 5378
+          "line": 6239
+        },
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 6492
+        }
+      ]
+    },
+    {
+      "name": "unlock",
+      "sfx": "uiClick",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": "40ms @ 0.45",
+      "sites": [
+        {
+          "file": "path/src/ui/unlockToast.js",
+          "line": 145
         }
       ]
     },
@@ -6715,7 +8031,41 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3059
+          "line": 3273
+        }
+      ]
+    },
+    {
+      "name": "nameRoll",
+      "sfx": "nameRoll",
+      "sfxMinGap": 0.05,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 3440
+        }
+      ]
+    },
+    {
+      "name": "nameSettle",
+      "sfx": "nameSettle",
+      "sfxMinGap": 0.05,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 3441
         }
       ]
     },
@@ -6735,19 +8085,19 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6735
+          "line": 8472
         },
         {
           "file": "path/src/main.js",
-          "line": 7108
+          "line": 8860
         },
         {
           "file": "path/src/main.js",
-          "line": 7175
+          "line": 8931
         },
         {
           "file": "path/src/main.js",
-          "line": 7421
+          "line": 9258
         }
       ]
     },
@@ -6764,7 +8114,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7126
+          "line": 8882
         }
       ]
     },
@@ -6781,7 +8131,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5976
+          "line": 7642
         }
       ]
     },
@@ -6798,7 +8148,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2355
+          "line": 3434
         }
       ]
     },
@@ -6818,11 +8168,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6450
+          "line": 8152
         },
         {
           "file": "path/src/main.js",
-          "line": 7141
+          "line": 8897
         }
       ]
     },
@@ -6862,15 +8212,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2815
+          "line": 3935
         },
         {
           "file": "path/src/main.js",
-          "line": 6448
+          "line": 8150
         },
         {
           "file": "path/src/main.js",
-          "line": 7058
+          "line": 8810
         }
       ]
     },
@@ -6890,7 +8240,7 @@
       "sites": [
         {
           "file": "path/src/systems/boats.js",
-          "line": 721
+          "line": 1144
         }
       ]
     },
@@ -6907,7 +8257,27 @@
       "sites": [
         {
           "file": "path/src/systems/boss.js",
-          "line": 735
+          "line": 805
+        }
+      ]
+    },
+    {
+      "name": "spawnSurge",
+      "sfx": "spawnSurge",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0.05,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 2.2,
+        "radius": 42
+      },
+      "haptic": "120ms @ 0.45",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 7913
         }
       ]
     },
@@ -7057,14 +8427,14 @@
     },
     {
       "name": "bossHit",
-      "sfx": "bossHit2",
+      "sfx": null,
       "sfxMinGap": 0.11,
       "emit": null,
-      "shake": 0.19,
+      "shake": 0,
       "hitstop": 0,
-      "glow": 0.55,
+      "glow": 0.12,
       "ripple": null,
-      "haptic": "30ms @ 0.50",
+      "haptic": null,
       "sites": []
     },
     {
@@ -7383,7 +8753,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6934
+          "line": 8686
         }
       ]
     },
@@ -7403,7 +8773,24 @@
       "sites": [
         {
           "file": "path/src/systems/bossHotSpots.js",
-          "line": 1579
+          "line": 2001
+        }
+      ]
+    },
+    {
+      "name": "hotSpotSeep",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": "hotSpotSeep",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": [
+        {
+          "file": "path/src/systems/bossHotSpots.js",
+          "line": 2343
         }
       ]
     },
@@ -7423,7 +8810,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossHotSpots.js",
-          "line": 1627
+          "line": 2049
         }
       ]
     },
@@ -7443,7 +8830,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4874
+          "line": 6297
         }
       ]
     },
@@ -7460,7 +8847,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4926
+          "line": 6349
         }
       ]
     },
@@ -7480,11 +8867,11 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 915
+          "line": 1543
         },
         {
           "file": "path/src/main.js",
-          "line": 5659
+          "line": 7314
         }
       ]
     },
@@ -7504,7 +8891,7 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 924
+          "line": 1562
         }
       ]
     },
@@ -7544,7 +8931,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5491
+          "line": 7118
         }
       ]
     },
@@ -7564,7 +8951,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 1899
+          "line": 2839
         }
       ]
     },
@@ -7581,7 +8968,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6122
+          "line": 7775
         }
       ]
     },
@@ -7601,7 +8988,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6171
+          "line": 7824
         }
       ]
     },
@@ -7621,7 +9008,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3646
+          "line": 4900
         }
       ]
     },
@@ -7641,7 +9028,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3647
+          "line": 4901
         }
       ]
     },
@@ -7661,15 +9048,15 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 825
+          "line": 1422
         },
         {
           "file": "path/src/main.js",
-          "line": 6187
+          "line": 7859
         },
         {
           "file": "path/src/main.js",
-          "line": 6430
+          "line": 8132
         }
       ]
     },
@@ -7689,11 +9076,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6639
+          "line": 8376
         },
         {
           "file": "path/src/main.js",
-          "line": 7227
+          "line": 8991
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3033
         }
       ]
     },
@@ -7713,7 +9104,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7335
+          "line": 9161
         }
       ]
     },
@@ -7730,7 +9121,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6208
+          "line": 7880
         }
       ]
     },
@@ -7750,7 +9141,7 @@
       "sites": [
         {
           "file": "path/src/systems/boats.js",
-          "line": 274
+          "line": 584
         }
       ]
     },
@@ -7770,7 +9161,7 @@
       "sites": [
         {
           "file": "path/src/systems/boats.js",
-          "line": 514
+          "line": 937
         }
       ]
     },
@@ -7790,7 +9181,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7193
+          "line": 8949
         }
       ]
     },
@@ -7807,12 +9198,7 @@
         "radius": 8
       },
       "haptic": "12ms",
-      "sites": [
-        {
-          "file": "path/src/main.js",
-          "line": 7272
-        }
-      ]
+      "sites": []
     },
     {
       "name": "coralTaken",
@@ -7830,7 +9216,27 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7240
+          "line": 9007
+        }
+      ]
+    },
+    {
+      "name": "scoreCoralTaken",
+      "sfx": "levelUp",
+      "sfxMinGap": 0,
+      "emit": "levelUp",
+      "shake": 0.14,
+      "hitstop": 0,
+      "glow": 0.8,
+      "ripple": {
+        "strength": 1.8,
+        "radius": 10
+      },
+      "haptic": "14ms / 20ms / 14ms",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 9117
         }
       ]
     },
@@ -7850,7 +9256,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7311
+          "line": 9136
         }
       ]
     },
@@ -7904,7 +9310,7 @@
       "sfx": "missileImpact",
       "sfxMinGap": 0.05,
       "emit": "missileImpact",
-      "shake": 0,
+      "shake": 0.3,
       "hitstop": 0.045,
       "glow": 0.9,
       "ripple": {
@@ -7915,7 +9321,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2536
+          "line": 3646
         }
       ]
     },
@@ -7924,7 +9330,7 @@
       "sfx": "strike",
       "sfxMinGap": 0,
       "emit": "boost",
-      "shake": 0,
+      "shake": 0.18,
       "hitstop": 0,
       "glow": 0.5,
       "ripple": {
@@ -7935,7 +9341,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6044
+          "line": 7697
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2535
         }
       ]
     },
@@ -7952,7 +9362,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6060
+          "line": 7713
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2541
         }
       ]
     },
@@ -7961,7 +9375,7 @@
       "sfx": "strikeChain",
       "sfxMinGap": 0,
       "emit": "sparks",
-      "shake": 0,
+      "shake": 0.06,
       "hitstop": 0,
       "glow": 0.3,
       "ripple": {
@@ -7972,7 +9386,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3344
+          "line": 4598
         }
       ]
     },
@@ -7981,7 +9395,7 @@
       "sfx": "pearlBurst",
       "sfxMinGap": 0.06,
       "emit": "explosion",
-      "shake": 0,
+      "shake": 0.12,
       "hitstop": 0,
       "glow": 0.55,
       "ripple": {
@@ -7992,7 +9406,27 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5961
+          "line": 7627
+        }
+      ]
+    },
+    {
+      "name": "pickupBlast",
+      "sfx": "pickupBlast",
+      "sfxMinGap": 0.06,
+      "emit": "pickupBlast",
+      "shake": 0.44,
+      "hitstop": 0,
+      "glow": 0.8,
+      "ripple": {
+        "strength": 3,
+        "radius": 16
+      },
+      "haptic": "36ms @ 0.80",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 5056
         }
       ]
     },
@@ -8001,7 +9435,7 @@
       "sfx": "sealRam",
       "sfxMinGap": 0.07,
       "emit": "bite",
-      "shake": 0,
+      "shake": 0.16,
       "hitstop": 0.095,
       "glow": 0.35,
       "ripple": {
@@ -8012,11 +9446,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6964
+          "line": 8716
         },
         {
           "file": "path/src/main.js",
-          "line": 7080
+          "line": 8832
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2493
         }
       ]
     },
@@ -8036,7 +9474,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7002
+          "line": 8754
         }
       ]
     },
@@ -8056,7 +9494,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6411
+          "line": 8112
         }
       ]
     },
@@ -8073,11 +9511,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7011
+          "line": 8763
         },
         {
           "file": "path/src/main.js",
-          "line": 7082
+          "line": 8834
         }
       ]
     },
@@ -8094,7 +9532,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5815
+          "line": 7479
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2576
         }
       ]
     },
@@ -8111,7 +9553,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5836
+          "line": 7500
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2581
         }
       ]
     },
@@ -8131,7 +9577,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3732
+          "line": 4993
         }
       ]
     },
@@ -8148,7 +9594,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7033
+          "line": 8785
         }
       ]
     },
@@ -8165,7 +9611,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7538
+          "line": 9375
         }
       ]
     },
@@ -8185,7 +9631,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3284
+          "line": 4538
         }
       ]
     },
@@ -8256,7 +9702,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6598
+          "line": 8335
         }
       ]
     },
@@ -8276,7 +9722,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6604
+          "line": 8341
         }
       ]
     },
@@ -8296,9 +9742,329 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6652
+          "line": 8389
         }
       ]
+    },
+    {
+      "name": "versusBallBreach",
+      "sfx": "breach",
+      "sfxMinGap": 0.2,
+      "emit": "splash",
+      "shake": 0.08,
+      "hitstop": 0,
+      "glow": 0.25,
+      "ripple": {
+        "strength": 1.8,
+        "radius": 8
+      },
+      "haptic": "8ms",
+      "sites": []
+    },
+    {
+      "name": "versusBallReentry",
+      "sfx": "reentry",
+      "sfxMinGap": 0.2,
+      "emit": "reentry",
+      "shake": 0.2,
+      "hitstop": 0,
+      "glow": 0.45,
+      "ripple": {
+        "strength": 3,
+        "radius": 12
+      },
+      "haptic": "14ms",
+      "sites": []
+    },
+    {
+      "name": "versusBallHit",
+      "sfx": "versusBallHit",
+      "sfxMinGap": 0.05,
+      "emit": "ballSplash",
+      "shake": 0.08,
+      "hitstop": 0,
+      "glow": 0.3,
+      "ripple": {
+        "strength": 1.4,
+        "radius": 7
+      },
+      "haptic": "22ms @ 0.50",
+      "sites": []
+    },
+    {
+      "name": "versusBlock",
+      "sfx": "versusBlock",
+      "sfxMinGap": 0.06,
+      "emit": "ballSplash",
+      "shake": 0.1,
+      "hitstop": 0,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 1.8,
+        "radius": 8
+      },
+      "haptic": "28ms @ 0.60",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 1857
+        }
+      ]
+    },
+    {
+      "name": "versusPierce",
+      "sfx": "versusPierce",
+      "sfxMinGap": 0.06,
+      "emit": "ballSplash",
+      "shake": 0.09,
+      "hitstop": 0,
+      "glow": 0.4,
+      "ripple": {
+        "strength": 2,
+        "radius": 9
+      },
+      "haptic": "26ms @ 0.55",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2114
+        }
+      ]
+    },
+    {
+      "name": "versusSave",
+      "sfx": "versusSave",
+      "sfxMinGap": 0.2,
+      "emit": null,
+      "shake": 0.12,
+      "hitstop": 0,
+      "glow": 0.5,
+      "ripple": {
+        "strength": 2.2,
+        "radius": 11
+      },
+      "haptic": "73ms @ 0.78",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 4595
+        }
+      ]
+    },
+    {
+      "name": "versusBallWall",
+      "sfx": "versusBallWall",
+      "sfxMinGap": 0.05,
+      "emit": "ballSplash",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.2,
+      "ripple": {
+        "strength": 1,
+        "radius": 6
+      },
+      "haptic": "16ms @ 0.35",
+      "sites": []
+    },
+    {
+      "name": "bodyCheck",
+      "sfx": "bodyCheck",
+      "sfxMinGap": 0.05,
+      "emit": "bite",
+      "shake": 0.12,
+      "hitstop": 0.035,
+      "glow": 0.35,
+      "ripple": {
+        "strength": 1.6,
+        "radius": 8
+      },
+      "haptic": "34ms @ 0.70",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3128
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3225
+        }
+      ]
+    },
+    {
+      "name": "sealBurst",
+      "sfx": "versusBurst",
+      "sfxMinGap": 0.1,
+      "emit": "bite",
+      "shake": 0.3,
+      "hitstop": 0.05,
+      "glow": 0.7,
+      "ripple": {
+        "strength": 2.6,
+        "radius": 12
+      },
+      "haptic": "60ms @ 1.00",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2666
+        }
+      ]
+    },
+    {
+      "name": "versusRespawn",
+      "sfx": "versusRespawn",
+      "sfxMinGap": 0.1,
+      "emit": "boost",
+      "shake": 0.04,
+      "hitstop": 0,
+      "glow": 0.3,
+      "ripple": {
+        "strength": 1.2,
+        "radius": 7
+      },
+      "haptic": "20ms @ 0.40",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2704
+        }
+      ]
+    },
+    {
+      "name": "versusGoal",
+      "sfx": "versusGoal",
+      "sfxMinGap": 0,
+      "emit": "goalSpray",
+      "shake": 0.3,
+      "hitstop": 0,
+      "glow": 0.8,
+      "ripple": {
+        "strength": 3.2,
+        "radius": 16
+      },
+      "haptic": "156ms @ 0.90 + 120ms @ 0.35",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3886
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 5327
+        },
+        {
+          "file": "path/src/ui/workbench.js",
+          "line": 2578
+        }
+      ]
+    },
+    {
+      "name": "versusGoalCheer",
+      "sfx": "versusGoalCheer",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.2,
+      "ripple": null,
+      "haptic": "",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3887
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 5342
+        },
+        {
+          "file": "path/src/ui/workbench.js",
+          "line": 2579
+        }
+      ]
+    },
+    {
+      "name": "versusPost",
+      "sfx": "versusPost",
+      "sfxMinGap": 0.04,
+      "emit": "sparks",
+      "shake": 0.05,
+      "hitstop": 0,
+      "glow": 0.2,
+      "ripple": {
+        "strength": 0.9,
+        "radius": 5
+      },
+      "haptic": "16ms @ 0.35",
+      "sites": []
+    },
+    {
+      "name": "versusCountdown",
+      "sfx": "versusCountdown",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.1,
+      "ripple": {
+        "strength": 0.6,
+        "radius": 6
+      },
+      "haptic": "12ms @ 0.25",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3568
+        }
+      ]
+    },
+    {
+      "name": "versusKickoff",
+      "sfx": "versusKickoff",
+      "sfxMinGap": 0,
+      "emit": "boost",
+      "shake": 0.06,
+      "hitstop": 0,
+      "glow": 0.45,
+      "ripple": {
+        "strength": 2,
+        "radius": 12
+      },
+      "haptic": "30ms @ 0.50",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 3588
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 4253
+        }
+      ]
+    },
+    {
+      "name": "versusWin",
+      "sfx": "versusWin",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.6,
+      "ripple": null,
+      "haptic": "90ms @ 0.80 + 140ms @ 0.40",
+      "sites": []
+    },
+    {
+      "name": "versusLose",
+      "sfx": "versusLose",
+      "sfxMinGap": 0,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.15,
+      "ripple": null,
+      "haptic": "200ms @ 0.25",
+      "sites": []
     },
     {
       "name": "sealLunge",
@@ -8316,11 +10082,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6651
+          "line": 8388
         },
         {
           "file": "path/src/main.js",
-          "line": 6733
+          "line": 8470
         }
       ]
     },
@@ -8337,7 +10103,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6653
+          "line": 8390
         }
       ]
     },
@@ -8357,7 +10123,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6664
+          "line": 8401
         }
       ]
     },
@@ -8374,7 +10140,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6582
+          "line": 8308
         }
       ]
     },
@@ -8394,7 +10160,27 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6593
+          "line": 8319
+        }
+      ]
+    },
+    {
+      "name": "sardineHit",
+      "sfx": "sardineHit",
+      "sfxMinGap": 0.09,
+      "emit": "bounce",
+      "shake": 0.012,
+      "hitstop": 0,
+      "glow": 0.12,
+      "ripple": {
+        "strength": 0.35,
+        "radius": 3
+      },
+      "haptic": "8ms @ 0.16",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 8330
         }
       ]
     },
@@ -8414,7 +10200,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6669
+          "line": 8406
         }
       ]
     },
@@ -8434,7 +10220,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6766
+          "line": 8504
         }
       ]
     },
@@ -8454,7 +10240,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6785
+          "line": 8523
         }
       ]
     },
@@ -8483,7 +10269,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6800
+          "line": 8538
         }
       ]
     },
@@ -8503,7 +10289,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6816
+          "line": 8554
         }
       ]
     },
@@ -8523,7 +10309,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6829
+          "line": 8567
         }
       ]
     },
@@ -8532,7 +10318,7 @@
       "sfx": "clubFreeze",
       "sfxMinGap": 0.06,
       "emit": "bubbleBurst",
-      "shake": 0.06,
+      "shake": 0,
       "hitstop": 0,
       "glow": 0.45,
       "ripple": {
@@ -8543,7 +10329,27 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6848
+          "line": 8600
+        }
+      ]
+    },
+    {
+      "name": "clubZap",
+      "sfx": "clubZap",
+      "sfxMinGap": 0.12,
+      "emit": "clubSparks",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.6,
+      "ripple": {
+        "strength": 1.1,
+        "radius": 6
+      },
+      "haptic": "10ms @ 0.28",
+      "sites": [
+        {
+          "file": "path/src/main.js",
+          "line": 8594
         }
       ]
     },
@@ -8584,6 +10390,18 @@
       "sites": []
     },
     {
+      "name": "clubSparks",
+      "sfx": null,
+      "sfxMinGap": 0,
+      "emit": "clubSparks",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.3,
+      "ripple": null,
+      "haptic": null,
+      "sites": []
+    },
+    {
       "name": "belugaTrap",
       "sfx": "belugaTrap",
       "sfxMinGap": 0.05,
@@ -8599,7 +10417,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6615
+          "line": 8352
         }
       ]
     },
@@ -8619,7 +10437,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6620
+          "line": 8357
         }
       ]
     },
@@ -8639,7 +10457,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6624
+          "line": 8361
         }
       ]
     },
@@ -8707,12 +10525,7 @@
         "radius": 6
       },
       "haptic": "14ms @ 0.25",
-      "sites": [
-        {
-          "file": "path/src/main.js",
-          "line": 6464
-        }
-      ]
+      "sites": []
     },
     {
       "name": "elementFreeze",
@@ -8730,7 +10543,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6466
+          "line": 8182
         }
       ]
     },
@@ -8750,7 +10563,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6567
+          "line": 8289
         }
       ]
     },
@@ -8767,7 +10580,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6568
+          "line": 8290
         }
       ]
     },
@@ -8802,7 +10615,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6679
+          "line": 8416
         }
       ]
     },
@@ -8819,7 +10632,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6684
+          "line": 8421
         }
       ]
     },
@@ -8839,7 +10652,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6481
+          "line": 8197
         }
       ]
     },
@@ -8856,7 +10669,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6693
+          "line": 8430
         }
       ]
     },
@@ -8876,7 +10689,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4497
+          "line": 5920
         }
       ]
     },
@@ -8893,7 +10706,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6188
+          "line": 7860
         }
       ]
     },
@@ -8913,7 +10726,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4517
+          "line": 5940
         }
       ]
     },
@@ -8933,7 +10746,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4594
+          "line": 6017
         }
       ]
     },
@@ -8953,7 +10766,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6721
+          "line": 8458
         }
       ]
     },
@@ -8970,7 +10783,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6862
+          "line": 8614
         }
       ]
     },
@@ -8990,7 +10803,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6865
+          "line": 8617
         }
       ]
     },
@@ -8999,7 +10812,7 @@
       "sfx": "orcaStrike",
       "sfxMinGap": 0.06,
       "emit": "splash",
-      "shake": 0,
+      "shake": 0.3,
       "hitstop": 0.04,
       "glow": 0.5,
       "ripple": {
@@ -9010,11 +10823,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6727
+          "line": 8464
         },
         {
           "file": "path/src/main.js",
-          "line": 6734
+          "line": 8471
         }
       ]
     },
@@ -9031,7 +10844,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6888
+          "line": 8640
         }
       ]
     },
@@ -9051,7 +10864,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6909
+          "line": 8661
         }
       ]
     },
@@ -9068,7 +10881,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5662
+          "line": 7317
         }
       ]
     },
@@ -9088,7 +10901,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5675
+          "line": 7330
         }
       ]
     },
@@ -9123,7 +10936,7 @@
       "sites": [
         {
           "file": "path/src/systems/deathDive.js",
-          "line": 610
+          "line": 694
         }
       ]
     },
@@ -9143,7 +10956,7 @@
       "sites": [
         {
           "file": "path/src/systems/deathDive.js",
-          "line": 614
+          "line": 698
         }
       ]
     },
@@ -9163,7 +10976,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5686
+          "line": 7341
         }
       ]
     },
@@ -9180,7 +10993,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5711
+          "line": 7366
         }
       ]
     },
@@ -9197,7 +11010,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5712
+          "line": 7367
         }
       ]
     },
@@ -9214,7 +11027,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5721
+          "line": 7376
         }
       ]
     },
@@ -9234,7 +11047,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5723
+          "line": 7378
         }
       ]
     },
@@ -9251,7 +11064,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5726
+          "line": 7381
         }
       ]
     }
@@ -9364,7 +11177,7 @@
     "ambient": {
       "enabled": true,
       "mode": "sporadic",
-      "volume": 0.68,
+      "volume": 0.57,
       "gapSeconds": 22,
       "gapVary": 0.55,
       "fadeSeconds": 1.8,
@@ -9425,6 +11238,15 @@
           "seconds": 7.52325
         }
       ]
+    },
+    "splashBed": {
+      "enabled": true,
+      "volume": 0.3,
+      "fadeIn": 2.6,
+      "fadeOut": 0.9,
+      "pitchVary": 0,
+      "slots": 4,
+      "clips": []
     },
     "flight": [
       {
@@ -9510,6 +11332,7 @@
       "name": "FF_ES_fx_explosion_lightning.mp3",
       "usedBy": [
         "thunderCrack",
+        "versusGoal",
         "clubShock"
       ]
     },
@@ -9529,7 +11352,9 @@
       "bytes": 100937,
       "seconds": 8.385333,
       "name": "OLIVER_DWILLY_FX_retro_laser_shutdown.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusLose"
+      ]
     },
     {
       "path": "/sfx/OLIVER_DWILLY_FX_hiphop_midnight_riser.mp3",
@@ -9537,7 +11362,9 @@
       "bytes": 94667,
       "seconds": 7.862833,
       "name": "OLIVER_DWILLY_FX_hiphop_midnight_riser.mp3",
-      "usedBy": []
+      "usedBy": [
+        "spawnSurge"
+      ]
     },
     {
       "path": "/sfx/Seal_Death_02.mp3",
@@ -9575,7 +11402,9 @@
       "bytes": 77426,
       "seconds": 6.426083,
       "name": "OLIVER_DWILLY_FX_swell_glitter_elite.mp3",
-      "usedBy": []
+      "usedBy": [
+        "spawnSurge"
+      ]
     },
     {
       "path": "/sfx/EG_MouthWindfall_02.mp3",
@@ -9595,7 +11424,8 @@
       "seconds": 2.088,
       "name": "HG_SF_FX_beboplex_2.mp3",
       "usedBy": [
-        "chumFull"
+        "chumFull",
+        "uiClick"
       ]
     },
     {
@@ -9635,7 +11465,8 @@
       "seconds": 5.694667,
       "name": "OLIVER_DWILLY_FX_white_noise_impact_basic.mp3",
       "usedBy": [
-        "bossArrive"
+        "bossArrive",
+        "spawnSurge"
       ]
     },
     {
@@ -9655,7 +11486,8 @@
       "seconds": 5.17225,
       "name": "OLIVER_DWILLY_FX_planet_killer_sub_impact.mp3",
       "usedBy": [
-        "bossArrive"
+        "bossArrive",
+        "versusGoalCheer"
       ]
     },
     {
@@ -9738,7 +11570,9 @@
       "bytes": 39810,
       "seconds": 3.291417,
       "name": "ESM_Fast_Mechanical_Computer_Program_Particle_Sci_Fi_Abstract_Loading_Particle_Military.mp3",
-      "usedBy": []
+      "usedBy": [
+        "uiClick"
+      ]
     },
     {
       "path": "/sfx/ESM_PG_cinematic_fx_magic_item_award_hit_chime_ding_positive_shimmer_04.mp3",
@@ -9774,7 +11608,9 @@
       "bytes": 38870,
       "seconds": 3.213083,
       "name": "OLIVER_DWILLY_FX_ukg_lazer_beam.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusSave"
+      ]
     },
     {
       "path": "/sfx/HGUI_s37_BubbleBeam_01_lo.mp3",
@@ -9792,7 +11628,9 @@
       "bytes": 38592,
       "seconds": 2.376,
       "name": "HGUI_s37_BubbleBeam_04_lo.mp3",
-      "usedBy": []
+      "usedBy": [
+        "swirlBed"
+      ]
     },
     {
       "path": "/sfx/HG_FLY_Breath_Jers.mp3",
@@ -9951,7 +11789,8 @@
       "seconds": 0.696,
       "name": "fluteseal_01.mp3",
       "usedBy": [
-        "breach"
+        "breach",
+        "sealBolt"
       ]
     },
     {
@@ -10085,7 +11924,9 @@
       "bytes": 22883,
       "seconds": 1.880833,
       "name": "OLIVER_DWILLY_105_FX_german_electro_dancing_lazer_bubbles.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusBallWall"
+      ]
     },
     {
       "path": "/sfx/EG_Grumbler_01.mp3",
@@ -10157,12 +11998,26 @@
       ]
     },
     {
+      "path": "/sfx/Seal_Call_02.mp3",
+      "exists": true,
+      "bytes": 19121,
+      "seconds": 1.567333,
+      "name": "Seal_Call_02.mp3",
+      "usedBy": [
+        "sealPeek",
+        "sealBolt"
+      ]
+    },
+    {
       "path": "/sfx/FF_AS_fish_splash_low_drop.mp3",
       "exists": true,
       "bytes": 18808,
       "seconds": 1.54125,
       "name": "FF_AS_fish_splash_low_drop.mp3",
-      "usedBy": []
+      "usedBy": [
+        "pearlBurst",
+        "pickupBlast"
+      ]
     },
     {
       "path": "/sfx/HG_FLY_Beach_003.mp3",
@@ -10170,9 +12025,7 @@
       "bytes": 18807,
       "seconds": 0.470175,
       "name": "HG_FLY_Beach_003.mp3",
-      "usedBy": [
-        "pearlBurst"
-      ]
+      "usedBy": []
     },
     {
       "path": "/sfx/Electricity_02.mp3",
@@ -10201,6 +12054,16 @@
       "seconds": 1.489,
       "name": "EliArf_EatChum_08.mp3",
       "usedBy": []
+    },
+    {
+      "path": "/sfx/Seal_Call_01.mp3",
+      "exists": true,
+      "bytes": 18181,
+      "seconds": 1.489,
+      "name": "Seal_Call_01.mp3",
+      "usedBy": [
+        "sealBolt"
+      ]
     },
     {
       "path": "/sfx/ESM_Fantasy_Game_Material_Water_Bubble_Potion_3_Magic_RPG_Apothecary_Ancient_Medieval_Element_Accent_Impact.mp3",
@@ -10290,9 +12153,7 @@
       "bytes": 16613,
       "seconds": 1.358333,
       "name": "FF_AS_fish_splash_tone.mp3",
-      "usedBy": [
-        "reentry"
-      ]
+      "usedBy": []
     },
     {
       "path": "/sfx/Seal_56.mp3",
@@ -10302,7 +12163,8 @@
       "name": "Seal_56.mp3",
       "usedBy": [
         "breach",
-        "seabedThud"
+        "seabedThud",
+        "sealPeek"
       ]
     },
     {
@@ -10341,8 +12203,7 @@
       "name": "DS_SCB_foley_one_shot_water_droplet_echo.mp3",
       "usedBy": [
         "bubblePop",
-        "octoGrab",
-        "uiClick"
+        "octoGrab"
       ]
     },
     {
@@ -10356,13 +12217,24 @@
       ]
     },
     {
+      "path": "/sfx/Seal_Huff.mp3",
+      "exists": true,
+      "bytes": 15673,
+      "seconds": 1.28,
+      "name": "Seal_Huff.mp3",
+      "usedBy": [
+        "reentry"
+      ]
+    },
+    {
       "path": "/sfx/Seal_05.mp3",
       "exists": true,
       "bytes": 15046,
       "seconds": 1.22775,
       "name": "Seal_05.mp3",
       "usedBy": [
-        "playerDeath"
+        "playerDeath",
+        "sealNose"
       ]
     },
     {
@@ -10453,7 +12325,8 @@
       "seconds": 1.097167,
       "name": "Seal_58.mp3",
       "usedBy": [
-        "seabedThud"
+        "seabedThud",
+        "sealNose"
       ]
     },
     {
@@ -10551,7 +12424,9 @@
       "seconds": 0.888167,
       "name": "Seal_07.mp3",
       "usedBy": [
-        "boostEmpty"
+        "boostEmpty",
+        "sealPeek",
+        "sealNose"
       ]
     },
     {
@@ -10606,7 +12481,10 @@
       "bytes": 10658,
       "seconds": 0.862083,
       "name": "Seal_13.mp3",
-      "usedBy": []
+      "usedBy": [
+        "sealPeek",
+        "sealNose"
+      ]
     },
     {
       "path": "/sfx/Seal_Breach_01.mp3",
@@ -10653,7 +12531,7 @@
       "seconds": 0.835917,
       "name": "Seal_PlayerHit_08.mp3",
       "usedBy": [
-        "playerHit"
+        "surfacing"
       ]
     },
     {
@@ -10693,7 +12571,7 @@
       "seconds": 0.783667,
       "name": "EliArf_TakeDamage_01.mp3",
       "usedBy": [
-        "playerHit"
+        "bodyCheck"
       ]
     },
     {
@@ -10797,7 +12675,8 @@
       "seconds": 0.731417,
       "name": "Seal_FoodChain_01.mp3",
       "usedBy": [
-        "foodChain"
+        "foodChain",
+        "sealNose"
       ]
     },
     {
@@ -10807,7 +12686,8 @@
       "seconds": 0.731417,
       "name": "Seal_Weddell_06.mp3",
       "usedBy": [
-        "celebrate"
+        "celebrate",
+        "sealNose"
       ]
     },
     {
@@ -10817,7 +12697,8 @@
       "seconds": 0.731417,
       "name": "Seal_Weddell_07.mp3",
       "usedBy": [
-        "celebrate"
+        "celebrate",
+        "sealPeek"
       ]
     },
     {
@@ -10904,7 +12785,9 @@
       "bytes": 8150,
       "seconds": 0.653083,
       "name": "Seal_PlayerHit_FoodChain_03.mp3",
-      "usedBy": []
+      "usedBy": [
+        "sealNose"
+      ]
     },
     {
       "path": "/sfx/Seal_Weddell_05.mp3",
@@ -10913,7 +12796,8 @@
       "seconds": 0.653083,
       "name": "Seal_Weddell_05.mp3",
       "usedBy": [
-        "celebrate"
+        "celebrate",
+        "sealNose"
       ]
     },
     {
@@ -10922,7 +12806,9 @@
       "bytes": 8064,
       "seconds": 0.468,
       "name": "HGUI_s37_Smack_07_lo.mp3",
-      "usedBy": []
+      "usedBy": [
+        "bodyCheck"
+      ]
     },
     {
       "path": "/sfx/ESM_MG3_fx_foley_slime_smash_squish_splat_01c.mp3",
@@ -10930,7 +12816,9 @@
       "bytes": 7836,
       "seconds": 0.626917,
       "name": "ESM_MG3_fx_foley_slime_smash_squish_splat_01c.mp3",
-      "usedBy": []
+      "usedBy": [
+        "bodyCheck"
+      ]
     },
     {
       "path": "/sfx/Seal_Paps_takeDamage_03.mp3",
@@ -10938,8 +12826,16 @@
       "bytes": 7836,
       "seconds": 0.626917,
       "name": "Seal_Paps_takeDamage_03.mp3",
+      "usedBy": []
+    },
+    {
+      "path": "/sfx/Seal_Wa_01.mp3",
+      "exists": true,
+      "bytes": 7836,
+      "seconds": 0.626917,
+      "name": "Seal_Wa_01.mp3",
       "usedBy": [
-        "playerHit"
+        "sealPeek"
       ]
     },
     {
@@ -10949,7 +12845,8 @@
       "seconds": 0.626917,
       "name": "Seal_Weddell_03.mp3",
       "usedBy": [
-        "celebrate"
+        "celebrate",
+        "sealNose"
       ]
     },
     {
@@ -10971,6 +12868,16 @@
       "usedBy": [
         "eelChain",
         "elementHit"
+      ]
+    },
+    {
+      "path": "/sfx/Seal_Wa_02.mp3",
+      "exists": true,
+      "bytes": 7523,
+      "seconds": 0.600833,
+      "name": "Seal_Wa_02.mp3",
+      "usedBy": [
+        "sealPeek"
       ]
     },
     {
@@ -11120,9 +13027,7 @@
       "bytes": 6269,
       "seconds": 0.496333,
       "name": "EliArf_TakeDamage_02.mp3",
-      "usedBy": [
-        "playerHit"
-      ]
+      "usedBy": []
     },
     {
       "path": "/sfx/EliArf_clack_01.mp3",
@@ -11160,6 +13065,16 @@
       "name": "Seal_ScallopSquirt_01.mp3",
       "usedBy": [
         "scallopLaunch"
+      ]
+    },
+    {
+      "path": "/sfx/Seal_bleh.mp3",
+      "exists": true,
+      "bytes": 6269,
+      "seconds": 0.496333,
+      "name": "Seal_bleh.mp3",
+      "usedBy": [
+        "versusBlock"
       ]
     },
     {
@@ -11264,7 +13179,9 @@
       "bytes": 5642,
       "seconds": 0.444083,
       "name": "EG_FlickPlop_13.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusKickoff"
+      ]
     },
     {
       "path": "/sfx/EliArf_01.mp3",
@@ -11302,9 +13219,7 @@
       "bytes": 5642,
       "seconds": 0.444083,
       "name": "Seal_Paps_takeDamage_02.mp3",
-      "usedBy": [
-        "playerHit"
-      ]
+      "usedBy": []
     },
     {
       "path": "/sfx/HG_UI_Blip_Menu_Terminal-converted.mp3",
@@ -11397,7 +13312,9 @@
       "bytes": 4702,
       "seconds": 0.36575,
       "name": "EG_FlickPlop_11.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusBallHit"
+      ]
     },
     {
       "path": "/sfx/EliArf_04.mp3",
@@ -11425,7 +13342,9 @@
       "bytes": 4702,
       "seconds": 0.36575,
       "name": "Razor_Hit_01.mp3",
-      "usedBy": []
+      "usedBy": [
+        "razorClamLaunch"
+      ]
     },
     {
       "path": "/sfx/Seal_21.mp3",
@@ -11433,7 +13352,9 @@
       "bytes": 4702,
       "seconds": 0.36575,
       "name": "Seal_21.mp3",
-      "usedBy": []
+      "usedBy": [
+        "sealBolt"
+      ]
     },
     {
       "path": "/sfx/EG_FlickPlop_04.mp3",
@@ -11441,7 +13362,9 @@
       "bytes": 4388,
       "seconds": 0.339583,
       "name": "EG_FlickPlop_04.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusBallHit"
+      ]
     },
     {
       "path": "/sfx/EG_FlickPlop_05.mp3",
@@ -11564,7 +13487,9 @@
       "bytes": 3448,
       "seconds": 0.26125,
       "name": "EG_FlickPlop_15.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusCountdown"
+      ]
     },
     {
       "path": "/sfx/EliArf_Gulp_01.mp3",
@@ -11608,7 +13533,9 @@
       "bytes": 3448,
       "seconds": 0.26125,
       "name": "Seal_Shoot_06.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusBlock"
+      ]
     },
     {
       "path": "/sfx/EG_FlickPlop_06.mp3",
@@ -11616,7 +13543,9 @@
       "bytes": 3134,
       "seconds": 0.235083,
       "name": "EG_FlickPlop_06.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusKickoff"
+      ]
     },
     {
       "path": "/sfx/EG_FlickPlop_08.mp3",
@@ -11624,7 +13553,9 @@
       "bytes": 3134,
       "seconds": 0.235083,
       "name": "EG_FlickPlop_08.mp3",
-      "usedBy": []
+      "usedBy": [
+        "versusBallHit"
+      ]
     },
     {
       "path": "/sfx/EliArf_Art_08.mp3",
@@ -11671,6 +13602,16 @@
       "usedBy": []
     },
     {
+      "path": "/sfx/Seal_Smack_02.mp3",
+      "exists": true,
+      "bytes": 2821,
+      "seconds": 0.209,
+      "name": "Seal_Smack_02.mp3",
+      "usedBy": [
+        "versusBallHit"
+      ]
+    },
+    {
       "path": "/sfx/pickup1.mp3",
       "exists": true,
       "bytes": 2821,
@@ -11697,6 +13638,26 @@
       "usedBy": [
         "combDrain"
       ]
+    },
+    {
+      "path": "/sfx/Seal_Smack_03.mp3",
+      "exists": true,
+      "bytes": 2507,
+      "seconds": 0.182833,
+      "name": "Seal_Smack_03.mp3",
+      "usedBy": [
+        "versusBallHit"
+      ]
+    },
+    {
+      "path": "/sfx/Seal_Smack_01.mp3",
+      "exists": true,
+      "bytes": 1880,
+      "seconds": 0.130583,
+      "name": "Seal_Smack_01.mp3",
+      "usedBy": [
+        "versusBallHit"
+      ]
     }
   ],
   "problems": {
@@ -11706,16 +13667,10 @@
     "orphanFiles": [
       "Electricity_01.mp3",
       "HG_SF_LOOP_HeavenlyMud_A_82BPM_loop.mp3",
-      "OLIVER_DWILLY_FX_retro_laser_shutdown.mp3",
-      "OLIVER_DWILLY_FX_hiphop_midnight_riser.mp3",
-      "OLIVER_DWILLY_FX_swell_glitter_elite.mp3",
       "HGUI_s37_PulseCannon_01_lo.mp3",
       "ESM_PG_cinematic_fx_weapons_warefare_cannon_shot_ship_clanking_metal_03.mp3",
       "HGUI_s37_PulseCannon_03_lo.mp3",
-      "ESM_Fast_Mechanical_Computer_Program_Particle_Sci_Fi_Abstract_Loading_Particle_Military.mp3",
       "ESM_PG_fx_water_splash_weapon_cannon_impact_near_air_projectile_whoosh_02.mp3",
-      "OLIVER_DWILLY_FX_ukg_lazer_beam.mp3",
-      "HGUI_s37_BubbleBeam_04_lo.mp3",
       "HG_UI_SynthMoan.mp3",
       "OLIVER_DWILLY_FX_disco_laser_echo.mp3",
       "71_Pops_-_Squish_Pop_and_Pop_Gun.mp3",
@@ -11726,46 +13681,36 @@
       "OLIVER_DWILLY_FX_wtf_video_game_wake_up_sparkly_C.mp3",
       "HGUI_s37_Riser_03_lo.mp3",
       "HGUI_s37_Explode_01_lo.mp3",
-      "OLIVER_DWILLY_105_FX_german_electro_dancing_lazer_bubbles.mp3",
       "HG_FLY_Beach_069.mp3",
-      "FF_AS_fish_splash_low_drop.mp3",
+      "HG_FLY_Beach_003.mp3",
       "EliArf_EatChum_08.mp3",
       "HG_SF_Nuthatch_Lazer.mp3",
+      "FF_AS_fish_splash_tone.mp3",
       "HGUI_s37_Rumbler_01_lo.mp3",
       "HGUI_s37_PulseCannon_04_lo.mp3",
       "HG_UI_Blip_Menu_Static-converted.mp3",
       "FF_AS_fish_splash_harmless.mp3",
-      "Seal_13.mp3",
       "HGUI_Organ_Shark.mp3",
       "HG_UI_Blip_Nutatch-converted.mp3",
-      "Seal_PlayerHit_FoodChain_03.mp3",
-      "HGUI_s37_Smack_07_lo.mp3",
-      "ESM_MG3_fx_foley_slime_smash_squish_splat_01c.mp3",
+      "Seal_Paps_takeDamage_03.mp3",
       "HG_UI_Blip_Menu_Tappies-converted.mp3",
       "HGUI_s37_Knock_06_lo.mp3",
       "EG_FlickPlop_16.mp3",
       "EliArf_EatChum_06.mp3",
       "EG_FlickPlop_03.mp3",
+      "EliArf_TakeDamage_02.mp3",
       "EliArf_clack_01.mp3",
       "EliArf_03.mp3",
       "EliArf_clack_02.mp3",
-      "EG_FlickPlop_13.mp3",
+      "Seal_Paps_takeDamage_02.mp3",
       "HG_UI_Blip_Click_Jagged.mp3",
       "HG_UI_Blip_Menu_TikTok-converted.mp3",
       "EG_FlickPlop_12.mp3",
-      "EG_FlickPlop_11.mp3",
-      "Razor_Hit_01.mp3",
-      "Seal_21.mp3",
-      "EG_FlickPlop_04.mp3",
       "EG_FlickPlop_05.mp3",
       "HG_UI_Blip_Menu_Bic-converted.mp3",
       "HGUI_s37_Beep_03_lo.mp3",
-      "EG_FlickPlop_15.mp3",
       "Seal_Shoot_01.mp3",
       "Seal_Shoot_02.mp3",
-      "Seal_Shoot_06.mp3",
-      "EG_FlickPlop_06.mp3",
-      "EG_FlickPlop_08.mp3",
       "Seal_Shoot_03.mp3",
       "ESM_VCSFX_FX_foley_one_shot_bottle_cork_drink_pop_open_nearfield_04.mp3",
       "Seal_Shoot_04.mp3",
@@ -11774,18 +13719,27 @@
     "unreferencedSounds": [
       "jetBed",
       "jetBedWiggle",
+      "swirlBed",
       "crewEaten",
       "oxygenWarn2",
       "cardLand",
       "cardLand2",
       "cardLand22",
-      "bossHit"
+      "bossHit",
+      "bossHit2"
     ],
     "silentEvents": [
       "jetSpool",
+      "lungeWind",
+      "lungeStrike",
+      "bossLungeWind",
+      "bossLungeStrike",
       "preyEaten",
       "cardLand",
+      "cardReroll",
+      "bossHit",
       "bossDeath",
+      "hotSpotSeep",
       "hotSpotChumTrail",
       "projectileFizzle",
       "missileLaunchExtra",
@@ -11794,6 +13748,7 @@
       "clubChips",
       "clubEmbers",
       "clubFrost",
+      "clubSparks",
       "whaleCrumbs"
     ]
   }

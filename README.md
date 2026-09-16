@@ -34,7 +34,9 @@ deploys or publishes — the classification that keeps it off a button.
 
 ## Deploying
 
-The public build is **https://seal-survivor.pages.dev**, on Cloudflare Pages.
+The public build is **https://sealsurvivor.com**, on Cloudflare Pages —
+a custom domain on the same `seal-survivor` Pages project, so
+`seal-survivor.pages.dev` still serves the identical build.
 
 **Pushing to `SealSurvivor-Main` deploys it.** There is no separate publish
 step: `.github/workflows/deploy.yml` builds on every push and uploads `dist/`,
@@ -167,7 +169,7 @@ because they aren't the same game.
 
 `playtest/runs.jsonl` only ever catches runs played against `npm run dev` — it
 is written by a Vite middleware, so a deployed build has nothing to write to.
-Runs played on `seal-survivor.pages.dev` go to the collection worker instead
+Runs played on `sealsurvivor.com` go to the collection worker instead
 (`server/playtest/`), and come down with:
 
 ```bash

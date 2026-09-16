@@ -539,7 +539,9 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
 
   /**
    * @param w          1 while the menu is up, 0 once the run owns the frame.
-   * @param pxPerUnit  screen pixels per world unit in the frame as it stands.
+   * @param pxPerUnit  screen pixels per world unit at the UN-ZOOMED framing —
+   *                   refFrameHeight, not frameHeight. See the note there: the
+   *                   shader owns the zoom now, and this owns the window.
    */
   function fitRim(w, pxPerUnit) {
     if (!shells.length || !(pxPerUnit > 0)) return;
@@ -676,9 +678,23 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
     return [el.clientWidth || window.innerWidth || 1280, el.clientHeight || window.innerHeight || 720];
   }
 
-  /** World units the frame is tall right now, at whatever zoom it is at. */
-  function frameHeight() {
-    return world.halfExtents(camera.zoom).h * 2;
+  /**
+   * World units the frame is tall AT ZOOM 1 — the run's own framing, not the
+   * crop the menu is currently holding.
+   *
+   * That distinction is the whole of this function, and it used to be the other
+   * way round (`halfExtents(camera.zoom)`). The outline shader rescales every
+   * rim in the scene by the lens itself now (assets.js setOutlineViewFactor,
+   * driven once a frame from main.js), so a width handed to
+   * setOutlineThicknessOn is a width at the UN-ZOOMED framing — dividing by the
+   * zoom here as well is a second compensation, and it only shows up while the
+   * menu is actually cropped, which is the whole time anyone is looking at it.
+   *
+   * The WINDOW still belongs here: pixels-per-unit moves when the window is
+   * resized, and a rim asked for in pixels has to be re-answered when it does.
+   */
+  function refFrameHeight() {
+    return world.halfExtents(1).h * 2;
   }
 
   // Gone by the time the camera is a fifth of the way out — see the note at
@@ -1186,6 +1202,34 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
   }
 
   function updatePad() {
+    // THE DRAWER IS THE ROW UNDER THE HEXAGONS, and the pad walks it as one
+    // screen: push DOWN off the bottom button and the cursor drops into the
+    // strip of hats, left and right walk it, UP climbs back out, confirm puts
+    // one on. It is handled before anything else here because while the cursor
+    // is down there the hexagons must not move — the two share the one confirm
+    // button, and a frame that drove both would put a hat on and press Play.
+    //
+    // THE STRIP OWNS ITS OWN INDEX (see padIn in ui/accessoryDrawer.js). The
+    // hexagons are picked in world space by where they are and the strip is a
+    // list in DOM order; there is no shared coordinate to walk them in, so the
+    // menu hands the frame over rather than trying to.
+    if (drawer.padInside()) {
+      if (menuInput.y < 0) {
+        drawer.padOut();
+        // BACK ONTO A HEXAGON, not onto nothing. The cursor came from one and
+        // has to land on one, or the push that left the strip would leave the
+        // screen with no selection at all and the next press would have to be
+        // spent re-asking for one.
+        if (padHover < 0) padHover = 0;
+        hovered = padHover;
+        auto = false;
+        feedback('uiHover');
+        return;
+      }
+      if (menuInput.x) drawer.padStep(menuInput.x);
+      if (menuInput.confirm) drawer.padConfirm();
+      return;
+    }
     if (menuInput.x || menuInput.y) {
       // menuInput is in SCREEN space and +y is DOWN; the tiles are in world
       // units and +y is UP. Without the flip a push down walks the selection
@@ -1196,6 +1240,15 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
         // rather than walking from a button the player never chose.
         ? 0
         : stepTo(Math.sign(menuInput.x), -Math.sign(menuInput.y));
+      // ...EXCEPT DOWNWARDS, where there IS something below the bottom row: the
+      // drawer. A push down with no hexagon that way drops into the strip, and
+      // only a push down — left and right off the edge of the arrangement still
+      // hold where they are.
+      if (next < 0 && menuInput.y > 0 && padHover >= 0 && drawer.padIn()) {
+        hovered = -1;
+        auto = false;
+        return;
+      }
       // Nothing that way is not an error: the edge of the arrangement holds
       // the selection where it is, which is what every menu in the game does —
       // and it stays silent, because a click on a push that moved nothing is
@@ -1398,7 +1451,7 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
         if (t >= 1) {
           // Everything is at its run value on this frame anyway — put the rim
           // there exactly rather than a thousandth off it, then let go.
-          const h = frameHeight();
+          const h = refFrameHeight();
           fitRim(0, h > 0 ? viewport()[1] / h : 1);
           tidy();
           return;
@@ -1531,10 +1584,12 @@ export function mountMainMenu({ world, seal, root, items = [] }) {
       fitScrim(w);
       placeLabels(w);
       tag?.update(dt);
-      // The rim, mixed against the frame as it stands this frame — the pull-out
-      // changes pixels-per-unit continuously, and a rim asked for in pixels has
-      // to be re-answered every one of them.
-      const h = frameHeight();
+      // The rim, mixed against the frame the run is composed at — the WINDOW
+      // still changes pixels-per-unit as it is resized, and a rim asked for in
+      // pixels has to be re-answered when it does. The pull-out's zoom no
+      // longer belongs here: the shader takes that off every rim in the scene
+      // at once (see refFrameHeight).
+      const h = refFrameHeight();
       fitRim(w, h > 0 ? viewport()[1] / h : 1);
     },
   };

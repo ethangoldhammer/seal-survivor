@@ -25,7 +25,7 @@
 // the camera may reach `camera.reach` past the wall (cameraReach below,
 // spent by clampFocus in world.js), which is wider than the line. So the
 // ball is seen to cross it, a ball rattling short of it is still in play,
-// and a keeper standing in front of it (keeperReach) can shove it back out.
+// and a keeper standing in front of it can shove it back out.
 // It used to be the edge of the screen, which was wherever the shore's one
 // boulder of cover happened to stop.
 // ---------------------------------------------------------------------------
@@ -35,13 +35,16 @@ import { ballMaxRadius } from './ballShape.js';
 import { bounds, midWater, arenaHoles } from '../arena.js';
 import { versusActive } from './versusFlag.js';
 import { shoreOverscan, shore } from './wallRocks.js';
+import { mouthHalfHeight } from './goalBand.js';
 
 const cfg = () => CONFIG.versus?.goal ?? {};
 
-/** The mouth's half height in world units — the band is goalY ± this. */
-export function mouthHalfHeight() {
-  return cfg().halfHeight ?? 7;
-}
+// THE MOUTH'S HALF HEIGHT lives in systems/goalBand.js and is re-exported
+// here, where every reader already looks for it. It is not a config read any
+// more: it grows with the roster and is clamped against the wall, and
+// wallRocks.js — which carves the hole and cannot import this module — has to
+// get the same number out of the same function. See the note over there.
+export { mouthHalfHeight } from './goalBand.js';
 
 /** How far past the wall the hole is cut. */
 export function tunnelDepth() {
@@ -58,11 +61,17 @@ export function mouthY() {
  * CONFIG.versus.camera.reach, and never past the tunnel's back. Outside a
  * match it is the shore's own overscan, as it always was. world.js's
  * focusLimits spends it; screenEdgeX below is the same number as an x.
+ *
+ * IN THE WALL'S FRAME, cap included: the tunnel is cut `tunnel` deep past
+ * the drawn FACE, which is shore.face past the wall, so the back is both of
+ * them out. Capped against the tunnel alone it stopped the frame a rock face
+ * short of the corridor's end — which is exactly where a seal may now stand.
  */
 export function cameraReach() {
   if (!versusActive()) return shoreOverscan();
   const want = Math.max(0, CONFIG.versus?.camera?.reach ?? 12);
-  return Math.min(want, tunnelDepth() - 0.5);
+  const inset = shore.built ? shore.face : 0;
+  return Math.min(want, inset + tunnelDepth() - 0.5);
 }
 
 /**
@@ -97,6 +106,45 @@ export function goalLineDepth() {
  */
 export function goalLineX(side) {
   return rockX(side) + side * goalLineDepth();
+}
+
+/**
+ * THE LINE A KEEPER DEFENDS, as a distance past the WALL'S LINE — which is
+ * the frame arena.clampToArena works in, and not the one the goal line is
+ * published in. The line is `goalLineDepth()` past the DRAWN FACE and the
+ * face is `shore.face` past the wall, so this is both of them, less a small
+ * gap: a keeper whose centre is here has its body over the line.
+ *
+ * NOT how deep a seal may swim — that is keeperReachDepth, the whole
+ * corridor. This is the depth at which a keeper is fully contesting a shot
+ * (the goal light's defend ramp, versus.js stirGoalLights), and the harness
+ * asserts against it, so it stays a function rather than a frame conversion
+ * redone in two places.
+ */
+export function keeperLineDepth() {
+  const inset = shore.built ? shore.face : 0;
+  return Math.max(0, inset + goalLineDepth() - KEEPER_GAP);
+}
+
+// The gap keeperLineDepth leaves in front of the line. Small on purpose: the
+// seal's own body is wider than this, so it covers the line while its centre
+// is still short of it — which is what defending the last stride looks like.
+const KEEPER_GAP = 0.5;
+
+/**
+ * HOW DEEP A SEAL MAY SWIM into a mouth, past the WALL'S LINE: the whole
+ * corridor, to the rock at the tunnel's back. A body of `radius` stops with
+ * its edge on that rock, the way it stops on any wall.
+ *
+ * It used to stop at `keeperReach` (7 past the wall), a rule with no rock
+ * behind it: the tunnel is built 16 deep past the face and the seal bumped
+ * an invisible wall a third of the way down it, looking at the last half of
+ * its own goal and unable to get back there for the close ones. The only
+ * wall a seal meets in the goal now is one it can see.
+ */
+export function keeperReachDepth(radius = 0) {
+  const inset = shore.built ? shore.face : 0;
+  return Math.max(0, inset + tunnelDepth() - Math.max(0, radius));
 }
 
 /**
@@ -139,9 +187,13 @@ export function inMouthBand(y, r) {
 // ---------------------------------------------------------------------------
 // THE SEALS' HOLE — what arena.clampToArena asks.
 //
-// A seal is allowed into the mouth, `keeperReach` past the wall and no
-// further — always short of the goal line — and inside it the lips hold it
-// the way the walls do. Goalkeeping inside the mouth is the whole point.
+// A seal is allowed into the mouth and all the way down the corridor to the
+// rock at the tunnel's back (keeperReachDepth), and inside it the lips hold
+// it the way the walls do. Goalkeeping inside the mouth is the whole point,
+// and a save on the line is a seal that got BEHIND the ball — so nothing
+// short of the rock may stop it. The camera's reach into the goal covers the
+// corridor for the same reason (cameraReach): a keeper that can stand where
+// the frame cannot follow is a keeper you cannot play.
 // ---------------------------------------------------------------------------
 
 const _hole = { xMin: -Infinity, xMax: Infinity, yMin: 0, yMax: 0 };
@@ -160,8 +212,10 @@ function probe(x, y, radius) {
   const inside = x < bounds.left || x > bounds.right;
   if (!inside && !inMouthBand(y, radius)) return null;
   if (inside && Math.abs(y - gy) > h + radius) return null;
-  // A keeper may stand in front of the line, never on it.
-  const depth = Math.max(0, Math.min(c.keeperReach ?? 7, goalLineDepth() - 0.5));
+  // To the rock at the back, and the body's own edge is what meets it —
+  // `depth` is spent below on the CENTRE, in the wall's frame. See
+  // keeperReachDepth for why there is no shorter stop.
+  const depth = keeperReachDepth(radius);
   if (x < bounds.left + radius) {
     _hole.xMin = bounds.left - depth;
     _hole.xMax = Infinity;

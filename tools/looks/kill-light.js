@@ -139,6 +139,21 @@ const ortho = (h, y = 0, x = 0) => {
   return c;
 };
 
+/**
+ * What world.framedView() reports for one of these cameras — where the frame
+ * is and how tall it is, in world units.
+ *
+ * The light needs it because the shaft is grown until its ORIGIN is off the
+ * top edge (bladeReach): a length in world units cannot promise that on its
+ * own, since this page's own shots run from a kill push-in to a frustum wide
+ * enough to hold a megalodon. Without it every panel here would be judging the
+ * authored length, which is the one framing the game never draws.
+ */
+const framedOf = (c) => ({
+  y: c.position.y + (c.top + c.bottom) / 2,
+  halfH: (c.top - c.bottom) / (2 * c.zoom),
+});
+
 // THE FRAME THE PHOTOGRAPH IS ACTUALLY TAKEN IN. The kill shot pushes in to
 // CONFIG.boss.kill.cam.zoom on the arena frustum and aims between the seal and
 // the body — see applyFraming in systems/bossKill.js. Reproduced rather than
@@ -309,7 +324,12 @@ function shutter({
     // WALL for the two schedules, DILATED for the water — both, every frame,
     // exactly as main.js runs them.
     updateBossBooms(DT);
-    updateBossLight(DT, sealRig.position, seal);
+    // ...AND THE FRAME IT IS BEING DRAWN INTO, exactly as main.js hands over
+    // world.framedView(). The shaft is grown until its ORIGIN is off the top
+    // edge (see bladeReach), so a page that passed nothing would judge the
+    // light at its authored length — which is the one framing the game never
+    // uses, and the one where the top of the cone is in shot.
+    updateBossLight(DT, sealRig.position, seal, framedOf(cam));
     updateParticles(DT * HOLD);
     post.resize();
     post.render(scene, cam, DT);

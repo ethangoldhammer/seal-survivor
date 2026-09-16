@@ -26,10 +26,24 @@ import './dom-stub.mjs';
 import { CONFIG } from '../path/src/config.js';
 import {
   strikeState, resetStrike, updateCharge, tryStrike, updateStrike, feedChum,
-  restoreCharge, strikeLoaded, consumeChainLink, liveChain, cancelDash,
+  restoreCharge, strikeLoaded, consumeChainLinks, liveChain, cancelDash,
   chainStrike, pipCount, pipValue, linkCost,
   minFire,
 } from '../path/src/systems/strike.js';
+
+// THE DEEPEST LINK OF WHATEVER THE LAST CALL SCORED, or 0 — which is exactly
+// what consumeChainLink() returned before it became consumeChainLinks().
+//
+// A HARNESS HELPER RATHER THAN AN EXPORT, deliberately. The GAME has to see
+// every link, because the banner is a number the player is asked to count and
+// one that skips is the bug the queue exists to fix; a check asking "did the
+// counter reach x2" does not, and giving the game back a reader that drops
+// links would be handing the bug back with it.
+const lastLink = (...a) => {
+  const links = consumeChainLinks(...a);
+  return links.length ? links[links.length - 1].chain : 0;
+};
+
 
 const stats = {
   strikeChumRefill: CONFIG.strike.charge.chumRefill,
@@ -47,7 +61,7 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
   if (!ok) fails++;
 };
-const eat = (n = 1) => { let got = 0; for (let i = 0; i < n; i++) { feedChum(stats); if (consumeChainLink()) got++; } return got; };
+const eat = (n = 1) => { let got = 0; for (let i = 0; i < n; i++) { feedChum(stats); if (lastLink()) got++; } return got; };
 const tick = (s) => { for (let t = 0; t < s; t += DT) updateStrike(DT, null, { x: 0, y: 0 }, stats, [], {}); };
 
 /** A wind-up carried to a full charge and released. `early` lets go short. */
@@ -154,7 +168,7 @@ resetStrike();
 fillTank();
 strike();
 let swept = 0;
-for (let i = 0; i < 40; i++) { feedChum(stats); if (consumeChainLink()) swept++; }
+for (let i = 0; i < 40; i++) { feedChum(stats); if (lastLink()) swept++; }
 check(`forty orbs in one frame pay a barful's worth (${FIRST.links}), not forty`,
   swept === FIRST.links, `${swept} links`);
 cancelDash();
@@ -163,7 +177,7 @@ console.log('\nTHE BLUE ORB IS FUEL, NOT A COMBO TOOL');
 resetStrike();
 fillTank();
 strike();
-const orbLinks = (restoreCharge(stats), consumeChainLink());
+const orbLinks = (restoreCharge(stats), lastLink());
 check('a charge orb pays exactly one link, not a barful', orbLinks === 1, `${orbLinks}`);
 check('  ...and it filled the bar, so eating after it scores nothing', eat(4) === 0);
 cancelDash();
@@ -172,7 +186,7 @@ resetStrike();
 fillTank();
 strike();
 eat(PIPS);
-const during = (restoreCharge(stats), consumeChainLink());
+const during = (restoreCharge(stats), lastLink());
 check('an orb caught during the pause scores nothing', during === 0, `${during}`);
 cancelDash();
 
@@ -187,6 +201,57 @@ check('a breach still links while the bar is maxed', breached > 0, `x${breached}
 const wiped = chainStrike('schoolWipe');
 check('  ...and so does a wiped school', wiped > breached, `x${wiped}`);
 cancelDash();
+
+console.log('\nEVERY LINK IS REPORTED, NOT JUST THE DEEPEST');
+// WHAT THIS IS ABOUT, and it is not the scoring. The counter has always moved
+// by exactly one per link. What dropped them was the REPORT: the reader handed
+// back the most recent link and threw the rest away, so an event worth three —
+// Porpoising stacked three deep pays a link per stack on one breach — was
+// announced once, at the number it finished on, and the banner counted 1, 4, 7.
+//
+// The whole of the fix is that a link is booked where the counter moves
+// (extendChain) instead of being remembered at the call site.
+resetStrike();
+fillTank();
+strike();
+cancelDash();
+const many = chainStrike('breach', 3);
+const reported = consumeChainLinks();
+check('a breach worth three links moves the counter to x3', many === 3, `x${many}`);
+check('  ...and reports three of them', reported.length === 3, `${reported.length} reported`);
+check('  ...counting every number on the way',
+  reported.map((l) => l.chain).join(',') === '1,2,3', reported.map((l) => l.chain).join(','));
+check('  ...each naming what paid for it',
+  reported.every((l) => l.source === 'breach'), [...new Set(reported.map((l) => l.source))].join('/'));
+// AND THE QUEUE EMPTIES ON READ. A second reader getting the same links back
+// would double every count on screen — the failure this is the other side of.
+check('  ...and nothing is left to be replayed', consumeChainLinks().length === 0);
+
+// A MOUTHFUL'S LINKS COME THROUGH THE SAME DOOR. One pip is one link at this
+// depth, so this is not the multi-link case — it is the check that food did not
+// get a second, quieter path to the counter while the queue was being added.
+resetStrike();
+fillTank();
+strike();
+feedChum(stats);
+const fromFood = consumeChainLinks();
+check('a mouthful reports its link the same way', fromFood.length === 1, `${fromFood.length}`);
+check('  ...named as food', fromFood[0]?.source === 'chumEaten', fromFood[0]?.source);
+cancelDash();
+
+// AND A BACKLOG IS BOUNDED. Nothing should ever reach this — every producer
+// drains — but a path that forgot to must not be able to hoard a whole run's
+// links and hand a hundred stale numbers to whoever asks next.
+resetStrike();
+fillTank();
+strike();
+cancelDash();
+const cap = CONFIG.strike.foodChain.maxPendingLinks ?? 24;
+chainStrike('breach', cap + 10);
+const capped = consumeChainLinks();
+check(`an undrained queue stops at ${cap}`, capped.length === cap, `${capped.length}`);
+check('  ...keeping the LAST ones, so it ends on the truth',
+  capped[capped.length - 1].chain === cap + 10, `x${capped[capped.length - 1].chain}`);
 
 console.log('\nAND THE WINDOW LAPSING CLEARS EVERYTHING');
 resetStrike();

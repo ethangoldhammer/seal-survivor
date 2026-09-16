@@ -1106,5 +1106,48 @@ section('THE PAUSE BUTTON — a phone\'s only way into Options');
   check('a real tap still does not, so the hold is not decorative', opened === 0, `${opened}`);
 }
 
+// ---------------------------------------------------------------------------
+section('THE SCORE CORAL\'S BADGE — under the number it multiplies');
+// The badge is display:none until a window is running, and the class that
+// shows it lives on the CORNER rather than on the badge — see the note in the
+// stylesheet. So the failure mode worth checking is not "does it appear" but
+// "does it GO", because a stale class leaves a multiplier on screen that the
+// scoreboard is no longer applying, and nothing anywhere throws.
+{
+  const corner = $('#svCorner');
+  const badge = $('#svScoreMult');
+  const value = $('#svScoreMultValue');
+
+  // Every caller that predates the parameter passes nothing, and the reset
+  // path passes nothing on purpose. Both must read as "no window".
+  ui.updateHUD(gameState, player, null, 0, camera, 1 / 60);
+  check('no window, no badge', !corner.classList.contains('sv-boosting'));
+  check('...and it is genuinely not drawn',
+    getComputedStyle(badge).display === 'none', getComputedStyle(badge).display);
+
+  ui.updateHUD(gameState, player, null, 0, camera, 1 / 60, { mult: 7, left: 9, frac: 0.5 });
+  check('a live window shows it', corner.classList.contains('sv-boosting'));
+  check('...as the multiplier, not as a percentage', value.textContent === 'x7', value.textContent);
+  check('...and it is drawn', getComputedStyle(badge).display === 'flex',
+    getComputedStyle(badge).display);
+  check('the track reports how much of the window is left',
+    badge.style.getPropertyValue('--sv-mult-left') === '0.500',
+    badge.style.getPropertyValue('--sv-mult-left'));
+  // The coral's own tint, so a Look-panel drag moves the badge with the
+  // pickup. Resolved the same way createCoralOrb resolves it.
+  const want = CONFIG.assetLooks?.scoreOrb?.tint ?? CONFIG.scorePickup?.coral?.color;
+  check('...and it wears the coral\'s colour',
+    badge.style.getPropertyValue('--sv-score-mult')
+      === `#${(want >>> 0).toString(16).padStart(6, '0')}`,
+    badge.style.getPropertyValue('--sv-score-mult'));
+
+  // THE ONE THAT MATTERS. A window ending hands back a mult of 1.
+  ui.updateHUD(gameState, player, null, 0, camera, 1 / 60, { mult: 1, left: 0, frac: 0 });
+  check('the window ending takes the badge with it',
+    !corner.classList.contains('sv-boosting'));
+  check('...and it stops being drawn', getComputedStyle(badge).display === 'none',
+    getComputedStyle(badge).display);
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

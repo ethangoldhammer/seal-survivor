@@ -1928,19 +1928,30 @@
       }
     },
     "seagull": {
-      "surface": "biolum",
+      "surface": "toon+biolum",
       "layers": {
         "noise": null,
-        "toon": null,
+        "toon": "seagull",
         "biolum": "seagull"
       },
       "assets": {
         "noiseShader": null,
-        "toonShade": null,
+        "toonShade": "seagull",
         "biolumSkin": "seagull",
         "csvSkinColumn": "seagull"
       },
       "presets": {
+        "toonShade": {
+          "seagull": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
         "biolumSkin": {
           "seagull": {
             "pigment": 1,
@@ -1950,10 +1961,11 @@
             "coverage": 0.45,
             "strength": 2.38,
             "flow": 1.24,
+            "upBias": 0,
             "pattern": "marble",
             "colorA": 1184274,
-            "colorB": 16769920,
-            "colorC": 16772127,
+            "colorB": 16777215,
+            "colorC": 16777215,
             "shellColor": 2630949
           }
         }
@@ -2698,22 +2710,861 @@
           }
         }
       }
-    }
-  },
-  "config": {
-    "sealShader": {
-      "orcaCow": {
-        "wetCausticUp": 0.9,
-        "wet": 0.8
+    },
+    "accessoryJester": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "accessoryJester",
+        "biolum": "accessoryJester"
       },
-      "humpbackWhale": {
-        "wetCausticUp": 1,
-        "size": 0.74,
-        "wetCausticScale": 5.6,
-        "wetCaustics": 1.95,
-        "wetPatch": 0.65
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "accessoryJester",
+        "biolumSkin": "accessoryJester",
+        "csvSkinColumn": "accessoryJester"
+      },
+      "presets": {
+        "toonShade": {
+          "accessoryJester": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 0.4,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "accessoryJester": {
+            "pigment": 1,
+            "pigmentGlow": 0,
+            "scale": 0.38,
+            "contrast": 1.95,
+            "coverage": 0.1,
+            "strength": 3,
+            "flow": 1.46,
+            "upBias": -0.05,
+            "pattern": "veins",
+            "colorA": 16711680,
+            "colorB": 2031360,
+            "colorC": 43775,
+            "shellColor": 16777215
+          }
+        }
+      }
+    },
+    "accessoryCloche": {
+      "surface": "noise+toon+biolum",
+      "layers": {
+        "noise": "accessoryCloche",
+        "toon": "accessoryCloche",
+        "biolum": "accessoryCloche"
+      },
+      "assets": {
+        "noiseShader": "accessoryCloche",
+        "toonShade": "accessoryCloche",
+        "biolumSkin": "accessoryCloche",
+        "csvSkinColumn": "accessoryCloche"
+      },
+      "presets": {
+        "sealShader": {
+          "accessoryCloche": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 1.15,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.29,
+            "splitPaint": 0,
+            "splitStrength": 0,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "accessoryCloche": {
+            "strength": 1,
+            "steps": 4,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 0.31,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "accessoryCloche": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.47,
+            "contrast": 0.65,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.78,
+            "upBias": 0,
+            "pattern": "flow",
+            "colorA": 0,
+            "colorB": 7895160,
+            "colorC": 6052956,
+            "shellColor": 4210752
+          }
+        }
+      }
+    },
+    "accessoryStetson": {
+      "surface": "toon",
+      "layers": {
+        "noise": null,
+        "toon": "accessoryStetson",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "accessoryStetson",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "toonShade": {
+          "accessoryStetson": {
+            "strength": 1,
+            "steps": 5,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0.18,
+            "range": 1
+          }
+        }
+      }
+    },
+    "accessoryBobHair": {
+      "surface": "noise+biolum",
+      "layers": {
+        "noise": "accessoryBobHair",
+        "toon": null,
+        "biolum": "accessoryBobHair"
+      },
+      "assets": {
+        "noiseShader": "accessoryBobHair",
+        "toonShade": null,
+        "biolumSkin": "accessoryBobHair",
+        "csvSkinColumn": "accessoryBobHair"
+      },
+      "presets": {
+        "sealShader": {
+          "accessoryBobHair": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.02,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "biolumSkin": {
+          "accessoryBobHair": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.54,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.28,
+            "upBias": 0.4,
+            "pattern": "blotches",
+            "colorA": 0,
+            "colorB": 7368816,
+            "colorC": 5066061,
+            "shellColor": 8224125
+          }
+        }
+      }
+    },
+    "accessoryShortHair": {
+      "surface": "noise+biolum",
+      "layers": {
+        "noise": "accessoryShortHair",
+        "toon": null,
+        "biolum": "accessoryShortHair"
+      },
+      "assets": {
+        "noiseShader": "accessoryShortHair",
+        "toonShade": null,
+        "biolumSkin": "accessoryShortHair",
+        "csvSkinColumn": "accessoryShortHair"
+      },
+      "presets": {
+        "sealShader": {
+          "accessoryShortHair": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "biolumSkin": {
+          "accessoryShortHair": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 2.58,
+            "flow": 2,
+            "upBias": 0,
+            "pattern": "blotches",
+            "colorA": 35829,
+            "colorB": 0,
+            "colorC": 14606046,
+            "shellColor": 9609657
+          }
+        }
+      }
+    },
+    "accessoryUshanka": {
+      "surface": "noise+toon+biolum",
+      "layers": {
+        "noise": "accessoryUshanka",
+        "toon": "accessoryUshanka",
+        "biolum": "accessoryUshanka"
+      },
+      "assets": {
+        "noiseShader": "accessoryUshanka",
+        "toonShade": "accessoryUshanka",
+        "biolumSkin": "accessoryUshanka",
+        "csvSkinColumn": "accessoryUshanka"
+      },
+      "presets": {
+        "sealShader": {
+          "accessoryUshanka": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.31,
+            "contrast": 3.55,
+            "wet": 1.65,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 88,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.85,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "accessoryUshanka": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "accessoryUshanka": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.06,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 1.36,
+            "upBias": 0,
+            "pattern": "spots",
+            "colorA": 0,
+            "colorB": 11307859,
+            "colorC": 7429421,
+            "shellColor": 7360323
+          }
+        }
+      }
+    },
+    "accessoryBobble": {
+      "surface": "noise+toon+biolum",
+      "layers": {
+        "noise": "accessoryBobble",
+        "toon": "accessoryBobble",
+        "biolum": "accessoryBobble"
+      },
+      "assets": {
+        "noiseShader": "accessoryBobble",
+        "toonShade": "accessoryBobble",
+        "biolumSkin": "accessoryBobble",
+        "csvSkinColumn": "accessoryBobble"
+      },
+      "presets": {
+        "sealShader": {
+          "accessoryBobble": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "accessoryBobble": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.34,
+            "high": 1,
+            "soft": 0.76,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "accessoryBobble": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.04,
+            "contrast": 1.9,
+            "coverage": 0.42,
+            "strength": 1.16,
+            "flow": 0.3,
+            "upBias": 0,
+            "pattern": "blotches",
+            "colorA": 16777215,
+            "colorB": 12763842,
+            "colorC": 12434877,
+            "shellColor": 7697781
+          }
+        }
+      }
+    },
+    "enemyCrownJelly": {
+      "surface": "toon+biolum",
+      "layers": {
+        "noise": null,
+        "toon": "crownJelly",
+        "biolum": "crownJelly"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": "crownJelly",
+        "biolumSkin": "crownJelly",
+        "csvSkinColumn": "crownJelly"
+      },
+      "presets": {
+        "toonShade": {
+          "crownJelly": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "crownJelly": {
+            "pigment": 0.48,
+            "pigmentGlow": 0,
+            "scale": 0.27,
+            "contrast": 1.6,
+            "coverage": 0.42,
+            "strength": 1.8,
+            "flow": 1.38,
+            "upBias": 0.85,
+            "pattern": "veins",
+            "colorA": 15132390,
+            "colorB": 8325642,
+            "colorC": 235776,
+            "shellColor": 15422207
+          }
+        }
+      }
+    },
+    "enemyDancingCrab": {
+      "surface": "noise+toon",
+      "layers": {
+        "noise": "dancingCrab",
+        "toon": "dancingCrab",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": "dancingCrab",
+        "toonShade": "dancingCrab",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "sealShader": {
+          "dancingCrab": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.02,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "dancingCrab": {
+            "strength": 1,
+            "steps": 2,
+            "gamma": 1.9,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
+      }
+    },
+    "enemyMyllokunmingia": {
+      "surface": "noise+toon+biolum",
+      "layers": {
+        "noise": "myllokunmingia",
+        "toon": "myllokunmingia",
+        "biolum": "myllokunmingia"
+      },
+      "assets": {
+        "noiseShader": "myllokunmingia",
+        "toonShade": "myllokunmingia",
+        "biolumSkin": "myllokunmingia",
+        "csvSkinColumn": "myllokunmingia"
+      },
+      "presets": {
+        "sealShader": {
+          "myllokunmingia": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "myllokunmingia": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        },
+        "biolumSkin": {
+          "myllokunmingia": {
+            "pigment": 0,
+            "pigmentGlow": 0.78,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.96,
+            "upBias": 0,
+            "pattern": "blotches",
+            "colorA": 2697513,
+            "colorB": 7697781,
+            "colorC": 1842204,
+            "shellColor": 11447725
+          }
+        }
+      }
+    },
+    "enemyClawCrab": {
+      "surface": "noise+biolum",
+      "layers": {
+        "noise": "clawCrab",
+        "toon": null,
+        "biolum": "clawCrab"
+      },
+      "assets": {
+        "noiseShader": "clawCrab",
+        "toonShade": null,
+        "biolumSkin": "clawCrab",
+        "csvSkinColumn": "clawCrab"
+      },
+      "presets": {
+        "sealShader": {
+          "clawCrab": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "biolumSkin": {
+          "clawCrab": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.83,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.3,
+            "upBias": 0,
+            "pattern": "blotches",
+            "colorA": 16753930,
+            "colorB": 0,
+            "colorC": 15918016,
+            "shellColor": 16734750
+          }
+        }
+      }
+    },
+    "enemyCombJelly": {
+      "surface": "biolum",
+      "layers": {
+        "noise": null,
+        "toon": null,
+        "biolum": "combJelly"
+      },
+      "assets": {
+        "noiseShader": null,
+        "toonShade": null,
+        "biolumSkin": "combJelly",
+        "csvSkinColumn": "combJelly"
+      },
+      "presets": {
+        "biolumSkin": {
+          "combJelly": {
+            "pigment": 0,
+            "pigmentGlow": 0,
+            "scale": 0.53,
+            "contrast": 1.6,
+            "coverage": 0.45,
+            "strength": 1.8,
+            "flow": 0.3,
+            "upBias": 0,
+            "pattern": "flow",
+            "colorA": 6746367,
+            "colorB": 13809919,
+            "colorC": 6421759,
+            "shellColor": 9771713
+          }
+        }
+      }
+    },
+    "enemyLizardfish": {
+      "surface": "noise+toon",
+      "layers": {
+        "noise": "lizardfish",
+        "toon": "lizardfish",
+        "biolum": null
+      },
+      "assets": {
+        "noiseShader": "lizardfish",
+        "toonShade": "lizardfish",
+        "biolumSkin": null,
+        "csvSkinColumn": null
+      },
+      "presets": {
+        "sealShader": {
+          "lizardfish": {
+            "paint": 0,
+            "paintGlow": 0,
+            "strength": 0.83,
+            "size": 0.04,
+            "contrast": 3.55,
+            "wet": 0.55,
+            "wetGloss": 0.7,
+            "wetSteps": 2,
+            "wetSoft": 0.5,
+            "wetTight": 24,
+            "wetEdge": 0.15,
+            "wetRim": 0.9,
+            "wetRimPower": 3.4,
+            "wetPatch": 0.35,
+            "wetCaustics": 1.2,
+            "wetCausticScale": 4,
+            "wetCausticUp": 0.75,
+            "wetGlow": 1,
+            "wetTint": 0.5,
+            "split": 0,
+            "splitLine": 0,
+            "splitSoft": 0.25,
+            "splitPaint": 0,
+            "splitStrength": 0.35,
+            "splitSize": 0.4,
+            "splitContrast": 1,
+            "color": 0,
+            "wetColor": 14676735,
+            "baseColor": 16777215,
+            "splitColor": 664115,
+            "splitBaseColor": 16777215
+          }
+        },
+        "toonShade": {
+          "lizardfish": {
+            "strength": 1,
+            "steps": 3,
+            "gamma": 1,
+            "low": 0.28,
+            "high": 1,
+            "soft": 0,
+            "range": 1
+          }
+        }
       }
     }
   },
-  "recorded": "humpbackWhale"
+  "config": {
+    "toonShade": {
+      "crownJelly": {
+        "steps": 3
+      },
+      "dancingCrab": {
+        "steps": 2,
+        "gamma": 1.9
+      }
+    },
+    "sealShader": {
+      "dancingCrab": {
+        "size": 0.02
+      }
+    },
+    "biolumSkin": {
+      "crownJelly": {
+        "pigment": 0.48,
+        "colorA": 15132390,
+        "colorB": 8325642,
+        "colorC": 235776,
+        "shellColor": 15422207,
+        "scale": 0.27,
+        "pattern": "veins",
+        "flow": 1.38,
+        "upBias": 0.85,
+        "coverage": 0.42
+      },
+      "myllokunmingia": {
+        "colorA": 2697513,
+        "pigmentGlow": 0.78,
+        "pigment": 0,
+        "colorB": 7697781,
+        "colorC": 1842204,
+        "shellColor": 11447725,
+        "flow": 0.96
+      },
+      "clawCrab": {
+        "colorA": 16753930,
+        "scale": 0.83,
+        "colorB": 0,
+        "colorC": 15918016
+      },
+      "combJelly": {
+        "pattern": "flow",
+        "colorA": 6746367,
+        "colorB": 13809919,
+        "colorC": 6421759,
+        "shellColor": 9771713
+      },
+      "seagull": {
+        "colorC": 16777215,
+        "colorB": 16777215
+      }
+    },
+    "creatureOutline": {
+      "__flat": {
+        "thickness": 0.425,
+        "glow": 2.3
+      }
+    }
+  },
+  "recorded": "seagull"
 }

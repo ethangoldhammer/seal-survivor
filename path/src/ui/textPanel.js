@@ -1,11 +1,18 @@
 import { CONFIG, TUNER_SCHEMA, saveTuningToStorage } from '../config.js';
-import { TEXT_ROLES } from '../textRoles.js';
+import { TEXT_ROLES, roleUnit } from '../textRoles.js';
 import { fontLabel } from '../fonts.js';
 import { buildSectionedTunerGroups, buildExpandAllToggle, buildTunerSearch, refreshTunerRows } from './tunerControls.js';
-import { previewToasts, popupPose, previewScreen, PREVIEW_SCREENS } from './ui.js';
+import { previewToasts, popupPose, previewScreen, previewScreenNames } from './ui.js';
 import { isTypingTarget } from './typing.js';
 import { CALLOUTS, resolveCalloutText } from '../systems/callouts.js';
 import { DEVICES } from '../devices.js';
+// The table itself, not uiText(): a role's `sampleFrom` is an id held in data,
+// and npm run test:uitext refuses a uiText() call whose id is not a literal.
+// Read straight off the table, a missing row is the id — the same fallback.
+import { UI_TEXT } from '../uiTextTable.js';
+// The longest name the roster can cast, for `{name}` in a specimen.
+import { sealNameParts } from '../systems/randomName.js';
+import { joinSealName } from '../sealNameTable.js';
 
 // THE TEXT PANEL (Y) — where every piece of type in the game is designed.
 //
@@ -31,6 +38,10 @@ const SECTIONS = [
   ['HUD', '#4fe0c0'],
   ['Upgrade cards', '#c9a6ff'],
   ['Popups', '#ff8fb1'],
+  // The match, and the screen before it. Green for the pitch; the warmer one
+  // for the select, which is the one screen of the mode that is a menu.
+  ['Blubberball', '#7dffb0'],
+  ['Team select', '#ffa86b'],
 ];
 
 const STYLES = `
@@ -107,6 +118,52 @@ const STYLES = `
   /* The button role paints a fill as well as text, so it wants to be a shape
      rather than a run of inline words. */
   .sv-txp-spec .sv-btn { display: inline-block; }
+  /* EVERY SAMPLE, whatever its class. The per-class overrides above were
+     written one role at a time and missed three roles for months (see the
+     callout note); this is the same override for whichever surface a role
+     names — a countdown numeral that is absolute at 42% of the screen and
+     born at opacity 0, a locked slot that is a flex row with a margin. Two
+     classes deep, so it beats any one-class layout rule and loses to nothing
+     the role sheet writes (font, colour, shadow are not touched here). The
+     replay loop's inline transform and opacity still win over it, as inline
+     always does. */
+  .sv-txp-spec .sv-txp-sample { position: static; transform: none; inset: auto;
+    opacity: 1; animation: none; margin: 0; pointer-events: none;
+    /* Wrapped, whatever the role says. The goal card's scorer and the team
+       select's names are nowrap in the game — the card is 92vw wide and the
+       slot ellipsises — but this strip is 320px, and a thirty-character name
+       at 3.6vmin hangs out of the panel with the end of the line unreadable.
+       Whether a name FITS its slot is the layout audit's question (npm run
+       layout); this strip's is what the letters look like.
+
+       Wrapped at SPACES first — break-word, not anywhere: the two differ only
+       on a word that still doesn't fit, and the other offers the browser
+       intra-word breaks while it is MEASURING, so the longest name in the
+       table came out broken across six lines mid-word ("Congress/man") when
+       three at its own spaces was available.
+
+       (No backticks anywhere in this block: it is inside a template literal
+       and one would end the string, with the error pointing at a comment.) */
+    white-space: normal; max-width: 100%; overflow-wrap: break-word; }
+  /* THE ANCESTORS A DESCENDANT SELECTOR NEEDS. A role like
+     '.sv-versus-over .sv-btn' or '.sv-ldg-head .sv-title' is only matched with
+     its parent present, so the specimen builds one — and the parent brings
+     its own layout (the after-match prompt is a centred flex column with a
+     radial scrim in ::before). Flattened to an inline nothing, scrim and all,
+     so the wrapper exists for the selector and for nothing else. */
+  .sv-txp-spec .sv-txp-wrap { display: inline; position: static; transform: none; inset: auto;
+    padding: 0; margin: 0; gap: 0; background: none; border: 0; box-shadow: none;
+    pointer-events: none; animation: none; opacity: 1; flex: none; width: auto; }
+  .sv-txp-spec .sv-txp-wrap::before, .sv-txp-spec .sv-txp-wrap::after { content: none; }
+  /* THE GLASS, for a role whose type is black on a frosted pane (the goal
+     card, the replay tag). The pane is the real .sv-glass rule from
+     versus.js, tinted P1's colour the way glassTint does it; without it the
+     specimen is black type on the strip's near-black, and a role you cannot
+     see is a role you tune blind. Padded like the card so the type sits off
+     the rim as it does in the game. */
+  .sv-txp-spec .sv-txp-plate { display: inline-block; max-width: 100%;
+    padding: 6px 12px; --sv-glass-radius: 8px; color: #05070a; }
+  .sv-txp-spec .sv-txp-plate .sv-txp-sample { display: inline-block; }
   /* The role's name, in the PANEL's font at a fixed size — it has to stay
      legible no matter what the specimen next to it has been set to. */
   .sv-txp-key { display: block; font-family: 'Inter', system-ui, sans-serif;
@@ -188,7 +245,9 @@ export function initTextPanel(onChange) {
   const screens = document.createElement('div');
   screens.className = 'sv-txp-screens';
   const screenChips = [];
-  for (const name of PREVIEW_SCREENS) {
+  // Read at build, so anything main.js registered before initTextPanel (the
+  // Blubberball surfaces) is a chip beside the four ui.js owns.
+  for (const name of previewScreenNames()) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'sv-t-chip';
@@ -265,9 +324,9 @@ export function initTextPanel(onChange) {
   note.className = 'sv-txp-note';
   note.textContent = 'Every value here saves to path/src/imported-tuning.json with the rest of the tuning. '
     + 'Fonts off the shelf are downloaded the first time you pick them — pick one with no network and it '
-    + 'falls back through its stack. The screen you pick stays up after you close the panel — press `start` '
-    + 'to put the menu back. This panel sits on the same edge as the ` tuner and covers it; press ` to put '
-    + 'that one away.';
+    + 'falls back through its stack. The screen you pick stays up after you close the panel — pick `menu` '
+    + 'to put the title back. The Blubberball screens are invented state and touch no match. This panel '
+    + 'sits on the same edge as the ` tuner and covers it; press ` to put that one away.';
   panel.appendChild(note);
 
   document.body.appendChild(panel);
@@ -342,9 +401,48 @@ const ROLE_ROWS = {
   boostWarn: (row) => row.anchor === 'player',
 };
 
+// ---------------------------------------------------------------------------
+// THE ROLES WHOSE WORDS ARE ONE ROW OF uiText.csv — `sampleFrom` in
+// textRoles.js. Same principle as the callouts above, one row instead of the
+// longest of many: the line the specimen shows is the line the player reads,
+// so a lorem row shows as lorem and the panel says so. `{name}` in either the
+// row or a hand-typed sample is a seal's name, and it is the LONGEST name the
+// roster can cast, because the worst case is the case that decides the type.
+// ---------------------------------------------------------------------------
+let longestName = '';
+
+function longestSealName() {
+  if (longestName) return longestName;
+  const parts = sealNameParts();
+  let best = '';
+  // Every adjective against every nickname, under the length rule joinSealName
+  // enforces — a pair that does not fit collapses to the nickname, so the
+  // longest halves are not necessarily the longest name. A few thousand joins,
+  // once.
+  for (const a of parts?.adjective ?? []) {
+    for (const n of parts?.nickname ?? []) {
+      const whole = joinSealName(a.text, n.text);
+      if (whole.length > best.length) best = whole;
+    }
+  }
+  for (const f of parts?.full ?? []) if (f.text.length > best.length) best = f.text;
+  longestName = best || 'Seal';
+  return longestName;
+}
+
+function fillName(text) {
+  return String(text ?? '').split('{name}').join(longestSealName());
+}
+
 function sampleFor(role) {
+  if (role.sampleFrom) {
+    // A missing row shows its id, the way uiText() itself falls back — the
+    // specimen then reads as the id, which is the right kind of wrong.
+    const row = UI_TEXT[role.sampleFrom];
+    return fillName(row ?? role.sampleFrom);
+  }
   const wants = ROLE_ROWS[role.key];
-  if (!wants) return role.sample;
+  if (!wants) return fillName(role.sample);
   let best = '';
   for (const row of CALLOUTS.values()) {
     if (!wants(row)) continue;
@@ -373,22 +471,70 @@ function buildSpecimen() {
     key.className = 'sv-txp-key';
     line.appendChild(key);
 
-    // THE SAMPLE WEARS THE ROLE'S OWN CLASS. That is the whole trick: the rule
-    // typography.js writes for `.sv-title` is a plain class selector, so a
-    // <span class="sv-title"> in here is styled by exactly the rule the game's
-    // title is styled by — not by an approximation of it maintained separately.
-    const sample = document.createElement('span');
-    sample.className = role.selector.replace(/^\./, '');
+    // THE SAMPLE WEARS THE ROLE'S OWN CLASSES. That is the whole trick: the
+    // rule typography.js writes for `.sv-title` is a plain class selector, so
+    // a <span class="sv-title"> in here is styled by exactly the rule the
+    // game's title is styled by — not by an approximation of it maintained
+    // separately. mountSelector builds whatever the selector needs to match:
+    // one element with two classes, or a parent for a descendant selector.
+    const { outer, inner: sample } = mountSelector(role.selector);
+    sample.classList.add('sv-txp-sample');
     sample.textContent = sampleFor(role);
     // The chain banner's colour is written inline in the game, so the specimen
     // has to write one too or it would be the only line rendering unstyled.
     if (role.inlineColor) sample.dataset.inlineColor = '1';
-    line.appendChild(sample);
+    if (role.plate === 'glass') {
+      const plate = document.createElement('span');
+      plate.className = 'sv-glass sv-txp-plate';
+      plate.appendChild(outer);
+      line.appendChild(plate);
+    } else {
+      line.appendChild(outer);
+    }
 
     line.addEventListener('click', () => openRole(role.key));
     specEl.appendChild(line);
   }
   paintSpecimen();
+}
+
+/**
+ * THE ELEMENTS A ROLE'S SELECTOR MATCHES, built. `.sv-title` is one span with
+ * one class; `.sv-versus-count.sv-versus-go` is one span with two; and
+ * `.sv-ldg-head .sv-title` is a span INSIDE a span, because a descendant
+ * selector matches nothing without its ancestor.
+ *
+ * That last case was the bug: the old specimen stripped the leading dot and
+ * used the rest as a class list, so the score card quip's sample wore the
+ * classes "sv-ldg-head" and ".sv-title" (dot included) — and was styled by
+ * neither rule. Its line on the panel rendered in the panel's own font at
+ * the panel's own size for as long as the role existed, with nothing to say
+ * so, since a line of Inter looks like a line of Inter.
+ *
+ * Every ancestor is tagged `.sv-txp-wrap` so the strip can flatten whatever
+ * layout its class brings with it — see the note on that rule.
+ */
+function mountSelector(selector) {
+  const compounds = String(selector).trim().split(/\s+/);
+  let outer = null;
+  let inner = null;
+  for (const compound of compounds) {
+    const el = document.createElement('span');
+    el.className = compound.split('.').filter(Boolean).join(' ');
+    if (inner) {
+      inner.classList.add('sv-txp-wrap');
+      inner.appendChild(el);
+    } else {
+      outer = el;
+    }
+    inner = el;
+  }
+  return { outer, inner };
+}
+
+/** The sample element of a role's line — the one wearing the role's class. */
+function sampleOf(key) {
+  return specEl?.querySelector(`[data-role="${key}"] .sv-txp-sample`) ?? null;
 }
 
 // Open a role's group, scroll to it, and flash the specimen line so the two
@@ -421,7 +567,20 @@ function paintSpecimen() {
     if (!line) continue;
     const s = CONFIG.textStyles?.[role.key] ?? {};
     const font = s.font && s.font !== 'global' ? fontLabel(s.font) : 'global';
-    line.firstChild.textContent = `${role.label} · ${font} · ${s.size}px`;
+    // The unit is the role's — px for most, vmin for the match's screen-sized
+    // lines — and the readout says which, or a 26 next to a 24 would look
+    // like two sizes of the same thing.
+    line.firstChild.textContent = `${role.label} · ${font} · ${s.size}${roleUnit(role)}`;
+    if (role.plate === 'glass') {
+      // The pane is P1's colour, the way glassTint in versus.js dresses it —
+      // the same wash and rim, so what is being judged is black type on the
+      // glass the game draws, not on a guess at it.
+      const plate = line.querySelector('.sv-txp-plate');
+      const n = (CONFIG.versus?.teams?.[0]?.color ?? 0x3ddc63) >>> 0;
+      const rgb = `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+      plate?.style.setProperty('--sv-team-wash', `rgba(${rgb},0.26)`);
+      plate?.style.setProperty('--sv-team-rim', `rgba(${rgb},0.55)`);
+    }
     if (role.inlineColor) {
       // THE LIVE COLOUR WHERE THE ROLE NAMES ONE. An inlineColor role is one
       // ui.js paints per element, so its STORED colour is by definition not
@@ -429,7 +588,8 @@ function paintSpecimen() {
       // draw is worse than no specimen, because somebody will tune against it.
       // Falls back to the stored value for the roles whose live colour is not a
       // single number (the strike prompt walks a hue wheel). See textRoles.js.
-      const sample = line.lastChild;
+      const sample = sampleOf(role.key);
+      if (!sample) continue;
       const live = role.colorFrom
         ? role.colorFrom.split('.').reduce((o, k) => (o == null ? undefined : o[k]), CONFIG)
         : undefined;
@@ -465,8 +625,7 @@ function replayFrame(now) {
   const t = (now - replayStart) / 1000;
   for (const role of TEXT_ROLES) {
     if (!role.motion) continue;
-    const line = specEl.querySelector(`[data-role="${role.key}"]`);
-    const sample = line?.lastChild;
+    const sample = sampleOf(role.key);
     if (!sample) continue;
     // Each kind loops on its OWN life, so shortening one popup's time on screen
     // visibly speeds that line up and leaves its neighbours alone.
@@ -504,7 +663,7 @@ function stopReplay() {
   // panel put away mid-fade would come back with a half-invisible specimen.
   for (const role of TEXT_ROLES) {
     if (!role.motion) continue;
-    const sample = specEl.querySelector(`[data-role="${role.key}"]`)?.lastChild;
+    const sample = sampleOf(role.key);
     if (!sample) continue;
     sample.style.transform = '';
     sample.style.opacity = '';

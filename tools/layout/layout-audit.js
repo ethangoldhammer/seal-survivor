@@ -75,7 +75,48 @@ const VIEWPORTS = [
 // ui/splashLayout.js, and checks them against the wordmark and the DOM over
 // the card. It is here because the dice sat on the SURVIVOR on every wide
 // screen for as long as nothing measured it.
-const SURFACES = ['splash', 'HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card', 'settings', 'paused'];
+// THE BALL GAME'S FOUR, added when its type became designable in the Text
+// panel (Y). They are here because they are the surfaces in the game with the
+// least DOM and the most vmin: the goal card, the countdown numeral and the
+// after-match prompt are all sized as a share of the screen, and a share of a
+// 375px phone held upright is a different design from a share of a 1920 desktop.
+//
+// 'goal card' carries the score strip as well — previewVersusUi paints the
+// strip on every branch — so the two meters, the clock and the card are one
+// tile rather than two.
+// 'match over' is the prompt over the highlight reel, and it is the one tile
+// here with tap targets in it: Rematch and Main Menu are sized in vmin with a
+// px floor precisely so a phone in landscape (where a match is most likely to
+// be played two-up on one screen) keeps them at 44px, and nothing measured
+// that floor until this line existed.
+// 'match HUD' is the kickoff: the countdown numeral and, under it, the card
+// naming the two sides. It was missing from this list while the numeral was
+// the only thing on that screen — one glyph in the middle cannot overflow
+// anything — and a team name can be 34 characters of nowrap type in a column
+// that has to clear both the strip above it and the numeral. It is measured on
+// the surface it is measured on for a reason: previewVersusUi is the only way
+// to see that card without playing a match to a whistle.
+// 'team select' is the screen before the match — two columns of seal slots, a
+// colour wheel each, and two settings rows. It stacks under 3:4 on purpose
+// (see the media query in ui/teamSelect.js), and that rule is exactly the kind
+// that is written once and never measured again.
+// 'room lobby' is the screen before the team select on the online route: two
+// player rows, a five-letter code sized in vmin, and a text field sized in ch.
+// Worth measuring for two reasons the other screens do not have — the code is
+// the one piece of type on any screen that a person reads OUT LOUD off a phone
+// held at arm's length, so it is deliberately large and can collide; and the
+// entry field is the only text input in the game, which is the control a
+// software keyboard shoves the viewport around for.
+// 'seal sports' and 'leaderboard' are the two plain panels off the main menu —
+// a column of buttons each, which is exactly why neither was here: there is
+// nothing in either one that looks capable of overflowing. What they DO have is
+// tap targets, and the whole argument for the touch half of this audit is that
+// a 38px button is invisible to every other check in the repo. They are also
+// the two screens the shared panel cursor (ui/panelNav.js) was written for, so
+// a stop that stops being a stop — a button that is disabled, or hidden — now
+// has a tile it shows up on.
+const SURFACES = ['splash', 'HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card', 'settings', 'paused',
+  'match HUD', 'goal card', 'match over', 'team select', 'room lobby', 'seal sports', 'leaderboard'];
 
 // THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
 // itself of, restated here ON PURPOSE rather than imported: this is the check,
@@ -328,6 +369,7 @@ function finish(results, summary, silent = 0) {
 
 function describe(f) {
   if (f.type === 'tap') return `${f.what} — tap target ${f.w}x${f.h}, under ${TAP_MIN}`;
+  if (f.type === 'empty') return `${f.what} built nothing this sweep can see — ${f.n} element(s) measured`;
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
   if (f.type === 'threw') return `surface failed to build — ${f.what}`;
   if (f.type === 'callout-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
@@ -467,6 +509,115 @@ async function buildSurface(surface, ui, callout, callouts) {
     mesh: { position: { x: 0, y: 0, z: 0 } },
   };
 
+  // THE BALL GAME. Driven through versus.js's own preview rather than through
+  // previewScreen: those chips are REGISTERED by main.js at boot (ui.js cannot
+  // import the match HUD, which imports ui.js), and this harness never runs
+  // main.js. Calling the module directly is the same code the chip calls, one
+  // link earlier in the chain.
+  //
+  // previewVersusUi refuses over a live match and writes nothing into
+  // versusState — see its header. There is no match here, and the audit has no
+  // state to protect, but it is the reason this is safe to call at all.
+  if (surface === 'match HUD' || surface === 'goal card' || surface === 'match over') {
+    const versus = await import('../../path/src/systems/versus.js');
+    versus.previewVersusUi(surface);
+    return;
+  }
+  // THE TWO PLAIN PANELS. Through their own entry points rather than by
+  // un-hiding the markup: both are built lazily on the first show, so a panel
+  // that was only revealed would be a panel that does not exist yet.
+  if (surface === 'seal sports') {
+    ui.showSealSports({ onBall() {}, onBallOnline() {} });
+    return;
+  }
+  if (surface === 'leaderboard') {
+    // A BOARD WITH ROWS IN IT. The panel paints from this device's own list,
+    // which in a fresh audit profile is empty — and an empty table is not the
+    // row that can overflow. Seeded with the longest name the field accepts
+    // (MAX_NAME_LEN) against a six-figure score, which is the widest row the
+    // board can ever be asked to draw.
+    //
+    // This writes localStorage on the AUDIT's origin, which is this static
+    // server and nothing else — see the note at the top of tools/layout-audit.mjs
+    // about why there is no writer of the game's own state anywhere in here.
+    //
+    // AND THE ROWS ARE SWEPT AGAIN AFTERWARDS, for the reason the name above is
+    // put back: the tiles share one origin, so a board left in storage is a
+    // board the score card tile then draws as well.
+    const board = await import('../../path/src/systems/leaderboard.js');
+    const { MAX_NAME_LEN } = await import('../../path/src/systems/playerName.js');
+    const restore = snapshotStorage();
+    const name = 'W'.repeat(MAX_NAME_LEN);
+    for (let i = 0; i < 8; i++) {
+      board.submitScoreLocal({
+        name: i ? `${name.slice(0, MAX_NAME_LEN - 1)}${i}` : name,
+        score: 128400 - i * 9137, kills: 412 - i * 17, level: 24 - i, time: 900 - i * 40,
+        date: Date.now(),
+      });
+    }
+    // Painted from the list as it is NOW — showLeaderboard reads it
+    // synchronously — so the sweep below cannot empty the table it just drew.
+    ui.showLeaderboard();
+    restore();
+    await settle(60);
+    return;
+  }
+  if (surface === 'team select') {
+    // The screen alone. `onStart`/`onBack` are what the Text panel's own chip
+    // passes — nothing to walk into from here, so both simply close it — and
+    // neither is pressed: the sweep is a still.
+    //
+    // MEASURED ON THE LONGEST NAME THE SCREEN CAN BE ASKED TO DRAW. Seat 0 is
+    // the player's own, off the splash, and it is the captain's row — the
+    // biggest type in the column. Every other seat is cast at random from
+    // sealNames.csv, so a sweep that took what it was given would measure a
+    // different width on every run and would usually measure a short one. This
+    // is the row that decided the panel's width ceiling (see ui/teamSelect.js),
+    // and it is the row that comes back cut if anybody narrows it again.
+    //
+    // THE WRITE IS ROLLED BACK THE MOMENT THE SCREEN IS BUILT, and that is not
+    // tidiness. Every tile is its own iframe but they all share ONE ORIGIN, so
+    // localStorage is shared: a name left in the key is read by every tile that
+    // mounts afterwards, and the upgrade cards expand {player} into their
+    // descriptions. Measured with this left in, a thirty-two character name
+    // overflowed a card on the Desktop tile — a finding invented entirely by
+    // the harness, on a surface this branch has nothing to do with.
+    //
+    // savePlayerName caches in memory as well as writing, so the screen keeps
+    // the long name after the storage is put back. `restore` is a snapshot of
+    // the whole of localStorage rather than one key, so it cannot drift out of
+    // step with whatever that key is called this month.
+    const { savePlayerName, MAX_NAME_LEN } = await import('../../path/src/systems/playerName.js');
+    const restore = snapshotStorage();
+    savePlayerName('W'.repeat(MAX_NAME_LEN));
+    const teams = await import('../../path/src/ui/teamSelect.js');
+    // Built synchronously, so the roster has read the name before this line.
+    teams.showTeamSelect({ parent: ui.uiRoot(), onStart() {}, onBack() {} });
+    restore();
+    return;
+  }
+
+  if (surface === 'room lobby') {
+    // MEASURED IN ITS FULLEST STATE, which is the room with both players in it
+    // — the pick screen is two buttons and could never overflow anything. The
+    // members are written straight onto the exported roomState rather than
+    // faked through a socket: this audit has no server, and roomState is the
+    // object the screen renders from either way.
+    const net = await import('../../path/src/systems/online/room.js');
+    const lobby = await import('../../path/src/ui/roomLobby.js');
+    lobby.showRoomLobby({ parent: ui.uiRoot(), onBack() {}, onHosting() {}, onGuestStart() {} });
+    net.roomState.code = 'QRSTV';
+    net.roomState.role = 'host';
+    net.roomState.status = 'live';
+    net.roomState.rtt = 42;
+    net.roomState.members = [
+      { role: 'host', name: '', ready: true, present: true },
+      { role: 'guest', name: '', ready: false, present: true },
+    ];
+    lobby.showRoomLobbyRoom();
+    return;
+  }
+
   if (surface === 'settings' || surface === 'paused') {
     // Through the real entry point rather than by un-hiding the markup: the
     // body is rebuilt on the way in (buildBody reads the live settings) and a
@@ -477,6 +628,16 @@ async function buildSurface(surface, ui, callout, callouts) {
     return;
   }
   if (surface === 'cards') {
+    // A REROLL IN THE BANK FIRST, or the button under the hand is not on this
+    // tile at all — the row is hidden on a run that has never beaten a boss
+    // (see updateRerollButton in ui/ui.js), which is the correct default and
+    // would leave the one control on this screen that is not a hexagon
+    // unmeasured at every viewport. Written straight onto the real player
+    // object rather than through previewScreen, because previewScreen is also
+    // the Text panel's preview inside a LIVE run and must not hand out
+    // rerolls there.
+    const { player: realPlayer } = await import('../../path/src/entities/player.js');
+    realPlayer.rerolls = 2;
     ui.previewScreen('cards');
     return;
   }
@@ -609,6 +770,28 @@ async function buildSurface(surface, ui, callout, callouts) {
   }
 }
 
+/**
+ * EVERY TILE SHARES ONE localStorage, because every tile is an iframe of the
+ * same origin. A branch above that seeds a name or a board to measure the
+ * widest row it can be asked to draw would otherwise be seeding it for every
+ * surface that mounts afterwards — which is a finding the harness invented.
+ *
+ * Returns a function that puts the whole of it back. The whole of it rather
+ * than one key: the key a module stores under is that module's business and is
+ * not the harness's to know.
+ */
+function snapshotStorage() {
+  let before = null;
+  try { before = { ...localStorage }; } catch { /* no storage here; nothing to restore */ }
+  return () => {
+    if (!before) return;
+    try {
+      localStorage.clear();
+      for (const [k, v] of Object.entries(before)) localStorage.setItem(k, v);
+    } catch { /* as above */ }
+  };
+}
+
 function settle(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -696,13 +879,31 @@ async function settleAnimations(capMs = 1200) {
 
 // --- the measurement --------------------------------------------------------
 
+// WHAT THE SWEEP CAN SEE. Everything under the UI root, the callout layer —
+// and the ball game's HUD, which is a sibling of .sv-ui on the body rather
+// than a child of it (it has to sit under the menus at z-index 7; see the
+// .sv-versus block in systems/versus.js).
+//
+// THAT OMISSION IS WHY THE COUNT BELOW EXISTS. The two match surfaces were
+// added to SURFACES, built correctly, screenshotted correctly — and reported
+// clean at all eight viewports, because not one of their elements was inside
+// a root this list named. A surface that measures nothing passes, and a pass
+// is exactly what it should never have been able to produce.
+const ROOTS = '.sv-ui, .sv-ui *, .sv-callout-layer, .sv-callout-layer *, .sv-versus, .sv-versus *';
+
+// The fewest elements a real surface can be. Every one of them mounts a panel
+// or a strip with several nodes in it; a tile that measures fewer than this
+// has built nothing, and is reporting on an empty screen.
+const MIN_NODES = 3;
+
 function measure() {
   const findings = [];
   const W = window.innerWidth;
   const H = window.innerHeight;
   const seen = new Set();
+  let measured = 0;
 
-  for (const node of document.querySelectorAll('.sv-ui, .sv-ui *, .sv-callout-layer, .sv-callout-layer *')) {
+  for (const node of document.querySelectorAll(ROOTS)) {
     if (PER_FRAME.some((sel) => node.closest(sel))) continue;
     if (FULL_BLEED.some((sel) => node.closest(sel))) continue;
     // Full-bleed layers (.sv-ui, .sv-center, .sv-toast-layer) are inset:0 by
@@ -715,6 +916,7 @@ function measure() {
     const style = getComputedStyle(node);
     if (style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
 
+    measured++;
     const what = path(node);
     // One finding per element per type. A deeply nested run of spans that all
     // overflow because their parent does is one bug, and reporting it eleven
@@ -792,6 +994,9 @@ function measure() {
       once('tap', { w: Math.round(r.width), h: Math.round(r.height) });
     }
   }
+
+  // NOTHING TO MEASURE IS A FAILURE, NOT A PASS — see the note on ROOTS.
+  if (measured < MIN_NODES) findings.push({ type: 'empty', what: 'the surface', n: measured });
 
   findings.push(...measureCalloutOverlap());
   return findings;

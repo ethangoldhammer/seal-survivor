@@ -13,12 +13,10 @@
 //
 // Four things worth failing over:
 //
-//   HALFWAY    that the heading actually lands between the swim and the aim,
-//              at the ANGULAR midpoint, for spreads all the way out to 180
-//              degrees. Normalising (move + aim) passes most of these and then
-//              returns NaN on the opposed case — which is ordinary play, you
-//              swim away from the thing you're shooting — so the wrap is
-//              tested explicitly rather than assumed.
+//   STICK WINS that a pushed stick IS the heading whatever the aim says, for
+//              spreads all the way out to 180 degrees — including exactly
+//              opposed, which is ordinary play (you swim away from the thing
+//              you're shooting) and the case a vector sum returns NaN on.
 //
 //   INPUTS     that a half-pushed stick steers exactly as hard as a full one
 //              (input.move carries analog magnitude, input.aim does not), that
@@ -69,42 +67,27 @@ const delta = (a, b) => {
 };
 const close = (a, b, eps = 1e-6) => Math.abs(delta(a, b)) <= eps;
 
-// The blend the game ships with. Everything below assumes halfway, so say so
-// out loud rather than silently testing whatever a tuning file left behind.
-section('CONFIG — the shipped blend');
-check('strike.aimBlend is the halfway point', CONFIG.strike.aimBlend === 0.5,
+// The rule the game ships with: the stick wins when it is pushed, the aim
+// decides otherwise. There is no blend to read off a tuning file any more.
+section('CONFIG — no blend');
+check('strike.aimBlend is gone', !('aimBlend' in CONFIG.strike),
   `got ${CONFIG.strike.aimBlend}`);
 
-// ------------------------------------------------------------------- halfway
+// --------------------------------------------------------------- stick wins
 
-section('HALFWAY — the heading sits between the swim and the aim');
+section('STICK WINS — a pushed stick is the heading, whatever the aim says');
 
 // Spreads from a nudge to fully opposed, in both rotational directions, from a
 // swim heading that isn't axis-aligned so a lucky symmetry can't carry it.
 for (const swimDeg of [0, 37, 90, 175, -120]) {
-  for (const spread of [10, 45, 90, 135, 179]) {
+  for (const spread of [10, 45, 90, 135, 179, 180]) {
     for (const sign of [1, -1]) {
       const aimDeg = swimDeg + sign * spread;
       const out = strikeDirection(dir(swimDeg), dir(aimDeg));
-      const want = swimDeg + sign * spread / 2;
-      check(`swim ${swimDeg}, aim ${aimDeg} -> ${want}`,
-        close(angleOf(out), want, 1e-6), `got ${angleOf(out).toFixed(3)}`);
+      check(`swim ${swimDeg}, aim ${aimDeg} -> ${swimDeg}`,
+        close(angleOf(out), swimDeg, 1e-6), `got ${angleOf(out).toFixed(3)}`);
     }
   }
-}
-
-// The case that kills the naive normalize(move + aim): exactly opposed inputs
-// sum to the zero vector. A heading is still owed here, it must be finite, and
-// it must be perpendicular — the honest halfway between two opposite ways to
-// go.
-section('HALFWAY — exactly opposed inputs (the normalize(move+aim) trap)');
-for (const swimDeg of [0, 90, -37, 180]) {
-  const out = strikeDirection(dir(swimDeg), dir(swimDeg + 180));
-  const finite = Number.isFinite(out.x) && Number.isFinite(out.y);
-  check(`swim ${swimDeg}, aim reversed: finite`, finite, JSON.stringify(out));
-  check(`swim ${swimDeg}, aim reversed: 90 deg off the swim`,
-    finite && Math.abs(Math.abs(delta(angleOf(out), swimDeg)) - 90) < 1e-6,
-    finite ? `${delta(angleOf(out), swimDeg).toFixed(3)} deg` : 'NaN');
 }
 
 // -------------------------------------------------------------------- inputs
@@ -112,15 +95,15 @@ for (const swimDeg of [0, 90, -37, 180]) {
 section('INPUTS — magnitude, missing sticks, unit output');
 
 // input.move keeps analog magnitude (input.js only clamps it to <= 1), aim is
-// normalized. A halfway that leaned on magnitude would make a gently pushed
-// stick steer less, which is not what a direction blend means.
+// normalized. The magnitude is the throttle, not a vote: a gently pushed
+// stick launches exactly where a full one does.
 {
   const full = strikeDirection({ x: 1, y: 0 }, dir(90));
   const half = strikeDirection({ x: 0.28, y: 0 }, dir(90));
-  check('a half-pushed stick steers like a full one',
+  check('a half-pushed stick launches like a full one',
     close(angleOf(full), angleOf(half), 1e-9),
     `${angleOf(full).toFixed(3)} vs ${angleOf(half).toFixed(3)}`);
-  check('and both land on 45', close(angleOf(full), 45, 1e-9));
+  check('and both land on the stick, 0', close(angleOf(full), 0, 1e-9));
 }
 
 {
@@ -163,25 +146,21 @@ section('INPUTS — magnitude, missing sticks, unit output');
 {
   const target = { x: 9, y: 9 };
   const out = strikeDirection(dir(0), dir(90), target);
-  check('writes into the supplied scratch object', out === target && close(angleOf(target), 45));
+  check('writes into the supplied scratch object', out === target && close(angleOf(target), 0));
 }
 
-// The blend is a slider, so the ends have to mean what the label says.
-section('BLEND — the slider ends');
-const shipped = CONFIG.strike.aimBlend;
-try {
-  CONFIG.strike.aimBlend = 0;
-  check('0 = straight along the swim', close(angleOf(strikeDirection(dir(20), dir(140))), 20));
-  CONFIG.strike.aimBlend = 1;
-  check('1 = straight at the aim', close(angleOf(strikeDirection(dir(20), dir(140))), 140));
-  CONFIG.strike.aimBlend = 5; // a tuning file with nonsense in it
-  check('out-of-range clamps instead of overshooting',
-    close(angleOf(strikeDirection(dir(20), dir(140))), 140));
-  CONFIG.strike.aimBlend = undefined; // a null in imported-tuning.json wins over the default
-  check('a missing blend falls back to halfway',
-    close(angleOf(strikeDirection(dir(20), dir(140))), 80));
-} finally {
-  CONFIG.strike.aimBlend = shipped;
+// The blend used to be a slider. A tuning file that still carries it must not
+// bring it back: nothing reads the key.
+section('BLEND — gone, and a stale tuning value cannot revive it');
+{
+  CONFIG.strike.aimBlend = 0.5;
+  try {
+    check('aimBlend 0.5 in the tuning changes nothing',
+      close(angleOf(strikeDirection(dir(20), dir(140))), 20));
+  } finally {
+    delete CONFIG.strike.aimBlend;
+  }
+  check('no slider for it', !/strike\.aimBlend/.test(fs.readFileSync(path.join(HERE, '../path/src/config.js'), 'utf8').replace(/\/\/[^\n]*/g, '')));
 }
 
 // -------------------------------------------------------------------- wiring
@@ -192,7 +171,7 @@ const main = fs.readFileSync(MAIN, 'utf8');
 check('main.js imports strikeDirection', /import \{[^}]*\bstrikeDirection\b[^}]*\} from '\.\/systems\/strike\.js'/.test(main));
 check('the launch calls it', /const dir = strikeDirection\(input\.move, input\.aim\)/.test(main));
 // The prediction flies the whole dash (predictDash) — and predictDash launches
-// through strikeDirection, so the corridor still starts on the halfway rule.
+// through strikeDirection, so the corridor still starts on the same rule.
 check('the lens prediction flies the dash', /dashDir: predictDash\(input\.move, input\.aim, strikeState\.pending, player\.stats, player\.comboSpeedMul, dashPrediction\)\.dir/.test(main));
 {
   const strikeSrc = fs.readFileSync(path.join(HERE, '../path/src/systems/strike.js'), 'utf8');

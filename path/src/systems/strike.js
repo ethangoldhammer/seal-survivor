@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { ease, isEasing } from '../ease.js';
-import { removeEnemy, applyKnockback } from '../entities/enemies.js';
+import { removeEnemy, applyKnockback, staggerBoss } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
 import { markTarget } from './marks.js';
 import { hitCreature } from './hitShape.js';
@@ -68,6 +68,12 @@ export function createStrikeState() {
     charge: 0,       // 0..1 — the FUEL bar. Burned by holding, refilled by food.
     pending: 0,      // power banked so far for the strike being wound up, 0..1
     charging: false, // holding AND there is fuel left to burn
+    // TURBO — see updateTurbo. `turboOn` is the latch: set when a wind-up is
+    // held with the stick pushed, cleared when the hold ends (release, dash,
+    // or an empty bar). `turbo` is the 0..1 blend the seal actually swims by,
+    // eased toward the latch over CONFIG.strike.turbo.rampIn / rampOut.
+    turboOn: false,
+    turbo: 0,
     power: 0,        // the banked power the CURRENT dash was launched with, 0..1
     // Seconds left in which a pickup arriving at the mouth still counts as
     // having been struck by the dash that just ended. See
@@ -78,6 +84,24 @@ export function createStrikeState() {
     // frame the timer runs out. See CONFIG.strike.dashControl.followThrough.
     steerGrace: 0,
     steerGraceMax: 0,
+    // THE HELD AIM — the aim hand's heading as far as this dash is concerned.
+    //
+    // A pointer aims at a POINT: input.js re-derives the mouse's and the aim
+    // thumb's heading every frame as cursor-minus-seal, so a dash that flies
+    // past the cursor sees the aim flip through 180 degrees with no hand
+    // touching anything, and a seal steering toward it turned round. Measured
+    // (tools/strike-corridor-test.mjs, THE OVERSHOOT): a full-charge mouse
+    // strike released at a cursor 8 units away landed 92 degrees off its own
+    // launch line. On a phone the thumb is always that close.
+    //
+    // So the dash keeps its own copy. tryStrike sets it to the launch heading
+    // — no instruction yet — and it is replaced only on a frame the aim device
+    // actually GESTURED (input.aimMoved), with the DIRECTION OF THE GESTURE
+    // (input.aimGesture: a mouse flick up is up, a thumb slide is its slide,
+    // a right stick is itself). An idle hand is not an instruction, and the
+    // seal flying past a cursor nobody moved changes nothing. See holdAim().
+    aim: { x: 0, y: 0 },
+    aimSteer: false, // ...and whether a gesture has set it since the launch
     flash: 0,        // >0 = the bar is flashing, just spent (see strikeRing.js)
     // THE PERFECT CHARGE — the wind-up fully banked, `perfectAt` of the bar.
     //
@@ -244,6 +268,38 @@ export function createStrikeState() {
     // per dash), and the one-frame edge of a perfect charge landing.
     hits: new Set(),
     perfectEdge: false,
+    // SOURCE NAME -> SECONDS until that source may add another link. A chain
+    // source can arrive in bursts — a magnet sweep collects six orbs inside one
+    // frame — and without a floor between links that alone would hold a chain
+    // open indefinitely. Same reasoning as feedback.js's `sfxGaps`: a rate
+    // limit on the channel that can't take the pile-up.
+    //
+    // PER STATE, because the throttle is per SEAL. It was one module map, which
+    // is the same thing while there is one chain in the game; with a chain on
+    // every seal in a match it would be one seal's mouthful shutting the source
+    // off for everybody, and — worse — only the run's own state ticks the
+    // clocks down (see updateStrike's `own`), so a CPU seal's first link would
+    // have closed the source for the rest of the match.
+    chainGaps: new Map(),
+    // EVERY FOOD CHAIN LINK SCORED SINCE THE LAST READ, oldest first.
+    //
+    // It was `lastChain`, a single number, and that was a REPORTING bug with no
+    // symptom anywhere in the scoring: the counter moved by one per link
+    // exactly as it should, and the caller was handed only the number it ended
+    // on. One swallow that completes two links, or a breach worth three with
+    // Porpoising stacked, came out as x3 -> x5 — a read-out whose whole job is
+    // to be counted, telling the player they had missed something they had not.
+    //
+    // A queue rather than a wider return value for the reason `lastRelease` is
+    // held here: feedChum's boolean is "did this top the bar off", which its
+    // callers branch on, and widening it would touch every call site to say
+    // something one of them wants.
+    //
+    // Entries are `{ chain, source }` — the depth after that link, and what
+    // CONFIG.strike.chainOn calls the thing that paid for it. Per link rather
+    // than per drain, so a frame that mixes a mouthful with a breach can still
+    // attribute each one. Per state for the same reason as the gaps above.
+    chainLinks: [],
   };
 }
 
@@ -416,13 +472,50 @@ export function pickupBlast(stats, kindMul = 1) {
  * the note there), so travel is speed x duration x the full-charge multiplier.
  * `hitRadius` is on the end because a dash connects with the seal's body, not
  * with a point — the same slack hitCreature is given in updateStrike.
+ *
+ * AND OFF THE FULL-TANK SPEED, not the live one. The bar throttles the dash
+ * (breathSpeedMul in stats.js — `breathBase` is the pre-throttle stash), and
+ * reading the throttled number here would put the weak-spot tip on screen and
+ * take it off again as the seal breathed, which is the same flicker the
+ * paragraph above rejects the live charge for.
  */
 export function strikeReach(stats = null) {
   const c = CONFIG.strike.charge ?? {};
-  const speed = stats?.strikeDashSpeed ?? CONFIG.strike.dashSpeed ?? 0;
+  const speed = stats?.breathBase?.strikeDashSpeed ?? stats?.strikeDashSpeed ?? CONFIG.strike.dashSpeed ?? 0;
   const duration = (stats?.strikeDashDuration ?? CONFIG.strike.dashDuration ?? 0)
     * (c.reachMulMax ?? 1);
   return speed * duration + (stats?.hitRadius ?? 0);
+}
+
+/**
+ * THE AIM HAND, AS THE DASH SEES IT. Called by updatePlayer every frame a dash
+ * or its follow-through is live, before dashSteer.
+ *
+ * On a frame the aim device GESTURED (input.aimMoved — see input.js) the
+ * dash's held aim becomes the DIRECTION OF THE GESTURE (input.aimGesture: a
+ * mouse flicked up is up, a thumb slid left is left, a right stick is
+ * itself) and stays there. On every other frame it is left alone, which is
+ * the whole point: a pointer's heading is cursor-minus-seal and changes on
+ * its own as the seal moves, and a dash that read it live turned round the
+ * moment it flew past the cursor.
+ *
+ * An input with no gesture vector (the versus pad readers, the bots, a test
+ * stub) falls back to its `aim`, which for those is a direction already.
+ *
+ * Returns the held aim, for the caller to hand dashSteer.
+ */
+export function holdAim(s, input) {
+  if (input?.aimMoved) {
+    const g = input.aimGesture;
+    let ax = g?.x ?? 0, ay = g?.y ?? 0;
+    if (Math.hypot(ax, ay) <= 0.001) { ax = input.aim?.x ?? 0; ay = input.aim?.y ?? 0; }
+    const len = Math.hypot(ax, ay);
+    if (len > 0.001) {
+      s.aim.x = ax / len; s.aim.y = ay / len;
+      s.aimSteer = true;
+    }
+  }
+  return s.aim;
 }
 
 /**
@@ -434,17 +527,18 @@ export function strikeReach(stats = null) {
  * Reads a heading and a speed, returns the next pair in `out`. The player
  * turns the result back into a velocity; the prediction integrates it.
  *
- *   TURN      the heading swings toward the SAME blend of swim and aim the
- *             launch used (strikeDirection, CONFIG.strike.aimBlend) at
- *             dashTurnRate x steerMul, scaled by the combo alongside the
- *             speed it divides, so the turn RADIUS stays constant as a chain
- *             makes the seal faster. It used to swing onto the raw stick,
- *             which at 24 rad/s erased the aim's share of the launch within
- *             two frames — aimBlend set where the dash pointed for a
- *             thirtieth of a second and the stick decided where it went.
- *             Steering toward the blend keeps the split real for the whole
- *             flight, and live: move either hand mid-dash and the seal
- *             follows the new halfway.
+ *   TURN      the heading swings toward the SAME rule the launch used
+ *             (strikeDirection: the move stick when it is pushed, the aim
+ *             otherwise) at dashTurnRate x steerMul, scaled by the combo
+ *             alongside the speed it divides, so the turn RADIUS stays
+ *             constant as a chain makes the seal faster. The aim handed in
+ *             is the dash's HELD aim (holdAim) — the last heading the aim
+ *             hand actually gestured, never the live cursor — so a released
+ *             stick with an idle mouse is no instruction at all and the seal
+ *             holds its line. It used to steer toward an angular blend of
+ *             both hands, which was a direction neither of them asked for,
+ *             and toward the live pointer, which flipped as the seal flew
+ *             past it.
  *   TAKEOVER  the turn is not at full authority from the first frame. A
  *             dash is a commitment, and a seal that can be dragged off its
  *             launch line on frame two never committed to anything — so the
@@ -465,7 +559,9 @@ export function strikeReach(stats = null) {
  * @param heading  radians, the dash's current direction
  * @param speed    world units/s
  * @param moveX/Y  input.move — NOT normalized, the magnitude is the throttle
- * @param aimX/Y   input.aim — normalized, may be zero (then the stick alone steers)
+ * @param aimX/Y   the dash's HELD aim (strikeState.aim, via holdAim) — normalized,
+ *                 may be zero (then the stick alone steers); never the live
+ *                 pointer heading, which flips as the seal passes the cursor
  * @param combo    player.comboSpeedMul
  * @param dt       seconds
  * @param stats    player.stats (strikeDashSpeed)
@@ -496,27 +592,17 @@ export function dashSteer(heading, speed, moveX, moveY, aimX, aimY, combo, dt, s
     return out;
   }
 
-  // The steer target: the same rule as the launch, on this frame's hands —
-  // with one difference that only exists mid-flight.
-  //
-  // A RELEASED MOVE STICK BLENDS AGAINST THE HEADING, not against nothing.
-  // strikeDirection hands the WHOLE heading to whichever hand is still giving
-  // one, which is the only sane answer at the launch (a strike from a
-  // standstill has to go somewhere, and the cursor is the only thing pointing)
-  // but the wrong one here: letting go of the stick halfway through a dash
-  // would swing the target from the halfway point to the full aim, so the seal
-  // lurches toward the cursor as a reward for taking a hand off. It could not
-  // happen while this whole function was gated on the stick being pushed, and
-  // became possible the moment the aim was allowed to steer.
-  //
-  // Standing in the missing hand's place with the direction the seal is
-  // ALREADY travelling makes a released stick mean "no new instruction", and
-  // it means that at every blend rather than as a special case: at aimBlend 0
-  // the target is the heading and nothing turns, at 0.5 it eases half way to
-  // the cursor, at 1 it goes to the cursor exactly as it does today.
+  // The steer target: the same rule as the launch, on this frame's hands. The
+  // stick when it is pushed; the HELD aim otherwise (holdAim — the last
+  // heading the aim hand gestured, seeded on the launch line, so a dash with
+  // neither hand giving anything new steers toward where it is already going
+  // and turns by nothing). Letting go of the stick used to swing the target
+  // from a blend onto the full aim, a lurch toward the cursor as a reward for
+  // taking a hand off; with the held aim seeded on the launch there is
+  // nothing to lurch toward unless the hand has asked for it.
   const stickLive = stick > 0.001;
-  steerMove.x = stickLive ? moveX : Math.cos(heading);
-  steerMove.y = stickLive ? moveY : Math.sin(heading);
+  steerMove.x = stickLive ? moveX : 0;
+  steerMove.y = stickLive ? moveY : 0;
   steerAim.x = aimX ?? 0; steerAim.y = aimY ?? 0;
   const want = strikeDirection(steerMove, steerAim, steerTarget);
   let delta = (want.x === 0 && want.y === 0) ? 0 : Math.atan2(want.y, want.x) - heading;
@@ -631,13 +717,11 @@ const forecastStep = { heading: 0, speed: 0, breakOut: false };
 /**
  * WHERE A DASH RELEASED RIGHT NOW WOULD LAND — the whole dash, not the launch.
  *
- * The launch heading (strikeDirection: the aimBlend point between the swim
- * and the aim) is only the FIRST frame of a dash. With the stick held the
- * seal keeps steering every frame after it (dashSteer above — toward that
- * same blend now, and once toward the raw stick, which at 24 rad/s erased
- * the aim inside two frames), throttled by the stick and dragged by the
- * water. The balance between the two hands is a balance of the whole flight,
- * and the only honest way to draw it is to fly it.
+ * The launch heading (strikeDirection: the stick when pushed, the aim
+ * otherwise) is only the FIRST frame of a dash. With the stick held the seal
+ * keeps steering every frame after it (dashSteer above), throttled by the
+ * stick and dragged by the water, and the only honest way to draw where that
+ * ends is to fly it.
  *
  * This replays the dash as updatePlayer will run it: the impulse, then per
  * frame the stick's thrust, the steer (dashSteer above, the same function),
@@ -689,7 +773,10 @@ export function predictDash(move, aim, power, stats, combo = 1, out = { dir: { x
     if (held) {
       const v = Math.hypot(vx, vy);
       if (v > 0.001) {
-        dashSteer(Math.atan2(vy, vx), v, mx, my, aim?.x ?? 0, aim?.y ?? 0, combo, dt, stats, 1 - left / duration, t, forecastStep);
+        // The held aim of a dash released now is its own launch line (tryStrike
+        // seeds it there), so that is what the forecast steers toward — the
+        // live pointer would flip as the forecast flew past it.
+        dashSteer(Math.atan2(vy, vx), v, mx, my, launch.x, launch.y, combo, dt, stats, 1 - left / duration, t, forecastStep);
         if (forecastStep.breakOut) break;
         vx = Math.cos(forecastStep.heading) * forecastStep.speed;
         vy = Math.sin(forecastStep.heading) * forecastStep.speed;
@@ -739,28 +826,22 @@ const TAU = Math.PI * 2;
  * Where a strike released right now would GO — the one rule, so the corridor
  * the lens draws and the impulse the dash gets can never disagree.
  *
- * Neither the swim direction nor the aim on its own was right. Launching along
- * movement alone ignored the cursor entirely, so a strike could only ever go
- * where you were already swimming; launching along aim alone fought the
- * momentum you had committed to. The dash now splits the difference: the
- * heading is the point HALFWAY between the two, so both hands steer it and
- * neither one wins outright. Pull the stick and the cursor together and they
- * agree; spread them and the dash goes between them, which is also the only
- * reading a player can predict from what's on screen.
+ * THE STICK WINS WHEN IT IS PUSHED. A pushed move stick (or WASD) is the
+ * heading; the aim (cursor / right stick / aim thumb) decides only when the
+ * stick is idle. So the seal only ever launches along a direction one of the
+ * player's hands is actually giving.
  *
- * Interpolated as an ANGLE rather than by normalising move + aim. The vector
- * sum collapses to zero when the two are exactly opposed — the one case a
- * player WILL hit, swimming away from what they're shooting at — and would
- * hand back a NaN heading. Wrapping the delta into (-pi, pi] picks a side
- * deterministically instead. It also makes the halfway an angular halfway
- * regardless of how far the movement stick is pushed: a half-tilted stick
- * steers the dash exactly as much as a full one, since it is only ever asked
- * for a direction.
+ * It used to launch at the angular HALFWAY point between the two hands
+ * (strike.aimBlend, 0.5). That is a direction nobody asked for: swim east and
+ * point north and the dash went north-east, which neither hand can read off
+ * the screen, and a pointer's heading changes on its own as the seal moves,
+ * so the halfway moved under the player mid-flight. The blend is gone, not
+ * set to 0 — a slider whose one honest value is an end is not a slider.
  *
- * A missing input hands the whole heading to the other: no movement means a
- * strike from a standstill still goes at the cursor, and no aim leaves it
- * along the swim. Both missing returns the zero vector — the caller checks it
- * and doesn't fire.
+ * Only the DIRECTION of the stick is read: a half-tilted stick launches
+ * exactly where a full one does. The magnitude is the throttle (dashSteer).
+ *
+ * Both idle returns the zero vector — the caller checks it and doesn't fire.
  *
  * @param move  input.move — NOT normalized (analog magnitude survives).
  * @param aim   input.aim — normalized in every path that writes it.
@@ -772,36 +853,22 @@ export function strikeDirection(move, aim, out = { x: 0, y: 0 }) {
   const mLen = Math.hypot(mx, my);
   const aLen = Math.hypot(ax, ay);
 
-  if (mLen <= 0.001) {
-    out.x = aLen > 0.001 ? ax / aLen : 0;
-    out.y = aLen > 0.001 ? ay / aLen : 0;
-    return out;
-  }
-  if (aLen <= 0.001) {
+  if (mLen > 0.001) {
     out.x = mx / mLen;
     out.y = my / mLen;
     return out;
   }
-
-  const blend = Math.min(1, Math.max(0, CONFIG.strike.aimBlend ?? 0.5));
-  const swim = Math.atan2(my, mx);
-  // Wrapped into (-pi, pi] so the blend always takes the SHORT way round —
-  // without it, aim at 179 deg and swim at -179 deg would sweep the dash the
-  // long way through 358 deg and launch it backwards.
-  let delta = Math.atan2(ay, ax) - swim;
-  delta = ((delta + Math.PI) % TAU + TAU) % TAU - Math.PI;
-  const heading = swim + delta * blend;
-  out.x = Math.cos(heading);
-  out.y = Math.sin(heading);
+  out.x = aLen > 0.001 ? ax / aLen : 0;
+  out.y = aLen > 0.001 ? ay / aLen : 0;
   return out;
 }
 
 /**
  * ENGLISH — the spin a player puts on a shot on purpose, read off the two
- * sticks disagreeing. The strike launches BETWEEN the swim and the aim
- * (strikeDirection), so a player swimming across the line they are pointing
- * at is a seal whose body slides across the ball's face as it hits, and that
- * slide is what friction turns into spin (versus.js strikeBall). This is the
+ * sticks disagreeing. The strike launches along the stick (strikeDirection),
+ * so a player pointing across the line they are swimming is a seal whose
+ * body slides across the ball's face as it hits, and that slide is what
+ * friction turns into spin (versus.js strikeBall). This is the
  * slide as a number: sin of the angle from the aim to the swim, -1..1,
  * positive when the swim is anticlockwise of the aim, times how hard the
  * stick is pushed — a nudge is a little english, a full deflection is all
@@ -833,11 +900,17 @@ export function strikeEnglish(move, aim) {
 // dash speed, top speed and thrust all read this, and so does the dash's own
 // turn rate, so a fast combo curves just as tightly as a slow one.
 // 1 when no chain is running.
-export function comboSpeedMul() {
+export function comboSpeedMul(stats = null, s = strikeState) {
   // Reads the fractional pip depth, so the seal speeds up with every mouthful
   // instead of stepping up once a bar. `comboSpeedPerLevel` is unchanged and
   // still means "per link" — see chainLevel().
-  const level = chainLevel();
+  //
+  // WHOSE CHAIN, and this one mattered most: at `comboSpeedMax` it is worth
+  // 1.75x on thrust, top speed, the dash and the dash's turn rate. main.js
+  // pushed it onto `player` alone, so in a match one seal could be most of
+  // twice the speed of everything else on the pitch and nothing else in the
+  // water could earn it.
+  const level = chainLevel(stats, s);
   if (level <= 0) return 1;
   return Math.min(
     CONFIG.strike.comboSpeedMax,
@@ -856,24 +929,43 @@ export function comboSpeedMul() {
  * Fractional, like comboSpeedMul, so the burn of a wind-up bleeds the bonus
  * away smoothly rather than dropping it a pip at a time mid-hold.
  *
+ * WHOSE BAR, though. This read the module's own `strikeState` — player 1's —
+ * with no way to ask about anybody else's, so in a match the seal in seat 0 got
+ * up to 15% more acceleration off a stocked bar and the other seven got none.
+ * Every other meter in this file already takes its state as an argument; this
+ * one simply had not been asked the question yet.
+ *
  * @param stats the run's stat block — only for pipCount, which a card moves.
+ * @param s     whose meter: the run's by default, a match seal's otherwise.
  */
-export function chargeThrustMul(stats = null) {
+export function chargeThrustMul(stats = null, s = strikeState) {
   const per = CONFIG.strike.chargeThrustPerPip ?? 0;
   if (!CONFIG.strike.enabled || per <= 0) return 1;
-  const pips = Math.max(0, Math.min(1, strikeState.charge)) * pipCount(stats);
+  const pips = Math.max(0, Math.min(1, s?.charge ?? 0)) * pipCount(stats);
   return Math.min(CONFIG.strike.chargeThrustMax ?? Infinity, 1 + per * pips);
 }
 
 let orbTimer = 0;
 let pipCooldown = 0; // seconds until the next queued pip tick may be heard
 const hitThisDash = strikeState.hits;
-// source name -> seconds until that source may add another link. A chain
-// source can arrive in bursts — a magnet sweep collects six orbs inside one
-// frame — and without a floor between links that alone would hold a chain
-// open indefinitely. Same reasoning as feedback.js's `sfxGaps`: a rate limit
-// on the channel that can't take the pile-up.
-const chainGaps = new Map();
+
+/**
+ * IS THE FOOD CHAIN LIVE AT ALL.
+ *
+ * True outside a match, always: the chain is the run's central loop and
+ * nothing in a run switches it off. Inside a match it is
+ * `CONFIG.versus.chain.enabled`, and that switch covers EVERY seal — the
+ * person's and the computer's alike, because the one thing a toggle here must
+ * not do is turn it off for one side.
+ *
+ * Asked at the two doors every link comes through (noteChainMouthful for the
+ * food, chainStrike for everything else) rather than at each of the dozen call
+ * sites, so "off" cannot mean off-for-some-sources.
+ */
+function chainAllowed() {
+  if (!versusActive()) return true;
+  return CONFIG.versus?.chain?.enabled !== false;
+}
 
 function randomBetween(a, b) {
   return a + Math.random() * Math.max(0, b - a);
@@ -911,6 +1003,8 @@ export function resetStrike(s = strikeState) {
   s.verdictOffset = 0;
   s.verdictFlash = 0;
   s.charging = false;
+  s.turboOn = false;
+  s.turbo = 0;
   s.power = 0;
   s.flash = 0;
   s.active = false;
@@ -934,12 +1028,12 @@ export function resetStrike(s = strikeState) {
   }
   s.invulnTimer = 0;
   s.hits.clear();
-  // The rest is the run's own: the pip queue, the chain throttles, the orb timer.
+  s.chainGaps.clear();
+  s.chainLinks.length = 0;
+  // The rest is the run's own: the pip queue and the orb timer.
   if (s !== strikeState) return;
-  chainGaps.clear();
   pipQueue.length = 0;
   pipCooldown = 0;
-  lastMouthful.chain = 0;
   orbTimer = randomBetween(CONFIG.strike.orbSpawnMin, CONFIG.strike.orbSpawnMax);
 }
 
@@ -962,6 +1056,55 @@ export function resetStrike(s = strikeState) {
 // The ring reads `perfectFlash` instead and needs no edge — it is drawing a
 // decay, not firing an event.
 // (the perfect-charge edge lives on the state now: s.perfectEdge)
+
+/**
+ * TURBO — the faster swim of a wind-up held with the stick pushed.
+ *
+ * Runs right after updateCharge, because it reads `charging` for THIS frame.
+ * The latch (`turboOn`) arms on the first frame the seal is both charging and
+ * holding a direction past CONFIG.strike.turbo.moveMin, and stays armed for
+ * the rest of the hold whether or not the stick stays pushed — the player has
+ * committed to a line, and a stick that dips through centre on the way to a
+ * new heading must not stutter the swim. It clears the moment `charging` does,
+ * which is every way a wind-up ends: the release that fires the dash, a button
+ * that comes up on nothing, and a bar that has burned to empty under the
+ * hold.
+ *
+ * The blend (`turbo`, 0..1) is what the seal swims by, eased linearly toward
+ * the latch over rampIn / rampOut so the extra speed arrives as a surge rather
+ * than a step — and so the dash that ends it launches out of a body that is
+ * still, for a few frames, in turbo, which is the hand-off the feature is for.
+ *
+ * @param moveLen  the stick's throw this frame, 0..1 (the length of input.move)
+ * @returns the blend, for the caller to push onto the player.
+ */
+export function updateTurbo(dt, moveLen, s = strikeState) {
+  const c = CONFIG.strike.turbo;
+  if (!CONFIG.strike.enabled || !c || c.enabled === false) {
+    s.turboOn = false;
+    s.turbo = 0;
+    return 0;
+  }
+  const pushed = (moveLen ?? 0) >= (c.moveMin ?? 0.3);
+  s.turboOn = !!s.charging && (s.turboOn || pushed);
+  const target = s.turboOn ? 1 : 0;
+  const ramp = target > s.turbo ? (c.rampIn ?? 0) : (c.rampOut ?? 0);
+  if (ramp <= 0) s.turbo = target;
+  else if (target > s.turbo) s.turbo = Math.min(1, s.turbo + dt / ramp);
+  else s.turbo = Math.max(0, s.turbo - dt / ramp);
+  return s.turbo;
+}
+
+/**
+ * A stat's turbo multiplier at the current blend: 1 with turbo off, the stat
+ * itself at full, linear between. One helper so the thrust, the ceiling and
+ * the swim cycle all read the blend the same way.
+ */
+export function turboLerp(mul, blend) {
+  const m = Number.isFinite(mul) && mul > 0 ? mul : 1;
+  const t = Math.max(0, Math.min(1, blend ?? 0));
+  return 1 + (m - 1) * t;
+}
 
 export function updateCharge(dt, held, stats, s = strikeState) {
   if (!CONFIG.strike.enabled) return;
@@ -1294,6 +1437,10 @@ export function tryStrike(aimDir, stats, english = 0, s = strikeState) {
   s.dashTimeLeft = duration;
   s.dashDuration = duration;
   s.dashDir = { x: aimDir.x, y: aimDir.y };
+  // The held aim starts ON the launch line: nothing has been asked for yet,
+  // and steering toward where the seal is already going turns it by nothing.
+  s.aim.x = aimDir.x; s.aim.y = aimDir.y;
+  s.aimSteer = false;
   s.english = Number.isFinite(english) ? Math.max(-1, Math.min(1, english)) : 0;
   // i-frames cover this dash's own length plus a tail, rather than a fixed
   // total — a full-charge dash outlasts the old flat 0.45s, and would have
@@ -1492,13 +1639,20 @@ function notePips(before, after, stats) {
  * opened by a dash exactly as before, and cruising over a stray orb does not
  * silently start one. What changed is only what keeps it going.
  */
-function noteChainMouthful(count = 1) {
+function noteChainMouthful(count = 1, s = strikeState) {
+  // WHOSE CHAIN. The run's by default — and in a match, the seal that ate it.
+  // Every counter this touches is already per state (createStrikeState); what
+  // was missing was the argument. The TRACE is not: it is the player's own
+  // debug read (systems/chainTrace.js) and a CPU seal filing misses into it
+  // would bury the only line in there that is about a person.
+  const own = s === strikeState;
+  if (!chainAllowed()) return;
   // Ungated: progress toward the NEXT link is just food eaten since the last
   // strike, whether or not a combo is currently running.
-  strikeState.pipsSinceStrike += count;
+  s.pipsSinceStrike += count;
   // The rest is the live chain, which does need a window open.
-  if (!isFeeding()) {
-    noteChain('miss', { why: 'no window open' });
+  if (!isFeeding(s)) {
+    if (own) noteChain('miss', { why: 'no window open' });
     return;
   }
   // THE WINDOW IS HELD OPEN BY EATING, WHETHER OR NOT THE EATING SCORED.
@@ -1509,14 +1663,14 @@ function noteChainMouthful(count = 1) {
   // the pause is "no more links until you strike", not "you are on a timer
   // now". Nothing is farmed by holding a chain open, because holding it open
   // is exactly what pays nothing.
-  strikeState.chainTimer = CONFIG.strike.chainWindow;
+  s.chainTimer = CONFIG.strike.chainWindow;
 
   // ---- A FULL BAR IS THE PAUSE ------------------------------------------
   // `count` is PIPS OF FUEL that went in, not mouthfuls that went down (see
   // feedChum), so a swallow into a bar with no room arrives here as zero and
   // scores nothing by construction rather than by a rule about it.
   if (count <= 0) {
-    noteChain('miss', { why: 'bar full — strike again to re-open it' });
+    if (own) noteChain('miss', { why: 'bar full — strike again to re-open it' });
     return;
   }
 
@@ -1541,18 +1695,18 @@ function noteChainMouthful(count = 1) {
   // gulp hands over a pile), and each mouthful in it is its own link — the
   // pips are the grain of the whole system and a lump that scored once would
   // pay less for the same food.
-  if (!strikeState.armed) {
+  if (!s.armed) {
     // WHY IT DID NOT LINK, recorded at the branch that decided it. Four
     // different failures look identical from the seat — nothing happens — and
     // each wants a different fix. See systems/chainTrace.js.
     // Reachable two ways and the wording has to cover both: a wind-up let go
     // of EARLY never completed its charge, and a chain that lapsed took its
     // arming with it.
-    noteChain('miss', { why: 'no charged strike behind it' });
+    if (own) noteChain('miss', { why: 'no charged strike behind it' });
     return;
   }
-  if (strikeState.pipsSinceStrike < linkPips()) {
-    noteChain('miss', { why: `${strikeState.pipsSinceStrike} of ${linkPips()} mouthfuls for the first link` });
+  if (s.pipsSinceStrike < linkPips()) {
+    if (own) noteChain('miss', { why: `${s.pipsSinceStrike} of ${linkPips()} mouthfuls for the first link` });
     return;
   }
 
@@ -1560,17 +1714,17 @@ function noteChainMouthful(count = 1) {
   // A cycle pays at most one barful. Spent down per pip so a fill that crosses
   // more pips than are left pays only what it can afford — which is the case
   // a magnet sweep hits, handing over a whole pile in one frame.
-  const payable = Math.min(count, strikeState.pipBudget);
+  const payable = Math.min(count, s.pipBudget);
   if (payable <= 0) {
-    noteChain('miss', { why: 'no charge behind it — strike again to re-open it' });
+    if (own) noteChain('miss', { why: 'no charge behind it — strike again to re-open it' });
     return;
   }
-  strikeState.pipBudget -= payable;
+  s.pipBudget -= payable;
   // THE MULTIPLIER PAUSES WITH THE COUNTER, deliberately. They are one chain
   // told two ways — the banner and the damage — and a multiplier that kept
   // climbing through the pause would have the number on screen and the damage
   // being dealt disagreeing for as long as the player kept eating.
-  strikeState.chainPips += payable;
+  s.chainPips += payable;
 
   // ---- AND THE PRICE GOES UP WITH THE CHAIN -----------------------------
   //
@@ -1583,53 +1737,73 @@ function noteChainMouthful(count = 1) {
   // Priced against `chainCount` INSIDE the loop rather than once outside it,
   // because a gulp that pays two links pays the second at the second's price —
   // a magnet sweep is not a discount.
-  strikeState.linkCredit += payable;
+  s.linkCredit += payable;
   let scored = 0;
   for (;;) {
-    const cost = linkCost(strikeState.chainCount);
-    if (strikeState.linkCredit < cost) break;
-    const chain = chainStrike('chumEaten');
+    const cost = linkCost(s.chainCount);
+    if (s.linkCredit < cost) break;
+    const chain = chainStrike('chumEaten', 1, s);
     if (!chain) {
       // The switch table said no. Only reachable with chainOn.chumEaten off,
       // which is a thing a stale tuning snapshot can do — and if it ever
       // happens the log has to say so rather than showing a silent gap. The
       // bank is left alone: nothing was bought, so nothing is spent.
-      noteChain('miss', { why: 'chainOn.chumEaten is off' });
+      if (own) noteChain('miss', { why: 'chainOn.chumEaten is off' });
       break;
     }
-    strikeState.linkCredit -= cost;
+    s.linkCredit -= cost;
     scored++;
-    lastMouthful.chain = chain;
-    noteChain('link', { chain });
+    // NOT BOOKED HERE. extendChain() queues every link at the one place the
+    // counter moves, so this loop paying two of them reports two — which is
+    // the whole of the fix, and it is one line that is no longer written
+    // rather than a line that had to be added.
+    if (own) noteChain('link', { chain });
   }
   // WHY THE PART-PAYMENT IS LOGGED. Under the flat rule every mouthful inside
   // an armed window was a link, so silence meant a bug; now it usually means
   // "two of three, keep eating", and the trace is the only place the player's
   // side of that is visible. See systems/chainTrace.js.
-  if (!scored && strikeState.linkCredit > 0) {
+  if (own && !scored && s.linkCredit > 0) {
     noteChain('miss', {
-      why: `${strikeState.linkCredit} of ${linkCost(strikeState.chainCount)} mouthfuls for link ${strikeState.chainCount + 1}`,
+      why: `${s.linkCredit} of ${linkCost(s.chainCount)} mouthfuls for link ${s.chainCount + 1}`,
     });
   }
 }
 
-// The link the most recent mouthful scored, waiting to be reported. Held
-// rather than returned for the same reason `lastRelease` is: feedChum's
-// boolean is "did this top the bar off", which its callers branch on, and
-// widening it would touch every call site to say something one of them wants.
-const lastMouthful = { chain: 0 };
+// Returned in place of a fresh array when nothing scored, which is almost
+// every call: this is asked once per chum orb swallowed, and a run eats
+// thousands. Frozen so a caller that pushes into what it was handed fails
+// loudly here rather than by quietly growing a shared array.
+const NO_LINKS = Object.freeze([]);
 
 /**
- * The FOOD CHAIN link the last mouthful scored, or 0. Clears on read, so a
- * caller that forgets to check cannot replay an old link on the next orb.
+ * EVERY FOOD CHAIN LINK SCORED SINCE THE LAST READ, oldest first, as
+ * `{ chain, source }` — `chain` being the depth the counter stood at AFTER
+ * that link. Empties on read, so a caller that forgets to check cannot replay
+ * them on the next orb.
+ *
+ * ALL OF THEM, AND THAT IS THE POINT. This replaced consumeChainLink(), which
+ * returned the most recent one and dropped the rest — so a mouthful worth two
+ * links, or a breach worth three, was announced once at the number it finished
+ * on and the banner appeared to skip. The scoring was never wrong; only the
+ * report was, which is exactly why it survived so long.
+ *
+ * EVERY PRODUCER PATH MUST DRAIN. There is one producer — extendChain(), via
+ * chainStrike() — and each of its callers reads this immediately afterwards,
+ * including the ones that then throw the result away (a match seal's links are
+ * real and are simply not announced on this screen). A path that scored links
+ * and never drained would hand them to whoever asked next, under that caller's
+ * source; the bound in extendChain is what stops such a bug growing without
+ * limit, and `source` on each entry is what stops it being misattributed.
  *
  * The companion to consumeStrikeLink(), and between them they are every link
  * in the game: one for the sources that fire on an action (a breach, a school
  * emptied), one for the source that fires on food.
  */
-export function consumeChainLink() {
-  const out = lastMouthful.chain;
-  lastMouthful.chain = 0;
+export function consumeChainLinks(s = strikeState) {
+  if (!s.chainLinks.length) return NO_LINKS;
+  const out = s.chainLinks.slice();
+  s.chainLinks.length = 0;
   return out;
 }
 
@@ -1819,12 +1993,12 @@ export function liveChain(s = strikeState) {
  * number would make the multiplier fall backwards the instant a link was
  * scored — you would earn a link and get slower.
  */
-export function chainLevel(stats = null) {
-  if (strikeState.chainTimer <= 0) return 0;
+export function chainLevel(stats = null, s = strikeState) {
+  if (s.chainTimer <= 0) return 0;
   const c = CONFIG.strike.charge;
   const refill = Math.max(0.02, stats?.strikeChumRefill ?? c.chumRefill ?? 0.2);
   const perLevel = Math.max(1, Math.round(1 / refill));
-  return strikeState.chainPips / perLevel;
+  return s.chainPips / perLevel;
 }
 
 /**
@@ -1851,9 +2025,9 @@ export function chainLevel(stats = null) {
  * Same units on both counters — `chainLevel` is fractional LINKS — so one
  * offset still means the same thing to this and to the xp multiplier.
  */
-export function chainDamageMul(stats) {
+export function chainDamageMul(stats, s = strikeState) {
   const offset = CONFIG.strike.chainLevelOffset ?? 1;
-  const raw = Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, liveChain() - offset));
+  const raw = Math.pow(stats?.strikeChainMul ?? 1, Math.max(0, liveChain(s) - offset));
   // CAPPED, like its two remaining siblings. comboSpeedMul stops at
   // comboSpeedMax and chainXpMul at xp.chain.max; the score multiplier is the
   // one that is deliberately unbounded, because nothing is played with it.
@@ -1910,7 +2084,7 @@ export function chainXpMul(stats = null) {
  * bar. Returns true only when it topped the bar off inside a live combo, which
  * is the case the caller turns into a FOOD CHAIN link.
  */
-export function feedChum(stats) {
+export function feedChum(stats, s = strikeState) {
   if (!CONFIG.strike.enabled) return false;
   // THE BAR MOVES FIRST, AND WHAT IT MOVED BY IS WHAT THE CHAIN IS PAID.
   //
@@ -1919,12 +2093,12 @@ export function feedChum(stats) {
   // The hole is the rule now: a link is a pip of fuel going in, so a swallow
   // into a bar that is already full moves nothing and scores nothing, and the
   // chain holds until a charged release empties the bar and buys the next one.
-  const before = strikeState.charge;
+  const before = s.charge;
   // Exactly one pip. Not `strikeChumRefill` directly: the pip count is rounded
   // off it, so paying the raw fraction would leave the bar landing a hair
   // short of a boundary and the last pip needing a second orb to close.
-  const filled = fillMeter(pipValue(stats), stats);
-  noteChainMouthful(pipsCrossed(before, strikeState.charge, stats));
+  const filled = fillMeter(pipValue(stats), stats, s);
+  noteChainMouthful(pipsCrossed(before, s.charge, stats), s);
   return filled;
 }
 
@@ -1932,11 +2106,25 @@ export function feedChum(stats) {
 // one that is, and refreshes the window either way. The single place the chain
 // counter moves — every source below routes through here so a link means the
 // same thing whatever caused it.
-function extendChain() {
-  const chaining = strikeState.chainTimer > 0;
-  strikeState.chainCount = chaining ? strikeState.chainCount + 1 : 1;
-  strikeState.chainTimer = CONFIG.strike.chainWindow;
-  return strikeState.chainCount;
+function extendChain(s = strikeState, source = '') {
+  const chaining = s.chainTimer > 0;
+  s.chainCount = chaining ? s.chainCount + 1 : 1;
+  s.chainTimer = CONFIG.strike.chainWindow;
+  // BOOKED WHERE THE COUNTER MOVES, so a link cannot be scored without being
+  // reportable. Every earlier attempt at this lived at the call sites — one
+  // remembered number in noteChainMouthful, one return value out of
+  // chainStrike — and each of them could drop a link while the count stayed
+  // right, which is a bug with no symptom except a number that skips.
+  s.chainLinks.push({ chain: s.chainCount, source });
+  // BOUNDED, AND IT DROPS THE OLDEST. Nothing should ever reach this: every
+  // producer drains (see consumeChainLinks), so a backlog means a path that
+  // forgot to. What it must not do is grow for a whole run and then announce
+  // a hundred stale numbers at whoever asks first — and if links have to be
+  // lost, the ones worth keeping are the ones nearest the count the chain is
+  // actually at. Same rule, same reason, as the pip queue's cap.
+  const cap = Math.max(1, CONFIG.strike?.foodChain?.maxPendingLinks ?? 24);
+  if (s.chainLinks.length > cap) s.chainLinks.splice(0, s.chainLinks.length - cap);
+  return s.chainCount;
 }
 
 /**
@@ -1952,8 +2140,8 @@ function extendChain() {
  *   is switched off, still cooling down, or the strike system is disabled —
  *   so the caller can treat 0 as "nothing happened, show nothing".
  */
-export function chainStrike(source, links = 1) {
-  if (!CONFIG.strike.enabled) return 0;
+export function chainStrike(source, links = 1, s = strikeState) {
+  if (!CONFIG.strike.enabled || !chainAllowed()) return 0;
   const on = CONFIG.strike.chainOn;
   if (!on?.[source]) return 0;
   // `chumFull` and `chumEaten` are the SAME food seen at two grains — every
@@ -1970,13 +2158,13 @@ export function chainStrike(source, links = 1) {
   // pointing it at whatever the live engine happens to be is the whole reason
   // it is a rule here rather than a default over there.
   if (source === 'chumFull' && on.chumEaten) return 0;
-  if (chainGaps.has(source)) return 0;
+  if (s.chainGaps.has(source)) return 0;
 
   const gap = on.cooldowns?.[source] ?? 0;
-  if (gap > 0) chainGaps.set(source, gap);
+  if (gap > 0) s.chainGaps.set(source, gap);
 
   let chain = 0;
-  for (let i = 0; i < Math.max(1, links); i++) chain = extendChain();
+  for (let i = 0; i < Math.max(1, links); i++) chain = extendChain(s, source);
   return chain;
 }
 
@@ -2000,7 +2188,7 @@ export function restoreCharge(stats = null, s = strikeState) {
   // Booked BEFORE the fill for the same reason, since afterwards the bar is
   // full and the crossing is already spent. Still budget-gated inside, so an
   // orb caught during the pause cannot re-open it.
-  if (s === strikeState) noteChainMouthful(1);
+  noteChainMouthful(1, s);
   const filled = fillMeter(1, stats, s);
   // An orb caught mid-dash is meant to read as "go again, right now" — so it
   // also refreshes the chain window. Without this you could grab the pickup
@@ -2137,12 +2325,16 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
     pipCooldown = CONFIG.strike.charge.pipGap ?? 0.055;
     hooks?.onPip?.(pip.index, pip.total);
   }
-  // Run down the per-source chain throttles. Deleting the entry is what
-  // re-arms the source, so an idle one costs nothing until it next fires.
-  for (const [source, left] of (own ? chainGaps : [])) {
+  // Deleting the entry is what re-arms the source, so an idle one costs
+  // nothing until it next fires.
+  // Run down the per-source chain throttles. Per STATE now — they used to be
+  // one module map ticked only for the run's own seal, which with a chain on
+  // every seal would have left a CPU's first link closing that source for the
+  // rest of the match.
+  for (const [source, left] of s.chainGaps) {
     const next = left - dt;
-    if (next <= 0) chainGaps.delete(source);
-    else chainGaps.set(source, next);
+    if (next <= 0) s.chainGaps.delete(source);
+    else s.chainGaps.set(source, next);
   }
   if (s.invulnTimer > 0) s.invulnTimer = Math.max(0, s.invulnTimer - dt);
   if (s.steerGrace > 0) s.steerGrace = Math.max(0, s.steerGrace - dt);
@@ -2182,7 +2374,7 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
       // `liveChain()` rather than the raw counter: with the hit no longer
       // scoring its own link, the depth this reads is whatever the FOOD is
       // paying for, and an expired chain has to count as no chain.
-      const mul = chainDamageMul(stats);
+      const mul = chainDamageMul(stats, s);
       // A ram deals nothing to ORDINARY FLESH at the shipped `contactShare` of
       // 0 — the strike's damage went off where it was released, and the one
       // exception is the weak spot below. The flash and the pop still
@@ -2287,7 +2479,18 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
       // heading, not along the line between the bodies: the seal is a
       // battering ram travelling in one direction, and pushing radially would
       // make a glancing clip on the way past throw a shark sideways.
-      applyKnockback(e, s.dashDir.x, s.dashDir.y, s.power);
+      // `source: 'ram'` — the seal's own body, which is one of exactly two
+      // things a boss answers to at all (see CONFIG.boss.tenacity). On every
+      // other creature in the game the argument does nothing.
+      applyKnockback(e, s.dashDir.x, s.dashDir.y, s.power, { source: 'ram' });
+
+      // ...AND A PERFECT ONE INTO A LIT SPOT STAGGERS IT. The only stagger a
+      // boss can be given — see CONFIG.strike.weakSpot.stagger. Both halves of
+      // the test are already answered above: `weakRam` is a lit spot under the
+      // contact of an arming dash, and `perfectStrike` is the release. Landed
+      // AFTER the ram so the shove is the one that moved it and this is what
+      // stopped it, in that order.
+      if (weakRam && s.perfectStrike) staggerBoss(e);
 
       // Only when there is damage to report. A zero handed to the damage hook
       // would file a zero-point hit against the strike in the playtest report
@@ -2305,7 +2508,13 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
       // moment was WORTH is a feedback decision and belongs at the call site
       // in main.js, not in the system that resolved the hit.
       if (weakRam) hooks.onWeakSpotRam?.(e, strikeContact, s.power, s.perfectStrike);
-      if (chain) hooks.onChainHit?.(chain);
+      // DRAINED, not reported off `chain`. A ram scores one link so the two
+      // readings agree today — but the queue is the contract now (see
+      // consumeChainLinks) and a producer that leaves its link sitting there
+      // hands it to the next caller under the wrong source. The hook's own
+      // signature is untouched on purpose: main.js labels this 'strike', and
+      // what the chain callout does with that name is a separate rule.
+      if (chain) for (const link of consumeChainLinks(s)) hooks.onChainHit?.(link.chain);
 
       // AND THE MARK. Anything big enough to shrug the shove off is painted
       // for the homing weapons instead — see systems/marks.js for why that is
