@@ -51,6 +51,58 @@ const VIEWPORTS = [
   { name: 'Desktop', w: 1920, h: 1080, touch: false },
 ];
 
+// ---------------------------------------------------------------------------
+// THE FLIPS — `npm run flip`, a different question from the one above.
+//
+// The sweep in the rest of this file builds every surface FRESH at each size,
+// which is the question "does this fit". It cannot ask the other one: does a
+// surface that is ALREADY UP survive the screen changing under it. Those are
+// not the same check, and the gap between them is where a whole class of bug
+// lives — a layout decision taken once at build time and then latched, so the
+// hive stays in its portrait arrangement on a phone that has been turned over,
+// or the boss bar keeps a drop measured against a corner that is no longer
+// there. Every one of those passes the fit sweep at both sizes, because at both
+// sizes a fresh build is correct.
+//
+// IT IS A ROUND TRIP, A TO B AND BACK TO A, and that shape is the whole reason
+// this can be an automatic check at all. The obvious build — flip to B and
+// compare against a fresh build at B — cannot work here: the tiles deal a real
+// hand of upgrades, roll real seal names and cast a real roster, so two
+// independent mounts of the same surface are two different screens and every
+// comparison between them is noise. One frame, turned and turned back, has the
+// same content in it both times, so ANY difference is the surface failing to
+// come back — which is precisely the thing being looked for, with nothing else
+// able to produce it.
+//
+// It measures at B as well, with the same rules the fit sweep uses. That half
+// is not redundant: a surface can survive the round trip perfectly and still be
+// broken while it is over there.
+//
+// THE PAIRS ARE CROSSINGS, not a product of the list above. Each one steps over
+// a breakpoint the code actually branches on, because a flip that changes
+// nothing tests nothing:
+//   rotation      393x852 <-> 852x393. The phone turning over. Crosses the
+//                 700px width rule AND the 560px height rule at once, in
+//                 opposite directions — see narrowScreen/shortScreen.
+//   tablet        744x1133 <-> 1024x768. The same turn on a screen that is on
+//                 the desktop side of the width rule in both orientations, so
+//                 the only thing that moves is the aspect.
+//   window drag   1920x1080 <-> 375x667. Not a device: a desktop window pulled
+//                 narrow, which crosses the phone breakpoint on a machine that
+//                 never fires orientationchange. Several surfaces listen only
+//                 for that event, and this is the pair that finds them.
+const FLIP_PAIRS = [
+  { name: 'rotation', touch: true, a: { w: 393, h: 852 }, b: { w: 852, h: 393 } },
+  { name: 'tablet', touch: true, a: { w: 744, h: 1133 }, b: { w: 1024, h: 768 } },
+  { name: 'window drag', touch: false, a: { w: 1920, h: 1080 }, b: { w: 375, h: 667 } },
+];
+
+// How far two rectangles may differ across a round trip before it counts.
+// A whole pixel rather than zero: sub-pixel layout rounds differently when a
+// box is laid out at one width and then again at another, and a half-pixel
+// shift is not a surface that failed to come back.
+const FLIP_SLOP = 1;
+
 // The surfaces, by the name previewScreen() already knows, plus the two it has
 // no word for. `coach` is the first-run tutorial band — the longest line in
 // callouts.csv, which is the one that has to fit. There is no 'start' any more:
@@ -115,8 +167,19 @@ const VIEWPORTS = [
 // the two screens the shared panel cursor (ui/panelNav.js) was written for, so
 // a stop that stops being a stop — a button that is disabled, or hidden — now
 // has a tile it shows up on.
+//
+// 'phone prompts' is the stack of three rows that tell a phone in a browser
+// about its own ring switch, which way up it is held, and the strip of screen
+// the browser's bottom bar is sitting on (ui/mobilePrompts.js). It is here for
+// the reason the two plain panels above are: there is nothing in three rows of
+// text that looks capable of overflowing, and every one of them is prose from a
+// spreadsheet in a 340px box with a 44px target in it — which is exactly the
+// shape that does. It is also a surface that only exists where there is a
+// thumb, so it is drawn on the five touch tiles and correctly absent from the
+// other three.
 const SURFACES = ['splash', 'HUD', 'HUD grown', 'coach', 'boss', 'cards', 'score card', 'settings', 'paused',
-  'match HUD', 'goal card', 'match over', 'team select', 'room lobby', 'seal sports', 'leaderboard'];
+  'match HUD', 'goal card', 'match over', 'team select', 'room lobby', 'seal sports', 'leaderboard',
+  'phone prompts'];
 
 // THE FURNITURE A CALLOUT MAY NOT COVER. The same list ui/callout.js clears
 // itself of, restated here ON PURPOSE rather than imported: this is the check,
@@ -199,6 +262,13 @@ function runQuery() {
 // thread is a machine under load, and layout is not what it would be measuring.
 const LIVE_TILES = 6;
 
+// WHICH SWEEP THIS PAGE IS. `?mode=flip` is `npm run flip`; anything else is
+// the fit sweep this file was written for. One page rather than two because
+// every part below the job list is shared — the tile scaffolding, the frame
+// protocol, the stall watchdog, the report — and a second copy of all of that
+// is a second copy that stops agreeing with the first.
+const MODE = params.get('mode') === 'flip' ? 'flip' : 'fit';
+
 function runParent() {
   const grid = document.getElementById('grid');
   const summary = document.getElementById('summary');
@@ -212,17 +282,36 @@ function runParent() {
   const scaleFor = (v) => Math.min(1, 300 / v.w);
   const jobs = [];
 
-  for (const v of VIEWPORTS) {
-    for (const surface of SURFACES) {
-      const scale = scaleFor(v);
+  // ONE TILE LIST, TWO SHAPES. A fit tile is a viewport and a surface; a flip
+  // tile is a PAIR and a surface, mounted at the pair's `a` and driven to `b`
+  // and back by the frame. Everything downstream — the scaffolding, the
+  // measuring, the report — takes the same `{ v, surface, mount, list }` and
+  // does not need to know which sweep it is in.
+  //
+  // The tile is scaled off the WIDER of the two, so a rotation tile does not
+  // change size on the page halfway through and make the sweep look broken.
+  const tiles = MODE === 'flip'
+    ? FLIP_PAIRS.flatMap((pair) => SURFACES.map((surface) => ({
+      surface,
+      v: { name: `${pair.name} ${pair.a.w}x${pair.a.h} ↔ ${pair.b.w}x${pair.b.h}`,
+        w: pair.a.w, h: pair.a.h, touch: pair.touch },
+      flipTo: pair.b,
+      box: { w: Math.max(pair.a.w, pair.b.w), h: Math.max(pair.a.h, pair.b.h) },
+    })))
+    : VIEWPORTS.flatMap((v) => SURFACES.map((surface) => ({ surface, v, flipTo: null, box: v })));
+
+  for (const tile of tiles) {
+    {
+      const { v, surface, flipTo, box } = tile;
+      const scale = scaleFor(box);
       const cell = document.createElement('div');
       cell.className = 'cell';
-      cell.style.width = `${Math.round(v.w * scale) + 2}px`;
-      cell.innerHTML = `<h2>${v.name} · ${v.w}x${v.h} · ${surface}</h2>`;
+      cell.style.width = `${Math.round(box.w * scale) + 2}px`;
+      cell.innerHTML = `<h2>${v.name} · ${surface}</h2>`;
 
       const clip = document.createElement('div');
       clip.className = 'clip';
-      clip.style.cssText = `width:${v.w * scale}px; height:${v.h * scale}px; overflow:hidden; position:relative;`;
+      clip.style.cssText = `width:${box.w * scale}px; height:${box.h * scale}px; overflow:hidden; position:relative;`;
       cell.appendChild(clip);
 
       const list = document.createElement('div');
@@ -231,12 +320,25 @@ function runParent() {
       cell.appendChild(list);
       grid.appendChild(cell);
 
-      const src = `./layout-audit.html?frame=1&surface=${encodeURIComponent(surface)}&touch=${v.touch ? 1 : 0}`;
+      const src = `./layout-audit.html?frame=1&surface=${encodeURIComponent(surface)}&touch=${v.touch ? 1 : 0}`
+        + (flipTo ? `&flipTo=${flipTo.w}x${flipTo.h}` : '');
+      // THE IFRAME IS THE VIEWPORT, so changing its width and height is how a
+      // flip is performed — there is no other way to move `window.innerWidth`
+      // inside a frame from outside it. The frame ASKS for the resize (see the
+      // handshake in runFrame) rather than the parent driving it on a timer,
+      // because only the frame knows when it has finished settling at the size
+      // it is already at.
+      const sizeTo = (frame, w, h) => {
+        frame.width = w;
+        frame.height = h;
+        frame.style.width = `${w}px`;
+        frame.style.height = `${h}px`;
+      };
       const mount = () => {
         const frame = document.createElement('iframe');
-        frame.width = v.w;
-        frame.height = v.h;
-        frame.style.cssText = `width:${v.w}px; height:${v.h}px; transform:scale(${scale}); transform-origin:0 0;`;
+        sizeTo(frame, v.w, v.h);
+        frame.style.transform = `scale(${scale})`;
+        frame.style.transformOrigin = '0 0';
         clip.innerHTML = '';
         clip.appendChild(frame);
         // Unloading is what actually frees the GL context; removing the element
@@ -250,7 +352,7 @@ function runParent() {
       // Clicking a spent tile brings it back, so any one of these can be looked
       // at properly after the sweep has moved on.
       clip.addEventListener('click', () => { if (!clip.firstChild) mount(); });
-      jobs.push({ v, surface, mount, list });
+      jobs.push({ v, surface, mount, list, sizeTo });
     }
   }
 
@@ -328,14 +430,37 @@ function measureOne(job) {
     const onMessage = (e) => {
       // Keyed on the frame's own window: the message carries no identity of its
       // own that could be trusted, and every tile sends the same shape.
-      if (e.source !== frame.contentWindow || e.data?.kind !== 'sv-layout') return;
+      if (e.source !== frame.contentWindow) return;
+      // THE FLIP HANDSHAKE. Only the parent can change a frame's viewport, and
+      // only the frame knows when it is ready to be changed — so the frame asks
+      // and the parent answers. Each leg of the round trip is one of these.
+      if (e.data?.kind === 'sv-flip-resize') {
+        job.sizeTo(frame, e.data.w, e.data.h);
+        // A frame that is still turning is a frame that is still measuring, so
+        // the watchdog is pushed out by the same amount the trip will take.
+        // Without this a slow surface reports nothing and looks like a hang.
+        bump();
+        frame.contentWindow?.postMessage({ kind: 'sv-flip-resized' }, '*');
+        return;
+      }
+      if (e.data?.kind !== 'sv-layout') return;
       settle(e.data.findings ?? []);
     };
     window.addEventListener('message', onMessage);
-    const timer = setTimeout(
-      () => settle([{ type: 'threw', what: 'the frame never reported — see the console' }]),
-      15000,
-    );
+    // A TIMER THAT CAN BE PUSHED OUT, rather than one absolute deadline. A flip
+    // tile builds once and then measures three times with a settle between each,
+    // which does not fit in the budget a single build was given — and the honest
+    // fix is to extend it per leg rather than to raise it for every tile and
+    // make a genuine hang take three times as long to be called.
+    let timer = null;
+    const bump = () => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => settle([{ type: 'threw', what: 'the frame never reported — see the console' }]),
+        15000,
+      );
+    };
+    bump();
   });
 }
 
@@ -348,12 +473,14 @@ function finish(results, summary, silent = 0) {
   const bad = results.filter((r) => r.findings.length);
   const lines = [
     total === 0
-      ? '<span class="ok">Clean — every surface fits every viewport.</span>'
+      ? (MODE === 'flip'
+        ? '<span class="ok">Clean — every surface survives the screen changing under it.</span>'
+        : '<span class="ok">Clean — every surface fits every viewport.</span>')
       : `<span class="bad">${total} finding(s) across ${bad.length} of ${results.length} surface/viewport pairs.</span>`,
   ];
   if (silent) lines.push(`<span class="bad">${silent} frame(s) never reported.</span>`);
   for (const r of bad) {
-    lines.push(`\n<b>${r.viewport} ${r.w}x${r.h} — ${r.surface}</b>`);
+    lines.push(`\n<b>${r.viewport}${MODE === 'flip' ? '' : ` ${r.w}x${r.h}`} — ${r.surface}</b>`);
     for (const f of r.findings) lines.push(`  ${escapeHtml(describe(f))}`);
   }
   summary.innerHTML = lines.join('\n');
@@ -368,6 +495,22 @@ function finish(results, summary, silent = 0) {
 }
 
 function describe(f) {
+  // THE LEG IT WAS FOUND ON. A flip tile measures the fit rules on the far side
+  // of the turn, and a finding with no leg on it reads as a finding at the size
+  // the tile is named for — which is the size it came BACK to.
+  const leg = f.leg === 'over' ? 'after the flip: ' : '';
+  if (f.type === 'stuck') {
+    return `${f.what} did not come back — was ${f.was}, now ${f.now} (${f.by}px)`
+      + (f.of > 1 ? `, and ${f.of - 1} more element(s) with it` : '');
+  }
+  if (f.type === 'stuck-count') {
+    return `${f.n} element(s) appeared or vanished across the flip and stayed that way — ${f.what}`;
+  }
+  if (f.type === 'stuck-blind') {
+    return `${f.what} had almost nothing to compare — ${f.n} visible element(s) of ${f.of}.`
+      + ' A clean sheet from this tile would mean nothing.';
+  }
+  if (leg) return leg + describe({ ...f, leg: null });
   if (f.type === 'tap') return `${f.what} — tap target ${f.w}x${f.h}, under ${TAP_MIN}`;
   if (f.type === 'empty') return `${f.what} built nothing this sweep can see — ${f.n} element(s) measured`;
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;
@@ -448,7 +591,21 @@ async function runFrame(surface) {
     // having them. Overridden here to what this viewport actually is.
     ui.uiRoot()?.classList.toggle('sv-touch', params.get('touch') === '1');
 
-    await buildSurface(surface, ui, callout, callouts);
+    // A SURFACE MAY HAND BACK A CLEANUP, and it is run after the measuring
+    // rather than at the end of the build. Three tiles seed localStorage (a
+    // long name, a full board, a cleared prompt ledger) and then put it back,
+    // because every tile shares one origin and a seed left behind is read by
+    // the next tile that mounts. Undoing it INSIDE the build was fine while a
+    // tile was a still — and became a bug the moment `npm run flip` started
+    // turning the screen under a live surface: the board re-paints on the
+    // resize, reads the storage that has already been rolled back, and comes
+    // back with sixty elements in the wrong place. The tool reported that as
+    // the game latching, which is the worst kind of finding — a real-looking
+    // bug that only the harness can produce.
+    //
+    // Deferred to the end of the frame is just as safe: the next tile is a new
+    // iframe and this one is torn down behind it.
+    const cleanup = await buildSurface(surface, ui, callout, callouts);
     // Let the type and the reveal masks land before anything is measured — both
     // settle asynchronously, and a box measured first is a box that is about to
     // change size.
@@ -462,8 +619,27 @@ async function runFrame(surface) {
     await settleAnimations();
     await settle(120);
 
-    findings.push(...measure());
-    if (surface === 'splash') findings.push(...(await measureSplash()));
+    const flipTo = parseSize(params.get('flipTo'));
+    if (flipTo) {
+      // THE ROUND TRIP. Everything measured here is measured in ONE frame with
+      // ONE set of contents, which is what lets a difference mean something —
+      // see the note over FLIP_PAIRS.
+      const here = { w: window.innerWidth, h: window.innerHeight };
+      const before = signature();
+
+      await flipTo_(flipTo.w, flipTo.h);
+      // The fit rules, over there. Not redundant with the fit sweep: this is
+      // the surface as it ARRIVED at that size rather than as it was built
+      // there, and the two are only the same if nothing latched.
+      for (const f of measure()) findings.push({ ...f, leg: 'over' });
+
+      await flipTo_(here.w, here.h);
+      findings.push(...stuck(before, signature()));
+    } else {
+      findings.push(...measure());
+      if (surface === 'splash') findings.push(...(await measureSplash()));
+    }
+    cleanup?.();
   } catch (err) {
     console.error(err);
     findings.push({ type: 'threw', what: String(err?.message ?? err) });
@@ -558,9 +734,39 @@ async function buildSurface(surface, ui, callout, callouts) {
     // Painted from the list as it is NOW — showLeaderboard reads it
     // synchronously — so the sweep below cannot empty the table it just drew.
     ui.showLeaderboard();
-    restore();
     await settle(60);
-    return;
+    // HANDED BACK rather than called: a flip re-paints the board, and a board
+    // whose rows were already put back re-paints as empty. See the cleanup note
+    // in runFrame.
+    return restore;
+  }
+  if (surface === 'phone prompts') {
+    // THE HUD UNDER THEM, because that is where they sit in the game: the stack
+    // is z-index 5, over the run's own furniture and under every menu, so a
+    // tile with nothing behind it would not be measuring the screen the rows
+    // are actually on.
+    ui.showHud();
+    // The rows are mounted at initUI and are silent until the game says which
+    // screen it is on. `menu` is the stage all three can appear on — and the
+    // call is what re-asks the questions, which matters here: `.sv-touch` was
+    // written onto the root AFTER initUI (see runFrame), so the mount's own
+    // first pass answered for the laptop rather than for this tile's device.
+    const prompts = await import('../../path/src/ui/mobilePrompts.js');
+    prompts.resetMobilePromptStage();
+    prompts.setMobilePromptStage('menu');
+    // A DISMISSED ROW IS A ROW THIS TILE CANNOT MEASURE, and the ledger is in
+    // localStorage on an origin every tile shares — so one sweep that somehow
+    // wrote it would blind every later tile, with a clean sheet to show for it.
+    // Cleared rather than trusted; the restore is for the same reason the
+    // leaderboard's is.
+    const restore = snapshotStorage();
+    try { localStorage.removeItem('sealSurvivor.phonePrompts.v1'); } catch { /* no storage */ }
+    prompts.setMobilePromptStage('run');
+    prompts.setMobilePromptStage('menu');
+    await settle(60);
+    // Deferred like the other two: a flip re-asks every row's question, and a
+    // ledger already put back could answer "dismissed" on the way home.
+    return restore;
   }
   if (surface === 'team select') {
     // The screen alone. `onStart`/`onBack` are what the Text panel's own chip
@@ -593,8 +799,8 @@ async function buildSurface(surface, ui, callout, callouts) {
     const teams = await import('../../path/src/ui/teamSelect.js');
     // Built synchronously, so the roster has read the name before this line.
     teams.showTeamSelect({ parent: ui.uiRoot(), onStart() {}, onBack() {} });
-    restore();
-    return;
+    // Deferred for the same reason the board's is — see runFrame.
+    return restore;
   }
 
   if (surface === 'room lobby') {
@@ -875,6 +1081,158 @@ async function settleAnimations(capMs = 1200) {
       settle(left),
     ]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE FLIP — turning the screen under a surface that is already up.
+// ---------------------------------------------------------------------------
+
+/** `852x393` from the URL, or null. */
+function parseSize(raw) {
+  const m = /^(\d+)x(\d+)$/.exec(String(raw ?? ''));
+  return m ? { w: Number(m[1]), h: Number(m[2]) } : null;
+}
+
+/**
+ * Ask the parent to resize this frame, and come back when the surface has
+ * finished reacting to it.
+ *
+ * THE FRAME CANNOT DO THIS ITSELF. `window.resizeTo` does nothing to an iframe
+ * and there is no other way to move `innerWidth` from the inside, so the tile's
+ * geometry belongs to the parent and this is a request. The underscore is the
+ * ugly half of naming a local after the URL parameter it acts on; it is called
+ * twice and from one place.
+ *
+ * THREE WAITS AFTERWARDS, and each one covers something the other two do not.
+ * `resize` tells us the viewport has actually changed (a resize that is refused
+ * or coalesced would otherwise be waited on forever, so the ack is raced against
+ * a timeout). settleAnimations covers a surface that RE-REVEALS on a
+ * breakpoint change — several do, and a signature taken mid-reveal is a
+ * signature of a transform the layout is only passing through. The flat settle
+ * at the end covers the relayouts that are queued to a timer rather than run
+ * inline (`queueRelayout` in ui.js is one), which is exactly the class of code
+ * this whole check exists to exercise.
+ */
+function flipTo_(w, h) {
+  return new Promise((done) => {
+    let settled = false;
+    const finish = async () => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onAck);
+      window.removeEventListener('resize', onResize);
+      await settleAnimations();
+      await settle(200);
+      done();
+    };
+    // The viewport really changing is the signal worth waiting on; the parent's
+    // ack only says the request was received.
+    const onResize = () => finish();
+    const onAck = (e) => { if (e.data?.kind === 'sv-flip-resized') setTimeout(finish, 250); };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('message', onAck);
+    parent.postMessage({ kind: 'sv-flip-resize', w, h }, '*');
+    // A flip that never arrives must not hang the tile — see the stall note in
+    // tools/layout-audit.mjs. Reporting a surface as clean because nothing
+    // happened to it would be worse, so this is deliberately longer than any
+    // honest resize and shorter than the parent's own watchdog.
+    setTimeout(finish, 3000);
+  });
+}
+
+/**
+ * Where everything on this surface is, right now.
+ *
+ * THE SAME FILTER `measure()` USES, and that is not laziness — it is the
+ * argument. Anything measure() refuses to judge (positioned per frame, a
+ * deliberately full-bleed backdrop, an invisible node) is also something whose
+ * position across a round trip means nothing, and including it here would put
+ * findings in this check that the fit sweep has already decided are not
+ * findings anywhere else.
+ *
+ * Rectangles rather than computed styles. A layout that failed to come back
+ * shows up as a box in the wrong place or of the wrong size — which is the
+ * thing a player sees — and a style diff would flag a hundred properties that
+ * happen to be written differently without moving anything.
+ */
+function signature() {
+  const out = new Map();
+  for (const node of document.querySelectorAll(ROOTS)) {
+    if (PER_FRAME.some((sel) => node.closest(sel))) continue;
+    if (FULL_BLEED.some((sel) => node.closest(sel))) continue;
+    if (node.classList.contains('sv-ui') || node.classList.contains('sv-center')) continue;
+    const style = getComputedStyle(node);
+    const hidden = style.visibility === 'hidden' || Number(style.opacity) === 0 || style.display === 'none';
+    const r = node.getBoundingClientRect();
+    // KEYED ON THE PATH PLUS AN ORDINAL, because `path()` is a readable identity
+    // and not a unique one — a row of cards is eight elements with the same
+    // name. Without the ordinal, eight boxes would collapse into one entry and
+    // seven of them would be unwatched.
+    const name = path(node);
+    let n = 0;
+    while (out.has(`${name}#${n}`)) n++;
+    out.set(`${name}#${n}`, hidden || r.width < 1 || r.height < 1
+      ? null
+      : [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]);
+  }
+  return out;
+}
+
+/**
+ * What did not come back. One finding per element, and the first few only.
+ *
+ * A SURFACE THAT LATCHES USUALLY LATCHES WHOLESALE — a container keeps its
+ * portrait arrangement and every one of its forty children is then in the wrong
+ * place. All forty are the same bug, and printing forty lines buries whatever
+ * else the sweep found. The count is carried on the finding so the size of it
+ * is still visible.
+ */
+function stuck(before, after) {
+  // A CHECK THAT MEASURED NOTHING MUST NOT REPORT CLEAN, which is the same
+  // argument the `empty` finding makes for the fit sweep and is not a
+  // hypothetical here. The first version of this comparison was verified by
+  // deliberately corrupting one entry, and it reported clean — the entry picked
+  // happened to be one of the ~180 hidden nodes on that surface, which compare
+  // null-to-null and are skipped. A real emptying of the signature (a selector
+  // that stops matching, a filter that widens) would look exactly like the
+  // clean sheet this whole sweep is trying to earn.
+  //
+  // Counted on the VISIBLE entries, because those are the only ones a
+  // difference can be found in.
+  const visible = [...before.values()].filter(Boolean).length;
+  if (visible < MIN_NODES) {
+    return [{ type: 'stuck-blind', what: 'the round trip', n: visible, of: before.size }];
+  }
+
+  const moved = [];
+  const gone = [];
+  for (const [key, a] of before) {
+    const b = after.get(key);
+    if (b === undefined) { gone.push(key); continue; }
+    if (a === null && b === null) continue;
+    if (a === null || b === null) { gone.push(key); continue; }
+    const by = Math.max(...a.map((n, i) => Math.abs(n - b[i])));
+    if (by > FLIP_SLOP) moved.push({ key, by, a, b });
+  }
+  // Elements that only exist AFTER the trip are the same bug seen from the
+  // other side — a row that appeared on the way over and never left.
+  for (const key of after.keys()) if (!before.has(key)) gone.push(key);
+
+  const findings = [];
+  moved.sort((x, y) => y.by - x.by);
+  for (const m of moved.slice(0, 6)) {
+    findings.push({
+      type: 'stuck', what: m.key.replace(/#\d+$/, ''), by: m.by,
+      was: m.a.join(','), now: m.b.join(','), of: moved.length,
+    });
+  }
+  if (gone.length) {
+    findings.push({
+      type: 'stuck-count', what: gone.slice(0, 4).map((k) => k.replace(/#\d+$/, '')).join(', '),
+      n: gone.length,
+    });
+  }
+  return findings;
 }
 
 // --- the measurement --------------------------------------------------------

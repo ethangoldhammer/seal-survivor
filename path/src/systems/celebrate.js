@@ -86,6 +86,7 @@ import { setSfxEcho } from './audio.js';
 
 // Scratch, module-level so posing allocates nothing per frame.
 const _target = new THREE.Vector3();
+const _brow = new THREE.Vector3();
 const _wasFore = new THREE.Vector3();
 const _wasAt = new THREE.Vector3();
 const _step = new THREE.Vector3();
@@ -126,6 +127,11 @@ export const celebrationState = {
   // names one — so a versus goal can be one seal's without the other joining
   // in. See playCelebration's `only`.
   only: null,
+  // WHICH WAY THE WHOLE ANIMAL SHOULD BE POINTING, as a world direction, or
+  // null for "wherever it was going" — which is every celebration except the
+  // salute. See celebrationFacing: this file does not write it, entities/
+  // player.js folds it into the one heading it already owns.
+  facing: null,
 };
 
 function cfg() {
@@ -185,7 +191,7 @@ function pickVariant(rng, weights = cfg().weights ?? {}) {
 export function playCelebration({
   variant = null, weights = null, peakAt = null,
   hold = null, release = null, escorts = true, rng = Math.random, at = null,
-  only = null,
+  only = null, facing = null,
 } = {}) {
   const c = cfg();
   if (c.enabled === false) return null;
@@ -201,6 +207,13 @@ export function playCelebration({
   celebrationState.release = release ?? c.release ?? 0.5;
   celebrationState.escorts = escorts;
   celebrationState.only = only;
+  // Copied rather than held: the caller's vector is usually a scratch it is
+  // about to reuse, and a performance that read it live would swing the seal
+  // around for a second and a half after the moment that aimed it.
+  celebrationState.facing = (facing && Number.isFinite(facing.x) && Number.isFinite(facing.y)
+    && (facing.x !== 0 || facing.y !== 0))
+    ? { x: facing.x, y: facing.y }
+    : null;
   celebrationState.duration = peak + (hold ?? c.hold ?? 0.35) + celebrationState.release;
 
   // The seal says something, and the water opens up behind it.
@@ -266,6 +279,7 @@ export function resetCelebration() {
   celebrationState.release = 0;
   celebrationState.escorts = true;
   celebrationState.only = null;
+  celebrationState.facing = null;
 }
 
 /**
@@ -397,6 +411,68 @@ const POSES = {
     }
   },
 
+  // THE SALUTE — flipper to the brow, in front of a headstone.
+  //
+  // The one pose in this file that is ABOUT something in the world rather than
+  // about the seal, and the only one that turns the whole animal: the body
+  // comes upright and the nose leans toward the stone. That half is not here —
+  // see celebrationFacing, which hands the heading to the one writer of it in
+  // entities/player.js rather than adding a fourth writer of the same
+  // transform (the somersault's note above is the long version).
+  //
+  // THE FLIPPER IS AIMED AT THE HEAD, MEASURED, not at a height typed into
+  // this file. Every other pose here is written in reach-fractions from a
+  // limb's own root, which is right for "held high" and wrong for "touching
+  // the brow": where the head IS depends on the neck's pose, on the crane, and
+  // on which way the animal is facing, and a hand-typed `up` that lands on the
+  // brow while the seal is level misses it by the length of the neck the
+  // moment the head moves. So the head is posed FIRST, its tip is read back
+  // out of the solved bones, and the flipper is sent to that point plus an
+  // offset — which stays a salute whatever the head is doing under it.
+  //
+  // The offsets are still in the FLIPPER'S own reach, like everything else, so
+  // a re-export that changes the arm's proportions moves the touch with it.
+  salute(ctx) {
+    const p = cfg().poses?.salute ?? {};
+    if (ctx.head) {
+      finTarget(ctx.head, _target, ctx.basis, 1, p.headUp ?? 0.12, p.headFore ?? 0.92, 0);
+      ctx.solve(ctx.head, _target);
+      // AFTER the solve, and after forcing the world matrices down the chain:
+      // applyChainToPoint writes local quaternions, so a tip read without this
+      // is the head's position from before it was posed — a salute aimed one
+      // frame behind its own neck, which on the way in is the whole travel.
+      ctx.head.bones[0].updateWorldMatrix(true, true);
+      tipWorld(ctx.head, _brow, 1);
+    }
+    for (const { chain, side } of ctx.fins) {
+      // +1 is the right flipper, measured (the rig's own rest positions put it
+      // at z=+0.74) rather than taken off a bone name.
+      const saluting = side > 0;
+      if (saluting && ctx.head) {
+        const reach = measureReach(chain, 1);
+        _target.copy(_brow)
+          .addScaledVector(ctx.basis.up, (p.browUp ?? 0.06) * reach)
+          .addScaledVector(ctx.basis.fore, (p.browFore ?? -0.04) * reach)
+          .addScaledVector(ctx.basis.lat, side * (p.browOut ?? 0.1) * reach);
+      } else if (saluting) {
+        // No head chain on this model: the flipper still comes up and forward,
+        // which is a salute at everything except the contact.
+        finTarget(chain, _target, ctx.basis, side, p.up ?? 0.5, p.fore ?? 0.6, p.spread ?? 0.16);
+      } else {
+        // The other one stays down along the body. A second raised flipper is
+        // a wave, and this is not a wave.
+        finTarget(chain, _target, ctx.basis, side, p.offUp ?? -0.22, p.offFore ?? -0.18, p.offSpread ?? 0.3);
+      }
+      ctx.solve(chain, _target);
+    }
+    if (ctx.tail) {
+      // Hanging straight down under an upright animal, which is what stops the
+      // body reading as a plank stood on end.
+      finTarget(ctx.tail, _target, ctx.basis, 1, p.tailUp ?? -0.15, p.tailFore ?? -0.9, 0);
+      ctx.solve(ctx.tail, _target);
+    }
+  },
+
   // Head thrown back and barking at the sky, flippers swept behind. The most
   // "animal" of the five and the one that reads at the smallest size, since it
   // is all in the line of the neck.
@@ -450,6 +526,42 @@ export function celebrationSpin(tag = null) {
   const spinFor = Math.max(0.01, celebrationState.peakAt + (cfg().hold ?? 0.35));
   const u = Math.min(1, celebrationState.clock / spinFor);
   return smoothstep(0, 1, u) * Math.PI * 2 * (p.turns ?? 1);
+}
+
+/**
+ * WHICH WAY THE WHOLE ANIMAL IS POINTING, as a direction and a weight — or
+ * null when the performance has no opinion, which is all of them but one.
+ *
+ * The salute is a pose AT something: an upright seal facing a headstone reads
+ * as respect, and the same flipper-to-brow on an animal still swimming past
+ * reads as a scratch. So the body has to turn, and turning the body is not
+ * this file's to do — entities/player.js owns the heading (mesh.rotation.z)
+ * and the mirror that keeps the animal belly-down, and a second writer of
+ * either would fight the turnaround roll rather than compose with it.
+ *
+ * So this is asked, not pushed, exactly like celebrationSpin: the run hands
+ * the blended direction to poseBody as the direction it should be pointing,
+ * and every curve poseBody already has — the heading lerp, the eased mirror —
+ * carries it. Which also means the release needs no unwind: the weight falls
+ * to zero, the requested direction goes back to being the seal's own travel,
+ * and the animal swims out of the pose the way it swims out of a turn.
+ *
+ * `weight` rides the pose envelope, so the turn arrives with the flipper.
+ *
+ * @returns { x, y, weight } or null. The direction is NOT normalised — the
+ *   caller is blending it against a velocity anyway and poseBody takes any
+ *   length above its own minTurn.
+ */
+export function celebrationFacing(tag = null) {
+  if (!celebrationState.active || !celebrationState.facing) return null;
+  if ((celebrationState.only ?? null) !== tag) return null;
+  const p = cfg().poses?.[celebrationState.variant] ?? {};
+  const { weight } = envelope();
+  const w = weight * (p.faceWeight ?? 1);
+  if (!(w > 0.001)) return null;
+  const f = celebrationState.facing;
+  const len = Math.hypot(f.x, f.y) || 1;
+  return { x: f.x / len, y: f.y / len, weight: Math.min(1, w) };
 }
 
 /** Every variant this build knows how to pose, for the tuner and the tests. */

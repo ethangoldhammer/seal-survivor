@@ -20,5 +20,6 @@ chumChunk,coach,This chunk is a real deal seal meal.,,,,,TRUE,band,32,6,,pickup
 attractorOrb,coach,Grab the attractive clam to pull the chum towards you.,,,,,TRUE,band,30,6,,pickup
 crab,coach,Loose chum sinks to the bottom. And out come the crabs...,,,,,TRUE,band,28,6,,seabed
 invincible,coach,Turtles can be knocked around but not hurt. Whales are immovable chumsuckers.,,,,,TRUE,band,24,6,,creature
+salute,coach,Hit {clap} to salute.,,Hit {faceLeft} to salute.,,kbm pad,TRUE,band,26,7,,grave
 breach,coach,Go ahead now... breach!!!,,,,,TRUE,band,20,7,,surface
-resumed,coach,***resumed***,,,,,TRUE,band,95,6,,
+resumed,coach,"The browser version will need to reload. For a smoother experience, download the full game on Steam or iOS.",,,,,TRUE,band,95,6,,

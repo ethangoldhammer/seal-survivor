@@ -14,7 +14,9 @@ import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
   initInput, updateInput, clearPendingInput, inputDevice, inputTokens, input, menuInput, holdInput,
+  setSealTapTarget,
 } from './input.js';
+import { worldToScreen } from './ui/project.js';
 import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer, sealBite, grantRerolls, startingRerolls, setJoltWallDt, setJoltPaused } from './entities/player.js';
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
@@ -80,7 +82,7 @@ import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeEnglish } from './systems/strike.js';
-import { strikeState, tryStrike, restoreCharge, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
+import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -120,7 +122,7 @@ import { updateProjectileVoices, clearProjectileVoices, flightVoiceCount } from 
 import { initImpactFlashes, updateImpactFlashes, clearImpactFlashes, spawnImpactFlash } from './systems/impactFlash.js';
 import { initMusselShells, updateMusselShells, clearMusselShells, spawnMusselShell } from './systems/musselShell.js';
 import { initBossImpacts, updateBossImpacts, clearBossImpacts, spawnBossImpact } from './systems/bossImpact.js';
-import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint, drainHotSpotChum, drainHotSpotShoves } from './systems/bossHotSpots.js';
+import { initBossHotSpots, updateBossHotSpots, resetBossHotSpots, liveHotSpots, hotSpotLit, hotSpotPoint, aimHotSpots, drainHotSpotChum, drainHotSpotShoves } from './systems/bossHotSpots.js';
 import { initBossGibs, updateBossGibs, resetBossGibs, spawnBossGibs } from './systems/bossGibs.js';
 import { initGore, updateGore, resetGore } from './systems/gore.js';
 import { initIceShatter, updateIceShatter, resetIceShatter, spawnIceShatter } from './systems/iceShatter.js';
@@ -144,6 +146,7 @@ import { stepBodies } from './systems/rigidBody.js';
 import { damageDebris } from './systems/boatDebris.js';
 import { damageCrew, nearestFloatingCrew, eatCrew } from './systems/crew.js';
 import { updateEel, resetEel, resetEelBolts, currentEelStats, createEelCompanion, resetEelCompanion, rebuildEelCompanion, spawnArcBolt } from './systems/eel.js';
+import { resetEelSparks } from './systems/eelSparks.js';
 import { createBelugaDrone, updateBeluga, resetBeluga, rebuildBelugaDrone } from './systems/beluga.js';
 import { updateSealTeam, resetSealTeam, rebuildSealTeam } from './systems/sealTeam.js';
 import { createBakalarBoat, updateBakalar, resetBakalar, rebuildBakalarBoat } from './systems/bakalar.js';
@@ -207,7 +210,7 @@ const TIP_TIERS = parseTipCsv(tipsCsv);
 import { updateStage, parkStageCamera, holdStageSafe, isStaging, stageSimulates, resetStage, sandboxRequested } from './systems/stage.js';
 import { initStagePanel, setStagePanelVisible } from './ui/stage.js';
 import { initWorkbench, updateWorkbench } from './ui/workbench.js';
-import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, showSealSports, hideSealSports, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, hideHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible } from './ui/ui.js';
+import { initUI, showStartMenu, showLeaderboard, hideLeaderboard, showSealSports, hideSealSports, hideAllMenus, showLevelUp, showGameOver, updateHUD, updateBossBar, spawnScoreToast, spawnChainToast, spawnProcToast, spawnDamageReadout, resetDamageReadout, updateToasts, chainBannerHasPrompt, clearToasts, updateMenuNav, hidePlayerBars, applyBarPlacement, applyBoostMeter, showHud, hideHud, showRestartTransition, hideRestartTransition, uiRoot, screenToWorld, setPauseButtonVisible, splashUp } from './ui/ui.js';
 import { setHiveUpgrades, setHiveLayout, setHiveStyle, setHiveStack, toggleHive, hiveRect, slamAndRipple, setHiveTips } from './ui/upgradeHive.js';
 import { showUpgradeTip, hideUpgradeTip, resetUpgradeTip } from './ui/upgradeTip.js';
 import { starfishLevelStats, multishotLevelStats, missileLevelStats,
@@ -223,6 +226,11 @@ import { noteDeath } from './systems/lastRun.js';
 import { setTelegraph, updateTelegraph, clearTelegraph } from './systems/telegraph.js';
 import { initCallouts, updateCalloutUi, clearCalloutUi } from './ui/callout.js';
 import { initGraveLabel, updateGraveLabel, clearGraveLabel } from './ui/graveLabel.js';
+// WHICH STONE THE SEAL IS AT — one answer, read by the caption above, by the
+// camera push and by the salute button. See systems/graveGaze.js.
+import { updateGraveGaze, resetGraveGaze, graveAttention } from './systems/graveGaze.js';
+import { trySalute, updateSalute, resetSalute, saluteReady } from './systems/salute.js';
+import { updatePoseBubbles, resetPoseBubbles } from './systems/poseBubbles.js';
 import { initGraveBeam, updateGraveBeam, clearGraveBeam } from './systems/graveBeam.js';
 import { initChainDebug, updateChainDebug, toggleChainDebug, dumpChainTrace } from './ui/chainDebug.js';
 import { hidePauseMenu, isPauseOpen, showPauseMenu, updatePauseNav } from './ui/pauseMenu.js';
@@ -239,6 +247,11 @@ import { publishBallGrid } from './systems/ballGrid.js';
 import { resetRoster } from './systems/sealRoster.js';
 import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
 import { isTextEntry, isTypingTarget } from './ui/typing.js';
+import { toggleFullscreen } from './systems/fullscreen.js';
+// The three phone prompts — the ring switch, which way up it is held, and the
+// strip of screen the browser's own bottom bar is sitting on. ui.js mounts the
+// surface; this file is the only thing that knows which SCREEN the game is on.
+import { setMobilePromptStage } from './ui/mobilePrompts.js';
 import { initTuner, refreshTuner, setTunerMeta } from './ui/tuner.js';
 import { initTexturePanel } from './ui/textures.js';
 import { initTypography, applyTypography } from './ui/typography.js';
@@ -1098,34 +1111,15 @@ function togglePause() {
   setPaused(!isPauseOpen());
 }
 
-// Shift+F: fullscreen. Not behind DEV_UI — this is a player feature, and it is
-// the only fullscreen the game has. The browser's own F11 / Ctrl+Cmd+F still
+// Shift+F: fullscreen. Not behind DEV_UI — this is a player feature, and on a
+// keyboard it is the whole of it. The browser's own F11 / Ctrl+Cmd+F still
 // works alongside it; this exists because plain `f` is already the dev stage
 // panel (ui/stage.js) and because the request has to come from a real key
 // event, which is why it lives in a handler rather than a menu-only button.
 //
-// documentElement, NOT the renderer's container: the HUD, the pause menu and
-// the callout band are all appended to document.body (see ui/ui.js), so
-// fullscreening #root alone would show the canvas with every overlay clipped
-// away. world.js already listens for `resize`, which fires on the way in and
-// out, so the camera and the drawing buffer need nothing from here.
-function toggleFullscreen() {
-  const el = document.documentElement;
-  // Safari is still prefix-only for all three of these, and the element getter
-  // is the one that decides which branch we take — a missed prefix there reads
-  // as "not fullscreen" and every press would re-request instead of exiting.
-  const current = document.fullscreenElement ?? document.webkitFullscreenElement ?? null;
-  if (current) {
-    (document.exitFullscreen ?? document.webkitExitFullscreen)?.call(document);
-    return;
-  }
-  const request = el.requestFullscreen ?? el.webkitRequestFullscreen;
-  // Rejects when the gesture isn't trusted or the embed disallows it. Nothing
-  // to recover — the run carries on windowed — but swallowing it silently would
-  // make an iframe that blocks fullscreen look like a dead key.
-  request?.call(el)?.catch?.((err) => console.warn('[fullscreen]', err?.message ?? err));
-}
-
+// The request itself is systems/fullscreen.js now — a phone has no Shift key,
+// and the touch button in the corner (ui/fullscreenButton.js) asks for exactly
+// the same thing.
 function bindFullscreenKey() {
   window.addEventListener('keydown', (e) => {
     if (!e.shiftKey || e.repeat || e.key.toLowerCase() !== 'f') return;
@@ -2354,6 +2348,13 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // A fresh run shouldn't inherit the death rumble from the last one.
   stopHaptics();
   resetBubbles();
+  // The pose emitters' carry and their fired-burst memory, or the first
+  // celebration of a new run inherits the last one's phase and fires nothing.
+  resetPoseBubbles();
+  // ...and the attention on whatever stone the last run ended beside, which
+  // would otherwise still be holding the camera's latch.
+  resetGraveGaze();
+  resetSalute();
   // Same idea for the rim: a run that ended mid-flare shouldn't hand the next
   // one a seal that opens lit and fades down. Clears the damage flash too.
   resetPlayerOutlineCharge();
@@ -2383,6 +2384,7 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   resetBoats(world.scene);
   resetEel();
   resetEelBolts(world.scene);
+  resetEelSparks(world.scene);
   resetEelCompanion(player.mesh.position);
   resetBeluga(world.scene, player.mesh.position);
   resetSealTeam(world.scene);
@@ -4778,6 +4780,15 @@ function takeSubject(kind, id) {
     }
     return best;
   }
+  // THE STONE THE SEAL IS AT, by id — and the id rather than the record,
+  // because nearestGrave builds a fresh object every frame and a held one
+  // would be a snapshot of where the marker was. Resolved back through the
+  // same attention the button reads, so the tip cannot end up standing over a
+  // grave the salute would refuse.
+  if (kind === 'grave') {
+    const g = graveAttention().grave;
+    return g ? { kind, id: g.id } : null;
+  }
   if (kind === 'chum') {
     const handle = chumEntry(x, y);
     return handle ? { kind, handle } : null;
@@ -4859,6 +4870,14 @@ function subjectAt(handle) {
     // the tile the coach would want to pulse is a div. The hive does its own
     // announcing on a pick (see slamAndRipple).
     return screenToWorld(world.camera, r.left + r.width / 2, r.top);
+  }
+  if (handle.kind === 'grave') {
+    // Null the moment the seal swims off it — which is what ends the tip, and
+    // it is the same frame the caption goes. The TOP of the stone, because the
+    // label is drawn a fixed gap above whatever world point it is given and
+    // the middle of a headstone would put the sentence across the inscription.
+    const g = graveAttention().grave;
+    return g && g.id === handle.id ? { x: g.x, y: g.topY } : null;
   }
   if (handle.kind === 'hotspot') {
     // Gone the moment it ruptures, which is what ends the tip: the light goes
@@ -6822,6 +6841,43 @@ const guarded = guardFrame(runFrame, {
   },
 });
 
+// --- THE ANIMAL AS A BUTTON ------------------------------------------------
+//
+// The circle a touch has to land in to clap, in CSS pixels, or null while
+// there is nothing to tap. Handed to input.js every frame — see
+// setSealTapTarget, and CONFIG.touch.clap for the three numbers.
+//
+// SIZED OFF THE CAMERA, not typed in pixels. The seal is about a unit across
+// and the frame holds fifty-odd of them, so its projected size is a few tens
+// of pixels — and it is not a fixed few tens: the camera zooms for a chain, a
+// boss kill, a dive. The floor is what is in play at rest (a fingertip is
+// bigger than the animal on a phone) and the ceiling is what keeps a zoomed-in
+// frame from turning half the glass into a clap button.
+//
+// The gate is the clap's own, one screen down in runFrame, minus the menu: the
+// bust is the same animal at portrait size and a press on it there already
+// cycles what it is wearing (systems/mainMenu.js).
+const _sealTapAt = { x: 0, y: 0 };
+const _sealTapCircle = { x: 0, y: 0, r: 0 };
+function sealTapCircle() {
+  if (CONFIG.touch.clap?.enabled === false) return null;
+  if (!gameState.running || gameState.paused || deathState.active || mainMenuActive()) return null;
+  if (!player.mesh) return null;
+  const c = CONFIG.touch.clap ?? {};
+  const half = world.halfExtents(world.camera.zoom);
+  if (!(half.w > 0)) return null;
+  // One projection for the centre, and the scale from the frustum rather than
+  // a second one — the camera is orthographic, so a world unit is the same
+  // number of pixels wherever on screen it is measured.
+  worldToScreen(world.camera, player.mesh.position.x, player.mesh.position.y, _sealTapAt);
+  const pxPerUnit = window.innerWidth / (2 * half.w);
+  const body = (player.stats?.hitRadius ?? CONFIG.player.hitRadius) * (c.grow ?? 2.2) * pxPerUnit;
+  _sealTapCircle.x = _sealTapAt.x;
+  _sealTapCircle.y = _sealTapAt.y;
+  _sealTapCircle.r = Math.min(c.maxPx ?? 120, Math.max(c.minPx ?? 46, body));
+  return _sealTapCircle;
+}
+
 // THE FRAME ITSELF. Never handed to setAnimationLoop directly — `animate`
 // below is the guarded one, and it is the only caller. See systems/frameGuard.js
 // for why a throw out of here used to be the end of the game.
@@ -6968,6 +7024,24 @@ function runFrame(now) {
   // does anything, so this asks it the same question rather than tracking the
   // four screens (level-up, death dive, score card, menu) separately.
   setPauseButtonVisible(canPause() && !isPauseOpen());
+
+  // WHICH SCREEN THE PHONE PROMPTS ARE ALLOWED TO SPEAK ON, beside the pause
+  // button and at the top of the frame for exactly the same reason: this is a
+  // question about the whole session, and down beside updateHUD it would sit
+  // inside a block that stops running the moment a menu goes up — which is
+  // when the answer changes.
+  //
+  // DERIVED EVERY FRAME RATHER THAN PUSHED AT THE TRANSITIONS. The three
+  // screens are reached by half a dozen routes between them (boot, the card's
+  // dismiss, Play, death, Main menu off the score card, the ball game coming
+  // back), and a push per route is a route that gets forgotten — which strands
+  // a prompt on the wrong screen with nothing to take it down. setMobilePromptStage
+  // returns immediately unless the string actually moved, so the cost of asking
+  // sixty times a second is two calls and a compare.
+  //
+  // The card comes FIRST: it is an opaque layer over the whole overlay, so a
+  // prompt drawn under it is styled, measured and invisible.
+  setMobilePromptStage(splashUp() ? 'splash' : mainMenuEngaged() ? 'menu' : 'run');
 
   // Handed the STAMP, not rawDt, and deliberately before the clamp below —
   // see systems/perfLog.js. `Math.min(..., 0.05)` is correct for the
@@ -7220,6 +7294,16 @@ function runFrame(now) {
   // those are in the same seconds the behaviours integrate against. A no-op
   // unless the V panel is open.
   tickAttackTrace(dt);
+  // WHERE THE SEAL IS, FOR A THUMB — the phone's clap button, since a phone has
+  // none of the real ones. input.js owns the gesture and knows nothing about
+  // the camera, so the circle over the animal is published here, in pixels, on
+  // the frame it is true for.
+  //
+  // NOT ON THE MENU, which draws the same animal at a size a thumb cannot miss
+  // and where a press on it already means something else (the outfit cycle in
+  // systems/mainMenu.js). Everywhere else the gate matches the clap's own, one
+  // screen further down this function: a run, unpaused, nobody dying.
+  setSealTapTarget(sealTapCircle());
   updateInput(world.camera, player.mesh.position);
   // A REPLAY IS NOT PLAY, and this is the line that says so.
   //
@@ -8024,6 +8108,16 @@ function runFrame(now) {
     //
     // A span that covered all of them could only ever answer "shots", which is
     // where this went round twice.
+    // WHICH WEAK SPOT THE PLAYER IS POINTING AT, before anything steers.
+    //
+    // HERE and not down with updateBossHotSpots, which runs several hundred
+    // lines later: every seeker in the air reads this answer inside the call
+    // below, so one written after them would steer the whole volley on the
+    // previous frame's aim — a lag nobody would see as a lag, only as the
+    // ordnance being slightly wrong about where you were pointing.
+    aimHotSpots(
+      player.mesh.position.x, player.mesh.position.y, input.aim.x, input.aim.y,
+    );
     const _tshots = performance.now();
     updateProjectiles(
       dt, world.scene, enemies,
@@ -9118,14 +9212,70 @@ function runFrame(now) {
         // kind — a shared event would mean the first orb a player swam into
         // silently marked off the other four.
         noteTutorialEvent('strikeOrb');
-        // The blue orb skips the wind-up entirely: a full meter, instantly.
-        // If that fill lands inside a combo it reaches the chain the same way
-        // chum does — through the meter, which is the only route orbs have.
-        const filled = restoreCharge(player.stats);
+        // The blue orb skips the wind-up entirely: a full meter. If that fill
+        // lands inside a combo it reaches the chain the same way chum does —
+        // through the meter, which is the only route orbs have.
+        //
+        // ...BUT IT ARRIVES A PIP AT A TIME. The fill used to land on the
+        // frame the seal touched the orb: one flash, and the bar was simply
+        // full. The biggest single hand-over of the game's second currency was
+        // a number that had already happened by the time the eye got there,
+        // and a bar filled from empty looked exactly like one topped up from
+        // four fifths.
+        //
+        // So the swallow's goo carries it home instead (systems/
+        // pickupAbsorb.js), ONE PIECE PER MISSING PIP, and each blob lights
+        // its container on the frame it reaches the body. The pip ladder
+        // already in the meter does the rest: every crossing queues a
+        // `strikePip` a semitone above the last (see onPip above), so the orb
+        // now resolves on the pip that fills the bar rather than stopping. How
+        // long the vacuum runs IS the tell about what the pickup was worth —
+        // a bar with two pips missing goes down in two blips.
+        //
+        // The chain credit is booked here, at the touch, and not out of the
+        // pay callback: it is the SWALLOW that links, and a credit that waited
+        // on the last blob would let a window lapse during the vacuum. See
+        // creditOrb.
+        creditOrb();
+        // Both read ONCE, at the touch. A card picked while the goo is still
+        // in the water can change what a pip is worth (Booster Pack adds a
+        // container), and an orb whose shares were sized against one bar and
+        // paid into another would land a sliver over or under full.
+        const missing = pipsToFull(player.stats);
+        const fuel = missing * pipValue(player.stats);
         // The orb's OWN colour, read off the asset so the burst follows the
         // Look panel rather than carrying a second copy of the tint that goes
         // stale the first time anyone re-skins it.
-        feedback('strikeOrbTaken', { x, y, scale: 0.85, color: assetBaseColor('strikeOrb') });
+        absorbInPieces('strikeOrbTaken', {
+          x, y,
+          scale: 0.85,
+          color: assetBaseColor('strikeOrb'),
+          // One blip per container still dark — and at least one, because an
+          // orb taken on a full bar is still a thing the seal swallowed and
+          // must still make the sound of being swallowed.
+          pieces: Math.max(1, missing),
+          // AND ON ITS OWN CLOCK. The chunk's vacuum is a slow swallow and
+          // this one is a re-arm — see CONFIG.pickups.absorb.orb. Only the
+          // timing; the ladder is the shared one.
+          tune: CONFIG.pickups.absorb?.orb,
+        }, (share) => {
+          // A corpse does not fill a bar. Same guard the chunk's heal takes,
+          // for the same reason: pieces taken on the frame the seal dies are
+          // still in the water afterwards, and a meter climbing on the death
+          // screen is a bar nobody can spend.
+          if (!gameState.running) return;
+          // THE SHARE, NOT A FLAT PIP. `share` sums to exactly 1 whatever the
+          // reserve handed back, so the bar always reaches full even if the
+          // burst came out short of the pieces asked for — it just lights more
+          // than one container per blob when it does. A flat pipValue() here
+          // would be an orb that quietly underfills when the water is busy.
+          if (addCharge(share * fuel, player.stats)) {
+            chainFrom('chumFull');
+            // The crossing to full — same flash as the mouthful that tops it
+            // off, now landing on the blob that actually did it.
+            chargeCrossed();
+          }
+        });
         sealBite('orb');
         // One pickup, one mouthful — so it links exactly like a chum orb does
         // inside an armed chain. Without this the one pickup that hands over a
@@ -9134,10 +9284,6 @@ function runFrame(now) {
           playtest.recordChainLink(link.chain);
           onChainHit(link.chain, link.source || 'chumEaten');
         }
-        if (filled) chainFrom('chumFull');
-        // An orb fills the bar outright, so it crosses to full unless it
-        // already was — same flash as the mouthful that tops it off.
-        if (filled) chargeCrossed();
         pickupStruck(x, y, 'strikeOrb', assetBaseColor('strikeOrb'));
       },
       (x, y) => {
@@ -9695,6 +9841,9 @@ function runFrame(now) {
     // one: the corner has to be on screen with something in it, and the pick
     // that put it there has to be recent — see the `hiveStack` step for why the
     // window is what ends the tip.
+    // A headstone close enough to salute — the same test the button asks, so
+    // the tip and the gesture can never disagree about whether there is one.
+    get graveInReach() { return !!graveAttention().grave; },
     upgradesHeld: player.upgrades.length,
     sinceUpgrade,
     get hiveShown() { return !!hiveRect(); },
@@ -9741,6 +9890,22 @@ function runFrame(now) {
   // is being played, so a hit-stop that freezes the seal freezes its caption
   // too. `live` is what takes it down for a menu or a death — as a fade, since
   // the upgrade cards open on top of a frame that is still being drawn.
+  // WHICH STONE, HOW LONG, AND WHETHER TO PUSH THE FRAME IN — immediately
+  // before the caption, because the caption reads its answer. The order is
+  // load-bearing in one direction only: the label one frame behind the gaze
+  // would be a caption that comes up a frame late, where the gaze one frame
+  // behind the label is a push-in that starts on a stone the player has
+  // already left. Same clock as the label, for the reason given there.
+  updateGraveGaze(realDt, {
+    camera: world.camera,
+    x: player.mesh.position.x,
+    y: player.mesh.position.y,
+    // The speed is the "stopping to look at" half of it. Velocity rather than
+    // the frame's travel: a seal being shoved by knockback is not stopping,
+    // and the two come apart at exactly the moments that matter.
+    speed: Math.hypot(player.velocity.x, player.velocity.y),
+    live: gameState.running,
+  });
   updateGraveLabel(realDt, {
     camera: world.camera,
     x: player.mesh.position.x,
@@ -9943,13 +10108,40 @@ function runFrame(now) {
     const at = (m && m.length >= 2)
       ? { x: (m[0].x + m[1].x) / 2, y: (m[0].y + m[1].y) / 2 }
       : { x: player.mesh.position.x, y: player.mesh.position.y };
-    triggerClap(at);
+    // THE SAME BUTTON MEANS SOMETHING ELSE IN FRONT OF A HEADSTONE. See
+    // systems/salute.js for why this is one button and not two. It answers
+    // null everywhere there is no stone in reach — and also when a salute or a
+    // victory lap is already running, which is a refusal rather than a miss:
+    // falling through to a clap there would hand the seal two hand-posed
+    // performances on the same flippers.
+    const saluted = trySalute(at, player.mesh.position);
+    // The coach's line is answered by the GESTURE, not by the press: a button
+    // that was refused (a performance already running, the throttle) has
+    // taught nobody anything and the tip should still be there afterwards.
+    if (saluted) noteTutorialEvent('salute');
+    if (!saluted && !saluteReady()) triggerClap(at);
   }
+  updateSalute(rawDt);
   updateClap(rawDt);
   player.clap?.update(rawDt);
 
   updateCelebration(rawDt);
   player.celebrate?.update(rawDt);
+
+  // THE WATER'S ANSWER TO THE POSE — after both performances have been applied
+  // this frame, so a burst keyed to the contact leaves an anchor that is
+  // already where the contact put it rather than one frame behind it.
+  //
+  // `rawDt`, like the performances themselves: a puff timed on the kill shot's
+  // dilated clock would arrive a second after the pose it belongs to.
+  //
+  // aboveSurface is measured off the POSITION rather than read off the flag —
+  // the flag stops being written the moment the run stops (see the note in
+  // systems/breachTrail.js), and a celebration outlives that by design.
+  updatePoseBubbles(rawDt, player.aimRig, {
+    aboveSurface: player.mesh.position.y > bounds.surfaceY,
+    velocity: player.velocity,
+  });
 
   // `player.stats` so the ring knows how many pips the bar is cut into —
   // Coiled Spring changes that mid-run, and a ring reading the CONFIG default

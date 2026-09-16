@@ -69,7 +69,40 @@ const MOUNTS = [
   ['/', ROOT],
 ];
 
-function resolveSafe(urlPath) {
+// Every place a URL could legitimately come from, best first. A LIST and not a
+// single answer because the '/' mount matches everything: it resolves a nested
+// asset request to a file inside the build that is simply not there, and any
+// fallback tried only when resolution FAILS would never run.
+function candidates(urlPath) {
+  const out = [];
+  const push = (p) => { if (p && !out.includes(p)) out.push(p); };
+  push(mountFor(urlPath));
+
+  // A LOOK PAGE SERVED FROM A SUBDIRECTORY ASKS FOR ITS ASSETS FROM THERE.
+  //
+  // Every look config sets `base: './'`, so assetUrl (path/src/assetPath.js)
+  // turns '/models/morayeel.fbx' into './models/morayeel.fbx' — correct, and
+  // the whole point of that function. But the page itself is built to
+  // /tools/looks/<name>.html, so the browser resolves that against the document
+  // and asks for /tools/looks/models/morayeel.fbx, which is under none of the
+  // mounts above.
+  //
+  // The result is a look page with no models on it, and it does NOT look like a
+  // server problem: assets.js catches the 404 and quietly substitutes the
+  // built-in primitive, so the page comes up, renders, and shows you a hexagon
+  // where the animal goes. I judged an effect against that stand-in before
+  // noticing. Retry from the last occurrence of a mount prefix, after the exact
+  // paths above have had their turn, so a real file in the build still wins.
+  for (const [prefix] of MOUNTS) {
+    if (prefix === '/') continue;
+    const at = urlPath.lastIndexOf(prefix);
+    if (at <= 0) continue;
+    push(mountFor(urlPath.slice(at)));
+  }
+  return out;
+}
+
+function mountFor(urlPath) {
   for (const [prefix, dir] of MOUNTS) {
     if (!urlPath.startsWith(prefix)) continue;
     const rel = urlPath.slice(prefix.length);
@@ -353,14 +386,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const file = resolveSafe(decodeURIComponent(url.pathname));
-  if (!file) { res.writeHead(404).end('no'); return; }
-  try {
-    const body = await readFile(file);
-    res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' }).end(body);
-  } catch {
-    res.writeHead(404).end('no');
+  for (const file of candidates(decodeURIComponent(url.pathname))) {
+    try {
+      const body = await readFile(file);
+      res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' }).end(body);
+      return;
+    } catch { /* try the next place it could be */ }
   }
+  res.writeHead(404).end('no');
 });
 
 // THE PAGE, not the root. `vite build` keeps the input's path relative to the

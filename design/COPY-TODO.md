@@ -417,3 +417,26 @@ arena said the same thing twice, once when the clam dropped and once when the
 seal ate it. The drop's toast is gone entirely now rather than rewritten: a
 receipt answers "what did that just give me", and the drop has given nothing
 yet. `clamGrab` keeps the words because it has the payout.
+
+## The salute tip (callouts.csv, `salute`) — staged as lorem
+
+The coach line that tells a player the clap button does something else in front
+of a headstone. Two cells, because the row names a key binding:
+
+- `text` — keyboard. One short sentence. It has to carry two facts: that the
+  stone can be saluted, and which key does it. Write `{clap}` where the key
+  goes and it resolves to whatever that action is bound to (the strike tip does
+  the same with `{strike}`). It stands beside the stone, not on the band, so it
+  is read with the grave in the same look — around the length of "Eat chum to
+  fill your boost meter." is right, and it is up for seven seconds or until the
+  player salutes.
+- `textPad` — controller. Same sentence without the key name; the button is X /
+  Square and the row must not tell a pad player to press a key.
+
+No `textTouch`: a touchscreen has no clap control, so the row does not exist
+there (`devices` is `kbm pad`).
+
+The register is the question. The rest of the coach is instructional ("Eat chum
+to fill your boost meter"), and this is the one tip about a thing with no
+gameplay in it at all — the seal is standing at the marker of a previous run's
+death. It can be as plain or as quiet as you want; it just cannot be long.

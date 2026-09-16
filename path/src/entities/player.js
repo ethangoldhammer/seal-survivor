@@ -9,7 +9,7 @@ import { bounds, clampToArena, midWater } from '../arena.js';
 import { feedback } from '../systems/feedback.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createAimRig } from '../systems/aimRig.js';
-import { createCelebrationDriver, resetCelebration, celebrationSpin } from '../systems/celebrate.js';
+import { createCelebrationDriver, resetCelebration, celebrationSpin, celebrationFacing } from '../systems/celebrate.js';
 import { createClapDriver, resetClap } from '../systems/clap.js';
 import { createBreathDriver } from '../systems/breathe.js';
 import { createJawDriver } from '../systems/jaw.js';
@@ -2048,16 +2048,41 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
   // it twitch on every mouse jiggle while drifting the other way. Aim-facing
   // is still selectable via CONFIG.player.faceMode.
   const useVelocity = CONFIG.player.faceMode !== 'aim';
+  let faceX = useVelocity ? seal.velocity.x : input.aim.x;
+  let faceY = useVelocity ? seal.velocity.y : input.aim.y;
+  // A POSE THAT WANTS THE WHOLE ANIMAL POINTED SOMEWHERE — today only the
+  // salute, which stands the seal up in front of a headstone. Asked for as a
+  // direction and a weight (systems/celebrate.js) and blended INTO the
+  // direction the run was going to pass anyway, so it arrives and leaves on
+  // poseBody's own heading lerp and its own eased mirror. Nothing else turns
+  // the seal, and nothing here writes a rotation.
+  const posedFace = celebrationFacing(seal.celebrateTag ?? null);
+  if (posedFace) {
+    // WHERE IT IS POINTING NOW as the other end of the blend, not its
+    // velocity: a salute happens with the animal stopped, so velocity is noise
+    // at best and zero at worst — and a blend from zero is a blend that snaps
+    // the moment the weight leaves 0. The art's forward is +Y, hence the
+    // quarter turn (the same one poseBody subtracts going the other way).
+    const held = seal.mesh.rotation.z + Math.PI / 2;
+    const len = Math.hypot(faceX, faceY);
+    const fromX = len > (CONFIG.player.minSpeedToTurn ?? 0.01) ? faceX / len : Math.cos(held);
+    const fromY = len > (CONFIG.player.minSpeedToTurn ?? 0.01) ? faceY / len : Math.sin(held);
+    const w = posedFace.weight;
+    faceX = fromX + (posedFace.x - fromX) * w;
+    faceY = fromY + (posedFace.y - fromY) * w;
+  }
   poseBody(
     seal,
     dt,
-    useVelocity ? seal.velocity.x : input.aim.x,
-    useVelocity ? seal.velocity.y : input.aim.y,
+    faceX,
+    faceY,
     {
       // Velocity spends most of a drift near zero, so it needs a floor or the
       // seal spins on rounding noise. An aim vector is always a unit direction
-      // and needs none.
-      minTurn: useVelocity ? CONFIG.player.minSpeedToTurn : 0.0001,
+      // and needs none — and neither does a posed facing, which is a unit
+      // vector blended against another one and would be REFUSED by the floor
+      // at exactly the low speeds it exists for.
+      minTurn: posedFace ? 0.0001 : (useVelocity ? CONFIG.player.minSpeedToTurn : 0.0001),
       // Dashing swaps in its own, much faster facing rate, and a combo scales
       // the normal one — at combo speeds the default smoothing reads as the
       // model lagging behind where you're actually going.

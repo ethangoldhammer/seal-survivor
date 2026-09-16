@@ -54,6 +54,26 @@ export function captureSizeFor(scaleFactor) {
   return { ...unitsToSize(Math.max(units, 1)), scaleFactor: s, exact: false };
 }
 
+// HOW BIG THE WINDOW IS TO PLAY IN, which is a different question from how big
+// the FILE is. 960x540 points captures natively at 1920x1080 and is small to
+// play in; a bigger window captures bigger and is scaled back down afterwards
+// (see finish() in record.js), which costs a pass over the file and looks
+// slightly better for it — more source detail going into the same 1080 lines.
+//
+// 1280x720 rather than the largest thing that fits: the window's pixel count is
+// what the GPU pays every frame, and 1600x900 at 2x is 5.8 megapixels against
+// this 3.7 — the difference between comfortable and the hitching that started
+// all this. Capped by the work area so it can never open off-screen.
+export const PLAY = { width: 1280, height: 720 };
+
+export function playSizeFor(scaleFactor, avail) {
+  const native = captureSizeFor(scaleFactor);
+  // Never smaller than the size that needs no scaling at all.
+  if (PLAY.width <= native.width) return native;
+  const want = PLAY.width <= avail.width && PLAY.height <= avail.height ? PLAY : fitCapture(PLAY, avail);
+  return want.width < native.width ? native : { ...want, scaleFactor };
+}
+
 /** What a window of `size` points records as, at that display's scale. */
 export const recordedSize = ({ width, height }, scaleFactor) => ({
   width: Math.round(width * scaleFactor),

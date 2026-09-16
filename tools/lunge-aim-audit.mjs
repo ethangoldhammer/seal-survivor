@@ -67,6 +67,15 @@ const MID = -20;
 const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
 const SECONDS = 120;
 
+// THE SEAL'S REAL SPEED, measured rather than guessed: updatePlayer on a full
+// stick settles at 15 u/s (CONFIG.player.maxSpeed is 34, which is the dash
+// ceiling, not the cruise). Both audits in this directory used to drive it at
+// 7-9, which is HALF a real player — and every figure they produced was
+// therefore measured against a target moving at half speed, in the direction
+// that flatters the boss. A boss's committed run is 20-24 u/s, so the closing
+// speed against a real seal is four units a second rather than fifteen.
+const SEAL_SPEED = 15;
+
 function seeded(seed) {
   let a = seed >>> 0;
   return () => {
@@ -81,7 +90,7 @@ const wrap = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI)
 // A seal that swims a lazy circuit at roughly its own cruise.
 function swimmer(seed) {
   const rnd = seeded(seed + 7777);
-  const speed = 7 + rnd() * 3;
+  const speed = SEAL_SPEED * (0.85 + rnd() * 0.3);
   const r = 10 + rnd() * 8;
   const phase = rnd() * Math.PI * 2;
   return (t) => ({
@@ -130,8 +139,8 @@ for (const seed of SEEDS) {
       if (DODGE && (e.lungeStage === 'wind' || e.lungeStage === 'strike')) {
         // Break perpendicular to the shark's heading, at the seal's own cruise.
         const away = (e.heading ?? 0) + Math.PI / 2 * (dodgeSide || 1);
-        p.x = prev.x + Math.cos(away) * 9 * dt;
-        p.y = prev.y + Math.sin(away) * 9 * dt;
+        p.x = prev.x + Math.cos(away) * SEAL_SPEED * dt;
+        p.y = prev.y + Math.sin(away) * SEAL_SPEED * dt;
       } else if (DODGE) {
         dodgeSide = Math.sin(t * 0.37) > 0 ? 1 : -1;
       }

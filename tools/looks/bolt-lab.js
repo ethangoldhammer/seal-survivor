@@ -38,7 +38,8 @@ import { preloadAssets } from '../../path/src/assets.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { weatherState } from '../../path/src/systems/weather.js';
 import {
-  updateEel, createEelCompanion, resetEelBolts, spawnChainBolt, crackleCfg, eelCfg,
+  updateEel, createEelCompanion, resetEelBolts, resetEelCompanion, spawnChainBolt,
+  spawnEelChain, eelOrigin, crackleCfg, eelCfg,
 } from '../../path/src/systems/eel.js';
 
 const q = new URLSearchParams(location.search);
@@ -216,6 +217,23 @@ water.position.z = -1;
 scene.add(water);
 
 const HALF_W = 19;
+
+// WHERE THE EEL SITS, and not a fixed world x. It used to be parked at -16,
+// which is behind the 336px panel at any pane narrower than about 1900px —
+// harmless while the eel was hidden and the arc started at -15, and not harmless
+// now that the charge orbiting the animal is half of what the page is for. Same
+// measurement as the ladder's first column; see ladderLeft.
+const EEL = { x: -16, y: 0 };
+// The panel is opaque and fixed to the left edge, so the first column of a grid
+// laid out across the full frame is behind it — which cost the ladder two of its
+// eight levels, the two it is most often read against.
+//
+// BOTH OF THESE ARE DECLARED UP HERE, above resize(), rather than beside the
+// things they describe. The pane fires a `resize` while preloadAssets is still
+// awaiting, and resize() now places the eel through ladderLeft() — so a const
+// either of them reaches is in its temporal dead zone at that moment, and the
+// page dies on load with a ReferenceError naming a minified symbol.
+const PANEL_PX = 336;
 const cam = new THREE.OrthographicCamera(-HALF_W, HALF_W, 10, -10, 0.1, 100);
 cam.position.set(0, 0, 20);
 cam.lookAt(0, 0, 0);
@@ -253,14 +271,25 @@ function resize() {
   cam.left = -HALF_W; cam.right = HALF_W; cam.top = halfH; cam.bottom = -halfH;
   cam.updateProjectionMatrix();
   post.resize();
+  placeEel();
+}
+function placeEel() {
+  EEL.x = ladderLeft() + 2.5;
 }
 window.addEventListener('resize', () => { resize(); placeLadderLabels(ladder); });
 
 await preloadAssets();
-// updateEel's fade pass is what animates every bolt on this page, and it runs
-// updateCompanion before it gets there — so the companion has to exist even
-// though it is hidden at level 0, which is the level the lab always passes.
+// THE EEL IS ON THE PAGE, at the lab's own level rather than at 0.
+//
+// It used to be hidden here — the page passed level 0 so updateEel would do its
+// fade pass and nothing else — and that was right while the bolt was the whole
+// effect. It is not any more: the chain leaves the orbiting sparks, and a page
+// that judges the bolt without the charge it comes out of is judging half of
+// it. An empty enemy list is what keeps the firing logic harmless; updateEel
+// finds no target and returns before the cooldown means anything.
 scene.add(createEelCompanion());
+placeEel();
+resetEelCompanion(EEL);
 resize();
 
 // --- the bodies the chain hops through --------------------------------------
@@ -287,15 +316,18 @@ function showMarkers(points) {
 }
 
 // A chain across the frame: evenly spaced along X, scattered in Y. The first
-// point is the eel, so it sits off to the left the way the companion does.
+// point is the EEL'S OWN POSITION — the spring lags, so it is asked for rather
+// than assumed — because spawnEelChain moves that point onto whichever spark is
+// pointing at the first victim, and a made-up origin two units off the animal
+// would have the orbit throwing its arcs at empty water.
 function chainPoints(hops, y = 0, width = 30) {
   const n = Math.max(1, Math.round(hops)) + 1;
-  const pts = [];
-  for (let i = 0; i < n; i++) {
+  const pts = [eelOrigin()];
+  for (let i = 1; i < n; i++) {
     const f = n > 1 ? i / (n - 1) : 0;
     pts.push({
       x: -width / 2 + width * f,
-      y: y + (i === 0 ? 0 : (Math.random() * 2 - 1) * lab.spread),
+      y: y + (Math.random() * 2 - 1) * lab.spread,
     });
   }
   return pts;
@@ -318,10 +350,6 @@ const labelBox = document.createElement('div');
 labelBox.id = 'ladderLabels';
 document.body.appendChild(labelBox);
 
-// The panel is opaque and fixed to the left edge, so the first column of a grid
-// laid out across the full frame is behind it — which cost the ladder two of its
-// eight levels, the two it is most often read against.
-const PANEL_PX = 336;
 // viewport(), NOT window.innerWidth. The pane reports 0 there and this divides
 // by it: at innerWidth 1 the panel is "12768 world units wide" and every ladder
 // cell is placed a mile off the right of the frame. The screen goes black, the
@@ -379,8 +407,12 @@ function fire() {
     return;
   }
   const pts = chainPoints(lab.hops);
-  showMarkers(pts);
-  spawnChainBolt(scene, pts, 1, lab.level);
+  // The markers are the BODIES, so the eel's own point is not one of them.
+  showMarkers(pts.slice(1));
+  // spawnEelChain and not spawnChainBolt: the launch spark, the feeder arcs and
+  // the discharge flare are all part of what the eel fires now, and the page
+  // exists to draw exactly what the eel fires.
+  spawnEelChain(scene, pts, lab.level);
 }
 
 // --- readout ----------------------------------------------------------------
@@ -462,7 +494,7 @@ function step(dt) {
   // Level 0 and an empty world: updateEel's own fade pass is all this page
   // wants from it, and that pass runs before any of the firing logic precisely
   // so a bolt lent to Voltaic still fades when the eel was never taken.
-  updateEel(dt, scene, { x: -16, y: 0 }, 0, [], {});
+  updateEel(dt, scene, EEL, lab.level, [], {});
 }
 function render() {
   post.render(scene, cam, DT);

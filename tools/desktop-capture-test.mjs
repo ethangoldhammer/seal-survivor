@@ -130,10 +130,14 @@ if (process.argv.includes('--window')) {
     if (error) check('the smoke ran', false, error);
     for (const r of results ?? []) {
       const label = `pass ${r.pass}: ${r.width}x${r.height} @${r.scaleFactor}x`;
-      // THE CONTRACT, measured on a real window rather than derived: what this
-      // window records as.
-      check(`${label} records ${r.shot.width}x${r.shot.height}`,
-        r.shot.width === 1920 && r.shot.height === 1080);
+      // THE CONTRACT, measured on a real window rather than derived. The window
+      // you PLAY in is allowed to be bigger than the one that captures 1080p
+      // natively — what it may never be is SMALLER, because avconvert's presets
+      // are ceilings: they scale a larger source down and leave a smaller one
+      // untouched. Under-capture and the take is quietly not 1080p, with a
+      // scaling pass that reports success and changes nothing.
+      check(`${label} records ${r.shot.width}x${r.shot.height}, at or above 1080p`,
+        r.shot.width >= 1920 && r.shot.height >= 1080);
       check(`${label} is 16:9`, r.square);
       // The minimum has to come DOWN to the capture size, or on a small
       // display the OS clamps the window back up to 960x600 and the arithmetic

@@ -39,18 +39,98 @@
 // was already good still on disk.
 // ============================================================================
 
-import { app, shell } from 'electron';
-import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { app, screen, shell } from 'electron';
+import { spawn, execFile } from 'node:child_process';
+import { mkdirSync, readdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { OUTPUT } from './captureSize.js';
 import { RECORDINGS, takeName, captureArgs, BLACKHOLE_UID } from './takeFile.js';
 
 export { RECORDINGS, takeName, captureArgs, BLACKHOLE_UID } from './takeFile.js';
+
+/**
+ * Scale a finished take down to exactly 1920x1080, in place.
+ *
+ * A window big enough to PLAY in is bigger than the one that captures natively
+ * at 1080p, so the take comes off the screen at 2560x1440 and has to come back.
+ * avconvert ships with macOS and does it at about a fifth of real time — a ten
+ * second take took 2.1s.
+ *
+ * ITS PRESETS ARE CEILINGS, NOT TARGETS, which is worth knowing before trusting
+ * this: `Preset1920x1080` scales 2560x1440 down correctly and leaves a
+ * 1920x1144 source completely untouched, because the width is already at the
+ * limit. So it can only be relied on when the source is genuinely larger in
+ * BOTH axes — which a whole-multiple capture always is.
+ *
+ * The original is replaced only once the new file exists, so a failed pass
+ * leaves the oversized take rather than nothing at all.
+ */
+function toOutputSize(file, done) {
+  const scaled = `${file}.1080.mov`;
+  // DETACHED, and unref'd. The take usually ends BECAUSE the game is quitting,
+  // so the scaling would otherwise be killed a few milliseconds after it
+  // started and leave an oversized file — which is exactly what happened the
+  // first time: 2560x1440 on disk, no error, and a log that stopped mid-line.
+  // Detaching lets it finish in the seconds after the app is gone.
+  //
+  // A leftover avconvert is harmless in a way a leftover screencapture is not
+  // (it holds nothing, touches no input, and exits on its own), which is why
+  // this is allowed to outlive the app and the recorder is not.
+  const proc = spawn('/usr/bin/avconvert', [
+    '--source', file, '--output', scaled,
+    '--preset', `Preset${OUTPUT.width}x${OUTPUT.height}`, '--replace',
+  ], { detached: true, stdio: 'ignore' });
+  proc.unref();
+
+  // Renamed by a watcher rather than inside the child, because the child is a
+  // system binary and cannot be asked to do it: poll for the scaled file to
+  // stop growing, then swap it in. Only runs while this process is alive; if
+  // the app quit first, `finish` below does it on the next launch.
+  proc.on('exit', (code) => {
+    if (code !== 0) {
+      console.warn(`[record] could not scale to ${OUTPUT.width}x${OUTPUT.height} — keeping the take as filmed`);
+      done(file);
+      return;
+    }
+    try { renameSync(scaled, file); done(file); } catch { done(scaled); }
+  });
+}
+
+/**
+ * Finish any take a previous session left oversized or half-scaled.
+ *
+ * The scaling outlives the app but the RENAME cannot, so a session that quit
+ * during the pass leaves `take.mov` beside `take.mov.1080.mov`. Swapping them
+ * in on the next launch is what makes that self-healing rather than something
+ * to notice and fix by hand.
+ */
+export function sweepUnfinished() {
+  let swapped = 0;
+  try {
+    for (const name of readdirSync(RECORDINGS)) {
+      if (!name.endsWith('.1080.mov')) continue;
+      const scaled = join(RECORDINGS, name);
+      const original = join(RECORDINGS, name.slice(0, -'.1080.mov'.length));
+      // Only when it looks complete: a partial file from a pass that was
+      // killed is worse than the oversized take it would replace.
+      if (statSync(scaled).size < 1024) { continue; }
+      renameSync(scaled, original);
+      swapped++;
+    }
+  } catch { /* no folder yet, or nothing to do */ }
+  if (swapped) console.log(`[record] finished scaling ${swapped} take(s) from a previous session`);
+}
+
+/** The display scale where the window is now — 2 on a Retina panel. */
+function scaleOf(win) {
+  return screen.getDisplayMatching(win.getBounds()).scaleFactor || 1;
+}
 
 export function createRecorder(win, { audio = null } = {}) {
   let proc = null;
   let file = null;
   let startedAt = 0;
+  let shotWidth = 0;
   // Why the take ended, set by whoever ends it. Read in the exit handler,
   // which is the only place that knows the take is actually over.
   let ending = '';
@@ -95,8 +175,30 @@ export function createRecorder(win, { audio = null } = {}) {
         start(null);
         return;
       }
-      if (!failed) console.log(`[record] ${secs}s — ${ending || 'stopped'} — ${file}`);
-      else console.warn(`[record] screencapture exited ${code ?? signal} after ${secs}s — ${stderr.trim() || 'no output'}`);
+      if (!failed) {
+        const done = (at) => console.log(`[record] ${secs}s — ${ending || 'stopped'} — ${at}`);
+        // Scaled only when it was filmed larger. A native 1080p take is left
+        // alone rather than run through a re-encode that could only lose to it.
+        if (shotWidth > OUTPUT.width) {
+          console.log(`[record] ${secs}s — ${ending || 'stopped'} — scaling to ${OUTPUT.width}x${OUTPUT.height}…`);
+          toOutputSize(file, done);
+        } else done(file);
+        return;
+      }
+
+      // EXIT 1 WITH NOTHING ON STDERR IS THE PERMISSION, essentially always.
+      // Screen Recording is granted to an APP, and `screencapture` is
+      // attributed to whichever app launched this process — not to Electron,
+      // which reports `granted` either way and is a red herring. Denied, it
+      // exits within a second having written nothing and said nothing, so the
+      // raw report ("exited 1 — no output") sends you looking at the recorder.
+      if (code === 1 && !stderr.trim() && Number(secs) < 2) {
+        console.warn('[record] screencapture wrote nothing and said nothing, which is almost always'
+          + '\n  Screen Recording not being granted to the app that launched this session.'
+          + '\n  System Settings > Privacy & Security > Screen Recording, then relaunch it.');
+        return;
+      }
+      console.warn(`[record] screencapture exited ${code ?? signal} after ${secs}s — ${stderr.trim() || 'no output'}`);
     });
 
     proc.on('error', (err) => {
@@ -126,6 +228,9 @@ export function createRecorder(win, { audio = null } = {}) {
     // welded over everything else is a worse bug than the one it prevents.
     win.setAlwaysOnTop(true, 'screen-saver');
 
+    // What this take will come off the screen at, so the exit handler knows
+    // whether it needs bringing back down to 1920x1080.
+    shotWidth = Math.round(bounds.width * scaleOf(win));
     const sound = withAudio ? `, sound from ${withAudio}` : ', no sound';
     console.log(`[record] filming ${bounds.width}x${bounds.height} at ${bounds.x},${bounds.y}${sound} -> ${file}`);
     return file;

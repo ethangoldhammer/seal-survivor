@@ -67,6 +67,8 @@ import { bossShot, bossShots, bossShotImage, shareBossShot, saveBossShot, shareR
 import { desktopSaveAvailable } from '../systems/desktopSave.js';
 import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapshotPrint.js';
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
+import { mountFullscreenButton } from './fullscreenButton.js';
+import { mountMobilePrompts } from './mobilePrompts.js';
 import { TYPOGRAPHY_EVENT } from './typography.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform, buildHiveSnapshot } from './upgradeHive.js';
 import {
@@ -3118,6 +3120,24 @@ export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, on
   // After `el`, because it reads both of those.
   wirePauseButton();
 
+  // THE WAY TO THE WHOLE SCREEN ON A PHONE. Held sideways in a browser the game
+  // is drawn into a viewport the browser's own bottom bar has already taken a
+  // slice out of, and until this there was no way to ask for the display back
+  // without a keyboard (Shift+F, main.js). The button decides for itself
+  // whether it may appear at all — a thumb, a real Fullscreen API, a browser
+  // tab rather than one of the app shells — so there is no route knowledge
+  // here; see ui/fullscreenButton.js.
+  mountFullscreenButton({ parent: root, onPress: () => feedback('uiClick') });
+
+  // THE THREE THINGS A BROWSER ON A PHONE WILL NOT SAY FOR ITSELF — the ring
+  // switch, which way up it is held, and the strip of screen Safari's own
+  // bottom bar is sitting on. Mounted beside the button above because the
+  // fullscreen row is a label on it, and because both surfaces answer the same
+  // live questions about the same device; see ui/mobilePrompts.js. Which SCREEN
+  // the game is on comes from main.js (setMobilePromptStage) — this module has
+  // no route knowledge and wants none.
+  mountMobilePrompts({ parent: root, onPress: () => feedback('uiClick') });
+
   // The score card's tip jar, built rather than written into the markup above
   // so the link, its look and where it points live in one file — see
   // ui/tipJar.js. Held on `el` because the pad has to be able to reach it:
@@ -3460,6 +3480,29 @@ export function showStartMenu() {
   // "Seal" for anybody who has never had one, and the score card at the end of
   // a run is where a name can still be typed.
   leaveSplash();
+}
+
+/**
+ * IS THE NAME CARD STILL UP?
+ *
+ * A live getter rather than a flag, and `isDestroyed` rather than `!!splash`:
+ * the handle is only nulled lazily, in the gamepad poll, so a truthy `splash`
+ * outlives the card it used to be by however long it takes a pad to be
+ * polled. Anything that branched on the handle alone would be answering about
+ * a screen that is already gone — see the note in updateMenuNav.
+ *
+ * `splashPlayed` is NOT the answer either: it latches on the first mount and
+ * stays true for the life of the page, which is what keeps the player from
+ * being asked for their name twice. It says the card has HAPPENED, not that it
+ * is on screen.
+ *
+ * Exported for main.js, which turns it into the phone prompts' stage — see
+ * ui/mobilePrompts.js. The card is an opaque z-index 20 layer over the whole
+ * overlay, so anything below it is styled, measured and invisible, and a
+ * surface that does not know about it is a surface that thinks it is showing.
+ */
+export function splashUp() {
+  return !!splash && !splash.isDestroyed;
 }
 
 /**

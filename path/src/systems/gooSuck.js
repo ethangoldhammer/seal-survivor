@@ -211,6 +211,16 @@ function flowAt(rx, ry, rz, c, wts, out) {
  * being absorbed piece by piece, where the arrivals ARE the feedback. 0 (the
  * default) is exactly the behaviour every existing burst has.
  *
+ * `at.holdAt` REPLACES that shared beat for this blast. The hold is a look
+ * number for every ordinary burst, and the one caller that needs its own is
+ * the one where the hold is a DELAY ON A PAYOUT: the blue orb hands the seal
+ * a bar of fuel to go again with, and a third of a second of goo hanging
+ * decoratively in the water before any of it arrives is the pickup answering
+ * late. `at.rampTime` replaces the pull's ramp-in for the same caller and the
+ * same reason — the hold decides when the suck starts, the ramp decides how
+ * long it takes to mean it, and shortening only one of them moves the arrival
+ * by about half of what it looks like it should. See CONFIG.pickups.absorb.orb.
+ *
  * `at.countClamp` is a [min, max] on how many blobs the burst may be, applied
  * AFTER the emitter's count and the look multiplier. It is for a caller that
  * has to LIVE with the number — a payload cut into forty shares arrives as a
@@ -294,6 +304,15 @@ export function spawnSuckGoo(emitterName, x, y, at = {}) {
       seed: Math.random(),
       payload,
       holdAdd: stagger * (index / span),
+      // THE BEAT BEFORE THE PULL, when this blast wants its own — see
+      // `at.holdAt` in the header. Stored per blob rather than looked up from
+      // the config in the step, so a tuner drag on the shared hold mid-flight
+      // cannot restart a pull that has already begun.
+      holdBase: at.holdAt != null ? Math.max(0, at.holdAt) : null,
+      // ...and how fast the pull comes ON, for the same reason and stored the
+      // same way. The hold says when the suck starts; this says how long it
+      // takes to mean it, and a burst that has to ARRIVE promptly needs both.
+      rampOwn: at.rampTime != null ? Math.max(0.01, at.rampTime) : null,
     });
   });
   // Long enough to cover the last blob's wait as well as its flight, or a
@@ -411,7 +430,9 @@ export function updateGooSuck(dt) {
       }
     }
     // Its own wait on top of the blast's — see `holdStagger` in spawnSuckGoo.
-    const bHold = hold + (b.holdAdd ?? 0);
+    // The blast's own hold when it named one (`at.holdAt`), and the shared
+    // beat otherwise.
+    const bHold = (b.holdBase ?? hold) + (b.holdAdd ?? 0);
     if (b.age < bHold || !target.set) {
       // ACT ONE: the wall of drag. Closed form per frame so the stop is the
       // same at any frame rate.
@@ -455,7 +476,7 @@ export function updateGooSuck(dt) {
       }
       // ACT THREE: the suck. The pull ramps in over `rampTime` from the end of
       // the hold, so the goo is drawn rather than yanked.
-      const s = smooth((b.age - bHold) / ramp);
+      const s = smooth((b.age - bHold) / (b.rampOwn ?? ramp));
       if (s > suction) suction = s;
       near = clamp01(1 - d / nearR);
       if (b.phase !== lastPhase) {

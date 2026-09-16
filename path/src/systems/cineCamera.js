@@ -154,6 +154,11 @@ const machine = {
   from: null,     // resolved bag the blend started from
   to: null,       // resolved bag it is heading for
   cur: null,      // what this frame reads
+  // Seconds this state has been SETTLED — the blend finished and the rig is
+  // simply holding it. Only the creep below reads it; every other state ignores
+  // it entirely. Reset by enter(), so it is a property of this visit rather
+  // than of the state.
+  held: 0,
 };
 
 // Highest priority first. A death outranks everything, and inside a death the
@@ -165,7 +170,12 @@ const machine = {
 // `bossReveal` sits directly under the death beats: it is the one state that
 // looks at something OTHER than the seal, and the only thing that may cut it
 // short is the player dying during it.
-const PRIORITY = ['mainMenu', 'deathFloor', 'deathFall', 'deathHit', 'bossReveal', 'boosting', 'charging', 'roundStart'];
+// `graveGaze` sits directly under it and above everything the player is doing
+// with the controls, which is safe rather than contested: the state it belongs
+// to requires the seal to be nearly stationary, so a boost or a wind-up has
+// already ended the dwell that armed it by the time either could claim the
+// frame. Above them so that a stray frame of drift cannot flicker the push.
+const PRIORITY = ['mainMenu', 'deathFloor', 'deathFall', 'deathHit', 'bossReveal', 'graveGaze', 'boosting', 'charging', 'roundStart'];
 
 function cfg() {
   return CONFIG.cinecam ?? {};
@@ -413,6 +423,7 @@ function enter(name) {
   machine.to = resolve(name);
   machine.state = name;
   machine.hold = incoming.hold ?? 0;
+  machine.held = 0;
 
   // Nothing has been drawn yet — this is the state a run OPENS in, so it is
   // the starting condition rather than something to blend to. Blending here
@@ -478,7 +489,7 @@ export function cineEvent(name) {
 // Three ways it ends, so a forgotten release cannot strand the camera on a
 // fight nobody is having: the caller drops it (cineRevealDone, which boss.js
 // does when the ceremony lands, when the boss dies, when the fight is switched
-// off and on a run reset), the subject stops existing (see revealPoint), or the
+// off and on a run reset), the subject stops existing (see subjectPoint), or the
 // rig is reset.
 let reveal = { held: false, at: null };
 
@@ -515,17 +526,71 @@ export function cineRevealing() {
   return reveal.held && !!reveal.at;
 }
 
-// Where the reveal is pointing this frame, or null if there is nothing to
-// point at. Resolved once per frame and reused, because the subject is a
-// callback into another module and the goal reads it in two places.
-function revealPoint() {
-  if (!cineRevealing()) return null;
-  const p = reveal.at();
-  if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
-    cineRevealDone();
-    return null;
+// ---------------------------------------------------------------------------
+// THE GRAVE — the other shot that is not of the seal alone
+// ---------------------------------------------------------------------------
+// systems/graveGaze.js holds this while the player has stopped at a headstone.
+// It is a LATCH for the same reason the reveal is: it describes a mode the
+// player is in, not a moment that expires, and a shot on its own countdown
+// would let go under somebody who is still standing there reading.
+//
+// What it points at is NOT the stone. The seal can be up to a stone-height
+// above a marker standing on the bed, so a push-in on either one alone puts
+// the other off an edge; the callback returns a point along the line between
+// them and graveGaze.js owns how far along (CONFIG.gravesite.gaze.bias). The
+// rig therefore treats it exactly like the reveal — one subject, whose
+// position happens to be derived from two things.
+let gaze = { held: false, at: null };
+
+/**
+ * Frame the seal and the stone it has stopped at. Held until cineGazeDone.
+ *
+ * @param at  () => ({ x, y }) — read every frame, because the seal drifts
+ *            while it stands there and a point captured on the frame the push
+ *            started would leave the shot behind it.
+ */
+export function cineGaze(at) {
+  if (!cineEnabled()) return;
+  if (!cfg().states?.graveGaze || typeof at !== 'function') return;
+  gaze = { held: true, at };
+}
+
+/** Let go — the player swam off, or the run ended. */
+export function cineGazeDone() {
+  gaze = { held: false, at: null };
+}
+
+/** Is the frame currently holding a grave? For the tuner readout and the tests. */
+export function cineGazing() {
+  return gaze.held && !!gaze.at;
+}
+
+// Where the frame is pointing this frame, or null if there is nothing to point
+// at. Resolved ONCE per frame and reused, because each subject is a callback
+// into another module and the goal reads the answer in two places.
+//
+// The reveal outranks the gaze here as well as in PRIORITY, and the two have
+// to agree: a boss arriving while the player stands at a grave is the boss's
+// moment, and a state machine pointed at one subject while this function
+// returned the other would frame the grave under the reveal's own zoom.
+function subjectPoint() {
+  if (cineRevealing()) {
+    const p = reveal.at();
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+      cineRevealDone();
+      return null;
+    }
+    return p;
   }
-  return p;
+  if (cineGazing()) {
+    const p = gaze.at();
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+      cineGazeDone();
+      return null;
+    }
+    return p;
+  }
+  return null;
 }
 
 /** The lens comes out of the water: bead it up and let it dry. */
@@ -549,8 +614,10 @@ export function resetCineCamera() {
   machine.blendT = 1;
   machine.blendDur = 0.0001;
   machine.hold = 0;
+  machine.held = 0;
   pulse = { name: null, left: 0 };
   reveal = { held: false, at: null };
+  gaze = { held: false, at: null };
   // NOT the menu latch. A reset is "this run is starting from nothing", and the
   // one route that resets the rig while a menu is up is the menu's own Play —
   // where dropping the latch here would cut the frame to the opening shot on
@@ -589,6 +656,9 @@ function pick(signals) {
     charging: !!signals.strikeHeld,
     roundStart: pulse.name === 'roundStart' && pulse.left > 0,
     bossReveal: cineRevealing(),
+    // The latch systems/graveGaze.js holds while the seal is stopped at a
+    // stone. A mode, not a moment — see cineGaze.
+    graveGaze: cineGazing(),
   };
   for (const name of PRIORITY) {
     if (live[name] && c.states?.[name]) return name;
@@ -641,9 +711,9 @@ export function updateCineCamera(dt, ctx) {
   }
   // Resolved BEFORE pick(), because a subject that has gone (a boss killed
   // during its own reveal, an enemy list cleared by a reset) ends the reveal
-  // inside revealPoint — and the state machine has to see that on this frame
+  // inside subjectPoint — and the state machine has to see that on this frame
   // rather than hold a shot of empty water for one more.
-  const subject = revealPoint();
+  const subject = subjectPoint();
   const want = pick(ctx);
   if (want !== machine.state) enter(want);
 
@@ -675,7 +745,33 @@ export function updateCineCamera(dt, ctx) {
   // blend stays in authored space and the aspect is answered last, which also
   // means a resize moves the frame on the zoom spring rather than cutting.
   const af = cineAspectZoom();
-  const pz = p.zoom * af;
+
+  // THE CREEP — a state that goes on closing in for as long as it is held.
+  //
+  // Every other state in this file arrives and stops, which is right for a
+  // moment: a death beat, a boss arriving, the opening shot. One state is not
+  // a moment but a PLACE THE PLAYER HAS CHOSEN TO STAY (the grave), and there
+  // the arrival is the beginning of the shot rather than the end of it — the
+  // frame should go on tightening while they stand there, slowly enough that
+  // it is never the thing being watched.
+  //
+  // Written as a second, much slower target rather than as a longer blendIn,
+  // because the two are doing different jobs and want different curves: the
+  // blend is the MOVE onto the shot (a second or so, and it has to be over
+  // before the player wonders what happened), and this is the shot breathing
+  // in afterwards (tens of seconds, and nobody should be able to point at when
+  // it started). Declared per state, so a state with no `zoomHeld` behaves
+  // exactly as it always has.
+  const stateCfg = c.states?.[machine.state] ?? {};
+  let zoomWant = p.zoom;
+  if (machine.blendT >= 1 && (stateCfg.zoomHeld ?? 0) > 0) {
+    machine.held += dt;
+    const u = Math.min(1, machine.held / Math.max(0.01, stateCfg.creepFor ?? 10));
+    // Eased rather than linear, so the creep is fastest just after the arrival
+    // and settles into its ceiling instead of stopping dead at it.
+    zoomWant = p.zoom + (stateCfg.zoomHeld - p.zoom) * ease(u);
+  }
+  const pz = zoomWant * af;
   // FLOORED AT THE SAME 1.001 THE CLAMPS BELOW USE, because the aspect term can
   // otherwise invert the two limits. On a portrait phone `af` is about 0.26, so
   // a zoomMax of 3.55 scales to a CEILING of 0.92 — under the floor. Any aspect
@@ -694,6 +790,9 @@ export function updateCineCamera(dt, ctx) {
   // it means the two limits can never cross, which is the property worth having
   // rather than the argument about which branch happens to fire first.
   const zoomCeil = Math.max(1.001, (base.zoomMax ?? 3) * af, pz, (machine.from?.zoom ?? 0) * af);
+  // The creep's own ceiling is included above through `pz`, so a state that
+  // creeps past `zoomMax` is allowed to — the same licence a state that NAMES a
+  // zoom already has. What the cap still catches is the spring overshooting it.
   if (!rig.primed) {
     rig.zoom = clamp(pz, 1.001, zoomCeil);
     rig.zoomVel = 0;
@@ -749,7 +848,7 @@ export function updateCineCamera(dt, ctx) {
   // Both describe the player's swimming and the player's aim, and neither
   // means anything about a boss; the reveal state zeroes them in config.js in
   // any case, and this is the second lock on that door.
-  const onSubject = subject && machine.state === 'bossReveal';
+  const onSubject = subject && (machine.state === 'bossReveal' || machine.state === 'graveGaze');
   cineSubject.active = !!onSubject;
   if (onSubject) {
     cineSubject.x = subject.x;
@@ -944,5 +1043,6 @@ export function cineDebug() {
     y: rig.y,
     droplets: cineLens.droplets,
     revealing: cineRevealing(),
+    gazing: cineGazing(),
   };
 }

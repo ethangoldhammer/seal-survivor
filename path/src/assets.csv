@@ -14,7 +14,7 @@ clubIce,1,,biolum:clubIce,Cold Snap club - same model as club - keep equal
 clubZap,1,,biolum:clubZap,Zappy Club - same model as club - keep equal
 clubThrow,1,,biolum:hide,Hurler thrown club - same model as club - keep equal
 dumboOcto,1.9,,biolum:dumboOcto,
-eelCompanion,1.5,,biolum:eelCompanion,
+eelCompanion,1.875,,biolum:eelCompanion,
 enemyAbyssShark,2.62,,biolum:abyssHunter,night variant of enemyGreatWhite - keep these two equal
 enemyAnglerfish,2.5,,biolum:anglerfish,"3.4 fit x this = 8.5 on screen, between the dolphin (7.2) and the shark (10.1) - a chunky ambusher, not an apex body. Registered only: no enemies.csv row and no spawning.csv entry, so nothing places it in a wave yet."
 enemyBarracuda,1.78,,biolum:barracuda,

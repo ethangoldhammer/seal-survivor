@@ -24,11 +24,18 @@
 // which question is even asked. Without it the white swatch would be named in
 // the red band's words, and nothing about the file would look wrong.
 //
-// THE SEALS ARE THE OTHER HALF, and this is the part a colour table alone
+// THE SEALS CAN BE THE OTHER HALF, and this is the part a colour table alone
 // cannot do. A shape may borrow a member's NICKNAME or its ADJECTIVE — the
 // halves a seal name is built from (sealNameTable.js) — so a side with Phat
-// Tony in it can be Tony's Terrors or the Phat Terrors. That is a team named
-// after its players, which is what a team name mostly is.
+// Tony in it could be Tony's Terrors or the Phat Terrors.
+//
+// BOTH OF THOSE SHIP DISABLED. Ethan asked for the colour shape alone, so the
+// two member shapes in teamNames.csv carry `enabled` FALSE and a side is named
+// after the strip it is wearing. The machinery below is untouched and still
+// tested — the member tokens, the one-seal rule, the "a shape that cannot be
+// filled is not drawn" rule — because turning a row back on is a cell in a
+// table, and a mechanism deleted to match today's roster is a mechanism
+// somebody has to write again.
 //
 // Columns (order doesn't matter, unknown columns are ignored):
 //   id       a short handle for the row. Must be unique; never shown.

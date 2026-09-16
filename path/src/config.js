@@ -1168,6 +1168,47 @@ export const CONFIG = {
           defocus: 0.7, focusRadius: 0.3, focusFeather: 0.35, flare: 0.5, vignette: 0.45,
         },
 
+        // --- stopping at a grave ---------------------------------------------
+        // The push-in that answers a player who has stopped over a headstone
+        // and stayed there (systems/graveGaze.js holds the latch). SLOW at
+        // both ends, which is the whole character of it: `blendIn` here is
+        // three times the reveal's, so the frame CREEPS rather than arriving,
+        // and the blend out is longer still — swimming away from a grave
+        // should not feel like the camera letting go of you.
+        //
+        // The subject is a point between the seal and the stone, so nothing
+        // leads and nothing biases: those describe the seal's swimming and its
+        // aim, and both are nearly zero in a state that requires the animal to
+        // have stopped. The dead zone goes with them or the last units of the
+        // creep never happen.
+        //
+        // A MODEST ZOOM, under the reveal's. There are two things in this
+        // frame and they are a stone-height apart; punching in as hard as a
+        // boss arrival would put one of them off an edge, which is exactly the
+        // failure the shared subject point exists to avoid.
+        // THE ZOOM IS READ AGAINST THE LIVE BASE, NOT AGAINST 1. This shipped
+        // at 1.32 and read as nothing happening, because the tuned base zoom
+        // is 1.24 — a 6% tighter frame, eased in over a second and a half,
+        // through a spring deliberately set soft. Every number in this block
+        // is a push relative to whatever `base.zoom` is at the time, and the
+        // others say what "a push" means here: the round's opening shot is
+        // 2.24 and a boss arrival 1.5.
+        // ...AND IT KEEPS GOING. `zoomHeld` is a second, much slower target the
+        // frame eases toward for as long as the state is held, once the blend
+        // has landed — the only state in this file that does not simply arrive
+        // and stop, because it is the only one that is a place the player has
+        // CHOSEN to stay rather than a moment happening to them. The arrival
+        // is over in `blendIn`; this is the shot breathing in over the next
+        // `creepFor` seconds, slowly enough that nobody can point at when it
+        // started. Remove `zoomHeld` and the state is an ordinary push-in.
+        graveGaze: {
+          blendIn: 1.3, blendOut: 1.1,
+          zoom: 1.85, zoomHeld: 2.45, creepFor: 12,
+          stiffMul: 0.4, dampMul: 1.2, zoomStiffMul: 0.5, zoomDampMul: 1.25,
+          lookAheadMul: 0, aimBiasMul: 0, deadZoneMul: 0,
+          defocus: 0.55, focusRadius: 0.34, focusFeather: 0.4, flare: 0.1, vignette: 0.4,
+        },
+
         // NO foodChain STATE, ON PURPOSE. There was one — a 1.62 push-in held
         // for 1.1s — and it was a good shot for a rare event that turned out
         // not to be rare: a chain ceremony fires often enough that the rig
@@ -6790,6 +6831,102 @@ export const CONFIG = {
         },
       },
 
+      // --- THE ORBIT: charge circling the eel --------------------------------
+      // A handful of sparks flying a strange attractor centred on the companion,
+      // and the place the chain leaves from. systems/eelSparks.js is the whole
+      // mechanism and the reasoning; these are its numbers.
+      //
+      // AIZAWA SEEN DOWN ITS OWN AXIS — the same field and viewpoint as the
+      // `ring` storm in attractorStorms.csv. A sine would have been half the
+      // code and it reads as a gear: six evenly spaced particles at a fixed rate
+      // is a loop the eye finds in two seconds. An attractor never closes — the
+      // radius breathes by about 60% of its own mean and a spark now and then
+      // spirals in across the body before being flung back out to the rim.
+      sparks: {
+        enabled: true,
+        shape: 'aizawa', // 'aizawa' | 'lorenz' | 'thomas' — see systems/attractors.js
+        // HOW MANY, and the ability's one visible statement about its own size
+        // between cooldowns. The bolt's crackle ramp says it while the chain is
+        // on screen; this says it for the other two seconds.
+        count: 9,
+        countPerLevel: 1.5,
+        countMax: 20,
+        // A TUBE AROUND THE BODY, not a ring about a point. The attractor's z
+        // runs along the eel and its x sticks out sideways, so a spark travels
+        // the animal's whole length while it circles — see systems/eelSparks.js
+        // for which coordinate goes where and why the third one is brightness.
+        //
+        // `length` is the moray: fit 2.4 x size 1.875 = 4.5 world units nose to
+        // tail, measured rather than eyeballed, and set a little under it so
+        // the charge stays on the body instead of hanging off both ends. It is
+        // read off assets.csv rather than derived from it, so a resize of the
+        // animal is TWO edits — that row and these numbers — and an orbit that
+        // no longer fits its eel is the tell that only one of them happened.
+        length: 4.25,
+        radius: 1.25,  // how far the orbit stands off the body axis
+        // ...and WHERE ALONG THE BODY its middle sits, in world units from the
+        // companion's own origin, negative toward the tail. Not zero, and this
+        // is the one number here that is easy to leave wrong: a swimmer's
+        // origin is at its `pivot` (assets.js), which for the moray is 0.15 —
+        // fifteen percent back from the nose, so it turns by leading with its
+        // head. Centred on the origin the orbit wraps the eel's HEAD and leaves
+        // two thirds of the animal bare. 0.5 - 0.15 of 4.5 units is 1.575.
+        offset: -1.575,
+        // `rate` is attractor time and carries no length, so it is the one
+        // number here a resize leaves alone — a bigger orbit at the same rate
+        // is correctly a faster one. `speedCap` is world units a second and
+        // therefore is not: left where it was, it would clamp the larger orbit
+        // that the same rate now draws, and the effect would come out slower
+        // for being bigger.
+        rate: 2.5,
+        speedCap: 13.75,
+        // --- THE WIGGLE: one wave down the body, the way a moray swims -------
+        // A loopable travelling wave bending the whole cloud sideways. Not
+        // decoration on top of the attractor — it is what makes this charge
+        // belong to THIS animal rather than to a fish in general. The noise is
+        // four harmonics at integer frequencies, so it repeats exactly every
+        // `period` and never has a seam to hide.
+        wiggle: {
+          amp: 0.275,   // world units the wave throws a spark sideways
+          period: 1.1,  // seconds for one full loop
+          waves: 1.3,   // crests fitted along the body — about one, like an eel
+          jitter: 0.15, // how far a spark may drift off the shared wave. Small:
+                        // the wave is the animal's, and a big value turns one
+                        // body's undulation into a dozen unrelated squiggles.
+        },
+        // THE TAIL. `trail` samples over `trailSeconds`, kept in the EEL'S OWN
+        // FRAME — a world-space tail smears into a straight streak behind a
+        // swimming eel and the orbit disappears exactly when the player is
+        // moving. Longer than about 0.2s and the ring fills in solid.
+        trail: 9,
+        trailSeconds: 0.13,
+        // EVERYTHING ABOUT HOW IT LOOKS IS A SHARE OF THE BOLT'S OWN, rather
+        // than a second set of numbers: the charge and the discharge are the
+        // same electricity and one slider should move both. It is also the only
+        // version that survives a retune — the bolt's core is a slider Ethan
+        // moves, and absolute numbers here would quietly stop matching the arc.
+        // The halo's opacity is the bolt's outright, not even a share.
+        coreMul: 0.375, // x the bolt's core width
+        haloMul: 0.69,  // x the bolt's halo width
+        // Under 1 because a spark is a hint and the bolt is the event.
+        glow: 0.55,
+        haloGlow: 0.4,
+        // How far the hidden third coordinate dims a spark on the far side of
+        // the ring. 0 is a flat ring; too high and half the orbit vanishes.
+        depth: 0.45,
+        // THE DISCHARGE. Both decay together over `flareDecay` seconds: the
+        // orbit flashes and whips round as the chain leaves it, which is what
+        // makes the two one event instead of two.
+        flare: 2.6,      // brightness x at the instant it fires
+        flareRate: 2.2,  // ...and how much faster the orbit runs
+        flareDecay: 0.18,
+        // How many neighbouring sparks throw a short arc into the chain's first
+        // point. This is the "branches from the orbit" half: without it one
+        // spark reads as having been the charge all along.
+        feeders: 2,
+        feederStrength: 0.5, // those arcs' share of a full bolt's width and opacity
+      },
+
       // --- storm response ---------------------------------------------------
       // The eel reads weatherState.intensity (0..1) and scales its LOOK with it,
       // so a storm overhead makes the chain lightning visibly angrier. Purely
@@ -11293,7 +11430,23 @@ export const CONFIG = {
           // runs at about 60 degrees off, which is visibly reeling while still
           // closing. Past about 7 it swims away instead, which is a different
           // and worse thing than confusion.
-          veer: 4,
+          //
+          // 4 -> 5.4 WHEN THE BOSSES' TURN RATES WERE RAISED. This number is
+          // half of a tug of war and the other half just doubled: bossShark
+          // went 1.05 -> 2.6 rad/s, orca 2.4 -> 3.2, mosasaur 1.15 -> 2.5,
+          // hammerhead 1.95 -> 3.0 (enemies.csv, alongside dropping the
+          // bosses' come-about for an arc). A body that corrects twice as fast
+          // takes the same push off half as far, so at 4 the weave collapsed
+          // from 19.4 degrees clear of an unveered daze to 9.2 — under the
+          // 14.3 npm run test:bossperks holds it to, and on screen a daze that
+          // had stopped reading as one.
+          //
+          // 5.4 is measured, not nudged: against the same 48 seeds it restores
+          // 19.6 degrees, which is the number the old turn rate gave. RAISE IT
+          // WITH ANY FUTURE TURN-RATE RETUNE — the test is the only thing that
+          // notices, because the failure is a daze that still slows and no
+          // longer weaves, which looks deliberate.
+          veer: 5.4,
           veerRate: 2.2,
           // A cancelled wind-up waits this long past the end of the daze before
           // it may telegraph again. Deliberately short: the player bought a
@@ -14468,7 +14621,7 @@ export const CONFIG = {
         // is the archetype a run is allowed to OPEN on (see bosses.csv), so it
         // is the one that has to teach the lesson cleanly: a boss commits, and
         // moving sideways works.
-        lunge: { range: 20, minRange: 9, windup: 0.85, windSpeedMul: 0.35,
+        lunge: { maxPitch: 1.45, range: 20, minRange: 9, windup: 0.85, windSpeedMul: 0.35,
                  speedMul: 3.4, strikeTime: 1.1, strikeTurnRate: 0.35,
                  cooldown: 5.0, veerSwing: 0.7, damageMul: 4,
                  patterns: { pass: 0.4, double: 0.3, feint: 0.3 } },
@@ -14485,7 +14638,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { weavePeriod: 9, weaveLead: 11, weaveAmp: 3.6, weaveBody: 0.07, wanderPitch: 0.1, cruise: false } },
+                lateral: { weavePeriod: 9, weaveLead: 11, weaveAmp: 3.6, weaveBody: 0.07, wanderPitch: 0.1, cruise: false, flipSpeedMul: 1, flipHold: 0.3, flipOnCross: true, cruisePitch: 1.05 } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         spawnGroup: 'apex shark',
     },
@@ -14695,7 +14848,7 @@ export const CONFIG = {
         // twice the mid-run lean. It is the chasing boss whose commitment you
         // have to dodge LATE.
         // 7 x 3.0 x 1.0 = 21 units of run against a 20-unit gap.
-        lunge: { range: 20, minRange: 8, windup: 0.7, windSpeedMul: 0.4,
+        lunge: { maxPitch: 1.45, range: 20, minRange: 8, windup: 0.7, windSpeedMul: 0.4,
                  speedMul: 3.0, strikeTime: 1.0, strikeTurnRate: 0.55,
                  cooldown: 4.4, veerSwing: 0.8, damageMul: 5,
                  patterns: { pass: 0.3, double: 0.5, feint: 0.2 } },
@@ -14711,7 +14864,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { weavePeriod: 6.5, weaveLead: 9, weaveAmp: 2.8, weaveBody: 0.09, wanderPitch: 0.13, cruise: false } },
+                lateral: { weavePeriod: 6.5, weaveLead: 9, weaveAmp: 2.8, weaveBody: 0.09, wanderPitch: 0.13, cruise: false, flipSpeedMul: 1, flipHold: 0.3, flipOnCross: true, cruisePitch: 1.15 } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex` and NOT `shark` — it holds an apex slot for the fight like
         // any other big body, but it is not one of the sharks and must not eat
@@ -14763,7 +14916,7 @@ export const CONFIG = {
         // is that it hits you SOMEWHERE ELSE (see `playerKnockback` below), and
         // an attack that pins you in place for two seconds is the exact
         // opposite verb. It throws; the other three hold.
-        lunge: { range: 18, minRange: 8, windup: 0.6, windSpeedMul: 0.4,
+        lunge: { maxPitch: 1.45, range: 18, minRange: 8, windup: 0.6, windSpeedMul: 0.4,
                  speedMul: 3.0, strikeTime: 0.95, strikeTurnRate: 0.7,
                  cooldown: 4.0, veerSwing: 0.85, damageMul: 6,
                  patterns: { pass: 0.4, double: 0.4, feint: 0.2 } },
@@ -14806,7 +14959,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { weavePeriod: 5.5, weaveLead: 8, weaveAmp: 2.4, weaveBody: 0.1, wanderPitch: 0.14, cruise: false } },
+                lateral: { weavePeriod: 5.5, weaveLead: 8, weaveAmp: 2.4, weaveBody: 0.1, wanderPitch: 0.14, cruise: false, flipSpeedMul: 1, flipHold: 0.3, flipOnCross: true, cruisePitch: 1.15 } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex shark` — unlike the orca and the mosasaur, this one genuinely
         // is a shark and belongs under the shark family's tighter ceiling.
@@ -14974,7 +15127,7 @@ export const CONFIG = {
         // gape over 1.68s — and until now that clip played over a per-second
         // drain that did not care where the head was. The clip is the pay-off
         // of the run now, and `grab` is what the pay-off can become.
-        lunge: { range: 20, minRange: 9, windup: 0.9, windSpeedMul: 0.35,
+        lunge: { maxPitch: 1.4, range: 20, minRange: 9, windup: 0.9, windSpeedMul: 0.35,
                  speedMul: 3.4, strikeTime: 1.15, strikeTurnRate: 0.32,
                  cooldown: 5.2, veerSwing: 0.7, damageMul: 4,
                  patterns: { pass: 0.4, double: 0.2, feint: 0.4 } },
@@ -14991,7 +15144,7 @@ export const CONFIG = {
                 // fight you could stand still and ignore. It keeps every other
                 // line of this block — the flattening and the weave are what a
                 // big body swimming looks like, and are not about pursuit.
-                lateral: { weavePeriod: 11, weaveLead: 13, weaveAmp: 4.2, weaveBody: 0.06, wanderPitch: 0.09, cruise: false } },
+                lateral: { weavePeriod: 11, weaveLead: 13, weaveAmp: 4.2, weaveBody: 0.06, wanderPitch: 0.09, cruise: false, flipSpeedMul: 1, flipHold: 0.3, flipOnCross: true, cruisePitch: 1.0 } },
         weight: 0, spawnRateMul: 0, maxConcurrent: 1,
         // `apex` and not `apex shark` — it is an apex body holding an apex slot,
         // but a mosasaur is a reptile and must not eat the shark family's much
@@ -21666,9 +21819,13 @@ export const CONFIG = {
         'musselBlast', 'musselBarrage', 'missileImpact', 'clubBoom',
         'infectionBurst', 'pearlBurst', 'octoPop',
 
-        // WEATHER THAT HITS THE WATER. Not a hit at all, and it belongs with
-        // the explosions: it is the arena itself doing something.
-        'lightningStrike',
+        // WEATHER THAT HITS THE WATER was here — `lightningStrike` — and it is
+        // deliberately gone. Its shake is tuned to 0: the strike carries its
+        // glow, its ripple and its thunder, and the camera stays put. A name on
+        // this list with nothing to give is a row promising a move it cannot
+        // make, which is exactly what npm run test:shake objects to; the guest
+        // list is for events that actually keep the camera. Put it back the day
+        // the shake goes back above 0.
       ],
       // The A/B kill switch for every hit-stop in the game, separate from the
       // scale so that turning it off and back on doesn't cost you the tuned
@@ -22751,6 +22908,33 @@ export const CONFIG = {
         color: 0xd9d2c4,
     },
 
+      // --- stopping in front of one ---------------------------------------------
+      // The caption above comes up on a swim-past; this is what happens if you
+      // STAY. systems/graveGaze.js, and its header has the argument for why the
+      // three conditions live in one place rather than beside each thing that
+      // asks them.
+      gaze: {
+        enabled: true,
+        // How long all three have to hold before the frame starts moving. Long
+        // enough that crossing the yard mid-fight never takes the camera,
+        // short enough that stopping on purpose is answered rather than
+        // waited out. It is deliberately not zero — a push-in on arrival would
+        // fire on every player who happened to drift through slowly.
+        hold: 0.5,
+        // ...and how slow counts as stopped, in world units per second,
+        // against a top speed of about 34. This is the half that makes it
+        // "stopping to look at" rather than "swimming past": the whole radius
+        // is under half a second wide at speed, so a dwell clock without it
+        // would only ever fire by accident. Loose enough that holding station
+        // in a current, or nudging the stick to stay put, still counts.
+        stillSpeed: 4,
+        // Where the frame sits on the line from the seal to the top of the
+        // stone. 0 is the animal, 1 is the marker; a little past halfway puts
+        // the inscription comfortably in shot without making the seal a
+        // passenger in its own frame.
+        bias: 0.45,
+    },
+
       // --- the impact ------------------------------------------------------------
       impact: {
         enabled: true,
@@ -23526,12 +23710,102 @@ export const CONFIG = {
           follow: 0,
           blendFrom: 0,
         },
-        finsUp: { up: 0.85, fore: 0.35, spread: 0.3, tremble: 0.04, trembleHz: 9, headUp: 0.45, headFore: 0.8 },
-        flip: { turns: 1, tuck: 0.35, tuckUp: 0.1, tuckFore: -0.25 },
+        // EVERY POSE CAN CARRY A `bubbles` BLOCK, and what each one asks for
+        // is a reading of the pose rather than a decoration on it: a burst at
+        // a phase is a contact or an effort, a rate is something ongoing. See
+        // systems/poseBubbles.js for the two cadences and why neither
+        // substitutes for the other. A pose with no block emits nothing, which
+        // is the right default — the swimming bubbles are still running
+        // underneath all of this.
+        finsUp: {
+          up: 0.85, fore: 0.35, spread: 0.3, tremble: 0.04, trembleHz: 9, headUp: 0.45, headFore: 0.8,
+          // One puff as the flippers reach the top. Off the mouth, because the
+          // throw is an effort and the animal is making it.
+          bubbles: { enabled: true, from: 'mouth', rate: 1.5, scale: 0.9, bursts: [{ at: 1, count: 6, scale: 1.2 }] },
+        },
+        flip: {
+          turns: 1, tuck: 0.35, tuckUp: 0.1, tuckFore: -0.25,
+          // THE ONE POSE THAT IS MOSTLY RATE. A somersault is continuous
+          // motion through water, so a single puff says nothing about it and a
+          // stream off the tips draws the whole arc — which is also the only
+          // way the turn reads at all in a still.
+          bubbles: {
+            enabled: true, emitter: 'wakeBubbles', from: 'fins', rate: 26, scale: 0.75, maxPerFrame: 4,
+            bursts: [{ at: 0.2, count: 4, from: 'tail', scale: 1.1 }],
+          },
+        },
         // `beats` is an ODD QUARTER on purpose — see POSES.tailWag. On 2.5 the
         // sweep is at a zero crossing exactly when the trophy is taken.
-        tailWag: { sweep: 0.95, beats: 2.25, fore: -0.85, finUp: 0.35, finFore: 0.15, finSpread: 0.45, headUp: 0.35, headFore: 0.8 },
-        headToss: { up: 0.8, fore: 0.35, finUp: -0.15, finFore: -0.35, finSpread: 0.5 },
+        tailWag: {
+          sweep: 0.95, beats: 2.25, fore: -0.85, finUp: 0.35, finFore: 0.15, finSpread: 0.45, headUp: 0.35, headFore: 0.8,
+          // Off the tail, which is the part doing the work.
+          bubbles: { enabled: true, emitter: 'wakeBubbles', from: 'tail', rate: 14, scale: 0.8 },
+        },
+        headToss: {
+          up: 0.8, fore: 0.35, finUp: -0.15, finFore: -0.35, finSpread: 0.5,
+          // A bark, so the burst is the loudest of the five and lands with the
+          // head at the top of its throw.
+          bubbles: { enabled: true, from: 'mouth', rate: 0, scale: 1.3, bursts: [{ at: 1, count: 12, scale: 1.4 }] },
+        },
+
+        // THE SALUTE, at a headstone. Pressed rather than rolled, so it is not
+        // in `weights` above — see systems/salute.js.
+        //
+        // The saluting flipper's three numbers are measured FROM THE HEAD,
+        // which is the one target in this block that is not anchored at its
+        // own limb's root: `browUp`, `browFore` and `browOut` are offsets from
+        // the solved tip of the head chain, in the FLIPPER's own reach. See
+        // POSES.salute for why a hand-typed height cannot stay on a brow that
+        // moves.
+        //
+        // `browOut` is the one to reach for first if the flipper reads as
+        // going THROUGH the head: it holds the touch a tenth of a reach out
+        // along the camera axis, which is the axis the side view cannot show.
+        // The pose lab's front and top views are the place to judge it
+        // (npm run looks:poselab).
+        salute: {
+          browUp: 0.06, browFore: 0, browOut: 0.1,
+          // MEASURED, and the two of them are one number: the right shoulder
+          // sits 2.28 from the head chain's tip when the head is thrown
+          // forward, against a flipper reach of 1.90 — so at the head pose the
+          // other victory shapes use, the salute is asking for a touch the arm
+          // cannot physically make, and the solver stops a fifth of a body
+          // length short with nothing to say about it. Bringing the head down
+          // and back is what puts the brow inside the flipper's reach; at 0.5
+          // and -0.2 the tip finishes 0.53 from the head's own tip, which is
+          // the brow rather than the snout.
+          headUp: -0.2, headFore: 0.5,
+          // The flipper that is not saluting, held down along the body. A
+          // second raised one is a wave.
+          offUp: -0.22, offFore: -0.18, offSpread: 0.3,
+          tailUp: -0.15, tailFore: -0.9,
+          // Where the fallback goes on a model with no head chain.
+          up: 0.5, fore: 0.6, spread: 0.16,
+          // MOST OF THE WAY TO THE POSE, unlike the block's 0.25. A salute is
+          // a contact like the clap is, and a quarter of the swim cycle
+          // surviving inside it is a flipper that never quite arrives — but
+          // unlike the clap this one is HELD for over a second, and at 0 it is
+          // a statue. A tenth keeps the animal breathing under it.
+          follow: 0.1,
+          // HOW MUCH OF THE HEADING THE POSE OWNS (celebrationFacing). 1 is
+          // upright and square to the stone; under it the seal leans toward
+          // the grave without committing, which is worth having as a dial
+          // rather than as an edit.
+          faceWeight: 1,
+          // The water's half of it. A small puff off the mouth as the flipper
+          // arrives, and a slow leak through the hold so a held pose is not a
+          // still frame. See systems/poseBubbles.js.
+          bubbles: {
+            enabled: true,
+            emitter: 'breathBubbles',
+            from: 'mouth',
+            rate: 2.5,
+            scale: 0.8,
+            bursts: [
+              { at: 0.95, count: 5, from: 'mouth', scale: 1.15 },
+            ],
+          },
+        },
       },
 
       // THE SEAL TEAM JOINS IN. The escorts are a different model with a real
@@ -23586,6 +23860,24 @@ export const CONFIG = {
       // 1 the flippers keep some of where they were pointing, which reads as a
       // half-hearted clap rather than as a subtler one.
       weight: 1,
+
+      // THE WATER, ON THE CONTACT. Authored exactly like a celebration's — see
+      // systems/poseBubbles.js — and keyed to `t`, which for this system is
+      // the whole animation: 1 is the flippers touching.
+      //
+      // A BURST AND NO RATE, deliberately. The gesture is a fifth of a second
+      // and it can be played to a beat, so a stream would be a permanent
+      // haze under fast clapping rather than a reading of each clap. The
+      // count is small for the same reason: twelve claps in a bar is twelve of
+      // these, and they add up whether the tuning says so or not.
+      bubbles: {
+        enabled: true,
+        emitter: 'wakeBubbles',
+        from: 'fins',
+        rate: 0,
+        scale: 0.7,
+        bursts: [{ at: 0.92, count: 4 }],
+      },
 
       // The IK the pose solves through. The aim rig's numbers with the stops
       // opened up, exactly as CONFIG.celebrate.ik does and for the same
@@ -23661,6 +23953,57 @@ export const CONFIG = {
         headFore: 0.7,
         headWeight: 0.6,
       },
+    },
+
+    // ---------------------------------------------------------------------------
+    // THE SALUTE — the same button, in front of a headstone. systems/salute.js.
+    //
+    // NOT CONFIG.levelUp.salute, which is an older use of the word: that block
+    // is the beat the level-up holds while the seal does SOMETHING (it rolls
+    // one of the victory shapes), and it has no flipper-to-brow in it. This one
+    // is the gesture itself. The two never meet — different callers, different
+    // clocks, different poses — but the name is shared, so check which block
+    // you are in before moving a number between them.
+    //
+    // WHY IT IS A CELEBRATION AND THE CLAP IS NOT. The clap needed a system of
+    // its own because it has to be re-firable mid-stroke and must not
+    // anticipate (see the header there). This is the opposite of both: it is
+    // one deliberate gesture, it is HELD, and a second press while it is up is
+    // a player pressing again rather than a rhythm — so it goes through
+    // playCelebration like the boss lap and the level-up pose, with its own
+    // clock, and inherits the momentum, the anti-ratchet and the blend-out
+    // that file already owns.
+    //
+    // ITS TIMING IS NOT THE KILL SHOT'S. The default peak there is derived
+    // from the trophy shutter, which is over a second in — right for a
+    // photograph and much too slow for a gesture answering a button.
+    // ---------------------------------------------------------------------------
+    salute: {
+      enabled: true,
+      // WALL seconds, like every other pose clock.
+      //
+      // Slower than the clap's attack by a lot, and that is the gesture: a
+      // salute that snapped up in four frames would be a flinch. Still inside
+      // half a second, so it answers the press rather than playing at the
+      // player.
+      peakAt: 0.42,
+      // Held, which is the whole point — it is a pose you stand in, not a
+      // stroke you play. Long enough to read at a glance and to photograph.
+      hold: 1.4,
+      release: 0.55,
+      // A floor on re-pressing, same idea as the clap's: not a cooldown, a
+      // throttle against auto-repeat. A press DURING a salute is refused
+      // outright (see systems/salute.js) — re-entering one would re-capture
+      // the entry snapshot in the saluted pose, which is the ratchet
+      // systems/poseRig.js exists to prevent.
+      minGap: 0.25,
+      // HOW FAR THE UPRIGHT LEANS TOWARD THE STONE. The facing is built as
+      // (lean toward the grave, 1): at 0 the seal stands perfectly vertical
+      // and the side it faces is decided by rounding, at 1 it is at
+      // forty-five degrees. A quarter is upright with the nose plainly turned
+      // toward the marker, which is also enough for the mirror to resolve
+      // which way round the animal should be belly-first.
+      lean: 0.25,
     },
 
     // ---------------------------------------------------------------------------
@@ -26255,6 +26598,34 @@ export const CONFIG = {
         tapMaxMs: 250,    // a press held longer than this is a stick grab, not a tap
         tapSlop: 16,      // px the tap may drift and still count as a tap
     },
+
+      // THE SEAL IS THE CLAP BUTTON. A phone has no X button to put the
+      // gesture on, and the animal is the one thing on screen the player is
+      // already looking at — so touching it is the press. In front of a
+      // headstone the same touch salutes, exactly as the key and the pad
+      // button do; see systems/salute.js for why that is one gesture and not
+      // two.
+      //
+      // It fires on the way DOWN (input.js, beginTouch) and it owns the
+      // circle outright: a double-tap that lands on the seal claps twice
+      // rather than charging a strike. The strike keeps the whole rest of the
+      // glass, which is nearly all of it.
+      clap: {
+        enabled: true,
+        // Multiple of the seal's own hitRadius, put through the camera. The
+        // body is longer than that circle and the target should cover it, so
+        // this is comfortably over 1.
+        grow: 2.2,
+        // ...but never smaller than a fingertip, whatever the zoom is doing.
+        // The seal is about a unit across and the camera fits 52 of them into
+        // the height of the screen, so on a phone the projected circle is a
+        // few tens of pixels and this floor is what is actually in play.
+        minPx: 46,
+        // And never bigger than this, so a zoomed-in camera (a boss kill, a
+        // chain) cannot quietly turn most of the glass into a clap button and
+        // swallow the strike's double-tap with it.
+        maxPx: 120,
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -29509,6 +29880,31 @@ export const CONFIG = {
         // frame it comes apart. Enough to read as mass, not enough to close
         // the gaps that make it six pieces.
         burstSwell: 0.85,
+
+        // --- AND THE ONE THE PLAYER IS POINTING AT --------------------------
+        //
+        // A designated spot takes the whole volley (see CONFIG.homing.hotSpots
+        // and aimHotSpots), and a lock the player cannot see is a lock they
+        // cannot use: they would be aiming at a light, watching pellets curve,
+        // and guessing at the connection between the two. The ring is already
+        // the thing that says WHERE, so it is the thing that says WHICH.
+        //
+        // ON THE RETICLE AND NOT ON THE LIGHT. The glow is painted on the
+        // animal's hide by the shell shader, which means brightening it there
+        // costs a uniform per spot and reads as the wound changing rather than
+        // as a mark being placed on it. The ring is a readout drawn in front of
+        // the body and is free to say something about the player's intent.
+        //
+        // A MULTIPLIER ON WHAT THE RING ALREADY DOES, so a spot that is also
+        // being hit still shows its flash on top: the lock is the quieter of
+        // the two statements and must not swallow the loud one.
+        lockGlow: 1.7,
+        lockSwell: 0.55,
+        // ...and it turns faster. The one property of this ring that nothing
+        // else in the fight uses, so it cannot be confused with a hit, a heat
+        // level or a rupture — and rotation reads at fight scale on a mark this
+        // small where another few percent of brightness does not.
+        lockSpin: 3.2,
       },
     },
   },
@@ -29598,6 +29994,52 @@ export const CONFIG = {
       // under. Fails the test and the shot aims at the body instead, which is
       // the behaviour every seeker had before this existed.
       clearance: 0.25,
+
+      // --- THE SPOT THE PLAYER POINTED AT ---------------------------------
+      //
+      // Everything above decides where ONE pellet goes on its own. These
+      // decide when the player takes the decision away from all of them at
+      // once: aim across a light and the whole volley works that light. See
+      // aimHotSpots in systems/bossHotSpots.js for the mechanism and
+      // entities/projectiles.js for the seeker that obeys it.
+
+      // HOW CLOSE THE AIM BEAM HAS TO PASS TO CLAIM A SPOT, in multiples of
+      // that spot's own radius — 1 is the beam going through its edge.
+      //
+      // Relative and not absolute because a weak spot's size varies by four to
+      // one across the roster (hotSpots.minRadius to maxRadius): one world
+      // distance would make a small light unclaimable and a big one magnetic,
+      // and the player would experience that as the aim working on some bosses.
+      // Above 1 on purpose — the reticle sits a fixed distance out along the
+      // aim (systems/aimIndicator.js) and is not a range-finder, so asking for
+      // a beam that visibly crosses the light is asking for precision the
+      // indicator does not offer.
+      aimGrab: 2.2,
+      // ...AND HOW FAR IT MAY WANDER BEFORE THE CLAIM DROPS. One number for
+      // both was the first version and it flickered: a hand holding still
+      // still moves a pixel, and a spot crossing its own boundary twice a
+      // second split the volley between the light and the body centre — which
+      // is exactly the fault this whole mechanism exists to remove, arriving
+      // by a different route. Clamped up to `aimGrab` in code, so the two can
+      // never be set the wrong way round.
+      aimRelease: 3.6,
+      // HOW MUCH NEARER ANOTHER SPOT HAS TO BE TO TAKE A HELD CLAIM, as a
+      // fraction of where the held one is. The other half of the same anti-
+      // flicker: a boss can wear two lights on one flank a couple of spot-radii
+      // apart, and on plain nearest-wins a hand holding still crosses between
+      // them several times a second — the release cone above never gets a say,
+      // because neither spot ever leaves it. At 0.6 a new light has to be
+      // clearly the one being pointed at, which makes changing target something
+      // the player does rather than something that happens.
+      aimSwap: 0.6,
+      // HOW SQUARELY A CLAIMED SPOT MUST STILL FACE THE SHOT. The looser twin
+      // of `facing` above, and negative on purpose: `facing` is a rule about a
+      // pellet choosing for itself, where a light on the far flank is a trap;
+      // this is a rule about honouring a choice the player made and can see
+      // drawn on the water, and it should give way only when the body is
+      // genuinely in front of the light. At -0.35 a spot the shot has come
+      // round the shoulder of is still worked.
+      aimFacing: -0.35,
     },
   },
 
@@ -29692,6 +30134,51 @@ export const CONFIG = {
     flipSpeedMul: 0.5,   // swim speed through the come-about
     flipHold: 0.8,       // seconds after a come-about before it may do another
   },
+
+  // -------------------------------------------------------------------------
+  // WHY THE FOUR SWIMMING BOSSES TURN AT FULL SPEED, AND IN THREE DIMENSIONS.
+  // -------------------------------------------------------------------------
+  // Three overrides on each archetype's `hunt.lateral`, and all three are
+  // opt-outs of behaviour that is right for wildlife and wrong for a boss.
+  //
+  //   flipSpeedMul: 1  the come-about costs NO SPEED, and the lockout after it
+  //   flipHold: 0.3    is cut to a third of a second rather than removed.
+  //                    A shark asked to reverse MIRRORS its heading in one
+  //                    frame and yaws the body through the camera (systems/
+  //                    fishTurn.js) at half speed, then refuses another for
+  //                    `flipHold`. The mirror itself is kept and is not the
+  //                    problem — arcing instead sweeps the heading through
+  //                    VERTICAL, which is a body standing on its tail, and is
+  //                    the whole reason the come-about was written. It was
+  //                    tried: bosses spent 270-560 frames a fight at a steepest
+  //                    90 degrees. What is wrong for a boss is that the turn is
+  //                    a STOP — the throttle and the lockout — and that
+  //                    `npm run gates` measured 17-26% of a fight spent
+  //                    mid-turn and unable to commit. At full speed the same
+  //                    manoeuvre is a body turning WHILE it swims, which is
+  //                    the whole ask.
+  //
+  //                    THE HOLD IS NOT PART OF THE STOP and must not go to 0.
+  //                    It is what stops a body sitting on top of what it wants
+  //                    from seeing the wanted direction reverse every frame and
+  //                    mirroring on every one of them — measured at 0, that is
+  //                    a boss vibrating in place with its yaw never finishing,
+  //                    and it read as 140-260 frames a fight pointing straight
+  //                    up. A third of a second is long enough to stop the
+  //                    thrash and far too short to feel like a lockout.
+  //
+  //   cruisePitch      the shared lateralCruise.cruisePitch is 0.42 rad (24
+  //                    degrees), which is what makes a shark's cruise read as
+  //                    left-and-right with the vertical reserved for its lunge.
+  //                    A boss is not making passes across a tank, it is hunting
+  //                    you in open water: at ~1.1 rad its approach is allowed
+  //                    most of the sphere and its turns bank through three
+  //                    dimensions instead of pivoting in a plane.
+  //
+  // The three are one change. The pitch without the free turn is a body that
+  // still stops to come about, and the free turn without the pitch is a fast
+  // flat pivot — neither on its own reads as swimming.
+  // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
   // THE LUNGE IS THE DANGER. Shared rules for every def carrying a `lunge`
@@ -35454,15 +35941,37 @@ export const CONFIG = {
     // than swum to.
     stationInset: 0.42,
     // HOW MUCH FURTHER A HUNTER NOTICES A BALL than a single fish, as a
-    // multiplier on its own `hunt.preyRadius`. This is what makes the tug of
-    // war happen at all rather than being wired and inert.
+    // multiplier on its own `hunt.preyRadius`. This is what keeps the tug of
+    // war happening rather than being wired and inert — LATE. Early it does
+    // nothing, and that is not a fault in it.
     //
-    // Measured at 1x (i.e. before this existed): a shark dropped five units
-    // from a ball made one pass, took one fish, carried on past on its cruise
-    // — a hunter spends only a fraction of its turn rate on prey, see
-    // CONFIG.cruiseHunt — and at thirty units out was beyond its own 15-unit
-    // preyRadius with nothing to bring it back. It cruised open water for the
-    // remaining forty seconds. One mouthful per ball is not an exchange.
+    // IT IS THE COUNTERWEIGHT TO CONFIG.hunterRamp.preyFocus, which is this
+    // same radius pulled from the other end: 4% of whatever is left shed per
+    // difficulty point, one point every twenty seconds. So the widening is
+    // only worth anything once the narrowing has happened, and the honest
+    // description of this row is not "the mechanic" but "the thing that stops
+    // the ramp from quietly deleting the mechanic at minute ten".
+    //
+    // Measured, abyssShark, six seeds, the same fight at four points in a run
+    // — fish eaten from one ball, with no draw at all / on the plain radius /
+    // at this row's 2.5x:
+    //
+    //     difficulty 0   (0 min)   preyRadius 24.6    15 / 45 / 47
+    //     difficulty 6   (2 min)   preyRadius 20.8    11 / 46 / 47
+    //     difficulty 20  (7 min)   preyRadius 14.9    13 / 42 / 46
+    //     difficulty 40  (13 min)  preyRadius 10.6    22 / 21 / 38
+    //
+    // A plain 21-unit radius reaches a third of an 80-unit arena and the ball
+    // is leashed to a station inside it, so a cruising shark re-enters that
+    // circle on its own every few seconds and the widening has nothing left to
+    // add. At thirteen minutes the plain reach has collapsed onto the no-draw
+    // floor and this row is carrying the whole exchange on its own.
+    //
+    // The shark that makes one pass and never comes back — one mouthful per
+    // ball, which is not an exchange — is therefore the LATE one, not the
+    // first one the player meets. `npm run test:bait` measures both ends, and
+    // measured only the early one for a while, which is why it read this row
+    // as inert.
     //
     // It is also the truest number here: a ball of fish is a loud, thrashing,
     // visible mass, and real predators converge on one from a long way off.
@@ -37846,6 +38355,39 @@ export const CONFIG = {
       // The last piece is a little bigger — the top of the ladder and the end
       // of the vacuum land together.
       lastScale: 1.7,
+
+      // --- AND THE BLUE ORB'S OWN, over the numbers above --------------------
+      // The chunk and the orb are absorbed by the same machinery and are not
+      // the same sentence. A chunk is a BREAK — a lot of meat, going down
+      // slowly, and the length of the swallow is the reward. The blue orb is
+      // the pickup you take to GO AGAIN, and every tenth of a second of it is
+      // a tenth of a second the player is holding a direction with an empty
+      // bar. Absorbed on the chunk's clock it answered a second after it was
+      // touched, which is late enough that the strike you grabbed it for has
+      // already been cancelled.
+      //
+      // So it keeps the ladder, the curve and the piece rule, and takes its
+      // own TIMING. Only the keys it disagrees about are here; everything
+      // omitted follows the tuning above, which is the point of an overlay —
+      // retuning the ladder retunes both pickups, as it should.
+      orb: {
+        // THE BEAT BEFORE ANY OF IT MOVES (over CONFIG.fx.gooSuck.holdAt).
+        // Not zero: the hold is what makes the pull read as a pull rather than
+        // as the burst curving, and an orb whose goo homes on the frame it
+        // leaves has no burst at all. One frame over two, and then it comes.
+        hold: 0.04,
+        // HOW FAST THE PULL COMES ON (over CONFIG.fx.gooSuck.rampTime). The
+        // shared 0.8 is a mass being drawn in; it is also most of the delay,
+        // because a blob a fifth of a second into an 0.8 ramp is being pulled
+        // at a sixth of full strength and is still drifting outward. Cutting
+        // the hold alone moved the first pip by about half of what it looked
+        // like it should, which is this number's fingerprint.
+        ramp: 0.22,
+        // ...AND THE SPREAD ACROSS THE PIECES. Still a stream — the blips have
+        // to be countable or the bar and the ear stop agreeing — but a tight
+        // one: five pips at this spacing is a run, not a queue.
+        stagger: 0.16,
+      },
     },
 
     // --- AND THE SEAL ACTUALLY BITES IT ---------------------------------------
@@ -41851,6 +42393,23 @@ export const CONFIG = {
       tick: 0.8,          // wall seconds per numeral
       goHold: 0.6,        // the whistle's line stays this long, over live play
       inset: 0.16,        // seals start this share of the pitch width in from their own wall
+      // WHERE THE TWO SIDES STAND THIS TIME. A 1v1 has ONE formation spot per
+      // side, so the rotation that keeps a bigger roster moving (formationSlot
+      // in systems/sealRoster.js) is the identity for it and both seals opened
+      // every single kickoff of the match on the same two marks.
+      //
+      // So the whole formation is swung round the centre spot and pushed in or
+      // out a little, once per kickoff — an angle and a distance — and the two
+      // sides get the SAME roll mirrored across the halfway line, so whatever
+      // it hands one seal it hands the other. Nobody starts nearer the ball or
+      // higher in the water than their opponent; the pair of them simply do
+      // not start where they started last time.
+      //
+      // Set either to 0 to stand still. See kickoffScatter.
+      scatter: {
+        angle: 0.4,       // radians either way off the centre lane (~23 degrees)
+        distance: 0.15,   // ...and this share nearer or further from the ball
+      },
       // THE RECENTRE BEFORE THE COUNT — see versusState.settled. The frame
       // comes back from the goal it was punched into first, and only then
       // does "3" go up. `settle: false` starts the count on the frame the
@@ -41859,6 +42418,23 @@ export const CONFIG = {
       settleMax: 1.6,     // wall seconds the recentre may take before the count starts anyway
       settleTol: 1.5,     // world units the shot may still be short of its frame
       settleZoomTol: 0.03, // ...and the share of the zoom it may still be off by
+      // THE GATHER — the bodies' half of that same wait. A goal fires a
+      // shockwave out of the mouth (goalJet.blast) that throws every seal near
+      // it across the pitch, end over end and limp, and the kickoff used to
+      // undo the whole thing in one frame: positions, headings and tumble
+      // angles all written outright, four somersaulting animals teleported
+      // onto four marks. So the placement is EASED instead — each body travels
+      // from where the goal left it to where the kickoff wants it over this
+      // many WALL seconds, its heading and its belly roll turning with it and
+      // its tumble unwinding to level as it arrives. The count does not start
+      // until they are standing there.
+      //
+      // The marks themselves have not moved: this is the same placement
+      // arriving over a beat instead of on a frame. Set to 0 to have it back
+      // as a cut. A kickoff with nobody out of place — a match opening, a goal
+      // whose blast caught nobody — skips it rather than holding the count for
+      // a beat of nothing. See armGather.
+      gather: 0.6,
       bait: {
         perSide: 2,       // bait balls between each seal and the ball
         maxAlive: 8,      // no more dropped while this many balls are already in the water
@@ -41877,7 +42453,14 @@ export const CONFIG = {
       freeze: 0.35,       // held at freezeScale
       freezeScale: 0.04,
       ramp: 0.45,         // back to full speed over this
-      respawn: 1.3,       // the ball is back at centre
+      // THE BALL IS BACK AT CENTRE — and this is also how long the goal's
+      // shockwave has to throw the bodies about before the kickoff starts
+      // gathering them in, which is what it is really tuned against. The water
+      // is only at full speed from `freeze + ramp` (0.8s), so at the 1.3 this
+      // used to be, the blast's 1.6-second tumble (goalJet.blast.tumbleFor)
+      // had half a second of real time to spend and the kickoff took the rest
+      // of it away — the explosion was over before it had finished happening.
+      respawn: 2.4,
       fly: 1.45,          // the big number leaves for the HUD (after play has resumed)
       flyTime: 0.6,
       wonHold: 3.5,       // the end state holds this long, then the rematch prompt comes up
@@ -45452,6 +46035,24 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.states.bossReveal.flare', min: 0, max: 2, step: 0.02, label: 'boss reveal: flare' },
       { path: 'cinecam.states.bossReveal.vignette', min: 0, max: 1, step: 0.02, label: 'boss reveal: vignette' },
 
+      // Stopping at a grave. The blend times are the whole character of this
+      // one — it is meant to creep — and the dwell that arms it lives with the
+      // graveyard's own numbers (CONFIG.gravesite.gaze).
+      { path: 'cinecam.states.graveGaze.blendIn', min: 0.1, max: 4, step: 0.05, label: 'grave: push in over (s)' },
+      { path: 'cinecam.states.graveGaze.blendOut', min: 0.1, max: 4, step: 0.05, label: 'grave: let go over (s)' },
+      // Against the BASE zoom, which is 1.24 — a grave zoom near that is a
+      // push nobody can see. See the note in the state block.
+      { path: 'cinecam.states.graveGaze.zoom', min: 1.02, max: 2.8, step: 0.01, label: 'grave: zoom on arrival' },
+      // Where it goes on creeping to while you stand there, and over how long.
+      // Set `held` to the arrival zoom to switch the creep off.
+      { path: 'cinecam.states.graveGaze.zoomHeld', min: 1.02, max: 3.4, step: 0.01, label: 'grave: zoom if you stay' },
+      { path: 'cinecam.states.graveGaze.creepFor', min: 1, max: 40, step: 0.5, label: 'grave: creeps in over (s)' },
+      { path: 'cinecam.states.graveGaze.stiffMul', min: 0.05, max: 3, step: 0.05, label: 'grave: pan speed (x)' },
+      { path: 'cinecam.states.graveGaze.zoomStiffMul', min: 0.05, max: 3, step: 0.05, label: 'grave: zoom speed (x)' },
+      { path: 'cinecam.states.graveGaze.defocus', min: 0, max: 1, step: 0.02, label: 'grave: edge blur' },
+      { path: 'cinecam.states.graveGaze.focusRadius', min: 0.02, max: 0.8, step: 0.01, label: 'grave: sharp radius' },
+      { path: 'cinecam.states.graveGaze.vignette', min: 0, max: 1, step: 0.02, label: 'grave: vignette' },
+
       // The three death beats. `deathHit.hold` is also the handover point —
       // it's how long the hit lasts before the fall takes the frame. Framing
       // during a death still belongs to deathDive.js's push-in, which blends
@@ -46437,6 +47038,26 @@ export const TUNER_SCHEMA = [
       { path: 'clap.pose.headFore', min: -0.5, max: 1.2, step: 0.02, label: 'head: forward' },
       // 0 keeps the head out of it entirely without touching the fins.
       { path: 'clap.pose.headWeight', min: 0, max: 1, step: 0.05, label: 'head joins in' },
+    ],
+  },
+  {
+    // The same button, in front of a headstone (systems/salute.js). The TIMING
+    // is here; the SHAPE is not, for the same reason the victory lap's shapes
+    // are not — those numbers only read against each other and against the
+    // head they are measured from, so they are designed together on one page
+    // (npm run looks:poselab) rather than one slider at a time.
+    group: 'Salute',
+    section: 'Creature rigging',
+    items: [
+      { path: 'salute.enabled', type: 'bool', label: 'salute a grave instead of clapping' },
+      { path: 'salute.peakAt', min: 0.1, max: 1.5, step: 0.02, label: 'time to full extension' },
+      { path: 'salute.hold', min: 0, max: 4, step: 0.05, label: 'held' },
+      { path: 'salute.release', min: 0.05, max: 2, step: 0.05, label: 'time to let go' },
+      { path: 'salute.minGap', min: 0.05, max: 2, step: 0.05, label: 'fastest allowed salute' },
+      // 0 stands the seal perfectly vertical, which leaves which way it faces
+      // to rounding; a quarter turns the nose plainly toward the stone.
+      { path: 'salute.lean', min: 0, max: 1, step: 0.02, label: 'lean toward the stone' },
+      { path: 'celebrate.poses.salute.faceWeight', min: 0, max: 1, step: 0.05, label: 'how much of the heading it owns' },
     ],
   },
   {
@@ -47576,6 +48197,36 @@ export const TUNER_SCHEMA = [
       { path: 'eel.crackle.ramp.flicker', min: 0, max: 1, step: 0.05, label: 'ramp share: flicker & reshape' },
       { path: 'eel.crackle.ramp.branches', min: 0, max: 1, step: 0.05, label: 'ramp share: forks' },
       { path: 'eel.crackle.ramp.width', min: 0, max: 1, step: 0.05, label: 'ramp share: width' },
+      // The orbit. The charge circling the eel between discharges, and the
+      // place the chain leaves from — systems/eelSparks.js. `count` is the
+      // ability's one statement about its own size while nothing is firing, and
+      // the brightnesses are SHARES of the bolt glow above rather than numbers
+      // of their own, so the charge and the discharge move together.
+      { path: 'eel.sparks.enabled', type: 'bool', label: 'orbiting sparks' },
+      { path: 'eel.sparks.count', min: 0, max: 24, step: 1, label: 'sparks at level 1' },
+      { path: 'eel.sparks.countPerLevel', min: 0, max: 4, step: 0.5, label: 'sparks: per level' },
+      { path: 'eel.sparks.countMax', min: 1, max: 32, step: 1, label: 'sparks: ceiling' },
+      { path: 'eel.sparks.length', min: 0.5, max: 8, step: 0.1, label: 'orbit: along the body' },
+      { path: 'eel.sparks.radius', min: 0.1, max: 3, step: 0.05, label: 'orbit: off the body' },
+      { path: 'eel.sparks.offset', min: -3, max: 3, step: 0.02, label: 'orbit: slide along the body' },
+      { path: 'eel.sparks.wiggle.amp', min: 0, max: 1.5, step: 0.02, label: 'wiggle: how far' },
+      { path: 'eel.sparks.wiggle.period', min: 0.1, max: 4, step: 0.05, label: 'wiggle: loop length s' },
+      { path: 'eel.sparks.wiggle.waves', min: 0, max: 4, step: 0.1, label: 'wiggle: crests on the body' },
+      { path: 'eel.sparks.wiggle.jitter', min: 0, max: 1, step: 0.05, label: 'wiggle: spark to spark ±' },
+      { path: 'eel.sparks.rate', min: 0, max: 8, step: 0.1, label: 'orbit speed' },
+      { path: 'eel.sparks.speedCap', min: 1, max: 40, step: 0.5, label: 'orbit: speed cap' },
+      { path: 'eel.sparks.trail', min: 2, max: 24, step: 1, label: 'tail: samples' },
+      { path: 'eel.sparks.trailSeconds', min: 0.02, max: 0.5, step: 0.01, label: 'tail: how long' },
+      { path: 'eel.sparks.coreMul', min: 0.05, max: 2, step: 0.05, label: 'spark width (x bolt core)' },
+      { path: 'eel.sparks.haloMul', min: 0.05, max: 2, step: 0.05, label: 'spark halo (x bolt halo)' },
+      { path: 'eel.sparks.glow', min: 0, max: 2, step: 0.05, label: 'spark brightness (x bolt glow)' },
+      { path: 'eel.sparks.haloGlow', min: 0, max: 2, step: 0.05, label: 'spark halo brightness x' },
+      { path: 'eel.sparks.depth', min: 0, max: 1, step: 0.05, label: 'far side dims by' },
+      { path: 'eel.sparks.flare', min: 1, max: 8, step: 0.1, label: 'discharge: brightness x' },
+      { path: 'eel.sparks.flareRate', min: 1, max: 6, step: 0.1, label: 'discharge: orbit speed x' },
+      { path: 'eel.sparks.flareDecay', min: 0.02, max: 1, step: 0.01, label: 'discharge: how long' },
+      { path: 'eel.sparks.feeders', min: 0, max: 6, step: 1, label: 'arcs into the chain' },
+      { path: 'eel.sparks.feederStrength', min: 0.1, max: 1, step: 0.05, label: 'those arcs: strength' },
       // Storm response. Every one of these is a MULTIPLIER reached at full
       // storm and folded in as 1 + (mul - 1) * intensity, so 1 means "weather
       // changes nothing about this" and the sliders above stay the clear-sky
@@ -48728,6 +49379,14 @@ export const TUNER_SCHEMA = [
       { path: 'gravesite.label.nameSize', min: 8, max: 40, step: 1, label: 'label name size (px)' },
       { path: 'gravesite.label.causeSize', min: 6, max: 30, step: 1, label: 'label cause size (px)' },
       { path: 'gravesite.label.color', type: 'color', label: 'label ink' },
+
+      // Stopping in front of one. `hold` and `stillSpeed` are the two halves
+      // of "stopping to look at" — see CONFIG.gravesite.gaze — and `bias` is
+      // where the pushed-in frame sits between the seal and the stone.
+      { path: 'gravesite.gaze.enabled', type: 'bool', label: 'push in when you stop at a grave' },
+      { path: 'gravesite.gaze.hold', min: 0, max: 3, step: 0.05, label: 'how long you must stay (s)' },
+      { path: 'gravesite.gaze.stillSpeed', min: 0, max: 20, step: 0.5, label: 'how slow counts as stopped (units/s)' },
+      { path: 'gravesite.gaze.bias', min: 0, max: 1, step: 0.05, label: 'frame between seal (0) and stone (1)' },
       { path: 'gravesite.beam.enabled', type: 'bool', label: 'light the grave as you pass' },
       { path: 'gravesite.beam.strength', min: 0, max: 5, step: 0.05, label: 'beam brightness' },
       { path: 'gravesite.beam.width', min: 0.2, max: 10, step: 0.1, label: 'beam width (units)' },

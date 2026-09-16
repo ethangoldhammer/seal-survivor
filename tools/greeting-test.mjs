@@ -67,6 +67,11 @@ dom.window.HTMLCanvasElement.prototype.getContext = () => null;
 // a missing export is a SyntaxError at LINK time — one unstubbed name would
 // take the whole file down before a check runs. Same stub as
 // tools/callout-test.mjs, and for the same reason.
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -88,7 +93,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 globalThis.fetch = async () => ({ ok: false, status: 404 });
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { actionForKey, stickDeadzone } from './systems/settings.js';
-import { defaultDevice, shoulderLabel } from './devices.js';
+import { defaultDevice, shoulderLabel, faceLeftLabel } from './devices.js';
 import { versusActive, captainPad } from './systems/versusFlag.js';
 
 // There is no `firing` here any more. The seal shoots on its own — see
@@ -74,6 +74,10 @@ export const input = {
   // it starts re-enters itself rather than being sustained (see
   // systems/clap.js). A key held down does not clap continuously, which is
   // deliberate — auto-repeat is not a rhythm.
+  //
+  // On a phone there is no button to press, so the ANIMAL is the button: a
+  // touch that lands on the seal raises this on the frame it lands. See
+  // setSealTapTarget and the note in beginTouch.
   clap: false,
 };
 
@@ -217,6 +221,37 @@ const lastTap = { move: null, aim: null }; // { at, x, y }
 // release spends a full charge on nothing.
 let suppressStrikeRelease = false;
 
+// --- THE SEAL IS A BUTTON --------------------------------------------------
+// Where the animal is on screen, in the same CSS pixels a touch arrives in:
+// { x, y, r }, or null for "not right now". Published every frame by main.js
+// (setSealTapTarget) because only the run knows where the camera put the seal
+// and whether it is a thing to be touched at all — the main menu draws the
+// same animal and a press there already cycles what it is wearing.
+//
+// WHY A CIRCLE AND NOT A RAYCAST, which is the same answer mainMenu.js gives
+// for the bust: the body is a SkinnedMesh held in a pose its bind box does not
+// cover, so a ray can be rejected before a triangle is tested and the seal
+// ignores every other tap. A circle over the animal cannot fail that way.
+//
+// One frame stale at worst — the target is written before updateInput and read
+// by a touch that arrives after it, which at 60fps is a seal that has moved a
+// few pixels inside a target tens of pixels across.
+let sealTap = null;
+
+/**
+ * WHERE THE SEAL IS, FOR A THUMB. `{ x, y, r }` in CSS px, or null while there
+ * is nothing to tap. See CONFIG.touch.clap.
+ */
+export function setSealTapTarget(target) {
+  sealTap = target ?? null;
+}
+
+/** Did this contact land on the animal? False whenever there is no target. */
+function onSeal(clientX, clientY) {
+  if (!sealTap || CONFIG.touch.clap?.enabled === false) return false;
+  return Math.hypot(clientX - sealTap.x, clientY - sealTap.y) <= sealTap.r;
+}
+
 // --- multitouch, for the grid ----------------------------------------------
 // The sticks above care about ROLES — which half a thumb landed in, and what
 // that half does. This cares about FINGERS: every contact on the canvas, sticks
@@ -322,7 +357,13 @@ export function inputDevice() {
  * pads plugged in, the one being pressed is the one the words are about.
  */
 export function inputTokens() {
-  return { bumper: shoulderLabel(inputStatus.gamepadName) };
+  return {
+    bumper: shoulderLabel(inputStatus.gamepadName),
+    // The clap's button — CLAP_BUTTON is standard-gamepad index 2, the left of
+    // the four face buttons, so this and the binding cannot drift apart without
+    // somebody moving the clap.
+    faceLeft: faceLeftLabel(inputStatus.gamepadName),
+  };
 }
 
 export const inputStatus = {
@@ -561,11 +602,38 @@ function beginTouch(t) {
   const s = CONFIG.touch.strike ?? {};
   const now = performance.now();
 
+  // --- A TAP ON THE ANIMAL IS A CLAP ---------------------------------------
+  //
+  // ON THE PRESS, not on the lift, and that is the whole reason this is here
+  // rather than beside the tap bookkeeping in endTouch. The one thing this
+  // gesture has to do is land on a beat (see systems/clap.js, which will not
+  // even use an anticipation because a wind-up reads as the input being late);
+  // a finger is on the glass for 60 to 150ms before it comes off, and waiting
+  // for that is a gesture that is uniformly, audibly behind the music.
+  //
+  // WHAT IT COSTS, honestly: a thumb PLANTED on the seal to steer claps once
+  // on the way down. It is the same trade the salute makes — a gesture that
+  // costs nothing and changes nothing about the fight, in exchange for being
+  // immediate — and the alternative is being late every single time.
+  //
+  // The press goes on to drive its half's stick as it always did, so a plant
+  // that turns into a drag still steers. What it does NOT do is join the
+  // double-tap strike, at either end: it cannot pair with an earlier tap here,
+  // and it arms nothing on the way out (`onSeal` below, read in endTouch).
+  // Otherwise clapping to a beat would charge a dash on every second tap and
+  // launch it on the lift — a real shove, from a gesture that has no business
+  // moving the animal.
+  const seal = onSeal(t.clientX, t.clientY);
+  if (seal) clapRequested = true;
+
   // That half already has a thumb on it, so this is a finger BEYOND the two
   // sticks: the third-touch strike. Only one at a time — a fourth contact is
   // ignored rather than stealing the charge from the third.
+  //
+  // A finger on the seal is excepted for the reason above: it has already
+  // clapped, and a charge it never asked for would launch when it lifts.
   if (sticks[role]) {
-    if (s.thirdTouch && strikeTouchId === null) strikeTouchId = t.identifier;
+    if (s.thirdTouch && !seal && strikeTouchId === null) strikeTouchId = t.identifier;
     return;
   }
 
@@ -575,6 +643,11 @@ function beginTouch(t) {
     current: new THREE.Vector2(t.clientX, t.clientY),
     down: now,
     charging: false,
+    // Landed on the animal, so it clapped — kept for endTouch, which must not
+    // arm a double-tap off it. Latched at touchdown rather than re-tested on
+    // the way out: the seal swims out from under a resting thumb, and whether
+    // this press was a clap is settled by where it BEGAN.
+    onSeal: seal,
   };
 
   // Double-tap-and-hold. This press is the second half of a tap-then-hold in
@@ -583,6 +656,7 @@ function beginTouch(t) {
   const tap = lastTap[role];
   if (
     s.doubleTap &&
+    !seal &&
     tap &&
     now - tap.at <= (s.doubleTapMs ?? 300) &&
     Math.hypot(t.clientX - tap.x, t.clientY - tap.y) <= (s.tapSlop ?? 16)
@@ -682,6 +756,7 @@ function endTouch(t, cancelled) {
     const wasTap =
       !stick.charging &&
       !cancelled &&
+      !stick.onSeal &&
       held <= (s.tapMaxMs ?? 250) &&
       drift <= (s.tapSlop ?? 16);
     lastTap[role] = wasTap

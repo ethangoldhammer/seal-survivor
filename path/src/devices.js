@@ -53,6 +53,36 @@ export function shoulderLabel(padId) {
   return 'a shoulder button';
 }
 
+// --- ...and what it calls the LEFT FACE BUTTON ------------------------------
+// Standard-gamepad index 2, which is the clap (CLAP_BUTTON in input.js). The
+// same problem as the shoulders and the same answer: the Gamepad API hands out
+// an index and the manufacturer's free-text `id`, never a label, so the only
+// way to tell somebody holding an Xbox pad to press X — and somebody holding a
+// DualSense to press Square — is to recognise the pad.
+//
+// THE POSITION IS THE CONSTANT, NOT THE LETTER. Index 2 is the left of the four
+// on every standard mapping, which is why the token is `{faceLeft}` rather than
+// anything named after a glyph: X, Square and Y are the same button under three
+// names, and the Nintendo pad is the reason the letter cannot be the id — its
+// physical Y sits where an Xbox X does, so a hard-typed "X" would send a Switch
+// player to the wrong side of the pad.
+//
+// The fallback says the position rather than guessing a letter. A player who
+// has to look down and find it is better served than one confidently told to
+// press a button their pad does not have.
+const FACE_LEFT_NAMES = [
+  { test: /dualsense|dualshock|playstation|\b054c\b/i, label: 'Square' },
+  { test: /xbox|xinput|\b045e\b/i, label: 'X' },
+  { test: /nintendo|switch|joy-?con|pro controller|\b057e\b/i, label: 'Y' },
+];
+
+/** What to call the left face button on the pad with this `id`. */
+export function faceLeftLabel(padId) {
+  const id = String(padId ?? '');
+  for (const { test, label } of FACE_LEFT_NAMES) if (test.test(id)) return label;
+  return 'the left face button';
+}
+
 /**
  * Does this machine's PRIMARY pointer suggest a touchscreen? `hover: none`
  * alongside `pointer: coarse` is the pair that means it: coarse on its own is

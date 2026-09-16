@@ -264,13 +264,45 @@ for (const r of rows) {
 // ...and the slow turners genuinely take longer than the quick ones, which is
 // the whole shape of the change rather than a constant that happens to be
 // bigger.
-const slow = rows.find((r) => r.k === 'bossShark');
-const quick = rows.find((r) => r.k === 'hammerhead');
-if (slow?.reaims.length && quick?.reaims.length) {
-  ok(median(slow.reaims) > median(quick.reaims),
-    `a boss shark (turnRate ${CONFIG.enemies.bossShark.turnRate}) takes longer to come round than a `
-    + `hammerhead (${CONFIG.enemies.hammerhead.turnRate}) — ${r1(median(slow.reaims))}s against `
-    + `${r1(median(quick.reaims))}s. The re-aim is sized against the animal, not typed`);
+// ...AND THE TIME IS SIZED AGAINST THE ANIMAL, not typed.
+//
+// ASKED OF THE EXPRESSION, not of two bodies' medians. It used to compare
+// bossShark's median re-aim against hammerhead's, on the argument that the
+// slower turner should take longer — and that comparison cannot hold, because
+// each body ends its runs at a DIFFERENT angle off the seal. The median is over
+// a different population per body, so the ordering is a fact about where their
+// passes finish rather than about how the time is computed, and it flipped on a
+// tuning change that did not touch the mechanism at all (twice: once when
+// bossShark's turnRate went 1.05 -> 2.6, and again when `reaimCone` widened and
+// let a different set of re-aims survive to be counted).
+//
+// The claim is that `time` scales with |diff| / turnRate. That is a property of
+// the formula in enterStep, so it is asked of the formula, for one fixed turn,
+// across the whole measured roster.
+{
+  const rules = CONFIG.lungeRules ?? {};
+  const QUARTER = Math.PI / 2; // a 90-degree come-about, the same for everybody
+  const needed = (k) => {
+    const c = CONFIG.enemies[k].lunge ?? {};
+    const rate = CONFIG.enemies[k].turnRate ?? 0;
+    const floor = c.reaimTime ?? rules.reaimTime ?? 0.45;
+    if (!(rate > 0)) return floor;
+    return Math.min(c.reaimMax ?? rules.reaimMax ?? 1.3, Math.max(floor, QUARTER / rate));
+  };
+  const byTurn = rows.map((r) => r.k)
+    .sort((a, b) => (CONFIG.enemies[a].turnRate ?? 0) - (CONFIG.enemies[b].turnRate ?? 0));
+  const slow = byTurn[0];
+  const quick = byTurn[byTurn.length - 1];
+  ok(needed(slow) > needed(quick),
+    `the same 90-degree come-about costs ${slow} (turnRate ${CONFIG.enemies[slow].turnRate}) `
+    + `${r1(needed(slow))}s and ${quick} (${CONFIG.enemies[quick].turnRate}) ${r1(needed(quick))}s `
+    + '— the re-aim is sized against the animal, not typed');
+  // ...and it is a real spread rather than everything pinned to one end of the
+  // clamp, which is the way this check goes quiet: with every body against
+  // `reaimMax` the expression is doing nothing and the line above still passes.
+  const spread = new Set(rows.map((r) => r1(needed(r.k)))).size;
+  ok(spread >= 3, `${spread} distinct re-aim lengths across ${rows.length} bodies `
+    + '— all of them on the same number would mean the clamp, not the animal, is deciding');
 }
 
 console.log(fails ? `\n${fails} FAILED\n` : '\nall good\n');

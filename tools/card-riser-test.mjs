@@ -111,6 +111,20 @@ registerHooks({
     return next(url, ctx);
   },
 });
+// AFTER our own hooks, and that is not an oversight — see tools/vite-loader.mjs.
+//
+// Registered last, the loader claims every `?raw`/`?url` import before this
+// file's hooks see it, so the `.riv?url` stub below NEVER RUNS: the module
+// under test gets the real path out of node_modules instead of "stub.riv".
+// Thirty-two harnesses were in that shape and the other twenty-seven were
+// moved above their hooks; this one cannot be, yet. Turning its stub on makes
+// the test fail, because the stub hands back a bare filename and the consumer
+// fetches it (`fetch(riv.default)` in ui/snapshotCard.js) — the real path does
+// not parse as a URL either, so both routes degrade, just not identically.
+//
+// Fixing it means giving the stub a fetchable URL and teaching whatever this
+// harness asserts to survive a Rive file that actually loads. Until then the
+// stub below is dead code and this line is what keeps the test honest.
 await import('./vite-loader.mjs');
 globalThis.fetch = async () => ({ ok: false, status: 404 });
 

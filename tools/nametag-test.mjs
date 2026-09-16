@@ -66,6 +66,11 @@ globalThis.__riveControl = {
   release() { const q = this.pending.splice(0); for (const fire of q) fire(); },
 };
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -116,7 +121,6 @@ export const RuntimeLoader = { setWasmUrl(u) { L.wasmUrl = u; } };
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 
 const { mountNameTag, NAMETAG_ASPECT } = await import('../path/src/ui/nameTag.js');
 const { NAMETAG_ARTBOARD, riveRequirements } = await import('../path/src/ui/riveContract.js');

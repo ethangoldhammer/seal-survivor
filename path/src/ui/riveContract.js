@@ -110,6 +110,17 @@ export const SPLASH_BINDINGS = {
   // shrink the row as one. Rive has no viewport units, so the game measures and
   // hands the number over; see fitEntryRow in ui/riveSplash.js.
   entryScale: 'numEntryScale',
+  // THE NAME'S OWN SIZE, written by the game beside `entryScale`. It drives the
+  // pill's font and its side padding — and nothing else — so a long name is
+  // drawn smaller instead of dragging the dice and the Start button down with
+  // it. See fitNameScale in ui/splashLayout.js for what that was costing: the
+  // widest name the roller can make took the buttons to 15px on a phone.
+  nameScale: 'numNameScale',
+  // HOW TALL THE TITLE SLOT IS, as a fraction — and therefore where the
+  // waterline sits, because Sky is the same height and Sea is the rest. 0.32
+  // on every screen that can afford it; a phone held sideways gives some of its
+  // sky back so the buttons under the title can reach 44px. See fitTitleFrac.
+  titleFrac: 'numTitleFrac',
   // The row's TRUE width, in artboard units, written BY the artboard: its
   // layout's computed width is bound out to this number, so the game never
   // has to guess how wide a name renders. Read only.

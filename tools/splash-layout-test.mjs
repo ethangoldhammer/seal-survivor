@@ -43,7 +43,7 @@
 // recipe is in splashLayout.js.
 // ---------------------------------------------------------------------------
 import {
-  SPLASH_GEOMETRY, fitEntryScale, entryRects, wordmarkRect, splashFindings,
+  SPLASH_GEOMETRY, fitEntryScale, fitNameScale, geometryFor, entryRects, wordmarkRect, splashFindings,
   estimateRowWidth, entryColumnHeight, horizonY,
 } from '../path/src/ui/splashLayout.js';
 import { MAX_NAME_LEN } from '../path/src/systems/playerName.js';
@@ -85,9 +85,11 @@ function domOverCard(W, H, touch) {
 const ROW_W = estimateRowWidth('x'.repeat(MAX_NAME_LEN));
 
 function check(W, H, touch, label) {
-  const scale = fitEntryScale({ W, H, rowW: ROW_W });
-  const pillW = Math.min(ROW_W * scale, W - 48);
-  const found = splashFindings({ W, H, scale, pillW, others: domOverCard(W, H, touch), touch })
+  const g = geometryFor(W, H);
+  const scale = fitEntryScale({ W, H, g });
+  // The pill is drawn at the NAME's scale now, not the row's — see fitNameScale.
+  const pillW = ROW_W * fitNameScale({ W, rowW: ROW_W, scale });
+  const found = splashFindings({ W, H, scale, pillW, g, others: domOverCard(W, H, touch), touch })
     // Tap size is a trade-off the layout audit reports per device; here the
     // question is only whether anything is ON anything.
     .filter((f) => f.type !== 'tap');
@@ -124,24 +126,37 @@ console.log('splash layout — the entry column never sits on the wordmark');
 
 // 2. THE GEOMETRY IS THE ARTBOARD'S. Pinned to the runtime — see the header.
 {
+  // RE-READ AFTER THE NAME WAS DECOUPLED FROM THE BUTTONS. The old row here
+  // carried a width per device as well, because one scale drove the whole row
+  // and the pill's width was what pinned it: 0.602 on an iPhone SE, which is
+  // a 48px button. `numEntryScale` answers to the wordmark alone now and the
+  // name shrinks on its own (fitNameScale), so the readings are the taller
+  // numbers below and the width no longer belongs in this table — it is a
+  // function of the OTHER scale and pins nothing here.
+  //
+  // Measured off the shipping artboard by npm run test:splashhit, which drives
+  // a real browser at each size and reads the number back; re-record from its
+  // report rather than by hand.
   const MEASURED = [
-    // name, W, H, numEntryWidth read back, numEntryScale read back
-    ['iPhone SE', 375, 667, 327.000, 0.60214],
-    ['iPhone 15', 393, 852, 345.000, 0.63528],
-    ['iPhone 15 Pro Max', 430, 932, 382.000, 0.70341],
-    ['iPhone 15 landscape', 852, 393, 156.917, 0.28895],
-    ['iPad mini', 744, 1133, 543.066, 1],
-    ['iPad landscape', 1024, 768, 501.677, 0.92379],
-    ['Laptop', 1280, 800, 478.256, 0.88066],
-    ['Desktop', 1920, 1080, 543.066, 1],
+    // name, W, H, numEntryScale read back
+    ['iPhone SE', 375, 667, 0.991],
+    ['iPhone 15', 393, 852, 1],
+    ['iPhone 15 Pro Max', 430, 932, 1],
+    ['iPhone 15 landscape', 852, 393, 0.553],
+    ['iPad mini', 744, 1133, 1],
+    ['iPad landscape', 1024, 768, 0.924],
+    ['Laptop', 1280, 800, 0.881],
+    ['Desktop', 1920, 1080, 1],
   ];
   let drift = 0;
-  for (const [name, W, H, width, scale] of MEASURED) {
-    // The pill hugs whatever name the dice rolled, so the widths above are one
-    // run's name at eight sizes — width/scale is the same 543.07 in every row,
-    // and a row where it is not is a reading taken before the resize settled.
-    const rowW = width / scale;
-    const s = fitEntryScale({ W, H, rowW });
+  for (const [name, W, H, scale] of MEASURED) {
+    // THROUGH geometryFor, because the title's height is no longer a constant:
+    // a screen too short to fit a 44px button under a full-size title gives
+    // some of it back (fitTitleFrac), and the artboard is laid out at whatever
+    // that leaves. Reading the model at the design 0.32 would reproduce the
+    // number this row USED to hold — 0.289 on a sideways phone — and agree with
+    // a fixture that no longer describes the shipping file.
+    const s = fitEntryScale({ W, H, g: geometryFor(W, H) });
     if (Math.abs(s - scale) > 0.003) { drift++; fail(`${name}: model fits ${s.toFixed(4)}, the artboard was read at ${scale}`); }
   }
   if (!drift) ok('the fit reproduces numEntryScale as read back from the shipping artboard at 8 device sizes');

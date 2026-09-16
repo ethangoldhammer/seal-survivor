@@ -39,8 +39,8 @@
 // ============================================================================
 
 import { app, screen } from 'electron';
-import { OUTPUT, captureSizeFor, recordedSize, fitCapture, is169 } from './captureSize.js';
-import { createRecorder } from './record.js';
+import { OUTPUT, captureSizeFor, playSizeFor, recordedSize, fitCapture, is169 } from './captureSize.js';
+import { createRecorder, sweepUnfinished } from './record.js';
 import { BLACKHOLE_UID } from './takeFile.js';
 
 const RATIO = 16 / 9;
@@ -106,6 +106,7 @@ export function registerCapture(win) {
   // the wrong shape.
   const [minW, minH] = win.getMinimumSize();
   let locked = false;
+  sweepUnfinished();
   const recorder = createRecorder(win, { audio: audioSource() });
 
   function off() {
@@ -139,8 +140,11 @@ export function registerCapture(win) {
     const chromeH = win.getSize()[1] - win.getContentSize()[1];
     const chromeW = win.getSize()[0] - win.getContentSize()[0];
 
-    const want = captureSizeFor(display.scaleFactor);
-    if (!want.exact) {
+    const want = playSizeFor(display.scaleFactor, {
+      width: display.workArea.width - chromeW,
+      height: display.workArea.height - chromeH,
+    });
+    if (want.exact === false) {
       console.warn(`[capture] this display reports a scale of ${display.scaleFactor}, which does not `
         + `divide ${OUTPUT.width}x${OUTPUT.height} — takes will be ${recordedSize(want, display.scaleFactor).width}`
         + `x${recordedSize(want, display.scaleFactor).height}, not ${OUTPUT.height}p`);
@@ -246,7 +250,7 @@ function report(win, display) {
   const [w, h] = win.getContentSize();
   const s = display.scaleFactor;
   const shot = recordedSize({ width: w, height: h }, s);
-  const right = shot.width === OUTPUT.width && shot.height === OUTPUT.height;
-  console.log(`[capture] takes will be ${shot.width}x${shot.height}`
-    + `${right ? '' : `  — NOT ${OUTPUT.width}x${OUTPUT.height}`}  (window ${w}x${h} @${s}x)`);
+  const native = shot.width === OUTPUT.width && shot.height === OUTPUT.height;
+  const how = native ? '' : ` (captured at ${shot.width}x${shot.height}, scaled down after the take)`;
+  console.log(`[capture] takes will be ${OUTPUT.width}x${OUTPUT.height}${how}  — window ${w}x${h} @${s}x`);
 }

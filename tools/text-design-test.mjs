@@ -78,6 +78,11 @@ dom.window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,
 // has this method, and a `?.` in the panel would only hide the next one.
 dom.window.Element.prototype.scrollIntoView = function scrollIntoView() {};
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -94,7 +99,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 
 globalThis.fetch = async () => ({ ok: false, status: 404 });
 const warnings = [];
@@ -614,9 +618,13 @@ section('The panel');
     check('...inside the ancestor its selector needs',
       quip.parentElement.classList.contains('sv-ldg-head') && quip.parentElement.classList.contains('sv-txp-wrap'),
       quip.parentElement.className);
-    const overBtn = sampleOf('vsOverButton');
-    check('the after-match button wears its two-deep rule, not the plain button one',
-      getComputedStyle(overBtn).fontSize.includes('2.6vmin'), getComputedStyle(overBtn).fontSize);
+    // The same claim the after-match button used to carry, on the pair that is
+    // still in the markup: `vsReelTag` is `.sv-versus-reel .sv-versus-replay-tag`
+    // and `vsReplayTag` is the bare `.sv-versus-replay-tag` under it, so a
+    // specimen that took the one-deep rule would read 18px instead.
+    const reelTag = sampleOf('vsReelTag');
+    check('the reel tag wears its two-deep rule, not the plain replay-tag one',
+      getComputedStyle(reelTag).fontSize.includes('1.6vmin'), getComputedStyle(reelTag).fontSize);
     const go = sampleOf('vsGo');
     check('a two-class selector is one element with both classes',
       go.classList.contains('sv-versus-count') && go.classList.contains('sv-versus-go'), go.className);
@@ -656,18 +664,22 @@ section('The panel');
     check('a vmin role emits vmin', /font-size: calc\(26vmin \* var\(--sv-scale\)\)/.test(rule('.sv-versus-count')),
       rule('.sv-versus-count').slice(0, 120));
     check('...and a floored one is max()ed with its px floor',
-      /font-size: max\(18px, calc\(2\.6vmin \* var\(--sv-scale\)\)\)/.test(rule('.sv-versus-over .sv-btn')),
-      rule('.sv-versus-over .sv-btn').slice(0, 140));
+      /font-size: max\(13px, calc\(1\.6vmin \* var\(--sv-scale\)\)\)/.test(rule('.sv-versus-reel .sv-versus-replay-tag')),
+      rule('.sv-versus-reel .sv-versus-replay-tag').slice(0, 140));
     const vminRows = TUNER_SCHEMA.filter((g) => g.panel === 'text')
       .flatMap((g) => g.items).filter((it) => /^textStyles\.vs(Count|Go|Card\w+|Over\w+|ReelTag)\.size$/.test(it.path));
-    // EIGHT, not nine: vsCardWin was the goal card's winner line and the result
-    // lives on the stats page now — a Rive artboard, whose type is sized by the
-    // Theme view model rather than by a tuner row. See textRoles.js.
+    // SIX, not nine. Three of this group's roles have left the DOM for the
+    // stats page — a Rive artboard, whose type is sized by the Theme view
+    // model rather than by a tuner row: vsCardWin was the goal card's winner
+    // line, and vsOverTitle/vsOverButton were the play-again prompt that got
+    // folded into the same page. Their COPY did not move (ui/statsCopy.js
+    // still reads all three rows off uiText.csv); only the selectors did.
+    // See textRoles.js.
     check('...and its slider is a vmin slider, not a px one',
-      vminRows.length === 8 && vminRows.every((it) => it.max <= 40 && it.label.includes('vmin')),
+      vminRows.length === 6 && vminRows.every((it) => it.max <= 40 && it.label.includes('vmin')),
       `${vminRows.length} rows: ${vminRows.map((it) => it.max).join(',')}`);
     check('...that names the floor where there is one',
-      vminRows.find((it) => it.path === 'textStyles.vsOverButton.size')?.label.includes('18px'));
+      vminRows.find((it) => it.path === 'textStyles.vsReelTag.size')?.label.includes('13px'));
   }
 
   // A SHEET THAT ARRIVES AFTER THE ROLE SHEET. The match HUD and the team

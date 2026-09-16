@@ -70,7 +70,8 @@ function absorb(opts = {}) {
   const paid = [];
   const order = [];
   let lastFlag = 0;
-  absorbInPieces('chumChunkEaten', { x: opts.x ?? 9, y: opts.y ?? 0, scale: opts.scale ?? 1.5 },
+  absorbInPieces('chumChunkEaten',
+    { x: opts.x ?? 9, y: opts.y ?? 0, scale: opts.scale ?? 1.5, pieces: opts.pieces, tune: opts.tune },
     (share, taken, count, x, y, last) => {
       paid.push(share);
       order.push(taken);
@@ -279,6 +280,12 @@ section('THE CHUNK ASKS FOR IT — the wiring, not the module');
     CONFIG.feedback.chumChunkEaten?.goo === 'pickupGoo');
   check('...so does the boost piece off a weak spot',
     CONFIG.feedback.hotSpotChumTaken?.goo === 'pickupGoo');
+  // The blue orb rides the same path — one piece per dark pip. Without goo on
+  // its event the suck never spawns, absorbInPieces falls back to paying the
+  // lot in one call, and the orb silently goes back to filling the bar on the
+  // frame it was touched with nothing to show it.
+  check('...and so does the blue orb, which is all of them at once',
+    CONFIG.feedback.strikeOrbTaken?.goo === 'pickupGoo');
   check('the per-piece event exists', !!CONFIG.feedback[CONFIG.pickups.absorb.event]);
   // A throttle here would collapse the ladder into one blip and the feature
   // would be gone with nothing failing.
@@ -297,6 +304,89 @@ section('THE CHUNK ASKS FOR IT — the wiring, not the module');
   CONFIG.fx.gooSuck.countMul = wide;
   check('a huge look multiplier still lands inside the clamp', big.pieces === hi, `${big.pieces} pieces, cap ${hi}`);
   check('...and a tiny one still splits into enough to hear', small.pieces === lo, `${small.pieces} pieces, floor ${lo}`);
+}
+
+// ---------------------------------------------------------------------------
+section('ONE PIECE PER UNIT — a countable payout names its own piece count');
+{
+  // The blue orb is absorbed one piece per DARK PIP (see the strike orb in
+  // main.js), so the count is the payout rather than a look choice — and it
+  // has to escape the clamp in BOTH directions or the bar and the blips stop
+  // agreeing. A five-pip bar is under the floor of [6,15]; a twelve-pip one
+  // with Booster Pack is nowhere near the cap, and the cap is what a look
+  // multiplier drag would otherwise push it into.
+  const [lo, hi] = CONFIG.pickups.absorb.pieces;
+  const five = absorb({ pieces: 5 });
+  check('five pips ask for five pieces, under the clamp\'s floor',
+    five.pieces === 5, `${five.pieces} pieces, floor ${lo}`);
+  check('...and the shares still sum to the whole payout',
+    Math.abs(five.paid.reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  check('...with the ladder arriving on the last of them',
+    heard.length === 5 && heard[heard.length - 1] === CONFIG.pickups.absorb.pitchTo,
+    `${heard.length} blips, top ${heard[heard.length - 1]}`);
+  // The look multiplier is what the clamp exists to contain, and it must not
+  // reach a count that IS the payout — a tuner drag that turned a five-pip
+  // orb into fifteen blips would be the bar and the ear disagreeing.
+  const wide = CONFIG.fx.gooSuck.countMul;
+  CONFIG.fx.gooSuck.countMul = 40;
+  const loud = absorb({ pieces: 5, scale: 3 });
+  CONFIG.fx.gooSuck.countMul = 0.01;
+  const quiet = absorb({ pieces: 5, scale: 0.2 });
+  CONFIG.fx.gooSuck.countMul = wide;
+  check('a huge look multiplier cannot add pieces to it',
+    loud.pieces === 5, `${loud.pieces} pieces, cap ${hi}`);
+  check('...and a tiny one cannot take any away', quiet.pieces === 5, `${quiet.pieces} pieces`);
+  // A full bar is missing nothing, and main.js still asks for one piece: the
+  // seal swallowed the thing and it must still make the sound of it.
+  const one = absorb({ pieces: 1 });
+  check('a one-piece swallow is still a swallow', one.pieces === 1 && one.paid.length === 1);
+  check('...sounding like the start of a run, not the end of one',
+    heard.length === 1 && heard[0] === CONFIG.pickups.absorb.pitchFrom, `${heard[0]}`);
+  // And with no count named, the clamp owns it exactly as before.
+  const open = absorb({});
+  check('a payout that does not name a count is still the tuner\'s',
+    open.pieces >= lo && open.pieces <= hi, `${open.pieces} in [${lo},${hi}]`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE ORB\'S OWN CLOCK — one machine, two sentences');
+{
+  // The chunk is a BREAK and the orb is a RE-ARM, and they are absorbed by the
+  // same code. The overlay is what keeps that from meaning they have to feel
+  // alike — and the failure it guards against is silent in both directions: an
+  // overlay that stops being read puts the orb back on the chunk's second-long
+  // swallow, and one that leaks puts the chunk on the orb's.
+  const orb = CONFIG.pickups.absorb.orb;
+  check('the orb names its own timing', orb && orb.hold != null && orb.ramp != null && orb.stagger != null);
+  check('...and nothing else — the ladder is the shared one',
+    !('pitchFrom' in orb) && !('pitchTo' in orb) && !('curve' in orb) && !('event' in orb),
+    Object.keys(orb).join(','));
+  check('...and it IS quicker than the chunk\'s', orb.stagger < CONFIG.pickups.absorb.stagger,
+    `${orb.stagger}s vs ${CONFIG.pickups.absorb.stagger}s`);
+
+  // Measured, not asserted off the config: the hold and the ramp are two
+  // numbers in two different files and only the arrival time says whether
+  // they add up. `frames` is the frame each piece was paid on.
+  // Both swallowed AT the seal, which is where a pickup is taken — the helper's
+  // default 9 units is the chunk's own geometry and would put a second of
+  // flight into a measurement that is about the hold and the ramp.
+  const slow = absorb({ pieces: 5, x: 1 });
+  const quick = absorb({ pieces: 5, x: 1, tune: orb });
+  const last = (r) => r.frames[r.frames.length - 1] / 60;
+  check('the orb\'s bar fills inside half a second',
+    last(quick) < 0.5, `${last(quick).toFixed(2)}s across 5 pips`);
+  check('...well ahead of the chunk on the same five pieces',
+    last(quick) < last(slow) * 0.7, `${last(quick).toFixed(2)}s vs ${last(slow).toFixed(2)}s`);
+  check('...with the first pip landing promptly', quick.frames[0] / 60 < 0.3,
+    `${(quick.frames[0] / 60).toFixed(2)}s`);
+  // Still a STREAM. A vacuum quick enough to land two pips on one frame is a
+  // chord, and the bar would then climb faster than the ear can count it.
+  const perFrame = new Map();
+  for (const f of quick.frames) perFrame.set(f, (perFrame.get(f) ?? 0) + 1);
+  check('...and no two pips landing on the same frame',
+    Math.max(...perFrame.values()) === 1, `worst frame carried ${Math.max(...perFrame.values())}`);
+  // The overlay must not reach the pickup that did not ask for one.
+  check('the chunk is untouched by it', last(slow) > 0.6, `${last(slow).toFixed(2)}s`);
 }
 
 console.log(failures ? `\n${failures} failing` : '\nall passing');

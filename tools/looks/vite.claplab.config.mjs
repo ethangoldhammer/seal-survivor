@@ -13,7 +13,15 @@ const PROJECT = resolve(HERE, '../..');
 
 export default defineConfig({
   root: PROJECT,
-  base: './',
+  // ROOT-ABSOLUTE, not './'. This page was serving a seal-shaped hole: the
+  // built page sits at /tools/looks/clap-lab.html, assetPath.js rewrites every
+  // '/models/...' against Vite's `base`, and a relative base therefore asks for
+  // '/tools/looks/models/furseal.glb' — which serve.mjs, mounting the real
+  // public/models at '/models/', answers with a 404. Nothing throws on the
+  // 404 itself: assets.js falls back to the built-in shape, which has no aim
+  // rig, so the page dies one frame later on a null rig and reads as a bug in
+  // the clap. Same fix and the same note as vite.riglimits.config.mjs.
+  base: '/',
   build: {
     // The page awaits preloadAssets at the top level.
     target: 'esnext',

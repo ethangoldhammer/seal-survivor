@@ -76,6 +76,19 @@ const MANUAL = argv.includes('--manual') || argv.includes('--no-open');
 // READ is still the terminal report, so the window is opt-in; --once never
 // shows one.
 const SHOW = argv.includes('--show') && !ONCE;
+// --flip is the OTHER question this page can ask, and it is a mode rather than
+// a tool of its own: the server, the Electron driver, the stall watchdog, the
+// tile scaffolding and the report are all the same, and only the job list and
+// what gets measured change. See FLIP_PAIRS in tools/layout/layout-audit.js.
+//
+//   npm run layout   does every surface FIT at each size
+//   npm run flip     does every surface SURVIVE the size changing under it
+const FLIP = argv.includes('--flip');
+const MODE = FLIP ? 'flip' : 'fit';
+// Its own file, so a flip run cannot overwrite the fit sweep's report and be
+// read later as one. The two answer different questions and a reader reaching
+// for `layout-report.json` is reaching for the fit one.
+const REPORT_FILE = FLIP ? 'flip-report.json' : 'layout-report.json';
 // HOW LONG SILENCE IS ALLOWED TO LAST, in ms, measured from the last thing the
 // page said rather than from the start. An absolute deadline would have to be
 // longer than the slowest honest sweep on the slowest machine, which is a
@@ -183,7 +196,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204).end();
     try {
       const report = JSON.parse(body);
-      await writeFile(join(OUT, 'layout-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+      await writeFile(join(OUT, REPORT_FILE), `${JSON.stringify(report, null, 2)}\n`);
       settle(report);
     } catch (err) {
       console.error(`  a malformed report — ${err.message}`);
@@ -211,13 +224,17 @@ const server = http.createServer(async (req, res) => {
 
 // localhost rather than 127.0.0.1: the Browser pane refuses the numeric form.
 await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
-const PAGE = `http://localhost:${PORT}/tools/layout/layout-audit.html?run=${RUN}`;
+const PAGE = `http://localhost:${PORT}/tools/layout/layout-audit.html?run=${RUN}&mode=${MODE}`;
 console.log(`\n  ${PAGE}\n`);
 
 const driver = MANUAL ? null : startDriver();
 console.log(MANUAL
   ? 'waiting for a browser to open that page…'
-  : 'measuring — 64 tiles, about a minute…');
+  // A flip tile builds once and measures three times with a settle between each,
+  // so it costs about three times what a fit tile does on a third of the tiles.
+  : FLIP
+    ? 'flipping — 48 tiles, each turned and turned back, a couple of minutes…'
+    : 'measuring — 64 tiles, about a minute…');
 
 const report = await Promise.race([reported, watchdog()]);
 if (process.stdout.isTTY) process.stdout.write('\r'.padEnd(74) + '\r');
@@ -237,7 +254,7 @@ if (ONCE || report.stalled) {
     // Only worth saying when the tool was the one driving. In --manual the
     // reader IS the browser, and telling them to run --manual is telling them
     // to do what they just did.
-    console.log(`  To watch it happen:  npm run layout -- --manual`);
+    console.log(`  To watch it happen:  npm run ${FLIP ? 'flip' : 'layout'} -- --manual`);
     console.log(`  then open that URL — the ?run= is part of it — and watch the tiles.`);
   }
   process.exit(report.total > 0 || report.silent > 0 ? 1 : 0);
@@ -368,7 +385,11 @@ function printReport({ results, total, silent, stalled }) {
   const bad = results.filter((r) => r.findings.length);
   console.log('');
   for (const r of bad) {
-    console.log(`  ${r.viewport} ${r.w}x${r.h} — ${r.surface}`);
+    // A flip tile's name already carries both sizes ("rotation 393x852 ↔
+    // 852x393"), and printing one of them beside it reads as the size the
+    // findings were found at — which is the wrong half of the trip for
+    // everything marked `after the flip`.
+    console.log(`  ${r.viewport}${FLIP ? '' : ` ${r.w}x${r.h}`} — ${r.surface}`);
     for (const f of r.findings) console.log(`      ${describe(f)}`);
   }
   console.log('');
@@ -383,15 +404,33 @@ function printReport({ results, total, silent, stalled }) {
     }
   }
   console.log(total === 0 && !silent
-    ? `  PASS  every surface fits every viewport (${results.length} pairs)`
+    ? (FLIP
+      ? `  PASS  every surface survives the screen changing under it (${results.length} flips)`
+      : `  PASS  every surface fits every viewport (${results.length} pairs)`)
     : `  FAIL  ${total} finding(s) across ${bad.length} of ${results.length} surface/viewport pairs`);
   // Not on a stall: nothing was written this run, so the path would point at
   // whatever the last successful sweep left behind — a stale file offered as
   // this run's answer is worse than no file at all.
-  if (!stalled) console.log(`\n  full report: ${join(OUT, 'layout-report.json')}`);
+  if (!stalled) console.log(`\n  full report: ${join(OUT, REPORT_FILE)}`);
 }
 
 function describe(f) {
+  // Kept in step with the copy in tools/layout/layout-audit.js by hand, which
+  // is what this file has always done: the page's copy renders into the grid
+  // and this one renders into a terminal, and neither can import the other.
+  const leg = f.leg === 'over' ? 'after the flip: ' : '';
+  if (f.type === 'stuck') {
+    return `${f.what} did not come back — was ${f.was}, now ${f.now} (${f.by}px)`
+      + (f.of > 1 ? `, and ${f.of - 1} more element(s) with it` : '');
+  }
+  if (f.type === 'stuck-count') {
+    return `${f.n} element(s) appeared or vanished across the flip and stayed that way — ${f.what}`;
+  }
+  if (f.type === 'stuck-blind') {
+    return `${f.what} had almost nothing to compare — ${f.n} visible element(s) of ${f.of}.`
+      + ' A clean sheet from this tile would mean nothing.';
+  }
+  if (leg) return leg + describe({ ...f, leg: null });
   if (f.type === 'tap') return `${f.what} — tap target ${f.w}x${f.h}, under 44`;
   if (f.type === 'empty') return `${f.what} built nothing this sweep can see — ${f.n} element(s) measured`;
   if (f.type === 'clipped') return `${f.what} — clipped, content ${f.contentW}px in a ${f.boxW}px box`;

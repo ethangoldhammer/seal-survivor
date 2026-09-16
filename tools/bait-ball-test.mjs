@@ -1361,10 +1361,45 @@ section('THE EXCHANGE ACTUALLY HAPPENS — a predator on a real ball');
 // fish in forty seconds, from a shark dropped five units away.
 //
 // The mutation is the point of the section. Assert only "predators eat some"
-// and the check passes on a build where `pull` has been deleted, because "some"
-// is one. So this runs the same fight twice, once with the wider draw and once
-// without, and asserts the DIFFERENCE.
-function feedRun(seed, pull) {
+// and the check passes on a build where the draw has been deleted, because
+// "some" is one. So this runs the same fight with the draw and without, and
+// asserts the DIFFERENCE.
+//
+// WHICH MINUTE OF THE RUN IT ASKS IN IS PART OF THE ASSERTION, and that is the
+// thing this section had wrong for a while. `pull` is a multiplier on a radius
+// the hunter ramp is busy SHRINKING (CONFIG.hunterRamp.preyFocus sheds 4% of
+// what is left per difficulty point, one point every twenty seconds), so the
+// two are the same dial pulled from opposite ends and the widening is only
+// worth anything once the narrowing has happened. Measured, abyssShark, six
+// seeds, the same fight at four points in a run:
+//
+//     difficulty   minutes   preyRadius   no draw   plain radius   x2.5
+//        0           0          24.6         15          45         47
+//        6           2          20.8         11          46         47
+//       20           7          14.9         13          42         46
+//       40          13          10.6         22          21         38
+//
+// At two minutes a plain 21-unit radius already reaches a third of an 80-unit
+// arena, the ball is leashed to a station inside it, and a shark on its cruise
+// re-enters that circle every few seconds on its own: the widening has nothing
+// left to add and measures 2% — which is what "wired and inert" looks like from
+// inside a green test. It is at thirteen minutes, with the ramp down at a
+// 10-unit radius, that the plain reach collapses to the no-draw floor and the
+// widening is carrying the whole exchange.
+//
+// So there are two arms, because there are two separate mutations to catch and
+// no single difficulty catches both:
+//
+//   EARLY, against no draw at all — a build where a ball's fish are not
+//   eligible prey. `pull` below its own CSV floor of 1 is not a build anyone
+//   could ship; it is the control that isolates "it came for the ball" from
+//   "it crossed some water that had fish in it".
+//
+//   LATE, against the plain radius — the build where the `pull` multiplier
+//   itself has been deleted and `reach` falls back to `preyR`. That one reads
+//   as a perfectly healthy mechanic for the first ten minutes of every run.
+const LATE = 40; // difficulty points — thirteen minutes in, and see the table
+function feedRun(seed, pull, difficulty = 6) {
   const scene = new THREE.Scene();
   const orig = Math.random;
   const wasPull = CONFIG.baitBall.pull;
@@ -1373,12 +1408,16 @@ function feedRun(seed, pull) {
   resetEnemies(scene);
   resetWaves(0);
   const pp = player.mesh?.position ?? new THREE.Vector3(0, 0, 0);
-  const ball = spawnBaitBall(scene, 6, 10, devBaitBallSpec());
+  const ball = spawnBaitBall(scene, difficulty, 10, devBaitBallSpec());
   if (ball) {
     ball.arriving = false;
     for (const e of enemies) if (e.schoolId === ball.id) e.entering = false;
   }
-  const pred = spawnNamed(scene, HUNTER, 6,
+  // The hunter is spawned at the same difficulty as the ball because that is
+  // where the ramp is baked (see spawnOne): `preyRadius` is a per-instance
+  // number fixed at spawn, so passing 6 here would hand every arm below the
+  // two-minute shark however late the fight is supposed to be.
+  const pred = spawnNamed(scene, HUNTER, difficulty,
     { x: (ball?.x ?? 0) + 5, y: ball?.y ?? 0 }, { ignoreCaps: true, overfill: true });
   if (pred) pred.entering = false;
   const dt = 1 / 60;
@@ -1394,21 +1433,34 @@ function feedRun(seed, pull) {
 
 {
   const seeds = [1, 2, 3, 4, 5, 6];
-  const withPull = seeds.map((s) => feedRun(s, CONFIG.baitBall.pull));
-  const without = seeds.map((s) => feedRun(s, 1));
   const sum = (a) => a.reduce((x, y) => x + y, 0);
+  const live = CONFIG.baitBall.pull;
+  // `0` is not a shippable value — the CSV floors this row at 1 — so this arm
+  // is a control, not a build. It collapses a ball fish's reach to nothing,
+  // which is the only way to ask what the hunter would have eaten by simply
+  // swimming through the water the ball is in.
+  const early = seeds.map((s) => feedRun(s, live));
+  const blind = seeds.map((s) => feedRun(s, 0));
+  const lateWide = seeds.map((s) => feedRun(s, live, LATE));
+  const latePlain = seeds.map((s) => feedRun(s, 1, LATE));
   check(`a ${HUNTER} left alone with a ball actually feeds from it`,
-    HUNTER && sum(withPull) / seeds.length >= 2,
-    `${(sum(withPull) / seeds.length).toFixed(1)} fish a ball — ${withPull.join(', ')}`);
-  check('...and it is `pull` that brings it back round, not luck',
-    sum(withPull) > sum(without) * 1.5,
-    `${sum(withPull)} fish with the wider draw vs ${sum(without)} without`);
+    HUNTER && sum(early) / seeds.length >= 2,
+    `${(sum(early) / seeds.length).toFixed(1)} fish a ball — ${early.join(', ')}`);
+  check('...and it is the ball it came for, not water that happened to have fish in it',
+    sum(early) > sum(blind) * 1.5,
+    `${sum(early)} fish drawn to the ball vs ${sum(blind)} blundered into`);
+  check('...and `pull` is what holds that up once the ramp has narrowed its focus',
+    sum(lateWide) > sum(latePlain) * 1.5,
+    `at difficulty ${LATE}: ${sum(lateWide)} fish with the wider draw vs `
+    + `${sum(latePlain)} on the plain radius`);
   // The other direction, and it is the one that keeps this from being a
   // mechanic the player cannot win: a hunter must not clear a whole ball on its
-  // own before the seal can cross the arena.
+  // own before the seal can cross the arena. Worst case across BOTH minutes of
+  // the run, since the late arm is the hungrier one.
+  const worst = Math.max(...early, ...lateWide);
   check('...but never strips the whole ball on its own',
-    Math.max(...withPull) < C.size.max,
-    `worst case ${Math.max(...withPull)} of ${C.size.min}-${C.size.max}`);
+    worst < C.size.max,
+    `worst case ${worst} of ${C.size.min}-${C.size.max}`);
 }
 
 // ---------------------------------------------------------------------------

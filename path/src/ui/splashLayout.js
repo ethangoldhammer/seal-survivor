@@ -194,19 +194,99 @@ export function entryRects(W, H, scale, pillW, g = SPLASH_GEOMETRY) {
  * be visible, and the artboard is the right place to fix it (a shorter title
  * slot on short screens). Nothing here can shrink the wordmark.
  */
+/**
+ * How tall the title slot may be on this screen, as a fraction of its height.
+ *
+ * THE HORIZON MOVES WITH THIS. `title.heightFrac` is not a title area — Sky is
+ * that tall, Sea is the rest, and the slot's bottom edge IS the waterline (see
+ * the header). So this is the one number that trades sky for room, and it is
+ * spent only where the alternative is a button no thumb can hit.
+ *
+ * 0.32 wherever it works, which is every screen in the sweep but one. A phone
+ * held sideways is 393px tall: the title takes 126 of them and what is left
+ * fits the entry column at 0.289, a 23px button against the 44 a touch target
+ * needs. Shrinking the title to 0.195 there buys exactly 44 and costs a shorter
+ * sky on the one viewport that cannot afford the full one.
+ *
+ * Stepped down only as far as it has to be, so a screen that needs a little
+ * gives up a little. The floor is real: past it the wordmark is small enough to
+ * read as an accident, and a screen that short is better served by a title that
+ * is honestly cramped than by one that has vanished to buy two more pixels.
+ */
+export function fitTitleFrac({
+  W, H,
+  tapMin = 44,
+  clearance = 8,
+  floor = 0.18,
+  g = SPLASH_GEOMETRY,
+} = {}) {
+  const full = g.title.heightFrac;
+  if (!(H > 0) || !(W > 0)) return full;
+  const want = tapMin / g.column.button;
+  const col = entryColumnHeight(g);
+  const scaleAt = (frac) => {
+    const wm = wordmarkRect(W, H, { ...g, title: { ...g.title, heightFrac: frac } });
+    return Math.min(1, (H - g.strip.bottom - clearance - wm.bottom) / col);
+  };
+  if (scaleAt(full) >= want) return full;
+  for (let f = full; f >= floor; f -= 0.005) if (scaleAt(f) >= want) return Math.round(f * 1000) / 1000;
+  return floor;
+}
+
+/** The geometry with this screen's title height in it — see fitTitleFrac. */
+export function geometryFor(W, H, g = SPLASH_GEOMETRY) {
+  const frac = fitTitleFrac({ W, H, g });
+  return frac === g.title.heightFrac ? g : { ...g, title: { ...g.title, heightFrac: frac } };
+}
+
 export function fitEntryScale({
-  W, H, rowW,
-  margin = 24,
+  W, H,
   clearance = 8,
   minScale = 0.12,
   g = SPLASH_GEOMETRY,
 } = {}) {
-  const byWidth = rowW > 0 ? (W - 2 * margin) / rowW : 1;
   const wm = wordmarkRect(W, H, g);
   const room = H - g.strip.bottom - clearance - wm.bottom;
-  const byWordmark = room / entryColumnHeight(g);
-  const s = Math.min(1, byWidth, byWordmark);
+  const s = Math.min(1, room / entryColumnHeight(g));
   if (!Number.isFinite(s)) return 1;
+  return Math.max(minScale, s);
+}
+
+/**
+ * How big the NAME'S OWN TEXT may be — the second half of the fit, and the
+ * reason the buttons are no longer hostage to how long somebody's name is.
+ *
+ * THE WIDTH CEILING USED TO LIVE IN fitEntryScale, and one number drove the
+ * whole row: the dice, the gaps, the pill and the Start button all shrank
+ * together so a long name would fit between the screen's edges. The widest name
+ * the roller can make is "Congressman Jingleheimer Schmidt" — 32 characters, a
+ * pill 1744 units wide — and squeezing that into a 375px phone forced the row
+ * to 0.188. That is a 15px Start button, against the 44 a thumb needs, and it
+ * had nothing to do with the title: measured across the eight viewports the
+ * hit audit sweeps, the wordmark's ceiling on a portrait phone is about 1.0
+ * and WIDTH was binding every time. The tallest title in the game was being
+ * blamed for a button made small by a name.
+ *
+ * So the row's vertical rhythm — buttons, gaps, radii, the pill's HEIGHT —
+ * stays on `fitEntryScale`, which now answers to the wordmark alone. The pill's
+ * FONT and its side padding answer to this instead, and shrink on their own
+ * until the name fits. A long name is drawn smaller; the buttons either side of
+ * it do not move.
+ *
+ * Never larger than the buttons' scale: text bigger than the row it sits in
+ * would be a pill overflowing its own slot, which is the one thing the old
+ * single scale could never do wrong.
+ */
+export function fitNameScale({
+  W, rowW, scale = 1,
+  margin = 24,
+  minScale = 0.12,
+  g = SPLASH_GEOMETRY,
+} = {}) {
+  void g;
+  const byWidth = rowW > 0 ? (W - 2 * margin) / rowW : 1;
+  const s = Math.min(scale, byWidth);
+  if (!Number.isFinite(s)) return scale;
   return Math.max(minScale, s);
 }
 

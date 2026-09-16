@@ -76,8 +76,8 @@ import { strikeState, resetStrike } from '../path/src/systems/strike.js';
 import { initParticles } from '../path/src/entities/particles.js';
 import {
   versusState, startVersus, resetVersus, updateVersus, updateVersusClock, enterKickoff,
-  matchSeals, seatOf, goalBlast, replayState, ball, p2, resetBall, ballContactReach,
-  solveBallSurface, replayHoldsInput,
+  matchSeals, seatOf, goalBlast, replayState, ball, p2, resetBall, ballContactReach, setKickoffSeed,
+  solveBallSurface, replayHoldsInput, sealPos, kickoffSpot,
 } from '../path/src/systems/versus.js';
 import { rockX, mouthY, tunnelDepth } from '../path/src/systems/versusGoal.js';
 import { ASSETS, installModel } from '../path/src/assets.js';
@@ -145,6 +145,22 @@ function frame(input = idle) {
   updateVersus(DT * scale, noPads);
   return scale;
 }
+/**
+ * A MATCH ON A KNOWN KICKOFF. startVersus rolls versusState.kickoffSeed, which
+ * decides where the two formations stand each kickoff (kickoffScatter in
+ * systems/versus.js) — so an unpinned match here plays out differently every
+ * run, and a check on what the water did during it passes or fails on the
+ * roll rather than on the code. Pinned to one number: every run of this file
+ * is the same match, and a failure is reproducible by anyone who runs it.
+ */
+function startMatch() {
+  // BEFORE startVersus, not after: it rolls the seed and then places the seals
+  // for the opening kickoff, so a write afterwards is a match whose FIRST
+  // kickoff was still random — which is most of what this file measures.
+  setKickoffSeed(0x5EA15EA1);
+  startVersus(scene);
+  return scene;
+}
 function toPlay(limit = 12) {
   for (let t = 0; t < limit && versusState.phase !== 'play'; t += DT) frame();
   return versusState.phase === 'play';
@@ -164,12 +180,30 @@ function bellyUp(seal) {
   const rolled = Math.abs(Math.atan2(Math.sin(seal.mirrorAngle), Math.cos(seal.mirrorAngle))) > Math.PI / 2;
   return wantMirror !== rolled;
 }
-const upsideDown = () => [...matchSeals()].filter(bellyUp).map(seatOf);
+/** Is this seal's turnaround still running? THERE IS A THIRD ANSWER after all:
+ *  a seal 19% of the way through rolling from one side to the other is neither
+ *  upright nor on its back, and bellyUp reads it as on its back — the angle is
+ *  a quarter of the way round and `mirrored` already names the side it is
+ *  heading FOR. Sampled while the water is live, that is a pass or a fail
+ *  depending on which frame the loop above stopped on.
+ *
+ *  It never showed while every kickoff was the same two marks: the play below
+ *  ran identically every time and simply never ended mid-roll. */
+const rolling = (seal) => (seal.mirrorT ?? 1) < 1;
+/** The seals that are on their backs AND have finished getting there.
+ *
+ *  NOT FRAMED ON UNTIL EVERYTHING SETTLES, which was the other way to write
+ *  this: the water is live, the bots keep swimming, and a seal that turns
+ *  again while you wait for the last turn to land makes the wait unbounded. A
+ *  mid-roll seal is simply not evidence either way, so it is not counted. The
+ *  kickoff checks above are where a roll is caught settled — the count holds
+ *  every body still while the ease runs out. */
+const upsideDown = () => [...matchSeals()].filter((s2) => !rolling(s2) && bellyUp(s2)).map(seatOf);
 
 // ---------------------------------------------------------------------------
 section('EVERY SEAL IS THE RIGHT WAY UP ON A KICKOFF — and stays up through the count');
 {
-  startVersus(scene);
+  startMatch();
   check('the match opens on a kickoff', versusState.phase === 'kickoff', `phase ${versusState.phase}`);
   // Before a single frame: the placement itself has to be right, because the
   // count holds the bodies still and nothing later gets a chance to fix it.
@@ -375,7 +409,7 @@ section('...AND THE THROW ACTUALLY THROWS — across the pitch, off the walls, i
   // A KICKOFF TAKES IT BACK. Whatever the blast left on a body, the count puts
   // every seal on its mark with nothing running.
   resetPlayer();
-  startVersus(scene);
+  startMatch();
   toPlay();
   goalBlast(-1, mouthY());
   enterKickoff();
@@ -395,7 +429,7 @@ section('A REPLAY IS NOT PLAY — and a ragdoll is not footage');
   // the blast is certain to catch them. Set up the way tools/versus-test.mjs
   // sets up its replay section: a full-power dash into a still ball short of
   // the right goal, so there is a `lastTouch` for replayWanted to find.
-  resetVersus(); resetPlayer(); startVersus(scene);
+  resetVersus(); resetPlayer(); startMatch();
   check('the match is in play before the shot', toPlay(), `phase ${versusState.phase}`);
   resetBall();
   ball.x = bounds.right - 30; ball.y = midWater();
@@ -652,6 +686,174 @@ section('ON THE REAL SEAL — the skeleton comes back, measured against a contro
         strays.length === 0,
         strays.length ? strays.map(([n, o]) => `${n} ${o.toFixed(2)} rad`).join(', ') : `${bones.length} bones home`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('THE GATHER — the bodies arrive at the kickoff, they are not placed there');
+//
+// The blast above is the point of a goal and the kickoff used to be where it
+// went to die: `holdKickoff` wrote every position, every heading, every belly
+// roll and every tumble angle outright, so four somersaulting animals were
+// teleported onto four marks on one frame and the count started over the cut.
+//
+// Now a kickoff called BY A GOAL eases them there instead (CONFIG.versus.
+// kickoff.gather), and the count waits for them. The marks have not moved —
+// every claim below measures the bodies against kickoffSpot, the same answer a
+// snapped kickoff lands on — only how they get to them.
+{
+  const KO = () => V().kickoff;
+  const savedGather = KO().gather;
+
+  /** Ride a gather out, watching every body every frame. */
+  function watchGather() {
+    const r = { frames: 0, maxStep: 0, travelled: 0, inverted: 0, spinAt: [], spinSeen: 0, wall: 0 };
+    const was = new Map();
+    for (const seal of matchSeals()) {
+      const p = sealPos(seal);
+      was.set(seatOf(seal), { x: p.x, y: p.y });
+      r.spinAt.push(Math.abs(seal.jolt?.spin ?? 0) + Math.abs(seal.jolt?.roll ?? 0));
+    }
+    while (!versusState.gathered && r.wall < (KO().gather ?? 0) + 0.5) {
+      frame();
+      r.wall += DT;
+      r.frames++;
+      r.inverted += upsideDown().length;
+      for (const seal of matchSeals()) {
+        const seat = seatOf(seal);
+        const p = sealPos(seal);
+        const from = was.get(seat);
+        const step = Math.hypot(p.x - from.x, p.y - from.y);
+        r.maxStep = Math.max(r.maxStep, step);
+        r.travelled += step;
+        from.x = p.x; from.y = p.y;
+        r.spinSeen = Math.max(r.spinSeen, Math.abs(seal.jolt?.spin ?? 0) + Math.abs(seal.jolt?.roll ?? 0));
+      }
+    }
+    return r;
+  }
+
+  /** A goal's kickoff, with everybody parked in the mouth so the blast is certain
+   *  to catch them and certain to have somewhere to throw them. */
+  function blastedKickoff() {
+    resetVersus(); resetPlayer(); startMatch(); toPlay();
+    const face = rockX(-1);
+    const gy = mouthY();
+    player.mesh.position.set(face + 3, gy, 0);
+    player.velocity.set(0, 0);
+    for (const seal of matchSeals()) {
+      if (seal === player) continue;
+      sealPos(seal).set(face + 5, gy + 2, 0);
+      seal.velocity.set(0, 0);
+    }
+    const caught = goalBlast(-1, gy);
+    // A beat of real water first — the blast is a throw, and a kickoff called
+    // on the same frame would be gathering bodies that had not gone anywhere.
+    for (let i = 0; i < 30; i++) { setJoltWallDt(DT); updatePlayer(DT, idle); updateVersus(DT, noPads); }
+    return caught;
+  }
+
+  KO().gather = savedGather > 0 ? savedGather : 0.6;
+  const caught = blastedKickoff();
+  check('the goal threw somebody to gather', caught > 0, `${caught} seal(s) caught`);
+  const away = [...matchSeals()].map((s) => {
+    const p = sealPos(s);
+    const spot = kickoffSpot(seatOf(s), { x: 0, y: 0 });
+    return Math.hypot(p.x - spot.x, p.y - spot.y);
+  });
+  enterKickoff(true);
+  check('...and a goal\'s kickoff opens un-gathered rather than placing them',
+    !versusState.gathered && Math.max(...away) > 5, `furthest ${Math.max(...away).toFixed(0)} units off its mark`);
+  const g = watchGather();
+  check('it takes the beat it was given', Math.abs(g.wall - KO().gather) < DT * 2,
+    `${g.wall.toFixed(2)}s of ${KO().gather}`);
+  // THE CLAIM THE WHOLE THING IS FOR. A teleport is one frame that moves the
+  // whole distance; an ease is every frame moving a little of it.
+  check('...and nobody teleports: no frame moves more than a tenth of the trip',
+    g.maxStep > 0 && g.maxStep < g.travelled * 0.1,
+    `biggest step ${g.maxStep.toFixed(2)} of ${g.travelled.toFixed(0)} units travelled over ${g.frames} frames`);
+  // ...AND THE ROLL TRAVELS WITH THE HEADING. A seal whose mark faces the
+  // other way from the goal it was blown out of has to turn AND roll its belly
+  // down, and easing one without the other is an animal swimming on its back
+  // for half a second in the middle of a countdown.
+  check('...and nobody swims on their back on the way', g.inverted === 0, `${g.inverted} inverted seal-frame(s)`);
+  // THE TUMBLE UNWINDS RATHER THAN BEING CUT. `spin` and `roll` are where the
+  // somersault has GOT to; zeroing them on the frame the kickoff opens is the
+  // somersault ending in a splice.
+  check('...and the somersault unwinds over it instead of being cut',
+    Math.max(...g.spinAt) > 0.05 && g.spinSeen > 0.02,
+    `${Math.max(...g.spinAt).toFixed(2)} rad of tumble owed at the kickoff`);
+
+  // WHERE THEY END UP IS THE PLACEMENT THAT ALWAYS WAS — to the float, on the
+  // kickoff's own answer, with the tumble gone and the wheel full.
+  {
+    const off = [...matchSeals()].map((s) => {
+      const p = sealPos(s);
+      const spot = kickoffSpot(seatOf(s), { x: 0, y: 0 });
+      return Math.hypot(p.x - spot.x, p.y - spot.y);
+    });
+    const spun = [...matchSeals()].filter((s) => Math.abs(s.jolt?.spin ?? 0) > 1e-9 || Math.abs(s.jolt?.roll ?? 0) > 1e-9);
+    check('every body lands exactly on its mark', Math.max(...off) < 1e-6, `furthest ${Math.max(...off).toExponential(1)}`);
+    check('...level, with nothing left of the tumble', spun.length === 0, `${spun.length} still turning`);
+    check('...and upright', upsideDown().length === 0, `seats ${JSON.stringify(upsideDown())}`);
+  }
+  check('the count waits for them, then runs as it always did', toPlay(12), `phase ${versusState.phase}`);
+
+  // A KICKOFF WITH NOBODY OUT OF PLACE DOES NOT HOLD THE COUNT. Otherwise every
+  // goal whose blast caught nobody would open with a beat of four seals
+  // standing perfectly still on their marks.
+  {
+    resetVersus(); resetPlayer(); startMatch(); toPlay();
+    for (const seal of matchSeals()) {
+      // The turn the kickoff about to be called will place on: enterKickoff
+      // steps `kickoffs` and then spends kickoffTurn(), which is one behind it.
+      const spot = kickoffSpot(seatOf(seal), { x: 0, y: 0 }, versusState.kickoffs);
+      sealPos(seal).set(spot.x, spot.y, 0);
+      seal.velocity.set(0, 0);
+      faceSeal(seal, Math.atan2(midWater() - spot.y, (bounds.left + bounds.right) * 0.5 - spot.x));
+      const j = seal.jolt;
+      if (j) { j.spin = j.spinV = j.roll = j.rollV = j.free = 0; }
+    }
+    enterKickoff(true);
+    check('a kickoff with everybody already on their marks holds nothing',
+      versusState.gathered, 'gathered on the frame it opened');
+  }
+
+  // ...AND NEITHER DOES ANY OTHER WAY IN. A match opening has just built its
+  // roster standing on the marks; a rematch is called out of a highlight reel
+  // that is posing the seals from recorded frames. Easing out of either is
+  // easing out of nothing, so only a GOAL asks for a gather.
+  {
+    resetVersus(); resetPlayer(); startMatch();
+    check('a match opens on a placed kickoff, not a gathered one', versusState.gathered);
+    toPlay();
+    blastedKickoff();
+    enterKickoff();
+    check('...and a kickoff called without one places the bodies outright',
+      versusState.gathered
+      && Math.max(...[...matchSeals()].map((s) => {
+        const p = sealPos(s);
+        const spot = kickoffSpot(seatOf(s), { x: 0, y: 0 });
+        return Math.hypot(p.x - spot.x, p.y - spot.y);
+      })) < 1e-6);
+    toPlay(12);
+  }
+
+  // OFF IS OFF: `gather: 0` is the cut back.
+  {
+    KO().gather = 0;
+    resetVersus(); resetPlayer(); startMatch(); toPlay();
+    blastedKickoff();
+    enterKickoff(true);
+    const off = Math.max(...[...matchSeals()].map((s) => {
+      const p = sealPos(s);
+      const spot = kickoffSpot(seatOf(s), { x: 0, y: 0 });
+      return Math.hypot(p.x - spot.x, p.y - spot.y);
+    }));
+    check('gather: 0 puts the placement back on the frame the kickoff opens',
+      versusState.gathered && off < 1e-6, `furthest ${off.toExponential(1)}`);
+    KO().gather = savedGather;
+    toPlay(12);
   }
 }
 

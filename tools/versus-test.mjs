@@ -35,7 +35,7 @@ import {
   renderVersus, resetBall, dentBall, sealContact, p2Pad, readP2Input, versusFocus, rimRadius, rimAngle, solveBallSurface,
   versusCameraGoal, updateVersusCamera, strikeBallFrom, impactDent, versusBubblePips, driveOutline, timeLeft,
   versusOutOfAir, sealVulnerable,
-  kickoffSpot, enterKickoff,
+  kickoffSpot, kickoffScatter, enterKickoff,
   ballHitRadius, ballHitRadiusAt, ballContactReach, ballRestRadius, versusSeals, updatePinch,
   matchSeals, sealAt, seatOf, sealPos, setMatchRoster, matchRoster, bodyCheck, creditGoal, formatClock, jostle, rimRadiusAt, releaseP2,
   updateNameTags, tagText,
@@ -216,8 +216,23 @@ section('A match opens on a kickoff, with everything in its place');
   check('P1 is in the left half', player.mesh.position.x < -half * 0.1, `x=${player.mesh.position.x.toFixed(1)}`);
   check('P2 is in the right half', p2.pos.x > half * 0.1, `x=${p2.pos.x.toFixed(1)}`);
   const s0 = kickoffSpot(0, {}); const s1 = kickoffSpot(1, {});
-  check('each seal is on its own kickoff spot, `inset` in from its own wall', Math.abs(player.mesh.position.x - s0.x) < 1e-6 && Math.abs(p2.pos.x - s1.x) < 1e-6 && Math.abs(s0.x - (bounds.left + KO.inset * bounds.width)) < 1e-6, `p1 ${s0.x.toFixed(1)} p2 ${s1.x.toFixed(1)}`);
-  check('...mirrored about the ball', Math.abs(s0.x + s1.x) < 1e-6 && s0.y === midWater());
+  check('each seal is on its own kickoff spot', Math.abs(player.mesh.position.x - s0.x) < 1e-6 && Math.abs(p2.pos.x - s1.x) < 1e-6, `p1 ${s0.x.toFixed(1)} p2 ${s1.x.toFixed(1)}`);
+  // `inset` FROM ITS OWN WALL, times whatever this kickoff rolled. It used to
+  // be that distance exactly — the spot was the same two marks every kickoff of
+  // the match, which at 1v1 is what kickoffScatter exists to stop.
+  {
+    const anchor = bounds.width * 0.5 - KO.inset * bounds.width;
+    const sc = kickoffScatter(undefined, {});
+    const r = Math.hypot(s0.x, s0.y - midWater());
+    check('...at `inset` in from its own wall, swung and stretched by this kickoff\'s roll',
+      Math.abs(r - anchor * sc.scale) < 1e-6, `${r.toFixed(2)} against ${anchor.toFixed(2)} x ${sc.scale.toFixed(3)}`);
+  }
+  // MIRRORED ACROSS THE HALFWAY LINE — the same distance from the ball and the
+  // same height in the water, in opposite halves. NOT `s0.y === midWater()`,
+  // which is what it used to say: the lane is rolled now, and the thing worth
+  // asserting was never that it was zero but that both sides get the same one.
+  check('...mirrored about the ball', Math.abs(s0.x + s1.x) < 1e-6 && Math.abs(s0.y - s1.y) < 1e-6,
+    `${s0.x.toFixed(2)},${s0.y.toFixed(2)} vs ${s1.x.toFixed(2)},${s1.y.toFixed(2)}`);
   check('both meters open full', strikeState.charge >= 0.999 && p2.charge >= 0.999, `p1=${strikeState.charge.toFixed(2)} p2=${p2.charge.toFixed(2)}`);
   check('scores are 0–0', versusState.scores[0] === 0 && versusState.scores[1] === 0);
   check('the goal mouths are installed in the arena', goalHolesInstalled());
@@ -510,7 +525,30 @@ section('The shutter: freeze, ramp, then the number flies into a kickoff');
   check('the number flies as the ball comes back', flownAt > 0 && Math.abs(flownAt - respawnedAt) < dt * 2, `flew at ${flownAt.toFixed(2)}s`);
   check('and the shutter closes into a kickoff', versusState.phase === 'kickoff' && versusState.kickoffs === kickoffsBefore + 1, `phase ${versusState.phase} at ${t.toFixed(2)}s`);
   const s0 = kickoffSpot(0, {}); const s1 = kickoffSpot(1, {});
-  check('...with both seals back on their spots', Math.abs(player.mesh.position.x - s0.x) < 1e-6 && Math.abs(p2.pos.x - s1.x) < 1e-6);
+  // THE SEALS ARRIVE, THEY ARE NOT PLACED — see the gather in versus.js. A
+  // goal throws every body near the mouth across the pitch and this kickoff
+  // eases them onto their marks over `kickoff.gather` wall seconds instead of
+  // writing them there on the frame it opens. So the claim is about where they
+  // END UP and when: on their spots, exactly, before the first numeral.
+  check('...with the seals still gathering rather than teleported',
+    !versusState.gathered || (Math.abs(player.mesh.position.x - s0.x) < 1e-6 && Math.abs(p2.pos.x - s1.x) < 1e-6),
+    `gathered ${versusState.gathered}, p1 ${player.mesh.position.x.toFixed(1)} vs ${s0.x.toFixed(1)}`);
+  {
+    let waited = 0;
+    let numeral = false;
+    while (!versusState.gathered && waited < (KO.gather ?? 0) + 0.5) {
+      // Read BEFORE the frame that lands them: the count is allowed to open on
+      // the frame the gather finishes, and is not allowed to open before it.
+      if (versusState.count !== -1) numeral = true;
+      frame();
+      waited += dt;
+    }
+    check('...and on their spots to the float once the gather is done',
+      versusState.gathered && Math.abs(player.mesh.position.x - s0.x) < 1e-6 && Math.abs(p2.pos.x - s1.x) < 1e-6,
+      `after ${waited.toFixed(2)}s: p1 ${player.mesh.position.x.toFixed(3)} vs ${s0.x.toFixed(3)}, p2 ${p2.pos.x.toFixed(3)} vs ${s1.x.toFixed(3)}`);
+    check('...over the beat it is given, with no numeral up while they travelled',
+      !numeral && Math.abs(waited - (KO.gather ?? 0)) < dt * 2, `${waited.toFixed(2)}s of ${KO.gather}, numeral ${numeral}`);
+  }
   check('...and the water frozen again under the count', updateVersusClock(dt) <= k.freezeScale + 1e-9);
   check('the count runs out into play', toPlay(), `phase ${versusState.phase}`);
   check('a live match runs at full speed', updateVersusClock(dt) === 1);
@@ -1308,10 +1346,21 @@ section('The meter comes back on its own, and out of the air');
   versusState.phase = 'play';
   resetBall();
   const every = V.regen.pipEvery;
+  const idle = [pad(0), pad(1)]; // pads present and untouched: no bot, no wind-up
+  // NOBODY DROWNS IN THE MIDDLE OF IT. regenPips skips a seat that is out of
+  // the water, and a burst costs a full second of respawn — so a seal that
+  // runs out of air partway through this window silently loses a pip and the
+  // meter takes the blame. Which seal that is depends on how long it has been
+  // under: this used to pass only because the goal shutter above happened to
+  // end before player 2's air did, and lengthening `clock.respawn` by a second
+  // was enough to sink it. Both seals start with a full lungful, and the air
+  // is what the section below is for.
+  const fullO2 = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100);
+  player.oxygen = fullO2; p2.oxygen = fullO2;
+  settle(Math.max(0, ...versusState.dead) + 0.1, idle);
   strikeState.charge = 0; strikeState.pending = 0;
   p2.charge = 0; p2.pending = 0;
   versusState.regenT[0] = versusState.regenT[1] = every;
-  const idle = [pad(0), pad(1)]; // pads present and untouched: no bot, no wind-up
   settle(every - 0.2, idle);
   check('nothing before the pip is due', strikeState.charge < 1e-6 && p2.charge < 1e-6, `p1 ${strikeState.charge.toFixed(3)} p2 ${p2.charge.toFixed(3)}`);
   settle(0.4, idle);
@@ -4663,6 +4712,31 @@ section('A match shows no run HUD and no tutorial text');
   const outCss = Number(src.match(/\.sv-versus-card\.sv-versus-out \{ animation: svVersusCardOut ([\d.]+)s/)?.[1] ?? 0);
   check('the exit animation and the timer that follows it are the same length',
     outMs > 0 && Math.abs(outMs / 1000 - outCss) < 1e-6, `CARD_OUT_MS ${outMs}ms, sheet ${outCss}s`);
+  // THE SCORE STRIP GOES WITH IT. Both numbers and the clock are on the stats
+  // page, so a strip left at the top is the same answer a second time, smaller,
+  // over the top of the fuller one — and it is a readout for a match that is
+  // still being played.
+  check('the gameplay score strip is taken down for the stats page',
+    overFn.includes("hud?.classList.add('sv-versus-hud-gone')"), overFn.replace(/\s+/g, ' ').slice(0, 160));
+  check('...by a rule that only changes its opacity, so the layout under it does not move',
+    /\.sv-versus-hud\.sv-versus-hud-gone \{ opacity: 0; \}/.test(src) &&
+    /\.sv-versus-hud \{[^}]*transition: opacity/.test(src));
+  // ...AND COMES BACK. The HUD is hidden between matches, not rebuilt, so a
+  // class left on it is a strip that is missing for the rest of the session.
+  const hideOverFn = src.slice(src.indexOf('function hideOver() {'), src.indexOf('function goal(side) {'));
+  check('...and comes back on every way out of the end screen, not just the rematch',
+    hideOverFn.includes("hud?.classList.remove('sv-versus-hud-gone')"), hideOverFn.replace(/\s+/g, ' ').slice(0, 160));
+  // The four ways out, each read to its own closing brace rather than through a
+  // fixed window — rematch() carries a dozen lines of comment before its call,
+  // and a window short enough to miss it would fail a function that is correct.
+  const bodyOf = (from) => {
+    const at = src.indexOf(from);
+    return at < 0 ? '' : src.slice(at, src.indexOf('\n}', at));
+  };
+  const ways = ['export function rematch()', 'function chooseOver(', 'function hideUi()', 'export function previewVersusUi'];
+  const missed = ways.filter((w) => !bodyOf(w).includes('hideOver()'));
+  check('...which is the one function the rematch, the menu, hideUi and the preview all go through',
+    missed.length === 0, missed.join(', ') || `${ways.length} routes, all through hideOver`);
   // DOWN, NOT UP. Up is where the stats page arrives from.
   check('...and the card sinks out rather than climbing into the page',
     /@keyframes svVersusCardOut \{[^}]*\}[^}]*to \{ opacity: 0; transform: translate\(-50%, -3[0-9]%\)/.test(src),
@@ -4860,8 +4934,17 @@ section('A roster, not a pair: teammates and opponents under the same rules');
   // Rocket League. Without it the same seal is the striker at every kickoff of
   // the match and the rest are permanently its escort.
   {
+    // WITH THE SCATTER HELD STILL. kickoffScatter moves the whole formation
+    // every kickoff, so a spot compared raw would differ between two turns
+    // whether or not the rotation did anything — the check would pass on a
+    // rotation that had been deleted. Zeroed here so what moves is the
+    // rotation and only the rotation, and put back below: the scatter has its
+    // own section, and the two are different claims about the same spot.
+    const sc = CONFIG.versus.kickoff.scatter;
+    const wasAngle = sc.angle; const wasDistance = sc.distance;
+    sc.angle = 0; sc.distance = 0;
     const seen = [new Set(), new Set()];
-    const first = [0, 1].map((i) => `${spots[i].x.toFixed(3)},${spots[i].y.toFixed(3)}`);
+    const first = [0, 1].map((i) => { const p = kickoffSpot(i, { x: 0, y: 0 }); return `${p.x.toFixed(3)},${p.y.toFixed(3)}`; });
     const perSide = matchRoster();
     for (let k = 0; k < perSide; k++) {
       enterKickoff();
@@ -4881,7 +4964,10 @@ section('A roster, not a pair: teammates and opponents under the same rules');
     const back = [0, 1].map((i) => { const p = kickoffSpot(i, { x: 0, y: 0 }); return `${p.x.toFixed(3)},${p.y.toFixed(3)}`; });
     check('...and comes back to where it started after a full turn',
       back[0] === first[0] && back[1] === first[1], `${back[0]} vs ${first[0]}`);
-    // Two sides never stand on top of each other, whatever the rotation.
+    sc.angle = wasAngle; sc.distance = wasDistance;
+    // Two sides never stand on top of each other, whatever the rotation — and
+    // the scatter is LIVE for this one, because a shifted formation is exactly
+    // when two seals might be put on the same mark.
     for (let k = 0; k < perSide; k++) {
       enterKickoff();
       const all = [0, 1, 2, 3].map((i) => kickoffSpot(i, { x: 0, y: 0 })).map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`);
@@ -5039,6 +5125,134 @@ section('A roster, not a pair: teammates and opponents under the same rules');
   startVersus(scene);
   toPlay();
   check('and it goes back to a pair on request', matchSeals().length === 2, `${matchSeals().length} bodies`);
+}
+
+// ---------------------------------------------------------------------------
+// NOBODY OPENS TWO KICKOFFS ON THE SAME MARK — and neither side is ever handed
+// a better one than the other. A 1v1 has ONE formation spot per side, so the
+// rotation above is the identity for it and the two seals used to start every
+// kickoff of the match on exactly the same two marks.
+//
+// Everything here is swept over seeds rather than asserted on the roll this
+// match happened to make: a single roll can look symmetric by luck, and the
+// claim is about the construction.
+// ---------------------------------------------------------------------------
+section('Where the two sides stand is rolled, and rolled the same for both');
+{
+  const KO2 = CONFIG.versus.kickoff;
+  const SEEDS = 200;
+  const TURNS = 12;
+
+  for (const perSide of [1, 2, 3, 4]) {
+    setMatchRoster(perSide);
+    const seats = perSide * 2;
+    let mirror = 0;          // the worst a pair of opposite seats disagreed
+    let shared = 0;          // two seals on one mark
+    let wrongHalf = 0;
+    let outside = 0;
+    let closest = Infinity;  // ...any seat ever got to the halfway line
+    const marks = new Set();
+
+    for (let seed = 0; seed < SEEDS; seed++) {
+      versusState.kickoffSeed = (seed * 2654435761) >>> 0;
+      for (let t = 0; t < TURNS; t++) {
+        const p = [];
+        for (let i = 0; i < seats; i++) p.push({ ...kickoffSpot(i, { x: 0, y: 0 }, t) });
+        if (new Set(p.map((q) => `${q.x.toFixed(3)},${q.y.toFixed(3)}`)).size !== seats) shared++;
+        for (let i = 0; i < seats; i++) {
+          const q = p[i];
+          // Seats alternate: even is the left side, odd is the right.
+          if (i % 2 === 0 ? q.x >= 0 : q.x <= 0) wrongHalf++;
+          if (q.y < bounds.bottom + 4 - 1e-9 || q.y > bounds.surfaceY - 4 + 1e-9) outside++;
+          if (q.x <= bounds.left || q.x >= bounds.right) outside++;
+          closest = Math.min(closest, Math.abs(q.x));
+        }
+        // A SEAT AND ITS OPPOSITE NUMBER: same distance out, same height.
+        for (let i = 0; i < seats; i += 2) {
+          mirror = Math.max(mirror, Math.abs(p[i].x + p[i + 1].x), Math.abs(p[i].y - p[i + 1].y));
+        }
+        marks.add(`${p[0].x.toFixed(2)},${p[0].y.toFixed(2)}`);
+      }
+    }
+
+    const samples = SEEDS * TURNS;
+    // EXACTLY MIRRORED, not nearly. One roll is made and both sides are placed
+    // from it in their own frame, so this is 0 and not "small" — a tolerance
+    // here would hide the two-branch arrangement this replaced, where each
+    // side was its own sum and the two could drift apart.
+    check(`${perSide}v${perSide}: the two sides are exact mirrors of each other`, mirror === 0, mirror.toExponential(2));
+    check('...with nobody in the wrong half', wrongHalf === 0, `${wrongHalf} of ${samples * seats}`);
+    check('...nobody outside the water', outside === 0, `${outside} of ${samples * seats}`);
+    check('...and no two seals on one mark', shared === 0, `${shared} of ${samples}`);
+    // HOW FAR BACK THE FORWARD-MOST SEAL STANDS, against the same seal's
+    // standoff with the scatter off. Measured ACROSS the pitch and not as a
+    // distance from the ball, because those are two different claims and only
+    // this one is a promise: a seal swung onto the centre lane is nearer the
+    // ball than it was — it gave up its lane offset for it — and that is the
+    // scatter working rather than a seal stealing a march.
+    //
+    // `distance` is taken off the FRONT seat (see kickoffScatter), so a full
+    // roster's striker cannot be walked up to the halfway line: a share of the
+    // ANCHOR's standoff would have been most of the striker's.
+    {
+      const was = [KO2.scatter.angle, KO2.scatter.distance];
+      KO2.scatter.angle = 0; KO2.scatter.distance = 0;
+      let flat = Infinity;
+      for (let i = 0; i < seats; i++) flat = Math.min(flat, Math.abs(kickoffSpot(i, { x: 0, y: 0 }, 0).x));
+      [KO2.scatter.angle, KO2.scatter.distance] = was;
+      const floor = flat * (1 - KO2.scatter.distance);
+      check('...and the front seal is never walked closer in than `distance` allows',
+        closest >= floor - 1e-6, `closest ${closest.toFixed(2)}, floor ${floor.toFixed(2)} (flat ${flat.toFixed(2)})`);
+    }
+    // ...AND IT ACTUALLY MOVES. The whole point at 1v1, where the rotation is
+    // the identity and this is the only thing that varies the kickoff.
+    check('...and the spots are different ones, kickoff to kickoff', marks.size > samples * 0.5,
+      `${marks.size} distinct marks in ${samples} kickoffs`);
+  }
+
+  setMatchRoster(1);
+  versusState.kickoffSeed = 0x1234abcd;
+  // PURE IN ITS ARGUMENTS. kickoffSpot is asked several times per kickoff — as
+  // the roster is built, as everyone is placed, by the bots and by the labs —
+  // and a Math.random() inside it would hand each of them a different mark for
+  // the same seal. Which is a bug that shows up as a seal standing somewhere
+  // nothing else agrees it is, on some frames, at some kickoffs.
+  {
+    const a = kickoffSpot(0, { x: 0, y: 0 }, 5);
+    const b = kickoffSpot(0, { x: 0, y: 0 }, 5);
+    const c = kickoffSpot(0, { x: 0, y: 0 }, 5);
+    check('asking twice for the same kickoff gives the same mark',
+      a.x === b.x && a.y === b.y && b.x === c.x && b.y === c.y, `${a.x.toFixed(3)} ${b.x.toFixed(3)} ${c.x.toFixed(3)}`);
+    const other = kickoffSpot(0, { x: 0, y: 0 }, 6);
+    check('...and the next kickoff is somewhere else', other.x !== a.x || other.y !== a.y,
+      `${a.x.toFixed(2)},${a.y.toFixed(2)} then ${other.x.toFixed(2)},${other.y.toFixed(2)}`);
+  }
+  // A MATCH IS REPLAYABLE. The seed is the only thing between two identical
+  // matches, which is what makes the harness above able to sweep at all.
+  {
+    versusState.kickoffSeed = 99;
+    const a = kickoffSpot(0, { x: 0, y: 0 }, 3);
+    versusState.kickoffSeed = 100;
+    const b = kickoffSpot(0, { x: 0, y: 0 }, 3);
+    versusState.kickoffSeed = 99;
+    const c = kickoffSpot(0, { x: 0, y: 0 }, 3);
+    check('the same seed replays the same kickoff', a.x === c.x && a.y === c.y);
+    check('...and a different one does not', a.x !== b.x || a.y !== b.y);
+  }
+  // OFF IS OFF. Both dials at zero is the kickoff exactly as it was before any
+  // of this — the anchor at `inset`, on the centre lane.
+  {
+    const was = [KO2.scatter.angle, KO2.scatter.distance];
+    KO2.scatter.angle = 0; KO2.scatter.distance = 0;
+    const p0 = kickoffSpot(0, { x: 0, y: 0 }, 7);
+    const p1 = kickoffSpot(1, { x: 0, y: 0 }, 7);
+    check('with both dials at zero the kickoff is the one it always was',
+      Math.abs(p0.x - (bounds.left + KO2.inset * bounds.width)) < 1e-9 && p0.y === midWater() &&
+      Math.abs(p1.x - (bounds.right - KO2.inset * bounds.width)) < 1e-9 && p1.y === midWater(),
+      `${p0.x.toFixed(3)},${p0.y.toFixed(3)} | ${p1.x.toFixed(3)},${p1.y.toFixed(3)}`);
+    [KO2.scatter.angle, KO2.scatter.distance] = was;
+  }
+  setMatchRoster(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -5791,6 +6005,71 @@ section('Every ui.* the match reaches for is one mountUi builds');
   const dead = [...used].filter((k) => !built.has(k));
   check('...and every ui.* read is one of them', dead.length === 0,
     dead.length ? `ui.${dead.join(', ui.')} — read but never built` : `${used.size} names, all built`);
+}
+
+section('The strip fits the phone it is on');
+{
+  // THE STRIP IS THE ONE PART OF BLUBBERBALL SIZED IN PX. Every other line is
+  // vmin with a px floor; the score and the clock are tuned px in the Text
+  // panel (52px of Orbitron on the clock, plus min-width: 5ch so a match past
+  // ten minutes does not shuffle the row sideways), which made the strip a
+  // fixed ~437px on every screen there is. That is 62px wider than an iPhone SE
+  // and 6px wider than a Pro Max, and it hung off BOTH sides of every phone in
+  // the game — `npm run layout` reported it at three viewports x three match
+  // surfaces, 54 findings, for as long as the strip existed.
+  //
+  // FROM THE SOURCE, like the section above it and for the same reason: this
+  // harness has no layout engine, and the thing being protected is a shape
+  // rather than a number. The NUMBER is `npm run layout`'s job, and it now
+  // measures 0 where it measured 54 — what can quietly come back here is the
+  // wiring, and every piece of it fails silently.
+  const src = readFileSync(new URL('../path/src/systems/versus.js', import.meta.url), 'utf8');
+
+  check('the strip carries a fit scale at all',
+    /--sv-vs-fit/.test(src) && /transform:\s*translateX\(-50%\)\s*scale\(var\(--sv-vs-fit/.test(src),
+    'without it the row is a fixed 437px on a 375px phone');
+  // ORDER, and it is not style: `scale() translateX(-50%)` scales the -50% too,
+  // so the strip slides off centre as it shrinks — which looks like a centring
+  // bug in a file that has nothing to do with centring.
+  check('the translate comes before the scale',
+    src.indexOf('translateX(-50%) scale(var(--sv-vs-fit') > -1
+    && !/scale\(var\(--sv-vs-fit[^;]*\)\s*translateX\(-50%\)/.test(src),
+    'scaling the -50% walks the strip off centre');
+  check('...about the top centre, so the scale does not move it',
+    /transform-origin:\s*50%\s*0/.test(src));
+
+  // offsetWidth, NOT getBoundingClientRect. The rect is the box AFTER the
+  // transform, so a fit measured through it reads the strip at the scale it is
+  // already wearing and shrinks a little more on every resize until it
+  // disappears. This is the single line that turns the fix into a slow bug.
+  const fit = src.slice(src.indexOf('function fitStrip('), src.indexOf('\nfunction paintScores'));
+  check('the natural width is measured with offsetWidth', /\.offsetWidth/.test(fit),
+    'a rect read would feed the scale back into itself');
+  check('...and never through getBoundingClientRect', !/getBoundingClientRect/.test(fit),
+    'that is the transformed box — see the note in fitStrip');
+  check('a strip with no layout yet is left alone rather than scaled to nothing',
+    /natural < 1/.test(fit), 'measured before the roled font lands');
+
+  // THE FOUR THINGS THAT CHANGE THE ANSWER. A fit computed once is a fit for
+  // one screen, one font and one scoreline, and each of these fails by leaving
+  // the strip at a scale that WAS right.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const calls = [...code.matchAll(/fitStrip/g)].length;
+  check('it is re-asked from more than one place', calls >= 5, `${calls} mentions`);
+  check('a rotation re-asks it', /addEventListener\('resize', fitStrip\)/.test(code),
+    'a strip that fits sideways is 62px too wide stood up');
+  check('the font landing re-asks it', /document\.fonts/.test(code) && /stripFitKey = ''/.test(code),
+    'a fit measured in the fallback face is a fit for type that is not on screen');
+  check('the clock and the score both re-ask it',
+    /paintClock[\s\S]{0,600}?fitStrip\(\)/.test(code) && /paintScores[\s\S]{0,400}?fitStrip\(\)/.test(code));
+  check('and the Text panel preview, which writes the readouts by hand',
+    /previewVersusUi[\s\S]{0,1200}?fitStrip\(\)/.test(code),
+    'the painters never run there, so the preview would measure full size');
+  // The guard is what makes a call from paintClock free — that runs every frame.
+  check('a per-frame call is free unless something moved', /if \(key === stripFitKey\) return/.test(fit),
+    'paintClock ticks every frame; a layout read per frame on a phone is the cost that shows up late');
+  check('...and the viewport is part of what "moved" means', /window\.innerWidth\}/.test(fit),
+    'without it a resize changes nothing the key can see');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');

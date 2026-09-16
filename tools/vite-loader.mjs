@@ -17,6 +17,25 @@
 // `register()` + worker-thread hooks. The async form has to name a SEPARATE
 // module to load off-thread; pointing it at this file made the process exit 0
 // having silently never run the entry script at all.
+//
+// IMPORT THIS BEFORE A HARNESS REGISTERS HOOKS OF ITS OWN.
+//
+// registerHooks runs NEWEST FIRST — the last hook registered sees a specifier
+// before the older ones do — and the resolve hook below claims every `?raw`
+// and `?url` import outright, resolving it to the real file on disk and
+// short-circuiting. So a harness that registers its own stubs and *then*
+// imports this file has its `?raw`/`?url` stubs silently swallowed: the module
+// under test gets a real path where the harness meant to hand it a fake one.
+//
+// It fails quietly, which is the whole problem. tools/rive-boss-test.mjs stubs
+// '@rive-app/canvas/rive.wasm?url' and asserts the runtime was pointed at it;
+// with the order wrong the assertion read back an absolute node_modules path,
+// and every other harness in the same shape went on passing only because none
+// of them asserted on the stubbed value. Thirty-two of them were like that.
+//
+// Plain specifiers are unaffected either way — a stub for '@rive-app/canvas'
+// wins from either side, because this file passes anything without a Vite
+// suffix straight through to `next`. It is only the suffixed ones that clash.
 // ---------------------------------------------------------------------------
 
 import { registerHooks } from 'node:module';

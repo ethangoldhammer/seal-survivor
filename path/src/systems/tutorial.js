@@ -328,6 +328,30 @@ const STEPS = {
     // completely as one who dashes into it.
     done: (ctx, events) => events.has('bossWeakSpot'),
   },
+  // THE SALUTE — the one tip about a button that means something else
+  // somewhere else (systems/salute.js).
+  //
+  // IT IS THE ONLY WAY THE PLAYER COULD KNOW. Every other control in the game
+  // does one thing everywhere; this one is a clap in open water and a salute
+  // in front of a headstone, and nothing about a gravestone suggests that.
+  // Without a line here the gesture is undiscoverable — which is also what it
+  // looked like from the inside, since a press that quietly claps is
+  // indistinguishable from a press that did nothing.
+  //
+  // READY ONLY WHILE A STONE IS ACTUALLY IN REACH, which is the same answer
+  // systems/graveGaze.js gives the camera and the button — one test, so the
+  // tip cannot offer a gesture the button would refuse. It stands beside the
+  // stone (subject `grave`) and leaves when the seal does, like every other
+  // world tip here.
+  //
+  // KEYBOARD AND PAD ONLY, by the row's `devices` column: there is no clap
+  // control on a touchscreen, so there is nothing to teach a phone.
+  salute: {
+    ready: (ctx) => !!ctx.graveInReach,
+    // The gesture itself, not merely a press — a button that got refused has
+    // not taught anybody anything.
+    done: (ctx, events) => events.has('salute'),
+  },
   // THE HIVE — where the run's build lives, and the one tip about a piece of
   // the interface rather than about the water.
   //

@@ -69,6 +69,11 @@ globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 dom.window.HTMLCanvasElement.prototype.getContext = () => null;
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -90,7 +95,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 globalThis.fetch = async () => ({ ok: false, status: 404 });
 
 const store = localStorage;
@@ -612,6 +616,10 @@ function makeSubjects(ctx) {
     // corner is on screen, which is what `hiveShown` stands in for here.
     if (kind === 'hotspot') return ctx.weakSpotInReach;
     if (kind === 'hive') return ctx.hiveShown;
+    // A headstone is alive exactly while the seal is standing at one — the
+    // same condition its step is ready on, because systems/graveGaze.js gives
+    // one answer to both (see the salute step).
+    if (kind === 'grave') return ctx.graveInReach;
     return true;
   };
   return {
@@ -679,6 +687,8 @@ function coachRun(script, { live = true, seconds = 40, device = 'kbm' } = {}) {
     // every other water condition: a script that means to cover them says so.
     weakSpotInReach: false,
     hiveShown: false,
+    // No grave under the seal unless a script says so.
+    graveInReach: false,
     upgradesHeld: 0,
     sinceUpgrade: Infinity,
     // Where whatever the tip is about happens to be. Written by a script that
@@ -1508,7 +1518,11 @@ section('{player} — one name, every text table');
     // never hits one.
     ctx.weakSpotInReach = t > 116 && t < 124;
     if (t > 120 && t < 120.05) noteTutorialEvent('bossWeakSpot');
-  }, { device: 'kbm', seconds: 130 });
+    // ...and a headstone, stood at and saluted. A keyboard has the button, so
+    // a keyboard run has to spend this step like every other.
+    ctx.graveInReach = t > 126;
+    if (t > 128 && t < 128.05) noteTutorialEvent('salute');
+  }, { device: 'kbm', seconds: 134 });
   check('a keyboard player finishes without the two stick steps',
     tutorialComplete('kbm'), [...tutorialDone()].join(','));
   check('...and the same ledger is NOT finished on a phone',
@@ -1761,12 +1775,19 @@ section('the pace — how long a tip stays, and the quiet after it');
   // Each step is run until it actually leaves the band rather than for a fixed
   // couple of frames: answering a tip no longer clears it on the same frame,
   // and a loop that assumed it did would simply never finish.
+  // TWO DEVICES, and the comment above used to be able to say one. Touch was
+  // "the device every step exists on" until the salute, which is a gesture a
+  // touchscreen has no button for at all (see its row's `devices` column) — so
+  // a single-device sweep can no longer reach every step, and the strict
+  // tutorialComplete() below asks about all of them. The ledger persists
+  // across both passes, so between them they spend the lot.
+  for (const device of ['touch', 'kbm']) {
   for (let i = 0; i < COACH_IDS.length * 2 && !tutorialComplete(); i++) {
     resetCallouts();
     resetTutorialRun();
     const done = tutorialDone();
     const ctx = withSubjects({
-      runTime: 99, device: 'touch',
+      runTime: 99, device,
       moving: false, aiming: false, charging: false,
       chumInWater: true, oxygenLow: !done.has('surface'),
       aboveSurface: false, airTime: 0, nearSurface: true,
@@ -1782,6 +1803,7 @@ section('the pace — how long a tip stays, and the quiet after it');
       // a fixed `true` here would leave the loop spinning against a tip that is
       // behaving exactly as designed.
       weakSpotInReach: !done.has('bossWeakSpot'),
+      graveInReach: !done.has('salute'),
       hiveShown: true,
       upgradesHeld: 1,
       sinceUpgrade: done.has('hiveStack') ? Infinity : 0,
@@ -1821,11 +1843,13 @@ section('the pace — how long a tip stays, and the quiet after it');
     // tips that have no answer at all (the hive's is a fact, like the turtle's)
     // end on exactly this.
     ctx.weakSpotInReach = false;
+    ctx.graveInReach = false;
     ctx.sinceUpgrade = Infinity;
     for (let f = 0; f < 600 && tutorialState.active; f++) {
       updateCallouts(DT, {}, true);
       updateTutorial(DT, ctx, true);
     }
+  }
   }
   check('every step can be completed', tutorialComplete(), [...tutorialDone()].join(','));
 

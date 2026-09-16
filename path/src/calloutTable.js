@@ -102,6 +102,10 @@
 //               creature  the nearest animal the tip is about
 //               hotspot   a weak spot on the boss, within striking distance.
 //                         Ends when that spot ruptures — see hotSpotLit.
+//               grave     the headstone the seal is standing at. A THING even
+//                         though a stone cannot be eaten: the tip ends when the
+//                         player swims off it, which is the same frame the
+//                         grave's own caption goes (systems/graveGaze.js).
 //             Three name a PLACE, and are always answerable:
 //               surface   the waterline straight above the seal
 //               seabed    the floor straight below it
@@ -127,7 +131,7 @@ const DEVICE_TEXT_COLUMN = { touch: 'textTouch', pad: 'textPad' };
 
 export const CALLOUT_KINDS = ['warn', 'coach'];
 /** What a line can be ABOUT. See the `subject` column above. */
-export const SUBJECTS = ['chum', 'pickup', 'creature', 'hotspot', 'surface', 'seabed', 'hive'];
+export const SUBJECTS = ['chum', 'pickup', 'creature', 'hotspot', 'surface', 'seabed', 'hive', 'grave'];
 /** The surfaces a callout can appear on. First entry is the default. */
 export const CALLOUT_ANCHORS = ['band', 'player', 'world'];
 

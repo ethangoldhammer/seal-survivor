@@ -1880,6 +1880,26 @@ function updateTurtles(dt, scene, e, r, playerPos, dirX, dirY) {
 
   // Station-keeping. Spread along the perpendicular to the boss-player line so
   // three turtles are a fence rather than a column.
+  //
+  // THE BOSS'S OWN VELOCITY IS CARRIED, and the row's `speed` is what CLOSES
+  // the remaining gap on top of it. That is not a refinement — without it the
+  // perk did not work at all.
+  //
+  // The station is a point on a swimming animal, so holding it means moving at
+  // the boss's speed before a turtle has closed a single unit. `speed` is 3 in
+  // bossPerks.csv and a boss shark cruises at 4.9 to 9.1, so a turtle driven at
+  // `speed` alone fell behind on every frame the boss was moving: 25 seconds
+  // into a fight all three sat 8-11 units astern of their posts, on the WRONG
+  // SIDE of the boss, and the screen the whole perk is named for only existed
+  // in the moments the boss happened to be slow. It read as a perk that does
+  // nothing rather than as a bug, which is why it survived.
+  //
+  // Adding the boss's velocity rather than raising `speed` past the boss's is
+  // also the one that stays fixed: speed scales with difficulty
+  // (speedPerDifficulty in enemies.csv), so any number chosen here would go
+  // stale at some level and quietly bring the bug back.
+  const bossVx = e.vx ?? 0;
+  const bossVy = e.vy ?? 0;
   const n = active.escorts.length;
   for (let i = 0; i < n; i++) {
     const t = active.escorts[i];
@@ -1889,12 +1909,14 @@ function updateTurtles(dt, scene, e, r, playerPos, dirX, dirY) {
     const dx = wantX - t.mesh.position.x;
     const dy = wantY - t.mesh.position.y;
     const d = Math.hypot(dx, dy);
-    if (d < 0.15) { t.vx = 0; t.vy = 0; continue; }
+    // On station: travel with the boss, which is what standing still relative
+    // to a moving animal means.
+    if (d < 0.15) { t.vx = bossVx; t.vy = bossVy; t.heading = Math.atan2(t.vy, t.vx); continue; }
     // Eased into rather than driven at full speed, so a turtle arriving at its
     // post settles instead of oscillating across it.
     const v = Math.min(speed, d * 3);
-    t.vx = (dx / d) * v;
-    t.vy = (dy / d) * v;
+    t.vx = bossVx + (dx / d) * v;
+    t.vy = bossVy + (dy / d) * v;
     // Face the way it is going, like every other creature — the integrator in
     // updateEnemies does not do this for a body it isn't steering.
     t.heading = Math.atan2(t.vy, t.vx);

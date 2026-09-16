@@ -68,6 +68,7 @@ import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
   hotSpotShells, hotSpotRings, spotAt, setHotSpotLook, drainHotSpotChum,
+  aimHotSpots, designatedHotSpot,
   drainHotSpotShoves,
 } from '../path/src/systems/bossHotSpots.js';
 import { isOrganicRing, EDGE_KINDS } from '../path/src/systems/organicRing.js';
@@ -874,6 +875,19 @@ section('4d. A guided shot aims for the light');
   // shot it gave up. So whatever a shot commits to must be pointing back at
   // it — the check is on the spot's own outward normal, which is the number
   // facingHotSpots filters on.
+  //
+  // MEASURED WHERE THE CHOICE WAS MADE, which is the position at the TOP of
+  // the step rather than the one at the bottom of it. updateHoming picks the
+  // spot and then the shot is integrated past it in the same call, so reading
+  // the choice against the position it left behind asks whether the spot was
+  // facing the shot AFTER the shot flew through it — and once a shot is allowed
+  // to hold its spot all the way to contact, the last step of every successful
+  // approach reports a cosine near -1. That is the shot arriving, not the aim
+  // failing. It only ever passed because the shot used to let go on the way in.
+  //
+  // AND THE FLIGHT STOPS AT THE HULL, the way systems/combat.js ends it. Left
+  // running, a pellet carries on through the animal and out the other side,
+  // steering the whole way from inside a body it has already hit.
   {
     let worst = 1;
     let checked = 0;
@@ -892,12 +906,15 @@ section('4d. A guided shot aims for the light');
       });
       const p = projectiles[0];
       for (let k = 0; k < 40 && projectiles.length; k++) {
+        const fromX = p.mesh.position.x;
+        const fromY = p.mesh.position.y;
+        if (hitCreature(e, fromX, fromY, p.radius, contact)) break;
         updateProjectiles(DT, scene, [e], null, null);
         updateBossHotSpots(DT, DT);
         const s = p.aimSpot;
         if (!s) continue;
-        const dx = p.mesh.position.x - (s.cwx ?? s.wx);
-        const dy = p.mesh.position.y - (s.cwy ?? s.wy);
+        const dx = fromX - (s.cwx ?? s.wx);
+        const dy = fromY - (s.cwy ?? s.wy);
         const d = Math.hypot(dx, dy) || 1;
         worst = Math.min(worst, (dx * s.wnx + dy * s.wny) / d);
         checked += 1;
@@ -906,6 +923,219 @@ section('4d. A guided shot aims for the light');
     check('every spot a shot commits to is facing that shot', checked > 0
       && worst >= (CONFIG.homing.hotSpots.facing ?? 0.15) - 1e-6,
       `${checked} frames, worst cos ${worst.toFixed(3)} against a floor of ${CONFIG.homing.hotSpots.facing}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // THE SPOT THE PLAYER POINTED AT, and the whole volley on it.
+  //
+  // ON THE REAL GUNS, which is the point of this block existing separately
+  // from everything above it. The numbers used up there are a MUSSEL's — speed
+  // 18 at 9.5 rad/s, a 1.9-unit turn circle, a shot that can bend onto
+  // anything — and on those the aim looked fine while the two weapons the
+  // player actually fires could not use it at all. A pebble carves 6.5 units
+  // and a laser bolt 12.3, both wider than this animal, so a harness that does
+  // not fire a pebble is not testing the feature the player has.
+  //
+  // Measured against a control with the designation switched off, on the same
+  // boss with the same spots, so the only difference is whether the aim was
+  // pointing at one.
+  {
+    const guns = {
+      pebble: {
+        speed: CONFIG.weapon.speed, life: CONFIG.weapon.life,
+        radius: CONFIG.weapon.radius,
+      },
+      bolt: {
+        speed: CONFIG.weapon.speed * (CONFIG.finLaser?.speedMul ?? 1.9),
+        life: CONFIG.weapon.life * (CONFIG.finLaser?.lifeMul ?? 0.34),
+        radius: CONFIG.weapon.radius,
+      },
+    };
+    // The seeker a level-1 Sonar Teeth hands the gun — the weakest version of
+    // the card, because the strongest one was never the problem.
+    const hc = CONFIG.homingShot;
+    const seek = {
+      homing: true, turnRate: hc.turnRate, acquireRadius: 999,
+      homingDelay: 0, sizeBias: hc.sizeBias, sizeRefRadius: hc.refRadius,
+    };
+
+    // The spot a player at (ox, oy) would pick: the one most squarely facing
+    // them, which is the one they can see.
+    function nearestFacing(ox, oy) {
+      let best = null;
+      let bestCos = -2;
+      for (const s of owner.spots) {
+        if (!s.alive || s.dead) continue;
+        const dx = ox - (s.cwx ?? s.wx);
+        const dy = oy - (s.cwy ?? s.wy);
+        const d = Math.hypot(dx, dy) || 1;
+        const cos = (dx * s.wnx + dy * s.wny) / d;
+        if (cos > bestCos) { bestCos = cos; best = s; }
+      }
+      return best;
+    }
+
+    // One shot, from `angle` on the ring, with the seal aiming either at
+    // `want` or straight down the middle of the animal.
+    function shoot(angle, gun, want) {
+      const ox = e.mesh.position.x + Math.cos(angle) * RANGE;
+      const oy = e.mesh.position.y + Math.sin(angle) * RANGE;
+      let ax = -Math.cos(angle);
+      let ay = -Math.sin(angle);
+      if (want) {
+        ax = (want.cwx ?? want.wx) - ox;
+        ay = (want.cwy ?? want.wy) - oy;
+        const l = Math.hypot(ax, ay) || 1;
+        ax /= l; ay /= l;
+      }
+      owner.designated = null;
+      projectiles.length = 0;
+      spawnProjectile(scene, {
+        origin: new THREE.Vector3(ox, oy, 0),
+        dir: new THREE.Vector2(ax, ay),
+        faction: 'player', damage: 1, speed: gun.speed, life: gun.life,
+        radius: gun.radius, asset: 'bullet', ...seek,
+      });
+      const p = projectiles[0];
+      for (let k = 0; k < 400 && projectiles.length; k++) {
+        // The seal keeps pointing where it was pointing. Re-asked every frame
+        // because that is how main.js asks it, and because the STICKINESS is
+        // only exercised by asking more than once.
+        aimHotSpots(ox, oy, ax, ay);
+        updateProjectiles(DT, scene, [e], null, null);
+        updateBossHotSpots(DT, DT);
+        if (!projectiles.length) break;
+        if (hitCreature(e, p.mesh.position.x, p.mesh.position.y, p.radius, contact)) {
+          return spotAt(owner, p.mesh.position.x, p.mesh.position.y) ?? 'body';
+        }
+      }
+      return 'miss';
+    }
+
+    // THE CLAIM IS ABOUT WHICH SPOT, NOT HOW MANY. Counting spot hits either
+    // way is the wrong measurement and it reads as a pass: the per-pellet rule
+    // already lands on SOME light most of the time, so a designation that went
+    // to the wrong one every time would score the same. What the player asked
+    // for is THIS light, so that is what is counted.
+    for (const [name, gun] of Object.entries(guns)) {
+      let freeOnWanted = 0;
+      let aimedOnWanted = 0;
+      let freeMiss = 0;
+      let aimedMiss = 0;
+      for (let i = 0; i < SHOTS; i++) {
+        const angle = (i / SHOTS) * Math.PI * 2;
+        const ox = e.mesh.position.x + Math.cos(angle) * RANGE;
+        const oy = e.mesh.position.y + Math.sin(angle) * RANGE;
+        const want = nearestFacing(ox, oy);
+        const free = shoot(angle, gun, null);
+        const aimed = shoot(angle, gun, want);
+        if (free === want) freeOnWanted += 1;
+        if (aimed === want) aimedOnWanted += 1;
+        if (free === 'miss') freeMiss += 1;
+        if (aimed === 'miss') aimedMiss += 1;
+      }
+      check(`a ${name} goes to the spot the aim picked`,
+        aimedOnWanted > freeOnWanted,
+        `${aimedOnWanted}/${SHOTS} landed on the chosen spot, against ${freeOnWanted}/${SHOTS} choosing for themselves`);
+      check(`...and the ${name} does not pay for it in misses`,
+        aimedMiss <= freeMiss,
+        `${aimedMiss} missed aimed, ${freeMiss} free`);
+    }
+
+    // THE WHOLE VOLLEY, not one pellet. The fault this exists to remove is a
+    // fan of pellets splitting itself over three lights by proximity, which
+    // from behind the seal reads as the ordnance ignoring the aim.
+    {
+      const ox = e.mesh.position.x + 13;
+      const oy = e.mesh.position.y + 6;
+      const want = nearestFacing(ox, oy);
+      let ax = (want.cwx ?? want.wx) - ox;
+      let ay = (want.cwy ?? want.wy) - oy;
+      const l = Math.hypot(ax, ay) || 1;
+      ax /= l; ay /= l;
+      owner.designated = null;
+      aimHotSpots(ox, oy, ax, ay);
+      check('the aim claims the spot it is pointed at',
+        designatedHotSpot(e) === want, want ? 'claimed' : 'nothing lit');
+
+      projectiles.length = 0;
+      // A fan, the way a multishot volley leaves the flippers.
+      for (let i = -3; i <= 3; i++) {
+        const a = Math.atan2(ay, ax) + i * 0.16;
+        spawnProjectile(scene, {
+          origin: new THREE.Vector3(ox, oy, 0),
+          dir: new THREE.Vector2(Math.cos(a), Math.sin(a)),
+          faction: 'player', damage: 1, speed: guns.pebble.speed,
+          life: guns.pebble.life, radius: guns.pebble.radius, asset: 'bullet', ...seek,
+        });
+      }
+      const fan = projectiles.slice();
+      for (let k = 0; k < 20; k++) {
+        aimHotSpots(ox, oy, ax, ay);
+        updateProjectiles(DT, scene, [e], null, null);
+        updateBossHotSpots(DT, DT);
+      }
+      const onWant = fan.filter((p) => p.aimSpot === want).length;
+      check('every pellet in the volley works the same spot',
+        onWant === fan.length, `${onWant}/${fan.length}`);
+
+      // ...AND A HAND THAT WOBBLES DOES NOT DROP IT. The release cone is wider
+      // than the grab cone precisely so this holds; with one cone for both, a
+      // spot crossed its own boundary twice a second and the volley split
+      // between the light and the body centre — the same fault by another road.
+      const wob = 0.055;
+      const wx = ax * Math.cos(wob) - ay * Math.sin(wob);
+      const wy = ax * Math.sin(wob) + ay * Math.cos(wob);
+      aimHotSpots(ox, oy, wx, wy);
+      check('...and a small wobble does not drop the claim',
+        designatedHotSpot(e) === want);
+
+      // A CLAIM IS NOT A MAGNET. Point the aim right away from the animal and
+      // the designation has to go, or it is not an aim at all.
+      aimHotSpots(ox, oy, 1, 0.9);
+      check('...and aiming away from the boss clears it',
+        designatedHotSpot(e) === null);
+    }
+
+    // THE SEAL'S ORDNANCE ONLY. An enemy missile chases the seal and has no aim
+    // of its own to obey — and a player's reticle steering the things being
+    // fired AT them is the same bug with the sign flipped.
+    {
+      const ox = e.mesh.position.x + 13;
+      const oy = e.mesh.position.y + 6;
+      const want = nearestFacing(ox, oy);
+      let ax = (want.cwx ?? want.wx) - ox;
+      let ay = (want.cwy ?? want.wy) - oy;
+      const l = Math.hypot(ax, ay) || 1;
+      ax /= l; ay /= l;
+      // AGAINST A CONTROL RUN OF THE SAME SHOT with nothing designated, which
+      // is the only honest way to ask this: the per-pellet rule can perfectly
+      // well pick the same spot the player did, and a bare "it is not on the
+      // designated one" would pass or fail on that coincidence rather than on
+      // the faction gate.
+      function enemyShotSpot(designate) {
+        owner.designated = null;
+        if (designate) aimHotSpots(ox, oy, ax, ay);
+        projectiles.length = 0;
+        spawnProjectile(scene, {
+          origin: new THREE.Vector3(ox + 6, oy + 6, 0),
+          dir: new THREE.Vector2(-1, -1),
+          faction: 'enemy', damage: 1, speed: guns.pebble.speed,
+          life: guns.pebble.life, radius: guns.pebble.radius, asset: 'bullet', ...seek,
+        });
+        const p = projectiles[0];
+        for (let k = 0; k < 6; k++) {
+          if (designate) aimHotSpots(ox, oy, ax, ay);
+          updateProjectiles(DT, scene, [e], null, null);
+        }
+        return p.aimSpot ?? null;
+      }
+      const withAim = enemyShotSpot(true);
+      const without = enemyShotSpot(false);
+      check('an enemy shot does not obey the player\'s aim',
+        withAim === without,
+        withAim === without ? 'same spot either way' : 'the reticle moved it');
+    }
   }
 
   // AND NOTHING CHANGES FOR ANYTHING THAT IS NOT A BOSS. The aim reaches into

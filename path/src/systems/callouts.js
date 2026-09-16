@@ -6,7 +6,7 @@ import {
 } from '../calloutTable.js';
 import { settings, keyLabel } from './settings.js';
 import { playerName } from './playerName.js';
-import { shoulderLabel } from '../devices.js';
+import { shoulderLabel, faceLeftLabel } from '../devices.js';
 
 // ---------------------------------------------------------------------------
 // THE BAND — one line of text across the middle of the screen, and the rules
@@ -100,7 +100,7 @@ const BINDING_TOKEN = /\{(\w+)\}/g;
 // allowed to ignore — and the failure of letting those disagree is a warning
 // nobody can act on ("this row names a key binding" about a row that says
 // somebody's name) or, worse, a real missing textPad going unreported.
-const NON_KEY_TOKENS = new Set(['bumper', 'player']);
+const NON_KEY_TOKENS = new Set(['bumper', 'faceLeft', 'player']);
 
 // What a hardware token says when nobody has told us about the hardware. Not a
 // safety net for a caller that forgot — it is the honest answer for a pad the
@@ -108,7 +108,7 @@ const NON_KEY_TOKENS = new Set(['bumper', 'player']);
 // this to any controller it does not recognise. A tip that read
 // "{bumper} to charge a strike" would be a brace on screen in the one sentence
 // a first-time player is reading most carefully.
-const DEFAULT_TOKENS = { bumper: shoulderLabel(null) };
+const DEFAULT_TOKENS = { bumper: shoulderLabel(null), faceLeft: faceLeftLabel(null) };
 
 /**
  * Does this text name a KEY BINDING, as opposed to merely containing a token?

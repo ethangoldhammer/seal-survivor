@@ -360,6 +360,15 @@ section('6. EVERY GUN CAN REACH THE RANGE IT FIRES FROM');
 section('7. AND THEY CAN BE SHOT OUT OF THE AIR');
 // ---------------------------------------------------------------------------
 {
+  // THE WATER HAS TO BE EMPTY FIRST. Section 4b leaves a boss and five escorts
+  // in it, and `resolveCombat` runs player-bullets-vs-ENEMIES before it gets to
+  // player-bullets-vs-shots — so a body that happens to be under the muzzle
+  // eats the pellet and this section reports the shot as unclearable. It stayed
+  // green for as long as those six bodies happened to drift elsewhere, and
+  // started failing on a boss retune that changed nothing about projectiles:
+  // the classic shared-fixture failure, where the section that breaks is not
+  // the section that changed.
+  resetEnemies(scene);
   const es = CONFIG.enemyShot;
   const origin = new THREE.Vector3(0, MID, 0);
   const gun = { radius: 0.4, asset: 'enemyFish', scale: 1 };

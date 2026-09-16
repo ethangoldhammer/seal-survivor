@@ -2178,6 +2178,21 @@ export function chainStrike(source, links = 1, s = strikeState) {
  * orbs have now.
  */
 export function restoreCharge(stats = null, s = strikeState) {
+  creditOrb(s);
+  return fillMeter(1, stats, s);
+}
+
+/**
+ * THE ORB'S CREDIT WITHOUT ITS FUEL — everything restoreCharge does to the
+ * CHAIN, split out for the caller that hands the fuel over a pip at a time as
+ * the goo arrives (systems/pickupAbsorb.js) and so cannot let one call do both.
+ *
+ * Booked on the frame the orb is TOUCHED, which is why it can be split off at
+ * all: the chain is about the swallow, not about how long the goo takes to get
+ * home. A credit that waited for the last blob would let a window lapse in the
+ * half-second the vacuum is running.
+ */
+export function creditOrb(s = strikeState) {
   // ONE LINK, NOT A BARFUL, and this is the one place the pip rule is
   // deliberately not applied. A blue orb fills the meter outright, so by the
   // arithmetic everywhere else it would cross a whole bar of pips and pay a
@@ -2189,7 +2204,6 @@ export function restoreCharge(stats = null, s = strikeState) {
   // full and the crossing is already spent. Still budget-gated inside, so an
   // orb caught during the pause cannot re-open it.
   noteChainMouthful(1, s);
-  const filled = fillMeter(1, stats, s);
   // An orb caught mid-dash is meant to read as "go again, right now" — so it
   // also refreshes the chain window. Without this you could grab the pickup
   // that lets you keep going and still watch the combo lapse while the dash
@@ -2198,7 +2212,26 @@ export function restoreCharge(stats = null, s = strikeState) {
   if (s.active && s.chainCount > 0) {
     s.chainTimer = CONFIG.strike.chainWindow;
   }
-  return filled;
+}
+
+/**
+ * HOW MANY CONTAINERS ON THE BAR ARE NOT LIT — what an orb still has to hand
+ * over, counted in whole pips.
+ *
+ * This is the length of the vacuum: the orb is absorbed in one piece per pip
+ * (see the blue orb in main.js), so a bar with two pips missing goes down in
+ * two blips and an empty one takes the whole ladder. That is the tell about
+ * how much the pickup was actually worth to you, which the old instant fill
+ * could not say — a full bar and an empty one looked exactly alike.
+ *
+ * CEILED, so a part-burned pip counts as a whole one to refill: the bar is
+ * snapped to pips on every fill, but a meter caught mid-HOLD is partway
+ * through burning one, and a floor there would leave the last sliver unpaid
+ * and the vacuum one blip short of full.
+ */
+export function pipsToFull(stats = null, s = strikeState) {
+  const n = pipCount(stats);
+  return Math.max(0, Math.ceil(n - Math.min(1, s.charge) * n - 1e-6));
 }
 
 /**

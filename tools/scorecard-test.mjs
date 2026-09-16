@@ -115,6 +115,11 @@ dom.window.URL.revokeObjectURL = () => {};
 globalThis.URL = dom.window.URL;
 dom.window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,';
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -131,7 +136,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 
 // No AudioContext is installed, so playSfx bails before it reaches the graph
 // and every menu sound is a no-op. That is the point: this file is about the

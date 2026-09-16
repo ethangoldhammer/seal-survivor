@@ -1,0 +1,173 @@
+{
+  "celebrate": {
+    "poses": {
+      "clap": {
+        "up": 0.32,
+        "fore": 0.5,
+        "open": 0.5,
+        "close": 0.08,
+        "beats": 1.5,
+        "bob": 0.08,
+        "headUp": 0.3,
+        "headFore": 0.85,
+        "follow": 0,
+        "blendFrom": 0,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "breathBubbles",
+          "from": "mouth",
+          "rate": 0,
+          "scale": 1.01,
+          "bursts": []
+        }
+      },
+      "finsUp": {
+        "up": 0.66,
+        "fore": -0.61,
+        "spread": 0.8,
+        "tremble": 0.035,
+        "trembleHz": 9,
+        "headUp": 0.45,
+        "headFore": 0.8,
+        "bubbles": {
+          "enabled": true,
+          "from": "fins",
+          "rate": 12,
+          "scale": 1.01,
+          "bursts": []
+        }
+      },
+      "flip": {
+        "turns": 1,
+        "tuck": 0.35,
+        "tuckUp": -0.32,
+        "tuckFore": -0.13,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "breathBubbles",
+          "from": "tail",
+          "rate": 53.5,
+          "scale": 1.01,
+          "maxPerFrame": 4,
+          "bursts": [
+            {
+              "at": 0.2,
+              "count": 4,
+              "from": "tail",
+              "scale": 1.1
+            },
+            {
+              "at": 0.1,
+              "count": 8,
+              "from": "mouth",
+              "scale": 1
+            }
+          ]
+        }
+      },
+      "tailWag": {
+        "sweep": 0.95,
+        "beats": 1.75,
+        "fore": -0.85,
+        "finUp": 0.59,
+        "finFore": 0.14,
+        "finSpread": 0.51,
+        "headUp": 0.35,
+        "headFore": 0.9,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "breathBubbles",
+          "from": "tail",
+          "rate": 15.5,
+          "scale": 1.01,
+          "bursts": []
+        }
+      },
+      "headToss": {
+        "up": 0.8,
+        "fore": 0.35,
+        "finUp": -0.15,
+        "finFore": -0.35,
+        "finSpread": 0.5,
+        "bubbles": {
+          "enabled": true,
+          "from": "mouth",
+          "rate": 0,
+          "scale": 1.01,
+          "bursts": [
+            {
+              "at": 1,
+              "count": 12,
+              "scale": 1.4
+            }
+          ]
+        }
+      },
+      "salute": {
+        "browUp": 0.6,
+        "browFore": 0.6,
+        "browOut": 0.1,
+        "headUp": -0.13,
+        "headFore": 0.5,
+        "offUp": 0.62,
+        "offFore": -0.48,
+        "offSpread": 0.49,
+        "tailUp": -0.15,
+        "tailFore": -0.11,
+        "up": 0.37,
+        "fore": 0.6,
+        "spread": 0.66,
+        "follow": 0.33,
+        "faceWeight": 1,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "breathBubbles",
+          "from": "mouth",
+          "rate": 2.5,
+          "scale": 1.01,
+          "bursts": [
+            {
+              "at": 0.95,
+              "count": 5,
+              "from": "mouth",
+              "scale": 1.15
+            }
+          ]
+        }
+      }
+    }
+  },
+  "clap": {
+    "pose": {
+      "up": 0.12,
+      "fore": 0.9,
+      "close": 0,
+      "bob": 0.12,
+      "headUp": -0.15,
+      "headFore": 0.7,
+      "headWeight": 0.6
+    },
+    "bubbles": {
+      "enabled": true,
+      "emitter": "wakeBubbles",
+      "from": "fins",
+      "rate": 0,
+      "scale": 1.01,
+      "bursts": [
+        {
+          "at": 0.92,
+          "count": 4
+        }
+      ]
+    }
+  },
+  "salute": {
+    "enabled": true,
+    "peakAt": 0.75,
+    "hold": 2.3,
+    "release": 1.25,
+    "minGap": 0.25,
+    "lean": 0.5
+  },
+  "savedAt": "2026-09-16T15:53:21.804Z"
+}

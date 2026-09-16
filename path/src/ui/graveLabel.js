@@ -1,5 +1,13 @@
 import { CONFIG } from '../config.js';
-import { nearestGrave } from '../systems/gravesite.js';
+// WHICH STONE THE SEAL IS AT, asked of the one place that answers it. This
+// file used to run the test itself — nearestGrave, the height check and the
+// projection — and systems/graveGaze.js needed exactly the same answer to
+// decide whether to push the camera in. Two copies of a proximity test agree
+// until one of them is retuned, so the test moved there and this asks for it.
+// A function and not that file's state, deliberately: state would mean this
+// caption depended on the gaze having run first this frame. The conditions
+// have not changed; see that file's header for all three.
+import { graveAtSeal } from '../systems/graveGaze.js';
 import { worldToScreen } from './ui.js';
 // The light that finds the stone at the same moment the caption does. Fired
 // from here rather than from the frame loop because THIS is where the event
@@ -112,20 +120,8 @@ let shown = null;
 let alpha = 0;
 let fading = false;
 const anchor = { x: 0, y: 0 };
-// Scratch for the in-shot test, which runs before the anchor is adopted and so
-// cannot borrow the anchor's own.
-const SHOT_PT = { x: 0, y: 0 };
-
 function cfg() {
   return CONFIG.gravesite?.label ?? {};
-}
-
-/** Does this world point land inside the window? The caption's whole claim to
- *  a place on screen is that its stone is somewhere under it. */
-function onScreen(camera, x, y) {
-  worldToScreen(camera, x, y, SHOT_PT);
-  return SHOT_PT.x >= 0 && SHOT_PT.x <= window.innerWidth
-    && SHOT_PT.y >= 0 && SHOT_PT.y <= window.innerHeight;
 }
 
 function hexCss(hex, a = 1) {
@@ -192,26 +188,13 @@ export function updateGraveLabel(dt, ctx = {}) {
   if (c.enabled === false) { clearGraveLabel(); return; }
 
   const step = Math.min(Math.max(dt ?? 0, 0), 0.1);
-  // BOTH AXES, and the vertical one is measured against the stone rather than
-  // against its centre: `reach` is clearance ABOVE the top of the head, and a
-  // seal swimming alongside the stone's own height is at zero. nearestGrave is
-  // horizontal by design (it is shared with the crabs, who live on the floor
-  // and have no vertical half to the question), so the height test is this
-  // caller's — which is fine because every stone stands on the same bed, so it
-  // rejects or accepts them all alike and cannot pick the wrong one.
-  const found = ctx.live === false || !ctx.camera
-    ? null
-    : nearestGrave(ctx.x ?? 0, c.radius ?? 6);
-  const above = found ? Math.max(0, (ctx.y ?? 0) - found.topY) : 0;
-  // ...and the third test, which is the camera's rather than the seal's: the
-  // stone has to be in the picture. Asked EVERY frame and not just on arrival,
-  // because the frame can move out from under a caption that was fair when it
-  // came up. The top of the head is the right point to ask about — it is the
-  // stone's highest, so a top below the bottom edge means the whole marker is
-  // under the frame, and it is also the point the caption hangs off, which
-  // makes this exactly "is there anything to hang it on".
-  const inShot = found ? onScreen(ctx.camera, found.x, found.topY) : false;
-  const near = found && above <= (c.reach ?? 6) && inShot ? found : null;
+  // NEAR, LOW ENOUGH, AND IN SHOT — all three in systems/graveGaze.js. `live`
+  // stays this file's own test, and the answer to it is a FADE rather than a
+  // cut: the level-up cards open on top of a frame that is still being drawn,
+  // and a caption that blinks off the instant they do is a flicker in the
+  // corner of the eye during the one moment the player is reading something
+  // else.
+  const near = ctx.live === false ? null : graveAtSeal(ctx.camera, ctx.x ?? 0, ctx.y ?? 0);
 
   // --- who the label is about ----------------------------------------------
   // A DIFFERENT grave takes the old one down first rather than swapping the

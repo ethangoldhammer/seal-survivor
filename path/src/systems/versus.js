@@ -177,8 +177,23 @@ export const versusState = {
   // match); the count's clock does not start until it is true.
   settled: true,
   settleT: 0,             // wall seconds spent recentring
+  // THE GATHER — the same idea one beat earlier, for the BODIES rather than
+  // the frame. A goal throws every seal in the mouth across the pitch
+  // (goalBlast) and the kickoff used to teleport them from wherever that left
+  // them onto their marks in one frame, mid-tumble. `gathered` is false from
+  // the goal's kickoff until every body has been eased onto its spot over
+  // `kickoff.gather` wall seconds; like `settled`, the count's clock does not
+  // start until it is true. True on every other way into a kickoff — see the
+  // `gather` argument to enterKickoff.
+  gathered: true,
+  gatherT: 0,             // wall seconds into the ease
   wallDt: 0,              // the raw delta updateVersusClock was last handed
   kickoffs: 0,            // how many kickoffs this session, for the harness
+  // THE MATCH'S SEED for where the two formations stand each kickoff. Rolled
+  // once, in startVersus, and spent by kickoffScatter as a pure function of
+  // the kickoff's number — so every caller asking where seat 3 starts gets the
+  // same answer, and a harness that wants a repeatable match pins this.
+  kickoffSeed: 0,
   goT: 0,                 // wall seconds the whistle's line has left on screen
   lastPost: null,         // { side, nx, ny, x, y } of the last post/lip hit, for the harness
   lastImpact: null,       // the payload of the ball's last impact event, for the harness
@@ -465,6 +480,8 @@ function resetMatchState() {
   st.draw = false;
   st.flown = false;
   st.respawned = false;
+  st.gathered = true;
+  st.gatherT = 0;
   st.chumTimer = 0;
   st.goals = 0;
   st.lastGoal = null;
@@ -499,6 +516,25 @@ function resetMatchState() {
   resetRecorder();
 }
 
+// A seed to use instead of rolling one, or null to roll. See setKickoffSeed.
+let pinnedSeed = null;
+
+/**
+ * PIN WHERE EVERY KICKOFF OF THE NEXT MATCH STANDS — for the harnesses and the
+ * labs, and for nothing the player ever touches.
+ *
+ * versusState.kickoffSeed can be written directly once a match is running, but
+ * not for the OPENING kickoff: startVersus rolls the seed and then places the
+ * seals, so by the time a caller has the state to write to, the first kickoff
+ * has already happened on the old seed. This is the same value, set early
+ * enough to matter.
+ *
+ * `null` puts it back to rolling, which is what a real match does.
+ */
+export function setKickoffSeed(seed) {
+  pinnedSeed = seed == null ? null : (seed >>> 0);
+}
+
 export function startVersus(worldScene) {
   scene = worldScene;
   // The streaks draw OVER the goo, so they live in the post chain's overlay
@@ -516,6 +552,19 @@ export function startVersus(worldScene) {
   versusState.timeScale = 1;
   versusState.count = 0;
   versusState.kickoffs = 0;
+  // ...AND A NEW ROLL OF WHERE THE KICKOFFS STAND. Here rather than in
+  // resetMatchState, alongside the count it is spent with: `kickoffs` survives
+  // a rematch on purpose (a rematch turning the formation is the point), so a
+  // rematch keeps counting up through fresh spots on this same seed, and it is
+  // starting a match from the menu — where the count goes back to zero — that
+  // needs a new one, or every session would open on the same two marks.
+  //
+  // BEFORE THE KICKOFF BELOW, and that is the whole reason this line is where
+  // it is: enterKickoff places every seal, so a seed written after it would
+  // leave the OPENING kickoff on whatever the last match rolled. A harness
+  // setting versusState.kickoffSeed after startVersus hits the same wall,
+  // which is what setKickoffSeed is for.
+  versusState.kickoffSeed = pinnedSeed ?? ((Math.random() * 0x100000000) >>> 0);
   // THE CAST, as the team select left it — see systems/rosterCast.js. Seat 0
   // wears the name off the splash (the one this player already chose for
   // themselves tonight) and every other seat was rolled and re-rollable on the
@@ -4035,11 +4084,29 @@ export function updateVersusClock(rawDt, pads = null) {
     // travelling. Timed out rather than trusted: a framing that never
     // converges (a seal wedged in a mouth, a zoom on its clamp) must not be
     // able to stop the match.
+    // ...AND THE BODIES, the same rule about the same frame. The goal threw
+    // them and the kickoff is easing them onto their marks (the gather, see
+    // holdKickoff); "3" goes up when they are standing there, not while they
+    // are still travelling. Bounded by the ease itself rather than by a
+    // timeout, because unlike the camera this one cannot fail to converge: it
+    // is a residual spent against a curve that reaches 1.
+    //
+    // BOTH CLOCKS RUN TOGETHER and the count waits on the later of them. In
+    // series they would be two waits — and they are the same wait seen from
+    // two ends: the shot is chasing a box drawn round the ball and the seals
+    // (versusCameraGoal), so it cannot arrive until the bodies have.
     if (!st.settled) {
       st.settleT += rawDt;
-      st.phaseT = 0;
       if (cameraRecentred() || st.settleT >= (ko.settleMax ?? 1.6)) st.settled = true;
-      else { st.timeScale = scale; return scale; }
+    }
+    if (!st.gathered) {
+      st.gatherT += rawDt;
+      if (st.gatherT >= Math.max(0, ko.gather ?? 0)) st.gathered = true;
+    }
+    if (!st.settled || !st.gathered) {
+      st.phaseT = 0;
+      st.timeScale = scale;
+      return scale;
     }
     const tick = Math.max(0.05, ko.tick ?? 0.8);
     const from = Math.max(1, Math.round(ko.count ?? 3));
@@ -4103,7 +4170,9 @@ export function updateVersusClock(rawDt, pads = null) {
       st.respawned = true;
       st.flown = true;
       landScore(st.scorer);
-      enterKickoff();
+      // THE ONE KICKOFF THAT GATHERS — see enterKickoff. A goal is the only
+      // way into a kickoff with bodies still flying from a shockwave.
+      enterKickoff(true);
     }
   } else if (st.phase === 'won') {
     scale = k.freezeScale ?? 0.04;
@@ -4333,6 +4402,12 @@ function showOver() {
   // what the screen is for now, and the scorer it named is on it, in the row
   // that credits them.
   dismissCard();
+  // ...AND THE SCORE STRIP WITH IT, for the reason in the sheet below: the
+  // page carries both numbers and the clock, so the strip is a second, smaller
+  // answer laid over the full one. Set here and cleared in hideOver, which is
+  // the one pair of doors the end state has — a rematch comes back through it
+  // and gets its strip back.
+  ui.hud?.classList.add('sv-versus-hud-gone');
   // THE PROMPT IS THE STATS PAGE. It used to be a DOM panel at the centre of
   // the screen with this card mounted on top of it — the prompt was behind the
   // artboard, and the only way to answer it was the keyboard or a pad.
@@ -4347,6 +4422,16 @@ function showOver() {
 function hideOver() {
   statsCard?.setOver(false, overCursor);
   hideStats();
+  // THE STRIP COMES BACK — and unconditionally, not only on a rematch. The
+  // HUD is HIDDEN between matches rather than rebuilt (hideUi sets
+  // root.hidden; mountUi keeps the `ui` it already has), so this element
+  // outlives the match that faded it. Clearing it on only one of the two ways
+  // out would leave the next match's strip at opacity 0: a score that is not
+  // there at all, on a screen where everything else is, which reads as a bug
+  // in the match rather than as a class nobody took off.
+  // Every exit is through here — the rematch, the main menu, hideUi and the
+  // text panel's preview all call it — which is why it is the one place.
+  ui?.hud?.classList.remove('sv-versus-hud-gone');
   if (overKey && typeof window !== 'undefined') {
     window.removeEventListener('keydown', overKey, true);
     overKey = null;
@@ -4563,45 +4648,194 @@ export function kickoffTurn() {
 }
 
 /**
- * Where seal `who` stands for a kickoff: `inset` of the pitch in from its own
- * wall, at the formation spot its side's rotation gives it this time round.
+ * Where seal `who` stands for a kickoff: its side's anchor, `inset` of the
+ * pitch in from its own wall, plus the formation spot its side's rotation gives
+ * it this time round — and the whole of that swung and stretched by this
+ * kickoff's own roll (kickoffScatter).
  *
- * `turn` is which kickoff this is — the spots ROTATE within a side, the way a
- * kickoff rotates in Rocket League, so the seal that took the front spot last
- * time takes the one behind it now (see formationSlot in systems/sealRoster.js).
- * Defaulted to the match's own count so nothing that only wants "where does
- * this seat start" has to know about it, and passable so the labs and the
- * harness can ask for a particular turn.
+ * `turn` is which kickoff this is, and BOTH of the things that vary read it:
+ * the spots ROTATE within a side, the way a kickoff rotates in Rocket League,
+ * so the seal that took the front spot last time takes the one behind it now
+ * (see formationSlot in systems/sealRoster.js) — and the roll is a pure
+ * function of it. Defaulted to the match's own count so nothing that only wants
+ * "where does this seat start" has to know about it, and passable so the labs
+ * and the harness can ask for a particular kickoff.
+ *
+ * PURE IN (who, turn), which is load bearing rather than tidy: this is asked
+ * several times per kickoff — once per seat as the roster is built, again as
+ * everyone is placed, again by the bots — and a roll made HERE would hand a
+ * different mark to each of them.
  */
 export function kickoffSpot(who, out = _start[who] ?? { x: 0, y: 0 }, turn = kickoffTurn()) {
-  const ko = cfg().kickoff ?? {};
   const width = bounds.right - bounds.left;
-  const inset = clamp01(ko.inset ?? 0.16) * width;
+  const half = (bounds.top - bounds.bottom) * 0.5;
   const team = teamOfSeat(who);
-  // A SIDE IS A FORMATION, not a queue. The captain of each side stands where
-  // it always did; the seats behind it start further back from the middle and
+  // A SIDE IS A FORMATION, not a queue. The captain of each side stands on its
+  // side's anchor; the seats behind it start further back from the middle and
   // fan above and below the water's centre — see seatFormation, which returns
   // shares because the arena is rebuilt at a different width for a match and
   // this is the only place holding the bounds.
   const f = seatFormation(who, turn);
-  const inward = team === 0 ? 1 : -1;
-  const line = team === 0 ? bounds.left + inset : bounds.right - inset;
-  // UP THE PITCH, not back down it. The captain is already most of the way
-  // into its own half — `inset` is a sixth of the width from the wall — so the
-  // room a formation has is in FRONT of it, toward the middle. Fanning the
-  // other way put the fourth seat of a full roster inside the rock.
+  // ...AND THE WHOLE FORMATION IS SOMEWHERE SLIGHTLY DIFFERENT EACH TIME. The
+  // anchor swings and moves in or out; the shape hanging off it does not
+  // change. See kickoffScatter.
+  const sc = kickoffScatter(turn, _scatter);
+  // IN THE SIDE'S OWN FRAME, and that is what makes the two sides mirror
+  // images rather than two sums that happen to agree. `u` is distance from the
+  // centre spot toward this side's OWN wall and `v` is height in the water;
+  // both are computed once, without asking which team this is, and only the
+  // last line spends the side. Written as two branches — one adding `inset`
+  // to bounds.left and one subtracting it from bounds.right — it was two
+  // chances to get one arrangement right, and a scatter would have been a
+  // third and a fourth.
   //
+  // UP THE PITCH, not back down it. The anchor is already most of the way into
+  // its own half — `inset` is a sixth of the width from the wall — so the room
+  // a formation has is in FRONT of it, toward the middle. Fanning the other
+  // way put the fourth seat of a full roster inside the rock.
+  let u = anchorOut() + sc.du - f.back * width * 0.5;
+  const v = sc.dv + f.lane * half * 0.5;
   // Halfway is the ceiling: a seat may line up level with the ball at a push
   // and never in the other side's half, which is not a rule about fairness but
   // about the kickoff reading as two sides facing each other.
+  u = Math.max(1, u);
   const mid = (bounds.left + bounds.right) * 0.5;
-  const forward = line + inward * f.back * width * 0.5;
-  out.x = team === 0 ? Math.min(forward, mid - 1) : Math.max(forward, mid + 1);
-  const half = (bounds.top - bounds.bottom) * 0.5;
-  const lane = midWater() + f.lane * half * 0.5;
+  out.x = team === 0 ? mid - u : mid + u;
   // ...and inside the water, whatever the lane asked for.
-  out.y = Math.max(bounds.bottom + 4, Math.min(bounds.surfaceY - 4, lane));
+  out.y = Math.max(bounds.bottom + 4, Math.min(bounds.surfaceY - 4, midWater() + v));
   return out;
+}
+
+/** A SIDE'S ANCHOR, as a distance from the centre spot toward its own wall:
+ *  where its captain stands before any scatter. The one number both sides are
+ *  built out of, so neither can drift from the other. */
+function anchorOut() {
+  const width = bounds.right - bounds.left;
+  return width * 0.5 - clamp01(cfg().kickoff?.inset ?? 0.16) * width;
+}
+
+/**
+ * HOW FAR A SIDE'S FORMATION ALREADY REACHES off its anchor — the most any
+ * seat of one side is fanned up or down the water, and the furthest forward
+ * any of them stands. World units.
+ *
+ * This is the room the scatter is NOT allowed to spend. A 1v1 has one seat on
+ * the anchor and reaches nowhere, so it may swing the whole way; a full roster
+ * already fills most of the water it is allowed and may barely move. That is
+ * the honest rule rather than a per-roster table of amounts: the scatter gets
+ * what the formation leaves, and a roster size nobody has tried yet is handled
+ * by the same sentence.
+ *
+ * Turn 0 is enough — the rotation is a PERMUTATION of the same spots, so every
+ * turn reaches exactly as far as every other one.
+ */
+function formationReach() {
+  const width = bounds.right - bounds.left;
+  const half = (bounds.top - bounds.bottom) * 0.5;
+  let lane = 0;
+  let back = 0;
+  // One side's seats, off the mapping that owns which they are — seats
+  // alternate, and "every other one" written out here would be a second copy
+  // of that fact.
+  for (const i of seatsOfTeam(0)) {
+    const f = seatFormation(i, 0);
+    lane = Math.max(lane, Math.abs(f.lane) * half * 0.5);
+    back = Math.max(back, f.back * width * 0.5);
+  }
+  return { lane, back };
+}
+
+// The kickoff's roll, in world units: how far the anchor moves out toward its
+// own wall (`du`, negative is toward the ball) and up the water (`dv`). One
+// object, refilled — kickoffSpot asks once per seat and reads it immediately.
+const _scatter = { du: 0, dv: 0, angle: 0, scale: 1 };
+
+// How close to the halfway line the FRONT seat may be pushed, and how close to
+// its own wall the anchor may be pushed. Both in world units, and both are the
+// clamps that already existed in spirit: `1` is the halfway gap kickoffSpot has
+// always held, and `4` is the margin the water clamp uses at the surface and
+// the seabed, spent here on the wall.
+const SCATTER_MID_GAP = 1;
+const SCATTER_WALL_GAP = 4;
+
+/**
+ * THE KICKOFF'S OWN ROLL — where the two formations stand THIS time.
+ *
+ * A 1v1 has one formation spot per side, so formationSlot's rotation — the
+ * thing that keeps a bigger roster moving between kickoffs — is the identity
+ * for it, and the two seals opened every kickoff of the match on the same two
+ * marks. This is what varies it.
+ *
+ * SYMMETRIC, AND BY CONSTRUCTION RATHER THAN BY ARITHMETIC. One roll is made
+ * and both sides are placed from it in their own frame (see kickoffSpot), so
+ * the two spots are mirror images across the halfway line: same distance from
+ * the ball, same height in the water, opposite halves. There is no roll for
+ * side 1 that could come out different.
+ *
+ * MIRRORED IN X AND NOT ROTATED THROUGH 180°, which is the other symmetry this
+ * could have had and is not fair: up and down are not the same in this arena.
+ * One seal at the surface with air over it and the other on the seabed is a
+ * point-symmetric kickoff and an uneven one.
+ *
+ * SEEDED, NOT ROLLED WHERE IT IS READ. kickoffSpot is asked several times per
+ * kickoff — once per seat as the roster is built, again as everyone is placed,
+ * again by the bots and the labs — and a Math.random() in here would hand a
+ * different answer to each of them, which is a seal placed somewhere nothing
+ * else agrees it is. So the roll is a hash of the kickoff's number and the
+ * match's seed: a pure function of `turn`, the same for every caller, and
+ * replayable by pinning versusState.kickoffSeed.
+ *
+ * `out` is filled and returned. Angle and scale are the raw roll, kept for the
+ * harness and the labs; `du`/`dv` are what was actually spent after the room
+ * the formation leaves is taken out of it.
+ */
+export function kickoffScatter(turn = kickoffTurn(), out = _scatter) {
+  const c = cfg().kickoff?.scatter ?? {};
+  const maxAngle = Math.max(0, c.angle ?? 0);
+  const range = clamp01(c.distance ?? 0);
+  const base = anchorOut();
+  out.angle = 0;
+  out.scale = 1;
+  out.du = 0;
+  out.dv = 0;
+  if (base <= 0 || (maxAngle <= 0 && range <= 0)) return out;
+
+  const seed = (Math.imul(Math.round(turn) + 1, 0x9e3779b1) ^ (versusState.kickoffSeed | 0)) >>> 0;
+  const angle = (hash01(seed) * 2 - 1) * maxAngle;
+  const scale = 1 + (hash01(seed ^ 0x5bf03635) * 2 - 1) * range;
+
+  // THE ROOM LEFT OVER, per axis and per direction — out toward the wall, in
+  // toward the ball, and up or down the water are three different distances.
+  //
+  // `distance` IS MEASURED ON THE FRONT SEAT, not on the anchor. The anchor of
+  // a full roster stands with three seats in front of it, and a share of the
+  // ANCHOR's standoff is most of the FRONT seat's — a fifteen percent nudge of
+  // the formation would have walked the frontmost seal most of the way to the
+  // halfway line and handed it every kickoff. Taking the share off the seat
+  // that is closest to the ball is the same sentence the lane limit below
+  // says: the tighter the formation already is, the less there is to spend.
+  const reach = formationReach();
+  const front = Math.max(0, base - reach.back);
+  const laneRoom = Math.max(0, Math.min(bounds.surfaceY - 4 - midWater(), midWater() - (bounds.bottom + 4)) - reach.lane);
+  const inRoom = Math.min(front * range, Math.max(0, base - reach.back - SCATTER_MID_GAP));
+  const outRoom = Math.min(base * range, Math.max(0, (bounds.right - bounds.left) * 0.5 - SCATTER_WALL_GAP - base));
+
+  const du = base * scale * Math.cos(angle) - base;
+  const dv = base * scale * Math.sin(angle);
+  out.angle = angle;
+  out.scale = scale;
+  out.du = Math.max(-inRoom, Math.min(outRoom, du));
+  out.dv = Math.max(-laneRoom, Math.min(laneRoom, dv));
+  return out;
+}
+
+/** One 32-bit integer to one number in [0, 1). A hash and not a generator:
+ *  there is no stream here to advance, only "what did kickoff n roll". */
+function hash01(n) {
+  let h = Math.imul(n ^ 0x9e3779b9, 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
 }
 
 /**
@@ -4635,7 +4869,7 @@ function kickoffFacing(spot) {
  * each seal's line to the ball, and the countdown starts — the world is held at
  * freezeScale from here until the whistle (updateVersusClock).
  */
-export function enterKickoff() {
+export function enterKickoff(gather = false) {
   const st = versusState;
   const ko = cfg().kickoff ?? {};
   st.phase = 'kickoff';
@@ -4661,25 +4895,31 @@ export function enterKickoff() {
   // The spots for THIS kickoff — st.kickoffs has already been stepped above, so
   // the formation has rotated by the time anything is placed on it.
   for (let i = 0; i < rosterSize(); i++) kickoffSpot(i);
+  // THE GATHER, ARMED BEFORE ANY BODY IS PUT BACK — see armGather. Only a
+  // kickoff called by a GOAL gathers: it is the one that follows a shockwave,
+  // and it is the only one with a pose worth blending out of. A match opening
+  // has already built its roster standing on the marks, and a rematch is
+  // called out of a highlight reel that was posing the seals from recorded
+  // frames — easing out of either is easing out of nothing.
+  st.gathered = true;
+  st.gatherT = 0;
+  _gatherS = 0;
+  if (gather && ko.enabled !== false && (ko.gather ?? 0) > 0) st.gathered = !armGather();
   holdKickoff();
   // AT THE BALL, and the mirror resolved afresh from that facing (poseBody).
   // EVERY seat, seat 0 included: the player used to be the one seal this loop
   // skipped, so the seal holding the frame was the only one on the pitch still
   // pointing wherever it happened to die facing.
+  //
+  // THE AIM AND THE DASH ONLY while a gather is running — holdKickoff is what
+  // turns the body, over the ease rather than in one frame. These two are the
+  // seal's INTENT rather than its pose, and there is nothing to blend about
+  // "which way am I about to swim": they are written now either way, so a bot
+  // reading its own aim on the first frame of the count reads the kickoff's.
   for (const seal of matchSeals()) {
     const seat = seatOf(seal);
     const spot = _start[seat] ?? _start[0];
     const face = kickoffFacing(spot);
-    // THE HEADING AND THE ROLL, TOGETHER — see faceSeal in entities/player.js.
-    // This wrote rotation.z and then cleared `mirrored` so poseBody would
-    // resolve the mirror afresh, and poseBody never could: it resolves inside
-    // its `dirLen > minTurn` branch and holdKickoff zeroes every velocity on
-    // every frame of the count. A seal whose kickoff spot faces the other way
-    // from the play it just came out of therefore stood BELLY-UP through the
-    // whole "3, 2, 1" and past the whistle, righting itself with a snap the
-    // first time it swam. On the opening kickoff it was whichever side faces
-    // left, every match.
-    faceSeal(seal, face);
     const fx = Math.cos(face);
     const fy = Math.sin(face);
     if (seat === 0) {
@@ -4698,18 +4938,155 @@ export function enterKickoff() {
   dropKickoffBait();
 }
 
-/** Hold both seals on their spots with a full wheel, and the ball at centre. Every frame of the count. */
-function holdKickoff() {
+// ---------------------------------------------------------------------------
+// THE GATHER — from wherever the goal left a body to where the kickoff wants
+// it, over `kickoff.gather` wall seconds.
+//
+// A goal fires a shockwave out of the mouth (goalBlast) that throws every seal
+// near it across the pitch, end over end and limp. That is the point of it,
+// and the kickoff used to undo it in a single frame: `holdKickoff` wrote every
+// position, every heading and every tumble angle outright, so the last thing a
+// goal did was teleport four somersaulting animals onto four marks. The bang
+// and the count read as two clips spliced together.
+//
+// So the placement is EASED instead. The marks, the facings and the roll are
+// exactly what they always were — nothing about where a kickoff stands has
+// changed — but the bodies travel to them over a beat, and the count does not
+// start until they have arrived (versusState.gathered, read in
+// updateVersusClock alongside `settled`).
+//
+// WALL SECONDS, like everything else in this shutter. The world is at
+// freezeScale — four percent — from the frame the kickoff is called, so an
+// ease stepped on the water's clock would take half a minute to cross the
+// pitch with the countdown running at full speed over the top of it.
+// ---------------------------------------------------------------------------
+
+// Where each body was when the gather was armed, and the roll it is rolling
+// TO. Position and heading need no `from` — the ease below is written as a
+// residual (see `pull`), so it reads them off the body every frame and cannot
+// fight whatever else is still moving it. The mirror does: its target is the
+// nearest half turn of the right parity to where the angle stood when the
+// gather opened, and re-deriving that from a moving angle would walk it.
+const _gatherTo = Array.from({ length: MAX_PER_SIDE * 2 }, () => ({ mirror: 0, from: 0, has: false }));
+// The eased progress the last frame spent, so this frame can spend only the
+// difference. See `pull`.
+let _gatherS = 0;
+
+/**
+ * Open a gather: record each body's roll target, and say whether anything
+ * actually has to move.
+ *
+ * FALSE WHEN NOBODY IS OUT OF PLACE, which is not an optimisation. A kickoff
+ * whose bodies are already standing on their marks with the right heading has
+ * nothing to ease, and a gather armed over it would still hold the count for
+ * `gather` seconds — a beat of nothing, on every kickoff of a match where the
+ * goal caught nobody.
+ */
+function armGather() {
+  let move = false;
+  const near = 0.05;          // world units, and radians: below this it is the same pose
   for (const seal of matchSeals()) {
     const seat = seatOf(seal);
     const spot = _start[seat] ?? _start[0];
+    const face = kickoffFacing(spot);
+    const p = sealPos(seal);
+    const to = _gatherTo[seat];
+    if (!to) continue;
+    to.has = true;
+    to.from = seal.mirrorAngle;
+    to.mirror = mirrorFor(seal, face);
+    // The roll is driven here rather than by poseBody's own turnaround: that
+    // one is stepped on the frame's dilated dt and would take twenty-five
+    // times the beat it was authored for under the freeze. Settled so the
+    // ease block in poseBody stays out of the way, and `mirrored` moved to
+    // the side the seal is rolling TO so nothing starts a second turnaround
+    // on top of this one.
+    seal.mirrorT = 1;
+    seal.mirrorFrom = seal.mirrorTo = seal.mirrorAngle;
+    if (CONFIG.view === 'side') seal.mirrored = Math.cos(face) < 0;
+    if (Math.hypot(p.x - spot.x, p.y - spot.y) > near) move = true;
+    if (Math.abs(shortArc(face - Math.PI / 2 - seal.mesh.rotation.z)) > near) move = true;
+    if (Math.abs(to.mirror - seal.mirrorAngle) > near) move = true;
+    const j = seal.jolt;
+    if (j && (Math.abs(j.spin) > near || Math.abs(j.roll) > near)) move = true;
+  }
+  return move;
+}
+
+/** WHICH HALF TURN THE BELLY ROLLS TO for a seal about to face `face`: the
+ *  nearest one that leaves it the right way up. The same parity walk poseBody
+ *  makes on a turnaround — the angle climbs through whole half turns over a
+ *  run, so "0 or PI" is the wrong answer to it, and rolling the SHORT way is
+ *  what keeps a gather from unwinding a corkscrew it never made. */
+function mirrorFor(seal, face) {
+  if (CONFIG.view !== 'side') return seal.mirrorAngle;
+  const HALF = Math.PI;
+  const want = Math.cos(face) < 0 ? 1 : 0;
+  let half = Math.round(seal.mirrorAngle / HALF);
+  if (((half % 2) + 2) % 2 !== want) half += seal.mirrorAngle >= half * HALF ? 1 : -1;
+  return half * HALF;
+}
+
+/** An angle wrapped into (-pi, pi]. */
+function shortArc(a) {
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}
+
+/**
+ * HOW MUCH OF THE REMAINING DISTANCE THIS FRAME SPENDS.
+ *
+ * The ease is written as a residual rather than as a lerp from a remembered
+ * start, because a lerp from a remembered start is a body that has stopped
+ * being simulated: the goal's throw would be over on the frame the gather
+ * opened, and the seal would glide to its mark on rails. Held as a residual,
+ * whatever else moves the body — the last of the shove, the tumble righting
+ * itself — keeps moving it, and the pull only takes a share of whatever gap
+ * is left.
+ *
+ * `(s - prev) / (1 - prev)` is what makes that share add up to the curve. A
+ * per-frame lerp by the eased progress itself compounds — sixty frames of
+ * "move a tenth of the way" is not a tenth of the way — so what is spent each
+ * frame is the FRACTION OF THE REMAINDER the curve has crossed since the last
+ * one. The residual is then exactly `1 - s` of what it started as, however
+ * many frames that took, and `s = 1` spends all of it: the last frame of the
+ * gather lands the body on its mark to the float.
+ */
+function gatherPull() {
+  const st = versusState;
+  if (st.gathered) return 1;
+  const dur = Math.max(1e-3, cfg().kickoff?.gather ?? 0.5);
+  const t = clamp01(st.gatherT / dur);
+  const s = t * t * (3 - 2 * t);
+  const prev = _gatherS;
+  _gatherS = s;
+  if (prev >= 1) return 1;
+  return clamp01((s - prev) / (1 - prev));
+}
+
+/**
+ * Hold both seals on their spots with a full wheel, and the ball at centre.
+ * Every frame of the count — and, while a gather is running (enterKickoff),
+ * EASE them onto those spots rather than writing them.
+ */
+function holdKickoff() {
+  const w = gatherPull();
+  const gathering = w < 1;
+  for (const seal of matchSeals()) {
+    const seat = seatOf(seal);
+    const spot = _start[seat] ?? _start[0];
+    const pos = seat === 0 ? player.mesh.position : sealPos(seal);
+    if (gathering) {
+      pos.x += (spot.x - pos.x) * w;
+      pos.y += (spot.y - pos.y) * w;
+      pos.z = 0;
+    } else {
+      pos.set(spot.x, spot.y, 0);
+    }
     if (seat === 0) {
-      player.mesh.position.set(spot.x, spot.y, 0);
       if (strikeState.active) { cancelDash(); player.dashTimer = 0; }
       strikeState.charge = 1;
       strikeState.pending = 0;
     } else {
-      sealPos(seal).set(spot.x, spot.y, 0);
       if (seal.strike.active) { cancelDash(seal.strike); seal.dashTimer = 0; }
       seal.strike.charge = 1;
       seal.strike.pending = 0;
@@ -4724,20 +5101,66 @@ function holdKickoff() {
     seal.flingT = 0;
     seal.flingMul = 1;
     // ...AND THE TUMBLE. The goal's blast leaves the loser ragdolling
-    // (goalBlast), and the count snaps every body onto its spot with a full
+    // (goalBlast), and the count needs every body on its mark with a full
     // wheel — a seal still turning from it would spin on the mark through
-    // "3, 2, 1" and be facing the wrong way at the whistle. Cleared rather
-    // than sprung: the kickoff is a reset, not a recovery.
+    // "3, 2, 1" and be facing the wrong way at the whistle.
+    //
+    // THE RATES AND THE RAGDOLL GO NOW; THE ANGLE IS EASED OUT. Those are two
+    // different things and only one of them is a pose. `free`, `limp` and the
+    // two velocities are the tumble still HAPPENING — control taken away from
+    // a player on a body that is about to be stood on a mark — and a kickoff
+    // takes them back on the frame it is called, which is what it always did.
+    // `spin` and `roll` are where the tumble has GOT to, and zeroing those is
+    // the somersault ending in a cut. Under a gather they come out over the
+    // ease with everything else; without one, this is the snap it always was.
     const j = seal.jolt;
     if (j) {
-      j.spin = j.spinV = j.roll = j.rollV = 0;
+      j.spinV = j.rollV = 0;
       j.free = 0;
       j.kick = j.kickX = j.kickY = j.kickAt = 0;
+      if (gathering) {
+        j.spin -= j.spin * w;
+        j.roll -= j.roll * w;
+      } else {
+        j.spin = j.roll = 0;
+      }
       // The skeleton comes back with the wheel. `free` going to zero would
       // hand it back on the next pose anyway, but the kickoff snaps the body
       // onto its spot THIS frame and a seal that arrived there limp would hold
       // the pose it was blown out of through the whole count.
       if (j.limp) { j.limp = false; seal.anim?.setLimp?.(null); }
+    }
+    // WHICH WAY IT POINTS. Settled outright once the gather is done (or when
+    // there never was one) — see faceSeal, which writes the heading AND the
+    // half roll that keeps the belly down, because writing one without the
+    // other is a seal standing on its back through the count. Under a gather
+    // the same two fields are eased, in step, so the turn and the roll finish
+    // together.
+    const face = kickoffFacing(spot);
+    if (!gathering) {
+      faceSeal(seal, face);
+      continue;
+    }
+    if (!seal.mesh) continue;
+    seal.mesh.rotation.z += shortArc(face - Math.PI / 2 - seal.mesh.rotation.z) * w;
+    const to = _gatherTo[seat];
+    if (to?.has && CONFIG.view === 'side') {
+      seal.mirrorAngle += (to.mirror - seal.mirrorAngle) * w;
+      // A GATHER THAT ROLLS THE BELLY *IS* A TURNAROUND, and says so. Halfway
+      // through one the nose has crossed the vertical and the roll has not
+      // caught up — which is what a turnaround looks like from the outside at
+      // every speed, in play as much as here, and `mirrorT < 1` is the field
+      // that already means "do not read this pose as settled". Left at 1 it
+      // would advertise a seal mid-roll as a seal swimming on its back.
+      //
+      // The endpoints are the real ones so the claim is readable, and poseBody
+      // steps this on the DILATED clock — a thousandth of the gather per frame
+      // under the freeze — so the write below is what actually moves it. It
+      // runs after poseBody (holdKickoff is the last hand on these bodies), so
+      // there is no argument about which of the two wins.
+      seal.mirrorFrom = to.from;
+      seal.mirrorTo = to.mirror;
+      seal.mirrorT = Math.abs(to.mirror - to.from) > 1e-6 ? Math.min(0.999, _gatherS) : 1;
     }
   }
   ball.x = (bounds.left + bounds.right) * 0.5;
@@ -7047,7 +7470,41 @@ const STYLE = `
    layer for the preview only; the retro overlay (25) and the panel (31) stay
    above it. See previewVersusUi. */
 .sv-versus.sv-versus-preview { z-index: 11; }
-.sv-versus-hud { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 22px; }
+/* THE STRIP IS SCALED TO FIT, and the scale is measured rather than written.
+   Every other line in Blubberball is sized in vmin with a px floor; the score
+   and the clock are the two that are not (see vsScore/vsClock in
+   textRoles.js), so the strip is a FIXED ~437px on every screen there is —
+   which is 62px wider than an iPhone SE and 6px wider than a Pro Max. It hung
+   off both sides of every phone in the game.
+
+   RETUNING THE TYPE IS NOT THE FIX. Those sizes are the Text panel's and are
+   tuned (52px of Orbitron on the clock is a decision, not a default), and
+   min-width: 5ch on the clock is what actually reserves the 249px — a match
+   can run past ten minutes and the strip must not shuffle sideways when it
+   does. So the composition is kept exactly as authored and the whole thing is
+   made smaller, which is what a phone wants anyway.
+
+   --sv-vs-fit is written by fitStrip(). transform-origin is the top centre
+   so the scale happens about the point left:50% + translateX(-50%) already
+   puts the strip at — the centre stays on the centre line and the top stays at
+   top, at any scale. The order matters: the translate must come first, or the
+   -50% is itself scaled and the strip drifts off centre as it shrinks. */
+.sv-versus-hud { position: absolute; top: 12px; left: 50%;
+  transform: translateX(-50%) scale(var(--sv-vs-fit, 1)); transform-origin: 50% 0;
+  display: flex; align-items: center; gap: 22px;
+  transition: opacity .34s ease; }
+/* THE STRIP IS A GAMEPLAY READOUT AND THE MATCH IS OVER. Both scores and the
+   clock are on the stats page, bigger, beside the names they belong to and
+   with the goals, assists, saves and possession that explain them — so the
+   strip left at the top is the same two numbers a second time, smaller, over
+   the page giving the fuller answer. It is what you check WHILE you are
+   playing, and there is nothing left to check.
+   A TRANSITION RATHER THAN A KEYFRAME, unlike the goal card's exit below.
+   This one has to come BACK — a rematch puts the strip up again — and a
+   transition reverses itself when the class comes off, where an animation
+   would need a second one and a second duration to keep in step with. And
+   nothing waits on this one, so there is no timer to agree with either. */
+.sv-versus-hud.sv-versus-hud-gone { opacity: 0; }
 .sv-versus-side { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .sv-versus-score { font-size: 34px; font-weight: 700; line-height: 1; min-width: 1.2ch; text-align: center; transition: transform .25s cubic-bezier(.2,.8,.2,1); }
 .sv-versus-score.sv-versus-pop { transform: scale(1.35); }
@@ -7371,6 +7828,7 @@ function mountUi() {
     document.body.appendChild(root);
     ui = {
       root,
+      hud: root.querySelector('.sv-versus-hud'),
       sides: [...root.querySelectorAll('.sv-versus-side')],
       clock: root.querySelector('.sv-versus-clock'),
       scores: [...root.querySelectorAll('.sv-versus-score')],
@@ -7398,6 +7856,30 @@ function mountUi() {
       colors,
     };
     for (const t of ui.tags) ui.tagLayer.appendChild(t);
+
+    // THE TWO THINGS THAT CHANGE THE FIT WITHOUT CHANGING THE STRIP.
+    //
+    // Inside the `if (!ui)` block, so they are bound once for the life of the
+    // page: this element is built on the first match and reused by every one
+    // after it, and a listener added per mount is a listener added per rematch.
+    //
+    // A rotation crosses the whole question in one event — a strip that fits a
+    // phone held sideways is 62px too wide the moment it is stood up — and
+    // nothing else was going to re-ask, because paintClock's key only sees the
+    // window through innerWidth and a first-to match never ticks a clock at all.
+    window.addEventListener('resize', fitStrip);
+    // ...AND THE FONT LANDING. The strip is measured in whatever face is
+    // loaded, and the roled one (Orbitron, see textRoles.js) arrives after the
+    // first paint — so a fit computed in the fallback is a fit for type that is
+    // not on the screen. Both hooks for the reason ui.js gives at fitLabels:
+    // `fonts.ready` settles for the faces the document was asking for at the
+    // time, and initTypography may request this one after that has resolved.
+    //
+    // The key has to be cleared by hand: nothing in it moved, and without this
+    // the guard would refuse the one re-measure that matters.
+    const refit = () => { stripFitKey = ''; fitStrip(); };
+    document.fonts?.ready?.then(refit);
+    document.fonts?.addEventListener?.('loadingdone', refit);
   }
   // THE COLOURS ARE THIS MATCH'S, not the first match's: the team select
   // picks them (versusSetup, read through goalColors), and a HUD strip that
@@ -7515,6 +7997,11 @@ export function previewVersusUi(name) {
   ui.clock.classList.remove('sv-versus-urgent');
   ui.scores[0].textContent = '2';
   ui.scores[1].textContent = '1';
+  // WRITTEN BY HAND HERE, so the painters that normally call fitStrip never
+  // run — and a preview measured at full size on a phone tile is exactly the
+  // overhang this fit exists to remove, reported by `npm run layout` against a
+  // screen the game itself would have fitted.
+  fitStrip();
   // The cast the match would use, so the card shows a real roster name.
   syncRosterCast();
   const scorer = seatName(0);
@@ -7651,12 +8138,73 @@ function paintClock() {
   const ss = whole % 60;
   ui.clock.textContent = `${mm}:${String(ss).padStart(2, '0')}`;
   ui.clock.classList.toggle('sv-versus-urgent', left <= 10 && left > 0);
+  // Free unless the strip's shape or the window actually changed — see the key.
+  fitStrip();
+}
+
+// ---------------------------------------------------------------------------
+// THE STRIP, FITTED TO THE SCREEN.
+//
+// MEASURED, BECAUSE CSS CANNOT ASK THE QUESTION. "Is this row wider than the
+// window" needs a layout engine, and there is no media query for it — the width
+// depends on the tuned type, the font that actually loaded, and how many digits
+// are currently on the clock. The same answer ui.js reaches for in fitLabels and
+// fitNameField, for the same reason.
+//
+// offsetWidth, NOT getBoundingClientRect(). The rect is the box AFTER the
+// transform, so reading it would measure the strip at whatever scale it is
+// already wearing and converge on a strip that shrinks a little more every time
+// anything resizes. offsetWidth is the layout width and is blind to the
+// transform, which is exactly what has to be divided into the room available.
+//
+// THE MARGIN IS THE SAFE AREA PLUS A GUTTER. A notch in landscape eats the
+// corners of the viewport and `env()` is not readable from script, so the
+// gutter is generous rather than exact: the strip is centred, so it only has to
+// clear the WIDER of the two insets, and 20px a side covers every iPhone held
+// sideways.
+const STRIP_GUTTER = 20;
+
+// What the answer depends on. Recomputed only when one of these moves, because
+// paintClock runs every frame and a layout read per frame on a phone is the
+// kind of cost that does not show up until the thing is already shipped.
+// The viewport is in the key so a resize really does re-ask; the glyph COUNTS
+// rather than the text, because the clock is tabular-nums and 3:07 is exactly
+// as wide as 2:47 — it is 12:07 gaining a digit that moves anything.
+let stripFitKey = '';
+
+function fitStrip() {
+  if (!ui?.hud) return;
+  const key = `${window.innerWidth}|${ui.clock.hidden ? '' : ui.clock.textContent.length}`
+    + `|${ui.scores[0].textContent.length}|${ui.scores[1].textContent.length}`;
+  if (key === stripFitKey) return;
+  stripFitKey = key;
+  // Cleared before measuring, or the natural width is being read off a strip
+  // that is already scaled — see the offsetWidth note above. offsetWidth itself
+  // ignores the transform, but the property is cleared anyway so that a strip
+  // that somehow ended up display:none-adjacent, or whose children scale, can
+  // never feed its own output back in.
+  ui.hud.style.removeProperty('--sv-vs-fit');
+  const natural = ui.hud.offsetWidth;
+  // A strip with no width has not been laid out yet — it is hidden, or the
+  // roled font has not landed. Leaving it at 1 is the right way to be wrong:
+  // full size and possibly overhanging beats a strip scaled to nothing by a
+  // measurement taken before there was anything to measure.
+  if (natural < 1) return;
+  const room = Math.max(1, window.innerWidth - STRIP_GUTTER * 2);
+  const fit = Math.min(1, room / natural);
+  // Only when it actually has to shrink. Writing 1 would put a transform on the
+  // strip on every desktop for no reason, and a scaled layer is a layer the
+  // compositor rasterises separately.
+  if (fit < 0.999) ui.hud.style.setProperty('--sv-vs-fit', fit.toFixed(4));
 }
 
 function paintScores() {
   if (!ui) return;
   ui.scores[0].textContent = String(versusState.scores[0]);
   ui.scores[1].textContent = String(versusState.scores[1]);
+  // A tenth goal is a second digit on that side, which is the one thing besides
+  // the clock and the window that can widen the strip.
+  fitStrip();
 }
 
 // THE STRIP CARRIED TWO BARS PER SIDE, AND THEY ARE GONE.

@@ -4,6 +4,14 @@ import { player } from '../entities/player.js';
 import { LOCOMOTION_STATES, ONESHOT_STATES, trackCoverage } from '../systems/animation.js';
 import { celebrationState, celebrationSpin, snapshotMoment } from '../systems/celebrate.js';
 import { sealTeamAnimDebug } from '../systems/sealTeam.js';
+// The salute's gate, which is a fact about WHERE THE SEAL IS and is otherwise
+// invisible: the button is a clap everywhere and a salute in front of a
+// headstone, so a press that does the wrong thing looks exactly like a press
+// that did nothing. See systems/graveGaze.js.
+import { graveAttention } from '../systems/graveGaze.js';
+// ...and why a press was refused, which is four different conditions that all
+// look the same from the outside. See saluteDebug.
+import { saluteDebug } from '../systems/salute.js';
 import { isTypingTarget } from './typing.js';
 
 // ---------------------------------------------------------------------------
@@ -274,8 +282,27 @@ function tick() {
       + (spin ? `, spun ${(spin * 180 / Math.PI).toFixed(0)}°` : '');
   } else {
     el.celebFill.style.width = '0';
+    // ...AND WHETHER THE BUTTON IS A SALUTE RIGHT NOW. Three conditions decide
+    // it and none of them can be seen from the outside (near a stone, low
+    // enough over it, and the stone actually in shot), so without this line
+    // "the salute does nothing" and "there is no grave in reach" are the same
+    // observation. The dwell is the CAMERA's clock and not the button's — the
+    // press does not wait for it — but it is the other half of what is going
+    // on when the seal is standing at a stone, so it reads here too.
+    const att = graveAttention();
+    const sal = saluteDebug();
+    const hold = CONFIG.gravesite?.gaze?.hold ?? 0.5;
+    const why = !sal.enabled ? 'switched off'
+      : sal.busy ? `busy with ${sal.busy}`
+        : sal.since < sal.minGap ? 'inside the throttle' : null;
     el.celebNote.innerHTML = `<span style="color:${C.dim}">idle — fires on a boss kill `
-      + `(${Math.round((celebrationState.seq)) || 0} so far this session)</span>`;
+      + `(${Math.round((celebrationState.seq)) || 0} so far this session)</span>`
+      + (att.grave
+        ? `  <span style="color:${sal.ready ? C.ok : C.warn}">at ${att.grave.name} — `
+          + `${sal.ready ? 'the clap button salutes' : `salute refused: ${why ?? 'not ready'}`}</span>`
+          + `<span style="color:${C.dim}">, dwell ${att.dwell.toFixed(2)}/${hold.toFixed(2)}s`
+          + `${att.pushing ? ', frame pushed in' : ''}</span>`
+        : `  <span style="color:${C.dim}">no grave in reach — the button claps</span>`);
   }
 
   // --- clip coverage (static per model, but cheap and it can be rebuilt) ---

@@ -75,6 +75,11 @@ dom.window.HTMLCanvasElement.prototype.getContext = function getContext() {
 };
 dom.window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,';
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -92,7 +97,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 
 const warnings = [];
 const realWarn = console.warn;

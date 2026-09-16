@@ -210,14 +210,47 @@ check('the asset\'s own size from assets.csv survives the roll',
 
 // Colour is the half of the tell that still works head-on, where size is
 // hardest to judge.
+//
+// HOTTER IS RED DOMINANCE, NOT TOTAL LIGHT. This read `r + g + b` and it was
+// measuring the wrong thing: that sum RISES toward white and FALLS as a colour
+// saturates, so it only agrees with "hotter" for a ramp that gets paler. The
+// shipped ramp does the opposite — pale salmon at the smallest chunk to a hot
+// red at the biggest (chumChunk.tintMin/tintMax) — and its channel sums run
+// 540, 522, 501, 476, 445 while every eye in the room reads it as heating up.
+//
+// How far red leads the other two is the measure that matches: on the same
+// ramp it runs 97, 111, 125, 142, 160. It is also the thing the tell is FOR —
+// the player is reading which chunk is worth more at a glance, and a saturating
+// red is what says that, not a brighter pixel.
+const heat = (c) => c.r - (c.g + c.b) / 2;
+
+/**
+ * How far apart two colours LOOK, as CIE76 dE — see the tell check below.
+ *
+ * Takes THREE.Colors holding linear values (which is what a Color under colour
+ * management is) and converts through XYZ to Lab, where distance is roughly
+ * uniform to the eye. Written out here rather than pulled in: it is twelve
+ * lines, and a test that measures perception should show its working.
+ */
+function deltaE(a, b) {
+  const lab = (c) => {
+    let X = (0.4124 * c.r + 0.3576 * c.g + 0.1805 * c.b) / 0.95047;
+    let Y = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    let Z = (0.0193 * c.r + 0.1192 * c.g + 0.9505 * c.b) / 1.08883;
+    const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+    [X, Y, Z] = [f(X), f(Y), f(Z)];
+    return [116 * Y - 16, 500 * (X - Y), 200 * (Y - Z)];
+  };
+  const [l1, a1, b1] = lab(a);
+  const [l2, a2, b2] = lab(b);
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+}
 let warmer = true;
 for (let i = 1; i < sizes.length; i++) {
-  const a = sizes[i - 1].color;
-  const b = sizes[i].color;
-  if (b.r + b.g + b.b <= a.r + a.g + a.b) warmer = false;
+  if (heat(sizes[i].color) <= heat(sizes[i - 1].color)) warmer = false;
 }
 check('and it is visibly hotter than the one below it', warmer,
-  sizes.map((s) => '#' + s.color.getHexString()).join(' -> '));
+  sizes.map((s) => `#${s.color.getHexString()} (${heat(s.color).toFixed(2)})`).join(' -> '));
 
 // THE SHARED-MATERIAL TRAP. Two chunks of different sizes, alive at once.
 const twoA = chumChunks[0];
@@ -607,10 +640,25 @@ section('The other kind — a piece off a boss weak spot');
   // THE TELL. Same roll, same size — and they must not be the same colour, or
   // the one number the player reads off a chunk before swimming for it is
   // answering a question about the wrong currency.
-  const apart = Math.hypot(fuel.base.r - meal.base.r, fuel.base.g - meal.base.g,
-    fuel.base.b - meal.base.b);
-  check('fuel and food are told apart by colour at the same size', apart > 0.2,
-    `#${fuel.base.getHexString()} vs #${meal.base.getHexString()}, ${apart.toFixed(2)} apart`);
+  //
+  // MEASURED IN LAB, NOT IN THE BUFFER. This was a plain distance between the
+  // two `base` colours, and a THREE.Color under colour management holds LINEAR
+  // values — so the number it produced was a distance in linear light, which
+  // is not a distance anybody's eye agrees with. Linear crushes exactly the
+  // region these two live in: #ff477e and #f9857f come out 0.18 apart there
+  // and 0.24 in sRGB, on either side of a threshold that was picked against
+  // whichever space the test happened to be reading. A guard whose verdict
+  // depends on an accident like that is not guarding anything.
+  //
+  // CIE76 dE is the measure the claim actually wants — how far apart two
+  // colours look — and it is calibrated: 1 is the smallest difference a person
+  // can see, 2-3 is the print industry's "close enough", 10 reads as a
+  // different colour at a glance. These two are 32 apart: hot pink against
+  // salmon, which is the tell doing its job. 12 is the bar — comfortably past
+  // "obvious" while leaving the palette room to move.
+  const apart = deltaE(fuel.base, meal.base);
+  check('fuel and food are told apart by colour at the same size', apart > 12,
+    `#${fuel.base.getHexString()} vs #${meal.base.getHexString()}, dE ${apart.toFixed(0)}`);
   // ...and the material really is per-chunk. The shared-material trap this file
   // already checks for the heal ramp, arriving by a second route: an override
   // written to the asset's own material would repaint every chunk in the water.

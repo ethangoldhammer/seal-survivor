@@ -58,6 +58,15 @@ const LUNGERS = Object.entries(CONFIG.enemies)
   .map(([k]) => k)
   .filter((k) => !only || k === only);
 
+// THE SEAL'S REAL SPEED, measured rather than guessed: updatePlayer on a full
+// stick settles at 15 u/s (CONFIG.player.maxSpeed is 34, which is the dash
+// ceiling, not the cruise). Both audits in this directory used to drive it at
+// 7-9, which is HALF a real player — and every figure they produced was
+// therefore measured against a target moving at half speed, in the direction
+// that flatters the boss. A boss's committed run is 20-24 u/s, so the closing
+// speed against a real seal is four units a second rather than fifteen.
+const SEAL_SPEED = 15;
+
 function seeded(seed) {
   let a = seed >>> 0;
   return () => {
@@ -75,7 +84,7 @@ function seeded(seed) {
 // archetypes are compared against the same swim.
 function swimmer(seed) {
   const rnd = seeded(seed + 7777);
-  const speed = 7 + rnd() * 3;
+  const speed = SEAL_SPEED * (0.85 + rnd() * 0.3);
   const r = 10 + rnd() * 8;
   const phase = rnd() * Math.PI * 2;
   return (t) => ({

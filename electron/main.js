@@ -14,7 +14,7 @@ import { registerSaveIpc, flush } from './save.js';
 import { registerSaveImageIpc } from './saveImage.js';
 import { registerPlaytestIpc } from './playtest.js';
 import { initSteam, registerSteamIpc, steamStatus } from './steam.js';
-import { registerCapture } from './capture.js';
+import { registerCapture, wantsCapture } from './capture.js';
 
 // Before whenReady, necessarily — see registerScheme's note.
 registerScheme();
@@ -35,6 +35,13 @@ function createWindow() {
     // is not good enough. capture.js re-centres on every snap for the same
     // reason: setContentSize grows from the origin.
     center: true,
+    // NO FRAME WHILE FILMING. The take is a rectangle over the content area, so
+    // the title bar was never in the shot — but the window's own border and
+    // rounded corners sit right at the edge of it, and they read as a mistake
+    // in a clip. Frameless makes the content the whole window and the edges
+    // clean. A launch-time decision because `frame` cannot change afterwards;
+    // players get the normal window, and this one quits with Cmd+Q.
+    frame: !wantsCapture(),
     // Matches index.html's own background and capacitor.config.json's. Without
     // it the window paints white for a frame or two before the page's own
     // background lands, which on a game this dark reads as a flash of damage.

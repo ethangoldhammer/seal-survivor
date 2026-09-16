@@ -882,8 +882,42 @@ function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1, turnLimit = nu
     // shark got 27 degrees of the up-to-180 it wanted and then committed
     // anyway: measured at a median 107 degrees off the player, past 90 two
     // times in three. See npm run test:lungeaim.
+    //
+    // ...AND A BODY CAN OPT OUT OF IT ENTIRELY (`lateral.flip: false`), which
+    // the four swimming bosses do. A come-about is the right manoeuvre for
+    // WILDLIFE: a shark at turnRate 2.6 arcing through 180 degrees spends a
+    // second and a half pointing at the sky, and mirroring instead is what
+    // stops that reading as a body doing a loop-the-loop. It is the wrong
+    // manoeuvre for a boss, because it is a STOP: the heading snaps, the swim
+    // is throttled to `flipSpeedMul` for the whole yaw, and `flipHold` locks
+    // another one out afterwards — which measured at 17-26% of a boss fight
+    // spent mid-turn and unable to commit (`npm run gates`). Tank controls, in
+    // other words, on the one creature that has to read as swimming.
+    //
+    // What replaces it is simply the arc, at the body's own turnRate — and the
+    // reason that is now affordable is that the bosses' turn rates were raised
+    // to 2.5-3.2 rad/s, so 180 degrees takes about a second rather than three,
+    // and their `lateral.cruisePitch` was opened up so the arc is a bank
+    // through three dimensions instead of a flat pivot.
+    //
+    // ...OR WHENEVER THE TURN WOULD CROSS THE VERTICAL (`flipOnCross`), which
+    // the four swimming bosses ask for. `flipAngle` catches the big reversals
+    // and misses the ordinary ones: an arc from a heading on one horizontal
+    // side to a heading on the other MUST pass through straight up or straight
+    // down, however narrow it is. Measured, a boss turning 87 degrees — well
+    // inside the 115 the angle gate fires at — swept from 111 degrees to 24
+    // and spent the middle of that pointing at the sky, 140-320 frames a
+    // fight. The angle was never the right test; crossing the vertical is,
+    // and it is exactly the turn a fish takes flat instead.
+    //
+    // Only worth switching on for a body whose come-about is free. On wildlife
+    // the mirror costs `flipSpeedMul` and doing it this often would be an
+    // animal that flinches every time you cross its nose.
+    const crossing = lat?.flipOnCross === true
+      && Math.sign(Math.cos(want)) !== Math.sign(Math.cos(e.heading))
+      && Math.abs(diff) > 0.25;
     if (lat && e.lungeStage !== 'wind'
-      && Math.abs(diff) > (lat.flipAngle ?? lc.flipAngle ?? 2.0)) {
+      && (crossing || Math.abs(diff) > (lat.flipAngle ?? lc.flipAngle ?? 2.0))) {
       if (e.flipHold > 0) {
         // Mid come-about and asked to reverse AGAIN: hold the line instead.
         // Arcing toward it would be the loop through vertical this exists to
@@ -916,12 +950,6 @@ function steerTo(e, dx, dy, dt, responsiveness = 6, speedMul = 1, turnLimit = nu
     }
     const step = Math.min(Math.abs(diff), turnRate * dt) * Math.sign(diff);
     e.heading += step;
-    // speedMul applies here too. It did NOT before, and nothing noticed:
-    // the only caller passing one was the crabs' seabed rush, and crabs have
-    // no turnRate, so the multiplier was silently dropped on exactly the
-    // creatures that do have one. The lunge (see updateEnemies) is a
-    // turn-limited hunter asking to go faster, so it would have done nothing
-    // at all on this branch.
     e.vx = Math.cos(e.heading) * e.speed * speedMul;
     e.vy = Math.sin(e.heading) * e.speed * speedMul;
     return;
@@ -1645,6 +1673,7 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     e.lungePlan = null;
     e.lungeStep = 0;
     e.animState = null;
+    e.lungeGate = null;
     if (!ownCruise) return false;
     steerTo(e, ctx.dirX, ctx.dirY, dt, 10);
     return true;
@@ -1840,11 +1869,33 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
   // A boss always holds a slot — see the boss branch in assignFeedingSlots for
   // why that had to be made true rather than assumed, and what it cost while it
   // was only assumed.
+  const lat = e.def.hunt?.lateral;
   const myTurn = ownCruise || e.crowdView?.inCrowd !== true || e.feeding !== false;
   // Never mid come-about (systems/fishTurn.js is still yawing the body):
   // it turns, THEN it gathers. A wind-up that opened on the frame the heading
-  // mirrored had the ring drawing in on a body still facing the other way.
-  const settled = !(e.__turnT < 1);
+  // MIRRORED had the ring drawing in on a body still facing the other way.
+  //
+  // ...AND ONLY FOR A BODY THAT MIRRORS. `__turnT` is fishTurn's yaw, which
+  // runs whenever an animal changes which way it is facing horizontally — for
+  // a flipping body that coincides with the heading discontinuity this gate
+  // exists to wait out, and for an arcing one it does not. On a boss
+  // (`lateral.flip: false`) the heading is already correct throughout and the
+  // yaw is purely what the body LOOKS like while it comes round, so refusing
+  // to gather during it is refusing to attack while turning — which is the
+  // tank control this whole change is about. Measured: it held bossOrca up for
+  // 53% of a fight once the come-about was removed, more than the come-about
+  // ever had.
+  // ...AND ONLY FOR A BODY THAT PAUSES TO DO IT. `__turnT` is fishTurn's yaw,
+  // which runs whenever an animal changes which way it is facing. On a wildlife
+  // shark that coincides with the heading discontinuity this gate exists to
+  // wait out, AND with `flipSpeedMul` throttling the swim — the animal really
+  // is mid-manoeuvre and gathering through it would read as two things at once.
+  // A boss turns at full speed (`lateral.flipSpeedMul: 1`), so there is nothing
+  // to wait out and refusing to gather during the yaw is refusing to attack
+  // while turning, which is the tank control this whole change is about.
+  // Measured: it held bossOrca up for 53% of a fight.
+  const turnCosts = (lat?.flipSpeedMul ?? CONFIG.lateralCruise?.flipSpeedMul ?? 0.5) < 1;
+  const settled = turnCosts ? !(e.__turnT < 1) : true;
   // The gate is resolved to a NAME rather than to a boolean, so the one branch
   // below can both commit and say what stopped it. Evaluated in the order the
   // condition used to short-circuit in, which is what makes "minRange held this
@@ -1854,6 +1905,11 @@ function lungeChase(e, dt, ctx, ownCruise = true) {
     : !settled ? 'turning'
       : ctx.dist > range ? 'range'
         : lungeLineGate(e, ctx, c);
+  // PUBLISHED FOR THE APPROACH, not only for the trace. One assignment, every
+  // frame, whether or not anything is recording: `hunt` reads it to decide
+  // whether this body should be swimming to FIX its line rather than holding
+  // the standoff ring. See the note on closing the cone, below.
+  e.lungeGate = gate;
   if (attackTraceOn()) {
     noteLungeGate(e, dt, gate,
       gate === 'range' ? { dist: ctx.dist, range }
@@ -2566,7 +2622,43 @@ const BEHAVIORS = {
         if (floor > e.standoffDist) e.standoffDist = floor;
       }
       const want = approachVector(crowdSelf(e), ctx, ctx.apex, CONFIG.apexCrowd);
-      const go = shapeSwim(e, want.x, want.y, lat);
+      // ---------------------------------------------------------------------
+      // OUTSIDE ITS CONE, IT SWIMS TO FIX THAT.
+      // ---------------------------------------------------------------------
+      // The approach above holds a standoff ring, which is the right thing when
+      // the only question is distance — a body too far away closes, a body too
+      // near backs off, and the ring keeps a crowd legible while they do it.
+      //
+      // It is the wrong thing when the gate is shut on GEOMETRY. `cone`,
+      // `budget` and `pitch` all mean the line to the seal is fine in LENGTH
+      // and wrong in ANGLE, and a body that answers that by continuing to hold
+      // its ring is a body waiting for the player to solve its problem. It
+      // reads as the boss losing interest at exactly the moment it should look
+      // most deliberate, and `npm run gates` measured those three holding a
+      // fight up a quarter of the time.
+      //
+      // So on those frames the standoff is set aside and the body steers at the
+      // seal directly, unflattened: the nose comes round and the pitch closes
+      // at the same time, which is the same manoeuvre an animal makes when it
+      // is lining something up. The crowd AVOIDANCE is untouched — that is a
+      // separate term and still folded into `want` — so this cannot drive one
+      // body through another.
+      //
+      // Distance gates are deliberately NOT in the list. `range` and `minRange`
+      // are answered by the ring already, and overriding it for those would be
+      // two systems steering the same body toward and away from the same point
+      // on the same frame.
+      // STILL PITCH-BOUNDED, and that is not a hedge. Taking the raw direction
+      // to the seal skips shapeSwim, and shapeSwim is the only thing holding
+      // the body off vertical — measured, that had bosses at a steepest 90
+      // degrees for 300-450 frames a fight, standing on their tails. What the
+      // override is for is dropping the STANDOFF RING, not the pitch: their own
+      // `lateral.cruisePitch` is already opened up to 60-66 degrees, which is
+      // as much sky as a swimming animal should want.
+      const lining = e.lungeGate === 'cone' || e.lungeGate === 'budget' || e.lungeGate === 'pitch';
+      const go = lining
+        ? shapeSwim(e, ctx.dirX, ctx.dirY, lat)
+        : shapeSwim(e, want.x, want.y, lat);
       // Same budget as the fish branch, on the looser player numbers. Measured
       // off `want` rather than off the raw direction to the seal, because the
       // crowd avoidance is already folded into it and steering at a heading you
@@ -3407,9 +3499,16 @@ function edgeSpawnPoint(def = null) {
   // left at z 0, so it faded up on camera at the edge of frame.
   if (def?.surface) {
     const side = Math.random() < 0.5 ? -1 : 1;
+    const x = side * offscreenX();
+    // AT ITS OWN X, not at the middle of the arena. `surfaceHeightAt` is the
+    // wave, so reading it at 0 and placing the body out at the wing pins it to
+    // a line half a unit from the water it is actually arriving in — which is
+    // the pin having something to correct on the first frame, which is the one
+    // thing this branch exists to avoid. Off by up to a wave amplitude, and
+    // only ever visible as a body that bobs once as it enters.
     return {
-      x: side * offscreenX(),
-      y: surfaceHeightAt(0) + (def.surface.lift ?? 0),
+      x,
+      y: surfaceHeightAt(x) + (def.surface.lift ?? 0),
       side,
     };
   }

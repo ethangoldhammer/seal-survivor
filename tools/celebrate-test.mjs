@@ -35,9 +35,13 @@ import { createAnimationController } from '../path/src/systems/animation.js';
 import { createAimRig } from '../path/src/systems/aimRig.js';
 import {
   celebrationState, startCelebration, playCelebration, updateCelebration, resetCelebration,
-  createCelebrationDriver, snapshotMoment, celebrationSpin, CELEBRATION_VARIANTS,
+  createCelebrationDriver, snapshotMoment, celebrationSpin, celebrationFacing, CELEBRATION_VARIANTS,
 } from '../path/src/systems/celebrate.js';
 import { cardsArriveAt } from '../path/src/systems/levelUpTime.js';
+// For the salute, which is the one pose measured at the CHAIN TIPS rather than
+// at the bones — see that block for why the bones cannot see it.
+import { createPoseRig } from '../path/src/systems/poseRig.js';
+import { tipWorld } from '../path/src/systems/ikChain.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SEAL = resolve(HERE, '../public/models/furseal.glb');
@@ -128,13 +132,17 @@ const unpose = () => { for (const [bone, q] of virginQ) bone.quaternion.copy(q);
 // animation controller runs alongside it exactly as it does in the game, so
 // these are measurements of the celebration layered OVER the swim cycle rather
 // than of a pose sitting on a bind skeleton by itself.
-function runTo(variant, seconds, { locomotion = 'swim', peakAt = null } = {}) {
+function runTo(variant, seconds, { locomotion = 'swim', peakAt = null, hold = null, release = null } = {}) {
   resetCelebration();
   driver.reset();
   unpose();
   // Force the variant rather than rolling for it: a test at the mercy of a
   // coin flip is a test that fails on somebody else's machine.
-  if (peakAt) playCelebration({ variant, peakAt, escorts: false });
+  // `hold` and `release` matter for anything sampled after the peak: without
+  // them a gesture with its own long hold (the salute) is run on the boss
+  // kill's much shorter one, and a sample taken where the shipped pose would
+  // still be held lands most of the way through this performance's release.
+  if (peakAt) playCelebration({ variant, peakAt, hold, release, escorts: false });
   else startCelebration(fixedRng(variant));
   let t = 0;
   while (t < seconds) {
@@ -177,7 +185,14 @@ function fixedRng(variant) {
 }
 
 console.log('\nthe variants are all reachable');
-for (const v of CELEBRATION_VARIANTS) {
+// THE ROLLED ROSTER, which is not the same as the pose roster any more: the
+// salute is PRESSED at a headstone (systems/salute.js) and has no weight, so a
+// loop over every pose in the file would demand a boss kill be able to roll a
+// gesture that is only meaningful in front of a grave. Checked from the
+// weights themselves, so retiring a variant by zeroing it retires its check
+// with it rather than failing here.
+const ROLLED = Object.keys(CONFIG.celebrate.weights).filter((k) => CONFIG.celebrate.weights[k] > 0);
+for (const v of ROLLED) {
   resetCelebration();
   const got = startCelebration(fixedRng(v));
   check(`"${v}" can be rolled`, got === v, `rolled ${got}`);
@@ -299,6 +314,110 @@ console.log('\nheadToss — the head goes back and up');
   const p = runTo('headToss', SNAP);
   check('the head is thrown up', dorsal(p.head) - dorsal(rest.head) > 0.2,
     `+${(dorsal(p.head) - dorsal(rest.head)).toFixed(3)} dorsal`);
+}
+
+console.log('\nsalute — the right flipper reaches the head, the left one does not');
+{
+  // A FRESH SEAL, for the same reason the ratchet block below builds two: the
+  // shared `body` has been posed by every block above this one, and `unpose()`
+  // restores bones the MIXER is driving — which poisons its value-unchanged
+  // cache and quietly parks the shoulder at bind instead of on the swim cycle
+  // (the trap systems/poseRig.js documents). It is worth naming because it
+  // does not look like a harness problem: the salute still plays, the flipper
+  // still travels most of the way, and it settles 1.19 from the head against
+  // the 0.53 a seal in a run reaches — a miss you would go looking for in the
+  // pose.
+  const seal = createVisual('ship');
+  const salScene = new THREE.Scene();
+  salScene.add(seal);
+  salScene.updateMatrixWorld(true);
+  const salAnim = createAnimationController(seal);
+  const salDriver = createCelebrationDriver(seal);
+  const probe = createPoseRig(seal, 'salute-probe');
+
+  // AT THE TIPS, and this is not a refinement — it is the difference between
+  // measuring the pose and measuring nothing. The bones are not the ends of
+  // the limbs: hand_R_018 sits well inside the flipper and head_07 well inside
+  // the skull, and both tip lengths point roughly at each other, so a
+  // bone-to-bone distance carries about 0.9 of constant that no pose can ever
+  // remove. The salute closing from 2.9 to 0.5 at the tips reads there as 1.19
+  // to 1.10 — a pose that barely moves.
+  const _tip = new THREE.Vector3();
+  const _headTip = new THREE.Vector3();
+  const tipOf = (chain) => {
+    chain.bones[0].updateWorldMatrix(true, true);
+    return tipWorld(chain, _tip, 1).clone();
+  };
+  const headTip = () => {
+    probe.head.bones[0].updateWorldMatrix(true, true);
+    return tipWorld(probe.head, _headTip, 1).clone();
+  };
+  const finOf = (side) => probe.fins.find((f) => (side > 0 ? f.side > 0 : f.side < 0)).chain;
+
+  // Settle first — the controller crossfades into its opening state over the
+  // first fifth of a second, and a celebration started before that captures an
+  // entry pose the clip is still on its way out of.
+  resetCelebration();
+  for (let i = 0; i < 60; i++) {
+    salAnim.update(DT, 'swim', false);
+    salDriver.update(DT);
+    salScene.updateMatrixWorld(true);
+  }
+  const restHead = headTip();
+  const restR = tipOf(finOf(1)).distanceTo(restHead);
+  const restL = tipOf(finOf(-1)).distanceTo(restHead);
+
+  // MID-HOLD, on the salute's OWN clock — not on the peak. The IK chains slerp
+  // toward their solution (celebrate.ik.smoothing is 14), so the pose is still
+  // arriving for a few frames after the envelope says it got there.
+  playCelebration({
+    variant: 'salute',
+    peakAt: CONFIG.salute.peakAt,
+    hold: CONFIG.salute.hold,
+    release: CONFIG.salute.release,
+    escorts: false,
+    facing: { x: CONFIG.salute.lean, y: 1 },
+  });
+  const frames = Math.ceil((CONFIG.salute.peakAt + CONFIG.salute.hold * 0.5) / DT);
+  for (let i = 0; i < frames; i++) {
+    salAnim.update(DT, 'swim', false);
+    updateCelebration(DT);
+    salDriver.update(DT);
+    salScene.updateMatrixWorld(true);
+  }
+
+  const head = headTip();
+  const toHeadR = tipOf(finOf(1)).distanceTo(head);
+  const toHeadL = tipOf(finOf(-1)).distanceTo(head);
+  check('the saluting flipper closes on the head',
+    toHeadR < restR * 0.2, `${toHeadR.toFixed(3)} against ${restR.toFixed(3)} at rest`);
+  check('...and the other one does not', toHeadL > toHeadR * 3,
+    `L ${toHeadL.toFixed(3)} vs R ${toHeadR.toFixed(3)}`);
+  // Both flippers end up nearer the head than they started, because the head
+  // itself comes down and back to be reachable — so the check that matters is
+  // that the saluting one travels several times as far. A `side` test with the
+  // sign the wrong way round passes every distance check above and fails this.
+  check('...and the travel is the saluting flipper\'s',
+    (restR - toHeadR) > (restL - toHeadL) * 2.5,
+    `R closed ${(restR - toHeadR).toFixed(3)}, L ${(restL - toHeadL).toFixed(3)}`);
+  // A touch at the brow, not a flipper through the skull: `browOut` holds it
+  // out along the camera axis, which is the axis the side view cannot show and
+  // the one a designer will not catch by looking.
+  check('the touch is held off the head rather than inside it',
+    toHeadR > 0.05, `${toHeadR.toFixed(3)} from the head tip`);
+
+  // ...AND THE ANIMAL TURNS. The other half of this pose is not in the
+  // flippers at all (celebrationFacing), and it is asked for rather than
+  // written — so a driver that quietly stopped publishing it would leave a
+  // seal saluting a headstone while swimming past it.
+  const face = celebrationFacing();
+  check('the body is asked to stand upright', face && face.y > Math.abs(face.x),
+    face ? `x ${face.x.toFixed(2)} y ${face.y.toFixed(2)} w ${face.weight.toFixed(2)}` : 'null');
+  check('...at full weight while the pose is held', face && face.weight > 0.99,
+    face ? face.weight.toFixed(3) : 'null');
+
+  resetCelebration();
+  salDriver.update(DT);
 }
 
 console.log('\nthe seal comes back — no ratchet across repeated celebrations');

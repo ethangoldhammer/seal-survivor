@@ -801,8 +801,14 @@ function driveSpotRing(spot, owner, l, dt) {
   // either way, but z is still a perspective distance: pinning every reticle
   // to the arena plane would draw the ones on the near flank of a big animal
   // at the wrong size.
+  // IS THIS THE ONE THE PLAYER IS POINTING AT? The whole volley is going here
+  // (see aimHotSpots), and the ring is where that gets said — a lock the player
+  // cannot see is a lock they cannot use. A live spot only: a burst one is on
+  // its way out and its last frames belong to the rupture.
+  const locked = spot === owner.designated && spot.alive && !spot.dead;
+
   placeOrganicRing(ring, spot.wx, spot.wy, r, spot.wz);
-  ring.rotation.z += (t.spin ?? 0.6) * dt;
+  ring.rotation.z += (t.spin ?? 0.6) * (locked ? (t.lockSpin ?? 3.2) : 1) * dt;
 
   // The sweep on has a clock of its own rather than reading `fade`, so the
   // hand's travel is a fixed length whatever the spot's open time is set to —
@@ -828,9 +834,14 @@ function driveSpotRing(spot, owner, l, dt) {
     // The same fallback makeSpotRing uses. Two different ones is how the band
     // ends up one weight on the frame it is built and another on every frame
     // after it, which reads as the ring settling for no reason.
+    // The lock rides alongside the hit and the burst rather than replacing
+    // either, so a spot being worked still shows its flash on top of being the
+    // one the aim picked — the quieter statement must not swallow the loud one.
     thickness: Math.max(0.01, (t.thickness ?? 0.09)
-      * (1 + (t.hitSwell ?? 0.55) * flash + (t.burstSwell ?? 1.4) * grow)),
-    glow: Math.max(0, (t.glow ?? 2.6) * (1 + (t.hitGlow ?? 2.2) * flash)),
+      * (1 + (t.hitSwell ?? 0.55) * flash + (t.burstSwell ?? 1.4) * grow
+         + (locked ? (t.lockSwell ?? 0.55) : 0))),
+    glow: Math.max(0, (t.glow ?? 2.6) * (1 + (t.hitGlow ?? 2.2) * flash)
+      * (locked ? (t.lockGlow ?? 1.7) : 1)),
     // The edge, re-sent every frame for the same reason the thickness is: the
     // panel these are tuned from is open while a boss is in the water, and a
     // number that only lands on a ring built after the change is a slider that
@@ -1580,6 +1591,10 @@ export function attachHotSpots(scene, e) {
     relightIn: 0,
     placed: false,
     visible: false,
+    // The spot the player's aim is lying across, as of this frame — see
+    // aimHotSpots. Null until an aim claims one, and null again the moment it
+    // bursts, which is what hands the volley back to the per-pellet rule.
+    designated: null,
     // THE OVERRIDE SLOTS. Null and 1 mean "wear what CONFIG says", which is
     // what every boss does until something decides otherwise — see
     // setHotSpotLook.
@@ -1942,6 +1957,109 @@ export function hotSpotPoint(spot, out = null) {
   o.y = spot.cwy ?? spot.wy;
   o.r = spot.r;
   return o;
+}
+
+// ---------------------------------------------------------------------------
+// THE SPOT THE PLAYER IS POINTING AT
+//
+// Every guided shot in this game used to choose its own weak spot, nearest
+// wins, one pellet at a time. That is a reasonable rule and it is the wrong
+// one, for a reason that has nothing to do with the arithmetic: the player
+// cannot see it. A volley leaves the flippers and fans out over three
+// different lights, each pellet answering a question about its own position,
+// and from behind the seal it reads as the ordnance ignoring the aim entirely.
+// The crit that is supposed to be the fight's whole skill expression arrives
+// as weather.
+//
+// So the AIM decides, and every seeker in the air obeys the same answer. The
+// reticle is already drawn along `input.aim` (systems/aimIndicator.js) — this
+// is that beam asking which light it is lying across, once a frame, and
+// writing the winner onto the boss. Point at a spot and the whole volley goes
+// there; point anywhere else and every shot falls back to the per-pellet rule
+// below, which is what the game did before this existed.
+//
+// PER BOSS, not global: two bosses in the water at once (the blubberball
+// roster can do it) each get their own answer, and a shot chasing one is not
+// steered by an aim that happens to cross the other.
+//
+// STICKY, with two cones. `aimGrab` is how close the beam has to pass to CLAIM
+// a spot; `aimRelease` is how far it may wander before the claim drops. One
+// number for both meant a spot flickering on and off across the boundary while
+// a hand held still, and a volley split between the spot and the body centre —
+// visibly the same bug this whole mechanism exists to remove.
+// ---------------------------------------------------------------------------
+
+/**
+ * Which weak spot the player's aim is lying across, on every boss in the
+ * water. Called once a frame from main.js, BEFORE the projectiles update:
+ * the answer is read by every seeker that steers this frame, and one computed
+ * after them would steer the whole volley on the previous frame's aim.
+ *
+ * @param px,py  where the seal is
+ * @param ax,ay  the aim direction (input.aim — normalised, but not trusted to
+ *               be: a zero-length aim HOLDS the last answer rather than
+ *               clearing it, because a pad's stick returning to centre is not
+ *               the player saying "stop aiming at that")
+ */
+export function aimHotSpots(px, py, ax, ay) {
+  const len = Math.hypot(ax ?? 0, ay ?? 0);
+  if (!(len > 1e-4)) return;
+  const nx = ax / len;
+  const ny = ay / len;
+  const c = CONFIG.homing?.hotSpots ?? {};
+  const grab = c.aimGrab ?? 2.2;
+  const release = Math.max(grab, c.aimRelease ?? 3.6);
+
+  for (const owner of owners.values()) {
+    if (!owner.placed) { owner.designated = null; continue; }
+    let best = null;
+    let bestScore = Infinity;
+    let heldScore = Infinity;
+    for (const s of owner.spots) {
+      if (!s.alive || s.dead) continue;
+      const sx = s.cwx ?? s.wx;
+      const sy = s.cwy ?? s.wy;
+      const vx = sx - px;
+      const vy = sy - py;
+      // BEHIND THE SEAL IS NOT AIMED AT. The beam is a ray, not a line, and
+      // without this a spot directly astern scores as well as the one the
+      // player is looking at — the aim indicator draws forward only.
+      if (vx * nx + vy * ny <= 0) continue;
+      // How far the beam passes from the light, IN UNITS OF THAT LIGHT'S OWN
+      // RADIUS. Under 1 means the ray goes through the spot. Relative rather
+      // than absolute because spot size varies by a factor of four across the
+      // roster (hotSpots.minRadius to maxRadius) and a fixed miss distance
+      // would make the small ones unclaimable and the big ones magnetic.
+      const score = Math.abs(vx * ny - vy * nx) / Math.max(1e-4, s.r);
+      if (s === owner.designated) heldScore = score;
+      if (score < bestScore) { bestScore = score; best = s; }
+    }
+    const held = owner.designated;
+    const holding = held && held.alive && !held.dead && heldScore <= release;
+    // The held one keeps it unless the beam has MOVED ONTO another — inside
+    // the tighter cone and clearly nearer, not merely nearer by a hair. Two
+    // spots on one flank sit close enough together that a hand holding still
+    // still crosses between them, and "nearest wins" there hands the claim
+    // back and forth several times a second; `aimSwap` is what makes a change
+    // of target a thing the player did rather than a thing that happened.
+    const swap = CONFIG.homing?.hotSpots?.aimSwap ?? 0.6;
+    if (holding && !(bestScore <= grab && bestScore < heldScore * swap)) continue;
+    owner.designated = bestScore <= grab ? best : null;
+  }
+}
+
+/**
+ * The spot the player's aim claimed on this creature, or null.
+ *
+ * Null for everything that is not a boss wearing one, and null on a boss whose
+ * lights the aim is nowhere near — both of which mean "use the per-pellet
+ * rule", so a caller never has to special-case the ordinary fight.
+ */
+export function designatedHotSpot(e) {
+  const owner = owners.get(e);
+  const s = owner?.designated;
+  if (!s || !s.alive || s.dead) return null;
+  return s;
 }
 
 /**

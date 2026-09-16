@@ -9,6 +9,9 @@ import { aoe, targeting } from './scaling.js';
 import { hdrInto } from './beams.js';
 import { player } from '../entities/player.js';
 import { eelLevelStats } from '../levelStats.js';
+import {
+  updateEelSparks, sparkLaunchPoint, sparkFeeders, flareEelSparks,
+} from './eelSparks.js';
 
 let cooldown = 0;
 const activeBolts = []; // { mesh, life }
@@ -169,7 +172,10 @@ export function resetEelCompanion(playerPos) {
 function updateCompanion(dt, playerPos, level) {
   const active = level > 0;
   companionMesh.visible = active;
-  if (!active) return playerPos;
+  // A PLAIN OBJECT and not playerPos itself: the caller reads `.angle` off this
+  // now, and handing back the player's own Vector3 would be handing out a live
+  // reference to the seal's position with a field missing from it.
+  if (!active) return { x: playerPos.x, y: playerPos.y, angle: companionAngle() };
 
   wiggleClock += dt;
   const targetX = playerPos.x - 1.6;
@@ -187,7 +193,25 @@ function updateCompanion(dt, playerPos, level) {
   if (speed > 0.3) companionMesh.rotation.z = Math.atan2(companionVel.y, companionVel.x) - Math.PI / 2;
   if (CONFIG.animation.enabled && companionAnim) companionAnim.update(dt, stateForSpeed(speed), false);
 
-  return { x: companionPos.x, y: companionPos.y };
+  return { x: companionPos.x, y: companionPos.y, angle: companionAngle() };
+}
+
+// WHICH WAY THE BODY IS LYING, read off the mesh rather than kept alongside it.
+// The orbit is a tube around this axis, so if the two ever disagreed the charge
+// would run through empty water beside the animal — and they WOULD disagree,
+// because the rotation above is only written while the eel is actually moving
+// and holds its last heading when it drifts. Creatures come out nose-up (see
+// createVisual), which is the +PI/2.
+function companionAngle() {
+  return (companionMesh?.rotation.z ?? 0) + Math.PI / 2;
+}
+
+// Where the companion actually is, for anything that has to draw FROM the eel.
+// The spring lags the player by a variable amount, so the offset cannot be
+// recomputed by a caller — tools/looks/bolt-lab.js lays its chain out from this
+// so the arc leaves the animal on the page the way it does in the run.
+export function eelOrigin() {
+  return { x: companionPos.x, y: companionPos.y, angle: companionAngle() };
 }
 
 export function resetEel() {
@@ -562,6 +586,12 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
   }
 
   const origin = updateCompanion(dt, playerPos, level);
+  // THE ORBIT, flown every frame the companion is — before the level gate, the
+  // same way the fade pass above is, so the sparks are torn down by the frame a
+  // run ends rather than left circling a hidden eel. The storm snapshot is
+  // handed in rather than read there: the charge and the discharge have to be
+  // the same weather, and eelCfg() sampled twice in one frame is not.
+  updateEelSparks(dt, scene, origin.x, origin.y, origin.angle, level, eelCfg());
   if (level <= 0) return;
   cooldown -= dt;
   if (cooldown > 0) return;
@@ -617,7 +647,7 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
   }
 
   if (points.length > 1) {
-    spawnBolt(scene, points, 1, level);
+    spawnEelChain(scene, points, level);
     // At the eel, not the player — the arc originates from the companion, and
     // the sound coming from anywhere else is the one thing that would give
     // away that the eel is decorative.
@@ -640,6 +670,46 @@ export function updateEel(dt, scene, playerPos, level, enemiesList, hooks) {
  */
 export function spawnArcBolt(scene, x1, y1, x2, y2, strength = 1, level = 0) {
   spawnBolt(scene, [new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)], strength, level);
+}
+
+/**
+ * THE EEL'S CHAIN, LEAVING THE ORBIT.
+ *
+ * `points[0]` arrives as the eel itself and is REPLACED by the spark pointing
+ * at the first victim, so the arc starts on the charge rather than inside the
+ * animal's body — then the neighbouring sparks throw short arcs into that same
+ * point and the whole orbit reads as emptying into one place.
+ *
+ * WHY THE FEEDERS ARE SEPARATE BOLTS rather than extra points on the chain. A
+ * chain is a path THROUGH a list of points: threading two more sparks onto the
+ * front would make the bolt visit them in order, which is a squiggle around the
+ * eel and not a convergence. They have to arrive at the same place at the same
+ * time from different directions, and that is three bolts sharing one endpoint.
+ *
+ * The one place that knows this, so the lab draws what the game fires. Every
+ * other caller of the renderer — Voltaic, the zappy club — starts somewhere
+ * that is not the eel and goes on using spawnArcBolt.
+ */
+export function spawnEelChain(scene, points, level = 0, strength = 1) {
+  if (!points || points.length < 2) return;
+  const pts = points.map((p) => new THREE.Vector3(p.x, p.y, 0));
+  const s = CONFIG.eel?.sparks ?? {};
+  // Toward the FIRST VICTIM and not toward the eel: which spark is nearest the
+  // thing about to be hit is the only choice that never starts the bolt on the
+  // far side of the body from where it is going.
+  const launch = sparkLaunchPoint(pts[1].x, pts[1].y);
+  if (launch) {
+    pts[0].set(launch.x, launch.y, 0);
+    const k = Math.max(0, Math.min(1, s.feederStrength ?? 0.5));
+    for (const f of sparkFeeders(launch.x, launch.y, s.feeders)) {
+      spawnBolt(scene, [
+        new THREE.Vector3(f.x, f.y, 0),
+        new THREE.Vector3(launch.x, launch.y, 0),
+      ], strength * k, level);
+    }
+  }
+  spawnBolt(scene, pts, strength, level);
+  flareEelSparks();
 }
 
 /**

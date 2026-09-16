@@ -101,7 +101,7 @@ import { SPLASH_ARTBOARD, SPLASH_STATE_MACHINE, SPLASH_BINDINGS, SKY_FX_BINDINGS
 // Where the column, the pill and the wordmark are, and how big the column may
 // be without sitting on the title. The one copy of the artboard's geometry —
 // see ui/splashLayout.js, which the layout checks read too.
-import { fitEntryScale, entryRects, estimateRowWidth } from './splashLayout.js';
+import { fitEntryScale, fitNameScale, fitTitleFrac, geometryFor, entryRects, estimateRowWidth } from './splashLayout.js';
 import { loadPlayerName, savePlayerName, sanitizeName } from '../systems/playerName.js';
 // What the dice button spends. Parsed once at module load, out of
 // sealNames.csv — see the note above and path/src/sealNameTable.js.
@@ -349,6 +349,12 @@ export function mountRiveSplash({
   // the width the artboard reports at that scale (everything in the row scales
   // with the same number, so width / scale is the width at 1).
   let entryScale = 1;
+  // The name's own size — see fitNameScale. Tracked beside `entryScale` so the
+  // write below can skip a frame where neither has actually moved.
+  let nameScale = 1;
+  // ...and the title's height, which moves the horizon with it. See
+  // fitTitleFrac; 0.32 is the design value and every wide screen keeps it.
+  let titleFrac = 0.32;
   let entrySettleTimer = 0;
 
   // ---------------------------------------------------------------------------
@@ -635,18 +641,43 @@ export function mountRiveSplash({
       // The pill's width at scale 1, recovered from what the artboard reports
       // at the scale last written. Estimated from the text only before the first
       // layout has run.
+      // DIVIDED BY THE NAME'S SCALE, NOT THE ROW'S. `numEntryWidth` is the
+      // pill's rendered width, and the pill is drawn at `nameScale` now — its
+      // font and padding are bound to that, not to `entryScale`. Recovering
+      // with the wrong one feeds a wrong width back into fitNameScale, which
+      // writes a scale that changes the width again: a loop that settles only
+      // after many frames, and it showed up as the hitbox taking 550-890ms to
+      // catch up with a rotation where it used to take 300.
       let rowW = 0;
-      try { rowW = (vmi.number(SPLASH_BINDINGS.entryWidth)?.value ?? 0) / (entryScale || 1); } catch { rowW = 0; }
+      try { rowW = (vmi.number(SPLASH_BINDINGS.entryWidth)?.value ?? 0) / (nameScale || 1); } catch { rowW = 0; }
       if (!(rowW > 0)) rowW = estimateRowWidth(currentName || placeholder);
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
       if (!(W > 2 * ENTRY_MARGIN) || !(H > 0)) return;
-      const s = fitEntryScale({ W, H, rowW, margin: ENTRY_MARGIN });
+      // THE TITLE FIRST, because the row's ceiling is measured under it. A
+      // short screen buys room for the buttons by giving back sky; everything
+      // else keeps the full 0.32. See fitTitleFrac.
+      const frac = fitTitleFrac({ W, H });
+      const s = fitEntryScale({ W, H, g: geometryFor(W, H) });
+      // ...and how big the NAME may be inside it. Two numbers now: the row's
+      // rhythm answers to the wordmark, the text answers to the screen's width.
+      // See fitNameScale.
+      const n = fitNameScale({ W, rowW, scale: s, margin: ENTRY_MARGIN });
       // Written on a real change only: every write re-lays the row out, and the
       // layout engine would happily animate a 0.3% correction on every frame.
-      if (Math.abs(s - entryScale) < 0.005) return;
+      // Either number moving is a change — a name typed longer on a screen that
+      // was already at its ceiling moves only the second one.
+      if (Math.abs(s - entryScale) < 0.005 && Math.abs(n - nameScale) < 0.005
+        && Math.abs(frac - titleFrac) < 0.002) return;
       entryScale = s;
+      nameScale = n;
+      titleFrac = frac;
       scaleProp.value = s;
+      try { const tp = vmi.number(SPLASH_BINDINGS.titleFrac); if (tp) tp.value = frac; } catch { /* older export */ }
+      // An export without the property keeps its single-scale behaviour rather
+      // than throwing: the row is laid out by `entryScale` alone and a long
+      // name simply overflows, which is what it did before this existed.
+      try { const np = vmi.number(SPLASH_BINDINGS.nameScale); if (np) np.value = n; } catch { /* older export */ }
     } catch { /* an export without the number keeps its design size */ }
   }
 

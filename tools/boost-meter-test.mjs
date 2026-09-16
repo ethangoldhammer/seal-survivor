@@ -23,6 +23,7 @@ import {
 } from '../path/src/assets.js';
 import {
   strikeState, resetStrike, feedChum, updateStrike, restoreCharge,
+  addCharge, pipsToFull,
   pipCount, pipValue, chumRefillMul, pendingPips, chainStrike, liveChain,
   chainLevel, chainDamageMul, comboSpeedMul, chargeThrustMul, tryStrike, consumeStrikeLink, linkPips, linkCost, cancelDash,
   updateCharge, perfectCrossed, strikeLoaded, inSweetSpot, sweetOffset, sweetHalfWidth,
@@ -240,6 +241,57 @@ strikeState.charge = 0;
 restoreCharge(stats());
 check('fills the bar outright', near(strikeState.charge, 1));
 check('and books every pip it crossed', pendingPips() === pipCount(stats()));
+
+// ---------------------------------------------------------------------------
+// ...AND IT ARRIVES A PIP AT A TIME.
+//
+// The orb is absorbed in pieces now (systems/pickupAbsorb.js): one piece per
+// DARK container, each blob lighting its own on the frame it reaches the seal.
+// What that costs is a second place the bar can be filled from, and the ways
+// it can go wrong are all invisible — an orb that lands on 0.999 and never
+// fires the crossing, a near-full bar that still throws eleven blips, a short
+// burst that pays eight pips' worth into a five-pip bar.
+//
+// This is main.js' arithmetic, run here rather than trusted: pipsToFull says
+// how many pieces, and each piece pays its SHARE of exactly that many pips.
+console.log('\nA BLUE ORB ARRIVES A PIP AT A TIME');
+fuelled();
+const orbBarPips = pipCount(stats());
+strikeState.charge = 0;
+check(`an empty bar is missing every pip — ${orbBarPips}`, pipsToFull(stats()) === orbBarPips);
+strikeState.charge = 1;
+check('a full one is missing none', pipsToFull(stats()) === 0);
+strikeState.charge = 1 - 2 * pipValue(stats());
+check('two dark containers ask for two pieces', pipsToFull(stats()) === 2);
+// Caught mid-hold, partway through burning a pip. CEILED, so the sliver is
+// refilled rather than left behind — a floor here ends the vacuum one blip
+// short and the bar one sliver under full, which no screen would ever show.
+strikeState.charge = 1 - 1.5 * pipValue(stats());
+check('a part-burned pip still asks for a whole piece', pipsToFull(stats()) === 2);
+
+// The pay loop itself, share by share, exactly as the absorb hands it over.
+for (const start of [0, 0.5, 1 - 1e-9]) {
+  fuelled();
+  strikeState.charge = start;
+  const missing = pipsToFull(stats());
+  const pieces = Math.max(1, missing);
+  for (let i = 0; i < pieces; i++) addCharge((1 / pieces) * missing * pipValue(stats()), stats());
+  check(`  from ${start.toFixed(3)}: the pieces fill the bar exactly`, near(strikeState.charge, 1, 1e-9));
+  // One blip per piece, which is the whole read: the ladder the player hears
+  // is the pip queue, so a piece that lands without crossing a boundary is a
+  // piece that made no sound.
+  check(`  ...booking one pip per piece — ${missing}`, pendingPips() === missing);
+}
+// A SHORT BURST STILL FILLS IT. The reserve can hand back fewer blobs than
+// were asked for, and the absorb's promise is that the SHARES sum to 1 — so
+// the bar reaches full on three pieces as surely as on five, lighting more
+// than one container per blob. Paying a flat pip each would underfill here,
+// and only when the water was busy.
+fuelled();
+strikeState.charge = 0;
+for (let i = 0; i < 3; i++) addCharge((1 / 3) * orbBarPips * pipValue(stats()), stats());
+check('a burst cut short still fills the bar', near(strikeState.charge, 1, 1e-9));
+check(`  ...and books every pip on the way — ${orbBarPips}`, pendingPips() === orbBarPips);
 
 console.log('\nTOPPING UP A FULL BAR BOOKS NOTHING');
 fuelled();

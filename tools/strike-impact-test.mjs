@@ -394,6 +394,11 @@ check('a full charge shoves harder than a flick',
     if (knocked) armDash(power, { x: 1, y: 0 });
     let rams = 0;
     let overtaken = false;
+    // THE GAP, from the frame the ram lands. `overtaken` below is kept for the
+    // record it gives; the assertion is on this, and see the block after the
+    // seed list for why.
+    let gapAtRam = null;
+    let bestGap = -Infinity;
     for (let i = 0; i < Math.round(seconds / dt); i++) {
       const t = i * dt;
       if (knocked) {
@@ -402,11 +407,16 @@ check('a full charge shoves harder than a flick',
         // Only while the dash is still running: afterwards the seal coasts and
         // being level with it means nothing.
         if (rams > 0 && t < duration && e.mesh.position.x < seal.x) overtaken = true;
+        if (rams > 0) {
+          const gap = e.mesh.position.x - seal.x;
+          if (gapAtRam === null) gapAtRam = gap;
+          if (gap > bestGap) bestGap = gap;
+        }
       }
       updateEnemies(dt, scene, seal, () => {}, () => {});
     }
     Math.random = realRandom;
-    return { x: e.mesh.position.x, rams, overtaken };
+    return { x: e.mesh.position.x, rams, overtaken, opened: bestGap - (gapAtRam ?? 0) };
   }
 
   const seeds = [11, 99, 4242, 777, 31337];
@@ -436,8 +446,38 @@ check('a full charge shoves harder than a flick',
   check('a full-charge shove leaves faster than the seal is dashing',
     launched > dashSpeed,
     `${launched.toFixed(0)} u/s against a ${dashSpeed} u/s dash`);
-  check('...so the seal never overtakes what it just rammed',
-    !rammed({ knocked: true, power: 1, seconds: 0.5 }).overtaken);
+  // ...AND THE HALF OF THAT CLAIM THAT IS ACTUALLY CHECKABLE.
+  //
+  // This used to assert that the seal never overtakes what it rammed, for the
+  // whole length of the dash, and that is not true and was never meant to be.
+  // The throw is a SPEED over a DECAY, so it is a fixed distance: about 13
+  // units for a shark at full charge, which the knockback block in config.js
+  // states outright. A full-charge dash is 46 u/s for 0.48s, which is 22. The
+  // seal catching it back up before the dash ends is the design — the same
+  // block says a normal-charge shove "keeps pace with the dash and then falls
+  // behind" — so the old check was asking the shove to be something the tuning
+  // deliberately does not buy, and passed or failed on which way the shark
+  // happened to be swimming when the dash reached it.
+  //
+  // What it was reaching for is real and does survive, as a claim about the
+  // MOMENT OF CONTACT rather than about the whole dash: the shove has to beat
+  // the dash AND the animal's own stroke, so the gap opens no matter which way
+  // that animal was pointed. The second half is what `staggerSlow` buys (see
+  // updateEnemies: it crushes the stroke to 15% while the stagger runs), and
+  // without it most of a ram on a shark swimming into you is spent cancelling
+  // the shark.
+  //
+  // So: five headings, and the WORST of them is the assertion. Measured, the
+  // gap opens 1.5 to 1.8 units in the first hundred milliseconds whichever way
+  // the shark was going — a quarter of a body, at the one moment the player is
+  // looking straight at it. The same sweep at a normal charge opens 0.00 on
+  // the two seeds swimming into the dash, which is what this check is for: a
+  // shove that merely keeps pace is one the player cannot read as a hit.
+  const opened = seeds.map((seed) => rammed({ knocked: true, power: 1, seconds: 0.5, seed }).opened);
+  check('...so it leaves, whichever way the shark was swimming when it landed',
+    Math.min(...opened) > 1,
+    `gap opened ${Math.min(...opened).toFixed(2)}-${Math.max(...opened).toFixed(2)} units `
+    + `over ${seeds.length} headings`);
 }
 
 // ------------------------------------------------ the ones that survive it

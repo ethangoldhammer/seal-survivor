@@ -437,16 +437,16 @@ export const TEXT_ROLES = [
   { key: 'vsCardTime', label: 'Goal card — clock', selector: '.sv-versus-card-time', section: 'Blubberball',
     sample: '1:52', unit: 'vmin', plate: 'glass',
     style: { font: FONT_GLOBAL, size: 2.4, weight: 600, tracking: 0.02, case: 'as typed', useInk: false, color: 0x05070a, alpha: 0.74, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
-  // THE PROMPT AFTER THE MATCH, over the highlight reel. Floored, because
-  // the buttons are the tap targets — see the note on `floor` above.
-  { key: 'vsOverTitle', label: 'After-match heading', selector: '.sv-versus-over-title', section: 'Blubberball',
-    sampleFrom: 'versusOverTitle', sample: 'Again?', unit: 'vmin', floor: 30,
-    style: { font: FONT_GLOBAL, size: 6, weight: 700, tracking: 0.05, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.95, shadow: 14, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
-  // Dark on the pale button fill, like `button` above — and its own role
-  // because it is twice that size and beats it on specificity in versus.js.
-  { key: 'vsOverButton', label: 'After-match buttons', selector: '.sv-versus-over .sv-btn', section: 'Blubberball',
-    sampleFrom: 'versusRematch', sample: 'Rematch', unit: 'vmin', floor: 18,
-    style: { font: FONT_GLOBAL, size: 2.6, weight: 700, tracking: 0.03, case: 'as typed', useInk: false, color: 0x0a0c12, alpha: 1, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // NO ROLES FOR THE PLAY-AGAIN PROMPT, for the same reason `vsCardWin` has
+  // none: the prompt was a DOM panel under the highlight reel (a
+  // `.sv-versus-over` column with an `Again?` heading over two buttons) and it
+  // lives on the stats page now, which is a Rive artboard sized by the Theme
+  // view model rather than by a tuner row. Its three lines did not move — see
+  // the note in ui/statsCopy.js, which still reads `versusOverTitle`,
+  // `versusRematch` and `mainMenuButton` off uiText.csv — but the selectors
+  // `vsOverTitle` and `vsOverButton` named are gone from the markup, and a role
+  // is a selector plus a default: one nobody's markup wears is a group of
+  // sliders that move nothing. npm run test:textdesign is what caught it.
   // THE CORNER TAG — on the instant replay, and (reel) on the highlight reel
   // under the prompt, where it is smaller and has no skip line under it.
   { key: 'vsReplayTag', label: 'Replay tag', selector: '.sv-versus-replay-tag', section: 'Blubberball',

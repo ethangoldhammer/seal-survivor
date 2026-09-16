@@ -93,6 +93,20 @@ globalThis.__riveControl = {
   release() { const q = this.pending.splice(0); for (const fire of q) fire(); },
 };
 
+// VITE-LOADER FIRST, so THIS file's hooks register LAST.
+//
+// registerHooks runs in reverse registration order — the newest hook sees a
+// specifier before the older ones do — and tools/vite-loader.mjs claims every
+// `?raw` and `?url` import, resolving it to the real file on disk and
+// short-circuiting. Registered after us it therefore swallowed
+// '@rive-app/canvas/rive.wasm?url' before the stub below ever saw it, and the
+// WASM check read back an absolute node_modules path instead of 'stub-asset'.
+// The same shadowing sent ui/statsCard.js a real .riv path, which is the
+// "Failed to parse URL" line the harness used to print on its way past.
+//
+// Everything this file does not claim still falls through to it by `next()`.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -179,7 +193,6 @@ export const RuntimeLoader = { setWasmUrl(u) { L.wasmUrl = u; } };
   },
 });
 globalThis.__riveLog = riveLog;
-await import('./vite-loader.mjs');
 
 const { CONFIG } = await import('../path/src/config.js');
 const UI = await import('../path/src/ui/ui.js');
@@ -520,24 +533,37 @@ section('THE SPLASH — a name is rolled, a trigger starts the run');
     // (updateMenuNav in ui/ui.js); this is the module's half.
     NAME.clearPlayerName();
     const { handle, vmi } = mount();
+    // ENTRY 0 IS THE REEL'S LANDING, not the first press of the dice. A player
+    // with no name on file is GIVEN one on arrival — the reel flips the table
+    // and stops on it — and that name is one they were shown, so back has to
+    // reach it. (It used to be that a new player's history started empty and
+    // entry 0 was their first roll; riveSplash.js changed that the day after
+    // this block was written and the block was not moved with it, which is why
+    // both ends of the walk below name `arrived` rather than rolled[0].)
+    const arrived = handle.name;
     const rolled = [handle.randomize(), handle.randomize(), handle.randomize()];
+    check('the name a new player arrives with is entry 0', !!arrived && !rolled.includes(arrived),
+      arrived);
     check('back returns the name before this one', handle.previous() === rolled[1],
       `${handle.name} vs ${rolled[1]}`);
     check('...on the artboard as well as in the handle', shown(vmi) === rolled[1],
       shown(vmi));
     check('...and again', handle.previous() === rolled[0], handle.name);
+    check('...and back past the first roll is the name they arrived with',
+      handle.previous() === arrived, handle.name);
 
-    // Nothing before the first roll for a player with no name on file. A wrap
-    // to the far end of a list nobody can see is worse than doing nothing.
+    // Nothing before that. A wrap to the far end of a list nobody can see is
+    // worse than doing nothing.
     check('back stops at the first name rather than wrapping',
-      handle.previous() === rolled[0] && handle.name === rolled[0], handle.name);
+      handle.previous() === arrived && handle.name === arrived, handle.name);
 
     // TRUNCATES, the way a browser's history does — otherwise the right
     // shoulder sometimes rolls and sometimes replays.
     const fresh = handle.randomize();
-    check('rolling from partway back is a new name', !rolled.includes(fresh), fresh);
+    check('rolling from partway back is a new name', !rolled.includes(fresh) && fresh !== arrived,
+      fresh);
     check('...and back from it lands on where the roll was made, not on what it replaced',
-      handle.previous() === rolled[0], handle.name);
+      handle.previous() === arrived, handle.name);
 
     handle.destroy('test');
     NAME.clearPlayerName();

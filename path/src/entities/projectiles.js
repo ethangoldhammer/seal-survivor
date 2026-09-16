@@ -7,7 +7,7 @@ import { createAnimationController } from '../systems/animation.js';
 import { createInstancedPool } from '../systems/instancedPool.js';
 import { updateTumble } from '../systems/rocks.js';
 import { isMarked, markWeight, markedTargets } from '../systems/marks.js';
-import { facingHotSpots, hotSpotPoint } from '../systems/bossHotSpots.js';
+import { facingHotSpots, hotSpotPoint, designatedHotSpot } from '../systems/bossHotSpots.js';
 import { projectileLife } from '../systems/scaling.js';
 import { releaseLatticeChild, resetLattice } from '../loadout.js';
 import { attackTraceOn, noteShotEnd } from '../systems/attackTrace.js';
@@ -680,22 +680,36 @@ const _spots = [];
 // it would otherwise have hit — trading a certain body hit for a crit it was
 // never geometrically able to land.
 //
-// `clearance` widens both circles, because a spot reachable only by a perfect
-// arc is a spot the animal moves out from under while the shot is arcing.
+// Written as a distance against the SIDEWAYS offset rather than as two circle
+// tests, and that is not a tidy-up — the two forms are the same test only while
+// there is no margin on it, and the margin is what this whole function is for.
+// Both circles pass through the shot's own position, so inflating their RADII
+// swallows the water immediately in front of the nose: at a pebble's 6.5-unit
+// turn circle and a 25% clearance, a point dead ahead and under 4.9 units away
+// tested as unreachable. That is the one point every seeker on a closing
+// approach is looking at, so the aim let go of the spot in the last fifth of a
+// second of the flight and the pellet went back to the middle of the animal —
+// and it did it on exactly the shots that were about to land the crit.
+//
+// The equivalent exact statement is `d >= 2r·sin(bearing off the nose)`: a
+// point straight ahead needs no turn at any distance, and one square on the
+// beam needs two radii of room. `clearance` scales the distance that costs,
+// because a spot reachable only by a perfect arc is a spot the animal moves
+// out from under while the shot is arcing.
 function reachable(p, x, y, clearance) {
   if (!(p.turnRate > 0)) return false;
   const r = p.speed / p.turnRate;
   if (!(r > 0)) return true; // a shot that turns on the spot can reach anything
-  const px = p.mesh.position.x;
-  const py = p.mesh.position.y;
-  const lim = r * (1 + clearance);
-  // The two turn circles are one radius off each beam, i.e. along ±perp(dir).
-  const ax = px - p.dir.y * r;
-  const ay = py + p.dir.x * r;
-  if (Math.hypot(x - ax, y - ay) < lim) return false;
-  const bx = px + p.dir.y * r;
-  const by = py - p.dir.x * r;
-  return Math.hypot(x - bx, y - by) >= lim;
+  const dx = x - p.mesh.position.x;
+  const dy = y - p.mesh.position.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-4) return true;
+  // How far off the beam it sits, as a fraction of the range to it — which is
+  // the sine of the bearing, and the only part of the direction that matters.
+  // A point ASTERN is not a special case: the fore-and-aft term cancels out of
+  // the circle test entirely, so one beam-relative measure covers the circle.
+  const sin = Math.abs(p.dir.x * dy - p.dir.y * dx) / d;
+  return d >= 2 * r * sin * (1 + clearance);
 }
 
 // WHERE ON THE TARGET THIS SHOT IS STEERING — the middle of the body, or a
@@ -725,6 +739,45 @@ function aimAt(p) {
   const clearance = c.clearance ?? 0.25;
   const px = p.mesh.position.x;
   const py = p.mesh.position.y;
+
+  // THE PLAYER'S ANSWER BEATS THE PELLET'S. If the aim is lying across a spot
+  // (aimHotSpots in systems/bossHotSpots.js) then every seeker the seal has in
+  // the air works THAT one, and the nearest-wins rule below never runs. A
+  // volley that splits itself over three lights by proximity is arithmetic the
+  // player cannot see; a volley that all turns toward the light under the
+  // reticle is the aim doing something.
+  //
+  // THE SEAL'S ORDNANCE ONLY. A boat's missile chases the seal and has no aim
+  // to obey — and reading this on an enemy shot would let the player's reticle
+  // steer the things being fired at them.
+  //
+  // Still `facingHotSpots`, but on a much looser floor: `facing` exists to stop
+  // a pellet choosing a light behind two metres of boss, and a spot the player
+  // deliberately put the reticle on has earned the benefit of the doubt right
+  // up to the point where the body is genuinely in the way. Past that the
+  // designation is dropped rather than honoured — the shot falls through to the
+  // ordinary rule and works a light on the near flank, which is strictly better
+  // than burying itself in the animal on the player's behalf.
+  if (p.faction === 'player') {
+    const want = designatedHotSpot(p.target);
+    if (want) {
+      const facing = facingHotSpots(p.target, px, py, c.aimFacing ?? -0.35, _spots);
+      if (facing.indexOf(want) !== -1) {
+        hotSpotPoint(want, _aim);
+        // Still the reach test, and it is a different test than it was: with
+        // the margin applied where it belongs (see `reachable`), a spot ahead
+        // of a closing shot passes, which is the case the aim is about. What it
+        // still refuses is a spot square on the beam of a shot too fast to turn
+        // onto it — and there the honest answer is the rule below, which works
+        // a light this shot can actually make.
+        if (reachable(p, _aim.x, _aim.y, clearance)) {
+          p.aimSpot = want;
+          return _aim;
+        }
+      }
+    }
+  }
+
   const spots = facingHotSpots(p.target, px, py, c.facing ?? 0.15, _spots);
   let best = null;
   let bestD = Infinity;

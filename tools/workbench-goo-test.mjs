@@ -57,6 +57,11 @@ globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 dom.window.HTMLCanvasElement.prototype.getContext = () => null;
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -74,7 +79,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 // BEFORE the game modules, and load-bearing: a save posts the whole tuning
 // snapshot to the dev server, and this panel saves on every slider it nudges.
 // Left live, a test run would overwrite whatever is open in the browser with a

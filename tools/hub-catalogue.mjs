@@ -105,6 +105,9 @@ const GROUP_BY_NAME = {
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   notex: 'Audits',
+  // The same audit as `layout`, run against the flipped viewport — it reports
+  // and writes nothing, so it sits where `layout` does.
+  flip: 'Audits',
   // Generates candidate colour wheels and screens them — it writes nothing and
   // the output is hex rows to paste, so it reads as authoring rather than as an
   // asset job.
@@ -147,12 +150,42 @@ const GROUP_BY_NAME = {
   // ...and `desktop` puts the game on screen in that shell, which is a server
   // in every way that matters here.
   desktop: 'Servers',
+  // Filming, which is the desktop shell with the window locked to a 1920x1080
+  // capture and a recorder attached — so it sits beside `desktop` rather than
+  // in a drawer of its own. `film:open` is the one you want most often: it
+  // reveals the newest clip in Finder.
+  film: 'Servers', 'film:setup': 'Servers', 'film:finish': 'Servers', 'film:open': 'Servers',
   'desktop:test': 'Checks', 'desktop:test:save': 'Checks', 'desktop:test:shell': 'Checks',
   'desktop:test:playtest': 'Checks',
   'audit:offline': 'Audits', 'steam:status': 'Audits', 'bait:shader': 'Audits',
   // Reads what the phone's last sessions ended as. A report, not an asset job.
   crash: 'Audits',
   fonts: 'Assets',
+  // Audits that print rather than assert, like `chain:trace` above: each one
+  // replays a system offline and shows the numbers, and none of them writes.
+  aim: 'Audits', gates: 'Audits', jaws: 'Audits', 'outline:glsl': 'Audits',
+  // Reads the Mac's CoreAudio device ids for the recorder. A report.
+  audio: 'Audits',
+  'acc:seed': 'Assets',
+  // Rewrites public/models/ with --write, like `shrink`.
+  creatures: 'Assets',
+  'desktop:test:capture': 'Checks', 'desktop:test:record': 'Checks',
+  // THE RIVE CLI, which is the authoring loop for path/src/ui/blubberball.riv.
+  // The three that produce the file are asset jobs; `rive:push` sends the
+  // project to the editor, which puts it in front of somebody else.
+  rive: 'Assets', 'rive:watch': 'Assets', 'rive:rev': 'Assets', 'rive:try': 'Assets',
+  'rive:push': 'Publish',
+  // ...and these two render the artboards to disk with the real copy pushed
+  // in, which is a look page with no server in front of it — the same shape
+  // as the `look:` prefix above.
+  'rive:preview': 'Look pages', 'rive:live': 'Look pages',
+  // Diffs a .rev from the editor back against the hand-written .rml and
+  // reports; only --apply writes. The `sfx:trim` shape — an audit until you
+  // ask it not to be.
+  'rive:pull': 'Audits',
+  // The itch.io build and the upload of it. `itch:push` reaches butler, so it
+  // sits with the other things that leave this machine.
+  itch: 'Publish', 'itch:push': 'Publish',
 };
 
 // ---------------------------------------------------------------------------
@@ -167,6 +200,7 @@ const BLURBS = {
   deploy: 'Builds and publishes straight to the live site, with no commit.',
   'deploy:preview': 'Builds and publishes to preview.seal-survivor.pages.dev, leaving production alone.',
   hub: 'This page. The index of every tool in the repo, on a port that never moves.',
+  film: 'The game in the desktop shell, window locked so every clip is exactly 1920x1080, recording with sound from BlackHole. Quit the game to end the take; the clip is scaled and the folder opens.',
   test: 'Every check in the repo, chained. The first failure hides the rest — see npm-test-is-and-chained.',
   'playtest:sync': 'Pulls remote runs and rebuilds the playtest atlas from them in one step.',
   ios: 'Builds, syncs the Capacitor iOS project, and opens it in Xcode.',
@@ -181,6 +215,17 @@ const BLURBS = {
   // No banner on tools/head-socket-measure.mjs yet — its sibling
   // eye-socket-measure.mjs has one, and this stands in until it does.
   headsocket: 'Where a head-mounted socket lands on a rig, measured rather than guessed.',
+  // THE RIVE CLI SCRIPTS. These five run $HOME/.rive/bin/rive directly, so
+  // there is no tool file in this repo with a banner to read a sentence off.
+  rive: 'Builds rive/blubberball once and copies the .riv into path/src/ui/, where the game loads it.',
+  'rive:watch': 'The same build, left running: every save in the .rml rebuilds the .riv.',
+  'rive:rev': 'Builds, and writes a .rev beside it — the editor\'s format, which rive:pull diffs back.',
+  'rive:try': 'Renders one frame of the project 60 frames in, to build/try.png. Lorem, not the real copy — see rive:preview.',
+  'rive:push': 'Sends the local project up to the Rive editor. Other people see what this uploads.',
+  // Its banner's first sentence is the whole premise of the file (three
+  // clauses about what makes a team name different), which reads as a
+  // paragraph in a drawer. Same claim, one line.
+  'test:teamnames': 'What a Blubberball side is called: teamNames.csv, and the two joins — the picked colour and the seals in the seats — that a vocabulary test would never check.',
 };
 
 // ---------------------------------------------------------------------------

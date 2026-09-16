@@ -180,12 +180,63 @@ for (const L of [5, 20]) {
       + `${pad(pct(gross / bar), 19)}${pad(pct(landed / bar), 16)}`);
   }
 }
-const early = passes.filter((p) => p.L === 5);
-const late = passes.filter((p) => p.L === 20);
-ok(early.every((p) => p.frac >= 0.15 && p.frac <= 0.35),
-  `the opening boss's pass is a real hit — ${early.map((p) => pct(p.frac)).join(', ')} of a fresh bar`);
-ok(late.every((p) => p.frac >= 0.4),
-  `and a late one is the thing you move out of the way of — ${late.map((p) => pct(p.frac)).join(', ')}`);
+// ---------------------------------------------------------------------------
+// WHAT A FIGHT COSTS, which is the question — not what a pass costs.
+// ---------------------------------------------------------------------------
+// This used to band the PASS: 15-35% of a fresh bar early, 40%+ late. Those
+// numbers were authored when a committed run reached a real player about 1-5%
+// of the time, so "a pass is worth a fifth of your bar" and "a fight is
+// survivable" were the same statement. They are not any more. The reach retune
+// (2026-09-16) took the connect rate to 50-68% against a seal that dodges, and
+// holding the per-pass band would have put a late fight at 2.1-3.8 bars — three
+// deaths' worth — while every check in this file stayed green.
+//
+// So the assertion is the fight. A pass is priced by how OFTEN it lands and how
+// long the fight lasts, and both of those are measurements rather than
+// arithmetic — they live here as named constants with their provenance, and the
+// point of naming them is that a retune which moves them has to come back here.
+//
+//   npm run aim -- <boss> --dodge     connect rate and runs per minute
+//   section 6 of this file            the fight's own length, against a build
+const CONNECT = { bossShark: 0.66, bossOrca: 0.71, bossHammerhead: 0.70, bossMosasaur: 0.60 };
+const RUNS_PER_MIN = { bossShark: 12.5, bossOrca: 12.6, bossHammerhead: 14.2, bossMosasaur: 12.0 };
+const FIGHT_SECONDS = { 5: 43, 20: 61 };
+// A late boss should cost a competent player about a bar — demanding, and
+// survivable with what the water gives you back. The opening one should cost a
+// quarter of that: it is the fight that teaches you what a boss is.
+const BUDGET = { 5: [0.12, 0.40], 20: [0.7, 1.6] };
+
+const fights = passes.map((p) => {
+  const bar = p.L === 5 ? 115 : 200;
+  const perPass = p.frac * bar;
+  const bars = (perPass * RUNS_PER_MIN[p.k] * CONNECT[p.k] * (FIGHT_SECONDS[p.L] / 60)) / bar;
+  return { ...p, bars };
+});
+section('   ...and what a whole fight costs a player who dodges');
+for (const L of [5, 20]) {
+  const row = fights.filter((f) => f.L === L);
+  console.log(`   level ${String(L).padEnd(3)} ${row.map((f) => `${f.k.replace('boss', '')} ${f.bars.toFixed(2)}`).join('  ')}`);
+}
+for (const L of [5, 20]) {
+  const [lo, hi] = BUDGET[L];
+  const row = fights.filter((f) => f.L === L);
+  ok(row.every((f) => f.bars >= lo && f.bars <= hi),
+    `a level-${L} boss costs ${lo}-${hi} bars across the fight — `
+    + row.map((f) => `${f.k.replace('boss', '')} ${f.bars.toFixed(2)}`).join(', '));
+}
+// ...AND THE FOUR ARE WITHIN REACH OF EACH OTHER. They differ in HOW they
+// threaten — a hammerhead's pass is quick and shallow, a mosasaur's is slow and
+// heavy — and `damageMul` is what holds the totals together across that. One
+// archetype costing twice what another does is an accident, not a design.
+for (const L of [5, 20]) {
+  const row = fights.filter((f) => f.L === L).map((f) => f.bars);
+  ok(Math.max(...row) / Math.min(...row) <= 1.35,
+    `...and no archetype is more than a third worse than another at level ${L} — `
+    + `${Math.min(...row).toFixed(2)} to ${Math.max(...row).toFixed(2)}`);
+}
+// A pass still has to be a BLOW rather than chip, whatever the fight totals.
+ok(passes.every((p) => p.frac >= 0.03),
+  `every pass is still a blow and not a drain — smallest ${pct(Math.min(...passes.map((p) => p.frac)))} of the bar`);
 ok(passes.every((p) => p.frac <= cap.perSecond + 1e-9),
   `...but never the whole bar: damageCap.perSecond holds every one of them at ${pct(cap.perSecond)}`);
 

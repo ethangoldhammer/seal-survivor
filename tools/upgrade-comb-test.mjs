@@ -87,6 +87,20 @@ registerHooks({
     return next(url, ctx);
   },
 });
+// AFTER our own hooks — LEFT ALONE rather than chosen, see the ordering note
+// in tools/vite-loader.mjs.
+//
+// registerHooks runs newest-first, so with the loader registered last it claims
+// every `?raw`/`?url` import before this file's hooks see one: the `.riv?url`
+// stub above never fires. Twenty-eight sibling harnesses were in that shape and
+// were moved above their hooks, because for them the stub firing changes
+// nothing that any check can see.
+//
+// This one was not moved because it cannot currently be measured. `a second
+// hover on the same card is refused` fails about eight runs in ten WITH THE
+// ORDER UNTOUCHED, so a before/after on the hook order here is reading noise,
+// not an effect. Fix the flake first — the throttle check is the one to look
+// at — then try the move and see whether it changes anything.
 await import('./vite-loader.mjs');
 globalThis.fetch = async () => ({ ok: false, status: 404 });
 console.warn = () => {};

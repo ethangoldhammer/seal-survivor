@@ -138,6 +138,11 @@ dom.window.URL.createObjectURL = (blob) => `blob:http://localhost/${++objectUrls
 dom.window.URL.revokeObjectURL = () => {};
 globalThis.URL = dom.window.URL;
 
+// BEFORE our own hooks below. registerHooks runs newest-first and the loader
+// claims every `?raw`/`?url` import, so registering it after us would swallow
+// the stubs. See the note in tools/vite-loader.mjs.
+await import('./vite-loader.mjs');
+
 const { registerHooks } = await import('node:module');
 registerHooks({
   resolve(spec, ctx, next) {
@@ -185,7 +190,6 @@ registerHooks({
     return next(url, ctx);
   },
 });
-await import('./vite-loader.mjs');
 
 const { CONFIG } = await import('../path/src/config.js');
 const SHOT = await import('../path/src/systems/bossShot.js');

@@ -74,7 +74,13 @@ export function absorbPitch(taken, count, c = cfg()) {
  * @param {object} at     what feedback() would have been given: x, y, scale,
  *                        color, sfxOpts. `scale` is doing double duty — it is
  *                        already how big the burst is, and it is now also how
- *                        many pieces the payout is cut into.
+ *                        many pieces the payout is cut into. `pieces` overrides
+ *                        that count outright, for a payout whose pieces are
+ *                        COUNTABLE — one pip each — rather than shares of
+ *                        something continuous. `tune` is this pickup's own
+ *                        numbers over the shared ones — the keys of
+ *                        CONFIG.pickups.absorb it disagrees about, and nothing
+ *                        else.
  * @param {function} pay  called once per piece as pay(share, taken, count,
  *                        x, y, last). `share` sums to exactly 1.
  *
@@ -83,7 +89,11 @@ export function absorbPitch(taken, count, c = cfg()) {
  * and the pickup still works, which is the only honest way to A/B it.
  */
 export function absorbInPieces(event, at = {}, pay = null) {
-  const c = cfg();
+  // THE BASE NUMBERS, WITH THIS PICKUP'S OWN OVER THEM. An overlay rather than
+  // a second config block: a pickup that wants a quicker vacuum says only the
+  // keys it disagrees about, and everything it is silent on keeps following
+  // the shared tuning. See CONFIG.pickups.absorb.orb.
+  const c = at.tune ? { ...cfg(), ...at.tune } : cfg();
   if (typeof pay !== 'function') { feedback(event, at); return; }
   if (c.enabled === false) {
     feedback(event, at);
@@ -97,9 +107,23 @@ export function absorbInPieces(event, at = {}, pay = null) {
     // still burst ballistically everywhere else it is used.
     gooSuck: true,
     holdStagger: c.stagger ?? 0.5,
+    // THE BEAT BEFORE ANY OF IT MOVES, and how hard the pull comes on after
+    // it, when this pickup names them. Undefined leaves the shared look
+    // numbers (CONFIG.fx.gooSuck.holdAt / rampTime) exactly as they were,
+    // which is every caller that has not asked.
+    holdAt: c.hold,
+    rampTime: c.ramp,
     // The piece count is the ladder's length, so it is clamped here rather
     // than left entirely to the look tuning — see CONFIG.pickups.absorb.pieces.
-    countClamp: c.pieces,
+    //
+    // ...UNLESS THE CALLER IS PAYING IN WHOLE UNITS. `at.pieces` pins the count
+    // exactly, above and below, and that is not a violation of the clamp's
+    // reason for existing — it is the case the clamp was never about. A share
+    // of a heal can be any size, so the look owns how many there are; a PIP is
+    // a countable thing on the bar, and a blue orb that lit five containers in
+    // eleven blips would be counting something the player cannot see. Where the
+    // piece count IS the payout, the payout names it.
+    countClamp: at.pieces > 0 ? [at.pieces, at.pieces] : c.pieces,
     onCapture: (taken, count, x, y, last) => {
       pay(1 / count, taken, count, x, y, last);
       // The piece landing. Its own event so it can be silenced, retuned or
