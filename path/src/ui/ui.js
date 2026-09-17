@@ -31,7 +31,7 @@ import { touchPrimary, prefersReducedMotion, narrowScreen } from '../devices.js'
 // One setting, read live rather than pushed in: where the health and air
 // gauges are drawn. settings.js imports nothing from here, so this is a leaf
 // dependency and not half of a cycle.
-import { barPlacement, boostMeter, scorePopups } from '../systems/settings.js';
+import { barPlacement, boostMeter, fightText, scorePopups } from '../systems/settings.js';
 // THE BOOST COLUMN'S MODEL, borrowed rather than rebuilt. systems/strikeRing.js
 // owns the pip springs, the stagger queue and the pops whichever view is on
 // screen; this file only draws them. Neither module imports the other's data —
@@ -7612,6 +7612,16 @@ let dmgTotal = 0;
 export function spawnDamageReadout(camera, worldX, worldY, amount, maxHp) {
   const c = CONFIG.fx?.playerDamage?.readout ?? {};
   if (c.enabled === false || !el.svToastLayer || !camera || !(amount > 0)) return null;
+  // TURNED OFF IN OPTIONS — see settings.hud.fightText, which takes this line,
+  // the FOOD CHAIN banner and the ring's two lines together. Gated at the
+  // SPAWN for the same reason the score popup is: nothing is built, nothing is
+  // projected, nothing joins the per-frame loop.
+  //
+  // `dmgTotal` and `dmgToast` are deliberately NOT touched on the way out. The
+  // merge window is a fact about the beating and not about whether anybody is
+  // watching it, and resetting the running total here would mean turning the
+  // readout back on mid-fight started a "new" pile-on from whatever was left.
+  if (!fightText()) return null;
   PROJECT_V.set(worldX, worldY, 0);
   projectToScreen(camera, PROJECT_V, screenPt);
 
@@ -7840,6 +7850,21 @@ function stepChainCount() {
  */
 export function spawnChainToast(chain) {
   if (!el.svToastLayer) return;
+  // ...AND THE BANNER GOES WITH THE COUNT. Both are built by chainToastAt off
+  // this queue, so one gate covers the plate and the number that steps it —
+  // see settings.hud.fightText.
+  //
+  // The gate is HERE rather than in updateToasts because the chain itself is
+  // untouched: the links still land, the window still runs, the ring's arc
+  // still walks the hue wheel. What stops is the writing, which is the whole
+  // of what the setting promises.
+  //
+  // It also settles "STRIKE NOW!" on its own. `chainPin.prompt` requires a
+  // live `chainToast` (see updateToasts), so with no banner the prompt cannot
+  // claim the ring's slot — and main.js withholds the ring's copy of the line
+  // under the same setting, so the moment simply goes unnarrated rather than
+  // moving to the other surface.
+  if (!fightText()) return;
   chainCountQueue.push(chain);
   // DROPPED FROM THE FRONT, like the pip queue's backlog: if numbers have to
   // be lost, the ones worth keeping are the ones nearest the count the chain

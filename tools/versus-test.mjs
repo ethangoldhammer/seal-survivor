@@ -6319,8 +6319,73 @@ section('The strip fits the phone it is on');
   // The guard is what makes a call from paintClock free — that runs every frame.
   check('a per-frame call is free unless something moved', /if \(key === stripFitKey\) return/.test(fit),
     'paintClock ticks every frame; a layout read per frame on a phone is the cost that shows up late');
-  check('...and the viewport is part of what "moved" means', /window\.innerWidth\}/.test(fit),
+  check('...and the room is part of what "moved" means', /const key = `\$\{room\}/.test(fit),
     'without it a resize changes nothing the key can see');
+
+  // THE DYNAMIC ISLAND. The page draws edge to edge (viewport-fit=cover in
+  // index.html), so the top of the viewport is the top of the GLASS: upright,
+  // the pill sits over the middle of the strip, which is where the clock is;
+  // on its side the inset moves to the leading edge and about 59px of the
+  // window is behind it.
+  check('the strip hangs below the top inset, not below the top of the glass',
+    /\.sv-versus-hud \{ position: absolute; top: calc\(12px \+ env\(safe-area-inset-top, 0px\)\)/.test(src),
+    'upright, the Dynamic Island sits exactly over the clock between the two scores');
+  check('...and is centred in a band inset by the side insets',
+    /\.sv-versus-band \{[^}]*left: env\(safe-area-inset-left, 0px\); right: env\(safe-area-inset-right, 0px\)/.test(src),
+    'held sideways the pill takes one edge, and a strip centred on the glass is off centre on the screen');
+  check('...which is a real element, so the fit can read the insets in pixels',
+    /<div class="sv-versus-band">/.test(src) && /band: root\.querySelector\('\.sv-versus-band'\)/.test(src),
+    'env() is a CSS function with no JS reading — this is how fitStrip gets the number');
+  check('the fit measures the band and not the window',
+    /ui\.band\?\.clientWidth \|\| window\.innerWidth/.test(fit),
+    'fitting to the window fits to a width that is behind the pill');
+  check('...and the band takes no space of its own',
+    /\.sv-versus-band \{[^}]*height: 0/.test(src));
+}
+
+section('The stats page fits the screen it is on');
+{
+  // THE ONE SCREEN IN THE MODE WITH NOTHING ELSE ON IT, and the one you could
+  // get stuck on. The page is a Rive artboard 900 x 760 — taller than it is
+  // wide — and the canvas was sized `width: min(92vw, 900px)` with
+  // `height: auto`: a rule with no opinion about height. On a phone on its
+  // side there is barely any, so 92vw of an iPhone 15 landscape made the page
+  // 662px tall in a 393px viewport, centred, with a third of it off the top
+  // and a third off the bottom. Rematch and Main Menu are in the bottom
+  // third, and they are inside the artboard rather than in the DOM, so
+  // nothing else in this repo could see them go.
+  //
+  // MEASURED, ONCE, IN A BROWSER: at 874x402 with a Dynamic Island phone's
+  // insets the page came out 724x611 and now comes out 413x349, inside the
+  // viewport and inside the safe area. What is protected here is the wiring
+  // that produced that, because every part of it fails silently.
+  const src = readFileSync(new URL('../path/src/ui/statsCard.js', import.meta.url), 'utf8');
+  // The two absence checks read the CODE only: both comments quote the rule
+  // they replaced, which is the point of them, and a check that cannot tell a
+  // rule from a note about one fails the day somebody explains themselves.
+  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+  check('the page is not sized by width alone any more',
+    !/min\(92vw, 900px\)/.test(code),
+    'a width-only rule has no opinion about a landscape phone');
+  check('the width takes the smaller of the authored size, the room across and the room down',
+    /min\(900px, calc\(100vw - \$\{pad\.l\} - \$\{pad\.r\}\),/.test(src)
+    && /calc\(\(100\$\{vh\} - \$\{pad\.t\} - \$\{pad\.b\}\) \* \$\{STATS_ASPECT/.test(src),
+    'the room down expressed as the width that fits in it');
+  check('...spelled out rather than left to max-width plus max-height',
+    !/max-height:\s*100%/.test(code),
+    'measured in Chromium at 874x402 the height constraint did not apply and the page still overflowed');
+  check('the box and the width subtract the SAME four margins',
+    /const pad = \{/.test(src) && /padding:\$\{pad\.t\} \$\{pad\.r\} \$\{pad\.b\} \$\{pad\.l\}/.test(src),
+    'centred in one box and sized against another is centred wrong');
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    check(`...and the ${side} margin carries the device inset`,
+      new RegExp(`4vmin \\+ env\\(safe-area-inset-${side}, 0px\\)`).test(src),
+      'the page draws edge to edge, so the window is not what can be seen');
+  }
+  check('the page is laid out against the SMALL viewport',
+    /height:100vh; height:100svh;/.test(src) && /room\('vh'\)/.test(src) && /room\('svh'\)/.test(src),
+    'a browser bar is not a safe-area inset and reports 0 — svh is what keeps the buttons off it');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');

@@ -298,6 +298,38 @@ export const SCHEMA = {
       // filing it under Perf would sell it as the latter. Somebody turning it
       // off is doing it to see the water.
       { key: 'scorePopups', label: uiText('scorePopupsLabel'), type: 'bool', def: true, hint: uiText('scorePopupsHint') },
+      // THE FIGHT TALKING TO ITSELF — four lines, one switch, and the fact
+      // that they are four is the reason this is not four rows.
+      //
+      //   the damage readout   the -N off the seal (ui/ui.js, spawnDamageReadout)
+      //   the FOOD CHAIN       the banner and the link count that steps it
+      //   Boost Empty!         the ring's line on a press against a dead meter
+      //   STRIKE NOW!          the ring's line at the sweet spot
+      //
+      // WHAT THEY HAVE IN COMMON is not where they are drawn — two are on the
+      // toast layer and two are callouts on the `player` anchor — it is what
+      // they are FOR. Every one of them is the fight narrating a reading the
+      // player already has an instrument for: the health bar, the chain arc,
+      // the fuel pips. They are the words over the gauges, and somebody who
+      // has learned the gauges wants all four gone or none of them.
+      //
+      // WHY NOT FOUR SWITCHES. Four rows would be a menu you have to study to
+      // get the screen you want, for a preference that is really one decision
+      // taken once — and it would make the HUD tab nine rows on a phone, which
+      // is the thing the Perf tab was split out to avoid. The two ends of this
+      // (everything, or the gauges alone) are the only two settings anybody
+      // actually holds; the combinations in between are a UI accident.
+      //
+      // SEPARATE FROM `scorePopups` ABOVE, and that is the one split worth
+      // keeping: the +N is about a KILL — a thing that happened out in the
+      // water, with a place and a value — and these four are about the SEAL.
+      // Turning off the kill numbers to see the ocean is a different wish from
+      // turning off the seal's own commentary.
+      //
+      // THE SOUNDS STAY. `boostEmpty` still blips on a denied press and the
+      // chain still pops; this is a row about TEXT, and a player who wanted
+      // silence has three volume sliders one tab over.
+      { key: 'fightText', label: uiText('fightTextLabel'), type: 'bool', def: true, hint: uiText('fightTextHint') },
     ],
   },
   controls: {
@@ -730,6 +762,27 @@ export function boostMeter() {
  */
 export function scorePopups() {
   return settings.hud.scorePopups !== false;
+}
+
+/**
+ * Whether the fight narrates itself in words: the damage readout, the FOOD
+ * CHAIN banner and its count, and the ring's two lines ("Boost Empty!" and
+ * "STRIKE NOW!"). See the schema row for why the four share one switch.
+ *
+ * Same "only an explicit false turns it off" reading as `scorePopups` above —
+ * a corrupted snapshot holding null lands on the shipped behaviour rather than
+ * silently taking four lines away.
+ *
+ * Read in two places on purpose, because the four lines are built by two
+ * different systems: ui/ui.js gates the two toast-layer lines at their SPAWN,
+ * and main.js withholds the two warn CONDITIONS it hands updateCallouts. Both
+ * are the same answer off the same function within a frame, and neither one
+ * reaches into systems/callouts.js — which stays free of this import for the
+ * same reason it is free of entities/: it is a state machine a headless
+ * harness drives, and the answers are passed in.
+ */
+export function fightText() {
+  return settings.hud.fightText !== false;
 }
 
 /**

@@ -114,6 +114,24 @@ export const cineLens = {
   pathReach: 0,    // how far the cone reaches, WORLD units, smoothed — see corridor
   pathLength: 0,   // ...the same in aspect-corrected uv; world.js converts it
                    //   at the zoom the frame ended up at (1.0 = the frame's height)
+  // HOW WIDE THE FRAME IS COMPARED WITH THE ONE THE CONE WAS DRAWN FOR — the
+  // frame's zoom over cinePathRefZoom(), written by world.js beside
+  // pathLength and for the same reason: only it knows the zoom the frame
+  // ended up at. 1 on the frame the numbers were authored on.
+  //
+  // WHY THE CROSS-SECTION NEEDS IT AND THE LENGTH DOES NOT. `pathReach` is a
+  // world distance, so converting it to uv already folds the zoom in and the
+  // tip lands on the water the dash reaches whatever the frame is doing. The
+  // width, the feather and the ripple count are written in uv directly, so
+  // they do NOT — and a cone whose length moves with the zoom while its
+  // width stands still is a different cone at every zoom. It was authored on
+  // the wind-up frame of a run, which punches to a fixed zoom every time
+  // (cinecam.states.charging), so nothing ever showed it; Blubberball's
+  // camera fits the ball and every seal into the shot, which is anywhere
+  // from half that width to a third over it, and the same dash drew a long
+  // taper at one end of a match and a blunt wedge with three lumps on it at
+  // the other. See post.js pathMask, which spends it.
+  pathScale: 1,
   pathWidth: 0,    // half-width of the cone at the seal
   pathWidthFar: 0, // half-width at the far end — the taper
   pathFeather: 0,
@@ -183,6 +201,28 @@ function cfg() {
 
 export function cineEnabled() {
   return !!cfg().enabled;
+}
+
+/**
+ * THE FRAME THE DASH CORRIDOR'S CROSS-SECTION WAS DRAWN FOR — the zoom the
+ * numbers under cinecam.lens.path mean, so world.js can say how far off it
+ * this frame is (cineLens.pathScale).
+ *
+ * `charging` and not `base`, because `charging` is the ONLY state that lights
+ * the corridor (states.charging.path is the one non-zero `path` in the file):
+ * the wind-up frame is where every one of those widths was looked at and
+ * tuned, so it is what they describe. Read rather than typed for the same
+ * reason nothing types the corridor's length: a second number saying what the
+ * first one already says is a number that goes stale the day the wind-up is
+ * retuned, and this one would go stale silently — the cone would simply stop
+ * being the shape it was set to and nothing anywhere would disagree.
+ *
+ * Retuning the wind-up zoom is therefore a change of SIZE and not of shape:
+ * a tighter punch draws the same cone bigger, which is what a punch is.
+ */
+export function cinePathRefZoom() {
+  const z = cfg().states?.charging?.zoom ?? cfg().base?.zoom;
+  return z > 0.01 ? z : 1;
 }
 
 // ---------------------------------------------------------------------------

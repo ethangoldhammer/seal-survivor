@@ -7745,7 +7745,34 @@ const STYLE = `
    puts the strip at — the centre stays on the centre line and the top stays at
    top, at any scale. The order matters: the translate must come first, or the
    -50% is itself scaled and the strip drifts off centre as it shrinks. */
-.sv-versus-hud { position: absolute; top: 12px; left: 50%;
+/* THE BAND THE STRIP IS CENTRED IN — the top of the screen minus whatever the
+   device keeps for itself. The page draws edge to edge (viewport-fit=cover in
+   index.html), so the top of the viewport is the top of the GLASS and not the
+   top of the usable screen, and the strip's left:50% was the middle of the
+   glass rather than the middle of what a player can see.
+
+   BOTH AXES, because the Dynamic Island is in a different place in each
+   orientation and the strip is in the wrong one both times. Upright the pill
+   is at the top centre — exactly where the clock sits between the two scores,
+   which is the one part of this readout that changes every second. On its
+   side the inset moves to the leading edge instead (~59px), the top inset
+   goes to 0, and the strip is then centred in a frame 59px of which is not
+   there: the fit below would scale it to a width that runs under the pill.
+
+   A WRAPPER RATHER THAN A CALC ON THE STRIP, unlike the run's HUD in
+   ui/ui.js, and for one reason: fitStrip() needs the room in PIXELS and env()
+   is a CSS function with no JS reading. An element the browser has already
+   resolved the insets on hands it over as clientWidth, which is exact,
+   free, and cannot drift from the rule that placed the strip. Zero-height, so
+   it takes no space and nothing below it moves. */
+.sv-versus-band { position: absolute; top: 0; height: 0; pointer-events: none;
+  left: env(safe-area-inset-left, 0px); right: env(safe-area-inset-right, 0px); }
+/* THE STRIP IS SCALED TO FIT — see the note above the band. The top inset is
+   ADDED to the tuned 12px rather than swapped in for it: the 12px is how far
+   under the top edge the strip hangs, the inset is where the top edge
+   actually is, and it is 0 on every screen without a notch. The same rule the
+   boss bar keeps (ui/ui.js, ui/bossBarRive.js). */
+.sv-versus-hud { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%;
   transform: translateX(-50%) scale(var(--sv-vs-fit, 1)); transform-origin: 50% 0;
   display: flex; align-items: center; gap: 22px;
   transition: opacity .34s ease; }
@@ -8069,11 +8096,13 @@ function mountUi() {
     const root = document.createElement('div');
     root.className = 'sv-versus';
     root.innerHTML = `
-      <div class="sv-versus-hud">
-        <div class="sv-versus-side" style="color:${colors[0]}"><div class="sv-versus-score" data-p="0">0</div></div>
-        <div class="sv-versus-clock" hidden></div>
-        <div class="sv-versus-sep"></div>
-        <div class="sv-versus-side" style="color:${colors[1]}"><div class="sv-versus-score" data-p="1">0</div></div>
+      <div class="sv-versus-band">
+        <div class="sv-versus-hud">
+          <div class="sv-versus-side" style="color:${colors[0]}"><div class="sv-versus-score" data-p="0">0</div></div>
+          <div class="sv-versus-clock" hidden></div>
+          <div class="sv-versus-sep"></div>
+          <div class="sv-versus-side" style="color:${colors[1]}"><div class="sv-versus-score" data-p="1">0</div></div>
+        </div>
       </div>
       <div class="sv-versus-card sv-glass"><div class="sv-versus-card-name"></div><div class="sv-versus-card-line"></div><div class="sv-versus-card-time"></div></div>
       <div class="sv-versus-tags" hidden></div>
@@ -8084,6 +8113,7 @@ function mountUi() {
     document.body.appendChild(root);
     ui = {
       root,
+      band: root.querySelector('.sv-versus-band'),
       hud: root.querySelector('.sv-versus-hud'),
       sides: [...root.querySelectorAll('.sv-versus-side')],
       clock: root.querySelector('.sv-versus-clock'),
@@ -8122,7 +8152,8 @@ function mountUi() {
     // A rotation crosses the whole question in one event — a strip that fits a
     // phone held sideways is 62px too wide the moment it is stood up — and
     // nothing else was going to re-ask, because paintClock's key only sees the
-    // window through innerWidth and a first-to match never ticks a clock at all.
+    // window through the band's room and a first-to match never ticks a clock
+    // at all.
     window.addEventListener('resize', fitStrip);
     // ...AND THE FONT LANDING. The strip is measured in whatever face is
     // loaded, and the roled one (Orbitron, see textRoles.js) arrives after the
@@ -8413,24 +8444,36 @@ function paintClock() {
 // anything resizes. offsetWidth is the layout width and is blind to the
 // transform, which is exactly what has to be divided into the room available.
 //
-// THE MARGIN IS THE SAFE AREA PLUS A GUTTER. A notch in landscape eats the
-// corners of the viewport and `env()` is not readable from script, so the
-// gutter is generous rather than exact: the strip is centred, so it only has to
-// clear the WIDER of the two insets, and 20px a side covers every iPhone held
-// sideways.
+// AIR EITHER SIDE OF THE STRIP, AND NOTHING ELSE. The safe area used to be in
+// this number: `env()` is not readable from script, so it was 20px standing in
+// for a landscape notch as well, which was a guess and the wrong one — the
+// inset on an iPhone held sideways is about 59px, so the strip was fitted to a
+// width that ran under the Dynamic Island and then centred in it. The band the
+// strip now sits in carries the real insets (see .sv-versus-band in the sheet)
+// and hands them over as a layout read, so this is back to being what it says:
+// a margin, so the strip does not touch the edge of what is visible.
 const STRIP_GUTTER = 20;
 
 // What the answer depends on. Recomputed only when one of these moves, because
 // paintClock runs every frame and a layout read per frame on a phone is the
 // kind of cost that does not show up until the thing is already shipped.
-// The viewport is in the key so a resize really does re-ask; the glyph COUNTS
-// rather than the text, because the clock is tabular-nums and 3:07 is exactly
-// as wide as 2:47 — it is 12:07 gaining a digit that moves anything.
+// The ROOM is in the key so a resize really does re-ask — and it is the band's
+// room rather than the window's, so a rotation that moves the notch from the
+// top edge to the side re-asks as well, on a window whose width alone would
+// have said the same thing twice. The glyph COUNTS rather than the text,
+// because the clock is tabular-nums and 3:07 is exactly as wide as 2:47 — it
+// is 12:07 gaining a digit that moves anything.
 let stripFitKey = '';
 
 function fitStrip() {
   if (!ui?.hud) return;
-  const key = `${window.innerWidth}|${ui.clock.hidden ? '' : ui.clock.textContent.length}`
+  // THE ROOM IS THE BAND'S, NOT THE WINDOW'S. On a phone with a Dynamic
+  // Island held on its side, ~59px of the window is behind the pill, and a
+  // strip fitted to the window is a strip fitted to a width that includes it.
+  // The band is the window minus the insets (see the sheet) and the browser
+  // has already resolved them, so this is a plain layout read.
+  const room = Math.max(1, (ui.band?.clientWidth || window.innerWidth) - STRIP_GUTTER * 2);
+  const key = `${room}|${ui.clock.hidden ? '' : ui.clock.textContent.length}`
     + `|${ui.scores[0].textContent.length}|${ui.scores[1].textContent.length}`;
   if (key === stripFitKey) return;
   stripFitKey = key;
@@ -8446,7 +8489,6 @@ function fitStrip() {
   // full size and possibly overhanging beats a strip scaled to nothing by a
   // measurement taken before there was anything to measure.
   if (natural < 1) return;
-  const room = Math.max(1, window.innerWidth - STRIP_GUTTER * 2);
   const fit = Math.min(1, room / natural);
   // Only when it actually has to shrink. Writing 1 would put a transform on the
   // strip on every desktop for no reason, and a scaled layer is a layer the

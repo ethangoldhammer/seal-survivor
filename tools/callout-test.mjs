@@ -1527,12 +1527,20 @@ section('{player} — one name, every text table');
     tutorialComplete('kbm'), [...tutorialDone()].join(','));
   check('...and the same ledger is NOT finished on a phone',
     !tutorialComplete('touch'), [...tutorialDone()].join(','));
-  check('...so picking up a phone later still teaches the sticks', (() => {
+  // ...UNTIL THE RUN ENDS, at which point the device question stops mattering.
+  // The two claims above are about the ledger DURING a first run, where a step
+  // that does not exist on this hardware must not hold the set open. The moment
+  // that run is over the whole set retires (retireTutorial), including the two
+  // stick steps a keyboard was never offered — so the same browser picking up a
+  // phone on its second run is not taught the sticks, because it is not taught
+  // anything. That is the point of the rule and it is the case that would most
+  // obviously leak if the retirement were written per device.
+  check('...but once that run is over, a phone is not taught them either', (() => {
     resetCallouts();
     resetTutorialRun();
     const seen = coachRun((ctx) => { ctx.moving = false; }, { seconds: 8, device: 'touch' });
-    return seen[0]?.id === 'swim';
-  })());
+    return seen.length === 0 && tutorialComplete('touch');
+  })(), [...tutorialDone()].join(','));
 }
 {
   // The air tip preempts. A chum tip is live when the seal runs out of breath,
@@ -1586,13 +1594,55 @@ section('{player} — one name, every text table');
     (localStorage.getItem('sealSurvivor.tips.v1') ?? '').includes('strike'));
   check('the steps that never came up are not', !afterFirst.has('chum') && !afterFirst.has('breach'));
 
+  // THE SECOND RUN IS SILENT, and that is the whole rule. `chumInWater` is
+  // held true for the entire run below, so the chum tip is ready on every
+  // frame of it — it is not offered because there is no coach left, not
+  // because the water failed to produce a subject. A step that never got its
+  // chance retires with the ones that did.
   resetCallouts();
   resetTutorialRun();
   const second = coachRun((ctx, t) => { ctx.chumInWater = true; }, { seconds: 8 });
   check('a new run does not re-teach a finished step',
     !second.some((s) => s.id === 'strike'), second.map((s) => s.id).join(' → '));
-  check('...and picks up where it left off',
-    second.some((s) => s.id === 'chum'), second.map((s) => s.id).join(' → '));
+  check('...nor teach one the first run never reached',
+    !second.some((s) => s.id === 'chum'), second.map((s) => s.id).join(' → '));
+  check('...because the first run ending spent the whole set',
+    tutorialComplete('kbm') && tutorialComplete('touch'), [...tutorialDone()].join(','));
+  check('...and that retirement is in storage, not just in memory',
+    COACH_IDS.every((id) => (localStorage.getItem('sealSurvivor.tips.v1') ?? '').includes(`"${id}"`)));
+
+  // THE ONLY DOOR BACK IN. window.__tips.reset() is a development affordance
+  // and the thing this suite leans on between cases — it has to un-spend the
+  // RUN as well as the steps, or the very next resetTutorialRun would retire
+  // everything it just handed back and no case after the first would ever see
+  // a tip. Asserted rather than assumed because the failure is silent: every
+  // later block would simply measure an empty coach and call it a pass.
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  const third = coachRun((ctx, t) => { ctx.chumInWater = true; if (t > 3 && t < 3.05) noteTutorialEvent('strike'); }, { seconds: 10 });
+  check('a reset puts the coach back', third.length > 0, third.map((s) => s.id).join(' → '));
+  check('...and the run it had been spent on with it',
+    !tutorialComplete('kbm'), [...tutorialDone()].join(','));
+}
+{
+  // A RUN NOBODY PLAYED DOES NOT SPEND THE COACH. resetTutorialRun is reached
+  // at BOTH ends of a run — it opens one and closes one — so the guard on it
+  // is the difference between "the first run is over" and "the first run is
+  // about to start". Called twice with no live frame in between (a player who
+  // opens the game, presses Play, and quits to the menu before the water moves)
+  // it must leave the coach exactly where it was.
+  store.clear();
+  resetTutorial();
+  resetCallouts();
+  resetTutorialRun();
+  resetTutorialRun();
+  resetTutorialRun();
+  check('a run with no live frame in it does not retire the coach',
+    !tutorialComplete('kbm'), [...tutorialDone()].join(','));
+  const played = coachRun((ctx, t) => { ctx.chumInWater = true; }, { seconds: 8 });
+  check('...and the coach is still there to speak', played.length > 0,
+    played.map((s) => s.id).join(' → '));
 }
 // ---------------------------------------------------------------------------
 section('the pace — how long a tip stays, and the quiet after it');

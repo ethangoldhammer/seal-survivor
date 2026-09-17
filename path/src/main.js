@@ -10,6 +10,11 @@ import { updateBeatSync } from './systems/beatSync.js';
 import { reseatDecor } from './systems/decor.js';
 import { scatterSeabed, reseatSeabed } from './systems/seabedScatter.js';
 import { markDeathSite, plantGraves, updateGravesites, reseatGraves, restyleGraves, restoreGraves, setGraveImpact } from './systems/gravesite.js';
+// TEMPORARY — the seabed-flickers-in-a-goal-replay hunt. Delete this import, the
+// call below the composite, and systems/replayWatch.js together once the bug is
+// named. Inert outside a replay.
+import { watchReplay } from './systems/replayWatch.js';
+import { poolState } from './systems/replayCams.js';
 import { createWorld } from './world.js';
 import { midWater, bounds, seabedTopY } from './arena.js';
 import {
@@ -247,7 +252,7 @@ import { roomsAvailable } from './systems/online/room.js';
 import { showRosterPreview, refreshRosterPreview, hideRosterPreview, updateRosterPreview, rosterPreviewOn } from './systems/versus.js';
 import { publishBallGrid } from './systems/ballGrid.js';
 import { resetRoster } from './systems/sealRoster.js';
-import { actionForKey, onSettingsChanged, shakeScale } from './systems/settings.js';
+import { actionForKey, fightText, onSettingsChanged, shakeScale } from './systems/settings.js';
 import { isTextEntry, isTypingTarget } from './ui/typing.js';
 import { toggleFullscreen } from './systems/fullscreen.js';
 // The three phone prompts — the ring switch, which way up it is held, and the
@@ -9971,6 +9976,11 @@ function runFrame(now) {
   if (boostDenied && bandLive && !gameState.paused) {
     feedback('boostEmpty', { x: player.mesh.position.x, y: player.mesh.position.y });
   }
+  // WHETHER THE FIGHT IS ALLOWED TO NARRATE ITSELF. Read once and spent on
+  // both ring lines below, so the pair can never disagree within a frame — the
+  // same discipline `strikeMoment` is read under a few lines up, and for the
+  // same reason: these two share one slot and take turns on it.
+  const showFightText = fightText();
   updateCallouts(realDt, {
     // The held breath before a boss, the swim in, and the ceremony after it
     // are one continuous stretch (boss.js hands off between them inside a
@@ -10007,8 +10017,24 @@ function runFrame(now) {
     //                plate is pinned to this very slot during a chain, so the
     //                two would otherwise stack. Same reading of the same
     //                moment, one surface at a time — see `strikeMoment` above.
-    strikeNow: strikeMoment && !promptOnBanner,
-    boost: boostDenied,
+    //
+    // BOTH WITHHELD BY settings.hud.fightText, and withheld as CONDITIONS
+    // rather than suppressed at the draw. A condition that is never true never
+    // crosses, so the row never takes the ring's slot and its repeat timer
+    // never starts — turning the setting back on mid-fight gets the next real
+    // crossing rather than a line that was queued while nobody was looking.
+    //
+    // Here rather than inside systems/callouts.js, which has no imports from
+    // entities/ or from the settings on purpose: it is a state machine that a
+    // headless harness drives, and everything it knows is passed in. The seal's
+    // air, its health and now what the player asked to be told all arrive the
+    // same way.
+    //
+    // The SOUND is not gated with them — `boostEmpty` fires above, off
+    // `boostDenied` itself. A denied press still has to answer, and this row
+    // is about text.
+    strikeNow: strikeMoment && !promptOnBanner && showFightText,
+    boost: boostDenied && showFightText,
   }, bandLive && !gameState.paused && !versusActive());
 
   // THE HELLO, before the coach and on the same liveness gate. It takes the
@@ -11041,6 +11067,20 @@ function runFrame(now) {
   // rim width was tuned against.
   updateOutlineScale(renderCamera, world.halfExtents(1).h * 2);
   post.render(world.scene, renderCamera, realDt);
+  // TEMPORARY, and it has to be exactly here — see systems/graveWatch.js. It
+  // reads the colour buffer, which the browser owns again the moment this task
+  // yields, so the line after the draw is the only place the reading is real.
+  // Same constraint as the boss kill shot below. Inert outside a replay.
+  watchReplay({
+    renderer: world.renderer,
+    scene: world.scene,
+    // The camera the frame was DRAWN with, not world.camera — during a replay
+    // that is the pool's perspective shot, and the whole question is what that
+    // camera sees.
+    camera: renderCamera,
+    shot: poolState.shotName ?? '',
+    active: poolState.active && poolState.shot >= 0,
+  });
   perfPhase('render', performance.now() - _trender);
 
   // THE TROPHY, and it has to be here — on the line after the draw, inside the

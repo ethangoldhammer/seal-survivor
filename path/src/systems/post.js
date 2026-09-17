@@ -1478,12 +1478,32 @@ export function createPost(renderer) {
     u.uPathAmount.value = cineLens.pathAmount;
     u.uPathDir.value.set(cineLens.pathDirX, cineLens.pathDirY);
     u.uPathLength.value = cineLens.pathLength;
-    u.uPathWidth.value = cineLens.pathWidth;
-    u.uPathWidthFar.value = cineLens.pathWidthFar;
-    u.uPathFeather.value = cineLens.pathFeather;
+    // THE CONE IS ONE SHAPE AT EVERY ZOOM. `pathLength` is a world distance
+    // converted to uv, so it already grew and shrank with the frame; these
+    // are authored in uv and did not, and the cone was therefore a long taper
+    // on a punched-in frame and a blunt wedge on a wide one. `pathScale` is
+    // how much wider this frame is than the one they were drawn for — see
+    // cinePathRefZoom in cineCamera.js — so the cross-section, the edge
+    // falloff that softens it and the fray along it all ride it.
+    //
+    // The RIPPLES DIVIDE. uPathNoiseScale is "ripples per frame height", and
+    // the number of them on a given stretch of water is what should hold
+    // still: a wide frame draws a shorter cone, so the same authored density
+    // put three lumps on it where a run's frame gets a fray. Dividing states
+    // it the way it is meant — the break-up belongs to the water the dash
+    // crosses and not to the screen it is watched on.
+    //
+    // uPathNoise is NOT scaled: the shader already spends it as a fraction of
+    // the local half-width, which is now scaled, so scaling it here would
+    // apply the same correction twice and the edge would blow out on a wide
+    // frame. Nor is uPathVignette, which is a darkness and not a distance.
+    const ps = cineLens.pathScale > 0.001 ? cineLens.pathScale : 1;
+    u.uPathWidth.value = cineLens.pathWidth * ps;
+    u.uPathWidthFar.value = cineLens.pathWidthFar * ps;
+    u.uPathFeather.value = cineLens.pathFeather * ps;
     u.uPathVignette.value = cineLens.pathVignette;
     u.uPathNoise.value = cineLens.pathNoise;
-    u.uPathNoiseScale.value = cineLens.pathNoiseScale;
+    u.uPathNoiseScale.value = cineLens.pathNoiseScale / ps;
     u.uPathNoisePhase.value = cineLens.pathNoisePhase;
 
     // Summed onto whatever the CRT/VHS preset asked for rather than replacing

@@ -56,16 +56,19 @@ function check(name, pass, detail = '') {
  * and hasModel behave exactly as they do in the game — see the header for why
  * it is kept this dumb.
  *
- * THE PROPORTIONS ARE THE REAL FILE'S, and that is not decoration. Anything
- * this harness asserts about where a stone SITS is measured off this box, so a
- * box with the wrong shape is a harness that measures a different animal — the
- * same trap as every other stand-in in tools/. These three are
- * public/models/graves/headstone.glb's own bounding box (14.749 x 93.657 x
- * 64.013) normalised on its long axis, which is the axis `fit` scales. They
- * were inverted here for a long time: a box 1 wide and 0.3 deep in model
- * space, which orientationQuaternion turns into a stone THREE UNITS DEEP in
- * the world against the real one's 0.87 — and depth is exactly what the seat
- * now measures.
+ * THE PROPORTIONS ARE THE REAL FILE'S, and that is not decoration. Everything
+ * this harness asserts about where a stone sits is measured off this box, so a
+ * box the wrong SHAPE is a harness measuring a different animal. The three
+ * numbers are public/models/graves/headstone.glb's own bounding box
+ * (14.749 x 93.657 x 64.013) normalised on its long axis, which is the axis
+ * `fit` scales.
+ *
+ * They were inverted here: 1 x 2 x 0.3, which the asset's own `forward:'+Y'
+ * up:'-Z'` pair turns into a stone THREE UNITS DEEP in the world against the
+ * real one's 0.87 — the thin axis in the file is X, and this had it as Z. It
+ * cost nothing while nothing measured depth, which is exactly how a stand-in
+ * goes wrong: see the note at the top about a harness that builds its own
+ * subject.
  */
 function installStandIn(key) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.1575, 1, 0.6834), new THREE.MeshBasicMaterial());
@@ -219,6 +222,23 @@ console.log('\nplacement');
   reseatGraves();
   check('re-seating a settled stone leaves it where it was',
     Math.abs(rec.object.position.y - rest) < 1e-6, `${rest} -> ${rec.object.position.y}`);
+
+  // ...AND ACROSS, WHEN THE WALLS MOVE. A Blubberball match is played on a
+  // wider pitch (CONFIG.versus.widthScale), and setModeWorld re-seats the yard
+  // on exactly that flip. A stone re-seated on height alone keeps a world x
+  // that described the arena it was resolved in and not the one it is standing
+  // in, so the yard sits bunched around the centre spot of a pitch half again
+  // as wide — which is the failure systems/graveyardStore.js exists to prevent
+  // and was only ever applied at boot.
+  const wasHalf = bounds.right;
+  const wasX = rec.object.position.x;
+  const share = wasX / wasHalf;
+  updateBounds((window?.innerWidth ?? 1920) / (window?.innerHeight ?? 1080) * 1.5);
+  reseatGraves();
+  const nowShare = rec.object.position.x / bounds.right;
+  check('...and a wider arena carries the stone out with it',
+    Math.abs(nowShare - share) < 1e-3 && Math.abs(rec.object.position.x - wasX) > 1e-3,
+    `share ${share.toFixed(4)} -> ${nowShare.toFixed(4)}, x ${wasX.toFixed(2)} -> ${rec.object.position.x.toFixed(2)}`);
 }
 
 // --- depth ------------------------------------------------------------------
@@ -293,33 +313,25 @@ console.log('\ndepth');
   check('a range dragged behind the floor is clamped, not obeyed', sunk.restZ > SEABED_Z,
     `restZ ${sunk.restZ}, floor ${SEABED_Z}`);
 
-  // ...AND THE CLAMP ABOVE IS NOT ENOUGH ON ITS OWN, which is the bug this
-  // pair exists to hold shut. `restZ` is the stone's ORIGIN and the range is
-  // clamped to an origin's clearance, but the stone has real depth: at the
-  // back of the shipped slab the headstone's own back face reached 0.24 units
-  // INSIDE the floor strip. Nothing showed, because the run's camera is
-  // orthographic and looks straight down -z, so the stone's front covered its
-  // own buried part exactly. A Blubberball goal replay is filmed from up to 77
-  // degrees off-axis and the plane cut the stone there, live, in a shot nobody
-  // could reproduce anywhere else in the project.
+  // ...AND THE CLAMP ABOVE IS AN ORIGIN'S, WHICH IS NOT ENOUGH ON ITS OWN.
+  // `restZ` positions the stone's origin and the stone has real depth hanging
+  // off it, so the guarantee that matters is about the BOX: the whole stone has
+  // to sit in front of the plane the floor strip is drawn at. It did not — the
+  // back of the slab put a headstone's back face 0.24 units inside it, which is
+  // invisible under the run's orthographic camera and is cut open by the
+  // perspective camera a goal replay is filmed with.
   //
-  // MEASURED OFF THE BOX, not off `position.z`, because the whole failure was
-  // reasoning about the origin instead of the geometry hanging off it.
+  // MEASURED OFF THE BOX, not off `position.z`, because reasoning about the
+  // origin instead of the geometry hanging off it is the whole of how this got
+  // shipped. Held here rather than in world.js so that moving EITHER the plane
+  // or the slab back into each other fails, whichever one somebody edits.
   clearGraves();
-  const deepest = markDeathSite(scene, { x: 0, z: SEABED_Z + 0.2, name: 'BACK', cause: 'a crab' }, () => {});
+  const deepest = markDeathSite(scene, { x: 0, z: CONFIG.gravesite.restZ[0], name: 'BACK', cause: 'a crab' }, () => {});
   settleYard();
   const deepBox = new THREE.Box3().setFromObject(deepest.object);
-  check('the whole stone clears the floor strip, not just its origin', deepBox.min.z > SEABED_Z,
-    `back face ${deepBox.min.z.toFixed(3)}, floor ${SEABED_Z}`);
-  // Seating is measured from the AUTHORED depth every time, so the arena
-  // changes that re-seat the yard cannot walk a stone forward one call at a
-  // time — a drift that would be invisible until a yard several sessions old
-  // was standing in front of the play.
-  const seatedZ = deepest.object.position.z;
-  reseatGraves();
-  reseatGraves();
-  check('...and two re-seats do not walk it forward', Math.abs(deepest.object.position.z - seatedZ) < 1e-6,
-    `${seatedZ} -> ${deepest.object.position.z}`);
+  check('the whole stone stands in front of the floor strip, not just its origin',
+    deepBox.min.z > SEABED_Z,
+    `back face ${deepBox.min.z.toFixed(3)}, strip drawn at ${SEABED_Z}`);
 
   clearGraves();
 }

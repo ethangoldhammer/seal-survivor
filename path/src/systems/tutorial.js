@@ -30,14 +30,36 @@ import { calloutOnDevice, calloutText } from '../calloutTable.js';
 // waiting on the one before, so the screen never holds two instructions and the
 // next only arrives once the last is a thing you have actually done.
 //
-// THE UNIT OF "SEEN" IS THE STEP, NOT THE RUN. The obvious build is one flag:
-// has this browser played before. It is wrong for the only player it matters
-// to — the one who starts a run, dies to a crab in ninety seconds, and comes
-// back. Under a run flag that player has been taught to strike and nothing
-// else, permanently, because the chum tip never got an orb to point at and the
-// air tip never got a lungful low enough. Each step carries its own "done",
-// so a short first run teaches what it had time for and the next one picks up
-// the rest. Once the set is done nothing here ever speaks again.
+// THE COACH IS THE FIRST RUN, AND ONLY THE FIRST RUN. Whatever it had time to
+// teach before that run ended is what it taught; when the run ends the whole
+// set retires, including the steps that never found a subject to point at. A
+// second run is silent.
+//
+// This was built the other way round for a while — the unit of "seen" was the
+// STEP, so a short first run taught what it had time for and the next one
+// picked up the rest. The argument for it was the player who dies to a crab in
+// ninety seconds having been taught to strike and nothing else. The argument
+// against it is what that actually feels like from the seat: a tip about the
+// seabed arriving on your fourth run, minutes after you stopped being someone
+// who needed it, on a screen you are now trying to read for other reasons. A
+// tutorial that can still interrupt you once you are good at the game is not a
+// tutorial, it is the game second-guessing you — and the lesson it is late
+// with is one the player has by then worked out by playing.
+//
+// So the ledger below is still PER STEP, and that has not changed: a step
+// fires once, the control tips chain off each other's `done`, and nothing
+// repeats inside the run. What changed is the boundary around it. The set is
+// retired wholesale by the first run ENDING — see retireTutorial and the call
+// in resetTutorialRun — rather than by every step individually getting its
+// moment, which for most players was never going to happen at all.
+//
+// THE RETIREMENT IS WRITTEN INTO THE SAME LEDGER, as every id marked done,
+// rather than kept as a second "has played before" flag beside it. One fact in
+// one place: `tutorialComplete` already means "nothing here will ever speak
+// again" and already gates the top of updateTutorial, so a retired coach is
+// simply a full ledger and needs no new branch anywhere. It also means
+// window.__tips.reset() — the only door back in — still works exactly as it
+// did, because there is nothing else to clear.
 //
 // A TIP ABOUT A THING STANDS NEXT TO THAT THING. Not in a band across the
 // middle of the screen with an arrow pointing away from it — beside the bubble,
@@ -430,6 +452,25 @@ function settled(id, done, device) {
 const doneIds = new Set(loadDone());
 const events = new Set();
 
+// HAS A RUN ACTUALLY BEEN PLAYED since this page loaded, or since the last
+// retirement. Set by updateTutorial on any live frame and spent by
+// resetTutorialRun, which is the one function called at both ends of a run.
+//
+// IN MEMORY AND NOT IN STORAGE, which is a decision rather than an oversight.
+// What it holds is "a run is in progress right now", and the only way to lose
+// it is for the page to stop existing mid-run — a reload, a crash, a phone
+// killing the tab. In the case that matters the crash net puts that very run
+// back (systems/runSnapshot.js) and it ends normally a minute later; in the
+// case that does not, the player gets one more coached run out of a session
+// they abandoned. That is the same shape of wrongness loadDone already accepts
+// from a private window, and the same right way to be wrong.
+//
+// A LIVE FRAME AND NOT A STARTED RUN, because `live` is already the exact
+// question: it is false for a menu, a paused level-up, a dead seal and a
+// Blubberball match, all of which are things that must not spend the coach.
+// See the call in main.js.
+let ranOnce = false;
+
 export const tutorialState = {
   // The step talking right now, or null. Held as the id rather than the row so
   // it survives a re-parsed table.
@@ -573,6 +614,25 @@ export function tutorialDone() {
 }
 
 /**
+ * THE FIRST RUN IS OVER — every step is spent, including the ones that never
+ * got a subject to point at. From here `tutorialComplete` is true on every
+ * device and updateTutorial returns at its first line forever.
+ *
+ * Marking every id rather than setting a flag of its own: see the note at the
+ * head of this file about one fact in one place. It also survives the filter
+ * in loadDone, because every id written here is a live key of STEPS.
+ *
+ * Idempotent, and called on the far side of every run rather than only on a
+ * death — a player who quits to the menu ninety seconds in has still had their
+ * first run, and a coach that came back for the person who walked away would be
+ * teaching precisely the player who has decided they are done being taught.
+ */
+export function retireTutorial() {
+  for (const id of COACH_IDS) doneIds.add(id);
+  saveDone();
+}
+
+/**
  * Show the tips again from scratch. There is no button for this in the game —
  * it is a development door (window.__tips.reset()) and the thing a harness
  * calls between runs.
@@ -580,12 +640,38 @@ export function tutorialDone() {
 export function resetTutorial() {
   doneIds.clear();
   saveDone();
+  // ...AND THE RUN MARKER WITH THEM, or the next resetTutorialRun would retire
+  // everything this line just handed back. "Show the tips again from scratch"
+  // has to include un-spending the run that spent them, and a harness driving
+  // case after case (tools/callout-test.mjs) calls this immediately before
+  // resetTutorialRun every time — so without it only the first case would ever
+  // see a tip.
+  ranOnce = false;
   endStep(false, false);
   dropFade();
 }
 
-/** Start of a run. The step ledger SURVIVES this; only the live tip doesn't. */
+/**
+ * EITHER END OF A RUN — main.js calls this from resetArena, which is reached
+ * by starting one, restarting one and walking away from one alike.
+ *
+ * That is what makes it the right home for the retirement. It is the single
+ * function on the far side of every run however the run finished, so there is
+ * one place that decides the coach is done rather than one at the death and
+ * another at the quit, which would eventually disagree.
+ *
+ * The step ledger otherwise SURVIVES this; only the live tip doesn't.
+ */
 export function resetTutorialRun() {
+  // A RUN WAS PLAYED AND IS NOW OVER, so the coach is spent — see the note at
+  // the head of this file. Guarded on `ranOnce` because this same function
+  // opens a run as well as closing one: unguarded, the FIRST call of all (the
+  // one at the top of the very first run) would retire the coach before it had
+  // said a word.
+  if (ranOnce) {
+    ranOnce = false;
+    retireTutorial();
+  }
   events.clear();
   endStep(false, false);
   dropFade();
@@ -732,6 +818,12 @@ export function updateTutorial(dt, ctx = {}, live = true) {
     dropFade();
     return;
   }
+
+  // A LIVE FRAME OF A RUN THE COACH COULD STILL SPEAK ON. Below the two early
+  // returns on purpose: a finished set must not re-arm the marker, or the
+  // retirement above would be re-run on the far side of every run forever —
+  // harmless, but it would write localStorage once a run for no reason.
+  ranOnce = true;
 
   advanceFade(dt);
 
@@ -966,6 +1058,10 @@ function bestReady(ctx, minPriority, anchor = null) {
 if (typeof window !== 'undefined') {
   window.__tips = {
     reset: () => { resetTutorial(); return 'tips will show again'; },
+    // The other end of the same afternoon: see what a SECOND run looks like
+    // without having to play a first one to the end. `reset` un-spends the
+    // coach, this spends it — the pair is the whole of the state there is.
+    retire: () => { retireTutorial(); return 'the coach is done'; },
     done: () => [...doneIds],
   };
 }

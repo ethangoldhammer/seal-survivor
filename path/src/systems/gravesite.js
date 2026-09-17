@@ -7,7 +7,7 @@ import { makeEpitaph, revealEpitaph, disposeEpitaph } from './epitaph.js';
 // The beam is fired from here as well as from the label. A death is the one
 // time the player is not the reason a grave lights up — see the 'glance' phase.
 import { sweepGrave } from './graveBeam.js';
-import { loadGraveyard, saveGraveyard } from './graveyardStore.js';
+import { loadGraveyard, saveGraveyard, toFraction, fromFraction } from './graveyardStore.js';
 
 // ============================================================================
 // GRAVESITES — where the last few seals died, marked on the seabed.
@@ -131,12 +131,6 @@ function rollRestZ() {
   // than move it: the seabed strip is DRAWN at SEABED_Z, so anything behind it
   // is hidden by the floor, and a name nobody can find is worse than a name
   // behind a plant.
-  //
-  // THIS IS THE RANGE, NOT THE GUARANTEE. The number rolled here is the
-  // stone's ORIGIN and the 0.2 below is an origin's clearance; the stone has
-  // real thickness in z and its back face reaches further. seat() is what
-  // actually holds the whole box clear of the floor strip, measured — see the
-  // note there before trying to fix a buried stone by editing this line.
   const lo = Math.max(Math.min(a, b), SEABED_Z + 0.2);
   const hi = Math.min(Math.max(a, b), -0.2);
   if (!(hi > lo)) return Math.min(Math.max(c.z ?? -3.2, SEABED_Z + 0.2), -0.2);
@@ -179,6 +173,13 @@ export function recordGrave({ x, z, name, cause, lead = '', onEtched = null }) {
     // either — dying twice as the same seal is the normal case.
     id: nextId += 1,
     x: Number.isFinite(x) ? x : 0,
+    // ...and the same x as a FRACTION of the arena's half-width, which is the
+    // form that survives the arena changing size. It changes mid-session, not
+    // just between sessions: a Blubberball match is played on a wider pitch,
+    // so the stones have to be re-derived when the mode flips or the yard
+    // stays bunched in the middle of a pitch it does not fit. See
+    // reseatGraves, and the header in systems/graveyardStore.js.
+    fx: toFraction(Number.isFinite(x) ? x : 0),
     // Where it stands TODAY: clear of the plants, because it is about to be
     // read. An explicit z pins it instead.
     z: Number.isFinite(z) ? z : dropZ(),
@@ -243,6 +244,10 @@ export function restoreGraves() {
       onEtched: null,
       id: nextId += 1,
       x: Number.isFinite(g.x) ? g.x : 0,
+      // The fraction AS STORED, not one re-derived off the x above. They agree
+      // on this frame and are allowed to stop agreeing on the next one — the
+      // whole point is that the x is the disposable half.
+      fx: Number.isFinite(g.fx) ? g.fx : 0,
       z: restZ,
       restZ,
       name: g.name,
@@ -380,53 +385,19 @@ export function plantGraves(target) {
   return group;
 }
 
-// How far in front of the floor strip the back of a stone has to clear it.
-// An epsilon, not a look: two surfaces at the same depth is the bug, and any
-// gap at all is the fix. Deliberately NOT a tuner row — a slider that can be
-// dragged to 0 is a slider that can put the artefact back.
-const SEABED_CLEAR = 0.1;
-
 /**
  * Measure where the stone's base actually is, then lift it so it lands ON the
  * floor. The same problem decor.js has and for the same reason: assets.js
  * recentres every model on its area-weighted centroid, not on its feet, so the
  * origin is somewhere up inside the stone and by an amount that depends on
  * `fit`, the centroid and any size multiplier. Measured, never assumed.
- *
- * DEPTH IS SEATED THE SAME WAY, and for the same reason the height is. The
- * rolled depth is the stone's ORIGIN, and `restZ` is clamped to SEABED_Z + 0.2
- * on the assumption that keeps it clear of the floor strip drawn at SEABED_Z —
- * but a headstone is 0.87 deep at CONFIG.gravesite.scale 3, so a stone rolled
- * at the back of the slab has its back face at -4.24, a quarter of a unit
- * INSIDE the plane. The run's camera is orthographic and looks straight down
- * -z, so the stone's own front covers the buried part exactly and nothing
- * shows. A Blubberball goal replay is filmed by a perspective camera from up
- * to 77 degrees off-axis (systems/replayCams.js), and from there the plane
- * cuts the stone: the part behind it is swapped for flat seabed, and the cut
- * sweeps across the face as the shot pushes in.
- *
- * So the clearance is measured off the assembled object, exactly like the
- * height, rather than written into the restZ range as a second number that
- * goes stale the moment `scale` or `fit` moves.
  */
 function seat(rec) {
   const { object } = rec;
   if (!object) return;
-  // The AUTHORED depth first, so a re-seat measures the same stone twice and
-  // gets the same answer. Nudging `position.z` from wherever it already is
-  // would walk the stone forward one call at a time — reseatGraves runs on
-  // every arena change, and the drift would be invisible until a graveyard
-  // several sessions old was standing in front of the play plane.
-  object.position.z = rec.z;
   object.position.y = 0;
   object.updateMatrixWorld(true);
-  const raw = new THREE.Box3().setFromObject(object);
-  const baseOffset = raw.min.y;
-  // Forward by however much of the stone is behind the floor strip, and only
-  // if any of it is. A stone standing in front of the bed — which is where the
-  // newest one drops — is untouched.
-  const buried = (SEABED_Z + SEABED_CLEAR) - raw.min.z;
-  if (buried > 0) object.position.z = rec.z + buried;
+  const baseOffset = new THREE.Box3().setFromObject(object).min.y;
   // `bedDepth`, not `sink` — the old name is pinned at 0.05 in every saved
   // tuning snapshot, so reading it back would hand that number straight over
   // the new default. See the note in config.js.
@@ -753,6 +724,20 @@ function retire(rec) {
 export function reseatGraves() {
   for (const rec of graves) {
     if (!rec.object) continue;
+    // ACROSS, then down. The walls move as well as the floor — a Blubberball
+    // match is played on a wider pitch (CONFIG.versus.widthScale), and
+    // setModeWorld calls this on exactly that flip — so a stone re-seated on
+    // height alone keeps a world x that meant something about the arena it was
+    // resolved in and nothing about the one it is standing in. The yard then
+    // sits bunched around the centre spot of a pitch half again as wide,
+    // which reads as a graveyard that belongs to a different game.
+    //
+    // The fraction is the stored half and the x is the derived one — see
+    // systems/graveyardStore.js, whose whole argument is that a world x is a
+    // position ON THE MACHINE THAT SAVED IT. That was only ever applied at
+    // boot; the width moves during a session too.
+    if (Number.isFinite(rec.fx)) rec.x = fromFraction(rec.fx);
+    rec.object.position.x = rec.x;
     const y = rec.object.position.y;
     const airborne = rec.phase === 'falling';
     seat(rec);

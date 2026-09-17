@@ -185,9 +185,51 @@ function paint(vmi, data) {
 export function mountStatsCard({ parent, data = {} } = {}) {
   if (!parent) return null;
 
+  // THE PAGE IS FITTED TO THE SCREEN, BOTH WAYS.
+  //
+  // The artboard is 900 x 760 — taller than it is wide — and the canvas used
+  // to be sized `width: min(92vw, 900px)` with `height: auto`. A width-only
+  // rule is a rule with no opinion about height, and on a phone on its side
+  // there is barely any: 92vw of an iPhone 15 landscape is 784px, which makes
+  // the page 662px TALL in a viewport 393px high. `place-items: center` then
+  // centres the overflow, so a third of the page hangs off the top and a third
+  // off the bottom — and the bottom third is Rematch and Main Menu. The one
+  // screen in the mode with nothing else on it became the one screen you could
+  // not leave without the pointer finding a button it could not see.
+  //
+  // FOUR MARGINS, NAMED ONCE. They are what the box is padded by and what the
+  // width below subtracts, and they have to be the same four numbers or the
+  // page is centred in one box and sized against another. A vmin margin so the
+  // gap looks the same whichever way the phone is held, plus the device's own
+  // inset: the page draws edge to edge (viewport-fit=cover in index.html), so
+  // on a phone held sideways about 59px of the window is behind the Dynamic
+  // Island and a page centred in the window is not centred in what can be
+  // seen.
   const el = document.createElement('div');
   el.className = 'sv-stats-card';
-  el.style.cssText = 'position:absolute; inset:0; display:grid; place-items:center; pointer-events:auto; opacity:0; transition:opacity 220ms ease;';
+  const pad = {
+    t: 'calc(4vmin + env(safe-area-inset-top, 0px))',
+    r: 'calc(4vmin + env(safe-area-inset-right, 0px))',
+    b: 'calc(4vmin + env(safe-area-inset-bottom, 0px))',
+    l: 'calc(4vmin + env(safe-area-inset-left, 0px))',
+  };
+  // THE HEIGHT IS svh, NOT THE PARENT'S. `.sv-versus` is fixed at inset:0,
+  // which in a mobile browser is the LARGE viewport — the one you get once the
+  // address bar and the tab bar have scrolled away — so a page fitted to it is
+  // a page fitted to screen the browser is standing on. In Safari on a phone
+  // held upright that is about 80px at the bottom, which is where the buttons
+  // are, and env(safe-area-inset-bottom) does not describe it: a browser bar
+  // is not a hardware inset and reports 0. `svh` is the SMALL viewport, the
+  // one with the bars showing, so the page is laid out against the least
+  // screen there will ever be and a button cannot end up behind one. Installed
+  // and fullscreen the two are the same number, so it costs those nothing. The
+  // plain `vh` declaration before each `svh` one is the fallback for a browser
+  // that does not know the unit — which is what shipped before this.
+  el.style.cssText = 'position:absolute; top:0; left:0; right:0;'
+    + ' height:100vh; height:100svh;'
+    + ' display:grid; place-items:center; box-sizing:border-box;'
+    + ' pointer-events:auto; opacity:0; transition:opacity 220ms ease;'
+    + ` padding:${pad.t} ${pad.r} ${pad.b} ${pad.l};`;
   const canvas = document.createElement('canvas');
   // A fixed backing store, sized before the runtime is built — that is when it
   // reads the size it lays the artboard out in, and a surface sized while the
@@ -195,7 +237,22 @@ export function mountStatsCard({ parent, data = {} } = {}) {
   // the same note in nameTag.js.
   canvas.width = 1100;
   canvas.height = Math.round(1100 / STATS_ASPECT);
-  canvas.style.cssText = 'display:block; width:min(92vw, 900px); height:auto;';
+  // THE FIT IS WRITTEN OUT, not left to the replaced-element maxima.
+  //
+  // `max-width: min(900px, 100%)` with `max-height: 100%` is the textbook way
+  // to contain a canvas and it does not work here: measured in Chromium at
+  // 874x402, the width constraint applied and the height one did not, leaving
+  // the page 611px tall in a 402px box — the same overflow, arrived at by a
+  // rule that looks like it says otherwise. So the smaller of the three
+  // answers is taken in the width itself, where there is nothing to interpret:
+  // the authored size, the room across, and the room down expressed as the
+  // width that fits in it. `height: auto` then follows the backing store's own
+  // proportions, which are the artboard's.
+  //
+  // The vh pair is the svh fallback — see the note on the box's height.
+  const room = (vh) => `min(900px, calc(100vw - ${pad.l} - ${pad.r}),`
+    + ` calc((100${vh} - ${pad.t} - ${pad.b}) * ${STATS_ASPECT.toFixed(6)}))`;
+  canvas.style.cssText = `display:block; height:auto; width:${room('vh')}; width:${room('svh')};`;
   el.appendChild(canvas);
   parent.appendChild(el);
 

@@ -70,14 +70,22 @@ const MAX_STORED = 12;
  * A world x as a fraction of the arena's half-width. Clamped, because a stone
  * exactly on the wall reads as part of the scenery rather than as a grave, and
  * because a NaN here would put the whole yard at the origin.
+ *
+ * EXPORTED, because the width changes DURING a session as well as between
+ * them. A Blubberball match is played on a wider pitch (CONFIG.versus
+ * .widthScale, read by updateBounds), so the arena a stone was resolved
+ * against at boot is not the arena it is standing in five minutes later —
+ * gravesite.js re-derives the world x through these on every re-seat. Without
+ * that the fraction only survives a RELOAD, which is half of what the header
+ * above claims it is for.
  */
-function toFraction(x) {
+export function toFraction(x) {
   const half = Math.abs(bounds.right) || 1;
   const f = (Number(x) || 0) / half;
   return Math.max(-0.98, Math.min(0.98, f));
 }
 
-function fromFraction(fx) {
+export function fromFraction(fx) {
   const half = Math.abs(bounds.right) || 1;
   const f = Number(fx);
   return Number.isFinite(f) ? f * half : 0;
@@ -100,6 +108,12 @@ export function loadGraveyard() {
       .filter((g) => g && typeof g === 'object' && typeof g.name === 'string' && g.name.trim())
       .slice(-MAX_STORED)
       .map((g) => ({
+        // BOTH: the world x for everything that just wants a position, and the
+        // fraction it came from so a change of arena width can re-derive it.
+        // Deriving the fraction back off `x` would work today and quietly stop
+        // working the moment the two disagree — which is exactly the window
+        // this is for.
+        fx: Number.isFinite(Number(g.fx)) ? Number(g.fx) : 0,
         x: fromFraction(g.fx),
         z: Number.isFinite(Number(g.z)) ? Number(g.z) : undefined,
         name: String(g.name).trim(),

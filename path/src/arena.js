@@ -64,7 +64,38 @@ export const SEABED_HEIGHT = 1.2;
 // enemies.js). One constant rather than a -4 written in each, because the two
 // are the same fact and a creature hiding at the wrong side of the floor is
 // invisible in exactly the way a bug is.
-export const SEABED_Z = -4;
+//
+// BEHIND THE GRAVEYARD'S SLAB, which it was not. This shipped at -4 against a
+// yard whose resting depths run back to -3.8 (CONFIG.gravesite.restZ) — and a
+// headstone is 0.87 deep, so the stone at the back of the slab had its back
+// face at -4.24, a quarter of a unit INSIDE the plane.
+//
+// NOTHING SHOWED IN A RUN. The game's camera is orthographic and looks straight
+// down -z, so the stone's own front covers its buried part exactly and the
+// picture is the same at any of these depths — under that camera, depth here is
+// occlusion ORDER and nothing else. A Blubberball goal replay is filmed by a
+// perspective camera from up to 77 degrees off-axis (systems/replayCams.js) and
+// it is the only camera in the game that can see the difference: the plane cuts
+// the stone and the cut sweeps across its face as the shot pushes in.
+//
+// SO THE PLANE MOVED, NOT THE STONES. Both would fix it; only one is free.
+// Sliding this plane back is invisible to the orthographic camera by the
+// argument above, and it is overscanned several times the frame's width (see
+// backdropWidth), so the replay's cameras still land on it — npm run test:seams
+// is what holds that, and it FAILS if this goes much further back. Moving the
+// yard forward instead visibly re-seats a graveyard somebody has been
+// collecting for weeks, and was tried: it reads worse, because a stone pushed
+// forward lands among the plants it used to stand behind.
+//
+// IT DOES NOT CLEAR THE PLANT BED, and no plane here can. The bed is scattered
+// through CONFIG.seabed.depth (-5.5 to -1.5), but a plant is an extrusion with
+// thickness and a yaw and its leaves reach well past where it is planted:
+// MEASURED, the bed's geometry spans -7.16 to +5.89, which is thirteen units
+// deep and reaches in front of the play plane. A backdrop cannot get behind
+// that and still cover the frame — test:seams fails long before it does. Plants
+// that reach past this plane are cut by it in a replay exactly as the stone
+// was, and the fix for those is on the BED's side, not here.
+export const SEABED_Z = -4.6;
 
 // ...and the depth the water fill is drawn at. It spans the whole column, so
 // it is the FLOOR under every hiding depth the entrance uses: a body behind

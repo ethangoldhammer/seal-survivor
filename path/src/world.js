@@ -26,7 +26,7 @@ import { poolState } from './systems/replayCams.js';
 // that passes the day the shipped ones change.
 import { matchMargins, backdropWidth, seabedSkirt, waveHeadroom, shellReach, SKY_Z } from './systems/backdropFit.js';
 import { refreshFlash, skyLight } from './systems/daylight.js';
-import { updateCineCamera, cineLens, cineSubject, cineEnabled } from './systems/cineCamera.js';
+import { updateCineCamera, cineLens, cineSubject, cineEnabled, cinePathRefZoom } from './systems/cineCamera.js';
 import { mark as crashMark } from './systems/crashLog.js';
 import { retireMaterial } from './systems/programPin.js';
 
@@ -198,6 +198,11 @@ export function createWorld(container) {
   }
 
   const backdrop = new THREE.Group();
+  // Named so a diagnostic can find it by name rather than by guessing at the
+  // scene's shape — see systems/replayWatch.js. Costs nothing and the sky, the
+  // water fill, the seabed strip and the deep shell all hang off it, which
+  // makes it the one group worth being able to ask about.
+  backdrop.name = 'backdrop';
   scene.add(backdrop);
 
   const warpGrid = createGrid(scene);
@@ -356,7 +361,10 @@ export function createWorld(container) {
           new THREE.BufferGeometry().setFromPoints(pts),
           new THREE.LineBasicMaterial({ color: CONFIG.colors.depthLine, transparent: true, opacity: 0.5 })
         );
-        depthLines.position.z = -5;
+        // 0.4 in front of the water fill, written off it rather than typed: the
+        // two move together, and a typed -5 would be stranded in front of the
+        // sand the day the fill moves. See the note on SEABED_Z in arena.js.
+        depthLines.position.z = WATER_FILL_Z + 0.4;
         backdrop.add(depthLines);
       }
     }
@@ -991,6 +999,16 @@ export function createWorld(container) {
       // divide projectAt uses for the focal point — so the far end of the
       // cone lands on the world point the dash would reach, punch and all.
       cineLens.pathLength = (cineLens.pathReach * camera.zoom) / (camera.top - camera.bottom);
+      // ...AND THE CROSS-SECTION RIDES THE SAME ZOOM, or the cone is a
+      // different shape on every frame width. The length above is a world
+      // distance converted to uv, so it already moves with the zoom; the
+      // half-widths, the feather and the ripple spacing are written in uv and
+      // would stand still while it moved. A run never showed it — the wind-up
+      // punches to one zoom every time, which is the frame they were drawn
+      // for — but Blubberball's camera fits the ball and every seal into the
+      // shot and lands anywhere from half that width to a third over it. See
+      // cinePathRefZoom and the note by cineLens.pathScale.
+      cineLens.pathScale = camera.zoom / cinePathRefZoom();
     }
 
     // The framing, banked before the caller shakes the camera on top of it.

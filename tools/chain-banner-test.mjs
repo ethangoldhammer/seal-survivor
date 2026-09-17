@@ -36,7 +36,14 @@
 // modules. Run WITHOUT --import for that reason.
 // ---------------------------------------------------------------------------
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
+
+// For the source read at the end of this file: the two ring lines are gated in
+// main.js, which cannot be imported here (it starts a game).
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 let failures = 0;
 const section = (n) => console.log(`\n${n}`);
@@ -823,6 +830,97 @@ section('The old callers are gone');
     `arity ${ui.spawnChainToast.length}`);
   check('updateToasts takes the camera and the pin', ui.updateToasts.length === 1,
     'dt required, camera and pin optional');
+}
+
+// ---------------------------------------------------------------------------
+section('One switch for all four lines — settings.hud.fightText');
+// ---------------------------------------------------------------------------
+// THE POINT OF THE SETTING IS THAT IT IS ONE SETTING. Four lines, built by two
+// different systems on two different surfaces, and the promise on the row is
+// that they go together: the damage readout, the FOOD CHAIN banner and its
+// count, "Boost Empty!" and "STRIKE NOW!".
+//
+// Asserted HERE, in one block, rather than a claim apiece in the chain test and
+// the readout test. A pair of reaches measured in two files is the failure
+// this project has already had — one of them gets retuned, the other keeps
+// passing, and the thing they were supposed to keep in step quietly comes
+// apart. Whichever of the four is forgotten by a later change fails on this
+// screen, next to the three that were not.
+//
+// The two toast lines are exercised for real, because ui.js builds them and is
+// loaded here. The two callout lines cannot be: they are CONDITIONS main.js
+// withholds before systems/callouts.js ever sees them (deliberately — that file
+// has no settings import, so a headless harness can drive it), so what is
+// checkable is the withholding, in main.js's own source.
+{
+  const st = await import('../path/src/systems/settings.js');
+  const dmgLines = () => [...document.querySelectorAll('.sv-dmg')];
+
+  const fresh = () => {
+    ui.clearToasts();
+    ui.resetDamageReadout();
+    openWindow(1);
+  };
+
+  st.setSetting('hud.fightText', true);
+  fresh();
+  ui.spawnChainToast(3);
+  frame(1 / 60);
+  ui.spawnDamageReadout(camera, 0, 0, 12, 100);
+  check('on: the banner is drawn', !!banner());
+  check('on: ...carrying the link count', count()?.textContent?.includes('3'), count()?.textContent);
+  check('on: the damage readout is drawn', dmgLines().length === 1, `${dmgLines().length}`);
+
+  st.setSetting('hud.fightText', false);
+  fresh();
+  ui.spawnChainToast(3);
+  frame(1 / 60);
+  ui.spawnDamageReadout(camera, 0, 0, 12, 100);
+  check('off: no banner', !banner());
+  check('off: no damage readout', dmgLines().length === 0, `${dmgLines().length}`);
+  // NOTHING IS BUILT, rather than something built and hidden. The whole reason
+  // the gate is at the spawn (see the note by it) is that a hidden node is
+  // still a node being projected and restyled every frame — which is the one
+  // version of this setting that costs more than it saves.
+  check('off: ...and nothing is left on the layer to be updated',
+    layer().querySelectorAll('.sv-chain, .sv-dmg').length === 0,
+    `${layer().querySelectorAll('.sv-chain, .sv-dmg').length} node(s)`);
+  // ...and the ring's prompt cannot inherit the moment. `chainPin.prompt`
+  // needs a live banner, so with none there is nothing to claim the slot —
+  // which is what lets main.js gate the ring's own copy under the same setting
+  // without the two surfaces arguing about who says it.
+  prompting = true;
+  frame(1 / 60);
+  check('off: ...so the banner claims no prompt to hand anywhere',
+    !ui.chainBannerHasPrompt());
+  prompting = false;
+
+  st.setSetting('hud.fightText', true);
+  fresh();
+  ui.spawnChainToast(2);
+  frame(1 / 60);
+  check('and turning it back on brings the banner straight back', !!banner());
+
+  // THE OTHER TWO LINES, in the one file that can withhold them.
+  const main = fs.readFileSync(path.join(HERE, '../path/src/main.js'), 'utf8');
+  check('main.js reads the setting', /\bfightText\b/.test(main));
+  check('...and withholds "STRIKE NOW!" under it',
+    /strikeNow:[^\n]*showFightText/.test(main), (main.match(/strikeNow:.*/) ?? [''])[0].trim());
+  check('...and "Boost Empty!" with it',
+    /boost:[^\n]*showFightText/.test(main), (main.match(/\n\s*boost:.*/) ?? [''])[0].trim());
+  // THE SOUND IS NOT GATED. A denied press still has to answer — this row is
+  // about text, and somebody who wanted silence has three volume sliders one
+  // tab over. Checked because gating the feedback call is the obvious tidy-up
+  // a later reader would make, and it would be a different feature.
+  check('...but the denied-press sound is left alone',
+    /if \(boostDenied && bandLive && !gameState\.paused\) \{/.test(main));
+
+  // AND IT IS A ROW SOMEBODY CAN ACTUALLY REACH. A gate wired to a key with no
+  // schema entry is a setting that works perfectly and cannot be turned off.
+  const row = st.SCHEMA.hud.items.find((i) => i.key === 'fightText');
+  check('the pause menu has a row for it', !!row, row ? row.type : 'missing');
+  check('...defaulting to on, so nothing changes for a player who never opens it',
+    row?.def === true, String(row?.def));
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — all checks');

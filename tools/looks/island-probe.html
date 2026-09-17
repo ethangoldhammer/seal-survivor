@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>island probe</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #07131f; overflow: hidden;
+      font-family: ui-monospace, monospace; }
+    /* The insets, for the page to read — env() has no JS reading. */
+    #probe { position: fixed; top: 0; left: 0; width: 0; height: 0; visibility: hidden;
+      padding-top: env(safe-area-inset-top, 0px); padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+    /* What the device keeps for itself, shaded, so the safe box is visible. */
+    .unsafe { position: fixed; background: rgba(255,0,140,0.10); z-index: 90; pointer-events: none;
+      box-shadow: inset 0 0 0 1px rgba(255,0,140,0.35); }
+    /* The Dynamic Island, to scale and where iOS puts it. */
+    #pill { position: fixed; background: #000; z-index: 99; pointer-events: none;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.18); }
+    #pill::after { content: ''; position: absolute; right: 22%; top: 50%; transform: translateY(-50%);
+      width: 9px; height: 9px; border-radius: 50%; background: #10161d; }
+    #label { position: fixed; z-index: 100; color: #7de3ff; font-size: 10px; letter-spacing: .08em;
+      text-transform: uppercase; pointer-events: none; opacity: .85; }
+    #out { position: fixed; left: 0; bottom: 0; color: #5f8ba6; font-size: 9px; line-height: 1.35;
+      white-space: pre; padding: 4px 6px; z-index: 100; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="probe"></div>
+  <div id="pill"></div>
+  <div id="label"></div>
+  <div id="out"></div>
+  <script type="module" src="./island-probe.js"></script>
+</body>
+</html>

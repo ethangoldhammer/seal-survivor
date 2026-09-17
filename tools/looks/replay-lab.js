@@ -63,6 +63,10 @@ import { celebrationState } from '../../path/src/systems/celebrate.js';
 import { scatterSeabed } from '../../path/src/systems/seabedScatter.js';
 import { recordGrave, plantGraves, updateGravesites, clearGraves } from '../../path/src/systems/gravesite.js';
 import { initGraveBeam, updateGraveBeam } from '../../path/src/systems/graveBeam.js';
+// TEMPORARY, alongside the copy in main.js — this page is where the watcher
+// itself is proved, since a diagnostic nobody has seen fire is a diagnostic
+// that reports whatever you already believed.
+import { watchReplay } from '../../path/src/systems/replayWatch.js';
 
 const q = new URLSearchParams(location.search);
 const shotListEl = document.getElementById('shotList');
@@ -685,6 +689,15 @@ function render(rawDt) {
   tickGoalGlow(rawDt);
   updateParticles(rawDt);
   post.render(world.scene, cam, rawDt);
+  // On the line after the draw, exactly as main.js does it — the colour buffer
+  // is the browser's again the moment this task yields.
+  watchReplay({
+    renderer: gl,
+    scene: world.scene,
+    camera: cam,
+    shot: poolState.shotName ?? '',
+    active: poolState.active && poolState.shot >= 0,
+  });
 }
 
 function readout() {

@@ -384,6 +384,53 @@ section('WIRING — the cone, the fray, the uv conversion');
     /cineLens\.pathLength = \(cineLens\.pathReach \* camera\.zoom\) \/ \(camera\.top - camera\.bottom\)/.test(world)
     && /\* zoom\) \/ \(camera\.top - camera\.bottom\)/.test(world));
   check('...and carries dashReach into the rig', /cineCtx\.dashReach = signals\?\.dashReach/.test(world));
+
+  // SHAPE — the same dash draws the same cone whatever the frame is doing.
+  //
+  // The length is a world distance in uv, so it always moved with the zoom;
+  // the cross-section and the ripple spacing are authored in uv and did not,
+  // which made the cone a long taper on a punched-in frame and a blunt wedge
+  // with a few lumps on it on a wide one. A run never showed it — the wind-up
+  // punches to one zoom every time — and Blubberball's camera, which fits the
+  // ball and every seal into the shot, swings from about half that width to a
+  // third over it.
+  check('world.js publishes how far off the authored frame this one is',
+    /cineLens\.pathScale = camera\.zoom \/ cinePathRefZoom\(\)/.test(world));
+  check('...measured against the one state that lights the corridor',
+    /states\?\.charging\?\.zoom/.test(read('systems/cineCamera.js')));
+  check('post.js scales the cross-section and the feather by it',
+    /u\.uPathWidth\.value = cineLens\.pathWidth \* ps/.test(post)
+    && /u\.uPathWidthFar\.value = cineLens\.pathWidthFar \* ps/.test(post)
+    && /u\.uPathFeather\.value = cineLens\.pathFeather \* ps/.test(post));
+  check('...divides the ripple density, so the fray belongs to the water',
+    /u\.uPathNoiseScale\.value = cineLens\.pathNoiseScale \/ ps/.test(post));
+  check('...and does NOT scale the break-up depth, which the shader already spends as a fraction of the half-width',
+    /u\.uPathNoise\.value = cineLens\.pathNoise;/.test(post));
+  {
+    // The whole conversion, both ends, exactly as world.js and post.js run it.
+    const p = CONFIG.cinecam.lens.path;
+    const ref = CONFIG.cinecam.states.charging.zoom;
+    const reach = 21.5;           // a full-power dash, measured above
+    const frameH = CONFIG.arena.viewHeight;
+    const cone = (zoom) => {
+      const len = (reach * zoom) / frameH;
+      const ps = zoom / ref;
+      return { taper: (p.widthFar * ps) / len, ripples: len * (p.noiseScale / ps) };
+    };
+    // A run's wind-up, a match fitted wide, and a match punched all the way in.
+    const [run, wide, tight] = [ref, 0.5, 2.0].map(cone);
+    check('the cone has the same taper at any zoom',
+      Math.abs(run.taper - wide.taper) < 1e-9 && Math.abs(run.taper - tight.taper) < 1e-9,
+      `${run.taper.toFixed(3)} at the wind-up, ${wide.taper.toFixed(3)} fitted wide, ${tight.taper.toFixed(3)} punched in`);
+    check('...and the same number of ripples along it',
+      Math.abs(run.ripples - wide.ripples) < 1e-9 && Math.abs(run.ripples - tight.ripples) < 1e-9,
+      `${run.ripples.toFixed(1)} ripples`);
+    // ...and what it was: the unscaled cone, for the record.
+    const raw = (zoom) => ({ taper: p.widthFar / ((reach * zoom) / frameH), ripples: ((reach * zoom) / frameH) * p.noiseScale });
+    check('...where the unscaled cone was a different shape at each',
+      Math.abs(raw(ref).taper - raw(0.5).taper) > 0.1,
+      `${raw(ref).taper.toFixed(2)} vs ${raw(0.5).taper.toFixed(2)} wide, ${raw(0.5).ripples.toFixed(1)} ripples against ${raw(ref).ripples.toFixed(1)}`);
+  }
   const config = read('config.js');
   check('no length slider survives in the tuner', !/cinecam\.lens\.path\.length/.test(config));
   check('the rig reads no length number', !/pathCfg\.length/.test(read('systems/cineCamera.js')));
