@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { getAudioContext, getSfxBus, isAudioLive, sampleBuffer } from './audio.js';
+import { getAudioContext, getSfxBus, isAudioLive, makeImpulse, sampleBuffer } from './audio.js';
 
 // ---------------------------------------------------------------------------
 // THE JET'S SOUND BED — one voice that ramps up and then HOLDS.
@@ -24,7 +24,11 @@ import { getAudioContext, getSfxBus, isAudioLive, sampleBuffer } from './audio.j
 //            arrival as the moment the change stops. It breathes on a slow LFO
 //            so it is not DEAD, but it goes nowhere.
 //   RELEASE  down, fast. The stream is cut, not faded out — the tail is the
-//            room, not the synth.
+//            room, not the synth. `tail` is that room, when a block asks for
+//            one: a convolver fed for the whole hold and pushed harder as the
+//            dry path falls, so the cut lands somewhere instead of just
+//            stopping. Off by default — the jet is a stream that ends when it
+//            ends, and the strike's wind-up is the block that wanted it.
 //
 // WHY A MOOG AND NOT NOISE. The riser under a card is noise, deliberately, and
 // its file says why: pitched material makes a riser into a note that gets
@@ -196,6 +200,40 @@ function tearDown(v, fade) {
   try {
     const now = ctx.currentTime;
     const out = Math.max(0.005, fade);
+    // THE THROW, and then the room let go of. Scheduled before the envelope
+    // below so the send is already climbing while the dry signal falls — the
+    // two crossing is what makes the bed sound like it was thrown somewhere
+    // rather than turned down next to a reverb that happened to be on.
+    //
+    // The disconnect is what stops this leaking. A convolver whose input has
+    // gone quiet still holds its tail, and every node upstream of the bus stays
+    // reachable until something lets go of it — so a run's worth of wind-ups is
+    // a run's worth of live convolvers unless each one is torn off after it has
+    // finished ringing. Scheduled on a timer rather than done here, because
+    // "finished ringing" is the impulse's length after the throw, not now.
+    if (v.tailSend && v.tailVerb) {
+      const t = v.cfg?.tail ?? {};
+      const wet = Math.max(0, t.wet ?? 0);
+      const peak = wet * Math.max(1, t.throw ?? 2.5);
+      const secs = Math.max(0.05, t.seconds ?? 0.6);
+      v.tailSend.gain.cancelScheduledValues(now);
+      v.tailSend.gain.setValueAtTime(v.tailSend.gain.value, now);
+      v.tailSend.gain.linearRampToValueAtTime(peak, now + out);
+      // ...and then shut, so the tail rings out of a send that is no longer
+      // feeding it. Without this the convolver keeps taking whatever the fading
+      // dry path still has in it, and the room re-triggers on the click at the
+      // very end of the fade.
+      v.tailSend.gain.linearRampToValueAtTime(0, now + out + secs * 0.5);
+      const send = v.tailSend, verb = v.tailVerb;
+      v.tailSend = v.tailVerb = null;
+      setTimeout(() => {
+        try { send.disconnect(); verb.disconnect(); } catch { /* already gone */ }
+        // A LONGER GRACE THAN THE IMPULSE, in milliseconds. The convolver's
+        // output is the impulse's length past its last non-silent input, and
+        // its last input is the end of the fade above — so the ring is still
+        // going `secs` after the send has shut, not `secs` after the release.
+      }, (out + secs * 2) * 1000 + 120);
+    }
     gain.gain.cancelScheduledValues(now);
     // setValueAtTime from the LIVE value, not from the last scheduled one —
     // the same trap cardRiser documents. A bed cut in the middle of its ramp
@@ -311,6 +349,41 @@ export function startJetBed(key, cfg = null) {
   const gate = ctx.createGain();
   gate.gain.value = muted ? 0 : 1;
   gain.connect(gate).connect(master);
+
+  // --- THE ROOM THE BED IS CUT INTO ----------------------------------------
+  // Optional, and off unless a block asks for it (`tail`). What it buys is the
+  // one thing the release above cannot do on its own: the bed is a source that
+  // STOPS, and a source that stops leaves nothing behind, so the cut reads as a
+  // switch rather than as a sound ending in a place.
+  //
+  // FED THROUGHOUT, NOT OPENED AT THE RELEASE, and this is the trap the echo
+  // bus in systems/audio.js already documents from the other side: gate the
+  // INPUT and the line is empty at the moment you want to hear it, so the tail
+  // has nothing in it but whatever arrives after the sound has gone — which is
+  // silence, because the sound going is the event. The send runs at `wet` for
+  // the whole hold (a held note in a space, which is what it should be) and
+  // the release pushes it to `wet * throw`, so the last instant of the bed is
+  // thrown in harder than the rest of it was.
+  //
+  // HUNG OFF THE GATE rather than off `gain`, so a bed muted by the menu takes
+  // its reverb down with it. Off `gain` the room would keep ringing under an
+  // open pause menu after the dry signal had been gated away, which is the
+  // exact failure the gate exists to prevent, arriving one node later.
+  let tailSend = null, tailVerb = null;
+  const t = c.tail;
+  if (t && t.enabled !== false && (t.wet ?? 0) > 0) {
+    // Null before the first gesture unlocks audio — but `isAudioLive` above
+    // has already refused that case, so a null here is a context that died
+    // between the two, and the bed is simply dry.
+    const impulse = makeImpulse(Math.max(0.05, t.seconds ?? 0.6), Math.max(0.1, t.decay ?? 2.6));
+    if (impulse) {
+      tailVerb = ctx.createConvolver();
+      tailVerb.buffer = impulse;
+      tailSend = ctx.createGain();
+      tailSend.gain.value = Math.max(0, t.wet ?? 0);
+      gate.connect(tailSend).connect(tailVerb).connect(master);
+    }
+  }
 
   const ladder = buildLadder(ctx, c.resonance ?? 9);
   const shaper = ctx.createWaveShaper();
@@ -471,6 +544,7 @@ export function startJetBed(key, cfg = null) {
     ctx, gain, gate, gateTarget: muted ? 0 : 1, cfg: c,
     sources, lfo, freqs: ladder.freqs, startedAt: now, ramp,
     layers: layers.length, synth: synthLevel > 0,
+    tailSend, tailVerb,
   });
   return true;
 }
@@ -497,5 +571,11 @@ export function jetBedState(key) {
     sampled: v.layers > 0,
     muted: v.gateTarget === 0,
     breathing: !!v.lfo,
+    // Whether this bed has a room to be cut into. `false` on a block with no
+    // `tail`, and also on one that asked for it and could not have it — the
+    // context died between isAudioLive and makeImpulse — which is the case
+    // worth being able to see, because it is silent and sounds like a tuning
+    // mistake.
+    tail: !!v.tailVerb,
   };
 }

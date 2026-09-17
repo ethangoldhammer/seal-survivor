@@ -26,7 +26,7 @@ import { FLIPPER_SIDES } from './flipperSide.js';
 import { updateFinLights, resetFinLights, finLightColor } from './systems/finLights.js';
 import { consumeDazes, resetControl } from './systems/control.js';
 import { updateCelestialPass, resetCelestialPass } from './systems/celestialPass.js';
-import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, hitReactionMul, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal, spawnOpeningBaitBalls, drainSpawnTells } from './entities/enemies.js';
+import { enemies, updateSpawning, updateEnemies, animateEnemiesIdle, resetEnemies, removeEnemy, spawnNamed, nightlifeWeight, setStrikeThreat, applyKnockback, hitReactionMul, spawnBaitBall, devBaitBallSpec, setSpawnLevel, spawnOpeningShoal, spawnOpeningBaitBalls, drainSpawnTells, drainCrabRicochets } from './entities/enemies.js';
 import { noteBaitLoss, baitBallFor } from './systems/baitBall.js';
 import { inSpawnGroup } from './enemyTable.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossBanner, bossEntering, bossState, capBossDamage } from './systems/boss.js';
@@ -82,7 +82,7 @@ import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeEnglish } from './systems/strike.js';
-import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast } from './systems/strike.js';
+import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -181,7 +181,7 @@ import { censusReport, censusLine, canvasBytes } from './systems/memoryCensus.js
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { updateBubbleJet, updateJets, resetBubbleJet, setJetStats } from './systems/bubbleJet.js';
-import { setJetBedsMuted } from './systems/jetBed.js';
+import { setJetBedsMuted, startJetBed, releaseJetBed } from './systems/jetBed.js';
 import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
 import { updateAccessories } from './systems/accessories.js';
@@ -458,6 +458,46 @@ let razorClamCooldown = 0;
 let bounceCooldown = 0;
 let rapidFireTimer = 0; // seconds remaining on an active rapid-fire pickup
 let chargeHapticTimer = 0; // counts down between wind-up rumble pulses
+// THE WIND-UP'S HELD VOICE. A module-level key and an open flag, the same
+// shape systems/sardineSwirl.js keeps its bed by — the key is only ever an
+// identity (the bed engine holds voices in a Map), and the flag is what makes
+// "start it if it is not already going" a question this file can answer
+// without reaching into the engine's internals every frame.
+const CHARGE_BED_KEY = { charge: true };
+let chargeBedOpen = false;
+
+// ONE PIP SPENT, DURING THE HOLD THAT SPENDS IT — the run of blips that climbs
+// across a wind-up and counts the player in to "STRIKE NOW!".
+//
+// REGISTERED ONCE, HERE, rather than passed per frame: the burn is raised from
+// updateCharge, which has no hooks bag to hang it on (see onStrikeBurnPip), and
+// it is the run's own seal by construction — a match's CPU wind-ups are filtered
+// out at the source.
+//
+// THE PITCH CLIMBS WITH `burned`, NOT WITH THE BAR'S LEVEL, which is the whole
+// difference between this and the fill's tick a few hundred lines down. `burned`
+// counts from 1 within this hold and only goes up, so the run says "the strike
+// is getting bigger" while the meter draws the fuel going. Capped, because a
+// twelve-pip bar with a Booster Pack container on it would otherwise finish two
+// octaves above where it started, and a triangle blip up there is a whistle.
+onStrikeBurnPip((burned, total) => {
+  if (!player?.mesh) return;
+  const c = CONFIG.strike.charge;
+  const per = c.burnSemitones ?? 2;
+  const max = c.burnSemitonesMax ?? 14;
+  const semitones = Math.min(max, (burned - 1) * per);
+  feedback('strikeBurn', {
+    x: player.mesh.position.x,
+    y: player.mesh.position.y,
+    // Equal temperament, so `burnSemitones` is a number that can be argued
+    // about by ear rather than a playback ratio nobody can hear the size of.
+    sfxOpts: { pitch: Math.pow(2, semitones / 12) },
+    // How far up the run this blip is, for anything that wants to draw it.
+    // Passed as the event's scale rather than as the raw count: a listener
+    // should not have to know the bar's length to know how far along it is.
+    scale: total > 1 ? Math.min(1, (burned - 1) / (total - 1)) : 1,
+  });
+});
 let bubbleSpawnTimer = 0;
 let rapidFireSpawnTimer = 0;
 let scoreOrbSpawnTimer = 0;
@@ -2297,6 +2337,13 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   resetSardineSwirl();
   resetClub();
   resetStrike();
+  // The wind-up's held voice, if a run ended with a finger still on the
+  // button. Nothing else would take it down: the start/release pair that
+  // normally owns it lives inside the run's own update, which does not run
+  // again for the seal that just died — and a bed with nobody left to release
+  // it is a sound that never stops. Fast, because this is a cut and not a
+  // release; the room is not the point when the run is over.
+  if (chargeBedOpen) { releaseJetBed(CHARGE_BED_KEY, 0.05); chargeBedOpen = false; }
   // A run that ended pinned must not open the next one still ramping, and a
   // boss mid-lunge when the last run ended must not pay the new run's first
   // frame for a dodge nobody made.
@@ -3458,7 +3505,13 @@ function updateBossShot() {
   // (CONFIG.feedback.bossPellet), not asked for here. Positioned off the mesh
   // rather than off a cached x/y for the reason enemies have none: the
   // position IS the mesh.
-  if (gained && player.mesh) {
+  //
+  // AND ONLY IF THERE WAS A PAYOUT. `shotsPerBoss` at 0 turns the pellet off
+  // (weapons.csv owns the number), and a receipt for a reward that was not
+  // handed out is worse than no receipt — it is the one lie a payout toast can
+  // tell. Read off the same CONFIG field applyBossGrowth spends, so the switch
+  // is one number rather than two that can drift apart.
+  if (gained && player.mesh && (CONFIG.weapon.shotsPerBoss ?? 0) > 0) {
     // THE WORDS ARE THE LOADOUT'S, and they are uiText.csv's on either one.
     // A run can be throwing stones or firing light, and a receipt that says
     // "pebbles" on a laser run is the same lie weaponName.js exists to stop —
@@ -3881,6 +3934,22 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
       y: y ?? e.mesh.position.y,
       scale: Math.min(1.6, 0.7 + dmg / 40),
     });
+  } else if (e.def?.voice?.hit) {
+    // ...AND WHAT AN ORDINARY CREATURE IS MADE OF, on exactly the same terms:
+    // a voice ON TOP of the generic hit above, never instead of it, carrying a
+    // sound and nothing else so there is still one author of the shake and the
+    // spark. Read off the def rather than off a list of ids here, so a species
+    // that wants one is a line in CONFIG.enemies and nothing in this file.
+    //
+    // The crabs are the ones that have one today, and the reason is that they
+    // are the only common body in the water that is not made of fish — see the
+    // note on CONFIG.enemies.walkingCrab.voice. It fires for a ricochet too:
+    // to this function a crab hit by another crab is a crab being hit.
+    feedback(e.def.voice.hit, {
+      x: x ?? e.mesh.position.x,
+      y: y ?? e.mesh.position.y,
+      scale: Math.min(1.6, 0.7 + dmg / 40),
+    });
   }
 
   if (at?.sphere && e.hitShape) {
@@ -3919,6 +3988,63 @@ function onEnemyDamagedFeedback(e, dmg, x, y, dir, projectile, at = null) {
       feedback: projectile.splashFx ?? undefined,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE CRAB RICOCHET
+//
+// One crab hits another hard enough to hurt it. The collision itself is
+// entities/enemies.js's (resolveCrabCollisions, which queues the pairs); this
+// is the half that has to live up here, because a kill is not just an hp
+// subtraction — it is the score, the xp orb, the playtest ledger, the lifetime
+// tally and the food chain, and every one of those is in this file.
+//
+// CREDITED TO THE PLAYER, and that is honest rather than generous: the only
+// thing in the game that can put a shove on a crab is the seal, and the
+// ricochet is gated on the shove (see CONFIG.crabPhysics.ricochet). A crowd
+// barging at a chum pile queues nothing at any speed, so there is no case
+// where this books a kill the player did not cause.
+//
+// Deferred through the queue rather than resolved inside the collision pass
+// for the same reason processPendingSplashes exists: that pass is a loop over
+// `enemies`, and removeEnemy splices the array out from under it.
+// ---------------------------------------------------------------------------
+function processCrabRicochets() {
+  drainCrabRicochets((hit) => {
+    hurtByRicochet(hit.a, hit, hit.damageA);
+    hurtByRicochet(hit.b, hit, hit.damageB);
+  });
+}
+
+function hurtByRicochet(e, hit, damage) {
+  // BY INDEX, and looked up fresh per victim. `removeEnemy` takes an index —
+  // handing it the creature is a silent no-op — and the first half of this
+  // very pair may already have killed a crab that a later entry in the same
+  // frame's queue also names. A missing index IS "it already died".
+  const i = enemies.indexOf(e);
+  if (i < 0) return;
+  // The king crab shoulders the swarm around and is not damaged by it. Scenery
+  // is not a target either — see the same arm in processPendingSplashes, which
+  // is where asking an invincible creature for its health used to file a
+  // billion points of damage per turtle.
+  if (e.isBoss || e.invincible) return;
+
+  const dealt = Math.min(damage ?? hit.damage, Math.max(0, e.hp));
+  if (!(dealt > 0)) return;
+  e.hp -= dealt;
+  e.flash = CONFIG.fx.hitFlash;
+  e.hitThisFrame = true;
+  playtest.recordDamage('crabRicochet', dealt, e);
+  noteDamageDealt(dealt);
+  // Through the ordinary damage feedback, so a ricochet sparks, flashes and
+  // flinches like every other hit in the game — and so the crab's own shell
+  // voice (`voice` on the def) fires for it without this function knowing the
+  // creature is a crab. The contact point is where the two shells met, not
+  // where either body is.
+  onEnemyDamagedFeedback(e, dealt, hit.x, hit.y);
+  if (e.hp > 0) return;
+  onEnemyKilledFeedback(e);
+  removeEnemy(world.scene, i);
 }
 
 function processPendingSplashes() {
@@ -4519,6 +4645,17 @@ function onEnemyKilledFeedback(e, killEvent = null) {
   // sound under the most frequent event in the game.
   if (e.isBoss) {
     bossVoice('die', e.assetKey ?? e.def.asset, {
+      x: e.mesh.position.x,
+      y: e.mesh.position.y,
+    });
+  } else if (e.def.voice?.die) {
+    // The same for a creature that carries its own — under `kill` rather than
+    // instead of it. The bosses' argument against doing this for every minnow
+    // still holds and is why this is opt-in per species: a material voice on
+    // the most frequent event in the game would be a second sound under all of
+    // it. A crab shell failing is worth one; a trout is already flesh, which
+    // is what `kill` is written for.
+    feedback(e.def.voice.die, {
       x: e.mesh.position.x,
       y: e.mesh.position.y,
     });
@@ -7795,6 +7932,29 @@ function runFrame(now) {
     player.chumSealed = CONFIG.strike.enabled
       && input.strikeHeld
       && CONFIG.strike.charge.gulp?.blockEating !== false;
+
+    // THE WIND-UP'S HELD VOICE — one sound from the press to the let-go, and
+    // then thrown into its room and gone (CONFIG.strike.charge.bed, run by the
+    // jet's bed engine — the argument for reusing it is in the config note).
+    //
+    // GATED ON THE BUTTON AND NOT ON `charging`, exactly like `chumSealed`
+    // above and for the same reason spelled out there. `charging` goes false on
+    // the frame the tank runs dry, and that frame is "STRIKE NOW!" — so a bed
+    // hung off it would cut out at precisely the moment the player is being
+    // asked to commit, and the held sound would be missing from every wind-up's
+    // most important half-second. What a player means by "still charging" is
+    // that their finger is still down.
+    //
+    // Asked every frame, which is what it is built for: startJetBed treats a
+    // re-start of an open key as a no-op, so this is "keep holding" rather than
+    // sixty attacks a second.
+    const wantChargeBed = CONFIG.strike.enabled && input.strikeHeld && !deathState.active;
+    if (wantChargeBed && !chargeBedOpen) {
+      chargeBedOpen = startJetBed(CHARGE_BED_KEY, CONFIG.strike.charge.bed);
+    } else if (!wantChargeBed && chargeBedOpen) {
+      releaseJetBed(CHARGE_BED_KEY);
+      chargeBedOpen = false;
+    }
     if (strikeState.charging) {
       addSustainedShake(CONFIG.strike.charge.shake * strikeState.pending);
       chargeHapticTimer -= dt;
@@ -8355,6 +8515,11 @@ function runFrame(now) {
       feedback('bite', { x, y, vx: e.vx, vy: e.vy });
       onPlayerBite(e);
     });
+    // WHAT THE CROWD DID TO ITSELF, immediately after the pass that found it
+    // and before anything else reads `enemies`. A punted crab is a thrown
+    // object and this is what it cost whatever it landed on — queued inside
+    // the collision pass, resolved out here where a kill may splice the array.
+    processCrabRicochets();
     // The tells on this frame's lunge stages — after the behaviour, so the
     // ring draws the stage the body is actually in.
     updateLungeTells(dt, world.scene);

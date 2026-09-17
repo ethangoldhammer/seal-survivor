@@ -68,6 +68,13 @@ export function createStrikeState() {
     charge: 0,       // 0..1 — the FUEL bar. Burned by holding, refilled by food.
     pending: 0,      // power banked so far for the strike being wound up, 0..1
     charging: false, // holding AND there is fuel left to burn
+    // Pips spent by THIS wind-up, counting from 0 on the frame the hold
+    // begins. What the burn run is pitched off (see onStrikeBurnPip), and it
+    // rises rather than tracking the bar's level on purpose: the bar is going
+    // DOWN while the strike is getting bigger, and the sound is about the
+    // strike. Survives the release so the frames after it can still read what
+    // the hold was worth.
+    burnedPips: 0,
     // TURBO — see updateTurbo. `turboOn` is the latch: set when a wind-up is
     // held with the stick pushed, cleared when the hold ends (release, dash,
     // or an empty bar). `turbo` is the 0..1 blend the seal actually swims by,
@@ -1142,12 +1149,53 @@ export function updateCharge(dt, held, stats, s = strikeState) {
   // by a pip's worth (windUpTime). A pip is one chum and 1/pipCount of a
   // strike, whatever the bar's length.
   const time = windUpTime(stats);
+  // THE HOLD STARTING IS AN EDGE, and the wind-up's own sounds hang off it.
+  // Read before `charging` is reassigned, because the whole question is what
+  // it was on the frame before — see `burnedPips` below and startCharge in
+  // main.js, which both need "this hold" to mean something.
+  const wasCharging = s.charging;
   s.charging = !!held && s.charge > 0;
+  // A hold that has only just begun starts its own count. Not reset on the
+  // RELEASE: `burnedPips` is read after the fact by the release burst and by
+  // the panel's readout, and a counter zeroed where the button came up would
+  // have nothing in it by the time either looked.
+  if (s.charging && !wasCharging) s.burnedPips = 0;
   if (s.charging) {
     // Never more than is in the tank, so the two always move together.
     const burn = Math.min(s.charge, dt / time);
+    // PIPS SPENT, COUNTED ON THE TANK AND NOT ON THE BANK. The two move
+    // together on an ordinary hold, so either would do — until something
+    // fills the meter mid-wind-up (the sun's trickle, CONFIG.dayNight.pass.
+    // sun.charge), which tops `pending` out with fuel still in the tank. The
+    // bank then stops crossing boundaries while the burn is still very much
+    // burning, and the sound of the wind-up would go quiet a beat before the
+    // wind-up did. What is being spent is the FUEL, so the fuel is what is
+    // counted.
+    //
+    // Floor-of-before minus floor-of-after, against a bar cut into pipCount
+    // pieces — the same arithmetic notePips does going the other way, with
+    // the same epsilon, so a pip that snapToPip has just landed exactly on a
+    // boundary is not counted twice by a float a hair under it.
+    const n = pipCount(stats);
+    const from = Math.ceil(s.charge * n - 1e-6);
     s.charge -= burn;
     s.pending = Math.min(1, s.pending + burn);
+    const to = Math.ceil(s.charge * n - 1e-6);
+    // FIRED HERE AND NOT QUEUED, which is the opposite of what the fill does
+    // and is right for the opposite reason. A fill can arrive six pips inside
+    // one frame (a magnet sweep) and needs pipGap to spread them out; a burn
+    // is paced by the drain itself — one pip every windUpTime/pipCount
+    // seconds, 0.2s on the default bar — so it can never bunch, and putting
+    // it through the same queue would only make the sound lag the bar it is
+    // describing.
+    for (let i = from; i > to; i--) {
+      s.burnedPips = (s.burnedPips ?? 0) + 1;
+      // THE RUN'S OWN SEAL ONLY, the same test `own` makes in updateStrike. A
+      // match runs updateCharge for every seal on the board (systems/
+      // versus.js), and a hook that did not ask would blip in the player's
+      // ears every time a CPU wound one up.
+      if (s === strikeState) burnHook?.(s.burnedPips, n);
+    }
   }
 
   // BOOSTER PACK'S REGEN — the one refill that is not food, in pips per
@@ -1612,6 +1660,35 @@ function snapToPip(value, stats) {
   const pips = value * n;
   const nearest = Math.round(pips);
   return Math.abs(pips - nearest) < 1e-6 ? nearest / n : value;
+}
+
+// THE OTHER DIRECTION — a pip SPENT, during the hold that spends it.
+//
+// A CALLBACK AND NOT A `hooks` ARGUMENT, unlike every other event the strike
+// system raises. Those all come out of updateStrike, which already takes a
+// hooks bag; this one is raised by updateCharge, whose signature ends in the
+// state it operates on (`s = strikeState`) and whose fourth argument is
+// therefore spoken for. Threading a fifth past it would have to be passed by
+// all four callers including two harnesses, to deliver something only one of
+// them wants.
+//
+// Registered ONCE, at wiring time, rather than per frame. There is exactly one
+// listener — the seal the player is holding the button on — and the run's own
+// state is the only one that reaches it (see the `s === strikeState` test in
+// updateCharge, which is what keeps a match's CPU wind-ups out of the mix).
+let burnHook = null;
+
+/**
+ * Listen for pips coming off the bar during a wind-up. `cb(burned, total)`,
+ * where `burned` counts from 1 within THIS hold — so a caller can pitch a run
+ * off it — and `total` is the bar's length in pips.
+ *
+ * Pass null to stop listening. Replacing an existing listener rather than
+ * adding to a list is deliberate: two things pitching the same run would be
+ * the chord this whole corner of the file is built to avoid.
+ */
+export function onStrikeBurnPip(cb) {
+  burnHook = typeof cb === 'function' ? cb : null;
 }
 
 // PIP TICKS ARE QUEUED, NEVER FIRED FROM THE FILL.

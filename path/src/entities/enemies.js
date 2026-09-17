@@ -471,10 +471,39 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   // half of this that matters there is the DISPLACEMENT and not the stagger —
   // a boss owns what a hold does to it (CONFIG.boss.control.daze) and a ram is
   // not allowed to open that door round the back.
+  // A CRAWLER IS THROWN, and it needs its own profile because the two rules
+  // above between them gave it nothing.
+  //
+  // A crab's authored radius is 0.2 — it is a SPHERE doing two jobs (the
+  // collision reach, and, through the crawl clamp, how high the body rests off
+  // the sand), and it is deliberately far under the creature's half-width so
+  // the legs bed into the seabed. That put it under `heavy.minRadius` (0.65),
+  // which is the line the ram's own prey cull draws, so a crab took the
+  // ordinary knock: 34 units/sec decaying at 12, which integrates to 2.8 units
+  // of travel. A crab is four units wide. The physics was there, the crowd
+  // solver was there, and a full-commitment strike moved a crab by less than
+  // its own body — which is why it never once hit anything.
+  //
+  // So the SHELL gets its own class, between the ordinary knock and the heavy
+  // one, and it is the fastest and longest-carrying of the three. That is not
+  // generosity: this is the one body in the game that is small, hard, and
+  // standing on a floor, which is the exact combination that skitters. And it
+  // is what makes CONFIG.crabPhysics.ricochet a mechanic rather than a number
+  // nothing can reach — a crab that travels 24 units crosses a crowd.
+  //
+  // No stagger, unlike `heavy`. That exists to stop a shark swimming its own
+  // shove off; a crab walks at three and has nothing to swim off.
+  const ck = CONFIG.crabPhysics?.knock ?? {};
+  const crawler = ck.enabled !== false
+    && e.hp > 0
+    && !onBoss
+    && e.def?.behavior === 'crawl';
+
   const hv = k.heavy ?? {};
   const heavy = hv.enabled !== false
     && e.hp > 0
     && !onBoss
+    && !crawler
     && size >= (hv.minRadius ?? pivot);
 
   // A BOSS IS MOVED BY A RAM. See CONFIG.strike.knockback.boss. The size
@@ -494,13 +523,17 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   // is the daze's job, on the daze's budget and behind the daze's cooldown.
   const bossKnock = onBoss && bk.enabled !== false && e.hp > 0;
 
-  const boost = (bossKnock ? (bk.speedMul ?? 2.5) : heavy ? (hv.speedMul ?? 1.7) : 1) * gain;
+  const boost = (bossKnock ? (bk.speedMul ?? 2.5)
+    : crawler ? (ck.speedMul ?? 3.2)
+    : heavy ? (hv.speedMul ?? 1.7) : 1) * gain;
   e.knockX = (e.knockX ?? 0) + (dirX / len) * push * boost;
   e.knockY = (e.knockY ?? 0) + (dirY / len) * push * boost;
   // Per-body, because the decays are different journeys: an ordinary knock is
   // over in a fifth of a second and a heavy one is a throw. Read by the
   // integrator, so the last hit a body took owns its falloff.
-  e.knockDecay = bossKnock ? (bk.decay ?? 6) : heavy ? (hv.decay ?? 9) : (k.decay ?? 12);
+  e.knockDecay = bossKnock ? (bk.decay ?? 6)
+    : crawler ? (ck.decay ?? 4.5)
+    : heavy ? (hv.decay ?? 9) : (k.decay ?? 12);
 
   if (bossKnock) {
     // BOTH OFF BY DEFAULT, and kept as dials rather than deleted because
@@ -625,6 +658,11 @@ function plowThrough(e, dt) {
 
 export function resetEnemies(scene) {
   spawnLevel = 1;
+  // Nothing from the last run may be billed against this one. The queue is
+  // normally empty by the time anything resets it — main.js drains it every
+  // frame — but a run that ended between the pass and the drain would hand
+  // the next seal a kill it did not make.
+  crabRicochets.length = 0;
   // The seal is about to be somewhere else entirely. Without this the first
   // frame of the new run measures the jump from the old run's last position as
   // the seal's velocity, and every lunge in the opening seconds leads a target
@@ -709,6 +747,12 @@ export function resetEnemies(scene) {
 function resolveCrabCollisions(dt, list) {
   const c = CONFIG.crabPhysics;
   if (!c?.enabled) return;
+  // THE RICOCHET'S OWN GATE, read once. Switched off outright while the seal
+  // is dead — everything below the collision itself is a mechanic, and the
+  // pile-on is not: it is the last thing the player watches. Leaving it armed
+  // there would also file kills against a run that has already been scored.
+  const r = (!deathState.active && c.ricochet) || null;
+  const minRic = r ? (r.minSpeed ?? 12) : Infinity;
 
   // Support is recomputed from scratch every frame — a crab whose neighbour
   // walked out from under it has to fall, and a stale height would leave it
@@ -751,6 +795,11 @@ function resolveCrabCollisions(dt, list) {
   for (let i = 0; i < bodies.length; i++) {
     const a = bodies[i];
     if (a.bumpCooldown > 0) a.bumpCooldown -= dt;
+    // Its own timer rather than a share of `bumpCooldown`: that one throttles
+    // the FLAIL, which should fire often in a busy heap, and this throttles
+    // DAMAGE, which must fire once per bounce. Two shells stay in contact for
+    // several frames and one gap cannot serve both.
+    if (a.ricochetCool > 0) a.ricochetCool -= dt;
 
     for (let j = i + 1; j < bodies.length; j++) {
       const b = bodies[j];
@@ -821,15 +870,64 @@ function resolveCrabCollisions(dt, list) {
 
       const want = sum * (c.contactScale ?? 1);
       const d2 = dx * dx + dy * dy;
-      if (d2 > want * want || d2 < 1e-9) continue;
+      if (d2 < 1e-9) continue;
 
       const d = Math.sqrt(d2);
       const nx = dx / d;
       const ny = dy / d;
 
+      // CLOSING SPEED ALONG THE NORMAL, READ OFF THE WHOLE MOTION — and read
+      // HERE, above the contact test, because how fast the pair is closing is
+      // now part of deciding whether they touch at all.
+      //
+      // `vx/vy` is only what a crab is WALKING at, and a crab walks at three.
+      // Everything that ever HITS one — a ram, a release burst, a pickup
+      // blast, a headstone — arrives in `knockX/knockY` instead: a separate
+      // channel laid over the locomotion and integrated straight onto the
+      // position, for the reason applyKnockback spells out. This test could
+      // not see a single unit of it, so a crab punted across the seabed at a
+      // hundred units a second was measured as one walking at three, resolved
+      // as a nudge, and passed through the heap it should have scattered. The
+      // shove was real, it moved the body, and it stopped existing at the one
+      // moment it was worth something. Both halves, or the contact is fiction.
+      const akx = a.knockX ?? 0;
+      const aky = a.knockY ?? 0;
+      const bkx = b.knockX ?? 0;
+      const bky = b.knockY ?? 0;
+      const rvx = (b.vx + bkx) - (a.vx + akx);
+      const rvy = (b.vy + bky) - (a.vy + aky);
+      const along = rvx * nx + rvy * ny;
+
+      // A SWEPT CONTACT, and it is the difference between a punt working and a
+      // punt working three times in five.
+      //
+      // A thrown crab covers 1.8 units in a frame and two shells touch over a
+      // window 0.9 wide, so a discrete "are they overlapping right now" test
+      // MISSES HALF THE TIME: the body is short of the contact on one frame
+      // and past it on the next, and the crowd it should have scattered is
+      // simply walked through. That failure is invisible in a way worth
+      // naming — nothing throws, the crab visibly flies, and the ricochet
+      // reads as an unreliable mechanic rather than as a missed test.
+      //
+      // So the pair interacts if it is within the contact distance PLUS how
+      // far it will close this frame. Only the approach expands it (a pair
+      // flying apart adds nothing), and for a crowd walking at three that is
+      // five hundredths of a unit — which is why the heap behaves identically.
+      // This is a speculative contact: the bounce is resolved a frame early
+      // for a fast body, which is what stops it interpenetrating rather than
+      // something that has to be corrected afterwards.
+      const reach = want + Math.max(0, -along) * dt;
+      if (d > reach) continue;
+
       // Positional correction first, so bodies never settle overlapped and
       // then jitter as the impulse fires every frame on the same pair.
-      const overlap = want - d;
+      //
+      // OFF THE REAL OVERLAP, never off `reach`. A speculative pair is not
+      // touching yet and pushing it apart by the distance it was ABOUT to
+      // close would fling bodies away from each other before contact — a
+      // crowd that shoved without touching, at exactly the speeds this test
+      // was added to catch.
+      const overlap = Math.max(0, want - d);
       const ma = a.radius * a.radius;
       const mb = b.radius * b.radius;
       const total = ma + mb;
@@ -862,19 +960,42 @@ function resolveCrabCollisions(dt, list) {
         b.mesh.position.y += ny * pushB;
       }
 
-      // Closing speed along the normal. Only resolve if they're actually
-      // approaching — separating pairs would otherwise get yanked back.
-      const rvx = b.vx - a.vx;
-      const rvy = b.vy - a.vy;
-      const along = rvx * nx + rvy * ny;
+      // Only resolve if they are actually approaching — a separating pair
+      // would otherwise be yanked back together.
       if (along > 0) continue;
+
+      // ...and how much of that closing speed was the KNOCK rather than the
+      // walk. Read twice below and it is the same question both times — is
+      // this two crabs shuffling, or is one of them a thrown object.
+      const knockAlong = Math.abs((bkx - akx) * nx + (bky - aky) * ny);
 
       const restitution = c.restitution ?? 0.45;
       const impulse = (-(1 + restitution) * along) / total;
-      a.vx -= impulse * mb * nx;
-      a.vy -= impulse * mb * ny;
-      b.vx += impulse * ma * nx;
-      b.vy += impulse * ma * ny;
+
+      // WHERE THE EXCHANGE IS DELIVERED, split by that same share.
+      //
+      // A crowd shouldering at a pile is STEERING, and its part goes into
+      // `vx/vy` exactly as it always has — the walk absorbs it, `steerTo`
+      // lerps it away over a fifth of a second, and the crowd behaves
+      // identically to before this block was touched.
+      //
+      // A hit carrying a knock is not steering, and putting its part there
+      // would hand the whole thing to that same lerp — the shove would be
+      // gone before the body it was passed to had moved. It goes into the
+      // knock channel instead, which is the one built for a shove laid over
+      // the locomotion, and that is what makes a punted crab pass its
+      // momentum ON: one strike into a heap scatters the heap, and each body
+      // it reaches carries enough to scatter the next.
+      const pass = knockAlong > 0 ? Math.min(1, knockAlong / Math.max(1e-4, Math.abs(along))) : 0;
+      const keep = 1 - pass;
+      a.vx -= impulse * mb * nx * keep;
+      a.vy -= impulse * mb * ny * keep;
+      b.vx += impulse * ma * nx * keep;
+      b.vy += impulse * ma * ny * keep;
+      if (pass > 0) {
+        passKnock(a, -impulse * mb * nx * pass, -impulse * mb * ny * pass, b);
+        passKnock(b, impulse * ma * nx * pass, impulse * ma * ny * pass, a);
+      }
 
       // Only dress the hit up when it's a real knock, not the constant
       // grazing of a dense crowd — otherwise a pile of crabs would tumble
@@ -898,8 +1019,90 @@ function resolveCrabCollisions(dt, list) {
         _bump.set(nx, ny, 0);
         b.anim?.impulse?.(_bump, boneKick);
       }
+
+      // --- THE RICOCHET ------------------------------------------------------
+      //
+      // Gated on `knockAlong` and never on `force`, which is the whole of what
+      // keeps this from being a second damage source the balance has not
+      // accounted for. No shove, no damage, at any speed: a crowd barging at a
+      // chum pile bills nothing, and neither does a crab falling off a tower
+      // under `gravity` — which reaches ten units a second and would otherwise
+      // have made a heap quietly lethal to itself.
+      //
+      // It also settles the CREDIT. The only thing that can put a knock on a
+      // crab is the player, so the player owns what the crab lands on.
+      if (!r || r.enabled === false || knockAlong < minRic) continue;
+      if (a.ricochetCool > 0 || b.ricochetCool > 0) continue;
+      a.ricochetCool = r.cooldown ?? 0.25;
+      b.ricochetCool = r.cooldown ?? 0.25;
+      // Priced off the closing speed rather than off the impulse, and they are
+      // the same number here: `impulse * total` cancels the masses out, so the
+      // momentum exchanged IS 1.45x the closing speed however big the two
+      // shells are. Written as the speed because that is the figure the config
+      // is tuned against and the one a harness can assert.
+      const damage = Math.min(r.maxDamage ?? 40, (knockAlong - minRic) * (r.perSpeed ?? 0.9));
+      // WHICH ONE IS THE PROJECTILE: whichever is carrying the bigger shove.
+      // Nothing is flagged as thrown anywhere — a crab's own momentum is the
+      // only thing that could say so, and it already does. It takes
+      // `throwerShare` of what it deals, so a punt ploughs through a crowd
+      // instead of the pair destroying each other on the first contact.
+      const aThrows = akx * akx + aky * aky >= bkx * bkx + bky * bky;
+      const share = Math.max(0, r.throwerShare ?? 0.5);
+      crabRicochets.push({
+        a,
+        b,
+        speed: knockAlong,
+        damage,
+        damageA: damage * (aThrows ? share : 1),
+        damageB: damage * (aThrows ? 1 : share),
+        // The contact point, so the spark lands between the shells rather than
+        // inside whichever of them the loop happened to reach first.
+        x: a.mesh.position.x + nx * (d * 0.5),
+        y: a.mesh.position.y + ny * (d * 0.5),
+      });
     }
   }
+}
+
+/**
+ * Hand a shove ON, from one crab to the one it just hit.
+ *
+ * The falloff travels with it. Without that, a crab struck by a punted one
+ * takes the momentum and spends it in a twelfth of a second (the ordinary
+ * `CONFIG.strike.knockback.decay`) while the thing that hit it is still
+ * travelling on a heavy knock's 6 — so the second body in a chain barely
+ * moves and the chain reads as one crab bouncing off a wall. The SLOWER of
+ * the two, so a chain can never quietly speed up.
+ */
+function passKnock(e, ix, iy, from) {
+  e.knockX = (e.knockX ?? 0) + ix;
+  e.knockY = (e.knockY ?? 0) + iy;
+  const fallback = CONFIG.strike?.knockback?.decay ?? 12;
+  const mine = e.knockDecay || fallback;
+  e.knockDecay = Math.min(mine, from.knockDecay || mine);
+}
+
+// ---------------------------------------------------------------------------
+// RICOCHETS FOUND THIS FRAME, reported to the game after the pass rather than
+// resolved here. Two reasons, and either one alone would be enough:
+//
+//   * this runs inside a loop over `enemies`, and a kill splices that array
+//     out from under it — the same hazard main.js defers `pendingSplashes`
+//     for and systems/rigidBody.js defers `pendingImpacts` for.
+//   * the damage has to be CREDITED. Score, the xp orb, the playtest ledger,
+//     the unlock tally and the food chain all live in main.js, and a kill
+//     booked here would be a creature that died and was worth nothing.
+//
+// Drained by main.js immediately after updateEnemies. Never written once the
+// seal is dead: the pile-on is the last thing the player watches, not a
+// mechanic (see the `corpse` block in BEHAVIORS.crawl).
+// ---------------------------------------------------------------------------
+const crabRicochets = [];
+
+/** @param {(hit: {a, b, speed, damage, x, y}) => void} fn */
+export function drainCrabRicochets(fn) {
+  for (const hit of crabRicochets) fn?.(hit);
+  crabRicochets.length = 0;
 }
 
 const _bump = new THREE.Vector3();
@@ -4501,6 +4704,10 @@ function spawnOne(scene, key, def, difficulty, at, opts = {}) {
     staggerSlow: null,
     staggerCool: 0,
     bumpCooldown: 0,
+    // The gap before this crab may be billed for another ricochet — see
+    // CONFIG.crabPhysics.ricochet. Declared here rather than left undefined so
+    // the first contact of a crab's life reads a number instead of NaN.
+    ricochetCool: 0,
     // Rest pose, rolled once per individual (see the crowd-variation block on
     // enemies.walkingCrab). `restLean` is the angle the locked broadside
     // heading actually settles at, so the tumble spring rights the crab back

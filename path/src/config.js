@@ -3158,7 +3158,7 @@ export const CONFIG = {
       // applyBossGrowth in stats.js for why the two payouts are different in
       // kind, and weapons.csv for the number (this is the fallback its type is
       // read off). 0 turns it off.
-      shotsPerBoss: 2,
+      shotsPerBoss: 0,
       // The only thing that decides whether the guns are live — there is no fire
       // button any more, on any device. Turning this off silences every weapon
       // that fires on the trigger (shots, missiles, bounce) and leaves the passive
@@ -4750,6 +4750,107 @@ export const CONFIG = {
         shake: 0.09,          // at fully banked power, scaling up from 0
         hapticInterval: 0.07, // seconds between rumble pulses while holding
         flashTime: 0.28,      // the bar flashing as it is spent, on release
+
+        // --- THE WIND-UP'S OWN VOICE ------------------------------------------
+        // ONE SOUND, HELD FROM THE PRESS TO THE RELEASE, and then thrown into a
+        // short room and gone until the next press.
+        //
+        // NOT A CONFIG.sfx ENTRY, and it could not be — the same reason the jet
+        // bed and the card riser are not, spelled out at the top of
+        // systems/jetBed.js. Everything in that table knows its length at the
+        // moment it is triggered. This one does not: it lasts exactly as long
+        // as a finger stays on a button, which is a number no table can hold.
+        //
+        // WHICH IS WHY IT IS THE JET'S ENGINE AND NOT A SECOND ONE. startJetBed
+        // takes the block it runs on, so pointing it at this one buys the ramp,
+        // the hold, the breath, the drive, the menu gate and the sample swap
+        // already argued out over there. Two implementations of START/HOLD/
+        // RELEASE would be two places for a bed to leak and two places to fix
+        // when one does.
+        //
+        // `strikeCharging` in CONFIG.feedback stays where it is and stays
+        // silent — it is a per-interval RUMBLE, and its note has always said a
+        // sound belongs here rather than on it. A held voice fired every 70ms
+        // is seventy attacks a second, which is a buzz, not a hold.
+        bed: {
+          enabled: true,
+          // A VOICE NAME, not a filename: `strikeChargeBed` in CONFIG.sfx is a
+          // slot that exists so a recording has somewhere to go. It ships with
+          // no file behind it, so what sounds today is the oscillator stack
+          // below; drop a file on that voice in the F panel's library and it is
+          // looped through this same drive and sweep, layered over the stack
+          // (`synthLevel`) rather than replacing it.
+          //
+          // A layer that is not loaded is SKIPPED, not fatal — see the note in
+          // systems/jetBed.js — which is what makes an empty slot safe to ship.
+          sample: 'strikeChargeBed',
+          sampleLevel: 1,
+          // The oscillator stack, kept at full alongside whatever sample is
+          // named. A file assigned here LAYERS with the synth rather than
+          // replacing it — the argument for that is in systems/jetBed.js, and
+          // the short version is that an mp3 has grain the stack has not and
+          // the stack has weight a 16kHz mp3 has not. Drop this to 0 to hear
+          // the file alone.
+          synthLevel: 1,
+
+          // The spool. Shorter than the jet's 0.45 because the thing it is
+          // describing is shorter — a default wind-up is one second end to
+          // end, and a ramp half of it long would still be arriving at the
+          // moment the player is being asked to let go.
+          ramp: 0.22,
+          attack: 0.3,
+          attackLevel: 0.5,
+          gain: 0.17,
+
+          // Under the pip run rather than over it. The blips are the reading
+          // (see `burnSemitones`) and this is the ground they are read
+          // against, so it sits low and stays out of their way — a bed that
+          // competed with them would cost the player the one channel that says
+          // how much is left.
+          from: 140,
+          to: 900,
+          resonance: 7,
+          drive: 5,
+          preGain: 1.4,
+          // Slow, shallow, and present for the reason the jet's is: a held
+          // sound with nothing moving in it stops being heard after about a
+          // second, and a wind-up is about a second.
+          breathRate: 0.9,
+          breathDepth: 90,
+
+          // THE CUT. Fast — the release is an event, and a bed that faded out
+          // would blur the frame the dash launches on.
+          release: 0.07,
+          releaseTo: 120,
+
+          // ...AND THE ROOM IT IS CUT INTO. `throw` is how much harder the send
+          // is pushed as the dry path falls, which is what makes the release
+          // read as the sound being thrown somewhere rather than switched off
+          // next to a reverb. Short on purpose: this rings UNDER the dash it
+          // just launched, and a long tail would still be going when the seal
+          // arrives.
+          tail: { enabled: true, seconds: 0.5, decay: 2.8, wet: 0.16, throw: 3 },
+        },
+
+        // HOW FAR THE PIP RUN CLIMBS PER PIP SPENT, in semitones. The blips
+        // ascend across a hold — see onStrikeBurnPip in systems/strike.js —
+        // and what they are counting is the strike getting bigger, not the bar
+        // getting emptier, which is why they go UP while the meter goes down.
+        //
+        // IN SEMITONES AND NOT AS A RATIO because the ear hears it that way and
+        // the number has to be arguable by ear: 2 is a whole tone a pip, so a
+        // five-pip bar climbs a major sixth from first blip to last and a
+        // twelve-pip bar runs out of anywhere sensible to go. Raise it and a
+        // short bar gets more dramatic; lower it and a long one stays musical.
+        burnSemitones: 2,
+        // A CEILING ON THE CLIMB, in semitones above the first blip. Without
+        // it a twelve-pip bar with Booster Pack on top ends the run two octaves
+        // up, where a triangle blip is a whistle rather than a tick. The run
+        // flattens against this rather than being rescaled to fit, so the first
+        // pips of a long bar sound the same as the first pips of a short one —
+        // which is the point: the reading is "another one", not "how long is my
+        // bar".
+        burnSemitonesMax: 14,
 
         // --- the rim, winding up ----------------------------------------------
         // The seal's own outline (CONFIG.playerOutline) throbs while a strike is
@@ -15721,6 +15822,21 @@ export const CONFIG = {
         // reversed when walking screen-right.
         asset: 'enemyWalkingCrab', behavior: 'crawl', faceCamera: true, gaitTravel: -1,
         collides: true, // real crab-vs-crab knockback, see CONFIG.crabPhysics
+        // WHAT IT IS MADE OF. The same arrangement the bosses have
+        // (CONFIG.boss.voiceClass -> bossHitFlesh/Shell/Hull): a sound fired
+        // ALONGSIDE the event that already owns the moment — `bulletHit` going
+        // in, `kill` going out — carrying `sfx` and nothing else, so the shake,
+        // the spark and the hit-stop are still authored in exactly one place.
+        //
+        // A crab needed one because it is the one common creature in the water
+        // that is not made of fish. Every other body in a swarm is flesh and
+        // the generic voices are written for flesh; a shell landing, cracking
+        // and being knocked into another shell is the game's only percussion,
+        // and it was arriving as the same wet thud a minnow makes.
+        //
+        // Any creature may carry one: this is read off the def, not off a list
+        // of crab ids. Bosses are skipped — they have their own.
+        voice: { hit: 'crabHit', die: 'crabDie' },
         radius: 0.8, hp: 34, hpPerDifficulty: 4, speed: 3, speedVariance: 0.6,
         contactDamage: 12, xp: 9,
         // --- crowd variation -----------------------------------------------
@@ -15904,6 +16020,7 @@ export const CONFIG = {
       emberCrab: {
         asset: 'enemyEmberCrab', behavior: 'crawl', faceCamera: true, gaitTravel: -1,
         collides: true,
+        voice: { hit: 'crabHit', die: 'crabDie' }, // the day crab's, see the note there
         bioluminescent: true, // held back until the sun is down — enemies.csv owns this
         // Balance lives in enemies.csv. The values here are the built-in
         // fallback for a row that goes missing, and are what the CSV's
@@ -15985,6 +16102,7 @@ export const CONFIG = {
       dancingcrab: {
         asset: 'enemyDancingCrab', behavior: 'crawl', faceCamera: true, gaitTravel: -1,
         collides: true,
+        voice: { hit: 'crabHit', die: 'crabDie' }, // the day crab's, see the note there
         radius: 0.2, hp: 26, hpPerDifficulty: 6, speed: 3.4, speedVariance: 0.6,
         contactDamage: 22, xp: 7,
         scaleVariance: 0.16,
@@ -19900,6 +20018,17 @@ export const CONFIG = {
       bossHitHull:  { emit: null, sfx: 'bossHitHull',  sfxMinGap: 0.11 },
       bossDieHull:  { emit: null, sfx: 'bossDieHull' },
 
+      // The swarm's shell, on exactly the same terms: fired alongside the
+      // event that owns the moment (`bulletHit` going in, `kill` going out),
+      // carrying a sound and nothing else. Which creatures have one is
+      // `voice` on the def in CONFIG.enemies — today the three crabs.
+      //
+      // `sfxMinGap` is the one number that matters here and it is tighter than
+      // the boss's, because a crab wave is many bodies rather than one: too
+      // long a gap and half a heap taking splash damage plays a single tick.
+      crabHit: { emit: null, sfx: 'crabHit', sfxMinGap: 0.045 },
+      crabDie: { emit: null, sfx: 'crabDie', sfxMinGap: 0.05 },
+
       // --- THE CRY ---------------------------------------------------------
       // ONE PAIR PER ARCHETYPE, on top of the material voice rather than
       // instead of it — the same arrangement `hotSpotHit` uses over a hit, and
@@ -20434,6 +20563,19 @@ export const CONFIG = {
       // borrows `strikePip`'s tick a fifth lower rather than staying silent,
       // because the tell has to survive a player who is looking at the thing
       // they are about to hit instead of at their own animal.
+      //
+      // ...WHICH IS NO LONGER WHAT YOU HEAR. `strikePerfect` has takes assigned
+      // to it in imported-tuning.json and a saved take list replaces the synth,
+      // so the borrowed tick above is the fallback and the seal's own voice is
+      // the sound. Left standing because the REASONING is still what governs
+      // this row — one hard tap against the buzz, no spray, no shake — and a
+      // sample swapped in does not change any of that.
+      //
+      // IT IS THE THIRD OF THE WIND-UP'S THREE CUES and the only one that was
+      // already here. The held voice (CONFIG.strike.charge.bed) and the burn
+      // run (`strikeBurn`) were built to arrive AT this, which is why neither
+      // of them is allowed to be a hit: this is the downbeat, and a downbeat
+      // needs a bar in front of it that is not also downbeats.
       strikePerfect: { emit: null, shake: 0, hitstop: 0, glow: 0.35, sfx: 'strikePerfect',
                        haptic: [{ duration: 70, magnitude: 1 }] },
       // The mouthful that topped the charge meter back off, fired at the ORB
@@ -20457,6 +20599,31 @@ export const CONFIG = {
       // sweep's pips are heard — just spread into a run.
       strikePip:   { emit: null, shake: 0, hitstop: 0, glow: 0.06, sfx: 'strikePip',
                      haptic: [{ duration: 18, magnitude: 0.22 }] },
+      // ONE PIP OF THE BAR BEING SPENT — the other direction, during the hold
+      // that spends it. Fired from updateCharge (see onStrikeBurnPip in
+      // systems/strike.js) as the fuel crosses each boundary on its way down.
+      //
+      // ITS PITCH GOES UP WHILE THE BAR GOES DOWN, which looks backwards
+      // written out and is the only thing it could be. What the run is counting
+      // is not how much fuel is left, it is how big the strike has become — and
+      // a descending run under a wind-up reads as a machine losing power at the
+      // exact moment the player is being asked to commit to one. The bar is
+      // already drawing the emptying; the ear gets the other half.
+      //
+      // AND IT IS THE CLOCK ON "STRIKE NOW!". The blips are evenly spaced by
+      // construction — the drain paces them, one every windUpTime/pipCount
+      // seconds — so a player who has heard a few wind-ups knows where the top
+      // is before it arrives. A tenth-of-a-second window (sweetFraction) that
+      // announced itself only on the frame it opened was a window you could
+      // only hit by having already decided to; this is the count-in.
+      //
+      // Nothing but a sound and the faintest tap, for the reason the fill's
+      // tick has: it fires five to twelve times per hold, and the repeated
+      // event is the one that has to stay out of the way. No `sfxMinGap` — the
+      // pacing is the drain's and cannot bunch, and a gap here could only ever
+      // eat a pip out of a run that is meant to be counted.
+      strikeBurn:  { emit: null, shake: 0, hitstop: 0, glow: 0.05, sfx: 'strikeBurn',
+                     haptic: [{ duration: 14, magnitude: 0.18 }] },
       // ASKED FOR A STRIKE ON A DEAD METER — the press that bought nothing, and
       // the one moment the empty bar is news (see the "Boost Empty!" line in
       // main.js). Nothing but a sound and a short tap: this is a REFUSAL, and
@@ -25787,6 +25954,30 @@ export const CONFIG = {
       // is a different enough instrument that the two beds can be open at the
       // same time without reading as one sound.
       swirlBed: { src: null, srcs: ['/sfx/HGUI_s37_BubbleBeam_04_lo.mp3'], type: 'noise', filter: 2000, decay: 1, gain: 0.2 },
+      // THE STRIKE WIND-UP'S BED — the held voice under a charge, and the same
+      // rules as the three above in every respect: buffer only, never fired by
+      // playSfx, never on a feedback event. CONFIG.strike.charge.bed names it
+      // and systems/jetBed.js loops it through that bed's own drive and sweep.
+      //
+      // IT SHIPS WITH NO FILE, unlike the other three, and that is the one
+      // difference. The bed runs on its oscillator stack until a file is put
+      // here — `synthLevel` is 1, so a file added later LAYERS with the stack
+      // rather than replacing it, and the bed does not go silent in the
+      // meantime the way a sample-only bed with no sample would.
+      //
+      // THE ROW EXISTS SO THE SLOT EXISTS. `bed.sample` can only ever name a
+      // voice in this table, so without this row there is nowhere in the F
+      // panel's library to drop a recording for the wind-up at all — the only
+      // way to give it one would be to edit this file, which is the thing the
+      // library is for not having to do.
+      //
+      // WHAT IT WANTS: something that holds. A file with an attack and a decay
+      // in it loops as a pulse at the loop length, which is a rhythm the
+      // wind-up does not have and cannot use. The Moog batch the other three
+      // beds came out of is the right shelf; so is anything sustained and
+      // flat. Set loopStart/loopEnd on the bed block if the seam ticks — see
+      // the measured points on `jetBed` above for why 0/0 usually is not it.
+      strikeChargeBed: { src: null, type: 'noise', filter: 2000, decay: 1, gain: 0.2 },
       // Thunder, synthesised rather than sampled — there is no thunder in the
       // sfx library and `boom` is already exactly the right shape for it: a
       // pitch sweeping down through the floor with a big noise bed over it,
@@ -25856,6 +26047,34 @@ export const CONFIG = {
       // blast that fires with it. Below `bigKill` on purpose — a boat is the
       // biggest single thing that explodes in this game.
       bossDieHull:  { src: null, type: 'boom', freq: [95, 18],  decay: 1.4,  gain: 0.55, noise: 0.8, filter: 520, pitchVary: 0.08, filterVary: 0.14 },
+
+      // --- THE SWARM'S OWN SHELL --------------------------------------------
+      // The same idea as the three classes above, one rung down. Those are
+      // written for a boss: a body the fight stops for, hit a dozen times over
+      // a minute. These are for a creature that arrives nine at a time, dies in
+      // two shots and bounces off its neighbours — so both are SHORTER and
+      // QUIETER than their boss equivalents, and neither may ring, because a
+      // ring heard nine times in a second is a tone and a tone is a note.
+      //
+      // Kept apart from `bossHitShell` rather than reusing it, and the reason
+      // is the gain and the decay rather than the timbre: a swarm voice at the
+      // boss's 0.26/0.055 is a seabed that clatters like gravel in a tumbler
+      // the moment a chum pile lands. Same material, a tenth the body.
+      //
+      // Synthesised, like every voice above and for the same reason — there is
+      // nothing in the library for it yet. Each takes a `src`/`srcs` the moment
+      // there is a recording worth using instead.
+
+      // A SHELL BEING STRUCK. Brighter and shorter than the king crab's: a
+      // small carapace is a tick, not a crack. `pitchVary` is wide on purpose —
+      // this is the most repeated sound in a crab wave, and a fixed one turns a
+      // swarm into a machine gun.
+      crabHit: { src: null, type: 'noise', filter: 6400, decay: 0.035, gain: 0.17, pitchVary: 0.3, filterVary: 0.3 },
+      // ...and a shell failing: the tick with the body underneath it giving
+      // way. A `boom` rather than noise, so there is something to fall — but
+      // pitched high and gone in a quarter second, which is what keeps it a
+      // crab dying rather than a small boss.
+      crabDie: { src: null, type: 'boom', freq: [640, 150], decay: 0.26, gain: 0.3, noise: 0.9, filter: 3800, pitchVary: 0.22, filterVary: 0.28 },
 
       // --- WHAT EACH ONE SAYS ABOUT IT ------------------------------------
       // The cry, one pair per archetype, PLAYED OVER the material voice above
@@ -26305,13 +26524,48 @@ export const CONFIG = {
       // pitch IS the reading — how close the bar is to full — and randomness
       // would blur the one thing it says.
       strikePip: { src: null, type: 'blip', wave: 'triangle', freq: [660, 900], decay: 0.09, gain: 0.13, pitchVary: 0 },
-      // THE WIND-UP FULLY LOADED — the note the pips have been climbing toward.
-      // The same triangle, an octave above where a pip run ends and rung twice
-      // as long: it has to arrive as the ARRIVAL rather than as one more tick,
-      // and the way to say that with the instrument the player already knows is
-      // pitch and length, not a new timbre. `pitchVary` 0 for the reason the
-      // pip has it — this is a reading, and a wobble on it says the top of the
-      // bar moved.
+      // A PIP BEING SPENT. The fill's tick, a fourth lower and a touch shorter,
+      // and deliberately the SAME INSTRUMENT: a player has already learned what
+      // a triangle blip in this register means, and teaching them a second
+      // timbre for "one pip" would be two vocabularies for one fact. What tells
+      // the two apart is the direction of travel — a fill climbs toward full and
+      // stops; a burn climbs away from where it started and keeps going until
+      // the player lets go.
+      //
+      // STARTS LOW BECAUSE IT HAS SO FAR TO CLIMB. The caller pitches this up
+      // `burnSemitones` per pip (see onStrikeBurnPip), so a twelve-pip bar asks
+      // for more headroom than the fill's run ever needs — starting where the
+      // fill starts would put the last blips of a long hold in whistle
+      // territory. `burnSemitonesMax` is the other half of that.
+      //
+      // `pitchVary` 0 for the reason the fill's is 0, doubled: the pitch is the
+      // reading AND the count-in to the sweet spot, and a wobble on it would
+      // blur a window a tenth of a second wide.
+      strikeBurn: { src: null, type: 'blip', wave: 'triangle', freq: [440, 560], decay: 0.07, gain: 0.11, pitchVary: 0 },
+      // "STRIKE NOW!" — THE WIND-UP FULLY LOADED, and the moment the whole
+      // feature is built around. Fires on the frame `loaded` goes true (see
+      // perfectCrossed in systems/strike.js), which is the same instant the
+      // callout goes up, the meter's core pops and the sweet spot opens.
+      //
+      // WHAT IS BELOW IS THE FALLBACK, NOT THE SOUND. This voice has takes
+      // assigned to it in imported-tuning.json, and a saved `srcs` replaces the
+      // synth entirely — so the triangle described in the next paragraph is
+      // what plays only if those files ever go missing. Retuning the numbers
+      // here changes nothing you can hear; the sound lives in the F panel's
+      // library, which is where it should be changed.
+      //
+      // That is worth saying out loud because this table reads as the place the
+      // game's sounds are defined, and for about seventy of these entries it is
+      // not: config.js says `src: null` for every voice in the game and the
+      // tuning file is what points them at files. See the note at the top of
+      // tools/sfx-assign.mjs.
+      //
+      // THE FALLBACK'S SHAPE: the pip's triangle an octave above where a run
+      // ends and rung twice as long. It has to arrive as the ARRIVAL rather
+      // than as one more tick, and the way to say that with the instrument the
+      // player already knows is pitch and length, not a new timbre. `pitchVary`
+      // 0 for the reason the pip has it — this is a reading, and a wobble on it
+      // says the top of the bar moved.
       strikePerfect: { src: null, type: 'blip', wave: 'triangle', freq: [1320, 1760], decay: 0.2, gain: 0.2, pitchVary: 0 },
       // THE REFUSAL. Deliberately the strikePip's sweep run backwards and an
       // octave down — the same instrument saying the opposite thing, so a
@@ -31220,6 +31474,96 @@ export const CONFIG = {
       // is). Only the upper one moves, so a stack keeps the lane of whatever
       // is at the bottom of it rather than everything sliding to z 0.
       laneMerge: 4,
+    },
+
+    // --- how far a crab is thrown -------------------------------------------
+    //
+    // The shell's own knock class, alongside the ordinary one and the heavy
+    // one in CONFIG.strike.knockback — see the note at `crawler` in
+    // applyKnockback for why a crab qualified for neither and was therefore
+    // moved 2.8 units by a full-commitment ram, against a body four units
+    // wide.
+    knock: {
+      enabled: true,
+      // What the shove is multiplied by for a crawler, applied after the size
+      // divisor exactly as `heavy.speedMul` is.
+      speedMul: 3.2,
+      // ...and its falloff, which is the field that decides how FAR rather
+      // than how fast: the throw integrates to speed/decay. At 26 x 1.3 x 3.2
+      // and 4.5 a full-charge ram sends a crab about 24 units, which is a
+      // third of the arena and comfortably across a crowd. The slowest falloff
+      // of the three classes on purpose — a shell on sand skitters, where a
+      // fish's shove is damped by the water it is swimming in.
+      decay: 4.5,
+    },
+
+    // --- the ricochet --------------------------------------------------------
+    //
+    // A crab the seal has hit is a THROWN OBJECT, and this is what it costs
+    // whatever it lands on.
+    //
+    // It works at all because the contact test above now reads a crab's whole
+    // motion rather than only its walk (see resolveCrabCollisions). A shove
+    // lives in `knockX/knockY`, a channel laid over the locomotion and
+    // integrated straight onto the position — so a crab punted across the
+    // seabed at a hundred units a second used to arrive at the crowd measured
+    // as walking at three, resolve as a nudge, and pass through the heap it
+    // should have scattered.
+    //
+    // Two rules keep this from becoming a second damage source the balance has
+    // not accounted for:
+    //
+    //   IT IS ONLY EVER THE PLAYER'S ENERGY. `minSpeed` is tested against the
+    //   KNOCK's own share of the closing speed, never the whole of it, so a
+    //   crowd shouldering at a pile — or a crab falling off a tower under
+    //   `gravity`, which is fast — can never bill a point of it. No shove, no
+    //   damage, at any speed. That is also what settles who gets the credit:
+    //   the seal put the energy in, so the seal owns the kill.
+    //
+    //   AND NEVER WHILE THE RUN IS OVER. The pile-on is the last thing the
+    //   player watches, not a mechanic — see `crawl.corpse`. The queue is not
+    //   written at all once the seal is dead.
+    ricochet: {
+      enabled: true,
+      // Closing speed (world units/sec) carried BY THE KNOCK below which two
+      // shells meeting is just a crowd. Deliberately far above
+      // `minImpactSpeed` — that one is the bar for a tumble, which should
+      // happen constantly in a heap, and this is the bar for damage, which
+      // must not. Nothing in this game walks at 12.
+      minSpeed: 12,
+      // Damage per unit of closing speed above that bar. Sized against the
+      // shove a ram actually leaves and MEASURED against it (npm run
+      // test:ricochet): a full-charge strike launches a crab at 108 u/s
+      // (speed 26 x powerMax 1.3 x knock.speedMul 3.2 above), and a crab a
+      // couple of body-lengths away is reached at about 45 — so the first
+      // body a punt finds takes ~30 against a 34-hp shell, and one struck
+      // point blank takes the cap. Further down the chain, where the knock
+      // has decayed to twenty and then fifteen, it is 7 and 3.
+      //
+      // That curve is the design: a punt is worth a kill and then a
+      // scattering, never a chain that clears the seabed.
+      perSpeed: 0.9,
+      // The ceiling, set a little over one crab (34 hp, 44 for the ember) so
+      // that a point-blank hit is decisive without a freak chain one-shotting
+      // a late-run shell that has grown into its difficulty scaling.
+      maxDamage: 40,
+      // WHAT THE PROJECTILE ITSELF TAKES, as a share of what it deals. Both
+      // shells are in the same collision and a flat reading of it would have
+      // them destroy each other on contact — which is true, and is the wrong
+      // picture: a punted crab should plough THROUGH a crowd, break up two or
+      // three bodies and come apart somewhere in the middle of them. At a half
+      // it survives its first hit on about a third of its bar and dies on its
+      // second, which is the arc worth watching.
+      //
+      // Whichever of the pair carries the bigger shove is the projectile;
+      // there is no flag on it, because there is nothing a crab can be told
+      // that its own momentum does not already say.
+      throwerShare: 0.5,
+      // Per-crab gap between ricochet hits, seconds. Two shells in contact are
+      // in contact for several frames, and without this one bounce bills
+      // damage on every one of them — the same reason `bumpCooldown` exists
+      // for the flail.
+      cooldown: 0.25,
     },
   },
 
@@ -45825,6 +46169,32 @@ export const TUNER_SCHEMA = [
       // one clock. See CONFIG.strike.ring.core's release block.
       { path: 'strike.charge.flashTime', min: 0, max: 1, step: 0.02, label: 'charge: spend flash / core burst' },
       { path: 'strike.charge.tailLift', min: 0, max: 40, step: 0.5, label: 'wind-up: tail lift' },
+      // --- the wind-up's three cues ------------------------------------------
+      // The held voice and the burn run. The arrival ("STRIKE NOW!") is not
+      // here and should not be: it is a CONFIG.sfx voice with takes assigned to
+      // it, so it is tuned in the F panel's library alongside every other
+      // sample in the game rather than by a slider that the take list ignores.
+      { path: 'strike.charge.bed.enabled', type: 'bool', label: 'wind-up voice: on' },
+      { path: 'strike.charge.bed.gain', min: 0, max: 0.6, step: 0.005, label: 'wind-up voice: level' },
+      { path: 'strike.charge.bed.ramp', min: 0.02, max: 1.2, step: 0.01, label: 'wind-up voice: spool time' },
+      { path: 'strike.charge.bed.from', min: 40, max: 2000, step: 10, label: 'wind-up voice: filter from (Hz)' },
+      { path: 'strike.charge.bed.to', min: 200, max: 6000, step: 25, label: 'wind-up voice: filter to (Hz)' },
+      { path: 'strike.charge.bed.resonance', min: 0.5, max: 20, step: 0.5, label: 'wind-up voice: resonance' },
+      { path: 'strike.charge.bed.drive', min: 0, max: 20, step: 0.5, label: 'wind-up voice: drive' },
+      { path: 'strike.charge.bed.synthLevel', min: 0, max: 2, step: 0.05, label: 'wind-up voice: synth level' },
+      { path: 'strike.charge.bed.sampleLevel', min: 0, max: 2, step: 0.05, label: 'wind-up voice: sample level' },
+      { path: 'strike.charge.bed.release', min: 0.01, max: 0.5, step: 0.005, label: 'wind-up voice: cut time' },
+      // The room the cut lands in. `throw` is the send pushed harder as the dry
+      // path falls — the difference between being thrown somewhere and being
+      // turned down next to a reverb.
+      { path: 'strike.charge.bed.tail.wet', min: 0, max: 0.6, step: 0.005, label: 'wind-up room: wet' },
+      { path: 'strike.charge.bed.tail.throw', min: 1, max: 8, step: 0.1, label: 'wind-up room: throw on release' },
+      { path: 'strike.charge.bed.tail.seconds', min: 0.05, max: 2, step: 0.05, label: 'wind-up room: length' },
+      { path: 'strike.charge.bed.tail.decay', min: 0.5, max: 6, step: 0.1, label: 'wind-up room: decay' },
+      // Semitones a pip, so the number is arguable by ear. The cap is what
+      // keeps a 12-pip bar from ending two octaves up.
+      { path: 'strike.charge.burnSemitones', min: 0, max: 7, step: 1, label: 'pip run: climb per pip (semitones)' },
+      { path: 'strike.charge.burnSemitonesMax', min: 0, max: 36, step: 1, label: 'pip run: highest it goes (semitones)' },
       // The four channels of the wind-up tremble. `head` and `body` ran to 0.3
       // when the block was called `vibrate` and both sat near the bottom of it;
       // the ceilings are the same, and the shipped values now use a third of
@@ -47136,6 +47506,17 @@ export const TUNER_SCHEMA = [
       { path: 'crabPhysics.rightingDamping', min: 0.5, max: 30, step: 0.5, label: 'righting damping' },
       { path: 'crabPhysics.boneImpulsePerSpeed', min: 0, max: 3, step: 0.05, label: 'skeleton flail per impact' },
       { path: 'crabPhysics.maxBoneImpulse', min: 0, max: 12, step: 0.25, label: 'max skeleton flail' },
+      // --- the ricochet ---
+      // A TOGGLE AND NOTHING ELSE. `minSpeed`, `perSpeed`, `maxDamage` and
+      // `cooldown` are balance — how much a punt is worth — and balance does
+      // not belong on a slider that saves itself into imported-tuning.json and
+      // then outranks config.js forever. They live in CONFIG.crabPhysics
+      // .ricochet where they can be read next to the shove they are priced
+      // against. This switch is here because "with and without" is the one
+      // comparison you actually want to make with the game running.
+      { path: 'crabPhysics.knock.speedMul', min: 0, max: 8, step: 0.1, label: 'how hard a crab is thrown' },
+      { path: 'crabPhysics.knock.decay', min: 1, max: 20, step: 0.25, label: '...and how fast the throw bleeds off' },
+      { path: 'crabPhysics.ricochet.enabled', type: 'bool', label: 'crabs hurt each other when punted' },
       // --- climbing and depth: how a crowd arranges itself ---
       // `climb bias` at 0 restores the old behaviour exactly (a flat rank of
       // crabs all at floor height), which makes it the first slider to reach

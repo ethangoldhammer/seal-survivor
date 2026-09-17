@@ -224,8 +224,24 @@ for (const target of targets) {
   }
   let head = 0;
   while (head < cells.length && cells[head] > FLOOR) head++;
+  // The tail is intermittent for the same reason the head is, and unlike the
+  // head it has a KNOWN EXTENT. What lands here is the final granule's missing
+  // overlap — the frame that would have finished it is the one we did not keep
+  // — so the damage cannot reach further back than the spare frame plus the
+  // frame it completes. Inside that span a cell can dip under the floor and
+  // the next be over it again, and a strict run from the end stops on that dip
+  // and hands every cell before it to `middle`. That reads as "the body does
+  // not match" on an excerpt whose body is bit for bit the original: a 4.97s
+  // cut of the 10s explosion diverges in its last four 10ms cells at
+  // 61/64/74/55, and the 55 alone was enough to blame the other three on the
+  // middle and refuse the file. So scan the bounded span and take the
+  // furthest-back cell over the floor inside it — beyond the span, damage is
+  // still the middle's, which is what the refusal is for.
+  const TAIL_SPAN = Math.max(1, Math.ceil(2 * spf / mp3.rate / 0.01));
   let tail = 0;
-  while (tail < cells.length - head && cells[cells.length - 1 - tail] > FLOOR) tail++;
+  for (let i = 1; i <= Math.min(TAIL_SPAN, cells.length - head); i++) {
+    if (cells[cells.length - i] > FLOOR) tail = i;
+  }
   const headPeak = Math.max(0, ...cells.slice(0, head));
   const tailPeak = Math.max(0, ...cells.slice(cells.length - tail));
   const middle = Math.max(0, ...cells.slice(head, cells.length - tail));

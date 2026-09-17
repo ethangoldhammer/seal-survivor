@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-09-13T04:19:35.231Z",
+  "generatedAt": "2026-09-17T02:53:23.759Z",
   "counts": {
-    "sounds": 184,
-    "sampled": 104,
-    "synth": 80,
-    "events": 242,
-    "eventsWithSound": 221,
+    "sounds": 187,
+    "sampled": 106,
+    "synth": 81,
+    "events": 245,
+    "eventsWithSound": 224,
     "silentEvents": 21,
-    "callSites": 246,
+    "callSites": 249,
     "files": 243,
-    "orphanFiles": 50,
+    "orphanFiles": 46,
     "unreferencedSounds": 10
   },
   "bus": {
@@ -715,6 +715,59 @@
       ],
       "directSites": [],
       "minGap": 0,
+      "orphaned": false
+    },
+    {
+      "name": "crabHit",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "noise",
+        "wave": null,
+        "freq": null,
+        "filter": 6400,
+        "noise": null,
+        "decay": 0.035,
+        "gain": 0.17,
+        "pitchVary": 0.3,
+        "filterVary": 0.3,
+        "detune": 0
+      },
+      "firedBy": [
+        "crabHit"
+      ],
+      "directSites": [],
+      "minGap": 0.045,
+      "orphaned": false
+    },
+    {
+      "name": "crabDie",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          640,
+          150
+        ],
+        "filter": 3800,
+        "noise": 0.9,
+        "decay": 0.26,
+        "gain": 0.3,
+        "pitchVary": 0.22,
+        "filterVary": 0.28,
+        "detune": 0
+      },
+      "firedBy": [
+        "crabDie"
+      ],
+      "directSites": [],
+      "minGap": 0.05,
       "orphaned": false
     },
     {
@@ -3914,6 +3967,34 @@
       "orphaned": false
     },
     {
+      "name": "versusSpike",
+      "mode": "synth",
+      "files": [],
+      "missing": [],
+      "variations": 0,
+      "synth": {
+        "type": "boom",
+        "wave": null,
+        "freq": [
+          210,
+          38
+        ],
+        "filter": 2600,
+        "noise": 0.3,
+        "decay": 0.42,
+        "gain": 0.42,
+        "pitchVary": 0.06,
+        "filterVary": 0.15,
+        "detune": 0
+      },
+      "firedBy": [
+        "versusSpike"
+      ],
+      "directSites": [],
+      "minGap": 0.08,
+      "orphaned": false
+    },
+    {
       "name": "versusSave",
       "mode": "sample",
       "files": [
@@ -6023,10 +6104,17 @@
     },
     {
       "name": "nameRoll",
-      "mode": "synth",
-      "files": [],
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/EG_FlickPlop_12.mp3",
+          "exists": true,
+          "bytes": 5015,
+          "seconds": 0.391833
+        }
+      ],
       "missing": [],
-      "variations": 0,
+      "variations": 1,
       "synth": {
         "type": "noise",
         "wave": null,
@@ -6034,8 +6122,8 @@
         "filter": 2400,
         "noise": null,
         "decay": 0.17,
-        "gain": 0.2,
-        "pitchVary": 0.16,
+        "gain": 5.3088444423098835,
+        "pitchVary": 0.44,
         "filterVary": 0.3,
         "detune": 0
       },
@@ -6048,10 +6136,29 @@
     },
     {
       "name": "nameSettle",
-      "mode": "synth",
-      "files": [],
+      "mode": "sample",
+      "files": [
+        {
+          "path": "/sfx/EG_FlickPlop_03.mp3",
+          "exists": true,
+          "bytes": 6582,
+          "seconds": 0.522417
+        },
+        {
+          "path": "/sfx/EG_FlickPlop_05.mp3",
+          "exists": true,
+          "bytes": 4388,
+          "seconds": 0.339583
+        },
+        {
+          "path": "/sfx/EG_FlickPlop_16.mp3",
+          "exists": true,
+          "bytes": 6896,
+          "seconds": 0.548583
+        }
+      ],
       "missing": [],
-      "variations": 0,
+      "variations": 3,
       "synth": {
         "type": "blip",
         "wave": "triangle",
@@ -6062,7 +6169,7 @@
         "filter": null,
         "noise": null,
         "decay": 0.15,
-        "gain": 0.1,
+        "gain": 2.6544222211549418,
         "pitchVary": 0.04,
         "filterVary": 0,
         "detune": 0
@@ -6613,7 +6720,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6174
+          "line": 6618
         }
       ]
     },
@@ -6648,7 +6755,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5623
+          "line": 6067
         }
       ]
     },
@@ -6825,15 +6932,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3787
+          "line": 3828
         },
         {
           "file": "path/src/main.js",
-          "line": 8145
+          "line": 8517
         },
         {
           "file": "path/src/main.js",
-          "line": 8149
+          "line": 8521
         }
       ]
     },
@@ -6850,7 +6957,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8214
+          "line": 8586
         }
       ]
     },
@@ -6870,7 +6977,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2820
+          "line": 2855
         }
       ]
     },
@@ -6935,7 +7042,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5146
+          "line": 5590
         }
       ]
     },
@@ -6952,7 +7059,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5147
+          "line": 5591
         }
       ]
     },
@@ -7068,7 +7175,7 @@
       "sites": [
         {
           "file": "path/src/entities/enemies.js",
-          "line": 4258
+          "line": 4823
         }
       ]
     },
@@ -7088,7 +7195,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossGrab.js",
-          "line": 168
+          "line": 251
         }
       ]
     },
@@ -7108,7 +7215,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossGrab.js",
-          "line": 410
+          "line": 535
         }
       ]
     },
@@ -7128,11 +7235,11 @@
       "sites": [
         {
           "file": "path/src/systems/bossGrab.js",
-          "line": 218
+          "line": 301
         },
         {
           "file": "path/src/systems/bossGrab.js",
-          "line": 250
+          "line": 333
         }
       ]
     },
@@ -7242,7 +7349,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2921
+          "line": 2956
         }
       ]
     },
@@ -7262,7 +7369,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8083
+          "line": 8445
         }
       ]
     },
@@ -7342,11 +7449,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8906
+          "line": 9278
         },
         {
           "file": "path/src/main.js",
-          "line": 9254
+          "line": 9677
         }
       ]
     },
@@ -7366,7 +7473,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8918
+          "line": 9290
         }
       ]
     },
@@ -7386,7 +7493,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5126
+          "line": 5570
         }
       ]
     },
@@ -7406,11 +7513,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8073
+          "line": 8435
         },
         {
           "file": "path/src/main.js",
-          "line": 9223
+          "line": 9646
         }
       ]
     },
@@ -7427,11 +7534,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8078
+          "line": 8440
         },
         {
           "file": "path/src/main.js",
-          "line": 9225
+          "line": 9648
         }
       ]
     },
@@ -7451,7 +7558,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3088
+          "line": 3123
         }
       ]
     },
@@ -7471,7 +7578,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4673
+          "line": 4716
         }
       ]
     },
@@ -7491,7 +7598,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4730
+          "line": 4773
         }
       ]
     },
@@ -7508,7 +7615,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 5468
+          "line": 5511
         }
       ]
     },
@@ -7588,7 +7695,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4722
+          "line": 4765
         }
       ]
     },
@@ -7608,7 +7715,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 5997
+          "line": 6040
         }
       ]
     },
@@ -7625,7 +7732,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3453
+          "line": 3494
         }
       ]
     },
@@ -7645,7 +7752,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 4910
+          "line": 4953
         }
       ]
     },
@@ -7716,7 +7823,7 @@
       "sites": [
         {
           "file": "path/src/systems/celebrate.js",
-          "line": 213
+          "line": 226
         }
       ]
     },
@@ -7736,7 +7843,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6225
+          "line": 6669
         }
       ]
     },
@@ -7844,19 +7951,19 @@
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 150
+          "line": 152
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3128
+          "line": 3148
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6308
+          "line": 6351
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6459
+          "line": 6502
         }
       ]
     },
@@ -7981,23 +8088,31 @@
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 151
+          "line": 153
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3129
+          "line": 3130
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 3745
+          "line": 3139
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6239
+          "line": 3149
         },
         {
           "file": "path/src/ui/ui.js",
-          "line": 6492
+          "line": 3788
+        },
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 6282
+        },
+        {
+          "file": "path/src/ui/ui.js",
+          "line": 6535
         }
       ]
     },
@@ -8031,7 +8146,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3273
+          "line": 3293
         }
       ]
     },
@@ -8048,7 +8163,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3440
+          "line": 3460
         }
       ]
     },
@@ -8065,7 +8180,7 @@
       "sites": [
         {
           "file": "path/src/ui/ui.js",
-          "line": 3441
+          "line": 3461
         }
       ]
     },
@@ -8085,19 +8200,19 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8472
+          "line": 8844
         },
         {
           "file": "path/src/main.js",
-          "line": 8860
+          "line": 9232
         },
         {
           "file": "path/src/main.js",
-          "line": 8931
+          "line": 9303
         },
         {
           "file": "path/src/main.js",
-          "line": 9258
+          "line": 9681
         }
       ]
     },
@@ -8114,7 +8229,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8882
+          "line": 9254
         }
       ]
     },
@@ -8131,7 +8246,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7642
+          "line": 5224
         }
       ]
     },
@@ -8148,7 +8263,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3434
+          "line": 3475
         }
       ]
     },
@@ -8168,11 +8283,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8152
+          "line": 8524
         },
         {
           "file": "path/src/main.js",
-          "line": 8897
+          "line": 9269
         }
       ]
     },
@@ -8212,15 +8327,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3935
+          "line": 4049
         },
         {
           "file": "path/src/main.js",
-          "line": 8150
+          "line": 8522
         },
         {
           "file": "path/src/main.js",
-          "line": 8810
+          "line": 9182
         }
       ]
     },
@@ -8240,7 +8355,7 @@
       "sites": [
         {
           "file": "path/src/systems/boats.js",
-          "line": 1144
+          "line": 1154
         }
       ]
     },
@@ -8257,7 +8372,7 @@
       "sites": [
         {
           "file": "path/src/systems/boss.js",
-          "line": 805
+          "line": 813
         }
       ]
     },
@@ -8277,7 +8392,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7913
+          "line": 8275
         }
       ]
     },
@@ -8522,6 +8637,30 @@
       "sites": []
     },
     {
+      "name": "crabHit",
+      "sfx": "crabHit",
+      "sfxMinGap": 0.045,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": []
+    },
+    {
+      "name": "crabDie",
+      "sfx": "crabDie",
+      "sfxMinGap": 0.05,
+      "emit": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "ripple": null,
+      "haptic": null,
+      "sites": []
+    },
+    {
       "name": "bossHitShark",
       "sfx": "bossHitShark",
       "sfxMinGap": 1.2,
@@ -8753,7 +8892,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8686
+          "line": 9058
         }
       ]
     },
@@ -8773,7 +8912,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossHotSpots.js",
-          "line": 2001
+          "line": 2162
         }
       ]
     },
@@ -8790,7 +8929,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossHotSpots.js",
-          "line": 2343
+          "line": 2521
         }
       ]
     },
@@ -8810,7 +8949,7 @@
       "sites": [
         {
           "file": "path/src/systems/bossHotSpots.js",
-          "line": 2049
+          "line": 2229
         }
       ]
     },
@@ -8830,7 +8969,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6297
+          "line": 6741
         }
       ]
     },
@@ -8847,7 +8986,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6349
+          "line": 6793
         }
       ]
     },
@@ -8867,11 +9006,11 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 1543
+          "line": 1989
         },
         {
           "file": "path/src/main.js",
-          "line": 7314
+          "line": 7721
         }
       ]
     },
@@ -8891,7 +9030,7 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 1562
+          "line": 2008
         }
       ]
     },
@@ -8931,7 +9070,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7118
+          "line": 5336
         }
       ]
     },
@@ -8951,7 +9090,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 2839
+          "line": 2874
         }
       ]
     },
@@ -8968,7 +9107,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7775
+          "line": 8127
+        },
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2909
         }
       ]
     },
@@ -8988,7 +9131,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7824
+          "line": 8176
         }
       ]
     },
@@ -9008,7 +9151,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4900
+          "line": 5089
         }
       ]
     },
@@ -9028,7 +9171,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4901
+          "line": 5090
         }
       ]
     },
@@ -9048,15 +9191,15 @@
       "sites": [
         {
           "file": "path/src/entities/player.js",
-          "line": 1422
+          "line": 1868
         },
         {
           "file": "path/src/main.js",
-          "line": 7859
+          "line": 8221
         },
         {
           "file": "path/src/main.js",
-          "line": 8132
+          "line": 8504
         }
       ]
     },
@@ -9076,15 +9219,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8376
+          "line": 8748
         },
         {
           "file": "path/src/main.js",
-          "line": 8991
+          "line": 9414
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3033
+          "line": 3558
         }
       ]
     },
@@ -9104,7 +9247,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9161
+          "line": 9584
         }
       ]
     },
@@ -9121,7 +9264,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7880
+          "line": 8242
         }
       ]
     },
@@ -9141,7 +9284,7 @@
       "sites": [
         {
           "file": "path/src/systems/boats.js",
-          "line": 584
+          "line": 594
         }
       ]
     },
@@ -9161,7 +9304,7 @@
       "sites": [
         {
           "file": "path/src/systems/boats.js",
-          "line": 937
+          "line": 947
         }
       ]
     },
@@ -9178,12 +9321,7 @@
         "radius": 7
       },
       "haptic": "12ms",
-      "sites": [
-        {
-          "file": "path/src/main.js",
-          "line": 8949
-        }
-      ]
+      "sites": []
     },
     {
       "name": "hotSpotChumTaken",
@@ -9216,7 +9354,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9007
+          "line": 9430
         }
       ]
     },
@@ -9236,7 +9374,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9117
+          "line": 9540
         }
       ]
     },
@@ -9256,7 +9394,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9136
+          "line": 9559
         }
       ]
     },
@@ -9321,7 +9459,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 3646
+          "line": 3687
         }
       ]
     },
@@ -9341,11 +9479,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7697
+          "line": 8049
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 2535
+          "line": 2936
         }
       ]
     },
@@ -9362,11 +9500,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7713
+          "line": 8065
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 2541
+          "line": 2942
         }
       ]
     },
@@ -9386,7 +9524,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4598
+          "line": 4756
         }
       ]
     },
@@ -9406,7 +9544,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7627
+          "line": 5209
         }
       ]
     },
@@ -9426,7 +9564,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5056
+          "line": 5500
         }
       ]
     },
@@ -9446,15 +9584,15 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8716
+          "line": 9088
         },
         {
           "file": "path/src/main.js",
-          "line": 8832
+          "line": 9204
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 2493
+          "line": 2869
         }
       ]
     },
@@ -9474,7 +9612,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8754
+          "line": 9126
         }
       ]
     },
@@ -9494,7 +9632,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8112
+          "line": 8484
         }
       ]
     },
@@ -9511,11 +9649,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8763
+          "line": 9135
         },
         {
           "file": "path/src/main.js",
-          "line": 8834
+          "line": 9206
         }
       ]
     },
@@ -9532,11 +9670,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7479
+          "line": 7893
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 2576
+          "line": 3004
         }
       ]
     },
@@ -9553,11 +9691,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7500
+          "line": 7914
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 2581
+          "line": 3009
         }
       ]
     },
@@ -9577,7 +9715,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4993
+          "line": 5437
         }
       ]
     },
@@ -9594,7 +9732,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8785
+          "line": 9157
         }
       ]
     },
@@ -9611,7 +9749,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 9375
+          "line": 9798
         }
       ]
     },
@@ -9631,7 +9769,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 4538
+          "line": 4696
         }
       ]
     },
@@ -9702,7 +9840,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8335
+          "line": 8707
         }
       ]
     },
@@ -9722,7 +9860,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8341
+          "line": 8713
         }
       ]
     },
@@ -9742,7 +9880,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8389
+          "line": 8761
         }
       ]
     },
@@ -9807,7 +9945,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 1857
+          "line": 2048
         }
       ]
     },
@@ -9827,7 +9965,30 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 2114
+          "line": 2325
+        }
+      ]
+    },
+    {
+      "name": "versusSpike",
+      "sfx": "versusSpike",
+      "sfxMinGap": 0.08,
+      "emit": "spikeSmear",
+      "shake": 0.22,
+      "hitstop": 0.11,
+      "glow": 0.8,
+      "ripple": {
+        "strength": 3.2,
+        "radius": 10,
+        "rings": 3,
+        "ringGrow": 1.7,
+        "ringFade": 0.6
+      },
+      "haptic": "70ms @ 1.00",
+      "sites": [
+        {
+          "file": "path/src/systems/versus.js",
+          "line": 2740
         }
       ]
     },
@@ -9847,7 +10008,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 4595
+          "line": 5556
         }
       ]
     },
@@ -9876,17 +10037,20 @@
       "glow": 0.35,
       "ripple": {
         "strength": 1.6,
-        "radius": 8
+        "radius": 8,
+        "rings": 3,
+        "ringGrow": 1.6,
+        "ringFade": 0.58
       },
       "haptic": "34ms @ 0.70",
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3128
+          "line": 3653
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 3225
+          "line": 3750
         }
       ]
     },
@@ -9906,7 +10070,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 2666
+          "line": 3191
         }
       ]
     },
@@ -9926,7 +10090,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 2704
+          "line": 3229
         }
       ]
     },
@@ -9935,26 +10099,26 @@
       "sfx": "versusGoal",
       "sfxMinGap": 0,
       "emit": "goalSpray",
-      "shake": 0.3,
+      "shake": 1.45,
       "hitstop": 0,
       "glow": 0.8,
       "ripple": {
         "strength": 3.2,
         "radius": 16
       },
-      "haptic": "156ms @ 0.90 + 120ms @ 0.35",
+      "haptic": "200ms @ 1.00 + 148ms @ 0.86",
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3886
+          "line": 4492
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 5327
+          "line": 6288
         },
         {
           "file": "path/src/ui/workbench.js",
-          "line": 2578
+          "line": 2724
         }
       ]
     },
@@ -9971,15 +10135,15 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3887
+          "line": 4493
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 5342
+          "line": 6303
         },
         {
           "file": "path/src/ui/workbench.js",
-          "line": 2579
+          "line": 2725
         }
       ]
     },
@@ -10014,7 +10178,7 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3568
+          "line": 4125
         }
       ]
     },
@@ -10034,11 +10198,11 @@
       "sites": [
         {
           "file": "path/src/systems/versus.js",
-          "line": 3588
+          "line": 4145
         },
         {
           "file": "path/src/systems/versus.js",
-          "line": 4253
+          "line": 5214
         }
       ]
     },
@@ -10082,11 +10246,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8388
+          "line": 8760
         },
         {
           "file": "path/src/main.js",
-          "line": 8470
+          "line": 8842
         }
       ]
     },
@@ -10103,7 +10267,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8390
+          "line": 8762
         }
       ]
     },
@@ -10123,7 +10287,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8401
+          "line": 8773
         }
       ]
     },
@@ -10140,7 +10304,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8308
+          "line": 8680
         }
       ]
     },
@@ -10160,7 +10324,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8319
+          "line": 8691
         }
       ]
     },
@@ -10180,7 +10344,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8330
+          "line": 8702
         }
       ]
     },
@@ -10200,7 +10364,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8406
+          "line": 8778
         }
       ]
     },
@@ -10220,7 +10384,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8504
+          "line": 8876
         }
       ]
     },
@@ -10240,7 +10404,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8523
+          "line": 8895
         }
       ]
     },
@@ -10269,7 +10433,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8538
+          "line": 8910
         }
       ]
     },
@@ -10289,7 +10453,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8554
+          "line": 8926
         }
       ]
     },
@@ -10309,7 +10473,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8567
+          "line": 8939
         }
       ]
     },
@@ -10329,7 +10493,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8600
+          "line": 8972
         }
       ]
     },
@@ -10349,7 +10513,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8594
+          "line": 8966
         }
       ]
     },
@@ -10417,7 +10581,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8352
+          "line": 8724
         }
       ]
     },
@@ -10437,7 +10601,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8357
+          "line": 8729
         }
       ]
     },
@@ -10457,7 +10621,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8361
+          "line": 8733
         }
       ]
     },
@@ -10543,7 +10707,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8182
+          "line": 8554
         }
       ]
     },
@@ -10563,7 +10727,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8289
+          "line": 8661
         }
       ]
     },
@@ -10580,7 +10744,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8290
+          "line": 8662
         }
       ]
     },
@@ -10615,7 +10779,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8416
+          "line": 8788
         }
       ]
     },
@@ -10632,7 +10796,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8421
+          "line": 8793
         }
       ]
     },
@@ -10652,7 +10816,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8197
+          "line": 8569
         }
       ]
     },
@@ -10669,7 +10833,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8430
+          "line": 8802
         }
       ]
     },
@@ -10689,7 +10853,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5920
+          "line": 6364
         }
       ]
     },
@@ -10706,7 +10870,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7860
+          "line": 8222
         }
       ]
     },
@@ -10726,7 +10890,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 5940
+          "line": 6384
         }
       ]
     },
@@ -10746,7 +10910,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 6017
+          "line": 6461
         }
       ]
     },
@@ -10766,7 +10930,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8458
+          "line": 8830
         }
       ]
     },
@@ -10783,7 +10947,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8614
+          "line": 8986
         }
       ]
     },
@@ -10803,7 +10967,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8617
+          "line": 8989
         }
       ]
     },
@@ -10823,11 +10987,11 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8464
+          "line": 8836
         },
         {
           "file": "path/src/main.js",
-          "line": 8471
+          "line": 8843
         }
       ]
     },
@@ -10844,7 +11008,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8640
+          "line": 9012
         }
       ]
     },
@@ -10864,7 +11028,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 8661
+          "line": 9033
         }
       ]
     },
@@ -10881,7 +11045,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7317
+          "line": 7724
         }
       ]
     },
@@ -10901,7 +11065,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7330
+          "line": 7737
         }
       ]
     },
@@ -10976,7 +11140,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7341
+          "line": 7748
         }
       ]
     },
@@ -10993,7 +11157,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7366
+          "line": 7773
         }
       ]
     },
@@ -11010,7 +11174,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7367
+          "line": 7774
         }
       ]
     },
@@ -11027,7 +11191,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7376
+          "line": 7783
         }
       ]
     },
@@ -11047,7 +11211,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7378
+          "line": 7785
         }
       ]
     },
@@ -11064,7 +11228,7 @@
       "sites": [
         {
           "file": "path/src/main.js",
-          "line": 7381
+          "line": 7788
         }
       ]
     }
@@ -12943,7 +13107,9 @@
       "bytes": 6896,
       "seconds": 0.548583,
       "name": "EG_FlickPlop_16.mp3",
-      "usedBy": []
+      "usedBy": [
+        "nameSettle"
+      ]
     },
     {
       "path": "/sfx/EliArf_EatChum_03.mp3",
@@ -12989,7 +13155,9 @@
       "bytes": 6582,
       "seconds": 0.522417,
       "name": "EG_FlickPlop_03.mp3",
-      "usedBy": []
+      "usedBy": [
+        "nameSettle"
+      ]
     },
     {
       "path": "/sfx/EliArf_Bloop_01.mp3",
@@ -13283,7 +13451,9 @@
       "bytes": 5015,
       "seconds": 0.391833,
       "name": "EG_FlickPlop_12.mp3",
-      "usedBy": []
+      "usedBy": [
+        "nameRoll"
+      ]
     },
     {
       "path": "/sfx/EliArf_02.mp3",
@@ -13372,7 +13542,9 @@
       "bytes": 4388,
       "seconds": 0.339583,
       "name": "EG_FlickPlop_05.mp3",
-      "usedBy": []
+      "usedBy": [
+        "nameSettle"
+      ]
     },
     {
       "path": "/sfx/EG_FlickPlop_10.mp3",
@@ -13695,9 +13867,7 @@
       "Seal_Paps_takeDamage_03.mp3",
       "HG_UI_Blip_Menu_Tappies-converted.mp3",
       "HGUI_s37_Knock_06_lo.mp3",
-      "EG_FlickPlop_16.mp3",
       "EliArf_EatChum_06.mp3",
-      "EG_FlickPlop_03.mp3",
       "EliArf_TakeDamage_02.mp3",
       "EliArf_clack_01.mp3",
       "EliArf_03.mp3",
@@ -13705,8 +13875,6 @@
       "Seal_Paps_takeDamage_02.mp3",
       "HG_UI_Blip_Click_Jagged.mp3",
       "HG_UI_Blip_Menu_TikTok-converted.mp3",
-      "EG_FlickPlop_12.mp3",
-      "EG_FlickPlop_05.mp3",
       "HG_UI_Blip_Menu_Bic-converted.mp3",
       "HGUI_s37_Beep_03_lo.mp3",
       "Seal_Shoot_01.mp3",
