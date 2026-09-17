@@ -1,4 +1,7 @@
+import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+import { projectileCount } from '../stats.js';
+import { spawnProjectile } from '../entities/projectiles.js';
 import { ease, isEasing } from '../ease.js';
 import { removeEnemy, applyKnockback, staggerBoss } from '../entities/enemies.js';
 import { applyElementalHit } from './elements.js';
@@ -2755,4 +2758,88 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
   }
 
   return { spawnOrb };
+}
+
+// ---------------------------------------------------------------------------
+// BONE SHRAPNEL — the burst itself.
+//
+// It lived in main.js beside the ram hook until the fragments were found to be
+// dying on the frame they were born (see `ignore` below). It is here now for
+// the reason riderDamage is: a rider on the strike belongs with the strike,
+// and — the part that matters — NOTHING COULD TEST IT IN main.js. A harness
+// that retypes the spawn call is a harness that passes while the game drops an
+// argument, which is exactly the failure this function just had.
+// ---------------------------------------------------------------------------
+// Bone Shrapnel: every enemy the strike dash connects with bursts a ring of
+// fragments outward from ITS OWN position, not the seal's — the fish coming
+// apart is the source, so a dash through a school leaves overlapping bursts
+// rather than one puff at the player. Damage is a fraction of the strike hit
+// that spawned it, which is what carries the chain multiplier through.
+const shrapnelOrigin = new THREE.Vector3();
+const shrapnelDir = new THREE.Vector2();
+
+export function spawnShrapnel(scene, atPos, strikeDamage, from = null, stats = null) {
+  const level = stats?.shrapnelCount ?? 0;
+  if (level <= 0) return 0;
+  const c = CONFIG.strike.shrapnel;
+  // The base count is guaranteed positive here (level > 0 above), so the Clone
+  // Warz gate is already satisfied — routed through projectileCount anyway so
+  // there is exactly one place the bonus is spelled out.
+  const n = projectileCount(c.count + c.countPerLevel * (level - 1), stats);
+  // A random offset for the WHOLE ring rather than per-fragment: the fragments
+  // stay evenly spaced (so there are no bald patches to slip through) while
+  // consecutive bursts don't land in an identical star pattern.
+  const base = Math.random() * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const a = base + (i / n) * Math.PI * 2 + (Math.random() - 0.5) * c.spread;
+    shrapnelOrigin.set(atPos.x, atPos.y, 0);
+    shrapnelDir.set(Math.cos(a), Math.sin(a));
+    spawnProjectile(scene, {
+      origin: shrapnelOrigin,
+      dir: shrapnelDir,
+      faction: 'player',
+      damage: strikeDamage * c.damageFrac,
+      speed: c.speed,
+      life: c.life,
+      radius: c.radius,
+      pierce: c.pierce,
+      asset: 'shrapnel',
+      source: 'shrapnel',
+      // THE BODY IT CAME OUT OF CANNOT STOP IT, and without this line nothing
+      // else ever did. The burst spawns AT the point the dash connected —
+      // which is on the rammed animal — and a fragment pierces nothing, so the
+      // combat pass on the very same frame found that body, spent the fragment
+      // on it and despawned it before anything was drawn. Measured against the
+      // real hit shapes: five of five fragments gone on frame one, 0.37 units
+      // from the burst, on a minnow and on a megalodon alike. The card has
+      // been paying its damage back into the creature it burst from and
+      // showing the player nothing.
+      //
+      // Thematically it is also the only right answer: these fragments ARE
+      // that animal. A dash through a school still leaves every OTHER body in
+      // the water a target, which is the overlapping-bursts read the note at
+      // the top of this function describes.
+      ignore: from,
+      // ROLLS ABOUT ITS OWN LENGTH — CONFIG.strike.shrapnel.roll, which has
+      // been authored, documented and tuned to 12 and never once passed to a
+      // projectile. `orient` alone leaves the bone pointing down its heading
+      // and perfectly still, which on a body this thin is a white stick.
+      roll: c.roll,
+      // NOSE-FIRST, WITH A ROLL — not the end-over-end spin this had before the
+      // fragment became a bone (assets.js `shrapnel`). A tumbling shot has no
+      // back, and the back is where its ribbon comes from: CONFIG.trails
+      // .shrapnel anchors at `tailOffset: 1`, which is a meaningless anchor on
+      // a body whose long axis points somewhere new every frame.
+      //
+      // 'axis' rather than plain `true`, and this is the one that would have
+      // been a bug. The leftward mirror in updateProjectile is a Ry(PI) applied
+      // AFTER the heading, so it lands correctly only when the heading is on an
+      // axis and is 90 degrees out at a leftward DIAGONAL — and a shrapnel
+      // burst is a full ring, which means it fires at every one of those
+      // headings every time. The razor blade opts out for the same reason: a
+      // bone is symmetric end to end and has no belly to keep downward.
+      orient: 'axis',
+    });
+  }
+  return n;
 }

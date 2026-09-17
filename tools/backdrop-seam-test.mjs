@@ -46,6 +46,20 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
+
+// THE PERSPECTIVE POOL IS WHAT THIS FILE IS ABOUT.
+//
+// A goal replay now ships filmed with the FLAT orthographic lens (CONFIG
+// .versus.replay.cams.projection, default 'flat'), and a flat camera cannot
+// produce the seam this file exists to catch: its rays are parallel to -z, so
+// it looks AT the backdrop and never along it. Left on the default, every check
+// below passes by being unable to fail, and the shell-is-necessary assertion at
+// the end reads 0.0% — a green suite that means nothing.
+//
+// So the perspective lens is forced HERE, before any shot is posed. These are
+// still the contract it has to keep whenever somebody switches to it, and they
+// are the whole argument for why the flat one is the default.
+CONFIG.versus.replay.cams.projection = 'perspective';
 import { enableVersus } from '../path/src/systems/versusFlag.js';
 import { bounds, updateBounds } from '../path/src/arena.js';
 import { resetPool, updatePool } from '../path/src/systems/replayCams.js';

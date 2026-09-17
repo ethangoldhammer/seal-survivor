@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
 import { emit } from '../entities/particles.js';
-import { createVisual, hasModel, makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
+import { createVisual, releaseVisual, hasModel, makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { buildHumanoidRig, bindHumanoidRig, aimBone, anchorToHips } from './humanoidRig.js';
 import { spawnGore } from './gore.js';
@@ -838,6 +838,16 @@ function disposeFigure(scene, f) {
   // Only the copies made for this man's dissolve. The model's own materials
   // are shared with everybody else wearing it and are not ours to dispose.
   for (const m of f.body.cloned ?? []) retireMaterial(m);
+  // ...AND THE SKELETON, which is neither shared nor a material and was
+  // therefore falling between the two lines above.
+  //
+  // A crewman is a createVisual, so his rig is his alone and carries a bone
+  // DataTexture from the first frame he draws. Every other resource here was
+  // being handed back and that one was not — and he is the most frequently
+  // built body in the game after a projectile, one to five of him on every boat
+  // for the length of a run. Already detached by the removeFromParent above, so
+  // this is reached only for the disposal it does.
+  releaseVisual(f.body.group);
 }
 
 // ---------------------------------------------------------------------------

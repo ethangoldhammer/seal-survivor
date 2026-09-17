@@ -13,11 +13,22 @@ import { seagullLevelStats } from '../levelStats.js';
 
 // SEAGULL BOMB — an attack run, not a projectile.
 //
-// A gull enters from off the side of the arena at altitude, cruises in over
-// the water alternating flapping flight and glides, picks the densest knot of
-// crabs on the seabed, and once it is overhead commits to a dive it holds all
-// the way down. It is the crab layer's counter: crabs gather on your dropped
-// chum, and the gulls come for the crabs.
+// A gull enters from above the top of the shot on a rolled bearing, cruises in
+// over the water alternating flapping flight and glides, picks the densest knot
+// of crabs on the seabed, and once it is overhead commits to a dive it holds
+// all the way down. It is the crab layer's counter: crabs gather on your
+// dropped chum, and the gulls come for the crabs.
+//
+// THE BEARING IS THREE ROLLS — a side, a length of approach and a depth into or
+// out of the picture. It used to be one bit, left wall or right wall at cruise
+// altitude, which made the whole presentation of the card the same two shots.
+// Entering over the top is what lets the other two vary: a steep approach has
+// no room to slide in from a side, and a gull out in the background is the
+// wrong SIZE for the play plane while it is back there (see depthScale), so
+// either would pop into an empty sky if the run began at cruise altitude. The
+// entrance is spent by the time the bird is overhead — level, full size, on the
+// play plane — because the dive and its impact test are two-dimensional and
+// know nothing about any of this.
 //
 // ...AND IT DIVES ON WHATEVER IS THERE WHEN THEY ARE NOT. Crabs are the first
 // choice and stay the first choice, but a card that sat idle whenever the
@@ -42,7 +53,11 @@ const GLIDE = 'idle';
 const FLAP = 'swim';
 const DIVE = 'boost';
 
-// How far past the arena edge a gull spawns and despawns.
+// How far past the arena edge a gull despawns. The SPAWN is no longer measured
+// off the wall — a run now begins above the top of the shot and the roll may
+// put it well inside either edge, or well outside one (see spawnSeagull) — so
+// this is the leaving side of that pair only, and the cull tests it against the
+// direction of travel rather than against the position alone.
 const OFFSCREEN_MARGIN = 4;
 
 const DEG = Math.PI / 180;
@@ -183,7 +198,53 @@ function pickTarget(enemiesList) {
   return null;
 }
 
-export function spawnSeagull(scene, enemiesList) {
+// HOW BIG A GULL IS DRAWN AT A DEPTH, which is the only way its depth is
+// visible at all.
+//
+// The camera is orthographic and looks straight down -z (world.js), so moving a
+// body through z changes nothing on screen except which one sorts in front of
+// which. A gull honestly flown in from the background and left at that renders
+// as a bird that is simply THERE, at full size, in the middle of the sky — the
+// pop the entrance exists to remove, arriving at a different coordinate. So the
+// depth is drawn rather than projected, exactly as the bait ball draws its
+// column (systems/baitBall.js, CONFIG.baitBall.depthCue).
+//
+// @param {number} z     where the bird is
+// @param {number} t     0..1 of the entrance still to fly; the cue rides it to
+//                       0 alongside the depth itself, so the bird is at its
+//                       true size by the time it is on the play plane
+function depthScale(c, z, t) {
+  const range = c.depthRange ?? 0;
+  if (range <= 0) return 1;
+  const near = Math.max(-1, Math.min(1, z / range));
+  return 1 + (c.depthCue ?? 0) * near * t;
+}
+
+// THE TOP OF THE SHOT, which is not the top of the frame.
+//
+// `bounds.frameTop` is where the frame's upper edge sits with the camera at
+// rest, and the cinematic rig is not at rest. A breach pans it up, and at the
+// arena's ceiling (arena.js: bounds.top is three times the air) the shot's top
+// is twenty-one units above where a resting frame puts it. An entrance
+// measured off the resting frame would put the gull inside that gap and it
+// would appear out of nothing in the middle of an empty sky — the one thing
+// this entrance exists to prevent — and it would only ever do it during a big
+// jump, i.e. only when there is something else to look at and nobody is going
+// to catch it happening.
+//
+// world.framedView() is the answer to exactly this question and folds in the
+// two things that make it easy to get wrong: the frustum's centre is not the
+// camera's position, and the zoom shrinks about that centre rather than about
+// the camera. Handed in rather than imported, the way graveGaze and
+// shaderWarmup take the camera — world.js owns the frame and nothing in
+// systems/ reaches back for it. Without one (every headless harness) the
+// resting frame is the honest answer, because that is where the camera is.
+function shotTop(view) {
+  if (!view) return bounds.frameTop;
+  return view.y + view.halfH;
+}
+
+export function spawnSeagull(scene, enemiesList, view = null) {
   const c = CONFIG.seagullBomb;
   const pick = pickTarget(enemiesList);
   // EMPTY WATER, which is now the only thing that holds a run back. Skipping
@@ -193,10 +254,52 @@ export function spawnSeagull(scene, enemiesList) {
   if (!pick) return null;
   const { target, anyPrey } = pick;
 
-  // Enter from the side the target is furthest from, so the run has room to
-  // read as an approach instead of appearing already on top of it.
-  const fromLeft = target.x > (bounds.left + bounds.right) * 0.5;
-  const dir = fromLeft ? 1 : -1;
+  // THE BEARING. Three rolls — a side, a length of run and a depth — and
+  // together they are the angle the run comes in on. See the entrance block in
+  // CONFIG.seagullBomb for why it is three numbers rather than a left/right
+  // flag, which is all this used to be.
+  //
+  // The side is rolled FREELY, with no check for room. It used to be forced to
+  // whichever wall the pile was furthest from, because the spawn sat at cruise
+  // altitude and a side with no room in front of it would put the bird inside
+  // the frame. Every entrance starts above the frame now (see entryY below), so
+  // there is no such thing as a side without room: a run rolled onto the near
+  // wall simply spends longer coming down.
+  const dir = Math.random() < 0.5 ? 1 : -1;
+  const run = c.approachMin + Math.random() * Math.max(0, (c.approachMax ?? 0) - (c.approachMin ?? 0));
+  const z0 = (Math.random() * 2 - 1) * (c.depthRange ?? 0);
+
+  // ABOVE THE SHOT, always. This is the one part of the entrance that is not
+  // rolled, and it is what lets the rest of it be — see the entrance block in
+  // config.js.
+  const entryY = shotTop(view) + (c.entryHeight ?? 0);
+  const drop = Math.max(0, entryY - (bounds.surfaceY + c.cruiseAltitude));
+
+  // The run, held to two bounds the roll knows nothing about.
+  //
+  // Never inside the commit distance, whatever the table says: a spawn closer
+  // than `diveZone` is a gull that dives on the frame it was created, from
+  // above the top of the shot — the approach the whole ability is presented
+  // through, skipped entirely.
+  //
+  // And never coming down faster than `entryDropMax`, which is the clause that
+  // earns its keep when the camera is high. The drop is measured from the top
+  // of the SHOT, so a breach that pans the frame up to the arena's ceiling
+  // makes it three times what it is at rest — and a short run rolled against a
+  // drop that size is not a steep entrance, it is a bird falling out of the sky
+  // faster than the stoop it is about to perform. Lengthening the run rather
+  // than clamping the descent is what keeps the line straight.
+  //
+  // Solved against the stretch of run the descent is actually flown over, not
+  // the whole approach: `entryDescent` spends it in the first share and cruises
+  // the rest, so measuring across the full span would report a line a third as
+  // steep as the one the bird flies.
+  const share = Math.max(0.05, Math.min(1, c.entryDescent ?? 1));
+  const span = Math.max(
+    c.diveZone * 3,
+    run,
+    drop * c.cruiseSpeed / (Math.max(1, c.entryDropMax ?? 20) * share),
+  );
 
   // Container carries position and heading; the visual inside it carries the
   // left/right flank flip. Same split entities/enemies.js uses for faceMotion
@@ -209,11 +312,12 @@ export function spawnSeagull(scene, enemiesList) {
   // flock comes out wearing the preset and the table looks broken.
   setOutlineVariant(visual, 'seagull', rollBiolumSkinVariant(visual)?.__rim ?? null);
   container.add(visual);
-  container.position.set(
-    fromLeft ? bounds.left - OFFSCREEN_MARGIN : bounds.right + OFFSCREEN_MARGIN,
-    bounds.surfaceY + c.cruiseAltitude,
-    0
-  );
+  container.position.set(target.x - dir * span, entryY, z0);
+  // The depth cue's first frame, applied here rather than left to the first
+  // update: a gull rolled deep into the background is drawn at 0.78x, and one
+  // frame of it at full size would be a pop in exactly the place this entrance
+  // exists to remove one.
+  container.scale.setScalar(depthScale(c, z0, 1));
   scene.add(container);
 
   const anim = (visual.userData?.clips?.length || visual.userData?.rig)
@@ -233,6 +337,27 @@ export function spawnSeagull(scene, enemiesList) {
     anyPrey,
     vx: dir * c.cruiseSpeed,
     vy: 0,
+    // --- the entrance, kept so the descent can be flown ----------------------
+    // How much of the arrival is left, 1 at the spawn and 0 once overhead. The
+    // altitude the spring holds and the depth the bird is drawn at both ride on
+    // it, so a run levels off and lands on the play plane at the same moment,
+    // whatever bearing it came in on. See updateSeagulls.
+    descend: 1,
+    entryY,
+    entrySpan: span,
+    z0,
+    // The descent's own speed, kept SEPARATE from vy — which stays what it has
+    // always been, the bob around whatever height the bird is holding.
+    //
+    // Two variables because the descent is a feed-forward and the bob is a
+    // chase, and a chase cannot fly a descent. The altitude spring corrects
+    // whatever error it is handed; against a setpoint that is itself moving
+    // down it trails by however long it takes to respond, and the first pass
+    // did exactly that — every bearing, however steep it was rolled, arrived
+    // over the pile four units high and dove out of the top of the frame. So
+    // the line's rate is applied directly and the spring is left doing the one
+    // thing it is good at.
+    entryVy: 0,
     // Flap and glide alternate on a timer rather than tracking speed: a gull
     // crossing at constant velocity would otherwise sit in one clip the whole
     // way, and the glide is half of what makes it read as a seagull.
@@ -271,19 +396,67 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       // instead of tracking a ruler-straight line.
       g.vy += (g.gliding ? -c.glideSink : c.flapLift) * dt;
 
+      // FLYING THE ENTRANCE IN. `descend` is how much of the arrival is left,
+      // measured off the horizontal distance still to close and normalised so
+      // it hits 0 exactly where the run commits. The altitude below and the
+      // depth further down both ride on it, which is what ties a rolled bearing
+      // together: however steep or however deep the entrance was, the bird is
+      // level, full size and on the play plane at the moment it is overhead.
+      //
+      // MONOTONE BY CONSTRUCTION, and it has to be. A retarget (just above) can
+      // hand the run a pile FURTHER away than the spawn was, and a raw distance
+      // ratio would send the gull climbing back out of the top of the frame to
+      // re-fly an entrance the player has already watched.
+      const closing = Math.abs(g.container.position.x - g.target.x) - c.diveZone;
+      const remain = Math.max(0, Math.min(1, closing / Math.max(1, g.entrySpan - c.diveZone)));
+      // ...spent over the FIRST share of the approach and no more. The entrance
+      // is a way IN, not the whole flight. Stretched across the entire run it
+      // put the bird below the top of the shot only for the last third of one —
+      // measured, under half a second of visible approach on a short bearing
+      // against nearly two seconds of flight — and the flap and the glide that
+      // are the whole reason a seagull reads as a seagull never got a frame.
+      // It comes down early and cruises the rest, which is also the order the
+      // two motions want: the bob is authored around a level hold.
+      const share = Math.max(0.05, Math.min(1, c.entryDescent ?? 1));
+      const wasDescend = g.descend;
+      g.descend = Math.min(g.descend, Math.max(0, Math.min(1, (remain - (1 - share)) / share)));
+
       // ...pulled back toward the cruising altitude, because the bob does NOT
       // cancel itself out. Lift x flapTime and sink x glideTime are two
       // independently tuned numbers, so any mismatch integrates: the first
       // pass climbed 10 units in 5 seconds and left the top of the screen
       // (the visible sky is only arena.viewHeight * surfaceFromTop tall).
       // A spring keeps the undulation without letting it drift.
+      //
+      // The height it holds is the entrance's, not the cruise's, until the
+      // entrance is flown. Same spring, same undulation on top of it — the
+      // descent is the line it bobs along rather than a separate motion.
       const cruiseY = bounds.surfaceY + c.cruiseAltitude;
-      g.vy += (cruiseY - g.container.position.y) * c.altitudeHold * dt;
+      const holdY = cruiseY + (g.entryY - cruiseY) * g.descend;
+      g.vy += (holdY - g.container.position.y) * c.altitudeHold * dt;
       g.vy *= 1 - Math.min(1, c.altitudeDamp * dt);
 
       const vyCap = c.cruiseSpeed * 0.5;
       g.vy = Math.max(-vyCap, Math.min(vyCap, g.vy));
       g.vx = g.dir * c.cruiseSpeed;
+
+      // ...and the line the bob is riding, measured rather than derived: how
+      // far the hold height moved THIS frame is exactly the descent's speed,
+      // and taking it from the two heights means it cannot disagree with them.
+      // Zero the moment the entrance is flown, so a cruising gull is the same
+      // gull it always was.
+      g.entryVy = dt > 0
+        ? (g.entryY - cruiseY) * (g.descend - wasDescend) / dt
+        : 0;
+
+      // BACK ONTO THE PLAY PLANE, and squared so the depth is spent EARLY. The
+      // approach is where the flourish belongs; the last stretch before the
+      // commit has to be flat and in-plane, because the dive and the impact
+      // test are both two-dimensional and a bird that went off a unit in front
+      // of the crab it aimed at is a miss nothing on screen explains.
+      const depthT = g.descend * g.descend;
+      g.container.position.z = g.z0 * depthT;
+      g.container.scale.setScalar(depthScale(c, g.z0, depthT));
 
       // Retarget while inbound — crabs move, and the pile it picked may have
       // been eaten or killed by the time it gets there.
@@ -303,6 +476,20 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       // while it is still approaching on the diagonal.
       if (Math.abs(g.container.position.x - g.target.x) <= c.diveZone) {
         g.phase = 'dive';
+        // The entrance is over. `descend` is already 0 here by construction —
+        // it is normalised against exactly this distance — so these two are
+        // pinned rather than eased, and the stoop is flown at true size on the
+        // play plane where the impact test can see it. A gull that reached the
+        // commit some other way (a retarget onto a pile it was already over)
+        // lands on the same plane instead of diving a few tenths off it.
+        g.container.position.z = 0;
+        g.container.scale.setScalar(1);
+        // The descent folds into the bob's velocity here and stops being its
+        // own term — a stoop is one motion and `entryVy` has no meaning inside
+        // it. Folded rather than dropped, so the plunge starts from the speed
+        // the bird actually had rather than losing whatever it was carrying.
+        g.vy += g.entryVy;
+        g.entryVy = 0;
         // Once, at the top of the stoop — the phase flip is edge-triggered by
         // this branch only running while still cruising, so it can't repeat
         // on the way down.
@@ -321,9 +508,14 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       g.vy = Math.max(-c.diveSpeedMax, g.vy);
     }
 
+    // The bob and the descent, which are one motion to everything downstream of
+    // here — the surface break, the nose, the plunge. Only the soar keeps them
+    // apart, and only because they are steered differently.
+    const vy = g.vy + g.entryVy;
+
     const prevY = g.container.position.y;
     g.container.position.x += g.vx * dt;
-    g.container.position.y += g.vy * dt;
+    g.container.position.y += vy * dt;
 
     // Breaking the surface on the way down.
     if (prevY > bounds.surfaceY && g.container.position.y <= bounds.surfaceY) {
@@ -346,7 +538,7 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
     const fade = Math.max(0.01, CONFIG.animation?.states?.boost?.fade ?? CONFIG.animation?.crossfade ?? 0.2);
     g.diveBlend = Math.max(0, Math.min(1, g.diveBlend + (g.phase === 'dive' ? dt : -dt) / fade));
 
-    if (Math.hypot(g.vx, g.vy) > 0.05) {
+    if (Math.hypot(g.vx, vy) > 0.05) {
       // Both the flank flip and the correction's sign come off `dir` — the side
       // the run entered from — and NOT off vx. A dive bleeds vx toward zero and
       // steers across it, so reading the sign live lets it cross mid-plunge,
@@ -354,7 +546,7 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       // The gull never turns around, so `dir` is the honest answer for both.
       const flip = g.dir < 0 ? -1 : 1;
       const correction = flip * g.diveBlend * (c.divePitch ?? 0) * DEG;
-      g.container.rotation.z = Math.atan2(g.vy, g.vx) - Math.PI / 2 + correction;
+      g.container.rotation.z = Math.atan2(vy, g.vx) - Math.PI / 2 + correction;
       if (CONFIG.view === 'side') g.visual.rotation.y = g.dir < 0 ? Math.PI : 0;
     }
 

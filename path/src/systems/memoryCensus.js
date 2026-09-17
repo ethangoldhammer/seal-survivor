@@ -192,6 +192,12 @@ export function censusItems(items) {
   let geo = 0;
   let tex = 0;
   let bones = 0;
+  // HOW MANY BONE TEXTURES HAVE BEEN UPLOADED, as opposed to how many bytes
+  // they are. `boneSeen` counts skeletons; a skeleton only grows a texture once
+  // it has been DRAWN (three builds it lazily inside the first render), so the
+  // two numbers are not the same and it is the uploaded one the renderer's own
+  // tally can be compared against.
+  let boneTextures = 0;
   let meshes = 0;
   let nodes = 0;
   let userData = 0;
@@ -228,12 +234,24 @@ export function censusItems(items) {
         boneSeen.add(sk.uuid ?? sk);
         bones += sk.boneMatrices?.byteLength ?? 0;
         bones += sk.boneTexture?.image?.data?.byteLength ?? 0;
+        if (sk.boneTexture) boneTextures++;
       }
     });
   };
   one(items);
   heavy.sort((a, b) => b.b - a.b);
-  return { geo, tex, bones, userData, meshes, nodes, skeletons: boneSeen.size, heavy: heavy.slice(0, 3), heavyCount: heavy.length };
+  return {
+    geo, tex, bones, userData, meshes, nodes,
+    skeletons: boneSeen.size,
+    // THE TWO COUNTS, beside the bytes, because the bytes cannot see this
+    // game's actual leak. `texSeen` is deduped by Source exactly as the byte
+    // figure is, so these are texture UPLOADS the scene can still reach — the
+    // number to hold `renderer.info.memory.textures` against.
+    textures: texSeen.size,
+    boneTextures,
+    heavy: heavy.slice(0, 3),
+    heavyCount: heavy.length,
+  };
 }
 
 /**
@@ -292,10 +310,31 @@ export function canvasBytes() {
   return { count: list.length, bytes, biggest };
 }
 
+/**
+ * THE LEAK THE BYTES CANNOT SEE, and the reason `glTextures` is here.
+ *
+ * Everything above answers "how much is reachable". The phone's trail shows
+ * that question coming back FLAT — tex105MB, reading after reading, session
+ * after session — while `renderer.info.memory.textures` in the tick beside it
+ * went 306 → 704 inside one run. Both numbers were right. Neither could name
+ * what was happening, because a bone texture is four kilobytes: a thousand of
+ * them move the count by a thousand and the megabytes by four.
+ *
+ * So the count is reported too, against the renderer's own. The renderer
+ * increments on upload and decrements only on dispose(), so what it holds and
+ * what the scene can reach are the same number in a game with no leak, and the
+ * difference is textures that were uploaded, dropped, and never freed. That
+ * subtraction is the instrument; `glTextures` is the half of it this file
+ * cannot work out for itself.
+ */
 export function censusReport({ items = [], audioBytes = 0, audioParts = null, targetBytes = 0,
-  canvas = null, keptBytes = 0 } = {}) {
+  canvas = null, keptBytes = 0, glTextures = null } = {}) {
   const c = censusItems(items);
   const mb = (n) => Math.round(n / MB);
+  // Bone textures are textures. They are counted apart from `texSeen` above
+  // (they hang off a Skeleton, not off a material) and have to be added back
+  // before the total means anything next to the renderer's.
+  const reachable = c.textures + c.boneTextures;
   return {
     geoMB: mb(c.geo),
     texMB: mb(c.tex),
@@ -327,6 +366,21 @@ export function censusReport({ items = [], audioBytes = 0, audioParts = null, ta
       + (canvas?.bytes ?? 0) + keptBytes),
     meshes: c.meshes,
     skeletons: c.skeletons,
+    // The count, its two halves, and the renderer's own.
+    texCount: c.textures,
+    boneTexCount: c.boneTextures,
+    reachableTextures: reachable,
+    glTextures,
+    // WHAT NOTHING CAN REACH AND NOTHING WILL FREE. Null rather than 0 when the
+    // caller could not hand over the renderer's tally, for the same reason
+    // audioParts is null rather than zeroes: a harness with no renderer must
+    // not be made to report "no orphans" as a fact about the game.
+    //
+    // Floored at zero. The renderer counts an upload, so a texture the scene
+    // holds but has never drawn is reachable-but-not-uploaded and makes this
+    // briefly negative — which is not a leak running backwards, it is the
+    // census being early.
+    orphanTextures: glTextures === null ? null : Math.max(0, glTextures - reachable),
   };
 }
 
@@ -346,7 +400,15 @@ export function censusLine(r) {
   const cv = r.canvasMB === null ? ''
     : ` cv${r.canvasCount}(${r.canvasMB}MB max${r.canvasBiggestMB})`;
   const kept = r.keptMB ? ` kept${r.keptMB}` : '';
+  // THE SUBTRACTION, SPELLED OUT rather than left for whoever reads the trail
+  // to do against a number in a different crumb. It reads
+  // `gl704=318map+575bone+?orphan` — the renderer's tally, then what the scene
+  // can account for, then what nothing can. A healthy run has no orphan term at
+  // all; one that is leaking has a term that only ever grows.
+  const gl = r.glTextures === null ? ''
+    : ` gl${r.glTextures}=${r.texCount}map+${r.boneTexCount}bone`
+      + (r.orphanTextures ? `+${r.orphanTextures}orphan` : '');
   return `geo${r.geoMB} tex${r.texMB} bone${r.boneMB} ud${r.udMB} ${a} rt${r.targetMB}${cv}${kept}`
-    + ` = ${r.totalMB}MB · ${r.nodes} nodes ${r.skeletons} skel`
+    + ` = ${r.totalMB}MB · ${r.nodes} nodes ${r.skeletons} skel${gl}`
     + (r.heavyCount ? ` · ${r.heavyCount} heavy: ${top}` : '');
 }

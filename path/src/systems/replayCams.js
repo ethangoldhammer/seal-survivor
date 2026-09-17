@@ -3,10 +3,20 @@
 // director that keeps the one with the best angle on the action.
 //
 // The game is filmed by one orthographic camera on the flat plane (world.js).
-// A replay is filmed by THIS: a pool of PerspectiveCamera shots that leave the
-// plane — swung round the action in yaw and pitch, dollied in and out, pushed
-// in slowly — and a director that scores every shot every frame and cuts or
-// blends to the best one the moment the current shot stops framing the play.
+// A replay is filmed by THIS: a pool of shots — swung round the action in yaw
+// and pitch, dollied in and out, pushed in slowly — and a director that scores
+// every shot every frame and cuts or blends to the best one the moment the
+// current shot stops framing the play.
+//
+// THE LENS IS A CHOICE, and it defaults to the game's own. CONFIG.versus
+// .replay.cams.projection picks between 'flat' (an orthographic camera square on the
+// play plane, one shot's FRAMING at a time — the default) and 'perspective'
+// (the pool of PerspectiveCameras that leave the plane, which is what this
+// file was built as). Everything below is shared: the scoring, the cuts, the
+// blends, the push-in and the seam slide all resolve where to look and how
+// tight, which is the same question for either lens. One line at the end of
+// updatePool knows which one is fitted — see poseFlat, and the note on `lens`
+// in config.js for why flat is the default.
 //
 // A SHOT (CONFIG.versus.replay.cams.shots[]) is:
 //   targets   { poi: weight } — the points of interest it frames. The look-at
@@ -92,6 +102,11 @@ function makePose() {
 export const poolState = {
   active: false,
   camera: new THREE.PerspectiveCamera(40, 16 / 9, 0.5, 600),
+  // The camera THIS FRAME WAS DRAWN WITH — the one above, or the flat lens when
+  // `cams.lens` is 'flat'. Read it rather than `camera` anywhere the question is
+  // "what is the picture being made with"; `camera` is the pool's own and is
+  // posed whether or not it is the one fitted.
+  rendered: null,
   shot: -1,            // index into shots, -1 = none yet
   shotName: null,
   onShot: 0,           // seconds on the current shot
@@ -117,6 +132,199 @@ export const poolState = {
 const _goal = makePose();
 const _want = makePose();
 const _cam = new THREE.PerspectiveCamera();
+
+// ---------------------------------------------------------------------------
+// THE FLAT LENS — the same director, filmed on the game's own camera.
+//
+// `cams.projection: 'flat'` — THE DEFAULT — films a replay with an ORTHOGRAPHIC
+// camera on the play plane instead of the perspective pool. Everything above
+// this line is untouched: the director still scores every shot, still cuts and blends, still
+// pushes in and still slides off a seam. Only the last step differs — where the
+// lens ends up and what shape its frustum is.
+//
+// WHAT IT IS FOR. The backdrop is a picture at ONE DEPTH: a sky plane, a water
+// fill, a seabed strip, each a flat quad a few units behind the play. That
+// works because an orthographic camera fires every ray parallel to -z, so depth
+// back there is occlusion ORDER and nothing else — a plane behind a thing
+// covers only what the thing already covers. A perspective camera's rays fan
+// out and it sees ALONG the picture, at which point every plane in it stops
+// being a backdrop and becomes a wall standing in the scene: it cuts the
+// gravestones, it cuts a third of the plant bed, and the cut sweeps as the shot
+// pushes in. None of that can happen here, by construction, which is the point.
+//
+// A SHOT'S ZOOM IS ITS OWN FRAMING, not a second set of numbers. A perspective
+// shot at `distance` d with a vertical `fov` f frames 2 d tan(f/2) of world at
+// the look-at. The flat lens is set to frame exactly that much, so every shot
+// keeps the size it was authored at, the slow push-in reads as a slow zoom-in,
+// and a cut between two shots is a cut between two zooms. Writing zooms per
+// shot instead would be a second description of the same framing, going stale
+// the day somebody retunes a `distance`.
+//
+// WHAT IS LOST, honestly: yaw and pitch. A flat camera has one angle, so the
+// eleven shots stop being eleven ANGLES and become eleven FRAMINGS — where the
+// cut goes and how tight it is. That is most of what the director was choosing
+// between (its score is about what is in frame, not what it is seen from), but
+// it is not all of it, and `impactLow` and `checkOver` in particular exist for
+// their angle.
+const _flat = new THREE.OrthographicCamera(-1, 1, 1, -1, -100, 200);
+// The box of a flat shot's targets. Its own, not versus.js's — that one belongs
+// to the MATCH camera and is written every frame by a different rule; sharing it
+// would make two cameras fight over one scratch object.
+const _fitBox = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+function fitInclude(x, y, first) {
+  if (first) { _fitBox.minX = _fitBox.maxX = x; _fitBox.minY = _fitBox.maxY = y; return; }
+  if (x < _fitBox.minX) _fitBox.minX = x;
+  if (x > _fitBox.maxX) _fitBox.maxX = x;
+  if (y < _fitBox.minY) _fitBox.minY = y;
+  if (y > _fitBox.maxY) _fitBox.maxY = y;
+}
+// Far enough in front of the play plane to be in front of everything and close
+// enough to be inside `near`/`far` above. Orthographic, so this number does not
+// change the picture by one pixel — it only decides what is behind the lens.
+const FLAT_Z = 50;
+
+/**
+ * Which projection the replay is filmed with. Defaults to FLAT, so a saved
+ * tuning snapshot from before this key existed still gets the new behaviour —
+ * imported-tuning.json holds whole sections and would otherwise pin every
+ * machine that has ever opened the tuner to the old lens.
+ *
+ * `projection`, never `lens`: `cams.lens` is the optical block next to it
+ * (defocus, focus radius, flare) and is an OBJECT in every saved snapshot.
+ */
+export function flatLens() {
+  return (cfg().projection ?? 'flat') !== 'perspective';
+}
+
+/**
+ * Pose the flat lens from the pose the director already resolved.
+ *
+ * The frustum is the ARENA'S frame, exactly as world.js applyFrustum builds it,
+ * and `zoom` does the rest — three's orthographic projection divides top/bottom
+ * by zoom, so the frame's height is (top - bottom) / zoom and setting the zoom
+ * is setting how much world is in shot.
+ *
+ * THE ZOOM IS FITTED TO THE SHOT'S OWN TARGETS, not converted from its
+ * `distance` and `fov`. Converting was tried first and is wrong in a way that
+ * is easy to miss: 2 d tan(fov/2) is the frame's VERTICAL extent at the
+ * look-at, and a perspective shot with yaw on it is looking across the pitch,
+ * so the world it actually covers horizontally is much wider than that times
+ * the aspect. Nine of the eleven shots carry yaw. The flat frame came out too
+ * tight and dropped promised targets off the side — tools/versus-test.mjs
+ * caught it at 138 frames of 388 with a target out, which is exactly the
+ * contract a shot makes when it lists a target at weight 0.3 or more.
+ *
+ * So this asks the same question the director scores on: what is this shot OF,
+ * and is it in frame. The box of the shot's weighted targets, plus the pool's
+ * own `pad`, fitted on whichever axis is tighter. That also means a flat shot
+ * holds its subjects while they move, which a fixed conversion could not.
+ *
+ * `fov` still reaches the picture through the pose the director eased — the
+ * push-in shrinks the box's padding share below, so a shot that pushes in still
+ * closes on its subject.
+ */
+function poseFlat(pose, bounds, shot, pois, aspect) {
+  const cam = _flat;
+  cam.right = bounds.frameWidth / 2;
+  cam.left = -cam.right;
+  cam.top = bounds.frameTop;
+  cam.bottom = bounds.frameBottom;
+  const frameH = cam.top - cam.bottom;
+  const frameW = cam.right - cam.left;
+
+  // The box of everything this shot promises to show. Weightless targets are
+  // not promised and do not widen the frame — same rule framingScore keeps.
+  let first = true;
+  for (const [name, w] of Object.entries(shot?.targets ?? {})) {
+    const p = pois?.[name];
+    if (!p || !(w > 0)) continue;
+    fitInclude(p.x, p.y, first);
+    first = false;
+  }
+
+  let zoom;
+  if (first) {
+    // Nothing to fit — a shot with no live targets. Fall back to the pose's own
+    // framing rather than to a typed number, so it is still THIS shot's size.
+    const dist = Math.max(0.01, pose.pos.distanceTo(pose.at));
+    zoom = frameH / Math.max(1e-4, 2 * dist * Math.tan((pose.fov * Math.PI) / 360));
+  } else {
+    const c = cfg();
+    // Air round the box, in WORLD units, and part of what the fit holds — never
+    // spent to keep a subject in, exactly as the match camera's own pad is not.
+    const pad = Math.max(0, c.flatPad ?? 6);
+    const needW = Math.max(1e-4, (_fitBox.maxX - _fitBox.minX) + pad * 2);
+    const needH = Math.max(1e-4, (_fitBox.maxY - _fitBox.minY) + pad * 2);
+    // Whichever axis is tighter wins, so the box is inside the frame on both.
+    zoom = Math.min(frameW / needW, frameH / needH);
+    // ...and the shot's own push still reads. `fovPush` is 0 at the start of a
+    // shot and 1 when the push has run out, so this closes the remaining air
+    // rather than adding zoom of its own — a push-in that fought the fit would
+    // put the subject back outside it.
+    const close = c.flatPush ?? 0.25;  // from the cams block, beside `projection`
+    zoom *= 1 + close * clamp01(poolState.fovPush);
+  }
+  cam.zoom = Math.max(0.05, zoom);
+
+  // CENTRED ON THE BOX, NOT ON THE LOOK-AT, and the difference is the whole
+  // reason the fit works. `at` is the WEIGHTED CENTROID of the targets, so a
+  // shot that weights the ball at 2 and the impact at 0.4 looks near the ball —
+  // while the box that has to fit is the extremes of both. Fitting one and
+  // centring the other puts the light target outside the frame the fit just
+  // guaranteed would hold it, which is exactly what it did: every settled frame
+  // of every shot had a promised target out.
+  let cx = pose.at.x;
+  let cy = pose.at.y;
+  if (!first) {
+    cx = (_fitBox.minX + _fitBox.maxX) * 0.5;
+    cy = (_fitBox.minY + _fitBox.maxY) * 0.5;
+  }
+  // THE FRAME STOPS AT THE MOUTH, the same rule the perspective pose keeps at
+  // the end of poseShot and for the same reason: a frame whose edge reaches
+  // past a goal's face is looking into the tunnel, and the shore is a carved
+  // mesh that shows its inner faces from anywhere but square-on. Slid, not
+  // shrunk — the fit above decided how much is in shot and this only decides
+  // where that much sits. A frame already wider than the room is centred in it
+  // rather than fought.
+  {
+    const c = cfg();
+    const past = c.pastFace ?? 2.5;
+    const loX = bounds.left - past;
+    const hiX = bounds.right + past;
+    const loY = bounds.bottom - past;
+    const hiY = (bounds.top ?? cy + 99) + past;
+    const hw = frameW / (2 * cam.zoom);
+    const hh = frameH / (2 * cam.zoom);
+    cx = hiX - loX < hw * 2 ? (loX + hiX) / 2 : Math.max(loX + hw, Math.min(hiX - hw, cx));
+    cy = hiY - loY < hh * 2 ? (loY + hiY) / 2 : Math.max(loY + hh, Math.min(hiY - hh, cy));
+  }
+
+  // OFFSET BY THE FRUSTUM'S OWN CENTRE, which is not zero. The arena's frame is
+  // ASYMMETRIC — top 10.4, bottom -41.6 on a 16:9 desktop — because the water
+  // hangs below a strip of air, so the middle of the view sits at
+  // (top + bottom) / 2 and not at the camera's y. Set the camera to the
+  // subject's y and the subject lands a full 15.6 units above the middle of the
+  // picture, which at these zooms is most of the frame: every promised target
+  // of every shot was out, on all 388 settled frames, and tools/versus-test.mjs
+  // said so plainly.
+  //
+  // NOT DIVIDED BY THE ZOOM. three builds the frustum as cx +- (right - left) /
+  // (2 zoom), so the centre sits at the camera's position plus cx at EVERY
+  // zoom — the offset does not shrink as you zoom in. world.js viewCentre makes
+  // the same point about the same frustum, and dividing here is the bug it
+  // warns about.
+  //
+  // No lookAt either: the rotation is identity and calling it would be a chance
+  // to get it wrong.
+  cam.position.set(cx - (cam.left + cam.right) * 0.5, cy - (cam.top + cam.bottom) * 0.5, FLAT_Z);
+  cam.rotation.set(0, 0, 0);
+  cam.updateProjectionMatrix();
+  cam.updateMatrixWorld();
+  // The particle scaler reads this; for a flat lens every point on the play
+  // plane is the same distance from it, which is what FLAT_Z is.
+  cam.userData.focusDistance = FLAT_Z;
+  return cam;
+}
 const _v = new THREE.Vector3();
 const _off = new THREE.Vector3();
 const _q = new THREE.Vector3();
@@ -140,6 +348,10 @@ export function resetPool(aspect = 16 / 9) {
   st.snap = true;
   st.camera.aspect = aspect;
   st.camera.updateProjectionMatrix();
+  // Cleared rather than left: a replay that ends with the flat lens fitted and
+  // restarts with the perspective one would otherwise draw its first frame
+  // through last replay's camera.
+  st.rendered = null;
 }
 
 export function stopPool() {
@@ -520,15 +732,29 @@ export function updatePool(ctx) {
   st.cur.pos.lerp(_want.pos, follow);
   st.cur.at.lerp(_want.at, follow);
   st.cur.fov = lerp(st.cur.fov, _want.fov, follow);
-  const cam = st.camera;
-  cam.position.copy(st.cur.pos);
-  cam.up.set(0, 1, 0);
-  cam.lookAt(st.cur.at);
-  cam.fov = st.cur.fov;
-  cam.updateProjectionMatrix();
-  cam.updateMatrixWorld();
-  // For the particle scaler: how far the plane the action is on sits from the lens.
-  cam.userData.focusDistance = cam.position.distanceTo(st.cur.at);
+  // ONE SEAM, and it is here. Everything above resolved WHERE to look and HOW
+  // TIGHT, which is the same question for either lens; this is the only line
+  // that cares which one is fitted. See poseFlat.
+  let cam;
+  if (flatLens()) {
+    cam = poseFlat(st.cur, bounds, shot, pois, aspect);
+  } else {
+    cam = st.camera;
+    cam.position.copy(st.cur.pos);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(st.cur.at);
+    cam.fov = st.cur.fov;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    // For the particle scaler: how far the plane the action is on sits from the lens.
+    cam.userData.focusDistance = cam.position.distanceTo(st.cur.at);
+  }
+  // PUBLISHED SEPARATELY, never written over `st.camera`. The pool's
+  // perspective camera stays the pool's — resetPool and the aspect check above
+  // write to it every frame, and the harness reads its fov — so the camera the
+  // FRAME is drawn with is its own field. Collapsing the two put an
+  // orthographic camera somewhere three lines expected a perspective one.
+  st.rendered = cam;
   st.fovPush = clamp01(((shot.fov ?? 40) - st.cur.fov) / Math.max(1e-6, (shot.fov ?? 40) - (shot.push ?? shot.fov ?? 40)));
 
   // The lens: the sharp region round the primary target, its size the shot's.

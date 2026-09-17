@@ -81,7 +81,17 @@ const STYLES = `
 
      The safe-area inset is not decoration: on an iPhone the bottom of the
      viewport is the home indicator, and a link under it is a link that swipes
-     the player out of the game instead of opening. */
+     the player out of the game instead of opening.
+
+     IT IS ALSO HALF OF A PAIR, and the halves have to measure from the same
+     edge. The artboard reserves 72pt below the entry column for this
+     (SPLASH_GEOMETRY.strip.bottom) — 58 of which this spends at touch size,
+     leaving 14. That only holds while the reserve starts where this does, so
+     riveSplash.js pads the wrapper by the same inset and sizes the canvas to
+     the content box. Measured from the viewport on one side and the safe area
+     on the other, the jar climbs into the reserve and the Start button lands
+     on it: 20px of overlap on a notched iPhone, clean on every desktop, which
+     is exactly the shape of bug a check at one viewport never sees. */
   .sv-tip-splash { position: absolute; left: 50%; transform: translateX(-50%);
     bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 2;
     /* Its own dark backing, unlike the two menu copies. Those sit on a

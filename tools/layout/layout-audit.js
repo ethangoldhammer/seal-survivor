@@ -1387,16 +1387,30 @@ async function measureSplash() {
     out.push({ type: 'splash-unread', what: 'splash entry column', by: `the artboard reported scale ${scale} and pill width ${pillW}; nothing could be measured` });
     return out;
   }
+  // EVERYTHING IS IN THE CANVAS'S SPACE, not the window's.
+  //
+  // The artboard is laid out against the CANVAS box, which is the viewport
+  // less the bottom safe area — riveSplash.js pads the wrapper so the card's
+  // 72pt reserve starts above the home indicator rather than under it. Handing
+  // splashFindings window.innerHeight would put the Start button an inset
+  // lower than it draws and report the tip jar, which sits in that reserve, as
+  // clear of a column that is nowhere near it. So the canvas gives both the
+  // size and the origin, and the DOM rects are shifted into it.
+  const box = document.querySelector('.sv-riv canvas')?.getBoundingClientRect();
+  if (!(box?.width > 0 && box?.height > 0)) {
+    out.push({ type: 'splash-unread', what: 'splash canvas', by: 'the card is up but its canvas has no box; nothing could be measured against it' });
+    return out;
+  }
   const others = [];
   for (const sel of ['.sv-tip-splash', '.sv-build-stamp']) {
     for (const node of document.querySelectorAll(sel)) {
       const r = node.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) continue;
-      others.push({ what: path(node), rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } });
+      others.push({ what: path(node), rect: { left: r.left - box.left, right: r.right - box.left, top: r.top - box.top, bottom: r.bottom - box.top } });
     }
   }
   out.push(...splashFindings({
-    W: window.innerWidth, H: window.innerHeight, scale, pillW, others,
+    W: box.width, H: box.height, scale, pillW, others,
     touch: params.get('touch') === '1', tapMin: TAP_MIN,
   }));
   return out;

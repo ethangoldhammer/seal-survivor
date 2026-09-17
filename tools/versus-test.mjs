@@ -21,6 +21,26 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
+
+// THE REPLAY CAMERA THIS FILE IS ABOUT.
+//
+// A goal replay now ships filmed with the FLAT orthographic lens
+// (CONFIG.versus.replay.cams.projection, default 'flat'), because the backdrop
+// is a picture at one depth and only a camera with parallel rays can treat it
+// as one — see the note on `projection` in config.js.
+//
+// The replay-camera block below is about the OTHER one: the pool of perspective
+// shots swung off the plane, their angle, their z offset and their fov push.
+// Those are still the contract that lens has to keep whenever it is the one
+// fitted, so they are asserted against it directly rather than deleted. Set
+// HERE, before anything steps a replay, because the camera is posed inside
+// updatePool — flipping it mid-block leaves `poolState.rendered` holding the
+// lens the previous frame was drawn with.
+//
+// The flat lens has its own tests in tools/replay-lens-test.mjs, and the
+// framing checks in this file (targets in frame, no seam past a goal's face)
+// pass under either.
+CONFIG.versus.replay.cams.projection = 'perspective';
 import { enableVersus, versusActive, versusDrops, versusSetup } from '../path/src/systems/versusFlag.js';
 import { beginLobby, endSession, REMOTE } from '../path/src/systems/online/session.js';
 import { versusZoomFloor, matchMargins } from '../path/src/systems/backdropFit.js';

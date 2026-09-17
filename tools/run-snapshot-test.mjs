@@ -35,7 +35,7 @@ function installStorage() {
 }
 installStorage();
 
-const { packRun, resumable, saveRun, readRun, clearRun, noteResume } =
+const { packRun, resumable, saveRun, readRun, clearRun, noteResume, resumeHeld } =
   await import('../path/src/systems/runSnapshot.js');
 
 let failures = 0;
@@ -73,6 +73,30 @@ for (const key of Object.keys(packed)) {
     'stored on every beat and never restored — either apply it or stop paying for it');
 }
 
+// --- the loop the resumed run opens on --------------------------------------
+// The one part of a restore the player HEARS, and the one the join check above
+// cannot see: `slotForLevel` picks a loop per CONFIG.music.levelsPerSlot levels,
+// so a run resumed at fourteen opens four loops away from where it was. It used
+// to open on the first one and correct itself by QUEUE — a queue waits for the
+// playing file to finish, and on a phone that had just lost its process nothing
+// was decoded yet, so it missed that boundary too and waited for the one after.
+//
+// Read out of the source rather than driven, because the bug is entirely which
+// NUMBER buildRun hands the transport, and the transport is three systems away
+// from anything this suite can stand up.
+const buildBody = main.slice(
+  main.indexOf('function buildRun(resume = null) {'),
+  main.indexOf('\nfunction ', main.indexOf('function buildRun(resume = null) {') + 1),
+);
+check('buildRun was found in main.js', buildBody.length > 200,
+  'the function was renamed or moved — the two checks below are blind until the slice is fixed');
+const musicStart = buildBody.match(/(?:releaseMusicIntoRun|playMusic)\(([^)]*)\)/g) ?? [];
+check('buildRun starts the music', musicStart.length === 2, musicStart.join(' / '));
+check('...at the level the snapshot restores, not the one on the clock',
+  musicStart.every((call) => !/gameState\.level/.test(call)),
+  `${musicStart.join(' / ')} — gameState.level is 1 here on every route, including a resume:`
+  + ' the snapshot is applied at the END of buildRun');
+
 // --- the picks --------------------------------------------------------------
 const withElement = packRun({
   picks: [
@@ -99,6 +123,26 @@ check('the second resume is allowed', resumable({ ...fresh, resumes: 1 }, rules)
 check('the third is not', resumable({ ...fresh, resumes: 2 }, rules) === false,
   'the loop guard is the only thing standing between a fatal board and an unescapable relaunch');
 check('nothing at all does not resume', resumable(null, rules) === false);
+
+// --- the hold that hands a resume back --------------------------------------
+// The counter counts FAILED resumes. A restore that walks back into the wall
+// that killed it dies inside the loading screen; the kills on the phone's own
+// crash trail are five to nine minutes apart. Everything below is about that
+// gap being read the right way round — the release that counted every restore
+// refused a third resume to a run the net had twice saved for six minutes.
+const hold = { holdSeconds: 60 };
+check('a restore that dies immediately has not held', resumeHeld(0, hold) === false);
+check('...nor one that dies in the loading screen', resumeHeld(9, hold) === false);
+check('...nor one a second short', resumeHeld(59.9, hold) === false);
+check('a run that reaches the hold has held', resumeHeld(60, hold) === true);
+check('...and so has one the length of a real session', resumeHeld(541, hold) === true,
+  'the third kill on the 9/17 trail came 541s after the resume that preceded it');
+check('a hold with no reading is not a hold', resumeHeld(undefined, hold) === false);
+check('...and neither is a broken one', resumeHeld(NaN, hold) === false);
+// The two ends joined: a run that held is offered the net again, where one that
+// did not is still refused on its second failure.
+check('a held resume is spendable again', resumable({ ...fresh, resumes: 0 }, rules) === true);
+check('...where two failures in a row are not', resumable({ ...fresh, resumes: 2 }, rules) === false);
 
 // --- storage ----------------------------------------------------------------
 clearRun();

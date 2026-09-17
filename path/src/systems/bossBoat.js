@@ -370,6 +370,22 @@ function ride(dt, e, playerPos) {
     const roll = Math.sin(e.rollClock * 1.1) * (c.rollAmount ?? 0.05);
     e.visual.rotation.z = roll;
 
+    // AND THE HEEL — the lateral rock, about the axis the hull is sailing
+    // along, which is the only part of a boat's idle that shows it is a solid.
+    // The nod above is in the plane of the screen and moves a silhouette; this
+    // one swings the deck and the far rail toward the lens and away again.
+    //
+    // Written to rotation.x, which under three's default XYZ order composes
+    // OUTSIDE the yaw below — so the heel is about the world's X whichever way
+    // the hull is pointed, and coming about doesn't invert it mid-turn.
+    //
+    // Smaller and slower than a rowboat's (CONFIG.boats.heelAmount): this hull
+    // is four times the length and carries people standing up on it, and the
+    // crew's feet are placed against the deck's world matrix every frame
+    // (systems/crew.js), so the heel moves them for real.
+    e.visual.rotation.x = Math.sin(e.rollClock * (c.heelSpeed ?? 0.6) + Math.PI / 3)
+      * (c.heelAmount ?? 0.07);
+
     // IT STEERS ROUND, it does not flip. This used to be one line that snapped
     // rotation.y between 0 and PI on the frame the velocity changed sign, which
     // is a forty-metre boat changing ends in a single frame — and it is the one

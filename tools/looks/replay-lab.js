@@ -880,6 +880,15 @@ window.__seek = (t) => { playing = false; seekStagedReplay(t); };
 window.__pick = (i) => { picked = i; buildPanel(); };
 window.__solo = (on) => { solo = on; b('bSolo').classList.toggle('on', solo); stageGoal(); };
 window.__preset = preset;
+// THE LENS, so a flat replay can be looked at without playing a match. The
+// director is the same either way — only what it is filmed through changes.
+// See poseFlat in systems/replayCams.js.
+window.__lens = (which) => {
+  CONFIG.versus.replay.cams.projection = which === 'perspective' ? 'perspective' : 'flat';
+  resetPool(STAGE_W / STAGE_H);
+  stageGoal();
+  return CONFIG.versus.replay.cams.projection;
+};
 window.__step = (n = 1) => { for (let i = 0; i < n; i++) { step(1 / 60); render(1 / 60); } readout(); };
 async function shoot(name) {
   render(1 / 60);

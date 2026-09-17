@@ -7109,9 +7109,11 @@ export function endStagedReplay() {
 
 /**
  * THE CAMERA TO RENDER THROUGH THIS FRAME, or null for the world's own — asked
- * by main.js right before post.render. While the pool is directing, this is
- * its perspective camera, and the lens is written for the composite (post.js
- * reads cineLens; `forced` lets it through with the cinematic camera off).
+ * by main.js right before post.render. While the pool is directing, this is the
+ * lens the director posed — its perspective camera, or the flat orthographic
+ * one when CONFIG.versus.replay.cams.lens is 'flat' — and the lens is written
+ * for the composite (post.js reads cineLens; `forced` lets it through with the
+ * cinematic camera off).
  */
 export function replayRenderCamera() {
   const rs = replayState;
@@ -7130,7 +7132,11 @@ export function replayRenderCamera() {
   cineLens.flare = c.lens?.flare ?? 0;
   cineLens.vignette = c.lens?.vignette ?? 0;
   rs.lensForced = true;
-  return poolState.camera;
+  // The camera the frame is DRAWN with, which is the pool's perspective one
+  // unless `cams.projection` is 'perspective' — see poseFlat in systems/replayCams.js. Never
+  // `poolState.camera` directly: that one is posed every frame whether or not
+  // it is the lens actually fitted.
+  return poolState.rendered ?? poolState.camera;
 }
 
 function releaseReplayLens() {

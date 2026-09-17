@@ -7259,6 +7259,93 @@ export const CONFIG = {
       altitudeHold: 2.2, // spring pulling back to the cruise height
       altitudeDamp: 1.4, // bleeds off vertical speed so the spring settles
 
+      // --- the entrance -------------------------------------------------------
+      // WHERE A RUN COMES FROM. It used to be one of two places: in from the
+      // left wall or in from the right, at cruise altitude, every time. Eight
+      // stacks of a card whose whole presentation is an approach, and the
+      // approach was the same shot twice.
+      //
+      // The entrance is a BEARING now — a rolled side, a rolled length of run
+      // and a rolled depth — and the three of them together are the angle. The
+      // gull descends and closes on the same ramp (`descend` in seagull.js), so
+      // whatever bearing it came in on it arrives level, on the play plane, and
+      // exactly overhead.
+      //
+      // EVERY ENTRANCE STARTS ABOVE THE FRAME, which is what makes the rest of
+      // it safe to vary. A bird rolled onto a steep bearing has little or no
+      // horizontal run to slide in along, and a bird rolled deep into the
+      // background is the wrong SIZE for the play plane while it is back there
+      // (see depthCue) — both would pop into an empty sky if they started at
+      // cruise altitude. Entering from over the top of the shot means the first
+      // frame a player ever sees of a gull is one already on its way down.
+      //
+      // Measured off the LIVE shot rather than the resting frame — see shotTop
+      // in seagull.js, and the twenty-one units of sky a breach opens up above
+      // bounds.frameTop that this would otherwise spawn straight into.
+      entryHeight: 6, // units above the top of the shot that a run begins at
+
+      // How far out, horizontally, the spawn is placed from the pile. This is
+      // the angle: at `approachMin` the descent from entryHeight is steep and
+      // the bird drops into the top of the shot, at `approachMax` it is a long
+      // shallow glide in from off the side. Both must stay well clear of
+      // `diveZone` below — that is the distance at which the run commits, so a
+      // spawn inside it would be a dive with no approach at all.
+      approachMin: 11,
+      approachMax: 46,
+
+      // ...and the fastest a run may come down on its way in, which only ever
+      // binds when the camera is high. `entryHeight` is measured off the top of
+      // the SHOT, so a breach that pans the frame up to the arena's ceiling
+      // triples the distance a run has to come down — and the shortest approach
+      // rolled against a drop that size stops being a steep entrance and
+      // becomes a bird falling faster than the stoop it is about to perform.
+      // The run is lengthened to hold this rather than the descent being
+      // clamped, so the line stays straight. At rest the roll is nearly always
+      // the longer of the two and this barely shows.
+      //
+      // A SPEED RATHER THAN AN ANGLE, so it can be read against the two numbers
+      // it has to sit between: `cruiseSpeed` 13, which is how fast the bird
+      // flies, and `diveSpeedMax` 30, which is the stoop it is on its way to.
+      // The entrance has to be quicker than the cruise and unmistakably slower
+      // than the dive, and at an angle none of that is visible.
+      entryDropMax: 20, // world units a second
+
+      // HOW MUCH OF THE APPROACH IS SPENT COMING DOWN, as a share of the run.
+      // The rest is level cruise at `cruiseAltitude`, exactly as it always was.
+      //
+      // It is not 1, and the difference is the whole visible approach. A
+      // descent stretched across the entire run keeps the gull above the top of
+      // the shot until the last stretch of it — measured, under half a second
+      // of bird against nearly two seconds of flight on a short bearing — so
+      // the flap and the glide that are the only reason the thing reads as a
+      // seagull rather than as a projectile never get a frame on screen. At
+      // 0.35 the entrance is over early and what a player watches is a bird
+      // flying, which is what the card is presented through.
+      entryDescent: 0.35,
+
+      // --- depth --------------------------------------------------------------
+      // HOW FAR INTO THE PICTURE, OR OUT OF IT, A RUN MAY BEGIN. Rolled either
+      // side of zero, so a gull can come out of the background or sweep in over
+      // the foreground, and is eased back onto the play plane during the
+      // approach — the dive and the impact test are both two-dimensional, and a
+      // bird that detonated a unit in front of the crab it aimed at would be a
+      // miss nothing on screen explains.
+      //
+      // Bounded by the SKY PLANE, which is at z = -6 (backdropFit.js: SKY_Z).
+      // Anything at or behind that is painted over by the sky and the run
+      // simply does not exist for its first second.
+      depthRange: 4,
+
+      // ...and the depth has to be DRAWN. The camera is orthographic (world.js)
+      // so moving the gull through z changes nothing on screen but which body
+      // sorts in front of which — the same problem the bait ball has, and the
+      // same answer: scale the bird by how far toward the camera it is. See
+      // CONFIG.baitBall.depthCue, which is the same cue at a smaller radius.
+      //
+      // At 0.22 a gull entering from the back of the sky is drawn at 0.78x and
+      // one sweeping in over the front at 1.22x, both easing to 1 as they close.
+      depthCue: 0.22,
+
       // --- dive ---
       diveZone: 2.4, // horizontal half-width overhead that triggers the commit
       diveAccel: 34, // downward acceleration once committed
@@ -8062,6 +8149,11 @@ export const CONFIG = {
     },
       bobSpeed: 1.6,
       bobAmount: 0.22,
+      // The lateral rock — see CONFIG.boats.heelAmount for which axis this is
+      // and why every hull in the ocean has one. Slower and a shade smaller
+      // than a rowboat's: this is a working trawler under tow, not a dinghy.
+      heelAmount: 0.12,
+      heelSpeed: 0.8,
 
       // --- voicemail bombs ------------------------------------------------
       // Dropped INTO the loaded net while the boat sails, on top of the haul
@@ -33140,7 +33232,15 @@ export const CONFIG = {
     // Or the hull jitters over a player holding still, which reads as broken
     // rigging rather than as a boat.
     deadzone: 1.5,
+    // The nod, in the plane of the screen. See CONFIG.boats for the same pair
+    // on the hulls you shoot at, and for which axis does what.
     rollAmount: 0.05,
+    // The lateral rock. Deliberately under the rowboats' 0.14: this hull is
+    // eleven units of boat with guests standing on the deck, and the crew are
+    // planted against its world matrix every frame, so what is a pleasant
+    // wallow on a dinghy is a listing ship here.
+    heelAmount: 0.07,
+    heelSpeed: 0.6,
     // HOW IT COMES ABOUT. The hull used to change ends in a single frame the
     // moment its velocity changed sign — a forty-metre boat flipping like a
     // sprite, at the exact moment the fight is watching it, because it only
@@ -34658,6 +34758,21 @@ export const CONFIG = {
     radius: 1.6,
     bobAmount: 0.22, // vertical bob on the surface
     bobSpeed: 1.6,
+    // THE TWO AXES A SAILING HULL ROCKS ON. Both are the swell, neither is a
+    // reaction to anything — what a hit does to a boat is CONFIG.physics.boat,
+    // laid on top of these (see RigidBody.restAngle / restBank).
+    //
+    //   roll   the fore-and-aft nod, bow up and down, on `bobSpeed` x 0.7.
+    //          In the plane of the screen, so it only ever tips a silhouette.
+    //   heel   the lateral rock about the axis the boat is sailing along. This
+    //          is the one that swings the deck toward the camera and away, and
+    //          the only thing in a boat's idle that says it is a model rather
+    //          than a cut-out — turn it up to read the hull, down for a calm
+    //          sea. Past about 0.3 the mast starts to scythe and the crew look
+    //          like they are on a fairground ride.
+    rollAmount: 0.08, // radians of nod — was hard-coded, same number
+    heelAmount: 0.14, // radians of lateral rock — about 8 degrees each way
+    heelSpeed: 0.85, // rad/s. Slower than the nod: a beam sea has a long period
     contactDamage: 0, // boats are targets, not threats — they sit above the water
     xp: 20,
     // What a hull does when it's hit. A boat is a SIMULATED BODY — mass, one
@@ -35633,7 +35748,18 @@ export const CONFIG = {
     // board heavy enough to exhaust the process is a plausible cause of the
     // kill and not only its victim, so an unbounded net can hand the player an
     // unescapable loop. Two.
+    //
+    // Two CONSECUTIVE FAILURES, though, not two resumes — see the next number.
     maxResumes: 2,
+    // How long a restored run has to survive before the resume it spent is
+    // handed back. Past this it is a run that is being played, not a restore
+    // circling a wall, so the counter above goes back to zero.
+    //
+    // Sixty seconds because the two cases it separates are nowhere near each
+    // other: a restore that dies on the same board it died on last time does
+    // not get out of the loading screen, and the kills on the phone's own trail
+    // are five to nine minutes apart. See resumeHeld in systems/runSnapshot.js.
+    holdSeconds: 60,
   },
 
   // ---------------------------------------------------------------------------
@@ -43720,6 +43846,63 @@ export const CONFIG = {
       // and cuts or blends to the best angle on the action.
       cams: {
         enabled: true,
+        // WHICH PROJECTION A REPLAY IS FILMED WITH.
+        //
+        // NOT `lens`, which is three lines down and is the optical block — the
+        // defocus, the focus radius, the flare. That name was tried first and
+        // is already in every saved imported-tuning.json as an OBJECT, so the
+        // toggle compared {defocus, ...} to a string, was never equal to
+        // 'flat', and silently filmed every replay the old way while reading
+        // correctly in config.js. See the note in SERVERS.md about a snapshot
+        // beating a default.
+        //
+        //   'flat'         THE DEFAULT. The game's own orthographic camera,
+        //                  square on the play plane, one shot's framing at a
+        //                  time.
+        //   'perspective'  the pool of virtual cameras, off the plane, in yaw
+        //                  and pitch. What a goal replay used to be.
+        //
+        // THE DIRECTOR IS THE SAME EITHER WAY. It still scores all eleven shots
+        // every frame, still cuts and blends, still pushes in, still slides off
+        // a seam. Only the last step differs, and there is exactly one line in
+        // systems/replayCams.js that knows which lens is fitted. Under 'flat'
+        // the shots become eleven FRAMINGS rather than eleven angles, each with
+        // its own zoom derived from the `distance` and `fov` it was already
+        // authored with — so a push-in reads as a zoom-in and a cut is a cut
+        // between zooms. There are no second numbers to keep in step.
+        //
+        // WHY FLAT IS THE DEFAULT. The backdrop is a PICTURE AT ONE DEPTH — a
+        // sky plane, a water fill, a seabed strip, each a flat quad a few units
+        // behind the play. That is exactly right for an orthographic camera,
+        // whose rays are all parallel to -z: depth back there is occlusion
+        // ORDER and nothing else, and a plane behind a thing covers only what
+        // the thing already covers. A perspective camera's rays fan out and it
+        // sees ALONG the picture, at which point every plane in it stops being
+        // a backdrop and becomes a wall standing in the scene. Measured: it cut
+        // the back gravestone and 52 of the 140 plants in the bed, and the cut
+        // sweeps across them as the shot pushes in. None of that can happen
+        // under 'flat', by construction rather than by tuning — which is why
+        // the seabed strip's depth and the bed's scatter range stopped being
+        // load-bearing the day this flipped.
+        //
+        // WHAT 'flat' GIVES UP, and it is real: yaw and pitch. `impactLow` and
+        // `checkOver` exist for their angle, and a flat lens has only one. See
+        // poseFlat in systems/replayCams.js.
+        projection: 'flat',
+        // WORLD UNITS OF AIR round the box of a flat shot's targets. The flat
+        // lens fits its zoom to what the shot promises to show (see poseFlat in
+        // systems/replayCams.js) and this is the room left round it, so it is
+        // part of what the fit HOLDS rather than something spent to keep a
+        // subject in. Bigger reads wider and safer; smaller reads tighter and
+        // starts putting a fast subject on the edge of frame.
+        flatPad: 6,
+        // ...and how much of that air a shot's push-in closes, as a fraction.
+        // The perspective pool pushes by easing its fov; a flat shot cannot, so
+        // the push arrives as the fit tightening over the seconds the shot
+        // holds. 0 is a flat shot that never moves. It rides `fovPush`, which is
+        // the SAME easing the perspective push runs on, so a shot that was
+        // tuned to close quickly still does.
+        flatPush: 0.25,
         noseLength: 2.2,    // world units from a seal's centre to its face, for the face targets
         // NO SEAMS: the shore is a carved mesh and the goal a tunnel, and both
         // show their inner faces from any angle but square-on. A shot's yaw
@@ -46629,6 +46812,9 @@ export const TUNER_SCHEMA = [
       // untouched by this, and the one thing a switch here must never be is
       // one that leaves one side chaining.
       { path: 'versus.chain.enabled', type: 'bool', label: 'blubberball: the food chain runs in a match' },
+      { path: 'versus.replay.cams.projection', type: 'choice', options: ['flat', 'perspective'], label: 'blubberball: goal replay camera' },
+      { path: 'versus.replay.cams.flatPad', min: 0, max: 24, step: 0.5, label: 'blubberball: flat replay — air round the subject (units)' },
+      { path: 'versus.replay.cams.flatPush', min: 0, max: 1, step: 0.05, label: 'blubberball: flat replay — how far a shot closes in' },
       // --- what a ball contact sounds like -----------------------------------
       // The bands pick which of the three rows fires; everything under them
       // shapes the one that does. Which FILE each row plays is the F panel's
@@ -49136,6 +49322,18 @@ export const TUNER_SCHEMA = [
       { path: 'boats.speed', min: 0.5, max: 12, step: 0.1 },
       { path: 'boats.hp', min: 5, max: 400, step: 5 },
       { path: 'boats.radius', min: 0.5, max: 5, step: 0.1 },
+      // --- HOW A HULL SITS ON THE WATER ------------------------------------
+      // The idle, not the reaction: what every boat does while nothing is
+      // happening to it. `heel` is the lateral rock — the deck swinging toward
+      // the camera and away — and it is the one that makes the hull read as a
+      // model instead of a cut-out sliding past. The boat boss and Bakalar's
+      // trawler have their own pair under their own groups.
+      { path: 'boats.bobAmount', min: 0, max: 1.5, step: 0.02, label: 'bob (height on the swell)' },
+      { path: 'boats.bobSpeed', min: 0, max: 6, step: 0.1, label: 'bob speed' },
+      { path: 'boats.rollAmount', min: 0, max: 0.5, step: 0.01, label: 'nod (bow up and down)' },
+      { path: 'boats.heelAmount', min: 0, max: 0.6, step: 0.01, label: 'heel (rock toward the camera)' },
+      { path: 'boats.heelSpeed', min: 0, max: 4, step: 0.05, label: 'heel speed' },
+      { path: 'boats.trawlerScale', min: 0.5, max: 4, step: 0.05, label: 'trawler size (x rowboat)' },
       { path: 'boats.hitReaction.maxRoll', min: 0.1, max: 1.6, step: 0.05, label: 'roll limit while afloat (no capsize)' },
       { path: 'boats.hitReaction.strike.damageMul', min: 0, max: 3, step: 0.05, label: 'ram: damage vs hulls (x strike damage)' },
       { path: 'boats.trawlerChance', min: 0, max: 1, step: 0.05, label: 'trawler chance' },
@@ -49245,6 +49443,24 @@ export const TUNER_SCHEMA = [
       { path: 'gore.pieces.boneColor', type: 'color', label: 'bone colour' },
       { path: 'gore.pieces.meatColor', type: 'color', label: 'flesh colour' },
       { path: 'gore.pieces.tint', min: 0, max: 1, step: 0.05, label: 'piece-to-piece variation' },
+    ],
+  },
+
+  // How the boat boss's hull sits on the water. Its own group because it is
+  // its own hull: the boss holds station over the fight rather than sailing
+  // across it, it is four times a rowboat's length, and it has people standing
+  // on the deck — so the rock that suits the fleet is a listing ship here. The
+  // same pair of axes as CONFIG.boats, which is where they are described.
+  // Drives both hulls (the trawler and the yacht) — see systems/bossBoat.js.
+  {
+    group: 'The boat boss — how the hull rides',
+    panel: 'enemies',
+    section: 'Boats',
+    items: [
+      { path: 'bossBoat.rollAmount', min: 0, max: 0.5, step: 0.01, label: 'nod (bow up and down)' },
+      { path: 'bossBoat.heelAmount', min: 0, max: 0.4, step: 0.01, label: 'heel (rock toward the camera)' },
+      { path: 'bossBoat.heelSpeed', min: 0, max: 3, step: 0.05, label: 'heel speed' },
+      { path: 'bossBoat.draft', min: -2, max: 1, step: 0.05, label: 'how deep it floats' },
     ],
   },
 
@@ -49629,6 +49845,10 @@ export const TUNER_SCHEMA = [
       { path: 'bakalar.haulSpeed', min: 0.5, max: 30, step: 0.5, label: 'haul speed' },
       { path: 'bakalar.bobSpeed', min: 0, max: 6, step: 0.1, label: 'hull bob speed' },
       { path: 'bakalar.bobAmount', min: 0, max: 2, step: 0.02, label: 'hull bob' },
+      // The lateral rock, the axis that shows the hull is a solid — see the
+      // same pair under Boats & trawlers.
+      { path: 'bakalar.heelAmount', min: 0, max: 0.6, step: 0.01, label: 'heel (rock toward the camera)' },
+      { path: 'bakalar.heelSpeed', min: 0, max: 4, step: 0.05, label: 'heel speed' },
       { path: 'bakalar.bomb.enabled', type: 'bool', label: 'drops voicemail bombs' },
       { path: 'bakalar.bomb.dropInterval', min: 0.5, max: 15, step: 0.1, label: 'seconds between drops' },
       { path: 'bakalar.bomb.dropIntervalPerLevel', min: 0, max: 2, step: 0.02, label: 'drops sooner per level' },

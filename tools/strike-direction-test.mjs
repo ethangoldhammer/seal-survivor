@@ -39,11 +39,17 @@
 // hands.
 // ---------------------------------------------------------------------------
 
+import './dom-stub.mjs';
+import * as THREE from 'three';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../path/src/config.js';
-import { strikeDirection, strikeState, resetStrike, feedChum, chumRefillMul, pipCount } from '../path/src/systems/strike.js';
+import { strikeDirection, strikeState, resetStrike, feedChum, chumRefillMul, pipCount, spawnShrapnel } from '../path/src/systems/strike.js';
+import { enemies, spawnNamed, resetEnemies } from '../path/src/entities/enemies.js';
+import { projectiles, resetProjectiles, updateProjectiles } from '../path/src/entities/projectiles.js';
+import { resolveCombat } from '../path/src/systems/combat.js';
+import { player, initPlayer, resetPlayer } from '../path/src/entities/player.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAIN = path.join(HERE, '../path/src/main.js');
@@ -231,6 +237,84 @@ check('the pip ceiling still binds a derived count',
 resetStrike();
 check('and one chum is worth one pip whatever the chain is doing', chumRefillMul() === 1);
 resetStrike();
+
+// ---------------------------------------------------------------------------
+section('THE BONE ZONE — a fragment has to survive the body it came out of');
+// ---------------------------------------------------------------------------
+//
+// THE BUG THIS EXISTS FOR IS AN INVISIBLE ONE, twice over.
+//
+// The burst spawns at the point the dash connected, which is ON the rammed
+// animal, and a fragment carries `pierce: 0` — so the combat pass later in the
+// SAME FRAME found that body, spent the fragment on it and despawned it before
+// anything was ever drawn. Measured before the fix: five of five fragments
+// gone on frame one, 0.37 units from the burst, against a minnow and against a
+// megalodon alike. That is a fifth of the bone's own length, out of a 0.55s
+// fuse and twelve units of flight.
+//
+// Nothing failed. The card still paid out — into the creature it burst from,
+// which is the one body the ram had already committed to — so the ledger saw
+// damage and the player saw nothing at all. A card called The Bone Zone had
+// never once put a bone on screen.
+//
+// THE ASSERTION IS FLIGHT TIME, NOT A FLAG. Checking that `ignore` is set
+// would pass on the day it is written and keep passing when the burst is moved
+// or the hit test is retuned; the thing that matters is that the bones are in
+// the water long enough to be seen, and the only way to know that is to fly
+// them through the real hit shapes. This is also why the burst lives in
+// strike.js and is imported here rather than retyped — a harness that rebuilds
+// the spawn call is a harness that passes while the game drops an argument,
+// which is exactly the failure being fixed.
+{
+  const scene = new THREE.Scene();
+  initPlayer(scene);
+  resetPlayer();
+  const hooks = new Proxy({}, { get: () => () => {} });
+  const dt = 1 / 60;
+  const c = CONFIG.strike.shrapnel;
+
+  // A lone body, so the only thing a fragment can possibly hit is its source.
+  // The seal is parked far away for the same reason.
+  const flight = (species) => {
+    resetEnemies(scene);
+    resetProjectiles(scene);
+    player.mesh.position.set(-400, -400, 0);
+    const e = spawnNamed(scene, species, 0, 0);
+    e.hp = 1e7;
+    e.invuln = 0;
+    const at = { x: e.mesh.position.x, y: e.mesh.position.y };
+    const born = spawnShrapnel(scene, at, 100, e, { shrapnelCount: 1 });
+    let frames = 0;
+    while (projectiles.length && frames < 400) {
+      frames++;
+      updateProjectiles(dt, scene, () => {}, hooks);
+      resolveCombat(dt, scene, hooks);
+    }
+    return { born, frames, alive: projectiles.length };
+  };
+
+  const fuseFrames = Math.floor(c.life * 60);
+  for (const species of ['fish', 'shark', 'megalodon']) {
+    const r = flight(species);
+    check(`a burst off a ${species} is still in the water a frame later`,
+      r.frames > 1, `${r.born} fragments, all gone after ${r.frames} frame(s)`);
+    // The real bar: a fragment that clears the body should burn its whole fuse,
+    // because there is nothing else in the water to stop it.
+    check(`...and flies its full ${(c.life * 1000).toFixed(0)}ms fuse off a ${species}`,
+      r.frames >= fuseFrames, `${r.frames} frames against a ${fuseFrames}-frame fuse`);
+  }
+
+  // The level gate, which is the one branch above that has nothing to do with
+  // flight: no stack, no burst. Checked here because `stats` moved from a
+  // module-level `player` to an argument when the burst did.
+  resetEnemies(scene);
+  resetProjectiles(scene);
+  check('and no stack bursts nothing at all',
+    spawnShrapnel(scene, { x: 0, y: 0 }, 100, null, { shrapnelCount: 0 }) === 0
+      && projectiles.length === 0);
+  resetProjectiles(scene);
+  resetEnemies(scene);
+}
 
 console.log(failures === 0 ? '\nAll strike checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

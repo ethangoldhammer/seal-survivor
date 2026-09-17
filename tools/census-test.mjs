@@ -41,6 +41,72 @@ console.log('\nTHE AUDIO SPLIT');
   check('audio is counted once in the total', r.totalMB === 131 + 14, `${r.totalMB}MB`);
 }
 
+console.log('\nTHE COUNT, AGAINST THE RENDERER\'S OWN');
+// The leak the byte census is blind to, and the reason this block exists. A
+// bone texture is about four kilobytes: a thousand of them move
+// renderer.info.memory.textures by a thousand and `tex` by four. The phone's
+// trail read a flat tex105MB through three sessions while the renderer's tally
+// went 306 -> 704 inside one run, and nothing in the line said the two numbers
+// were about the same thing.
+{
+  // A scene of one skinned body: a material map, and a skeleton that has been
+  // drawn and therefore owns a bone texture.
+  const map = { isTexture: true, source: { uuid: 'map-1' }, image: { width: 4, height: 4 } };
+  const skel = {
+    uuid: 'sk-1',
+    boneMatrices: { byteLength: 1024 },
+    boneTexture: { image: { data: { byteLength: 1024 } } },
+  };
+  const body = {
+    traverse(fn) { fn(this); },
+    userData: {},
+    material: { map },
+    skeleton: skel,
+  };
+
+  const r = censusReport({ items: [body], glTextures: 2 });
+  check('the map is counted as one texture', r.texCount === 1, `${r.texCount}`);
+  check('the bone texture is counted apart from it', r.boneTexCount === 1, `${r.boneTexCount}`);
+  check('reachable is the two together', r.reachableTextures === 2, `${r.reachableTextures}`);
+  check('a renderer holding exactly what the scene holds has no orphans',
+    r.orphanTextures === 0, `${r.orphanTextures}`);
+  check('...and the line says so without an orphan term',
+    / gl2=1map\+1bone(?! )/.test(censusLine(r)) && !/orphan/.test(censusLine(r)), censusLine(r));
+
+  // THE CASE THE WHOLE THING IS FOR: bodies dropped from the scene without
+  // skeleton.dispose(). The renderer still holds their uploads; the walk cannot
+  // reach them; the megabytes do not move.
+  const leaking = censusReport({ items: [body], glTextures: 704 });
+  check('textures the scene cannot reach are named as orphans',
+    leaking.orphanTextures === 702, `${leaking.orphanTextures}`);
+  check('...and the line carries the whole subtraction',
+    /gl704=1map\+1bone\+702orphan/.test(censusLine(leaking)), censusLine(leaking));
+  check('...while the byte figure stays exactly as flat as it was on the phone',
+    leaking.texMB === r.texMB, `${leaking.texMB} vs ${r.texMB}`);
+
+  // A skeleton that has not been DRAWN has no texture yet: three builds it
+  // lazily inside the first render. Counting it would report an upload that
+  // has not happened and drag the orphan term negative.
+  const undrawn = censusReport({
+    items: [{ traverse(fn) { fn(this); }, userData: {}, skeleton: { uuid: 'sk-2', boneMatrices: { byteLength: 1024 } } }],
+    glTextures: 0,
+  });
+  check('an undrawn skeleton is not counted as an upload',
+    undrawn.boneTexCount === 0, `${undrawn.boneTexCount}`);
+  check('...and the orphan count never runs backwards',
+    censusReport({ items: [body], glTextures: 0 }).orphanTextures === 0);
+}
+
+console.log('\nA CALLER WITH NO RENDERER TO ASK');
+{
+  const r = censusReport({ items: [], audioBytes: 4 * 1048576 });
+  check('omits the tally rather than inventing one', r.glTextures === null);
+  check('...and says nothing about orphans it cannot know about',
+    r.orphanTextures === null, `${r.orphanTextures}`);
+  check('...and the line leaves the whole term out',
+    !/gl\d/.test(censusLine(r)), censusLine(r));
+}
+
 console.log('\nA CALLER THAT CANNOT REACH THE BANKS');
 {
   const r = censusReport({ items: [], audioBytes: 131 * MB, targetBytes: 14 * MB });

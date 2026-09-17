@@ -38,6 +38,22 @@
 // the snapshot and increments on each restore; past `maxResumes` the snapshot
 // is refused and dropped, and the player lands on the title the old way.
 //
+// ...AND IT COUNTS FAILED RESUMES, NOT RESUMES, which is the correction the
+// phone asked for. It counted every restore for one release, and the trail off
+// the device says what that cost (`npm run crash`, 9/17): three kills in a row,
+// at 328s, 400s and 541s of play. Not one of them is the wall this counter was
+// written about — each restore handed the player five to nine MINUTES of run —
+// and the third was refused anyway, because two perfectly good resumes had
+// already spent both lives. The net gave up on a run it was saving.
+//
+// So a resume that HELD gives its life back: once a restored run has been
+// playing for `holdSeconds` it is no longer a suspect, and the counter returns
+// to zero (see resumeHeld, and the hold in main.js's captureRunSnapshot). The
+// hazard is unchanged and still caught — a restore that walks into the same
+// wall dies in seconds, never reaches the hold, and two of those in a row put
+// the player on the title exactly as before. What is gone is the case where
+// the guard fired on evidence of the net working.
+//
 // STORED SEPARATELY FROM THE CRASH BEACON, deliberately. The beacon is a
 // diagnostic that is claimed and cleared on read; this is a save that must
 // survive being read, and must be cleared only by a run that ended properly.
@@ -153,6 +169,26 @@ export function resumable(snap, { now = Date.now(), maxAgeMs = 15 * 60 * 1000, m
   if (!Number.isFinite(snap.level) || snap.level < minLevel) return false;
   if ((snap.resumes ?? 0) >= maxResumes) return false;
   return true;
+}
+
+/**
+ * Has a restored run been playing long enough to stop being a suspect?
+ *
+ * Pure, and the whole of the policy the counter note above describes. The
+ * number it is measured against wants to sit in the gap between the two things
+ * it has to tell apart, and the gap is enormous: a restore that walks straight
+ * back into the wall that killed it dies inside the loading screen's own
+ * seconds, where the sessions on the phone's crash trail ran for five to nine
+ * minutes. Anything from ten seconds to two minutes separates those, so the
+ * default is nowhere near either edge.
+ *
+ * MEASURED IN WALL SECONDS SINCE THE RESTORE, not in run time. The run clock
+ * stops for the level-up cards, and the cards are one of the two places the
+ * trail says the process is most often killed — a hold counted in run time
+ * would stall exactly where the evidence is that it should not.
+ */
+export function resumeHeld(heldSeconds, { holdSeconds = 60 } = {}) {
+  return Number.isFinite(heldSeconds) && heldSeconds >= holdSeconds;
 }
 
 /**

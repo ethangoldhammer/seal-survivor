@@ -212,6 +212,67 @@ console.log('splash layout — the entry column never sits on the wordmark');
   else console.error('  (stopped after a dozen — the rest would be the same story)');
 }
 
+// 3b. THE JAR AND THE RESERVE MEASURE FROM THE SAME EDGE.
+//
+//     The artboard reserves 72pt below the Start button and the tip jar lives
+//     inside that reserve — 14px up, 44 tall on a thumb, 14 to spare. That only
+//     holds while both are measured from the SAME bottom edge, and for a long
+//     time they were not: the jar sat `14px + env(safe-area-inset-bottom)` off
+//     the viewport (ui/tipJar.js, and it has to — under the home indicator is
+//     a link that swipes the player out of the game) while the canvas filled
+//     the whole viewport, so the artboard's 72 started 34px lower on a notched
+//     iPhone than the jar's 58 did. The Play button landed on the jar by 20px.
+//
+//     Every check above ran at inset 0 and passed, because at inset 0 there is
+//     no bug. So this one sweeps the inset, and it checks its own detector
+//     first for the reason the header gives.
+//
+//     ui/riveSplash.js pads the wrapper by the inset and sizes the canvas to
+//     the content box, which is what makes the two edges one edge again — so
+//     the fix's half of this is the same `check` as everywhere else, run at the
+//     CANVAS height rather than the viewport's.
+{
+  const INSETS = [20, 21, 34, 48];   // iPad, phone sideways, phone upright, headroom
+  const before = failures;
+
+  // The detector half: the arrangement as it was, at each inset.
+  let seen = 0; let missed = 0;
+  for (const [name, W, H, touch] of DEVICES) {
+    for (const inset of INSETS) {
+      const g = geometryFor(W, H);
+      const scale = fitEntryScale({ W, H, g });
+      const pillW = ROW_W * fitNameScale({ W, rowW: ROW_W, scale });
+      // The jar lifted by the inset, the artboard still laid out on the full
+      // viewport — the two edges that used to disagree.
+      const jarH = touch ? 44 : 34;
+      const jar = [{ what: 'a.sv-tip-splash', rect: { left: (W - 92) / 2, right: (W + 92) / 2, top: H - 14 - inset - jarH, bottom: H - 14 - inset } }];
+      const f = splashFindings({ W, H, scale, pillW, g, others: jar, touch })
+        .filter((x) => x.type === 'splash-over-ui');
+      if (f.length) seen++; else missed++;
+    }
+  }
+  // Not every row overlaps — a 20pt iPad inset against a 34pt phone one is a
+  // different amount of climb, and the SE has no indicator to clear. The claim
+  // is that the detector SEES the arrangement, not that every cell of it broke.
+  if (seen > 0) ok(`the detector reports the jar on the Start button at ${seen} of ${seen + missed} device x inset pairs when the two measure from different edges`);
+  else fail('detector: the old viewport-measured jar was never reported on the Start button');
+
+  // The fix's half: the canvas is the viewport less the inset, and the jar is
+  // 14px off the canvas — which is `check` at that height, at every device and
+  // every inset, plus a grid of short screens where the reserve is tightest.
+  for (const [name, W, H, touch] of DEVICES) {
+    for (const inset of INSETS) check(W, H - inset, touch, `${name} less a ${inset}px safe area`);
+  }
+  for (let W = 320; W <= 1024; W += 16) {
+    for (const inset of INSETS) {
+      for (let H = 480; H <= 1000; H += 16) check(W, H - inset, true, 'safe-area grid');
+      if (failures > before + 12) break;
+    }
+    if (failures > before + 12) break;
+  }
+  if (failures === before) ok('with the canvas sized to the safe area, the jar clears the column at every device and inset');
+}
+
 // 4. THE COLUMN IS WHERE THE DISSOLVE THINKS IT IS. entryRects is what the
 //    name-swap reads for the pill; a column that is 324 tall at scale 1 and
 //    sits 72 off the bottom is the artboard's design.

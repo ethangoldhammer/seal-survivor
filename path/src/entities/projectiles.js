@@ -119,6 +119,23 @@ export function projectileInstanceStats() {
 
 export function spawnProjectile(scene, {
   origin, dir, faction, damage, speed, life, radius, pierce = 0, asset, source = null,
+  // A BODY THIS SHOT CANNOT HIT — the one it came OUT of, or null for every
+  // shot in the game that was fired rather than shed.
+  //
+  // It is pre-seeded into `hits`, which is the set the pierce test already
+  // consults, so nothing downstream needs a second concept: combat.js skips a
+  // body it finds there exactly as it skips one this shot has already pierced.
+  //
+  // THE HOLE IT CLOSES IS A SHOT THAT IS BORN INSIDE A CREATURE. Bone Shrapnel
+  // bursts at the point the dash connected, which is ON the rammed animal, and
+  // a fragment carries `pierce: 0` — so the very next combat pass found the
+  // source body, spent the fragment on it and despawned it. Measured: every
+  // one of the five fragments died on the frame it was born, 0.37 units from
+  // the burst, out of a 0.55s fuse and twelve units of flight. That is less
+  // than a fifth of the bone's own length, and it happens BEFORE the frame is
+  // drawn, so the card's whole picture — a ring of bone leaving the body —
+  // had never once appeared on screen.
+  ignore = null,
   // HOW MUCH FIRE IT TAKES TO SWAT THIS OUT OF THE AIR, or 0 for a shot that
   // cannot be — which is every player pellet and every hostile shot that
   // existed before CONFIG.enemyShot. Only enemy shots are swept for (see the
@@ -363,7 +380,7 @@ export function spawnProjectile(scene, {
     pierce,
     finElement,
     finSide,
-    hits: new Set(), // enemies already pierced, so each takes damage once
+    hits: ignore ? new Set([ignore]) : new Set(), // enemies already pierced (plus `ignore`), so each takes damage once
     homing,
     // Seconds of straight flight before the seeker engages. Lets a launch be
     // its own beat — the shell visibly leaves the flipper on the heading it

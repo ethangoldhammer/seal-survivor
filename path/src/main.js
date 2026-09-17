@@ -87,7 +87,7 @@ import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeEnglish } from './systems/strike.js';
-import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip, chargeEnvelope, chargeEnvelopeTop } from './systems/strike.js';
+import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, spawnShrapnel, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip, chargeEnvelope, chargeEnvelopeTop } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -289,7 +289,7 @@ import { claimCrash, armCrash, disarmCrash, crashBeat } from './systems/crashWat
 // ...and the other half of the same problem. crashWatch says a run was killed;
 // this is what makes that worth knowing — the run itself, kept outside the
 // process so the next boot can hand it back. See systems/runSnapshot.js.
-import { resumable, saveRun, readRun, clearRun, noteResume } from './systems/runSnapshot.js';
+import { resumable, saveRun, readRun, clearRun, noteResume, resumeHeld } from './systems/runSnapshot.js';
 
 // Restore any saved tuning BEFORE anything reads CONFIG — world/grid/camera
 // creation below all pull from it immediately, not just once gameplay starts.
@@ -2221,6 +2221,12 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // eventually be restored over a different one.
   clearRun();
   runResumes = resume?.resumes ?? 0;
+  // ...and the clock the counter above is forgiven against. Started HERE, at
+  // the reset, rather than at the end of the restore: the hold is about the run
+  // staying up, and everything between this line and the first frame — the
+  // rebuild, the snapshot, the shader warm-up on a phone that has just lost a
+  // process — is time the restore is most exposed, not time to discount.
+  resumeSpentAt = resume ? performance.now() : 0;
   // Frame times are per RUN, and the recorder is cleared here rather than at
   // boot on purpose: boot is a loading screen and a shader warm-up, and the
   // multi-second frames those produce would sit at the top of the worst-frames
@@ -2248,6 +2254,15 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   }
 
   unlockAudio(); // browsers need a gesture before any sound can play
+  // WHICH LOOP TO DECODE FIRST, and it has to be said before the line below.
+  // preloadDefaultTracks awaits ONE file on its own — the one the player is
+  // about to hear — and picks it with slotForLevel against the level the music
+  // last knew about. On a resumed boot that is 1, so the one file it waited for
+  // was the one file a resumed run does not want. setLevel with the transport
+  // stopped writes nothing but the level, which is exactly what is needed here:
+  // the decode that gets priority becomes the run's own loop, and buildRun's
+  // play() finds it in memory instead of deferring its open to a second fetch.
+  if (resume) setMusicLevel(resume.level);
   preloadDefaultTracks(); // fetches the built-in loops once; no-op after the first call
   preloadAmbient(); // same deal for the ambient bed's clips
   // A death is the busiest the mix ever gets, so the repetition ducking is at
@@ -2636,7 +2651,22 @@ function buildRun(resume = null) {
     // playing and start it as they always did.
     if (!versusMusicActive()) startVersusMusic();
   } else {
-    if (!releaseMusicIntoRun(gameState.level)) playMusic(gameState.level);
+    // THE LEVEL THE RUN IS ABOUT TO BE AT, not the one it is at on this line.
+    //
+    // gameState.level is 1 here on every route, including a resume: the
+    // snapshot is applied at the END of this function, on top of a completed
+    // reset. So a resumed run used to open on the first loop and then correct
+    // itself — applyRunSnapshot's setMusicLevel QUEUES the right slot, and a
+    // queue waits for the playing file to finish. On a phone that had just
+    // lost its process the correction was later still: nothing is decoded on
+    // the frame this runs, so the queue missed its first boundary and waited
+    // for the one after. The player came back to a run at level fourteen
+    // listening to Loop01 from the top for the best part of half a minute.
+    //
+    // Read off the snapshot instead, so the transport opens on the loop the
+    // run had climbed to and setMusicLevel below has nothing left to correct.
+    const musicLevel = resume?.level ?? gameState.level;
+    if (!releaseMusicIntoRun(musicLevel)) playMusic(musicLevel);
     // The opening shot: wide and barely tracking, easing into the normal follow
     // over the state's blend-out. No-op with the cinematic camera off.
     cineEvent('roundStart');
@@ -2751,9 +2781,21 @@ function buildRun(resume = null) {
 // one failure here that nothing else in the game would notice.
 // ---------------------------------------------------------------------------
 
-// How many times THIS run has already been restored, carried across each save
-// so the counter that breaks a resume loop survives the run it is counting.
+// How many times THIS run has already been restored WITHOUT THE RESTORE
+// STICKING, carried across each save so the counter that breaks a resume loop
+// survives the run it is counting. Zeroed below once a restored run has been
+// playing long enough to have clearly survived — see the counter note in
+// systems/runSnapshot.js for why that distinction is the whole point of it.
 let runResumes = 0;
+
+// performance.now() at the moment a restore handed the run back, or 0 when
+// this run was not restored (or has already earned its resume back).
+//
+// THE WALL CLOCK, not gameState.time: the run clock stops dead for the level-up
+// cards, and the cards are one of the two places the crash trail says the
+// process is most often killed. A hold counted in run time would stall exactly
+// where the evidence says it must not.
+let resumeSpentAt = 0;
 
 /**
  * Write the run down. Cheap enough to call on the crash heartbeat, and called
@@ -2762,6 +2804,17 @@ let runResumes = 0;
 function captureRunSnapshot() {
   if (CONFIG.crashResume?.enabled === false) return;
   if (!gameState.running) return;
+  // THE RESUME EARNS ITSELF BACK. Checked here rather than on a timer because
+  // this is already the one place that runs on the crash heartbeat, and the
+  // only place the number it changes is read — a timer would be a second clock
+  // that could be running when this is not.
+  if (resumeSpentAt && resumeHeld((performance.now() - resumeSpentAt) / 1000, {
+    holdSeconds: CONFIG.crashResume?.holdSeconds ?? 60,
+  })) {
+    crumb('run:resume-held', `L${gameState.level}`);
+    runResumes = 0;
+    resumeSpentAt = 0;
+  }
   saveRun({
     resumes: runResumes,
     picks: player.upgrades,
@@ -2872,9 +2925,13 @@ function applyRunSnapshot(snap) {
   pendingBossStacks = 0;
   bossesPaid = snap.bosses;
 
-  // The music opens where the run had climbed to, not on the first loop. The
-  // level was 1 when releaseMusicIntoRun ran above, which is the correct
-  // opening for a new run and the wrong one for this.
+  // THE LEVEL THE ROTATION MOVES ON FROM, which is a different job now that
+  // the transport already opened on the right loop (see musicLevel in
+  // buildRun). This says the same number a third time and is not redundant:
+  // setLevel is what warms the loop AFTER this one, so without it the first
+  // level a resumed run gains finds its file cold and holds the current loop
+  // for an extra pass. The track switch it would otherwise queue is a no-op,
+  // because the slot it asks for is the one already playing.
   setMusicLevel(gameState.level);
   setSpawnLevel(gameState.level);
 
@@ -6620,59 +6677,6 @@ function fireBounce() {
   });
 }
 
-// Bone Shrapnel: every enemy the strike dash connects with bursts a ring of
-// fragments outward from ITS OWN position, not the seal's — the fish coming
-// apart is the source, so a dash through a school leaves overlapping bursts
-// rather than one puff at the player. Damage is a fraction of the strike hit
-// that spawned it, which is what carries the chain multiplier through.
-const shrapnelOrigin = new THREE.Vector3();
-const shrapnelDir = new THREE.Vector2();
-
-function spawnShrapnel(atPos, strikeDamage) {
-  const level = player.stats.shrapnelCount;
-  if (level <= 0) return;
-  const c = CONFIG.strike.shrapnel;
-  // The base count is guaranteed positive here (level > 0 above), so the Clone
-  // Warz gate is already satisfied — routed through projectileCount anyway so
-  // there is exactly one place the bonus is spelled out.
-  const n = projectileCount(c.count + c.countPerLevel * (level - 1), player.stats);
-  // A random offset for the WHOLE ring rather than per-fragment: the fragments
-  // stay evenly spaced (so there are no bald patches to slip through) while
-  // consecutive bursts don't land in an identical star pattern.
-  const base = Math.random() * Math.PI * 2;
-  for (let i = 0; i < n; i++) {
-    const a = base + (i / n) * Math.PI * 2 + (Math.random() - 0.5) * c.spread;
-    shrapnelOrigin.set(atPos.x, atPos.y, 0);
-    shrapnelDir.set(Math.cos(a), Math.sin(a));
-    spawnProjectile(world.scene, {
-      origin: shrapnelOrigin,
-      dir: shrapnelDir,
-      faction: 'player',
-      damage: strikeDamage * c.damageFrac,
-      speed: c.speed,
-      life: c.life,
-      radius: c.radius,
-      pierce: c.pierce,
-      asset: 'shrapnel',
-      source: 'shrapnel',
-      // NOSE-FIRST, WITH A ROLL — not the end-over-end spin this had before the
-      // fragment became a bone (assets.js `shrapnel`). A tumbling shot has no
-      // back, and the back is where its ribbon comes from: CONFIG.trails
-      // .shrapnel anchors at `tailOffset: 1`, which is a meaningless anchor on
-      // a body whose long axis points somewhere new every frame.
-      //
-      // 'axis' rather than plain `true`, and this is the one that would have
-      // been a bug. The leftward mirror in updateProjectile is a Ry(PI) applied
-      // AFTER the heading, so it lands correctly only when the heading is on an
-      // axis and is 90 degrees out at a leftward DIAGONAL — and a shrapnel
-      // burst is a full ring, which means it fires at every one of those
-      // headings every time. The razor blade opts out for the same reason: a
-      // bone is symmetric end to end and has no belly to keep downward.
-      orient: 'axis',
-    });
-  }
-}
-
 // Every ricochet in a chain is louder, brighter and sprayier than the last, and
 // the bink climbs a fraction of a semitone each time — so a shot pinballing
 // through a crowd reads as one rising run instead of the same click ten times.
@@ -6736,15 +6740,18 @@ function currentSeagullFireRate(level) {
   return CONFIG.seagullBomb.baseFireRate * Math.pow(CONFIG.seagullBomb.fireRatePerLevel, level - 1);
 }
 
-// Launch an attack run. The gull enters from off the side of the arena and
-// flies itself in (systems/seagull.js) — nothing is fired from the seal, so
-// this doesn't need an aim direction or a muzzle. spawnSeagull returns null
+// Launch an attack run. The gull enters from above the top of the shot on a
+// rolled bearing and flies itself in (systems/seagull.js) — nothing is fired
+// from the seal, so this doesn't need an aim direction or a muzzle. It does
+// need the frame, and only for the entrance: `framedView()` is where the shot's
+// top actually is, which is not bounds.frameTop whenever the camera has panned
+// up off a breach. spawnSeagull returns null
 // only when the water is empty (crabs first, anything else second — see
 // pickTarget there); the cooldown is only consumed on a run that actually
 // launched, so the next tick tries again immediately and a gull shows up
 // shortly after anything does.
 function fireSeagull() {
-  const launched = spawnSeagull(world.scene, enemies);
+  const launched = spawnSeagull(world.scene, enemies, world.framedView());
   seagullCooldown = launched
     ? currentSeagullFireRate(player.stats.seagullLevel)
     : CONFIG.seagullBomb.retargetInterval;
@@ -7117,6 +7124,12 @@ function runFrame(now) {
           // same frame per boss, and a Blob is not even on the JS heap.
           canvas: canvasBytes(),
           keptBytes: shotBytes.total,
+          // THE RENDERER'S OWN TALLY, so the line can subtract. This number was
+          // already in the trail — it is the `t<n>` in the tick crumb — but two
+          // figures in two different crumbs, one counting bytes and one counting
+          // uploads, is not a comparison anybody makes while reading. Handed in
+          // here it becomes one term of a sum the line states outright.
+          glTextures: world.renderer.info.memory.textures,
         }))} pool${pool.bodies}/${pool.keys}`);
         // THE TROPHIES, BROKEN OUT, on their own line rather than folded into
         // `kept` above. Four copies of the same frame are kept per kill for
@@ -9293,7 +9306,7 @@ function runFrame(now) {
         // see riderDamage() in systems/strike.js, which also returns 0 off the
         // beat, so a mistimed dash still bursts nothing.
         const rider = riderDamage(0, player.stats);
-        if (rider > 0) spawnShrapnel(at ?? e.mesh.position, rider);
+        if (rider > 0) spawnShrapnel(world.scene, at ?? e.mesh.position, rider, e, player.stats);
       },
       // THE DASH FOUND THE MARK. Fires on the same frame as `strikeRam` and
       // `hotSpotHit` and on top of both — see CONFIG.feedback.strikeWeakSpot.

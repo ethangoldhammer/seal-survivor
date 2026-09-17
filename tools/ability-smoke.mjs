@@ -59,7 +59,20 @@ import {
 } from '../path/src/systems/control.js';
 import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpStats, harpNoteCount, harpAuraNotes } from '../path/src/systems/harp.js';
 import { installNoteGlyphs } from '../path/src/systems/noteStorm.js';
-import { bounds, seabedTopY } from '../path/src/arena.js';
+import { bounds, seabedTopY, updateBounds } from '../path/src/arena.js';
+import { SKY_Z } from '../path/src/systems/backdropFit.js';
+
+// THE REAL ARENA, before anything reads it. `bounds` is declared with
+// placeholder literals and only becomes the shipped ocean when a window
+// resizes, which nothing headless ever does — so left untouched this harness
+// runs every ability against a 80-unit arena with a 10-unit ceiling instead of
+// the 231-unit one with 31 units of sky that the game is tuned at.
+//
+// It matters most to the seagull's entrance, which is measured off the top of
+// the shot: at the placeholder numbers the jump ceiling and the resting frame
+// are the same height, so the case that entrance exists to handle does not
+// exist to be tested.
+updateBounds(CONFIG.arena.referenceAspect || 16 / 9);
 
 const scene = new THREE.Scene();
 const dt = 1 / 60;
@@ -1833,6 +1846,222 @@ check('a crab run does not go off on a fish it falls through', earlyBlast === 0,
 resetSeagulls(scene);
 enemies.length = 0;
 check('empty water still launches nothing', spawnSeagull(scene, enemies) === null);
+resetSeagulls(scene);
+enemies.length = 0;
+
+// --- THE ENTRANCE ----------------------------------------------------------
+// A run's bearing is three rolls now — a side, a length of approach and a
+// depth — and every one of them fails INVISIBLY in the game. A spawn a little
+// too low is a bird that pops into an empty sky, and you cannot tell that from
+// having looked away; a depth left on at the commit is a dive that goes off
+// beside the crab it aimed at, and that reads as the ability being unreliable.
+//
+// Flown rather than inspected. Each run below is ticked from its spawn all the
+// way to its commit, because the thing being asserted is the SHAPE of the
+// approach — that it comes down, that it never goes back up, and that it is
+// level and in-plane at the moment it matters.
+{
+  const realRandom = Math.random;
+  let rngState = 20260917;
+  Math.random = () => {
+    rngState = (rngState * 1664525 + 1013904223) >>> 0;
+    return rngState / 4294967296;
+  };
+
+  const gc = CONFIG.seagullBomb;
+  const cruiseY = bounds.surfaceY + gc.cruiseAltitude;
+  // How far one flap can lift the bird off the line it is holding — the whole
+  // of `flapLift` integrated over `flapTime` with the altitude spring ignored,
+  // so it is a bound the bob cannot reach rather than one it lives near.
+  // Derived, so retuning the undulation moves the allowance with it instead of
+  // leaving a stale number here to quietly widen into a pass.
+  const bob = 0.5 * gc.flapLift * gc.flapTime * gc.flapTime;
+  let belowFrame = 0;      // runs that started inside the shot
+  let climbed = 0;         // runs that went back up out of it
+  let highCommit = 0;      // runs still descending when they dove
+  let offPlane = 0;        // runs that dove off the play plane
+  let wrongSize = 0;       // ...or at the wrong size for it
+  let neverDove = 0;
+  let deepest = 0;
+  let nearest = 0;
+  let longest = 0;
+  let shortest = Infinity;
+  let shortestLook = Infinity;  // seconds of gull on screen before the commit
+  let leastCruise = Infinity;   // ...and the share of that spent at altitude
+
+  for (let run = 0; run < 60; run++) {
+    resetSeagulls(scene);
+    enemies.length = 0;
+    // The pile walks across the arena run to run, so the bearing is rolled
+    // against every part of it rather than against the middle.
+    const px = bounds.left + 4 + (bounds.width - 8) * (run / 59);
+    enemies.push(crabAt(px, bounds.bottom + 2));
+    const g = spawnSeagull(scene, enemies);
+    if (!g) { neverDove++; continue; }
+
+    if (g.container.position.y <= bounds.frameTop) belowFrame++;
+    const span = Math.abs(g.container.position.x - px);
+    longest = Math.max(longest, span);
+    shortest = Math.min(shortest, span);
+    deepest = Math.min(deepest, g.container.position.z);
+    nearest = Math.max(nearest, g.container.position.z);
+
+    let peakY = g.container.position.y;
+    let dove = false;
+    let look = 0;     // time below the top of the shot and inside its sides
+    let cruise = 0;   // ...of which, time with the entrance already flown
+    for (let i = 0; i < 1200 && seagullCount() > 0; i++) {
+      updateSeagulls(dt, scene, enemies, {});
+      if (seagullCount() === 0) break;
+      // Below the top of the shot, and that alone. Whether the bird is inside
+      // the frame's SIDES is the camera's business — it follows the seal, and
+      // the seal is on its way to the same pile the gull is — so testing x
+      // against a frame pinned at the origin would only measure how far up the
+      // wall this run's pile happens to sit.
+      if (g.container.position.y <= bounds.frameTop) {
+        look += dt;
+        if (g.descend <= 0) cruise += dt;
+      }
+      if (g.phase === 'dive') {
+        dove = true;
+        // Measured on the frame the commit fires, which is the frame the
+        // entrance has to have finished on.
+        if (g.container.position.y > cruiseY + 2) highCommit++;
+        if (Math.abs(g.container.position.z) > 1e-6) offPlane++;
+        if (Math.abs(g.container.scale.x - 1) > 1e-6) wrongSize++;
+        break;
+      }
+      // Undulation is allowed; climbing back toward the spawn height is not.
+      peakY = Math.max(peakY, g.container.position.y);
+    }
+    if (dove) {
+      shortestLook = Math.min(shortestLook, look);
+      leastCruise = Math.min(leastCruise, look > 0 ? cruise / look : 0);
+    }
+    if (!dove) neverDove++;
+    // The bob is allowed — flapping lifts, and a gull that never rose at all
+    // would be a gull on rails. Going back up toward the height it entered at
+    // is the failure, and `bob` is the headroom between the two.
+    else if (peakY > g.entryY + bob) climbed++;
+  }
+
+  check('every run starts above the top of the frame', belowFrame === 0,
+    `${belowFrame} of 60 spawned in shot`);
+  check('...and none of them climbs back out of it', climbed === 0,
+    `${climbed} of 60 went back up`);
+  check('every run finds its pile', neverDove === 0, `${neverDove} of 60 never dove`);
+  check('...having come down to cruise altitude first', highCommit === 0,
+    `${highCommit} of 60 committed from the entrance height`);
+  check('...on the play plane', offPlane === 0, `${offPlane} of 60 dove off-plane`);
+  check('...and at its true size', wrongSize === 0, `${wrongSize} of 60 dove scaled`);
+
+  // The rolls have to actually roll. A bearing that collapsed to one value is
+  // the bug this replaced, wearing the new code's clothes — and every check
+  // above passes just as happily on sixty identical runs.
+  // THE APPROACH HAS TO BE WATCHABLE, which is a different thing from being
+  // correct and is the one property here that has already regressed once. The
+  // descent originally ran the whole length of the approach, which kept the
+  // gull above the top of the shot until the last stretch of it — every check
+  // above passed, and what a player saw was under half a second of bird before
+  // it folded up and fell. `entryDescent` is what holds it, and this is what
+  // notices when it stops.
+  check('...with a second of visible bird before the stoop, at any bearing',
+    shortestLook >= 0.8,
+    `shortest look at one is ${shortestLook.toFixed(2)}s`);
+  // ...and most of that watched flying LEVEL. A bird still on its way down for
+  // all of it is a bird whose flap and glide never show against a steady hold,
+  // which is the only thing that makes it read as a seagull rather than as a
+  // projectile with a model on it.
+  check('...most of it spent cruising rather than still coming down',
+    leastCruise >= 0.45,
+    `${(leastCruise * 100).toFixed(0)}% level on the flattest run`);
+
+  check('the approach varies from steep to shallow',
+    longest - shortest > (gc.approachMax - gc.approachMin) * 0.5,
+    `${shortest.toFixed(1)} to ${longest.toFixed(1)} units of run`);
+  check('...and runs come from the background and the foreground both',
+    deepest < -gc.depthRange * 0.5 && nearest > gc.depthRange * 0.5,
+    `z ${deepest.toFixed(1)} to ${nearest.toFixed(1)}`);
+  // The sky plane is painted at SKY_Z; anything at or behind it is simply not
+  // in the picture, and a run that spent its approach there would be the pop
+  // this entrance exists to remove, one coordinate over.
+  check('...and never behind the sky plane', deepest > SKY_Z,
+    `${deepest.toFixed(1)} vs sky at ${SKY_Z}`);
+
+  // A RETARGET ONTO SOMETHING FURTHER AWAY, which is the one thing that can
+  // ask the descent to run backwards. `descend` rides the distance still to
+  // close, and a pile that moves further off than the spawn was makes that
+  // ratio greater than 1 — a raw reading would put the hold line back at the
+  // entrance height and fly the bird up out of the top of the frame to re-make
+  // an entrance the player has already watched. It is clamped one-way for
+  // exactly this, and nothing else in the run exercises it.
+  resetSeagulls(scene);
+  enemies.length = 0;
+  enemies.push(crabAt(0, bounds.bottom + 2));
+  const bolter = spawnSeagull(scene, enemies);
+  const startY = bolter.container.position.y;
+  for (let i = 0; i < 90; i++) updateSeagulls(dt, scene, enemies, {});
+  const midY = bolter.container.position.y;
+  // The pile bolts to the far wall, behind the bird.
+  enemies[0].mesh.position.x = bolter.container.position.x + bolter.dir * -200;
+  let rose = 0;
+  for (let i = 0; i < 240 && seagullCount() > 0; i++) {
+    updateSeagulls(dt, scene, enemies, {});
+    if (seagullCount() === 0) break;
+    rose = Math.max(rose, bolter.container.position.y - midY);
+  }
+  check('a pile that bolts cannot send the gull back up for a second entrance',
+    rose <= bob,
+    `rose ${rose.toFixed(2)} of an allowed ${bob.toFixed(2)}, from ${startY.toFixed(1)} -> ${midY.toFixed(1)}`);
+
+  // THE CAMERA IS NOT AT REST, and that is what `view` is for. A breach pans
+  // the shot up to the arena's ceiling — twenty-one units of sky above
+  // bounds.frameTop — and a run that measured its entrance off the resting
+  // frame would spawn straight into the middle of it, at full size, out of
+  // nothing. It would only ever happen mid-jump, which is the moment least
+  // likely to be watched closely and most likely to be blamed on something
+  // else.
+  //
+  // Flown, not just placed, because the second half of this is the descent:
+  // three times the drop against the same rolled run is a bird falling faster
+  // than the stoop it is about to perform, and `entryAngleMax` is what holds it
+  // to a line. Both numbers come from the same sixty runs.
+  {
+    // The highest the rig can go: focus pinned at the ceiling less half a
+    // frame, which is exactly focusLimits' hiY in world.js.
+    const halfH = (bounds.frameTop - bounds.frameBottom) / 2;
+    const high = { x: 0, y: bounds.top - halfH, halfW: bounds.frameWidth / 2, halfH };
+    const top = high.y + high.halfH;
+    let inShot = 0;
+    let plummet = 0;
+    let steepest = 0;
+    for (let run = 0; run < 60; run++) {
+      resetSeagulls(scene);
+      enemies.length = 0;
+      enemies.push(crabAt(bounds.left + 6 + (bounds.width - 12) * (run / 59), bounds.bottom + 2));
+      const g = spawnSeagull(scene, enemies, high);
+      if (!g) continue;
+      if (g.container.position.y <= top) inShot++;
+      let fastest = 0;
+      for (let i = 0; i < 1200 && seagullCount() > 0; i++) {
+        updateSeagulls(dt, scene, enemies, {});
+        if (seagullCount() === 0 || g.phase === 'dive') break;
+        fastest = Math.max(fastest, -(g.vy + g.entryVy));
+      }
+      steepest = Math.max(steepest, fastest);
+      // The stoop is the fastest the bird is ever allowed to be moving.
+      if (fastest > gc.diveSpeedMax) plummet++;
+    }
+    check('a run under a panned-up camera still starts out of shot', inShot === 0,
+      `${inShot} of 60 spawned inside a shot topping out at ${top.toFixed(1)}`);
+    check('...and comes down slower than the dive it is on the way to',
+      plummet === 0,
+      `fastest descent ${steepest.toFixed(1)}, held to ${gc.entryDropMax} and capped by the stoop's ${gc.diveSpeedMax}`);
+  }
+
+  Math.random = realRandom;
+}
+
 resetSeagulls(scene);
 enemies.length = 0;
 

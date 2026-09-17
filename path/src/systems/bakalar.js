@@ -969,6 +969,12 @@ export function updateBakalar(dt, scene, level, enemiesList, hooks = {}) {
   boat.position.x += dir * c.speed * dt;
   boat.position.y = bounds.surfaceY + Math.sin(clock * c.bobSpeed) * c.bobAmount;
   boat.rotation.z = Math.sin(clock * c.bobSpeed * 0.7) * 0.06;
+  // The lateral rock, the same axis every other hull in the ocean heels on
+  // (CONFIG.boats.heelAmount, systems/bossBoat.js) — it swings the deck toward
+  // the camera and away, which is what stops a boat sailing past in profile
+  // reading as a cut-out. The net is unaffected on purpose: it hangs off the
+  // hull's POSITION, and a net hangs straight down whatever the boat is doing.
+  boat.rotation.x = Math.sin(clock * (c.heelSpeed ?? 0.8) + Math.PI / 3) * (c.heelAmount ?? 0.12);
 
   // The net hangs straight down from the hull, trailing slightly behind it so
   // it looks dragged rather than carried.

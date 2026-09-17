@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, difficultyRamp, enemyPaceMul } from '../config.js';
-import { createVisual, hasModel } from '../assets.js';
+import { createVisual, releaseVisual, hasModel } from '../assets.js';
 import { versusActive } from './versusFlag.js';
 import { bounds, seabedTopY } from '../arena.js';
 import { pickups, spawnXpOrb } from '../entities/pickups.js';
@@ -52,7 +52,8 @@ export function resetBoats(scene) {
   for (const b of boats) {
     if (b.body) removeBody(b.body);
     clearBoatTell(scene, b);
-    scene.remove(b.mesh);
+    // releaseVisual, NOT scene.remove — see sinkBoat for the whole of why.
+    releaseVisual(b.mesh);
   }
   boats.length = 0;
   for (const o of attractorOrbs) {
@@ -199,6 +200,10 @@ function spawnBoat(scene, difficulty) {
     radius: Math.hypot(halfLength, halfHeight) + Math.hypot(offsetX, offsetY),
     spawnScale,
     phase: Math.random() * Math.PI * 2,
+    // The heel's own phase — see updateBoats. Drawn separately from `phase`
+    // rather than offset from it, so no two hulls in the same shot rock
+    // together AND no one hull's nod and heel are the same gesture.
+    heelPhase: Math.random() * Math.PI * 2,
     flash: 0,
     // Whether the keel was clear of the water last frame — the edge the
     // re-entry splash is fired on. See updateBoats.
@@ -763,7 +768,26 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
     // The gentle roll of a boat on the water. This is the body's REST angle;
     // whatever the physics has done to it is laid on top by the step itself
     // (see RigidBody.writeBack), which is why nothing here touches rotation.
-    b.body.restAngle = Math.sin(clock * CONFIG.boats.bobSpeed * 0.7 + b.phase) * 0.08;
+    b.body.restAngle = Math.sin(clock * CONFIG.boats.bobSpeed * 0.7 + b.phase)
+      * (CONFIG.boats.rollAmount ?? 0.08);
+
+    // ...AND THE HEEL, which is the axis that shows the hull is a solid. The
+    // nod above is fore-and-aft: on a camera looking straight down the Z it
+    // only ever slides a silhouette up and down, and a boat that sails past
+    // in perfect profile could as well be a cut-out. Rocking about the axis
+    // it is sailing along swings the deck toward the lens and away again, so
+    // the beam, the deck and the far rail come into view and the hull reads as
+    // an object with a third dimension — which is the whole point of it being
+    // a model. Same axis the physics heels on when something hits the boat
+    // (see `banks` in systems/rigidBody.js), laid in as the REST bank so a
+    // shove is measured from the rock rather than replacing it.
+    //
+    // SLOWER THAN THE NOD, and out of phase with it, because they are two
+    // periods of the same swell rather than one gesture: locked together they
+    // read as a single mechanical wobble, and the quarter-turn offset is what
+    // makes the hull look like it is being worked by the water.
+    b.body.restBank = Math.sin(clock * (CONFIG.boats.heelSpeed ?? 0.85) + b.heelPhase)
+      * (CONFIG.boats.heelAmount ?? 0.14);
 
     if (b.flash > 0) {
       b.flash = Math.max(0, b.flash - dt);
@@ -821,7 +845,12 @@ export function updateBoats(dt, scene, difficulty, playerPos, hooks = {}) {
       releaseCrew(scene, b, false);
       clearBoatTell(scene, b);
       removeBody(b.body);
-      scene.remove(b.mesh);
+      // Sailing off the edge is the QUIETEST way a boat leaves, and it was the
+      // most expensive: no explosion, no debris, no wreck to watch — just a
+      // hull dropped from the scene every few seconds for the length of a run,
+      // each one taking its bone texture with it into the renderer's map and
+      // leaving it there. See sinkBoat.
+      releaseVisual(b.mesh);
       boats.splice(i, 1);
     }
   }
@@ -1194,7 +1223,23 @@ export function damageBoat(scene, index, amount, hooks = {}, dir = null, at = nu
   // light is orphaned in the pool's "in use" half and never handed back, which
   // presents as the blink slowly running out of sprites over a long run.
   clearBoatTell(scene, b);
-  scene.remove(b.mesh);
+  // THE BODY GOES BACK, it is not merely taken off the scene.
+  //
+  // A hull is a createVisual, so it owns a Skeleton nobody shares and — from
+  // the first frame it draws — a bone DataTexture on the GPU. scene.remove
+  // drops the reference and frees exactly none of that: three counts a texture
+  // as resident until dispose() is called on it, and disposeVisual (reached
+  // through here) is the only code in this game that ever calls it on a
+  // skeleton. Boats sink all run, so this one line was a steady upload the
+  // process could never get back — the count climbing 306 -> 704 inside a run
+  // while the byte census read a flat 105MB, because four kilobytes a time
+  // moves a tally and not a total.
+  //
+  // releaseVisual is right even though a boat is never pooled: a body with no
+  // `__rest` snapshot (this one was cloned by createVisual, not issued by
+  // acquireVisual) takes the disposal branch, which is the wanted behaviour
+  // and stays wanted if boats are ever pooled later.
+  releaseVisual(b.mesh);
   boats.splice(index, 1);
   return true;
 }

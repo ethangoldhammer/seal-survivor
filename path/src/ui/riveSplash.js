@@ -227,12 +227,52 @@ export function mountRiveSplash({
   // pointer-events must be explicit: the splash sits inside .sv-ui in the real
   // game, and that container is pointer-events:none so the 3D scene below it
   // stays clickable.
+  //
+  // THE CARD ENDS AT THE SAFE AREA, NOT AT THE SCREEN. The wrapper is
+  // full-bleed so its background still covers the whole viewport, but its
+  // padding box stops above the home indicator — and the canvas is sized to
+  // the CONTENT box, so that is the bottom edge the artboard lays out against.
+  //
+  // This is what keeps the Start button off the tip jar. The artboard reserves
+  // 72pt below the entry column (SPLASH_GEOMETRY.strip.bottom) and the jar sits
+  // 14px above the safe edge inside it — 58px of the 72 on a touch device, with
+  // 14 to spare. Measured from the VIEWPORT instead, the jar climbs by the
+  // inset and the two collide: 20px of the Play button on every notched iPhone,
+  // where env(safe-area-inset-bottom) is 34.
+  //
+  // Not a change the .riv could make. Rive has no env(), so an artboard-side
+  // fix would have to be handed the inset as one more bound number; shrinking
+  // the box it is given says the same thing once, and lifts the Start button
+  // off the home indicator at the same time.
   wrap.style.cssText =
-    `position:absolute; inset:0; pointer-events:all; z-index:20; background:${background};`;
+    `position:absolute; inset:0; box-sizing:border-box; pointer-events:all; z-index:20;`
+    + ` padding-bottom:env(safe-area-inset-bottom, 0px); background:${background};`;
 
+  // The canvas fills the CONTENT box — see above. Its resize is watched by a
+  // ResizeObserver (applyCanvasSize), so a browser that reports the inset late
+  // reflows the artboard when it lands rather than keeping the wrong height.
   const canvas = document.createElement('canvas');
-  canvas.style.cssText = 'display:block; width:100%; height:100%;';
+  canvas.style.cssText = 'display:block; box-sizing:border-box; width:100%; height:100%;';
   wrap.appendChild(canvas);
+
+  // THE SEA, CONTINUED INTO THE INSET. The padding above is a strip the
+  // artboard no longer paints, and the wrapper's own background is the wrong
+  // colour for it — `#05070d` under a deep-blue sea reads as a letterbox bar,
+  // and `transparent` (CONFIG.titleSeal.scrim) opens a slot of running game at
+  // the bottom of the title card. So the strip gets the artboard's own
+  // background: `Fill 1` on `Splash Responsive` (1-116100), #292577, which is
+  // also what the sea fades to at its bottom edge — sampled off the rendered
+  // canvas to check, and the two agree.
+  //
+  // MEASURED FROM THE .RIV, like SPLASH_GEOMETRY, and stale for the same
+  // reason if the backdrop is recoloured in the editor. It is 0px tall on
+  // every screen with no home indicator, which is every desktop.
+  const seam = document.createElement('div');
+  seam.className = 'sv-riv-seam';
+  seam.style.cssText =
+    'position:absolute; left:0; right:0; bottom:0; pointer-events:none; z-index:0;'
+    + ' height:env(safe-area-inset-bottom, 0px); background:#292577;';
+  wrap.appendChild(seam);
 
   // THE TIP JAR. A DOM element over the artboard rather than a button in it,
   // for the same reason the name field is one: the splash is a Rive export,
