@@ -1695,7 +1695,7 @@ export const ASSETS = {
     shape: 'cone', radius: 2.4, height: 14, color: 0x51606b, unlit: true,
   },
 
-  // THE HUMPBACK — the other body the sweep can wear (CONFIG.whale.asset).
+  // THE HUMPBACK — the other body the sweep can wear (CONFIG.whale.roster).
   // Built from the Sketchfab pack by tools/build-humpback.mjs, which is where
   // every fact below about the file was measured; see its header.
   //
@@ -6931,6 +6931,63 @@ const POOL_HEADROOM = 4;
 // a spawn-table bug, and the pool should not quietly hold the evidence.
 const POOL_MAX_PER_KEY = 96;
 
+// ...AND A BUDGET ACROSS ALL OF THEM, which the per-key caps cannot give.
+//
+// Every number above is per key, and the roster is 52 keys deep late in a run.
+// `peak + 4` is the right shape for one creature and says nothing about their
+// sum: measured off the phone's own crash trail (npm run crash), a 150-alive
+// crowd parked 250 bodies and a long run reached 579 across 52 keys, every one
+// of them inside its own cap and nothing to stop the total.
+//
+// WHAT THAT COSTS IS THE HEAP, NOT THE GPU. The trail's tracked total sits flat
+// at 398-423MB whether 250 or 579 are parked — 0.012MB per body, which is
+// noise — so the census, which counts geometry, textures and bone textures,
+// says a parked body is free. It is not: the same samples put a pooled body at
+// 21.9 scene nodes and 0.63 of a Skeleton, and at 579 parked that is ~12,700 of
+// the 23,910 nodes in the graph. iOS jetsams on RESIDENT memory, which includes
+// the JS heap the census cannot see (`performance.memory` does not exist in
+// WebKit, so heapUsed() reads 0 on the device and nothing records it).
+//
+// Both of tonight's kills sat at the top of that node count — one on a plain
+// tick, one ON `pool:clear`, which is the app dying while doing the work that
+// would have freed it.
+//
+// 288 rather than a round number: the trail's own healthy stretch held 250 for
+// a 150-alive crowd, and this is that with the same headroom the per-key caps
+// use. Past it, parking a body evicts one from the largest pool instead of
+// growing the total — largest, so a wide roster cannot be starved by whichever
+// key happened to fill first.
+const POOL_TOTAL_BUDGET = 288;
+
+/** Bodies parked across every key. */
+function pooledTotal() {
+  let n = 0;
+  for (const list of visualPool.values()) n += list.length;
+  return n;
+}
+
+/**
+ * Make room for one more parked body, or say there is none.
+ *
+ * Disposes from the LARGEST pool — not the oldest, not the caller's own. The
+ * budget is a shared resource and the key holding the most of it is the one
+ * that can spare one; taking it from the caller would make the cap a race
+ * between creatures rather than a bound on the total.
+ */
+function evictForBudget(exceptKey) {
+  let biggest = null;
+  let most = 0;
+  for (const [key, list] of visualPool) {
+    if (list.length > most) { most = list.length; biggest = key; }
+  }
+  // Nothing to take, or the only thing to take is the one body we were about
+  // to park anyway — let the caller dispose instead of churning it.
+  if (!biggest || most <= 1 || (biggest === exceptKey && most <= 1)) return false;
+  const victim = visualPool.get(biggest).pop();
+  if (victim) disposeVisual(victim);
+  return true;
+}
+
 // Acquired and not yet handed back — the bodies of this key the game has in
 // play right now — and the largest that has ever been.
 const liveByKey = new Map();
@@ -7042,6 +7099,13 @@ export function releaseVisual(visual) {
   let free = visualPool.get(key);
   if (!free) { free = []; visualPool.set(key, free); }
   if (free.length >= poolCap(key)) {
+    disposeVisual(visual);
+    return false;
+  }
+  // The shared budget, after this key's own cap — see POOL_TOTAL_BUDGET. A body
+  // that cannot be parked without evicting one is only worth parking if there
+  // is somewhere to take it from; otherwise this is the one that goes.
+  if (pooledTotal() >= POOL_TOTAL_BUDGET && !evictForBudget(key)) {
     disposeVisual(visual);
     return false;
   }

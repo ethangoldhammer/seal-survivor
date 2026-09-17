@@ -5137,6 +5137,23 @@ export const CONFIG = {
         decay: 12,
         spin: 5,         // tumble imparted to bodies that roll (crabs)
         boneImpulse: 2.6, // the flinch through the skeleton, as bone spring units
+        // HOW MUCH OF A STRIKE BUILD REACHES THE FLINCH. The ram's shove is
+        // deliberately NOT scaled by upgrades — how far a body is thrown is a
+        // balance number and belongs to the charge — but how hard the animal
+        // is seen to be hit is feel, and a player who has spent four cards on
+        // strike damage should be able to watch a boss buckle where a
+        // first-level seal bounces off it.
+        //
+        // Taken as a CURVE on the damage ratio rather than the ratio itself.
+        // stats.strikeDamage over CONFIG.strike.damage runs past 4x on a
+        // committed build, and a linear read of that is a boss whipping like a
+        // flag. The exponent is what makes the first few cards the ones you
+        // feel: at 0.5 a doubled strike buys 1.4x the flinch and a quadrupled
+        // one 2x.
+        boneUpgradeExp: 0.5,
+        // ...and a ceiling, because the spring response saturates anyway and
+        // everything past this is cost with no picture.
+        boneUpgradeMax: 2.4,
 
         // --- WHAT A RAM DOES TO SOMETHING THAT SURVIVES IT ---------------------
         //
@@ -5267,6 +5284,29 @@ export const CONFIG = {
           // radians its aim is shoved toward the dash.
           stagger: 0,
           headingKick: 0,
+          // --- AND THE JOSTLE THROUGH ITS SKELETON -------------------------
+          //
+          // The shove above moves the animal; this shakes the animal's BONES,
+          // through the same spring chains that carry its swim lag (see
+          // anim.impulse in systems/animation.js). It is the half of a hit
+          // that reads on a body too big to move: a megalodon shoved 3.2 units
+          // while swimming 7 units a second has barely changed course, and the
+          // thing the player actually sees is whether the animal FLINCHED.
+          //
+          // ITS OWN NUMBER RATHER THAN THE ROSTER'S 2.6, because the roster's
+          // was tuned on a body a fifth this size and a big rig absorbs it:
+          // measured, a full-charge ram at 2.6 swung a boss shark's skeleton
+          // 0.67 units — 13% of its own body radius — and a minimum-charge one
+          // 4.7%, which is under the noise of the swim cycle it is laid on top
+          // of. The response saturates as you push it (x3 buys 2.8x the swing,
+          // x12 buys 7.5x), so this is a number to read off the animal rather
+          // than to reason about.
+          //
+          // NOT divided by size. `boneImpulse` is in spring units, and a
+          // stiffer chain already absorbs the same shove into a smaller swing
+          // through its own spring constant — scaling it here as well would
+          // apply the same stiffening twice. See the note on impulse().
+          boneImpulse: 9,
         },
       },
 
@@ -7368,16 +7408,39 @@ export const CONFIG = {
       // wagSpeed/wagAmplitude pairs those names actually mean. Its own state
       // rather than a borrowed one — see the note on `whaleCruise` there.
       wagState: 'whaleCruise',
-      // WHICH ANIMAL MAKES THE CROSSING — a key in ASSETS. Two bodies are
-      // rigged for it and they are moved in opposite ways:
+      // WHICH ANIMALS MAKE THE CROSSING — a ROSTER of keys in ASSETS, not one
+      // key. Two bodies are rigged for it and they are moved in opposite ways:
       //   'whale'          the bowhead. No clips; the procedural rig wags it
       //                    at `wagState` above and its jaw is two morphs.
       //   'humpbackWhale'  the humpback. An authored feeding loop
       //                    ("EAT-delphinidae") bound to 'idle', paced by
       //                    `clipSpeed` below; the jaw is in the clip.
       // systems/whale.js measures whichever body it is handed, so every other
-      // number in this block is the same for both.
-      asset: 'humpbackWhale',
+      // number in this block is the same for both — which is the whole reason
+      // this can be a list at all.
+      //
+      // A LIST RATHER THAN A PICK, because the sweep was one animal for the
+      // life of a run and the other was dead weight in the build: a key naming
+      // exactly one body means half the rigging work ships as a file nobody
+      // ever sees. The roll is in spawnWhale and it NEVER REPEATS while there
+      // is another body to send — two bodies is a strict alternation. Rolling
+      // uniformly would give a run a coin-flip chance of showing the same
+      // animal three sweeps running, which is the thing this is for undone by
+      // chance, and the gaps here are minutes apart so nobody would read it as
+      // luck.
+      //
+      // CODE-OWNED, and stripped from the snapshot both ways (see
+      // withoutTableOwnedKeys): deepMerge REPLACES an array rather than merging
+      // it, so a saved copy is not one tuned value winning but the WHOLE roster
+      // — and every body added here afterwards would be dead text.
+      roster: ['humpbackWhale', 'whale'],
+      // ...AND THE OVERRIDE, which is what the tuner's choice writes. 'roster'
+      // is the rotation above; any asset key pins every sweep to that body, for
+      // looking at one of them. Deliberately NOT named `asset`: that field is
+      // in every saved snapshot at 'humpbackWhale', and saved tuning beats
+      // config.js — a roster read through the old name would have shipped as
+      // the humpback forever, however this file read.
+      body: 'roster',
       // PLAYBACK PACE of a clip-driven body's loop, as a multiple of the clip
       // as authored. The humpback's EAT is 0.875s of full-tempo chewing — a
       // gulp every second on a 31-unit animal reads as a fish, not a whale.
@@ -13448,12 +13511,27 @@ export const CONFIG = {
       // 0.05 u/s — so these are the turn rates for the two stages that hold
       // station. See faceToward in systems/bossAngler.js.
       //
-      // The lurk turns SLOWLY (0.9, under the def's own 1.05) so a player
-      // circling wide can get behind it, and the wind-up turns fast (2.4, the
-      // orca's rate) but not instantly — so moving during the tell makes it
-      // commit slightly off, which is the counterplay working.
-      lurkTurnRate: 0.9,
-      windupTurnRate: 2.4,
+      // BOTH RAISED WITH THE RANGE, and for the same reason. The old note is
+      // worth keeping in mind: the lurk turned SLOWLY (0.9, under the def's own
+      // 1.05) so that a player circling wide could get BEHIND it, and that was
+      // a real piece of counterplay while the fight was an ambush.
+      //
+      // It stops working the moment the animal shoots across the arena. The
+      // lure hangs off the front of the head, so a fish that has not come round
+      // fires its own beam through its own body — measured over 60-second
+      // fights, the nose was up to 180 degrees off the seal and averaged 23 on
+      // the stations it did engage from. Getting behind an anglerfish no longer
+      // buys safety, so a slow turn buys nothing but an attack that looks
+      // broken.
+      //
+      // 3.2 tracks you through the lurk — three times the body's own turnRate,
+      // which is what "aggressive" has to mean on a body that does not chase.
+      // 6.0 through the wind-up is a snap onto the line, and it is still a RATE
+      // rather than a lock: a seal that keeps moving across the charge still
+      // makes it commit off, which is the counterplay the beam has always had
+      // and the only one it needs.
+      lurkTurnRate: 3.2,
+      windupTurnRate: 6,
       // Where it goes between ambushes. It relocates rather than sitting in one
       // place all fight: a trap in a known spot is not a trap after the first
       // one.
@@ -13527,19 +13605,38 @@ export const CONFIG = {
       // Beyond that, the beam. Three ranges, three answers, and a player learns
       // them by standing in the wrong one.
       //
-      // `lureRange` is the outer edge of it caring at all. Past this the animal
-      // holds station in the dark and the fight simply does not happen, which
-      // is the same proposition the lurk has always made: you can always leave.
+      // `lureRange` is the outer edge of it caring at all, and it now covers
+      // the whole arena on purpose. THIS IS A REVERSAL, and the note it
+      // replaces should be read before anyone puts it back: it argued that a
+      // range smaller than the playfield is what keeps the lurk a proposition,
+      // so that standing off is an option the player has.
       //
-      // IT HAS TO BE SMALLER THAN THE ARENA OR IT IS NOT A RANGE. The playfield
-      // is 80 wide and 40 deep, so a fish on the floor is within 46 units of
-      // almost every point a seal can occupy — set there, "stay out of its
-      // reach" stopped being an option the player had and the boss simply
-      // attacked forever. 34 leaves the far half of the water genuinely out of
-      // its reach, which is what keeps the lurk a proposition rather than a
-      // pause. The beam's band is what is left between pulseRadius*pulsePick
-      // (15) and this.
-      lureRange: 34,
+      // IT WAS ARGUING FROM A PLAYFIELD THAT NO LONGER EXISTS. That note says
+      // "80 wide and 40 deep". The arena is 184.9 by 41.6 — the width more than
+      // doubled since — so 34 was not half the water, it was under a fifth of
+      // it, and the boss's answer to a player anywhere else was nothing at all.
+      //
+      // MEASURED, IT WAS WORSE THAN THAT. The pick is by distance FROM THE
+      // LURE: pulse inside pulseRadius*pulsePick (20.7), beam beyond it, and
+      // nothing at all past this. So the beam's entire window was the 13-unit
+      // annulus between 20.7 and 34 — on an animal 15.75 units long. Over
+      // 60-second fights at seven stations around the arena the boss fired
+      // ZERO beams from six of them and did not enter a single cycle from four;
+      // the one station inside the annulus produced two. The signature attack
+      // of this fight essentially never happened, and from most of the water
+      // the animal was inert scenery.
+      //
+      // 190 is the corner-to-corner diagonal (189.5), so there is no station a
+      // seal can take that it does not answer. Paired with `beamLength`, which
+      // is the same number for the same reason: the reach of the decision and
+      // the reach of the shot have to agree, or the animal charges a shot that
+      // cannot arrive.
+      //
+      // WHAT PAYS FOR IT is the tell, not the distance. The charge is 1.25s of
+      // a lit lure and a swept ring, the beam burns exactly where it was aimed
+      // and never follows (see fireLure), and the discharge is still a dark,
+      // punishable animal. Standing off is no longer the answer; moving is.
+      lureRange: 190,
       // The tell, and it is LONGER than the lunge's wind-up (0.85). It has to
       // be: the lunge is a body moving, which a player reads instantly and from
       // anywhere on screen, while a lure attack announces itself with a light
@@ -13558,16 +13655,31 @@ export const CONFIG = {
       // lunge, and never gating the lunge itself — see the note in
       // systems/bossAngler.js for why it runs one way only.
       //
-      // 5.6 is not a comfort number, it is what buys the LURK back. A lure
-      // cycle costs 3.4s of stages (charge 1.25, discharge 0.55, recovery 1.6)
-      // and a lunge cycle 2.8s, so this is the only thing standing between the
-      // fight and an animal that is always mid-attack. At 2.6 the lurk was
-      // shorter than the 0.7s ramp its own light takes to reach the throb —
-      // which is to say the boss whose entire identity is that it WAITS never
-      // visibly waited, and the tell that teaches the player to read it never
-      // finished arriving. Whatever else moves here, this has to stay well
-      // above (recoverTime + dischargeTime + the lurk hold's attack).
-      attackGap: 5.6,
+      // THE SECOND HALF OF THE SAME REVERSAL, and the note it replaces made the
+      // honest case for the old fight: 5.6 was what bought the LURK back, so
+      // the boss whose identity was that it WAITS visibly waited, and its light
+      // had time to finish its 0.7s ramp to the throb.
+      //
+      // The fight is not that fight any more. This one zaps. At 0.6 the gap
+      // stops being the binding constraint and the cadence becomes the CYCLE —
+      // charge 1.25, discharge 0.55, lureRecover 0.45, settle 0.6, so a shot
+      // about every 2.9s against the old 6.9s. The pause between attacks is
+      // still the discharge and the recovery, which are the frames the animal
+      // is dark and punishable; what has gone is the dead lurk on top of them.
+      //
+      // Kept as a real number rather than zeroed: it is what stops a lunge and
+      // a beam landing on the same breath, which is the one thing it was always
+      // for underneath the pacing argument.
+      attackGap: 0.6,
+      // THE LURE'S OWN RECOVERY, separate from `recoverTime` because the two
+      // attacks earn different windows. A lunge is the whole body committed
+      // across the water and the player who dodged it has earned 1.6s of a
+      // spent animal. A beam is a light going out: the follow-through is
+      // `dischargeTime`, and 1.6s more of nothing on top of it was most of the
+      // reason this boss read as idle. The relocation still happens here — the
+      // animal works its way across the arena between shots — just at the new
+      // tempo rather than at a walking pace.
+      lureRecover: 0.45,
 
       // WHICH NODE THE LIGHT COMES OUT OF. Both lure attacks are born at the
       // esca, not at the middle of the fish — an animal whose whole silhouette
@@ -13657,7 +13769,14 @@ export const CONFIG = {
       // Long enough to cross the arena from the floor at any angle — the beam
       // is a line, and one that stops short of the wall is a line with an
       // invisible edge no player can learn.
-      beamLength: 150,
+      //
+      // 190, the corner-to-corner diagonal, and the SAME number as `lureRange`
+      // on purpose: that one is how far away the animal will decide to shoot
+      // and this is how far the shot carries. A decision that outreaches the
+      // weapon is a boss charging a beam that stops in open water short of the
+      // player it was aimed at — which is what the old 150 would have become
+      // the moment the range opened up.
+      beamLength: 190,
       // The near-white core inside the electric colour. The line's own colour
       // comes from the shared threat palette (threatColor('electric') in
       // systems/organicRing.js), so the boss's beam and the player's Voltaic
@@ -15090,6 +15209,14 @@ export const CONFIG = {
         // time. Every other boss rolls a place on its outline each arrival;
         // this one is told, and the difference is the animal.
         //
+        // THE PIN LIVES IN bossHotSpots.csv NOW, in the bossMosasaur row, and
+        // this note is what is left of it here. It was a `weakSpot` string on
+        // this creature — a mechanism for one animal, in the file that
+        // describes the BODY, reached by a hard-coded two-value table in
+        // systems/bossHotSpots.js. What it was actually saying is a fact about
+        // the FIGHT, and the whole roster wanted to be able to say it, so it is
+        // a table: one row per archetype, naming places on the body's own axis.
+        //
         // THE ROLL COULD NOT WIN HERE. Twelve fitted spheres and exactly ONE
         // is wide enough to carry a spot at `minRadius` — the rest are neck,
         // jaw, paddles and four tail bones a fifth that size. The first spot
@@ -15105,7 +15232,7 @@ export const CONFIG = {
         // circle, is now a boss you beat by getting BEHIND it. That is the
         // lunge's own weakness stated as a target — it commits to a run, and
         // the thing you want is at the end it cannot point at you.
-        weakSpot: 'tail',
+        //
         // radius 2 against the shark's 2.2, and both are multiplied by their
         // model's assets.csv size (2.3 for each) before they mean anything — so
         // 4.6 world units against the megalodon's 5.06. LOWER on the longer
@@ -16028,6 +16155,34 @@ export const CONFIG = {
       seaTurtle: {
         separates: true, rigidBody: 'turtle',
         asset: 'enemySeaTurtle', behavior: 'drift', faceMotion: true,
+        // IT TURNS, IT DOES NOT ROLL OVER. The shared path faced this body by
+        // swinging its heading through vertical and then rolling it 180 degrees
+        // about its own spine. On a fish that roll is free — flat side to side,
+        // it looks the same on its side as upright. This body is 1.42 across
+        // and 0.55 tall, so the same roll hands the camera its edge: the shell
+        // shrinking to a third of itself, belly-up, and back. It yaws in 3D now
+        // like everything else in systems/fishTurn.js, where its beam (95% of
+        // its length) means the turn costs it almost no silhouette at all.
+        //
+        // It is also the one def that goes round the BACK rather than through
+        // the lens, because a come-about through the lens is an animal turning
+        // to face you and this one is not hunting anybody. See section 4 there,
+        // which also covers how the yaw shares the body with the physics
+        // instead of fighting it for `rotation.z`.
+        //
+        // Slow and heavy. Twice the shared 0.55, and a nose that re-aims
+        // vertically at less than half the shared rate — the same reasoning as
+        // the megalodon's, one size further along. A turtle that came about at
+        // fish speed would be the flip again with extra steps.
+        //
+        // THE LEAN IS A THIRD OF THE SHARED ONE AND CAPPED HALF AS LOW, and
+        // both numbers are needed because a long turn is a FAST one through its
+        // middle: inOutCubic peaks at three times the average rate, so 1.3
+        // seconds to cover PI is 7.3 rad/s at the midpoint — more yaw velocity
+        // than any fish here reaches, feeding a lean the shared 0.22 would slam
+        // into its own cap and hold there. A turtle heeled over 29 degrees at
+        // the top of every turn is the barrel roll coming back in miniature.
+        comeAbout: { through: 'back', time: 1.3, bank: 0.03, bankMax: 0.25, pitchRate: 1.6 },
         radius: 1, hp: 1e9, hpPerDifficulty: 0,
         speed: 1.6, speedVariance: 0.4, contactDamage: 8, xp: 0,
         // `stay` is the whole reason a turtle can be common now. It cannot be
@@ -16775,7 +16930,23 @@ export const CONFIG = {
           // than the small one would read as waterlogged rather than as heavy.
           deepGap: 1.4, buoyancy: 34, waterDrag: 1.4,
         },
-        drift: { wanderChange: 6 },
+        // A DRIFT WITH A DIRECTION. `towardPlayer` is the chance that each
+        // wander roll is taken toward the seal rather than anywhere at all —
+        // see the roll in the `drift` behaviour, where the argument is.
+        //
+        // The short version: a uniform roll is a random walk, and measured over
+        // 90-second fights this boss sat a mean 80 units from a parked seal and
+        // spent 93% of the fight more than 40 units away. It was not losing a
+        // chase, it was never in one. At 0.75 it still wanders — one roll in
+        // four goes wherever the water takes it, and the cone is wide — but it
+        // converges, so the fight happens.
+        //
+        // IT STILL CANNOT CHASE YOU, and every other number on this body
+        // assumes that. It drifts at 1.6 u/s against a seal that swims at 9 and
+        // dashes at 46; `above: 3` below is priced as "a breach on a body that
+        // cannot chase you" and that sentence is still true. This buys arrival,
+        // not pursuit.
+        drift: { wanderChange: 6, towardPlayer: 0.75, towardCone: 1.1 },
         // ABOVE THE ANIMAL, in its own radii — never world units, because the
         // radius follows `sizeMul` and a world number here would stop
         // describing the body the day anyone resizes it.
@@ -22168,11 +22339,16 @@ export const CONFIG = {
         // still a fight to win, which is the only point at which knowing is
         // worth anything.
         //
-        // It is only affordable because `rampCurve` below is now well above 1
-        // — the two numbers are one decision. Widening the band without
-        // flattening the curve would put a third of every run under a visibly
-        // red frame.
-        threshold: 0.35,
+        // It is only affordable because `rampCurve` below is well above 1 —
+        // the two numbers are one decision. Widening the band without
+        // flattening the curve would put half of every run under a visibly red
+        // frame.
+        //
+        // 0.15 -> 0.35 -> 0.55 over three passes, each one because the effect
+        // was still arriving too late to be a warning. At 0.55 the frame starts
+        // moving while you are still winning, which is the only time a warning
+        // is worth anything; the curve is what keeps that from being loud.
+        threshold: 0.55,
         // Seconds-ish constants on the exponential ease in and out. The fall
         // is deliberately the slower of the two: arriving in trouble should be
         // quicker than leaving it, or a heal reads as an undo.
@@ -22201,7 +22377,7 @@ export const CONFIG = {
         // one that arrives late, and past about 1.5 the last sliver stops being
         // the emergency it has to be. Anything gentler than this would need an
         // S-curve rather than an exponent.
-        rampCurve: 1.45,
+        rampCurve: 1.5,
         // The same curve for the MIX (systems/audio.js's near-death wash), and
         // a separate number because sound is the more intrusive of the two: a
         // frame you can glance past, a warble you cannot. Slightly later than
@@ -22213,37 +22389,67 @@ export const CONFIG = {
         // How far toward `color` the edge of the frame goes at empty. 1 is a
         // full replacement out at the corners; the middle of the screen is
         // never touched at any value (see `inner`).
-        strength: 0.9,
+        strength: 1,
         // Deep arterial rather than bright red. It is laid over a lot of
         // screen, and a saturated red at this coverage reads as a UI element
         // over the game rather than as the game going wrong.
-        color: 0x8e0f14,
+        //
+        // Opened up from 0x8e0f14 when the whole effect was asked to read more
+        // obviously: the old one is arterial to the point of reading as brown
+        // over near-black water, and the thing that survives a dark ocean is
+        // VALUE, not saturation. Still deep — this is blood, not a red filter.
+        color: 0xb31218,
         // How bright the blood laid over the picture is. ADDED rather than
         // mixed toward, which is the one number to understand here: a mix can
         // only redirect light that is already in the pixel, and this ocean is
         // a screen of near-black water — the first version of this effect was
         // very nearly invisible on the frames that matter for exactly that
         // reason. This is the knob that decides whether it reads at all.
-        glow: 0.62,
+        //
+        // 0.62 -> 1.05 -> 0.85. The jump to 1.05 did make the frame redder and
+        // it bought that by ADDING light to near-black water, which raises the
+        // water toward whatever bright thing is in front of it — the corner
+        // orb's contrast against its own background fell to x1.32 and the
+        // readability check very nearly went red. The lesson is that "more
+        // obviously red" is bought more cheaply with COVERAGE (`inner`) and
+        // with the hue's own value (`color`) than with raw added light, because
+        // neither of those closes the gap between a silhouette and its water.
+        glow: 0.85,
         // What the picture underneath keeps at full strength. It is only ever
         // DIMMED, never replaced: every silhouette and every highlight stays
         // where it is, or the corners of the frame become a blindfold in the
         // one situation where the player most needs to see what is coming.
         // Raise it if the edges are hiding things; lower it for a heavier
         // effect at the cost of the same.
-        keep: 0.55,
+        //
+        // Went 0.55 -> 0.5 and straight back up to 0.62 in the same pass that
+        // made everything else louder, and the reason is worth keeping: with
+        // `glow` at 1.05 the blood is bright enough that the corner stopped
+        // being a warning and started being a blindfold — the look page's
+        // orb-against-water contrast fell to x1.32, a hair off failing. Because
+        // the blood is ADDED and this is a MULTIPLY on the picture underneath,
+        // the two are not in competition: raising this back up costs the red
+        // nothing and hands the silhouettes their brightness back.
+        keep: 0.68,
         // ...and how much of its own colour goes with it. Draining toward grey
         // under the red is what makes the blood read as the only colour left
         // rather than as a filter sitting on top of a picture that is
         // otherwise carrying on as normal.
-        drain: 0.75,
+        drain: 0.8,
         // Where the band starts and ends, as a radius from the centre of the
         // frame: 0 is the middle, 1 the middle of an edge, 1.41 a corner. So
         // the shipped pair leaves the middle half of the screen completely
         // clean, is about half strength along the edges and full in the
         // corners — it follows the frame rather than being a circle, which is
         // what keeps it even on a phone and on an ultrawide.
-        inner: 0.45,
+        //
+        // 0.45 -> 0.30: at 0.45 the band was a rim, and a rim is something you
+        // can look past. At 0.30 it is a third of the way to the middle of the
+        // screen before it even starts, so the frame is closing in rather than
+        // being edged. It cannot go much further — the middle of the frame has
+        // to stay a window (see `keep`), and 0.30 is where the clean box the
+        // look page measures starts to be touched.
+        inner: 0.30,
         outer: 1.25,
 
         // --- the heartbeat -----------------------------------------------------
@@ -22266,8 +22472,8 @@ export const CONFIG = {
         // the work. Brightness alone reads as a flashing light; an aperture
         // that narrows and opens reads as something squeezing. Both are scaled
         // by strain, so it is a faint breath at 14% and a hammering at 2%.
-        pulse: 0.22,
-        close: 0.16,
+        pulse: 0.34,
+        close: 0.22,
 
         // --- the scan lines ----------------------------------------------------
         // The second read, and the one that is about the SIGNAL rather than
@@ -22283,24 +22489,47 @@ export const CONFIG = {
         // whichever of the three wrote last.
         //
         // How dark the bars go out in the band, at an empty bar.
-        scan: 0.16,
+        scan: 0.34,
         // ...and the fraction of that which reaches the clean middle of the
         // screen. NOT zero, unlike the blood: the lines are the one part of
         // this that is allowed across the whole frame, because a degrading
         // signal that stops at an invisible circle reads as a vignette with a
         // texture in it rather than as the picture failing. Kept well under 1
         // so the middle is still the part you can see through.
-        scanCore: 0.5,
+        scanCore: 0.7,
         // Lines down the height of the frame. Lower is fatter and coarser —
         // this is the number that decides whether it reads as a fine tube
         // texture or as bars rolling over the picture. Deliberately coarser
         // than the CRT preset's 600.
-        scanCount: 190,
+        scanCount: 120,
         // Lines per second the pattern crawls upward. A locked pattern is
         // invisible within seconds — the eye writes it off as part of the
         // screen — and a fast one is a strobe. Under one line a second is slow
         // enough to be felt rather than watched.
-        scanDrift: 0.9,
+        scanDrift: 1.4,
+
+        // --- the signal coming apart ------------------------------------------
+        // Scan lines say the picture is degrading; these two say it is TEARING,
+        // which is the read the lines alone could not carry. Both are ADDED to
+        // whatever the active preset and the drowning blackout already wrote —
+        // the same arrangement applySuffocationCrt uses, and for the same
+        // reason: on `crt` this pushes an already-broken picture past breaking
+        // point, and on `off` it IS the whole distortion, so a player who has
+        // switched the screen filter off still gets it.
+        //
+        // These are the one part of this effect that is NOT band-limited. The
+        // blood is a frame around the picture; a signal failing is not
+        // something that can politely stop at a circle, and a tear that did
+        // would read as a filter rather than as the feed going.
+        //
+        // Pixels of red/blue separation at an empty bar. Kept under the
+        // drowning blackout's 4: colour fringing is the most legible artifact
+        // in this whole shader, so it arrives last and stays smaller.
+        chroma: 3.2,
+        // Fraction of the frame that lines tear sideways by. Tiny on purpose —
+        // past about 0.01 the picture stops reading as a picture, and the one
+        // thing this effect may never do is hide the shark.
+        jitter: 0.006,
       },
     },
 
@@ -29400,6 +29629,59 @@ export const CONFIG = {
     // lights on their own.
     goo: true,
 
+    // --- AND WHAT A HIT ON ONE DOES TO THE ANIMAL'S SKELETON --------------
+    //
+    // Every hit in the game already shoves the bone springs a little (see
+    // anim.impulse in systems/animation.js, and CONFIG.strike.knockback
+    // .boneImpulse for what a ram spends). This is the weak spot's own, and it
+    // is the loudest one in the game on purpose: hitting the lit patch should
+    // not merely pay better, it should LOOK like it landed somewhere the
+    // animal cannot absorb. A boss is too heavy to shove meaningfully — the
+    // whole of CONFIG.strike.knockback.boss is an argument about how little it
+    // may be moved — so the flinch is the only channel a hit on one has.
+    //
+    // ALONG THE SKIN'S NORMAL AT THE SPOT, like the goo and the rupture's
+    // shove, so a wound opened on the near flank kicks the body away from the
+    // player and one on the far side pulls it across. The same direction those
+    // two already read, single-sourced off `wnx`/`wny`.
+    jostle: {
+      enabled: true,
+      // PAID ON DAMAGE, NOT ON HITS, and it is the same argument the chum
+      // payout makes one block up. Bullets arrive ten a second and the club
+      // once; an impulse per hit would make an automatic weapon a boss in
+      // permanent convulsion and a slow one nearly silent. Scaled by the share
+      // of the rupture pool a hit carries, the springs — which integrate
+      // impulses — reach the same total either way, and every hit still moves
+      // the body by what it was worth.
+      //
+      // This is also what makes it answer to the player's BUILD with nothing
+      // threaded through: a hit is a fraction of the pool, and bigger guns are
+      // a bigger fraction. It covers every weapon rather than just the strike.
+      //
+      // The number is what a hit worth the WHOLE pool would spend — which no
+      // single hit is, so read it as the scale rather than as a value anything
+      // reaches. `chum.damageShare` is 0.34, so a piece-shedding hit spends
+      // about a third of this.
+      strength: 34,
+      // How the impulse is spread along each chain: 0 buckles a body through
+      // its middle, 1 flicks the tip. Higher than the ram's, because a weak
+      // spot is a PLACE and the reaction wants to whip away from it rather
+      // than fold the whole animal.
+      tipBias: 0.85,
+      // ...and it grows with the wound, on the same ramp the hit's leak, shake
+      // and sound already ride (`rampMin`/`rampMax`). A player looking
+      // somewhere else feels the run-up in the body language as well as
+      // hearing it.
+      heatRamp: true,
+      // WHAT THE BURST ITSELF SPENDS, flat, on top of whatever the hit that
+      // caused it already paid. The rupture is a charge going off inside the
+      // flesh: CONFIG.hotSpots.burstKnock already throws the whole animal, and
+      // this is the body coming apart around that shove rather than riding it
+      // rigidly.
+      rupture: 26,
+      ruptureTipBias: 0.6,
+    },
+
     // --- AND WHAT LEAKS OUT OF ONE BETWEEN SHOTS -------------------------
     // The per-hit leak already grows with heat (`rampMin`/`rampMax` above), and
     // that only ever shows on the frames the player is landing shots. This is
@@ -29687,20 +29969,14 @@ export const CONFIG = {
       // kept in step with the crit's reach by hand. Painted on the skin, the
       // shader divides by the radius uniform directly: the drawn boundary and
       // the reach are not two numbers that agree, they are one number.
-      // How deeply the edge is chewed, and how fast the chewing crawls. A
-      // round hot spot reads as a decal stamped on the model — and this is the
-      // answer to that, on the SPILL only, so it is an amplitude on a haze
-      // rather than on the shape.
-      //
-      // NEARLY OFF NOW. It is a noise field animating on the boundary of the
-      // thing the player is aiming at, on up to three spots at once: the most
-      // literal visual noise in the feature and the least legible thing it
-      // buys. What it was for is covered three times over by the ring, the
-      // rising level and the throb, none of which move the outline. Kept at a
-      // whisper so the edge is not a vector circle; anything here that reads
-      // as MOTION is already too much.
-      jag: 0.06,
-      jagRate: 0.7,
+      // THERE IS NO `jag` ANY MORE EITHER, and that deletion is most of the
+      // answer to "too busy". It was a three-octave noise field animating on
+      // the boundary of the thing the player is aiming at, on up to three
+      // spots at once — the most literal visual noise in the feature and the
+      // least legible thing it bought. What it was for (a spot that is not a
+      // clean vector circle) is covered by the ring, the rising level and the
+      // throb, none of which move the outline. It also owned the per-spot
+      // random seed, whose slot now carries the aim lock.
       // --- the shape, and the reason the spot reads as a target ----------
       // THE RING is the loudest thing here and the one that does the work: a
       // hard bright band sitting exactly on the crit boundary. Without it the
@@ -29780,11 +30056,20 @@ export const CONFIG = {
       // whole feature was built to avoid, arriving from the other direction.
       // Under 1 the hide's noise, banding and lighting still show through the
       // colour, which is what makes it look painted ON something.
-      cover: 0.5,
+      //
+      // AND IT IS THE NUMBER THAT REPLACED THE RETICLE. At 0.5 the patch was
+      // half paint and half a plea, which is why every boss also carried a
+      // hexagonal mark drawn in front of it: the light could not be trusted to
+      // read on a pale hull or a lit deck, so a second object was added that
+      // did not care what it was drawn over. Turned up, the patch does not
+      // care either — it IS the hide inside the circle — and the second object
+      // is redundant. This is the whole trade: one number up, eleven layers
+      // and a spinning hexagon gone.
+      cover: 0.82,
       // ...and at the moment before it bursts. Higher, so a spent spot is not
       // just brighter but more solidly ITS OWN COLOUR — the animal showing
       // through less and less as the wound takes over.
-      coverFull: 0.85,
+      coverFull: 0.95,
       // WHERE THE LEVEL STANDS ON A FRESH SPOT, as a fraction of the radius,
       // rising to the boundary as the spot takes damage.
       //
@@ -29799,26 +30084,21 @@ export const CONFIG = {
       // which reads as a target already spent. A third of the radius is a
       // clear bright centre with most of the disc left to fill.
       charge: 0.34,
-      // How bright the level's own leading edge is — the line at the top of
-      // the fill. This is what makes 90% look different from 60% in a single
-      // frame rather than over a second of watching. Over the bloom threshold
-      // so it reads as a line, and a third under the boundary ring it is
-      // climbing toward — at full heat the two land on top of each other and
-      // the rim doubles, which is the loudest the spot ever gets before it
-      // goes.
-      chargeEdge: 2.2,
-      // THE SPILL beyond the boundary: how far out it reaches as a fraction of
-      // the radius, and how bright. This is the only part the chewed edge
-      // touches — a jag on the RING would be the boundary lying about the
-      // crit's reach by the jag's own amplitude.
-      //
-      // TIGHT AND FAINT, which is the other half of the note above. A haze
-      // reaching half the radius again, bright enough to bloom, is not a haze
-      // — it is the spot being that size, and it was the reason a spot looked
-      // twice its reach and had no outer edge to speak of. A quarter of the
-      // radius at a twelfth of the ring's brightness is light thinning out.
-      spill: 0.25,
-      spillGain: 0.25,
+      // THE LEVEL'S OWN LEADING EDGE IS GONE. It was a second bright line
+      // inside a shape that already has one, a third of the ring's brightness
+      // and climbing toward it — so on a spot near rupture the player was
+      // reading two concentric bands a few pixels apart and neither of them
+      // was a boundary they could name. The level's top is now simply where
+      // the fill stops, against a ring that does not move, which is the same
+      // reading with one line instead of two.
+      // AND THERE IS NO SPILL. A haze outside the boundary meant the brightest
+      // region on the animal was WIDER than the reach it was describing, so
+      // the player aiming at the middle of what they could see was aiming at
+      // the middle of something bigger than the crit. Nothing is drawn past
+      // r = 1 now except the burst shock, which is over in a fifth of a second.
+      // The halo the spill was reaching for is the BLOOM's job and always was:
+      // bright skin throws light, and a dim ring of extra geometry pretending
+      // to be thrown light does not.
       // --- AND THE BURST, ON THE SKIN --------------------------------------
       // Everything else a rupture does happens beside the animal — the goo,
       // the meat, the reticle thrown outward — so the body's own account of a
@@ -29836,18 +30116,38 @@ export const CONFIG = {
       burstWidth: 0.18,
       burstGain: 6,
       // Falloff exponent on the hot middle. Higher is a tighter, harder core.
+      // What this is FOR, now that the white mix on it is gone: a disc of one
+      // flat colour has no centre, and the centre is what the player aims at.
       core: 7.1,
-      // How white that core goes. This is what stops the spot being a flat
-      // counter: the body falls off from the first pixel and the middle is
-      // pushed toward white, so there is a bright heart with a green edge
-      // rather than one saturated disc.
-      // ...and NOT ALL THE WAY, which is the change. A middle pushed to white
-      // is a second bright peak inside a shape that now has a bright edge of
-      // its own — two highlights in one small light, and the white one sits
-      // exactly where the colour ramp is supposed to be read, so it costs the
-      // heat shift as well. Half a mix leaves a hot heart without bleaching
-      // the thing that heart is meant to be telling you.
-      white: 0.45,
+      // ...and how much it is worth. Small: at the top of the heat ramp the
+      // interior is already at the ceiling, so this is a number that does its
+      // whole job on a FRESH spot — a soft hot middle under a hard ring, which
+      // together are a target. Big enough to matter there, small enough that
+      // it cannot become a second highlight fighting the ring.
+      coreGain: 0.35,
+      // --- AND THE ONE THE PLAYER IS POINTING AT ---------------------------
+      //
+      // A designated spot takes the whole volley (see CONFIG.homing.hotSpots
+      // and aimHotSpots), and a lock the player cannot see is a lock they
+      // cannot use: they would be aiming at a light, watching pellets curve,
+      // and guessing at the connection between the two.
+      //
+      // THIS USED TO BE THE RETICLE'S JOB. With the reticle gone it is said on
+      // the patch, which is where the eye already is — and it is said TWICE,
+      // because once is not enough on a boss whose spots all throb in lockstep
+      // (`pulseSpread` ships at 0): at that spread the spots are otherwise
+      // identical objects and a brightness lift has nothing to be read
+      // against. `lockGlow` lifts the whole spot; `lockRing` fattens its
+      // boundary band, which is weight rather than light and survives being
+      // one of three bright things on a busy animal.
+      lockGlow: 0.9,
+      lockRing: 0.8,
+      // THE WHITE MIX ON THAT CORE IS GONE. A middle pushed toward white is a
+      // second bright peak inside a shape that already has a bright edge, and
+      // it sits exactly where the lit → hot colour ramp is meant to be read —
+      // so it cost the heat shift to buy a highlight the ring was already
+      // providing. The core survives as a soft brightening only, which is what
+      // gives a flat disc a centre to aim at.
       // THE THROB, ON THE MUSICAL GRID. One cycle per half bar, so every boss
       // in the water pulses with the track instead of each on its own rad/sec.
       // Any name from BEAT_DIVISIONS; 'free' falls back to `pulse` below.
@@ -29892,233 +30192,16 @@ export const CONFIG = {
       flashSeconds: 0.2,
       // No `lift` either: the old quad needed nudging toward the camera to sit
       // off the skin, and this IS the skin.
-
-      // --- THE TARGET DRAWN AROUND IT ---------------------------------------
       //
-      // A SMALL RETICLE PER SPOT, the strike mark's own ring (systems/
-      // organicRing.js) at a fraction of its size. The painted glow above is
-      // the better-looking half of this feature and it has one weakness it
-      // cannot fix from inside itself: it is ADDITIVE LIGHT ON A HIDE, so how
-      // well it reads is a property of the animal it landed on. On the orca's
-      // near-black flank it is unmissable; on the pale yacht hull, the boat's
-      // deck lights or a crab's own lit shell it is one bright thing among
-      // several, and on the far side of a turning boss it is correctly
-      // occluded by the body — which is honest and still leaves the player
-      // hunting for the thing they are supposed to be aiming at.
-      //
-      // The ring is the opposite kind of object on purpose: depth-test OFF, a
-      // hard bright band, drawn in front of everything. It says WHERE, and the
-      // glow underneath says WHAT — how hot, how close to going, whether that
-      // last shot landed on it. Neither one is doing the other's job.
-      //
-      // IT IS THE MARK'S RING AND IT SHOULD LOOK RELATED TO IT. The player
-      // already knows a segmented bracket means "this is the thing to hit" —
-      // that is what a strike paints on a target (systems/marks.js). Reusing
-      // the shader costs nothing to learn, and two things separate the two
-      // marks: the mark is four arms on a CIRCLE in the strike's amber (or its
-      // status element), and these are six on a loose HEXAGON wearing the
-      // spot's own ramp, white through hot to the struck red. Same sentence,
-      // different subject.
-      target: {
-        enabled: true,
-        // Ring radius as a multiple of the spot's own — and OVER 1 rather than
-        // under it. The band has to sit outside the painted boundary or the two
-        // draw on top of each other and the ring reads as a hard edge on the
-        // glow rather than as a separate mark around it. The crit reach is
-        // still the spot's radius; this ring is not a promise about reach the
-        // way a telegraph is, it is a label pointing at one.
-        // ...and CLOSER than it was. At 1.5 the mark stands half a radius off
-        // the light it is labelling, which at fight scale is a bracket with a
-        // gap inside it big enough to read as a shape of its own; the two
-        // halves of one tell should sit close enough that the eye takes them
-        // as one object. Still outside the boundary, which is the rule.
-        radiusMul: 1.3,
-        // Band half-width, as a fraction of the ring's radius. THIN: this is a
-        // line drawn around something, not a shape in its own right — at any
-        // real weight the six pieces stop reading as an outline and start
-        // reading as six blobs arranged in a circle, and the goo coming out of
-        // the middle has nothing left to contrast with.
-        //
-        // WHICH IS EXACTLY WHAT SHIPPED, TWICE OVER. The literal in
-        // makeSpotRing carried `thickness` twice, so this value was
-        // overwritten by a 0.17 fallback further down the same object — and
-        // then the tuner snapshotted the rendered 0.17 back into
-        // imported-tuning.json, where it shadowed this line as well. Fixing
-        // the literal alone changed nothing on screen for that reason. The
-        // failure this note warns about, arriving through a dead line and
-        // outliving it in a save file.
-        thickness: 0.085,
-        // --- HOW MUCH THE WATER HAS BEEN AT IT -------------------------------
-        // The ring shader's own numbers, overridden here because its defaults
-        // were authored for a blast ring or a strike mark and this is the
-        // smallest ring in the game.
-        //
-        // `noiseScale` is cells per WORLD unit, so the grain is a fixed
-        // physical size and a small ring covers less of it. At the shader's
-        // 0.55 a reticle three units across spans under two cells — the two
-        // sides of one hexagon reading opposite ends of a single lobe, which
-        // is not a chewed edge but a lopsided ring, and is most of why the
-        // mark read as distorted rather than as organic.
-        noiseScale: 2.4,
-        // ALL THREE OF THE NUMBERS BELOW ARE NEARLY OFF, and that is the
-        // decision rather than three small ones. The wobble, the varying band
-        // weight and the torn segment ends are the ring shader's whole organic
-        // dialect — right on a blast wave or a strike mark, which are big,
-        // brief and alone on screen. This mark is small, permanent and there
-        // are three of them, and at that size every one of those qualities is
-        // read as fuzz on the outline rather than as the water having been at
-        // it. What the shape has to do here is be FINDABLE and be a hexagon.
-        // The excursion, as a fraction of the radius (the cap binds at every
-        // legal spot size, so this IS the wobble).
-        //
-        // AND IT IS NOT ONLY THE WOBBLE, which is the trap in this number. In
-        // the `facet` dialect the polygon and the noise are BOTH scaled by
-        // this amplitude — the hexagon's flats are pulled in by 1.2 of it and
-        // the noise by 0.22 of it — so winding it down to kill the fuzz winds
-        // the hexagon down with it, and the mark quietly becomes a circle.
-        // Which it did: at 0.05 this was the strike mark's own shape in the
-        // strike mark's own family, and the one thing the two marks may never
-        // share is their silhouette. Back up to where the hexagon is a
-        // hexagon; the fuzz is dealt with by the three numbers around it,
-        // which are the ones that only do fuzz.
-        wobble: 0.13,
-        // How much the band's weight varies around the ring. The shader's 0.35
-        // is a third of the thickness — it sells a goo boundary and eats a
-        // thin line, which on a band this narrow is the difference between six
-        // segments and six lumps of six different sizes.
-        massVar: 0.05,
-        // ...and how ragged the ends of the segments are. Kept, because a
-        // bracket cut clean is a vector shape; small, because at this size a
-        // torn end is most of a segment.
-        arcJitter: 0.02,
-        // --- A LOOSE HEXAGON, IN SIX PIECES ---------------------------------
-        // The strike mark is a four-armed bracket on a CIRCLE. These are six
-        // segments on a HEXAGON, and the difference is what stops a weak spot
-        // reading as a second lock-on: same family, plainly not the same mark,
-        // and it is the game's own shape — the upgrade comb, the hive and the
-        // level-up cells are all hexes, so a target that says "this is the
-        // thing to hit" in that shape is speaking the language already on
-        // screen.
-        //
-        // `facet` is the chord dialect from systems/organicRing.js: the drawn
-        // radius is 1/cos of the angle off each flat's centre, which makes the
-        // polygon whose INCIRCLE is the true radius — the flats sit inside it
-        // and only the corners reach out. LOOSE is the rest of it: the same
-        // noise field every ring in the game wobbles on still runs underneath,
-        // pulling each facet in by its own amount, so this is a hexagon the
-        // water has been at rather than a vector one.
-        //
-        // The two counts are one decision, not two — `arcs` cuts the perimeter
-        // into six pieces and `facets` gives it six flats, and the arc phase is
-        // offset by an eighth of a segment, so each piece is most of one flat
-        // with the gap falling near a corner. Set them to different numbers and
-        // the gaps crawl across the flats at whatever the beat frequency of the
-        // two is, which looks like a bug nobody can name.
-        edge: 'facet',
-        arcs: 6,
-        facets: 6,
-        // How much of each segment survives the gap. Tighter than the mark's,
-        // because these are small on screen and a wide gap on a small shape
-        // leaves six tick marks with nothing between them.
-        arcGap: 0.86,
-        // Brightness. Read against `glow` above: the painted spot is light ON
-        // an animal and lands wherever that animal's own shading leaves it,
-        // while this is drawn over the top of everything, so it does not need
-        // the same push to be seen.
-        // Trimmed, for the halo rather than for the line: at 2.6 six segments
-        // each threw a soft skirt wide enough to close the gaps between them,
-        // and six pieces whose gaps have filled in is a blob. Far enough down
-        // to give the shape its holes back, not so far that the mark stops
-        // carrying at fight scale — which 2 did, and fight scale is the only
-        // frame this number can be judged in.
-        glow: 2.4,
-        // IT TURNS AROUND ITS OWN CENTRE. Radians a second, and higher than it
-        // would be on a circle for a reason that only applies to this shape: a
-        // rotating circle is invisible — the silhouette is the same at every
-        // angle and only the noise on the edge gives it away — while a hexagon
-        // sweeps its corners, so a speed that read as nothing on the strike
-        // mark reads clearly here. Still well under the pace of anything the
-        // player has to react to: a spin says LIVE, and a fast one would say
-        // URGENT, which is the throb's job.
-        // SLOWER. A hexagon sweeping its corners at 1.1 is plainly moving,
-        // which was the point while the spot underneath it was a light that
-        // did nothing but breathe — and is a third motion now, against a level
-        // that rises and a throb that is already on the beat. A spin says
-        // LIVE; it does not have to say it this often.
-        spin: 0.3,
-        // Seconds the sweep takes to draw one on. The hand goes round once as
-        // the spot opens, so a new weak spot is DRAWN rather than switched on.
-        sweepIn: 0.3,
-        // How much the ring breathes with the spot's own throb, 0..1 of its
-        // opacity. Driven off the same cycle as the glow, so the ring and the
-        // light it surrounds pulse together instead of beating against each
-        // other.
-        pulseDepth: 0.18,
-        // WHAT A HIT DOES TO IT. The band fattens and brightens for the length
-        // of the spot's own flash — the gooey half of the feedback, and the
-        // reason it fattens rather than flashing white is that a thicker band
-        // on this shader reads as more MASS in the same place, which is the one
-        // response that looks like the thing is made of the same stuff as the
-        // ichor coming out of it.
-        // BOTH SMALLER THAN THEY WERE, and for the reason the whole pass
-        // exists: at 0.55 and 2.2 on a band already drawing at twice its
-        // authored weight, a hit turned six segments into six saturated
-        // trapezoids and the hexagon stopped existing for the length of the
-        // flash — the shape reading as broken at the exact moment the player
-        // is looking at it. The pop below is the loud half of a hit and it
-        // costs the outline nothing, because it moves the whole shape instead
-        // of thickening it.
-        hitSwell: 0.3,
-        hitGlow: 1.5,
-        // AND IT POPS. A fatter band is felt more than seen at fight scale;
-        // what is unmistakable is the whole shape jumping outward and settling
-        // back, because that movement happens against the spot's own edge and
-        // the eye is already there. A fraction of the radius, out on the frame
-        // of the hit and eased back on the SAME clock as the flash
-        // (`flashSeconds`), so the pop and the white are one event rather than
-        // two effects that happen to overlap.
-        hitPop: 0.3,
-        // AND WHAT A RUPTURE DOES. The ring is thrown outward by this fraction
-        // of its radius over `closeSeconds` while the sweep eats it away, so
-        // the mark comes apart with the spot instead of blinking out — the
-        // visual half of the burst that systems/bossHotSpots.js fires as goo on
-        // the same frame.
-        burstGrow: 1.1,
-        // ...and how much fatter the band gets as it goes. A ring that only
-        // grows reads as a shockwave; one that thickens as it grows reads as
-        // the mass being flung apart, which is what actually happened.
-        // ...and this one is smaller for the same reason. Against a thin band
-        // 1.4 is not a mass being flung apart, it is six petals: the segments
-        // fatten past the gaps between them and the ring is a flower on the
-        // frame it comes apart. Enough to read as mass, not enough to close
-        // the gaps that make it six pieces.
-        burstSwell: 0.85,
-
-        // --- AND THE ONE THE PLAYER IS POINTING AT --------------------------
-        //
-        // A designated spot takes the whole volley (see CONFIG.homing.hotSpots
-        // and aimHotSpots), and a lock the player cannot see is a lock they
-        // cannot use: they would be aiming at a light, watching pellets curve,
-        // and guessing at the connection between the two. The ring is already
-        // the thing that says WHERE, so it is the thing that says WHICH.
-        //
-        // ON THE RETICLE AND NOT ON THE LIGHT. The glow is painted on the
-        // animal's hide by the shell shader, which means brightening it there
-        // costs a uniform per spot and reads as the wound changing rather than
-        // as a mark being placed on it. The ring is a readout drawn in front of
-        // the body and is free to say something about the player's intent.
-        //
-        // A MULTIPLIER ON WHAT THE RING ALREADY DOES, so a spot that is also
-        // being hit still shows its flash on top: the lock is the quieter of
-        // the two statements and must not swallow the loud one.
-        lockGlow: 1.7,
-        lockSwell: 0.55,
-        // ...and it turns faster. The one property of this ring that nothing
-        // else in the fight uses, so it cannot be confused with a hit, a heat
-        // level or a rupture — and rotation reads at fight scale on a mark this
-        // small where another few percent of brightness does not.
-        lockSpin: 3.2,
-      },
+      // AND NO `target` BLOCK. Everything that was in it — a loose hexagon in
+      // six pieces, its spin, its sweep-in, its hit pop and swell, its burst
+      // grow, its three noise-dialect overrides and its three lock keys — was
+      // the reticle drawn in front of the animal, and the reticle is gone. See
+      // the note at the top of systems/bossHotSpots.js: it existed because an
+      // additive patch could not be trusted to read on an arbitrary hide, and
+      // `cover` above is the answer to that which does not need a second
+      // object. What it uniquely said — which spot the aim is on — moved to
+      // `lockGlow` / `lockRing`, on the patch itself.
     },
   },
 
@@ -30285,6 +30368,20 @@ export const CONFIG = {
     // Tangential weight while holding the ring: 0 hovers, 1 circles at about
     // the same rate it closes.
     circleStrength: 1,
+    // HOW MUCH OF THAT IS GIVEN UP WHILE THE BODY IS OUT OF POSITION — see
+    // approachVector, which is where the arithmetic and the measurement are.
+    //
+    // The short version: the two terms above are the same size whenever a body
+    // is a ring's width off its stand-off distance, so a hunter forty units
+    // out steered 45 degrees off the player and closed at 71% of its own
+    // speed — and it did that no matter how far away it was. On the four
+    // chasing bosses that read as the animal losing interest between runs.
+    //
+    // At 1 the circling fades to nothing a full ring out and is at full
+    // strength only once the body has arrived, so the ring is still a ring and
+    // the way IN is a line. At 0 this block behaves exactly as it always did,
+    // which is what makes the change measurable rather than asserted.
+    circleTaper: 1,
   },
 
   // ---------------------------------------------------------------------------
@@ -32388,6 +32485,15 @@ export const CONFIG = {
     time: 0.55,
     curve: 'inOutCubic',
     deadzone: 0.05,
+    // WHICH WAY ROUND. 'camera' sweeps the nose through the lens, which is the
+    // whole argument in systems/fishTurn.js and right for everything that
+    // hunts: the midpoint of the turn is the frame where the animal's face
+    // arrives at the player. 'back' performs the same U-turn through the back
+    // wall, so the midpoint is the animal showing its back and swimming away.
+    // The cost is identical either way — it is what the pose CLAIMS that
+    // differs. See section 4 of that file; the sea turtle, which hunts nobody,
+    // is the only def that asks for it.
+    through: 'camera',
     // rad/s the nose may re-aim vertically. Bounded at +-90 degrees by
     // construction (see fishTurn.js), so this is only ever about how twitchy
     // the climb looks, never about whether the body ends up upside down.
@@ -45766,7 +45872,13 @@ export const TUNER_SCHEMA = [
       { path: 'strike.knockback.massExp', min: 0, max: 3, step: 0.1, label: 'ram: how hard size resists' },
       { path: 'strike.knockback.decay', min: 0.5, max: 20, step: 0.25, label: 'ram: knockback falloff' },
       { path: 'strike.knockback.spin', min: 0, max: 20, step: 0.5, label: 'ram: tumble imparted' },
-      { path: 'strike.knockback.boneImpulse', min: 0, max: 10, step: 0.1, label: 'ram: skeleton flinch' },
+      { path: 'strike.knockback.boneImpulse', min: 0, max: 10, step: 0.1, label: 'ram: skeleton flinch (wildlife — a boss has its own below)' },
+      // WHAT A STRIKE BUILD BUYS, and it buys only this. The shove is balance
+      // and belongs to the charge; how hard the animal is SEEN to be hit is
+      // feel. Measured on a boss shark: at exp 0.5 a doubled strike swings the
+      // skeleton 1.3x as far and a quadrupled one 1.6x.
+      { path: 'strike.knockback.boneUpgradeExp', min: 0, max: 1.5, step: 0.05, label: '…how much a strike build adds to it' },
+      { path: 'strike.knockback.boneUpgradeMax', min: 1, max: 5, step: 0.1, label: '…capped at' },
       // What a ram does to something too big to eat and still alive after it.
       // See CONFIG.strike.knockback.heavy — the shove above is written for the
       // schools and was very nearly invisible on a shark.
@@ -45784,9 +45896,16 @@ export const TUNER_SCHEMA = [
       // moving them.
       { path: 'strike.knockback.boss.enabled', type: 'bool', label: 'ram: bosses get knocked back' },
       { path: 'strike.knockback.boss.speedMul', min: 0, max: 6, step: 0.1, label: 'ram: boss shove' },
+      // THE HALF OF A HIT THAT READS ON A BODY TOO BIG TO MOVE. The shove
+      // above is deliberately small — a boss that flew would read as
+      // weightless — so this is what actually shows the player they connected.
+      // Measured on a boss shark: 2.6 (the roster's) swung its skeleton 13% of
+      // its own body radius at full charge and under 5% at minimum, inside the
+      // noise of the swim cycle; 9 reads at both.
+      { path: 'strike.knockback.boss.boneImpulse', min: 0, max: 30, step: 0.5, label: '…and its skeleton flinch — TURN THIS DOWN if a rammed boss looks whippy' },
       { path: 'strike.knockback.boss.decay', min: 1, max: 20, step: 0.5, label: 'ram: how far a boss carries (lower = further)' },
       { path: 'strike.knockback.boss.massExp', min: 0, max: 3, step: 0.1, label: 'ram: how hard a boss’s size resists' },
-      { path: 'strike.knockback.boss.stagger', min: 0, max: 2, step: 0.05, label: 'ram: seconds a boss is off its stroke' },
+      { path: 'strike.knockback.boss.stagger', min: 0, max: 2, step: 0.05, label: 'ram: seconds a boss is off its stroke (0 — a plain ram is NOT meant to interrupt one)' },
       { path: 'strike.knockback.boss.headingKick', min: 0, max: 2, step: 0.05, label: 'ram: how far a boss is turned off its line' },
 
       { path: 'strike.mark.enabled', type: 'bool', label: 'mark: strike paints big targets' },
@@ -47064,7 +47183,7 @@ export const TUNER_SCHEMA = [
       // ends: along the floor it scrapes the crab layer, along the surface it
       // hides behind the waves.
       // --- which animal, and how fast it chews ---
-      { path: 'whale.asset', type: 'choice', options: ['humpbackWhale', 'whale'], label: 'the animal (takes effect on the next sweep)' },
+      { path: 'whale.body', type: 'choice', options: ['roster', 'humpbackWhale', 'whale'], label: 'the animal (takes effect on the next sweep)' },
       { path: 'whale.clipSpeed', min: 0.02, max: 2, step: 0.01, label: 'humpback: feeding loop speed (x authored)' },
       { path: 'whale.depthMin', min: 0, max: 1, step: 0.01, label: 'shallowest crossing' },
       { path: 'whale.depthMax', min: 0, max: 1, step: 0.01, label: 'deepest crossing' },
@@ -49215,8 +49334,6 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.hotColor', type: 'color', label: 'damaged' },
       { path: 'hotSpots.look.flashColor', type: 'color', label: 'struck' },
       { path: 'hotSpots.look.glow', min: 0, max: 8, step: 0.1, label: 'glow (x any per-boss brightness)' },
-      { path: 'hotSpots.look.jag', min: 0, max: 1, step: 0.01, label: 'edge chewed by' },
-      { path: 'hotSpots.look.jagRate', min: 0, max: 6, step: 0.1, label: '…crawling at' },
       { path: 'hotSpots.look.ring', min: 0, max: 6, step: 0.05, label: 'boundary ring brightness' },
       { path: 'hotSpots.look.ringWidth', min: 0.02, max: 0.6, step: 0.01, label: '…ring thickness (x radius)' },
       { path: 'hotSpots.look.floor', min: 0, max: 2, step: 0.05, label: 'interior glow (always lit)' },
@@ -49225,9 +49342,6 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.cover', min: 0, max: 1, step: 0.05, label: '…replaces the hide by (0 = pure glow)' },
       { path: 'hotSpots.look.coverFull', min: 0, max: 1, step: 0.05, label: '…and by this at full damage' },
       { path: 'hotSpots.look.charge', min: 0, max: 0.95, step: 0.02, label: '…filled to (x radius) when fresh' },
-      { path: 'hotSpots.look.chargeEdge', min: 0, max: 3, step: 0.05, label: '…brightness of the level\'s own edge' },
-      { path: 'hotSpots.look.spill', min: 0, max: 1.5, step: 0.05, label: 'spill past the boundary' },
-      { path: 'hotSpots.look.spillGain', min: 0, max: 2, step: 0.05, label: '…spill brightness' },
       { path: 'hotSpots.seep.enabled', type: 'bool', label: 'damaged spots leak between shots' },
       { path: 'hotSpots.seep.from', min: 0, max: 0.9, step: 0.05, label: '…starting at this much damage' },
       { path: 'hotSpots.seep.everyEmpty', min: 0.05, max: 2, step: 0.05, label: '…a puff every (s) there' },
@@ -49238,7 +49352,9 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.burstWidth', min: 0.02, max: 0.8, step: 0.02, label: '…its thickness' },
       { path: 'hotSpots.look.burstGain', min: 0, max: 8, step: 0.1, label: '…its brightness' },
       { path: 'hotSpots.look.core', min: 0.5, max: 10, step: 0.1, label: 'hot core tightness' },
-      { path: 'hotSpots.look.white', min: 0, max: 1, step: 0.05, label: '…core goes white by' },
+      { path: 'hotSpots.look.coreGain', min: 0, max: 2, step: 0.05, label: '…and its brightness' },
+      { path: 'hotSpots.look.lockGlow', min: 0, max: 4, step: 0.05, label: 'the spot your aim is on — brightens by' },
+      { path: 'hotSpots.look.lockRing', min: 0, max: 3, step: 0.05, label: '…and its ring fattens by' },
       { path: 'hotSpots.look.pulseSync', type: 'choice', options: BEAT_DIVISIONS, label: 'throb — one pulse per' },
       { path: 'hotSpots.look.pulse', min: 0, max: 12, step: 0.1, label: '…or free-running (rad/s)' },
       { path: 'hotSpots.look.pulseDepth', min: 0, max: 1, step: 0.02, label: '…depth (brightness)' },
@@ -49248,34 +49364,30 @@ export const TUNER_SCHEMA = [
       { path: 'hotSpots.look.openSeconds', min: 0.05, max: 2, step: 0.05, label: 'opens over (s)' },
       { path: 'hotSpots.look.closeSeconds', min: 0.05, max: 2, step: 0.02, label: 'closes over (s)' },
       { path: 'hotSpots.look.flashSeconds', min: 0.02, max: 1, step: 0.02, label: 'hit flash lasts (s)' },
-      // THE RETICLE ROUND ONE — the strike mark's ring, small, drawn in front
-      // of the animal. It wears the spot's own colours, so there is nothing to
-      // pick here: everything above the divider is the light ON the boss and
-      // everything below it is the mark AROUND the light.
-      { path: 'hotSpots.look.target.enabled', type: 'bool', label: 'target ring — draw it' },
-      { path: 'hotSpots.look.target.radiusMul', min: 1, max: 3, step: 0.05, label: '…size (x the crit radius)' },
-      { path: 'hotSpots.look.target.thickness', min: 0.02, max: 0.6, step: 0.01, label: '…band thickness' },
-      { path: 'hotSpots.look.target.noiseScale', min: 0.2, max: 6, step: 0.1, label: '…edge grain (cells per world unit)' },
-      { path: 'hotSpots.look.target.wobble', min: 0, max: 0.4, step: 0.01, label: '…edge wobble (x radius)' },
-      { path: 'hotSpots.look.target.massVar', min: 0, max: 0.8, step: 0.02, label: '…band weight varies by' },
-      { path: 'hotSpots.look.target.arcJitter', min: 0, max: 0.5, step: 0.01, label: '…segment ends torn by' },
-      { path: 'hotSpots.look.target.arcs', min: 0, max: 8, step: 1, label: '…segments (0 = unbroken outline)' },
-      { path: 'hotSpots.look.target.facets', min: 3, max: 12, step: 1, label: '…sides (6 = hex; keep it equal to the segments)' },
-      { path: 'hotSpots.look.target.arcGap', min: 0.3, max: 1, step: 0.02, label: '…how much of each segment survives' },
-      { path: 'hotSpots.look.target.glow', min: 0, max: 8, step: 0.1, label: '…glow' },
-      { path: 'hotSpots.look.target.spin', min: -4, max: 4, step: 0.05, label: '…spin (rad/s)' },
-      { path: 'hotSpots.look.target.sweepIn', min: 0.05, max: 1.5, step: 0.02, label: '…drawn on over (s)' },
-      { path: 'hotSpots.look.target.pulseDepth', min: 0, max: 1, step: 0.02, label: '…breathes with the spot by' },
-      { path: 'hotSpots.look.target.hitSwell', min: 0, max: 2, step: 0.05, label: 'hit fattens the band by' },
-      { path: 'hotSpots.look.target.hitGlow', min: 0, max: 6, step: 0.1, label: '…and brightens it by' },
-      { path: 'hotSpots.look.target.hitPop', min: 0, max: 1, step: 0.02, label: '…and pops it outward by (x radius)' },
-      { path: 'hotSpots.look.target.burstGrow', min: 0, max: 3, step: 0.05, label: 'rupture throws it out by' },
-      { path: 'hotSpots.look.target.burstSwell', min: 0, max: 4, step: 0.1, label: '…fattening it by' },
       // THE ONE NUMBER FROM `chum` THAT IS A SLIDER. Everything else about the
       // meat a spot kicks loose — what it pays, how often, how many — is
       // throughput and lives in behaviour.csv; this is the tell that the piece
       // is FUEL and not food, and a tell is judged by eye against the health
       // chunk's red-to-amber ramp with both in the water.
+      // --- WHAT A HIT ON ONE DOES TO THE ANIMAL'S SKELETON ----------------
+      // IF THE SYMPTOM IS "a boss reacts to damage instead of attacking", this
+      // group is only half the answer and the smaller half. None of it reaches
+      // a boss that is MID-ATTACK at all — boss.tenacity.committed in
+      // behaviour.csv is what refuses it, across all four flinch channels at
+      // once, and that is the switch to reach for first. These numbers decide
+      // how hard the animal is shaken the rest of the time.
+      // Paid on DAMAGE, not on hits — the number is what a hit worth the WHOLE
+      // rupture pool would spend, which no single hit is, so read it as the
+      // scale. Measured on a boss shark: a full-charge ram on the flank swings
+      // the skeleton 41% of its body radius, and a perfect one into a lit spot
+      // 133% — which is what "hitting the spot hits harder" has to look like
+      // on a body the fight will not let you actually move.
+      { path: 'hotSpots.jostle.enabled', type: 'bool', label: 'flinch: hitting a weak spot shakes the skeleton' },
+      { path: 'hotSpots.jostle.strength', min: 0, max: 120, step: 1, label: '…how hard — TURN THIS DOWN if a boss under fire looks like it is flailing' },
+      { path: 'hotSpots.jostle.tipBias', min: 0, max: 1, step: 0.05, label: '…0 buckles the middle, 1 flicks the tip' },
+      { path: 'hotSpots.jostle.heatRamp', type: 'bool', label: '…and grows as the spot fills' },
+      { path: 'hotSpots.jostle.rupture', min: 0, max: 120, step: 1, label: 'flinch: the burst itself shakes it by' },
+      { path: 'hotSpots.jostle.ruptureTipBias', min: 0, max: 1, step: 0.05, label: '…spread along the body' },
       { path: 'hotSpots.chum.tint', type: 'color', label: 'meat it kicks loose — colour' },
       { path: 'hotSpots.chum.glowMul', min: 0, max: 6, step: 0.1, label: '…resting glow (x the chunk glow) — red needs this to bloom' },
       { path: 'hotSpots.chum.sizeMul', min: 0.5, max: 4, step: 0.05, label: '…how big (x the size its pips buy)' },
@@ -49473,6 +49585,10 @@ export const TUNER_SCHEMA = [
       { path: 'fx.nearDeath.scanCore', min: 0, max: 1, step: 0.05, label: '…fraction of that in the clean middle' },
       { path: 'fx.nearDeath.scanCount', min: 40, max: 700, step: 10, label: 'scan lines down the frame' },
       { path: 'fx.nearDeath.scanDrift', min: -6, max: 6, step: 0.1, label: 'scan lines per second they crawl' },
+      // The tearing. Added to the preset's own, so these read on `crt` and on
+      // `off` alike — see the note in the block.
+      { path: 'fx.nearDeath.chroma', min: 0, max: 10, step: 0.1, label: 'colour separation (px)' },
+      { path: 'fx.nearDeath.jitter', min: 0, max: 0.03, step: 0.001, label: 'line tearing' },
       { path: 'feedback.kill.ripple.strength', min: 0, max: 10, step: 0.1, label: 'kill grid punch' },
       // Above the per-emitter counts on purpose: this is the one to move when
       // the screen as a whole is too busy, and the counts below it are for when
@@ -50899,8 +51015,39 @@ const PATH_TABLES = [
     // player fire it takes to clear one. There is no look in it at all; what a
     // shot looks like belongs to its gun's row in the GUNS table and to the
     // boats' `fx` sub-block, which is fenced out of this table above.
-    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken', 'pace', 'lungeRules', 'lateralCruise', 'boats', 'enemyShot'],
+    // `boss` joins them FENCED TO TWO SUB-BLOCKS, and both arrived the way
+    // `kraken` did: neither had a tuner group, so imported-tuning.json was
+    // their only home and no edit to config.js could reach a game that had
+    // ever saved once.
+    //
+    //   boss.tenacity  what a boss answers to when it is shot at, and whether
+    //                  a hit may interrupt one mid-attack. Four numbers, and
+    //                  every one of them is a fight-long pacing decision read
+    //                  against the lunge blocks already in this file.
+    //   boss.angler    the anglerfish fight's reach and cadence — the same
+    //                  half of that boss `kraken` is here for on the squid.
+    //
+    // Everything else under `boss` stays out: the armor, the control budget,
+    // the ragdoll, the corpse, the kill sequence, the light. The forbid below
+    // is what holds that line.
+    roots: ['bite', 'hunterRamp', 'apexCrowd', 'enemies', 'hotSpots', 'kraken', 'pace', 'lungeRules', 'lateralCruise', 'boats', 'enemyShot', 'boss'],
     forbid: (id) => {
+      // `boss` is the biggest block in the file and this table owns two
+      // sub-blocks of it. Everything else under it — the armor, the daze, the
+      // ragdoll, the corpse, the kill sequence, the light, the warmup — is
+      // either a look judged by eye or a rule with a home of its own, and a
+      // stray row under this root would otherwise reach any of them.
+      if (id.startsWith('boss.')
+        && !id.startsWith('boss.tenacity.') && !id.startsWith('boss.angler.')) {
+        return 'behaviour.csv owns boss.tenacity and boss.angler only — the armor, the daze, '
+          + 'the ragdoll and everything that is judged by eye are elsewhere';
+      }
+      // ...and the anglerfish's LOOK is fenced out of its own block for the
+      // same reason hotSpots.look is below: the lure's colour and the ring's
+      // dialect are eye judgements made in the second they happen.
+      if (id.startsWith('boss.angler.') && (id.endsWith('Color') || id.endsWith('Core'))) {
+        return 'the lure and beam colours are judged by eye — they stay on sliders';
+      }
       // FENCED TWICE. `boats` is a big block and nearly all of it — the hulls,
       // the wreckage, the crew, the chum, the physics, the attractor — is not a
       // damage economy at all, and a stray row under this root would otherwise
@@ -51255,6 +51402,47 @@ export function withoutTableOwnedKeys(snapshot) {
     }
     rest.biolumSkin = { ...rest.biolumSkin, presets };
   }
+  // NEAR DEATH IS CODE'S, WHOLE. Every value a snapshot carries for this block
+  // is an auto-capture equal to the config.js default — nothing in it was ever
+  // tuned — and leaving it in has now eaten the same change twice: the effect
+  // was reported as "not seeing this at all" while the saved threshold quietly
+  // held it at the old number, and renaming the block to escape that only
+  // bought one round, because the next save captured the new name too.
+  //
+  // THE TRADE, stated so the next person does not have to guess: the tuner's
+  // Near-death sliders still move the live game, so an A/B is exactly as good
+  // as it was — they just do not survive a reload, because this block's home is
+  // config.js and its review surface is `npm run looks:hurt`. Delete this one
+  // `if` to hand the block back to the snapshot.
+  if (rest.fx?.nearDeath) {
+    const { nearDeath, ...fx } = rest.fx;
+    rest.fx = fx;
+  }
+  // THE SWEEP'S ROSTER — see withoutWhaleRoster. An array the tuner cannot
+  // edit, plus the single-body `asset` key it replaced, which every snapshot
+  // still carries at 'humpbackWhale' and which would otherwise sit on
+  // CONFIG.whale looking exactly like the field that used to be read.
+  // THE ANGLERFISH FIGHT, whole. Nothing in the ` tuner can edit a single one
+  // of its 36 keys — there is no `boss.angler` row anywhere in the tuner's
+  // tables — so every copy in a snapshot is an echo of whatever config.js held
+  // on the day of some blanket save, and left in, that echo wins.
+  //
+  // It is not hypothetical tidying: `lureRange`, `attackGap`, `beamLength` and
+  // both turn rates were all retuned in source to make this boss attack across
+  // the arena, and not one of the new numbers could have reached a machine with
+  // a snapshot on disk. The old fight would have gone on shipping with a
+  // corrected config.js sitting beside it saying otherwise — which is exactly
+  // the failure the eye-socket names had (see the note at `eyeNodes`), and the
+  // reason nobody caught those for months: the fix appears to do nothing, so
+  // whoever made it assumes they were wrong about the cause.
+  //
+  // Stripped both ways — see tuningSnapshot — or the next save writes the echo
+  // straight back and the file is stale again the moment anyone tunes anything.
+  if (rest.boss?.angler) {
+    const { angler, ...boss } = rest.boss;
+    rest.boss = boss;
+  }
+  if (rest.whale) rest.whale = withoutWhaleRoster(rest.whale);
   if (rest.emitters) rest.emitters = withoutCodeOwnedFields(rest.emitters, ['colors']);
   if (rest.feedback) rest.feedback = withoutCodeOwnedFields(rest.feedback, FEEDBACK_CODE_OWNED);
   // The camera's reach into a goal has no slider and follows the tunnel now
@@ -51496,6 +51684,38 @@ function withoutCodeOwnedFields(section, fields) {
   return out;
 }
 
+// Drop the sweep's roster from a copy of CONFIG.whale. Returns a new object;
+// the input may be the live CONFIG and must not be mutated.
+//
+// `roster` is an ARRAY of asset keys and deepMerge REPLACES arrays rather than
+// merging them, so a snapshot carrying its own copy is not one tuned value
+// winning — it is the WHOLE roster, and a body added in config.js afterwards
+// would be dead text. Nothing in the tuner can edit the list: its choice writes
+// `body`, which is real tuning and survives.
+//
+// `asset` goes with it, and that one is not tidying. It is the field this
+// roster REPLACED, it sits in every snapshot on disk at 'humpbackWhale', and a
+// merge puts it straight back onto CONFIG.whale where the next save captures it
+// again — a dead key that reads exactly like the live one it used to be.
+function withoutWhaleRoster(whale) {
+  if (!whale || typeof whale !== 'object') return whale;
+  const { roster, asset, ...rest } = whale;
+  return rest;
+}
+
+// Drop the anglerfish fight from a copy of CONFIG.boss. Returns a new object;
+// the input is the live CONFIG and must not be mutated.
+//
+// Everything under `boss.angler` is code-owned — no tuner row reaches any of
+// it — so a snapshot carrying it is not tuning, it is a copy that outranks the
+// file it was copied from. Everything else under `boss` (tenacity, armor,
+// control, ragdoll) is real, reachable tuning and is saved as usual.
+export function withoutAnglerFight(boss) {
+  if (!boss || typeof boss !== 'object') return boss;
+  const { angler, ...rest } = boss;
+  return rest;
+}
+
 // Drop the boss and match banks from a copy of CONFIG.music. Returns a new
 // object; the input may be the live CONFIG and must not be mutated.
 //
@@ -51650,6 +51870,15 @@ function tuningSnapshot() {
   // Stripping only on load would leave every save writing the echo straight
   // back, and config.js's `enabled: false` would go on losing to a file.
   snapshot.render = withoutAdaptiveEnabled(CONFIG.render);
+  // ...and the whale's roster goes out the way it comes in, or the next save
+  // would write the echo straight back and config.js's list would be dead text
+  // again — the array replaces rather than merges. The `body` override beside
+  // it is a real tuner choice and is saved.
+  snapshot.whale = withoutWhaleRoster(CONFIG.whale);
+  // ...and the anglerfish fight goes out the way it comes in. Stripping only on
+  // load would leave every save writing the echo back, so the block would be
+  // shadowing config.js again the moment anyone touched an unrelated slider.
+  snapshot.boss = withoutAnglerFight(CONFIG.boss);
   // The spawn knobs go out the same way they come in — spawning.csv owns them,
   // so writing them here would give them a second home that could disagree
   // with the file. Both halves are needed: stripping only on load would leave

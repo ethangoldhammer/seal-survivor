@@ -67,7 +67,7 @@ import { enemies, resetEnemies } from '../path/src/entities/enemies.js';
 import { pickups, resetPickups } from '../path/src/entities/pickups.js';
 import {
   whaleClock, resetWhaleClock, updateWhaleClock, isPrey, headingFor, intakeRadius, mouthAheadOf,
-  resetWhales, spawnWhale, updateWhales, whaleCount,
+  resetWhales, spawnWhale, updateWhales, whaleCount, pickBody,
   measureBodyProfile, sectionAt, bodyDistance,
 } from '../path/src/systems/whale.js';
 
@@ -220,7 +220,7 @@ if (skin) {
 // ===========================================================================
 section('THE OTHER BODY — public/models/humpback.glb, built by tools/build-humpback.mjs');
 //
-// The sweep can wear either animal (CONFIG.whale.asset). The humpback is the
+// The sweep wears both animals (CONFIG.whale.roster). The humpback is the
 // clip-driven one, and the things that go wrong with it are different from the
 // bowhead's: a texture that was meant to be stripped coming back (the body is
 // painted, and a map underneath the pigment is a photograph bleeding through),
@@ -230,9 +230,18 @@ section('THE OTHER BODY — public/models/humpback.glb, built by tools/build-hum
 // and a bone name that GLTFLoader's sanitizer changed under us.
 {
   const H = ASSETS.humpbackWhale;
-  check('CONFIG.whale.asset names a registered model', !!ASSETS[C.asset]?.model, `"${C.asset}"`);
-  check('the tuner can switch bodies and pace the loop',
-    ['whale.asset', 'whale.clipSpeed'].every((p) => TUNER_SCHEMA.some((g) => g.items?.some((i) => i.path === p))));
+  check('every body on the roster names a registered model',
+    C.roster.length > 0 && C.roster.every((k) => !!ASSETS[k]?.model), C.roster.join(', '));
+  check('both rigged bodies are on it — a roster of one is the old single key',
+    C.roster.includes('whale') && C.roster.includes('humpbackWhale'), C.roster.join(', '));
+  check('the tuner can pin a body and pace the loop',
+    ['whale.body', 'whale.clipSpeed'].every((p) => TUNER_SCHEMA.some((g) => g.items?.some((i) => i.path === p))));
+  {
+    const row = TUNER_SCHEMA.flatMap((g) => g.items ?? []).find((i) => i.path === 'whale.body');
+    check('...and its choices are the roster plus the rotation itself',
+      row?.options?.[0] === 'roster' && C.roster.every((k) => row.options.includes(k)),
+      (row?.options ?? []).join(', '));
+  }
   check('clipSpeed is a slow-down, not a speed-up', C.clipSpeed > 0 && C.clipSpeed <= 1, `${C.clipSpeed}x`);
 
   const hbuf = readFileSync(resolve(HERE, '../public/models/humpback.glb'));
@@ -284,6 +293,58 @@ section('THE OTHER BODY — public/models/humpback.glb, built by tools/build-hum
     check('the feeding loop opens the jaw', widest > 0.5,
       `${(widest * 180 / Math.PI).toFixed(0)}° at the widest`);
   }
+}
+
+// ===========================================================================
+section('THE ROTATION — both bodies get sent, and never the same one twice');
+//
+// The sweep named ONE asset for the life of a run, so a build shipped two
+// rigged whales and showed one of them. The roster is the fix and the thing
+// that can go wrong with it is quiet in exactly the same way: a roll that
+// happens to favour one body, or a `lastBody` that is never written, both leave
+// a run that looks fine and is still the old feature.
+//
+// pickBody is exercised directly for the sequence — twenty sweeps is most of an
+// hour of play and no scene needs to exist to ask what the twentieth animal was
+// — and then once through spawnWhale, because a roll nothing calls is a roll
+// that does not happen.
+{
+  const roster = { ...C, body: 'roster' };
+  const counts = new Map(C.roster.map((k) => [k, 0]));
+  let repeats = 0;
+  for (const seed of SEEDS) {
+    const rand = mulberry32(seed);
+    let prev = null;
+    for (let i = 0; i < 20; i++) {
+      const body = pickBody(rand, roster, prev);
+      if (body === prev) repeats++;
+      counts.set(body, (counts.get(body) ?? 0) + 1);
+      prev = body;
+    }
+  }
+  const tally = [...counts].map(([k, n]) => `${k} ${n}`).join(', ');
+  check('every body on the roster gets sent', [...counts.values()].every((n) => n > 0), tally);
+  check('...and never twice running', repeats === 0, `${repeats} repeat(s) over 100 sweeps`);
+  check('...which on a roster of two is an even split', (() => {
+    const ns = [...counts.values()];
+    return Math.max(...ns) - Math.min(...ns) <= SEEDS.length;
+  })(), tally);
+
+  // A PIN BEATS THE ROTATION, which is the tuner's choice — and a stale key
+  // from an old snapshot must not be able to pick a body that is not there.
+  check('a pinned body wins outright',
+    pickBody(mulberry32(3), { ...C, body: 'whale' }, 'whale') === 'whale');
+  check('...but a pin naming nothing falls back to the rotation',
+    C.roster.includes(pickBody(mulberry32(3), { ...C, body: 'narwhal' }, null)));
+
+  // AND THROUGH THE REAL PATH. `assetKey` is what the crossing is wearing.
+  const scene = new THREE.Scene();
+  resetWhaleClock(mulberry32(3)); // clears the module's memory of the last body
+  const bodies = [];
+  for (let i = 0; i < 4; i++) bodies.push(spawnWhale(scene, mulberry32(3 + i)).assetKey);
+  resetWhales(scene);
+  check('consecutive crossings wear different bodies', bodies.every((b, i) => i === 0 || b !== bodies[i - 1]),
+    bodies.join(' -> '));
 }
 
 // ===========================================================================

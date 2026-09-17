@@ -31,7 +31,7 @@ import { touchPrimary, prefersReducedMotion, narrowScreen } from '../devices.js'
 // One setting, read live rather than pushed in: where the health and air
 // gauges are drawn. settings.js imports nothing from here, so this is a leaf
 // dependency and not half of a cycle.
-import { barPlacement, boostMeter } from '../systems/settings.js';
+import { barPlacement, boostMeter, scorePopups } from '../systems/settings.js';
 // THE BOOST COLUMN'S MODEL, borrowed rather than rebuilt. systems/strikeRing.js
 // owns the pip springs, the stagger queue and the pops whichever view is on
 // screen; this file only draws them. Neither module imports the other's data —
@@ -7538,6 +7538,11 @@ function motionFor(kind) {
 
 export function spawnScoreToast(camera, worldX, worldY, points, multiplier = 1) {
   if (!el.svToastLayer || !camera) return;
+  // TURNED OFF IN OPTIONS — see settings.hud.scorePopups. Gated at the SPAWN
+  // rather than by hiding the layer: nothing is built, nothing is projected,
+  // and nothing joins the per-frame loop, which is the only version of this
+  // that is actually cheaper. Every other line on the layer is unaffected.
+  if (!scorePopups()) return;
   PROJECT_V.set(worldX, worldY, 0);
   projectToScreen(camera, PROJECT_V, screenPt);
 

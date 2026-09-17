@@ -67,11 +67,13 @@ import { updateBeatSync, divisionSeconds } from '../path/src/systems/beatSync.js
 import {
   initBossHotSpots, attachHotSpots, updateBossHotSpots, hotSpotDamage,
   hotSpotsOf, resetBossHotSpots, perimeterCandidates, liveHotSpotCount,
-  hotSpotShells, hotSpotRings, spotAt, setHotSpotLook, drainHotSpotChum,
+  hotSpotShells, spotAt, setHotSpotLook, drainHotSpotChum,
   aimHotSpots, designatedHotSpot,
-  drainHotSpotShoves,
+  drainHotSpotShoves, bossHotSpotRoster, liveHotSpots, anchorOrder,
 } from '../path/src/systems/bossHotSpots.js';
-import { isOrganicRing, EDGE_KINDS } from '../path/src/systems/organicRing.js';
+import { parseAnchors } from '../path/src/bossHotSpotTable.js';
+import { parseBossCsv } from '../path/src/bossTable.js';
+import { strikeBoneGain } from '../path/src/systems/strike.js';
 import { pipCount, strikeState, updateStrike, resetStrike } from '../path/src/systems/strike.js';
 import { spawnProjectile, updateProjectiles, projectiles } from '../path/src/entities/projectiles.js';
 
@@ -237,9 +239,9 @@ function spotTake(e, spot, at, base) {
   return out;
 }
 
-function lightUp(e, seed = 4242) {
+function lightUp(e, seed = 4242, archetype = null) {
   seeded(seed, () => {
-    attachHotSpots(scene, e);
+    attachHotSpots(scene, e, archetype);
     // One tick places them: attachHotSpots deliberately places nothing, and a
     // harness that asserted straight after the attach would be asserting on
     // the empty intent rather than on the spots.
@@ -1415,196 +1417,6 @@ section('5d. The colour and the brightness are exposed, per boss');
 }
 
 // ---------------------------------------------------------------------------
-section('5e. Each spot wears a target ring in front of the animal');
-// ---------------------------------------------------------------------------
-// THE HALF OF THE FEATURE THAT DOES NOT DEPEND ON THE HIDE. The painted glow
-// is additive light on an animal, so how well it reads is a property of the
-// animal; the ring is drawn in front of everything and reads the same on all
-// of them. What is checked here is that it says the same thing the light says
-// — same place, same colour, same moment — because two marks on one spot that
-// disagree are worse than one.
-{
-  const e = spawnBoss();
-  const owner = lightUp(e);
-  const t = CONFIG.hotSpots.look.target;
-  const rings = hotSpotRings(e);
-
-  check('one ring per spot', rings.length === owner.spots.length,
-    `${rings.length} rings, ${owner.spots.length} spots`);
-  check('...and every one of them is in the scene',
-    rings.every((r) => r.parent === scene));
-  // A GENERIC TEARDOWN MUST BE ABLE TO TELL. Every organic ring shares one
-  // quad, so anything walking the scene and freeing `obj.geometry` would take
-  // the strike mark's and every boss tell's geometry with it.
-  check('...and flagged as organic rings, so nothing frees the shared quad',
-    rings.every((r) => isOrganicRing(r)));
-
-  // A LOOSE HEX IN SIX PIECES, not the strike mark's four arms on a circle.
-  // Checked because the two marks can appear on the same boss at the same time
-  // — a strike paints the animal while its weak spots are lit — and if they
-  // ever converge on one shape the player is being told two different things
-  // in identical words.
-  check('the outline is faceted rather than round',
-    rings.every((r) => r.material.uniforms.uEdge.value === EDGE_KINDS.facet),
-    `edge ${rings[0]?.material.uniforms.uEdge.value}`);
-  // GAPS ON CORNERS IS THE CLAIM, and equal counts are only one way to get it.
-  // Six facets and three arcs puts each gap on every OTHER corner, which is the
-  // same read — a gap that lands mid-edge is the thing this is guarding
-  // against, and that happens when the facet count is not a whole multiple of
-  // the arc count. Written as equality it was a tripwire on a tuner slider
-  // (`look.target.facets` / `.arcs`) rather than a check on the geometry.
-  check('...with the gaps on corners — facets a whole multiple of segments',
-    rings.every((r) => {
-      const f = r.material.uniforms.uFacets.value;
-      const a = r.material.uniforms.uArcs.value;
-      return a > 0 && f % a === 0;
-    }),
-    `${rings[0]?.material.uniforms.uFacets.value} sides, ${rings[0]?.material.uniforms.uArcs.value} segments`);
-  check('...and it is a hex',
-    rings.every((r) => r.material.uniforms.uFacets.value === 6));
-  check('and it is not the strike mark\'s shape',
-    (CONFIG.strike?.mark?.ring?.arcs ?? 4) !== CONFIG.hotSpots.look.target.arcs
-      || CONFIG.hotSpots.look.target.edge !== 'facet');
-
-  const s = owner.spots[0];
-  const ring = s.ring;
-  const u = ring.material.uniforms;
-
-  // OUTSIDE THE CRIT BOUNDARY, and this is the invariant that stops the ring
-  // being a lie about reach: the crit radius is drawn by the glow's own band,
-  // and a reticle that sat inside it would be promising a smaller target than
-  // the one the game answers to. Bigger is safe — nobody reads the outer edge
-  // of a bracket as the edge of a hitbox — smaller is not.
-  check('the ring sits outside the crit radius it points at',
-    u.uRadius.value > s.r,
-    `ring ${u.uRadius.value.toFixed(2)} vs crit ${s.r.toFixed(2)}`);
-  check('...at the configured multiple of it',
-    Math.abs(u.uRadius.value - s.r * t.radiusMul) < 1e-4,
-    `x${(u.uRadius.value / s.r).toFixed(2)}, configured x${t.radiusMul}`);
-  // The scale and the radius uniform are a PAIR — the world-unit wobble is
-  // divided by that radius, so a mesh scaled by hand wobbles by an amplitude
-  // computed against whatever the radius was last frame.
-  check('...with the mesh scale and the uniform in step',
-    Math.abs(ring.scale.x - u.uRadius.value) < 1e-4,
-    `scale ${ring.scale.x.toFixed(2)}`);
-  check('and it is drawn on the spot, at the spot\'s own depth',
-    Math.hypot(ring.position.x - s.wx, ring.position.y - s.wy) < 1e-4
-      && Math.abs(ring.position.z - s.wz) < 1e-4);
-
-  // IT RIDES THE ANIMAL. Swum on, the light moves with the flesh (section 2)
-  // and the ring has to move with the light rather than staying where the boss
-  // was when the spot opened.
-  const wasX = ring.position.x;
-  e.mesh.position.x += 6;
-  scene.updateMatrixWorld(true);
-  tickHitShapes();
-  updateBossHotSpots(DT, DT);
-  check('it follows the spot when the boss moves',
-    Math.abs(ring.position.x - s.wx) < 1e-4 && Math.abs(ring.position.x - wasX) > 1,
-    `moved ${(ring.position.x - wasX).toFixed(2)}`);
-
-  // THE COLOUR IS THE SPOT'S, and it is re-derived in the ring rather than
-  // shared with the shader's three uniforms — so this is the check that keeps
-  // the two ends from drifting into a red bracket around a white light.
-  const l = CONFIG.hotSpots.look;
-  check('a fresh ring wears the spot\'s base colour',
-    u.uColor.value.getHex() === (l.litColor ?? 0xffffff),
-    `#${u.uColor.value.getHexString()}`);
-
-  // A HIT FATTENS AND BRIGHTENS IT. The gooey half: more mass in the same
-  // place, which is the one response that looks like the stuff coming out of
-  // the wound.
-  // IT TURNS. On a circle a spin is invisible; on a hexagon the corners sweep,
-  // which is the whole reason the shape and the spin were chosen together.
-  const wasSpin = ring.rotation.z;
-  const restR = u.uRadius.value;
-  for (let i = 0; i < 10; i++) updateBossHotSpots(DT, DT);
-  check('it turns about its own centre',
-    Math.abs(ring.rotation.z - wasSpin) > 1e-4,
-    `${(ring.rotation.z - wasSpin).toFixed(3)} rad in 10 frames at ${t.spin}/s`);
-  // ...WITHOUT WANDERING. rotation.z is the only transform the spin may touch:
-  // placeOrganicRing rewrites position and scale every frame, so a spin
-  // implemented as an orbit would fight it and land somewhere off the spot.
-  check('...and stays on the spot while it does',
-    Math.hypot(ring.position.x - s.wx, ring.position.y - s.wy) < 1e-4
-      && Math.abs(u.uRadius.value - restR) < 1e-4);
-
-  const restThick = u.uThickness.value;
-  const restGlow = u.uGlow.value;
-
-  // THE POP IS A SLIDER, AND THIS CHECKS THE WIRE RATHER THAN THE SETTING.
-  // `look.target.hitPop` is a look number the tuner owns, and it is 0 in the
-  // shipped tuning — a decision about how the ring reads, not a bug. Asserting
-  // `uRadius > restR` against whatever the slider holds made this a tripwire on
-  // that decision: red the moment the pop was dialled out, and green again on a
-  // build where the pop was wired to nothing but the slider happened to be up.
-  // Neither verdict is about the code.
-  //
-  // So the knob is DRIVEN to a known value here and put back afterwards. What
-  // is being asserted is that the radius follows it at all, which is true
-  // whatever the tuner is set to and is the only half of this a test can own.
-  const shippedPop = t.hitPop;
-  t.hitPop = 0.9;
-  hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool / (CONFIG.hotSpots.critMul * 6));
-  updateBossHotSpots(DT, DT);
-  check('a hit pops the whole shape outward — at hitPop 0.9', u.uRadius.value > restR,
-    `${restR.toFixed(2)} → ${u.uRadius.value.toFixed(2)}`);
-  check('a hit fattens the band', u.uThickness.value > restThick,
-    `${restThick.toFixed(3)} → ${u.uThickness.value.toFixed(3)}`);
-  check('...and brightens it', u.uGlow.value > restGlow,
-    `${restGlow.toFixed(2)} → ${u.uGlow.value.toFixed(2)}`);
-  check('...and pulls the colour toward the struck red',
-    u.uColor.value.getHex() !== (l.litColor ?? 0xffffff),
-    `#${u.uColor.value.getHexString()}`);
-
-  // Let the flash run out, then chew it most of the way down: the colour has
-  // to have moved along the heat ramp on its own, with no hit on it.
-  for (let i = 0; i < 40; i++) updateBossHotSpots(DT, DT);
-  // AND THE POP SETTLES. A swell that did not come back would leave every spot
-  // that has ever been hit permanently bigger than a fresh one, which reads as
-  // the ring lying about the crit radius rather than as a hit.
-  check('...and the pop settles back to the resting size',
-    Math.abs(u.uRadius.value - restR) < 1e-3,
-    `${u.uRadius.value.toFixed(3)} vs ${restR.toFixed(3)}`);
-  // Put back only after the settle has been watched — the decay is the other
-  // half of the wiring and it has to run at the value that caused the swell.
-  t.hitPop = shippedPop;
-  const cool = u.uColor.value.getHex();
-  while (s.alive && s.taken < s.pool * 0.8) {
-    hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool / (CONFIG.hotSpots.critMul * 12));
-  }
-  for (let i = 0; i < 40; i++) updateBossHotSpots(DT, DT);
-  check('a chewed spot\'s ring has moved along the heat ramp',
-    s.alive && u.uColor.value.getHex() !== cool,
-    `#${u.uColor.value.getHexString()} from #${cool.toString(16).padStart(6, '0')}`);
-
-  // THE BURST. Thrown outward and eaten away by the same sweep the mark uses
-  // to expire, so the reticle comes apart with the spot instead of blinking
-  // out beside the goo.
-  // `burstGrow` is the same kind of number as `hitPop` above and is 0 in the
-  // shipped tuning for the same reason — driven, then put back.
-  const shippedGrow = t.burstGrow;
-  t.burstGrow = 0.6;
-  const beforeR = u.uRadius.value;
-  while (s.alive) hotSpotDamage(e, { x: s.wx, y: s.wy }, s.pool);
-  for (let i = 0; i < 4; i++) updateBossHotSpots(DT, DT);
-  check('a rupture throws the ring outward — at burstGrow 0.6', u.uRadius.value > beforeR,
-    `${beforeR.toFixed(2)} → ${u.uRadius.value.toFixed(2)}`);
-  t.burstGrow = shippedGrow;
-  check('...fattening it as it goes', u.uThickness.value > restThick,
-    `${u.uThickness.value.toFixed(3)}`);
-  check('...and the sweep is eating it away', u.uSweepOut.value > 0,
-    `sweepOut ${u.uSweepOut.value.toFixed(2)}`);
-
-  // AND IT LEAVES. A ring left behind is a bracket hanging in open water at a
-  // place the fight has finished with — and unlike a stale glow, which needs a
-  // body to be painted on, this one would still be drawn.
-  for (let i = 0; i < 90; i++) updateBossHotSpots(DT, DT);
-  check('the burst ring is gone once the light is out',
-    !hotSpotRings(e).includes(ring) && ring.parent === null);
-}
-
-// ---------------------------------------------------------------------------
 section('5g. A rupture shoves the animal, out along the wound');
 // ---------------------------------------------------------------------------
 // THE HALF THAT IS NOT A LIGHT. Everything else about a burst happened around
@@ -1675,19 +1487,520 @@ section('5g. A rupture shoves the animal, out along the wound');
 }
 
 // ---------------------------------------------------------------------------
-section('5f. The reticles leave with the body');
+section('5e. A boss can be TOLD where its weak spots go');
 // ---------------------------------------------------------------------------
+// bossHotSpots.csv, one row per archetype. The roll answers "somewhere good on
+// this outline", which is the right question for a body with a lot of outline
+// and the wrong one where the answer is a design decision — and on the three
+// bosses that collide as a CIRCLE by choice there are no fitted spheres for a
+// heuristic to prefer at all, so the roll there was picking points on a disc.
+//
+// EVERY PLACEMENT CHECK BELOW RUNS ON THE MEGALODON'S BODY while naming
+// somebody else's row, and that is deliberate rather than lazy: what is being
+// measured is that an anchor puts a spot at the named place on WHATEVER body it
+// is handed, which is the property that has to hold on ten different rigs. The
+// shark is simply the one body this harness can pose.
 {
+  const roster = bossHotSpotRoster();
+  const ids = parseBossCsv(readFileSync(new URL('../path/src/bosses.csv', import.meta.url), 'utf8'),
+    CONFIG.enemies, () => {}).map((b) => b.id);
+
+  check('every row in bossHotSpots.csv is a real archetype',
+    Object.keys(roster).every((id) => ids.includes(id)),
+    Object.keys(roster).join(', ') || 'no rows');
+
+  // THE MOSASAUR'S PIN SURVIVED THE MOVE. It was a `weakSpot: 'tail'` string on
+  // the creature in config.js reached through a hard-coded two-value table; if
+  // the migration lost it, nothing on screen would say so — the boss would
+  // simply go back to rolling, which is what it did before anybody noticed it
+  // was wrong.
+  check('the mosasaur is still told: one spot, at its tail',
+    roster.bossMosasaur?.anchors?.length === 1 && roster.bossMosasaur.anchors[0].along === -1,
+    JSON.stringify(roster.bossMosasaur?.anchors));
+
+  // --- the vocabulary -------------------------------------------------------
+  // A malformed anchor is DROPPED rather than defaulted, and this is the check
+  // that keeps it that way: 0 is amidships and is a perfectly plausible place,
+  // so a typo silently becoming 0 would move a boss's weak spot to its middle
+  // and look exactly like a decision somebody made.
+  const said = [];
+  const warn = (m) => said.push(m);
+  check('words for the ends', JSON.stringify(parseAnchors('tail|head|mid', 'x', warn))
+    === JSON.stringify([{ along: -1, side: 0, vert: 0 }, { along: 1, side: 0, vert: 0 }, { along: 0, side: 0, vert: 0 }]));
+  check('...and numbers, with a side',
+    JSON.stringify(parseAnchors('0.5:l|0.5:r', 'x', warn))
+      === JSON.stringify([{ along: 0.5, side: 1, vert: 0 }, { along: 0.5, side: -1, vert: 0 }]));
+  check('past the ends clamps rather than refusing',
+    parseAnchors('-1.4', 'x', warn)[0].along === -1);
+  check('blank is no anchors at all', parseAnchors('', 'x', warn) === null);
+  const before = said.length;
+  check('a position that is neither a number nor a word is dropped and named',
+    parseAnchors('snout', 'x', warn) === null && said.length > before,
+    said[said.length - 1]?.slice(0, 60));
+  const beforeSide = said.length;
+  check('...and an unknown side falls back to either flank, loudly',
+    parseAnchors('0.5:sideways', 'x', warn)[0].side === 0 && said.length > beforeSide);
+
+  // --- THE WORLD-UP AXIS ---------------------------------------------------
+  // `l`/`r` are flanks in the body's frame and follow the animal round when it
+  // turns; `u`/`d` are world up and down and do not. A dorsal spot written as
+  // a flank is a belly spot on the way home, which is the bug this axis exists
+  // to make unwritable.
+  check('the back and the belly parse onto their own axis',
+    JSON.stringify(parseAnchors('head:u|0:belly', 'x', warn))
+      === JSON.stringify([{ along: 1, side: 0, vert: 1 }, { along: 0, side: 0, vert: -1 }]));
+  check('...and every spelling of them agrees',
+    ['u', 'up', 'top', 'back', 'dorsal'].every((w) => parseAnchors(`0:${w}`, 'x', warn)[0].vert === 1)
+    && ['d', 'down', 'belly', 'under', 'ventral'].every((w) => parseAnchors(`0:${w}`, 'x', warn)[0].vert === -1));
+  // A spot is on a flank OR on the back, never both -- naming two is not a
+  // place, so the vertical key clears `side` rather than stacking with it.
+  check('a vertical anchor carries no flank', parseAnchors('0:u', 'x', warn)[0].side === 0);
+  check('...and a flank anchor carries no vertical', parseAnchors('0:l', 'x', warn)[0].vert === 0);
+
+  // --- a row's count is its anchors ----------------------------------------
+  {
+    const e = spawnBoss();
+    const spots = lightUp(e, 4242, 'bossMosasaur').spots;
+    check('an archetype told ONE place gets one spot', spots.length === 1, `${spots.length}`);
+    // The body faces +x at heading 0, so the tail end is -x. Measured against
+    // the animal's own reach rather than against a world number, because the
+    // whole point of the anchor is that it is in the body's frame.
+    const along = (spots[0].wx - e.mesh.position.x) / (e.radius ?? 1);
+    check('...and it opens at the tail end of the body', along < -0.4,
+      `${along.toFixed(2)} body radii forward of centre`);
+  }
+
+  // --- one per flank --------------------------------------------------------
+  // MEASURED ON THE ORDERING, not through a placement, and the difference is
+  // the whole reason anchorOrder is exported. A placement runs the snap and
+  // the hull-match on top of the order, so on a body whose flanks are thin at
+  // the named station — a megalodon's snout at 0.55, which is what this
+  // harness has to hand — the near-side candidates are refused for having no
+  // flesh within reach and the spot correctly lands on the far one. That is
+  // the placer being right and it looks identical to the ordering being wrong.
+  // The crab's own row is authored against a body that collides as a CIRCLE,
+  // where the perimeter is 24 points evenly around it and both flanks are
+  // equally available.
+  {
+    const e = spawnBoss();
+    const cands = perimeterCandidates(e.hitShape, CONFIG.hotSpots.rays ?? 24);
+    const claws = bossHotSpotRoster().bossCrab.anchors;
+    check('the crab is told two places, one per flank',
+      claws.length === 2 && claws[0].side === -claws[1].side && claws[0].along === claws[1].along,
+      JSON.stringify(claws));
+
+    // `across` is the left-hand normal of the heading; at heading 0 that is y.
+    const port = (c) => c.wy - e.mesh.position.y;
+    const first = (anchor) => anchorOrder(cands, e, anchor)[0];
+    check('a port anchor puts a port candidate first', port(first(claws[0])) > 0,
+      port(first(claws[0])).toFixed(2));
+    check('...and a starboard one a starboard candidate', port(first(claws[1])) < 0,
+      port(first(claws[1])).toFixed(2));
+
+    // THE WORLD-UP AXIS, measured the way the bug would show: the SAME anchor
+    // on a boss facing the other way. A flank swaps with the heading and the
+    // back does not, so a dorsal spot written `:l` is a belly spot on the way
+    // home -- which is exactly what this asserts cannot happen any more.
+    const up = (c) => c.wy - e.mesh.position.y;
+    const dorsal = parseAnchors('mid:back', 't', () => {})[0];
+    const ventral = parseAnchors('mid:belly', 't', () => {})[0];
+    check('a dorsal anchor puts a top candidate first', up(first(dorsal)) > 0,
+      up(first(dorsal)).toFixed(2));
+    check('...and a ventral one a bottom candidate', up(first(ventral)) < 0,
+      up(first(ventral)).toFixed(2));
+
+    e.heading = Math.PI; // the same animal, swimming home
+    const back = perimeterCandidates(e.hitShape, CONFIG.hotSpots.rays ?? 24);
+    const firstBack = (a) => anchorOrder(back, e, a)[0];
+    check('...and the back is still the back when the boss turns round',
+      up(firstBack(dorsal)) > 0 && up(firstBack(ventral)) < 0,
+      `${up(firstBack(dorsal)).toFixed(2)} / ${up(firstBack(ventral)).toFixed(2)}`);
+    e.heading = 0;
+
+    // AND THE STATION STILL WINS INSIDE THE NAMED FLANK. A side is a flank,
+    // not a direction to walk in: if the lateral distance leaked back into the
+    // score the order would run to the widest part of that flank instead of to
+    // the place that was asked for.
+    const alongOf = (c) => (c.wx - e.mesh.position.x);
+    const head = first({ along: 1, side: 1 });
+    const tail = first({ along: -1, side: 1 });
+    check('a port anchor at the head and one at the tail are different places',
+      alongOf(head) > alongOf(tail), `${alongOf(head).toFixed(1)} vs ${alongOf(tail).toFixed(1)}`);
+
+    // AN ANCHOR CAN NEVER FAIL TO PRODUCE AN ORDER. It orders every candidate
+    // the perimeter search found rather than selecting among some of them, so
+    // the worst case is a spot a little away from where it was asked for
+    // instead of a boss with a weak spot fewer than it should have.
+    check('...and every candidate is in the order, none filtered out',
+      anchorOrder(cands, e, claws[0]).length === cands.length,
+      `${cands.length} candidates`);
+  }
+
+  // --- a spot relights WHERE IT BURST --------------------------------------
+  // The opposite of what an unauthored boss does, and the point of authoring
+  // one: if the replacement opened somewhere else, the fight would teach the
+  // player the place for four seconds and then contradict it.
+  {
+    const e = spawnBoss();
+    const spots = lightUp(e, 7, 'bossMosasaur').spots;
+    const where = spots[0] ? { x: spots[0].wx, y: spots[0].wy } : null;
+    // Chew it to its burst.
+    for (let i = 0; i < 40 && liveHotSpots(e).length; i++) {
+      const s = liveHotSpots(e)[0];
+      if (!s) break;
+      hotSpotDamage(e, { x: s.wx, y: s.wy }, e.maxHp);
+      updateBossHotSpots(DT, DT);
+    }
+    // Past the relight gap.
+    for (let i = 0; i < Math.ceil((CONFIG.hotSpots.relightSeconds + 1) / DT); i++) {
+      updateBossHotSpots(DT, DT);
+    }
+    const now = liveHotSpots(e);
+    check('a burst spot relights, and at the place it was told', now.length === 1
+      && where != null && Math.hypot(now[0].wx - where.x, now[0].wy - where.y) < (e.radius ?? 1),
+      now.length ? `${Math.hypot(now[0].wx - where.x, now[0].wy - where.y).toFixed(2)} units away` : 'nothing relit');
+  }
+
+  // --- and the colour -------------------------------------------------------
+  // A per-boss colour REPLACES the roster one rather than multiplying it: a
+  // multiply cannot brighten, so pure blue over a red default comes out black
+  // and the two ways of saying "this boss's spots are blue" disagree.
+  {
+    const e = spawnBoss();
+    lightUp(e, 11, 'bossMosasaur');
+    const u = hotSpotShells(e)[0].material.userData.__hotUniforms;
+    const want = CONFIG.hotSpots.look.litColor ?? 0xffffff;
+    check('a row with no colour leaves the roster colour alone',
+      u.uHotLit.value.getHex() === want, `#${u.uHotLit.value.getHex().toString(16)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+section('5f. Nothing is painted outside the crit boundary, and the lock is on the spot');
+// ---------------------------------------------------------------------------
+// TWO DELETIONS AND ONE MOVE, asserted so they cannot come back by accident.
+//
+// The spill was a haze reaching past r = 1, which meant the brightest region on
+// the animal was WIDER than the reach it was describing — a player aiming at
+// the middle of what they could see was aiming at the middle of something
+// bigger than the crit. And the reticle was a second object saying WHERE, on a
+// screen that already had the patch saying it; what it uniquely said — which
+// spot the volley is going to — moved onto the patch, where the eye already is.
+{
+  const l = CONFIG.hotSpots.look;
+  check('the look has no spill', l.spill === undefined && l.spillGain === undefined);
+  check('...no chewed edge', l.jag === undefined && l.jagRate === undefined);
+  check('...no second interior line', l.chargeEdge === undefined);
+  check('...and no reticle block at all', l.target === undefined);
+  check('the lock is a look number, not a ring', typeof l.lockGlow === 'number'
+    && typeof l.lockRing === 'number', `${l.lockGlow} / ${l.lockRing}`);
+
+  // COVERAGE IS WHAT REPLACED THE RETICLE, so it has to be high enough to be
+  // paint rather than a plea. Below about half the patch is lighting the hide
+  // instead of standing in for it, which is the state the reticle existed to
+  // rescue — and the reticle is gone.
+  check('the patch mostly replaces the hide rather than lighting it',
+    (l.cover ?? 0) >= 0.6 && (l.coverFull ?? 0) >= (l.cover ?? 0) && (l.coverFull ?? 1) <= 1,
+    `cover ${l.cover} -> ${l.coverFull}`);
+
   const e = spawnBoss();
-  lightUp(e);
-  const rings = hotSpotRings(e);
-  check('lit, with rings', rings.length > 0, `${rings.length}`);
-  e.hitShape.alive = false;
+  const spots = lightUp(e).spots;
+  const u = hotSpotShells(e)[0].material.userData.__hotUniforms;
+  // The lock rides the mood vector's w slot, which used to carry the per-spot
+  // seed. Nothing reads a seed in the shader any more (the noise field it fed
+  // is gone), which is what freed the slot — so this is also the check that the
+  // slot did not quietly go back to carrying a random number.
+  check('no spot is locked until an aim claims one',
+    u.uHotMood.value.every((m) => m.w === 0),
+    u.uHotMood.value.map((m) => m.w.toFixed(2)).join(' '));
+
+  const target = spots[0];
+  aimHotSpots(target.wx - 30, target.wy, 1, 0);
   updateBossHotSpots(DT, DT);
-  check('a released boss takes every ring out of the scene with it',
-    rings.every((r) => r.parent === null));
-  check('...and the scene is holding none of ours',
-    !scene.children.some((o) => isOrganicRing(o)));
+  const idx = hotSpotsOf(e).spots.indexOf(designatedHotSpot(e));
+  check('an aim lights the lock slot on exactly one spot',
+    idx >= 0 && u.uHotMood.value.filter((m) => m.w > 0).length === 1,
+    `spot ${idx}`);
+  check('...and it is the one the aim picked',
+    idx >= 0 && u.uHotMood.value[idx].w === 1);
+}
+
+// ---------------------------------------------------------------------------
+section('5h. Hitting one shakes the animal\'s skeleton');
+// ---------------------------------------------------------------------------
+// THE HALF OF A HIT THAT READS ON A BODY TOO BIG TO MOVE. The whole of
+// CONFIG.strike.knockback.boss is an argument about how LITTLE a boss may be
+// shoved — a boss that flew would read as weightless — so on the one creature
+// in the water that matters, the flinch is the only channel a hit has.
+//
+// MEASURED AGAINST A CONTROL RUN, never off absolute bone positions: the animal
+// is swimming, and a swim cycle out-moves any impulse you try to read without
+// one. Bone positions are taken RELATIVE TO THE BODY for the same reason, and
+// the world matrices are forced first — without that every pose reports its
+// last-uploaded transform, every frame measures identical, and nothing throws.
+{
+  const _bv = new THREE.Vector3();
+  const bones = (e) => {
+    scene.updateMatrixWorld(true);
+    const out = [];
+    e.visual.traverse((o) => {
+      if (!o.isBone) return;
+      o.getWorldPosition(_bv);
+      out.push(_bv.x - e.mesh.position.x, _bv.y - e.mesh.position.y, _bv.z - e.mesh.position.z);
+    });
+    return out;
+  };
+  const trail = (hit, frames = 60) => {
+    const e = spawnBoss();
+    lightUp(e);
+    const out = [];
+    for (let i = 0; i < frames; i++) {
+      if (i === 5 && hit) hit(e);
+      e.anim?.update(DT, stateForSpeed(e.def.speed ?? 5), false);
+      tickHitShapes();
+      updateBossHotSpots(DT, DT);
+      out.push(bones(e));
+    }
+    return out;
+  };
+  // The loudest bone, and how much of the BODY moved. A tail tip whipping alone
+  // and a whole animal buckling have the same peak and completely different
+  // means, and only one of them reads as a hit.
+  const peak = (a, b) => {
+    let best = 0;
+    for (let f = 0; f < a.length; f++) {
+      for (let i = 0; i < a[f].length; i += 3) {
+        const d = Math.hypot(a[f][i] - b[f][i], a[f][i + 1] - b[f][i + 1], a[f][i + 2] - b[f][i + 2]);
+        if (d > best) best = d;
+      }
+    }
+    return best;
+  };
+
+  const control = trail(null);
+  const probe = spawnBoss();
+  const R = probe.radius || 1;
+  const pct = (v) => `${(v / R * 100).toFixed(1)}% of body radius`;
+
+  // --- a ram on the flank ---------------------------------------------------
+  const flank = peak(control, trail((e) => applyKnockback(e, 1, 0, 1, { source: 'ram', boneGain: 1 })));
+  check('a full-charge ram visibly shakes a boss', flank > R * 0.15, pct(flank));
+  const weakCharge = peak(control, trail((e) => applyKnockback(e, 1, 0, 0, { source: 'ram', boneGain: 1 })));
+  check('...and a minimum-charge one still reads at all', weakCharge > R * 0.08, pct(weakCharge));
+  check('...but less, so the charge is worth holding', weakCharge < flank,
+    `${pct(weakCharge)} vs ${pct(flank)}`);
+
+  // --- a hit on a lit spot --------------------------------------------------
+  // THE POINT OF THE WHOLE BLOCK. Same animal, same frame, same impulse
+  // direction — the only difference is where the hit landed.
+  const onSpot = peak(control, trail((e) => {
+    const s = liveHotSpots(e)[0];
+    hotSpotDamage(e, { x: s.cwx, y: s.cwy },
+      Math.max(CONFIG.strike.damage, e.maxHp * (CONFIG.strike.weakSpot.maxHpFrac ?? 0.035) * 2), null, 'ram');
+    applyKnockback(e, 1, 0, 1, { source: 'ram', boneGain: 1 });
+  }));
+  check('a ram into a lit spot shakes it far harder than one on the flank',
+    onSpot > flank * 2, `${pct(onSpot)} vs ${pct(flank)} — x${(onSpot / flank).toFixed(1)}`);
+
+  // --- PAID ON DAMAGE, NOT ON HITS -----------------------------------------
+  // The chum payout's argument applied to the body language, and the reason it
+  // is here: bullets arrive ten a second and the club once, so an impulse per
+  // HIT would make an automatic weapon a boss in permanent convulsion and a
+  // slow one nearly silent. Ten small hits and one big one carrying the same
+  // damage have to reach the same place, because the springs integrate.
+  const oneBig = peak(control, trail((e) => {
+    const s = liveHotSpots(e)[0];
+    hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.3 / CONFIG.hotSpots.critMul, null, 'club');
+  }));
+  const tenSmall = peak(control, trail((e) => {
+    const s = liveHotSpots(e)[0];
+    for (let i = 0; i < 10; i++) hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.03 / CONFIG.hotSpots.critMul, null, 'club');
+  }));
+  check('ten small hits shake it about as hard as one big one of the same damage',
+    Math.abs(oneBig - tenSmall) < oneBig * 0.35, `${pct(oneBig)} vs ${pct(tenSmall)}`);
+
+  // A PELLET DOES NOT ROCK A BOSS, which is the same rule read from the other
+  // end and is what stops the fight being a permanent earthquake.
+  const pellet = peak(control, trail((e) => {
+    const s = liveHotSpots(e)[0];
+    hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.02 / CONFIG.hotSpots.critMul, null, 'club');
+  }));
+  check('one pellet barely moves it', pellet < R * 0.05, pct(pellet));
+
+  // --- and it comes back ----------------------------------------------------
+  // A spring that never settles is a boss that swims wrong for the rest of the
+  // fight, and a NaN in one is a body that vanishes — both silent.
+  {
+    const long = trail(null, 240);
+    const hit = trail((e) => {
+      const s = liveHotSpots(e)[0];
+      hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 2, null, 'ram');
+      applyKnockback(e, 1, 0, 1, { source: 'ram', boneGain: 1 });
+    }, 240);
+    let settled = -1;
+    let finite = true;
+    for (let f = 6; f < long.length; f++) {
+      let mx = 0;
+      for (let i = 0; i < long[f].length; i += 3) {
+        const d = Math.hypot(long[f][i] - hit[f][i], long[f][i + 1] - hit[f][i + 1], long[f][i + 2] - hit[f][i + 2]);
+        if (!Number.isFinite(d)) finite = false;
+        if (d > mx) mx = d;
+      }
+      if (mx < R * 0.02) { settled = f - 5; break; }
+    }
+    check('no NaN reaches the springs', finite);
+    check('the biggest hit in the fight settles back into the swim',
+      settled > 0 && settled < 180, settled > 0 ? `${(settled / 60).toFixed(2)}s` : 'still moving after 4s');
+  }
+
+  // --- AND NONE OF IT DURING A RUN -----------------------------------------
+  // CONFIG.boss.tenacity: a committed boss takes no hit reaction from
+  // anything, at any weight. Three channels can deliver one and this was the
+  // one that never asked — which put the loudest flinch in the game inside the
+  // exact window super armor deliberately leaves the spot open in, so the
+  // moment the player is told to shoot the spot was the moment the animal
+  // stopped being able to finish its attack. It read as the damage reaction
+  // cancelling the lunge, and on the hammerhead — the longest tail chain in
+  // the roster, whose whole tell is the head coming round — it read worst.
+  //
+  // MEASURED ON THE BONES against the same control run as everything above,
+  // not off a call count: a gate that returns early and an impulse that lands
+  // and is silently damped somewhere else are the same number of calls and
+  // completely different animals.
+  //
+  // EVERY MOVE A BOSS HAS, not only the lunge: `isAttacking` in
+  // entities/enemies.js is the one predicate all four flinch channels read,
+  // and the list below is its list. A body whose attack is a clip resolves
+  // this in trigger() (ATTACK_STATES in systems/animation.js); these are the
+  // ones whose attack is a state on the creature instead, and they had no way
+  // to say so.
+  {
+    // `ram` — a named hitter on tenacity's list. jostleGate refuses everything
+    // else outright (a stream of pellets crits, bleeds and bursts a spot and
+    // does not rock the animal), so an unnamed hit measures zero whether this
+    // gate works or not and would prove nothing about it.
+    const spotHit = (e) => {
+      const s = liveHotSpots(e)[0];
+      hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.3 / CONFIG.hotSpots.critMul, null, 'ram');
+    };
+    const cruising = peak(control, trail(spotHit));
+    check('a ram into a lit spot shakes a boss that is doing nothing', cruising > R * 0.05,
+      pct(cruising));
+
+    // THE WIND-UP IS THE ONE THAT COSTS MOST, and it is the one the first pass
+    // at this left open: `isCommittedRun` is only the run itself, so a boss
+    // was still being whipped through the half-second that is its entire tell.
+    // On the hammerhead that half-second is the skull coming round to face
+    // you, which is the only warning the shove ever gives.
+    const moves = {
+      'winding up to a lunge': (e) => { e.lungeStage = 'wind'; },
+      'committed to the run': (e) => { e.lungeStage = 'strike'; },
+      're-aiming between two of them': (e) => { e.lungeStage = 'reaim'; },
+      'ramming — the perk, the kraken, the angler, the crab': (e) => { e.ramming = true; },
+      'holding you in its jaws': (e) => { e.grabbing = true; },
+      'swinging a claw': (e) => { e.claw = { isStriking: () => true }; },
+      'driven by a perk': (e) => { e.perkDrive = true; },
+    };
+    for (const [what, arm] of Object.entries(moves)) {
+      const held = peak(control, trail((e) => { arm(e); spotHit(e); }));
+      check(`...and none at all into one ${what}`, held < R * 0.01, pct(held));
+    }
+
+    // ...BUT NOT WHILE IT IS MERELY SWIMMING AT YOU. The cruise between two
+    // runs is not an attack, and a rule that caught it would be a boss that
+    // never flinches at all — which passes every check above and is a
+    // different bug wearing this one's passing test.
+    const cruise = peak(control, trail((e) => { e.lungeStage = 'cruise'; spotHit(e); }));
+    check('...while the cruise between runs still flinches', cruise > R * 0.05, pct(cruise));
+
+    // THE RUPTURE IS NOT AN EXCEPTION. It is the bigger half of the same
+    // channel, and its shove through applyKnockback is already refused mid-run
+    // — a burst that could not move the animal but could still whip it would
+    // be the hole in a different shape.
+    const burst = peak(control, trail((e) => {
+      const s = liveHotSpots(e)[0];
+      e.lungeStage = 'wind';
+      hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 2, null, 'ram');
+    }));
+    check('...and neither does a spot rupturing on one', burst < R * 0.01, pct(burst));
+
+    // WHAT STILL LANDS. The whole point of the exemption is that it costs the
+    // player nothing but the body language: the crit, the pool and the burst
+    // are all untouched mid-run. Asserted here rather than left to section 5,
+    // because a gate written one line too early in jostle() would take the
+    // damage with it and every check above would still pass.
+    {
+      const e = spawnBoss();
+      lightUp(e);
+      const s = liveHotSpots(e)[0];
+      e.lungeStage = 'strike';
+      const hp0 = e.hp;
+      const pool0 = s.taken;
+      e.hp -= hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.3 / CONFIG.hotSpots.critMul, null, 'ram');
+      check('...while the crit itself still lands mid-run',
+        hp0 - e.hp > 0 && s.taken - pool0 > 0,
+        `${(hp0 - e.hp).toFixed(1)} hp, ${(s.taken - pool0).toFixed(1)} into the pool`);
+    }
+
+    // THE DIAL, so the flag is doing the work rather than something else in
+    // the chain having gone quiet.
+    const TEN = CONFIG.boss.tenacity;
+    const was = TEN.committed;
+    TEN.committed = false;
+    const off = peak(control, trail((e) => { e.lungeStage = 'wind'; spotHit(e); }));
+    TEN.committed = was;
+    check('...and CONFIG.boss.tenacity.committed is the switch', off > R * 0.05, pct(off));
+  }
+
+  // --- AND A BOSS DOES NOT ANSWER TO BEING SHOT AT -------------------------
+  //
+  // The rule is CONFIG.boss.tenacity and it is about the FIGHT, not the
+  // picture: a flinching boss is a boss that is not lunging, so a hit reaction
+  // per pellet makes the answer to a wind-up "shoot harder" instead of "move".
+  //
+  // THIS IS THE CHECK THAT WAS MISSING WHEN THE JOSTLE FIRST SHIPPED. It
+  // called anim.impulse directly, which is the one path the tenacity gate does
+  // not sit on — the exact hole boss-tenacity-test.mjs names in its own header
+  // ("added in front of the SHOVE and forgotten in front of the FLINCH"). That
+  // harness caught it by counting lunges; this is the same fact asserted where
+  // somebody changing the jostle will see it.
+  const bullet = peak(control, trail((e) => {
+    const s = liveHotSpots(e)[0];
+    // No source — a pellet, which is not on tenacity.sources.
+    for (let i = 0; i < 12; i++) hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.08 / CONFIG.hotSpots.critMul);
+  }));
+  check('a stream of pellets into a lit spot does not rock the boss', bullet < R * 0.05,
+    pct(bullet));
+  const swung = peak(control, trail((e) => {
+    const s = liveHotSpots(e)[0];
+    hotSpotDamage(e, { x: s.cwx, y: s.cwy }, s.pool * 0.96 / CONFIG.hotSpots.critMul, null, 'club');
+  }));
+  check('...but a club swing carrying the same damage does', swung > bullet * 5,
+    `${pct(swung)} vs ${pct(bullet)}`);
+
+  // --- what the build buys --------------------------------------------------
+  // And what it does NOT: `boneGain` reaches the flinch and nothing else, so a
+  // strike build is allowed to look harder without a boss being thrown further.
+  check('a strike build makes a boss flinch harder', strikeBoneGain({ strikeDamage: CONFIG.strike.damage * 4 })
+    > strikeBoneGain({ strikeDamage: CONFIG.strike.damage }),
+    `x${strikeBoneGain({ strikeDamage: CONFIG.strike.damage * 4 }).toFixed(2)} at 4x strike`);
+  check('...a base run is exactly 1', strikeBoneGain({ strikeDamage: CONFIG.strike.damage }) === 1);
+  check('...and a run with no stats block is too', strikeBoneGain(null) === 1);
+  check('...it never goes below 1', strikeBoneGain({ strikeDamage: CONFIG.strike.damage * 0.1 }) === 1);
+  check('...and it is capped', strikeBoneGain({ strikeDamage: CONFIG.strike.damage * 1000 })
+    <= (CONFIG.strike.knockback.boneUpgradeMax ?? 2.4));
+  {
+    // THE SHOVE IS NOT UPGRADE-SCALED, and this is the check that keeps it
+    // that way. How far a body is thrown decides whether it can reach you next
+    // second, which is balance and belongs to the charge.
+    const a = spawnBoss();
+    applyKnockback(a, 1, 0, 1, { source: 'ram', boneGain: 1 });
+    const plain = a.knockX;
+    const b = spawnBoss();
+    applyKnockback(b, 1, 0, 1, { source: 'ram', boneGain: 4 });
+    check('...and it does not move the boss any further', Math.abs(b.knockX - plain) < 1e-6,
+      `${plain.toFixed(3)} either way`);
+  }
 }
 
 // ---------------------------------------------------------------------------

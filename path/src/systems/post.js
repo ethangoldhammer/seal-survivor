@@ -1397,34 +1397,46 @@ export function createPost(renderer) {
     // so the pulse grows with the emergency instead of arriving at full depth
     // the moment the threshold is crossed — at 14% it is a breath, at 2% it is
     // a hammering.
-    const pulse = (c.pulse ?? 0.22) * beat * k;
-    u.uHurt.value = Math.min(1, k * (c.strength ?? 0.9) * (1 + pulse));
+    const pulse = (c.pulse ?? 0.34) * beat * k;
+    u.uHurt.value = Math.min(1, k * (c.strength ?? 1) * (1 + pulse));
 
     // The aperture narrowing on the beat. This is the half that reads as a
     // heart rather than as a flashing light — brightness alone has a rate and
     // no weight to it. Floored so a big `close` cannot walk the inner edge
     // past the outer one, which would invert the smoothstep and paint the
     // MIDDLE of the screen instead of the edge.
-    const inner = c.inner ?? 0.45;
+    const inner = c.inner ?? 0.30;
     const outer = c.outer ?? 1.25;
-    const closed = inner - (c.close ?? 0.16) * beat * k;
+    const closed = inner - (c.close ?? 0.22) * beat * k;
     u.uHurtInner.value = Math.max(0.05, Math.min(outer - 0.05, closed));
     u.uHurtOuter.value = outer;
-    u.uHurtKeep.value = Math.max(0, Math.min(1, c.keep ?? 0.55));
-    u.uHurtDrain.value = Math.max(0, Math.min(1, c.drain ?? 0.75));
-    u.uHurtGlow.value = Math.max(0, c.glow ?? 0.62);
+    u.uHurtKeep.value = Math.max(0, Math.min(1, c.keep ?? 0.68));
+    u.uHurtDrain.value = Math.max(0, Math.min(1, c.drain ?? 0.8));
+    u.uHurtGlow.value = Math.max(0, c.glow ?? 0.85);
     // Read every frame rather than at boot, so dragging the swatch in the
     // tuner is live.
-    u.uHurtColor.value.set(c.color ?? 0x8e0f14);
+    u.uHurtColor.value.set(c.color ?? 0xb31218);
 
     // The scan lines. Scaled by `k` and NOT by the beat: the heart already owns
     // one pulsing channel, and a second thing breathing at the same rate turns
     // a heartbeat into a strobe. These are the steady half — the signal is
     // simply worse than it was, and stays worse.
-    u.uHurtScan.value = Math.max(0, c.scan ?? 0.16) * k;
-    u.uHurtScanCore.value = Math.max(0, Math.min(1, c.scanCore ?? 0.5));
-    u.uHurtScanCount.value = Math.max(1, c.scanCount ?? 190);
-    u.uHurtScanDrift.value = c.scanDrift ?? 0.9;
+    // The signal tearing. ADDED to whatever the preset and the drowning
+    // blackout already wrote, rather than assigned — three systems want these
+    // two uniforms and a player drowning at 4% health must get both, not
+    // whichever ran last. applyLowHealthVignette runs after applySuffocationCrt
+    // for exactly this reason.
+    //
+    // Not band-limited, unlike everything else here: a failing signal that
+    // stopped at an invisible circle would read as a filter rather than as the
+    // feed going. See the note in CONFIG.fx.nearDeath.
+    u.uChroma.value += (c.chroma ?? 3.2) * k;
+    u.uJitter.value += (c.jitter ?? 0.006) * k;
+
+    u.uHurtScan.value = Math.max(0, c.scan ?? 0.34) * k;
+    u.uHurtScanCore.value = Math.max(0, Math.min(1, c.scanCore ?? 0.7));
+    u.uHurtScanCount.value = Math.max(1, c.scanCount ?? 120);
+    u.uHurtScanDrift.value = c.scanDrift ?? 1.4;
   }
 
   function applyCineLens() {

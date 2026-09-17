@@ -249,8 +249,23 @@ for (const type of ALL) {
       `peak ${peak.toFixed(1)} against cruise ${e.speed.toFixed(1)} x ${c.speedMul}`);
     // Above 2x cruise: the jaw's own short burst (CONFIG.bite.lunge, 1.85x)
     // is not a run and is not counted against this.
+    //
+    // TWO BARS, AND THE SPLIT IS THE POINT. A wildlife shark's run is a rare
+    // event in a long cruise and 25% is what that looks like — unchanged, and
+    // the six of them still pass it. A BOSS is a fight rather than a hazard:
+    // its cooldowns were cut in half deliberately (see behaviour.csv) because
+    // `rest` was 52-60% of every boss fight and the animal read as drifting
+    // between attacks rather than attacking. They now burst on about a third
+    // of their frames, which is what that change was FOR.
+    //
+    // The boss bar is still a real bar: it would catch a boss whose cooldown
+    // went to nothing and turned the fight into one continuous sprint, which
+    // is the failure this line is actually guarding against on that half of
+    // the roster.
+    const boss = BOSSES.includes(type);
+    const bar = boss ? 0.45 : 0.25;
     const hot = frames.filter((f) => f.speed > e.speed * 2).length / frames.length;
-    check(`${type} seed ${seed}: ...and most of the time it is not happening`, hot < 0.25,
+    check(`${type} seed ${seed}: ...and ${boss ? 'it is still not a continuous sprint' : 'most of the time it is not happening'}`, hot < bar,
       `${(hot * 100).toFixed(0)}% of frames above 2x cruise`);
   }
 }

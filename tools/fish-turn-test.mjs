@@ -30,6 +30,8 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { enemies, spawnNamed, updateEnemies, resetEnemies } from '../path/src/entities/enemies.js';
+import { turnFish, comesAbout } from '../path/src/systems/fishTurn.js';
+import { stepBodies } from '../path/src/systems/rigidBody.js';
 
 const scene = new THREE.Scene();
 
@@ -421,6 +423,163 @@ console.log('\nA PACK GATHERS TOGETHER; TWO OF A SOLITARY ANIMAL DO NOT');
   check('the sailfish pair does not',
     pairMean > packMean,
     `${pairMean.toFixed(2)}s across three, at stagger ${CONFIG.enemies.sailfish.lunge.stagger ?? 1}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nTHE TURTLE TURNS AWAY, AND KEEPS ITS TUMBLE');
+// ---------------------------------------------------------------------------
+// Section 4 of systems/fishTurn.js. Two claims that nothing above can make:
+// the yaw goes round the BACK on this one body, and it shares that body with
+// systems/rigidBody.js rather than taking turns with it over `rotation.z`.
+//
+// The pose is composed the way the renderer composes it — the physics writes
+// `restAngle + angle` to `rotation.z` in writeBack, so the harness does the
+// same before reading the matrix. Reading the mesh without that step would be
+// measuring a turtle with its tumble left off, which is the half of this the
+// come-about must not have eaten.
+{
+  const T = CONFIG.enemies.seaTurtle;
+  check('it comes about at all', comesAbout(T, {}), `through: ${T.comeAbout?.through}`);
+  check('and it goes round the back', T.comeAbout?.through === 'back',
+    'the far pose is +PI, not -PI');
+
+  // --- THE PATH ------------------------------------------------------------
+  // A real spawned turtle, steered by hand rather than by its own wander: the
+  // drift picks its headings at random and a reversal is not a thing the test
+  // can ask it for. What is under test is the manoeuvre, and `turnFish` is
+  // where the manoeuvre lives — the run below is what proves the creature is
+  // actually wired to it.
+  const { mesh, visual, body, frames } = withSeed(7, () => {
+    resetEnemies(scene);
+    const e = spawnNamed(scene, 'seaTurtle', 0, { x: 0, y: MID }, { ignoreCaps: true });
+    if (!e) throw new Error('could not spawn seaTurtle');
+    const out = [];
+    // Right for a moment, then hard left, then right again: two full turns,
+    // each given four seconds against a 1.3s come-about so both finish.
+    for (let i = 0; i < Math.round(12 / dt); i++) {
+      const t = i * dt;
+      const dir = t < 4 ? 1 : (t < 8 ? -1 : 1);
+      e.vx = dir * 1.6;
+      e.vy = Math.sin(t * 0.7) * 0.5;
+      turnFish(e, dt, false);
+      // writeBack, as systems/rigidBody.js performs it.
+      e.mesh.rotation.z = e.body.restAngle + e.body.angle;
+      const a = axes(e.mesh, e.visual);
+      out.push({ t, yaw: e.mesh.rotation.y, bank: e.visual.rotation.y, ...a });
+    }
+    return { mesh: e.mesh, visual: e.visual, body: e.body, frames: out };
+  });
+
+  check('the body is composed in YXZ', mesh.rotation.order === 'YXZ',
+    `order ${mesh.rotation.order} — anything else and the yaw is inside the heading`);
+  check('the physics still owns rotation.z', body != null && body.restAngle !== 0,
+    `restAngle ${body ? body.restAngle.toFixed(3) : 'no body'}`);
+
+  // Mid-turn is the yaw strictly between the two resting poses. With
+  // `through: 'back'` that interval is (0, PI) — the mirror of section 1's.
+  const mid = frames.filter((f) => f.yaw > 1e-3 && f.yaw < Math.PI - 1e-3);
+  check('it spends real time coming about', mid.length > 100,
+    `${mid.length} frames of turn over two reversals`);
+  const maxZ = Math.max(...mid.map((f) => f.fwd.z));
+  const minZ = Math.min(...mid.map((f) => f.fwd.z));
+  const maxUp = Math.max(...mid.map((f) => Math.abs(f.fwd.y)));
+  const minDorsal = Math.min(...frames.map((f) => f.dorsal.y));
+  const worstBank = Math.max(...frames.map((f) => Math.abs(f.bank)));
+  check('the nose swings AWAY from the camera, never toward it',
+    minZ < -0.95 && maxZ < 1e-9,
+    `nose z reaches ${minZ.toFixed(3)} and never comes forward (max ${maxZ.toFixed(3)})`);
+  check('and it never points at the ceiling',
+    maxUp < 0.5,
+    `nose y peaks at ${maxUp.toFixed(3)} — the pitch is its own drift, not the turn`);
+  check('the shell is up on every frame of both turns',
+    minDorsal > 0.95,
+    `dorsal y bottoms out at ${minDorsal.toFixed(4)} (the flip it replaces laid it flat)`);
+  const bound = (T.comeAbout?.bankMax ?? CONFIG.fishTurn.bankMax) + 1e-6;
+  check('the roll is a lean, never a flip',
+    worstBank <= bound,
+    `worst ${worstBank.toFixed(3)} rad against a ${bound.toFixed(3)} bound`);
+
+  // THE DETECTOR, on the composition this replaced. The old path faced a
+  // turtle by swinging the heading through vertical and rolling the body
+  // upright about its own spine, so the same two measurements have to come out
+  // the other way round — over the top, and inverted on the way — or the four
+  // checks above are measuring nothing.
+  {
+    const lMesh = new THREE.Object3D();
+    const lVisual = new THREE.Object3D();
+    let legacyUp = -Infinity;
+    let legacyDorsal = Infinity;
+    let legacyZ = 0;
+    for (let i = 0; i <= 60; i++) {
+      const u = i / 60;
+      lMesh.rotation.set(0, 0, Math.PI * u - Math.PI / 2);
+      lVisual.rotation.set(0, Math.PI * u, 0);
+      const a = axes(lMesh, lVisual);
+      legacyUp = Math.max(legacyUp, a.fwd.y);
+      legacyDorsal = Math.min(legacyDorsal, a.dorsal.y);
+      legacyZ = Math.min(legacyZ, a.fwd.z);
+    }
+    check('...the old turn went over the top instead (the detector working)',
+      legacyUp > 0.95 && legacyZ > -0.05,
+      `legacy nose y peaks at ${legacyUp.toFixed(3)}, z never leaves the plane (min ${legacyZ.toFixed(3)})`);
+    // The legacy roll is 180 degrees about the model's FORWARD axis, so the
+    // shell does not end up under the turtle — it passes through vertical,
+    // which is worse to look at and easier to get wrong in a test. At the
+    // midpoint the animal is standing on its tail AND lying on its side.
+    check('...and stood the shell on its edge on the way',
+      legacyDorsal < 0.05,
+      `legacy dorsal y bottoms out at ${legacyDorsal.toFixed(3)} — the shell edge-on to the camera`);
+  }
+
+  // --- THE PUNT ------------------------------------------------------------
+  // The turtle is ammunition, and a come-about that quietly straightened it
+  // out mid-flight would have taken the one thing it is for. So: drive it
+  // through the real loop, hit it, and read both channels.
+  {
+    const punted = withSeed(9, () => {
+      resetEnemies(scene);
+      const e = spawnNamed(scene, 'seaTurtle', 0, { x: 0, y: MID }, { ignoreCaps: true });
+      const player = new THREE.Vector3(30, MID, 0);
+      const step = () => {
+        updateEnemies(dt, scene, player, () => {}, () => {});
+        stepBodies(dt, {});
+      };
+      for (let i = 0; i < 60; i++) step();
+      const yawBefore = e.mesh.rotation.y;
+      e.body.applyImpulse(34, 6, e.mesh.position.x, e.mesh.position.y + e.radius);
+      // The launch threshold is the same number the integrator uses to decide
+      // the body is cargo — see CONFIG.physics.turtle.launchSpeed. The yaw is
+      // only asserted to hold WHILE that is true: a turtle that has come to
+      // rest facing backwards is supposed to turn round, and measuring past the
+      // landing would be calling the recovery a bug.
+      const launchSpeed = CONFIG.physics.turtle.launchSpeed;
+      let spin = 0;
+      let yawDrift = 0;
+      let flying = 0;
+      let last = e.mesh.rotation.z;
+      for (let i = 0; i < Math.round(3 / dt); i++) {
+        const wasFlying = e.body.speed() > launchSpeed;
+        step();
+        if (!enemies.length) break;
+        let d = e.mesh.rotation.z - last;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        spin += Math.abs(d);
+        last = e.mesh.rotation.z;
+        if (wasFlying) {
+          flying++;
+          yawDrift = Math.max(yawDrift, Math.abs(e.mesh.rotation.y - yawBefore));
+        }
+      }
+      return { spin, yawDrift, flying, alive: enemies.includes(e) };
+    });
+    check('a punted turtle still cartwheels',
+      punted.spin > 1.5,
+      `${punted.spin.toFixed(2)} rad of tumble in the three seconds after the hit`);
+    check('and the come-about leaves it alone while it flies',
+      punted.flying > 20 && punted.yawDrift < 1e-9,
+      `yaw moved ${punted.yawDrift.toExponential(1)} rad over ${punted.flying} launched frames`);
+  }
 }
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all good'}\n`);

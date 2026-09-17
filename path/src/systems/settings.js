@@ -36,6 +36,7 @@
 // that are not yet come out of uiText.csv, where the editor can find them and
 // the ship gate can count them — see uiTextTable.js.
 import { uiText } from '../uiTextTable.js';
+import { touchPrimary } from '../devices.js';
 
 const STORAGE_KEY = 'sealsurvivor.settings.v1';
 
@@ -86,7 +87,22 @@ export const SCHEMA = {
       // frame rate ask for less than that, without being able to overrule the
       // ceiling by typing a bigger number.
       {
-        key: 'resolution', label: 'Resolution', type: 'range', min: 0.5, max: 1, step: 0.05, def: 1,
+        // HALF ON A TOUCH DEVICE, and this is the one row whose default is not
+        // the same everywhere. A phone's screen is three or four times denser
+        // than a laptop's and its GPU is a fraction of the size, so the
+        // authored cap it would otherwise ask for is the single most expensive
+        // thing about the mobile build — and the cheapest to give back, on a
+        // display where the pixels are too small to count.
+        //
+        // A DEFAULT, NOT A CEILING: the slider still reaches 1 and a player who
+        // moves it is stored and obeyed forever after. Only somebody who has
+        // never opened this menu gets the 0.5.
+        //
+        // `touchPrimary` is the same test `defaultDevice` uses, so "mobile"
+        // here means exactly what it means everywhere else in the game rather
+        // than a second opinion about screen widths.
+        key: 'resolution', label: 'Resolution', type: 'range', min: 0.5, max: 1, step: 0.05,
+        def: () => (touchPrimary() ? 0.5 : 1),
         format: (v) => `${Math.round(v * 100)}%`,
         hint: 'Lower this first if the frame rate struggles',
       },
@@ -267,6 +283,21 @@ export const SCHEMA = {
         },
         hint: uiText('upgradeTipsHint'),
       },
+      // THE +N OFF EVERY KILL. On by default, and the only thing this row
+      // reaches is the score/combo popup — the FOOD CHAIN banner, the proc
+      // receipts and the damage readout all share the same layer and the same
+      // loop, and every one of them is saying something the player cannot read
+      // anywhere else. The kill number can be: it is already going into the
+      // score counter at the top of the screen.
+      //
+      // A HUD ROW RATHER THAN A PERF ONE even though it is cheaper with it off
+      // — a school wipe is a dozen nodes born on one frame, each getting four
+      // inline style writes a frame for its whole life (see updateToasts in
+      // ui/ui.js), and the cap is 40. That is real main-thread work on a phone,
+      // but it is a fraction of a frame rather than a fix for a bad one, and
+      // filing it under Perf would sell it as the latter. Somebody turning it
+      // off is doing it to see the water.
+      { key: 'scorePopups', label: uiText('scorePopupsLabel'), type: 'bool', def: true, hint: uiText('scorePopupsHint') },
     ],
   },
   controls: {
@@ -292,6 +323,19 @@ export const SCHEMA = {
   },
 };
 
+/**
+ * An item's default, which may be a FUNCTION of the device it is asked on.
+ *
+ * Every row but one is a plain value. `video.resolution` is not: a phone
+ * defaults to half, a desktop to full (see the note on that row). Resolved
+ * here rather than at module load so a harness that changes what
+ * `touchPrimary` answers gets the right number, and so the value cannot be
+ * frozen by whichever surface imported this file first.
+ */
+function defOf(item) {
+  return typeof item.def === 'function' ? item.def() : item.def;
+}
+
 function defaults() {
   const out = {};
   for (const [section, def] of Object.entries(SCHEMA)) {
@@ -300,7 +344,7 @@ function defaults() {
       // Structured clone of the object-valued defaults (the bindings), or the
       // DEFAULT ITSELF would be the live object and a rebind would edit it —
       // making "reset to defaults" hand back whatever it was last changed to.
-      out[section][item.key] = item.type === 'keys' ? { ...item.def } : item.def;
+      out[section][item.key] = item.type === 'keys' ? { ...defOf(item) } : defOf(item);
     }
   }
   return out;
@@ -324,12 +368,12 @@ function coerce(item, value) {
     // is a real value. Returning null for every choice, as this used to, meant
     // a setting added later could never state a default it would actually get
     // back after a reload.
-    return item.type === 'boolOrNull' ? null : item.def;
+    return item.type === 'boolOrNull' ? null : defOf(item);
   }
   switch (item.type) {
     case 'range': {
       const n = Number(value);
-      if (!Number.isFinite(n)) return item.def;
+      if (!Number.isFinite(n)) return defOf(item);
       return Math.min(item.max, Math.max(item.min, n));
     }
     case 'bool':
@@ -337,18 +381,18 @@ function coerce(item, value) {
     case 'boolOrNull':
       return typeof value === 'boolean' ? value : null;
     case 'choice':
-      return item.options.includes(value) ? value : item.def;
+      return item.options.includes(value) ? value : defOf(item);
     case 'keys': {
-      if (typeof value !== 'object') return { ...item.def };
-      const out = { ...item.def };
-      for (const action of Object.keys(item.def)) {
+      if (typeof value !== 'object') return { ...defOf(item) };
+      const out = { ...defOf(item) };
+      for (const action of Object.keys(defOf(item))) {
         const k = value[action];
         if (typeof k === 'string' && k && !RESERVED_KEYS.has(k)) out[action] = k;
       }
       return out;
     }
     default:
-      return item.def;
+      return defOf(item);
   }
 }
 
@@ -677,6 +721,15 @@ export function barPlacement() {
 export function boostMeter() {
   const v = settings.hud.boostMeter;
   return v === 'ring' || v === 'bar' ? v : 'both';
+}
+
+/**
+ * Whether the +N rises off a kill. Written as "only an explicit false turns it
+ * off", the same reading as the two above: a corrupted snapshot holding null
+ * lands on the shipped behaviour rather than silently taking the popups away.
+ */
+export function scorePopups() {
+  return settings.hud.scorePopups !== false;
 }
 
 /**

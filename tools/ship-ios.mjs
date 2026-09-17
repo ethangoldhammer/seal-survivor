@@ -261,6 +261,19 @@ export async function shipPhone(opts = {}) {
   const phone = pickDevice(JSON.parse(listDevices()).result.devices, wantedDevice);
 
   say(`  ${'device'.padEnd(16)}${c.bold}${phone.name}${c.off} ${c.dim}${phone.model} · ${phone.id}${c.off}`);
+  // THE UDID AS WELL, and the two are not interchangeable. `phone.id` is
+  // Xcode's CoreDevice identifier — what devicectl and `-destination id=` want,
+  // and what every line below is about. The UDID is what APPLE wants: a build
+  // dies at GatherProvisioningInputs with "your team has no devices from which
+  // to generate a provisioning profile" until the phone is registered at
+  // developer.apple.com, and the form there rejects the CoreDevice id.
+  //
+  // Printed because that failure sends you looking for a number, and the one
+  // this summary showed was the wrong one — ten minutes of pasting an id Apple
+  // will not take, with nothing to say why.
+  if (phone.udid && phone.udid !== phone.id) {
+    say(`  ${'udid'.padEnd(16)}${c.dim}${phone.udid}${c.off} ${c.dim}(register this one at developer.apple.com, not the id above)${c.off}`);
+  }
   if (phone.stale) say(`  ${''.padEnd(16)}${c.dim}(no live connection reported — the install will tell us)${c.off}`);
   say(`  ${'app'.padEnd(16)}${c.dim}${bundleId} · team ${teamId}${c.off}`);
   say(`  ${'build number'.padEnd(16)}${c.bold}${build}${c.off}${buildOverride ? `${c.dim} (--build)${c.off}` : ''}`);

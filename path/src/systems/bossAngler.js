@@ -1007,7 +1007,15 @@ function stageMachine(dt, scene, e, playerPos, hooks) {
       dropRing();
       anglerState.attack = null;
       anglerState.stage = 'recover';
-      anglerState.timer = c.recoverTime ?? 1.6;
+      // THE LURE'S OWN RECOVERY, not the lunge's. See CONFIG.boss.angler
+      // .lureRecover: a spent beam is a light going out and its follow-through
+      // is the discharge above, where a spent LUNGE is the whole body stranded
+      // across the water and has earned the longer window. Sharing one number
+      // was most of the reason this animal read as idle between shots — it
+      // paid a melee recovery for an attack it never left the floor to make.
+      // Falls back to the lunge's, so a config with no such key is the old
+      // behaviour exactly.
+      anglerState.timer = c.lureRecover ?? c.recoverTime ?? 1.6;
     }
     return;
   }

@@ -200,7 +200,62 @@ export function approachVector(self, toward, crowd, cfg) {
     // ten times the weight of one already in position.
     const err = Math.max(-1, Math.min(1, (toward.dist - ring) / Math.max(1, ring)));
     const spin = self.orbitDir ?? 1;
-    const circle = cfg.circleStrength ?? 1;
+    // THE CIRCLING FADES OUT WITH THE DISTANCE ERROR, and without this taper
+    // the two terms are the same size whenever the body is a ring's width out
+    // of position — which is to say a hunter forty units away steered 45
+    // degrees off the player and closed at 71% of its own speed, forever.
+    //
+    // MEASURED, on the four chasing bosses, over 90-second fights against a
+    // parked seal: on the frames they were not mid-run their heading was 61 to
+    // 79 degrees off the seal on average, and 13-35% of those frames they were
+    // pointed more than 90 degrees away — actively swimming off. That is the
+    // "aimless wandering" in one number, and it was not the wander branch (a
+    // boss never reaches it) or the weave (too small). It was this.
+    //
+    // The ring is still a ring. At `err` 0 the body is exactly where it wants
+    // to be and the term is entirely tangential, which is the circling the
+    // whole mechanism exists for: a crowd holding station legibly rather than
+    // hovering. What changes is only the way IN — far out of position it now
+    // comes almost straight, and the orbit resumes as it arrives.
+    //
+    // ONLY ON THE WAY IN — `Math.max(0, err)` and not `Math.abs(err)`, and the
+    // difference is a body sitting ON TOP of the player rather than outside its
+    // ring. There `err` is -1, and tapering on the absolute value cancelled the
+    // circling there too, which turns "orbit out to the ring" into "back
+    // straight off it". Nothing asked for that: this exists to fix the way IN.
+    //
+    // It is not theoretical. A boss carrying the seal in its jaws is at
+    // distance zero by definition, so it took the inside-the-ring branch for
+    // the whole hold — and npm run test:grab measures the held seal's motion in
+    // the body's frame, where the boss's own orbit is part of what it reads.
+    // Cancelling that took the bossShark from x2.96 on its phase test to x1.50,
+    // under the x1.72 the free sine scores, with nothing about the jaw having
+    // changed. Clamped here, both numbers come back.
+    //
+    // AND SHARED OUT AMONG WHOEVER IS COMPETING FOR THE RING, because the
+    // circling on the way in is doing two different jobs and they want
+    // opposite answers.
+    //
+    // For ONE body it is dead time: a boss forty units out steered 45 degrees
+    // off the seal and closed at 71% of its own speed, which is what this
+    // whole taper exists to stop. For SIX it is the thing that FANS THEM OUT —
+    // six hunters coming straight in converge on one line and arrive stacked,
+    // and crowdAvoid alone is not enough to separate them. Measured with the
+    // taper applied flat, npm run test:crowd went from a closest pair of 1.5
+    // units to 0.7, with an overlapping pair and the heading spread down from
+    // 0.67 to 0.50: the fix for the boss was a regression for the pack.
+    //
+    // So a body alone in the crowd takes the whole taper and a body sharing
+    // the ring gives it back in proportion. A boss fight is the `1` case by
+    // construction — clearForBoss empties the water — and a school of apex
+    // sharks is the `6` case, which is the same split the two measurements
+    // were pointing at from either side.
+    let sharing = 0;
+    for (const other of crowd ?? []) {
+      if (other !== self && other?.inCrowd === true) sharing += 1;
+    }
+    const taper = (cfg.circleTaper ?? 1) / (1 + sharing);
+    const circle = (cfg.circleStrength ?? 1) * (1 - taper * Math.max(0, err));
     x = toward.dirX * err - toward.dirY * spin * circle;
     y = toward.dirY * err + toward.dirX * spin * circle;
   }

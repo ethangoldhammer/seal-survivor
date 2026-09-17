@@ -99,6 +99,11 @@ export function resolveCombat(dt, scene, hooks) {
       // The PELLET's position as well as the contact — see hotSpotDamage. The
       // contact is on the collision hull and can be attributed to a different
       // part of the animal entirely; the bullet is where the shot was.
+      // NO SOURCE NAMED, and that is the answer rather than an omission: a
+      // pellet is not one of the three things a boss answers to (CONFIG.boss
+      // .tenacity.sources). It crits, it fills the pool, it sheds meat and it
+      // bursts the spot — what it does not do is rock the animal, because a
+      // flinch per pellet is a boss that never finishes a run.
       const dealt = hotSpotDamage(e, contact, b.damage, b.mesh.position);
 
       e.hp -= dealt;

@@ -1300,10 +1300,18 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // here: a boss does not get new moves half way through its own fight.
   attachBossCrab(scene, e, gameState.difficulty ?? 0, level);
   // ...and the weak spots, which every boss gets rather than only the ones
-  // that came with a body built for something. Rolled 1-3 here and PLACED on
-  // the first frame that finds the animal posed — see attachHotSpots for why
-  // those cannot be the same moment.
-  attachHotSpots(scene, e);
+  // that came with a body built for something. Rolled 1-3 here — or read off
+  // this archetype's row in bossHotSpots.csv, which is where a boss says where
+  // its own weak points go and what colour they read as — and PLACED on the
+  // first frame that finds the animal posed, see attachHotSpots for why those
+  // cannot be the same moment.
+  //
+  // THE ARCHETYPE ID, not the creature key. Two archetypes could in principle
+  // wear one enemy (the boat and the yacht nearly do), and the row is about
+  // the FIGHT rather than the body — handed over rather than stamped on the
+  // creature, because bodies are pooled and a stale id would paint the next
+  // megalodon with this one's colour.
+  attachHotSpots(scene, e, archetype.id);
 
   bossState.enemy = e;
   crumb('boss:spawn');

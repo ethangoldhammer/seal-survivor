@@ -1194,7 +1194,9 @@ function hurt(scene, e, dmg, enemiesList, hooks, at = null, source = null) {
   // nothing, so the blast never crits. That is the rule the whole feature runs
   // on (see systems/bossHotSpots.js): aimed damage is rewarded for finding a
   // spot, area damage cannot find anything.
-  if (at) dmg = hotSpotDamage(e, at, dmg);
+  // 'club' — one of the three things a boss answers to, so a swing into a lit
+  // spot shakes the animal as well as paying double. See CONFIG.boss.tenacity.
+  if (at) dmg = hotSpotDamage(e, at, dmg, null, 'club');
 
   e.hp -= dmg;
   e.flash = CONFIG.fx.hitFlash;

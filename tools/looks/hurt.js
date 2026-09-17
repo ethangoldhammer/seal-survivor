@@ -443,6 +443,12 @@ const bgGone = boxLum(gone, ...WATER);
 // dims, and what matters is whether the bright thing still stands out of it.
 const contrastClean = orbClean / Math.max(bgClean, 1e-4);
 const contrastGone = orbGone / Math.max(bgGone, 1e-4);
+// THIS IS THE BINDING CONSTRAINT ON `glow` NOW, and it was not before. The
+// blood is ADDED to near-black water, so brightening it raises the WATER toward
+// whatever silhouette is in front of it — at glow 1.05 this measured x1.32
+// against a bar of x1.35 and the corner had quietly become a blindfold. The
+// margin here is small on purpose: it is the number that says how loud the
+// effect is allowed to get, so it should go red when the next pass pushes.
 check('a bright thing in the corner is still clearly visible at empty',
   contrastGone > contrastClean * 0.6,
   `orb/water contrast x${contrastClean.toFixed(2)} → x${contrastGone.toFixed(2)}`);

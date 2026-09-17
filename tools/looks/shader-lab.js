@@ -123,7 +123,7 @@ initCreatureOutlines();
 // the ones this was built for are at the top rather than alphabetically buried
 // among eighty fish.
 // ---------------------------------------------------------------------------
-// The two whale bodies first: CONFIG.whale.asset picks either, and both wear a
+// The two whale bodies first: CONFIG.whale.roster sends both, and both wear a
 // per-asset rim (ASSETS.<key>.outline) that only this page's own-rim section
 // can reach — see buildPanels.
 const WANTED = ['whale', 'humpbackWhale', 'enemyShark', 'enemyGreatWhite', 'enemyMegalodon', 'enemyAbyssShark',

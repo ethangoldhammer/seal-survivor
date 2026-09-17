@@ -265,31 +265,39 @@ section('The animal <span>— what a boss looks like wearing them</span>', 3);
 }
 
 // ---------------------------------------------------------------------------
-section('The mark around it <span>— the half that does not depend on the hide</span>', 3);
+section('Paint or light <span>&mdash; the number that replaced the reticle</span>', 3);
 // ---------------------------------------------------------------------------
-// AT FIGHT SCALE, WHICH IS THE ONLY SCALE THIS ARGUMENT CAN BE HAD AT. The
-// painted glow is additive light on an animal, so how far it carries is a
-// property of that animal — and on a boss a couple of hundred pixels across it
-// is competing with its own bloom, the water and whatever else is lit. The
-// ring is drawn in front of everything at a fixed fraction of the spot, so the
-// comparison here is "can you find the thing you are supposed to shoot", not
-// "is the glow pretty".
+// AT FIGHT SCALE, WHICH IS THE ONLY SCALE THIS ARGUMENT CAN BE HAD AT. On a
+// boss a couple of hundred pixels across the mark is competing with its own
+// bloom, the water, and whatever else on the animal is lit.
+//
+// `cover` is the whole comparison. At 0 the spot is pure additive light, which
+// can only ADD to whatever the hide already is — so the same number is a
+// different amount of contrast on a near-black orca and on a white hull, and
+// no single value reads on both. That is why every spot used to carry a
+// hexagonal reticle drawn in front of the animal as well: a second object that
+// did not care what it was drawn over. Turned up, the patch REPLACES the hide
+// inside its own circle and does not care either, and the second object has
+// nothing left to do.
 {
-  const BASE = { ...(LOOK.target ?? {}) };
+  const BASE = LOOK.cover;
+  const BASE_FULL = LOOK.coverFull;
 
-  LOOK.target = { ...BASE, enabled: false };
+  LOOK.cover = 0;
+  LOOK.coverFull = 0;
   newBoss(0);
   run(30, fightCam);
-  present('Glow alone (control)', 'The light on its own at the frustum the player is given. Everything that differs between this panel and the next is the reticle.');
+  present('Light only (cover 0)', 'The effect as it shipped: additive, and nothing else. This is the state the reticle existed to rescue &mdash; on a pale hull or a lit deck it is one bright thing among several.');
 
-  LOOK.target = { ...BASE };
+  LOOK.cover = BASE;
+  LOOK.coverFull = BASE_FULL;
   newBoss(0);
   run(30, fightCam);
-  present('With the target ring', 'The strike mark\'s own bracket at a fraction of its size, depth-test off so a spot on the far flank is still findable. It wears the spot\'s colour ramp — that is what keeps it from reading as a second strike mark.', true);
+  present('Paint (shipped)', 'The same spot standing in for the hide rather than lighting it. Everything bright still adds on top; what changed is that the interior is now a colour the animal IS, which lands the same way on any body.', true);
 
-  // STRUCK, at the same scale. The band fattens and brightens for the length of
-  // the spot's own flash: more mass in the same place rather than a whiter
-  // white, which is the response that looks like the stuff coming out of it.
+  // STRUCK, at the same scale. The flash is the loud half and it moves LIGHT,
+  // not coverage — a hide that changed colour on every hit would read as the
+  // animal's own skin flickering rather than as a marked one being worked.
   {
     const e = newBoss(0);
     const spot = hotSpotsOf(e).spots[0];
@@ -299,11 +307,9 @@ section('The mark around it <span>— the half that does not depend on the hide<
     updateParticleScale(fightCam, gl);
     shoot(spot, spot.pool / (CONFIG.hotSpots.critMul * 6));
     run(3, fightCam);
-    present('The frame it is hit', 'The ring fattens and brightens with the hit and the ichor comes out of the wound underneath it. If the two do not read as one event, it is `hitSwell` that is wrong, not the goo.');
+    present('The frame it is hit', 'The patch lifts and the ichor comes out of the wound. If the two do not read as one event it is `flashSwell` that is wrong, not the goo.');
     updateParticleScale(detailCam, gl);
   }
-
-  LOOK.target = BASE;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,8 +317,8 @@ section('One spot <span>— whole, damaged, struck</span>', 3);
 // ---------------------------------------------------------------------------
 {
   const heats = [
-    ['Whole', 0, 'The base colour, breathing on the half bar. White by default — the neutral anything tinting it lands on cleanly (setHotSpotLook).'],
-    ['Half eaten', 0.5, 'Drifting to hotColor, pulsing faster and chewed deeper at the edge. This IS the warning that it is nearly done — there is no bar.'],
+    ['Whole', 0, 'The roster colour, breathing on the grid, lit out to `charge` of its radius. A boss with a row in bossHotSpots.csv replaces this colour with one chosen against its own hide.'],
+    ['Half eaten', 0.5, 'The level has risen toward the ring, the colour is drifting to hotColor and the throb has doubled onto the second harmonic. This IS the warning that it is nearly done — there is no bar.'],
     ['About to go', 0.9, 'Nearly the full shift. The next few pellets burst it.'],
   ];
   for (const [title, heat, note] of heats) {
@@ -409,13 +415,13 @@ section('The rupture at fight scale <span>— the only frame that decides its si
 }
 
 // ---------------------------------------------------------------------------
-section('Tinted <span>— the base is white so anything can drive it</span>', 3);
+section('Tinted <span>&mdash; per boss, in bossHotSpots.csv</span>', 3);
 // ---------------------------------------------------------------------------
 {
   for (const [title, color, note] of [
-    ['Base (white)', null, 'No override. The default every boss wears until something decides otherwise.'],
-    ['Perk tint', 0xffd83a, 'The electric perk\'s own yellow, as bossSparkColor would resolve it — the spots and the aura would then be the same fight.'],
-    ['Element tint', 0x38b6ff, 'A cold override. Nothing wires this yet; setHotSpotLook is the hook and this is what it buys.'],
+    ['Roster base', null, 'No override. What a boss with no row in bossHotSpots.csv wears.'],
+    ['Per-boss colour', 0x38b6ff, 'The `color` column, which REPLACES the base rather than multiplying it — a multiply cannot brighten, so the two ways of saying "this boss\'s spots are blue" would disagree. This is the column to fill first on a pale hide.'],
+    ['Perk tint', 0xffd83a, 'The electric perk\'s own yellow, through setHotSpotLook — a fact about THIS FIGHT, so it outranks the archetype\'s own column.'],
   ]) {
     const e = newBoss();
     const spot = hotSpotsOf(e).spots[0];

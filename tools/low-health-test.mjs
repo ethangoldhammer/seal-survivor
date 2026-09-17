@@ -91,7 +91,12 @@ console.log(`\nthreshold ${(THRESHOLD * 100).toFixed(0)}% of the bar`
 section('DORMANT ABOVE THE THRESHOLD');
 // Most frames of most runs. Nothing may run at all — this is what keeps the
 // post pipeline off for a player with bloom and the screen filter switched off.
-for (const frac of [1, 0.5, THRESHOLD + 0.05, THRESHOLD + 0.001]) {
+// Sampled off THRESHOLD rather than at literal fractions of the bar. The band
+// has widened twice now, and a hardcoded 0.5 stopped being "comfortably healthy"
+// the moment the threshold passed it — which failed as a dormancy bug when the
+// only thing wrong was the test's own arithmetic.
+const HEALTHY = THRESHOLD + (1 - THRESHOLD) / 2;
+for (const frac of [1, HEALTHY, THRESHOLD + 0.05, THRESHOLD + 0.001]) {
   resetLowHealthFx();
   const s = settle(frac, 4);
   check(`${(frac * 100).toFixed(1)}% health is completely dormant`,

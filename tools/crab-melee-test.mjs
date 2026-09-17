@@ -238,8 +238,23 @@ section('THE HAYMAKER');
     `${moved.length().toFixed(2)} units along (${dir.x.toFixed(2)}, ${dir.y.toFixed(2)})`);
   check('the body is handed back when the run ends',
     crabMeleeState.stage === 'ready' && e.perkDrive === false && e.ramming === false);
-  check('...on a long cooldown, so this is punctuation and not a rhythm',
-    crabMeleeState.swingCd > 3, `${crabMeleeState.swingCd.toFixed(1)}s`);
+  // THE GAP IS STILL A GAP, and the bar is now the swing's own wind-up rather
+  // than a flat 3 seconds. The old line asked for `> 3` on the argument that a
+  // haymaker is punctuation and not a rhythm — which was the right worry for a
+  // boss that spent most of a fight doing nothing, and this crab does not any
+  // more (its four cooldowns were cut together; see behaviour.csv).
+  //
+  // What has to hold is the same rule the chasing bosses are held to in
+  // tools/boss-threat-test.mjs: the player gets at least as long to breathe as
+  // they got to read. A cooldown shorter than the rear-up is two swings inside
+  // one reaction, and that is the thing worth refusing.
+  {
+    const rear = (CONFIG.crabClaw?.windup ?? 0.42) * (CONFIG.crabClaw?.big?.windupMul ?? 1);
+    check('...and still rests at least as long as its own rear-up, so two swings '
+      + 'never arrive inside one reaction',
+      crabMeleeState.swingCd > rear,
+      `${crabMeleeState.swingCd.toFixed(1)}s against a ${rear.toFixed(2)}s rear-up`);
+  }
   GC.enabled = grabWas1;
 }
 

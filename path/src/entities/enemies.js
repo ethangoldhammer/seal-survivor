@@ -165,6 +165,57 @@ export function isCommittedRun(e) {
 }
 
 /**
+ * IS THIS BODY IN THE MIDDLE OF AN ATTACK — the whole move, not the moment it
+ * lands, and on every boss rather than only the four that carry a lunge block.
+ *
+ * `isCommittedRun` above answers a narrower question and is right for what it
+ * is asked: where the body ENDS UP. A run already crossing the water you were
+ * standing in cannot be nudged out of it without deleting the dodge, and that
+ * argument does not extend to a wind-up, which is a boss standing still
+ * telling you what it is about to do.
+ *
+ * This is the question the FLINCH has to ask instead, and the two are not the
+ * same. An attack is a performance with a beginning: the wind-up is the tell,
+ * and on the hammerhead — a skull swinging round to face you — the wind-up IS
+ * the whole tell, the one thing that rig does better than any other in the
+ * roster. A body whipping under fire while it winds up has no tell at all, and
+ * the run that follows arrives unannounced. The animation layer already knows
+ * this and says it out loud (ATTACK_STATES in systems/animation.js: an attack
+ * may always interrupt a flinch, and a flinch may never interrupt an attack);
+ * this is the same rule for the bodies whose attack is not a clip.
+ *
+ * FIVE MOVES, ONE ANSWER, because "a boss" is five different animals here:
+ *
+ *   the LUNGE     `lungeStage` — the telegraphed pass the shark, the orca, the
+ *                 mosasaur and the hammerhead do. Every stage of the plan but
+ *                 `rest` and `cruise`: the wind-up, the run, and the re-aim in
+ *                 the middle of a double, which is a second wind-up and reads
+ *                 as one.
+ *   the RAM       `ramming` — the lunge perk, the kraken, the anglerfish and
+ *                 the king crab's charges. Already inside isCommittedRun.
+ *   the GRAB      `grabbing` — the whole time the jaws are closed on you.
+ *   the PINCH     the crab's claw, wind-up and recovery included, which is
+ *                 what `isStriking` already means to systems/crabClaw.js.
+ *   a PERK        `perkDrive` — a scripted move writing the body's position.
+ *                 Broader than an attack, and in here rather than at each call
+ *                 site because every caller of this wants it: a shove or a
+ *                 whip landing on a body a perk is driving desyncs the perk.
+ *
+ * ONE REACH, ASKED FOUR TIMES — the same rule isCommittedRun's own note gives:
+ * hitReactionMul, applyKnockback's bone kick and the weak spot's jostle all
+ * read this, so a fifth kind of boss attack is a line here and nothing else.
+ * The gun bosses are deliberately absent: a flinch does not stop a gun, and a
+ * boat that could not be rocked while firing would simply never be rocked.
+ */
+export function isAttacking(e) {
+  if (!e) return false;
+  if (e.perkDrive === true || isCommittedRun(e)) return true;
+  if (e.grabbing === true) return true;
+  if (e.lungeStage === 'wind' || e.lungeStage === 'reaim') return true;
+  return e.claw?.isStriking?.() === true;
+}
+
+/**
  * WHAT A COMMITTED RUN IS WORTH, as a multiplier on the body's own
  * `contactDamage` for as long as it is running.
  *
@@ -202,15 +253,20 @@ export function committedDamageMul(e) {
  * main.js and the bone twitch in systems/animation.js) so a body cannot end up
  * buckling without twitching or the reverse. Read by both, and by nothing else.
  *
- * Zero while a boss is COMMITTED whatever the number says, for the same reason
- * applyKnockback returns early there: the run is the moment the boss is most
- * shot at, and a flinch per pellet is the answer to a lunge that costs nothing.
+ * Zero while a boss is MID-ATTACK whatever the number says, for the same
+ * reason applyKnockback returns early on a run: an attack is the moment the
+ * boss is most shot at, and a flinch per pellet is the answer to a wind-up
+ * that costs nothing.
+ *
+ * `isAttacking` and not `isCommittedRun` — the whole move rather than the
+ * moment it lands. A flinch during the wind-up is the one that costs most,
+ * because the wind-up is the only warning the player gets.
  */
 export function hitReactionMul(e) {
   if (!e?.isBoss) return 1;
   const ten = CONFIG.boss?.tenacity ?? {};
   if (ten.enabled === false) return 1;
-  if (ten.committed !== false && (e.perkDrive || isCommittedRun(e))) return 0;
+  if (ten.committed !== false && isAttacking(e)) return 0;
   return Math.max(0, Math.min(1, ten.flinch ?? 0));
 }
 
@@ -323,6 +379,25 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   //
   // The strict answer on purpose: the failure lands on the new weapon that
   // forgot to say what it is, rather than on the boss.
+  //
+  // AND THE TWO HALVES OF A SHOVE ANSWER TWO DIFFERENT QUESTIONS, which is why
+  // this one flag is read twice below rather than once here. A shove is a
+  // DISPLACEMENT and a FLINCH, and they are refused on different terms:
+  //
+  //   the displacement  is refused mid-RUN, because a run already crossing the
+  //                     water you were standing in cannot be nudged out of it
+  //                     without deleting the dodge. A wind-up is not that — it
+  //                     is a boss standing still — so a ram may still lean on
+  //                     one, and does.
+  //   the flinch        is refused mid-ATTACK, wind-up included, because the
+  //                     wind-up is the only warning the player gets and a body
+  //                     whipping through it has no tell left. See isAttacking.
+  //
+  // Written as one variable so a body cannot end up buckling without being
+  // moved or the reverse — the same pairing hitReactionMul exists to keep.
+  const noFlinch = onBoss && (CONFIG.boss?.tenacity ?? {}).enabled !== false
+    && (CONFIG.boss?.tenacity ?? {}).committed !== false && isAttacking(e);
+
   if (onBoss) {
     const ten = CONFIG.boss?.tenacity ?? {};
     if (ten.enabled !== false) {
@@ -374,7 +449,7 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
       e.mesh.position.x - (dirX / len) * r - (dirY / len) * off,
       e.mesh.position.y - (dirY / len) * r + (dirX / len) * off,
     );
-    if (e.anim?.impulse) {
+    if (e.anim?.impulse && !noFlinch) {
       const kick = (k.boneImpulse ?? 2.6) * scale * gain;
       if (kick > 0) {
         _bump.set(dirX / len, dirY / len, 0);
@@ -474,8 +549,23 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
   // every creature carries, and the tumble that only bodies which roll (crabs)
   // do anything with. Both scaled by the same shove, so a flick and a
   // full-commitment ram don't look alike.
-  const kick = (k.boneImpulse ?? 2.6) * scale * gain;
-  if (kick > 0 && e.anim?.impulse) {
+  //
+  // A BOSS FLINCHES ON ITS OWN NUMBER. The roster's 2.6 was tuned on a body a
+  // fifth the size and a big rig absorbs it — measured, it swung a boss
+  // shark's skeleton 13% of its own body radius at full charge and under 5% at
+  // minimum, which is inside the noise of the swim cycle it is laid over. The
+  // shove is the half of a hit that MOVES a boss and it is deliberately small;
+  // this is the half that shows the animal was hit at all, and on a body too
+  // heavy to move it is the only half the player can see.
+  //
+  // AND `boneGain` IS THE PLAYER'S BUILD, arriving separately from `gain` on
+  // purpose. `gain` multiplies the displacement as well, and how far a boss is
+  // thrown is a balance number that belongs to the charge; how hard it is seen
+  // to be hit is feel. See CONFIG.strike.knockback.boneUpgradeExp, where the
+  // curve and the ceiling live.
+  const boneGain = Math.max(0, opts?.boneGain ?? 1);
+  const kick = ((onBoss ? bk.boneImpulse : null) ?? k.boneImpulse ?? 2.6) * scale * gain * boneGain;
+  if (kick > 0 && e.anim?.impulse && !noFlinch) {
     _bump.set(dirX / len, dirY / len, 0);
     e.anim.impulse(_bump, kick);
   }
@@ -2762,6 +2852,30 @@ const BEHAVIORS = {
     if (e.wanderTimer <= 0) {
       e.wanderTimer = d.wanderChange ?? 4;
       e.wanderAngle = Math.random() * Math.PI * 2;
+      // ...UNLESS IT HAS BEEN TOLD TO LEAN. A uniform roll every few seconds is
+      // a random walk, and a random walk has no destination: measured over
+      // 90-second fights, the man o' war boss sat a mean 80 units from a parked
+      // seal and spent 93% of the fight more than 40 away. It is not that it
+      // lost a chase — it never started one, and the fight was two bodies in
+      // the same ocean not meeting.
+      //
+      // `towardPlayer` is the chance that a roll is taken inside a cone around
+      // the seal instead of anywhere at all. It is NOT a chase and must not
+      // become one: this body drifts at 1.6 u/s against a seal that swims at 9
+      // and dashes at 46, so it can never catch anybody, and the whole of its
+      // damage-zone design (CONFIG.enemies.bossManOWar — `above: 3`, priced as
+      // "a breach on a body that cannot chase you") depends on that staying
+      // true. What it buys is only that the drift has a direction, so the
+      // animal arrives instead of milling about at the far wall.
+      //
+      // DEFAULTS TO 0, which is the uniform roll exactly. The turtle and the
+      // six jellyfish share this behaviour and none of them opts in — a
+      // jellyfish that homed on the player would not be a jellyfish.
+      const lean = d.towardPlayer ?? 0;
+      if (lean > 0 && ctx && Number.isFinite(ctx.dirX) && Math.random() < lean) {
+        const cone = d.towardCone ?? Math.PI / 2;
+        e.wanderAngle = Math.atan2(ctx.dirY, ctx.dirX) + (Math.random() * 2 - 1) * cone;
+      }
     }
     // RIDING THE WATERLINE, for the one drifter that does not live in the
     // column at all. A block on the DEF rather than a `behavior` of its own —

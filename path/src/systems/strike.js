@@ -353,6 +353,33 @@ export function powerDamageMul(s = strikeState) {
 }
 
 /**
+ * HOW MUCH HARDER A STRIKE BUILD MAKES A BODY FLINCH, as a multiplier on the
+ * skeleton impulse and on nothing else.
+ *
+ * The ram's SHOVE is deliberately not upgrade-scaled: how far a creature is
+ * thrown decides whether it can reach you next second, which is balance, and
+ * it belongs to the charge. How hard it is seen to be hit decides nothing and
+ * is the whole reward for having spent four cards on strike damage — a boss
+ * that buckles where a first-level seal bounces off it.
+ *
+ * A CURVE, NOT THE RATIO. stats.strikeDamage runs past four times the base on
+ * a committed build and a linear read of that is an animal whipping like a
+ * flag; the exponent is what puts the payoff in the first few cards. Clamped
+ * at both ends — never under 1, because a run that has somehow lost strike
+ * damage should not be punished with a limper hit than it started with.
+ *
+ * @param stats the run's stat block. Null (or a base run) returns 1.
+ */
+export function strikeBoneGain(stats) {
+  const k = CONFIG.strike?.knockback ?? {};
+  const base = CONFIG.strike?.damage ?? 0;
+  const have = stats?.strikeDamage ?? 0;
+  if (!(base > 0) || !(have > 0)) return 1;
+  const ratio = Math.max(1, have / base);
+  return Math.min(k.boneUpgradeMax ?? 2.4, ratio ** (k.boneUpgradeExp ?? 0.5));
+}
+
+/**
  * What the strike's RIDERS are worth — Bone Shrapnel's fragments and Glow Up!'s
  * elemental half, both of which are authored as a fraction of "a strike".
  *
@@ -2501,7 +2528,9 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
       // speed), which is the whole test for whether a source may crit. Returns
       // `dmg` untouched for anything that is not a boss wearing a spot, the
       // prey cull's minnows included.
-      if (dmg > 0) dmg = hotSpotDamage(e, strikeContact, dmg, playerPos);
+      // 'ram' — the seal's own body, and the loudest of the three sources a
+      // boss answers to. This is the hit the whole jostle is sized against.
+      if (dmg > 0) dmg = hotSpotDamage(e, strikeContact, dmg, playerPos, 'ram');
 
       if (dmg > 0) e.hp -= dmg;
       e.flash = CONFIG.fx.hitFlash;
@@ -2515,7 +2544,17 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
       // `source: 'ram'` — the seal's own body, which is one of exactly two
       // things a boss answers to at all (see CONFIG.boss.tenacity). On every
       // other creature in the game the argument does nothing.
-      applyKnockback(e, s.dashDir.x, s.dashDir.y, s.power, { source: 'ram' });
+      applyKnockback(e, s.dashDir.x, s.dashDir.y, s.power, {
+        source: 'ram',
+        // WHAT THE BUILD BUYS, and it buys the FLINCH rather than the shove.
+        // `boneGain` reaches only the skeleton impulse inside applyKnockback —
+        // how far a body is thrown stays a function of the charge, which is a
+        // balance number, while how hard the animal is seen to be hit is feel
+        // and is allowed to answer to the cards the player picked. The curve
+        // and the ceiling are CONFIG.strike.knockback.boneUpgradeExp/Max;
+        // measured against the base strike so a first-level seal is 1.
+        boneGain: strikeBoneGain(stats),
+      });
 
       // ...AND A PERFECT ONE INTO A LIT SPOT STAGGERS IT. The only stagger a
       // boss can be given — see CONFIG.strike.weakSpot.stagger. Both halves of

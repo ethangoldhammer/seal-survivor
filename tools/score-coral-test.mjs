@@ -165,8 +165,26 @@ section('SIZE — what it is worth is how big it is');
     return Math.max(size.x, size.y);
   };
   const steps = [0, 0.25, 0.5, 0.75, 1];
-  const grown = steps.map((t) => spawnScoreOrb(scene, { x: 0, y: 0, z: 0 },
-    { roll: rollScoreBoost(() => t, c) }));
+  // SEEDED, like the two blocks above it. A coral GROWS — spawnScoreOrb rolls
+  // its own branching out of Math.random — so the width of the smallest one is
+  // a draw, not a constant, and the floor below it was failing about one run in
+  // eight on a silhouette that happened to grow narrow. That is a flaky gate on
+  // a real claim: the asset row must survive the roll, and a threshold lowered
+  // until the unluckiest shape clears it would stop checking anything.
+  //
+  // The whole block under one seed rather than a seed per orb: the checks above
+  // compare the five to EACH OTHER, so they have to come from one sequence or
+  // the trend is five unrelated draws.
+  const grown = (() => {
+    const real = Math.random;
+    Math.random = seeded(20260916);
+    try {
+      return steps.map((t) => spawnScoreOrb(scene, { x: 0, y: 0, z: 0 },
+        { roll: rollScoreBoost(() => t, c) }));
+    } finally {
+      Math.random = real;
+    }
+  })();
   check('a coral in the water is one per spawn', scoreOrbs.length === steps.length);
   // A GROWN shape is a different silhouette every time, so the width of one
   // roll is not a clean multiple of another's — what has to hold is the trend

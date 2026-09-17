@@ -424,8 +424,31 @@ section('THE LIGHT SAYS WHAT THE BODY IS DOING');
   check('the recovery goes DARKER than the lurk — the punishable window',
     g('recover').max < g('lurk').min,
     `recovery peaks at ${g('recover').max.toFixed(2)}, below the lurk's ${g('lurk').min.toFixed(2)} trough`);
-  check('the lurk throbs rather than sitting still',
-    g('lurk').max - g('lurk').min > 0.05, `${(g('lurk').max - g('lurk').min).toFixed(3)} of swing`);
+  // THE THROB IS MEASURED WITH NOBODY IN THE WATER NOW, and the reason is the
+  // fight rather than the harness. The lurk between two attacks is 0.6s of
+  // settle, which is shorter than the 0.7s ramp the light takes to reach the
+  // throb — so a settled sample taken during a live fight is `-Infinity`, and
+  // this check read as broken when what it was actually reporting is that the
+  // animal no longer waits. It does still wait, when there is nothing to shoot
+  // at, and that is the state the idle light was authored for.
+  {
+    releaseAngler();
+    attachAngler(scene, boss);
+    at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+    let lo = Infinity; let hi = -Infinity;
+    for (let i = 0; i < 60 * 6; i++) {
+      // No player at all — the one state that is a lurk for longer than a beat.
+      updateBossAngler(DT, scene, null, {});
+      if (i > 60 * 2) { // past the ramp
+        const lvl = anglerStage().emissive;
+        lo = Math.min(lo, lvl); hi = Math.max(hi, lvl);
+      }
+      step(boss, DT);
+    }
+    check('the lurk throbs rather than sitting still', hi - lo > 0.05,
+      `${(hi - lo).toFixed(3)} of swing with nothing to shoot at`);
+    releaseAngler();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -757,8 +780,15 @@ section('IT HOLDS STATION, AND IT LOOKS AT YOU WHILE IT DOES');
   check('a reversal takes about a half turn at the lurk rate',
     took != null && Math.abs(took - half) < half * 0.35,
     `${took == null ? 'never got there' : `${took.toFixed(2)}s`} against ${half.toFixed(2)}s`);
-  check('...which is slow enough to swim round behind it', took > 1.5,
-    `${took?.toFixed(2)}s`);
+  // ...AND IT IS FAST ENOUGH THAT GETTING BEHIND IT BUYS NOTHING, which is the
+  // exact inversion of what this line used to assert (`took > 1.5` — slow
+  // enough to swim round behind it). That was real counterplay while the fight
+  // was an ambush with a 34-unit reach: get behind the animal and you were out
+  // of it. The reach is the whole arena now, so there is no behind — and a slow
+  // turn would only mean a beam leaving a lure that is still pointed away,
+  // which is the attack looking broken rather than the player outplaying it.
+  check('...and fast enough that circling behind it no longer buys safety',
+    took != null && took < 1.2, `${took?.toFixed(2)}s to come about`);
   releaseAngler();
 }
 
@@ -1000,9 +1030,39 @@ section('THE LURE PICKS ITS ATTACK BY DISTANCE, AND SAYS SO FIRST');
   check('the beam has a band of its own to live in',
     C2().pulseRadius * C2().pulsePick < C2().lureRange,
     `radial out to ${(C2().pulseRadius * C2().pulsePick).toFixed(1)}, lure range ${C2().lureRange}`);
-  check('the lure gap outlasts the stages it has to cover',
-    C2().attackGap > C2().recoverTime + C2().dischargeTime + CONFIG.emissiveCues.lurk.attack,
-    `${C2().attackGap}s against ${(C2().recoverTime + C2().dischargeTime + CONFIG.emissiveCues.lurk.attack).toFixed(2)}s of stages`);
+  // THE GAP IS NO LONGER THE PACEMAKER, and that is deliberate. This check used
+  // to read `attackGap > recoverTime + dischargeTime + the lurk's ramp` — the
+  // invariant of a fight whose boss WAITED, where the gap was the only thing
+  // standing between the player and an animal that is always mid-attack.
+  //
+  // It is always mid-attack now. What the gap has to do instead is stay small
+  // enough that the CYCLE is the cadence: a gap longer than the stages it
+  // covers puts dead lurk back on top of them, which is the thing that made
+  // this boss read as idle. It is kept above zero so a lunge and a beam cannot
+  // land on the same breath, which is what it was always for underneath the
+  // pacing argument.
+  check('the lure gap no longer outlasts the stages, so the cycle is the cadence',
+    C2().attackGap > 0 && C2().attackGap < C2().lureRecover + C2().dischargeTime,
+    `${C2().attackGap}s against ${(C2().lureRecover + C2().dischargeTime).toFixed(2)}s of follow-through`);
+  // ...AND THE LURE'S RECOVERY IS THE SHORT ONE. A spent beam is a light going
+  // out; a spent lunge is a whole body stranded across the water and has earned
+  // the longer window. Sharing `recoverTime` was most of the dead air.
+  check('a spent beam recovers faster than a spent lunge',
+    C2().lureRecover < C2().recoverTime, `${C2().lureRecover}s against ${C2().recoverTime}s`);
+  // THE REACH OF THE DECISION AND THE REACH OF THE SHOT ARE ONE NUMBER. A
+  // `lureRange` past `beamLength` is an animal charging a beam that stops in
+  // open water short of what it was aimed at, and nothing on screen says why.
+  check('it never charges a beam it cannot land', C2().lureRange <= C2().beamLength,
+    `decides at ${C2().lureRange}, shoots ${C2().beamLength}`);
+  // ...AND IT REACHES EVERY CORNER. The old range was 34 against a playfield
+  // 184.9 by 41.6 — under a fifth of the water — so the boss's answer to a
+  // player anywhere else was nothing at all. Measured off the arena rather
+  // than written down, so a playfield that grows again fails here.
+  {
+    const diag = Math.hypot(bounds.right - bounds.left, bounds.surfaceY - bounds.bottom);
+    check('and its reach covers the whole arena, from either side',
+      C2().lureRange >= diag, `${C2().lureRange} against a ${diag.toFixed(1)} diagonal`);
+  }
 
   // Drive it for real at three ranges and see what it actually throws.
   const runAt = (dist, seconds = 26) => {
@@ -1656,6 +1716,94 @@ section('THE HEAD-LOOK STILL SOLVES ONCE THE BODY IS ROLLED');
     Math.abs((results[0].before - results[0].after) - (results[1].before - results[1].after)) < 0.5,
     `${(results[0].before - results[0].after).toFixed(1)} vs `
     + `${(results[1].before - results[1].after).toFixed(1)} degrees of correction`);
+}
+
+// ---------------------------------------------------------------------------
+section('IT ZAPS FROM ANYWHERE, AND THE NOSE IS ON YOU WHEN IT DOES');
+// ---------------------------------------------------------------------------
+// The complaint this answers, in the words it arrived in: it needs to be
+// zapping at the player constantly no matter what side it is on, with
+// aggressive tracking.
+//
+// EVERY NUMBER HERE WAS MEASURED, NOT REASONED. Before the retune, over these
+// same eight stations and 60 seconds each, the boss fired ZERO beams from
+// seven of them and entered no cycle at all from five: the pick is by distance
+// FROM THE LURE, so the beam's entire window was the annulus between
+// pulseRadius*pulsePick (20.7) and the old lureRange (34) — thirteen units, on
+// an animal 15.75 units long. The signature attack of the fight essentially
+// never happened, and the reason was invisible from inside it, because from
+// most of the water the animal simply held station in the dark, which is what
+// it is supposed to do when you are out of reach.
+//
+// A WHOLE FIGHT PER STATION, driven through the same `step` as everything else
+// in this file — the integrator, the arena clamp and the real facing path — so
+// the numbers are the game's rather than a state machine's opinion of itself.
+{
+  const forwardAt = (e) => {
+    e.mesh.updateMatrixWorld(true);
+    return new THREE.Vector3(0, 1, 0).applyQuaternion(e.mesh.getWorldQuaternion(new THREE.Quaternion()));
+  };
+  const fightFrom = (px, py, seconds = 60) => {
+    releaseAngler();
+    resetBeams(scene);
+    attachAngler(scene, boss);
+    at(boss, 0, floorLine()); boss.vx = 0; boss.vy = 0;
+    boss.hp = boss.maxHp; boss.deep = false; boss.entering = false;
+    const target = { x: px, y: py };
+    let beams0 = 0; let pulses0 = 0; let worstAtShot = 0;
+    for (let i = 0; i < 60 * seconds; i++) {
+      updateBossAngler(DT, scene, target, {});
+      const st = anglerStage();
+      // ON THE FRAME THE SHOT LEAVES, which is the only frame the aim has to be
+      // right on. A mean over the whole fight measures the lunge throwing the
+      // body around as much as it measures tracking.
+      if (st.fired.beam > beams0 || st.fired.pulse > pulses0) {
+        const f = forwardAt(boss);
+        const dx = target.x - boss.mesh.position.x;
+        const dy = target.y - boss.mesh.position.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const off = Math.acos(Math.max(-1, Math.min(1, (f.x * dx + f.y * dy) / d)));
+        worstAtShot = Math.max(worstAtShot, off);
+      }
+      beams0 = st.fired.beam; pulses0 = st.fired.pulse;
+      step(boss, DT);
+    }
+    const st = anglerStage();
+    return { beam: st.fired.beam, pulse: st.fired.pulse, worstAtShot };
+  };
+
+  const deg = (r) => `${(r * 180 / Math.PI).toFixed(0)} degrees`;
+  // Both sides of the animal, both depths, and the far corner — the arena is
+  // 184.9 wide, so x=+-80 is genuinely across the water rather than nearby.
+  const stations = [
+    ['out to the right', 45, floorLine() + 20],
+    ['out to the left', -45, floorLine() + 20],
+    ['far right', 80, floorLine() + 30],
+    ['far left', -80, floorLine() + 30],
+    ['straight above it', 0, floorLine() + 45],
+    ['the far corner', 90, -2],
+  ];
+  let worst = 0;
+  for (const [label, px, py] of stations) {
+    const r = fightFrom(px, py);
+    worst = Math.max(worst, r.worstAtShot);
+    check(`it beams a seal ${label}`, r.beam >= 15,
+      `${r.beam} beams in 60s — it used to fire 0 from here`);
+  }
+  check('...and every shot in all of them left with the nose on the seal',
+    worst < 0.2, `worst ${deg(worst)} off at the moment of firing`);
+
+  // AND CLOSE IN IT STILL HOLDS RATHER THAN ZAPS. The distance pick is the
+  // lesson of the fight and the range change must not have flattened it into
+  // one answer — a boss that beams you at arm's length is one that forgot it
+  // has a mouth.
+  {
+    const near = fightFrom(20, floorLine());
+    check('close in it still reaches for the radial instead', near.pulse > near.beam,
+      `${near.pulse} pulses against ${near.beam} beams`);
+  }
+  releaseAngler();
+  resetBeams(scene);
 }
 
 console.log(failures ? `\n${failures} FAILED\n` : '\nall good\n');

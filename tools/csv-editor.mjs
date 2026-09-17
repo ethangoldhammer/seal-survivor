@@ -442,6 +442,16 @@ const DOCS = {
     perk: 'Tie this part to a boss PERK. Blank is the general pool. A part with a perk only appears on a boss that has it — and one of that perk\'s parts is guaranteed to land, which is how the name warns the player what the fight does.',
     notes: 'Free text — nothing reads it.',
   },
+  'bossHotSpots.csv': {
+    id: 'The boss archetype from bosses.csv. A join, checked: a row whose id is not an archetype is dropped with a warning at boot, because a typo here is a boss that silently goes back to rolling its spots and nothing on screen says so.',
+    enabled: 'FALSE takes the row out without deleting it \u2014 the boss falls back to rolled placement and the roster colour. Blank means enabled.',
+    anchors: 'WHERE THE SPOTS GO, in the animal\u2019s own frame so they survive it turning. One anchor is `along` or `along:side`: along runs -1 at the tail to +1 at the head (the words tail, mid and head work too), side is l or r for a flank and blank for either. Several separated by |, and HOW MANY ANCHORS IS HOW MANY SPOTS. An anchor is a preference, not a coordinate \u2014 it orders the places the perimeter search already found, so it can never put a spot in open water and can never fail to place one.',
+    count: 'How many spots, when `anchors` is blank \u2014 a fixed number without naming the places. Both blank rolls between hotSpots.countMin and countMax in Behaviour. This moves the fight\u2019s numbers: the rupture pool is PER SPOT, so a one-spot boss holds a third of what a three-spot boss holds in weak points.',
+    color: 'What the mark reads as on THIS hide, `#rrggbb` or bare hex. The patch stands in for the hide rather than lighting it, so which colour reads is a fact about the animal \u2014 one answer for a near-black orca, a white yacht hull and a translucent bell is a compromise on all three. Blank wears the roster colour.',
+    brightness: 'A multiplier on the roster glow, for a body that needs more or less push than the rest. Blank or 1 is the roster default.',
+    radiusFrac: 'Spot size as a fraction of this boss\u2019s own radius, overriding hotSpots.radiusFrac. This is the crit\u2019s REACH as well as the drawn boundary \u2014 one number, on purpose \u2014 so making a spot more obvious costs reach. Still clamped by minRadius, maxRadius and hostCap.',
+    notes: 'Free text \u2014 nothing reads it.',
+  },
   'bosses.csv': {
     id: 'A short handle for the archetype. bossNames.csv\'s `bosses` column joins to this, so renaming one unhooks its name parts.',
     enemy: 'Which row in enemies.csv this boss is built from. A key that does not exist is refused at boot.',
@@ -701,6 +711,12 @@ export const TABLES = [
     file: 'path/src/bosses.csv',
     label: 'Boss roster',
     blurb: 'Which creatures can be THE boss, how big each arrives, and from what level. One is drawn per boss out of a shuffle bag, so a run meets every archetype it has unlocked before it sees one twice.',
+    addRows: true,
+  },
+  {
+    file: 'path/src/bossHotSpots.csv',
+    label: 'Boss weak spots',
+    blurb: 'Where each boss\u2019s glowing weak spots go and what colour they read as. A boss with no row rolls its spots somewhere on its own outline and wears the roster colour, which is fine on a body that is mostly outline and useless on one where the answer is a design decision \u2014 the crab\u2019s weak points are its claws, and no placement heuristic was ever going to discover that. `anchors` names places in the animal\u2019s OWN frame, so they survive it turning: `along:side`, where along is -1 at the tail and +1 at the head (or the words tail / mid / head) and side is l or r for a flank. Several separated by |, and the number of them is the number of spots. What a spot is WORTH \u2014 the crit, the rupture pool, the relight gap \u2014 is not per animal and stays in Behaviour.',
     addRows: true,
   },
   {

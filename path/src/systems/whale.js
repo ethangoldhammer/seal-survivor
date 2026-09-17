@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { bounds } from '../arena.js';
-import { createVisual, morphControl } from '../assets.js';
+import { ASSETS, createVisual, morphControl } from '../assets.js';
 import { removeEnemy } from '../entities/enemies.js';
 import { pickups, chumChunks, bitePickup } from '../entities/pickups.js';
 import { createAnimationController } from './animation.js';
@@ -52,6 +52,17 @@ import { isBossDef } from './boss.js';
 const DEG = Math.PI / 180;
 
 const whales = [];
+
+// THE LAST BODY SENT, so the next sweep can send the other one. Module state
+// rather than a field on the whale, because the roll has to happen when there
+// is no whale in the water — `maxAlive` is 1 and the gaps are minutes, so the
+// previous animal is long gone by the time the next is chosen.
+//
+// Not reset by resetWhales alone: that is called when the scene is torn down
+// mid-run as well, and a run that carries on from there should carry on
+// alternating. resetWhaleClock is the start of a run, and that is where it
+// clears.
+let lastBody = null;
 
 // Scratch, so the per-frame work allocates nothing.
 const _mouth = new THREE.Vector3();
@@ -423,6 +434,8 @@ export function resetWhaleClock(rand = Math.random) {
   const c = CONFIG.whale ?? {};
   whaleClock.elapsed = 0;
   whaleClock.sweeps = 0;
+  // A fresh run may open with either body — see pickBody.
+  lastBody = null;
   // The first gap is rolled like any other, and `firstAt` gates on top of it
   // rather than replacing it — so the opening sweep is not pinned to the same
   // second of every run.
@@ -493,18 +506,64 @@ function depthToY(t) {
   return bounds.surfaceY - (bounds.surfaceY - bounds.bottom) * t;
 }
 
+/**
+ * WHICH ANIMAL MAKES THIS CROSSING.
+ *
+ * Two bodies are rigged for the sweep and they are animated in opposite ways:
+ * the bowhead (`whale`) ships no clips and is wagged by the procedural rig at
+ * `wagState`; the humpback (`humpbackWhale`) ships an authored feeding loop
+ * bound to 'idle' and plays it at `clipSpeed`. Everything else in this file
+ * MEASURES the body it was handed and does not care which it got, which is why
+ * this can be a roster rather than a key.
+ *
+ * THE ROLL NEVER REPEATS while there is another body to send, so two bodies is
+ * a strict alternation. A uniform roll would hand a run a one-in-four chance of
+ * the same animal twice and a one-in-eight of three, and at these gaps — minutes
+ * — that does not read as luck, it reads as the second whale not existing. The
+ * bias is worth more than the entropy here: nobody is watching for a pattern in
+ * an event they see four times in a run.
+ *
+ * `CONFIG.whale.body` pins the rotation to one body when it names an asset (the
+ * tuner's choice, for looking at one of them); 'roster' is the rotation.
+ *
+ * PURE, and `prev` is a parameter rather than the module's own `lastBody`: the
+ * claim this makes is about a SEQUENCE, and a function that reads its own
+ * history can only be asked the same question once. spawnWhale is what keeps
+ * the history.
+ *
+ * Exported for tools/whale-test.mjs — the alternation is the kind of thing that
+ * works by inspection and fails on a roster of one.
+ *
+ * @param rand injected for the tests
+ * @param c    the whale config block
+ * @param prev the body the last sweep wore, or null
+ */
+export function pickBody(rand = Math.random, c = CONFIG.whale ?? {}, prev = lastBody) {
+  // A pin wins outright, and only if it names something that exists — a stale
+  // key from a snapshot would otherwise spawn nothing at all, silently.
+  const pin = c.body;
+  if (pin && pin !== 'roster' && ASSETS[pin]) return pin;
+
+  const roster = (Array.isArray(c.roster) ? c.roster : []).filter((k) => ASSETS[k]);
+  if (!roster.length) return 'whale';
+  if (roster.length === 1) return roster[0];
+
+  // Everything but the one that just went. `prev` may name a body that has
+  // since left the roster, in which case this is the whole list and the roll is
+  // simply uniform.
+  const pool = roster.filter((k) => k !== prev);
+  const list = pool.length ? pool : roster;
+  // Clamped: a rand() that returns exactly 1 indexes off the end, and the
+  // failure is a whale that does not spawn rather than an error.
+  return list[Math.min(list.length - 1, Math.floor(rand() * list.length))];
+}
+
 export function spawnWhale(scene, rand = Math.random) {
   const c = CONFIG.whale ?? {};
 
   const container = new THREE.Group();
-  // WHICH ANIMAL. Two bodies can make the crossing and they are animated in
-  // opposite ways: the bowhead (`whale`) ships no clips and is wagged by the
-  // procedural rig at `wagState`; the humpback (`humpbackWhale`) ships an
-  // authored feeding loop bound to 'idle' and plays it at `clipSpeed`. The
-  // choice is a config field rather than a hardcoded key so the tuner can flip
-  // between them mid-run; everything else in this file measures the body it
-  // was handed and does not care which it got.
-  const assetKey = c.asset ?? 'whale';
+  const assetKey = pickBody(rand, c, lastBody);
+  lastBody = assetKey;
   const visual = createVisual(assetKey);
   container.add(visual);
 
@@ -547,6 +606,10 @@ export function spawnWhale(scene, rand = Math.random) {
     container,
     visual,
     anim,
+    // Which body this crossing is wearing. Kept because the two are animated in
+    // opposite ways and a reader with a whale in hand should not have to infer
+    // it from whether `anim` found a clip.
+    assetKey,
     // The locomotion state this body is driven in. A body with a clip bound
     // for 'idle' plays that clip; one without takes the procedural state the
     // config names. Decided once, off the controller, so the update loop is

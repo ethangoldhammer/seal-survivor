@@ -23,7 +23,7 @@ import '../tools/dom-stub.mjs';
 import * as THREE from 'three';
 import {
   ASSETS, createVisual, acquireVisual, releaseVisual,
-  clearVisualPool, visualPoolStats, visualPoolCaps,
+  clearVisualPool, visualPoolStats, visualPoolCaps, visualPoolCount,
 } from '../path/src/assets.js';
 
 let failures = 0;
@@ -318,6 +318,44 @@ check('releasing something the pool never issued does nothing', !threw);
 
 clearVisualPool();
 check('clearing empties it', Object.keys(visualPoolStats()).length === 0);
+
+// ===========================================================================
+section('The budget across every key, which the per-key caps cannot give');
+// ===========================================================================
+// A key's cap is `peak + headroom` — the right shape for ONE creature, and
+// silent about their sum. Late in a run the roster is ~52 keys deep, and the
+// phone's own crash trail (npm run crash) caught 579 bodies parked across it:
+// every one inside its own cap, ~12,700 scene nodes of furniture waiting behind
+// the fight, on a device that jetsams on resident memory. Both kills in that
+// trail sat at the top of the node count and one landed ON `pool:clear`.
+//
+// So the claim is about the TOTAL. Fill many keys, each modestly.
+{
+  clearVisualPool();
+  const KEYS = Object.keys(ASSETS).filter((k) => ASSETS[k].shape).slice(0, 15);
+  for (const key of KEYS) {
+    const got = [];
+    for (let i = 0; i < 30; i++) got.push(acquireVisual(key));
+    for (const v of got) releaseVisual(v);
+  }
+  const { bodies, keys } = visualPoolCount();
+  check('the pool is bounded across all keys, not just within one',
+    bodies <= 288, `${bodies} bodies across ${keys} keys`);
+
+  // ...AND THE BUDGET IS SHARED. A first-come bound would let whichever key
+  // filled first keep everything and hand the rest nothing — a pool that
+  // recycles one creature and re-clones the others, which is worse than a
+  // smaller pool. Eviction takes from the LARGEST pool for exactly this.
+  const stats = visualPoolStats();
+  const counts = KEYS.map((k) => stats[k] ?? 0);
+  const held = counts.filter((n) => n > 0).length;
+  check('...and every key that asked still holds something',
+    held === KEYS.length, `${held} of ${KEYS.length} keys`);
+  const spread = Math.max(...counts) - Math.min(...counts);
+  check('...within a body or two of each other, not a tail behind one hoarder',
+    spread <= 4, `largest ${Math.max(...counts)}, smallest ${Math.min(...counts)}`);
+  clearVisualPool();
+}
 
 console.log(`\n${failures ? `${failures} FAILURE(S)` : 'all checks passed'}`);
 process.exit(failures ? 1 : 0);

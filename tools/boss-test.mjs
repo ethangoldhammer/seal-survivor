@@ -1604,9 +1604,18 @@ section('THE PERKS — what they actually do to the water');
     // dash in any direction still lands inside the water.
     const target = { x: -5, y: -15, z: 0 };
     e.mesh.position.set(-30, -15, 0);
-    // MEASURED AGAINST A CONTROL, because the boss swims under its own power
-    // and would cover ground with no perk at all — a raw displacement proves
-    // nothing about whether the dash happened.
+    // A SECOND BODY IN THE WATER, still spawned and no longer compared against.
+    // It used to be the control for "did the dash happen, or is that just a
+    // shark swimming" — see the check at the bottom of this block for why a
+    // live body could never answer that honestly and what replaced it.
+    //
+    // KEPT RATHER THAN DELETED, and that is not sentiment. It is spawned from
+    // the same seeded stream this measurement runs on, so removing the call
+    // shifts every draw after it and the dash measured 24.8 u/s instead of
+    // 33.3 — the number moved by a quarter with nothing about the perk having
+    // changed. It is also a second apex body the crowd logic can push the
+    // dashing boss around, which is a scene closer to a real fight than an
+    // empty ocean is. What is gone is the comparison, not the company.
     const control = spawnNamed(scene, 'bossShark', 5, undefined, { ignoreCaps: true, overfill: true });
     control.mesh.position.set(-30, -28, 0);
 
@@ -1614,10 +1623,8 @@ section('THE PERKS — what they actually do to the water');
     let hitDash = false;
     let dashStart = null;
     let dashTravel = 0;
-    let controlTravel = 0;
     let dashFrames = 0;
     let lastBoss = e.mesh.position.clone();
-    let lastControl = control.mesh.position.clone();
     const cycle = (p.cooldown ?? 5.5) + (p.windup ?? 0.7) + (p.duration ?? 0.9) + 1;
 
     // RUN UNTIL ONE COMPLETE DASH HAS BEEN SEEN, rather than for a fixed
@@ -1640,11 +1647,9 @@ section('THE PERKS — what they actually do to the water');
       updateEnemies(dt, scene, target, () => {}, () => {});
       if (stage === 'dash') {
         dashTravel += e.mesh.position.distanceTo(lastBoss);
-        controlTravel += control.mesh.position.distanceTo(lastControl);
         dashFrames += 1;
       }
       lastBoss = e.mesh.position.clone();
-      lastControl = control.mesh.position.clone();
       // The frame after the dash ended. Everything below is about that one
       // dash — the straight-line check in particular compares the finish to
       // `dashStart`, which a second dash would make meaningless.
@@ -1663,9 +1668,23 @@ section('THE PERKS — what they actually do to the water');
     check('the dash runs at the speed its row is set to',
       Math.abs(dashSpeed - (p.speed ?? 0)) < (p.speed ?? 1) * 0.15,
       `${dashSpeed.toFixed(1)} u/s against the row's ${p.speed}`);
-    check('the dash outruns an unperked boss of the same species',
-      dashTravel > controlTravel * 1.5,
-      `dashed ${dashTravel.toFixed(1)} vs ${controlTravel.toFixed(1)} in the same frames`);
+    // AGAINST THE SPECIES' CRUISE, not against a live control, and the note at
+    // the check above already explains why in the general case: a live control
+    // can only say "faster than whatever the other shark happened to be
+    // doing". This check kept one anyway, and the chasing bosses' shorter
+    // cooldowns (see behaviour.csv) finally made that untenable — the control
+    // was mid-lunge for most of the window, at a speedMul that IS the perk's
+    // dash speed, so the ratio collapsed to 1.0. Excluding its committed
+    // frames only moved the problem: what was left was the wind-up, throttled
+    // to a quarter of cruise, which flatters the perk just as dishonestly from
+    // the other side (3 frames at 1.3 u/s).
+    //
+    // `def.speed` is the number the dash is actually meant to beat, it is the
+    // same one the run's own speedMul multiplies, and it does not depend on
+    // what any other body in the water is doing this second.
+    check('the dash outruns the cruise of an unperked boss of the same species',
+      dashSpeed > (e.def.speed ?? 0) * 1.5,
+      `${dashSpeed.toFixed(1)} u/s dashing against a ${e.def.speed} u/s cruise`);
     // The line is locked at the end of the wind-up. A dash that curved would be
     // a homing lunge, which is unavoidable and so not a fight.
     if (dashStart) {

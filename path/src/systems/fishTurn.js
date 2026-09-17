@@ -38,8 +38,9 @@ import { ease } from '../ease.js';
 //          and every value between the two has a POSITIVE +Z component — so
 //          every turn, in both directions, sweeps the nose through the camera.
 //          That is the one interval where that is true; the mirror image
-//          [0, PI] sweeps it through the back wall, which is the same
-//          manoeuvre performed where nobody can see it.
+//          [0, PI] sweeps it through the back wall, which for a fish is the
+//          same manoeuvre performed where nobody can see it. `through: 'back'`
+//          picks it anyway for the one body it suits — see section 4.
 //   PITCH  `rotation.z`, as `atan2(vy, |vx|) - PI/2`. Measured inside whichever
 //          half-plane the fish is in, so it is bounded at +-90 degrees and can
 //          never carry the body past vertical. The dorsal comes out exactly up
@@ -130,11 +131,72 @@ import { ease } from '../ease.js';
 // above is about. So a fish that has been in a ball comes about for the rest
 // of its life. That is a nicer animal than the one it was, and the alternative
 // is a handover that has to snap.
+//
+// ---------------------------------------------------------------------------
+// 4. A TURTLE TURNS THE OTHER WAY ABOUT, AND KEEPS ITS TUMBLE.
+// ---------------------------------------------------------------------------
+// The sea turtle was the loudest flip left in the water and the last creature
+// this file could take, for two reasons that both had to be answered.
+//
+// THE SHAPE IS WHY THE FLIP WAS SO BAD ON THIS ONE. Measured off
+// seaturtle.glb's box: 1.49 long, 1.42 across the flippers, 0.55 tall — a body
+// that is 95% as wide as it is long and barely a third as tall. Every other
+// creature here is a spindle, flat side to side, so the 180-degree roll about
+// its own forward axis that the shared path used to face it the other way
+// costs a fish nothing: rolled onto its side it presents the same silhouette
+// it always had. Roll a turtle and it hands the camera its 0.55 edge instead
+// of its 1.42 beam. The shell goes to a third of itself, belly-up, and comes
+// back — which is the thing that reads as flipping over, and it reads worst on
+// the one body in the water that is wide.
+//
+// A YAW IS THE OPPOSITE BARGAIN ON THAT SAME BOX. The turn's midpoint has the
+// turtle beam-on, and its beam is 0.95 of its length, so the silhouette barely
+// moves through the whole manoeuvre. The animal that suffers most from the
+// flip is the one that pays least for the yaw.
+//
+// WHICH WAY ROUND IS ABOUT WHAT IT MEANS, NOT ABOUT WIDTH — because at 90
+// degrees a turtle is beam-on either way and the two halves cost the same. A
+// come-about through the lens is the frame where the animal's face arrives at
+// the player, and a sea turtle is not hunting anybody: it has an hp of a
+// billion, no behaviour that knows the seal is there, and a visit with a clock
+// on it. Turning to look at you is a threat this creature never makes. So
+// `through: 'back'` puts the far pose at +PI and the midpoint is a shell
+// swimming away — which the player already reads correctly, because it is what
+// this turtle does anyway when its `stay` runs out.
+//
+// IT IS THE ONLY CREATURE HERE WITH A RIGID BODY. systems/rigidBody.js writes
+// `rotation.z` every frame — the heading its owner asked for plus the tumble a
+// punt left on it — so this file cannot write that channel on a turtle without
+// erasing the cartwheel, which is the whole reason the turtle exists. It does
+// not have to: 'YXZ' composes as Ry * Rx * Rz, so handing the pitch to
+// `body.restAngle` and keeping only the yaw leaves each writer a whole axis.
+// The physics spins the body about the heading it is pointed along; the yaw
+// turns which way that is. Neither reads the other's number, which is the
+// difference between this and the anglerfish handover in section 1.
 // ---------------------------------------------------------------------------
 
 const RIGHT = 0;
 const LEFT = -Math.PI;
 const TWO_PI = Math.PI * 2;
+
+/**
+ * Which way round the body goes: the far pose, as a signed half-turn.
+ *
+ * -PI sweeps the nose through the camera and is the default, for the reason
+ * section 1 gives. +PI is the same manoeuvre performed the other way about,
+ * through the back wall, and the choice between them is not a taste knob: it
+ * decides what the animal is DOING at the midpoint of every turn it makes.
+ *
+ * Through the lens, the middle of a U-turn is a body swinging its face at the
+ * player. On a hunter that is the manoeuvre's whole value — it is the frame
+ * where a shark notices you. On something that is not hunting it is a claim
+ * the creature does not mean, and the back wall says the true thing instead:
+ * the midpoint is the animal showing its back and swimming away. See
+ * section 4.
+ */
+function farPose(def, c) {
+  return num(def, c, 'through', 'camera') === 'back' ? Math.PI : LEFT;
+}
 
 function cfg() {
   return CONFIG.fishTurn ?? {};
@@ -181,9 +243,9 @@ function orbitYaw(dx, dz, hurry) {
  * it happens. The ease is then opened from there, so the fish finishes coming
  * level instead of arriving level.
  */
-function handBack(e) {
+function handBack(e, far) {
   const half = Math.round(e.__turnYaw / Math.PI);
-  const home = (half % 2 === 0) ? RIGHT : LEFT;
+  const home = (half % 2 === 0) ? RIGHT : far;
   e.__turnYaw += home - half * Math.PI;
   e.__turnFrom = e.__turnYaw;
   e.__turnTo = home;
@@ -203,12 +265,17 @@ function handBack(e) {
  *                  a heading it never had.
  * @param dt        seconds.
  * @param launched  the rigid body is flying, so IT owns the transform — write
- *                  nothing, the same handoff the shared path makes. No
- *                  creature with a `rigidBody` has opted into `comeAbout`
- *                  today (only the sea turtle has one at all); if one ever
- *                  does, the body's roll and this yaw have to be reconciled
- *                  rather than merely taking turns, because RigidBody writes
- *                  `rotation.z` and would be composing it under a stale yaw.
+ *                  nothing, the same handoff the shared path makes. The yaw
+ *                  is left exactly where the last steered frame put it, so a
+ *                  turtle that comes to rest is facing the way it was facing
+ *                  when it was hit and simply resumes; the cartwheel it did in
+ *                  between was `rotation.z`, which is the body's.
+ *
+ *                  THE SEA TURTLE IS THE ONE CREATURE HERE WITH A BODY, and
+ *                  the two are reconciled rather than taking turns: this
+ *                  writes the pitch to `body.restAngle` instead of to
+ *                  `rotation.z`, and keeps the yaw on `rotation.y`, which
+ *                  'YXZ' puts outside it. See the note at the write itself.
  */
 export function turnFish(e, dt, launched = false) {
   if (!e.mesh || !e.visual || launched) return;
@@ -216,6 +283,9 @@ export function turnFish(e, dt, launched = false) {
   const def = e.def;
 
   const dead = num(def, c, 'deadzone', 0.05);
+  // Which side of the water the far pose is on, and therefore which way every
+  // turn this creature ever makes goes round. See farPose.
+  const far = farPose(def, c);
 
   // --- WHAT IT IS POINTING AT ----------------------------------------------
   // Velocity, unless something has set `turnAim` this frame.
@@ -262,7 +332,7 @@ export function turnFish(e, dt, launched = false) {
     e.mesh.rotation.order = 'YXZ';
     e.__turnYaw = orbit
       ? orbitYaw(ax, az, num(def, c, 'depthHurry', 0.3))
-      : (ax < 0 ? LEFT : RIGHT);
+      : (ax < 0 ? far : RIGHT);
     e.__turnFrom = e.__turnYaw;
     e.__turnTo = e.__turnYaw;
     e.__turnT = 1;
@@ -299,8 +369,8 @@ export function turnFish(e, dt, launched = false) {
   } else {
     // The ball ended under this fish. Give the yaw back to the two-sided ease
     // at the same pose it is already in — see handBack.
-    if (e.__turnOrbit) handBack(e);
-    const want = ax < -dead ? LEFT : (ax > dead ? RIGHT : e.__turnTo);
+    if (e.__turnOrbit) handBack(e, far);
+    const want = ax < -dead ? far : (ax > dead ? RIGHT : e.__turnTo);
     if (want !== e.__turnTo) {
       // From where the body actually is, so a turn reversed halfway through
       // continues from here instead of snapping back to begin the new one.
@@ -371,7 +441,25 @@ export function turnFish(e, dt, launched = false) {
   }
 
   e.mesh.rotation.y = e.__turnYaw + wYaw;
-  e.mesh.rotation.z = e.__turnPitch + wPitch - Math.PI / 2;
+  // THE PITCH GOES WHERE THE HEADING WENT, and on a body with physics that is
+  // not `rotation.z`.
+  //
+  // systems/rigidBody.js owns `rotation.z` outright — it writes
+  // `restAngle + angle` there every frame, where `restAngle` is the pose the
+  // owner asked for and `angle` is the tumble a punt left on top of it (see
+  // writeBack). Assigning the pitch here would be erasing that tumble on every
+  // frame, which is the one thing a knocked turtle must keep, and the shared
+  // path below hands the heading over for exactly this reason.
+  //
+  // What makes the handover safe HERE and not for the pair this file replaces
+  // is the Euler order. 'YXZ' composes as Ry * Rx * Rz, so the yaw is applied
+  // OUTSIDE whatever the body writes: the physics keeps a whole axis to itself
+  // and the come-about keeps another, and neither is composing under a stale
+  // copy of the other's answer. The bank rides on the visual as always, which
+  // no body touches.
+  const pitch = e.__turnPitch + wPitch - Math.PI / 2;
+  if (e.body) e.body.restAngle = pitch;
+  else e.mesh.rotation.z = pitch;
   e.visual.rotation.y = e.__turnBank + wBank;
 }
 

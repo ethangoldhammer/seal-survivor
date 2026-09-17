@@ -58,7 +58,7 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import fs from 'node:fs';
 import { updateBounds } from '../path/src/arena.js';
-import { spawnNamed, resetEnemies, armBossArmor } from '../path/src/entities/enemies.js';
+import { spawnNamed, resetEnemies, armBossArmor, updateEnemies } from '../path/src/entities/enemies.js';
 import { hotSpotDamage, attachHotSpots } from '../path/src/systems/bossHotSpots.js';
 import {
   CONFIG, enemyPaceMul, bossDifficulty, bossHpRamp, difficultyRamp,
@@ -375,8 +375,23 @@ for (const k of CHASERS) {
 }
 ok(cadence.every((c) => c.period <= 9),
   `every chasing boss commits at least every ${r1(Math.max(...cadence.map((c) => c.period)))}s`);
-ok(cadence.every((c) => c.period >= 5),
-  '...and not so often that the tell stops being a tell');
+// THE FLOOR IS NO LONGER A PERIOD, and the note it replaces was making the
+// wrong argument with the right worry. It asked for `period >= 5`, on the
+// grounds that a boss committing too often stops telling you about it — but
+// the period is wind-up + strike + cooldown, and only ONE of those three is
+// the tell. Cutting the cooldowns in half to make these bosses attack instead
+// of drift left every wind-up exactly as long as it was, and failed this.
+//
+// What actually has to hold is that the player gets at least as long to
+// breathe as they got to read: a cooldown shorter than the animal's own
+// wind-up is two runs arriving inside one reaction, which is the thing worth
+// refusing. Asserted per body rather than in aggregate, because the four have
+// different wind-ups on purpose.
+ok(CHASERS.every((k) => {
+  const c = CONFIG.enemies[k].lunge;
+  return c.cooldown >= c.windup;
+}), '...and every one of them rests at least as long as its own wind-up, so two '
+  + 'runs never arrive inside one reaction');
 
 // The six that do not swim have their own committed attack, and every one of
 // them is billed as one. The man o' war is the exception ON PURPOSE — it
@@ -385,6 +400,59 @@ const src = (f) => fs.readFileSync(new URL(`../path/src/systems/${f}`, import.me
 for (const [k, f] of [['bossSquid', 'kraken.js'], ['bossAnglerfish', 'bossAngler.js'], ['bossCrab', 'bossCrab.js']]) {
   ok(/ramming = true/.test(src(f)),
     `${k} has its own committed attack and bills it as one (${f})`);
+}
+
+// ---------------------------------------------------------------------------
+// ...AND THEIR CADENCE IS HELD TO THE SAME RULE, per attack rather than per
+// body. The five that do not use the shared lunge each own a settle AND a
+// cooldown, and the two stack: the crab's gun was 4.5 + 5 for a 1.7-second
+// volley, which is the shape the chasing bosses had before their own were cut.
+// The floor is the tell, exactly as it is above — a gap shorter than the
+// attack's own wind-up is two of them inside one reaction.
+{
+  const crab = CONFIG.enemies.bossCrab;
+  const rear = (CONFIG.crabClaw?.windup ?? 0.42) * (CONFIG.crabClaw?.big?.windupMul ?? 1);
+  const attacks = [
+    ['the crab\'s gun', crab.clawVolley?.cooldown, crab.clawVolley?.settle, crab.clawVolley?.windup],
+    ['the crab\'s haymaker', crab.haymaker?.cooldown, crab.haymaker?.settle, rear],
+    ['the crab\'s pounce', crab.jump?.cooldown, crab.jump?.settle, rear],
+    ['the kraken\'s crush', CONFIG.kraken?.crush?.cooldown, null, CONFIG.kraken?.crush?.windup],
+  ];
+  for (const [what, cd, settle, tell] of attacks) {
+    ok(cd > 0 && tell > 0 && cd >= tell,
+      `${what} rests at least as long as its own tell (${cd}s against ${Number(tell).toFixed(2)}s)`);
+    // A settle is the gap after the attack COMPLETED and runs instead of the
+    // cooldown, not on top of it — but it is the longer of the two, so it is
+    // the one that decides how often the attack actually comes.
+    if (settle != null) {
+      ok(settle < cd * 2,
+        `...and its settle has not drifted back into a second cooldown (${settle}s against ${cd}s)`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE ONE THAT CANNOT CHASE YOU, and the only boss in the roster with no
+// committed attack at all: it drifts on the surface at 1.6 u/s and stings
+// whatever comes to it. Every other number on that body assumes exactly that
+// (CONFIG.enemies.bossManOWar prices `above: 3` as "a breach on a body that
+// cannot chase you"), so this is NOT a check that it pursues.
+//
+// It is a check that the drift has a DIRECTION. A uniform wander roll is a
+// random walk, and measured over 90-second fights this boss sat a mean 80
+// units from a parked seal and spent 93% of the fight more than 40 units away
+// — never in the fight rather than losing it. `towardPlayer` is the lean, and
+// at 0 the old random walk comes straight back.
+{
+  const d = CONFIG.enemies.bossManOWar.drift ?? {};
+  ok((d.towardPlayer ?? 0) > 0.5,
+    `the man o' war's drift leans toward the seal (${d.towardPlayer}) rather than rolling uniformly`);
+  ok((d.towardPlayer ?? 0) < 1 || (d.towardCone ?? 0) > 0.8,
+    '...and still wanders while it does — it is a drift with a direction, not a chase');
+  // AND IT REMAINS UNABLE TO CATCH ANYBODY, which is the half the damage zones
+  // are priced on. A seal swims at 9 and dashes at 46.
+  ok((CONFIG.enemies.bossManOWar.speed ?? 0) < 4,
+    `...and it still cannot chase you — ${CONFIG.enemies.bossManOWar.speed} u/s against a seal's 9`);
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +480,139 @@ if (!led || !Object.keys(led.dealt).length) {
       : 'no fight in the run is shorter than the opening one — a boss never gets less dangerous');
   ok(rows.every((r) => r.ttk <= 150),
     `...and none of them is a wall — longest ${Math.round(Math.max(...rows.map((r) => r.ttk)))}s`);
+}
+
+// ---------------------------------------------------------------------------
+section('7. WHAT THE FIGHT IS ACTUALLY MADE OF — driven, not read off the rows');
+// ---------------------------------------------------------------------------
+// Section 5 above reads the cadence off config. This one DRIVES it, because the
+// two disagreed for a long time and only one of them is the game.
+//
+// THE COMPLAINT THIS ANSWERS: boss attacks need to be more constant, with less
+// aimless wandering and constant pursuit of the player. Measured before the
+// change, over 90-second fights against three kinds of seal — one parked, one
+// strolling at about the boss's own speed, one sprinting at three times it:
+//
+//   `rest` was 40-60% of EVERY fight, on every chasing boss, against every
+//   kind of player. The single biggest block of a boss fight was its cooldown.
+//   Attack stages came to 24-35%.
+//
+//   And on the frames it was not attacking, the body's heading was 61-79
+//   degrees off the seal on average, and pointed more than 90 degrees away —
+//   actively swimming off — on 13-35% of them. That was not the wander branch
+//   (a boss never reaches it) or the weave (far too small). It was the
+//   stand-off ring circling at constant strength however far out of position
+//   the body was; see apexCrowd.circleTaper.
+//
+// THREE SEALS, because "it never comes near me" and "it cannot keep up with
+// me" are different complaints with different fixes, and one target cannot
+// tell them apart. Seeded, and averaged over three seeds: a boss rolls its
+// plan, its stagger and its veer from Math.random.
+{
+  const scene = new THREE.Scene();
+  updateBounds();
+  const DT = 1 / 60;
+  const noop = () => {};
+  const seeded = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let x = Math.imul(a ^ (a >>> 15), 1 | a);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const SEALS = {
+    parked: () => ({ x: 30, y: -18, z: 0 }),
+    // About a boss's own cruise (5-7 u/s), and about three times it.
+    strolling: (t) => ({ x: Math.cos(t * 0.12) * 40, y: -18 + Math.sin(t * 0.17) * 10, z: 0 }),
+    sprinting: (t) => ({ x: Math.cos(t * 0.35) * 55, y: -18 + Math.sin(t * 0.5) * 12, z: 0 }),
+  };
+
+  function fight(key, seed, sealAt, seconds = 90) {
+    const real = Math.random;
+    Math.random = seeded(seed);
+    try {
+      resetEnemies(scene);
+      const b = spawnNamed(scene, key, 0, { x: -60, y: -20 },
+        { ignoreCaps: true, overfill: true, boss: true });
+      b.isBoss = true;
+      b.hp = 1e9; // the shape of the fight is the subject, not the kill
+      let n = 0; let attack = 0;
+      let cruiseOff = 0; let cruiseN = 0; let cruiseAway = 0;
+      for (let i = 0; i < 60 * seconds; i++) {
+        const to = sealAt(i * DT);
+        updateEnemies(DT, scene, to, noop, noop, noop);
+        n++;
+        const attacking = isCommittedRun(b)
+          || b.lungeStage === 'wind' || b.lungeStage === 'reaim';
+        if (attacking) { attack++; continue; }
+        // THE CRUISE ONLY, not `rest`. The frames right after a run are the
+        // body coming about off a line it was committed to at five times its
+        // cruise speed — it is pointed away because the pass passed, which is
+        // the attack's own shape and not something to fix. `cruise` is the
+        // stage where the animal has finished with the last run and has not
+        // started the next: if it is aimless anywhere, it is aimless there.
+        if (b.lungeStage !== 'cruise') continue;
+        let diff = Math.atan2(to.y - b.mesh.position.y, to.x - b.mesh.position.x) - (b.heading ?? 0);
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        cruiseOff += Math.abs(diff);
+        cruiseN++;
+        if (Math.abs(diff) > Math.PI / 2) cruiseAway++;
+      }
+      return {
+        attackPct: attack / n,
+        cruiseOff: cruiseN ? cruiseOff / cruiseN : 0,
+        awayPct: cruiseN ? cruiseAway / cruiseN : 0,
+      };
+    } finally { Math.random = real; }
+  }
+
+  const deg = (r) => `${(r * 180 / Math.PI).toFixed(0)} degrees`;
+  for (const [who, sealAt] of Object.entries(SEALS)) {
+    fight(CHASERS[0], 1, sealAt, 10); // warm — see the note in boss-tenacity-test
+    const rows = CHASERS.map((k) => {
+      const rs = [1, 2, 3].map((seed) => fight(k, seed, sealAt));
+      const avg = (f) => rs.reduce((a, r) => a + f(r), 0) / rs.length;
+      return { k, attackPct: avg((r) => r.attackPct), off: avg((r) => r.cruiseOff), away: avg((r) => r.awayPct) };
+    });
+    for (const r of rows) {
+      console.log(`   ${who.padEnd(10)} ${r.k.padEnd(16)} attacking ${(r.attackPct * 100).toFixed(0)}%`
+        + `   cruising ${deg(r.off)} off the seal, ${(r.away * 100).toFixed(0)}% of it pointed away`);
+    }
+    // ABOUT HALF THE FIGHT, and the floor is what the complaint was about.
+    // There is no ceiling here: section 5's per-body rule (a cooldown at least
+    // as long as the body's own wind-up) is what stops this becoming one
+    // continuous run, and it is a rule about the tell rather than a fraction.
+    ok(rows.every((r) => r.attackPct > 0.35),
+      `${who}: every chasing boss spends over a third of the fight attacking `
+      + `(worst ${Math.round(Math.min(...rows.map((r) => r.attackPct)) * 100)}%, and it was 24-35% before)`);
+    // AND IT IS COMING AT YOU IN BETWEEN — the load-bearing one, and the bar
+    // has a measured number on the other side of it rather than a judgement.
+    //
+    // Set apexCrowd.circleTaper to 0 and every row here reads 45 to 49 degrees:
+    // dead flat, all four bodies, all three seals, because an untapered ring
+    // makes the radial and the tangential terms the same size and 45 degrees is
+    // that arithmetic showing through. With the taper it is 3 to 17. So this is
+    // not "is the angle smallish", it is "is the ring still steering the
+    // animal", and a regression cannot creep past it a degree at a time.
+    // 0.5 rad — 28.6 degrees, against the 45-49 the untapered ring produces.
+    // NOT a bar fitted to the best case: the worst body here is the orca at 20
+    // degrees against a strolling seal, and it is the worst for a reason worth
+    // knowing. It is the fastest chaser in the roster (7 u/s, turnRate 3.2)
+    // and a seal moving at about its own speed is the one target it most
+    // overshoots, so more of its cruise is spent coming about off the last run
+    // than any other body's. Parked or sprinting it reads 4.
+    //
+    // The margin that matters is the one on the other side: 28.6 is still a
+    // factor of 1.6 clear of what circleTaper 0 gives, and that number is flat
+    // across all four bodies and all three seals, so the old behaviour cannot
+    // creep back through this.
+    ok(rows.every((r) => r.off < 0.5),
+      `${who}: ...and between runs it is pointed at the seal, not 45 degrees off it `
+      + `(worst ${deg(Math.max(...rows.map((r) => r.off)))})`);
+  }
 }
 
 console.log(fails ? `\n${fails} FAILED\n` : '\nall good\n');

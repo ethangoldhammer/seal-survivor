@@ -251,7 +251,12 @@ for (const boss of BOSSES) {
     let sd = (0x5eed + trial * 7919) >>> 0;
     Math.random = () => { sd = (sd * 1103515245 + 12345) & 0x7fffffff; return sd / 0x7fffffff; };
     try {
-      attachHotSpots(scene, e);
+      // THE ARCHETYPE, so a boss with a row in bossHotSpots.csv is audited on
+      // the spots it actually gets rather than on a roll it never does. This is
+      // the column the audit exists to inform: an authored anchor pointing at a
+      // place where the hull and the flesh disagree is exactly what the payout
+      // number below catches.
+      attachHotSpots(scene, e, boss.id);
       for (let i = 0; i < 4; i++) { tickHitShapes(); updateBossHotSpots(DT, DT); }
     } finally { Math.random = real; }
     const own = hotSpotsOf(e);
@@ -296,6 +301,50 @@ for (const boss of BOSSES) {
   row.hull = worstHull;
   const owner = hotSpotsOf(e);
 
+  // IS THE PAINTED CENTRE ACTUALLY ON THE FLESH, over a stretch of animation?
+  //
+  // The glow is a shader on the animal's own geometry asking each fragment how
+  // near it is to this centre (systems/bossHotSpots.js). A centre that sits off
+  // the body has nothing near it to light: the spot renders as a crescent
+  // clinging to the silhouette, or as nothing at all, and from the water it
+  // reads as the mark having come loose from the animal.
+  //
+  // PLACEMENT ALREADY CHECKS THIS ONCE — `hullMatch` refuses a candidate where
+  // the hull and the skin disagree — but it checks it on the frame the spot
+  // opens, and the anchor then rides a bone through a whole swim cycle while
+  // pushToRim shoves it back out against the PADDED hull every frame. Nothing
+  // re-asks the question after that, which is exactly the shape of bug that
+  // only shows up on the one boss whose spot is pinned somewhere thin.
+  //
+  // In fractions of the spot's own radius, because that is what the shader
+  // divides by: 1.0 means the nearest flesh is a whole radius away, i.e. the
+  // entire patch is over open water.
+  if (owner?.spots?.length) {
+    const drift = [];
+    for (let f = 0; f < 90; f++) {
+      e.anim?.update(DT, stateForSpeed(e.def.speed ?? 5), false);
+      scene.updateMatrixWorld(true);
+      tickHitShapes();
+      updateBossHotSpots(DT, DT);
+      if (f % 10) continue;
+      const flesh = skin(e.visual);
+      if (!flesh.length) break;
+      for (const sp of owner.spots) {
+        let best = Infinity;
+        for (let i = 0; i < flesh.length; i += 3) {
+          const d = Math.hypot(flesh[i] - sp.wx, flesh[i + 1] - sp.wy);
+          if (d < best) best = d;
+        }
+        drift.push(best / Math.max(0.01, sp.r));
+      }
+    }
+    if (drift.length) {
+      drift.sort((a, b) => a - b);
+      row.drift = drift[Math.floor(drift.length / 2)];
+      row.driftWorst = drift[drift.length - 1];
+    }
+  }
+
   if (spheres.length && cloud.length) {
     let inside = 0;
     for (let i = 0; i < cloud.length; i += 3) {
@@ -307,16 +356,29 @@ for (const boss of BOSSES) {
   rows.push(row);
 }
 
-console.log('  boss             mode    spheres  covered  standoff(med/worst)  spots  aimed shot');
+console.log('  boss             mode    spheres  covered  standoff(med/worst)  spots  off-flesh(med/worst)  aimed shot');
 for (const r of rows) {
   const cov = r.covered != null ? `${(r.covered * 100).toFixed(0)}%` : '   —';
   const st = r.stand ? `${r.stand.median.toFixed(2)} / ${r.stand.worst.toFixed(2)}` : '   —      ';
   const shot = r.crit === undefined ? '—'
     : `${(r.crit * 100).toFixed(0)}% of ${r.shots} shots (worst ${(r.hull * 100).toFixed(0)}% off centre)`;
-  console.log(`  ${r.id.padEnd(16)} ${String(r.mode ?? 'circle').padEnd(7)} ${String(r.spheres).padStart(7)}  ${cov.padStart(7)}  ${st.padStart(13)}  ${r.spots.toFixed(1).padStart(5)}  ${shot}`);
+  const dr = r.drift != null ? `${r.drift.toFixed(2)} / ${r.driftWorst.toFixed(2)}` : '   —      ';
+  console.log(`  ${r.id.padEnd(16)} ${String(r.mode ?? 'circle').padEnd(7)} ${String(r.spheres).padStart(7)}  ${cov.padStart(7)}  ${st.padStart(13)}  ${r.spots.toFixed(1).padStart(5)}  ${dr.padStart(14)}      ${shot}`);
 }
 
 console.log('');
+// A SPOT THAT HAS COME LOOSE FROM THE ANIMAL. Asserted rather than reported,
+// unlike the aimed-shot column above: this one is measured against the MESH
+// and not against the probe, so there is no methodology for it to be dominated
+// by. Over a radius means the whole painted patch is over open water on some
+// frame of the swim, which from the water reads as the mark having detached.
+{
+  const loose = rows.filter((r) => (r.driftWorst ?? 0) > 1);
+  check('every spot stays on the flesh through a swim cycle',
+    loose.length === 0,
+    loose.map((r) => `${r.id} ${r.driftWorst.toFixed(2)}x radius off`).join(', '));
+}
+
 // THE ONE THE FEATURE LIVES OR DIES BY.
 const spotless = rows.filter((r) => !r.spots);
 check('every boss gets at least one weak spot', spotless.length === 0,

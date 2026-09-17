@@ -51,6 +51,8 @@ const CODE_OWNED = [
   'versus.replay.cams.shots',
   'versus.camera.reach',
   'versus.camera.mode',
+  'whale.roster',
+  'whale.asset',
   'feedback.*.emit',
   'feedback.*.toast',
   'emitters.*.colors',
@@ -83,6 +85,10 @@ const dirty = {
   versus: { camera: { reach: 12, mode: 'A', zoomMin: 1 }, replay: { cams: { shots: [1, 2], hold: 2 } } },
   feedback: { clamDrop: { emit: 'pop', toast: 'words', sfx: 'clam' } },
   emitters: { muzzle: { colors: ['#fff'], rate: 4 } },
+  // The sweep's roster is an array nothing can edit, and `asset` is the single
+  // key it replaced — still in every snapshot on disk, and a merge would put it
+  // back on CONFIG.whale looking exactly like the field that used to be read.
+  whale: { roster: ['whale'], asset: 'humpbackWhale', body: 'roster', bank: 7 },
 };
 
 section('a saved field cannot outrank config.js');
@@ -101,6 +107,7 @@ for (const [path, want] of [
   ['gravesite.scale', 1], ['pickups.magnet', 3], ['music.bpm', 170],
   ['versus.camera.zoomMin', 1], ['versus.replay.cams.hold', 2],
   ['feedback.clamDrop.sfx', 'clam'], ['emitters.muzzle.rate', 4],
+  ['whale.body', 'roster'], ['whale.bank', 7],
 ]) {
   check(path, hits(cleaned, path).length === 1 && path.split('.').reduce((o, k) => o?.[k], cleaned) === want);
 }

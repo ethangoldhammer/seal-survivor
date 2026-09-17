@@ -56,7 +56,7 @@ import { CONFIG } from '../path/src/config.js';
 import { updateBounds } from '../path/src/arena.js';
 import {
   enemies, spawnNamed, resetEnemies, updateEnemies,
-  applyKnockback, hitReactionMul, staggerBoss, isCommittedRun,
+  applyKnockback, hitReactionMul, staggerBoss, isCommittedRun, isAttacking,
 } from '../path/src/entities/enemies.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -212,6 +212,118 @@ section('COMMITTED MEANS COMMITTED');
   check('...and the flag is what does it', shove(boss, { source: 'ram' }) > 0);
   TEN.committed = true;
   boss.lungeStage = 'rest';
+}
+
+// ===========================================================================
+section('MID-ATTACK IS WIDER THAN MID-RUN — and it is every boss');
+// ===========================================================================
+// `isCommittedRun` answers where the body ENDS UP and is right for that: a run
+// already crossing the water you were standing in cannot be nudged out of it
+// without deleting the dodge. It is the wrong question for the FLINCH, and
+// that is the bug this section exists to hold shut — the first pass at the
+// rule used it for both, so a boss was still being whipped through the
+// half-second wind-up that is its entire tell. On the hammerhead that
+// half-second is the skull coming round to face you, and it is the only
+// warning the shove ever gives.
+//
+// EVERY MOVE A BOSS HAS, because "a boss" is five different animals: the
+// lunge's own stages, the `ramming` flag, the grab, the crab's pinch and a
+// perk driving the body. A body whose attack is a CLIP resolves this in
+// trigger() (ATTACK_STATES in systems/animation.js). These are the ones whose
+// attack is a state on the creature instead, and they had no way to say so.
+{
+  fresh();
+  const boss = put('bossShark', { boss: true });
+  const clear = () => {
+    boss.lungeStage = null;
+    boss.ramming = false;
+    boss.grabbing = false;
+    boss.perkDrive = false;
+    boss.claw = null;
+  };
+
+  const moves = {
+    'a wind-up': () => { boss.lungeStage = 'wind'; },
+    'the run itself': () => { boss.lungeStage = 'strike'; },
+    'the re-aim inside a double': () => { boss.lungeStage = 'reaim'; },
+    'a ram — the perk, the kraken, the angler, the crab': () => { boss.ramming = true; },
+    'a grab': () => { boss.grabbing = true; },
+    'the crab\'s pinch': () => { boss.claw = { isStriking: () => true }; },
+    'a perk driving the body': () => { boss.perkDrive = true; },
+  };
+  for (const [what, arm] of Object.entries(moves)) {
+    clear();
+    arm();
+    check(`${what} counts as attacking`, isAttacking(boss) === true);
+  }
+
+  // ...AND THE THINGS THAT ARE NOT AN ATTACK still are not. A rule that
+  // caught the cruise would be a boss that never flinches at all, which
+  // passes every check above and is a different bug wearing this one's
+  // passing test.
+  for (const [what, stage] of Object.entries({ 'doing nothing': null, resting: 'rest', cruising: 'cruise' })) {
+    clear();
+    boss.lungeStage = stage;
+    check(`...and ${what} does not`, isAttacking(boss) === false);
+  }
+
+  // THE FLINCH ASKS THE WIDER QUESTION. Proved against a non-zero `flinch`
+  // rather than against the shipped 0: at 0 this returns zero for every boss
+  // in every state, so the check would pass with the gate deleted.
+  {
+    const was = TEN.flinch;
+    TEN.flinch = 0.5;
+    clear();
+    boss.lungeStage = 'cruise';
+    const cruising = hitReactionMul(boss);
+    boss.lungeStage = 'wind';
+    const winding = hitReactionMul(boss);
+    TEN.flinch = was;
+    check('the flinch is refused during the wind-up', winding === 0);
+    check('...and allowed when the animal is only swimming', cruising === 0.5,
+      `${cruising} of a configured 0.5`);
+  }
+
+  // ...AND THE SHOVE DOES NOT, DELIBERATELY. The two halves of a hit answer
+  // two different questions and are refused on different terms — a ram may
+  // still lean on a boss that is standing still winding up, because that is
+  // the seal's own body arriving and the boss has not committed to anywhere
+  // yet. What it may not do is whip the skeleton while it does.
+  {
+    const kicks = [];
+    const realAnim = boss.anim;
+    boss.anim = { impulse: (dir, strength) => kicks.push(strength) };
+    clear();
+    boss.lungeStage = 'wind';
+    const moved = shove(boss, { source: 'ram' });
+    check('a ram still moves a boss that is winding up', moved > 0, `${moved.toFixed(2)} u/s`);
+    check('...but delivers it no flinch', kicks.length === 0, `${kicks.length} bone kicks`);
+
+    kicks.length = 0;
+    clear();
+    boss.lungeStage = 'cruise';
+    const cruising = shove(boss, { source: 'ram' });
+    check('...and a cruising one takes both', cruising > 0 && kicks.length === 1,
+      `${cruising.toFixed(2)} u/s and ${kicks.length} bone kick`);
+
+    kicks.length = 0;
+    clear();
+    boss.lungeStage = 'strike';
+    const running = shove(boss, { source: 'ram' });
+    check('...and a committed one takes neither', running === 0 && kicks.length === 0);
+    boss.anim = realAnim;
+    clear();
+  }
+
+  // ONE REACH, ASKED FOUR TIMES. The same rule the dodge payout is held to
+  // above: a fifth kind of boss attack has to be a line in `isAttacking` and
+  // nothing else, and a channel that grew its own copy of the test is one
+  // retune away from disagreeing with the other three about what an attack is.
+  {
+    const spots = readFileSync(resolve(HERE, '../path/src/systems/bossHotSpots.js'), 'utf8');
+    check('the weak spot\'s jostle reads the shared predicate', /isAttacking\(e\)/.test(spots)
+      && !/lungeStage === 'wind'/.test(spots));
+  }
 }
 
 // ===========================================================================
@@ -377,6 +489,131 @@ section('THE RUN LANDS WHERE IT WAS AIMED — under fire, measured');
   check('...and with the rule off, the same shooting walks it off that line',
     pushed > held * 10 && pushed > 1,
     `${pushed.toFixed(2)}u — this is the game before the block`);
+}
+
+// ===========================================================================
+section('THE ATTACKS STILL HAPPEN — a whole fight under fire, counted');
+// ===========================================================================
+// The complaint this answers, in the words it arrived in: the damage reaction
+// cancels out any lunge that needs to happen. Everything above measures one
+// run held on its line; this measures whether the runs COME AT ALL, over a
+// fight long enough for the cadence to matter, against an identical boss
+// nobody is shooting.
+//
+// SAME SEED ON BOTH SIDES. A boss rolls its stagger, its plan and its veer off
+// Math.random, so an unseeded pair measures the dice rather than the rule —
+// and the standard fix for a flake like that is to widen the threshold until
+// it stops, which is the assertion deleting itself. Identical seeds mean the
+// two fights are the same fight, and the only difference is the shooting.
+//
+// EVERY CHANNEL A PELLET HAS, fired every frame: the damage, the flinch flag
+// the animation reads, and the shove. Not the weak spot's jostle — that is a
+// skeleton impulse, and its refusal is measured on the actual bones in
+// tools/boss-hotspot-test.mjs section 5h, where a rig is loaded and there is
+// something to measure. What is asserted here is the half that decides the
+// fight: how many attacks the animal got to make.
+{
+  const seeded = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let x = Math.imul(a ^ (a >>> 15), 1 | a);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  // One fight. Returns how many runs the boss committed to and how many of
+  // them it finished, which are different questions: a run that is started and
+  // then broken is exactly the failure being hunted, and counting only starts
+  // would have missed it.
+  //
+  // `stagger` is a frame to fire the one legal interrupt on, and `leftRunOn`
+  // reports whether the animal actually came out of its run on that frame —
+  // the other half of the rule, which has to be driven rather than read off a
+  // field, or the block above is satisfied by a boss nothing can stop at all.
+  function fight(key, seed, { fire = false, stagger = -1 } = {}) {
+    const real = Math.random;
+    Math.random = seeded(seed);
+    try {
+      fresh();
+      const b = put(key, { boss: true, at: { x: -30, y: -20 } });
+      b.hp = 1e9;                      // the fight is the subject, not the kill
+      const to = { x: 0, y: -20, z: 0 };
+      let started = 0;
+      let finished = 0;
+      let prev = null;
+      let broken = 0;
+      let firstRunAt = -1;
+      let leftRunOn = false;
+      for (let i = 0; i < 60 * 60; i++) {
+        if (fire) {
+          b.hp -= 3;
+          b.hitThisFrame = true;
+          applyKnockback(b, 0, 1, 1, { source: 'shot' });
+        }
+        // The one thing that is allowed to end a run, fired once, mid-run.
+        if (i === stagger && b.lungeStage === 'strike') { staggerBoss(b); leftRunOn = b.lungeStage !== 'strike'; }
+        if (firstRunAt < 0 && b.lungeStage === 'strike') firstRunAt = i;
+        updateEnemies(DT, scene, to, noop, noop, noop);
+        if (b.lungeStage !== prev) {
+          if (b.lungeStage === 'strike') started++;
+          // A run that ends in `rest` ran its course; one that ends anywhere
+          // else was cut short. `reaim` is the middle of a two-part plan and
+          // is neither.
+          if (prev === 'strike' && b.lungeStage === 'rest') finished++;
+          if (prev === 'strike' && b.lungeStage !== 'rest' && b.lungeStage !== 'reaim') broken++;
+          prev = b.lungeStage;
+        }
+      }
+      return { started, finished, broken, firstRunAt, leftRunOn };
+    } finally { Math.random = real; }
+  }
+
+  // A THROWAWAY FIGHT PER BODY FIRST, and it is not a wart. resetEnemies clears
+  // the water but not every clock this module and the crowd keep across a run,
+  // so the FIRST fight with a given species carries state the next one does
+  // not — the control and the probe would differ by a run before either of
+  // them was shot at, and the honest reading of that number is "warm-up", not
+  // "the rule". Warmed, the two fights below are bit-identical frame for
+  // frame, and an exact comparison is the only one worth making: a tolerance
+  // here is a licence the next regression gets to spend.
+  const warm = (key, seed) => { fight(key, seed, {}); };
+
+  // THE HAMMERHEAD FIRST, because it is the body the complaint was made about
+  // and the one that shows it worst: the smallest boss in the water, the
+  // longest spring chain in the roster, and a tell that is entirely the head
+  // coming round to face you.
+  for (const key of ['bossHammerhead', 'bossShark', 'bossOrca', 'bossMosasaur']) {
+    warm(key, 7);
+    const calm = fight(key, 7, {});
+    const shot = fight(key, 7, { fire: true });
+    check(`${key} attacks under fire exactly as often as one nobody is shooting`,
+      shot.started === calm.started && shot.finished === calm.finished,
+      `${shot.started}/${shot.finished} runs started/finished against ${calm.started}/${calm.finished}`);
+    check('...and it finishes every one it starts', shot.broken === 0
+      && shot.finished > 0, `${shot.broken} cut short of ${shot.started}`);
+  }
+
+  // ...AND THE ONE THING THAT MAY STOP ONE STILL DOES. Driven on the same
+  // fight rather than asserted off the field: without this the block above is
+  // satisfied by a boss nothing can interrupt at all, which is a different bug
+  // wearing this one's passing test.
+  {
+    warm('bossHammerhead', 7);
+    const under = fight('bossHammerhead', 7, { fire: true });
+    const rammed = fight('bossHammerhead', 7, { fire: true, stagger: under.firstRunAt });
+    check('a perfect ram into a lit spot still ends a run under way',
+      under.firstRunAt >= 0 && rammed.leftRunOn,
+      `rammed on frame ${under.firstRunAt}, the run's first`);
+    // ...ON A RUN THE SHOOTING ALONE WAS NOT GOING TO END. Without this the
+    // check above passes on a run that was finishing anyway, which reads
+    // exactly like the mechanic working and exactly like it not existing.
+    const early = fight('bossHammerhead', 7, { fire: true, stagger: under.firstRunAt - 1 });
+    check('...and a frame earlier, outside the run, it does nothing',
+      !early.leftRunOn && early.started === under.started,
+      `${early.started} runs either way`);
+  }
 }
 
 // ===========================================================================
