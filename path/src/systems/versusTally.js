@@ -26,6 +26,18 @@
 // nobody, so the denominator is not the match clock. `share()` divides by the
 // time actually held, which is the only total the percentages can add up to.
 //
+// AND THE SHARE OVER TIME, not only at the whistle. The stats page replays the
+// possession bar across the match, so the ledger keeps a MARK every
+// `MARK_STEP` seconds of play — the running totals as they stood — and the
+// share at any moment is read off those. A running total rather than a share
+// per mark on purpose: a share is a division, and dividing at write time would
+// decide a denominator per mark that the next mark disagrees with. The marks
+// are sums; the reader divides once.
+//
+// BOUNDED, whatever the clock is set to. `MARK_CAP` marks is the ceiling and
+// the step DOUBLES rather than the list growing, so a fifteen-minute match
+// costs exactly what a three-minute one does at half the resolution.
+//
 // NOTHING HERE IS A LOOK, so none of it is tunable and none of it reads CONFIG.
 // ============================================================================
 
@@ -36,6 +48,10 @@ const SEATS = MAX_PER_SIDE * TEAMS;
 
 const zero = () => new Array(SEATS).fill(0);
 
+/** Seconds of play between marks, and the most marks that are ever kept. */
+const MARK_STEP = 0.25;
+const MARK_CAP = 900;
+
 const tally = {
   goals: zero(),
   assists: zero(),
@@ -45,6 +61,14 @@ const tally = {
   // Seconds of play in total, held by somebody. NOT the match clock: a ball in
   // flight that nobody has touched since the kickoff belongs to no seat.
   heldTotal: 0,
+  // Seconds of PLAY, held or not — the x-axis the marks below are laid on.
+  // Not `heldTotal` and not the match clock: the replay wants the time the
+  // players were playing, which is neither the time the ball was owned nor the
+  // time the whistle ran.
+  play: 0,
+  // The running per-SIDE totals, sampled. `t` is play seconds, `a`/`b` the two
+  // sides' held seconds as they stood at that moment.
+  marks: { step: MARK_STEP, next: MARK_STEP, t: [], a: [], b: [] },
 };
 
 /** Wipe it. Called from startVersus, beside the scores. */
@@ -54,6 +78,8 @@ export function resetTally() {
   tally.saves.fill(0);
   tally.held.fill(0);
   tally.heldTotal = 0;
+  tally.play = 0;
+  tally.marks = { step: MARK_STEP, next: MARK_STEP, t: [], a: [], b: [] };
 }
 
 const valid = (seat) => Number.isInteger(seat) && seat >= 0 && seat < SEATS;
@@ -82,11 +108,54 @@ export function noteTallySave(seat) {
 /**
  * A frame of play. `holder` is the seat that touched the ball last, or -1
  * while nobody has.
+ *
+ * AN UNHELD FRAME STILL COUNTS AS PLAY. It is not possession for anybody — the
+ * early return on `holder` is what keeps that true — but it is time the match
+ * was being played, and the replay's clock has to include it or a ball loose
+ * for ten seconds is ten seconds the bar skips over.
  */
 export function accrueTallyPossession(dt, holder) {
-  if (!(dt > 0) || !valid(holder)) return;
-  tally.held[holder] += dt;
-  tally.heldTotal += dt;
+  if (!(dt > 0)) return;
+  tally.play += dt;
+  if (valid(holder)) {
+    tally.held[holder] += dt;
+    tally.heldTotal += dt;
+  }
+  mark();
+}
+
+/**
+ * Write down where the two sides stood, if this frame crossed a mark.
+ *
+ * A `while` rather than an `if`: one frame of a stalled tab is a dt of several
+ * marks, and a mark list with a gap in it is a replay that jumps.
+ *
+ * The per-side sums are taken here rather than kept as two more running
+ * counters because a seat's SIDE is `teamOfSeat`, which the roster owns — and
+ * a second copy of that answer, updated per frame, is exactly the kind of
+ * thing that stays right until the day the roster changes shape.
+ */
+function mark() {
+  const m = tally.marks;
+  if (tally.play < m.next) return;
+  const a = teamSum(tally.held, 0);
+  const b = teamSum(tally.held, 1);
+  while (tally.play >= m.next) {
+    m.t.push(m.next);
+    m.a.push(a);
+    m.b.push(b);
+    m.next += m.step;
+  }
+  // THE LIST NEVER GROWS PAST THE CAP — the step doubles and every other mark
+  // is dropped instead. Keeping the EVEN indices keeps a mark at every
+  // multiple of the new step, so the list stays evenly spaced rather than
+  // becoming a list of two alternating gaps.
+  if (m.t.length > MARK_CAP) {
+    const keep = (arr) => arr.filter((_, i) => i % 2 === 1);
+    m.t = keep(m.t); m.a = keep(m.a); m.b = keep(m.b);
+    m.step *= 2;
+    m.next = m.t[m.t.length - 1] + m.step;
+  }
 }
 
 /** One side's total of a column. */
@@ -132,4 +201,32 @@ export function tallySnapshot() {
   }
 
   return { seats, teams, held: total };
+}
+
+/**
+ * The share of the ball over the match, for the stats page's replay.
+ *
+ * SHARES, not the sums the ledger keeps: the division is done once, here,
+ * against the total held AT THAT MOMENT rather than at the whistle — which is
+ * what makes the last point equal the final percentage and every point before
+ * it the number the page would have shown had the whistle gone then.
+ *
+ * A MOMENT NOBODY HAD THE BALL IS 50-50. It is the honest reading of a ball
+ * that belongs to neither side, it is what the bar looks like before a kickoff,
+ * and the alternative — 0 and 0 — is a bar that vanishes rather than one that
+ * is evenly split. tallySnapshot() answers 0 and 0 for the same match because
+ * it is reporting a FACT about the whole match; this is drawing a bar.
+ *
+ * `seconds` is the play time the last point sits at, which is the replay's
+ * length before it is sped up.
+ */
+export function tallyTimeline() {
+  const m = tally.marks;
+  const points = [];
+  for (let i = 0; i < m.t.length; i++) {
+    const total = m.a[i] + m.b[i];
+    const left = total > 0 ? (m.a[i] / total) * 100 : 50;
+    points.push({ t: m.t[i], left, right: 100 - left });
+  }
+  return { step: m.step, seconds: tally.play, points };
 }

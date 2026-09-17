@@ -49,8 +49,6 @@ accessoryShortHairName,Bob,,accessory drawer,"Not a hat: HAIR. A layered short c
 accessoryBobHairName,Anime Hair,,accessory drawer,"Not a hat: HAIR. A side-swept bob, swept across the face on one side. Same tile, two words at most. It shares the row with the short cut, so the two have to be tellable apart by name — the difference the player sees is long and smooth against short and spiky."
 loadResuming,Resuming,,loading,
 mainMenuButton,Main Menu,,pause menu,
-versusWinner,Champion!,,versus,"Centre-screen line under the winning score at the end of a two-player match, first to 5 goals. Two or three words at most, read for about three seconds while the water is frozen; the number above it says who won, so this only has to feel like a whistle."
-versusDraw,Tie,,versus,"Centre-screen line at the end of a TIMED Blubberball match that ran out with the scores level — the one result a first-to-five cannot produce. Sits exactly where versusWinner sits and is read the same way, for about three seconds over frozen water with the score on the strip above it. One or two words. It is not a failure and not nothing happening: both sides played the whole match and neither won it."
 versusGo,Go!,,versus,"The whistle: the line that pops at centre screen when the kickoff countdown (3, 2, 1) reaches zero and the two seals are released to race for the ball. One or two words, read for about half a second, in the same big type as the numerals it follows. Play is already live under it."
 versusKickoffVs,vs,,versus,
 sealSports,Seal sports,,main menu,"The fifth hex on the main menu, and the heading of the panel it opens — a list of the other things a seal can play. Your words from chat, typed in by Claude: read once. Two short words, one per line in the hexagon."
@@ -109,7 +107,6 @@ roomErrBadCode,Bad Code,,room lobby,
 roomErrBuild,Bad Build,,room lobby,
 roomErrLost,Lost Connection,,room lobby,
 roomErrOffline,Offline,,room lobby,
-statsTitle,Match Stats,,blubberball stats,"Heading at the top of the Blubberball stats page, over the two team names and the final score. Two or three words naming what the screen is."
 statsGoals,Goals,,blubberball stats,
 statsAssists,Assists,,blubberball stats,"The row heading for assists on the team tab — the touch that set a goal up, credited to a team-mate. One word, reads as a set with the goals, saves and possession rows."
 statsSaves,Saves,,blubberball stats,"The row heading for saves — a shot that was on target for a side's own goal and got cleared. One word, in the same set."

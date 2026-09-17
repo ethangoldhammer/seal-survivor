@@ -214,7 +214,6 @@
 
     <!-- --------------------------------------------------------------- match -->
     <ViewModel defaultInstanceId="3:59" name="MatchStats" id="3:30">
-        <ViewModelPropertyString  name="title"       id="3:31"/>
         <ViewModelPropertyString  name="leftName"    id="3:32"/>
         <ViewModelPropertyString  name="rightName"   id="3:33"/>
         <ViewModelPropertyNumber  name="leftScore"   id="3:34"/>
@@ -242,29 +241,11 @@
         <ViewModelPropertyString  name="possessionLabel" id="3:56"/>
         <ViewModelPropertyString  name="versusLabel"     id="3:48"/>
 
-        <!-- Optional: no badge at all unless the match set one. -->
+        <!-- Optional: no badge at all unless the match set one. It had the
+             badge band to itself the moment the champion line left it — see
+             the note on the Record Badge node in stats-page.rml. -->
         <ViewModelPropertyBoolean name="isRecord"    id="3:60"/>
         <ViewModelPropertyString  name="recordLabel" id="3:61"/>
-
-        <!-- THE CHAMPION, folded onto this page. It was a DOM text box floating
-             over the artboard at the end of a match (.sv-versus-card-win in
-             systems/versus.js) — the result was the one thing on screen that
-             was not part of the page announcing it.
-
-             THE NAME COMES WITH THE LABEL. Who won is the side, not the seal
-             that scored the last goal, and the two runs are one line: the label
-             small and tracked, the name after it. The goal card still names the
-             SEAL, because that is what a goal is.
-
-             `hasChampion` is what shows it, and it SHARES THE BADGE BAND with
-             the record pill above — both sit under the title and neither is
-             laid out around the other, so the page must never be handed both.
-             ui/statsCard.js is where that is enforced; there is nothing in the
-             artboard that can stop it. A draw has no champion and sets none of
-             these, which is the same blank the DOM box had. -->
-        <ViewModelPropertyBoolean name="hasChampion"   id="3:232"/>
-        <ViewModelPropertyString  name="championLabel" id="3:230"/>
-        <ViewModelPropertyString  name="championName"  id="3:231"/>
 
         <ViewModelPropertyString  name="tabTeamLabel"    id="3:62"/>
         <ViewModelPropertyString  name="tabPlayersLabel" id="3:63"/>
@@ -322,7 +303,6 @@
         <ViewModelPropertyViewModel viewModelReferenceId="3:100" name="player8" id="3:77"/>
 
         <ViewModelInstance exports="true" name="Default" id="3:59">
-            <ViewModelInstanceString propertyValue="lorem ipsum" viewModelPropertyId="3:31" name="Component" id="0:3459"/>
             <ViewModelInstanceString propertyValue="Team 1" viewModelPropertyId="3:32" name="Component" id="0:3460"/>
             <ViewModelInstanceString propertyValue="Team 2"   viewModelPropertyId="3:33" name="Component" id="0:3461"/>
             <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="3:34" name="Component" id="0:3462"/>
@@ -348,9 +328,6 @@
             <!-- true in the authored default so the block is on screen in
                  `rive --screenshot` and in the editor, where a badge that only
                  exists at the end of a real match is otherwise unreviewable. -->
-            <ViewModelInstanceBoolean propertyValue="false"       viewModelPropertyId="3:232" id="0:5300"/>
-            <ViewModelInstanceString propertyValue="lorem"        viewModelPropertyId="3:230" id="0:5301"/>
-            <ViewModelInstanceString propertyValue="dolor sit"    viewModelPropertyId="3:231" id="0:5302"/>
             <ViewModelInstanceString propertyValue="lorem"       viewModelPropertyId="3:62" name="Component" id="0:3482"/>
             <ViewModelInstanceString propertyValue="ipsum"       viewModelPropertyId="3:63" name="Component" id="0:3483"/>
             <ViewModelInstanceBoolean propertyValue="false"      viewModelPropertyId="3:64" name="Component" id="0:3484"/>

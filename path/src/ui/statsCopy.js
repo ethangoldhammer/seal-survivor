@@ -18,7 +18,7 @@
 // rive/blubberball/data.rml; the right-hand is a uiText.csv id. Both halves are
 // literals, which is the entire point:
 //
-//   - `uiText('statsTitle')` is matchable by tools/ui-text-test.mjs, which
+//   - `uiText('statsGoals')` is matchable by tools/ui-text-test.mjs, which
 //     fails on a row nothing reads and a read with no row. A loop over a table
 //     of ids would pass the id in as a VARIABLE, which that test cannot match
 //     to a row by anything static — and it fails the file for exactly that.
@@ -42,8 +42,6 @@ import { uiText } from '../uiTextTable.js';
  */
 export function statsLabels() {
   return {
-    title: uiText('statsTitle'),
-
     // The four rows of the team tab, in the order they are drawn.
     goalsLabel: uiText('statsGoals'),
     assistsLabel: uiText('statsAssists'),
@@ -74,21 +72,4 @@ export function statsLabels() {
     rematchLabel: uiText('versusRematch'),
     menuLabel: uiText('mainMenuButton'),
   };
-}
-
-/**
- * THE RESULT'S OWN LINE, which is the one label on this page that depends on
- * what happened — so it is a function rather than a row of the map above.
- *
- * Both rows are still LITERALS at a uiText call, which is the whole constraint
- * (see the header): tools/ui-text-test.mjs matches reads statically and cannot
- * follow an id held in a variable. A ternary over two literal calls is
- * matchable; a lookup table indexed by a boolean is not.
- *
- * These are the rows the DOM box over the artboard used to read — versusWinner
- * and versusDraw — moved, not reminted. A new id would have left two lines
- * Ethan has already written read by nothing.
- */
-export function championLabel(draw) {
-  return draw ? uiText('versusDraw') : uiText('versusWinner');
 }

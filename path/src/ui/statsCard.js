@@ -20,19 +20,48 @@
 // `play(name)` is a fresh instance the binding never reaches. Its listeners
 // still fire and write into nothing. So the name goes in the constructor.
 //
+// THE POSSESSION BAR MOVES, and it is the one thing on this page the artboard
+// does not draw by itself. `leftPossession`/`rightPossession` are bound to the
+// fill's width and to the two percentages beside it, so writing them on a
+// frame clock replays the match's share of the ball across the bar — see
+// ui/possessionReplay.js for the clock and systems/versusTally.js for the
+// marks it reads. Every other value on this page is written once.
+//
 // WITHOUT THE MACHINE RUNNING AT ALL nothing binds either — an artboard that
 // never advances never pushes a bind, so every value sits at the lorem it was
 // authored with. That failure looks exactly like a file that loaded fine.
 // ============================================================================
 
-import { Rive, Layout, Fit, Alignment } from '@rive-app/canvas';
-// Sets the WASM url. Imported for the side effect — see riveRuntime.js.
-import './riveRuntime.js';
+// THE WEBGL2 PACKAGE, not the canvas one. This page is built out of feathers —
+// every button glow, every drop shadow, the record pill's halo — and only the
+// Rive Renderer draws a feather SOFT; the Canvas2D renderer in
+// `@rive-app/canvas` draws it as a hard-edged offset copy, measured side by
+// side at the same runtime version. Same JavaScript API, its own WASM, and the
+// splash (ui/riveSplash.js) has ridden it for as long as it has had shadows.
+//
+// THE COST IS A SECOND GL CONTEXT, which is why the boss bar and the polaroid
+// have not moved: the bar would hold one alive through every fight, and the
+// polaroid's pixels are read back with drawImage for the share image. This
+// page has neither problem. It is built once, at the whistle, over water that
+// is frozen at four percent, nothing reads it back, and destroy() drops the
+// context with it — so the context exists for as long as a score screen is up
+// and not one frame longer.
+import { Rive, Layout, Fit, Alignment } from '@rive-app/webgl2';
+// Sets the WASM url — for the WEBGL2 package, which has its own loader.
+// `setWasmUrl` is global to its own package and does nothing for the other
+// one, which is why there are two of these modules. Imported for the side
+// effect, and it has to happen before any Rive instance exists — see
+// riveRuntimeGl.js.
+import './riveRuntimeGl.js';
 import rivUrl from './blubberball.riv?url';
-import { statsLabels, championLabel } from './statsCopy.js';
+import { statsLabels } from './statsCopy.js';
 // Which artboard row each seal goes in. Its own file so a test can check the
 // arithmetic without the Rive runtime — see ui/statsSeats.js.
 import { STATS_SEATS, seatIndexForRow } from './statsSeats.js';
+// The replay's clock — its own file for the same reason statsSeats.js is, and
+// the only part of this page a test can reach. See its header.
+import { makePossessionReplay } from './possessionReplay.js';
+import { CONFIG } from '../config.js';
 
 /** What the game needs blubberball.riv to contain. */
 export const STATS_ARTBOARD = 'Stats Page';
@@ -76,7 +105,7 @@ function write(vmi, kind, name, value, missing) {
  * @param data  see showStatsCard.
  * @returns the property names that were not there, for one warning.
  */
-function paint(vmi, data) {
+function paint(vmi, data, replay = null) {
   const missing = [];
   const w = (kind, name, value) => write(vmi, kind, name, value, missing);
 
@@ -93,31 +122,24 @@ function paint(vmi, data) {
   w('number', 'leftGoals', t0.goals);
   w('number', 'leftAssists', t0.assists);
   w('number', 'leftSaves', t0.saves);
-  w('number', 'leftPossession', t0.possession);
+  // THE BAR'S FIRST FRAME, which is the replay's if there is one — not the
+  // closing number. Writing the whistle's figure here and then starting a
+  // replay a frame later is a bar that snaps out of the answer and back into
+  // it, and the snap is on the frame the page fades in on.
+  const share = replay ? replay.at(0) : { left: t0.possession, right: t1.possession };
+  w('number', 'leftPossession', share.left);
   w('number', 'rightGoals', t1.goals);
   w('number', 'rightAssists', t1.assists);
   w('number', 'rightSaves', t1.saves);
-  w('number', 'rightPossession', t1.possession);
+  w('number', 'rightPossession', share.right);
 
-  // THE CHAMPION — the result line, which used to be a DOM text box floating
-  // over this artboard.
-  //
-  // ONE BAND, TWO BADGES. The champion line and the record pill are both laid
-  // out under the title at the same height and neither makes room for the
-  // other, so the artboard cannot be shown both — and nothing in the artboard
-  // can stop it. Here is where it is stopped. The champion wins: it is the
-  // result of the match on screen, and a record is a note about it.
-  //
-  // A DRAW HAS A LINE BUT NO NAME. Nobody won, so `championName` is blank and
-  // the label carries the whole of it — which is exactly what the DOM box did.
-  const draw = !!data.draw;
-  const champion = draw || !!data.championName;
-  w('boolean', 'hasChampion', champion);
-  if (champion) {
-    w('string', 'championLabel', championLabel(draw));
-    w('string', 'championName', draw ? '' : data.championName);
-  }
-  w('boolean', 'isRecord', !!data.isRecord && !champion);
+  // THE RECORD PILL, which has the badge band to itself. It used to share that
+  // height with a champion line — "Champion!" over the winning side's name —
+  // and neither was laid out around the other, so this had to choose between
+  // them. The line said what the two names and the two big numbers under it
+  // already said, and it is gone; the badge is no longer conditional on
+  // anything but the record.
+  w('boolean', 'isRecord', !!data.isRecord);
   // How many ROWS of each column to draw — per side, not per seat. The two
   // columns are the two sides, so a flat count of every seal in the match
   // would draw twice as many rows down each column as there are seals in it.
@@ -169,15 +191,46 @@ function paint(vmi, data) {
 }
 
 /**
+ * The match's share of the ball, as something that can be asked for a moment.
+ *
+ * TUNED IN CONFIG, OVERRIDABLE BY A HARNESS. The speed is a look — how fast
+ * the bar is worth watching — and lives with the rest of the mode's numbers; a
+ * caller may override it (`data.possession.speed`) so a look page does not
+ * have to sit through a match at whatever the game is tuned to.
+ *
+ * `null` when there is nothing to replay: no marks, or the mode's switch off.
+ * Every caller treats that as "the bar is the closing number", which is what
+ * this page did before the replay existed.
+ */
+function buildReplay(data) {
+  const src = data?.possession;
+  if (!src?.points?.length) return null;
+  const cfg = CONFIG?.versus?.stats?.possession ?? {};
+  if (cfg.enabled === false) return null;
+  return makePossessionReplay({
+    points: src.points,
+    seconds: src.seconds,
+    // WHERE IT COMES TO REST is the ledger's own pair, not the last mark —
+    // the figure printed beside the bar has to be the one the match reported.
+    final: { left: data.teams?.[0]?.possession, right: data.teams?.[1]?.possession },
+    speed: src.speed ?? cfg.speed ?? 5,
+    delay: src.delay ?? cfg.delay ?? 0.35,
+  });
+}
+
+/**
  * Put the page up.
  *
  * @param parent  the element it goes in.
  * @param data    { title, scores:[n,n], colors:[rgb,rgb], accent,
  *                  teams:[{name,goals,assists,saves,possession}, …],
+ *                  possession: tallyTimeline()'s { seconds, points } — the
+ *                  share over the match, replayed across the bar. Without it
+ *                  the bar is the closing number and does not move,
  *                  seats:[{name,goals,assists,saves}, …] — DENSE, in column
  *                  order: the left side's `seatsPerSide` seals, then the
  *                  right's,
- *                  seatsPerSide, isRecord, championName, draw,
+ *                  seatsPerSide, isRecord,
  *                  labels:{…} for a harness only }
  * @returns a handle whose every method is safe to call whether or not the
  *          artboard ever loaded. `live` stays false if it did not.
@@ -256,7 +309,52 @@ export function mountStatsCard({ parent, data = {} } = {}) {
   el.appendChild(canvas);
   parent.appendChild(el);
 
-  const state = { rive: null, live: false, destroyed: false };
+  const state = { rive: null, live: false, destroyed: false, replay: null, raf: 0, t0: 0 };
+
+  // ------------------------------------------------------------ the bar's clock
+  //
+  // ITS OWN FRAME LOOP, not the match's. The match is frozen at four percent
+  // while this page is up and its dt is scaled to match (see updateOver in
+  // systems/versus.js) — a bar driven off that would replay a three-minute
+  // match in two hours. This is footage of a match that is over, on the wall
+  // clock, exactly like the highlight reel playing behind it.
+  //
+  // IT STOPS WHEN THE REPLAY DOES. A loop that keeps writing the same two
+  // numbers every frame forever is a page that never idles, and the artboard
+  // is already redrawing itself for the hover glows.
+  function stopReplay() {
+    if (state.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(state.raf);
+    state.raf = 0;
+  }
+
+  function stepReplay() {
+    state.raf = 0;
+    if (state.destroyed || !state.live || !state.replay) return;
+    const vm = state.rive?.viewModelInstance;
+    if (!vm) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const share = state.replay.at(now - state.t0);
+    const missing = [];
+    write(vm, 'number', 'leftPossession', share.left, missing);
+    write(vm, 'number', 'rightPossession', share.right, missing);
+    // Warned once and then dropped: a missing property on a per-frame write is
+    // sixty warnings a second, and the paint above has already said so.
+    if (missing.length) { state.replay = null; return; }
+    if (!share.done) schedule();
+  }
+
+  function schedule() {
+    if (typeof requestAnimationFrame !== 'function') return;
+    state.raf = requestAnimationFrame(stepReplay);
+  }
+
+  /** Start it from now, wherever it had got to. */
+  function runReplay() {
+    stopReplay();
+    if (!state.replay) return;
+    state.t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    schedule();
+  }
 
   function warn(why) {
     console.warn(`[statsCard] the stats page is off — ${why}`);
@@ -284,10 +382,12 @@ export function mountStatsCard({ parent, data = {} } = {}) {
           el.remove();
           return;
         }
-        const missing = paint(vmi, data);
+        state.replay = buildReplay(data);
+        const missing = paint(vmi, data, state.replay);
         if (missing.length) warn(`these properties are not in the file: ${missing.join(', ')}`);
         state.live = true;
         el.style.opacity = '1';
+        runReplay();
       },
     });
   } catch (err) {
@@ -361,11 +461,18 @@ export function mountStatsCard({ parent, data = {} } = {}) {
     update(next) {
       if (!state.live) return;
       const vmi = state.rive?.viewModelInstance;
-      if (vmi) paint(vmi, next ?? {});
+      if (!vmi) return;
+      // A fresh ledger is a fresh replay — and from the top, because the bar
+      // is describing a different match than the one it was part way through.
+      state.replay = buildReplay(next ?? {});
+      paint(vmi, next ?? {}, state.replay);
+      runReplay();
     },
     destroy() {
       state.destroyed = true;
       state.live = false;
+      stopReplay();
+      state.replay = null;
       try { state.rive?.cleanup(); } catch { /* already gone */ }
       state.rive = null;
       el.remove();

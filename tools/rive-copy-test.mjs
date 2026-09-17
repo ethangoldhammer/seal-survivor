@@ -149,7 +149,7 @@ section('0. the parsers can still see what they are looking for');
   vals.get('9:2') === 'lorem'
     ? pass('its authored value is found')
     : fail('the authored-value parser matched nothing');
-  manifest(`    title: uiText('statsTitle'),`).get('title')?.[0] === 'statsTitle'
+  manifest(`    goalsLabel: uiText('statsGoals'),`).get('goalsLabel')?.[0] === 'statsGoals'
     ? pass('a manifest line is found')
     : fail('the manifest parser matched nothing');
   // ...and the function shape, which carries more than one row into one slot.
@@ -214,7 +214,6 @@ const DATA_OWNED = new Map([
   ['scorerName', 'who scored, off systems/rosterCast.js (GoalCard)'],
   ['goalLine', 'the assist or own-goal line, ALREADY COMPOSED — versus.js fills {name} into the versusAssist row, because who assisted is a sentence the match builds and not a label this artboard could look up'],
   ['goalClock', 'the match clock the goal landed on'],
-  ['championName', 'the winning SIDE, cast by systems/teamNameCast.js — the label beside it is copy and is checked above, but who won is the match\'s own fact. Blank on a draw, where the label carries the whole line'],
 ]);
 
 section('3. every player-facing string property is joined to a row');

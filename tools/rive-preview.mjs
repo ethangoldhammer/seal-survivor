@@ -13,26 +13,26 @@
 // way the game pushes them, and renders. Nothing is written to the .rml, so the
 // artboard stays clean and every gate stays green.
 //
-// IT CALLS statsCopy.js RATHER THAN PARSING IT. `statsLabels()` and
-// `championLabel()` are imported and invoked — the same functions
-// ui/statsCard.js calls — so a preview cannot drift from what the game does.
+// IT CALLS statsCopy.js RATHER THAN PARSING IT. `statsLabels()` is imported
+// and invoked — the same function ui/statsCard.js calls — so a preview cannot
+// drift from what the game does.
 // A tool that re-derived the mapping would be a second answer to "which row
 // goes in which slot", and the one that goes stale is always the one you were
 // looking at.
 //
 // THE SCENES ARE STATES, NOT PAGES. Half this screen is invisible at rest — the
-// champion block is gated on `hasChampion`, the record badge on `isRecord`, the
-// players tab on `showPlayers`, the prompt on `overShown`. A single render
+// record badge is gated on `isRecord`, the players tab on `showPlayers`, the
+// prompt on `overShown`. A single render
 // shows one of them and silently omits the rest, which is exactly the confusion
 // this exists to end. So it renders a named scene per state and writes them
 // together.
 //
 //   npm run rive:preview                 every scene as a still
-//   npm run rive:preview -- champion     just that one
+//   npm run rive:preview -- record       just that one
 //   npm run rive:preview -- --list       the scene names
 //
 //   npm run rive:live                    THE CLI'S OWN VIEWER, live, with the
-//   npm run rive:live -- champion        real copy in it — rebuilds as you edit
+//   npm run rive:live -- record          real copy in it — rebuilds as you edit
 //                                        the .rml, and takes the mouse
 //
 // The live window is the same scene table, so what you tune in it and what a
@@ -45,7 +45,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { statsLabels, championLabel } from '../path/src/ui/statsCopy.js';
+import { statsLabels } from '../path/src/ui/statsCopy.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PROJECT = join(ROOT, 'rive/blubberball');
@@ -79,20 +79,17 @@ const LABELS = { ...statsLabels() };
 const SCENES = {
   team: {
     artboard: 'Stats Page',
-    what: 'the team tab as a match leaves it — no champion, no record',
+    what: 'the team tab as a match leaves it — no record badge',
     data: { ...MATCH, ...LABELS },
   },
-  champion: {
-    artboard: 'Stats Page',
-    what: 'a match that was WON — the champion block is gated on hasChampion',
-    data: { ...MATCH, ...LABELS, hasChampion: true,
-            championLabel: championLabel(false), championName: "Tony's Terrors" },
-  },
+  // A DRAW IS A SCENE AND NOT A STATE, now that the champion line is gone: the
+  // page says a match was level the only way it says anything about the
+  // result, which is the two numbers being the same. Worth a still precisely
+  // because nothing else on the page marks it.
   draw: {
     artboard: 'Stats Page',
-    what: 'a timed match that ran out level — the same slot, the other sentence',
-    data: { ...MATCH, ...LABELS, leftScore: 3, rightScore: 3, hasChampion: true,
-            championLabel: championLabel(true), championName: '' },
+    what: 'a timed match that ran out level — the scoreline is the whole of it',
+    data: { ...MATCH, ...LABELS, leftScore: 3, rightScore: 3 },
   },
   record: {
     artboard: 'Stats Page',
@@ -205,9 +202,9 @@ for (const name of picked) {
   console.log(`  ok   ${name.padEnd(10)} ${relative(ROOT, out)}  — ${scene.what}`);
 }
 
-// A CONTACT SHEET, because eight files in a folder is eight files in a folder.
-// The states only mean anything beside each other: champion against draw,
-// record against ordinary. Written every run so it can never list a scene that
+// A CONTACT SHEET, because a folder of files is a folder of files. The states
+// only mean anything beside each other: the record badge against an ordinary
+// match, a win against a draw. Written every run so it can never list a scene that
 // is no longer there.
 const sheet = `<!doctype html><meta charset="utf-8"><title>Blubberball preview</title>
 <style>

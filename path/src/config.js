@@ -44117,6 +44117,20 @@ export const CONFIG = {
       creditWindow: 6,
       ownGoal: { wasLeaving: 2, minSpeed: 6 },
     },
+    // THE STATS PAGE — ui/statsCard.js, drawn by rive/blubberball.
+    //
+    // THE POSSESSION BAR REPLAYS THE MATCH rather than showing only where it
+    // ended. A final 50-50 is two very different matches — one where the ball
+    // went back and forth all afternoon, one where each side owned a half of
+    // it — and the bar drew them identically. Run back at `speed` times the
+    // speed it happened at, the swing IS the match.
+    //
+    // `delay` is a beat of the closing number before it starts moving, so the
+    // page has arrived and been read before the bar takes off; it comes to
+    // rest on exactly the figure the ledger reported.
+    stats: {
+      possession: { enabled: true, speed: 5, delay: 0.35 },
+    },
     // Food. The ordinary spawner is off; docile bait balls are dropped on this
     // clock instead, and the boats sail unarmed.
     chum: {
@@ -46812,6 +46826,9 @@ export const TUNER_SCHEMA = [
       // untouched by this, and the one thing a switch here must never be is
       // one that leaves one side chaining.
       { path: 'versus.chain.enabled', type: 'bool', label: 'blubberball: the food chain runs in a match' },
+      { path: 'versus.stats.possession.enabled', type: 'bool', label: 'blubberball: stats page replays the possession bar' },
+      { path: 'versus.stats.possession.speed', min: 1, max: 20, step: 0.5, label: 'blubberball: possession replay — times actual speed' },
+      { path: 'versus.stats.possession.delay', min: 0, max: 2, step: 0.05, label: 'blubberball: possession replay — beat before it starts (s)' },
       { path: 'versus.replay.cams.projection', type: 'choice', options: ['flat', 'perspective'], label: 'blubberball: goal replay camera' },
       { path: 'versus.replay.cams.flatPad', min: 0, max: 24, step: 0.5, label: 'blubberball: flat replay — air round the subject (units)' },
       { path: 'versus.replay.cams.flatPush', min: 0, max: 1, step: 0.05, label: 'blubberball: flat replay — how far a shot closes in' },

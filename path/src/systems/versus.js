@@ -61,10 +61,11 @@
 // beside the death dive's and the kill shot's.
 //
 // COPY. The whistle's line is `versusGo`, in uiText.csv — the score and the
-// countdown are numerals, which are not prose. The END state's line is no
-// longer read here at all: `versusWinner` and `versusDraw` moved onto the
-// stats page with the champion block, and ui/statsCopy.js is what reads them
-// now (championLabel).
+// countdown are numerals, which are not prose. THE END STATE HAS NO LINE. Its
+// two — `versusWinner` and `versusDraw` — moved onto the stats page with the
+// champion block and then left the game with it: the scoreline under the two
+// team names is the result, and a sentence saying so again was a second answer
+// to a question the page had already answered.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -138,7 +139,7 @@ import { features, actions, recordImitation, flushImitation, resetImitation, imi
 import { attachSealOutline, releaseSealOutline, setPlayerOutlineTint } from './outlines.js';
 import { instanceNoise } from './noiseShader.js';
 import { rosterSize, teamOfSeat, seatsOfTeam, sameTeam, seatIsCpu, seatPad, seatFormation, resetRoster, setRosterSize, rosterPerSide, MAX_PER_SIDE } from './sealRoster.js';
-import { resetTally, noteTallyGoal, noteTallySave, accrueTallyPossession, tallySnapshot } from './versusTally.js';
+import { resetTally, noteTallyGoal, noteTallySave, accrueTallyPossession, tallySnapshot, tallyTimeline } from './versusTally.js';
 import { goalColors, ballEvent, setBallDrive, setBallBody, noteBallMomentum, claimBall, teamColor, updateBallLook, resetBallLook, ballLookState, ballTint, ballOwner, recordBallLook, poseBallLook, LOOK_REC } from './ballLook.js';
 import { updateBallTrail, clearBallTrail } from './ballTrail.js';
 import { spitBallBubbles, resetBallSpit } from './ballSpit.js';
@@ -4510,23 +4511,21 @@ function statsCardData() {
   return {
     scores: [st.scores[0], st.scores[1]],
     colors,
-    // The winner's colour lights the record badge. A draw leaves the
-    // artboard's own accent alone rather than picking a side. The hover glows
-    // are NOT this: they are keyframed in the .rml, and a bind on a property a
-    // timeline also writes is a fight the timeline wins.
+    // The winner's colour lights the record badge — and it is the only thing
+    // on the page that names a winner now that the champion line is gone. A
+    // draw leaves the artboard's own accent alone rather than picking a side.
+    // The hover glows are NOT this: they are keyframed in the .rml, and a bind
+    // on a property a timeline also writes is a fight the timeline wins.
     accent: st.winner >= 0 ? colors[st.winner] : null,
     teams: [0, 1].map((t) => ({ name: teamName(t), ...snap.teams[t] })),
+    // THE SHARE OVER THE WHOLE MATCH, which the page replays across the bar —
+    // the closing pair above is where it comes to rest. See versusTally.js.
+    possession: tallyTimeline(),
     seats: order.map((i) => ({ name: seatName(i), ...(bySeat.get(i) ?? {}) })),
     // Rows per column, so a one-a-side match shows one line a side rather than
     // four, three of them empty.
     seatsPerSide: rosterPerSide(),
     isRecord: false,
-    // THE RESULT, which the page reports rather than a box floating over it.
-    // The SIDE, not the seal that scored the last goal — that one animal is
-    // credited on the goal card, where it belongs, and this is the answer to
-    // who won. A draw has no name and says so through `draw`.
-    draw: st.winner < 0,
-    championName: st.winner >= 0 ? teamName(st.winner) : '',
   };
 }
 
@@ -4787,10 +4786,9 @@ function endMatch(winner, draw = false, { onGoal = false } = {}) {
 function showResultCard(winner, draw) {
   if (!ui) return;
   // NOTHING LEFT FOR THIS CARD TO SAY. It carried the result — the line, and
-  // the winning side's name under it — and both are on the stats page now
-  // (ui/statsCard.js, off `championName`/`draw` in statsCardData). A card that
-  // repeated them would be a second answer to the same question, floating over
-  // the page giving the first one.
+  // the winning side's name under it — and the stats page took both over
+  // (ui/statsCard.js) before dropping them: the scoreline IS the result, and
+  // everything that restated it has now gone, this card first.
   //
   // So the whistle takes the goal card DOWN and the page is the result. The
   // colour of the pane said who won and the page says it in the accent and in
@@ -8580,8 +8578,8 @@ function showCard(scorer, won, pop = true) {
   // It used to turn into the champion card on that last goal: the winning
   // SIDE's name in place of the scorer's, and the assist line cleared because
   // "Assisted by Pete" under a team name credits a pass to nobody. Who won is
-  // the stats page's line now (the champion block, ui/statsCard.js), so this
-  // card is free to go on being what it is — and the match-winning goal keeps
+  // the stats page's scoreline now (ui/statsCard.js), so this card is free to
+  // go on being what it is — and the match-winning goal keeps
   // the caption every other goal got, which is the one goal that most deserves
   // it. The result and the moment are two things, and they are on two surfaces
   // instead of fighting over one.

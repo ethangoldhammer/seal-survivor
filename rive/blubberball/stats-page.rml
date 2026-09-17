@@ -5,6 +5,11 @@
          Two tabs: the sides' totals, and the seats' own. Every word is bound, so
          uiText.csv keeps owning the copy; the literals here are lorem and exist
          only as what shows before the game pushes anything in.
+
+         NO HEADING AND NO RESULT LINE. The page opened with "Match Stats" over
+         a "Champion! / <side>" band, and both were saying what the two names
+         and the two big numbers under them already said. What is left starts
+         at the scoreline.
          ========================================================================= -->
     <Artboard viewModelId="3:30" viewModelInstanceId="3:59" defaultStateMachineId="2:211"
               x="500" y="0" width="900" height="880" styleId="2:220" name="Stats Page" id="0:3">
@@ -145,7 +150,13 @@
         <!-- NEW RECORD — optional. `isRecord` fades the whole node in, so the
              badge costs nothing on the ordinary match that does not have one.
              The glow is a feathered stroke under a crisp one: the feathered
-             paint REPLACES the shape it is on, so a halo needs two strokes. -->
+             paint REPLACES the shape it is on, so a halo needs two strokes.
+
+             IT HAS THE BAND TO ITSELF now. It used to share this height with
+             the champion line — the result of the match, spelled out over a
+             scoreline that already said it — and neither was laid out around
+             the other, so ui/statsCard.js had to make sure the page was never
+             handed both. The champion is gone and that rule went with it. -->
         <Node x="0" y="0" name="Record Badge" id="2:3102">
         <Text x="450" y="92" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Record Label" id="2:3103">
             <TextStylePaint fontSize="14" letterSpacing="0.18" fontAssetId="3:1" name="S" id="2:3105">
@@ -171,47 +182,6 @@
                     </SolidColor>
                 </Fill>
             </Shape>
-        </Node>
-
-        <!-- CHAMPION — the result, on the page that reports it.
-             Two stacked lines, the way the DOM box had them: the label small
-             and tracked in the winner's colour, the side's name under it.
-
-             TWO TEXTS AND NOT RICH TEXT. One centred line of two runs reads
-             better, but the gap between them has to be a run of its own — a
-             literal string in the artboard, and every literal here is a string
-             no CSV row can reach. tools/rive-copy-test.mjs fails the file for
-             one, and it is right to: a spacer today is a word tomorrow.
-
-             NO PILL BEHIND IT, unlike the record badge above. That pill is a
-             fixed 210px and the team name is cast per match — a name two words
-             long would hang out of both ends of it. The accent on the label is
-             the badge.
-
-             SAME BAND AS THE RECORD PILL, and neither is laid out around the
-             other: ui/statsCard.js must never set both. -->
-        <Node x="0" y="0" opacity="0" name="Champion" id="2:3900">
-            <Text x="450" y="72" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Champion Label" id="2:3901">
-                <TextStylePaint fontSize="15" letterSpacing="0.2" fontAssetId="3:1" name="S" id="2:3902">
-                    <Fill name="Fill" id="0:5310">
-                        <SolidColor colorValue="FF3FE0C8" name="C" id="0:5311">
-                            <DataBindContext sourcePathIds="3:30-3:49" propertyKey="37" id="0:5312"/>
-                        </SolidColor>
-                    </Fill>
-                </TextStylePaint>
-                <TextValueRun styleId="2:3902" text="lorem" name="Run" id="2:3905">
-                    <DataBindContext sourcePathIds="3:30-3:230" propertyKey="268" id="0:5317"/>
-                </TextValueRun>
-            </Text>
-
-            <Text x="450" y="102" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Champion Name" id="2:3903">
-                <TextStylePaint fontSize="26" letterSpacing="0.02" fontAssetId="3:1" name="S" id="2:3904">
-                    <Fill name="Fill" id="0:5315"><SolidColor colorValue="FFF2F6FA" name="C" id="0:5316"/></Fill>
-                </TextStylePaint>
-                <TextValueRun styleId="2:3904" text="dolor sit" name="Run" id="2:3907">
-                    <DataBindContext sourcePathIds="3:30-3:231" propertyKey="268" id="0:5318"/>
-                </TextValueRun>
-            </Text>
         </Node>
 
         <!-- ---- PLAYERS TAB ---- -->
@@ -927,15 +897,6 @@
         </Shape>
 
         <!-- ---- SCORELINE ---- -->
-        <Text x="450" y="40" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Title" id="2:10">
-            <TextStylePaint letterSpacing="0.16" fontAssetId="3:1" name="S" id="2:11">
-                <DataBindContext sourcePathIds="3:30-3:210-3:311" propertyKey="274" id="0:4886"/>
-                <Fill name="Fill" id="0:3845"><SolidColor colorValue="FF7A8896" name="C" id="0:3846"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="2:11" text="lorem ipsum dolor" name="Run" id="2:12">
-                <DataBindContext sourcePathIds="3:30-3:31" propertyKey="268" id="0:3847"/>
-            </TextValueRun>
-        </Text>
         <Text x="300" y="248" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Left Score" id="2:30">
             <TextStylePaint fontSize="96" fontAssetId="3:1" name="S" id="2:31">
                 <Fill name="Fill" id="0:3848"><SolidColor colorValue="FFF2F6FA" name="C" id="0:3849"/></Fill>
@@ -1429,17 +1390,6 @@
         <LinearAnimation duration="1" name="Record On" id="2:3021">
             <KeyedObject objectId="2:3102" id="0:4140">
                 <KeyedProperty propertyKey="18" id="0:4141"><KeyFrameDouble value="1" id="0:4142"/></KeyedProperty>
-            </KeyedObject>
-        </LinearAnimation>
-
-        <LinearAnimation duration="1" name="Champion Off" id="2:3910">
-            <KeyedObject objectId="2:3900" id="0:5320">
-                <KeyedProperty propertyKey="18" id="0:5321"><KeyFrameDouble value="0" id="0:5322"/></KeyedProperty>
-            </KeyedObject>
-        </LinearAnimation>
-        <LinearAnimation duration="1" name="Champion On" id="2:3911">
-            <KeyedObject objectId="2:3900" id="0:5323">
-                <KeyedProperty propertyKey="18" id="0:5324"><KeyFrameDouble value="1" id="0:5325"/></KeyedProperty>
             </KeyedObject>
         </LinearAnimation>
 
@@ -2862,39 +2812,6 @@
                                 </BindablePropertyBoolean>
                             </TransitionPropertyViewModelComparator>
                             <TransitionValueBooleanComparator value="false" id="0:4652"/>
-                        </TransitionViewModelCondition>
-                    </StateTransition>
-                </AnimationState>
-            </StateMachineLayer>
-
-            <!-- Shown on hasChampion, the way the record badge is shown on
-                 isRecord. Its own layer: the two are independent booleans and a
-                 shared layer would make them one switch. -->
-            <StateMachineLayer name="Champion" id="2:3912">
-                <AnyState x="1700" y="2900" id="0:5330"/>
-                <ExitState x="1860" y="2900" id="0:5331"/>
-                <EntryState id="0:5332"><StateTransition stateToId="2:3913" id="0:5333"/></EntryState>
-                <AnimationState x="1300" animationId="2:3910" id="2:3913">
-                    <StateTransition stateToId="2:3914" duration="300" id="0:5334">
-                        <TransitionViewModelCondition id="0:5335">
-                            <TransitionPropertyViewModelComparator id="0:5336">
-                                <BindablePropertyBoolean id="0:5337">
-                                    <DataBindContext sourcePathIds="3:30-3:232" propertyKey="634" id="0:5338"/>
-                                </BindablePropertyBoolean>
-                            </TransitionPropertyViewModelComparator>
-                            <TransitionValueBooleanComparator value="true" id="0:5339"/>
-                        </TransitionViewModelCondition>
-                    </StateTransition>
-                </AnimationState>
-                <AnimationState x="1500" animationId="2:3911" id="2:3914">
-                    <StateTransition stateToId="2:3913" duration="180" id="0:5340">
-                        <TransitionViewModelCondition id="0:5341">
-                            <TransitionPropertyViewModelComparator id="0:5342">
-                                <BindablePropertyBoolean id="0:5343">
-                                    <DataBindContext sourcePathIds="3:30-3:232" propertyKey="634" id="0:5344"/>
-                                </BindablePropertyBoolean>
-                            </TransitionPropertyViewModelComparator>
-                            <TransitionValueBooleanComparator value="false" id="0:5345"/>
                         </TransitionViewModelCondition>
                     </StateTransition>
                 </AnimationState>
