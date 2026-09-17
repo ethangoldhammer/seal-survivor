@@ -1,5 +1,5 @@
 id,slot,text,review,hue,enabled,weight,notes
-shapeColourNoun,shape,{colour} {noun},,,,3,"The plain shape: the kit colour and the collective noun. Grammar, not copy — the words it puts together are the colour and noun rows."
+shapeColourNoun,shape,The {colour} {noun},,,,3,"The plain shape: the definite article, the kit colour and the collective noun — a side is ""the Red Blobz"" the way a ball team is the Red Sox. Grammar, not copy — the words it puts together are the colour and noun rows."
 shapeNicknamePossessive,shape,{nickname}'s {noun},,,FALSE,1,"OFF: Ethan asked for the colour shape only. The shape that names the side after one of its seals: Tony's Terrors. Grammar, not copy. The weight is left at what it had, so re-enabling it restores the old balance rather than needing it guessed again."
 shapeAdjectiveNoun,shape,{adjective} {noun},,,FALSE,1,"OFF, with the possessive above and for the same reason. The other member shape — it borrows the FRONT half of a seal's name instead: Phat Terrors. Grammar, not copy."
 colourRed,colour,Red,,0,,,

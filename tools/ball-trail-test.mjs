@@ -44,7 +44,7 @@ import {
   heldColor, starterColor,
 } from '../path/src/systems/ballLook.js';
 import {
-  updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit, ballTrailProfile, burstBallBubbles,
+  updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit, ballTrailProfile,
 } from '../path/src/systems/ballTrail.js';
 
 const scene = new THREE.Scene();
@@ -385,45 +385,26 @@ section('THE BUBBLES — the water profile\'s other half');
   check('...and neither does one under the gate',
     ballTrailStats('water').bubbles === 0);
 
-  // A HIT BOILS IT — burstBallBubbles, fired from ballImpactFx so every touch
-  // the ball has pays it. The point of the test is the case the continuous
-  // shedding above cannot cover: a ball sitting STILL, smacked. Under the
-  // drive gate it boils nothing at all, so a burst that went through the same
-  // gate would be silently dropped on exactly the hit that most wants it.
+  // A HIT IS NOT PAID HERE ANY MORE. This block used to check a `burst` the
+  // wake owed on every touch; the impact moved to systems/ballSpit.js, which
+  // fires from the contact patch instead of from a point astern. See
+  // npm run test:ballspit. What is left to check here is that the wake is the
+  // WAKE — bubbles are a pure function of the drive, and nothing about a hit
+  // reaches them.
   reset();
-  roll(Math.max(0.5, W.minSpeed - 2), 30);
-  const before = ballTrailStats('water').bubbles;
-  burstBallBubbles(1);
-  roll(Math.max(0.5, W.minSpeed - 2), 2);
-  const after = ballTrailStats('water').bubbles;
-  check('a hit boils bubbles off a ball too slow to shed any', after - before >= Math.floor(W.bubbles.burst) - 1,
-    `${after - before} against a burst of ${W.bubbles.burst}`);
-  const settled = ballTrailStats('water').bubbles;
-  roll(Math.max(0.5, W.minSpeed - 2), 30);
-  check('...paid once rather than every frame after', ballTrailStats('water').bubbles === settled,
-    `${ballTrailStats('water').bubbles} against ${settled}`);
+  roll(Math.max(0.5, W.minSpeed - 2), 40);
+  check('a ball under the drive gate boils nothing, hit or not',
+    ballTrailStats('water').bubbles === 0,
+    'the impact is ballSpit.js now, not a debt banked here');
 
-  // Scaled by how hard: a dribble puffs a couple, a spike detonates.
+  // ...AND NOTHING IS CARRIED ACROSS THE SURFACE. The debt does not survive a
+  // lob: paying it on splashdown would put a lob's worth of foam on the frame
+  // the ball re-enters, which is a frame that already has its own event.
   reset();
-  roll(Math.max(0.5, W.minSpeed - 2), 30);
-  const soft0 = ballTrailStats('water').bubbles;
-  burstBallBubbles(0.2);
-  roll(Math.max(0.5, W.minSpeed - 2), 2);
-  const soft = ballTrailStats('water').bubbles - soft0;
-  check('a gentle touch puffs fewer than a hard one', soft > 0 && soft < after - before,
-    `${soft} at a fifth force against ${after - before} at full`);
-
-  // ...AND NOTHING IS BANKED IN THE AIR. A burst owed up there is forgotten
-  // rather than paid on splashdown, which would put a volley's worth of foam
-  // on a frame that already has its own event.
-  reset();
-  burstBallBubbles(1);
   roll(T.fullSpeed, 10, { y: SKY });
-  reset();
-  roll(W.fullSpeed, 2);
   const carried = ballTrailStats('water').bubbles;
   roll(W.fullSpeed, 2);
-  check('a burst owed in the air is forgotten, not banked',
+  check('a lob banks no debt for the splashdown',
     ballTrailStats('water').bubbles - carried <= Math.ceil(W.bubbles.perSecond / 60) + 1,
     `${ballTrailStats('water').bubbles - carried} in two frames`);
 }

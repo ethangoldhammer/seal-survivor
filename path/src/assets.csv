@@ -55,9 +55,9 @@ moneyRoll4,1,,,"spare roll, seeker size. See moneyRoll2."
 musicNote,1,,biolum:musicNote,the harp's note
 musselOpen,2,,noise:mussel+toon:mussel,"The mussel's detonation state. Equal to missile on purpose - the two are the same animal and the pop is the shell OPENING, not the shell growing, so any difference here would read as the wrong thing. Same preset too: one surface, two states."
 octoGrabber,1.34,,biolum:octoGrabber,
-orcaFriendBull,1,,noise:orcaFriendBull+toon:orcaFriendBull,"The pod leader — Orca Family, slot 0."
-orcaFriendCalf,1,,biolum:orcaFriendCalf,"Orca Family, slot 2. Smallest of the three."
-orcaFriendCow,1,,biolum:orcaFriendCow,"Orca Family, slot 1."
+orcaFriendBull,1.5,,noise:orcaFriendBull+toon:orcaFriendBull,"The pod leader — Orca Family, slot 0. Size 1.5: doubled first, then split the difference — half way between the 1 they shipped at and the 2 that read too big. Moved as a family, so the bull/cow/calf proportions carried in their own `fit` are untouched. 4.4 fit x 1.5 = 6.6 on screen."
+orcaFriendCalf,1.5,,biolum:orcaFriendCalf,"Orca Family, slot 2. Smallest of the three. Size 1.5 with the rest of the family — see orcaFriendBull."
+orcaFriendCow,1.5,,biolum:orcaFriendCow,"Orca Family, slot 1. Size 1.5 with the rest of the family — see orcaFriendBull."
 plaque,1,,,the small slanted run marker. See headstone.
 rapidFireOrb,2.4,,,
 razorBlade,2.4,,,
@@ -73,7 +73,7 @@ strikeOrb,1.18,,,
 tomb,1,,,the big gabled run marker. See headstone.
 voicemailBomb,1,,toon:voicemailBomb,"Toon-banded and outlined. Size 1 is the models own fit; the bombs scale is CONFIG.bakalar.bomb.size, a RADIUS, applied on top in systems/bakalar.js. Decimated from a 4MB download by tools/optimize-bomb.mjs, which also bakes the wick path the flame burns down."
 trapBubble,5.02,,,
-trawler,0.84,,,
+trawler,1.68,,,"Doubled from 0.84. This is the hull's own scale and it is the only one that moved: CONFIG.boats.trawlerScale (1.5) is how much bigger a trawler is than a rowboat and the artillery scaleMul stacks on top, so both keep meaning what they meant. hullExtents measures the built mesh, so the hitbox, the wreck and the searchlight follow on their own. `bakalarBoat` and `bossBoat` wear the same model under their own keys and are unaffected."
 whale,2.6,,toon:whale+biolum:whale,"The bowhead sweeper. 12 fit x this = 31.2 world units of animal in an 80-wide frame - bigger than the mosasaur boss at 27.2, which is the largest thing in the game otherwise. Deliberately out of family with the boss column: the sweep reads as relief rather than as another arrival only if the silhouette is unmistakable at a glance. Its gulp reach is NOT derived from this - see whale.mouthRadius in spawning.csv."
 humpbackWhale,2.6,,noise:humpbackWhale+toon:humpbackWhale,"The humpback sweeper - the other body on CONFIG.whale.roster. Equal to whale on purpose: same fit (12), so the same 31.2 world units of animal. Its file ships NO texture (tools/build-humpback.mjs strips it); the biolum preset at pigment 1 is the whole hide, so the surface cell is load-bearing here rather than a glow on top."
 gorebone,,,toon:gorebone,"Row added by the shader lab, to carry the surface. Size left BLANK on purpose: blank is exactly what an asset with no row already gets, so this row changed what the creature wears and nothing about how big it is or how big it is to hit. Put a number here only if you mean to resize it."

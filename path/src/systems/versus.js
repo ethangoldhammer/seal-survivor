@@ -140,7 +140,8 @@ import { instanceNoise } from './noiseShader.js';
 import { rosterSize, teamOfSeat, seatsOfTeam, sameTeam, seatIsCpu, seatPad, seatFormation, resetRoster, setRosterSize, rosterPerSide, MAX_PER_SIDE } from './sealRoster.js';
 import { resetTally, noteTallyGoal, noteTallySave, accrueTallyPossession, tallySnapshot } from './versusTally.js';
 import { goalColors, ballEvent, setBallDrive, setBallBody, noteBallMomentum, claimBall, teamColor, updateBallLook, resetBallLook, ballLookState, ballTint, ballOwner, recordBallLook, poseBallLook, LOOK_REC } from './ballLook.js';
-import { updateBallTrail, clearBallTrail, burstBallBubbles } from './ballTrail.js';
+import { updateBallTrail, clearBallTrail } from './ballTrail.js';
+import { spitBallBubbles, resetBallSpit } from './ballSpit.js';
 import { updateBallGrid, resetBallGrid } from './ballGrid.js';
 import { fireGoalJet, goalJetOrigin, resetGoalJets } from './goalJet.js';
 import { fireHeroLight, bossLightState, resetBossLight } from './bossLight.js';
@@ -917,6 +918,7 @@ export function resetVersus() {
   versusState.timeScale = 1;
   resetBallLook();
   if (scene) clearBallTrail(scene);
+  resetBallSpit();
   // ...and the dents in the backdrop. Nothing publishes them once the match is
   // off, so the lattice clears on its own — this is so a match started again
   // does not inherit the last one's chain on its first frame.
@@ -1788,7 +1790,125 @@ export function updatePinch(dt) {
 const fxLast = new Map();
 export { ballTint };
 
-function ballImpactFx(event, nx, ny, t, extra = null, gap = null, origin = null) {
+/**
+ * WHAT THIS HIT SOUNDS LIKE — the band it falls in and the shape of it.
+ *
+ * Returns { event, sfxOpts, skid }: which row to fire instead of `event`, the
+ * per-instance pitch and ring to hand playSfx, and whether the contact also
+ * dragged. See the `voice` block in CONFIG.versus.ball.fx for the argument
+ * behind each number; this is only the arithmetic.
+ *
+ * READ OFF THE BALL AT THE MOMENT OF CONTACT, not passed in, because every
+ * caller already has a different idea of what it is describing (an impulse
+ * against the hardest strike, a closing speed against maxSpeed, a share of a
+ * nudge) and only `k` survives that as a common currency. Spin and which side
+ * of the surface it is on are facts about the BALL and are the same however
+ * the hit was measured.
+ */
+/**
+ * THE BALL'S ORDINARY TOUCH, all three weights of it — softest first.
+ *
+ * Exported and named because the split made "versusBallHit" stop meaning "the
+ * ball was touched" and start meaning "the ball was touched, about averagely".
+ * Three rows in CONFIG.feedback now cover what one used to (see ballVoice), and
+ * everything that reasons about the ordinary touch has to reason about all
+ * three: `versusSpike`, `versusBlock` and `versusSave` are each documented as
+ * firing OVER it, and each of those claims is now about the family rather than
+ * about a name.
+ *
+ * Spelled out at each site instead, the failure is silent in the worst way —
+ * a check for the base event under a spike simply stops finding one on exactly
+ * the hard shots that spike, which is to say on all of them.
+ *
+ * systems/online/protocol.js keeps its own literal copy on purpose: it is a
+ * leaf module with no imports at all, and its test cross-checks the two.
+ */
+export const BALL_TOUCH_EVENTS = ['versusBallTap', 'versusBallHit', 'versusBallSmash'];
+
+/**
+ * The band-and-shape resolver, for tools/blubberball-sfx-test.mjs.
+ *
+ * Exposed rather than reached through the module's internals, for the reason
+ * systems/audio.js exposes its bus nodes: the thing worth asserting is the
+ * MAPPING — that force picks the right row and moves pitch the right way, that
+ * spin lengthens rather than raises, that the two sides of the surface differ —
+ * and every one of those needs a `k` and a spin set exactly, which driving real
+ * collisions cannot give you. The integration (a skid firing over a bounce, the
+ * throttle surviving an alternating scramble) is driven for real in the same
+ * file; this is the arithmetic underneath it.
+ */
+export const __ballVoice = (event, k) => ballVoice(event, k);
+
+function ballVoice(event, k) {
+  const v = cfg().ball?.fx?.voice ?? {};
+  if (v.enabled === false) return { event, sfxOpts: null, skid: false };
+
+  // --- the band -------------------------------------------------------------
+  // Only the body contact splits. A wall, a post, a block, a pierce and a
+  // spike are already their own moments with their own voices.
+  let out = event;
+  if (event === 'versusBallHit') {
+    if (k < (v.tapBelow ?? 0.26)) out = 'versusBallTap';
+    else if (k > (v.smashAbove ?? 0.68)) out = 'versusBallSmash';
+  }
+
+  // --- how hard -------------------------------------------------------------
+  // Down with force, up with a light touch. See the note in config.
+  let pitch = lerp(v.pitchSoft ?? 1.2, v.pitchHard ?? 0.82, k);
+  let ring = lerp(v.decaySoft ?? 0.75, v.decayHard ?? 1.4, k);
+
+  // --- how much spin --------------------------------------------------------
+  // ABSOLUTE, because a ball spinning the other way scrapes exactly as much.
+  // Against the same cap the physics clamps at, so "fully spinning" means one
+  // thing in both places.
+  const spin = Math.min(1, Math.abs(ball.spin) / Math.max(0.01, v.spinRef ?? 28));
+  pitch *= 1 + (v.spinPitch ?? 0.07) * spin;
+  ring *= 1 + (v.spinRing ?? 0.55) * spin;
+
+  // --- which side of the surface -------------------------------------------
+  // `ball.above` is maintained by stepBall and is the same flag the breach and
+  // reentry events are raised off, so the sound and the splash cannot disagree
+  // about which medium the ball is in.
+  if (ball.above) {
+    pitch *= v.airPitch ?? 1.06;
+    ring *= v.airRing ?? 0.85;
+  } else {
+    pitch *= v.waterPitch ?? 0.88;
+    ring *= v.waterRing ?? 1.2;
+  }
+
+  const lo = v.pitchMin ?? 0.6, hi = v.pitchMax ?? 1.5;
+  const rlo = v.ringMin ?? 0.5, rhi = v.ringMax ?? 2.2;
+  return {
+    event: out,
+    sfxOpts: {
+      pitch: Math.min(hi, Math.max(lo, pitch)),
+      decayMul: Math.min(rhi, Math.max(rlo, ring)),
+    },
+    // A SKID IS A WALL CONTACT THAT WAS ALSO SLIDING. Both tests, because a
+    // ball spinning on the spot against a wall it is barely touching is not
+    // dragging along anything.
+    skid: event === 'versusBallWall'
+      && spin >= (v.skidSpin ?? 0.5)
+      && k >= (v.skidForce ?? 0.12),
+    spin,
+  };
+}
+
+/**
+ * WHOSE TOUCH THE SPIT IS IN. `team` on an impact payload is a SEAT (that is
+ * what every caller passes and what the older readers expect), so it goes
+ * through teamOfSeat rather than being used as a team index — off by one seat
+ * and the spray comes out in the defending colour on every strike.
+ *
+ * Null for anything with no seat behind it: a wall, a post, a hull, a fish.
+ */
+function spitColor(seat) {
+  if (seat == null || seat < 0) return null;
+  return teamColor(teamOfSeat(seat));
+}
+
+function ballImpactFx(event, nx, ny, t, extra = null, gap = null, origin = null, imp = null) {
   const f = cfg().ball?.fx ?? {};
   const k = clamp01(t);
   // ONE SPLASH PER MOMENT. A seal dribbling the ball closes on it every
@@ -1819,13 +1939,64 @@ function ballImpactFx(event, nx, ny, t, extra = null, gap = null, origin = null)
     color: ballTint().getHex(),
   };
   if (extra) Object.assign(at, extra);
-  feedback(event, at);
+  // WHICH ROW, AND SHAPED HOW. Resolved after the throttle above and not
+  // before it, which is the ordering that matters: `fxLast` is keyed on the
+  // event this was CALLED with, so the one-splash-per-moment gate stays the
+  // gate it always was. Keyed on the band instead, a scramble alternating taps
+  // and smashes would open a fresh window per band and the ball would go back
+  // to squirting goo every frame — the exact thing the gate exists to stop.
+  const shaped = ballVoice(event, k);
+  at.sfxOpts = { ...at.sfxOpts, ...shaped.sfxOpts };
+  feedback(shaped.event, at);
+  // THE DRAG, over the bounce. Its own event because it is its own sound, and
+  // its `scale` is the SPIN rather than the impact — a ball creeping along a
+  // wall with the spin still on it is a loud skid and a quiet bounce. No
+  // picture (see the row in CONFIG.feedback), so it takes the contact point
+  // and nothing else from the splash above.
+  if (shaped.skid) {
+    feedback('versusBallSkid', {
+      x: at.x, y: at.y, dirX: nx, dirY: ny,
+      scale: shaped.spin,
+      sfxOpts: shaped.sfxOpts,
+    });
+  }
   // THE BALL'S OWN WATER, over the event's burst. Every touch comes through
   // here — a strike, a block, a pierce, a wall, a post, a hull, a fish — so
   // this is the one place that can say "the ball was hit" without each of the
   // seven callers remembering to. `k` is how hard, already clamped.
-  burstBallBubbles(k);
-  versusState.lastImpact = { event, ...at };
+  //
+  // OUT OF THE CONTACT PATCH, not off the back of the ball. This used to be a
+  // burst paid through the WAKE (burstBallBubbles), which sheds from a point
+  // dead astern of the heading — a point that can say how fast the ball is
+  // going and nothing else. systems/ballSpit.js fires from `at`, which is the
+  // drawn edge at the bearing it was actually struck, along the line it leaves
+  // on, in the striker's colour: where it was hit, which way the impulse went,
+  // and by whom. See CONFIG.versus.ball.spit.
+  //
+  // `imp` is that line when the caller knows it — the strike does, because
+  // `grip` swings it off the contact normal toward the dash. Everything else
+  // passes none and gets the normal, which for a wall is exact (the rock's
+  // impulse IS its inward normal) and for a body is within the grip of it.
+  spitBallBubbles({
+    x: at.x, y: at.y,
+    nx, ny,
+    impX: imp?.x ?? null,
+    impY: imp?.y ?? null,
+    force: k,
+    vx: ball.vx, vy: ball.vy,
+    r: edge,
+    // THE SOURCE'S COLOUR AND NOT THE BALL'S. Everything else in this function
+    // is made of the ball — the splash, the goo, the trail — because it is the
+    // ball coming apart. The spit is the one part of the event that is about
+    // the thing that HIT it, so a wall passes nothing and comes out plain.
+    color: spitColor(at.team),
+  });
+  // BOTH NAMES. `event` stays what the caller CALLED this with — the kind of
+  // contact it was, which is the stable thing every existing reader is asking
+  // about and must not start changing with how hard the hit happened to be.
+  // `voice` is the row that actually fired, which is the new fact and the only
+  // way anything downstream can see that the band worked.
+  versusState.lastImpact = { event, voice: shaped.event, skid: shaped.skid, ...at };
   return at;
 }
 
@@ -2624,6 +2795,11 @@ export function spikeStrength(iy, vel, who) {
   return angle * lerp(1, sp.diveGain ?? 2.2, dive);
 }
 
+// The line the strike's impulse went out on, for ballImpactFx. Preallocated —
+// a strike allocates nothing, and this is written once per call just before it
+// is read.
+const _impLine = { x: 1, y: 0 };
+
 export function strikeBall(nx, ny, contactAngle, closing, vel, dashDir, power, who = -1, english = 0, speedIn = 0) {
   const c = cfg().ball ?? {};
   const im = c.impact ?? {};
@@ -2719,7 +2895,13 @@ export function strikeBall(nx, ny, contactAngle, closing, vel, dashDir, power, w
   // by the impulse against the hardest strike there is — so a limp tap and
   // a full wind-up into a ball coming the other way are not the same splash.
   const hardest = (c.strikeImpulseMax ?? 62) + (c.maxSpeed ?? 64) * carry;
-  ballImpactFx('versusBallHit', nx, ny, imp / Math.max(1, hardest), { team: who }, 0);
+  // (ix, iy) is where the ball WENT — the normal turned toward the dash by
+  // `grip`. The contact normal is where the seal happened to touch it, which
+  // is the other half of the story and is passed separately; the spit needs
+  // both, and the spike's smear already makes the same distinction.
+  _impLine.x = ix;
+  _impLine.y = iy;
+  ballImpactFx('versusBallHit', nx, ny, imp / Math.max(1, hardest), { team: who }, 0, null, _impLine);
   // A SEAL touched it, so this is where possession changes hands — `p` is how
   // hard, which is the same number the dent is sized from. The spike rides this
   // channel too: the look is what carries "something happened to the ball" to
@@ -4887,6 +5069,7 @@ export function enterKickoff(gather = false) {
   // centre spot, and a cloud that survived that would be joined to the new one
   // by a ribbon drawn straight across the pitch.
   if (scene) clearBallTrail(scene);
+  resetBallSpit();
   // The backdrop's dents too, and for the same reason read the other way: they
   // are marks on the WATER rather than on the ball, so they would not follow it
   // to the centre spot — they would sit in a line pointing into the goal it

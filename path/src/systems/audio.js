@@ -291,52 +291,26 @@ function buildImpulse(seconds, decay) {
   return buf;
 }
 
-// Small by construction — it is keyed on numbers that come from CONFIG, so its
-// size is the number of distinct rooms the game is tuned to have, not the
-// number of times they are asked for. Dragging a slider in the F panel is the
-// one thing that can grow it, and a dragged `seconds` is bounded by the row's
-// own range at its own step.
-const impulseCache = new Map();
-
 /**
  * The same synthetic room, for anything that needs a tail of its own rather
- * than a share of the bus send. Two callers: the music's boss-kill hush, which
- * hangs its own convolver off the music chain (that chain never touches this
+ * than a share of the bus send. The music's boss-kill hush is the one caller:
+ * it hangs its own convolver off the music chain (which never touches this
  * bus — see systems/music.js) and would otherwise ship a second copy of the
- * loop above, free to drift away from this one; and the strike wind-up's
- * release tail (systems/jetBed.js), which needs a room per held voice.
+ * loop above, free to drift away from this one.
+ *
+ * NOT CACHED, and it does not need to be: one impulse per boss kill is a
+ * buffer nobody will ever measure. A cache lived here briefly for a caller
+ * that asked for a room on every strike wind-up — hundreds a run, each one
+ * 48,000 Math.random/Math.pow pairs on the frame a button went down — and that
+ * caller is gone, so the cache went with it rather than sitting here being
+ * justified by a comment about something that no longer happens.
  *
  * Null before the context exists, which is every call made before the first
  * user gesture unlocks audio.
  */
 export function makeImpulse(seconds, decay) {
   if (!ctx) return null;
-  // CACHED, because the caller is no longer always a once-per-run thing.
-  //
-  // The music's hush builds one impulse per boss kill and would never have
-  // noticed. The strike wind-up's room (CONFIG.strike.charge.bed.tail) asks for
-  // one on every PRESS — hundreds a run — and building it is a buffer
-  // allocation plus a Math.random and a Math.pow per sample per channel: a
-  // half-second stereo room at 48kHz is 48,000 of each, run on the frame a
-  // button went down, which is the one frame in the interaction that has to be
-  // immediate.
-  //
-  // An impulse response is a pure function of (seconds, decay, sampleRate) —
-  // the noise inside it is random, but no caller wants a DIFFERENT random room
-  // per press; they want the same room. So the same buffer is handed out, and a
-  // ConvolverNode never mutates the buffer it is given.
-  //
-  // Keyed on the rate as well, because the cache outlives a context change: an
-  // output device switched mid-session gives a new ctx at a new sampleRate, and
-  // a buffer built for 48k handed to a 44.1k context is a room of the wrong
-  // length. Cleared with the context in unlockAudio for the same reason.
-  const key = `${seconds}|${decay}|${ctx.sampleRate}`;
-  let buf = impulseCache.get(key);
-  if (!buf) {
-    buf = buildImpulse(seconds, decay);
-    impulseCache.set(key, buf);
-  }
-  return buf;
+  return buildImpulse(seconds, decay);
 }
 
 // A soft-clip transfer curve, in two pieces:
@@ -870,13 +844,6 @@ export function unlockAudio() {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
     ctx = new Ctx();
-    // Rooms built against the OLD context are not usable in this one, and a
-    // sampleRate change would make them the wrong length even if they were.
-    // See makeImpulse — the key carries the rate, so this is belt as well as
-    // braces, but a cache that outlives the thing its entries were built from
-    // is the kind of thing that is only ever wrong on a device switch nobody
-    // tests on.
-    impulseCache.clear();
     master = ctx.createGain();
     master.gain.value = masterGain();
     buildBus();

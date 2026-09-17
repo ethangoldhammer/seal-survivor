@@ -1140,6 +1140,57 @@ export function turboLerp(mul, blend) {
   return 1 + (m - 1) * t;
 }
 
+/**
+ * THE WIND-UP'S ENVELOPE — how much of a strike is in hand, 0..1.
+ *
+ * ONE EXPRESSION, THREE CONSUMERS. The sustained shake, the rumble's interval
+ * pulse and the held voice (CONFIG.strike.charge.bed) are all the same fact
+ * told in three channels, and until this existed each of them spelled it out
+ * where it stood. That is fine right up until one of them is retuned, at which
+ * point the seal shakes on one curve and sounds on another — and nothing about
+ * that reads as a bug, it reads as the feel being slightly off.
+ *
+ * `floor` is what a wind-up is worth the instant it starts, before anything is
+ * banked. It is not zero and must not be: a hold that began in silence and
+ * faded up would have no attack at all, and the press is the event.
+ *
+ * NORMALISED, unlike the raw `floor + pending * span` this replaced. That
+ * expression tops out at 1.45, which was harmless while the only readers
+ * multiplied a shake by it and scaled a haptic, and is not harmless now that
+ * something maps it onto a gain — a bed driven to 1.45x its own peak is 3dB
+ * over the level it was tuned at, on every full charge.
+ */
+export function chargeEnvelope(pending = strikeState.pending) {
+  const e = CONFIG.strike.charge.envelope ?? {};
+  const floor = e.floor ?? 0.35;
+  const span = e.span ?? 1.1;
+  // Number.isFinite FIRST, not a clamp. Math.min(1, NaN) is NaN and
+  // Math.max(0, NaN) is NaN, so a clamp alone passes a NaN straight through —
+  // and this number becomes an AudioParam target, where a NaN does not fall
+  // back to anything, it poisons the node for the rest of its life.
+  const p = Number.isFinite(pending) ? Math.max(0, Math.min(1, pending)) : 0;
+  const top = floor + span;
+  return top > 0 ? (floor + p * span) / top : 0;
+}
+
+/**
+ * What a full wind-up is worth on the UNNORMALISED curve — `floor + span`.
+ *
+ * Here so the rumble can keep the range it was tuned at. Its scale has always
+ * been the raw expression, which tops out above 1, and multiplying a haptic
+ * magnitude by 1.45 is a perfectly sensible thing for it to have been doing;
+ * quietly renormalising it to 1.0 while adding a sound would have taken a
+ * third off the strongest rumble in the game as a side effect of a change
+ * about audio.
+ *
+ * The sound needs the normalised one and the motor wants the old one, so both
+ * come off the same two numbers and neither has to spell the expression out.
+ */
+export function chargeEnvelopeTop() {
+  const e = CONFIG.strike.charge.envelope ?? {};
+  return (e.floor ?? 0.35) + (e.span ?? 1.1);
+}
+
 export function updateCharge(dt, held, stats, s = strikeState) {
   if (!CONFIG.strike.enabled) return;
 

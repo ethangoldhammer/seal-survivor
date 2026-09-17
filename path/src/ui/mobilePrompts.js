@@ -48,6 +48,21 @@
 // in and never comes out. So the worst a stale ledger can do is stay quiet.
 //
 // ---------------------------------------------------------------------------
+// TWO OF THEM TAKE THEMSELVES DOWN. The sound and rotate rows are read in a
+// couple of seconds and then they are furniture, and the X is a 44px target
+// sitting over the bottom of the water that a player has to notice, aim at and
+// mean. So after AUTO_DISMISS_MS of being ON SCREEN they dismiss themselves —
+// through the same ledger the X writes to, so "it went away on its own" and "I
+// closed it" are the same event and neither comes back.
+//
+// The clock only runs while the row is actually up, and it is thrown away the
+// moment the row goes down for any other reason: a rotate row that was up for
+// two seconds before the phone turned was not read, and it gets its full time
+// again the next time the phone is upright. The fullscreen row has no timer —
+// it is a label on a control the player is being offered, and an offer that
+// expires while you are deciding is worse than one you have to close.
+//
+// ---------------------------------------------------------------------------
 // WHERE IT IS NOT. `.sv-center` surfaces — the level-up hand, the pause menu,
 // the score card — are full-screen layers at z-index 8, and this sits at 5 with
 // the run's own furniture, so it is covered while any of them is up. Same rule
@@ -110,6 +125,12 @@ function hasThumb() {
 // other two are answers to questions you ask on the way in, and a row about the
 // browser's chrome arriving over a boss fight is an interruption about nothing.
 // ---------------------------------------------------------------------------
+// HOW LONG A ROW GETS BEFORE IT CLOSES ITSELF. Long enough to read ninety
+// characters twice over on a phone that has just been picked up, and short
+// enough that it is gone before it is in the way. Overridable at the mount so
+// the harness can assert the behaviour without sitting there for eight seconds.
+const AUTO_DISMISS_MS = 8000;
+
 const PROMPTS = [
   {
     id: 'sound',
@@ -124,6 +145,7 @@ const PROMPTS = [
     // arguing with a choice it was asked to make, and it is the one way this
     // row can be actively wrong rather than merely unneeded.
     when: () => hasThumb() && !settings.audio?.muted,
+    autoDismiss: true,
   },
   {
     id: 'rotate',
@@ -136,6 +158,7 @@ const PROMPTS = [
     // to block anything and does not try to: it says the screen is bigger the
     // other way and gets out of the way when it is.
     when: () => hasThumb() && isPortrait(),
+    autoDismiss: true,
   },
   {
     id: 'fullscreen',
@@ -274,12 +297,15 @@ export function resetMobilePromptStage() {
  * Draw the stack into `parent` and hand back a handle.
  *
  * @param opts.parent   the .sv-ui overlay.
- * @param opts.onPress  called on a real dismissal, for the click sound — ui.js
- *                      owns feedback(), and importing it here would drag the
- *                      audio stack into every harness that mounts this.
+ * @param opts.onPress  called on a PRESSED dismissal, for the click sound —
+ *                      ui.js owns feedback(), and importing it here would drag
+ *                      the audio stack into every harness that mounts this. A
+ *                      row closing itself is not a press and makes no sound.
+ * @param opts.autoDismissMs  how long a self-closing row stays up. The harness
+ *                      turns it down; nothing in the game passes it.
  * @returns {{ el, refresh, remove, shown: () => string[] }}
  */
-export function mountMobilePrompts({ parent, onPress = null } = {}) {
+export function mountMobilePrompts({ parent, onPress = null, autoDismissMs = AUTO_DISMISS_MS } = {}) {
   const doc = parent?.ownerDocument ?? document;
   uiRootNode = parent ?? null;
 
@@ -301,6 +327,18 @@ export function mountMobilePrompts({ parent, onPress = null } = {}) {
   // The row nodes, built once and kept — a row that is rebuilt on every refresh
   // restarts its entrance animation every time anything on the page resizes.
   const rows = new Map();
+  // id -> the handle of the row's own countdown, while it is running. Not state
+  // about what is shown — refresh() still owns that — just the clock, and it
+  // exists only for as long as the row it belongs to is on screen.
+  const timers = new Map();
+
+  // ONE DISMISSAL PATH for the X and for the clock, so the two cannot drift
+  // into meaning different things.
+  function dismiss(id) {
+    dismissed.add(id);
+    saveDismissed(dismissed);
+    refresh();
+  }
 
   for (const prompt of PROMPTS) {
     const row = doc.createElement('div');
@@ -336,9 +374,7 @@ export function mountMobilePrompts({ parent, onPress = null } = {}) {
     close.setAttribute('aria-label', uiText('mobilePromptDismiss'));
     close.addEventListener('click', () => {
       onPress?.();
-      dismissed.add(prompt.id);
-      saveDismissed(dismissed);
-      refresh();
+      dismiss(prompt.id);
     });
 
     rows.set(prompt.id, row);
@@ -375,6 +411,21 @@ export function mountMobilePrompts({ parent, onPress = null } = {}) {
       // lists agree with the glass about what exists.
       row.hidden = !show;
       any = any || show;
+
+      // The countdown follows the row rather than the question: it starts when
+      // the row appears, and it is torn up — not paused — the moment the row
+      // goes away for any other reason, so the next appearance gets the whole
+      // of its time rather than the tail of a previous one.
+      const timer = timers.get(prompt.id);
+      if (show && prompt.autoDismiss && autoDismissMs > 0 && timer === undefined) {
+        timers.set(prompt.id, setTimeout(() => {
+          timers.delete(prompt.id);
+          dismiss(prompt.id);
+        }, autoDismissMs));
+      } else if (!show && timer !== undefined) {
+        clearTimeout(timer);
+        timers.delete(prompt.id);
+      }
     }
     // The container too, so an empty stack is not a pointer-events target and a
     // 340px-wide invisible box is not sitting over the bottom of the ocean.
@@ -425,6 +476,8 @@ export function mountMobilePrompts({ parent, onPress = null } = {}) {
     /** Which rows are up right now, for the harness. */
     shown: () => PROMPTS.filter((p) => !rows.get(p.id).hidden).map((p) => p.id),
     remove: () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
       window.removeEventListener('resize', onViewport);
       window.removeEventListener('orientationchange', onViewport);
       stopFullscreen();

@@ -69,7 +69,7 @@ import { buildPrintPaper, initSnapshotPrints, resyncPrintCards } from './snapsho
 import { hidePauseMenu, initPauseMenu } from './pauseMenu.js';
 import { mountFullscreenButton } from './fullscreenButton.js';
 import { mountMobilePrompts } from './mobilePrompts.js';
-import { TYPOGRAPHY_EVENT } from './typography.js';
+import { TYPOGRAPHY_EVENT, installStyleBelowRoles } from './typography.js';
 import { initUpgradeHive, hiveTileRect, setTileVisible, slamAndRipple, flyTransform, buildHiveSnapshot } from './upgradeHive.js';
 import {
   upgradeTipContent, renderTipInto, showUpgradeTip, hideUpgradeTip, compactDamage,
@@ -2780,9 +2780,16 @@ const STYLES = `
 export function initUI({ onStart, onRestart, onLevelChoice, onLevelUpCleared, onResume, onPauseRestart, onPauseMainMenu, onMainMenu, onSplash, onMenu, onPause }) {
   callbacks = { onStart, onRestart, onLevelChoice, onLevelUpCleared, onSplash, onMenu, onPause, onMainMenu };
 
-  const style = document.createElement('style');
-  style.textContent = STYLES;
-  document.head.appendChild(style);
+  // FILED UNDER THE ROLE SHEET rather than appended. This used to be a plain
+  // append, which was correct for exactly as long as initTypography ran after
+  // initUI — and it stopped being true when the loading screen's two lines
+  // became Text panel roles: that screen is up before any of this exists, so
+  // main.js now writes the role sheet FIRST. An append here would land after
+  // it, and a rule of the same specificity later in the document beats it, so
+  // every row in the panel would save its value and move nothing. Order is not
+  // something two call sites should have to agree about — see
+  // installStyleBelowRoles.
+  installStyleBelowRoles('svUiStyles', STYLES);
 
   // RE-MEASURE WHEN THE TYPE CHANGES. Two things on this screen are sized by
   // measuring text — the upgrade cards' auto-fit and the score card's name

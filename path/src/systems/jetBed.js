@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { getAudioContext, getSfxBus, isAudioLive, makeImpulse, sampleBuffer } from './audio.js';
+import { getAudioContext, getSfxBus, isAudioLive, sampleBuffer } from './audio.js';
 
 // ---------------------------------------------------------------------------
 // THE JET'S SOUND BED — one voice that ramps up and then HOLDS.
@@ -23,12 +23,20 @@ import { getAudioContext, getSfxBus, isAudioLive, makeImpulse, sampleBuffer } fr
 //            developing is a sound that never arrives; the ear reads the
 //            arrival as the moment the change stops. It breathes on a slow LFO
 //            so it is not DEAD, but it goes nowhere.
-//   RELEASE  down, fast. The stream is cut, not faded out — the tail is the
-//            room, not the synth. `tail` is that room, when a block asks for
-//            one: a convolver fed for the whole hold and pushed harder as the
-//            dry path falls, so the cut lands somewhere instead of just
-//            stopping. Off by default — the jet is a stream that ends when it
-//            ends, and the strike's wind-up is the block that wanted it.
+//   RELEASE  down, fast. The stream is cut, not faded out — AND THE TAIL IS
+//            THE BUS'S, not this file's. A bed lands on the shared sfx bus
+//            like every other sound in the game, and that bus has a reverb
+//            send on it (systems/audio.js) — so whatever room the game is in,
+//            a released bed is already in it, decaying alongside everything
+//            else rather than in a private space of its own.
+//
+//            THERE WAS A PER-BED CONVOLVER HERE AND IT IS GONE. It was built
+//            to make a release "land somewhere", and what it actually did was
+//            put one sound in a different room from the rest of the mix and
+//            keep ringing after the gesture that made it had ended. A driven
+//            bed in particular has to be gone the moment its driver stops —
+//            see CUT_FADE — and a half-second private tail is the one thing
+//            that can outlive a hard cut.
 //
 // WHY A MOOG AND NOT NOISE. The riser under a card is noise, deliberately, and
 // its file says why: pitched material makes a riser into a note that gets
@@ -64,6 +72,38 @@ const voices = new Map();
 const MAX_VOICES = 6;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * Aim an AudioParam at `value`, arriving in `glide` seconds, CANCELLABLY.
+ *
+ * WHY NOT setTargetAtTime, which is the obvious primitive for a continuously
+ * driven param and is what this used to be. A setTargetAtTime has no end time
+ * — it approaches its target forever — and `cancelScheduledValues(t)` only
+ * removes events scheduled AT OR AFTER t. One that started before the cancel
+ * is therefore still running afterwards, and it goes on pulling the param
+ * toward its last target underneath whatever you schedule next.
+ *
+ * That is not a subtle mistuning, it is a bed that cannot be switched off: the
+ * release ramp to 0 spends its whole length being fought back up, the gain
+ * never arrives, and then `source.stop()` cuts a still-sounding oscillator
+ * stack dead — a click, at full amplitude, straight onto the bus. It read as
+ * the sound not cutting AND as a short metallic ring, which sounds like two
+ * bugs and was this one.
+ *
+ * A LINEAR RAMP ENDS, so cancelScheduledValues really does clear it. Re-aimed
+ * every frame from the live value, it is the same glide with none of that —
+ * and it is the shape applyGate and cardRiser already use here.
+ *
+ * (cancelAndHoldAtTime would also fix it and is not used: it is absent on older
+ * WebKit under its standard name, and the fallback there is exactly this.)
+ */
+function glideParam(param, value, now, glide) {
+  param.cancelScheduledValues(now);
+  // From the LIVE value, so re-aiming mid-glide is continuous rather than a
+  // jump back to wherever the last ramp was headed.
+  param.setValueAtTime(param.value, now);
+  param.linearRampToValueAtTime(value, now + Math.max(0.005, glide));
+}
 
 // ---------------------------------------------------------------------------
 // THE MENU GATE
@@ -115,6 +155,25 @@ export function jetBedsMuted() {
 // enough not to click — a bed cut in one frame pops, and a pop is the one
 // thing a mute is supposed to avoid.
 const GATE_FADE = 0.06;
+
+// A DRIVEN BED DOES NOT FADE, IT STOPS — and this is the only fade it gets:
+// long enough to declick a saturated oscillator stack, short enough that
+// nothing is left of the sound by the next frame at 60fps.
+//
+// WHY IT IS NOT `release`. A spooled bed is a stream that ENDS, and a release
+// fade is the right shape for one: the jet's 0.12s is the stream tapering off.
+// A driven bed has no shape of its own — something outside is handing it a
+// level, and when that something stops handing, the sound is over at that
+// instant. The strike's wind-up is the case that made this explicit: the sound
+// has to be gone on the frame the button comes up, because what happens on the
+// NEXT frame is the dash launching, and a wind-up still tapering across its own
+// release reads as the charge outliving the strike it became.
+//
+// A CONSTANT AND NOT A TUNABLE, deliberately. There is no taste in it — above
+// about 20ms it is an audible tail on a gesture that has ended, and below about
+// 5ms it is the click the fade exists to avoid. A slider here would only offer
+// the two ways of being wrong.
+const CUT_FADE = 0.012;
 
 function applyGate(v, on, onlyIfUnset) {
   if (!v?.gate) return;
@@ -200,40 +259,6 @@ function tearDown(v, fade) {
   try {
     const now = ctx.currentTime;
     const out = Math.max(0.005, fade);
-    // THE THROW, and then the room let go of. Scheduled before the envelope
-    // below so the send is already climbing while the dry signal falls — the
-    // two crossing is what makes the bed sound like it was thrown somewhere
-    // rather than turned down next to a reverb that happened to be on.
-    //
-    // The disconnect is what stops this leaking. A convolver whose input has
-    // gone quiet still holds its tail, and every node upstream of the bus stays
-    // reachable until something lets go of it — so a run's worth of wind-ups is
-    // a run's worth of live convolvers unless each one is torn off after it has
-    // finished ringing. Scheduled on a timer rather than done here, because
-    // "finished ringing" is the impulse's length after the throw, not now.
-    if (v.tailSend && v.tailVerb) {
-      const t = v.cfg?.tail ?? {};
-      const wet = Math.max(0, t.wet ?? 0);
-      const peak = wet * Math.max(1, t.throw ?? 2.5);
-      const secs = Math.max(0.05, t.seconds ?? 0.6);
-      v.tailSend.gain.cancelScheduledValues(now);
-      v.tailSend.gain.setValueAtTime(v.tailSend.gain.value, now);
-      v.tailSend.gain.linearRampToValueAtTime(peak, now + out);
-      // ...and then shut, so the tail rings out of a send that is no longer
-      // feeding it. Without this the convolver keeps taking whatever the fading
-      // dry path still has in it, and the room re-triggers on the click at the
-      // very end of the fade.
-      v.tailSend.gain.linearRampToValueAtTime(0, now + out + secs * 0.5);
-      const send = v.tailSend, verb = v.tailVerb;
-      v.tailSend = v.tailVerb = null;
-      setTimeout(() => {
-        try { send.disconnect(); verb.disconnect(); } catch { /* already gone */ }
-        // A LONGER GRACE THAN THE IMPULSE, in milliseconds. The convolver's
-        // output is the impulse's length past its last non-silent input, and
-        // its last input is the end of the fade above — so the ring is still
-        // going `secs` after the send has shut, not `secs` after the release.
-      }, (out + secs * 2) * 1000 + 120);
-    }
     gain.gain.cancelScheduledValues(now);
     // setValueAtTime from the LIVE value, not from the last scheduled one —
     // the same trap cardRiser documents. A bed cut in the middle of its ramp
@@ -247,6 +272,55 @@ function tearDown(v, fade) {
     // The context went away underneath us — a tab suspend, an audio reset.
     // Nothing here is worth taking the frame down for.
   }
+}
+
+/**
+ * HAND A DRIVEN BED ITS LEVEL — `t` is 0..1, and it is the whole envelope.
+ *
+ * Called every frame by whatever owns the sound (main.js, off the strike
+ * meter's banked power). A bed opened without `envelope` ignores this: it has
+ * a spool of its own and two authorities on one AudioParam is not a blend, it
+ * is both of them happening.
+ *
+ * SMOOTHED, AND IT HAS TO BE. Writing `gain.value` once a frame is a staircase
+ * at the frame rate, and a staircase on a gain is zipper noise — the one
+ * artefact that makes a synthesised sound instantly read as broken rather than
+ * as cheap. A short linear ramp re-aimed every frame is the shape for this —
+ * see glideParam, which also says why the obvious primitive (setTargetAtTime)
+ * is the wrong one here and what it costs: a bed that cannot be switched off.
+ *
+ * `smooth` is how long the glide takes. Small enough that the meter feels connected
+ * to the ear (a wind-up is about a second end to end, so anything over ~50ms
+ * starts lagging the bar you are watching) and large enough to swallow the
+ * step. It is NOT the attack: a bed still opens from 0 because that is where
+ * startJetBed left it, so the first frames glide up rather than clicking on.
+ *
+ * THE FILTER RIDES IT TOO, exponentially — a sweep is heard in octaves, and a
+ * cutoff moved linearly with power spends the whole top half of the bar in the
+ * top octave and reads as having stopped. The level climbing WITH the filter
+ * is the same thing that makes the spooled version read as gaining power; here
+ * it is gaining the power the player is actually banking.
+ *
+ * Returns false for a key that is not open or not driven, so a caller can tell
+ * "I am driving nothing" from "I am driving it to zero".
+ */
+export function driveJetBed(key, t) {
+  const v = voices.get(key);
+  if (!v?.driven) return false;
+  const k = clamp(Number.isFinite(t) ? t : 0, 0, 1);
+  v.level = k;
+  try {
+    const now = v.ctx.currentTime;
+    const smooth = Math.max(0.005, v.cfg?.envelopeSmooth ?? 0.04);
+    glideParam(v.gain.gain, v.peak * k, now, smooth);
+    // Exponential in the cutoff, which is why this is a ratio raised to `k`
+    // rather than a lerp. Guarded above zero because an exponential through 0
+    // is not a number and a cutoff of 0 is a filter that has closed entirely.
+    const lo = Math.max(20, v.from), hi = Math.max(20, v.to);
+    const cut = lo * Math.pow(hi / lo, k);
+    for (const f of v.freqs) glideParam(f, cut, now, smooth);
+  } catch { /* dead context — nothing here is worth taking the frame down for */ }
+  return true;
 }
 
 /** Is this key's bed sounding? */
@@ -271,7 +345,10 @@ export function releaseJetBed(key, fade) {
   // against a different block's numbers is a fade at the wrong speed onto the
   // wrong cutoff, on a sound the caller has already stopped watching.
   const c = v.cfg ?? bedCfg();
-  const rel = fade ?? c.release ?? 0.12;
+  // A DRIVEN BED CUTS; a spooled one fades. See CUT_FADE for the argument.
+  // An explicit `fade` still wins either way — that is the panel auditioning
+  // the cut on its own, and a caller that has asked for a length has a reason.
+  const rel = fade ?? (v.driven ? CUT_FADE : (c.release ?? 0.12));
   try {
     const now = v.ctx.currentTime;
     // THE FILTER CLOSES WITH THE LEVEL. A bed whose gain alone fell read as
@@ -333,15 +410,35 @@ export function startJetBed(key, cfg = null) {
   // --- the envelope ---------------------------------------------------------
   const gain = ctx.createGain();
   gain.gain.setValueAtTime(0, now);
-  // ATTACK IS A FRACTION OF THE RAMP, not a number of seconds — the same rule
-  // cardRiser uses, for the same reason: retune the spool from 0.45 to 1.2 and
-  // the shape survives instead of becoming a click followed by a long climb.
-  const attack = clamp(c.attack ?? 0.35, 0.01, 1) * ramp;
-  gain.gain.linearRampToValueAtTime(peak * (c.attackLevel ?? 0.55), now + attack);
-  // ...and it keeps climbing to the held level across the rest of the ramp.
-  // The level climbing WITH the filter is what makes the spool read as gaining
-  // power rather than as a filter opening on a sound that was already there.
-  gain.gain.linearRampToValueAtTime(peak, now + ramp);
+  // DRIVEN OR SPOOLED — and it is one or the other, never both.
+  //
+  // A SPOOL is the jet's shape: a fixed ramp to a held level, scheduled once
+  // here and then left alone. It is right for a stream, whose whole character
+  // is that it winds up and then simply burns.
+  //
+  // A DRIVEN bed has no shape of its own. Something outside it hands it a
+  // level every frame (see driveJetBed) and the bed is whatever that says —
+  // which is what a CHARGE wants, because a wind-up is not a fixed ramp: it is
+  // however much fuel there was. A hold begun on a half-full bar has to peter
+  // out where the fuel runs out, and a scheduled ramp cannot know that.
+  //
+  // Nothing is scheduled in the driven case, deliberately. A ramp scheduled
+  // here and then re-aimed by a per-frame glide is two authorities on one
+  // param, and the driver's cancel would be throwing away a spool the bed
+  // thinks it is still on — the envelope reads as ignored for the first `ramp`
+  // seconds and then suddenly working.
+  const driven = !!c.envelope;
+  if (!driven) {
+    // ATTACK IS A FRACTION OF THE RAMP, not a number of seconds — the same rule
+    // cardRiser uses, for the same reason: retune the spool from 0.45 to 1.2 and
+    // the shape survives instead of becoming a click followed by a long climb.
+    const attack = clamp(c.attack ?? 0.35, 0.01, 1) * ramp;
+    gain.gain.linearRampToValueAtTime(peak * (c.attackLevel ?? 0.55), now + attack);
+    // ...and it keeps climbing to the held level across the rest of the ramp.
+    // The level climbing WITH the filter is what makes the spool read as gaining
+    // power rather than as a filter opening on a sound that was already there.
+    gain.gain.linearRampToValueAtTime(peak, now + ramp);
+  }
   // THE MENU GATE, its own node between the envelope and the bus — see the
   // note on setJetBedsMuted. It starts where the flag currently is, so a bed
   // opened while the cards are up arrives silent instead of announcing itself
@@ -349,41 +446,6 @@ export function startJetBed(key, cfg = null) {
   const gate = ctx.createGain();
   gate.gain.value = muted ? 0 : 1;
   gain.connect(gate).connect(master);
-
-  // --- THE ROOM THE BED IS CUT INTO ----------------------------------------
-  // Optional, and off unless a block asks for it (`tail`). What it buys is the
-  // one thing the release above cannot do on its own: the bed is a source that
-  // STOPS, and a source that stops leaves nothing behind, so the cut reads as a
-  // switch rather than as a sound ending in a place.
-  //
-  // FED THROUGHOUT, NOT OPENED AT THE RELEASE, and this is the trap the echo
-  // bus in systems/audio.js already documents from the other side: gate the
-  // INPUT and the line is empty at the moment you want to hear it, so the tail
-  // has nothing in it but whatever arrives after the sound has gone — which is
-  // silence, because the sound going is the event. The send runs at `wet` for
-  // the whole hold (a held note in a space, which is what it should be) and
-  // the release pushes it to `wet * throw`, so the last instant of the bed is
-  // thrown in harder than the rest of it was.
-  //
-  // HUNG OFF THE GATE rather than off `gain`, so a bed muted by the menu takes
-  // its reverb down with it. Off `gain` the room would keep ringing under an
-  // open pause menu after the dry signal had been gated away, which is the
-  // exact failure the gate exists to prevent, arriving one node later.
-  let tailSend = null, tailVerb = null;
-  const t = c.tail;
-  if (t && t.enabled !== false && (t.wet ?? 0) > 0) {
-    // Null before the first gesture unlocks audio — but `isAudioLive` above
-    // has already refused that case, so a null here is a context that died
-    // between the two, and the bed is simply dry.
-    const impulse = makeImpulse(Math.max(0.05, t.seconds ?? 0.6), Math.max(0.1, t.decay ?? 2.6));
-    if (impulse) {
-      tailVerb = ctx.createConvolver();
-      tailVerb.buffer = impulse;
-      tailSend = ctx.createGain();
-      tailSend.gain.value = Math.max(0, t.wet ?? 0);
-      gate.connect(tailSend).connect(tailVerb).connect(master);
-    }
-  }
 
   const ladder = buildLadder(ctx, c.resonance ?? 9);
   const shaper = ctx.createWaveShaper();
@@ -404,10 +466,12 @@ export function startJetBed(key, cfg = null) {
   const to = clamp(c.to ?? 2600, 20, 18000);
   for (const f of ladder.freqs) {
     f.setValueAtTime(from, now);
-    // EXPONENTIAL, because a filter sweep is heard in octaves. A linear ramp
-    // from 180 to 2600 spends most of its time in the top octave and reads as
-    // opening instantly and then sitting still.
-    f.exponentialRampToValueAtTime(Math.max(20, to), now + ramp);
+    // Same split as the level above: a spooled bed sweeps on a clock, a driven
+    // one is swept by whatever is driving it and must not also be sweeping
+    // itself. EXPONENTIAL, because a filter sweep is heard in octaves — a
+    // linear ramp from 180 to 2600 spends most of its time in the top octave
+    // and reads as opening instantly and then sitting still.
+    if (!driven) f.exponentialRampToValueAtTime(Math.max(20, to), now + ramp);
   }
 
   // --- the breath -----------------------------------------------------------
@@ -544,7 +608,7 @@ export function startJetBed(key, cfg = null) {
     ctx, gain, gate, gateTarget: muted ? 0 : 1, cfg: c,
     sources, lfo, freqs: ladder.freqs, startedAt: now, ramp,
     layers: layers.length, synth: synthLevel > 0,
-    tailSend, tailVerb,
+    driven, peak, from, to, level: 0,
   });
   return true;
 }
@@ -571,11 +635,11 @@ export function jetBedState(key) {
     sampled: v.layers > 0,
     muted: v.gateTarget === 0,
     breathing: !!v.lfo,
-    // Whether this bed has a room to be cut into. `false` on a block with no
-    // `tail`, and also on one that asked for it and could not have it — the
-    // context died between isAudioLive and makeImpulse — which is the case
-    // worth being able to see, because it is silent and sounds like a tuning
-    // mistake.
-    tail: !!v.tailVerb,
+    // Whether this bed has a shape of its own or is being handed one. A driven
+    // bed with nobody calling driveJetBed sits at 0 and is SILENT — which looks
+    // exactly like a bed that failed to open, so the panel and the harness both
+    // need to be able to tell the two apart.
+    driven: !!v.driven,
+    level: v.level ?? 0,
   };
 }

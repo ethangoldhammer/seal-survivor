@@ -4751,6 +4751,21 @@ export const CONFIG = {
         hapticInterval: 0.07, // seconds between rumble pulses while holding
         flashTime: 0.28,      // the bar flashing as it is spent, on release
 
+        // THE WIND-UP'S ENVELOPE, and the one curve every channel of it reads:
+        // the sustained shake, the rumble's pulse, and the held voice's level
+        // and filter. See chargeEnvelope in systems/strike.js.
+        //
+        // `floor` is what a wind-up is worth the instant it begins, before a
+        // thing has been banked, and it is deliberately not zero — a hold that
+        // faded up out of silence would have no attack, and the PRESS is the
+        // event. `span` is what the rest of the bar adds on top.
+        //
+        // IT IS NORMALISED WHERE IT IS READ, so these two are a shape rather
+        // than a level: raise them together and nothing changes, raise `span`
+        // alone and the difference between an empty wind-up and a full one
+        // gets wider.
+        envelope: { floor: 0.35, span: 1.1 },
+
         // --- THE WIND-UP'S OWN VOICE ------------------------------------------
         // ONE SOUND, HELD FROM THE PRESS TO THE RELEASE, and then thrown into a
         // short room and gone until the next press.
@@ -4793,10 +4808,36 @@ export const CONFIG = {
           // the file alone.
           synthLevel: 1,
 
-          // The spool. Shorter than the jet's 0.45 because the thing it is
-          // describing is shorter — a default wind-up is one second end to
-          // end, and a ramp half of it long would still be arriving at the
-          // moment the player is being asked to let go.
+          // DRIVEN, NOT SPOOLED — the one thing that makes this bed different
+          // from the jet's and the swirl's. Those two wind up on a fixed ramp
+          // and then hold, which is right for a stream: it is the same stream
+          // however long you point it at something.
+          //
+          // A WIND-UP IS NOT. What it is worth is however much fuel there was,
+          // so a hold begun on a half-full bar has to peter out where the fuel
+          // runs out and a full one has to reach the top — and a scheduled ramp
+          // cannot know either. With this on, the level and the filter are
+          // handed to the bed every frame off the meter itself (chargeEnvelope,
+          // driveJetBed), and `ramp`/`attack`/`attackLevel` below stop being
+          // read for anything but the breath's fade-in.
+          //
+          // THE BAR AND THE SOUND ARE NOW THE SAME NUMBER, which is the point:
+          // a player watching the meter and a player listening to it are being
+          // told the same thing, and it is no longer possible to retune one
+          // without the other following.
+          envelope: true,
+          // The glide the per-frame level is smoothed with. Small enough that
+          // the ear stays connected to the bar — a wind-up is about a second,
+          // so past ~50ms the sound starts lagging what is being watched — and
+          // large enough to swallow the frame-rate staircase that would
+          // otherwise be zipper noise on the gain.
+          envelopeSmooth: 0.04,
+
+          // The spool, kept for the breath's fade-in and for the day this bed
+          // is auditioned with `envelope` off. Shorter than the jet's 0.45
+          // because the thing it describes is shorter — a default wind-up is
+          // one second end to end, and a ramp half of it long would still be
+          // arriving at the moment the player is being asked to let go.
           ramp: 0.22,
           attack: 0.3,
           attackLevel: 0.5,
@@ -4807,6 +4848,13 @@ export const CONFIG = {
           // against, so it sits low and stays out of their way — a bed that
           // competed with them would cost the player the one channel that says
           // how much is left.
+          //
+          // WITH `envelope` ON THESE ARE THE TWO ENDS OF THE BAR, not the two
+          // ends of a ramp: `from` is an empty wind-up and `to` is a full one,
+          // and the cutoff sits wherever between them the meter currently is.
+          // Swept exponentially, because a filter is heard in octaves — moved
+          // linearly with power, the whole top half of the bar would be spent
+          // in the top octave and read as having stopped.
           from: 140,
           to: 900,
           resonance: 7,
@@ -4823,13 +4871,18 @@ export const CONFIG = {
           release: 0.07,
           releaseTo: 120,
 
-          // ...AND THE ROOM IT IS CUT INTO. `throw` is how much harder the send
-          // is pushed as the dry path falls, which is what makes the release
-          // read as the sound being thrown somewhere rather than switched off
-          // next to a reverb. Short on purpose: this rings UNDER the dash it
-          // just launched, and a long tail would still be going when the seal
-          // arrives.
-          tail: { enabled: true, seconds: 0.5, decay: 2.8, wet: 0.16, throw: 3 },
+          // NO ROOM OF ITS OWN. A bed lands on the shared sfx bus, and that
+          // bus has a reverb send on it (systems/audio.js) — so a released
+          // wind-up decays in whatever room the rest of the game is in, which
+          // is the only way it can sit in the mix rather than beside it.
+          //
+          // THERE WAS A PRIVATE CONVOLVER HERE. It was built to make the cut
+          // "land somewhere" and it did the opposite twice over: it put this
+          // one sound in a different space from everything around it, and it
+          // rang for half a second after a gesture that had ended — over the
+          // top of the dash the wind-up had just become. A driven bed has to
+          // be gone when its driver stops (CUT_FADE in systems/jetBed.js), and
+          // a private tail is the one thing that can outlive a hard cut.
         },
 
         // HOW FAR THE PIP RUN CLIMBS PER PIP SPENT, in semitones. The blips
@@ -14946,11 +14999,14 @@ export const CONFIG = {
         // opened fire. So it shells you with its money instead: banded rolls
         // of hundreds, out of a boat with a party on the deck.
         //
-        // A LOOK OVERRIDE AND NOTHING MORE. Damage, speed, fuse, blast radius,
-        // count and spread are all CONFIG.bossBoat.patterns and are not
-        // reachable from here on purpose — a yacht that hit differently would
-        // break the promise bosses.csv makes about this being a subtype, and
-        // the merge in gunFor is deliberately narrow enough to enforce it.
+        // A LOOK OVERRIDE, PLUS THE TWO THINGS A HULL IS ALLOWED TO CHANGE
+        // ABOUT ITS OWN ORDNANCE — how big it is (`shotSwell` below) and
+        // whether it goes off (`fuse` on the seeker). Damage, speed, fuse
+        // LENGTH, blast radius, count and spread are all
+        // CONFIG.bossBoat.patterns and are still not reachable from here — a
+        // yacht that hit for different numbers would break the promise
+        // bosses.csv makes about this being a subtype, and the merge in gunFor
+        // is deliberately narrow enough to enforce it.
         //
         //   BARREL / the explosive. `orient: false` with a `spin`, where the
         //   drum flies nose-first: a roll of cash tumbling end over end is a
@@ -14993,8 +15049,56 @@ export const CONFIG = {
           // The seeker keeps `orient`, which rewrites the whole orientation
           // every frame — a cant on it would be overwritten on the first, so it
           // deliberately does not carry one.
-          missiles: { asset: 'moneyRoll3', orient: true, radius: 0.38 },
+          //
+          // AND IT DETONATES, which the trawler's does not. `fuse` is what puts
+          // a shot on the ordnance list (see fireBossShot), and what that list
+          // means is "goes off wherever it stops" — fuse run out, hit the seal,
+          // shot out of the water, left the arena. So the yacht's whole loadout
+          // now answers a pellet the same way: every one of the three patterns
+          // can be cleared in the air, and every one of them costs you if you
+          // clear it standing next to it.
+          //
+          // The trawler keeps a missile that simply hits you, and that is the
+          // one place the two fights genuinely diverge. It is the right place:
+          // a torpedo is a torpedo, and a bundle of banded hundreds coming in
+          // at thirteen a second is a thing the player should expect to burst.
+          missiles: { asset: 'moneyRoll3', orient: true, radius: 0.38, fuse: true,
+                      blastEmitter: 'cashBurst', blastColor: 0xbfe0a8 },
         },
+
+        // HOW BIG THE MONEY IS, as a multiple of what the gun rows above draw
+        // — the body and the hitbox together. See swellFor in
+        // systems/bossBoat.js, which is the only reader.
+        //
+        // WHY IT IS NOT JUST A BIGGER `radius`. Two reasons, and both are about
+        // keeping one number honest. `radius` is the art's size and it is the
+        // number tools/looks/cash-ordnance.js is judged against; this is the
+        // FIGHT's size, and a ramp baked into the art number would mean the
+        // look page and the game disagree by up to a factor of two with nothing
+        // saying so. And a multiplier survives the art being re-measured, which
+        // a hand-doubled radius would quietly undo.
+        //
+        // `base` 1.5 is the floor and it is what the first yacht of a run
+        // throws (hence `from`, which is this archetype's own minLevel in
+        // bosses.csv — a ramp anchored at level 1 would make `base` a size
+        // nobody ever sees). `perLevel` is deliberately slow: over the twenty
+        // levels a long run actually spends past the fifth it adds about half
+        // again — level 25 throws them at x2.1 — so the shells the player learns
+        // to read at the first yacht are still recognisably the same shells at
+        // the last one, only harder to slip between. The ceiling is not reached
+        // until level 35, which is past where a run realistically goes: the cap
+        // is a guard rail rather than the shape of the ramp, and a ramp whose
+        // cap is the number most players actually see is a ramp that stopped
+        // being one. `max` is that rail, and it is set where the barrel
+        // stops being a shell and starts being an obstacle — at 2.4 a roll of
+        // cash is 1.2 units across against a blast radius of 3.2, so the body
+        // is still comfortably inside its own explosion.
+        //
+        // IT CUTS BOTH WAYS, on purpose. The hitbox goes with the picture, so a
+        // late-run shell is harder to squeeze past AND a much easier thing to
+        // shoot out of the water (see the enemy-shot pass in systems/combat.js)
+        // — which is the counterplay the size is supposed to be teaching.
+        shotSwell: { base: 1.5, from: 5, perLevel: 0.03, max: 2.4 },
         // FITTED TO THE HULL, unlike the trawler. A boat boss's circle has to
         // cover a hull that is far longer than it is tall, so it ends up as a
         // sphere with most of its area in empty sky above the deck and empty
@@ -18411,6 +18515,58 @@ export const CONFIG = {
         colors: [0xdff6ff, 0xbfefff, 0xffffff], cone: 0.35, drag: 1.5,
         gravity: [0, 3.4], inherit: 0.22, glow: 1.0, surfacePop: 'bubbleBurst',
       },
+      // WHAT THE BALL SPITS OUT OF THE CONTACT PATCH WHEN IT IS HIT — the two
+      // fans in systems/ballSpit.js. `ballWake` above is the same ball's WAKE,
+      // shed astern while it travels; these are the impact, and the difference
+      // between them is the whole of why they are separate rows.
+      //
+      // SMALL, MANY, AND SHORT. Two thirds of the wake's size and half its
+      // life, at four times the count: an impact is read as a volume of water coming
+      // apart, and the individual bubble is not the unit of that. Fired several
+      // times per hit from points spread across the patch (see the puff note in
+      // ballSpit.js), so the count here is a PUFF's worth and not a burst's.
+      //
+      // TWO THIRDS AND NOT A FIFTH, which is where these started, and the glow
+      // is over twice the wake's rather than matching it. Both were measured on
+      // the ball lab's page, not reasoned about: at a fifth of the wake and a
+      // glow of 1 the burst was there, was the right shape and the right count,
+      // and read as a faint smudge of noise. A bubble is one or two pixels at
+      // match zoom and these are born against the ball's own lit body, which is
+      // the brightest thing on the pitch — so "small" is a size RELATIVE to the
+      // bubbles already beside it, and there is a floor under it where small
+      // stops meaning small and starts meaning invisible.
+      //
+      // HIGH TURBULENCE, which is the one field doing real work. Everything
+      // else in this table sits under 1; the shared current ramps with a
+      // particle's AGE, so a 0.45s bubble only ever sees the first sliver of it
+      // and needs the multiplier to pick up any wander at all before it dies.
+      //
+      // `killAtSurface` rather than `surfacePop`: at this count a volley near
+      // the line would put a hundred separate foam bursts on one frame, which
+      // is the wake's job and already happening. These just go.
+      //
+      // THE JET — along the line the ball leaves on. A narrow cone PER PUFF,
+      // because this one is carrying a DIRECTION and a cone that swallows its
+      // own axis erases it; the spread across the whole fan is `spit.jetFan`,
+      // which bends each puff by where it sits rather than rolling it. Fast and
+      // low drag, so it is clear of the body within a few frames.
+      ballSpit: {
+        count: 14, speed: [6, 19], size: [0.10, 0.26], life: [0.22, 0.5],
+        colors: [0xdff6ff, 0xbfefff, 0xffffff, 0x9fe8ff], cone: 0.4, drag: 3.4,
+        gravity: [0, 3.0], inherit: 0.3, glow: 2.6, turbulence: 2.6,
+        killAtSurface: true,
+      },
+      // THE WASH — back out of the pinch, toward whoever hit it. Wide cone (its
+      // edges come out almost sideways, which is what makes one fan cover the
+      // whole collar), slower, heavier drag, and it hangs a little longer: this
+      // is the water that did NOT leave with the ball, so it should still be
+      // there a moment after the ball has gone.
+      ballSpitWash: {
+        count: 10, speed: [2.4, 8.5], size: [0.12, 0.30], life: [0.35, 0.8],
+        colors: [0xdff6ff, 0xbfefff, 0xffffff], cone: 1.05, drag: 2.2,
+        gravity: [0, 3.6], inherit: 0.3, glow: 2.2, turbulence: 2.2,
+        killAtSurface: true,
+      },
       // A HULL PUSHING WATER. Every boat in the game sheds this through the one
       // system that owns it, systems/boatWake.js: the rowboat and the trawler
       // that sail past (systems/boats.js), and both boat bosses holding station
@@ -20541,13 +20697,24 @@ export const CONFIG = {
       // "that one" — the reticle does the talking (see systems/marks.js).
       strikeMark:  { emit: 'sparks', shake: 0, hitstop: 0, glow: 0.2, sfx: 'strikeChain',
                      haptic: null, sfxMinGap: 0.12 },
-      // Winding a strike up. Re-fired on `charge.hapticInterval` for as long as
-      // the button is held, with `scale` riding the power banked so far, so the
-      // rumble builds instead of buzzing flat. No particles and no sound: the
-      // shake for this is SUSTAINED rather than per-event (see
-      // CONFIG.strike.charge.shake), and a spray of sparks every 70ms would bury
-      // the seal in its own wind-up. `sfx` is left wired but null — a rising
-      // whine belongs here if one gets authored.
+      // Winding a strike up. No particles: the shake for this is SUSTAINED
+      // rather than per-event (see CONFIG.strike.charge.shake), and a spray of
+      // sparks every 70ms would bury the seal in its own wind-up.
+      //
+      // TWO CHANNELS ON TWO CLOCKS, which is the thing to know about this row.
+      // The RUMBLE is re-fired on `charge.hapticInterval` for as long as the
+      // button is held, with `scale` riding the power banked so far, so it
+      // builds instead of buzzing flat — a motor can only be handed discrete
+      // pulses. The SOUND is one thing per wind-up: fired once on the press and
+      // CHOKED at the let-go (main.js), because what belongs on this row is a
+      // riser, and a riser's whole job is to be interrupted by the thing it was
+      // building to.
+      //
+      // The interval calls therefore pass `sfxSkip` (systems/feedback.js). They
+      // did not always, and the day a file was first assigned here it was
+      // started fourteen times a second with every copy playing to its end —
+      // a dozen overlapping risers, heard as a flanged smear rather than as a
+      // sound repeating. `sfx` ships null; assign one in the F panel.
       strikeCharging: { emit: null, shake: 0, hitstop: 0, glow: 0.05, sfx: null,
                         haptic: [{ duration: 55, magnitude: 0.3 }] },
       // THE WIND-UP FULLY LOADED — the perfect charge landing (see
@@ -20731,6 +20898,34 @@ export const CONFIG = {
       versusBallReentry: { emit: 'reentry', goo: 'ballGoo', shake: 0.2,  hitstop: 0, glow: 0.45, ripple: { strength: 3.0, radius: 12 }, sfx: 'reentry', haptic: [14], sfxMinGap: 0.2 },
       versusBallHit: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.08, hitstop: 0, glow: 0.3, ripple: { strength: 1.4, radius: 7 }, sfx: 'versusBallHit',
                      haptic: [{ duration: 22, magnitude: 0.5 }], sfxMinGap: 0.05 },
+      // THE SAME TOUCH, SOFT AND HARD. ballImpactFx picks one of these three by
+      // the hit's strength (CONFIG.versus.ball.fx.voice) — `versusBallHit`
+      // above is the middle band and the one everything else in the file still
+      // refers to by name.
+      //
+      // THREE EVENTS AND NOT THREE VOICES ON ONE EVENT, because a voice cannot
+      // be chosen per call: `def.sfx` is fixed per row (see systems/
+      // feedback.js) and takes inside a voice are picked at RANDOM, which is
+      // variation and not selection. A row each is also what puts three
+      // separately assignable slots in the F panel's library, which is the
+      // actual ask — different recordings for a dribble and a cannon, not one
+      // recording at three volumes.
+      //
+      // THE PICTURE SCALES WITH THE BAND TOO. A tap's splash is smaller and its
+      // shake is nearly nothing; a smash is the biggest non-goal event in a
+      // match. Without that the bands would be audible and invisible, and the
+      // ball would look the same being nudged as being hammered.
+      //
+      // `sfxMinGap` is NOT shared across the three, and that is deliberate: a
+      // scramble that is genuinely alternating taps and smashes should be heard
+      // doing it. The one-splash-per-moment throttle that stops a dribble
+      // becoming sixty squirts a second is a separate, earlier gate inside
+      // ballImpactFx and is keyed on the FUNNEL rather than on these names —
+      // see the note there.
+      versusBallTap: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.02, hitstop: 0, glow: 0.14, ripple: { strength: 0.7, radius: 4 }, sfx: 'versusBallTap',
+                     haptic: [{ duration: 12, magnitude: 0.22 }], sfxMinGap: 0.05 },
+      versusBallSmash: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.17, hitstop: 0, glow: 0.45, ripple: { strength: 2.4, radius: 10 }, sfx: 'versusBallSmash',
+                     haptic: [{ duration: 38, magnitude: 0.85 }], sfxMinGap: 0.05 },
       // THE CONTEST, both ways — see CONFIG.versus.ball.contest. Every touch
       // is a weighted race between the ball's speed toward the seal and the
       // seal's toward the ball, and the two outcomes are the two events here.
@@ -20795,6 +20990,23 @@ export const CONFIG = {
       // against rock, not seal against ball.
       versusBallWall: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.05, hitstop: 0, glow: 0.2, ripple: { strength: 1.0, radius: 6 }, sfx: 'versusBallWall',
                      haptic: [{ duration: 16, magnitude: 0.35 }], sfxMinGap: 0.05 },
+      // ...AND THE SKID, when it arrived spinning. Fires OVER versusBallWall
+      // rather than instead of it — the same relationship a block has to a
+      // nudge — because a spinning ball off rock is two true things at once:
+      // it struck, and then it dragged. Only the drag is new.
+      //
+      // NO PICTURE AND NO SHAKE. The wall's own event on the same frame has
+      // already sprayed the goo and dented the rim along the contact, and the
+      // physics is meanwhile trading the spin for a kick along the surface
+      // (see `bounce`). A second splash for one contact is the smear this
+      // table spends most of its comments avoiding; the skid is a SOUND, and
+      // the glow lift is only there so it is not completely invisible.
+      //
+      // `scale` is the spin, not the impact — which is the whole distinction.
+      // A ball creeping along a wall with the spin still on it is a loud skid
+      // and a quiet bounce, and that is correct.
+      versusBallSkid: { emit: null, goo: null, shake: 0, hitstop: 0, glow: 0.12, sfx: 'versusBallSkid',
+                     haptic: [{ duration: 18, magnitude: 0.25 }], sfxMinGap: 0.14 },
       // THE TWO BODIES. A dash into another seal, the seal that could not take
       // any more, and the seal coming back.
       //
@@ -26678,6 +26890,37 @@ export const CONFIG = {
       // duller — water on rock.
       versusBallHit:   { src: null, type: 'boom',  freq: [420, 110],  decay: 0.18, gain: 0.34, noise: 0.65, filter: 1800, pitchVary: 0.12, filterVary: 0.25 },
       versusBallWall:  { src: null, type: 'boom',  freq: [260, 70],   decay: 0.2,  gain: 0.28, noise: 0.6,  filter: 1200, pitchVary: 0.12, filterVary: 0.2 },
+      // THE SAME SLAP AT THE TWO ENDS OF ITS RANGE — see the `voice` block in
+      // CONFIG.versus.ball.fx for why the ball's body contact is banded and the
+      // wall's is not.
+      //
+      // A TAP is the ball being shepherded: a seal swimming it up the pitch,
+      // a bobble off a resting body. It is the slap with the weight taken out
+      // — higher, much shorter, and with the noise pulled back, because what
+      // makes a light contact light is that the mass never moves. It fires
+      // more often than anything else in a match, so it is also the quietest
+      // thing here by some way; a dribble that announced itself would bury the
+      // shots.
+      versusBallTap:   { src: null, type: 'boom',  freq: [620, 240],  decay: 0.075, gain: 0.16, noise: 0.42, filter: 2600, pitchVary: 0.14, filterVary: 0.3 },
+      // A SMASH is the whole ball moving: a full-power strike, a shot off a
+      // dive. Lower than the slap and longer, with the noise up — the body
+      // deforming as well as being struck, which is what the dent on the rim
+      // is already drawing on the same frame.
+      //
+      // IT MUST NOT BE A GOAL. versusGoal is the deepest boom in the match at
+      // [160, 36] and this has to stay clear of it, or the hardest shot in
+      // open play is mistaken for a score every time somebody hits one.
+      versusBallSmash: { src: null, type: 'boom',  freq: [300, 66],   decay: 0.3,  gain: 0.46, noise: 0.78, filter: 1250, pitchVary: 0.08, filterVary: 0.22 },
+      // THE SKID — a spinning ball dragging along the rock rather than
+      // knocking off it. Fires OVER versusBallWall, the way a block fires over
+      // a nudge, because both are true: it hit the wall AND it slid.
+      //
+      // NOISE AND NOT A BOOM, and that is the whole point of it. The wall's
+      // voice is an impact and impacts are transients; a scrape is the absence
+      // of one — it is the contact lasting. So this is filtered noise with no
+      // tone under it at all, long against everything else in the ball's bank,
+      // and the length is what carries the spin (`spinRing`).
+      versusBallSkid:  { src: null, type: 'noise', filter: 3200,      decay: 0.22, gain: 0.17, pitchVary: 0.1, filterVary: 0.35 },
       // THE CONTEST, both ways — and they must not sound alike, because they
       // are the same collision heard from either end.
       //
@@ -32971,6 +33214,18 @@ export const CONFIG = {
         life: 5,
         turnRate: 1.1,
         damage: 14,
+        // WHAT A SEEKER IS WORTH WHEN IT GOES OFF — and it only goes off on a
+        // hull whose `ordnance` gives it a fuse, which today is the yacht and
+        // not the trawler. The number lives here rather than beside that fuse
+        // because this is where every other blast radius in the fight lives:
+        // what a pattern costs is the pattern's business, and a hull is only
+        // allowed to say whether it detonates at all (see gunFor).
+        //
+        // Tighter than `rain`'s 3.2 and `spread`'s 2.8, because this is the one
+        // blast the player cannot be somewhere else for — a seeker arrives at
+        // them by definition, so the circle has to be small enough that killing
+        // it at arm's length is still the right move.
+        blastRadius: 2.4,
       },
       // THE FAN, straight down from the hull. Answered by being anywhere else.
       spread: {
@@ -42065,6 +42320,230 @@ export const CONFIG = {
         // contesting, which is not a moment.
         pierceMin: 6,
         pierceRef: 34,
+
+        // --- WHAT THE HIT SOUNDS LIKE ------------------------------------
+        // Until this block every touch the ball took was ONE sound at a
+        // volume. `scale` rides the strength, so a dribbling nudge and a
+        // full-power strike into the rock were the same recording, one of
+        // them louder — and loudness is the one channel a mixer, a distance
+        // fade and a repetition attenuator are all already spending. The
+        // moment the ball is doing something interesting is the moment the
+        // sound stops being able to say so.
+        //
+        // TWO MECHANISMS, and they do different jobs:
+        //
+        //   THE BAND     picks a different EVENT, so soft/normal/hard can be
+        //                genuinely different recordings rather than one
+        //                recording at three volumes. Three rows in
+        //                CONFIG.feedback, three voices, assignable
+        //                separately in the F panel's library.
+        //   THE SHAPE    pitch and ring length, computed per hit and passed
+        //                through sfxOpts. Continuous, so a band does not
+        //                arrive as a step change — the hardest tap and the
+        //                softest normal hit meet in the middle.
+        //
+        // Both run through ballImpactFx, which is the single funnel every
+        // touch already goes through (a strike, a block, a pierce, a wall, a
+        // post, a hull, a fish), so no caller has to know this exists.
+        voice: {
+          enabled: true,
+
+          // --- the bands ---------------------------------------------------
+          // On the hit's own strength, the same 0..1 `scale` rides. A nudge
+          // arrives at ~0.35 of the closing speed (bumpShare) so most
+          // dribbling lands under `tapBelow`; a strike at full impulse is 1.
+          //
+          // ONLY THE BALL'S BODY CONTACT IS BANDED. A wall, a post, a block
+          // and a pierce are already their own events with their own voices —
+          // they are different MOMENTS, and this is about one moment covering
+          // too wide a range. Banding a wall bounce as well would be four
+          // more rows saying what `scale` already says about a rock.
+          tapBelow: 0.26,
+          smashAbove: 0.68,
+
+          // --- the shape: how hard ------------------------------------------
+          // PITCH FALLS AS THE HIT GETS HARDER, which reads backwards written
+          // down and is what a body does: a light tap excites the surface and
+          // a heavy one moves the whole mass, so the harder hit is the lower
+          // one. Pitching UP with force is the instinctive choice and it makes
+          // a cannon shot sound like a smaller ball.
+          //
+          // On a synth voice `pitch` carries the filter with it (see playSfx),
+          // so this is brightness as well as note; on a sample it is tape
+          // speed, so a hard hit is also longer. `decay` below is what keeps
+          // the synth voices moving with it.
+          pitchSoft: 1.2,
+          pitchHard: 0.82,
+          decaySoft: 0.75,
+          decayHard: 1.4,
+
+          // --- the shape: spin ----------------------------------------------
+          // A BALL ARRIVING WITH SPIN SCRAPES RATHER THAN KNOCKS. The physics
+          // already models it — `slip` against a wall, the skid that trades
+          // spin for a kick along the surface — and none of it was audible.
+          //
+          // What spin buys is RING, not pitch: a knock is over when the
+          // surfaces part and a scrape lasts as long as they are sliding. A
+          // touch of brightness comes with it because a scrape is a rougher
+          // contact, but the length is the read.
+          //
+          // `spinRef` is the spin that counts as fully spinning — matched to
+          // impact.spinCap, which is where the physics clamps, so full here
+          // means the same thing it means there.
+          spinRef: 28,
+          spinPitch: 0.07,
+          spinRing: 0.55,
+
+          // WHEN A WALL CONTACT IS A SKID. Fraction of `spinRef`; over it a
+          // bounce fires `versusBallSkid` OVER `versusBallWall`, the way a
+          // block fires over a nudge. Both sound, because they are two true
+          // things about one contact: it hit the rock AND it dragged along it.
+          skidSpin: 0.5,
+          // ...and the skid has to be going somewhere. A ball spinning on the
+          // spot against a wall it is barely touching is not a skid, so the
+          // contact also has to carry this much of a hit.
+          skidForce: 0.12,
+
+          // --- the shape: which side of the surface -------------------------
+          // AIR AND WATER ARE DIFFERENT ROOMS. The ball crosses the surface
+          // constantly in a match (that is what the breach and reentry events
+          // are for) and every impact on either side sounded identical.
+          // Underwater is lower and longer — the medium is heavier and it
+          // sustains; in air it is brighter and shorter.
+          //
+          // Multipliers on top of the force and spin shaping rather than
+          // replacements for it, so a hard underwater smash is still lower
+          // than a soft underwater tap.
+          waterPitch: 0.88,
+          waterRing: 1.2,
+          airPitch: 1.06,
+          airRing: 0.85,
+
+          // The floor and ceiling the whole stack is clamped into. Pitch is a
+          // playbackRate on a sampled voice, and a rate that runs away is a
+          // sound of the wrong length as well as the wrong note — at 0.5 a
+          // 0.2s knock is a 0.4s thud, which arrives after the frame it is
+          // describing.
+          pitchMin: 0.6,
+          pitchMax: 1.5,
+          ringMin: 0.5,
+          ringMax: 2.2,
+        },
+      },
+
+      // WHAT THE BALL SPITS OUT OF THE CONTACT PATCH — systems/ballSpit.js,
+      // fired from ballImpactFx so every touch the ball has pays it: a strike,
+      // a block, a pierce, a wall, a post, a hull, a fish.
+      //
+      // IT IS NOT THE WAKE. `trail.water.bubbles` is the same ball cavitating
+      // as it TRAVELS, shed from a point dead astern of the heading. That point
+      // can say how fast the ball is going and nothing else. This one is born
+      // on the drawn edge at the bearing it was actually struck, and it is the
+      // only thing on screen that can say WHERE the ball was hit and WHICH WAY
+      // the impulse went — which is why it replaced the burst the wake used to
+      // pay on a hit rather than being added beside it. Two clouds of foam on
+      // one frame telling two different stories about the same touch is worse
+      // than either of them alone.
+      //
+      // TWO FANS: the jet along the line the ball leaves on (the direction),
+      // the wash back out of the pinch toward whoever hit it (the source). Each
+      // fires as several small PUFFS spread across the patch rather than as one
+      // cone, which is where the churn comes from — see ballSpit.js.
+      spit: {
+        enabled: true,
+        // Under this share of the hardest hit there is, nothing. A ball
+        // settling against the floor touches it every frame.
+        minForce: 0.03,
+        // CONCAVE, and it matters more here than anywhere else in the block.
+        // An ordinary pass lands around 0.2 of full force, so a linear ramp
+        // would make every touch in a normal possession nearly invisible and
+        // spend the whole effect on a shot nobody takes twice a match.
+        forcePow: 0.6,
+
+        // THE PATCH. How far across the contact the puffs are spread, as a
+        // share of the ball's radius there — and it OPENS with the force, the
+        // same way the dent does, because a harder hit flattens more of the
+        // ball against the striker. `patchSoft` is the share of it a nothing
+        // touch gets; `patchJitter` is how far off its slot a puff may sit, so
+        // the spread is not a visible row of five.
+        patch: 0.55,
+        patchSoft: 0.45,
+        patchJitter: 0.35,
+        // Off the skin along the normal, as a share of the radius. Born exactly
+        // on the drawn edge they start INSIDE the goo body's isoline and the
+        // first frames of the cloud are swallowed by it.
+        lift: 0.12,
+        // Per-puff scatter on the throw, either way. The emitter's own speed
+        // band already spreads the particles within a puff; this is what stops
+        // the puffs themselves arriving as one expanding shell.
+        speedVary: 0.35,
+
+        // --- the jet: the direction ---------------------------------------
+        // Along the line the ball LEAVES on, which the strike passes in
+        // (`grip` swings it off the contact normal toward the dash) and which
+        // defaults to the normal everywhere else — exactly right for a wall,
+        // where the rock's impulse IS its inward normal.
+        jetEmitter: 'ballSpit',
+        jetPuffsMin: 2, jetPuffsMax: 7,
+        jetScaleMin: 0.45, jetScaleMax: 3.2,
+        jetSpeedMin: 0.7, jetSpeedMax: 2.9,
+        // The jet is the ball's own water leaving WITH it, so it keeps the new
+        // velocity outright; the wash is water that stayed behind.
+        jetInherit: 1,
+        // How far the outermost puff is bent off the line by where it sits on
+        // the patch, in radians — the fan opens like water squeezed out of a
+        // closing gap.
+        //
+        // A FAN AND NOT A WIDE CONE, and the difference is that this is a
+        // function of WHERE on the patch the puff sits rather than a roll. It
+        // draws a V with its apex at the contact and its axis on the impulse,
+        // which says a direction; a cone of the same width says only that
+        // something happened. It is deliberately wide enough that the outer
+        // fingers clear the BALL — the middle of the jet is thrown under a body
+        // departing along that same line and is simply never seen, so a narrow
+        // jet is a jet nobody can look at. Measured on the ball lab's page.
+        jetFan: 0.85,
+        jetWander: 0.3,
+
+        // --- the wash: the source -----------------------------------------
+        // Back along the contact normal, toward the striker. The emitter's own
+        // cone is wide enough that the edges of this come out nearly sideways,
+        // so one fan covers the whole collar.
+        washEmitter: 'ballSpitWash',
+        washPuffsMin: 1, washPuffsMax: 5,
+        washScaleMin: 0.35, washScaleMax: 2.6,
+        washSpeedMin: 0.5, washSpeedMax: 1.4,
+        washInherit: 0.15,
+        washFan: 0.9,
+        washWander: 0.45,
+        washSize: 1,
+
+        // Both fans, at a nothing touch and at the hardest one.
+        sizeMin: 0.7, sizeMax: 1.25,
+
+        // THE CEILING ON ONE IMPACT, IN PARTICLES ASKED FOR — which is not the
+        // number that lands. CONFIG.fx.spriteDensity thins every sprite burst
+        // in the game on the way into the buffer, and at the shipped 0.35 a
+        // full-force hit asking for five hundred draws a little over two.
+        // The counts above are sized for what that leaves on screen — two
+        // hundred was the number it took for the cloud to read as water coming
+        // apart rather than as a sprinkle of sparks — so a machine on the
+        // relief ramp gets a thinner boil rather than a different effect.
+        //
+        // This is the number no single hit may go past however the ramps are
+        // tuned, and the fans spend it in order — the jet first, because the
+        // direction is the thing worth having.
+        maxParticles: 520,
+
+        // WHOSE HIT IT WAS, mixed into water — a MIX and never a replacement,
+        // the same as the wake's `tint` and for the same reason: at 1 these
+        // stop being bubbles and become a coloured puff, which reads as an
+        // ability firing rather than as the sea being displaced. A fifth of it
+        // is enough to say who hit it while the cloud stays water. A wall
+        // passes no colour at all, because a wall is nobody's — those come out
+        // plain, which is itself the information.
+        color: 0xdff6ff,
+        tint: 0.35,
       },
       // HOW THE BODY IS BUILT OUT OF SPLATS — and it is the HITBOX as well as
       // the picture, because systems/ballShape.js solves the goo isoline
@@ -42540,23 +43019,18 @@ export const CONFIG = {
             speedMul: 3.6,
             color: 0xdff6ff,
             tint: 0.48,
-            // A HIT BOILS IT — burstBallBubbles in systems/ballTrail.js, fired
-            // from ballImpactFx so every touch the ball has pays it: a strike,
-            // a block, a wall, a post, a body it went through. `burst` is the
-            // count at full force and it scales down with the impact, so a
-            // dribble puffs a couple and a spike detonates.
+            // A HIT IS NOT PAID HERE. This used to carry a `burst` that every
+            // touch through ballImpactFx bought, on the argument that the ball
+            // already cavitates through this path and a hit should make its OWN
+            // bubbles boil rather than add a second effect beside them. Right
+            // instinct, wrong place: these two points are dead ASTERN of the
+            // heading, and astern can say how fast the ball is going and
+            // nothing else — not where on the body it was struck, not which way
+            // the impulse went, not who hit it.
             //
-            // The trail's OWN bubbles rather than a new emitter. The ball
-            // already cavitates continuously at `perSecond`, from two points
-            // solved off its drawn edge, in whichever team currently owns it —
-            // a burst through that same path is the ball's water reacting,
-            // while a second emitter beside it would have been a puff of
-            // unrelated foam that happened to land in the same place.
-            burst: 14,
-            // The ceiling on bubbles OWED at once. A scramble in front of the
-            // mouth is half a dozen touches inside a second, and without this
-            // the debt compounds into one enormous belch a frame later.
-            burstMax: 26,
+            // CONFIG.versus.ball.spit owns the impact now, out of the contact
+            // patch on the frame of the touch. What is left here is the wake,
+            // which is what this block was always actually describing.
           },
           width: 0.61,
           growth: 1.95,
@@ -46155,6 +46629,37 @@ export const TUNER_SCHEMA = [
       // untouched by this, and the one thing a switch here must never be is
       // one that leaves one side chaining.
       { path: 'versus.chain.enabled', type: 'bool', label: 'blubberball: the food chain runs in a match' },
+      // --- what a ball contact sounds like -----------------------------------
+      // The bands pick which of the three rows fires; everything under them
+      // shapes the one that does. Which FILE each row plays is the F panel's
+      // library, not here — these are the numbers that decide which row and how
+      // it is bent, and all of them are look-and-feel.
+      { path: 'versus.ball.fx.voice.enabled', type: 'bool', label: 'ball hit: vary the sound by the hit' },
+      { path: 'versus.ball.fx.voice.tapBelow', min: 0, max: 0.6, step: 0.01, label: 'ball hit: under this is a tap' },
+      { path: 'versus.ball.fx.voice.smashAbove', min: 0.3, max: 1, step: 0.01, label: 'ball hit: over this is a smash' },
+      // Soft above 1 and hard below it, because pitch falls as the hit gets
+      // harder — see the note on the block. Crossing them inverts the mapping,
+      // which is a legitimate thing to try and an easy thing to do by accident.
+      { path: 'versus.ball.fx.voice.pitchSoft', min: 0.6, max: 1.6, step: 0.01, label: 'ball hit: pitch of a nothing touch' },
+      { path: 'versus.ball.fx.voice.pitchHard', min: 0.6, max: 1.6, step: 0.01, label: 'ball hit: pitch of a full-power one' },
+      { path: 'versus.ball.fx.voice.decaySoft', min: 0.3, max: 2, step: 0.05, label: 'ball hit: ring of a nothing touch' },
+      { path: 'versus.ball.fx.voice.decayHard', min: 0.3, max: 2.5, step: 0.05, label: 'ball hit: ring of a full-power one' },
+      { path: 'versus.ball.fx.voice.spinRef', min: 4, max: 40, step: 1, label: 'ball spin: what counts as fully spinning' },
+      { path: 'versus.ball.fx.voice.spinRing', min: 0, max: 2, step: 0.05, label: 'ball spin: extra ring at full spin' },
+      { path: 'versus.ball.fx.voice.spinPitch', min: 0, max: 0.5, step: 0.01, label: 'ball spin: extra brightness at full spin' },
+      { path: 'versus.ball.fx.voice.skidSpin', min: 0, max: 1, step: 0.05, label: 'ball skid: spin a wall bounce needs to drag' },
+      { path: 'versus.ball.fx.voice.skidForce', min: 0, max: 0.6, step: 0.01, label: 'ball skid: ...and the contact it needs' },
+      { path: 'versus.ball.fx.voice.waterPitch', min: 0.6, max: 1.2, step: 0.01, label: 'ball hit: underwater pitch' },
+      { path: 'versus.ball.fx.voice.waterRing', min: 0.6, max: 2, step: 0.05, label: 'ball hit: underwater ring' },
+      { path: 'versus.ball.fx.voice.airPitch', min: 0.8, max: 1.6, step: 0.01, label: 'ball hit: in-air pitch' },
+      { path: 'versus.ball.fx.voice.airRing', min: 0.4, max: 1.6, step: 0.05, label: 'ball hit: in-air ring' },
+      // The ceilings the whole stack lands in. Worth knowing they BITE: a hard
+      // underwater smash with full spin asks for 2.6x ring and gets ringMax, so
+      // the top of the range compresses rather than running away.
+      { path: 'versus.ball.fx.voice.pitchMin', min: 0.4, max: 1, step: 0.02, label: 'ball hit: lowest pitch allowed' },
+      { path: 'versus.ball.fx.voice.pitchMax', min: 1, max: 2.5, step: 0.05, label: 'ball hit: highest pitch allowed' },
+      { path: 'versus.ball.fx.voice.ringMin', min: 0.2, max: 1, step: 0.05, label: 'ball hit: shortest ring allowed' },
+      { path: 'versus.ball.fx.voice.ringMax', min: 1, max: 4, step: 0.1, label: 'ball hit: longest ring allowed' },
       { path: 'strike.charge.time', min: 0.15, max: 3, step: 0.05, label: 'charge: seconds a full bar buys' },
       { path: 'strike.charge.minFirePips', min: 1, max: 6, step: 1, label: 'charge: pips needed to fire' },
       { path: 'strike.charge.chumRefill', min: 0.02, max: 1, step: 0.02, label: 'charge: refill per chum' },
@@ -46184,13 +46689,6 @@ export const TUNER_SCHEMA = [
       { path: 'strike.charge.bed.synthLevel', min: 0, max: 2, step: 0.05, label: 'wind-up voice: synth level' },
       { path: 'strike.charge.bed.sampleLevel', min: 0, max: 2, step: 0.05, label: 'wind-up voice: sample level' },
       { path: 'strike.charge.bed.release', min: 0.01, max: 0.5, step: 0.005, label: 'wind-up voice: cut time' },
-      // The room the cut lands in. `throw` is the send pushed harder as the dry
-      // path falls — the difference between being thrown somewhere and being
-      // turned down next to a reverb.
-      { path: 'strike.charge.bed.tail.wet', min: 0, max: 0.6, step: 0.005, label: 'wind-up room: wet' },
-      { path: 'strike.charge.bed.tail.throw', min: 1, max: 8, step: 0.1, label: 'wind-up room: throw on release' },
-      { path: 'strike.charge.bed.tail.seconds', min: 0.05, max: 2, step: 0.05, label: 'wind-up room: length' },
-      { path: 'strike.charge.bed.tail.decay', min: 0.5, max: 6, step: 0.1, label: 'wind-up room: decay' },
       // Semitones a pip, so the number is arguable by ear. The cap is what
       // keeps a 12-pip bar from ending two octaves up.
       { path: 'strike.charge.burnSemitones', min: 0, max: 7, step: 1, label: 'pip run: climb per pip (semitones)' },

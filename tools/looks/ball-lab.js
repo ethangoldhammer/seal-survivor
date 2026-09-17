@@ -37,10 +37,11 @@ import { enableVersus } from '../../path/src/systems/versusFlag.js';
 import { createPost } from '../../path/src/systems/post.js';
 import { ballEvent, setBallDrive, updateBallLook, resetBallLook, teamColor, ballCredit } from '../../path/src/systems/ballLook.js';
 import { updateBallTrail, clearBallTrail, ballTrailStats, ballTrailSplit } from '../../path/src/systems/ballTrail.js';
+import { ballSpitStats, resetBallSpit } from '../../path/src/systems/ballSpit.js';
 import { updateBallGrid, publishBallGrid, resetBallGrid, ballGridState } from '../../path/src/systems/ballGrid.js';
 import { createGrid } from '../../path/src/systems/grid.js';
 import {
-  initParticles, updateParticles, updateParticleScale,
+  initParticles, updateParticles, updateParticleScale, particleCount, setParticleRelief,
 } from '../../path/src/entities/particles.js';
 import {
   ball, initBallAlone, stepBallAlone, strikeBallFrom, renderBall, resetBall, rimRadius, rimAngle, driveOutline,
@@ -321,6 +322,56 @@ const CONFIG_SLIDERS = [
   ['versus.ball.trail.water.bubbles.speedMul', 'thrown x', 0.2, 4, 0.1],
   ['versus.ball.trail.water.bubbles.tint', 'tinted by who owns it', 0, 1, 0.02],
   ['versus.ball.trail.water.bubbles.color', 'bubble colour', 'color'],
+
+  // WHAT IT SPITS WHEN IT IS HIT — systems/ballSpit.js, out of the CONTACT
+  // PATCH rather than off the back, which is the whole difference between it
+  // and the bubbles above. Two fans: the jet along the line the ball leaves on
+  // (the direction of the impulse) and the wash back out of the pinch toward
+  // whoever hit it (the source).
+  //
+  // THIS IS THE PAGE FOR IT, and not because it is convenient. The effect is a
+  // tenth of a second long and fires on a contact, so in a match it is over
+  // before you have found it; here the same strike goes off the `R` key from
+  // the same bearing at the same power as many times as it takes, and the drag
+  // aims it. Judge the jet on a GLANCING strike — a square one puts the
+  // impulse on the normal, which is where a burst that had stopped reading the
+  // impulse at all would also be.
+  ['the hit: how much', null],
+  ['versus.ball.spit.forcePow', 'ramp (low = a pass still boils)', 0.2, 2, 0.05],
+  ['versus.ball.spit.minForce', 'under this, nothing', 0, 0.3, 0.005],
+  ['versus.ball.spit.maxParticles', 'ceiling per hit', 40, 600, 10],
+  ['versus.ball.spit.sizeMin', 'bubble size, a nothing touch x', 0.2, 2, 0.05],
+  ['versus.ball.spit.sizeMax', 'bubble size, the hardest x', 0.2, 3, 0.05],
+  ['the hit: the patch', null],
+  ['versus.ball.spit.patch', 'spread across the contact, x radius', 0, 1.5, 0.02],
+  ['versus.ball.spit.patchSoft', 'of that, at a nothing touch', 0, 1, 0.02],
+  ['versus.ball.spit.patchJitter', 'scatter off the slot', 0, 1.5, 0.05],
+  ['versus.ball.spit.lift', 'off the skin, x radius', 0, 0.6, 0.01],
+  ['versus.ball.spit.speedVary', 'per-puff throw scatter', 0, 1, 0.02],
+  ['the hit: the jet (the impulse)', null],
+  ['versus.ball.spit.jetPuffsMin', 'puffs, a nothing touch', 1, 8, 1],
+  ['versus.ball.spit.jetPuffsMax', 'puffs, the hardest', 1, 10, 1],
+  ['versus.ball.spit.jetScaleMin', 'per puff x, a nothing touch', 0.1, 3, 0.05],
+  ['versus.ball.spit.jetScaleMax', 'per puff x, the hardest', 0.1, 4, 0.05],
+  ['versus.ball.spit.jetSpeedMin', 'thrown x, a nothing touch', 0.1, 3, 0.05],
+  ['versus.ball.spit.jetSpeedMax', 'thrown x, the hardest', 0.1, 4, 0.05],
+  ['versus.ball.spit.jetFan', 'fanned by the patch, rad', 0, 1.6, 0.05],
+  ['versus.ball.spit.jetWander', 'jitter off that, rad', 0, 1.2, 0.02],
+  ['versus.ball.spit.jetInherit', 'keeps the new velocity', 0, 1.5, 0.05],
+  ['the hit: the wash (the source)', null],
+  ['versus.ball.spit.washPuffsMin', 'puffs, a nothing touch', 0, 6, 1],
+  ['versus.ball.spit.washPuffsMax', 'puffs, the hardest', 1, 8, 1],
+  ['versus.ball.spit.washScaleMin', 'per puff x, a nothing touch', 0.1, 3, 0.05],
+  ['versus.ball.spit.washScaleMax', 'per puff x, the hardest', 0.1, 4, 0.05],
+  ['versus.ball.spit.washSpeedMin', 'thrown x, a nothing touch', 0.1, 3, 0.05],
+  ['versus.ball.spit.washSpeedMax', 'thrown x, the hardest', 0.1, 3, 0.05],
+  ['versus.ball.spit.washFan', 'fanned by the patch, rad', 0, 2, 0.05],
+  ['versus.ball.spit.washWander', 'jitter off that, rad', 0, 1.5, 0.02],
+  ['versus.ball.spit.washInherit', 'keeps the new velocity', 0, 1, 0.02],
+  ['versus.ball.spit.washSize', 'size against the jet\'s x', 0.3, 2.5, 0.05],
+  ['the hit: whose it was', null],
+  ['versus.ball.spit.tint', 'tinted by who hit it', 0, 1, 0.02],
+  ['versus.ball.spit.color', 'water colour', 'color'],
 
   // THE BACKDROP — systems/ballGrid.js, drawn by the game's own lattice
   // (systems/grid.js) behind this ball. The chain of dents can only really be
@@ -807,7 +858,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 't' || e.key === 'T') throwBall();
   if (e.key === 'a' || e.key === 'A') b('bAuto').click();
   if (e.key === 'f' || e.key === 'F') b('bFreeze').click();
-  if (e.key === 'r' || e.key === 'R') { resetBall(); clearBallTrail(scene); resetBallGrid(); }
+  if (e.key === 'r' || e.key === 'R') { resetBall(); clearBallTrail(scene); resetBallSpit(); resetBallGrid(); }
   if (e.key === 'o' || e.key === 'O') b('bOverlay').click();
   if (e.key === 'W') writePreset();
   if (e.key === '[') ball.spin -= lab.spinNudge;
@@ -932,6 +983,15 @@ window.__set = (path, v) => { setPath(CONFIG, path, v); refreshSliders(); onConf
 window.__lab = lab;
 window.__step = (n = 1) => { for (let i = 0; i < n; i++) step(DT); readout(); render(); };
 window.__preset = preset;
+// WHAT THE LAST HIT ACTUALLY SPAT, for tuning the contact-patch burst
+// (systems/ballSpit.js) without counting dots on a screenshot. `asked` is what
+// the two fans requested and `alive` is what is in the buffer right now — the
+// gap between them is CONFIG.fx.spriteDensity and the relief ramp, which is
+// exactly the thing a count off a picture cannot tell you.
+window.__spit = () => ({ ...ballSpitStats(), alive: particleCount() });
+// The relief ramp adapts to frame time, and stepping this page by hand feeds it
+// nonsense dt. Pinned so a measured burst is a measurement of the burst.
+window.__relief = (v = 1) => setParticleRelief(v);
 window.__trace = (on = true) => { trace = on; clearTrace(); };
 window.__spinState = ballSpinState;
 // The lattice and the chain, for a harness driving this page from outside —

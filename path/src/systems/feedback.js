@@ -521,7 +521,20 @@ export function feedback(event, at = {}) {
   // drops the copies piling up behind it — and the loudest scale seen during
   // the window wins, so the one sound that does play is the one the biggest
   // hit in the burst would have made.
-  if (def.sfx && !replay) {
+  // `at.sfxSkip` — FIRE EVERYTHING BUT THE SOUND.
+  //
+  // For a row whose channels are on different clocks. `strikeCharging` is the
+  // case that needed it: the rumble has to be re-triggered on an interval
+  // because a motor can only be handed discrete pulses, while the sound on it
+  // is one sustained thing per wind-up. Sharing one call, a riser assigned to
+  // that row was started fourteen times a second and each copy played to its
+  // end — a dozen overlapping risers, which is heard as a flanged smear rather
+  // than as a sound repeating.
+  //
+  // NOT `replay`, which is next door and looks like it would do. That one
+  // silences the haptics too, because a replay must not reach outside the frame
+  // it is showing — and the haptics are precisely what this needs to keep.
+  if (def.sfx && !replay && !at.sfxSkip) {
     const gap = def.sfxMinGap ?? 0;
     // Where this one happened, so the mixer can rank it against everything else
     // sounding — and so the throttle below can tell a hit on top of the player

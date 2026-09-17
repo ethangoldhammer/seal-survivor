@@ -1,12 +1,10 @@
 import { CONFIG } from '../config.js';
 import calloutsCsv from '../callouts.csv?raw';
 import {
-  parseCalloutCsv, calloutsOfKind, checkCalloutIds, calloutText, calloutOnDevice,
+  parseCalloutCsv, calloutsOfKind, checkCalloutIds, calloutText,
   CALLOUT_ANCHORS,
 } from '../calloutTable.js';
-import { settings, keyLabel } from './settings.js';
-import { playerName } from './playerName.js';
-import { shoulderLabel, faceLeftLabel } from '../devices.js';
+import { fillBindings, checkBindingText } from './bindingText.js';
 
 // ---------------------------------------------------------------------------
 // THE BAND — one line of text across the middle of the screen, and the rules
@@ -71,60 +69,10 @@ export const FIRED_BY_MAIN = ['resumed'];
 
 // --- {token}s ---------------------------------------------------------------
 // A tip may name a control as `{strike}` or `{bumper}`, which becomes whatever
-// that control is called on the hardware in front of the player. Written into
-// the CSV as a token rather than as the words "Space" or "LB" for the same
-// reason an upgrade card's numbers are: the moment somebody rebinds a key or
-// plugs in a different pad, a hand-typed name is a lie, and it is a lie in the
-// one sentence whose entire job is to say which button to press.
-//
-// Three sources, and the split is about who KNOWS. Key bindings are read
-// straight from the player's settings here. Anything about the physical
-// hardware — what this pad calls its shoulders — is handed in by the frame
-// loop, because that lives in input.js and this file has no devices in it on
-// purpose. And `{player}` comes from systems/playerName.js, which owns the one
-// name every text table in the game spends.
-//
-// Filled on the way to the screen rather than at parse time: bindings change
-// while the game is running, pads are unplugged, a name is typed mid-session,
-// and the table is parsed once.
-
-const BINDING_TOKEN = /\{(\w+)\}/g;
-
-// TOKENS THAT ARE NOT A KEY. Everything else in a `{token}` resolves against
-// the player's bindings, and the boot check below warns about a row that names
-// one without also having words for a pad. These two do not: `{bumper}` is
-// hardware and answers itself on every device, `{player}` is a name.
-//
-// Kept as a set rather than tested inline because it is the SAME question in
-// two places — what fillBindings resolves specially, and what the check is
-// allowed to ignore — and the failure of letting those disagree is a warning
-// nobody can act on ("this row names a key binding" about a row that says
-// somebody's name) or, worse, a real missing textPad going unreported.
-const NON_KEY_TOKENS = new Set(['bumper', 'faceLeft', 'player']);
-
-// What a hardware token says when nobody has told us about the hardware. Not a
-// safety net for a caller that forgot — it is the honest answer for a pad the
-// browser will not name, and it is the SAME answer, because shoulderLabel gives
-// this to any controller it does not recognise. A tip that read
-// "{bumper} to charge a strike" would be a brace on screen in the one sentence
-// a first-time player is reading most carefully.
-const DEFAULT_TOKENS = { bumper: shoulderLabel(null), faceLeft: faceLeftLabel(null) };
-
-/**
- * Does this text name a KEY BINDING, as opposed to merely containing a token?
- *
- * The question the boot check below actually wants, and it used to ask a
- * broader one (`/\{\w+\}/`) that could not tell "press {strike}" from "nice
- * one, {player}". That was harmless while every token in the file was a key —
- * and became wrong the moment one wasn't.
- */
-function namesKey(text) {
-  BINDING_TOKEN.lastIndex = 0;
-  for (const m of String(text ?? '').matchAll(BINDING_TOKEN)) {
-    if (!NON_KEY_TOKENS.has(m[1])) return true;
-  }
-  return false;
-}
+// that control is called on the hardware in front of the player. The resolver
+// lives in systems/bindingText.js, because the loading screen's quick tips
+// spend the same tokens and a second copy would be a second answer to "what
+// does this line say".
 
 /**
  * A row's words, resolved, for something that is not the band.
@@ -142,25 +90,6 @@ export function resolveCalloutText(row, device, tokens = {}) {
   return fillBindings(calloutText(row, device) ?? '', tokens);
 }
 
-function fillBindings(text, tokens = {}) {
-  if (!text.includes('{')) return text;
-  return text.replace(BINDING_TOKEN, (whole, name) => {
-    // The player's own name, from the one module that owns it. First, because
-    // it is the only token whose value the player typed — a binding called
-    // `player` would be a rebind quietly renaming somebody.
-    if (name === 'player') return playerName();
-    // The hardware words win over a key binding of the same name. Nothing
-    // collides today; if something ever does, the thing actually in the
-    // player's hands is the better answer.
-    if (tokens[name] ?? DEFAULT_TOKENS[name]) return tokens[name] ?? DEFAULT_TOKENS[name];
-    const key = settings.controls?.keys?.[name];
-    // An unknown token is left standing as `{whatever}`. Loud on purpose: it
-    // is a typo in a spreadsheet, and the alternative — dropping it — is a
-    // sentence with a hole in it that reads like ordinary bad writing.
-    return key ? keyLabel(key) : whole;
-  });
-}
-
 /**
  * A key token is fine in `text` and a bug on a device with no keyboard, so a
  * row that uses one has to say something else to the other two. Checked at
@@ -171,19 +100,7 @@ function fillBindings(text, tokens = {}) {
  * its own rather than on the shipping one.
  */
 export function checkCalloutBindings(table, warn = console.warn) {
-  for (const row of table.values()) {
-    if (!namesKey(row.text)) continue;
-    for (const [device, column] of [['touch', 'textTouch'], ['pad', 'textPad']]) {
-      if (row.deviceText?.[device]) continue;
-      // A row that does not exist on that device has nothing to answer for —
-      // a kbm-only line is entitled to name a key and say nothing else.
-      if (!calloutOnDevice(row, device)) continue;
-      warn(
-        `[callouts] "${row.id}" names a key binding but has no ${column} — a ${device} ` +
-          `player will be told to press a key they do not have.`,
-      );
-    }
-  }
+  checkBindingText('callouts', table.values(), warn);
 }
 
 checkCalloutBindings(CALLOUTS);

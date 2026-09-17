@@ -23,7 +23,9 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import { enemies, resetEnemies, updateEnemies } from '../path/src/entities/enemies.js';
-import { projectiles, resetProjectiles, updateProjectiles } from '../path/src/entities/projectiles.js';
+import {
+  projectiles, resetProjectiles, updateProjectiles, spawnProjectile,
+} from '../path/src/entities/projectiles.js';
 import { updateBoss, updateBossAbilities, resetBoss, bossState, forceBoss } from '../path/src/systems/boss.js';
 import { boatState } from '../path/src/systems/bossBoat.js';
 import { crew, damageCrew, updateCrew, resetCrew } from '../path/src/systems/crew.js';
@@ -98,13 +100,16 @@ const check = (n, ok, d = '') => {
   if (!ok) fail++;
 };
 
-function fresh(boss) {
+// `level` is a parameter rather than the fixed 20 because the yacht's ordnance
+// rides it — see `shotSwell` below. Everything above this line is level-blind
+// and keeps the 20 it has always run at.
+function fresh(boss, level = 20) {
   Math.random = mulberry32(SEED + scenario++);
   resetCrew(scene);
   resetEnemies(scene);
   resetProjectiles(scene);
   resetBoss(scene);
-  const gs = { difficulty: 20, level: 20, running: true };
+  const gs = { difficulty: 20, level, running: true };
   const e = forceBoss(scene, gs, { boss, perk: 'lunge' });
   let n = 0;
   while (bossState.arriving && n++ < 1000) updateBoss(DT, gs, scene);
@@ -345,8 +350,8 @@ console.log('\nIT SHELLS YOU WITH ITS MONEY');
 
 // What a hull actually put in the water, by pattern. Driven long enough for the
 // cycle to come round — the three patterns are fixed order, not a roll.
-function ordnanceOf(boss) {
-  const { e, gs: g } = fresh(boss);
+function ordnanceOf(boss, level = 20) {
+  const { e, gs: g } = fresh(boss, level);
   const pp = { x: 10, y: bounds.bottom + 8, z: 0 };
   const seen = new Map(); // source -> a sample projectile
   for (let i = 0; i < 60 * 24; i++) {
@@ -397,6 +402,145 @@ check('...and the emitters those trails name exist',
   trailed.map((k) => CONFIG.trails[k]?.particles?.emitter ?? '(none)').join(', '));
 check('...and so does the blast burst', !!CONFIG.emitters[ord.barrels.blastEmitter],
   ord.barrels.blastEmitter);
+
+// ---------------------------------------------------------------------------
+// HOW BIG THE MONEY IS — CONFIG.enemies.bossYacht `shotSwell`, spent by
+// swellFor in systems/bossBoat.js and applied by spawnProjectile's `swell`.
+//
+// TWO THINGS ARE SILENT HERE and each one looks like the other's success.
+//
+//   The swell could be applied as `scale` instead of on top of it, which SETS
+//   the root scale and so throws away the size multiplier createVisual has
+//   already written there from assets.csv. The shot would still be "bigger
+//   than before" on any run where the asset's own multiplier is under the
+//   swell — so a check that only asked "is it larger" would pass while the art
+//   was being silently resized. Hence the ratio against a control shot of the
+//   same asset: what is asserted is that the swell MULTIPLIES, not that the
+//   result is big.
+//
+//   The hitbox could be left behind. A picture twice the size of the circle it
+//   is hit on is the single most expensive kind of lie this game can tell —
+//   the player reads reach off the body — and nothing renders differently when
+//   it happens.
+const swellCfg = CONFIG.enemies.bossYacht.shotSwell;
+const wantSwell = (lvl) => Math.min(swellCfg.max ?? Infinity,
+  (swellCfg.base ?? 1) + Math.max(0, lvl - (swellCfg.from ?? 0)) * (swellCfg.perLevel ?? 0));
+
+// The same asset, spawned with no swell at all: whatever assets.csv says this
+// body is. Everything below is measured as a multiple of this rather than in
+// world units, so re-measuring the art cannot turn this check red.
+function plainScale(asset) {
+  resetProjectiles(scene);
+  spawnProjectile(scene, {
+    origin: new THREE.Vector3(0, 0, 0), dir: new THREE.Vector3(1, 0, 0),
+    faction: 'enemy', damage: 0, speed: 0, life: 99, radius: 1, asset,
+  });
+  const sc = projectiles[0].mesh.scale.x;
+  resetProjectiles(scene);
+  return sc;
+}
+const plainRoll = plainScale(ord.barrels.asset);
+
+// AT THE LEVEL THE FIRST ONE ARRIVES. `from` is the archetype's own minLevel in
+// bosses.csv, so this is the size `base` actually describes — a run that meets
+// a yacht at all meets it here or later, and a ramp measured from level 1 would
+// make `base` a number nobody ever sees.
+const { seen: early } = ordnanceOf('bossYacht', swellCfg.from);
+const earlyRain = early.get('boss:boatRain');
+const base = wantSwell(swellCfg.from);
+check('the money starts half again the size of the barrel it replaced',
+  Math.abs(earlyRain.radius / ord.barrels.radius - base) < 1e-6,
+  `x${(earlyRain.radius / ord.barrels.radius).toFixed(2)} of the ${ord.barrels.radius} the art asks for`);
+check('...and the body grew with it, not instead of it',
+  Math.abs(earlyRain.mesh.scale.x / plainRoll - base) < 1e-6,
+  `scale ${earlyRain.mesh.scale.x.toFixed(3)} against the asset's own ${plainRoll.toFixed(3)}`);
+
+// ...AND IT GROWS. Read off two fights rather than one, because the whole point
+// of banking the swell at attach (swellFor) is that it does NOT move during a
+// fight — a per-shot read would pass a "does it ramp" check while making the
+// shells visibly swell between volleys in front of the player.
+const late = wantSwell(30);
+const { seen: lateRolls } = ordnanceOf('bossYacht', 30);
+const lateRain = lateRolls.get('boss:boatRain');
+check('...and a later run throws more of it', lateRain.radius > earlyRain.radius * 1.1,
+  `x${(lateRain.radius / ord.barrels.radius).toFixed(2)} at level 30 against x${base.toFixed(2)} at ${swellCfg.from}`);
+check('...by the ramp the config asks for',
+  Math.abs(lateRain.radius / ord.barrels.radius - late) < 1e-6);
+// THE CEILING HOLDS. A GUARD RAIL rather than the shape of the ramp — it is not
+// reached until level 35 and a run does not realistically get there — so this
+// is asked at a level nothing will ever see, which is the point: it is the only
+// thing standing between an unbounded ramp and a shell wider than the blast it
+// sets off.
+const { seen: capped } = ordnanceOf('bossYacht', 999);
+check('...but never past the ceiling, however long the run',
+  Math.abs(capped.get('boss:boatRain').radius / ord.barrels.radius - swellCfg.max) < 1e-6,
+  `x${(capped.get('boss:boatRain').radius / ord.barrels.radius).toFixed(2)}, capped at x${swellCfg.max}`);
+// It is banked at ATTACH, so the fight it is measured in cannot move it.
+check('...and it is fixed for the fight, not re-read per shot',
+  boatState.shotSwell === swellCfg.max, `${boatState.shotSwell}`);
+
+// ---------------------------------------------------------------------------
+// AND IT GOES OFF — `fuse` on the yacht's seeker override.
+//
+// Every yacht shell now detonates wherever it stops: fuse run out, hit the
+// seal, shot out of the water, left the arena. The barrels always did (that is
+// what `fuse` on the shared GUNS row means); the seeker did not, so a bundle of
+// hundreds homing at you simply poked you and vanished.
+//
+// MEASURED AS DAMAGE AT A DISTANCE THE BODY CANNOT REACH. The shot is killed
+// two units from the seal — outside the contact test (its radius plus the
+// player's) and inside the salvo's blast radius — so a hit here can only have
+// come from the blast. Asking "did the player get hurt" with the seal on top of
+// the shot would pass on the contact damage that was always there.
+function detonates(boss) {
+  const { gs: g } = fresh(boss, 20);
+  const pp = { x: 0, y: bounds.bottom + 8, z: 0 };
+  let hits = [];
+  const hooks = { onPlayerHit: (d, dir, src) => hits.push({ d, src }) };
+  const tick = () => {
+    updateBoss(DT, g, scene);
+    updateBossAbilities(DT, scene, pp, hooks);
+    updateEnemies(DT, scene, pp, () => {}, () => {});
+    updateProjectiles(DT, scene, enemies, () => {}, () => {}, () => {});
+  };
+  let shot = null;
+  for (let i = 0; i < 60 * 24 && !shot; i++) {
+    tick();
+    shot = projectiles.find((p) => p.source === 'boss:boatSalvo') ?? null;
+  }
+  if (!shot) return { fired: false, hit: false, gap: 0, body: 0 };
+  // Two units below it, which is clear of shot.radius + the seal's own and well
+  // inside CONFIG.bossBoat.patterns.salvo.blastRadius.
+  const gap = 2;
+  pp.x = shot.mesh.position.x;
+  pp.y = shot.mesh.position.y - gap;
+  const body = shot.radius;
+  shot.life = 0;   // the fuse running out, which is the same exit as being shot down
+  hits = [];
+  // TWO TICKS, and the reason is the order inside one. updateBossAbilities runs
+  // the fuse watcher, and the watcher's whole rule is "this shot has left the
+  // projectile list" — which updateProjectiles, further down the same tick, is
+  // what does. So the blast is always the frame AFTER the shot stops, and a
+  // single tick here measures the frame before it.
+  tick();
+  tick();
+  return { fired: true, hit: hits.some((h) => h.src === 'boss:boatSalvo'), gap, body };
+}
+
+const yachtSeeker = detonates('bossYacht');
+check('a seeker fired at all, to say anything about', yachtSeeker.fired);
+check('the money goes off when it stops', yachtSeeker.hit,
+  `killed ${yachtSeeker.gap} units from the seal, blast radius ${CONFIG.bossBoat.patterns.salvo.blastRadius}`);
+check('...at a distance its own body cannot reach',
+  yachtSeeker.body + 1 < yachtSeeker.gap,
+  `body ${yachtSeeker.body.toFixed(2)} + a seal against a ${yachtSeeker.gap} unit gap`);
+// AND THE TRAWLER'S DOES NOT, which is the half of the claim that can break
+// without anyone noticing. `fuse` is on the yacht's `ordnance` row and not on
+// the shared GUNS one, and the salvo pattern hands a blast radius over either
+// way — so the day that number starts being read by the gun instead of the
+// hull, the trawler quietly acquires exploding torpedoes and every check above
+// still passes.
+check('the trawler\'s torpedo still just hits you', !detonates('bossBoat').hit);
 
 // THE TRAWLER IS UNTOUCHED. gunFor falls through to the shared GUNS table for a
 // def that says nothing, and the whole claim of the override is that the other

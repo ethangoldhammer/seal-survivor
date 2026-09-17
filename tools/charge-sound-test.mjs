@@ -7,8 +7,9 @@
 //
 //   THE HELD VOICE   CONFIG.strike.charge.bed, run by the jet's bed engine
 //                    (systems/jetBed.js). One sound from the press to the
-//                    let-go, thrown into a short room on the way out, and
-//                    silent until the next press.
+//                    let-go, CUT there rather than faded, and silent until the
+//                    next press. What tail it has is the shared sfx bus's
+//                    reverb, the same one the rest of the mix is in.
 //   THE BURN RUN     one blip per pip SPENT, climbing `burnSemitones` a pip.
 //                    Raised from updateCharge through onStrikeBurnPip.
 //   THE ARRIVAL      `strikePerfect` on the frame "STRIKE NOW!" goes up.
@@ -33,10 +34,12 @@
 //                           and every one after it is higher, which reads as
 //                           the game getting more excited rather than as a
 //                           counter nobody reset.
-//   A LEAKED ROOM           the convolver on the release tail is per wind-up.
-//                           Never disconnected, it is one live convolver per
-//                           strike for the length of the run, and a run is
-//                           hundreds of strikes. Nothing sounds wrong.
+//   A TAIL OF ITS OWN       a private room per bed rings on after the gesture
+//                           that made it has ended — over the dash the wind-up
+//                           just became — and puts one sound in a different
+//                           space from everything around it. There was one
+//                           here; the checks that it is gone are what stop it
+//                           coming back as a plausible-looking feature.
 //   THE CPU'S WIND-UPS      a match runs updateCharge for every seal on the
 //                           board. A hook that does not ask whose state it is
 //                           blips in the player's ears for all of them.
@@ -62,6 +65,9 @@ let failures = 0;
 const fail = (msg) => { console.log(`  FAIL  ${msg}`); failures++; };
 const pass = (msg) => console.log(`  ok    ${msg}`);
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
+const note = (text) => console.log(`        ${text}`);
+const check = (name, cond, detail = '') => (cond ? pass(`${name}${detail ? ' — ' + detail : ''}`)
+  : fail(`${name}${detail ? ' — ' + detail : ''}`));
 
 // --- the fake Web Audio API -------------------------------------------------
 // The same shape tools/echo-test.mjs and tools/sfx-bus-test.mjs use: ramps land
@@ -70,12 +76,16 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
 // because the release tail's whole argument is about ORDER — the send climbing
 // while the dry path falls — and that is a claim about times, not values.
 class Param {
-  constructor(v = 0) { this.value = v; this.ramps = []; }
+  constructor(v = 0) { this.value = v; this.ramps = []; this.targets = []; }
   setValueAtTime(v) { this.value = v; return this; }
-  setTargetAtTime(v) { this.value = v; return this; }
+  // RECORDED, not just applied. setTargetAtTime is the one automation with no
+  // end time, and an outstanding one is what made a released bed impossible to
+  // silence — so the harness has to be able to ask whether any were used, not
+  // only where the value ended up. See "the release can actually reach zero".
+  setTargetAtTime(v, t, tc) { this.value = v; this.targets.push([v, t, tc]); return this; }
   linearRampToValueAtTime(v, t) { this.value = v; this.rampEnd = t; this.ramps.push([v, t]); return this; }
   exponentialRampToValueAtTime(v, t) { this.value = v; this.rampEnd = t; this.ramps.push([v, t]); return this; }
-  cancelScheduledValues() { return this; }
+  cancelScheduledValues() { this.cancels = (this.cancels ?? 0) + 1; return this; }
 }
 let nodeId = 0;
 const live = new Set();          // every node built, so a leak is countable
@@ -132,6 +142,7 @@ audio.unlockAudio();
 const {
   updateCharge, onStrikeBurnPip, strikeState, resetStrike,
   pipCount, windUpTime, strikeLoaded, perfectCrossed, minFire,
+  chargeEnvelope, chargeEnvelopeTop,
 } = strike;
 
 // A stat block the real recomputeStats would produce, so nothing here depends
@@ -331,14 +342,23 @@ console.log('\nTHE ARRIVAL — "STRIKE NOW!"\n');
   } else if (arrive.type === burn?.type && arrive.wave === burn?.wave) {
     fail('the arrival fell back to the same synth as the run — with no takes on it, it resolves onto more of itself');
   } else pass(`the arrival is a '${arrive.type}' against the run's '${burn?.type}'`);
-  // pitchVary on either would blur a window a tenth of a second wide.
-  for (const [name, def] of [['strikeBurn', burn], ['strikePerfect', arrive]]) {
-    if (def && (def.pitchVary ?? 0) !== 0) fail(`${name} has pitchVary ${def.pitchVary} — the pitch is a reading and must not wobble`);
-    else pass(`${name} has no random pitch — the reading stays readable`);
-  }
+  // THE RUN'S PITCH IS A READING AND MUST NOT WOBBLE. Each blip is a rung on a
+  // ladder the player is counting, and `pitchVary` on it would blur the one
+  // thing it says — how far along the wind-up is — a tenth of a second either
+  // side of a window that is a tenth of a second wide.
+  if (burn && (burn.pitchVary ?? 0) !== 0) {
+    fail(`strikeBurn has pitchVary ${burn.pitchVary} — the run is a ladder and a wobbly rung is not on it`);
+  } else pass('the run has no random pitch — the ladder stays countable');
+  // THE ARRIVAL IS NOT ASSERTED, and that is deliberate rather than an
+  // oversight. It is ONE hit, not a rung: nothing is being counted off its
+  // pitch, so a wobble on it varies the take instead of blurring a reading —
+  // which is a taste decision and belongs to whoever is holding the F panel.
+  // This check used to demand 0 here and started failing the moment somebody
+  // tuned it, which is a test asserting authorship rather than behaviour.
+  note(`the arrival's pitchVary is ${arrive?.pitchVary ?? 0} — taste, not asserted`);
 }
 
-console.log('\nTHE HELD VOICE — press to let-go, then the room\n');
+console.log('\nTHE HELD VOICE — press to let-go, then nothing\n');
 
 // --- 9. it holds, and re-asking does not re-trigger it ----------------------
 {
@@ -358,79 +378,217 @@ console.log('\nTHE HELD VOICE — press to let-go, then the room\n');
 
   const st = jetBed.jetBedState(key);
   if (!st) fail('no state for an open bed');
-  else if (!st.tail) fail('the bed opened WITHOUT its room — the release will just stop');
-  else pass('...with a room to be cut into');
+  else pass('...and reports itself open');
 
   jetBed.releaseJetBed(key);
   if (jetBed.jetBedPlaying(key)) fail('the bed survived its release — a sound that never stops');
   else pass('released on the let-go, and silent until the next press');
 }
 
-// --- 10. THE ROOM IS FED THROUGHOUT AND THROWN ON THE RELEASE ---------------
-// The trap systems/audio.js documents from the other side: gate the INPUT and
-// the line is empty at the moment you open it, so the tail carries everything
-// except the sound that just ended.
+// --- 10. NO ROOM OF ITS OWN — the bus carries it ---------------------------
+// There was a private convolver per bed, built to make a release "land
+// somewhere". It did the opposite twice: it put one sound in a different space
+// from the rest of the mix, and it rang for half a second after the gesture
+// that made it had ended — over the dash the wind-up had just become. A driven
+// bed has to be gone when its driver stops, and a private tail is the one
+// thing that can outlive a hard cut.
+//
+// The tail a released bed has is the BUS's, which it is already in by virtue of
+// landing on it like every other sound in the game.
 {
   const bed = CONFIG.strike.charge.bed;
+  check('the block asks for no room of its own', !bed.tail);
+
   const key = { test: 2 };
   now = 0;
   const before = new Set(live);
   jetBed.startJetBed(key, bed);
-
-  // Find the convolver this bed built, and the gain feeding it.
   const fresh = [...live].filter((n) => !before.has(n));
-  const verb = fresh.find((n) => n.kind === 'convolver');
-  const send = fresh.find((n) => n.kind === 'gain' && n.outputs.includes(verb));
-  if (!verb) fail('no convolver was built for the tail');
-  else if (!send) fail('the convolver is fed by nothing — the room is silent');
-  else {
-    if (!(send.gain.value > 0)) {
-      fail(`the send sits at ${send.gain.value} during the hold — the line is empty when the release opens it`);
-    } else pass(`fed for the whole hold at ${send.gain.value} — the room has the sound in it before the cut`);
 
-    // The gate, not the envelope: a bed muted by the menu must take its room
-    // with it, or the reverb keeps ringing under an open pause menu.
-    const feeder = fresh.find((n) => n.outputs.includes(send));
-    const master = audio.getSfxBus();
-    if (!feeder || !feeder.outputs.includes(master)) {
-      fail('the send hangs off a node that does not also reach the bus — it is not on the gate');
-    } else pass('...hung off the menu gate, so a paused wind-up takes its room down too');
+  check('...and none is built', !fresh.some((n) => n.kind === 'convolver'),
+    `${fresh.filter((n) => n.kind === 'convolver').length} convolver(s)`);
 
-    const held = send.gain.value;
-    now = 5;
-    jetBed.releaseJetBed(key);
-    const peak = Math.max(...send.gain.ramps.map(([v]) => v));
-    if (!(peak > held)) {
-      fail(`the send was never pushed past its held level on release (${peak} vs ${held}) — nothing is thrown anywhere`);
-    } else pass(`thrown on the release — send pushed to ${peak.toFixed(3)} from ${held}`);
+  // THE ROUTE TO THE SHARED REVERB. The bus is `master`, and systems/audio.js
+  // sends it through busFilter -> convolver -> wetGain alongside the dry path.
+  // A bed that landed anywhere else would be dry while the rest of the mix was
+  // not, which is a thing you would hear and never be able to name.
+  const bus = audio.getSfxBus();
+  const reaches = (node, target, seen = new Set()) => {
+    if (!node || seen.has(node.id)) return false;
+    seen.add(node.id);
+    if (node === target) return true;
+    return node.outputs.some((n) => reaches(n, target, seen));
+  };
+  const gateNode = fresh.find((n) => n.kind === 'gain' && n.outputs.includes(bus));
+  check('the bed lands on the shared bus, so the bus reverb carries it',
+    !!gateNode && reaches(gateNode, bus));
+  const busConv = audio.__busNodes?.();
+  check('...and that bus really has a reverb send on it', !!busConv?.wetGain);
 
-    const last = send.gain.ramps[send.gain.ramps.length - 1];
-    if (!last || last[0] !== 0) fail('the send never shuts — the room re-triggers on the end of the fade');
-    else pass('...and then shut, so the tail rings out of a send that is no longer feeding it');
-  }
+  jetBed.releaseJetBed(key);
+  check('nothing of it is left afterwards', !jetBed.jetBedPlaying(key));
 }
 
-// --- 11. the room does not leak ---------------------------------------------
-// One convolver per wind-up, and a run is hundreds of them. Nothing sounds
-// wrong; the tab just gets heavier.
+console.log('\nTHE ENVELOPE — the meter IS the sound\n');
+
+// --- 13. one curve, and it is the meter ------------------------------------
+// The bed used to spool on a fixed ramp and then hold, which is the jet's
+// shape and is wrong here: a wind-up is worth however much fuel there was. A
+// hold begun on a half-full bar has to peter out where the fuel runs out, and
+// a scheduled ramp cannot know that.
+{
+  check('an empty wind-up is not silent', chargeEnvelope(0) > 0, `${chargeEnvelope(0).toFixed(3)} at rest`);
+  check('...because the PRESS is the event', chargeEnvelope(0) >= 0.15);
+  check('a full one is the top of the curve', Math.abs(chargeEnvelope(1) - 1) < 1e-9, `${chargeEnvelope(1)}`);
+  check('...and it only ever climbs', [0, 0.25, 0.5, 0.75, 1]
+    .every((p, i, a) => i === 0 || chargeEnvelope(p) > chargeEnvelope(a[i - 1])));
+  // NORMALISED, which is the whole reason this function exists rather than the
+  // expression that was inline: something maps it onto a GAIN now, and the raw
+  // curve tops out at 1.45 — a bed driven to 1.45x its own peak is 3dB over
+  // the level it was tuned at, on every full charge.
+  check('it is normalised, so a gain can read it', chargeEnvelope(1) <= 1 + 1e-9);
+  // ...and the motor keeps the range it was tuned at.
+  check('the rumble keeps its old range', Math.abs(chargeEnvelope(1) * chargeEnvelopeTop() - 1.45) < 1e-9,
+    `${(chargeEnvelope(1) * chargeEnvelopeTop()).toFixed(3)} at full charge`);
+  check('...which is above 1 on purpose', chargeEnvelopeTop() > 1);
+  // Clamped, because `pending` is read off live state and a NaN or an
+  // overshoot handed to a gain is a silent bed or a blown one.
+  check('a junk reading cannot escape it',
+    chargeEnvelope(NaN) >= 0 && chargeEnvelope(-5) >= 0 && chargeEnvelope(99) <= 1 + 1e-9,
+    `NaN ${chargeEnvelope(NaN).toFixed(2)}, -5 ${chargeEnvelope(-5).toFixed(2)}, 99 ${chargeEnvelope(99).toFixed(2)}`);
+}
+
+// --- 14. the bed is driven, and the drive reaches it ------------------------
 {
   const bed = CONFIG.strike.charge.bed;
-  const key = { test: 3 };
+  check('the charge bed asks to be driven', bed.envelope === true);
+
+  const key = { test: 4 };
+  now = 0;
+  jetBed.startJetBed(key, bed);
+  const st0 = jetBed.jetBedState(key);
+  check('...and opens driven', st0?.driven === true);
+  // A DRIVEN BED WITH NOBODY DRIVING IT IS SILENT, which looks exactly like one
+  // that failed to open — hence the readout.
+  check('...at nothing, until something drives it', st0?.level === 0, `level ${st0?.level}`);
+
+  jetBed.driveJetBed(key, chargeEnvelope(0));
+  const low = jetBed.jetBedState(key).level;
+  jetBed.driveJetBed(key, chargeEnvelope(1));
+  const high = jetBed.jetBedState(key).level;
+  check('driving it moves it', high > low, `${low.toFixed(3)} -> ${high.toFixed(3)}`);
+  check('...to the top of the curve at a full charge', Math.abs(high - 1) < 1e-9);
+
+  // Out-of-range input is clamped rather than trusted: this number becomes a
+  // gain and a cutoff, and both have a wrong side.
+  jetBed.driveJetBed(key, 9);
+  check('...and never past it', jetBed.jetBedState(key).level <= 1 + 1e-9);
+  jetBed.driveJetBed(key, NaN);
+  check('...nor anywhere at all on a junk reading', jetBed.jetBedState(key).level === 0);
+
+  jetBed.releaseJetBed(key);
+}
+
+// --- 15. a spooled bed ignores the drive -----------------------------------
+// Two authorities on one AudioParam is not a blend — the param does both,
+// which sounds like the envelope being ignored for `ramp` seconds and then
+// suddenly working. So the jet keeps its spool and refuses to be driven.
+{
+  const key = { test: 5 };
+  now = 0;
+  jetBed.startJetBed(key, CONFIG.bubbleJet.bed);
+  check('the jet is NOT driven', jetBed.jetBedState(key)?.driven === false);
+  check('...and refuses a drive', jetBed.driveJetBed(key, 1) === false);
+  jetBed.releaseJetBed(key);
+  check('driving a bed that is not open says so', jetBed.driveJetBed(key, 1) === false);
+}
+
+// --- 16. THE RELEASE CAN ACTUALLY REACH ZERO -------------------------------
+// The bug this exists for: driveJetBed drove the gain with setTargetAtTime,
+// which has no end time, and cancelScheduledValues only clears events at or
+// after the cancel — so the per-frame automation outlived the release and went
+// on pulling the gain back up underneath the ramp to 0. The ramp never
+// arrived, and then source.stop() cut a still-sounding oscillator stack dead.
+//
+// A click at full amplitude, into a half-second synthetic-noise room, is a
+// comb filter ringing. It was reported as two bugs — "the charge sound isn't
+// cutting on release" and "it echoes with a lot of feedback under 100ms" —
+// and it was this one thing.
+//
+// UNHEARABLE IN THIS HARNESS, because the fake ramps land instantly. What IS
+// decidable here is the SHAPE of the automation, which is where the bug lived:
+// nothing unbounded may be outstanding on a param that has to be able to reach
+// a value and stay there.
+{
+  const bed = CONFIG.strike.charge.bed;
+  const key = { test: 6 };
   now = 0;
   const before = new Set(live);
   jetBed.startJetBed(key, bed);
   const fresh = [...live].filter((n) => !before.has(n));
-  const verb = fresh.find((n) => n.kind === 'convolver');
-  now = 1;
-  jetBed.releaseJetBed(key);
 
-  // The disconnect is scheduled for after the ring, so this has to wait it out.
-  const t = bed.tail ?? {};
-  const waitMs = ((bed.release ?? 0.12) + (t.seconds ?? 0.6) * 2) * 1000 + 300;
-  await new Promise((r) => setTimeout(r, waitMs));
-  if (verb && !verb.disconnected) {
-    fail('the convolver is still connected after its tail — one live room per strike, for the whole run');
-  } else pass('the room is torn off once it has finished ringing');
+  // Drive it like a real wind-up: a second of frames climbing to full.
+  for (let i = 0; i <= 60; i++) { now = i / 60; jetBed.driveJetBed(key, chargeEnvelope(i / 60)); }
+
+  // The bed's own envelope gain — the node feeding the gate.
+  const gateNode = fresh.find((n) => n.kind === 'gain' && n.outputs.includes(audio.getSfxBus()));
+  const env = fresh.find((n) => n.kind === 'gain' && n.outputs.includes(gateNode));
+  if (!env) { fail('could not find the bed\'s envelope gain — the graph changed'); }
+  else {
+    check('the drive leaves nothing unbounded on the level',
+      env.gain.targets.length === 0,
+      `${env.gain.targets.length} setTargetAtTime call(s)`);
+    check('...and it did move it', env.gain.ramps.length > 0 && env.gain.value > 0,
+      `${env.gain.ramps.length} ramp(s), at ${env.gain.value.toFixed(3)}`);
+    // The filter is driven by the same call and had the same trap.
+    const filters = fresh.filter((n) => n.kind === 'biquad');
+    check('...nor on the cutoff', filters.every((f) => f.frequency.targets.length === 0),
+      `${filters.reduce((n, f) => n + f.frequency.targets.length, 0)} across ${filters.length} pole(s)`);
+
+    now = 2;
+    jetBed.releaseJetBed(key);
+    check('the release ramps the level to zero', env.gain.value === 0,
+      `ends at ${env.gain.value}`);
+    const last = env.gain.ramps[env.gain.ramps.length - 1];
+    check('...and zero is the LAST thing scheduled on it', last && last[0] === 0,
+      last ? `last ramp -> ${last[0]}` : 'no ramps');
+    // The stop has to land after the fade, or the fade is decoration and the
+    // click happens anyway.
+    // THE CUT IS NOT `release`, and must not be. A driven bed is switched off
+    // rather than faded out: the thing handing it a level has stopped, and on
+    // the very next frame the dash launches. A wind-up still tapering across
+    // its own release is the charge outliving the strike it became — which is
+    // exactly how it was reported.
+    const fadeLen = last ? last[1] - 2 : Infinity;
+    check('the cut is immediate, not a release fade', fadeLen <= 0.02 + 1e-9,
+      `${(fadeLen * 1000).toFixed(0)}ms`);
+    check('...and far shorter than the block\'s own release', fadeLen < (bed.release ?? 0.12),
+      `${(fadeLen * 1000).toFixed(0)}ms against a ${((bed.release ?? 0.12) * 1000).toFixed(0)}ms release`);
+    // ...but long enough to declick. A saturated oscillator stack cut in one
+    // sample is a pop, which is the one artefact worse than a tail.
+    check('...but not a hard zero, which would pop', fadeLen > 0.004, `${(fadeLen * 1000).toFixed(0)}ms`);
+  }
+}
+
+// --- 17. a spooled bed still fades ------------------------------------------
+// The cut belongs to DRIVEN beds. The jet is a stream that ends, and tapering
+// is the right shape for one — so this asserts the two do not share a rule.
+{
+  const jet = CONFIG.bubbleJet.bed;
+  const key = { test: 7 };
+  now = 0;
+  const before = new Set(live);
+  jetBed.startJetBed(key, jet);
+  const fresh = [...live].filter((n) => !before.has(n));
+  const gateNode = fresh.find((n) => n.kind === 'gain' && n.outputs.includes(audio.getSfxBus()));
+  const env = fresh.find((n) => n.kind === 'gain' && n.outputs.includes(gateNode));
+  now = 3;
+  jetBed.releaseJetBed(key);
+  const last = env?.gain.ramps[env.gain.ramps.length - 1];
+  const fadeLen = last ? last[1] - 3 : 0;
+  check('the jet still fades on its own release', Math.abs(fadeLen - (jet.release ?? 0.12)) < 1e-6,
+    `${(fadeLen * 1000).toFixed(0)}ms, block says ${((jet.release ?? 0.12) * 1000).toFixed(0)}ms`);
+  check('...which is longer than a driven cut', fadeLen > 0.02);
 }
 
 console.log('\nWIRING — main.js\n');
@@ -456,6 +614,84 @@ console.log('\nWIRING — main.js\n');
   } else pass('released on a run reset, so a death mid-hold cannot leave it open');
   if (!/onStrikeBurnPip\(/.test(src)) fail('main.js never listens for burn pips — the run is silent');
   else pass('the burn run is listened for');
+  // DRIVEN EVERY FRAME THE BED IS OPEN, not only while `charging`. The two part
+  // company for the whole back half of a wind-up — charging goes false when the
+  // tank runs dry and the button stays down through "STRIKE NOW!" — so a drive
+  // inside the charging branch freezes the bed at whatever level it reached and
+  // sits on it until the release.
+  const drive = src.match(/if \(chargeBedOpen\) driveJetBed\(CHARGE_BED_KEY, ([^)]+)\);/);
+  if (!drive) fail('main.js never hands the bed its level — a driven bed with nobody driving it is silent');
+  else pass('the bed is driven off the envelope');
+  const chargingBranch = src.indexOf('if (strikeState.charging) {');
+  const driveAt = drive ? src.indexOf(drive[0]) : -1;
+  if (driveAt >= 0 && chargingBranch >= 0 && driveAt > chargingBranch) {
+    fail('the drive is inside the `charging` branch — it stops at the frame the tank runs dry, which is "STRIKE NOW!"');
+  } else pass('...outside the `charging` branch, so it keeps moving through "STRIKE NOW!"');
+  if (!/scale: chargeEnv \* chargeEnvelopeTop\(\)/.test(src)) {
+    fail('the rumble no longer rides the range it was tuned at');
+  } else pass('the rumble keeps its own range off the same curve');
+
+  // ONE SOUND PER WIND-UP, MANY PULSES. The row carries both and they are on
+  // different clocks; fired together, a riser assigned to it is started
+  // fourteen times a second with every copy playing to its end.
+  const interval = src.match(/chargeHapticTimer = CONFIG\.strike\.charge\.hapticInterval;[\s\S]{0,900}?\}\);/);
+  if (!interval) fail('could not find the rumble interval in main.js');
+  else if (!/sfxSkip: true/.test(interval[0])) {
+    fail('the interval rumble fires the SOUND too — a riser on this row is started ~14x a second and every copy plays through');
+  } else pass('the interval carries the rumble only');
+  if (!/if \(chargeSoundOn && !chargeSoundWasOn\)/.test(src)) {
+    fail('the wind-up sound is not fired once on the press');
+  } else pass('the sound fires once, on the press');
+  // ...AND IS CUT AT THE LET-GO. Without this it plays through the dash it was
+  // building to, which is exactly how it was reported.
+  if (!/chokeSfx\(voice\)/.test(src)) {
+    fail('nothing chokes the wind-up sound — it plays through the strike it was building to');
+  } else pass('...and is choked at the let-go');
+  const chokes = (src.match(/chokeSfx\(voice\)/g) ?? []).length;
+  if (chokes < 2) fail('the run reset does not choke it — a death mid-hold leaves a riser in the air');
+  else pass(`...on the let-go and on a run reset (${chokes} sites)`);
+}
+
+// --- 18. sfxSkip is honoured, and is not `replay` ---------------------------
+// The flag exists so one row can run two clocks. It must silence the SOUND and
+// nothing else — `replay`, which lives next to it in systems/feedback.js and
+// looks like it would do, silences the haptics as well, and the haptics are
+// precisely what the rumble is.
+{
+  const fbSrc = fs.readFileSync(path.join(ROOT, 'path', 'src', 'systems', 'feedback.js'), 'utf8');
+  if (!/if \(def\.sfx && !replay && !at\.sfxSkip\)/.test(fbSrc)) {
+    fail('feedback.js does not honour sfxSkip — the flag is passed and ignored, which is silent');
+  } else pass('feedback.js skips only the sound');
+  // The haptic must NOT be gated on it, or the rumble goes with the sound.
+  const hap = fbSrc.match(/if \(def\.haptic && [^)]*\)/);
+  if (hap && /sfxSkip/.test(hap[0])) {
+    fail('the haptic is gated on sfxSkip too — the rumble dies with the sound');
+  } else pass('...and leaves the rumble alone');
+}
+
+// --- 19. the wind-up is findable in the F panel -----------------------------
+// An event with no row in the rail still WORKS — it falls into the "Everything
+// else" catch-all at the bottom — which is exactly why this is worth a check.
+// Nothing is broken, nothing warns, and the three voices of one gesture are
+// filed apart from each other and from the strike they belong to. The whole
+// point of that panel is to put a moment's channels side by side; a row in the
+// junk drawer is a sound you tune by remembering it exists.
+{
+  const wbSrc = fs.readFileSync(path.join(ROOT, 'path', 'src', 'ui', 'workbench.js'), 'utf8');
+  const sec = wbSrc.match(/\['Strike & food chain', \[([\s\S]*?)\]\]/);
+  if (!sec) fail('no Strike section in the workbench rail');
+  else {
+    const ids = [...sec[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    for (const id of ['strikeCharging', 'strikeBurn', 'strikePerfect']) {
+      if (!ids.includes(id)) fail(`${id} is not filed in the Strike section — it lands in "Everything else"`);
+      else pass(`${id} is filed with the strike`);
+    }
+    // ...and the three are ADJACENT, because they are one gesture.
+    const at = ['strikeCharging', 'strikeBurn', 'strikePerfect'].map((id) => ids.indexOf(id));
+    const adjacent = at.every((v, i) => i === 0 || v === at[i - 1] + 1);
+    check('...and the three sit together, in the order they happen', adjacent && at[0] >= 0,
+      at.join(','));
+  }
 }
 
 const label = failures ? `${failures} FAILED` : 'All charge-sound checks passed.';

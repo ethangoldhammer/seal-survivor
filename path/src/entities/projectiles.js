@@ -284,10 +284,29 @@ export function spawnProjectile(scene, {
   // describes what it is carrying and systems/finLaser.js is the only thing
   // that knows what the description MEANS. projectiles.js never acts on it.
   lattice = null,
+  // HOW MUCH BIGGER THIS SHOT IS THAN THE ONE ITS GUN DESCRIBES, picture and
+  // hitbox together. 1 for every shot in the game that does not ask.
+  //
+  // NOT `scale`, and the difference is the whole reason this exists. `scale`
+  // SETS the root scale, which overwrites the size multiplier createVisual has
+  // already written there from assets.csv — fine for a caller that owns its
+  // shot's size outright, and silently destructive for one that only wants the
+  // asset's own size times a factor. This multiplies, so the art keeps whatever
+  // assets.csv says it is and the swell rides on top.
+  //
+  // It is applied ONCE, at birth, and does not touch `sizeMul` — that field is
+  // the ricochet spring's baseline and a shot that launched swollen must still
+  // spring about its own launch size, not about 1.
+  swell = 1,
 }) {
   const mesh = createVisual(asset ?? (faction === 'player' ? 'bullet' : 'enemyBullet'));
   mesh.position.copy(origin);
   if (scale !== 1) mesh.scale.setScalar(scale);
+  // After `scale`, and multiplying rather than setting — see the note on
+  // `swell`. The hitbox moves with it just below, or the picture would be
+  // promising a reach the shot does not have.
+  if (swell !== 1) mesh.scale.multiplyScalar(swell);
+  const shotRadius = radius * swell;
   // Set BEFORE any angle is written, and only on a shot that actually rolls —
   // see the `roll` note above for why the order matters and why everything
   // else keeps three's default.
@@ -333,7 +352,7 @@ export function spawnProjectile(scene, {
     // Player shots only — an enemy torpedo comes through this same function and
     // has no business inheriting the seal's upgrades.
     life: faction === 'player' ? projectileLife(life) : life,
-    radius,
+    radius: shotRadius,
     // Both, and the max is what the hit flash and any future readout are sized
     // against — a shot at 3 of 12 should look more broken than one at 3 of 4.
     hp,
@@ -393,7 +412,7 @@ export function spawnProjectile(scene, {
     // the asset's own size multiplier (assets.csv) onto the root, and
     // setScalar(scale) above overwrites it. Reading it back means the swell
     // multiplies whatever the asset actually is.
-    launchRadius: radius,
+    launchRadius: shotRadius,
     launchScale: mesh.scale.x,
     // WHAT IT LEFT THE FIN WITH. The combo ramp rewrites `damage` in place —
     // every hit test in the game reads that one field — so the launch value has

@@ -41,6 +41,7 @@ import {
   versusState, ball, startVersus, resetVersus, updateVersus, updateVersusClock,
   resetBall, sealAt, sealPos, matchSeals, seatOf, sealContact, bodyCheck,
   versusOutOfAir, solveBallSurface, ballContactReach, rematch,
+  BALL_TOUCH_EVENTS, __ballVoice,
 } from '../path/src/systems/versus.js';
 import { sealHeading } from '../path/src/systems/ballShape.js';
 import { rockX, mouthY, goalLineX } from '../path/src/systems/versusGoal.js';
@@ -388,6 +389,102 @@ section('One result, heard two ways');
   for (let n = 0; n < 400 && versusState.phase === 'play'; n++) frame();
   check('an ordinary goal ends nothing', versusState.phase === 'scored' && !seen('versusWin') && !seen('versusLose'),
     `${versusState.phase}, win ${count('versusWin')}, lose ${count('versusLose')}`);
+}
+
+// ---------------------------------------------------------------------------
+section('THE TOUCH IS NOT ONE SOUND — band, force, spin, medium');
+// Until CONFIG.versus.ball.fx.voice every contact the ball took was one
+// recording at a volume, and loudness is the channel the mixer, the distance
+// fade and the repetition attenuator are all already spending. These are the
+// three axes that replaced it, and each is asserted where it is decidable:
+// the mapping here against __ballVoice, the wiring below against real play.
+{
+  const V0 = CONFIG.versus.ball.fx.voice;
+  const at = (k, opts = {}) => {
+    const spin = ball.spin, above = ball.above;
+    ball.spin = opts.spin ?? 0;
+    ball.above = opts.above ?? false;
+    const r = __ballVoice(opts.event ?? 'versusBallHit', k);
+    ball.spin = spin; ball.above = above;
+    return r;
+  };
+
+  // --- the band ---
+  check('a nothing touch is the soft row', at(0).event === 'versusBallTap', at(0).event);
+  check('...an ordinary one is the middle row', at((V0.tapBelow + V0.smashAbove) / 2).event === 'versusBallHit',
+    at((V0.tapBelow + V0.smashAbove) / 2).event);
+  check('...and a full-power one is the hard row', at(1).event === 'versusBallSmash', at(1).event);
+  check('the bands are exactly where config says', at(V0.tapBelow - 1e-6).event === 'versusBallTap'
+    && at(V0.tapBelow + 1e-6).event === 'versusBallHit'
+    && at(V0.smashAbove + 1e-6).event === 'versusBallSmash',
+    `tap<${V0.tapBelow}, smash>${V0.smashAbove}`);
+  check('every row it can pick is a row that exists', BALL_TOUCH_EVENTS.every((e) => !!CONFIG.feedback[e]?.sfx && !!CONFIG.sfx[CONFIG.feedback[e].sfx]),
+    BALL_TOUCH_EVENTS.join(', '));
+  // ONLY THE BODY CONTACT SPLITS. A wall and a post are already their own
+  // moments; banding them would be more rows saying what `scale` says.
+  check('a wall is not banded', at(0, { event: 'versusBallWall' }).event === 'versusBallWall'
+    && at(1, { event: 'versusBallWall' }).event === 'versusBallWall');
+
+  // --- how hard ---
+  // DOWN with force, which reads backwards and is what a body does: a light
+  // tap excites the surface, a heavy one moves the mass.
+  check('a harder hit is LOWER, not higher', at(1).sfxOpts.pitch < at(0).sfxOpts.pitch,
+    `${at(0).sfxOpts.pitch.toFixed(2)} soft vs ${at(1).sfxOpts.pitch.toFixed(2)} hard`);
+  check('...and rings longer', at(1).sfxOpts.decayMul > at(0).sfxOpts.decayMul,
+    `${at(0).sfxOpts.decayMul.toFixed(2)} vs ${at(1).sfxOpts.decayMul.toFixed(2)}`);
+  // The shaping is CONTINUOUS so a band boundary is not a step change: the two
+  // sides of a boundary must be close in pitch even though the row changed.
+  {
+    const lo = at(V0.tapBelow - 1e-4).sfxOpts.pitch, hi = at(V0.tapBelow + 1e-4).sfxOpts.pitch;
+    check('...and crosses a band boundary smoothly', Math.abs(lo - hi) < 0.01,
+      `${lo.toFixed(4)} -> ${hi.toFixed(4)} across the tap boundary`);
+  }
+
+  // --- spin ---
+  // What spin buys is RING, not pitch: a knock ends when the surfaces part, a
+  // scrape lasts as long as they slide.
+  {
+    const still = at(0.5, { spin: 0 }), spun = at(0.5, { spin: V0.spinRef });
+    check('spin lengthens the contact', spun.sfxOpts.decayMul > still.sfxOpts.decayMul,
+      `${still.sfxOpts.decayMul.toFixed(2)} -> ${spun.sfxOpts.decayMul.toFixed(2)}`);
+    check('...more than it brightens it',
+      (spun.sfxOpts.decayMul / still.sfxOpts.decayMul) > (spun.sfxOpts.pitch / still.sfxOpts.pitch),
+      `ring x${(spun.sfxOpts.decayMul / still.sfxOpts.decayMul).toFixed(2)} vs pitch x${(spun.sfxOpts.pitch / still.sfxOpts.pitch).toFixed(2)}`);
+    check('...and it does not care which way it is spinning',
+      Math.abs(at(0.5, { spin: -V0.spinRef }).sfxOpts.decayMul - spun.sfxOpts.decayMul) < 1e-9);
+  }
+
+  // --- the medium ---
+  {
+    const wet = at(0.5, { above: false }), dry = at(0.5, { above: true });
+    check('underwater is lower than in air', wet.sfxOpts.pitch < dry.sfxOpts.pitch,
+      `${wet.sfxOpts.pitch.toFixed(2)} wet vs ${dry.sfxOpts.pitch.toFixed(2)} dry`);
+    check('...and sustains longer', wet.sfxOpts.decayMul > dry.sfxOpts.decayMul,
+      `${wet.sfxOpts.decayMul.toFixed(2)} vs ${dry.sfxOpts.decayMul.toFixed(2)}`);
+    // A multiplier on the force shaping, not a replacement for it — or a hard
+    // underwater smash would outrank a soft underwater tap on the wrong side.
+    check('...without flattening how hard it was', at(1, { above: false }).sfxOpts.pitch < at(0, { above: false }).sfxOpts.pitch);
+  }
+
+  // --- the clamps ---
+  // Pitch is a playbackRate on a sampled voice, so a runaway is a sound of the
+  // wrong LENGTH as well as the wrong note, arriving after the frame it
+  // describes.
+  {
+    const worst = [at(0, { above: true, spin: V0.spinRef }), at(1, { above: false, spin: V0.spinRef })];
+    check('nothing escapes the pitch clamp', worst.every((r) => r.sfxOpts.pitch >= V0.pitchMin - 1e-9 && r.sfxOpts.pitch <= V0.pitchMax + 1e-9),
+      worst.map((r) => r.sfxOpts.pitch.toFixed(2)).join(' / '));
+    check('...or the ring clamp', worst.every((r) => r.sfxOpts.decayMul >= V0.ringMin - 1e-9 && r.sfxOpts.decayMul <= V0.ringMax + 1e-9),
+      worst.map((r) => r.sfxOpts.decayMul.toFixed(2)).join(' / '));
+  }
+
+  // --- the skid ---
+  check('a spinning wall bounce skids', at(0.5, { event: 'versusBallWall', spin: V0.spinRef }).skid);
+  check('...a still one does not', !at(0.5, { event: 'versusBallWall', spin: 0 }).skid);
+  check('...nor does a spinning ball resting against the rock',
+    !at(V0.skidForce / 2, { event: 'versusBallWall', spin: V0.spinRef }).skid);
+  check('...and a body contact never skids, however it is spinning',
+    !at(1, { event: 'versusBallHit', spin: V0.spinRef }).skid);
 }
 
 resetVersus();

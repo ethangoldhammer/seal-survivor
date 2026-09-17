@@ -118,16 +118,19 @@
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
-import { DEVICES, DEVICE_LABELS } from './devices.js';
+import {
+  DEVICE_TEXT_COLUMN, parseDeviceText, parseDeviceList, textForDevice, rowOnDevice,
+  speechlessDevices, deviceNames,
+} from './deviceText.js';
 
 const LABEL = 'callouts';
 const FILE = 'callouts.csv';
 
-// device -> the column its wording lives in. `kbm` is absent on purpose: its
-// column is `text`, which is also everyone else's fallback, and giving it an
-// override column too would be two cells that mean the same thing and can
-// disagree.
-const DEVICE_TEXT_COLUMN = { touch: 'textTouch', pad: 'textPad' };
+// The three-column rule — `text`, `textTouch`, `textPad`, plus `devices` —
+// belongs to deviceText.js now, because loadTips.csv wants the same one. Kept
+// re-exported here so nothing that reads the callout table has to know it
+// moved.
+export { DEVICE_TEXT_COLUMN };
 
 export const CALLOUT_KINDS = ['warn', 'coach'];
 /** What a line can be ABOUT. See the `subject` column above. */
@@ -154,34 +157,8 @@ export function parseCalloutCsv(text, warn = console.warn) {
 
     const line = String(row.text ?? '').trim();
 
-    // The per-device rewordings. Blank is the normal case and means "say the
-    // same thing" — most lines are about the water rather than about a button.
-    const deviceText = {};
-    for (const [device, column] of Object.entries(DEVICE_TEXT_COLUMN)) {
-      const variant = String(row[column] ?? '').trim();
-      if (variant) deviceText[device] = variant;
-    }
-
-    // Which devices this row exists on. An unknown name is dropped rather than
-    // widening the list: `devices=gamepad` meaning "all devices" would be a row
-    // that quietly shows up on a phone, where the words for a controller are
-    // not merely unhelpful but describe buttons that are not there.
-    let devices = null;
-    const devicesRaw = String(row.devices ?? '').trim().toLowerCase();
-    if (devicesRaw) {
-      const named = devicesRaw.split(/[\s,]+/).filter(Boolean);
-      const known = named.filter((d) => DEVICES.includes(d));
-      for (const d of named) {
-        if (!DEVICES.includes(d)) {
-          warn(`[${LABEL}] "${id}" lists the device "${d}", which is not ${DEVICES.join(', ')} — ignoring that one.`);
-        }
-      }
-      // Every name was a typo. Left as "all devices" rather than as an empty
-      // list, because an empty list is a row that can never appear anywhere,
-      // and that is a worse reading of a misspelling than showing it.
-      if (known.length) devices = known;
-      else warn(`[${LABEL}] "${id}" has no usable device in "${row.devices}" — showing it on all of them.`);
-    }
+    const deviceText = parseDeviceText(row);
+    const devices = parseDeviceList(row.devices, LABEL, id, warn);
 
     // WORDS FOR EVERY DEVICE IT CAN REACH. A callout with nothing to say is an
     // empty band flashing over the fight, which reads as a bug rather than as a
@@ -190,9 +167,9 @@ export function parseCalloutCsv(text, warn = console.warn) {
     // once per device: `text` is the fallback, so a row that a keyboard can see
     // still needs one, while a touch-and-pad row is entitled to leave it empty
     // and let its two columns do the talking.
-    const speechless = (devices ?? DEVICES).filter((d) => !calloutText({ text: line, deviceText }, d));
+    const speechless = speechlessDevices({ text: line, deviceText, devices });
     if (speechless.length) {
-      warn(`[${LABEL}] "${id}" has no words for ${speechless.map((d) => DEVICE_LABELS[d]).join(' or ')} — the row is being ignored.`);
+      warn(`[${LABEL}] "${id}" has no words for ${deviceNames(speechless)} — the row is being ignored.`);
       continue;
     }
 
@@ -265,18 +242,12 @@ export function parseCalloutCsv(text, warn = console.warn) {
  * reading. systems/callouts.js fills them in on the way to the screen.
  */
 export function calloutText(row, device) {
-  if (!row) return '';
-  return row.deviceText?.[device] ?? row.text;
+  return textForDevice(row, device);
 }
 
 /** Does this row exist at all for somebody holding `device`? */
 export function calloutOnDevice(row, device) {
-  if (!row) return false;
-  // No list is the common case and means every device. A device we were not
-  // told about — an undefined ctx in a harness — counts as "show it": going
-  // quiet would hide a line for a reason nobody asked for.
-  if (!row.devices || !device) return true;
-  return row.devices.includes(device);
+  return rowOnDevice(row, device);
 }
 
 /**

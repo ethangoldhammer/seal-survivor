@@ -414,6 +414,22 @@ for (const file of srcFiles) {
     // splash underneath this very hit), not a hex. Held to the EVENT and the
     // SOURCE, so a hand-typed colour on versusSpike is still a failure.
     if (/^\s*'versusSpike'/.test(args) && /\bcolor:\s*ballTint\(\)\.getHex\(\)/.test(args)) continue;
+    // WHAT THE BALL SPITS OUT OF THE CONTACT PATCH (systems/ballSpit.js). Both
+    // fans carry a colour because the colour IS the point of them: this is the
+    // one part of an impact that is about the thing that HIT the ball rather
+    // than about the ball, so it comes out in the striking team's colour mixed
+    // into water, and a wall — which is nobody's — passes null and comes out
+    // plain. A stock tint here would delete the only feedback on screen saying
+    // whose touch it was.
+    //
+    // Held to the SOURCE being a RELAY, the same terms as the drip: `o.tint` is
+    // resolved once per impact from the colour the caller handed in
+    // (`spitColor` in versus.js, which goes through the shared `teamColor`), so
+    // a hex typed in this file is still a failure and so is a second call there
+    // that decides on a tint of its own. Matched on the file as well, because
+    // the emitter is a config string (`o.emitter`) and there is no event name
+    // in the argument to hold it to.
+    if (file.endsWith('ballSpit.js') && /\bcolor:\s*o\.tint\b/.test(args)) continue;
     strayTints.push(`${path.relative(path.join(HERE, '..'), file)}: ${args.slice(0, 60).replace(/\s+/g, ' ')}`);
   }
 }

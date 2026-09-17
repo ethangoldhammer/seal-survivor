@@ -1,0 +1,8 @@
+id,text,textTouch,textPad,review,devices,enabled,weight,notes
+mammals,Seals are mammals! Air is life!,,,,,TRUE,1,Ethan's. Flavour that happens to teach the breach.
+clap,Press {clap} to clap.,Tap your player seal to clap.,Press {clap} to clap.,,,TRUE,1,"Waiting on the touch and pad wordings — the two lorem cells, not `text`, which is yours. `{clap}` resolves to whatever clap is bound to, and that is a key nobody holding a phone or a pad has. On a pad the token to use is `{faceLeft}`, which becomes that controller's left face button (the salute row in callouts.csv is the same line in the same shape). On touch there is no clap button at all — you tap the seal itself, see CONFIG.touch.clap. One sentence each, about as long as the keyboard line, read cold on the loading screen. Or type kbm into `devices` and the row is a keyboard tip on purpose."
+chum,Hoover up your chum before the crabs get to it!,,,,,TRUE,1,Ethan's. Names the crabs as the competition for chum on the floor.
+hotspot,Strike the glowing hot spot to stagger large baddies!,,,,,TRUE,1,"Ethan's. ""Strike"" is the ability, not a button, so it needs no token and no per-device wording."
+hotspotCopy,Low on health? Eat!,,,,,TRUE,1,"Ethan's. ""Strike"" is the ability, not a button, so it needs no token and no per-device wording."
+hotspotCopy2,Left stick to swim. Right stick to aim. ,First touch to swim. Second to aim.,,,,TRUE,1,"Ethan's. ""Strike"" is the ability, not a button, so it needs no token and no per-device wording."
+hotspotCopy3,Hold a trigger to charge a strike.,Add a 3rd touch to charge a strike.,,,,TRUE,1,"Ethan's. ""Strike"" is the ability, not a button, so it needs no token and no per-device wording."

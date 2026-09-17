@@ -183,7 +183,13 @@ export const RELAYED = new Set([
   'versusWin', 'versusLose',
   // Contacts. Every one of these is decided inside a collision the guest does
   // not run, and several are read off trajectory rather than off a touch.
-  'versusBallHit', 'versusBallWall', 'versusPost',
+  // The ball's body contact is THREE rows, not one — ballImpactFx picks by how
+  // hard the touch was (CONFIG.versus.ball.fx.voice). All three have to be here
+  // or the guest goes quiet for exactly the contacts that happen most: a tap is
+  // every dribble in the match and a smash is every shot worth hearing, and the
+  // middle row alone would relay only the ones in between.
+  'versusBallTap', 'versusBallHit', 'versusBallSmash',
+  'versusBallWall', 'versusBallSkid', 'versusPost',
   'versusBlock', 'versusSave', 'versusPierce',
   'bodyCheck',
   // A dash and its consequences — tryStrike lives on the host's side of the

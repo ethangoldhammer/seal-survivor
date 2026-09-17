@@ -31,7 +31,7 @@ import { initParticles, resetParticles, drivenCapacity } from '../path/src/entit
 import { spawnXpOrb, pickups, resetPickups } from '../path/src/entities/pickups.js';
 import { resetEnemies, spawnNamed, enemies } from '../path/src/entities/enemies.js';
 import { updateStrike } from '../path/src/systems/strike.js';
-import { versusHooks } from '../path/src/systems/versus.js';
+import { versusHooks, BALL_TOUCH_EVENTS } from '../path/src/systems/versus.js';
 import {
   versusState, ball, p2, startVersus, resetVersus, updateVersus, updateVersusClock, stirGoalLights, spotlightScorer,
   renderVersus, resetBall, dentBall, sealContact, p2Pad, readP2Input, versusFocus, rimRadius, rimAngle, solveBallSurface,
@@ -198,6 +198,12 @@ const COUNT_LEN = KO.count * KO.tick;
 const fired = new Map();
 onFeedback((name) => fired.set(name, (fired.get(name) ?? 0) + 1));
 const firedCount = (name) => fired.get(name) ?? 0;
+// THE BALL'S ORDINARY TOUCH IS THREE ROWS. ballImpactFx picks one by how hard
+// the hit was, so a count of `versusBallHit` alone answers 0 for a dribble
+// (all taps) and 0 for a cannon (all smashes) — which reads as "the event
+// never fired" on precisely the two cases worth testing. Anything asking "was
+// the ball touched" has to ask the family. See BALL_TOUCH_EVENTS.
+const touchCount = () => BALL_TOUCH_EVENTS.reduce((n, e) => n + firedCount(e), 0);
 
 // ---------------------------------------------------------------------------
 section('The pitch has its own width while the flag is on');
@@ -1300,7 +1306,12 @@ section('Every hit squirts goo from the contact point, scaled by how hard');
   resetBall(); fired.clear();
   for (let i = 0; i < 120; i++) { player.mesh.position.set(ball.x - ballReach() + 0.5, ball.y, 0); player.velocity.set(12, 0); frame(); }
   player.mesh.position.set(-30, midWater(), 0); player.velocity.set(0, 0);
-  check('a seal dribbling the ball for two seconds splashes a few times, not a hundred', firedCount('versusBallHit') >= 1 && firedCount('versusBallHit') <= Math.ceil(2 / F.bumpGap) + 1, `${firedCount('versusBallHit')} in 2s (gap ${F.bumpGap}s)`);
+  check('a seal dribbling the ball for two seconds splashes a few times, not a hundred', touchCount() >= 1 && touchCount() <= Math.ceil(2 / F.bumpGap) + 1, `${touchCount()} in 2s (gap ${F.bumpGap}s)`);
+  // ...AND A DRIBBLE IS A TAP. The band is the whole point of the split: if a
+  // shepherding nudge came out as the middle row, the three voices would exist
+  // and nothing would ever reach the outer two.
+  check('...and a dribble is the soft row, not the ordinary one', firedCount('versusBallTap') === touchCount() && touchCount() > 0,
+    `${firedCount('versusBallTap')} tap(s) of ${touchCount()} touch(es)`);
   // A ball settling onto the floor under its own buoyancy makes no splash.
   resetBall(); fired.clear();
   ball.y = bounds.bottom + ballRestRadius() + 0.01; ball.vy = -1; ball.vx = 0;
@@ -4132,7 +4143,10 @@ section('The contest: a fast ball knocks a slow seal aside; a seal that matches 
     ball.dashHit[1] = false; ball.pierced[1] = false;
     sealContact(1, p2.pos, p2.vel, p2.active, p2.dashDir, p2.power);
     check('a real downward strike fires it', firedCount('versusSpike') === 1, `${firedCount('versusSpike')}`);
-    check('...over the ordinary strike rather than instead of it', firedCount('versusBallHit') >= 1);
+    check('...over the ordinary strike rather than instead of it', touchCount() >= 1, `${touchCount()} touch(es)`);
+    // A full-power downward strike is the hard end by construction, so this is
+    // also where the smash row has to show up — the spike rides OVER it.
+    check('...and that strike is the hard row', firedCount('versusBallSmash') >= 1, `${firedCount('versusBallSmash')} smash(es)`);
     check('...and the harness can read what it was',
       versusState.lastSpike?.spike > 0 && versusState.lastSpike.who === 1,
       JSON.stringify(versusState.lastSpike));
@@ -4865,6 +4879,22 @@ section('A match shows no run HUD and no tutorial text');
   check('the tutorial is gated off in a match', tutGate.includes('!versusActive()'), tutGate || 'no gate found');
   const callouts = main.slice(main.indexOf('updateCallouts(realDt'), main.indexOf('updateGreeting(realDt'));
   check('...as the coach\'s band and the hello already are', callouts.includes('!versusActive()') && main.slice(main.indexOf('updateGreeting(realDt'), main.indexOf('updateGreeting(realDt') + 200).includes('!versusActive()'));
+
+  // THE AIM BEAM IS NOT IN THE FOOTAGE. A replay poses both seals from the
+  // tape, but input.aim keeps answering the cursor underneath, so a beam left
+  // running is a live interface element drawn over a piece of film — and it is
+  // the only thing in the shot that moves with the mouse. Read off the source
+  // because this harness never runs main.js's frame loop.
+  const aimAt = main.indexOf('updateAimIndicator(');
+  const aimCall = main.slice(main.lastIndexOf('\n', main.indexOf('NOT OVER A REPLAY')), main.indexOf(');', aimAt) + 2);
+  check('no aim beam over a replay', /replayHoldsInput\(\)/.test(aimCall), aimCall.replace(/\s+/g, ' ').slice(-120) || 'no gate found');
+  // ...CUT, NOT FADED. The gate inside the indicator eases `alpha` toward its
+  // target over aimIndicator.fade, and a replay opens on a hard camera cut, so
+  // routing this through `running: false` would leave a tenth of a second of
+  // beam dissolving over the first frames of the shot.
+  check('...and it is cut rather than faded out, because the replay opens on a cut',
+    /replayHoldsInput\(\)\)\s*\{\s*resetAimIndicator\(\);/.test(aimCall),
+    aimCall.replace(/\s+/g, ' ').slice(-120));
 
   // THE STRIP, THE CARD AND THE REPLAY — read off the source for the same
   // reason as the rules above: this harness has no DOM (tools/dom-stub.mjs

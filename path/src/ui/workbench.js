@@ -49,7 +49,24 @@ import { isLaser, laserReachSteps, latticeGenerations, childrenAt, latticeWorstC
 const RAIL_SECTIONS = [
   ['Your weapon', ['shoot', 'shootLaser', 'laserEyes', 'hit', 'bulletHit', 'latticeSplit', 'kill', 'bigKill', 'bounce', 'missileLaunch', 'missileImpact']],
   ['The seal', ['playerHit', 'playerDeath', 'boost', 'bite', 'clap', 'breach', 'surfacing', 'splash', 'seabedThud', 'seabedImpact', 'breathIn', 'breathOut', 'bubblePop', 'oxygenWarn']],
-  ['Strike & food chain', ['strike', 'strikeChain', 'strikeBurst', 'pickupBlast', 'strikeRam', 'strikeMark', 'boostEmpty', 'foodChain']],
+  // STRIKE & FOOD CHAIN — the wind-up first, then the launch, then what it
+  // hits, then the meter filling back up. Read top to bottom it is one turn of
+  // the loop: hold, count in, arrive, go, land, chain, eat.
+  //
+  // THE FIRST THREE ARE THE WIND-UP and are adjacent for the reason the
+  // Blubberball pairs are: they are one gesture in three voices and the only
+  // useful question about any of them is how it sits against the other two.
+  // `strikeCharging` is the held sound plus the rumble (two clocks — see its
+  // note in CONFIG.feedback), `strikeBurn` is the ladder of pips being spent,
+  // and `strikePerfect` is the arrival the ladder counts up to.
+  //
+  // `strikePip` is the meter FILLING and sits at the other end, next to the
+  // food chain that fills it. It and `strikeBurn` are the same bar in opposite
+  // directions and it is tempting to file them together; they belong apart,
+  // because one is something you spend and the other is something you earn.
+  ['Strike & food chain', ['strikeCharging', 'strikeBurn', 'strikePerfect',
+    'strike', 'strikeBurst', 'pickupBlast', 'strikeRam', 'strikeWeakSpot', 'strikeMark',
+    'strikeChain', 'boostEmpty', 'strikePip', 'foodChain']],
   ['Pickups & progression', ['pickup', 'chumSlurp', 'chumEaten', 'chumHoover', 'chumChunkEaten', 'chumFull', 'levelUp']],
   ['Escorts', ['sealRam', 'sealLunge', 'sealShot', 'eelBolt', 'eelChain', 'belugaSplit', 'belugaTrap', 'belugaPop', 'dumboCharm', 'octoGrab', 'octoPop', 'orcaStrike']],
   ['Auras & orbits', ['garlicTick', 'shrimpHit', 'calamariPulse']],
@@ -73,7 +90,12 @@ const RAIL_SECTIONS = [
   // they are twelve rows apart.
   ['Blubberball', [
     'versusCountdown', 'versusKickoff',
-    'versusBallHit', 'versusSpike', 'versusBallWall', 'versusPost', 'versusBallBreach', 'versusBallReentry',
+    // The ball's body contact, softest first, then the spike that rides over
+    // whichever of them fired. Adjacent for the reason the note above gives:
+    // these three are ONE moment at three weights, and the only useful question
+    // about any of them is how it sits against the other two.
+    'versusBallTap', 'versusBallHit', 'versusBallSmash', 'versusSpike',
+    'versusBallWall', 'versusBallSkid', 'versusPost', 'versusBallBreach', 'versusBallReentry',
     'versusBlock', 'versusSave', 'versusPierce',
     'bodyCheck', 'sealBurst', 'versusRespawn',
     'versusGoal', 'versusGoalCheer',

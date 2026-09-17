@@ -308,5 +308,54 @@ check('from the frame, beside the pause button, rather than at each route',
 check('and it can tell the title card from the menu',
   /splashUp\(\)\s*\?\s*'splash'/.test(main));
 
+// ===========================================================================
+section('9. the two reading rows close themselves');
+// ===========================================================================
+// THE CLOCK IS THE ONE PIECE OF THIS SURFACE THAT LOOKS IDENTICAL TO A BUG. A
+// row that never closes and a row that closed itself are the same screenshot
+// eight seconds apart, and a row that closes while its question is still true
+// is indistinguishable from the latching failure this whole file is against —
+// so both directions are asserted, at a delay the harness sets rather than the
+// eight seconds a phone gets.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+localStorage.removeItem('sealSurvivor.phonePrompts.v1');
+resetMobilePromptStage();
+const timed = mountMobilePrompts({ parent: host, autoDismissMs: 30 });
+setMobilePromptStage('menu');
+check('all three are up to begin with', timed.shown().sort().join(',') === 'fullscreen,rotate,sound',
+  `showing: ${timed.shown().join(',')}`);
+await sleep(90);
+check('the sound and rotate rows are gone without a tap',
+  timed.shown().sort().join(',') === 'fullscreen', `showing: ${timed.shown().join(',') || 'nothing'}`);
+check('and the offer with a decision in it is still standing',
+  timed.shown().includes('fullscreen'), 'an offer that expires while you decide is worse than one you close');
+
+// It went through the LEDGER, not through a hidden flag — so a row that closed
+// itself is closed for good, exactly as a tapped one is.
+timed.remove();
+resetMobilePromptStage();
+const afterTimer = mountMobilePrompts({ parent: host });
+setMobilePromptStage('menu');
+check('a row that timed out does not come back next page load',
+  afterTimer.shown().sort().join(',') === 'fullscreen', `showing: ${afterTimer.shown().join(',')}`);
+afterTimer.remove();
+
+// ...and the clock is thrown away rather than paused when the row goes down for
+// its own reason. A rotate row that was up for a moment before the phone turned
+// was not read, and must get its whole time again the next time it is upright.
+localStorage.removeItem('sealSurvivor.phonePrompts.v1');
+resetMobilePromptStage();
+const restarts = mountMobilePrompts({ parent: host, autoDismissMs: 60 });
+setMobilePromptStage('run'); // the one stage where rotate is alone
+flip({ toPortrait: false });
+await sleep(120);
+flip({ toPortrait: true });
+check('a clock that never finished is not carried over to the next time',
+  restarts.shown().includes('rotate'), `showing: ${restarts.shown().join(',') || 'nothing'}`);
+await sleep(120);
+check('and it does finish once the row has actually been up that long',
+  !restarts.shown().includes('rotate'), `showing: ${restarts.shown().join(',') || 'nothing'}`);
+restarts.remove();
+
 console.log(failures ? `\n${failures} failed` : '\nall good');
 process.exit(failures ? 1 : 0);

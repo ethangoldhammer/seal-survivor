@@ -1282,7 +1282,12 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
   // system rather than a perk, because it comes with a body that cannot swim
   // and a station on the surface — see systems/bossBoat.js. The rolled perk
   // above still applies on top, which is what keeps two boat fights different.
-  attachBossBoat(scene, e);
+  //
+  // The player's LEVEL goes with it, for the same reason the crab's does below:
+  // a hull whose ordnance rides a ramp (the yacht — CONFIG.enemies.bossYacht
+  // `shotSwell`) resolves how big its shells are ONCE, here, rather than per
+  // shot off a number that keeps moving during the fight.
+  attachBossBoat(scene, e, level);
   // ...and, if this one is a kraken, the ink it always has. Its own system for
   // the same reason the boat's bombardment is: it comes with a body built for
   // it and a standoff it will not leave — see systems/kraken.js.

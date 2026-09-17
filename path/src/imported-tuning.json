@@ -1769,6 +1769,33 @@
       "shake": 0.09,
       "hapticInterval": 0.07,
       "flashTime": 0.28,
+      "envelope": {
+        "floor": 0.35,
+        "span": 1.1
+      },
+      "bed": {
+        "enabled": true,
+        "sample": "strikeChargeBed",
+        "sampleLevel": 1,
+        "synthLevel": 1,
+        "envelope": true,
+        "envelopeSmooth": 0.04,
+        "ramp": 0.22,
+        "attack": 0.3,
+        "attackLevel": 0.5,
+        "gain": 0.17,
+        "from": 140,
+        "to": 900,
+        "resonance": 7,
+        "drive": 5,
+        "preGain": 1.4,
+        "breathRate": 0.9,
+        "breathDepth": 90,
+        "release": 0.07,
+        "releaseTo": 120
+      },
+      "burnSemitones": 2,
+      "burnSemitonesMax": 14,
       "outline": {
         "enabled": true,
         "glowAdd": 5,
@@ -4299,8 +4326,17 @@
         "missiles": {
           "asset": "moneyRoll3",
           "orient": true,
-          "radius": 0.38
+          "radius": 0.38,
+          "fuse": true,
+          "blastEmitter": "cashBurst",
+          "blastColor": 12574888
         }
+      },
+      "shotSwell": {
+        "base": 1.5,
+        "from": 5,
+        "perLevel": 0.03,
+        "max": 2.4
       },
       "hitShape": "mesh"
     },
@@ -7006,6 +7042,67 @@
       "inherit": 0.22,
       "glow": 1,
       "surfacePop": "bubbleBurst"
+    },
+    "ballSpit": {
+      "count": 14,
+      "speed": [
+        6,
+        19
+      ],
+      "size": [
+        0.07,
+        0.18
+      ],
+      "life": [
+        0.22,
+        0.5
+      ],
+      "colors": [
+        14677759,
+        12578815,
+        16777215,
+        10479871
+      ],
+      "cone": 0.4,
+      "drag": 3.4,
+      "gravity": [
+        0,
+        3
+      ],
+      "inherit": 0.3,
+      "glow": 1.15,
+      "turbulence": 2.6,
+      "killAtSurface": true
+    },
+    "ballSpitWash": {
+      "count": 10,
+      "speed": [
+        2.4,
+        8.5
+      ],
+      "size": [
+        0.09,
+        0.22
+      ],
+      "life": [
+        0.35,
+        0.8
+      ],
+      "colors": [
+        14677759,
+        12578815,
+        16777215
+      ],
+      "cone": 1.05,
+      "drag": 2.2,
+      "gravity": [
+        0,
+        3.6
+      ],
+      "inherit": 0.3,
+      "glow": 1,
+      "turbulence": 2.2,
+      "killAtSurface": true
     },
     "hullWake": {
       "count": 3,
@@ -9992,7 +10089,7 @@
           "delay": 0
         },
         {
-          "duration": 115,
+          "duration": 8,
           "magnitude": 0.18,
           "delay": 0
         }
@@ -10030,6 +10127,18 @@
         {
           "duration": 18,
           "magnitude": 0.22
+        }
+      ]
+    },
+    "strikeBurn": {
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.05,
+      "sfx": "strikeBurn",
+      "haptic": [
+        {
+          "duration": 14,
+          "magnitude": 0.18
         }
       ]
     },
@@ -10207,6 +10316,42 @@
       ],
       "sfxMinGap": 0.05
     },
+    "versusBallTap": {
+      "goo": "ballGoo",
+      "shake": 0.02,
+      "hitstop": 0,
+      "glow": 0.14,
+      "ripple": {
+        "strength": 0.7,
+        "radius": 4
+      },
+      "sfx": "versusBallTap",
+      "haptic": [
+        {
+          "duration": 12,
+          "magnitude": 0.22
+        }
+      ],
+      "sfxMinGap": 0.05
+    },
+    "versusBallSmash": {
+      "goo": "ballGoo",
+      "shake": 0.17,
+      "hitstop": 0,
+      "glow": 0.45,
+      "ripple": {
+        "strength": 2.4,
+        "radius": 10
+      },
+      "sfx": "versusBallSmash",
+      "haptic": [
+        {
+          "duration": 38,
+          "magnitude": 0.85
+        }
+      ],
+      "sfxMinGap": 0.05
+    },
     "versusBlock": {
       "goo": "ballGoo",
       "shake": 0.1,
@@ -10301,6 +10446,20 @@
         }
       ],
       "sfxMinGap": 0.05
+    },
+    "versusBallSkid": {
+      "goo": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.12,
+      "sfx": "versusBallSkid",
+      "haptic": [
+        {
+          "duration": 18,
+          "magnitude": 0.25
+        }
+      ],
+      "sfxMinGap": 0.14
     },
     "bodyCheck": {
       "goo": "checkGoo",
@@ -11532,13 +11691,13 @@
           "specPower": 20,
           "normal": 2,
           "warp": {
-            "amount": 5.189237696509259,
+            "amount": 4.5706890803763995,
             "scale": 7,
             "speed": 0.86,
             "feed": 3
           },
           "tint": 16765501,
-          "tintMix": 0.5499999999999998,
+          "tintMix": 0.5499999999999997,
           "outline": {
             "strength": 0.36,
             "width": 1.75,
@@ -12042,6 +12201,174 @@
       "neckCounter": 0.55
     }
   },
+  "celebrate": {
+    "enabled": true,
+    "chance": 0.7,
+    "peakLead": 0.03,
+    "hold": 0.35,
+    "release": 0.5,
+    "blendFrom": 1,
+    "blendSpan": 0.5,
+    "follow": 0.25,
+    "momentum": {
+      "enabled": true,
+      "speedRef": 34,
+      "drag": 0.35,
+      "lift": 0.1,
+      "turnRef": 4,
+      "bank": 0.3,
+      "smoothing": 8
+    },
+    "weights": {
+      "clap": 1.4,
+      "finsUp": 1.2,
+      "flip": 1,
+      "tailWag": 0.9,
+      "headToss": 1
+    },
+    "ik": {
+      "iterations": 4,
+      "smoothing": 14,
+      "maxBend": 1.6,
+      "softness": 0.8,
+      "maxFold": 1.9,
+      "maxTwist": 0.7,
+      "tolerance": 0.01
+    },
+    "poses": {
+      "clap": {
+        "up": 0.32,
+        "fore": 0.5,
+        "open": 0.5,
+        "close": 0.08,
+        "beats": 1.5,
+        "bob": 0.08,
+        "headUp": 0.3,
+        "headFore": 0.85,
+        "follow": 0,
+        "blendFrom": 0
+      },
+      "finsUp": {
+        "up": 0.85,
+        "fore": 0.35,
+        "spread": 0.3,
+        "tremble": 0.04,
+        "trembleHz": 9,
+        "headUp": 0.45,
+        "headFore": 0.8,
+        "bubbles": {
+          "enabled": true,
+          "from": "mouth",
+          "rate": 1.5,
+          "scale": 0.9,
+          "bursts": [
+            {
+              "at": 1,
+              "count": 6,
+              "scale": 1.2
+            }
+          ]
+        }
+      },
+      "flip": {
+        "turns": 1,
+        "tuck": 0.35,
+        "tuckUp": 0.1,
+        "tuckFore": -0.25,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "wakeBubbles",
+          "from": "fins",
+          "rate": 26,
+          "scale": 0.75,
+          "maxPerFrame": 4,
+          "bursts": [
+            {
+              "at": 0.2,
+              "count": 4,
+              "from": "tail",
+              "scale": 1.1
+            }
+          ]
+        }
+      },
+      "tailWag": {
+        "sweep": 0.95,
+        "beats": 2.25,
+        "fore": -0.85,
+        "finUp": 0.35,
+        "finFore": 0.15,
+        "finSpread": 0.45,
+        "headUp": 0.35,
+        "headFore": 0.8,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "wakeBubbles",
+          "from": "tail",
+          "rate": 14,
+          "scale": 0.8
+        }
+      },
+      "headToss": {
+        "up": 0.8,
+        "fore": 0.35,
+        "finUp": -0.15,
+        "finFore": -0.35,
+        "finSpread": 0.5,
+        "bubbles": {
+          "enabled": true,
+          "from": "mouth",
+          "rate": 0,
+          "scale": 1.3,
+          "bursts": [
+            {
+              "at": 1,
+              "count": 12,
+              "scale": 1.4
+            }
+          ]
+        }
+      },
+      "salute": {
+        "browUp": 0.06,
+        "browFore": 0,
+        "browOut": 0.1,
+        "headUp": -0.2,
+        "headFore": 0.5,
+        "offUp": -0.22,
+        "offFore": -0.18,
+        "offSpread": 0.3,
+        "tailUp": -0.15,
+        "tailFore": -0.9,
+        "up": 0.5,
+        "fore": 0.6,
+        "spread": 0.16,
+        "follow": 0.1,
+        "faceWeight": 1,
+        "bubbles": {
+          "enabled": true,
+          "emitter": "breathBubbles",
+          "from": "mouth",
+          "rate": 2.5,
+          "scale": 0.8,
+          "bursts": [
+            {
+              "at": 0.95,
+              "count": 5,
+              "from": "mouth",
+              "scale": 1.15
+            }
+          ]
+        }
+      }
+    },
+    "escorts": {
+      "enabled": true,
+      "chance": 0.85,
+      "stagger": 0.09,
+      "jitter": 0.05
+    }
+  },
   "clap": {
     "enabled": true,
     "attack": 0.06,
@@ -12512,6 +12839,13 @@
       "srcs": [
         "/sfx/HGUI_s37_BubbleBeam_04_lo.mp3"
       ],
+      "type": "noise",
+      "filter": 2000,
+      "decay": 1,
+      "gain": 0.2
+    },
+    "strikeChargeBed": {
+      "src": null,
       "type": "noise",
       "filter": 2000,
       "decay": 1,
@@ -13546,8 +13880,7 @@
       "pitchVary": 0,
       "srcs": [
         "/sfx/HG_UI_Ball_Bink.mp3",
-        "/sfx/HG_UI_Blip_Menu_Bic.mp3",
-        "/sfx/EG_Eep.mp3"
+        "/sfx/HG_UI_Blip_Menu_Bic.mp3"
       ]
     },
     "celestialSun": {
@@ -13598,7 +13931,7 @@
         52
       ],
       "decay": 0.4,
-      "gain": 0.26,
+      "gain": 2.113489039836647,
       "noise": 0.92,
       "filter": 700,
       "pitchVary": 0.12,
@@ -13648,12 +13981,38 @@
       "type": "blip",
       "wave": "triangle",
       "freq": [
-        660,
+        135,
         900
       ],
       "decay": 0.09,
-      "gain": 0.13,
-      "pitchVary": 0
+      "gain": 7.498942093324558,
+      "pitchVary": 0.29,
+      "srcs": [
+        "/sfx/HGUI_Organ_Shark.mp3",
+        "/sfx/EG_FlickPlop_13.mp3",
+        "/sfx/EG_FlickPlop_12.mp3",
+        "/sfx/EG_FlickPlop_11.mp3",
+        "/sfx/EG_FlickPlop_10.mp3"
+      ]
+    },
+    "strikeBurn": {
+      "src": null,
+      "type": "blip",
+      "wave": "triangle",
+      "freq": [
+        440,
+        560
+      ],
+      "decay": 0.07,
+      "gain": 14.962356560944336,
+      "pitchVary": 0.15,
+      "srcs": [
+        "/sfx/EG_FlickPlop_11.mp3",
+        "/sfx/EG_FlickPlop_10.mp3",
+        "/sfx/EG_FlickPlop_13.mp3",
+        "/sfx/EG_FlickPlop_14.mp3",
+        "/sfx/EG_FlickPlop_15.mp3"
+      ]
     },
     "strikePerfect": {
       "src": null,
@@ -13664,11 +14023,10 @@
         1760
       ],
       "decay": 0.2,
-      "gain": 1.4962356560944334,
-      "pitchVary": 0,
+      "gain": 2.8183829312644537,
+      "pitchVary": 0.13,
       "srcs": [
-        "/sfx/EliArf_01.mp3",
-        "/sfx/EliArf_02.mp3"
+        "/sfx/OLIVER_DWILLY_105_FX_german_electro_dancing_lazer_bubbles.mp3"
       ]
     },
     "boostEmpty": {
@@ -13869,7 +14227,8 @@
       "pitchVary": 0.12,
       "filterVary": 0.2,
       "srcs": [
-        "/sfx/FF_AS_fish_splash_solid_attack.mp3"
+        "/sfx/FF_AS_fish_splash_solid_attack.mp3",
+        "/sfx/SPLC-3991_FX_Oneshot_Explosion_Boom_Rocket_Explosion_lo.mp3"
       ]
     },
     "bodyCheck": {
@@ -13974,8 +14333,8 @@
       "gain": 12.589254117941675,
       "noise": 0.65,
       "filter": 1800,
-      "pitchVary": 0.27,
-      "filterVary": 0.25,
+      "pitchVary": 0.31,
+      "filterVary": 0.03,
       "srcs": [
         "/sfx/Seal_Smack_01.mp3",
         "/sfx/Seal_Smack_02.mp3",
@@ -13999,7 +14358,54 @@
       "pitchVary": 0.12,
       "filterVary": 0.2,
       "srcs": [
-        "/sfx/OLIVER_DWILLY_105_FX_german_electro_dancing_lazer_bubbles.mp3"
+        "/sfx/MNT_HV_fx_impact_anthem_boomy_low_E.mp3"
+      ]
+    },
+    "versusBallTap": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        620,
+        240
+      ],
+      "decay": 0.075,
+      "gain": 2.51188643150958,
+      "noise": 0.42,
+      "filter": 2600,
+      "pitchVary": 0.31,
+      "filterVary": 0.3,
+      "srcs": [
+        "/sfx/FF_AS_fish_splash_harmless.mp3"
+      ]
+    },
+    "versusBallSmash": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        300,
+        66
+      ],
+      "decay": 0.3,
+      "gain": 0.46,
+      "noise": 0.78,
+      "filter": 1250,
+      "pitchVary": 0.08,
+      "filterVary": 0.22,
+      "srcs": [
+        "/sfx/HGUI_s37_PulseCannon_02_lo.mp3"
+      ]
+    },
+    "versusBallSkid": {
+      "src": null,
+      "type": "noise",
+      "filter": 3200,
+      "decay": 0.22,
+      "gain": 2.6607250597988097,
+      "pitchVary": 0,
+      "filterVary": 0.35,
+      "srcs": [
+        "/sfx/Seal_Shoot_04.mp3",
+        "/sfx/Seal_Shoot_02.mp3"
       ]
     },
     "versusBlock": {
@@ -14083,10 +14489,9 @@
       ],
       "decay": 0.4,
       "gain": 3.548133892335755,
-      "pitchVary": 0,
+      "pitchVary": 0.05,
       "srcs": [
-        "/sfx/EG_FlickPlop_13.mp3",
-        "/sfx/EG_FlickPlop_06.mp3"
+        "/sfx/SPLC-4048_FX_Oneshot_UI_Glitch_Electronic_lo.mp3"
       ]
     },
     "versusWin": {
@@ -15115,11 +15520,11 @@
     "strikeCharging": {
       "src": null,
       "type": "noise",
-      "filter": 1160,
+      "filter": 3020,
       "decay": 0.99,
-      "gain": 2.51188643150958,
-      "pitchVary": 0,
-      "filterVary": 0.48,
+      "gain": 4.731512589614805,
+      "pitchVary": 0.43,
+      "filterVary": 0.57,
       "srcs": [
         "/sfx/HGUI_s37_Riser_03_lo.mp3"
       ]
@@ -17696,6 +18101,36 @@
       "scanGap": 3,
       "scanGlow": 0
     },
+    "loadTip": {
+      "font": "global",
+      "size": 15,
+      "weight": 500,
+      "tracking": 0.01,
+      "case": "as typed",
+      "useInk": false,
+      "color": 13560572,
+      "alpha": 0.88,
+      "shadow": 0,
+      "glow": 0,
+      "scan": 0,
+      "scanGap": 3,
+      "scanGlow": 0
+    },
+    "loadCaption": {
+      "font": "global",
+      "size": 13,
+      "weight": 500,
+      "tracking": 0.02,
+      "case": "as typed",
+      "useInk": false,
+      "color": 8050687,
+      "alpha": 0.72,
+      "shadow": 0,
+      "glow": 0,
+      "scan": 0,
+      "scanGap": 3,
+      "scanGlow": 0
+    },
     "label": {
       "font": "global",
       "size": 10,
@@ -18558,7 +18993,8 @@
         "speed": 13,
         "life": 5,
         "turnRate": 1.1,
-        "damage": 14
+        "damage": 14,
+        "blastRadius": 2.4
       },
       "spread": {
         "telegraph": 0.7,
@@ -18613,7 +19049,7 @@
   },
   "accessories": {
     "enabled": true,
-    "equipped": "accessoryCowboy",
+    "equipped": "accessoryWizard",
     "turnLerp": 6,
     "boneAlign": {
       "head_07": [
@@ -21673,7 +22109,65 @@
         "blockMin": 16,
         "blockRef": 34,
         "pierceMin": 6,
-        "pierceRef": 34
+        "pierceRef": 34,
+        "voice": {
+          "enabled": true,
+          "tapBelow": 0.26,
+          "smashAbove": 0.68,
+          "pitchSoft": 1.2,
+          "pitchHard": 0.82,
+          "decaySoft": 0.75,
+          "decayHard": 1.4,
+          "spinRef": 28,
+          "spinPitch": 0.07,
+          "spinRing": 0.55,
+          "skidSpin": 0.5,
+          "skidForce": 0.12,
+          "waterPitch": 0.88,
+          "waterRing": 1.2,
+          "airPitch": 1.06,
+          "airRing": 0.85,
+          "pitchMin": 0.6,
+          "pitchMax": 1.5,
+          "ringMin": 0.5,
+          "ringMax": 2.2
+        }
+      },
+      "spit": {
+        "enabled": true,
+        "minForce": 0.03,
+        "forcePow": 0.6,
+        "patch": 0.55,
+        "patchSoft": 0.45,
+        "patchJitter": 0.35,
+        "lift": 0.12,
+        "speedVary": 0.35,
+        "jetEmitter": "ballSpit",
+        "jetPuffsMin": 2,
+        "jetPuffsMax": 6,
+        "jetScaleMin": 0.45,
+        "jetScaleMax": 2.6,
+        "jetSpeedMin": 0.7,
+        "jetSpeedMax": 2.3,
+        "jetInherit": 1,
+        "jetFan": 0.55,
+        "jetWander": 0.3,
+        "washEmitter": "ballSpitWash",
+        "washPuffsMin": 1,
+        "washPuffsMax": 4,
+        "washScaleMin": 0.35,
+        "washScaleMax": 2,
+        "washSpeedMin": 0.5,
+        "washSpeedMax": 1.4,
+        "washInherit": 0.15,
+        "washFan": 0.9,
+        "washWander": 0.45,
+        "washSize": 1.15,
+        "sizeMin": 0.7,
+        "sizeMax": 1.25,
+        "maxParticles": 380,
+        "color": 14677759,
+        "tint": 0.35
       },
       "splats": {
         "core": 1.5,
@@ -21808,9 +22302,7 @@
             "sizeMul": 2.2,
             "speedMul": 2.1,
             "color": 14677759,
-            "tint": 0.35,
-            "burst": 14,
-            "burstMax": 26
+            "tint": 0.35
           },
           "width": 0.61,
           "growth": 1.95,
@@ -22280,5 +22772,5 @@
       }
     }
   },
-  "_savedAt": 1789616111100
+  "_savedAt": 1789621006781
 }

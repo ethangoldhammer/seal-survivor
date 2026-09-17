@@ -42,7 +42,9 @@ import { ballCredit, teamColor, heldColor, starterColor, ballLookState } from '.
 //   IT BUBBLES UNDERWATER. The swim trail is a filament, and a filament alone
 //   is a thin thing for an object with that much mass to leave. So the water
 //   profile also sheds bubbles from the same two points at the same drive —
-//   the `ballWake` emitter, tinted toward whoever owns the ball.
+//   the `ballWake` emitter, tinted toward whoever owns the ball. This is the
+//   ball TRAVELLING; what it spits when it is HIT is systems/ballSpit.js, out
+//   of the contact patch rather than off the back. See shedBubbles.
 //
 // WHY NOT A THIRD PROFILE INSIDE breachTrail.js. Its two profiles are one
 // animal above and below the line; a ball is a different body with a different
@@ -257,50 +259,29 @@ let bubbleDebt = 0;
 // to prove the bubbles are being asked for at all.
 let bubblesFired = 0;
 
-// BUBBLES OWED TO AN IMPACT, over whatever the drive is shedding — see
-// burstBallBubbles. Banked rather than emitted on the spot so the burst comes
-// out of the same two sources, in the same team tint, through the same
-// emitter as the trail's own: a hit should make the ball's OWN bubbles boil,
-// not add a second effect beside them.
-let bubbleBurst = 0;
-
-/**
- * A HIT PUFFS BUBBLES. `force` is 0..1 of the hardest thing that happens to
- * this ball — the same figure ballImpactFx rides — and it buys
- * `bubbles.burst` of them at 1.
- *
- * Spent on the next frame of the trail rather than here, because here has no
- * sources: where a bubble is born is the two points the ribbon is being drawn
- * from, and those are solved once a frame from the drawn edge. A burst owed
- * while the ball is stationary is still paid — the drive gate below is about
- * the CONTINUOUS shedding, and a ball smacked while sitting still is exactly
- * the case that should boil.
- */
-export function burstBallBubbles(force = 1) {
-  const b = CONFIG.versus?.ball?.trail?.water?.bubbles ?? {};
-  if (b.enabled === false) return 0;
-  const n = Math.max(0, b.burst ?? 0) * Math.max(0, Math.min(1, force));
-  if (!(n > 0)) return 0;
-  bubbleBurst = Math.min(b.burstMax ?? 24, bubbleBurst + n);
-  return n;
-}
+// THE IMPACT'S BURST USED TO BE PAID HERE, and it is worth saying why it is
+// not any more. It was banked and spent on the next frame of the trail, so it
+// came out of these same two sources in the same tint through the same emitter
+// — a hit made the ball's OWN bubbles boil rather than adding a second effect
+// beside them, which was the right instinct and the wrong place.
+//
+// The sources are dead ASTERN of the heading. That point can say how fast the
+// ball is going and nothing else: not where on the body it was struck, not
+// which way the impulse went, not who hit it. All three of those are what an
+// impact is, and none of them survives being drawn from the back of the ball a
+// frame later. systems/ballSpit.js owns it now, fired from the contact patch on
+// the frame of the touch. This file is the WAKE again, and only that.
 
 function shedBubbles(dt, sources, ball, c, drive, split) {
   const b = c.bubbles ?? {};
-  if (b.enabled === false) { bubbleDebt = 0; bubbleBurst = 0; return; }
+  if (b.enabled === false) { bubbleDebt = 0; return; }
   // The drive's own shedding, and only it, is what a still ball stops doing.
   if (drive > 0) bubbleDebt += (b.perSecond ?? 14) * drive * dt;
   else bubbleDebt = 0;
-  // The impact's, paid whatever the ball is doing — and paid in FULL on the
-  // frame it is owed rather than dribbled out under the per-frame cap, which
-  // is the difference between a ball that boils when it is hit and one that
-  // fizzes for a moment afterwards.
-  const owed = Math.floor(bubbleBurst);
-  bubbleBurst -= owed;
   let n = Math.floor(bubbleDebt);
-  if (n <= 0 && owed <= 0) return;
-  if (n > 0) bubbleDebt -= n;
-  n = Math.min(Math.max(0, n), 6) + owed;
+  if (n <= 0) return;
+  bubbleDebt -= n;
+  n = Math.min(n, 6);
   if (n <= 0) return;
 
   const mix = Math.max(0, Math.min(1, b.tint ?? 0));
@@ -410,18 +391,16 @@ export function updateBallTrail(dt, scene, ball, opts = {}) {
   });
 
   if (!airborne && emitting) shedBubbles(dt, sources, ball, w, drive, split);
-  // Out of the water there is nothing to bubble, and an impact's burst owed up
-  // there is FORGOTTEN rather than banked: paying it on splashdown would put a
-  // volley's worth of foam on the frame the ball re-enters, which is a frame
-  // that already has its own event.
-  else { bubbleDebt = 0; bubbleBurst = 0; }
+  // Out of the water there is nothing to bubble, and the debt does not carry:
+  // paying it on splashdown would put a lob's worth of foam on the frame the
+  // ball re-enters, which is a frame that already has its own event.
+  else bubbleDebt = 0;
 }
 
 /** Tear both trails down — kickoff, a goal, the end of a match, the lab's R. */
 export function clearBallTrail(scene) {
   for (const profile of PROFILE_LIST) clearRig(profile, scene);
   bubbleDebt = 0;
-  bubbleBurst = 0;
   bubblesFired = 0;
   dirX = 1;
   dirY = 0;

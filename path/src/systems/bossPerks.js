@@ -1474,6 +1474,17 @@ export function fireBossShot(scene, {
   // the caller because the two callers get it from different places — the perk
   // banks it at attach, the boat is handed it per frame.
   difficulty = 0,
+  // HOW MUCH BIGGER THIS SHOT IS THAN ITS GUN'S ROW SAYS — body and hitbox
+  // together, spent in spawnProjectile's `swell`. 1 for every gun in the table
+  // above and for the trawler; the yacht's ordnance rides a ramp (see
+  // CONFIG.enemies.bossYacht `shotSwell` and gunFor in systems/bossBoat.js).
+  //
+  // DELIBERATELY NOT ON THE BLAST. `blastRadius` is a pattern's number and it
+  // is what the damage reaches — a swell that quietly widened it would be a
+  // rebalance riding a size change, which is the same line gunFor draws. A
+  // bigger bomb going off in the same circle is the honest reading: what grew
+  // is the thing you can see and shoot at.
+  swell = 1,
 }) {
   _shotDir.set(dirX, dirY, 0);
   const es = CONFIG.enemyShot ?? {};
@@ -1496,6 +1507,7 @@ export function fireBossShot(scene, {
     life: flight,
     hp,
     radius: gun.radius,
+    swell,
     asset: gun.asset,
     scale: gun.scale,
     orient: gun.orient,

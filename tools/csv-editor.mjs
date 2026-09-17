@@ -432,6 +432,16 @@ const DOCS = {
     repeat: 'Seconds before a warning may say itself AGAIN while its condition is still true. Blank = say it once per crossing and then stay quiet until the trouble clears and comes back. Ignored on a tip — those never repeat.',
     arrow: 'What the arrow points at while this line is up. Two of them name a THING and can come up empty, because it can be eaten or expire mid-sentence: `chum` is the nearest bite, `pickup` is the nearest orb OF THIS ROW\'S OWN KIND (the row id names it, which is why there is one arrow value for five pickup tips rather than five). The other two name a DIRECTION and always answer: `surface` is straight up out of the water, `seabed` straight down at the floor. Blank is no arrow, which is most rows.',
   },
+  'loadTips.csv': {
+    id: 'A short handle for the row. Never shown to the player \u2014 it exists so a reworded tip keeps its identity in a diff. Nothing in code joins on it, so a new tip is just a new row.',
+    text: 'The tip itself, one line above the bar on the loading screen, and the fallback for any device below with nothing of its own. May name a control with a `{token}` \u2014 `{clap}` becomes whatever clap is bound to right now, so a rebind cannot make the line lie. A row carrying a key token needs the two columns beside it filled, or a phone is told to press a key it does not have.',
+    textTouch: 'What to say instead on a touchscreen. Blank uses `text`. Fill it in wherever the line names a control \u2014 there is no keyboard and, for the clap, no button at all: a thumb taps the seal.',
+    textPad: 'What to say instead on a controller. Blank uses `text`. `{faceLeft}` becomes what THIS pad calls the left of its four face buttons and `{bumper}` its shoulders, so neither a rebind nor a change of controller can make the line lie.',
+    devices: 'Which devices this tip exists on at all \u2014 space-separated `kbm`, `touch`, `pad`. Blank is all of them, which is most rows. Use it for a tip that is about a control one device simply does not have, rather than writing three versions of a sentence that only makes sense on one.',
+    enabled: 'FALSE takes it out of rotation. Blank means enabled.',
+    weight: 'Likelihood relative to the other rows \u2014 but on this screen it decides ORDER rather than frequency. A boot shows most of the table, shuffled, before any tip repeats, so a heavier row is one that comes up EARLY. Blank = 1, 0 is never shown.',
+    notes: 'The brief. Free text \u2014 nothing reads it.',
+  },
   'bossNames.csv': {
     id: 'A short handle for the row. Never shown to the player — it exists so a reworded part keeps its identity in a diff.',
     slot: 'Which PART of the name this is: prefix ("Gore") + root ("maw") make the name, epithet ("the Devourer") follows it. A nickname is a WHOLE name ("Ol\' Chompy") that replaces the prefix and root together — the way to hand-write a name the machine could never assemble. A solo name is a nickname that takes no epithet either: the cell is the entire name, the way a ship\'s name is complete on its own. Any other value is ignored, loudly.',
@@ -558,6 +568,7 @@ const BLANK_MEANS = {
   'flags.csv': { enabled: 'enabled', weight: '1', hulls: 'the general pool', notes: '\u2014' },
   'unlocks.csv': { enabled: 'enabled', count: '1 (once)', notes: '\u2014' },
   'callouts.csv': { enabled: 'enabled', anchor: 'band', priority: '0 (last)', hold: 'the panel default', repeat: 'never repeats', arrow: 'no arrow' },
+  'loadTips.csv': { enabled: 'enabled', weight: '1', devices: 'every device', textTouch: 'says what `text` says', textPad: 'says what `text` says', notes: '\u2014' },
   'bossNames.csv': { enabled: 'enabled', weight: '1', notes: '—', bosses: 'any boss', perk: 'general pool' },
   'bosses.csv': { enabled: 'enabled', weight: '1', sizeMul: '1 (unscaled)', minLevel: '0 (from the first)', ownNames: 'shares the pool', perkBias: 'rolls flat', perkBiasLevel: '0 (from the first)', perkBiasChance: '1 (always)', notes: '—' },
   'bossPerks.csv': { enabled: 'enabled', weight: '1', notes: '—', cooldown: 'unused', windup: 'unused', duration: 'unused', speed: 'unused', radius: 'unused', range: 'any range', count: '1', mul: '1', damage: 'unused', attack: 'the old colour' },
@@ -706,6 +717,12 @@ export const TABLES = [
     label: 'Warnings & tips',
     blurb: 'What the game SHOUTS: the four warnings that fire whenever you are in trouble, and the five first-run tips that fire once each per device and then never again. Rewording a line is free; the `id` joins to the code that fires it, so a new row needs a condition to go with it.',
     addRows: false,
+  },
+  {
+    file: 'path/src/loadTips.csv',
+    label: 'Loading tips',
+    blurb: 'The quick tips that rotate above the bar while the game boots \u2014 the one stretch where the player is looking straight at the glass with nothing to do. A POOL, unlike the warnings above: the `id` joins to nothing, so new lines are just new rows. Every tip is shown once, shuffled, before any of them comes round again. A tip that names a button carries the same three wordings a callout does, because "press E" is nonsense held in two hands.',
+    addRows: true,
   },
   {
     file: 'path/src/bosses.csv',

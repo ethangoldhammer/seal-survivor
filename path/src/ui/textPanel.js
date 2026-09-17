@@ -6,6 +6,12 @@ import { previewToasts, popupPose, previewScreen, previewScreenNames } from './u
 import { isTypingTarget } from './typing.js';
 import { CALLOUTS, resolveCalloutText } from '../systems/callouts.js';
 import { DEVICES } from '../devices.js';
+// The loading screen's tips are the second table with a role over it — read
+// live for the same reason the callouts are, and resolved the same way so a
+// tip naming a control sets the words rather than a brace.
+import { LOAD_TIPS } from '../loadTipTable.js';
+import { textForDevice } from '../deviceText.js';
+import { fillBindings } from '../systems/bindingText.js';
 // The table itself, not uiText(): a role's `sampleFrom` is an id held in data,
 // and npm run test:uitext refuses a uiText() call whose id is not a literal.
 // Read straight off the table, a missing row is the id — the same fallback.
@@ -35,6 +41,12 @@ import { joinSealName } from '../sealNameTable.js';
 const SECTIONS = [
   ['Global', '#7ad7ff'],
   ['Screens', '#ffc46b'],
+  // The two lines on the loading screen. Its own section rather than a pair of
+  // rows under Screens because it is not one: it is the surface that is up
+  // BEFORE any of them, drawn by a module that has no assets, no WebGL and no
+  // .sv-ui around it. Keeping it separate is also the reminder that changing
+  // these is the one type decision a player sees before the game has loaded.
+  ['Loading', '#9fb4ff'],
   ['HUD', '#4fe0c0'],
   ['Upgrade cards', '#c9a6ff'],
   ['Popups', '#ff8fb1'],
@@ -441,22 +453,38 @@ function sampleFor(role) {
     const row = UI_TEXT[role.sampleFrom];
     return fillName(row ?? role.sampleFrom);
   }
+  // THE LOADING TIP, whose table is loadTips.csv rather than callouts.csv. Same
+  // rule and the same reason as the three below it — the longest line the role
+  // will ever be asked to set, across every device's wording — with one
+  // difference: this role has no hand-typed `sample` to fall back to, because
+  // a stand-in here would be a line of the game's voice living in a source
+  // file. An unparseable table shows the role's own label, which is
+  // unmistakably not a tip.
+  if (role.key === 'loadTip') {
+    return longestOf(LOAD_TIPS, (row, device) => fillBindings(textForDevice(row, device)))
+      || role.label;
+  }
   const wants = ROLE_ROWS[role.key];
   if (!wants) return fillName(role.sample);
-  let best = '';
-  for (const row of CALLOUTS.values()) {
-    if (!wants(row)) continue;
-    for (const device of DEVICES) {
-      // Resolved, so a line naming a control sets the words the player
-      // would actually read rather than a brace and a token name.
-      const text = resolveCalloutText(row, device);
-      if (text.length > best.length) best = text;
-    }
-  }
+  const best = longestOf([...CALLOUTS.values()].filter(wants), resolveCalloutText);
   // A table that failed to parse falls back to the hand-typed line rather than
   // to an empty specimen — a blank row in here reads as the role being broken,
   // which is a worse lie than a short sample.
   return best || role.sample;
+}
+
+// The longest line a set of rows can produce, across every device's wording.
+// A specimen is for designing against the worst case, and the worst case for a
+// role is the longest string it will ever be asked to set.
+function longestOf(rows, resolve) {
+  let best = '';
+  for (const row of rows) {
+    for (const device of DEVICES) {
+      const text = resolve(row, device);
+      if (text.length > best.length) best = text;
+    }
+  }
+  return best;
 }
 
 function buildSpecimen() {

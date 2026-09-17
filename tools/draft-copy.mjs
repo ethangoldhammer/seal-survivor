@@ -65,6 +65,10 @@ export const COPY_COLUMNS = {
   'upgrades.csv': ['name', 'desc', 'weaponName', 'weaponNameLaser'],
   'tips.csv': ['label', 'desc'],
   'callouts.csv': ['text', 'textTouch', 'textPad'],
+  // The quick tips that rotate on the loading screen. Same three columns as
+  // callouts.csv and for the same reason — a tip that names a control has to
+  // say something else to a thumb and to a pad — so all three are copy.
+  'loadTips.csv': ['text', 'textTouch', 'textPad'],
   'epitaphs.csv': ['text'],
   'greetings.csv': ['text'],
   'kickers.csv': ['text'],

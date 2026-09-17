@@ -82,7 +82,7 @@ import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeEnglish } from './systems/strike.js';
-import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip } from './systems/strike.js';
+import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip, chargeEnvelope, chargeEnvelopeTop } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -181,7 +181,8 @@ import { censusReport, censusLine, canvasBytes } from './systems/memoryCensus.js
 import { updateBeams, resetBeams } from './systems/beams.js';
 import { updateLaserEyes, setLaserAim, resetLaserEyes } from './systems/laserEyes.js';
 import { updateBubbleJet, updateJets, resetBubbleJet, setJetStats } from './systems/bubbleJet.js';
-import { setJetBedsMuted, startJetBed, releaseJetBed } from './systems/jetBed.js';
+import { setJetBedsMuted, startJetBed, releaseJetBed, driveJetBed } from './systems/jetBed.js';
+import { chokeSfx } from './systems/audio.js';
 import { updateBurnGlow, resetBurnGlow } from './systems/burnGlow.js';
 import { createEyeLights, updateEyeLights, resetEyeLights, applyEyeLightColours, flareEyeLights } from './systems/eyeLights.js';
 import { updateAccessories } from './systems/accessories.js';
@@ -465,6 +466,10 @@ let chargeHapticTimer = 0; // counts down between wind-up rumble pulses
 // without reaching into the engine's internals every frame.
 const CHARGE_BED_KEY = { charge: true };
 let chargeBedOpen = false;
+// The button's own edge, kept separately from `chargeBedOpen` because the bed
+// can refuse to open (audio still locked, the block disabled) and the sound on
+// `strikeCharging` must still fire and still be choked when it does.
+let chargeSoundWasOn = false;
 
 // ONE PIP SPENT, DURING THE HOLD THAT SPENDS IT — the run of blips that climbs
 // across a wind-up and counts the player in to "STRIKE NOW!".
@@ -684,6 +689,15 @@ async function boot() {
   // its best case still LOOKS like the app restarting itself, because the
   // seconds a resumed player sits through are the same seconds a cold boot
   // takes and nothing on screen distinguishes them.
+  // BEFORE THE BAR GOES UP, and that is the whole reason this call is here
+  // rather than only down with the rest of the UI. The loading screen's two
+  // lines are ordinary Text panel roles now (`loadTip`, `loadCaption` in
+  // textRoles.js), and a role is a rule in a stylesheet this writes — so
+  // running it three hundred lines later meant the first type anybody sees was
+  // the one surface in the game the panel could not reach, hard-coded to Inter
+  // in ui/loading.js. It is idempotent by design (see ensureSheet), so the
+  // call further down stays exactly where it was and costs nothing.
+  initTypography();
   const loading = showLoading({ resuming: !!pendingResume });
   // Assets are the first two thirds of the bar and the shader warm-up is the
   // last third. Not a measurement — the split is a judgement about which half
@@ -946,6 +960,40 @@ async function boot() {
       // just put it away, since there is no match to walk into from here.
       show: () => showTeamSelect({ parent: uiRoot(), onStart: hideTeamSelect, onBack: hideTeamSelect }),
       hide: hideTeamSelect,
+    });
+    // THE LOADING SCREEN, which is the one surface you otherwise cannot get
+    // back to: it comes down at the end of boot and the only way to see it
+    // again is to reload, which closes the panel you were designing it in.
+    // Its two lines are roles now (`loadTip`, `loadCaption`), so the Text
+    // panel needs to be able to put it up like any other screen.
+    //
+    // PUT UP AS A RESUME, on purpose. The caption only exists on that branch,
+    // and a preview that shows half the type you came here to design is not
+    // worth picking — the cold boot is this screen minus one line, which you
+    // can read off the panel's own specimen strip.
+    //
+    // The bar is driven on a loop rather than parked: the tips rotate on their
+    // own timers, and judging how a line sits above a moving bar is the entire
+    // reason to look at the screen instead of at the specimen.
+    let loadingPreview = null;
+    let loadingRaf = 0;
+    registerPreviewScreen('loading', {
+      show: () => {
+        loadingPreview = showLoading({ resuming: true });
+        let t = 0;
+        const step = () => {
+          t = (t + 0.004) % 1.35;
+          loadingPreview?.setProgress(Math.min(1, t));
+          loadingRaf = requestAnimationFrame(step);
+        };
+        step();
+      },
+      hide: () => {
+        cancelAnimationFrame(loadingRaf);
+        loadingRaf = 0;
+        loadingPreview?.remove();
+        loadingPreview = null;
+      },
     });
   }
   if (DEV_UI) initTextPanel(handleTunerChange);
@@ -2344,6 +2392,15 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // it is a sound that never stops. Fast, because this is a cut and not a
   // release; the room is not the point when the run is over.
   if (chargeBedOpen) { releaseJetBed(CHARGE_BED_KEY, 0.05); chargeBedOpen = false; }
+  // ...and the riser with it, if one is assigned. A run that ended mid-hold
+  // leaves a sustained one-shot in the air with nothing left to choke it: the
+  // per-frame edge that normally does lives inside the run's own update, which
+  // does not run again for the seal that just died.
+  if (chargeSoundWasOn) {
+    const voice = CONFIG.feedback.strikeCharging?.sfx;
+    if (voice) chokeSfx(voice);
+    chargeSoundWasOn = false;
+  }
   // A run that ended pinned must not open the next one still ramping, and a
   // boss mid-lunge when the last run ended must not pay the new run's first
   // frame for a dodge nobody made.
@@ -7955,6 +8012,44 @@ function runFrame(now) {
       releaseJetBed(CHARGE_BED_KEY);
       chargeBedOpen = false;
     }
+    // THE WIND-UP IS ONE SOUND AND MANY PULSES, and those are two clocks.
+    //
+    // `strikeCharging` carries both: a rumble that has to be re-triggered on an
+    // interval (a motor can only be handed discrete pulses) and, if a file is
+    // assigned to it, a sustained thing that happens ONCE per wind-up. Fired
+    // together, a riser on that row was started fourteen times a second and
+    // every copy played to its end — a dozen overlapping risers, which is heard
+    // as a flanged smear rather than as a sound repeating. So the sound goes
+    // here, on the press, and the interval below asks for everything but it.
+    //
+    // ...AND IT IS CHOKED AT THE LET-GO, which is the other half. A riser's
+    // whole job is to be interrupted: left to finish it fights the moment it
+    // was building to, and fading it politely is worse than either, because the
+    // tail then sits under the sting saying the buildup has not noticed it
+    // landed. See chokeSfx, which is written for exactly this.
+    const chargeSoundOn = CONFIG.strike.enabled && input.strikeHeld && !deathState.active;
+    if (chargeSoundOn && !chargeSoundWasOn) {
+      feedback('strikeCharging', {
+        x: player.mesh.position.x, y: player.mesh.position.y,
+        scale: chargeEnvelope(strikeState.pending) * chargeEnvelopeTop(),
+      });
+    } else if (!chargeSoundOn && chargeSoundWasOn) {
+      const voice = CONFIG.feedback.strikeCharging?.sfx;
+      if (voice) chokeSfx(voice);
+    }
+    chargeSoundWasOn = chargeSoundOn;
+    // THE ENVELOPE, once, for everything that reads it. The shake, the rumble
+    // and the held voice are the same fact in three channels; read separately
+    // they drift the first time one of them is retuned, and a seal that shakes
+    // on one curve and sounds on another does not read as a bug, it reads as
+    // the feel being slightly off.
+    const chargeEnv = chargeEnvelope(strikeState.pending);
+    // HANDED OVER EVERY FRAME THE BED IS OPEN, and not only while `charging`.
+    // The two differ for the whole back half of a wind-up — charging goes false
+    // when the tank runs dry and the button stays down through "STRIKE NOW!" —
+    // and a bed that stopped being driven there would freeze at whatever level
+    // it happened to reach and sit on it until the release.
+    if (chargeBedOpen) driveJetBed(CHARGE_BED_KEY, chargeEnv);
     if (strikeState.charging) {
       addSustainedShake(CONFIG.strike.charge.shake * strikeState.pending);
       chargeHapticTimer -= dt;
@@ -7962,7 +8057,16 @@ function runFrame(now) {
         chargeHapticTimer = CONFIG.strike.charge.hapticInterval;
         feedback('strikeCharging', {
           x: player.mesh.position.x, y: player.mesh.position.y,
-          scale: 0.35 + strikeState.pending * 1.1,
+          // THE MOTOR KEEPS THE RANGE IT WAS TUNED AT. `chargeEnv` is
+          // normalised because something maps it onto a gain now, and the
+          // rumble's scale has always been the raw curve — which tops out at
+          // 1.45, not 1. Handing it the normalised one would have taken a
+          // third off the strongest rumble in the game as a side effect of a
+          // change about sound.
+          scale: chargeEnv * chargeEnvelopeTop(),
+          // EVERYTHING BUT THE SOUND. This is the rumble's clock; the sound
+          // fired once on the press above and is still going.
+          sfxSkip: true,
         });
       }
     } else {
@@ -10381,11 +10485,28 @@ function runFrame(now) {
   // are pointing RIGHT NOW, and a hit-stop must not freeze it a frame behind
   // the cursor. The guns run themselves, so this reads autofire rather than a
   // trigger — otherwise the beam would sit at idle opacity for a whole run.
-  updateAimIndicator(
-    realDt, player.mesh.position, input.aim,
-    CONFIG.weapon.autofire,
-    gameState.running && !gameState.paused,
-  );
+  //
+  // NOT OVER A REPLAY. A replay is footage of something that already happened
+  // and the seal in it is posed from the tape, so a beam drawn from the LIVE
+  // aim would be the one thing on screen answering the cursor — an interface
+  // element loose in a piece of film. This covers the instant replay, every
+  // clip of the highlight reel and the lab's staged shot alike: all three open
+  // the same span (systems/versus.js), which is what replayHoldsInput reads.
+  //
+  // reset rather than a `running: false`, which is the whole point of doing it
+  // here: the gate inside the indicator FADES over `aimIndicator.fade`, and a
+  // replay opens on a hard camera cut. A tenth of a second of beam dissolving
+  // over the first shot is exactly the artefact this is removing. Coming back
+  // out it fades up from zero as usual, because that edge has no cut on it.
+  if (replayHoldsInput()) {
+    resetAimIndicator();
+  } else {
+    updateAimIndicator(
+      realDt, player.mesh.position, input.aim,
+      CONFIG.weapon.autofire,
+      gameState.running && !gameState.paused,
+    );
+  }
   // The eyes. Real time and outside the pause gate, like the ring and the
   // indicator above: they are a readout of a head that is still pointing
   // somewhere, and a hit-stop that froze them would read as the seal having

@@ -82,6 +82,9 @@ export const boatState = {
   // through it is, 0..1.
   turnTo: null,
   turnT: 1,
+  // HOW MUCH BIGGER THIS HULL'S ORDNANCE IS THAN ITS GUN ROW SAYS. Banked at
+  // attach and never re-derived — see swellFor.
+  shotSwell: 1,
 };
 
 const _origin = new THREE.Vector3();
@@ -114,6 +117,7 @@ export function resetBossBoat(scene, exploded = false) {
     o.material?.dispose?.();
   }
   owned = [];
+  boatState.shotSwell = 1;
   // THE DECK GOES FIRST, while the hull it is measured against is still where
   // it was. goLimp hands each figure from the boat to the scene with `attach`,
   // which composes the boat's transform out — do it after the mesh has been
@@ -160,10 +164,40 @@ export function resetBossBoat(scene, exploded = false) {
  * the first update rather than here — `bounds.surfaceY` is the same number
  * either way, and doing it in one place means the pin cannot be half-applied.
  */
-export function attachBossBoat(scene, e) {
+/**
+ * HOW BIG THIS HULL'S SHELLS ARE, as a multiple of what their gun row draws.
+ *
+ * Read off the def like `ordnance` is, so this file still is not told which
+ * hull it has: a boat whose row says nothing throws its gun's own size, which
+ * is every barrel the trawler has ever dropped. The yacht says something —
+ * CONFIG.enemies.bossYacht `shotSwell` — because a roll of hundreds is the one
+ * shot in the game whose whole joke is how much of it there is, and at the
+ * barrel's 0.5 it was reading as a cork.
+ *
+ * READ ONCE, AT ATTACH, exactly as attachBossCrab resolves its volley's damage
+ * and attachBossPerk resolves a perk's: what a shell is is a fact about this
+ * fight. Derived per shot from a level that moves during the fight, the player
+ * would watch the ordnance grow between volleys — which is not a difficulty
+ * ramp, it is the picture changing while they are reading it.
+ *
+ * `from` is the level the ramp is measured from rather than 1, so `base` is
+ * what the first yacht a run ever sees actually throws: the two boats share a
+ * minLevel and nobody meets this boss at level 1, so a ramp anchored there
+ * would make `base` a number that never appears on screen.
+ */
+function swellFor(e, level = 0) {
+  const s = e?.def?.shotSwell;
+  if (!s) return 1;
+  const base = s.base ?? 1;
+  const over = Math.max(0, (level ?? 0) - (s.from ?? 0));
+  return Math.min(s.max ?? Infinity, base + over * (s.perLevel ?? 0));
+}
+
+export function attachBossBoat(scene, e, level = 0) {
   resetBossBoat(scene);
   if (!isBoatBoss(e)) return;
   boatState.boat = e;
+  boatState.shotSwell = swellFor(e, level);
   // IT SAILS IN, BUT NOT UNDERWATER. `entering` is raised on every spawn and
   // routes the creature through clampVertical, which pins it a full radius
   // BELOW the waterline until it is inside the side walls — on a hull four
@@ -589,12 +623,26 @@ export function updateBossBoat(dt, scene, playerPos, hooks = {}) {
  * nothing here changes. A def that says nothing gets the trawler's barrel,
  * which is the whole of what the trawler's row has to say on the subject.
  *
- * WHAT IT DELIBERATELY CANNOT REACH: damage, speed, fuse, blast radius, count
- * and spread all come from CONFIG.bossBoat.patterns and are not in this merge.
+ * WHAT IT DELIBERATELY CANNOT REACH: damage, speed, fuse length, blast radius,
+ * count and spread all come from CONFIG.bossBoat.patterns and are not in this
+ * merge.
  * A hull that could retune those would be a rebalance wearing a look change,
  * and the two yachts-are-trawlers guarantees in bosses.csv would quietly stop
  * being true. Only `radius` moves with the art, and only because a shot the
  * player can be hit by has to be the size of the thing they can see.
+ *
+ * TWO THINGS DO CROSS THAT LINE NOW, and both are named rather than merged, so
+ * the narrowness above still holds:
+ *
+ *   `fuse`   whether the shot DETONATES at all. The trawler's seeker is a
+ *            missile that hits you; the yacht's is a bundle of money that comes
+ *            apart. That is a real difference in the fight and it is the one
+ *            the hull is allowed to have, because everything the blast is WORTH
+ *            still comes out of the pattern row (`blastRadius`, `damage`) and
+ *            nothing here can move it.
+ *   `swell`  how big the body is — see swellFor. The hitbox goes with it,
+ *            which cuts both ways: a bigger shell is harder to be missed by and
+ *            easier to shoot out of the water.
  */
 function gunFor(e, id) {
   const base = bossGun(id);
@@ -654,6 +702,7 @@ function fire(scene, e, playerPos, p) {
       speed: p.speed ?? 9,
       life: fuse,
       blastRadius: p.blastRadius ?? 3.2,
+      swell: boatState.shotSwell,
       source: 'boss:boatRain',
     });
     return 1;
@@ -683,6 +732,13 @@ function fire(scene, e, playerPos, p) {
         life: p.life ?? 5,
         turnRate: p.turnRate ?? 1.1,
         chase: player,
+        // A SEEKER ONLY GOES OFF IF ITS HULL SAYS SO — `fuse` on the gun, which
+        // the yacht's `ordnance` sets and the trawler's does not. The number is
+        // handed over either way: a blast radius sitting unused on a pattern
+        // row is a great deal clearer than one that has to be added back in the
+        // day somebody wants the trawler's missiles to detonate too.
+        blastRadius: p.blastRadius ?? 2.4,
+        swell: boatState.shotSwell,
         source: 'boss:boatSalvo',
       });
     }
@@ -712,6 +768,7 @@ function fire(scene, e, playerPos, p) {
       speed: p.speed ?? 11,
       life: p.fuse ?? 1.6,
       blastRadius: p.blastRadius ?? 2.8,
+      swell: boatState.shotSwell,
       source: 'boss:boatSpread',
     });
   }

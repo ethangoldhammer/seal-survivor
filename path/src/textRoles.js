@@ -213,6 +213,48 @@ export const TEXT_ROLES = [
     sample: 'Posting your run…',
     style: { font: FONT_GLOBAL, size: 11, weight: 400, tracking: 0.03, case: 'as typed', useInk: true, color: 0xe8ecf3, alpha: 0.5, shadow: 0, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
 
+  // --- the loading screen: the first type anybody sees ---------------------
+  // THE ONLY SURFACE THAT IS UP BEFORE THE GAME EXISTS, which is why these two
+  // were hard-coded Inter in ui/loading.js for as long as that screen has had
+  // words on it: the Text panel's sheet is written by initTypography, and that
+  // used to run three hundred lines of boot AFTER the bar went up. It runs
+  // first now (see boot() in main.js), so the loading screen wears the game's
+  // face like everything else and these are ordinary rows.
+  //
+  // loading.js still carries the LAYOUT for both — where the line sits, how
+  // wide it may be, the height reserved for a second line, the crossfade — and
+  // none of the type. Its stylesheet is inserted BELOW the role sheet
+  // (installStyleBelowRoles' rule, applied by hand there because the screen
+  // builds and removes its own <style>), so a declaration that overlapped
+  // would beat the panel silently. Keep them disjoint.
+  //
+  // `sample` is absent on the tip on purpose: its words are loadTips.csv, read
+  // live by the panel the same way the warning band reads callouts.csv, and a
+  // hand-typed stand-in here would be a line of the game's voice written in a
+  // source file. The caption's is `sampleFrom`, one row of uiText.csv — the
+  // line the player actually reads on a resumed boot.
+  //
+  // A DARK SHADOW AND FULL ALPHA, unlike the rest of the Screens block, and
+  // both were measured rather than chosen. Every other menu role sits on a
+  // panel; these two sit on open water at the top of the boot with the retro
+  // treatment's own 14px halo over them (CONFIG.typography.retro is on). At
+  // 0.88 alpha and no shadow the tip was a smudge with no letterforms in it —
+  // a long line spread over 480px, where the caption's short dense word
+  // survives the same halo because its glyphs reinforce each other. The dark
+  // pass under the glow is what holds the edges. Judged on npm run looks:loading,
+  // which renders this file's values through the real module.
+  { key: 'loadTip', label: 'Loading tip', selector: '.sv-load-tip-line', section: 'Loading',
+    style: { font: FONT_GLOBAL, size: 15, weight: 500, tracking: 0.01, case: 'as typed', useInk: false, color: 0xceeafc, alpha: 1, shadow: 8, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+  // The resume line under the bar. Its own role rather than a size on the tip:
+  // the two are different registers on one screen — the tip is the thing you
+  // are meant to read, the caption is the screen saying what it is doing — and
+  // the whole design of that screen is that a resumed boot and a cold one are
+  // one composition with one line of difference. Tuning them together would
+  // make it impossible to widen that difference.
+  { key: 'loadCaption', label: 'Loading caption', selector: '.sv-load-cap', section: 'Loading',
+    sampleFrom: 'loadResuming',
+    style: { font: FONT_GLOBAL, size: 13, weight: 500, tracking: 0.02, case: 'as typed', useInk: false, color: 0x7ad7ff, alpha: 0.72, shadow: 6, glow: 0, scan: 0, scanGap: 3, scanGlow: 0 } },
+
   // --- the HUD: read at a glance, mid-fight --------------------------------
   { key: 'label', label: 'HUD label', selector: '.sv-label', section: 'HUD',
     sample: 'Score',

@@ -497,6 +497,38 @@ section('The panel');
   const titleSample = panel.querySelector('.sv-txp-spec .sv-title');
   check('a specimen wears the real class', !!titleSample);
 
+  // THE TWO ROLES WHOSE WORDS ARE IN A SPREADSHEET, read live. The loading
+  // tip's specimen is the LONGEST line in loadTips.csv, resolved, because a
+  // specimen is for designing against the case that decides the type — and it
+  // has no hand-typed fallback in textRoles.js on purpose, so a stale string
+  // in a source file cannot be what the panel shows. The caption's is one row
+  // of uiText.csv, which is the line the player actually reads.
+  {
+    const { LOAD_TIPS } = await import('../path/src/loadTipTable.js');
+    const { textForDevice } = await import('../path/src/deviceText.js');
+    const { fillBindings } = await import('../path/src/systems/bindingText.js');
+    const { DEVICES } = await import('../path/src/devices.js');
+    const { UI_TEXT } = await import('../path/src/uiTextTable.js');
+    let longest = '';
+    for (const row of LOAD_TIPS) {
+      for (const device of DEVICES) {
+        const text = fillBindings(textForDevice(row, device));
+        if (text.length > longest.length) longest = text;
+      }
+    }
+    const tipSample = panel.querySelector('[data-role="loadTip"] .sv-txp-sample');
+    check('the loading tip specimen comes from loadTips.csv',
+      !!tipSample && tipSample.textContent === longest, `"${tipSample?.textContent}"`);
+    // A brace here means the specimen is showing a token where the player sees
+    // a key — the panel would be sizing the role against the wrong string.
+    check('...with its control tokens spent', !/[{}]/.test(tipSample?.textContent ?? ''),
+      tipSample?.textContent);
+    const capSample = panel.querySelector('[data-role="loadCaption"] .sv-txp-sample');
+    check('the loading caption specimen comes from uiText.csv',
+      !!capSample && capSample.textContent === UI_TEXT.loadResuming,
+      `"${capSample?.textContent}" vs "${UI_TEXT.loadResuming}"`);
+  }
+
   // Clicking a line opens that role's controls — and the SECTION above it,
   // since a group opened inside a collapsed section is open and invisible.
   const chainLine = panel.querySelector('[data-role="chain"]');
