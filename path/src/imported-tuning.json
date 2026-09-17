@@ -12201,174 +12201,6 @@
       "neckCounter": 0.55
     }
   },
-  "celebrate": {
-    "enabled": true,
-    "chance": 0.7,
-    "peakLead": 0.03,
-    "hold": 0.35,
-    "release": 0.5,
-    "blendFrom": 1,
-    "blendSpan": 0.5,
-    "follow": 0.25,
-    "momentum": {
-      "enabled": true,
-      "speedRef": 34,
-      "drag": 0.35,
-      "lift": 0.1,
-      "turnRef": 4,
-      "bank": 0.3,
-      "smoothing": 8
-    },
-    "weights": {
-      "clap": 1.4,
-      "finsUp": 1.2,
-      "flip": 1,
-      "tailWag": 0.9,
-      "headToss": 1
-    },
-    "ik": {
-      "iterations": 4,
-      "smoothing": 14,
-      "maxBend": 1.6,
-      "softness": 0.8,
-      "maxFold": 1.9,
-      "maxTwist": 0.7,
-      "tolerance": 0.01
-    },
-    "poses": {
-      "clap": {
-        "up": 0.32,
-        "fore": 0.5,
-        "open": 0.5,
-        "close": 0.08,
-        "beats": 1.5,
-        "bob": 0.08,
-        "headUp": 0.3,
-        "headFore": 0.85,
-        "follow": 0,
-        "blendFrom": 0
-      },
-      "finsUp": {
-        "up": 0.85,
-        "fore": 0.35,
-        "spread": 0.3,
-        "tremble": 0.04,
-        "trembleHz": 9,
-        "headUp": 0.45,
-        "headFore": 0.8,
-        "bubbles": {
-          "enabled": true,
-          "from": "mouth",
-          "rate": 1.5,
-          "scale": 0.9,
-          "bursts": [
-            {
-              "at": 1,
-              "count": 6,
-              "scale": 1.2
-            }
-          ]
-        }
-      },
-      "flip": {
-        "turns": 1,
-        "tuck": 0.35,
-        "tuckUp": 0.1,
-        "tuckFore": -0.25,
-        "bubbles": {
-          "enabled": true,
-          "emitter": "wakeBubbles",
-          "from": "fins",
-          "rate": 26,
-          "scale": 0.75,
-          "maxPerFrame": 4,
-          "bursts": [
-            {
-              "at": 0.2,
-              "count": 4,
-              "from": "tail",
-              "scale": 1.1
-            }
-          ]
-        }
-      },
-      "tailWag": {
-        "sweep": 0.95,
-        "beats": 2.25,
-        "fore": -0.85,
-        "finUp": 0.35,
-        "finFore": 0.15,
-        "finSpread": 0.45,
-        "headUp": 0.35,
-        "headFore": 0.8,
-        "bubbles": {
-          "enabled": true,
-          "emitter": "wakeBubbles",
-          "from": "tail",
-          "rate": 14,
-          "scale": 0.8
-        }
-      },
-      "headToss": {
-        "up": 0.8,
-        "fore": 0.35,
-        "finUp": -0.15,
-        "finFore": -0.35,
-        "finSpread": 0.5,
-        "bubbles": {
-          "enabled": true,
-          "from": "mouth",
-          "rate": 0,
-          "scale": 1.3,
-          "bursts": [
-            {
-              "at": 1,
-              "count": 12,
-              "scale": 1.4
-            }
-          ]
-        }
-      },
-      "salute": {
-        "browUp": 0.06,
-        "browFore": 0,
-        "browOut": 0.1,
-        "headUp": -0.2,
-        "headFore": 0.5,
-        "offUp": -0.22,
-        "offFore": -0.18,
-        "offSpread": 0.3,
-        "tailUp": -0.15,
-        "tailFore": -0.9,
-        "up": 0.5,
-        "fore": 0.6,
-        "spread": 0.16,
-        "follow": 0.1,
-        "faceWeight": 1,
-        "bubbles": {
-          "enabled": true,
-          "emitter": "breathBubbles",
-          "from": "mouth",
-          "rate": 2.5,
-          "scale": 0.8,
-          "bursts": [
-            {
-              "at": 0.95,
-              "count": 5,
-              "from": "mouth",
-              "scale": 1.15
-            }
-          ]
-        }
-      }
-    },
-    "escorts": {
-      "enabled": true,
-      "chance": 0.85,
-      "stagger": 0.09,
-      "jitter": 0.05
-    }
-  },
   "clap": {
     "enabled": true,
     "attack": 0.06,
@@ -13039,7 +12871,7 @@
       "type": "noise",
       "filter": 6400,
       "decay": 0.035,
-      "gain": 4.731512589614805,
+      "gain": 0.692589,
       "pitchVary": 0.3,
       "filterVary": 0.3,
       "srcs": []
@@ -14005,7 +13837,6 @@
       ],
       "decay": 0.07,
       "gain": 14.962356560944336,
-      "pitchVary": 0.15,
       "srcs": [
         "/sfx/EG_FlickPlop_11.mp3",
         "/sfx/EG_FlickPlop_10.mp3",

@@ -912,13 +912,29 @@ section('PARTICLE RELIEF FOLLOWS THE ADAPTIVE CONTROLLER');
   const spriteName = Object.keys(CONFIG.emitters).find((n) => !CONFIG.emitters[n].goo);
   const gooName = Object.keys(CONFIG.emitters).find((n) => CONFIG.emitters[n].goo);
 
+  // SEEDED, for the same reason the goo block below is: `rand(def.size, 0.15)`
+  // draws from the emitter's own size RANGE, and those ranges are wide — the
+  // bubble emitters span 0.07 to 0.18, a factor of 2.6. Averaged over the three
+  // particles a thinned burst produces against the six a full one does, that
+  // spread swamps the multiplier being measured: the check read 0.121 against
+  // 0.104 and called a 27% SHRINK a 16% growth, about one run in five.
+  //
+  // With one seed on both, the low burst's draws are the full burst's first
+  // three, so the only thing left between them is `reliefSize`.
+  const realRandom = Math.random;
+  const seeded = (n) => () => (n = (n * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const SEED = 0x9E3779B9;
+
+  Math.random = seeded(SEED);
   setParticleRelief(1);
   resetParticles();
   const fullIdx = burst(spriteName, 0, -2);
-  const fullSize = sizesOf(fullIdx).reduce((a, b) => a + b, 0) / Math.max(1, fullIdx.length);
+  const fullSizes = sizesOf(fullIdx);
+  const fullSize = fullSizes.reduce((a, b) => a + b, 0) / Math.max(1, fullIdx.length);
 
   // A machine at 1.0 must be bit-for-bit what it was before any of this
   // existed — the relief multiplies by exactly one there.
+  Math.random = seeded(SEED);
   setParticleRelief(1);
   resetParticles();
   const againIdx = burst(spriteName, 0, -2);
@@ -927,13 +943,25 @@ section('PARTICLE RELIEF FOLLOWS THE ADAPTIVE CONTROLLER');
 
   // At the resolution floor the burst is thinner and smaller, and BOTH move —
   // fill is count x area, so taking a little of each beats taking a lot of one.
+  Math.random = seeded(SEED);
   setParticleRelief(0.4);
   resetParticles();
   const lowIdx = burst(spriteName, 0, -2);
-  const lowSize = sizesOf(lowIdx).reduce((a, b) => a + b, 0) / Math.max(1, lowIdx.length);
+  const lowSizes = sizesOf(lowIdx);
+  const lowSize = lowSizes.reduce((a, b) => a + b, 0) / Math.max(1, lowIdx.length);
+  Math.random = realRandom;
   check('under relief the sprite burst is thinner', lowIdx.length < fullIdx.length,
     `${lowIdx.length} vs ${fullIdx.length}`);
-  check('...and its particles are smaller', lowSize < fullSize,
+  // PARTICLE FOR PARTICLE, not mean against mean: the two bursts hold different
+  // COUNTS, so their averages are over different draws even under one seed.
+  // Same index, same draw, and what is left is the multiplier — which is
+  // `relief ** reliefSizePow`, 0.4 ** 0.35 = 0.727, so this is an exact claim
+  // rather than "smaller on average".
+  const want = 0.4 ** (CONFIG.fx?.reliefSizePow ?? 0.35);
+  const ratios = lowSizes.map((v, i) => v / fullSizes[i]);
+  check('...and its particles are smaller', ratios.every((r) => Math.abs(r - want) < 1e-3),
+    `x${ratios.map((r) => r.toFixed(3)).join(', ')} against ${want.toFixed(3)}`);
+  check('...which is the relief curve, not a coincidence', lowSize < fullSize,
     `${lowSize.toFixed(3)} vs ${fullSize.toFixed(3)}`);
   // Thinning may make a burst sparse, never delete it.
   check('...but the burst still happens', lowIdx.length >= 1, `${lowIdx.length}`);

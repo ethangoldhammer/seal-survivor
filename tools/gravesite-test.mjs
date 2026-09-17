@@ -55,9 +55,20 @@ function check(name, pass, detail = '') {
  * A stand-in stone. A box, installed under the real asset key so createVisual
  * and hasModel behave exactly as they do in the game — see the header for why
  * it is kept this dumb.
+ *
+ * THE PROPORTIONS ARE THE REAL FILE'S, and that is not decoration. Anything
+ * this harness asserts about where a stone SITS is measured off this box, so a
+ * box with the wrong shape is a harness that measures a different animal — the
+ * same trap as every other stand-in in tools/. These three are
+ * public/models/graves/headstone.glb's own bounding box (14.749 x 93.657 x
+ * 64.013) normalised on its long axis, which is the axis `fit` scales. They
+ * were inverted here for a long time: a box 1 wide and 0.3 deep in model
+ * space, which orientationQuaternion turns into a stone THREE UNITS DEEP in
+ * the world against the real one's 0.87 — and depth is exactly what the seat
+ * now measures.
  */
 function installStandIn(key) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 0.3), new THREE.MeshBasicMaterial());
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.1575, 1, 0.6834), new THREE.MeshBasicMaterial());
   const root = new THREE.Object3D();
   root.add(mesh);
   return installModel(key, root);
@@ -281,6 +292,34 @@ console.log('\ndepth');
   CONFIG.gravesite.restZ = savedRest;
   check('a range dragged behind the floor is clamped, not obeyed', sunk.restZ > SEABED_Z,
     `restZ ${sunk.restZ}, floor ${SEABED_Z}`);
+
+  // ...AND THE CLAMP ABOVE IS NOT ENOUGH ON ITS OWN, which is the bug this
+  // pair exists to hold shut. `restZ` is the stone's ORIGIN and the range is
+  // clamped to an origin's clearance, but the stone has real depth: at the
+  // back of the shipped slab the headstone's own back face reached 0.24 units
+  // INSIDE the floor strip. Nothing showed, because the run's camera is
+  // orthographic and looks straight down -z, so the stone's front covered its
+  // own buried part exactly. A Blubberball goal replay is filmed from up to 77
+  // degrees off-axis and the plane cut the stone there, live, in a shot nobody
+  // could reproduce anywhere else in the project.
+  //
+  // MEASURED OFF THE BOX, not off `position.z`, because the whole failure was
+  // reasoning about the origin instead of the geometry hanging off it.
+  clearGraves();
+  const deepest = markDeathSite(scene, { x: 0, z: SEABED_Z + 0.2, name: 'BACK', cause: 'a crab' }, () => {});
+  settleYard();
+  const deepBox = new THREE.Box3().setFromObject(deepest.object);
+  check('the whole stone clears the floor strip, not just its origin', deepBox.min.z > SEABED_Z,
+    `back face ${deepBox.min.z.toFixed(3)}, floor ${SEABED_Z}`);
+  // Seating is measured from the AUTHORED depth every time, so the arena
+  // changes that re-seat the yard cannot walk a stone forward one call at a
+  // time — a drift that would be invisible until a yard several sessions old
+  // was standing in front of the play.
+  const seatedZ = deepest.object.position.z;
+  reseatGraves();
+  reseatGraves();
+  check('...and two re-seats do not walk it forward', Math.abs(deepest.object.position.z - seatedZ) < 1e-6,
+    `${seatedZ} -> ${deepest.object.position.z}`);
 
   clearGraves();
 }

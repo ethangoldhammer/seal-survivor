@@ -55,6 +55,14 @@ import {
 } from '../../path/src/systems/versus.js';
 import { poolState, resetPool } from '../../path/src/systems/replayCams.js';
 import { celebrationState } from '../../path/src/systems/celebrate.js';
+// THE GRAVEYARD AND THE BED IT STANDS IN. A match is played over the same
+// seabed a run is, so every replay frame has the yard in it — and the pool's
+// cameras are the only ones in the game that see those stones from anywhere
+// but dead-on. Nothing else in the project can look at that, which is the
+// whole reason they are here.
+import { scatterSeabed } from '../../path/src/systems/seabedScatter.js';
+import { recordGrave, plantGraves, updateGravesites, clearGraves } from '../../path/src/systems/gravesite.js';
+import { initGraveBeam, updateGraveBeam } from '../../path/src/systems/graveBeam.js';
 
 const q = new URLSearchParams(location.search);
 const shotListEl = document.getElementById('shotList');
@@ -250,6 +258,37 @@ function resize() {
   replayState.aspect = w / h;
 }
 resize();
+
+// --- the yard ----------------------------------------------------------------
+//
+// AFTER resize(), because a stone is seated against the live seabed and the
+// bed is scattered across the arena's own bounds — both are stale until the
+// walls have been built for a match's pitch.
+//
+// The names are LOREM on purpose. Nothing a player reads is written here (see
+// CLAUDE.md); this page needs text on a stone face only so the inscription is
+// something to look at, and lorem is the one kind of placeholder that cannot
+// be mistaken for a line somebody wrote.
+scatterSeabed(world.scene);
+// The beam injects itself into the stones' MATERIALS, which only exist once
+// the models are loaded — after the preload above, before anything is planted.
+initGraveBeam();
+clearGraves();
+// ACROSS THE WHOLE DEPTH SLAB, one stone per step of it, so the sheet shows
+// the front of the bed and the back of it in the same frame. A yard rolled at
+// random would answer a different question every reload.
+const YARD = CONFIG.gravesite?.restZ ?? [-3.8, -1.2];
+const YARD_N = Math.max(1, Math.floor(CONFIG.gravesite?.max ?? 6));
+for (let i = 0; i < YARD_N; i++) {
+  const f = YARD_N > 1 ? i / (YARD_N - 1) : 0;
+  recordGrave({
+    x: bounds.left + (bounds.right - bounds.left) * (0.16 + 0.68 * f),
+    z: YARD[0] + (YARD[1] - YARD[0]) * f,
+    name: 'Lorem Ipsum',
+    cause: 'dolor sit amet',
+  });
+}
+plantGraves(world.scene);
 
 // --- the canned goal ---------------------------------------------------------
 //
@@ -636,6 +675,12 @@ function render(rawDt) {
   // in a match: nothing draws it if this is skipped and the frame is a goal
   // with no ball in it.
   renderBall();
+  // Wall clock in the game (the death dive dilates everything around them);
+  // here the lab's raw delta is the same thing. The yard is settled by the
+  // time a match is played, so this is the beam and nothing else — but it is
+  // the shipping call, so a stone still falling would fall correctly too.
+  updateGravesites(rawDt);
+  updateGraveBeam(rawDt);
   world.updateSurface(rawDt);
   tickGoalGlow(rawDt);
   updateParticles(rawDt);
