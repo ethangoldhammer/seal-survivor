@@ -1382,7 +1382,11 @@ export function updateBoss(dt, gameState, scene, opts = {}) {
  * is load-bearing rather than tidy.
  */
 export function updateBossAbilities(dt, scene, playerPos, hooks, rawDt = dt) {
-  updateBossPerks(dt, scene, playerPos, hooks);
+  // rawDt as well as dt. The aura's surge is locked to the music's half note
+  // (systems/beatSync.js), and a beat clock that stopped for a hit-stop would
+  // drift off the grid a little further every time the player got hit — the
+  // same reason the beat sync itself is ticked on the raw clock.
+  updateBossPerks(dt, scene, playerPos, hooks, rawDt);
   // AFTER the perks, and for the same reason they run before updateEnemies:
   // the boat writes the position and velocity the integrator is about to step,
   // and a frame late is a hull that visibly lags its own wake. Second of the

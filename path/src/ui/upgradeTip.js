@@ -247,7 +247,7 @@ export function effectiveSpan(change, now, after) {
   // pick takes the interval 0.1416s -> 0.0944s — one decimal rounds both to
   // "0.1", so the guard fired and the span vanished — while the row it was
   // about to print read "x4 -> x6", a span with nothing wrong with it. Rapid
-  // Fire and Bouncing Baby Guppies each lost their span on three of their
+  // Fire and Periwinkle Poppers each lost their span on three of their
   // stacks this way, and the disappearance read exactly like a capped stat.
   if (from === to) return '';
 
@@ -264,7 +264,7 @@ export function effectiveSpan(change, now, after) {
  * symptom would be a span describing a stat that is not the one the sentence
  * opens with. Asking which phrase the output actually starts with cannot drift.
  *
- * ONE STAT AND NOT ALL OF THEM. Bouncing Baby Guppies moves four; a span for
+ * ONE STAT AND NOT ALL OF THEM. Periwinkle Poppers moves four; a span for
  * each would treble the tallest tip in the game to answer a question nobody
  * asked four times. The one the sentence opens with is the one the card is
  * about.

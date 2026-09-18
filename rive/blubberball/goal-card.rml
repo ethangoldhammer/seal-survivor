@@ -31,7 +31,9 @@
             </TextValueRun>
         </Text>
 
-        <Text x="48" y="132" sizingValue="autoWidth" originX="0" originY="0.5" name="Goal Line" id="4:20">
+        <Text x="48" y="132" width="440" height="46" sizingValue="fixed"
+              overflowValue="fitFontSize" wrapValue="noWrap" alignValue="left"
+              verticalAlignValue="middle" originX="0" originY="0.5" name="Goal Line" id="4:20">
             <TextStylePaint letterSpacing="0.04" fontAssetId="3:1" name="S" id="4:21">
                 <DataBindContext sourcePathIds="3:400-3:405-3:313" propertyKey="274" id="0:5064"/>
                 <Fill name="Fill" id="0:5065">
@@ -48,7 +50,9 @@
         <!-- The scorer. The one hero size on this card, so it is NOT themed:
              folding it into a shared role would mean the role could never be
              tuned without wrecking the thing the card exists to say. -->
-        <Text x="48" y="78" sizingValue="autoWidth" originX="0" originY="0.5" name="Scorer" id="4:10">
+        <Text x="48" y="78" width="440" height="46" sizingValue="fixed"
+              overflowValue="fitFontSize" wrapValue="noWrap" alignValue="left"
+              verticalAlignValue="middle" originX="0" originY="0.5" name="Scorer" id="4:10">
             <TextStylePaint fontSize="46" fontAssetId="3:1" name="S" id="4:11">
                 <Fill name="Fill" id="0:5069"><SolidColor colorValue="FFF2F6FA" name="C" id="0:5070"/></Fill>
             </TextStylePaint>

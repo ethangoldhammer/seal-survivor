@@ -728,6 +728,51 @@ section('6b. the body lights up while it burns');
   check('a dead body cannot be zapped either',
     zap({ hp: 0, mesh: new THREE.Group() }) === false && burnCount() === 0);
 
+  // AND NOT ON A BOSS. The flash lights the WHOLE hide, which is the only place
+  // it can go on a sardine and the wrong place on a body that fills a third of
+  // the screen and already answers the hit where the hit was — the break ring
+  // and shards on the skin, the wound that stays, the weak spot's own flash.
+  // Laid over those, a body-wide red deletes the one thing all three know.
+  //
+  // THE MATERIAL IS CHECKED, not just the return. `zap` could go on returning
+  // false while some other path lit the body, and a boolean would certify a
+  // strobe. Nothing on the hide is what the fix actually promises.
+  resetBurnGlow();
+  const bossShot = bodyWith('enemyMegalodon', true);
+  const bossMats = [];
+  bossShot.mesh.traverse((o) => { if (o.isMesh) bossMats.push(o.material); });
+  const took = zap(bossShot);
+  updateBurnGlow(1 / 60);
+  check('a bolt does not flash a boss’s whole body',
+    took === false && burnFlash(bossShot) === 0
+      && bossMats.every((m) => m.emissiveIntensity === 0));
+  // ...AND IT COSTS NOTHING. Refused ahead of entryFor, so a boss under a
+  // volley is not holding one of the MAX slots — or a set of cloned materials —
+  // to write zero to every frame.
+  check('...and does not take a burn slot to do it', burnCount() === 0);
+
+  // THE SUSTAINED HALF IS UNTOUCHED, and that is the line this must not cross.
+  // `sear` is a STATE — a beam standing on the animal for seconds — and a state
+  // has nowhere local to live. What went is the per-arrival flash, which did.
+  sear(bossShot);
+  updateBurnGlow(1 / 60);
+  // RE-GATHERED, and the reason is the refusal above: `zap` now returns before
+  // entryFor, so nothing has been instanced yet and `bossMats` still holds the
+  // shared template — which stays at zero forever and reads exactly like a
+  // beam that stopped burning bosses.
+  const bossLit = [];
+  bossShot.mesh.traverse((o) => { if (o.isMesh) bossLit.push(o.material); });
+  check('...while a beam still burns it', burnHeat(bossShot) > 0
+    && bossLit.every((m) => m.emissiveIntensity > 0),
+    `heat ${burnHeat(bossShot).toFixed(3)}`);
+
+  // AN ORDINARY BODY IS UNCHANGED. The gate is `isBoss` and nothing else; a
+  // shark that stopped flashing would be this fix taking the feature with it.
+  resetBurnGlow();
+  const plain = bodyWith('enemyGreatWhite', false);
+  check('an ordinary body still takes the bolt flash',
+    zap(plain) === true && burnFlash(plain) === 1);
+
   resetBurnGlow();
   scene.clear();
 }

@@ -14,6 +14,12 @@
 // count rides the same `scale` the burst already took from the roll — so how
 // long the vacuum lasts is itself the tell about how big the thing was.
 //
+// AND THE FLIGHT ITSELF SOUNDS. A riser under the haul (systems/absorbRiser.js),
+// loudest on the frame the first piece reaches the seal and then settling to a
+// wash under the ladder below. It is started here and not inside the burst
+// because what it scores is the PAYOUT arriving: a burst nobody is paying out
+// of is a splat, and a splat does not get a vacuum.
+//
 // AND EACH ARRIVAL SOUNDS, A LITTLE HIGHER THAN THE LAST. One quiet blip per
 // piece, climbing from `pitchFrom` to `pitchTo` across the bunch, so the run
 // of them resolves on the last piece rather than stopping. A ladder that
@@ -38,8 +44,15 @@
 
 import { CONFIG } from '../config.js';
 import { feedback } from './feedback.js';
+import { startAbsorbRiser, arriveAbsorbRiser, stopAbsorbRiser } from './absorbRiser.js';
 
 const cfg = () => CONFIG.pickups?.absorb ?? {};
+
+// One id per bunch, so two chunks absorbing at once each drive their own riser.
+// A counter rather than the event name: the same event fires for every chunk,
+// and keying on it would have the second one's arrival settling the first one's
+// vacuum.
+let nextBunch = 1;
 
 /**
  * The pitch for arrival `taken` of `count`, 1-based.
@@ -62,6 +75,27 @@ export function absorbPitch(taken, count, c = cfg()) {
   const i = Math.max(1, Math.min(count, taken));
   const t = (i - 1) / (count - 1);
   return from + (to - from) * Math.pow(t, Math.max(0.05, c.curve ?? 1));
+}
+
+/**
+ * HOW LONG THE FIRST PIECE IS EXPECTED TO TAKE, in seconds — the hold before
+ * anything moves, the pull ramping on, and a guess at the flight itself.
+ *
+ * Exported and pure because it is the riser's whole schedule and it is read
+ * off four numbers that live in two different config blocks: this pickup's own
+ * timing where it has any (CONFIG.pickups.absorb.orb), the shared look
+ * otherwise (CONFIG.fx.gooSuck). Written at the call site it would be the place
+ * the two quietly stopped agreeing.
+ *
+ * It is a GUESS and is meant to be — the real arrival moves the peak (see
+ * arriveAbsorbRiser). What it has to be is the right size, not right.
+ */
+export function absorbApproach(c = cfg()) {
+  const suck = CONFIG.fx?.gooSuck ?? {};
+  const hold = c.hold ?? suck.holdAt ?? 0.4;
+  const ramp = c.ramp ?? suck.rampTime ?? 0.15;
+  const travel = c.riser?.travel ?? 0.3;
+  return Math.max(0.05, hold + ramp + travel);
 }
 
 /**
@@ -100,13 +134,33 @@ export function absorbInPieces(event, at = {}, pay = null) {
     pay(1, 1, 1, at.x ?? 0, at.y ?? 0, true);
     return;
   }
+
+  // THE VACUUM (systems/absorbRiser.js) — the flight, scored. Started here
+  // rather than inside the burst because what it is scoring is the PAYOUT
+  // arriving, and the payout is this module's: a burst nobody is paying out of
+  // is a splat, and a splat does not get a riser.
+  //
+  // Scheduled on an estimate and corrected by the first piece to land, so a
+  // burst that is never captured — the reserve came back empty, the run ended
+  // over it — still resolves on its own clock instead of hanging.
+  const bunch = nextBunch++;
+  const stagger = Math.max(0, c.stagger ?? 0.5);
+  // The riser block is overlaid the same way the block around it is, KEY BY
+  // KEY. The outer spread replaces it wholesale, so a pickup that wanted a
+  // quieter vacuum and said only `{ gain: 0.04 }` would lose the bands, the
+  // sweep and the envelope along with the loudness — which is a silence that
+  // looks like a level.
+  const riser = at.tune?.riser
+    ? { ...(cfg().riser ?? {}), ...at.tune.riser }
+    : c.riser;
+  startAbsorbRiser(bunch, absorbApproach({ ...c, riser }), stagger, riser);
   feedback(event, {
     ...at,
     // The event's own `goo`, drawn home instead of thrown away. `gooSuck` on
     // the FIRING rather than on the def, so an event can be absorbed here and
     // still burst ballistically everywhere else it is used.
     gooSuck: true,
-    holdStagger: c.stagger ?? 0.5,
+    holdStagger: stagger,
     // THE BEAT BEFORE ANY OF IT MOVES, and how hard the pull comes on after
     // it, when this pickup names them. Undefined leaves the shared look
     // numbers (CONFIG.fx.gooSuck.holdAt / rampTime) exactly as they were,
@@ -126,6 +180,20 @@ export function absorbInPieces(event, at = {}, pay = null) {
     countClamp: at.pieces > 0 ? [at.pieces, at.pieces] : c.pieces,
     onCapture: (taken, count, x, y, last) => {
       pay(1 / count, taken, count, x, y, last);
+      // THE VACUUM'S TWO MOMENTS. The first piece is the arrival — it peaks the
+      // riser where the goo actually got here rather than where the estimate
+      // said it would — and the last one takes it away under the top of the
+      // ladder. Every piece between them lands inside the settle, which is what
+      // the settle is for.
+      //
+      // `last` and `taken === 1` are both true for a one-piece bunch, and the
+      // order is right: it arrives, then it is taken away.
+      //
+      // The settle runs across the STAGGER, because that is how long the rest
+      // of the pieces will take: the burst spreads their starts from 0 to the
+      // full stagger, so the first one home is the one that waited nothing.
+      if (taken === 1) arriveAbsorbRiser(bunch, stagger);
+      if (last) stopAbsorbRiser(bunch);
       // The piece landing. Its own event so it can be silenced, retuned or
       // given a different spray without touching the swallow above it — and
       // the pitch is per arrival, which is the only reason it is passed here

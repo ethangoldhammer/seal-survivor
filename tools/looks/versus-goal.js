@@ -32,6 +32,7 @@ import { initParticles, updateParticles, updateParticleScale } from '../../path/
 import { updateOutlineScale } from '../../path/src/systems/outlines.js';
 import { ball, p2, initBallAlone, stepBallAlone, renderBall, goalBlast } from '../../path/src/systems/versus.js';
 import { fireGoalJet, updateGoalJets, resetGoalJets, goalJets, goalJetOrigin } from '../../path/src/systems/goalJet.js';
+import { cineLens, cineSplash, cineBreach, resetCineCamera, updateCineCamera } from '../../path/src/systems/cineCamera.js';
 
 const logEl = document.getElementById('log');
 const sheetEl = document.getElementById('sheet');
@@ -490,6 +491,155 @@ check('...and a tuning change moves it', hot < base - 0.05, `${(hot * 100).toFix
   G.noise.enabled = saved.noise;
   if (saved.trim == null) delete G.trim; else G.trim = saved.trim;
   refreshGoalGlow();
+}
+
+// ---------------------------------------------------------------------------
+// GOO ON THE LENS — cinecam.lens.droplets, the coloured half.
+//
+// A breach leaves seawater on the glass and seawater is clear. A GOAL throws
+// the ball's own substance back out of the mouth and over the camera, and that
+// is the scoring side's colour — so the same beads carry a tint (cineSplash).
+//
+// THIS NEEDS A REAL CONTEXT AND NOTHING ELSE WILL DO. The whole effect is nine
+// lines of GLSL inside the composite, and a shader that fails to compile
+// renders NOTHING while every Node assertion about cineLens passes — the
+// uniforms are all set correctly on a program that is not running. So: three
+// frames through the real post chain, and the pixels are the check.
+//
+// MEASURED AS A COLOUR SHIFT AND NOT AS BRIGHTNESS. The tint is absorption —
+// it multiplies the frame down toward the colour — so a red splash makes the
+// frame DARKER overall and only redder in the ratio. A check on "is it
+// brighter" reads the tintGlow lift alone and passes at any tint strength,
+// including zero.
+// ---------------------------------------------------------------------------
+{
+  place(bounds.left + world.halfExtents(2).w - reach, gy, 2);
+  const D = CONFIG.cinecam.lens.droplets;
+  const savedOn = CONFIG.cinecam.enabled;
+  CONFIG.cinecam.enabled = true;
+  cineLens.active = true;
+  resetCineCamera();
+  cineLens.active = true;
+
+  // Share of a frame's total that is one channel — the RATIO, which is what a
+  // tint moves and what brightness does not.
+  const chan = (canvas, i) => {
+    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let sum = 0; let tot = 0;
+    for (let k = 0; k < d.length; k += 16) {
+      sum += d[k + i];
+      tot += d[k] + d[k + 1] + d[k + 2] + 1;
+    }
+    return sum / tot;
+  };
+
+  // ...and the same ratio per BLOCK. A drop covers a few percent of the frame,
+  // so a whole-frame average of a real tint moves by under a thousandth — a
+  // number no honest threshold can be set against. The question is whether the
+  // glass goes red WHERE THE BEADS ARE.
+  const blocks = (canvas, i) => {
+    const w = canvas.width; const h = canvas.height;
+    const d = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+    const B = 32;
+    const out = [];
+    for (let by = 0; by + B <= h; by += B) for (let bx = 0; bx + B <= w; bx += B) {
+      let sum = 0; let tot = 0;
+      for (let y = 0; y < B; y += 2) for (let x = 0; x < B; x += 2) {
+        const o = (((by + y) * w) + bx + x) * 4;
+        sum += d[o + i];
+        tot += d[o] + d[o + 1] + d[o + 2] + 1;
+      }
+      out.push(sum / tot);
+    }
+    return out;
+  };
+  // THE DELTA BETWEEN MATCHING BLOCKS, and not the reddest block in either
+  // frame. The first cut took the max of each and compared those — and the
+  // reddest thing on this screen is the RIGHT-HAND GOAL, which is the red
+  // team's, sits in the same place in both frames, and swamped the drops
+  // completely. It reported 0.131 against 0.132 and failed a tint that was
+  // plainly there. Same block, before and after, strongest change wins.
+  const peakShift = (a, b, i) => {
+    const ba = blocks(a, i); const bb = blocks(b, i);
+    let best = 0;
+    for (let k = 0; k < Math.min(ba.length, bb.length); k++) best = Math.max(best, bb[k] - ba[k]);
+    return best;
+  };
+
+  const dry = await shot('the lens dry', 'no drops on the glass at all — the control');
+  const dryRed = chan(dry, 0);
+
+
+  // A breach first: the SAME beads, and they must stay colourless. This is the
+  // half that can regress silently — a tint left switched on would put the last
+  // goal's colour on every surface crossing in the game.
+  cineBreach(1);
+  const wet = await shot('seawater on the lens', `a breach: ${cineLens.droplets.toFixed(2)} wet, ${cineLens.tinted.toFixed(2)} of it coloured`);
+  check('a breach leaves the glass clear', cineLens.tinted === 0, `tinted ${cineLens.tinted}`);
+  check('...and it does not shift the frame\u2019s colour', Math.abs(chan(wet, 0) - dryRed) < 0.01,
+    `red share ${chan(wet, 0).toFixed(4)} vs ${dryRed.toFixed(4)} dry`);
+
+  resetCineCamera();
+  cineLens.active = true;
+  // ...and now the goal, in a colour nothing else in the frame is.
+  cineSplash(0xff2040, 1);
+  const goo = await shot('a goal\u2019s goo on the lens', `${cineLens.tinted.toFixed(2)} of the wetness is the scorer\u2019s colour`);
+  const gooRed = chan(goo, 0);
+  const shift = peakShift(dry, goo, 0);
+  check('the goal tints the beads', cineLens.tinted > 0 && cineLens.dropTint[0] > 0.9 && cineLens.dropTint[2] < 0.3,
+    `tinted ${cineLens.tinted.toFixed(2)}, rgb ${cineLens.dropTint.map((v) => v.toFixed(2)).join(',')}`);
+  check('...and the glass goes red where the beads are', shift > 0.02,
+    `the block that moved most went ${shift.toFixed(3)} redder`);
+  // The whole frame moves too, by a hair — reported and not asserted, because
+  // the number that matters is the one above and this one is the reason why.
+  log(`  across the whole frame it is only ${gooRed.toFixed(4)} against ${dryRed.toFixed(4)}: a bead is a few percent of a screen`);
+
+  // THE OTHER SIDE'S GOAL, and the colour has to travel. Two splashes of
+  // opposite colours must not leave the lens on the first one.
+  cineSplash(0x20a0ff, 1);
+  check('a second goal carries the colour toward the new side',
+    cineLens.dropTint[2] > cineLens.dropTint[0],
+    `rgb ${cineLens.dropTint.map((v) => v.toFixed(2)).join(',')}`);
+  await shot('the other side scores', 'the blend after a second goal from the far end');
+
+  // IT DRIES, and the goo can never outlast the water carrying it.
+  resetCineCamera();
+  cineLens.active = true;
+  cineSplash(0xff2040, 1);
+  // The rig's own tick, which is where the drying lives. The ctx is the shape
+  // world.js hands it (target/velocity/aim/dashDir plus scalars); a still seal
+  // at the origin is all this needs, since nothing here reads the framing.
+  const ctx = {
+    target: { x: 0, y: gy }, velocity: { x: 0, y: 0 }, aim: { x: 1, y: 0 },
+    dashDir: { x: 0, y: 0 }, dashReach: 0, chargePower: 0,
+    strikeHeld: false, charging: false, boosting: false,
+    deathPhase: 'none', deathElapsed: 0,
+    // THREE FUNCTIONS, ALL REQUIRED, and each one throws the moment the rig
+    // reaches it — mid-loop, taking every block after it on the page down too,
+    // which presents as a contact sheet simply missing its last third. They
+    // are not interchangeable and the rig calls them at different times, so
+    // discovering them one crash at a time is exactly what happens. The list
+    // is `grep -oE 'ctx\.\w+\(' systems/cineCamera.js`.
+    halfExtents: (zoom) => world.halfExtents(zoom),
+    // The page does not care where the rig ends up — nothing here reads the
+    // framing, only the lens — so the box is the pitch and the clamp is a
+    // pass-through. A real one would be world.js's, which is not exported.
+    clampFocus: (x, y) => ({ x, y }),
+    focusLimits: () => ({ loX: bounds.left, hiX: bounds.right, loY: bounds.bottom, hiY: bounds.top }),
+  };
+  let over = 0;
+  for (let k = 0; k < 900; k++) {
+    updateCineCamera(1 / 60, ctx);
+    if (cineLens.tinted > cineLens.droplets + 1e-6) over++;
+    if (cineLens.droplets <= 0) break;
+  }
+  check('the goo never outlasts the water it is in', over === 0, `${over} frame(s) with more colour than wetness`);
+  check('...and the glass ends up clear', cineLens.droplets === 0 && cineLens.tinted === 0,
+    `${cineLens.droplets.toFixed(3)} wet, ${cineLens.tinted.toFixed(3)} coloured`);
+
+  resetCineCamera();
+  CONFIG.cinecam.enabled = savedOn;
+  cineLens.active = false;
 }
 
 // ---------------------------------------------------------------------------

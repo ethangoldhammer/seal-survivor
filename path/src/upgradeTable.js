@@ -33,9 +33,25 @@
 //              every other one — which is the right answer for most of them.
 //              Set it on the cards that deserve their own arrival.
 //
-// Fields deliberately NOT here: `perLevelName` and `levelDescs`, which are
-// per-stack display rules on two upgrades and don't flatten into a row.
-// They stay in config.js.
+//   levelDescs what the card says AT A PARTICULAR STACK, when that differs from
+//              `desc`. Written `stack:line`, several separated by `|`:
+//
+//                1:Club hits go off in a blast|2:Another club on the ring
+//
+//              A stack with no entry falls back to `desc`, which is what every
+//              card with no cell here does at every stack.
+//
+//              IT USED TO LIVE IN config.js, and that is why it is here now.
+//              `cardDesc` in ui/ui.js reads `levelDescs[stack] ?? desc`, so on
+//              the nine cards whose override was on STACK 1 the `desc` column
+//              was dead text — you could edit it in the editor, watch it save,
+//              and never see it in the game. Fifteen lines of card copy were
+//              also invisible to the "needs your words" chip, to
+//              `npm run test:copy` and to `npm run copy:review`, which is
+//              exactly what CLAUDE.md says must not happen to prose.
+//
+// Fields deliberately NOT here: `perLevelName`, a per-stack display rule on two
+// upgrades that doesn't flatten into a row. It stays in config.js.
 //
 // Why `weight` belongs in the file and not on a tuner slider: rarity is only
 // ever meaningful against the rest of the roster. "Is Baby Beluga too common"
@@ -45,6 +61,37 @@
 // ============================================================================
 
 import { parseIdTable, parseBool, parseNumber } from './csvTable.js';
+
+/**
+ * "1:Blast|2:Another club" -> { 1: 'Blast', 2: 'Another club' }.
+ *
+ * A line may contain colons — only the FIRST one separates the stack from the
+ * words, which is what lets a description say "Level 2: bigger" without the
+ * parser eating half of it.
+ *
+ * A malformed entry is dropped WITH A WARNING rather than folded into stack 1.
+ * Silently landing on 1 would put a line on the first card of a run, which is
+ * the one every player sees and the last place to discover a typo.
+ */
+export function parseLevelDescs(raw, id, warn = console.warn) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  const out = {};
+  for (const part of s.split('|')) {
+    const token = part.trim();
+    if (!token) continue;
+    const at = token.indexOf(':');
+    const stack = at < 0 ? NaN : Number(token.slice(0, at).trim());
+    const text = at < 0 ? '' : token.slice(at + 1).trim();
+    if (!Number.isInteger(stack) || stack < 1 || !text) {
+      warn(`[${LABEL}] "${id}" has levelDescs entry "${token}", which is not `
+        + 'stack:line with a whole stack of 1 or more — dropping that entry.');
+      continue;
+    }
+    out[stack] = text;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 const LABEL = 'upgrades';
 const FILE = 'upgrades.csv';
@@ -100,6 +147,15 @@ export function applyUpgradeTable(upgrades, base, rows, imageKeys, warn = consol
     const desc = (row.desc ?? '').trim();
     if (name) u.name = name;
     if (desc) u.desc = desc;
+    // REPLACED WHOLESALE, not merged into whatever config.js held. A merge
+    // would make the cell unable to say "this card no longer overrides stack
+    // 1" — the config value would survive the deletion and the card would keep
+    // showing a line the table says it has stopped showing.
+    if ('levelDescs' in row) {
+      const parsed = parseLevelDescs(row.levelDescs, u.id, warn);
+      if (parsed) u.levelDescs = parsed;
+      else delete u.levelDescs;
+    }
     // WHAT THE WEAPON IS CALLED once this upgrade is held — see weaponName.js.
     // A whole name and not an adjective, so a row can say anything rather than
     // being stuck with "<word> Pebbles"; blank is the overwhelming majority of

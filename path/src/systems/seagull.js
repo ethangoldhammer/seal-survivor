@@ -10,6 +10,7 @@ import { createAnimationController } from './animation.js';
 import { aoe, targeting } from './scaling.js';
 import { player } from '../entities/player.js';
 import { seagullLevelStats } from '../levelStats.js';
+import { emit } from '../entities/particles.js';
 
 // SEAGULL BOMB — an attack run, not a projectile.
 //
@@ -64,13 +65,234 @@ const DEG = Math.PI / 180;
 
 const gulls = [];
 
+// THE BLAST'S RETURN, waiting to be heard. One record per bomb that has gone
+// off and not yet echoed: a position, and how long is left.
+//
+// Its own list because the gull is GONE by then — it is removed on the frame it
+// detonates, which is the whole difficulty. An explosion underwater is a crack
+// and then a low roll back off the seabed, and the gap between them is the only
+// thing that says it happened in a room made of water; there is no entity left
+// to carry that gap, so the module carries it. See CONFIG.seagullBomb.blastEcho
+// and the `seagullBlastTail` event.
+const echoes = [];
+
+// Scratch, so a stoop allocates nothing per frame.
+const _flow = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _snap = new THREE.Vector3();
+const DOWN = new THREE.Vector3(0, -1, 0);
+const _box = new THREE.Box3();
+const _size = new THREE.Vector3();
+
+// THE SPRING A LOOSE GULL SOLVES WITH. Rebuilt only when the tuner has actually
+// moved one of these — every bird in the air reads it once a frame and the
+// values are global, so the whole flock shares one object between rebuilds.
+// Same arrangement as limpSpring in systems/bossRagdoll.js.
+let slackCfg = null;
+let slackStamp = '';
+function slackSpring() {
+  const c = CONFIG.seagullBomb.slack ?? {};
+  const stamp = `${c.stiffness}|${c.damping}|${c.tipLooseness}|${c.maxLag}|${c.softness}|${c.snapAngle}`;
+  if (slackStamp !== stamp) {
+    slackStamp = stamp;
+    slackCfg = {
+      stiffness: c.stiffness ?? 5,
+      damping: c.damping ?? 1.6,
+      tipLooseness: Math.min(0.98, c.tipLooseness ?? 0.93),
+      maxLag: c.maxLag ?? 1.6,
+      softness: c.softness ?? 0.5,
+      snapAngle: c.snapAngle ?? 3,
+    };
+  }
+  return slackCfg;
+}
+
+// THE SHAPE THE WATER HAS TO LEAVE FROM, in world half-extents.
+//
+// A splash is made by a body DISPLACING water, so the crown of foam is fired
+// from a ring fitted to the thing that made it rather than from its centre —
+// see the ring note in systems/reentrySplash.js, which the seal's landing has
+// used since it was written. A gull is not a seal-shaped hole: it arrives
+// nose-down with its wings half folded, which measures tall and narrow, and it
+// is a much bigger object than its `radius` of 0.3 suggests — the asset carries
+// a size multiplier of 9.54 (assets.csv) on top of its fit, so the bird is more
+// than ten world units long.
+//
+// MEASURED OFF THE POSED VISUAL, not off the asset, because by the time this is
+// asked for the ragdoll has been folding the wings for a second and the
+// silhouette is nothing like the one the model was exported in.
+//
+// Once per splash, which is once per run — a Box3 over a skinned mesh is not
+// free, and this is the only caller.
+function gullExtent(g) {
+  g.container.updateMatrixWorld(true);
+  _box.setFromObject(g.visual);
+  if (_box.isEmpty()) return null;
+  _box.getSize(_size);
+  return { rx: _size.x * 0.5, ry: _size.y * 0.5 };
+}
+
+// CUT THE SKELETON LOOSE, once, when the tuck has finished fading in.
+//
+// NOT ON THE COMMIT, which is the obvious place and is a frame too early.
+// setLimp freezes whatever pose the bones are holding and makes THAT the thing
+// the springs pull back toward, and at the commit the mixer is still a fifth of
+// a second into crossfading out of the flap. Going loose there would weld the
+// bird to a half-flapped shape it was passing through, and every wobble for the
+// rest of the fall would be measured from a pose no artist ever drew.
+//
+// `diveBlend` is already the crossfade's own clock — it exists to ease the
+// pitch correction over the same fade — so the tuck is fully in at exactly the
+// moment it reaches 1, and that is the edge this waits for.
+function goSlack(g) {
+  const c = CONFIG.seagullBomb.slack ?? {};
+  if (c.enabled === false || g.slack || !g.anim?.setLimp) return;
+  g.slack = true;
+  // False means this body has no springs to go limp WITH — a build whose model
+  // never loaded, or the primitive cone fallback. Recorded rather than
+  // pretended: the per-frame forces below are skipped entirely, and the bird
+  // falls exactly as it used to.
+  g.loose = g.anim.setLimp(slackSpring());
+  if (!g.loose) return;
+
+  // WHAT THERE IS TO SHAKE, read back off the controller rather than written
+  // out again here — the rig is a table in assets.js and a second copy of its
+  // role names in this file is a copy that goes stale the first time one is
+  // renamed, silently, because a role no chain wears is a no-op impulse.
+  //
+  // Each limb is handed its own place in the buffet's cycle, spread evenly and
+  // then jittered, so the wings beat against each other rather than together.
+  // Evenly FIRST, because a pure roll clusters: two of five landing in the same
+  // tenth of a period is a coin flip away on any given bird, and the two that
+  // clustered would be the two wings as often as not.
+  const roles = g.anim.springRoles?.() ?? [];
+  const period = 1 / Math.max(0.1, c.buffetHz ?? 5.5);
+  const jitter = (c.buffetJitter ?? 0) * period;
+  g.limbs = roles.map((role, i) => ({
+    role,
+    phase: (i / Math.max(1, roles.length)) * period + (Math.random() * 2 - 1) * jitter,
+    // The legs are the longest chains on the bird and the least exposed to the
+    // airflow — in the tuck they hang close to the body's own axis, where the
+    // flow's projection onto them is near nothing (impulse drops whatever
+    // component runs along a bone). Measured on the first pass, they moved a
+    // fifth of what the wings did. The buffet is square to the flight path and
+    // is the one force that CAN move them, so it leans on them harder.
+    gain: role === 'gullLegL' || role === 'gullLegR' ? (c.legGain ?? 2.2) : 1,
+    // Which way round this limb leans off the airflow. Alternating down the
+    // list rather than rolled, because the list is L wing, R wing, neck, L leg,
+    // R leg in declaration order — so alternating puts the two wings on
+    // opposite sides of the flow and then the two legs, which is exactly the
+    // disagreement worth having. A roll would pair them the same way about
+    // a third of the time.
+    lean: i % 2 ? -1 : 1,
+  }));
+  // The kick, along the flight path. Everything hanging off the bird snaps
+  // backwards on the frame it lets go rather than easing into a stream.
+  const sp = Math.hypot(g.vx, g.vy);
+  if (sp > 1e-4) {
+    _snap.set(-g.vx / sp, -g.vy / sp, 0);
+    g.anim.impulse(_snap, c.snap ?? 7, c.tipBias ?? 0.75);
+  }
+}
+
+// One frame of a bird coming apart. Three forces, and each is doing a different
+// job — see CONFIG.seagullBomb.slack.
+function driveSlack(g, dt) {
+  const c = CONFIG.seagullBomb.slack ?? {};
+  const sp = Math.hypot(g.vx, g.vy);
+
+  // Weight. Small, because a stoop is very nearly free fall and the limbs
+  // barely have any relative to the body — but it is the one asymmetry left
+  // when the flow is straight up the bird's own axis.
+  if ((c.sag ?? 0) > 0) g.anim.impulse(DOWN, c.sag * dt, c.sagBias ?? 0.3);
+
+  if (sp > 0.05) {
+    // The air going past, opposite the travel. This is what streams the wings
+    // and the feet, and it grows with the fall because the fall accelerates.
+    _flow.set(-g.vx / sp, -g.vy / sp, 0);
+    g.anim.impulse(_flow, (c.flow ?? 0.06) * sp * dt, c.tipBias ?? 0.75);
+
+    // ...and the buffet, square to it, reversing on its own clock — ONE LIMB AT
+    // A TIME. Flow and sag alone settle into a hang: everything streams one way
+    // and stays there, which is a competent dive. This is the part that makes
+    // it a bird that has lost the argument with the air.
+    //
+    // PER LIMB, because a single world-space vector cannot break a mirror. The
+    // wings are laid out symmetrically about the body, so one shove — any shove
+    // — bends them through the same angle; measured over a whole fall, the two
+    // wingtips stayed within a tenth of a percent of body length of each other
+    // and the bird folded up tidily instead of flailing. Each chain gets its
+    // own phase through the same wave, so the wings beat against each other and
+    // the feet swing on a clock of their own.
+    const amp = c.buffet ?? 0;
+    if (amp > 0 && g.limbs) {
+      g.buffetT += dt;
+      // A square wave, not a sine. The reversal IS the motion: a sine spends
+      // most of its time near zero and hands the springs a smooth force they
+      // simply follow, while a flip gives them something to overshoot.
+      const period = 1 / Math.max(0.1, c.buffetHz ?? 1.6);
+      // ALONG THE AIRFLOW, not square to it — measured, and the measurement is
+      // the whole reason this line looks wrong. Square to the flight path is
+      // where a sideways gust belongs and is where this started, and in a stoop
+      // that direction lies almost flat ALONG the wing bones: the wings are the
+      // bird's widest axis and the stoop puts them across the fall. `impulse`
+      // drops whatever component of a force runs along a bone, because pushing
+      // a rigid segment down its own length does nothing, so 83% of every gust
+      // was thrown away before it reached a joint.
+      //
+      // Reversing the DRAG instead pumps each limb along the one axis it is
+      // free to swing through — the wings sweep back and open again, which is
+      // also the only one of the two that reads on a camera looking straight
+      // down -z.
+      const push = amp * sp * dt;
+      // A SPREAD OF DIRECTIONS, not one. Along the flow exactly, every limb
+      // gets shoved down the same line and the bird collapses into a streak —
+      // correct aerodynamics and a dull picture, because what makes a fall
+      // funny is the limbs disagreeing about which way is back. Each is pushed
+      // at its own angle either side of the airflow, so one wing rides up while
+      // the other tucks under and the feet swing across both.
+      //
+      // Bounded well short of square, and that bound is measured rather than
+      // chosen for looks: at 90 degrees the shove lies flat along the wing
+      // bones and `impulse` drops it entirely (see the note above), so a wider
+      // spread is not a bigger motion — it is a smaller one that took a longer
+      // route to get there.
+      const spread = c.spread ?? 1.1;
+      for (const limb of g.limbs) {
+        const sign = Math.floor((g.buffetT + limb.phase) / (period * 0.5)) % 2 ? -1 : 1;
+        const a = sign * spread * limb.lean;
+        const ca = Math.cos(a);
+        const sa = Math.sin(a);
+        // -v rotated by `a` about the view axis. By hand rather than through a
+        // quaternion: this runs once per limb per frame on every bird in the
+        // air, and it is two multiplies.
+        const fx = -g.vx / sp;
+        const fy = -g.vy / sp;
+        _side.set(fx * ca - fy * sa, fx * sa + fy * ca, 0);
+        g.anim.impulse(_side, push * limb.gain, c.tipBias ?? 0.75, limb.role);
+      }
+    }
+  }
+}
+
 export function resetSeagulls(scene) {
   for (const g of gulls) scene.remove(g.container);
   gulls.length = 0;
+  // A bomb that went off in the last run does not get to be heard in the next
+  // one. Nothing holds a scene object, so this is the only thing that clears
+  // them — and a run that ended a fifth of a second after a blast would
+  // otherwise open with its echo.
+  echoes.length = 0;
 }
 
 export function seagullCount() {
   return gulls.length;
+}
+
+// Blasts still owed their return. For the harness — there is nothing on screen
+// to count and a leak here is a list that grows for a whole run.
+export function seagullEchoCount() {
+  return echoes.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +593,22 @@ export function spawnSeagull(scene, enemiesList, view = null) {
     // Whether the seal has already kicked off this bird. One payout per gull —
     // see kickGull.
     kicked: false,
+    // --- the stoop coming apart ----------------------------------------------
+    // `slack` is "we have let go of the skeleton", `loose` is "and it had one
+    // to let go of". They are not the same question: a build whose model never
+    // loaded flies a primitive cone with no bones in it, and the difference
+    // decides whether the per-frame forces run at all. See goSlack.
+    slack: false,
+    loose: false,
+    buffetT: 0,
+    // One entry per spring chain, built when the skeleton is let go — see
+    // goSlack. Null until then, and null for ever on a body with no rig.
+    limbs: null,
+    // Seconds until the next puff of the underwater trail. Starts at 0 so the
+    // first one goes out on the frame the bird breaks the surface rather than
+    // an interval later — the entry is where a trail most needs to be dense,
+    // and a gap there reads as the bubbles starting from somewhere else.
+    bubbleT: 0,
   };
   gulls.push(gull);
   return gull;
@@ -517,9 +755,72 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
     g.container.position.x += g.vx * dt;
     g.container.position.y += vy * dt;
 
-    // Breaking the surface on the way down.
+    // Breaking the surface on the way down. The hook gets the SPEED as well as
+    // the place, because a splash is sized by how hard the thing arrived — the
+    // gull is doing up to `diveSpeedMax` here, which is faster than the seal
+    // ever lands — and the body's own extent, because the water leaves along
+    // the whole of a shape rather than out of a point (see fireReentrySplash in
+    // systems/reentrySplash.js, which the seal's landing already uses).
     if (prevY > bounds.surfaceY && g.container.position.y <= bounds.surfaceY) {
-      hooks.onSplash?.(g.container.position.x, bounds.surfaceY);
+      hooks.onSplash?.(g.container.position.x, bounds.surfaceY, {
+        vx: g.vx,
+        vy: vy,
+        speed: Math.hypot(g.vx, vy),
+        body: gullExtent(g),
+      });
+    }
+
+    // THE TRAIL. Air stripped out of the feathers all the way down — small and
+    // plentiful, shed on a timer rather than per frame so the density is a
+    // number somebody chose instead of whatever the frame rate happens to be.
+    //
+    // Only while DIVING and only below the water line. A gull cruising over the
+    // sea is in air and has nothing to shed, and one still above the surface on
+    // its way down would be trailing bubbles through the sky.
+    if (g.phase === 'dive' && g.container.position.y < bounds.surfaceY) {
+      const tr = c.trail ?? {};
+      if (tr.enabled !== false) {
+        const every = Math.max(1 / 240, tr.interval ?? 0.035);
+        g.bubbleT -= dt;
+        // ACCUMULATED, NOT RESET. `bubbleT = every` on each puff throws away
+        // however much of the frame was left over, which quantises the interval
+        // up to a whole number of frames — and a whole number of frames is a
+        // different length of time on every machine. Measured: the same dive
+        // laid down 44 particles at 30fps against 64 at 120fps, a 45% spread
+        // out of a timer that exists precisely so the frame rate cannot set the
+        // density. Adding the interval back keeps the remainder and the two
+        // agree.
+        //
+        // Bounded, because a frame long enough to owe a hundred puffs is a
+        // stall, and the answer to a stall is not to empty the particle buffer
+        // into the one frame that comes after it.
+        let puffs = 0;
+        while (g.bubbleT <= 0 && puffs < (tr.maxPerFrame ?? 4)) {
+          g.bubbleT += every;
+          puffs += 1;
+          // Emitted where the bird IS, not where it was: at thirty units a
+          // second the two are half a body apart, and a trail anchored to last
+          // frame's position trails the bird by a visible gap.
+          //
+          // Thrown BACK up its own path. The bubbles rise anyway (the emitter
+          // carries positive gravity), but giving them the direction the bird
+          // came from is what makes the column lean along the dive instead of
+          // standing vertically under a body that is still moving sideways.
+          const sp = Math.hypot(g.vx, vy) || 1;
+          emit('gullBubbles', g.container.position.x, g.container.position.y, {
+            dirX: -g.vx / sp,
+            dirY: -vy / sp,
+            // Sized off how fast it is going, so the entry — where the bird is
+            // quickest — is also where the trail is thickest, and it thins out
+            // as the water slows it.
+            speedMul: Math.min(2, 0.6 + sp / (c.diveSpeedMax || 30)),
+          });
+        }
+        // A stall long enough to blow through the cap leaves the timer owing
+        // more than it can pay. Cleared rather than carried, so the frame after
+        // a hitch is a normal frame instead of another capped burst.
+        if (g.bubbleT <= 0) g.bubbleT = every;
+      }
     }
 
     // Nose along the flight path. Model forward is mapped to the container's
@@ -537,6 +838,11 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
     // while the tuck was still fading in.
     const fade = Math.max(0.01, CONFIG.animation?.states?.boost?.fade ?? CONFIG.animation?.crossfade ?? 0.2);
     g.diveBlend = Math.max(0, Math.min(1, g.diveBlend + (g.phase === 'dive' ? dt : -dt) / fade));
+
+    // THE TUCK HAS LANDED — let the skeleton go. `diveBlend` reaching 1 is the
+    // crossfade being over, which is the only moment the frozen pose is the
+    // stoop and not something the bird was passing through. See goSlack.
+    if (g.phase === 'dive' && g.diveBlend >= 1) goSlack(g);
 
     if (Math.hypot(g.vx, vy) > 0.05) {
       // Both the flank flip and the correction's sign come off `dir` — the side
@@ -586,6 +892,20 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
           }
         }
         hooks.onImpact?.(x, y, lv.seagullSplash, lv.seagullSplashRadius);
+        // ...and the return off the seabed, owed from here. Queued rather than
+        // fired, because the gap IS the sound: the crack and the roll back are
+        // one explosion heard twice, and played together they are just a louder
+        // crack. Scaled by the blast, so a maxed stack rolls back further.
+        const ec = c.blastEcho ?? {};
+        if (ec.enabled !== false) {
+          echoes.push({
+            x,
+            y,
+            t: Math.max(0, ec.delay ?? 0.22),
+            scale: Math.min(ec.maxScale ?? 1.8, (ec.scale ?? 0.9)
+              * (1 + (lv.seagullSplashRadius / Math.max(1, c.splashRadius) - 1) * (ec.radiusGain ?? 0.35))),
+          });
+        }
         scene.remove(g.container);
         gulls.splice(i, 1);
         continue;
@@ -606,6 +926,22 @@ export function updateSeagulls(dt, scene, enemiesList, hooks = {}) {
       continue;
     }
 
+    // The forces first, then the solve — an impulse banked after update() is a
+    // frame late, and at the bottom of a stoop a frame is most of a body length.
+    if (g.loose) driveSlack(g, dt);
     if (CONFIG.animation.enabled && g.anim) g.anim.update(dt, state, false);
+  }
+
+  // The returns, on the same clock as everything else here. Counted down after
+  // the gulls rather than before, so a bomb that went off this frame does not
+  // get its echo on the same frame when `delay` is tuned to zero — at zero it
+  // lands on the NEXT one, which is still a gap you can hear at 60fps and is
+  // the least surprising reading of "no delay".
+  for (let i = echoes.length - 1; i >= 0; i--) {
+    const e = echoes[i];
+    e.t -= dt;
+    if (e.t > 0) continue;
+    hooks.onBlastEcho?.(e.x, e.y, e.scale);
+    echoes.splice(i, 1);
   }
 }

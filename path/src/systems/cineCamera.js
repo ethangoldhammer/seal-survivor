@@ -102,6 +102,16 @@ export const cineLens = {
   vignette: 0,
   droplets: 0,   // 0..1, decays after a breach
   dropAge: 0,    // seconds since the breach that wet the lens
+  // WHAT the wetness is, for the share of it that is not seawater. `tinted` is
+  // 0..1 like `droplets` and is always the smaller of the two — it is the part
+  // of the glass carrying goo — and it dries on the same clock, so a lens hit
+  // by a goal and then by a breach ends up clear rather than coloured.
+  //
+  // A SECOND SCALAR AND NOT A COLOUR WITH ALPHA: the amount has to decay while
+  // the colour holds, and packing them together means every dilution is also a
+  // desaturation toward whatever the last splash was. Linear 0..1 rgb.
+  tinted: 0,
+  dropTint: [1, 1, 1],
 
   // The dash corridor: a second, narrower focus claim laid along the line the
   // strike will actually travel, so winding one up lights up where it goes.
@@ -642,6 +652,51 @@ export function cineBreach(strength = 1) {
   cineLens.dropAge = 0;
 }
 
+/**
+ * ...AND SOMETHING COLOURED HITS IT. The same beads as a breach, carrying a
+ * colour — a goal's goo thrown back out of the mouth and over the camera.
+ *
+ * ONE LENS, TWO KINDS OF WET. This adds to the same `droplets` a breach does,
+ * because the glass does not have a separate set of beads for goo; what it adds
+ * on top is `tinted`, the share of that wetness which is coloured. A breach
+ * afterwards raises `droplets` without raising `tinted`, so seawater over goo
+ * reads as goo running thin — which is what it should do, and what a single
+ * scalar could never express.
+ *
+ * THE COLOUR IS A WEIGHTED BLEND, not a replacement. Two goals in quick
+ * succession from opposite ends would otherwise snap the whole lens to the
+ * second side's colour while the first side's goo is still visibly on it. The
+ * weight is how much each threw.
+ *
+ * @param rgb       0xRRGGBB, or null for clear water (then this is a breach).
+ * @param strength  how much of it, 1 being a full breach's worth of wetness.
+ */
+export function cineSplash(rgb, strength = 1) {
+  if (!cineEnabled()) return;
+  const d = cfg().lens?.droplets ?? {};
+  if (!(d.enabled ?? true)) return;
+  const add = Math.max(0, (d.perBreach ?? 1) * strength);
+  if (!(add > 0)) return;
+  if (Number.isFinite(rgb)) {
+    const next = [((rgb >> 16) & 0xff) / 255, ((rgb >> 8) & 0xff) / 255, (rgb & 0xff) / 255];
+    const had = cineLens.tinted;
+    const w = add / Math.max(1e-4, had + add);
+    const cur = cineLens.dropTint;
+    cineLens.dropTint = [
+      cur[0] + (next[0] - cur[0]) * w,
+      cur[1] + (next[1] - cur[1]) * w,
+      cur[2] + (next[2] - cur[2]) * w,
+    ];
+    // Capped at the wetness it rides on: goo cannot cover more of the glass
+    // than there is water on it, and letting it would leave colour behind
+    // after the beads it was drawn on had gone.
+    cineLens.tinted = Math.min(1, had + add);
+  }
+  cineLens.droplets = Math.min(1, cineLens.droplets + add);
+  cineLens.tinted = Math.min(cineLens.tinted, cineLens.droplets);
+  cineLens.dropAge = 0;
+}
+
 export function resetCineCamera() {
   rig.x = 0; rig.y = 0; rig.vx = 0; rig.vy = 0;
   rig.zoom = 1; rig.zoomVel = 0;
@@ -665,6 +720,8 @@ export function resetCineCamera() {
   // second lock on the same door.
   cineLens.droplets = 0;
   cineLens.dropAge = 0;
+  cineLens.tinted = 0;
+  cineLens.dropTint = [1, 1, 1];
   cineLens.active = false;
   cineSubject.active = false;
   corridor.live = false;
@@ -992,6 +1049,13 @@ export function updateCineCamera(dt, ctx) {
     // Linear rather than exponential: drops evaporate, they don't decay, and
     // an exponential leaves a last few hanging on the glass for ever.
     cineLens.droplets = Math.max(0, cineLens.droplets - dt / Math.max(0.05, drops.life ?? 3.2));
+    // The goo dries with the water it is in, and can never outlast it — the
+    // min is what stops a colour sitting on a lens with no beads left to carry
+    // it, which reads as a tinted frame rather than as a dirty one.
+    cineLens.tinted = Math.min(
+      cineLens.droplets,
+      Math.max(0, cineLens.tinted - dt / Math.max(0.05, drops.tintLife ?? drops.life ?? 3.2)),
+    );
   }
 
   // focusX/focusY are NOT set here. The tilt-shift focal point has to be where
@@ -1082,6 +1146,7 @@ export function cineDebug() {
     x: rig.x,
     y: rig.y,
     droplets: cineLens.droplets,
+    tinted: cineLens.tinted,
     revealing: cineRevealing(),
     gazing: cineGazing(),
   };

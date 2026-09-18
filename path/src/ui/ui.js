@@ -37,7 +37,7 @@ import { barPlacement, boostMeter, fightText, scorePopups } from '../systems/set
 // screen; this file only draws them. Neither module imports the other's data —
 // pipAnim() is a read — and neither imports back into here, so this is a leaf
 // dependency like the setting above it.
-import { pipAnim } from '../systems/strikeRing.js';
+import { pipAnim, pipRGB } from '../systems/strikeRing.js';
 import { pipCount } from '../systems/strike.js';
 // THE GRAIN IN THE GAUGES. One field for every meter on screen, shared with
 // the fuel wheel around the seal — see systems/meterNoise.js. The HUD is what
@@ -2006,8 +2006,9 @@ const STYLES = `
      air between them. The hive tips keep the 11px/9px pair in .sv-uptip below,
      since a tile there has no title to lean on and its box has to stay small
      enough to sit inside a hexagon's neighbourhood. */
-  .sv-card-fx.sv-card-fx-rows { text-align: left; max-width: none; white-space: nowrap;
-    width: max-content; padding: 10px 14px; border-radius: 9px;
+  .sv-card-fx.sv-card-fx-rows { text-align: left; white-space: normal;
+    width: max-content; max-width: var(--sv-tip-measure);
+    padding: 10px 14px; border-radius: 9px;
     line-height: 1.45; }
   .sv-card-fx-rows .sv-uptip-rows { margin-top: 0; column-gap: 12px; row-gap: 7px; }
   .sv-card-fx-rows .sv-uptip-label { font-size: 0.81em; }
@@ -2034,14 +2035,32 @@ const STYLES = `
      Wider than .sv-card-fx because it holds rows rather than a sentence, and
      the widest of them is a run line with three facts in it.
 
-     NO CAP AND NO WRAP, on this box or the card's row variant below: a row is
-     a label and a value, and a value broken onto a second line under its own
-     label stops reading as a row. The box grows to its longest line instead.
-     showUpgradeTip and showCardEffect both MEASURE the box before placing it
-     and clamp it to the window, so a wide tip slides in from the edge rather
-     than running off it. */
+     A MEASURE, AND THE VALUE WRAPS INSIDE IT — --sv-tip-measure, shared with
+     the card's row variant above so the two boxes cannot drift apart. This box
+     used to have no cap and no wrap at all, on the argument that a value broken
+     onto a second line under its own label stops reading as a row. That is
+     true of a FLOW layout and false of this one: the rows are a grid of
+     max-content / 1fr (see .sv-uptip-rows), so a wrapped value stays in its own
+     column beside the label rather than falling under it — the cell simply
+     becomes two lines tall, which is how a definition table has always wrapped.
+     What the uncapped version actually produced was a card whose "next" row
+     holds three measured phrases drawing as ONE line wider than the window: a
+     stripe across the whole screen, clipped at both ends, with the other tips
+     in the same hand sitting at 250px. Measuring and clamping cannot save that
+     — a box wider than the window has nowhere to slide to — so the fix is the
+     cap and not the placement.
+
+     IN em, so it follows the box's own font size. Both boxes are text roles
+     the player tunes (Y), and a px measure tuned against one size clips at the
+     next one up. Under a vw ceiling as well, because em alone still has no
+     opinion about a phone: the placement code clamps a tip INTO the window and
+     can only do that for a box that fits in one.
+
+     showUpgradeTip and showCardEffect both still MEASURE the box before placing
+     it, which is what puts a wide tip on the correct side of its hexagon. */
+  .sv-uptip, .sv-card-fx-rows { --sv-tip-measure: min(21em, 78vw); }
   .sv-uptip { position: fixed; z-index: 26; pointer-events: none;
-    width: max-content; white-space: nowrap;
+    width: max-content; max-width: var(--sv-tip-measure); white-space: normal;
     padding: 7px 10px; border-radius: 8px; text-align: left;
     background: rgba(9,14,22,0.96); border: 1px solid rgba(122,215,255,0.35);
     line-height: 1.4;
@@ -2082,7 +2101,12 @@ const STYLES = `
   .sv-uptip-row { display: contents; }
   .sv-uptip-label { text-transform: uppercase; white-space: nowrap;
     font-size: 0.82em; letter-spacing: 0.07em; opacity: 0.45; }
-  .sv-uptip-text { min-width: 0; }
+  /* The value wraps; min-width 0 is what lets the 1fr column shrink below its
+     content so it can. break-word is the backstop for the one thing wrapping
+     at spaces cannot handle — a measured phrase with no space in it long
+     enough to beat the measure on its own — so nothing can run off the box
+     whatever a future stat's wording turns out to be. */
+  .sv-uptip-text { min-width: 0; overflow-wrap: break-word; }
   /* The measured next stack is the row the tip exists for, so it is the one
      that is not grey. */
   .sv-uptip-row[data-row="next"] .sv-uptip-text { color: #9fe3ff; font-weight: 600; }
@@ -3646,6 +3670,10 @@ export function hideLeaderboard() {
 let sportsPanel = null;
 let sportsBall = null;
 let sportsBallOnline = null;
+// THE PANEL OPENS UNDER A FINGER THAT IS ALREADY LIFTING — see the guard in
+// buildSealSportsPanel. True from the moment it is shown until the panel has
+// seen a pointerdown of its own.
+let sportsGhostArmed = false;
 
 function buildSealSportsPanel() {
   const wrap = document.createElement('div');
@@ -3702,6 +3730,40 @@ function buildSealSportsPanel() {
 
   root.appendChild(wrap);
   bindMenuSounds(back).addEventListener('click', hideSealSports);
+  // SLIP PROTECTION, the same gesture the hive's tiles and the level-up row
+  // have (ui/press.js): press a sport, change your mind, slide the thumb off,
+  // let go — and nothing happens. On the container rather than per button
+  // because the online row is conditional, so the set of buttons is not the
+  // same in every build. No `onHold`: there is no tip on this screen to read.
+  pressableWithin(wrap, '.sv-sport, #svSportsBack');
+  // A GHOST CLICK CANNOT PICK A SPORT.
+  //
+  // The fifth hex commits on RELEASE (systems/mainMenu.js's onUp), so this
+  // panel is inserted into the document while the finger is coming up — and
+  // iOS dispatches its click AFTER touchend, off its own timeline, hit-testing
+  // wherever the finger actually is. The panel is centred and on a phone the
+  // hex is close enough to the middle that the click lands on a sport: one tap
+  // that opens the list and takes the first thing on it. This is the same
+  // shape as the splash's note about tearing the wrapper out on pointerdown,
+  // and the same one press.js's swallowNextClick exists for.
+  //
+  // DISARMED BY THE PANEL'S OWN POINTERDOWN, not by a timer — the precise rule
+  // and press.js's, for the reason written there. A deliberate press on a
+  // sport begins with a pointerdown ON this panel; the ghost click has none,
+  // because the press it came from landed on the canvas before this panel
+  // existed.
+  //
+  // A SYNTHESISED CLICK PASSES UNTOUCHED (detail 0): the keyboard, a screen
+  // reader, and the pad cursor's own `.click()` — which is the whole of how a
+  // controller presses these buttons, so eating it would trade one input for
+  // another.
+  wrap.addEventListener('pointerdown', () => { sportsGhostArmed = false; }, true);
+  wrap.addEventListener('click', (e) => {
+    if (!sportsGhostArmed || e.detail === 0) return;
+    sportsGhostArmed = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
   // THE SAME GAP, AND A WORSE ONE. This list is the only route into Blubberball,
   // which is the mode a controller is for — and it was the one screen on that
   // route a controller could not press a button on. The two "coming soon" rows
@@ -3730,10 +3792,14 @@ export function showSealSports({ onBall, onBallOnline } = {}) {
     sportsBallOnline.onclick = typeof onBallOnline === 'function' ? () => onBallOnline() : null;
   }
   sportsPanel.classList.remove('sv-hidden');
+  // Armed on every open, because every open is a press that is still finishing
+  // — off the hex, or off Back on the team select.
+  sportsGhostArmed = true;
 }
 
 export function hideSealSports() {
   sportsPanel?.classList.add('sv-hidden');
+  sportsGhostArmed = false;
 }
 
 // Called SYNCHRONOUSLY from the splash's dismiss handler, not deferred to the
@@ -6676,9 +6742,20 @@ function fitCardText(card) {
   }
 }
 
-// A word wider than its box overflows it, which shows up as scrollWidth
-// exceeding clientWidth — that's the mid-word break we're avoiding, since
-// nothing in the CSS is allowed to split the word instead.
+// A word wider than its box overflows it — that's the mid-word break we're
+// avoiding, since nothing in the CSS is allowed to split the word instead.
+//
+// MEASURED AGAINST THE CONTENT BOX, NOT AGAINST THE LINE'S OWN WIDTH, and the
+// difference is the whole test. .sv-card-content is a flex column with
+// align-items: center, so a line is sized to its own content rather than
+// stretched to the box — a name too wide for the hexagon is a 129px element
+// whose scrollWidth and clientWidth are both 129, and `line.scrollWidth >
+// line.clientWidth` is false for exactly the case it was written to catch.
+// It read as a working check for as long as no single WORD beat the measure:
+// a name that merely wrapped was caught by the height test below, and the
+// width arm quietly never fired. The first word wide enough to need it —
+// "Periwinkle", at 129px against a 113px box on a desktop card — went out of
+// the sides of the card with no fit applied at all.
 //
 // NO TOLERANCE ON THE HEIGHT. It used to allow a pixel, which sounds like
 // rounding and is not: the box is overflow:hidden, so that pixel is the bottom
@@ -6690,7 +6767,7 @@ function fitCardText(card) {
 // question of one pixel.
 function overflowsBox(content, lines) {
   if (content.scrollHeight > content.clientHeight) return true;
-  return lines.some((line) => line.scrollWidth > line.clientWidth + 1);
+  return lines.some((line) => line.scrollWidth > content.clientWidth + 1);
 }
 
 // THE PROJECTION MOVED TO A LEAF — ui/project.js — and is re-exported here so
@@ -7052,33 +7129,17 @@ const boostBar = {
   grow: 1,
 };
 
-/** One channel-wise sRGB mix of two 0xRRGGBB ints, as a CSS hex string. */
-function hexMix(a, b, t) {
-  const k = Math.max(0, Math.min(1, t));
-  const out = [16, 8, 0].map((sh) => {
-    const ca = (a >> sh) & 255;
-    const cb = (b >> sh) & 255;
-    return Math.round(ca + (cb - ca) * k);
-  });
-  return `#${out.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
-}
-
 /**
- * WHAT COLOUR PIP `i` IS, and it quotes the wheel rather than inventing a
- * ramp: the same mix(mix(colour, ready, t * 0.75), lastPip) the shader's
- * wheelColor() walks, so switching styles changes the shape of the meter and
- * not what it is saying. "One from full" keeps its own hue in both.
+ * WHAT COLOUR PIP `i` IS, as a CSS hex.
  *
- * Mixed in plain sRGB on purpose — these land in CSS, which is sRGB, where the
- * shader's .set() converts into the renderer's working space. Same numbers,
- * two destinations.
+ * The ramp itself is pipRGB in systems/strikeRing.js — the CPU's copy of the
+ * shader's own wheelColor(), shared so the wheel, this column and the seal's
+ * boost aura cannot quote three different colours for one pip. This end only
+ * formats it: CSS is sRGB and so is that integer, so nothing is converted on
+ * the way here.
  */
 function pipHex(i, n, ring) {
-  const base = ring.color ?? 0x7ad7ff;
-  const ready = ring.readyColor ?? 0x9dffd0;
-  const last = ring.lastPipColor ?? ready;
-  const t = n > 1 ? i / (n - 1) : 1;
-  return i >= n - 1 ? hexMix(base, last, 1) : hexMix(base, ready, t * 0.75);
+  return `#${pipRGB(i, n, ring).toString(16).padStart(6, '0')}`;
 }
 
 /**

@@ -1055,4 +1055,38 @@ section('Kill goo: sized off the body, lobes and throw together');
   resetParticles();
 }
 
+// ===========================================================================
+// A SPRAY OF WATER OVER GOO THAT IS SOMEBODY'S COLOUR
+// ===========================================================================
+// `color` rides on the whole `at`, so it reaches BOTH bursts an event fires.
+// That is right for a kill — the spray and the mass are the same creature —
+// and wrong for the fin flick, whose `emit` is ballSplash (the same water every
+// other touch throws, belonging to no team) over a `goo` that is the ball's own
+// mass. Tinting through `color` would make it the one touch in a match whose
+// WATER wears a team colour. `gooColor` is the third goo-only override, beside
+// gooSizeMul/gooSpeedMul, and the two ways it silently stops working are the
+// two checked here: feedback() stops splitting it off, or the flick goes back
+// to passing `color` and nobody notices because the goo is tinted either way.
+section('gooColor: the goo is tinted, the spray is not');
+{
+  const FEEDBACK = fs.readFileSync(path.join(HERE, '../path/src/systems/feedback.js'), 'utf8');
+  const VERSUS = fs.readFileSync(path.join(HERE, '../path/src/systems/versus.js'), 'utf8');
+  check('feedback() splits gooColor onto the goo burst',
+    /color:\s*at\.gooColor \?\? at\.color/.test(FEEDBACK));
+  check('...on the same branch as the size and speed overrides, so one arriving alone still routes',
+    /at\.gooSizeMul != null \|\| at\.gooSpeedMul != null \|\| at\.gooColor != null/.test(FEEDBACK));
+  check('...and nothing writes it onto the spray', !/emit\(def\.emit, x, y, goo/.test(FEEDBACK));
+
+  const flick = /feedback\('versusFinFlick',\s*\{([\s\S]*?)\n  \}\);/.exec(VERSUS);
+  check('the fin flick fires one', !!flick);
+  if (flick) {
+    check('...tinting its goo off the shared resolver',
+      /gooColor:\s*ballTint\(\)\.getHex\(\)/.test(flick[1]));
+    check('...and leaving its spray alone', !/\bcolor:/.test(flick[1]));
+  }
+  const def = CONFIG.feedback?.versus?.versusFinFlick ?? CONFIG.feedback?.versusFinFlick;
+  check('...over an event that really has both channels',
+    !!def && !!def.emit && !!def.goo, def ? `emit ${def.emit}, goo ${def.goo}` : 'no such event');
+}
+
 process.exit(failures ? 1 : 0);

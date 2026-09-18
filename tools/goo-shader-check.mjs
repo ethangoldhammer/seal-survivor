@@ -55,6 +55,54 @@ for (const u of ['uTeamA', 'uTeamB', 'uShare', 'uSeed', 'uLobes', 'uLobeSize', '
 // ...and the single-colour path every OTHER goo group takes is still there.
 check('the single-tint path is untouched for blood, foam and the rest',
   /col = mix\(col, uTint, uTintMix\);/.test(gooFragmentShader));
+// THE FRAME IS NOT THE FEATURE. uBallR used to be both the ball's radius and
+// the switch for the two-colour path, so before the first contact there was no
+// frame at all — and the mottle below is drawn in that frame from the kickoff.
+// A regression here is a ball whose interior is flat until somebody hits it,
+// which is a thing you can watch happen and not see.
+check('the two-colour path has its own switch, so the body frame can exist without it',
+  /uniform float uTeams;/.test(gooFragmentShader)
+    && /if \(uTeams > 0\.0\) \{/.test(gooFragmentShader)
+    && !/if \(uBallR > 0\.0\) \{/.test(gooFragmentShader));
+
+// --- THE BOIL INSIDE -------------------------------------------------------
+// Every uniform renderGooGroup writes for the mottle, declared AND read. A
+// declared-and-never-read uniform is dropped by the driver and the CPU writes
+// it into nothing, which looks exactly like a slider that does not work.
+for (const u of ['uMottle', 'uMottleScale', 'uMottleSpeed', 'uMottleFeed', 'uMottleBoil',
+  'uMottleHz', 'uMottleGain', 'uMottleRelief', 'uMottleEdge', 'uMottleRoll']) {
+  const declared = new RegExp(`uniform [a-z0-9]+ ${u};`).test(gooFragmentShader);
+  const uses = gooFragmentShader.split(new RegExp(`\\b${u}\\b`)).length - 1;
+  check(`the mottle declares and reads ${u}`, declared && uses >= 2, `${uses} mention(s)`);
+}
+// IT IS TURBULENCE, not cloud. |n - 0.5| creases each octave at its midline,
+// which is the whole difference between a substance churning and fog on the
+// ball; an octave that quietly loses its abs() still renders something
+// plausible and wrong.
+check('the mottle field is creased turbulence, sampled through its own warp',
+  /float mottleField\(vec2 p, float t\)/.test(gooFragmentShader)
+    && /abs\(vnoise\(q \* f \+ t/.test(gooFragmentShader)
+    && /vec2 q = p \+ vec2\(vnoise\(p \+ t\)/.test(gooFragmentShader));
+// IN THE BALL'S FRAME, turned by its roll. Sampled in uv it would sit still
+// while the ball crossed it — a window onto a substance rather than a
+// substance — and that failure looks fine in a still frame.
+check('...sampled in the ball’s own frame and turned by its spin',
+  /float cr = cos\(uMottleRoll\);/.test(gooFragmentShader)
+    && /vec2 mp = vec2\(d\.x \* cr - d\.y \* sr, d\.x \* sr \+ d\.y \* cr\) \* uMottleScale;/
+      .test(gooFragmentShader));
+// ...ON A CLOCK THAT CAN STEP. The same boil the outline has, one channel over
+// and over the whole interior.
+check('...on a clock that flows or steps, which is the boil',
+  /floor\(uTime \* uMottleHz\) \/ max\(uMottleHz, 1e-4\), uMottleBoil\)/.test(gooFragmentShader));
+// ...AND IT LETS GO AT THE EDGE, or the break-up eats the silhouette — the one
+// part of the ball that has to read at speed.
+check('...and lets go before the rim, so the outline stays clean',
+  /smoothstep\(uIso, uIso \+ uMottleEdge, dens\)/.test(gooFragmentShader));
+// ONE LIGHT ON ONE SURFACE. The mottle's slope goes into the SAME fake normal
+// the body's gradient makes, not into a second highlight laid over the first.
+check('...and its relief bends the body’s own normal',
+  /vec3 n = normalize\(vec3\(-\(dr - dl\) \* uNormal - motGx, -\(du - dd\) \* uNormal - motGy, 1\.0\)\);/
+    .test(gooFragmentShader));
 // THE CELLS ARE A FIELD, not a shape. The whole point of doing this as a
 // second metaball pass is that neighbouring cells SUM and are thresholded
 // together, which is what welds them; drawing each one and taking the max

@@ -189,6 +189,21 @@ export const CONFIG = {
   // aiming one way while swimming another is ordinary play.
   aimIndicator: {
     enabled: false,
+    // ...AND NEVER IN A BALL-GAME MATCH, whatever `enabled` says. This is a
+    // readout of where the GUN points, and there is no gun in Blubberball —
+    // main.js turns autofire off for the whole match. What the aim still does
+    // there is point the FLIPPERS (systems/aimRig.js) and, now, decide which
+    // way a swipe wipes the ball (systems/finFlick.js), and both of those are
+    // read off the animal itself. A beam drawn over a pitch is an interface
+    // element claiming a precision no shot in the mode has.
+    //
+    // Its own flag rather than a tuning value turned down, because `enabled`
+    // is a look the player tunes for a RUN and is saved that way — the saved
+    // snapshot has it on. Gated in main.js beside the replay gate, and a reset
+    // rather than a `running: false` for the same reason as that one: a match
+    // opens on a camera cut, and a tenth of a second of beam dissolving over
+    // the kickoff is the artefact this removes.
+    inVersus: false,
     opacity: 1,
     // What it drops to when nothing is firing, as a fraction of `opacity`. A
     // permanent full-strength beam becomes furniture and stops being read.
@@ -1349,6 +1364,32 @@ export const CONFIG = {
           // How far the trailing half is pinched into a tail, 0..1. The leading
           // edge always stays full width — a drop is a teardrop point-up.
           taper: 0.55,
+
+          // --- COLOURED WET ----------------------------------------------------
+          // A breach leaves seawater, which is clear. A GOAL throws the ball's
+          // own goo back out of the mouth and over the camera (see cineSplash,
+          // fired from systems/versus.js), and that is not clear — it is the
+          // scoring side's colour.
+          //
+          // `tint` is how strongly the coloured share of the wetness reads, and
+          // it is ABSORPTION: a film of something coloured takes light away, it
+          // does not add it, so this multiplies the frame behind each bead. At 1
+          // a fully-covered pixel is the pure colour and the picture behind it
+          // is gone, which is further than goo on glass ever goes.
+          tint: 0.85,
+          // ...and the little that is added back, because absorption alone is
+          // invisible on dark water — which is most of this game's frame. Enough
+          // for the colour to exist against black; past about 0.3 a drop stops
+          // being wet and starts being a light.
+          tintGlow: 0.12,
+          // The goo dries on its own clock, and slower than the water it is in
+          // by default: seawater runs off glass and goo stays on it. Capped by
+          // the water either way — colour cannot outlast the beads carrying it.
+          tintLife: 4.6,
+          // How much a GOAL throws, against perBreach's one surface crossing.
+          // More than a breach: a breach is the lens leaving the water, and
+          // this is a wall of goo squeezed out of a hole at the camera.
+          perGoal: 1,
         },
     },
     },
@@ -7368,6 +7409,202 @@ export const CONFIG = {
       // vector instead of near it. Measured, and it moves with the dive range —
       // re-pick those frames and this needs re-solving.
       divePitch: 96,
+
+      // --- the trail ------------------------------------------------------------
+      // WHAT THE BIRD DRAGS UNDER WITH IT. Air out of the feathers, shed the
+      // whole way from the water line to the seabed — the thing that turns the
+      // plunge from a sprite disappearing into a body going somewhere. The
+      // bubbles themselves are CONFIG.emitters.gullBubbles; this is only how
+      // often a puff goes out.
+      //
+      // ON A TIMER, NOT PER FRAME, which is the only decision here worth
+      // stating. A trail emitted every frame is a trail whose density is the
+      // frame rate: the same dive lays down twice as many bubbles on a 120Hz
+      // screen as on a 60Hz one, and every particle budget in the game is sized
+      // against the number somebody chose rather than the number the monitor
+      // happened to hand it.
+      //
+      // 0.035 is about 28 puffs a second against a fall that lasts one and a
+      // half. MEASURED end to end (npm run test:seagull), a dive lays down 39
+      // puffs and 78 bubbles — not 39 x 7, because `fx.spriteDensity` thins
+      // every emitter in the game and is tuned to 0.35, so a `count` of 7
+      // delivers two. That is the right place for it to be thinned: the trail
+      // rides the player's quality setting exactly like every other burst, and
+      // raising the count here to beat the thinning would make this the one
+      // effect that ignores it.
+      //
+      // Eighty small bubbles in a column is the "small but plentiful" the trail
+      // is for. It is cheap because they are tiny and short-lived, not because
+      // there are few of them.
+      trail: {
+        enabled: true,
+        interval: 0.035, // seconds between puffs
+        // The most puffs one frame may owe. The timer accumulates rather than
+        // resetting, so a long frame legitimately owes several — but a frame
+        // long enough to owe a hundred is a stall, and the answer to a stall is
+        // not to empty the particle buffer into the frame after it.
+        maxPerFrame: 4,
+      },
+
+      // --- the blast's return -----------------------------------------------
+      // An explosion underwater is a crack and then a low roll back off the
+      // seabed, and the GAP between them is the only thing that says it
+      // happened in a room made of water rather than in open air. Two events,
+      // `seagullBlast` and `seagullBlastTail`, on one clock.
+      //
+      // The clock lives in systems/seagull.js rather than on the gull, because
+      // the gull is GONE by the time this is owed — it is removed on the frame
+      // it detonates, which is exactly why this needed somewhere of its own to
+      // wait rather than being a field on a body that no longer exists.
+      blastEcho: {
+        enabled: true,
+        // Long enough to be a separate sound and short enough to still belong
+        // to the same bang. Under about 0.1 the two fuse into one thicker
+        // crack, which is the version that sounds like a mixing accident.
+        delay: 0.22,
+        // Quieter than the crack, always — this is the room, not the bomb.
+        scale: 0.9,
+        // ...and it grows a little with the blast that made it, so a maxed
+        // stack rolls back further. Read off the run's own splash radius
+        // against the table's base, so Splash Zone and Big Rigz reach it
+        // without this having to know they exist.
+        radiusGain: 0.35,
+        maxScale: 1.8,
+      },
+
+      // --- the stoop comes apart ----------------------------------------------
+      // A DIVING GULL IS NOT FLYING ANY MORE, and it should not go on looking
+      // like it is. The stoop clip is a held tuck the artist animated IN PLACE
+      // (see ASSETS.seagull) — one pose, looped, for the whole plunge — so what
+      // reached the screen was a rigid bird on a stick, identical from the
+      // commit to the splash however long the fall was.
+      //
+      // So the skeleton is cut loose once the tuck has landed. The mixer stops,
+      // the tuck becomes the pose the springs are pulled back toward, and the
+      // wings, legs and neck are dragged by the air the bird is falling
+      // through — the same machinery a dead boss falls with (systems/
+      // bossRagdoll.js), pointed at something that is still very much alive.
+      //
+      // IT COSTS NO ANIMATION AT ALL, which is why this is the one clip in the
+      // game it is safe to do to. Freezing a swim cycle would throw away a
+      // wingbeat; freezing a held pose throws away nothing, because the clip
+      // was not going anywhere. The glide and the flap keep their mixer and
+      // their authored beats, and the chains sleep through both — see the
+      // `asleep` flags on ASSETS.seagull.rig.springChains.
+      slack: {
+        enabled: true,
+
+        // The spring the chains solve with while loose. Role scaling does not
+        // apply to a limp body (see setLimp in systems/animation.js), so this
+        // is the whole of it and every chain gets the same.
+        //
+        // LOOSER THAN THE SEAL'S DEATH FLOP (stiffness 7, damping 2.6), which
+        // is the closest thing to compare it against, because that one is a
+        // body sinking through water and this is a bird falling through air.
+        // The low damping is deliberate and is most of what makes it comic: it
+        // overshoots and wobbles back rather than settling, so the wings keep
+        // arguing with the airflow the whole way down instead of streaming into
+        // one shape and holding it.
+        stiffness: 5,
+        damping: 1.6,
+        tipLooseness: 0.93, // a wingtip lags further behind than the shoulder
+        maxLag: 1.6,        // radians a bone may fall behind the frozen tuck
+        softness: 0.5,
+        snapAngle: 3.0,
+
+        // THE MOMENT IT LETS GO. One kick along the flight path as the tuck
+        // lands, so the limbs snap backwards on the frame the bird commits
+        // rather than easing into a stream over the next half second. Sized
+        // against CONFIG.boss.ragdoll.blow (10), which is the same impulse into
+        // the same solver and is documented there for why much larger is worse
+        // — past a point it slams every chain into its lag cap in one frame and
+        // the body CUTS to a folded pose instead of falling into one.
+        snap: 7,
+
+        // THE AIR GOING PAST, per unit of the bird's own speed, per second,
+        // pulling every chain the opposite way to its travel. The stoop
+        // accelerates to `diveSpeedMax` 30, so at the bottom of the fall this
+        // is worth 30x its value every second.
+        //
+        // MUCH SMALLER THAN THE BOSS'S 1.5, and the difference is not a
+        // disagreement about how air works — it is the speeds. A boss corpse
+        // drifts at the single digits its killing blow left it with and decays;
+        // a gull is doing thirty and climbing.
+        //
+        // AND SMALL EVEN FOR THAT, because this term is the enemy of the joke.
+        // It points every chain down ONE line, and a bird whose wings, legs and
+        // neck all stream the same way is a dart: filmed at 0.32, the skeleton
+        // collapsed into a streak within half a second and stayed there for the
+        // rest of the fall. It is kept only so the fall still reads as fast.
+        // `buffet` is what actually moves the limbs.
+        flow: 0.06,
+
+        // Weight, as a continuous impulse down the chains. Small, and it is
+        // meant to be: a bird in a stoop is in very nearly free fall, so its
+        // own limbs have almost no weight relative to it and the air is what
+        // moves them. It is here at all so the near-vertical part of the fall,
+        // where the flow is straight up the body and the wings have nothing to
+        // pick a side by, still has one asymmetry in it.
+        sag: 3,
+        sagBias: 0.3, // reaches the chain ROOTS — see CONFIG.boss.ragdoll.sagBias
+
+        // THE BUFFET, and it is the difference between aerodynamic and funny.
+        // Flow and sag alone settle into a hang: everything streams one way and
+        // stays there, which is a competent dive. This shoves the chains
+        // SIDEWAYS, square to the flight path, reversing `buffetHz` times a
+        // second — so the wings flap against the air they cannot fly in and the
+        // feet swing about underneath.
+        //
+        // Per unit of speed like `flow`, because a slow fall should wobble and
+        // a fast one should shake.
+        buffet: 2.2,
+
+        // AND IT HAS TO BE SLOW — slower than it looks like it should be, which
+        // is the single least obvious number in this block.
+        //
+        // A spring chain is a low-pass filter and this one is cut very low: at
+        // `stiffness` 5 its natural frequency is sqrt(5) rad/s, about 0.36Hz.
+        // The first pass drove it at 5.5Hz, fifteen times above that, and the
+        // response falls off as the square of the ratio — so roughly one part
+        // in two hundred of every shove survived and the buffet did nothing
+        // whatsoever. It measured as nothing, too: sweeping the amplitude from
+        // 0.5 to 2.4 moved the per-frame tip travel by a hundredth of a body
+        // length, which reads exactly like a force being applied somewhere it
+        // cannot be felt, because it was.
+        //
+        // Near the chain's own frequency it is the opposite problem in a good
+        // way: the limb is already loaded and the drive just has to lean on it.
+        // 1.6Hz is about two and a half flails on the way down, which is as
+        // many as a fall this short can show.
+        buffetHz: 1.6,
+        // Every LIMB gets its own place in that cycle — spread evenly around it
+        // and then jittered by this much, as a share of the period. The even
+        // spread is what makes the two wings disagree; the jitter is what stops
+        // two gulls stooping together from reading as one animation played
+        // twice.
+        buffetJitter: 0.18,
+        // ...and the legs get leaned on harder. They are the longest chains on
+        // the bird and the least exposed: tucked, they hang near the body's own
+        // axis, and `impulse` drops whatever component of a force runs ALONG a
+        // bone — so the airflow, which is straight up that axis in a stoop, has
+        // almost nothing to grip. Measured on the first pass, the feet moved a
+        // fifth of what the wings did. The buffet is square to the flight path
+        // and is the only force here that can reach them.
+        legGain: 2.2,
+        // How far either side of the airflow a limb is shoved, in radians.
+        // Along the flow exactly (0) every limb streams down the same line and
+        // the bird collapses into a streak — good aerodynamics, dull picture.
+        //
+        // Capped well short of square on purpose, and by measurement rather
+        // than taste: at a right angle the shove lies flat along the wing bones
+        // and `impulse` drops whatever runs ALONG a bone, so a wider spread is
+        // not a bigger flail, it is a smaller one. 0.9 rad is about 52 degrees.
+        spread: 1.1,
+
+        // 0 kicks every chain evenly, 1 puts all of it at the tips. High: this
+        // is drag on feathers and toes, not a blow to the body.
+        tipBias: 0.75,
+      },
 
       // --- the bird as a foothold ---------------------------------------------
       // A MID-AIR RELAUNCH THROUGH A GULL REFILLS THE BOOST METER AND SCORES A
@@ -14167,24 +14404,131 @@ export const CONFIG = {
         electric: {
           color: 0x8fe6ff,
           coreColor: 0xffffff,
-          // Arcs per second around the rim, and how long each one lives.
+          // HOW JAGGED THE BOUNDARY ITSELF IS, as a share of the aura's reach.
+          //
+          // The ring speaks the shared `electric` dialect — a held zigzag
+          // through spline nodes — but the amplitude it spends is
+          // CONFIG.fx.organicRing.wobble, which is half a WORLD unit, and half
+          // a unit on a twenty-unit aura is a quarter of one percent. The
+          // dialect was running the whole time at a size nothing could see, and
+          // the standing hazard that is supposed to read as lightning came out
+          // as a smooth blue arc. Expressed as a share of reach here so it is
+          // the same shape on a small boss and a giant one.
+          //
+          // CLAMPED TO organicRing.wobbleMax, in auraEdge(). That number is the
+          // whole game's promise about how far a threat circle may lie about
+          // its reach and `npm run looks:ring` audits every ring against it —
+          // so this dial may spend that budget and may not widen it.
+          edgeWobble: 0.16,
+          // Bolts per second, and the ceiling on how long one lives.
+          //
+          // A bolt can only be STRUCK on one of the ring's re-rolls, because it
+          // ends on a corner of the zigzag and a corner only stands still
+          // between them — so `arcRate` is honoured as an average, with the
+          // fraction carried across frames. It dies on the next re-roll, or
+          // after `arcSeconds`, whichever comes first: the ceiling is what
+          // keeps a bolt from hanging around if `organicRing.elecRate` is ever
+          // turned right down. See updateElectric in systems/bossPerks.js.
           arcRate: 14,
           arcSeconds: 0.09,
-          // THE SHAPE OF ONE ARC. `arcSegments` is how many straight pieces
-          // the strike is broken into and `arcJag` how far the joints are
-          // thrown sideways, as a fraction of the strike's own length — so a
-          // short spark and a long one kink by the same proportion and read as
-          // one phenomenon. See jagArc in systems/bossPerks.js.
+          // THE SHAPE OF ONE BOLT. It runs from the body out to a corner of the
+          // ring. `arcSegments` is how many straight pieces the trunk is broken
+          // into and `arcJag` how far the joints are thrown sideways, as a
+          // fraction of the strike's own length — so a short spark and a long
+          // one kink by the same proportion and read as one phenomenon. See
+          // jagArc in systems/bossPerks.js.
           //
-          // 1 segment is the old straight chord exactly, which is the setting
-          // to reach for if the jags ever cost more than they say. Past about
-          // 7 the extra joints are under a pixel at fight scale and all they
-          // buy is vertices.
+          // 1 segment is a straight chord exactly, which is the setting to
+          // reach for if the jags ever cost more than they say. Past about 7
+          // the extra joints are under a pixel at fight scale and all they buy
+          // is vertices.
           arcSegments: 5,
           arcJag: 0.22,
-          // How hard the ring breathes, 0-1, and how fast.
+          // THE FORKS. Branches off the trunk, each landing on a NEIGHBOURING
+          // corner of the same zigzag — so one strike grabs three consecutive
+          // corners and the bolts and the boundary read as one object instead
+          // of as a ring with weather inside it. A branch that stopped in open
+          // water would be the one part still floating free of the ring.
+          //
+          // 0 is a single unbranched bolt, which is what this was before the
+          // forks existed. Each fork costs `forkSegments` more line segments
+          // per live bolt and nothing else — it is the same draw call.
+          forks: 2,
+          forkSegments: 3,
+          // How far along the trunk a branch leaves, 0 at the body and 1 at the
+          // rim. Middling: a fork that splits off at the body is two bolts, and
+          // one that splits at the rim is a frayed end.
+          forkAt: 0.45,
+          // Where on the animal a bolt starts, as a share of its hitbox radius,
+          // and how far off the bearing of the corner it is aiming for it may
+          // leave, in radians. The spread is what stops the set reading as
+          // spokes — a bolt struck straight out along the radius is a diagram
+          // of a circle, and the read wanted here is charge ARCING rather than
+          // radiating.
+          boltInset: 0.55,
+          boltSpread: 0.55,
+          // --- THE SURGE, ON THE BEAT ----------------------------------------
+          // The field is the loudest periodic thing in an electric boss fight,
+          // and it used to run on a free sine at `pulseHz` — a rate picked by
+          // eye and therefore very slightly out of time with whatever loop is
+          // playing. That is the exact problem systems/beatSync.js exists for:
+          // nothing looks broken, the screen just never quite agrees with
+          // itself. `pulseDivision` names a musical figure instead; '1/2' is
+          // two beats, a little under a second at the run's tempo.
+          //
+          // It is an ATTACK, not a wave. A sine spends half its time rising,
+          // which reads as a swell; a half note wants a hit on the beat and a
+          // fall off it, which is what running the cycle through `beatEase` and
+          // inverting it gives. Any curve in ease.js works here; the `out`
+          // family is the one that lands hard and lets go.
+          //
+          // `pulseHz` is not retired — it is the FREE rate, used when
+          // pulseDivision is 'free' or CONFIG.beatSync.enabled is off.
+          pulseDivision: '1/2',
+          beatEase: 'outCubic',
+          // How hard the ring breathes, 0-1, and how fast if it is running free.
           pulse: 0.22,
           pulseHz: 3.5,
+
+          // --- THE OVERDRIVE -------------------------------------------------
+          // What the ring's colour is multiplied by before it is written, and
+          // how much more of that arrives on the downbeat. This is the channel
+          // that crosses the bright pass and blooms, as opposed to the alpha,
+          // which only makes the band more opaque.
+          //
+          // `beatGlow` LOOKS SMALL and is not. The bright pass thresholds
+          // luminance, where blue is worth 7% and red and green carry the rest —
+          // the aura was cyan until now and barely crossed it at any glow, and
+          // it is yellow now, which crosses it hard. The same add that was
+          // invisible before is a flare. Turn this up before turning `ringGlow`
+          // up: a high floor is a ring that is always blooming, which is a ring
+          // with no beat in it at all.
+          ringGlow: 2.2,
+          beatGlow: 1.6,
+
+          // --- WHAT ACTUALLY HURTS YOU ---------------------------------------
+          // A BOLT TOUCHING YOU, and nothing else. This was the whole disc at a
+          // flat rate for as long as the perk has existed; see the note over
+          // zapPlayer in systems/bossPerks.js for why that had to change and
+          // what it costs.
+          //
+          // `boltHitRadius` is the bolt's own thickness in world units, added to
+          // the seal's hitRadius. A line has no width, and a hazard you can only
+          // be hit by if you are EXACTLY on a mathematical segment is one that
+          // reads as broken — it is missing you by a pixel and there is no way
+          // to see that it did. Generous on purpose, the same way the crab's
+          // impact test is.
+          boltHitRadius: 0.35,
+          // The row in bossPerks.csv still says damage per SECOND — it is a
+          // field, and that is the honest unit for one. This is the conversion:
+          // how many seconds of the field one touch is worth. At 0.5 a zap is
+          // half the old standing rate, and a player who stands in the middle
+          // eats several a second.
+          zapSeconds: 0.5,
+          // How hard the seal's own body flashes, and how big the sparks are.
+          // See CONFIG.fx.playerFlash and the `bossShockZap` feedback event.
+          zapFlash: 1,
+          zapScale: 0.9,
 
           // --- THE FIELD INSIDE THE RING (goo group `aura`) -------------------
           // A charged medium filling the zone, so it reads as a SPACE that is
@@ -18212,6 +18556,32 @@ export const CONFIG = {
       // `turbulence` is nearly off — turbulence is what breaks a line up, and
       // a line is the entire effect. Short-lived on purpose: a smear that
       // outlives the frame you noticed it in is a stain.
+      // THE FIN'S WIPE — what a flipper dragged across the ball throws off it.
+      // See CONFIG.versus.ball.finFlick.
+      //
+      // BETWEEN A SPLASH AND A SMEAR, which is the whole shape of the event.
+      // `ballSplash` is a spray in every direction, because a body hitting the
+      // ball displaces water on every side of the contact; `spikeSmear` is a
+      // single tongue down one line, because the ball LEFT on that line. A
+      // flick is neither: nothing was displaced and nothing left — a fin
+      // scraped across a face. So it is a narrow fan thrown ALONG the wipe
+      // (cone 0.3, a third of the splash's) at one tight speed band, which
+      // reads as a sheet peeling off the side of the ball rather than as
+      // either a burst or a streak.
+      //
+      // `inherit` is low, the opposite of the smear's: the wipe belongs to the
+      // FIN and not to the ball, so it stays where the flipper was and the ball
+      // travels out from under it. That difference is the read — a flick that
+      // left with the ball would look like a deflection, and a deflection is
+      // exactly what a flick is not.
+      //
+      // Short and bright: it has to register inside the 0.18 s window without
+      // becoming a second object on the pitch while three seals are chasing.
+      finFlickWipe: {
+        count: 14, speed: [14, 26], size: [0.12, 0.3], life: [0.12, 0.3],
+        colors: [0xe6e3db, 0xffffff], cone: 0.3, drag: 5.2,
+        gravity: [0, -0.6], inherit: 0.12, glow: 1.8, turbulence: 0.15,
+      },
       spikeSmear: {
         count: 12, speed: [24, 96], size: [0.5, 0.95], life: [0.1, 0.26],
         colors: [0xe6e3db, 0xffffff], cone: 0.1, drag: 5.5,
@@ -18585,6 +18955,33 @@ export const CONFIG = {
         colors: [0x9fe8ff, 0xdff6ff, 0xffffff], cone: 0.6, drag: 1.6,
         gravity: [0, 3.2], inherit: 0.3, glow: 0.9, surfacePop: 'bubbleBurst',
     },
+      // WHAT A DIVING GULL DRAGS DOWN WITH IT. The air trapped in a bird's
+      // feathers, stripped off it on the way to the seabed — see the trail in
+      // systems/seagull.js, which sheds this on a timer for as long as the
+      // stoop is under the surface.
+      //
+      // SMALL AND PLENTIFUL, which is the whole brief and is the opposite of
+      // how a burst is usually built. `wakeBubbles` is 2 big ones per shed off
+      // a swimming animal; this is 7 tiny ones, thrown slowly, out of a body
+      // moving at thirty. The size range tops out BELOW where the seal's wake
+      // starts, on purpose: a gull is a fraction of the seal's mass and bubbles
+      // the size of the ones it makes would read as the bird boiling.
+      //
+      // `inherit` is low for the same reason the numbers are small. At the
+      // seal's 0.3 a trail shed at 30 units a second is thrown down the screen
+      // faster than it can rise and draws as a lance rather than as a column
+      // left behind — these are meant to stay where they were let go of and
+      // climb, marking the line the bird came down.
+      //
+      // `surfacePop` because they rise and the stoop starts at the water line:
+      // a bubble that reached the surface and sailed on into the sky is the one
+      // thing this cannot do. `killAtSurface` is left off so it pops rather
+      // than vanishing.
+      gullBubbles: {
+        count: 7, speed: [0.4, 1.8], size: [0.03, 0.09], life: [0.8, 2.0],
+        colors: [0xbfefff, 0xdff6ff, 0xffffff], cone: 1.5, drag: 2.4,
+        gravity: [0, 3.6], inherit: 0.06, glow: 0.8, surfacePop: 'bubbleBurst',
+    },
       // WHAT THE BLUBBERBALL BOILS OFF UNDERWATER — the other half of its
       // trail (systems/ballTrail.js), shed from the same two points astern of
       // the body at the same speed ramp.
@@ -18909,6 +19306,37 @@ export const CONFIG = {
         colors: [0x8fe6ff, 0xd8f6ff, 0x5fc8ff], cone: 0, drag: 3.2,
         gravity: [0, 0], inherit: 1, glow: 1.6, goo: 'aura',
         killAtSurface: false, turbulence: 0.5,
+    },
+      // THE BOOST SHELL SHATTERING at the let-go — systems/boostAura.js. Fired
+      // twice as loud when the release lands in the sweet spot, through
+      // multipliers on CONFIG.boostAura.burst.sweet rather than through a
+      // second entry here: it is the same water, thrown harder.
+      //
+      // NO `colors`, and that is the one thing about this entry worth reading
+      // twice. It is fired through emitCloud with a colour PER SPECK, and that
+      // colour is the shell's own — the burning pip's hue, already normalised
+      // on its peak channel. A palette here would be the debris quietly
+      // disagreeing with the thing it came out of about what colour the fuel
+      // was. The default white the table assumes for a colourless emitter is
+      // never reached.
+      //
+      // `speed` IS read, by hand, in burstBoostAura — emitCloud takes
+      // velocities from the cloud and never looks at the def, so leaving it to
+      // be applied automatically would make this slider move nothing. Same
+      // arrangement as the beam sparks. `cone` and `inherit` are genuinely not
+      // used and are therefore not declared: a control that moves nothing is
+      // worse than an absent one.
+      //
+      // TINY AND BRIEF, which is the whole brief. A fifth of a second and
+      // heavy drag, so the shell is gone rather than replaced by a cloud the
+      // dash then swims out of — the same argument chargeBurst makes about the
+      // release. No surface clip: the shell straddles the water line whenever
+      // the seal does, and half a burst deleted along a straight edge is the
+      // one failure that reads as a bug rather than as water.
+      boostAuraBurst: {
+        count: 0, speed: [6, 16], size: [0.03, 0.09], life: [0.12, 0.3],
+        drag: [7, 12], gravity: [0, -0.6], glow: 2.4,
+        killAtSurface: false, turbulence: 0.8,
     },
       // THE BOW WAVE — the other half of a wake, and the only half that happens
       // in the AIR: water thrown off the stem as the hull shoulders it aside.
@@ -20702,6 +21130,26 @@ export const CONFIG = {
       // whole look stays editable in one place. `scale` rides the power actually
       // spent, at the call site.
       strikeVent:  { emit: 'chargeBurst', shake: 0, hitstop: 0, glow: 0, sfx: null, haptic: null },
+      // THE BOOST SHELL COMING APART at the let-go — systems/boostAura.js.
+      //
+      // NO `emit` OF ITS OWN, and that is not an oversight. The specks are laid
+      // out on the shell's own band with a colour and a velocity each, which is
+      // emitCloud's shape and not emit()'s — so boostAura listens for this name
+      // and draws them. What the event is FOR is the replay: a Blubberball goal
+      // replay re-fires every positioned feedback() it recorded, so an effect
+      // that talks to the particle buffer directly is simply missing from the
+      // shot. Going through here is what puts it in one.
+      //
+      // Silent, still, and with no rumble: the release already fires
+      // strikeVent, strikeBurst and — on the window — strikePerfect, and the
+      // shell coming apart is the PICTURE of that moment rather than a fourth
+      // thing happening at it. A shake here would be the same instant shaking
+      // the camera four times.
+      // `drawnBy` is what tells the audit this is a CARRIER and not a dead
+      // entry: every channel below really is off, and the picture is drawn by
+      // the onFeedback listener in that module. The audit checks the claim
+      // rather than taking it — see the note by it in tools/upgrade-test.mjs.
+      boostShatter: { drawnBy: 'systems/boostAura.js', shake: 0, hitstop: 0, glow: 0, sfx: null, haptic: null },
       // Each link of a strike chain. `scale` climbs with the combo at the call
       // site, so this one authored pulse covers a 1-hit chain and a 6-hit one.
       strikeChain: { emit: 'sparks', shake: 0.06, hitstop: 0, glow: 0.3, ripple: { strength: 1.0, radius: 6 }, sfx: 'strikeChain',
@@ -21032,6 +21480,52 @@ export const CONFIG = {
       // match. Only fires over `ball.fx.blockMin`; below that it was a nudge.
       versusBlock: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.1, hitstop: 0, glow: 0.35, ripple: { strength: 1.8, radius: 8 }, sfx: 'versusBlock',
                      haptic: [{ duration: 28, magnitude: 0.6 }], sfxMinGap: 0.06 },
+      // A FIN FLICK THAT CONNECTED — a flipper wiped across a ball in flight
+      // and put spin on it. See CONFIG.versus.ball.finFlick.
+      //
+      // IT HAS TO BE UNMISTAKABLE AND IT HAS TO BE SMALL, which sounds like a
+      // contradiction and is not: nothing about the ball's FLIGHT changes on
+      // the frame of a flick — only its spin, and spin reads over the second
+      // that follows rather than at the moment it is applied (the strokes in
+      // systems/ballSpin.js have to spawn and the Magnus term has to bend
+      // something). So without an event of its own a successful flick looks
+      // exactly like a missed one, and the player cannot learn the reach.
+      //
+      // Hence a bright, cheap, zero-hitstop mark at the contact point: the
+      // ball's own water thrown along the wipe, a glow pop and a small ripple.
+      // No shake worth the name and no freeze at all — a flick is not a
+      // collision and must not punctuate like one, least of all while somebody
+      // else's shot is still travelling.
+      //
+      // `scale` is how sideways the swipe was (the `bite`), so a wipe that
+      // barely qualified is a flicker and a full crosswise sweep is the whole
+      // thing.
+      // NO SHAKE AND NO FREEZE, both written as zero rather than left to the
+      // guest lists in CONFIG.fx: a flick is not a collision, it lands while
+      // somebody else's shot is still travelling, and the mouse can open one
+      // every `cooldown`. An authored amount muted by a list is design
+      // information (see fx.shakeOnly); an amount that would be WRONG if the
+      // list ever opened is a bug waiting on a config change.
+      versusFinFlick: { emit: 'finFlickWipe', goo: 'ballGoo', shake: 0, hitstop: 0, glow: 0.45, ripple: { strength: 1.1, radius: 5 }, sfx: 'versusFinFlick',
+                     haptic: [{ duration: 18, magnitude: 0.45 }], sfxMinGap: 0.05 },
+      // THE SWIPE ITSELF — the flippers going through the water, whether or
+      // not they reach anything. The other half of the flick, and the half
+      // that makes it learnable: a gesture you only ever hear when it LANDS is
+      // a gesture you cannot practise, because a miss and a button that was
+      // never pressed are the same silence.
+      //
+      // SOUND ONLY, like versusBallSkid above and for the same reason — the
+      // picture is already on the animal (CONFIG.versus.ball.finFlick.kick
+      // twitches both flippers on every swipe), and a burst of particles off a
+      // seal that touched nothing would be the game reporting a hit.
+      //
+      // IT IS GATED ON BEING NEAR THE BALL, not on the swipe (see `swipeNear`).
+      // A window opens every `cooldown` for as long as a hand keeps moving, so
+      // an ungated voice is a whoosh every quarter second for the whole match
+      // — which is not feedback, it is a metronome. Near the ball it is the
+      // sound of trying.
+      versusFinSwipe: { emit: null, goo: null, shake: 0, hitstop: 0, glow: 0, sfx: 'versusFinSwipe',
+                     haptic: [{ duration: 10, magnitude: 0.18 }], sfxMinGap: 0.1 },
       // A PIERCE: the ball won. It goes THROUGH the seal — the bodies overlap
       // for the few frames of the pass — and the seal is knocked back along
       // the ball's line. Water displacing rather than anything landing, so it
@@ -21329,6 +21823,18 @@ export const CONFIG = {
       clubEmbers:  { emit: 'clubEmbers', shake: 0, hitstop: 0, glow: 0.2, sfx: null, haptic: null },
       clubFrost:   { emit: 'clubFrost',  shake: 0, hitstop: 0, glow: 0.15, sfx: null, haptic: null },
       clubSparks:  { emit: 'clubSparks', shake: 0, hitstop: 0, glow: 0.3, sfx: null, haptic: null },
+      // A BOLT OFF AN ELECTRIC BOSS'S FIELD LANDING ON THE SEAL —
+      // systems/bossPerks.js, zapPlayer. An ACCENT, in the same sense the four
+      // club rows above are: it fires on the same frame as the damage, and the
+      // damage already goes through systems/playerDamageFx.js, which throws
+      // `playerHit` with the sound, the shake, the hit-stop and the pad. A
+      // second sound under that is not emphasis, it is a smear.
+      //
+      // So: sparks and a little glow, and silence. `sparks` is the existing
+      // yellow-and-white burst — the same yellow the ring is now — rather than a
+      // preset of its own, because what is wanted here IS that burst and a
+      // second copy of it would be two places to retune one look.
+      bossShockZap: { emit: 'sparks', shake: 0, hitstop: 0, glow: 0.35, sfx: null, haptic: null },
       // An enemy sealed in a bubble. Was playing `bulletHit` — an impact sound
       // for something that deals no damage at all.
       belugaTrap:  { emit: 'breathBubbles', shake: 0.02, hitstop: 0, glow: 0.2, ripple: { strength: 0.6, radius: 5 }, sfx: 'belugaTrap',
@@ -21502,8 +22008,56 @@ export const CONFIG = {
       // stoop above, and it is now the only event that has both a stronger
       // ripple than the boat and a hitstop, because the whole approach was
       // built to make the player watch this land.
-      seagullBlast: { emit: 'bigExplosion', goo: 'killGoo', shake: 0.85, hitstop: 0.08, glow: 1.5,
-                      ripple: { strength: 5.5, radius: 26 }, sfx: 'seagullBlast', haptic: [38, 28, 55] },
+      // --- THE SEAGULL BOMB, END TO END -------------------------------------
+      // Four moments, four events, spread over the two or three seconds a run
+      // takes: the bird arriving in the sky, the stoop committing, the water
+      // being broken, and the bomb going off. They used to be two — the commit
+      // and the blast — with the surface crossing borrowing `breach`, the
+      // SEAL's event, so a gull hitting the water sounded like a seal leaving
+      // it and had the seal's foam.
+      //
+      // Separate events rather than one with parameters, because they are the
+      // ability's whole presentation and each is the only chance to say a
+      // different thing: the cry is a warning, the stoop is a commitment, the
+      // splash is the moment it stops being a bird problem, and the blast is
+      // the payoff. Each carries its own sfx cue for the same reason — see the
+      // gull's block in CONFIG.sfx, where all of them are staged with `srcs: []`
+      // for real takes.
+
+      // THE BIRD ARRIVING, called from fireSeagull the moment a run launches.
+      // Unpositioned shake and no emit: it happens above the top of the shot
+      // (see the entrance block in CONFIG.seagullBomb), so there is nothing to
+      // draw and the sound IS the event. It is the only warning the player gets
+      // that a bomb is inbound, seconds before anything is visible.
+      seagullCry: { emit: null, shake: 0, hitstop: 0, glow: 0, sfx: 'seagullCry' },
+
+      // BREAKING THE WATER. The gull is doing thirty by the time it gets here,
+      // which is faster than the seal ever lands, so this is closer to `slam`
+      // than to `breach` — and the hole and the column underneath it are fired
+      // separately by systems/reentrySplash.js from the same hook, exactly as
+      // the seal's landing does. See the onSplash hook in main.js.
+      //
+      // NO HITSTOP. The blast is a fifth of a second away and is where the
+      // clock is allowed to stop; doing it twice inside one arrival makes the
+      // pay-off read as a stutter rather than as a punch.
+      seagullSplash: { emit: 'splash', goo: 'breachFoam', shake: 0.3, hitstop: 0, glow: 0.4,
+                       ripple: { strength: 3.2, radius: 13 }, sfx: 'seagullSplash', haptic: [16] },
+
+      // THE BOMB. Turned up from where it shipped — shake 0.85, glow 1.5, a
+      // 26-unit ripple — because everything before it is bigger now and an
+      // arrival this long has to land harder than the run that set it up.
+      seagullBlast: { emit: 'bigExplosion', goo: 'killGoo', shake: 1.15, hitstop: 0.1, glow: 2.1,
+                      ripple: { strength: 7.5, radius: 34 }, sfx: 'seagullBlast', haptic: [38, 28, 55] },
+      // ...AND WHAT ROLLS BACK OFF THE SEABED A MOMENT LATER. Its own event on
+      // its own clock (`blastEcho` in CONFIG.seagullBomb, ticked by
+      // systems/seagull.js), because an explosion underwater is two sounds
+      // separated by a gap you can hear: the crack, and the low return.
+      //
+      // NO PICTURE AT ALL — no emit, no goo, no ripple. The first event drew
+      // everything there is to draw and this is the room it happened in. A
+      // second burst a fifth of a second late would read as two bombs.
+      seagullBlastTail: { emit: null, shake: 0.28, hitstop: 0, glow: 0.25,
+                          sfx: 'seagullBlastTail', haptic: [{ duration: 70, magnitude: 0.3 }] },
       // A MUSSEL GOING OFF. Eight or twenty of these land inside a second, so
       // it is deliberately the quiet member of the explosion family: the shake
       // and the ripple are a third of `bigKill`'s and there is NO hitstop at
@@ -21785,7 +22339,19 @@ export const CONFIG = {
       // new DIALECT means a new arm in the shader.
       attackTypes: {
         kinetic: { color: 0xffc65a, edge: 'smooth' },
-        electric: { element: 'shock', edge: 'electric' },
+        // YELLOW, AND STILL NAMED AS THE SHOCK FAMILY. An entry carrying both a
+        // literal and an element takes the literal — see threatType() — so this
+        // is the one threat in the table that deliberately does not wear its
+        // element's colour. The boss's standing field is a hazard you swim out
+        // of; the player's Voltaic arcs are a gun, and they read better as two
+        // things. Set `color` to null here and the join is back, and the whole
+        // palette moves with CONFIG.biolum.elements.shock again.
+        //
+        // It also blooms. The bright pass thresholds LUMINANCE, where blue is
+        // worth 7% and green 72% — the old cyan barely crossed it whatever the
+        // glow was set to, and yellow crosses it hard. Which is why `beatGlow`
+        // in boss.perkFx.electric is a smaller number than it looks.
+        electric: { color: 0xffe24d, element: 'shock', edge: 'electric' },
         blast: { color: 0xffa64a, edge: 'roil' },
         beam: { color: 0xff6a4a, edge: 'roil' },
         void: { color: 0xc9a2ff, edge: 'smooth' },
@@ -22411,6 +22977,41 @@ export const CONFIG = {
               speed: 0.86,    // how fast the field drifts
               feed: 1.6,     // how hard the first sample bends the second
             },
+            // THE BOIL INSIDE — the body's own substance, broken up. See the
+            // uniform notes in systems/post.js for what the field is made of
+            // and why it is sampled in the ball's own frame.
+            //
+            // Everything else on this group works on the EDGE: the warp folds
+            // the silhouette, the outline draws a line inside it, the boil
+            // jitters both. Past the rim band the ball was ONE FLAT COLOUR
+            // with a single highlight lying on it — and at the size it is
+            // drawn, the interior is most of what you are looking at, so a
+            // thing made of liquid read as a sticker of a thing made of
+            // liquid.
+            //
+            // `amount` is the only one that switches it off; the rest are the
+            // character of the churn. Tuned in the ball lab (npm run
+            // looks:ball) and written back with npm run ball:apply.
+            mottle: {
+              amount: 0.34,   // how deep the break-up cuts, 0 = off
+              scale: 3.2,     // noise cells across the ball's diameter
+              speed: 0.55,    // how fast the field churns
+              feed: 0.9,      // how hard it folds through itself
+              // HOW MUCH OF THE CLOCK STEPS rather than flows. At 0 the mass
+              // creeps; at 1 it holds still and jumps `hz` times a second,
+              // which is the outline's boil applied to the whole interior.
+              // Between them it does both, which is what hand-drawn liquid
+              // does — and what keeps this reading as the same substance the
+              // edge is made of.
+              boil: 0.5,
+              hz: 11,         // ...and how often it jumps
+              gain: 1.5,      // contrast: curds high, clouds low
+              relief: 2.4,    // how far the lumps bend the light
+              // Density above the isoline before the break-up fully bites, so
+              // the wet rim and the drawn outline stay clean. The silhouette
+              // is the one part of the ball that has to read at speed.
+              edge: 0.35,
+            },
             // Possession, written live by ballLook.js. White at mix 0 is the
             // ball's own colour untouched.
             tint: 0xffffff,
@@ -22497,6 +23098,13 @@ export const CONFIG = {
 
         // SOMETHING EXPLODING. The whole category, whoever set it off.
         'boatExplosion', 'waterBlast', 'bakalarBombBlast', 'seagullBlast',
+        // ...and the gull blast's return off the seabed, which is the same
+        // explosion arriving a second time. On the list rather than left muted
+        // because the low roll back is the half of an underwater bang you feel
+        // rather than hear, and a camera that moved for the crack and then sat
+        // perfectly still through it says the room has no walls. Its shake is a
+        // quarter of the crack's, so the two read as one event with a tail.
+        'seagullBlastTail',
         'musselBlast', 'musselBarrage', 'missileImpact', 'clubBoom',
         'infectionBurst', 'pearlBurst', 'octoPop',
 
@@ -22639,6 +23247,36 @@ export const CONFIG = {
       // How a number of damage becomes a hit you can feel. Read only by
       // systems/playerDamageFx.js — the long version of why any of this is
       // needed is at the top of that file.
+      // THE SEAL'S BODY GOING HOT WHEN SOMETHING HITS IT — systems/playerFlash.js.
+      //
+      // The third channel on a player hit, beside the rim (CONFIG.playerOutline
+      // .hit) and the eyes. Both of those are AROUND the animal — a silhouette
+      // and two pixels — so a hit landing while the camera is wide had nothing
+      // on the seal itself.
+      //
+      // Only the electric aura's bolts fire it today (see zapPlayer in
+      // systems/bossPerks.js). It is deliberately NOT wired into
+      // systems/playerDamageFx.js, which is the door every other source of
+      // player damage comes through: putting it there would change how every
+      // bite, bullet and claw in the game reads, which is a much bigger decision
+      // than this one and belongs to whoever wants to make it. One call in that
+      // file is all it would take.
+      //
+      // How bright and what colour are NOT here — they are the `playerZap` row
+      // in CONFIG.damageGlow.sources, with the rest of the game's body glows, so
+      // a second source can flash in its own colour without a second envelope.
+      playerFlash: {
+        enabled: true,
+        // How long one flash lasts, in REAL seconds — a hit that also caused a
+        // hit-stop must not have its own flash frozen by the freeze it caused.
+        seconds: 0.18,
+        // How the flash falls away. An `in` curve holds near full for the first
+        // frames and then drops off a cliff, which is what a flash is; an `out`
+        // curve here is a glow that fades, which reads as the seal being warm
+        // rather than as the seal being struck.
+        curve: 'inCubic',
+      },
+
       playerDamage: {
         // Minimum real seconds between two damage events being SHOWN. Damage
         // arriving inside the window isn't dropped, it's added to the next
@@ -27022,6 +27660,8 @@ export const CONFIG = {
       // it in noise, so the two are told apart in a scramble by timbre rather
       // than by level.
       versusBlock:     { src: null, type: 'boom',  freq: [300, 78],   decay: 0.16, gain: 0.34, noise: 0.72, filter: 1300, pitchVary: 0.12, filterVary: 0.28 },
+      versusFinFlick:  { src: null, type: 'boom',  freq: [1500, 620], decay: 0.11, gain: 0.26, noise: 0.85, filter: 4200, pitchVary: 0.18, filterVary: 0.3 },
+      versusFinSwipe:  { src: null, type: 'noise', filter: 2100,      decay: 0.13, gain: 0.12, pitchVary: 0.14, filterVary: 0.4 },
       // A PIERCE is the ball going THROUGH: nothing lands, so nothing thuds.
       // Filtered noise with the cutoff sweeping — water being displaced by
       // something that did not stop, on the same family as `sealLunge`.
@@ -27173,8 +27813,37 @@ export const CONFIG = {
       // drone underneath whatever else is being hit, and anything with body
       // here would beat against the plucks over it.
       harpAura:   { src: null, type: 'blip',  wave: 'sine',     freq: [520, 780],   decay: 0.16, gain: 0.05, pitchVary: 0.26 },
+      // --- THE GULL'S OWN VOICE ------------------------------------------------
+      // Three cues across a run, and they are three because the bird is audible
+      // at three moments that mean different things: arriving, committing, and
+      // hitting the water. The explosion is a separate family below — nothing
+      // in this group should sound like a bomb and nothing in that one should
+      // sound like an animal.
+      //
+      // ALL STAGED WITH `srcs: []`, which is where real takes go: drop files on
+      // any of these in the F menu's Sound tab and the synth below becomes the
+      // fallback it was always meant to be. Stack several on one cue and they
+      // cycle without repeating (see pickSample in systems/audio.js) — a gull is
+      // exactly the sound that gives itself away when it is the same sample
+      // every time, because a real one never makes the same call twice.
+      //
+      // Synthesised for now because nothing in the library is a bird, and a
+      // squawk faked out of a sample of something else would be worse than an
+      // honest noise — the same judgement `gullKick` records.
+
+      // ARRIVING. The first thing a player hears of a run, seconds before there
+      // is anything to see: the bird enters above the top of the shot. Bright
+      // and RISING, which is what separates it from the stoop below — the same
+      // animal, going the other way.
+      seagullCry: { src: null, srcs: [], type: 'blip', wave: 'square', freq: [700, 1450], decay: 0.26, gain: 0.15, pitchVary: 0.18 },
       // The dive. Falling sawtooth — a bird committing to a stoop.
-      seagullDive:{ src: null, type: 'blip',  wave: 'sawtooth', freq: [1500, 480], decay: 0.30, gain: 0.16, pitchVary: 0.10 },
+      seagullDive:{ src: null, srcs: [], type: 'blip',  wave: 'sawtooth', freq: [1500, 480], decay: 0.30, gain: 0.16, pitchVary: 0.10 },
+      // HITTING THE WATER at thirty units a second. Bright noise, short — this
+      // is spray being thrown clear, and the mass arriving under it belongs to
+      // the blast a fifth of a second later rather than here. Filtered high and
+      // decaying fast for the same reason `breach` is: what you hear of a small
+      // body entering water at speed is almost all hiss.
+      seagullSplash: { src: null, srcs: [], type: 'noise', filter: 3800, decay: 0.26, gain: 0.2, pitchVary: 0.14, filterVary: 0.2 },
 
       // THE BOWHEAD SWEEP. The lowest group in this table on purpose: nothing
       // else in the game lives down here, so the whale owns a band of the mix
@@ -27382,7 +28051,22 @@ export const CONFIG = {
       // The gull landing. Pitched under `bigKill` and given a long decay: it
       // goes off on the SEABED, and a blast that far down should arrive as a
       // thud through the floor rather than as a crack in the water.
-      seagullBlast:     { src: null, type: 'boom', freq: [140, 28], decay: 0.78, gain: 0.46, noise: 0.65, filter: 760, pitchVary: 0.08, filterVary: 0.18 },
+      // --- THE GULL'S EXPLOSION, WHICH IS TWO SOUNDS ---------------------------
+      // A bomb going off underwater is a crack and then a low return off the
+      // seabed, and the GAP between them is what says it happened in a room
+      // made of water rather than in the open. Two cues on one clock
+      // (CONFIG.seagullBomb.blastEcho), so each can be filled and levelled on
+      // its own — and so a take dropped on the crack does not have to contain
+      // its own tail baked in at whatever gap the recording happened to have.
+      //
+      // Staged with `srcs: []` like the bird's voice above, and kept in a
+      // separate family from it on purpose: these two are the payoff and those
+      // three are the animal.
+      seagullBlast:     { src: null, srcs: [], type: 'boom', freq: [190, 34], decay: 0.72, gain: 0.52, noise: 0.72, filter: 900, pitchVary: 0.08, filterVary: 0.18 },
+      // The return. Lower, longer, quieter and much darker than the crack —
+      // everything above a few hundred hertz has been eaten by the water by the
+      // time this comes back, which is the whole character of it.
+      seagullBlastTail: { src: null, srcs: [], type: 'boom', freq: [90, 20], decay: 1.25, gain: 0.3, noise: 0.5, filter: 340, pitchVary: 0.1, filterVary: 0.22 },
       // One shell of a barrage. Short and bright rather than deep — twenty of
       // these overlap, and anything with a long tail turns the flight into one
       // continuous rumble with no individual bangs in it.
@@ -28046,6 +28730,155 @@ export const CONFIG = {
       contrast: 2.2,
       white: 0.35,
       tipColor: 0xffffff,
+    },
+
+    // ---------------------------------------------------------------------------
+    // THE BOOST AURA — the shell of charged water a seal burning fuel pushes
+    // out ahead of itself. See systems/boostAura.js for the long argument;
+    // what matters here is which question it answers, because the seal already
+    // has two other channels talking about the strike:
+    //
+    //   sealCharge above     the markings, monochrome — "how much is in the
+    //                        tank". Hue on the BODY means element.
+    //   strike.charge.outline  the rim throbbing — "I am loading a strike".
+    //   THIS                 "the fuel is leaving right now, and this is which
+    //                        of it" — drawn entirely OUTSIDE the animal, which
+    //                        is why it is allowed the colour the body is not.
+    //
+    // IT WEARS THE DRAINING PIP'S HUE, off the fuel wheel's own ramp (`color`
+    // through `readyColor` with `lastPipColor` pinned on the end, in
+    // strike.ring above) — so retuning the ring retunes this with it, and a
+    // player who has learned the wheel's colours can read what is left without
+    // looking away from what they are about to hit.
+    //
+    // There is no colour of its own here for that reason. The three knobs that
+    // WOULD be one — a hue, a saturation, a tint — would each be a second
+    // opinion about a number the wheel already owns.
+    // ---------------------------------------------------------------------------
+    boostAura: {
+      enabled: true,
+
+      // HOW FAR OUT OF THE ANIMAL IT STARTS. `gap` is clearance past the
+      // body's measured bounding circle, so a hard edge never lands exactly on
+      // the silhouette — the seal's own outline shell already lives there.
+      gap: 0.12,
+      // ...AND HOW IT GROWS: world units per second of BURN, capped at `reach`
+      // units past that starting circle. A rate rather than a curve over the
+      // fuel level, because the thing being drawn is water being pushed and
+      // water does not know how full the tank was when the pushing started.
+      // At the default wind-up the cap lands a little before the tank runs
+      // dry, so a full hold ends with the shell HELD at its reach rather than
+      // still growing — which is what makes "out of fuel" visible out here.
+      push: 4.0,
+      reach: 3.4,
+
+      // Past 1 on purpose: the bright pass is a HalfFloat target, so the
+      // excess blooms outward rather than clipping to white in place. The hue
+      // is normalised on its PEAK CHANNEL before this multiplies it, so every
+      // pip on the wheel arrives here equally bright — see the header on why
+      // that is not luminance.
+      strength: 2.8,
+      // How fast the shell thins outward from the body. Above 1 keeps the mass
+      // against the animal, which is where it is being pushed from.
+      falloff: 0.85,
+      // Both edges, in shell widths. Soft enough that the inner one is not a
+      // ring stuck to the silhouette.
+      soft: 0.18,
+
+      // ---- the flow, down the line of the strike ---------------------------
+      // THE FIELD SLIDES THE WAY THE SHOT IS AIMED, and faster the longer the
+      // button has been down. Two things are being said at once and they are
+      // both things the player needs before they let go:
+      //
+      //   WHERE      the aura streams down the launch line — the same line
+      //              strikeDirection() gives the release and the wind-up's
+      //              corridor, between the swim and the cursor, so the water
+      //              is pointing at what the strike is about to hit.
+      //   HOW LONG   the stream accelerates, so a wind-up reads as WINDING UP
+      //              rather than as a state that is simply on. The radius is
+      //              already saying the same thing, and two channels saying it
+      //              are what make it legible in peripheral vision.
+      //
+      // Same arithmetic as push/reach above — a rate, a ramp per second of
+      // hold, and a ceiling — on purpose: the two things that grow with the
+      // length of a hold should grow by the same kind of number, or tuning one
+      // tells you nothing about the other.
+      //
+      // World units per second, so this is in the same money as `push` and
+      // reads against `grain`: at 1.35 features per unit, 2 u/s is under three
+      // features a second going past, and 10 is a torrent.
+      flow: 2.0,
+      flowRamp: 8.0,
+      flowMax: 9.0,
+
+      // ---- the turbulence -------------------------------------------------
+      // `grain` is features per WORLD unit, not per shell width: the field is
+      // nailed to the water, so a growing shell sweeps through it and churns
+      // as it expands instead of inflating a pattern. `warp` is what makes it
+      // turbulent rather than lumpy — the field displacing its own lookup —
+      // and `churn` is how fast the whole thing boils.
+      grain: 1.35,
+      warp: 1.4,
+      churn: 1.7,
+      // How far the field tears the LEADING edge, in shell widths. Generous
+      // compared with the organic ring's wobble because nothing out here is a
+      // promise about where damage lands.
+      wobble: 0.55,
+      // How much of the shell's body the field is allowed to eat, and how hard
+      // the field is driven toward its own extremes first.
+      depth: 1,
+      contrast: 1.7,
+
+      // Seconds to fade in on the first frame of a burn, and out when the
+      // burn stops. The shell keeps EXPANDING through the fade — a radius that
+      // collapsed on the release would read as the effect being switched off
+      // rather than as the boost ending.
+      rise: 0.06,
+      fade: 0.18,
+
+      // ---- the perfect charge landing -------------------------------------
+      // THE ONE END TO A HOLD THAT IS NOT A FADE. Every other way a wind-up
+      // finishes — the release, a death, the tank running dry — is the shell
+      // dissipating over `fade`, which is right: nothing happened, the water
+      // settles. A perfect charge is the moment the whole loop is asking the
+      // player to hit, so the shell is torn into specks instead.
+      //
+      // The size, the life, the drag and the glow are NOT here. They live on
+      // CONFIG.emitters.boostAuraBurst with every other burst in the game, so
+      // the particle workbench can audition this one the way it auditions the
+      // rest; what is here is only what the SHELL contributes — how many
+      // pieces it comes apart into, and how much of its flow they remember.
+      burst: {
+        enabled: true,
+        count: 110,
+        // A multiplier on the emitter's own `speed`, so the burst can be
+        // slowed against the rest of the particle table without unpicking a
+        // preset somebody tuned in the workbench.
+        speedMul: 1,
+        // HOW MUCH OF THE LAUNCH LINE THE DEBRIS KEEPS, on top of going
+        // outward. At 0 it is a symmetrical puff that says nothing about where
+        // the strike is pointed; at 1 the whole thing leans downrange and
+        // stops reading as the shell coming apart. It is a bias, not a
+        // direction.
+        aim: 0.5,
+
+        // ...AND WHAT HITTING THE SWEET SPOT MULTIPLIES. Three channels on the
+        // SAME burst — more of it, thrown harder, churning more — rather than
+        // a second effect, so the player learns one picture and then reads its
+        // intensity. Getting the window is the loudest thing that happens on
+        // the animal in an ordinary run, and it should look like it.
+        //
+        // `count` is capped inside the system at 256 specks however high this
+        // goes; the ceiling is the buffer, not a judgement.
+        sweet: {
+          count: 2.2,
+          speed: 1.8,
+          // Multiplied onto the emitter's own turbulence, so the global
+          // turbulence switch still binds — a miss-timed release and a
+          // perfectly timed one both go flat if the player has that off.
+          turbulence: 2.2,
+        },
+      },
     },
 
     // ---------------------------------------------------------------------------
@@ -38688,6 +39521,22 @@ export const CONFIG = {
       // the row that is on screen most, so it is the one that must not become
       // the brightest thing in a fight.
       burnFlesh: { perHit: 0.21, fade: 0.6,  peak: 1.9, curve: 'outCubic', color: 0xff7a52 },
+      // THE SEAL'S OWN BODY, HIT — systems/playerFlash.js. Like the two kill
+      // lights below it, this is not heat and `perHit`/`fade`/`curve` are
+      // unused: the envelope is the flash's own, on the wall clock, and only
+      // how bright and what colour belong to the source.
+      //
+      // BRIGHT, and brighter than anything else in this table. Every other row
+      // here lights something the player is looking AT; this one lights the
+      // thing they are looking THROUGH, at the centre of the screen, for a fifth
+      // of a second. It has to beat the rim flash and the eye flash that fire on
+      // the same frame or it is a subtlety underneath two things that are not.
+      //
+      // Yellow rather than white, because the only thing firing it today is the
+      // electric aura and the flash should be the colour of what caused it —
+      // the same read the mussel's impact flash takes from what it hit. A white
+      // row is the right answer the moment a second source calls flashPlayer().
+      playerZap: { peak: 2.2, color: 0xffe89a },
       killLightHero: { peak: 0.8, color: 0xfff2dc },
       killLightSubject: { peak: 0.35, color: 0xcfe6ff },
     },
@@ -38771,6 +39620,26 @@ export const CONFIG = {
     flashSeconds: 0.13,
     flashPeak: 0.9,
     flashCurve: 'outCubic',
+
+    // HOW MUCH OF THAT FLASH A BOSS TAKES. Zero, and the zero is the feature.
+    //
+    // The bolt's flash lights the WHOLE hide, which is the only place it can go
+    // on a sardine and the wrong place on a boss. A boss already says where it
+    // was hit, three times over and all of it on the skin: the break ring and
+    // shards at the contact point, the wound that stays there for the rest of
+    // the fight (systems/bossImpact.js), and the weak spot's own flash
+    // (CONFIG.hotSpots.look.flashColor). A body-wide red over those deletes the
+    // one thing those three know — WHERE — and at the fin laser's cadence it is
+    // a strobe across a body that fills a third of the screen.
+    //
+    // A SHARE RATHER THAN A SWITCH, so a trace can be handed back from the
+    // tuner if a fight ever reads as under-answered, and so the number is
+    // visible instead of living as an `if` inside zap().
+    //
+    // ONLY THE BOLT. The beam's sustained heat (`bossClimb` above) is still
+    // body-wide and should be: it is a state about the whole animal being cut
+    // over seconds, not an arrival with a place.
+    bossFlash: 0,
   },
 
   // ---------------------------------------------------------------------------
@@ -39400,6 +40269,97 @@ export const CONFIG = {
       // of the vacuum land together.
       lastScale: 1.7,
 
+      // --- AND THE SOUND OF IT BEING DRAWN IN -------------------------------
+      // systems/absorbRiser.js. The ladder above says how many pieces landed;
+      // this is the flight they landed at the end of, and until it existed that
+      // flight was silent — a bang, a gap the length of the haul, and then a
+      // run of blips.
+      //
+      // It is loudest AT THE SEAL, on the frame the first piece arrives, and
+      // then settles to a wash under the ladder. The peak is where the goo IS,
+      // which is what makes the swell read as a distance closing rather than as
+      // a crescendo.
+      //
+      // Noise, not tone — the whole argument is in systems/noiseRiser.js and it
+      // is doubly true here: the ladder this sits under is pitched, and a riser
+      // with a fundamental in it would be a second melody underneath a run of
+      // blips that is trying to resolve.
+      riser: {
+        enabled: true,
+        // HOW LONG THE FLIGHT IS GUESSED TO BE, on top of the hold and the pull
+        // ramp (CONFIG.fx.gooSuck.holdAt / rampTime, or this pickup's own).
+        // A guess is all it can be — where the blobs ended up after the burst
+        // and whether the seal swam toward its own splat are not knowable when
+        // the sound starts. The FIRST PIECE TO LAND moves the peak to where it
+        // really was, so this number only decides how much of the climb is
+        // heard before the arrival, and a burst that never reports back still
+        // resolves on it rather than droning.
+        travel: 0.3,
+
+        // --- THE BANK ---------------------------------------------------------
+        // One looping noise source per band through its own resonant bandpass,
+        // climbing across the flight. Darker and narrower than the card riser's
+        // (CONFIG.upgradeSlam.riser): this one is underwater, and its top end
+        // has to leave the pip ladder — 640-980Hz, up to x1.9 — somewhere to be
+        // heard.
+        bands: [
+          // THE MASS MOVING. A wash of air low enough that no pitch survives in
+          // it; the floor the other two stand on.
+          { level: 0.95, q: 1.0, from: 60, to: 480, at: 0 },
+          // THE BODY of the draw, and the band doing most of the travelling.
+          { level: 0.7, q: 4.5, from: 200, to: 1900, at: 0 },
+          // THE SUCK. Narrow enough to sing, held back so the last half of the
+          // flight has something in it the first half did not — which is the
+          // part that reads as "it is nearly here".
+          { level: 0.4, q: 12, from: 800, to: 5200, at: 0.5 },
+        ],
+
+        // --- MODULATION, shared so the bank reads as ONE gesture --------------
+        // The skew on every sweep. Over 1 holds low and rushes the last third,
+        // which is the one that reads as an approach.
+        curve: 1.2,
+        // Flip every band end for end — a vacuum that falls away instead of
+        // closing in. Not what this is, and worth hearing once to know why.
+        reverse: false,
+        // The bands shaken as they climb, in semitones, accelerating from
+        // `wobbleFrom` to `wobbleTo` cycles a second. This is what makes it
+        // sound like something being dragged through water rather than drawn
+        // on a curve.
+        wobbleDepth: 0.5,
+        wobbleFrom: 3,
+        wobbleTo: 11,
+        // Scheduling resolution for the sweep and the wobble. It has to clear a
+        // couple of points per wobble cycle or the wobble aliases into a wrong,
+        // slower one.
+        steps: 40,
+
+        // --- VARIATION, ROLLED ONCE PER CHUNK --------------------------------
+        // Less than the card's: a chunk is rarer than a card and should sound
+        // like the same event every time. Not none — a good run eats a dozen.
+        vary: { pitch: 2, spread: 0.05, level: 0.1, wobble: 0.2 },
+
+        // --- THE ENVELOPE -----------------------------------------------------
+        // Level at the top of the attack...
+        gain: 0.09,
+        // ...and how much louder than that it is at the seal. The swell IS the
+        // approach.
+        swell: 1.9,
+        // A SHARE OF THE FLIGHT, not seconds, so the chunk's long haul and the
+        // blue orb's quarter-second re-arm keep the same shape.
+        fadeIn: 0.22,
+        // Where it sits while the rest of the pieces come in, as a share of the
+        // peak. Not zero: there is still goo in the water and the wash is what
+        // says so — but low enough that the ladder is over it rather than
+        // through it.
+        tail: 0.28,
+        // How fast the peak is reached when the real arrival is EARLIER than
+        // the guess above. Short, but not a jump: this is a correction, and it
+        // should not be audible as one.
+        snap: 0.035,
+        // ...and the last piece taking it away.
+        fadeOut: 0.14,
+      },
+
       // --- AND THE BLUE ORB'S OWN, over the numbers above --------------------
       // The chunk and the orb are absorbed by the same machinery and are not
       // the same sentence. A chunk is a BREAK — a lot of meat, going down
@@ -39431,6 +40391,12 @@ export const CONFIG = {
         // to be countable or the bar and the ear stop agreeing — but a tight
         // one: five pips at this spacing is a run, not a queue.
         stagger: 0.16,
+        // AND NO VACUUM UNDER IT. The riser is a flight you can hear closing,
+        // and this flight is a third of a second — attack, arrival and settle
+        // inside a quarter of a second is not a build, it is a blur across the
+        // pips it is supposed to be getting out of the way of. The orb already
+        // has a sound for being swallowed; what it does not have is time.
+        riser: { enabled: false },
       },
     },
 
@@ -39812,15 +40778,14 @@ export const CONFIG = {
       },
       // Not interpolated from `baseCount`: this literal is built before CONFIG
       // is assigned, so the number can't be read here.
-      levelDescs: { 1: 'Opens a full ring of orbiting shrimp' }, maxStacks: 8 },
+      maxStacks: 8 },
     // Reads the CONFIG count rather than counting its own stacks, for the same
     // reason bounceShot reads maxBouncesPerLevel: the card's promise is "a
     // barrage of N", and N lives in one place so the tuner slider and the
     // description can't drift apart.
     { id: 'musselVolley', family: 'projectile', name: 'Mussel Barrage', desc: 'Full-charge strike fires a barrage of homing mussels',
       apply: (s) => { s.musselVolleyLevel = (s.musselVolleyLevel ?? 0) + 1; }, maxStacks: 5,
-      perLevelName: true,
-      levelDescs: { 1: 'Full-charge strike fires 8 homing mussels at once' } },
+      perLevelName: true },
     { id: 'bounceShot', family: 'projectile', name: 'Ricochet Rounds', desc: 'Chaining shot: +fire rate, +lifespan, +bounces', apply: (s) => {
         s.bounceLevel = (s.bounceLevel ?? 0) + 1;
         s.bounceFireRate = (s.bounceFireRate ?? CONFIG.bounce.fireRate) * 0.84;
@@ -39845,7 +40810,6 @@ export const CONFIG = {
     // the caroms. Filed under the melee-looking weapons it is not.
     { id: 'club', family: 'projectile', name: 'Driftwood Club', desc: 'Clubs on both fins, swung by your own swimming. Whacked enemies ricochet.',
       perLevelName: true,
-      levelDescs: { 1: 'Straps a club to each fin tip — swim faster, swing harder. Everything it touches is thrown.' },
       apply: (s) => { s.clubLevel = (s.clubLevel ?? 0) + 1; applyClubStack(s, 'club', s.clubLevel); }, maxStacks: 6 },
     // The club's variant. Reads clubLevel for its damage, so it is worth most
     // in a run that already took the base card — but it deliberately does not
@@ -39854,10 +40818,6 @@ export const CONFIG = {
     // the right build.
     { id: 'clubThrow', family: 'projectile', name: 'Hurler', desc: 'Strike release hurls homing clubs — the harder you charged, the more of them',
       perLevelName: true,
-      levelDescs: {
-        1: 'Releasing a strike throws clubs that seek what you painted, and shove what they find',
-        2: 'Another club on the ring around you — unless the Hurler is what your fins are holding',
-      },
       apply: (s) => { s.clubThrowLevel = (s.clubThrowLevel ?? 0) + 1; applyClubStack(s, 'throw', s.clubThrowLevel); }, maxStacks: 5 },
     // The two riders. Both hang off EVERY club hit the run has — the fin
     // swing, the carom, and the throw — which is what makes the club line a
@@ -39866,10 +40826,6 @@ export const CONFIG = {
     // rather than nothing at all.
     { id: 'clubBoom', family: 'aoe', name: 'Boom Boom Club', desc: 'Every club hit detonates — swung, caromed or thrown',
       perLevelName: true,
-      levelDescs: {
-        1: 'Club hits go off in a blast that catches the crowd behind them',
-        2: 'Another club on the ring around you — unless Boom Boom Club is what your fins are holding',
-      },
       apply: (s) => { s.clubBoomLevel = (s.clubBoomLevel ?? 0) + 1; applyClubStack(s, 'boom', s.clubBoomLevel); }, maxStacks: 5 },
     // THE BOUNCER — the card that buys the whole class at once.
     //
@@ -39897,7 +40853,6 @@ export const CONFIG = {
     // damage would quietly turn a melee weapon into an aura.
     { id: 'clubPower', family: 'projectile', name: 'Clubs Going Up!', desc: 'Every club you own hits harder, throws further and reaches further',
       perLevelName: true,
-      levelDescs: { 1: 'Every club in the run — swung, caromed, thrown or orbiting — hits harder and throws further' },
       apply: (s) => {
         s.clubDamageMul = (s.clubDamageMul ?? 1) * 1.22;
         s.clubKnockMul = (s.clubKnockMul ?? 1) * 1.18;
@@ -39905,10 +40860,6 @@ export const CONFIG = {
       }, maxStacks: 5 },
     { id: 'clubIce', family: 'aoe', name: 'Cold Snap', desc: 'Club hits chill what they touch, and freeze it solid once the chill saturates',
       perLevelName: true,
-      levelDescs: {
-        1: 'Club hits stack a slow, and lock the body when it maxes',
-        2: 'Another club on the ring around you — unless Cold Snap is what your fins are holding',
-      },
       apply: (s) => { s.clubIceLevel = (s.clubIceLevel ?? 0) + 1; applyClubStack(s, 'ice', s.clubIceLevel); }, maxStacks: 5 },
     // THE THIRD RIDER. Every club hit in the run throws a chain of lightning
     // into the crowd behind what it landed on — the same arcChain() Voltaic
@@ -39936,10 +40887,6 @@ export const CONFIG = {
     // `npm run test:copy` will not go green until they are Ethan's.
     { id: 'clubZap', family: 'aoe',
       perLevelName: true,
-      levelDescs: {
-        1: 'Zap a bunch of fish',
-        2: 'Zap fishes',
-      },
       apply: (s) => { s.clubZapLevel = (s.clubZapLevel ?? 0) + 1; applyClubStack(s, 'zap', s.clubZapLevel); }, maxStacks: 5 },
     { id: 'starfish', family: 'projectile', name: 'Starfish Shuriken', desc: 'Rapid thrown starfish: +fire rate, +size', apply: (s) => { s.starfishLevel = (s.starfishLevel ?? 0) + 1; }, maxStacks: 8 },
     { id: 'seagullBomb', family: 'aoe', name: 'Seagull Bomb', desc: 'Homing dive-bombers vs. crabs: +fire rate', apply: (s) => { s.seagullLevel = (s.seagullLevel ?? 0) + 1; }, maxStacks: 8 },
@@ -39959,7 +40906,6 @@ export const CONFIG = {
     { id: 'sealTeam', family: 'companion', name: 'Seal Team', desc: '+1 escort seal. Rams and lunges at enemies.',
       perLevelName: true,
       exclusive: 'escort',
-      levelDescs: { 6: 'EVOLVE: the whole squad opens fire while it orbits.' },
       apply: (s) => { s.sealTeamLevel = (s.sealTeamLevel ?? 0) + 1; }, maxStacks: 6 },
     { id: 'beluga', family: 'companion', name: 'Baby Beluga', desc: 'Bubble drone traps enemies: +bubble size', apply: (s) => { s.belugaLevel = (s.belugaLevel ?? 0) + 1; }, maxStacks: 8 },
 
@@ -40164,7 +41110,6 @@ export const CONFIG = {
     // the turn rate is deliberately below the mussel's.
     { id: 'homingShot', family: 'gun', name: 'Sonar Teeth', desc: 'Your shots seek the nearest and biggest thing in the water',
       perLevelName: true,
-      levelDescs: { 1: 'Every shot you fire curves onto a target, favouring the big ones' },
       apply: (s) => { s.homingShotLevel = (s.homingShotLevel ?? 0) + 1; }, maxStacks: 5 },
 
     // --- eaten, not picked ----------------------------------------------------
@@ -40217,7 +41162,6 @@ export const CONFIG = {
     { id: 'orbiterAmount', family: 'companion', name: 'Entourage', desc: '+1 of everything that circles you',
       perLevelName: true,
       companionMod: true,
-      levelDescs: { 1: 'One more of every companion on a ring around you — shrimp, escorts, harps, clubs' },
       apply: (s) => { s.orbiterBonus = (s.orbiterBonus ?? 0) + 1; }, maxStacks: 3 },
     { id: 'projectileAmount', family: 'projectile', name: 'Clone Warz', desc: '+1 of everything you fire',
       perLevelName: true,
@@ -42317,6 +43261,81 @@ export const CONFIG = {
         slip: 118,
         sweep: 28,
       },
+      // THE FIN FLICK — english on a ball that is ALREADY MOVING, put on by
+      // swiping the aim across it. See systems/finFlick.js for the gesture and
+      // the geometry; the friction itself is finFlickBall in systems/versus.js
+      // and is the same model strikeBall uses, with a much weaker press.
+      //
+      // The difference from `english` above is WHEN. English is bought at the
+      // moment of the strike and is gone the instant the ball leaves; this is
+      // a second bite at the same ball, at any point in its flight, by anyone
+      // who can get a flipper near it. A shot you have already taken can be
+      // bent; a shot coming at you can be spoiled.
+      //
+      // IT DOES NOT SHOOT THE BALL. There is no impulse down the swipe — only
+      // spin, and `squirt` of the sideways kick that spin's own friction
+      // implies. A flick that could also pass the ball would be a free strike
+      // with no wind-up, and the wind-up is the whole economy of a match.
+      finFlick: {
+        enabled: true,
+        // The window one swipe opens, and the whole period between swipes —
+        // `cooldown` is measured from the OPEN, and is floored at `duration`
+        // in case a tuning session crosses them over. A continuous swirl of
+        // the mouse is therefore one flick every `cooldown`, which is the
+        // honest reading of a hand that is continuously swiping.
+        duration: 0.18,
+        cooldown: 0.26,
+        // THE HITBOX, and it is meant to be generous: a capsule out of each
+        // fin tip, `sweep` long down the swipe and `reach` thick, against the
+        // ball's DRAWN edge. A flipper tip is a point on a six-unit animal and
+        // a test at the skin would land about one swipe in ten — every miss
+        // reading as the game ignoring the input. It exists only while the
+        // window is open, so none of this generosity reaches ordinary swimming.
+        reach: 2.4,
+        sweep: 3,
+        // u/s the fin drags across the face at a fully sideways swipe — the
+        // same quantity `english.slip` is, and deliberately smaller: a flipper
+        // wipe is not a body sliding over the ball at the moment of a strike.
+        slip: 96,
+        // The Coulomb cap, in the units the tangential impulse comes out in.
+        // The strike's cap is `friction` x its own impulse, which a flick does
+        // not have — a swipe presses on nothing — so it carries its own
+        // ceiling instead. At `slip` 96 the uncapped impulse would be 27; this
+        // holds one flick to 12.5 rad/s on a 2.8 ball, against a spin cap of
+        // 28 — and because the face's own surface speed is subtracted from the
+        // wipe, the three that fit inside a second measure 12.5, 12.5 and 3.0.
+        // Two flicks are most of a fully loaded ball and a third is a rounding
+        // error, which is the diminishing return `npm run test:finflick`
+        // measures rather than a cap doing the work.
+        grip: 14,
+        // Share of that impulse that also kicks the ball sideways — the
+        // physics says 1, and this is well under it on purpose: a flick is
+        // english, not a deflection, and a full squirt let a defender swat
+        // shots off line without ever touching them properly.
+        squirt: 0.22,
+        // How sideways a swipe has to be before it counts at all, 0..1 of the
+        // tangent. A swipe straight into the ball's centre has no drag in it
+        // and would connect having done nothing — which is worse than missing,
+        // because the feedback would say it landed.
+        bite: 0.2,
+        // What the flippers do on the swipe itself, whether or not it reaches
+        // the ball — CONFIG.fins.twitch's kick, on both fins. A gesture that
+        // only shows when it lands cannot be learned.
+        kick: 1,
+        // How close the ball has to be, in world units from the seal, for a
+        // swipe to make a NOISE (CONFIG.feedback.versusFinSwipe). The window
+        // opens every `cooldown` for as long as a hand keeps moving, so an
+        // ungated whoosh is a metronome for the whole match rather than
+        // feedback. Comfortably outside the reach a flick can actually land
+        // from — the sound is "you went for it", so it has to be audible on
+        // the misses that teach the distance, and silent while the ball is at
+        // the other end of the pitch.
+        swipeNear: 16,
+        // Draw the capsules being tested, and mark the last connect. Off in a
+        // match; this is here because `reach` and `sweep` cannot be tuned by
+        // watching swipes miss. See the debug block in systems/finFlick.js.
+        debug: false,
+      },
       // SPIN STROKES — the read. A spinning ball shows its spin as curved
       // strokes wrapped around its rim, riding round with the turn and TRIMMED
       // by its rate: nothing under `spinMin` rad/s, a short tick at that,
@@ -43722,6 +44741,29 @@ export const CONFIG = {
       // whose blast caught nobody — skips it rather than holding the count for
       // a beat of nothing. See armGather.
       gather: 0.6,
+      // THE TWO TANKS COMING BACK — the boost meter and the lungs, blended from
+      // wherever the goal left each seal up to full, arriving exactly as the
+      // count reaches zero.
+      //
+      // The meter used to SNAP full on the frame the kickoff was called, which
+      // put the whole refill behind the recentre and the gather: by the time
+      // "3" was on screen the ring had been full for a second and a half and
+      // nobody saw it move. The lungs were not refilled at all, so a seal that
+      // scored on its last breath started the next kickoff still gasping — the
+      // one player on the pitch being punished for the goal.
+      //
+      // THE END IS THE WHISTLE, and that is a promise rather than a tendency:
+      // the fill is an absolute lerp against the count's own progress (see
+      // fillTanks), so it is full on 0 whatever the frame rate did. `ease` is
+      // the curve it travels on — `linear` reads as a gauge being filled,
+      // `smoothstep` as one settling into place. `air` and `boost` turn either
+      // half off on its own; `enabled: false` is the old snap back.
+      fill: {
+        enabled: true,
+        ease: 'smoothstep',
+        air: true,
+        boost: true,
+      },
       bait: {
         perSide: 2,       // bait balls between each seal and the ball
         maxAlive: 8,      // no more dropped while this many balls are already in the water
@@ -43889,20 +44931,24 @@ export const CONFIG = {
         // `checkOver` exist for their angle, and a flat lens has only one. See
         // poseFlat in systems/replayCams.js.
         projection: 'flat',
-        // WORLD UNITS OF AIR round the box of a flat shot's targets. The flat
-        // lens fits its zoom to what the shot promises to show (see poseFlat in
-        // systems/replayCams.js) and this is the room left round it, so it is
-        // part of what the fit HOLDS rather than something spent to keep a
-        // subject in. Bigger reads wider and safer; smaller reads tighter and
-        // starts putting a fast subject on the edge of frame.
-        flatPad: 6,
-        // ...and how much of that air a shot's push-in closes, as a fraction.
-        // The perspective pool pushes by easing its fov; a flat shot cannot, so
-        // the push arrives as the fit tightening over the seconds the shot
-        // holds. 0 is a flat shot that never moves. It rides `fovPush`, which is
-        // the SAME easing the perspective push runs on, so a shot that was
-        // tuned to close quickly still does.
-        flatPush: 0.25,
+        // WORLD UNITS OF AIR round the box of a flat shot's promised targets —
+        // a SAFETY MARGIN, not the framing. What a flat shot is framed at comes
+        // from the shot's own `distance` and `fov` like everything else; this
+        // only caps it, so a subject can never be closed out of a frame that
+        // promised to hold it. Its whole job is to stop one touching the edge.
+        //
+        // It was 6 when it WAS the framing, and every shot came out the same
+        // size because of it. If a subject is riding the edge of frame, raise
+        // it; if the tight shots feel loose, the number to turn is that shot's
+        // `push`, not this.
+        flatPad: 2,
+        // HOW FAST A FLAT SHOT ARRIVES AT ITS ZOOM, in seconds of e-folding.
+        // The zoom is re-derived every frame and would otherwise land the
+        // instant it is computed — a cut from goalWide to scorerFace is 1.07 to
+        // 17.5, and taken in one frame that is not a zoom, it is a different
+        // shot. Small is a crash, large is a glide. A CUT still snaps: a cut is
+        // meant to be a cut.
+        flatZoomEase: 0.18,
         noseLength: 2.2,    // world units from a seal's centre to its face, for the face targets
         // NO SEAMS: the shore is a carved mesh and the goal a tunnel, and both
         // show their inner faces from any angle but square-on. A shot's yaw
@@ -45987,6 +47033,37 @@ export const TUNER_SCHEMA = [
     ],
   },
   {
+    // THE VACUUM under a chunk being drawn in — systems/absorbRiser.js. The
+    // flight is the goo-suck panel above; this is what it SOUNDS like, and the
+    // one number that ties them together is `flight guess`: the riser peaks
+    // when the first piece lands, so this only decides how much of the climb
+    // is heard before it does.
+    //
+    // The bank's faders are here; where each band SWEEPS is in config
+    // (CONFIG.pickups.absorb.riser.bands), because a band's endpoints are the
+    // sound's design and its level is the mix.
+    group: 'Chunk vacuum — the riser',
+    section: 'Look & FX',
+    items: [
+      { path: 'pickups.absorb.riser.enabled', type: 'bool', label: 'a riser under the haul' },
+      { path: 'pickups.absorb.riser.travel', min: 0, max: 2, step: 0.05, label: 'flight guess, past hold+ramp (s)' },
+      { path: 'pickups.absorb.riser.gain', min: 0, max: 0.4, step: 0.005, label: 'level at the top of the attack' },
+      { path: 'pickups.absorb.riser.swell', min: 0.5, max: 4, step: 0.05, label: 'x louder at the seal' },
+      { path: 'pickups.absorb.riser.fadeIn', min: 0.01, max: 0.95, step: 0.01, label: 'attack (share of the flight)' },
+      { path: 'pickups.absorb.riser.tail', min: 0, max: 1, step: 0.02, label: 'wash under the ladder (share of peak)' },
+      { path: 'pickups.absorb.riser.snap', min: 0.005, max: 0.3, step: 0.005, label: 'correction to the real arrival (s)' },
+      { path: 'pickups.absorb.riser.fadeOut', min: 0.01, max: 0.8, step: 0.01, label: 'the last piece takes it away (s)' },
+      { path: 'pickups.absorb.riser.bands.0.level', min: 0, max: 1.5, step: 0.05, label: 'fader: the mass moving' },
+      { path: 'pickups.absorb.riser.bands.1.level', min: 0, max: 1.5, step: 0.05, label: 'fader: the body' },
+      { path: 'pickups.absorb.riser.bands.2.level', min: 0, max: 1.5, step: 0.05, label: 'fader: the suck' },
+      { path: 'pickups.absorb.riser.curve', min: 0.2, max: 3, step: 0.05, label: 'sweep skew (>1 rushes the end)' },
+      { path: 'pickups.absorb.riser.wobbleDepth', min: 0, max: 4, step: 0.05, label: 'wobble depth (semitones)' },
+      { path: 'pickups.absorb.riser.wobbleFrom', min: 0, max: 30, step: 0.5, label: 'wobble at the burst (Hz)' },
+      { path: 'pickups.absorb.riser.wobbleTo', min: 0, max: 40, step: 0.5, label: '...and at the seal (Hz)' },
+      { path: 'pickups.absorb.riser.reverse', type: 'bool', label: 'flip every band end for end' },
+    ],
+  },
+  {
     // HOW BIG THE BLAST READS. Each pair is [flick, full charge] — the blast
     // interpolates between them on banked power, so the two pills are the two
     // ends of the same dial and the left one should always be the smaller.
@@ -46830,8 +47907,8 @@ export const TUNER_SCHEMA = [
       { path: 'versus.stats.possession.speed', min: 1, max: 20, step: 0.5, label: 'blubberball: possession replay — times actual speed' },
       { path: 'versus.stats.possession.delay', min: 0, max: 2, step: 0.05, label: 'blubberball: possession replay — beat before it starts (s)' },
       { path: 'versus.replay.cams.projection', type: 'choice', options: ['flat', 'perspective'], label: 'blubberball: goal replay camera' },
-      { path: 'versus.replay.cams.flatPad', min: 0, max: 24, step: 0.5, label: 'blubberball: flat replay — air round the subject (units)' },
-      { path: 'versus.replay.cams.flatPush', min: 0, max: 1, step: 0.05, label: 'blubberball: flat replay — how far a shot closes in' },
+      { path: 'versus.replay.cams.flatPad', min: 0, max: 12, step: 0.25, label: 'blubberball: flat replay — air round the subject (units)' },
+      { path: 'versus.replay.cams.flatZoomEase', min: 0.02, max: 1, step: 0.01, label: 'blubberball: flat replay — how fast the zoom arrives (s)' },
       // --- what a ball contact sounds like -----------------------------------
       // The bands pick which of the three rows fires; everything under them
       // shapes the one that does. Which FILE each row plays is the F panel's
@@ -47114,6 +48191,7 @@ export const TUNER_SCHEMA = [
     section: 'Interface & controls',
     items: [
       { path: 'aimIndicator.enabled', type: 'bool', label: 'show an aim indicator' },
+      { path: 'aimIndicator.inVersus', type: 'bool', label: '...in a ball-game match too' },
       { path: 'aimIndicator.opacity', min: 0, max: 1, step: 0.02, label: 'opacity while firing' },
       { path: 'aimIndicator.idleOpacity', min: 0, max: 1, step: 0.02, label: 'opacity when not firing (x)' },
       { path: 'aimIndicator.fade', min: 0.01, max: 1, step: 0.01, label: 'fade between those (s)' },
@@ -47391,6 +48469,10 @@ export const TUNER_SCHEMA = [
       { path: 'cinecam.lens.droplets.slide', min: 0, max: 1.6, step: 0.05, label: 'droplets: run distance (cell heights)' },
       { path: 'cinecam.lens.droplets.stretch', min: 0, max: 4, step: 0.05, label: 'droplets: vertical stretch when running' },
       { path: 'cinecam.lens.droplets.taper', min: 0, max: 0.9, step: 0.02, label: 'droplets: teardrop tail' },
+      { path: 'cinecam.lens.droplets.tint', min: 0, max: 1, step: 0.02, label: 'droplets: colour of a goal\u2019s goo' },
+      { path: 'cinecam.lens.droplets.tintGlow', min: 0, max: 0.4, step: 0.01, label: 'droplets: \u2026lifted off black by' },
+      { path: 'cinecam.lens.droplets.tintLife', min: 0.3, max: 12, step: 0.1, label: 'droplets: time for goo to dry (s)' },
+      { path: 'cinecam.lens.droplets.perGoal', min: 0, max: 2, step: 0.05, label: 'droplets: goo per goal' },
       // `droplets.slide` was listed twice in this group, the second time at
       // max 1 — the same value on two sliders that disagreed about its
       // ceiling, so the shipped 1.15 sat off the end of one of them and
@@ -48108,6 +49190,27 @@ export const TUNER_SCHEMA = [
       { path: 'boss.perkFx.electric.arcRate', min: 0, max: 60, step: 1, label: 'arcs per second' },
       { path: 'boss.perkFx.electric.arcSegments', min: 1, max: 9, step: 1, label: 'kinks per arc (1 = straight)' },
       { path: 'boss.perkFx.electric.arcJag', min: 0, max: 0.6, step: 0.02, label: 'kink depth (share of arc length)' },
+      // The ceiling here is fx.organicRing.wobbleMax, which is also where the
+      // value is clamped (auraEdge in systems/bossPerks.js). A slider that could
+      // ask for more than the clamp delivers is one that stops responding
+      // halfway along, which reads as a broken control rather than a limit.
+      { path: 'boss.perkFx.electric.edgeWobble', min: 0, max: 0.18, step: 0.01, label: 'ring jag depth (share of reach)' },
+      { path: 'boss.perkFx.electric.forks', min: 0, max: 4, step: 1, label: 'branches per bolt' },
+      { path: 'boss.perkFx.electric.forkSegments', min: 1, max: 6, step: 1, label: 'kinks per branch' },
+      { path: 'boss.perkFx.electric.forkAt', min: 0.1, max: 0.9, step: 0.05, label: 'branch leaves at (0 body, 1 rim)' },
+      { path: 'boss.perkFx.electric.boltInset', min: 0.1, max: 1, step: 0.05, label: 'bolt starts at (share of body)' },
+      { path: 'boss.perkFx.electric.boltSpread', min: 0, max: 1.6, step: 0.05, label: 'bolt lean off the radius (rad)' },
+      // The surge. `pulseDivision` is a beat picker like every other synced FX
+      // in the game; `pulseHz` beside it only does anything when it is 'free'.
+      { path: 'boss.perkFx.electric.pulseDivision', type: 'choice', options: BEAT_DIVISIONS, label: 'field surges every' },
+      { path: 'boss.perkFx.electric.beatEase', type: 'choice', options: EASINGS, label: 'surge falls off on' },
+      { path: 'boss.perkFx.electric.ringGlow', min: 0.5, max: 6, step: 0.1, label: 'ring glow floor' },
+      { path: 'boss.perkFx.electric.beatGlow', min: 0, max: 6, step: 0.1, label: '...and the downbeat adds' },
+      // What a bolt does when it lands.
+      { path: 'boss.perkFx.electric.boltHitRadius', min: 0, max: 1.5, step: 0.05, label: 'bolt thickness for hits' },
+      { path: 'boss.perkFx.electric.zapSeconds', min: 0.05, max: 2, step: 0.05, label: 'one zap is this many seconds of dps' },
+      { path: 'boss.perkFx.electric.zapFlash', min: 0, max: 1, step: 0.05, label: 'seal flash on a zap' },
+      { path: 'boss.perkFx.electric.zapScale', min: 0, max: 2, step: 0.05, label: 'zap spark size' },
       { path: 'boss.perkFx.electric.pulse', min: 0, max: 1, step: 0.02, label: 'ring breath depth' },
       { path: 'boss.perkFx.electric.pulseHz', min: 0.2, max: 12, step: 0.1, label: 'ring breath rate' },
       // The charged field inside the ring. `inset` is a SAFETY number as much
@@ -48769,6 +49872,56 @@ export const TUNER_SCHEMA = [
         type: 'bool',
         label: `ally: ${key.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}`,
       })),
+    ],
+  },
+  {
+    // ---------------------------------------------------------------------
+    // IN THE ` TUNER AND NOT IN T, unlike the seal's other two charge glows,
+    // which live in 'Strike indicator' next to the meter they read. Those two
+    // are parts of an INSTRUMENT and belong with it; this is water, and it is
+    // tuned the way the bubbles and the wake above it are — while a run is
+    // going, against the rest of the screen, rather than in the model panel.
+    //
+    // It is also fifteen rows, and at the bottom of a 129-row group nobody
+    // would find them.
+    //
+    // NO COLOUR ROWS. It wears the draining pip's own hue off the fuel wheel
+    // (CONFIG.strike.ring, in the Strike indicator group), so a tint here
+    // would be a second opinion about a number that already has an owner.
+    // ---------------------------------------------------------------------
+    group: 'Boost aura',
+    section: 'Look & FX',
+    items: [
+      // --- the shell of charged water a BURN pushes out (systems/boostAura.js).
+      // No colour rows: it wears the draining pip's own hue off the wheel
+      // above, and a tint here would be a second opinion about that.
+      { path: 'boostAura.enabled', type: 'bool', label: 'boost aura: shell while fuel burns' },
+      { path: 'boostAura.gap', min: 0, max: 1.5, step: 0.02, label: 'boost aura: clearance past the body' },
+      { path: 'boostAura.push', min: 0, max: 12, step: 0.1, label: 'boost aura: outward speed (units/s)' },
+      { path: 'boostAura.reach', min: 0.2, max: 10, step: 0.1, label: 'boost aura: how far it gets (units)' },
+      { path: 'boostAura.flow', min: 0, max: 12, step: 0.1, label: 'boost aura: flow down the aim at the start (units/s)' },
+      { path: 'boostAura.flowRamp', min: 0, max: 20, step: 0.1, label: 'boost aura: ...added per second of hold' },
+      { path: 'boostAura.flowMax', min: 0, max: 30, step: 0.5, label: 'boost aura: ...and its ceiling' },
+      { path: 'boostAura.strength', min: 0, max: 6, step: 0.05, label: 'boost aura: brightness' },
+      { path: 'boostAura.falloff', min: 0.2, max: 5, step: 0.05, label: 'boost aura: how fast it thins outward' },
+      { path: 'boostAura.soft', min: 0.02, max: 0.6, step: 0.01, label: 'boost aura: edge softness' },
+      { path: 'boostAura.grain', min: 0.05, max: 3, step: 0.05, label: 'boost aura: noise features per unit' },
+      { path: 'boostAura.warp', min: 0, max: 5, step: 0.05, label: 'boost aura: turbulence (domain warp)' },
+      { path: 'boostAura.churn', min: 0, max: 8, step: 0.1, label: 'boost aura: how fast it boils' },
+      { path: 'boostAura.wobble', min: 0, max: 2, step: 0.02, label: 'boost aura: how torn the leading edge is' },
+      { path: 'boostAura.depth', min: 0, max: 1, step: 0.02, label: 'boost aura: how much the noise eats' },
+      { path: 'boostAura.contrast', min: 0.2, max: 5, step: 0.05, label: 'boost aura: noise contrast' },
+      { path: 'boostAura.rise', min: 0.01, max: 0.6, step: 0.01, label: 'boost aura: fade in (s)' },
+      { path: 'boostAura.fade', min: 0.02, max: 1.5, step: 0.02, label: 'boost aura: fade out (s)' },
+      // The perfect charge shattering the shell. Size, life and drag are the
+      // emitter's (CONFIG.emitters.boostAuraBurst, in the particle workbench).
+      { path: 'boostAura.burst.enabled', type: 'bool', label: 'boost aura: shatter on a perfect charge' },
+      { path: 'boostAura.burst.count', min: 0, max: 256, step: 1, label: 'shatter: how many pieces' },
+      { path: 'boostAura.burst.speedMul', min: 0, max: 3, step: 0.05, label: 'shatter: speed (x the emitter)' },
+      { path: 'boostAura.burst.aim', min: 0, max: 1.5, step: 0.05, label: 'shatter: how much it leans downrange' },
+      { path: 'boostAura.burst.sweet.count', min: 1, max: 5, step: 0.1, label: 'shatter in the window: x pieces' },
+      { path: 'boostAura.burst.sweet.speed', min: 1, max: 5, step: 0.1, label: 'shatter in the window: x speed' },
+      { path: 'boostAura.burst.sweet.turbulence', min: 1, max: 5, step: 0.1, label: 'shatter in the window: x churn' },
     ],
   },
   {
@@ -51153,6 +52306,17 @@ export const TUNER_SCHEMA = [
       { path: 'versus.ball.english.enabled', type: 'bool', label: 'english (swim across the aim to spin it)' },
       { path: 'versus.ball.english.slip', min: 0, max: 200, step: 2, label: 'english: slide across the face at full (u/s)' },
       { path: 'versus.ball.english.deadzone', min: 0, max: 0.8, step: 0.02, label: 'english: how far the sticks must disagree' },
+      { path: 'versus.ball.finFlick.enabled', type: 'bool', label: 'fin flick (swipe the aim across a moving ball)' },
+      { path: 'versus.ball.finFlick.duration', min: 0.05, max: 0.6, step: 0.01, label: 'flick: how long one swipe stays live (s)' },
+      { path: 'versus.ball.finFlick.cooldown', min: 0.05, max: 1.2, step: 0.01, label: 'flick: period between swipes (s)' },
+      { path: 'versus.ball.finFlick.reach', min: 0.5, max: 6, step: 0.1, label: 'flick: hitbox thickness off the fin (u)' },
+      { path: 'versus.ball.finFlick.sweep', min: 0, max: 10, step: 0.1, label: 'flick: how far it reaches down the swipe (u)' },
+      { path: 'versus.ball.finFlick.slip', min: 0, max: 200, step: 2, label: 'flick: drag across the face at full (u/s)' },
+      { path: 'versus.ball.finFlick.grip', min: 0, max: 40, step: 0.5, label: 'flick: ceiling on one swipe\'s impulse' },
+      { path: 'versus.ball.finFlick.squirt', min: 0, max: 1, step: 0.02, label: 'flick: sideways kick with the spin' },
+      { path: 'versus.ball.finFlick.bite', min: 0, max: 0.9, step: 0.02, label: 'flick: how sideways a swipe must be to count' },
+      { path: 'versus.ball.finFlick.kick', min: 0, max: 3, step: 0.05, label: 'flick: how hard the flippers twitch' },
+      { path: 'versus.ball.finFlick.debug', type: 'bool', label: 'flick: draw the hitbox being tested' },
     ],
   },
   {

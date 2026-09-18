@@ -1,0 +1,388 @@
+<Rive version="1" kind="fragment">
+
+    <!-- =========================================================================
+         SEALITAIRE — Klondike, played on the ocean, native to Rive.
+
+         Three artboards:
+           Sealitaire   the screen. The HUD is markup (text is markup-only);
+                        everything that moves is table.luau, a ScriptedLayout
+                        filling the artboard. It draws the vortex (GPU canvas),
+                        the cards (the two card artboards below, instanced 52
+                        times), the seal (a skinned mesh in a second GPU
+                        canvas) and the CRT pass over all of it.
+           Card Face    one card, data-bound: rank + ink colour + which suit
+                        pip is showing. The script instances it per card.
+           Card Back    the back. No data, so no state machine needed.
+
+         Copy rule: every player-facing label here is a [DRAFT] shape or lorem.
+         Card ranks (A 2 .. K) are symbols, not prose.
+
+         Hierarchy order: FIRST child draws on TOP.
+         ========================================================================= -->
+
+    <Artboard defaultStateMachineId="0:4" viewModelId="0:300" viewModelInstanceId="0:310"
+              clip="true" x="0" y="0" width="1600" height="1000" styleId="0:3"
+              name="Sealitaire" id="0:2">
+        <Fill name="Background" id="0:6">
+            <SolidColor colorValue="FF07182B" name="Color" id="0:7"/>
+        </Fill>
+        <LayoutComponentStyle name="Artboard Style" id="0:3"/>
+
+        <!-- HUD. Hand-placed text over the table; the script leaves the top
+             strip clear. Labels are staged as [DRAFT] shapes. -->
+        <Text x="40" y="22" sizingValue="autoWidth" name="Title" id="0:20">
+            <TextStylePaint fontSize="40" letterSpacing="-0.02" fontAssetId="0:400" name="S" id="0:21">
+                <Fill name="Fill" id="0:22"><SolidColor colorValue="FFF6F1E7" name="C" id="0:23"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:21" text="Sealitaire" name="Run" id="0:24"/>
+        </Text>
+
+        <Text x="42" y="80" sizingValue="autoWidth" name="Moves Label" id="0:25">
+            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:26">
+                <Fill name="Fill" id="0:27"><SolidColor colorValue="FF7FB6E8" name="C" id="0:28"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:26" text="[DRAFT] MOVES" name="Run" id="0:29"/>
+        </Text>
+        <Text x="40" y="96" sizingValue="autoWidth" name="Moves" id="0:30">
+            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:31">
+                <Fill name="Fill" id="0:32"><SolidColor colorValue="FFF6F1E7" name="C" id="0:33"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:31" text="0" name="Run" id="0:34">
+                <DataBindContext sourcePathIds="0:300-0:301" propertyKey="268" id="0:35"/>
+            </TextValueRun>
+        </Text>
+
+        <Text x="172" y="80" sizingValue="autoWidth" name="Score Label" id="0:36">
+            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:37">
+                <Fill name="Fill" id="0:38"><SolidColor colorValue="FF7FB6E8" name="C" id="0:39"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:37" text="[DRAFT] SCORE" name="Run" id="0:40"/>
+        </Text>
+        <Text x="170" y="96" sizingValue="autoWidth" name="Score" id="0:41">
+            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:42">
+                <Fill name="Fill" id="0:43"><SolidColor colorValue="FFF6F1E7" name="C" id="0:44"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:42" text="0" name="Run" id="0:45">
+                <DataBindContext sourcePathIds="0:300-0:302" propertyKey="268" id="0:46"/>
+            </TextValueRun>
+        </Text>
+
+        <Text x="302" y="80" sizingValue="autoWidth" name="Clock Label" id="0:47">
+            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:48">
+                <Fill name="Fill" id="0:49"><SolidColor colorValue="FF7FB6E8" name="C" id="0:50"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:48" text="[DRAFT] TIME" name="Run" id="0:51"/>
+        </Text>
+        <Text x="300" y="96" sizingValue="autoWidth" name="Clock" id="0:52">
+            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:53">
+                <Fill name="Fill" id="0:54"><SolidColor colorValue="FFF6F1E7" name="C" id="0:55"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:53" text="0:00" name="Run" id="0:56">
+                <DataBindContext sourcePathIds="0:300-0:303" propertyKey="268" id="0:57"/>
+            </TextValueRun>
+        </Text>
+
+        <!-- Status line, bottom-left: what just happened, written by the script. -->
+        <Text x="40" y="956" sizingValue="autoWidth" name="Status" id="0:58">
+            <TextStylePaint fontSize="18" fontAssetId="0:400" name="S" id="0:59">
+                <Fill name="Fill" id="0:60"><SolidColor colorValue="FFB9D4EE" name="C" id="0:61"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:59" text="Lorem ipsum dolor sit amet" name="Run" id="0:62">
+                <DataBindContext sourcePathIds="0:300-0:304" propertyKey="268" id="0:63"/>
+            </TextValueRun>
+        </Text>
+
+        <!-- New deal. The script owns the hit test (BUTTON in table.luau
+             matches this rectangle); the markup only draws it. -->
+        <Text x="1480" y="52" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Deal Label" id="0:64">
+            <TextStylePaint fontSize="16" letterSpacing="0.06" fontAssetId="0:400" name="S" id="0:65">
+                <Fill name="Fill" id="0:66"><SolidColor colorValue="FF07182B" name="C" id="0:67"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:65" text="[DRAFT] NEW DEAL" name="Run" id="0:68"/>
+        </Text>
+        <Shape x="1480" y="52" name="Deal Button" id="0:69">
+            <Rectangle width="160" height="44" originX="0.5" originY="0.5" cornerRadiusTL="22" name="Path" id="0:70"/>
+            <Fill name="Fill" id="0:71"><SolidColor colorValue="FFF5B02E" name="C" id="0:72"/></Fill>
+        </Shape>
+
+        <!-- The table: one script, the whole artboard. Fill-sized so `resize`
+             receives the artboard and pointer positions are artboard units. -->
+        <LayoutComponent width="1600" height="1000" styleId="0:11" name="Root" id="0:10">
+            <LayoutComponentStyle layoutWidthScaleType="fill" layoutHeightScaleType="fill" name="Root Style" id="0:11"/>
+            <ScriptedLayout scriptAssetId="0:401" name="Table" id="0:12">
+                <ScriptInputArtboard artboardId="0:100" name="face" id="0:13"/>
+                <ScriptInputArtboard artboardId="0:200" name="back" id="0:14"/>
+                <FocusData id="0:15"/>
+            </ScriptedLayout>
+        </LayoutComponent>
+
+        <StateMachine name="State Machine 1" id="0:4">
+            <StateMachineLayer name="Layer 1" id="0:5">
+                <AnyState x="300" y="0" id="0:8"/>
+                <ExitState x="400" y="0" id="0:9"/>
+                <EntryState x="0" y="0" id="0:16"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+
+    <!-- =========================================================================
+         CARD FACE — 120 x 168. Instanced by the script with its own Card view
+         model per card, so the rank, ink colour and pip come from data.
+         ========================================================================= -->
+    <Artboard isComponent="true" defaultStateMachineId="0:102" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1700" y="0" width="120" height="168" styleId="0:101" name="Card Face" id="0:100">
+        <LayoutComponentStyle name="Style" id="0:101"/>
+
+        <!-- Rank, top-left and bottom-right (turned). Ink colour is bound. -->
+        <Text x="9" y="6" sizingValue="autoWidth" name="Rank TL" id="0:110">
+            <TextStylePaint fontSize="24" letterSpacing="-0.03" fontAssetId="0:400" name="S" id="0:111">
+                <Fill name="Fill" id="0:112">
+                    <SolidColor colorValue="FFD0392B" name="C" id="0:113">
+                        <DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="0:114"/>
+                    </SolidColor>
+                </Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:111" text="A" name="Run" id="0:115">
+                <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="0:116"/>
+            </TextValueRun>
+        </Text>
+        <Text x="111" y="162" rotation="3.1415927" sizingValue="autoWidth" name="Rank BR" id="0:117">
+            <TextStylePaint fontSize="24" letterSpacing="-0.03" fontAssetId="0:400" name="S" id="0:118">
+                <Fill name="Fill" id="0:119">
+                    <SolidColor colorValue="FFD0392B" name="C" id="0:120">
+                        <DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="0:121"/>
+                    </SolidColor>
+                </Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:118" text="A" name="Run" id="0:122">
+                <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="0:123"/>
+            </TextValueRun>
+        </Text>
+
+        <!-- Suit pips. One group per suit, opacity bound 0/1; each group holds
+             the big centre pip and the two small corner pips. Pip colours are
+             fixed per suit: fish and star red, bubble and shell navy. -->
+        <Node name="Fish" id="0:130">
+            <DataBindContext sourcePathIds="0:320-0:323" propertyKey="18" id="0:131"/>
+            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:132">
+                <Shape x="-6" y="-2" name="Eye" id="0:133">
+                    <Ellipse width="4" height="4" originX="0.5" originY="0.5" name="P" id="0:134"/>
+                    <Fill name="F" id="0:135"><SolidColor colorValue="FFF7F1E6" name="C" id="0:136"/></Fill>
+                </Shape>
+                <Shape name="Body" id="0:137">
+                    <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="0:138"/>
+                    <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="0:139"/>
+                    <Fill name="F" id="0:140"><SolidColor colorValue="FFD0392B" name="C" id="0:141"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:142">
+                <Shape name="Body" id="0:143">
+                    <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="0:144"/>
+                    <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="0:145"/>
+                    <Fill name="F" id="0:146"><SolidColor colorValue="FFD0392B" name="C" id="0:147"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:148">
+                <Shape name="Body" id="0:149">
+                    <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="0:150"/>
+                    <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="0:151"/>
+                    <Fill name="F" id="0:152"><SolidColor colorValue="FFD0392B" name="C" id="0:153"/></Fill>
+                </Shape>
+            </Node>
+        </Node>
+
+        <Node name="Star" id="0:154">
+            <DataBindContext sourcePathIds="0:320-0:324" propertyKey="18" id="0:155"/>
+            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:156">
+                <Shape name="Body" id="0:157">
+                    <Star width="30" height="30" points="5" innerRadius="0.5" cornerRadius="1.5" originX="0.5" originY="0.5" name="P" id="0:158"/>
+                    <Fill name="F" id="0:159"><SolidColor colorValue="FFE2542E" name="C" id="0:160"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:161">
+                <Shape name="Body" id="0:162">
+                    <Star width="30" height="30" points="5" innerRadius="0.5" cornerRadius="1.5" originX="0.5" originY="0.5" name="P" id="0:163"/>
+                    <Fill name="F" id="0:164"><SolidColor colorValue="FFE2542E" name="C" id="0:165"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:166">
+                <Shape name="Body" id="0:167">
+                    <Star width="30" height="30" points="5" innerRadius="0.5" cornerRadius="1.5" originX="0.5" originY="0.5" name="P" id="0:168"/>
+                    <Fill name="F" id="0:169"><SolidColor colorValue="FFE2542E" name="C" id="0:170"/></Fill>
+                </Shape>
+            </Node>
+        </Node>
+
+        <Node name="Bubble" id="0:171">
+            <DataBindContext sourcePathIds="0:320-0:325" propertyKey="18" id="0:172"/>
+            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:173">
+                <Shape x="-5" y="-6" name="Shine" id="0:174">
+                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:175"/>
+                    <Fill name="F" id="0:176"><SolidColor colorValue="FFF7F1E6" name="C" id="0:177"/></Fill>
+                </Shape>
+                <Shape name="Body" id="0:178">
+                    <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="0:179"/>
+                    <Ellipse x="13" y="-12" width="8" height="8" originX="0.5" originY="0.5" name="P2" id="0:180"/>
+                    <Fill name="F" id="0:181"><SolidColor colorValue="FF1E2A44" name="C" id="0:182"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:183">
+                <Shape x="-5" y="-6" name="Shine" id="0:184">
+                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:185"/>
+                    <Fill name="F" id="0:186"><SolidColor colorValue="FFF7F1E6" name="C" id="0:187"/></Fill>
+                </Shape>
+                <Shape name="Body" id="0:188">
+                    <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="0:189"/>
+                    <Fill name="F" id="0:190"><SolidColor colorValue="FF1E2A44" name="C" id="0:191"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:192">
+                <Shape x="-5" y="-6" name="Shine" id="0:193">
+                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:194"/>
+                    <Fill name="F" id="0:195"><SolidColor colorValue="FFF7F1E6" name="C" id="0:196"/></Fill>
+                </Shape>
+                <Shape name="Body" id="0:197">
+                    <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="0:198"/>
+                    <Fill name="F" id="0:199"><SolidColor colorValue="FF1E2A44" name="C" id="0:1100"/></Fill>
+                </Shape>
+            </Node>
+        </Node>
+
+        <Node name="Shell" id="0:1101">
+            <DataBindContext sourcePathIds="0:320-0:326" propertyKey="18" id="0:1102"/>
+            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:1103">
+                <Shape name="Body" id="0:1104">
+                    <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="0:1105"/>
+                    <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="0:1106"/>
+                    <Fill name="F" id="0:1107"><SolidColor colorValue="FF1E2A44" name="C" id="0:1108"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:1109">
+                <Shape name="Body" id="0:1110">
+                    <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="0:1111"/>
+                    <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="0:1112"/>
+                    <Fill name="F" id="0:1113"><SolidColor colorValue="FF1E2A44" name="C" id="0:1114"/></Fill>
+                </Shape>
+            </Node>
+            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:1115">
+                <Shape name="Body" id="0:1116">
+                    <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="0:1117"/>
+                    <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="0:1118"/>
+                    <Fill name="F" id="0:1119"><SolidColor colorValue="FF1E2A44" name="C" id="0:1120"/></Fill>
+                </Shape>
+            </Node>
+        </Node>
+
+        <!-- The plate: cream face with a faint inner border. -->
+        <Shape x="60" y="84" name="Inner Border" id="0:1121">
+            <Rectangle width="108" height="156" originX="0.5" originY="0.5" cornerRadiusTL="7" name="P" id="0:1122"/>
+            <Stroke thickness="1.5" name="Edge" id="0:1123"><SolidColor colorValue="26000000" name="C" id="0:1124"/></Stroke>
+        </Shape>
+        <Shape x="60" y="84" name="Plate" id="0:1125">
+            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="0:1126"/>
+            <Fill name="Fill" id="0:1127">
+                <LinearGradient startX="-60" startY="-84" endX="60" endY="84" name="G" id="0:1128">
+                    <GradientStop colorValue="FFFFFBF3" position="0" id="0:1129"/>
+                    <GradientStop colorValue="FFF1E8D6" position="1" id="0:1130"/>
+                </LinearGradient>
+            </Fill>
+        </Shape>
+
+        <StateMachine name="State Machine 1" id="0:102">
+            <StateMachineLayer name="Layer 1" id="0:103">
+                <AnyState x="300" y="0" id="0:104"/>
+                <ExitState x="400" y="0" id="0:105"/>
+                <EntryState x="0" y="0" id="0:106"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- =========================================================================
+         CARD BACK — navy, with bubbles rising. No data.
+         ========================================================================= -->
+    <Artboard isComponent="true" x="1900" y="0" width="120" height="168" styleId="0:201" name="Card Back" id="0:200">
+        <LayoutComponentStyle name="Style" id="0:201"/>
+        <Shape x="38" y="118" name="Bubble 1" id="0:210">
+            <Ellipse width="30" height="30" originX="0.5" originY="0.5" name="P" id="0:211"/>
+            <Stroke thickness="2" name="S" id="0:212"><SolidColor colorValue="FF7FB6E8" name="C" id="0:213"/></Stroke>
+        </Shape>
+        <Shape x="76" y="80" name="Bubble 2" id="0:214">
+            <Ellipse width="20" height="20" originX="0.5" originY="0.5" name="P" id="0:215"/>
+            <Stroke thickness="2" name="S" id="0:216"><SolidColor colorValue="FF7FB6E8" name="C" id="0:217"/></Stroke>
+        </Shape>
+        <Shape x="52" y="46" name="Bubble 3" id="0:218">
+            <Ellipse width="12" height="12" originX="0.5" originY="0.5" name="P" id="0:219"/>
+            <Stroke thickness="2" name="S" id="0:220"><SolidColor colorValue="FF7FB6E8" name="C" id="0:221"/></Stroke>
+        </Shape>
+        <Shape x="86" y="30" name="Bubble 4" id="0:222">
+            <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:223"/>
+            <Fill name="F" id="0:224"><SolidColor colorValue="FF7FB6E8" name="C" id="0:225"/></Fill>
+        </Shape>
+        <Shape x="60" y="84" name="Inner Border" id="0:226">
+            <Rectangle width="104" height="152" originX="0.5" originY="0.5" cornerRadiusTL="7" name="P" id="0:227"/>
+            <Stroke thickness="2" name="S" id="0:228"><SolidColor colorValue="FF7FB6E8" name="C" id="0:229"/></Stroke>
+        </Shape>
+        <Shape x="60" y="84" name="Plate" id="0:230">
+            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="0:231"/>
+            <Fill name="Fill" id="0:232">
+                <LinearGradient startX="-60" startY="-84" endX="60" endY="84" name="G" id="0:233">
+                    <GradientStop colorValue="FF1F4E8C" position="0" id="0:234"/>
+                    <GradientStop colorValue="FF122D57" position="1" id="0:235"/>
+                </LinearGradient>
+            </Fill>
+        </Shape>
+    </Artboard>
+
+    <ComponentAsset artboardId="0:100" name="Card Face" id="0:290"/>
+    <ComponentAsset artboardId="0:200" name="Card Back" id="0:291"/>
+
+
+    <!-- =========================================================================
+         DATA
+         ========================================================================= -->
+
+    <!-- The screen. Every value is a string the script has already formatted:
+         Rive cannot format, and a number bound to a text run needs a converter. -->
+    <ViewModel defaultInstanceId="0:310" name="Table" id="0:300">
+        <ViewModelPropertyString name="moves" id="0:301"/>
+        <ViewModelPropertyString name="score" id="0:302"/>
+        <ViewModelPropertyString name="clock" id="0:303"/>
+        <ViewModelPropertyString name="status" id="0:304"/>
+        <ViewModelInstance exports="true" name="Instance" id="0:310">
+            <ViewModelInstanceString propertyValue="0" viewModelPropertyId="0:301" id="0:311"/>
+            <ViewModelInstanceString propertyValue="0" viewModelPropertyId="0:302" id="0:312"/>
+            <ViewModelInstanceString propertyValue="0:00" viewModelPropertyId="0:303" id="0:313"/>
+            <ViewModelInstanceString propertyValue="Lorem ipsum dolor sit amet" viewModelPropertyId="0:304" id="0:314"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+    <!-- One card. The script makes 52 instances of this. -->
+    <ViewModel defaultInstanceId="0:330" name="Card" id="0:320">
+        <ViewModelPropertyString name="rank" id="0:321"/>
+        <ViewModelPropertyColor name="ink" id="0:322"/>
+        <ViewModelPropertyNumber name="fish" id="0:323"/>
+        <ViewModelPropertyNumber name="star" id="0:324"/>
+        <ViewModelPropertyNumber name="bubble" id="0:325"/>
+        <ViewModelPropertyNumber name="shell" id="0:326"/>
+        <ViewModelInstance exports="true" name="Instance" id="0:330">
+            <ViewModelInstanceString propertyValue="A" viewModelPropertyId="0:321" id="0:331"/>
+            <ViewModelInstanceColor propertyValue="FFD0392B" viewModelPropertyId="0:322" id="0:332"/>
+            <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:323" id="0:333"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:324" id="0:334"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:325" id="0:335"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:326" id="0:336"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+
+    <!-- =========================================================================
+         ASSETS. Modules must be declared before the script that requires them.
+         Shaders (.wgsl) and the seal.mesh blob need no markup: the build scans
+         the directory and the script fetches them by name.
+         ========================================================================= -->
+    <FontAsset file="fonts/Inter.ttf" name="Inter" id="0:400"/>
+    <ScriptAsset file="klondike.luau" isModule="true" name="klondike" id="0:402"/>
+    <ScriptAsset file="table.luau" name="table" id="0:401"/>
+    <ScriptAsset file="tests.luau" name="tests" id="0:403"/>
+</Rive>

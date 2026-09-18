@@ -34,12 +34,12 @@ const check = (name, cond, detail = '') => {
 
 // THE SHIPPED FIVE, in main.js's own order. The order matters more than the
 // labels here: the diamond is addressed by POSITION — Play on top, Options
-// left, Leaderboard right, the tip jar below, Seal sports on the cell
+// left, Leaderboard right, the tip jar below, Club seal on the cell
 // `fifthCell` names — and the only thing that ties an item to a position is
 // its index in this list.
 const ITEMS = [
   { label: 'Play' }, { label: 'Options' }, { label: 'Leaderboard' }, { label: 'Tip jar' },
-  { label: 'Seal sports' },
+  { label: 'Club seal' },
 ];
 // The three-cell figures were the menu before the tip jar joined it and are
 // still the right answer for three buttons, so they are measured with three;

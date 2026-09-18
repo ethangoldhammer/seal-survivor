@@ -514,6 +514,7 @@
   },
   "aimIndicator": {
     "enabled": true,
+    "inVersus": false,
     "opacity": 1,
     "idleOpacity": 0.56,
     "fade": 0.12,
@@ -778,7 +779,7 @@
       "boosting": {
         "blendIn": 0.12,
         "blendOut": 0.86,
-        "zoom": 1.18,
+        "zoom": 1.71,
         "stiffMul": 0.55,
         "zoomStiffMul": 2.9,
         "dampMul": 0.75,
@@ -914,7 +915,11 @@
         "spec": 0.5,
         "slide": 0.7,
         "stretch": 0.65,
-        "taper": 0.56
+        "taper": 0.56,
+        "tint": 0.85,
+        "tintGlow": 0.12,
+        "tintLife": 4.6,
+        "perGoal": 1
       }
     }
   },
@@ -2280,12 +2285,50 @@
     "glideSink": 3.6,
     "altitudeHold": 2.2,
     "altitudeDamp": 1.4,
+    "entryHeight": 6,
+    "approachMin": 11,
+    "approachMax": 46,
+    "entryDropMax": 20,
+    "entryDescent": 0.35,
+    "depthRange": 4,
+    "depthCue": 0.22,
     "diveZone": 2.4,
     "diveAccel": 34,
     "diveSpeedMax": 30,
     "diveSteer": 16,
     "hitRadius": 0.55,
-    "divePitch": 96
+    "divePitch": 96,
+    "trail": {
+      "enabled": true,
+      "interval": 0.035,
+      "maxPerFrame": 4
+    },
+    "blastEcho": {
+      "enabled": true,
+      "delay": 0.22,
+      "scale": 0.9,
+      "radiusGain": 0.35,
+      "maxScale": 1.8
+    },
+    "slack": {
+      "enabled": true,
+      "stiffness": 5,
+      "damping": 1.6,
+      "tipLooseness": 0.93,
+      "maxLag": 1.6,
+      "softness": 0.5,
+      "snapAngle": 3,
+      "snap": 7,
+      "flow": 0.06,
+      "sag": 3,
+      "sagBias": 0.3,
+      "buffet": 2.2,
+      "buffetHz": 1.6,
+      "buffetJitter": 0.18,
+      "legGain": 2.2,
+      "spread": 1.1,
+      "tipBias": 0.75
+    }
   },
   "whale": {
     "ram": {
@@ -2386,7 +2429,7 @@
     "spawnMax": 22,
     "spawnFasterPerLevel": 2.2,
     "spawnMinFloor": 5,
-    "netWidthFraction": 0.92,
+    "netWidthFraction": 0.8,
     "netDepth": 14.5,
     "netDepthPerLevel": 2.9,
     "netFloorGap": 2.5,
@@ -2439,6 +2482,8 @@
     },
     "bobSpeed": 1.6,
     "bobAmount": 0.22,
+    "heelAmount": 0.12,
+    "heelSpeed": 0.8,
     "bomb": {
       "enabled": true,
       "dropInterval": 3.2,
@@ -2456,7 +2501,7 @@
       "chumScatter": 4,
       "chumXp": 3,
       "chumSpread": 9.5,
-      "arenaChum": 10,
+      "arenaChum": 15,
       "arenaChumPerKill": 1.2,
       "size": 0.72,
       "color": 16765562,
@@ -2466,7 +2511,7 @@
         "enabled": true,
         "emitEvery": 0.045,
         "flameSize": 0.17,
-        "flameColor": 16765066,
+        "flameColor": 16718362,
         "flameHot": 16774880,
         "flameGlow": 2.6,
         "flicker": 22,
@@ -3657,12 +3702,26 @@
       "electric": {
         "color": 9430783,
         "coreColor": 16777215,
+        "edgeWobble": 0.16,
         "arcRate": 14,
         "arcSeconds": 0.09,
         "arcSegments": 5,
         "arcJag": 0.22,
+        "forks": 2,
+        "forkSegments": 3,
+        "forkAt": 0.45,
+        "boltInset": 0.55,
+        "boltSpread": 0.55,
+        "pulseDivision": "1/2",
+        "beatEase": "outCubic",
         "pulse": 0.22,
         "pulseHz": 3.5,
+        "ringGlow": 2.2,
+        "beatGlow": 1.6,
+        "boltHitRadius": 0.35,
+        "zapSeconds": 0.5,
+        "zapFlash": 1,
+        "zapScale": 0.9,
         "fillEnabled": false,
         "fillPerSecond": 16,
         "inset": 0.74,
@@ -6195,6 +6254,34 @@
       "goo": "ball",
       "turbulence": 0.4
     },
+    "finFlickWipe": {
+      "count": 25,
+      "speed": [
+        14,
+        26
+      ],
+      "size": [
+        0.12,
+        0.3
+      ],
+      "life": [
+        0.12,
+        0.3
+      ],
+      "colors": [
+        15131611,
+        16777215
+      ],
+      "cone": 0.3,
+      "drag": 5.2,
+      "gravity": [
+        0,
+        -0.6
+      ],
+      "inherit": 0.15,
+      "glow": 1.8,
+      "turbulence": 0.15
+    },
     "spikeSmear": {
       "count": 12,
       "speed": [
@@ -7012,6 +7099,35 @@
       ],
       "inherit": 0.3,
       "glow": 4.6,
+      "surfacePop": "bubbleBurst"
+    },
+    "gullBubbles": {
+      "count": 7,
+      "speed": [
+        0.4,
+        1.8
+      ],
+      "size": [
+        0.03,
+        0.09
+      ],
+      "life": [
+        0.8,
+        2
+      ],
+      "colors": [
+        12578815,
+        14677759,
+        16777215
+      ],
+      "cone": 1.5,
+      "drag": 2.4,
+      "gravity": [
+        0,
+        3.6
+      ],
+      "inherit": 0.06,
+      "glow": 0.8,
       "surfacePop": "bubbleBurst"
     },
     "ballWake": {
@@ -10370,6 +10486,38 @@
       ],
       "sfxMinGap": 0.06
     },
+    "versusFinFlick": {
+      "goo": "ballGoo",
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.45,
+      "ripple": {
+        "strength": 1.1,
+        "radius": 5
+      },
+      "sfx": "versusFinFlick",
+      "haptic": [
+        {
+          "duration": 18,
+          "magnitude": 0.45
+        }
+      ],
+      "sfxMinGap": 0.05
+    },
+    "versusFinSwipe": {
+      "goo": null,
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "sfx": "versusFinSwipe",
+      "haptic": [
+        {
+          "duration": 10,
+          "magnitude": 0.18
+        }
+      ],
+      "sfxMinGap": 0.1
+    },
     "versusPierce": {
       "goo": "ballGoo",
       "shake": 0.09,
@@ -10896,6 +11044,13 @@
       "sfx": null,
       "haptic": null
     },
+    "bossShockZap": {
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0.35,
+      "sfx": null,
+      "haptic": null
+    },
     "belugaTrap": {
       "shake": 0.02,
       "hitstop": 0,
@@ -11290,6 +11445,26 @@
       ],
       "sfxMinGap": 0.08
     },
+    "seagullCry": {
+      "shake": 0,
+      "hitstop": 0,
+      "glow": 0,
+      "sfx": "seagullCry"
+    },
+    "seagullSplash": {
+      "goo": "breachFoam",
+      "shake": 0.3,
+      "hitstop": 0,
+      "glow": 0.4,
+      "ripple": {
+        "strength": 3.2,
+        "radius": 13
+      },
+      "sfx": "seagullSplash",
+      "haptic": [
+        16
+      ]
+    },
     "seagullBlast": {
       "goo": "killGoo",
       "shake": 0.85,
@@ -11304,6 +11479,18 @@
         38,
         28,
         55
+      ]
+    },
+    "seagullBlastTail": {
+      "shake": 0.28,
+      "hitstop": 0,
+      "glow": 0.25,
+      "sfx": "seagullBlastTail",
+      "haptic": [
+        {
+          "duration": 70,
+          "magnitude": 0.3
+        }
       ]
     },
     "musselBlast": {
@@ -11504,6 +11691,7 @@
         "edge": "smooth"
       },
       "electric": {
+        "color": 16769613,
         "element": "shock",
         "edge": "electric"
       },
@@ -11696,6 +11884,17 @@
             "speed": 0.86,
             "feed": 3
           },
+          "mottle": {
+            "amount": 0.34,
+            "scale": 3.2,
+            "speed": 0.55,
+            "feed": 0.9,
+            "boil": 0.5,
+            "hz": 11,
+            "gain": 1.5,
+            "relief": 2.4,
+            "edge": 0.35
+          },
           "tint": 16765501,
           "tintMix": 0.5499999999999997,
           "outline": {
@@ -11760,6 +11959,11 @@
     "killGooBody": {
       "pivot": 0.8,
       "max": 4
+    },
+    "playerFlash": {
+      "enabled": true,
+      "seconds": 0.18,
+      "curve": "inCubic"
     },
     "playerDamage": {
       "minGap": 0.16,
@@ -13837,6 +14041,7 @@
       ],
       "decay": 0.07,
       "gain": 14.962356560944336,
+      "pitchVary": 0,
       "srcs": [
         "/sfx/EG_FlickPlop_11.mp3",
         "/sfx/EG_FlickPlop_10.mp3",
@@ -14256,6 +14461,32 @@
         "/sfx/Seal_bleh.mp3",
         "/sfx/Seal_Shoot_06.mp3"
       ]
+    },
+    "versusFinFlick": {
+      "src": null,
+      "type": "boom",
+      "freq": [
+        1500,
+        620
+      ],
+      "decay": 0.11,
+      "gain": 6.6834391756861455,
+      "noise": 0.85,
+      "filter": 4200,
+      "pitchVary": 0.18,
+      "filterVary": 0.3,
+      "srcs": [
+        "/sfx/EG_FlickPlop_06.mp3"
+      ]
+    },
+    "versusFinSwipe": {
+      "src": null,
+      "type": "noise",
+      "filter": 2100,
+      "decay": 0.13,
+      "gain": 0.12,
+      "pitchVary": 0.14,
+      "filterVary": 0.4
     },
     "versusPierce": {
       "src": null,
@@ -14687,8 +14918,24 @@
       "gain": 0.05,
       "pitchVary": 0.26
     },
+    "seagullCry": {
+      "src": null,
+      "srcs": [],
+      "type": "blip",
+      "wave": "square",
+      "freq": [
+        700,
+        1450
+      ],
+      "decay": 0.26,
+      "gain": 0.15,
+      "pitchVary": 0.18
+    },
     "seagullDive": {
       "src": null,
+      "srcs": [
+        "/sfx/EliArf_Boost_02.mp3"
+      ],
       "type": "blip",
       "wave": "sawtooth",
       "freq": [
@@ -14697,10 +14944,17 @@
       ],
       "decay": 0.78,
       "gain": 0.7498942093324559,
-      "pitchVary": 0.48,
-      "srcs": [
-        "/sfx/EliArf_Boost_02.mp3"
-      ]
+      "pitchVary": 0.48
+    },
+    "seagullSplash": {
+      "src": null,
+      "srcs": [],
+      "type": "noise",
+      "filter": 3800,
+      "decay": 0.26,
+      "gain": 0.2,
+      "pitchVary": 0.14,
+      "filterVary": 0.2
     },
     "whaleCall": {
       "src": null,
@@ -15155,6 +15409,10 @@
     },
     "seagullBlast": {
       "src": null,
+      "srcs": [
+        "/sfx/EliArf_Explode_01.mp3",
+        "/sfx/EliArf_Explode1.mp3"
+      ],
       "type": "boom",
       "freq": [
         140,
@@ -15165,11 +15423,22 @@
       "noise": 0.65,
       "filter": 760,
       "pitchVary": 0.37,
-      "filterVary": 0.31,
-      "srcs": [
-        "/sfx/EliArf_Explode_01.mp3",
-        "/sfx/EliArf_Explode1.mp3"
-      ]
+      "filterVary": 0.31
+    },
+    "seagullBlastTail": {
+      "src": null,
+      "srcs": [],
+      "type": "boom",
+      "freq": [
+        90,
+        20
+      ],
+      "decay": 1.25,
+      "gain": 0.3,
+      "noise": 0.5,
+      "filter": 340,
+      "pitchVary": 0.1,
+      "filterVary": 0.22
     },
     "musselBlast": {
       "src": null,
@@ -16305,6 +16574,26 @@
     "contrast": 2.2,
     "white": 0.36,
     "tipColor": 16777215
+  },
+  "boostAura": {
+    "enabled": true,
+    "gap": 0,
+    "push": 9,
+    "reach": 8,
+    "strength": 3.35,
+    "falloff": 0.8,
+    "soft": 0.12,
+    "flow": 8.5,
+    "flowRamp": 8,
+    "flowMax": 26,
+    "grain": 2.6,
+    "warp": 3.7,
+    "churn": 4.4,
+    "wobble": 0.55,
+    "depth": 0.2,
+    "contrast": 1.7,
+    "rise": 0.02,
+    "fade": 0.12
   },
   "biolumSkin": {
     "enabled": true,
@@ -17461,13 +17750,9 @@
       "scaleFull": 1.2
     },
     "chum": {
-      "trail": {
-        "enabled": true,
-        "every": 0.03
-      },
       "tint": 16729982,
       "glowMul": 5.7,
-      "sizeMul": 1.6,
+      "sizeMul": 0.75,
       "flashMul": 2.2
     },
     "look": {
@@ -18712,7 +18997,7 @@
     "hold": 1.6,
     "ringGap": 0.55,
     "oxygenLow": 0.25,
-    "healthLow": 0.2,
+    "healthLow": 0.25,
     "boostEmpty": 0.02,
     "arrow": {
       "hug": 26,
@@ -18791,6 +19076,8 @@
     "accel": 2.2,
     "deadzone": 1.5,
     "rollAmount": 0.05,
+    "heelAmount": 0.07,
+    "heelSpeed": 0.6,
     "turnTime": 1.6,
     "turnEase": "inOutCubic",
     "turnSwing": 1.1,
@@ -18852,8 +19139,8 @@
     "bloomLum": 3.6,
     "flareSwell": 0.9,
     "flareSwellAt": 7,
-    "boostColor": 9564842,
-    "boostReadyColor": 16221695,
+    "boostColor": 2572077,
+    "boostReadyColor": 12971226,
     "boostGlow": 3.2,
     "boostLerp": 7,
     "boostFall": 12,
@@ -19327,6 +19614,9 @@
     "radius": 1.6,
     "bobAmount": 0.22,
     "bobSpeed": 1.6,
+    "rollAmount": 0.08,
+    "heelAmount": 0.14,
+    "heelSpeed": 0.85,
     "contactDamage": 0,
     "xp": 20,
     "hitReaction": {
@@ -19701,7 +19991,8 @@
     "enabled": true,
     "maxAgeMinutes": 15,
     "minLevel": 2,
-    "maxResumes": 2
+    "maxResumes": 2,
+    "holdSeconds": 60
   },
   "oxygen": {
     "enabled": true,
@@ -19864,8 +20155,8 @@
   },
   "chumChunk": {
     "sinkSpeed": 0.9,
-    "scaleMin": 0.65,
-    "scaleMax": 2.9,
+    "scaleMin": 0.4,
+    "scaleMax": 2.85,
     "tintMin": 16096650,
     "tintMax": 16732780,
     "flash": {
@@ -20334,6 +20625,10 @@
         "curve": "outCubic",
         "color": 16742994
       },
+      "playerZap": {
+        "peak": 2.2,
+        "color": 16771226
+      },
       "killLightHero": {
         "peak": 0.8,
         "color": 16773852
@@ -20357,7 +20652,8 @@
     },
     "flashSeconds": 0.13,
     "flashPeak": 0.9,
-    "flashCurve": "outCubic"
+    "flashCurve": "outCubic",
+    "bossFlash": 0
   },
   "statusFx": {
     "enabled": true,
@@ -20659,10 +20955,58 @@
       "curve": 1.35,
       "event": "chumMorsel",
       "lastScale": 1.7,
+      "riser": {
+        "enabled": true,
+        "travel": 0.3,
+        "bands": [
+          {
+            "level": 0.95,
+            "q": 1,
+            "from": 60,
+            "to": 480,
+            "at": 0
+          },
+          {
+            "level": 0.7,
+            "q": 4.5,
+            "from": 200,
+            "to": 1900,
+            "at": 0
+          },
+          {
+            "level": 0.4,
+            "q": 12,
+            "from": 800,
+            "to": 5200,
+            "at": 0.5
+          }
+        ],
+        "curve": 1.2,
+        "reverse": false,
+        "wobbleDepth": 0.5,
+        "wobbleFrom": 3,
+        "wobbleTo": 11,
+        "steps": 40,
+        "vary": {
+          "pitch": 2,
+          "spread": 0.05,
+          "level": 0.1,
+          "wobble": 0.2
+        },
+        "gain": 0.09,
+        "swell": 1.9,
+        "fadeIn": 0.22,
+        "tail": 0.28,
+        "snap": 0.035,
+        "fadeOut": 0.14
+      },
       "orb": {
         "hold": 0.04,
         "ramp": 0.22,
-        "stagger": 0.16
+        "stagger": 0.16,
+        "riser": {
+          "enabled": false
+        }
       }
     },
     "jaw": {
@@ -20682,12 +21026,12 @@
       "airDrag": 1.2,
       "waterDrag": 4.5
     },
-    "healFraction": 0.015,
+    "healFraction": 0.005,
     "tiers": [
       {
         "maxRadius": 0.5,
         "xpMul": 0.45,
-        "healMul": 0.6,
+        "healMul": 0.35,
         "scale": 0.8,
         "color": 16733559
       },
@@ -20701,7 +21045,7 @@
       {
         "maxRadius": 999,
         "xpMul": 1.6,
-        "healMul": 2.2,
+        "healMul": 2,
         "scale": 1.6,
         "color": 16720452
       }
@@ -21885,6 +22229,20 @@
         "slip": 118,
         "sweep": 28
       },
+      "finFlick": {
+        "enabled": true,
+        "duration": 0.18,
+        "cooldown": 0.26,
+        "reach": 2.4,
+        "sweep": 3,
+        "slip": 96,
+        "grip": 14,
+        "squirt": 0.22,
+        "bite": 0.2,
+        "kick": 1,
+        "swipeNear": 16,
+        "debug": false
+      },
       "spinStrokes": {
         "enabled": true,
         "count": 4,
@@ -22290,6 +22648,12 @@
       "settleTol": 1.5,
       "settleZoomTol": 0.03,
       "gather": 0.6,
+      "fill": {
+        "enabled": true,
+        "ease": "smoothstep",
+        "air": true,
+        "boost": true
+      },
       "bait": {
         "perSide": 2,
         "maxAlive": 8,
@@ -22346,6 +22710,9 @@
       "celebrate": true,
       "cams": {
         "enabled": true,
+        "projection": "flat",
+        "flatPad": 2,
+        "flatZoomEase": 0.18,
         "noseLength": 2.2,
         "wallInset": 3,
         "floorInset": 2,
@@ -22428,6 +22795,13 @@
       "ownGoal": {
         "wasLeaving": 2,
         "minSpeed": 6
+      }
+    },
+    "stats": {
+      "possession": {
+        "enabled": true,
+        "speed": 5,
+        "delay": 0.35
       }
     },
     "chum": {
@@ -22603,5 +22977,5 @@
       }
     }
   },
-  "_savedAt": 1789621006781
+  "_savedAt": 1789697197234
 }

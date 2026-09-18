@@ -946,7 +946,7 @@ export function emit(name, x, y, opts = {}) {
  *        least `count` long. `vx/vy` and `size` are optional; `r/g/b` are
  *        LINEAR 0..1, which is what the buffer holds — a caller with hexes
  *        should go through THREE.Color rather than dividing by 255.
- * @param opts {{glow, sizeMul}}
+ * @param opts {{glow, sizeMul, turbMul}}
  */
 export function emitCloud(name, cloud, opts = {}) {
   const def = CONFIG.emitters[name];
@@ -957,7 +957,14 @@ export function emitCloud(name, cloud, opts = {}) {
   const sizeMul = Math.max(0, opts.sizeMul ?? 1);
   const glow = (def.glow ?? 1) * (CONFIG.bloom?.particleOverdrive ?? 1) * (opts.glow ?? 1);
   const tb = turbSettings();
-  const turb = tb ? (def.turbulence ?? 1) : 0;
+  // `turbMul` scales the emitter's churn for THIS call, the way `sizeMul` and
+  // `glow` scale its size and brightness. It exists for a caller that fires one
+  // emitter in two registers — systems/boostAura.js throws the same debris
+  // harder and rougher when the release lands in the sweet spot — and a second
+  // emitter def for that would be the same look maintained twice. Still
+  // multiplied through the def, so the global turbulence switch and the
+  // emitter's own figure both still bind.
+  const turb = tb ? (def.turbulence ?? 1) * Math.max(0, opts.turbMul ?? 1) : 0;
   const dragVary = Math.max(0, tb?.dragVary ?? 0);
   const wantsGroup = def.goo && gooSettings() ? gooGroupName(def) : null;
   const gooGroup = wantsGroup ? gooGroupNames().indexOf(wantsGroup) + 1 : 0;

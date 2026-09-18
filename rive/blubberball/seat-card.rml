@@ -76,8 +76,13 @@
             </TextValueRun>
         </Text>
 
-        <!-- THE NAME — cast off sealNames.csv by systems/rosterCast.js -->
-        <Text x="42" y="38" sizingValue="autoWidth" name="Seat Name" id="1:20">
+        <!-- THE NAME — cast off sealNames.csv by systems/rosterCast.js.
+             FITTED, like every box on any of these artboards holding text the
+             match casts: fixed width, `fitFontSize`, no wrap, so a long name
+             gets smaller instead of running under the ready stamp at x=356.
+             See the rule at the top of stats-page.rml. -->
+        <Text x="42" y="38" width="280" height="42" sizingValue="fixed"
+              overflowValue="fitFontSize" wrapValue="noWrap" name="Seat Name" id="1:20">
             <TextStylePaint fontSize="31" fontAssetId="3:1" name="Name Style" id="1:21">
                 <Fill name="Fill" id="0:3520"><SolidColor colorValue="FFF2F6FA" name="C" id="0:3521"/></Fill>
             </TextStylePaint>

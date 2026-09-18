@@ -2,13 +2,17 @@ import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import {
   makeOrganicRing, placeOrganicRing, updateOrganicRing, disposeOrganicRing,
-  isOrganicRing,
+  isOrganicRing, electricNode, electricNodeCount, advanceRingClock,
 } from './organicRing.js';
 import { spawnBeam } from './beams.js';
 import { spawnProjectile, projectiles } from '../entities/projectiles.js';
 import { enemies, spawnNamed } from '../entities/enemies.js';
 import { emit } from '../entities/particles.js';
 import { isDazed } from './control.js';
+import { advanceCycles } from './beatSync.js';
+import { flashPlayer } from './playerFlash.js';
+import { feedback } from './feedback.js';
+import { ease } from '../ease.js';
 import { applyBossLook, clearBossLook, bossSparkColor } from './bossLook.js';
 import { startAttractorStorm, stopAttractorStorm } from './attractorStorm.js';
 import { attackTraceOn, noteShotFired } from './attackTrace.js';
@@ -118,9 +122,16 @@ function track(scene, obj) {
 // place. `outer` is 1 at every call site here — the outer edge of a tell IS the
 // reach it is telling you about — and is asserted rather than handled, because
 // an outer under 1 would silently move the boundary the player is reading.
-function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null, role = null) {
+function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null, role = null,
+  look = {}) {
   const thickness = (outer - inner) / 2;
   const mesh = makeOrganicRing({
+    // Anything the caller wants to say about the EDGE, spread first so the
+    // fixed decisions below still win. Only the aura uses it today — see the
+    // note on `edgeWobble` in CONFIG.boss.perkFx.electric — and it is a bag
+    // rather than two more positional arguments because the next ring that
+    // wants its own dialect numbers should not move everybody else's call.
+    ...look,
     // Which family this belongs to, for CONFIG.fx.organicRing.roles — see
     // roleOn in systems/organicRing.js. Everything routed through tellRing is a
     // WARNING and carries 'tell'; the teleport flashes and the barrel blast
@@ -150,10 +161,10 @@ function makeRing(color, inner = 0.82, outer = 1, segments = 64, type = null, ro
 // type can keep it by clearing the column, and the fallback is what every perk
 // looked like before the palette existed.
 function tellRing(scene, perk, legacyColor, inner, outer, segments, fallbackType,
-  role = 'tell') {
+  role = 'tell', look = {}) {
   const atk = perk?.attack;
   return track(scene, makeRing(atk ? null : legacyColor, inner, outer, segments,
-    atk || fallbackType, role));
+    atk || fallbackType, role, look));
 }
 
 function disposeObj(obj) {
@@ -338,26 +349,70 @@ export function attachBossPerk(scene, enemy, perk, difficulty = 0) {
     // screen for the whole fight rather than for the second before something
     // happens. Its own role so that quietening the warnings does not silently
     // make a standing hazard invisible.
+    // THE EDGE HAS TO SPEND THE BUDGET IT WAS GIVEN. `wobble` is a WORLD
+    // distance and the shared default is half a unit, which on a mark two units
+    // across is a visible zigzag and on a twenty-unit aura is a quarter of one
+    // percent of the radius — an electric ring that had always come out as a
+    // smooth blue arc, because the dialect was running at an amplitude nothing
+    // could see. Expressed here as a share of the ring's own reach instead, so
+    // it reads the same on a small boss and a giant one. The CAP is untouched:
+    // `edgeWobble` is clamped to the shared wobbleMax in auraEdge(), so this
+    // makes the ring use the licence it already had rather than widening it.
     active.ring = tellRing(scene, perk, fx.electric?.color ?? 0x8fe6ff, 0.9, 1, 96, 'electric',
-      'aura');
+      'aura', auraEdge(auraReach(enemy, perk)));
     active.ring.visible = true;
-    // The arcs: one LineSegments whose vertices are rewritten every frame.
+    // The bolts: one LineSegments whose vertices are rewritten every frame.
     // A pool of meshes would be the obvious shape and is strictly worse —
-    // every arc lives for a twelfth of a second, and a single buffer draws all
+    // every bolt lives for a twelfth of a second, and a single buffer draws all
     // of them in one call with no allocation.
     //
-    // EACH ARC IS A JAGGED SPLINE, not a chord. A straight segment struck
-    // across the rim reads as a laser or as a dropped polygon; electricity is
-    // recognisable almost entirely by the KINK, and by the kink being
-    // different every time it re-strikes. See jagArc for the displacement.
-    // The buffer is sized for the segments rather than the arcs, which is the
-    // only cost of it: `arcSegments` at 5 is five times the vertices for the
-    // same twelve strikes, and still one draw call and still no allocation.
+    // EACH BOLT IS A JAGGED SPLINE, not a chord. A straight segment reads as a
+    // laser or as a dropped polygon; electricity is recognisable almost
+    // entirely by the KINK, and by the kink being different every time it
+    // re-strikes. See jagArc for the displacement.
+    //
+    // AND EACH ONE RUNS FROM THE BODY TO A CORNER OF THE RING. Before this they
+    // were struck across the rim between two arbitrary angles, which put the
+    // sparks and the boundary in the same circle without ever connecting them:
+    // the field looked like a ring with weather inside it. A bolt that leaves
+    // the animal, forks, and ends exactly on a corner of the zigzag says the
+    // thing the zone actually is — the boss is what is charging the edge.
+    // `electricNode` is what makes "exactly" true; see its note in
+    // systems/organicRing.js.
+    //
+    // The buffer is sized for the SEGMENTS, which is the only cost of the
+    // shape: a trunk of `arcSegments` plus `forks` branches of `forkSegments`
+    // each, per slot, and still one draw call and still no allocation.
     const arcGeo = new THREE.BufferGeometry();
     active.arcCount = 12;
     active.arcSegs = Math.max(1, Math.round(fx.electric?.arcSegments ?? 5));
-    active.arcPositions = new Float32Array(active.arcCount * active.arcSegs * 6);
+    active.forkCount = Math.max(0, Math.round(fx.electric?.forks ?? 2));
+    active.forkSegs = Math.max(1, Math.round(fx.electric?.forkSegments ?? 3));
+    active.boltVerts = (active.arcSegs + active.forkCount * active.forkSegs) * 6;
+    active.arcPositions = new Float32Array(active.arcCount * active.boltVerts);
     active.arcLife = new Float32Array(active.arcCount);
+    // Which of the ring's re-rolls each live bolt was struck on. A bolt is
+    // allowed to outlive its own corner by exactly no frames: when the ring
+    // re-rolls its nodes the corner this bolt ends on moves, so the bolt dies
+    // with it. That shared clock is the whole of the fusion — the alternative
+    // is re-solving the endpoint every frame, which is a bolt that MOVES, and a
+    // bolt that moves is a rope.
+    active.arcStep = new Float64Array(active.arcCount).fill(NaN);
+    // The re-roll each slot last SHOCKED the player on, so a bolt that is a
+    // trunk and two branches cannot charge for three. See zapPlayer.
+    active.zapped = new Float64Array(active.arcCount).fill(NaN);
+    // The re-roll the LAST frame saw, so a change of step can be noticed. NaN
+    // rather than 0: a fight that starts on step 0 must still count as a roll.
+    active.arcStepNow = NaN;
+    // Fractional bolts owed from the last frame. `arcRate` is still bolts per
+    // SECOND, but they can now only be struck on a re-roll, so the remainder
+    // has to be carried rather than rounded away — at 14 a second against a
+    // 13Hz ring that rounding is the difference between the tuned rate and
+    // double it.
+    active.boltCarry = 0;
+    // The joints of the trunk, so a fork can leave from a point that is
+    // genuinely ON it. Sized once here rather than allocated per strike.
+    active.boltJoints = new Float64Array((active.arcSegs + 1) * 2);
     arcGeo.setAttribute('position', new THREE.BufferAttribute(active.arcPositions, 3));
     const arcMat = new THREE.LineBasicMaterial({
       // THE SPARKS ARE THE RING'S COLOUR. Not a slider of their own and not a
@@ -438,6 +493,30 @@ export function activeBossPerk() {
     : null;
 }
 
+// THE AURA'S REACH, IN ONE PLACE. It is the radius the ring is drawn at, the
+// radius the damage check uses and the radius the bolts are struck to, and
+// those three being the same number is the perk's entire contract with the
+// player. It was computed twice before — once in updateElectric and once
+// nowhere, because attach had no reason to know it — and a third caller is
+// exactly how a drawn boundary drifts off a damage one.
+function auraReach(e, perk) {
+  return (e?.radius ?? 1) + (perk?.radius ?? 9);
+}
+
+// How far the aura's drawn edge may wander from that reach, as a share of it.
+//
+// CLAMPED TO THE SHARED CEILING, and that is not politeness. The whole game's
+// promise about every threat circle is CONFIG.fx.organicRing.wobbleMax — the
+// look page measures every lit pixel against radius * (1 + wobbleMax) — and a
+// per-perk number that could exceed it would be a boss claiming reach it does
+// not have, through a door the audit does not watch. So this dial can spend the
+// budget and cannot raise it.
+function auraEdge(reach) {
+  const cap = CONFIG.fx?.organicRing?.wobbleMax ?? 0.18;
+  const share = Math.max(0, Math.min(cap, CONFIG.boss?.perkFx?.electric?.edgeWobble ?? 0.16));
+  return { wobble: reach * share, wobbleMax: share };
+}
+
 // The size everything here is drawn against. `e.radius` is the hitbox and is
 // exactly what the aura's reach should be measured from — see the note in
 // CONFIG.boss.perkFx.electric about art that is smaller than reach.
@@ -457,7 +536,11 @@ function place(obj, e, worldRadius) {
 // runs while it is visible restarts its crackle every time it reappears.
 function tickRings(dt) {
   for (const obj of owned) {
-    if (isOrganicRing(obj)) obj.material.uniforms.uTime.value += dt;
+    // advanceRingClock, not a bare uTime write. The electric dialect's held
+    // jags run off an accumulated step phase that has to move with the clock —
+    // see the note on THE CLOCKS in systems/organicRing.js — and a ring whose
+    // seconds advanced while its phase stood still would never re-roll at all.
+    if (isOrganicRing(obj)) advanceRingClock(obj, dt);
   }
 }
 
@@ -556,7 +639,7 @@ function auraLobeLag(speed) {
  * resolveCombat is handed — so a shock from the aura goes through the same
  * i-frames, the same screen shake and the same playtest accounting as a bite.
  */
-export function updateBossPerks(dt, scene, playerPos, hooks = {}) {
+export function updateBossPerks(dt, scene, playerPos, hooks = {}, rawDt = dt) {
   // ABOVE THE `active` GATE, and all three of these have to be. Ordnance
   // outlives the perk that threw it and belongs to the boat as much as to a
   // perk, so a frame with no perk on it is still a frame in which barrels are
@@ -623,7 +706,7 @@ export function updateBossPerks(dt, scene, playerPos, hooks = {}) {
   const dist = Math.hypot(dx, dy) || 0.0001;
 
   if (active.id === 'lunge') updateLunge(dt, e, r, dx / dist, dy / dist);
-  else if (active.id === 'electric') updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks);
+  else if (active.id === 'electric') updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks, rawDt);
   else if (active.id === 'teleport') updateTeleport(dt, e, r, playerPos);
   else if (active.id === 'phase') updatePhase(dt, e, r);
   else if (active.id === 'turtles') updateTurtles(dt, scene, e, r, playerPos, dx / dist, dy / dist);
@@ -792,7 +875,7 @@ function updateLunge(dt, e, r, dirX, dirY) {
 // one of them sits exactly on the aura boundary, which is the hitbox — and a
 // displaced end would be a spark that visibly starts outside the circle the
 // player is being asked to trust.
-function jagArc(out, o, segs, x0, y0, x1, y1, z, jag) {
+function jagArc(out, o, segs, x0, y0, x1, y1, z, jag, joints = null) {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const len = Math.hypot(dx, dy) || 1;
@@ -805,6 +888,7 @@ function jagArc(out, o, segs, x0, y0, x1, y1, z, jag) {
 
   let px = x0;
   let py = y0;
+  if (joints) { joints[0] = x0; joints[1] = y0; }
   for (let s = 1; s <= segs; s++) {
     const t = s / segs;
     // sin(pi*t) is the taper: zero at both ends, widest in the middle.
@@ -814,6 +898,11 @@ function jagArc(out, o, segs, x0, y0, x1, y1, z, jag) {
     const i = o + (s - 1) * 6;
     out[i + 0] = px; out[i + 1] = py; out[i + 2] = z;
     out[i + 3] = cx; out[i + 4] = cy; out[i + 5] = z;
+    // The joints, for a caller that wants to branch off one. Handed back rather
+    // than recomputed by the caller: the displacement is random, so a second
+    // pass would put the fork's root near the trunk instead of on it, and a
+    // fork that starts beside its parent is two bolts rather than one forking.
+    if (joints) { joints[s * 2] = cx; joints[s * 2 + 1] = cy; }
     px = cx;
     py = cy;
   }
@@ -830,56 +919,178 @@ function jagArc(out, o, segs, x0, y0, x1, y1, z, jag) {
 // clipping the edge of it costs a sliver and sitting in it costs the stated
 // rate. A burst on entry would make brushing past it identical to living in
 // it, which is the opposite of what a zone is for.
-function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
+function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks, rawDt = dt) {
   const p = active.perk;
   const fx = CONFIG.boss?.perkFx?.electric ?? {};
-  const reach = r + (p.radius ?? 9);
+  const reach = auraReach(e, p);
+
+  // --- THE BEAT -------------------------------------------------------------
+  // The field surges ON THE HALF NOTE, not on a rate in Hz.
+  //
+  // It used to breathe on a free sine at `pulseHz` — 3.5 a second, picked by
+  // eye — which is the exact problem systems/beatSync.js was written for: a
+  // number that is very slightly out of time with whatever loop is playing, so
+  // nothing looks broken and the screen never quite agrees with itself. A
+  // standing hazard that surges is the loudest periodic thing in a boss fight
+  // and is the last thing that should be off the grid. `pulseDivision` names the
+  // figure; '1/2' is two beats, which at the run's tempo is about a second.
+  //
+  // AND IT IS A HIT, NOT A WAVE. A sine spends half its time on the way up,
+  // which reads as a swell; what a half note wants is an attack on the beat and
+  // a decay off it. So the cycle is run through an ease and inverted — full at
+  // the downbeat, falling to nothing by the next one.
+  //
+  // `pulseHz` survives as the FREE rate, for `pulseDivision: 'free'` and for
+  // whenever CONFIG.beatSync.enabled is off. advanceCycles picks between them.
+  active.pulseCycle = advanceCycles(
+    active.pulseCycle ?? 0, fx.pulseDivision ?? '1/2',
+    // rad/s to cycles/s is the conversion every caller of this makes; pulseHz is
+    // already cycles, so it goes straight in.
+    fx.pulseHz ?? 3.5, rawDt, 1,
+  );
+  // 1 on the beat, 0 just before the next one. `beatEase` shapes the fall.
+  const beat = 1 - ease(fx.beatEase ?? 'outCubic', active.pulseCycle);
 
   // The ring breathes, but only between `pulse` and 1 — never down to nothing,
   // because the ring IS the hitbox and a boundary that visibly moves is one
   // the player will (correctly) not trust.
-  const pulse = 1 - (fx.pulse ?? 0.22) * 0.5 * (1 + Math.sin(active.clock * Math.PI * 2 * (fx.pulseHz ?? 3.5)));
+  const pulse = 1 - (fx.pulse ?? 0.22) * (1 - beat);
   place(active.ring, e, reach);
   ringAlpha(active.ring, 0.28 + 0.3 * pulse);
+  // THE OVERDRIVE. `uGlow` multiplies the ring's colour before it is written, so
+  // this is what pushes the band over the bright pass and into bloom on the
+  // downbeat rather than merely making it a bit lighter. It is the one channel
+  // in here that can genuinely shout, which is why it rides the beat envelope
+  // directly instead of the softened `pulse` the alpha and the charge use.
+  //
+  // `beatGlow` is a SMALL number next to `ringGlow` for a reason that is not
+  // timidity: the bright pass thresholds luminance and the ring is yellow now,
+  // so a band that sat under the threshold at cyan crosses it hard — the same
+  // add that was invisible before is a flare now. See the note on
+  // CONFIG.fx.attackTypes.electric.
+  updateOrganicRing(active.ring, 0, {
+    glow: (fx.ringGlow ?? CONFIG.fx?.organicRing?.glow ?? 2.2) + (fx.beatGlow ?? 1.6) * beat,
+  });
   // Always whole — this perk has no wind-up and the ring IS the hitbox, so
   // there is never a moment where part of the boundary is not drawn. What rides
-  // the breath instead is the CHARGE, which drives how hard and how fast the
-  // jagged splines re-roll: the field visibly tightens on the beat rather than
-  // crackling at one flat rate.
+  // the breath instead is the CHARGE, which drives how hard the jagged splines
+  // throw and how fast they re-roll: the field visibly tightens on the beat
+  // rather than crackling at one flat rate.
   ringSweep(active.ring, 1, 0, 0.45 + 0.55 * pulse);
 
-  // Arcs. Each is a jagged spline struck across the rim, alive for a fraction
-  // of a second — the buffer is written in place and the whole set is one draw.
+  // --- THE BOLTS ------------------------------------------------------------
+  // Each one leaves the body, forks, and ends on a CORNER of the ring's zigzag.
+  // The buffer is written in place and the whole set is one draw.
   //
-  // The strike is re-rolled from scratch every time it comes back rather than
+  // A strike is re-rolled from scratch every time it comes back rather than
   // being animated: a bolt that moved would be a rope, and what electricity
   // does is EXIST somewhere else. `pulse` rides the amplitude so the jags bite
   // harder on the beat the ring tightens on, which is the field visibly
   // charging rather than crackling at one flat rate.
-  const rate = fx.arcRate ?? 14;
+  //
+  // THE RING'S CLOCK IS THE BOLTS' CLOCK. The zigzag holds each set of nodes
+  // for 1/elecRate of a second and then re-rolls them (see the electric arm in
+  // systems/organicRing.js), so a bolt may be struck only on a re-roll and dies
+  // on the next one. That is what lets the end of a bolt be the corner rather
+  // than a point near it: both are solved from the same step index, and neither
+  // can move while the other stands still. `arcSeconds` survives as a CEILING
+  // on top — a bolt never outlives it even if the ring's rate is turned right
+  // down — which is the one thing that number could still honestly mean.
+  // THE BOLTS ARE WRITTEN IN THE ANIMAL'S FRAME, and the whole set is carried on
+  // the boss by moving the object rather than the vertices. They are struck once
+  // and then held for a roll, so in world coordinates a swimming boss leaves
+  // them behind it — a tenth of a unit a frame, which is nothing to look at and
+  // is enough to unstick every endpoint from the corner it was solved onto. The
+  // ring is placed on the animal the same way, so the two travel as one.
+  active.arcs.position.set(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z);
+
+  const nodes = electricNodeCount(active.ring);
+  // The ring's own re-roll counter, read rather than recomputed. Both this and
+  // the shader are handed the same integer, so there is no arithmetic here that
+  // could drift out of step with the corners being drawn.
+  const step = active.ring.material.uniforms.uElecStep.value;
+  const rolled = step !== active.arcStepNow;
+  active.arcStepNow = step;
+
   const life = fx.arcSeconds ?? 0.09;
   const jag = (fx.arcJag ?? 0.22) * pulse;
-  const stride = active.arcSegs * 6;
+  const inset = Math.max(0, Math.min(1, fx.boltInset ?? 0.55));
+  const spread = fx.boltSpread ?? 0.55;
+  const forkAt = Math.max(0, Math.min(1, fx.forkAt ?? 0.45));
+  const stride = active.boltVerts;
+  const trunkFloats = active.arcSegs * 6;
+  const forkFloats = active.forkSegs * 6;
+
+  // How many to strike. Still `arcRate` per second, carried across frames so
+  // the average holds even though the strikes can only land on re-rolls.
+  active.boltCarry += (fx.arcRate ?? 14) * dt;
+  let owed = rolled ? Math.floor(active.boltCarry) : 0;
+  if (rolled) active.boltCarry -= owed;
+  // The same hitch guard the aura fill has: one long frame must not empty a
+  // second of strikes into a single flash.
+  owed = Math.min(owed, active.arcCount);
+
   for (let i = 0; i < active.arcCount; i++) {
     active.arcLife[i] -= dt;
-    if (active.arcLife[i] > 0) continue;
-    // Spread the respawns rather than restriking them all on the same frame:
-    // an even cadence reads as a machine, and a random one reads as static.
-    if (Math.random() > rate * dt / active.arcCount) continue;
-    active.arcLife[i] = life * (0.5 + Math.random());
-    const a0 = Math.random() * Math.PI * 2;
-    const a1 = a0 + (Math.random() - 0.5) * 1.2;
-    const r1 = reach * (0.55 + Math.random() * 0.4);
-    jagArc(
-      active.arcPositions, i * stride, active.arcSegs,
-      e.mesh.position.x + Math.cos(a0) * reach,
-      e.mesh.position.y + Math.sin(a0) * reach,
-      e.mesh.position.x + Math.cos(a1) * r1,
-      e.mesh.position.y + Math.sin(a1) * r1,
-      e.mesh.position.z, jag,
-    );
+    // A live bolt whose ring has since re-rolled is over, whatever its timer
+    // says. This is the line that keeps the two shapes welded.
+    if (active.arcStep[i] === step && active.arcLife[i] > 0) continue;
+    active.arcLife[i] = 0;
+    active.arcStep[i] = NaN;
+    if (owed <= 0 || nodes < 2) continue;
+    owed -= 1;
+
+    // WHICH CORNER. An OUTWARD node — one the zigzag pushes past the true
+    // radius — because a corner leaning toward the boss is the one that looks
+    // struck, and the inward ones are the valleys between them. The dialect
+    // alternates its sign with the index, so the outward nodes are the even
+    // ones; `electricNode` reports which it handed back rather than making
+    // this side re-derive the parity.
+    const ni = Math.floor(Math.random() * (nodes / 2)) * 2;
+    const node = electricNode(active.ring, ni);
+    const ex = Math.cos(node.angle) * node.radius;
+    const ey = Math.sin(node.angle) * node.radius;
+
+    // Where it leaves the body. Off the node's own bearing by up to `spread`
+    // so the set does not read as spokes — a bolt struck straight out along
+    // the radius is a diagram of a circle, and the whole read here is that the
+    // charge is arcing rather than radiating.
+    const a0 = node.angle + (Math.random() - 0.5) * 2 * spread;
+    const sx = Math.cos(a0) * r * inset;
+    const sy = Math.sin(a0) * r * inset;
+
+    const o = i * stride;
+    jagArc(active.arcPositions, o, active.arcSegs, sx, sy, ex, ey, 0, jag,
+      active.boltJoints);
+    active.arcLife[i] = life;
+    active.arcStep[i] = step;
+
+    // THE FORKS, and they end on corners too. A branch that stopped in open
+    // water would be the one part of this that still floats free of the ring;
+    // landing each on a NEIGHBOURING node instead makes one strike grab three
+    // consecutive corners of the zigzag, which is what fuses the two shapes
+    // into a single object rather than a ring with bolts near it.
+    for (let f = 0; f < active.forkCount; f++) {
+      const fo = o + trunkFloats + f * forkFloats;
+      // Alternating sides, walking outward: +1, -1, +2, -2. The immediate
+      // neighbours are INWARD corners, so a fork drops into the valley beside
+      // the corner its trunk took — which is the shape a real branch makes.
+      const away = (f % 2 === 0 ? 1 : -1) * (1 + Math.floor(f / 2));
+      const target = electricNode(active.ring, ni + away);
+      // From a genuine joint of the trunk. Jittered by a joint either way so
+      // every fork does not leave the same waypoint.
+      let j = Math.round(active.arcSegs * forkAt) + (Math.random() < 0.5 ? 0 : 1);
+      j = Math.max(1, Math.min(active.arcSegs - 1, j));
+      jagArc(
+        active.arcPositions, fo, active.forkSegs,
+        active.boltJoints[j * 2], active.boltJoints[j * 2 + 1],
+        Math.cos(target.angle) * target.radius,
+        Math.sin(target.angle) * target.radius,
+        0, jag,
+      );
+    }
   }
-  // Dead arcs are collapsed to a point rather than removed — a zero-length
+  // Dead bolts are collapsed to a point rather than removed — a zero-length
   // segment draws nothing, and rebuilding the buffer to omit them would cost
   // more than the pixels it saves.
   for (let i = 0; i < active.arcCount; i++) {
@@ -934,11 +1145,111 @@ function updateElectric(dt, e, r, playerPos, dist, dx, dy, hooks) {
     }
   }
 
-  if (dist < reach && hooks.onPlayerHit) {
+  zapPlayer(e, r, reach, playerPos, dist, dx, dy, hooks);
+}
+
+// ---------------------------------------------------------------------------
+// WHAT ACTUALLY SHOCKS YOU: A BOLT TOUCHING YOU.
+//
+// This used to be `dist < reach` — the whole disc, every frame, at the row's
+// rate — and the comments around it argued the case well: a field you have to
+// stay out of is a rule about the entire fight rather than an event inside it.
+// It is also unplayable to READ. Nothing on screen said which frame cost you
+// health, because the thing dealing damage (a uniform disc) was not the thing
+// being drawn (a rim and some sparks), and a hazard whose damage has no picture
+// is one the player learns as "stay away from the yellow" and nothing finer.
+//
+// So the bolts are the hitbox now. They are struck across the whole disc and
+// they are what is drawn, so the damage and the picture are finally the same
+// object — and standing in the field costs you whatever the bolts happen to
+// find rather than a flat rate. It is a real difficulty change and it is meant
+// to be: the field is now something to dodge INSIDE rather than a wall.
+//
+// ONE ZAP PER BOLT PER RE-ROLL, whatever it touches you with. A bolt is a trunk
+// and two branches; charging for all three would make a fork worth triple, and
+// the fork is a drawing decision. `zapped` is cleared when a bolt is struck, so
+// the dedupe rides the same clock everything else here does.
+//
+// THE ROW STILL MEANS DAMAGE PER SECOND. bossPerks.csv says `damage=dps inside
+// it`, and rewriting that to mean per-zap would silently retune the perk by
+// whatever the strike rate happens to be. `zapSeconds` is the conversion and it
+// is a number somebody can argue with: one touch is worth that many seconds of
+// the field.
+// ---------------------------------------------------------------------------
+function zapPlayer(e, r, reach, playerPos, dist, dx, dy, hooks) {
+  if (!hooks.onPlayerHit || !active.arcs) return;
+  const fx = CONFIG.boss?.perkFx?.electric ?? {};
+  // Cheap gate first: outside the ring nothing can reach you, because every
+  // bolt ends on the ring. Same bound as the old test, now an early-out rather
+  // than the answer.
+  const hitR = (hooks.playerRadius ?? CONFIG.player?.hitRadius ?? 1)
+    + (fx.boltHitRadius ?? 0.35);
+  if (dist > reach + hitR) return;
+
+  // The player in the ANIMAL'S frame, because that is the frame the bolt buffer
+  // is written in — see the note on active.arcs.position.
+  const px = playerPos.x - e.mesh.position.x;
+  const py = playerPos.y - e.mesh.position.y;
+  const r2 = hitR * hitR;
+
+  const stride = active.boltVerts;
+  const buf = active.arcPositions;
+  for (let i = 0; i < active.arcCount; i++) {
+    if (!(active.arcLife[i] > 0) || active.zapped[i] === active.arcStep[i]) continue;
+    const o = i * stride;
+    let touched = false;
+    for (let k = 0; k < stride && !touched; k += 6) {
+      // Collapsed segments are a dead slot's filler and sit at the origin,
+      // which is INSIDE the body — without this skip every dead slot would
+      // read as a bolt touching a player standing on the boss.
+      if (buf[o + k] === 0 && buf[o + k + 1] === 0
+        && buf[o + k + 3] === 0 && buf[o + k + 4] === 0) continue;
+      if (segDist2(px, py, buf[o + k], buf[o + k + 1], buf[o + k + 3], buf[o + k + 4]) <= r2) {
+        touched = true;
+      }
+    }
+    if (!touched) continue;
+    active.zapped[i] = active.arcStep[i];
+
+    const dmg = (active.damage ?? 16) * (fx.zapSeconds ?? 0.5);
     // Away from the boss, like every other contact shove — being shocked
     // should push you out of the thing shocking you, not into it.
-    hooks.onPlayerHit((active.damage ?? 16) * dt, { x: -dx, y: -dy }, 'bossShock');
+    //
+    // The RETURN is the gate on the feedback, not the call: onPlayerHit is
+    // wrapped in main.js so that an invulnerable seal takes nothing and gets 0
+    // back, and a flash plus a spray of sparks on a dash the player deliberately
+    // timed to pass through would be the effect announcing a hit that did not
+    // happen.
+    const dealt = hooks.onPlayerHit(dmg, { x: -dx, y: -dy }, 'bossShock');
+    if (!(dealt > 0)) continue;
+    // ON THE SEAL, not on the boss. Both of these are about what just happened
+    // to the player, and firing them at the bolt's origin would put the news at
+    // the other end of the thing that caused it.
+    flashPlayer(fx.zapFlash ?? 1, 'playerZap');
+    feedback('bossShockZap', { x: playerPos.x, y: playerPos.y, scale: fx.zapScale ?? 1 });
   }
+}
+
+/**
+ * Squared distance from (px,py) to the segment (ax,ay)-(bx,by).
+ *
+ * Squared, and never square-rooted: this runs over every segment of every live
+ * bolt every frame, and the caller only ever compares it against a radius it
+ * can square once.
+ */
+function segDist2(px, py, ax, ay, bx, by) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const len2 = vx * vx + vy * vy;
+  // A degenerate segment is a point. Guarded rather than trusted: jagArc can
+  // produce one when two joints land on top of each other, and 0/0 here would
+  // put a NaN into the comparison, which is false — a bolt that silently could
+  // not hit anything.
+  let t = len2 > 1e-12 ? ((px - ax) * vx + (py - ay) * vy) / len2 : 0;
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  const qx = ax + vx * t - px;
+  const qy = ay + vy * t - py;
+  return qx * qx + qy * qy;
 }
 
 // ---------------------------------------------------------------------------

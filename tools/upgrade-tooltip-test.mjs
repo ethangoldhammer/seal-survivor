@@ -540,6 +540,59 @@ section('A card that has landed can be read while the rest are still arriving');
 }
 
 // ---------------------------------------------------------------------------
+section('The box has a measure, and the value wraps inside it');
+{
+  // jsdom does no layout, so this is the RULE and not the rendered width — but
+  // the rule is the whole fix and it is a one-word revert (white-space: nowrap
+  // is what was there, with a deliberate note defending it).
+  //
+  // What it prevents: a card whose "next" row holds three measured phrases
+  // draws them as ONE line. Uncapped that measured 788px in a 942px window
+  // against 169px for the short tips in the same hand — a stripe across the
+  // screen, clipped at both ends. Capped it is 326px and four lines, which is
+  // the same shape as every other tip on the screen. Neither number is
+  // reachable from here; both are why the rule reads as it does.
+  const css = [...document.querySelectorAll('style')].map((n) => n.textContent).join('\n');
+  const rule = (sel) => {
+    const at = css.indexOf(sel);
+    return at < 0 ? '' : css.slice(at, css.indexOf('}', at) + 1);
+  };
+  const rows = rule('.sv-card-fx.sv-card-fx-rows {');
+  const hive = rule('.sv-uptip { position: fixed');
+  check('the card tooltip is capped', /max-width:\s*var\(--sv-tip-measure\)/.test(rows), rows.replace(/\s+/g, ' ').slice(0, 120));
+  check('...and no longer refuses to wrap', !/white-space:\s*nowrap/.test(rows), rows.replace(/\s+/g, ' ').slice(0, 120));
+  check('the hive tooltip is capped the same way', /max-width:\s*var\(--sv-tip-measure\)/.test(hive), hive.replace(/\s+/g, ' ').slice(0, 120));
+  check('...and wraps too', !/white-space:\s*nowrap/.test(hive), hive.replace(/\s+/g, ' ').slice(0, 120));
+  // ONE MEASURE FOR BOTH BOXES. The point of ui/upgradeTip.js is that the
+  // answer to "what does +1 do" cannot differ between two screens; a measure
+  // declared twice is the shape in which they start to.
+  const decl = rule('--sv-tip-measure') || css.slice(css.indexOf('--sv-tip-measure') - 200, css.indexOf('--sv-tip-measure') + 80);
+  check('...off one shared value, declared for both surfaces',
+    /\.sv-uptip[^{]*\.sv-card-fx-rows[^{]*\{[^}]*--sv-tip-measure/.test(css),
+    decl.replace(/\s+/g, ' ').slice(-120));
+  // The measure follows the box's FONT, because both boxes are text roles the
+  // player sizes in the Y panel — see the note on the rule.
+  // The DECLARATION and not the first mention of the name, which is the usage
+  // in the card rule above it.
+  const measure = css.match(/--sv-tip-measure:\s*([^;]+);/)?.[1] ?? '';
+  check('...in em rather than px, since the player sizes these boxes',
+    /\d\s*em\b/.test(measure) && !/\d\s*px\b/.test(measure), measure || 'not declared');
+  // A LABEL STILL NEVER WRAPS. The rows are a grid whose first column is
+  // max-content: a label allowed to break would drag that column narrow and
+  // the table would stop lining up, which is the failure the old nowrap on the
+  // whole box was actually guarding against.
+  // The bare label rule, not the card variant's font-size override that comes
+  // first in the sheet — anchored on the newline so the selector is the whole
+  // one and not the tail of a longer chain.
+  const labelRule = css.match(/\n\s*\.sv-uptip-label\s*\{[^}]*\}/)?.[0] ?? '';
+  check('a label still never breaks', /white-space:\s*nowrap/.test(labelRule),
+    labelRule.replace(/\s+/g, ' ').slice(0, 120));
+  check('...and the value can, down to a word that beats the measure on its own',
+    /overflow-wrap:\s*break-word/.test(rule('.sv-uptip-text {')),
+    rule('.sv-uptip-text {').replace(/\s+/g, ' ').slice(0, 120));
+}
+
+// ---------------------------------------------------------------------------
 section('Nothing warned');
 {
   const noisy = warnings.filter((w) => w.includes('[upgrades]'));

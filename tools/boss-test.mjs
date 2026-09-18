@@ -31,7 +31,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { CONFIG } from '../path/src/config.js';
-import { bossLockout, clearForBoss, enemies, resetEnemies, removeEnemy, updateEnemies, updateSpawning, spawnNamed } from '../path/src/entities/enemies.js';
+import { bossLockout, clearForBoss, enemies, resetEnemies, removeEnemy, updateEnemies, updateSpawning, spawnNamed, bossArmorMul } from '../path/src/entities/enemies.js';
 import { cycleState, lullEligible, resetWaves, setBossCycle, waveSpawn, waveState } from '../path/src/systems/waves.js';
 import { bossKillState, resetBossKill, startBossKill, updateBossKill, printPhaseSeconds } from '../path/src/systems/bossKill.js';
 import { initBossGibs, spawnBossGibs, updateBossGibs, resetBossGibs, bossGibCount } from '../path/src/systems/bossGibs.js';
@@ -955,10 +955,30 @@ resetEnemies(scene);
     `${enemies.filter((e) => e.type === bossKey).length} in the water`);
 
   // The bar tracks damage.
+  //
+  // MEASURED AGAINST THE HEALTH THE BOSS ENDED UP WITH, not against the number
+  // written on the line above, because on a boss `hp` is an ACCESSOR and a
+  // decrement is graded: armBossArmor (entities/enemies.js) wraps the setter,
+  // and once the fight is committed `CONFIG.boss.armor.committed` takes all but
+  // a fraction of any write that lowers it. So `hp = maxHp * 0.25` lands at
+  // maxHp * 0.25 on the runs where the boss has not committed and at 0.89 of it
+  // on the runs where it has — which is what made this check fail about one run
+  // in ten, always on the bar reading 89%.
+  //
+  // Asserting 0.25 was therefore asserting that the armour was OFF, which is
+  // not this check's claim and is not something this section sets up. The claim
+  // is that the BAR follows the health, whatever the health is, so the damage
+  // is applied, allowed to land however the armour says it lands, and the bar
+  // is compared to the result. The second check is what stops that being
+  // vacuous: the write has to have moved the bar off full, or a boss whose hp
+  // never changed would satisfy the first one.
   bossState.enemy.hp = bossState.enemy.maxHp * 0.25;
   updateBoss(DT, gameState, scene);
-  check('the bar follows its health', Math.abs((bossBanner()?.frac ?? 0) - 0.25) < 1e-6,
-    `${((bossBanner()?.frac ?? 0) * 100).toFixed(0)}%`);
+  const hurtFrac = bossState.enemy.hp / bossState.enemy.maxHp;
+  check('the bar follows its health', Math.abs((bossBanner()?.frac ?? 0) - hurtFrac) < 1e-6,
+    `${((bossBanner()?.frac ?? 0) * 100).toFixed(0)}% against ${(hurtFrac * 100).toFixed(0)}% of its health`);
+  check('...and the damage moved it off full', hurtFrac < 0.95,
+    `${(hurtFrac * 100).toFixed(0)}% left, armour x${bossArmorMul(bossState.enemy)}`);
 
   // A boss holds a shark slot: the whole point of tagging it `apex shark`.
   // A BOSS HOLDS AN APEX SLOT — and a shark-family one holds a shark slot too.
@@ -1705,22 +1725,48 @@ section('THE PERKS — what they actually do to the water');
     const e = plantBoss('electric');
     const reach = e.radius + (p.radius ?? 9);
 
+    // WHAT HURTS IS A BOLT TOUCHING YOU, not the disc.
+    //
+    // This used to be `dist < reach` at a flat rate every frame, and a second's
+    // worth of it came to exactly the CSV's `damage`. That is no longer the
+    // rule: the bolts are the hitbox now (see zapPlayer in systems/bossPerks.js),
+    // so standing still inside the field costs whatever the strikes happen to
+    // find. Which means the measurement has to change shape as well as its
+    // number — a second is too short a window to say anything about a hazard
+    // that arrives a few times a second, and a one-second sample here failed
+    // about one run in five purely on where the bolts went.
+    //
+    // Twenty seconds, and what is asserted is a RANGE. The arithmetic behind
+    // it: strikes land at `arcRate` a second, each is worth `zapSeconds` of the
+    // row's dps, and a stationary seal is inside the swept angle of some
+    // fraction of them. npm run test:bolts measures that fraction exactly; this
+    // only has to catch the field going silent or going back to a flat rate.
+    const fx = CONFIG.boss?.perkFx?.electric ?? {};
     let inside = 0;
+    let zaps = 0;
     e.mesh.position.set(0, reach * 0.4, 0); // well within the aura
-    for (let i = 0; i < 60; i++) {
-      updateBossPerks(dt, scene, playerPos, { onPlayerHit: (d) => { inside += d; } });
+    for (let i = 0; i < 60 * 20; i++) {
+      updateBossPerks(dt, scene, playerPos, {
+        playerRadius: CONFIG.player?.hitRadius ?? 1,
+        onPlayerHit: (d) => { inside += d; zaps++; return d; },
+      }, dt);
     }
-    check('standing in the aura hurts', inside > 0, `${inside.toFixed(1)} over a second`);
-    // Per second, not per frame: the rate is the promise, and a per-frame
-    // constant would make the aura framerate-dependent.
-    check('...at about the rate the CSV asks for',
-      Math.abs(inside - (p.damage ?? 16)) < (p.damage ?? 16) * 0.1,
-      `${inside.toFixed(1)}/s vs ${p.damage}/s`);
+    check('standing in the aura hurts', zaps > 3, `${zaps} zaps over 20s`);
+    // Each one is worth exactly the conversion, so the row still means dps.
+    check('...each zap worth zapSeconds of the rate the CSV asks for',
+      zaps > 0 && Math.abs(inside / zaps - (p.damage ?? 16) * (fx.zapSeconds ?? 0.5)) < 1e-6,
+      `${(inside / zaps).toFixed(1)} per zap vs ${p.damage}/s x ${fx.zapSeconds}`);
+    // ...and it is genuinely CHEAPER than living in the disc used to be, which
+    // is the whole point of the change. A field that cost the same whatever you
+    // did would be the flat rate wearing a picture.
+    check('...but standing still costs less than the old flat rate did',
+      inside / 20 < (p.damage ?? 16),
+      `${(inside / 20).toFixed(1)}/s against the ${p.damage}/s it used to be`);
 
     let outside = 0;
     e.mesh.position.set(0, reach * 2.5, 0);
-    for (let i = 0; i < 60; i++) {
-      updateBossPerks(dt, scene, playerPos, { onPlayerHit: (d) => { outside += d; } });
+    for (let i = 0; i < 60 * 5; i++) {
+      updateBossPerks(dt, scene, playerPos, { onPlayerHit: (d) => { outside += d; } }, dt);
     }
     check('standing outside it does not', outside === 0, `${outside.toFixed(2)} taken`);
 
@@ -1728,8 +1774,8 @@ section('THE PERKS — what they actually do to the water');
     let duringArrival = 0;
     e.mesh.position.set(0, reach * 0.4, 0);
     e.invuln = 1;
-    for (let i = 0; i < 60; i++) {
-      updateBossPerks(dt, scene, playerPos, { onPlayerHit: (d) => { duringArrival += d; } });
+    for (let i = 0; i < 60 * 5; i++) {
+      updateBossPerks(dt, scene, playerPos, { onPlayerHit: (d) => { duringArrival += d; } }, dt);
     }
     check('an arriving boss shocks nobody', duringArrival === 0, `${duringArrival.toFixed(2)} taken`);
     e.invuln = 0;

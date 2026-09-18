@@ -61,6 +61,10 @@ import { createHarpVisual, updateHarp, resetHarp, applyHarpCharm, currentHarpSta
 import { installNoteGlyphs } from '../path/src/systems/noteStorm.js';
 import { bounds, seabedTopY, updateBounds } from '../path/src/arena.js';
 import { SKY_Z } from '../path/src/systems/backdropFit.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+
+// Straight down, for the sleeping-chain shove below.
+const DOWN_TEST = new THREE.Vector3(0, -1, 0);
 
 // THE REAL ARENA, before anything reads it. `bounds` is declared with
 // placeholder literals and only becomes the shipped ocean when a window
@@ -1614,9 +1618,41 @@ check('...and its notes go with it', harpNoteCount() === 0, `${harpNoteCount()} 
     // between amber and cyan (NOTE_HUES), so warming is one direction for all
     // of them and red climbing against green is the reading — whichever hue
     // this particular host happened to draw.
+    //
+    // MEASURED AS A HUE ROTATION, in degrees, because that is what heat
+    // actually does: `CONFIG.abilityHeat.harp.hue` is -22, a luma-preserving
+    // turn of the wheel, and a turn of the wheel is the same size wherever on
+    // the arc the note was rolled.
+    //
+    // r/g was the reading here until a ship run failed at 0.081 -> 0.089. The
+    // hue is ROLLED per host across NOTE_HUES (amber 0.08 to cyan 0.50) and
+    // r/g is not on one scale across that arc: an amber note sits near 1 and a
+    // cyan one near 0.08, so an absolute `+ 0.01` asked a cyan note to warm by
+    // an eighth and an amber one by a hundredth. Rewriting it as a FACTOR did
+    // not fix it either — over 25 rolls the worst cyan note came out at x1.02,
+    // because r/g compresses toward the cyan end no matter how it is compared.
+    // The degrees do not compress, and the direction is the whole claim.
+    const hueDeg = (c) => {
+      const max = Math.max(c.r, c.g, c.b), min = Math.min(c.r, c.g, c.b);
+      const d = max - min;
+      if (d < 1e-9) return 0;
+      let h;
+      if (max === c.r) h = ((c.g - c.b) / d) % 6;
+      else if (max === c.g) h = (c.b - c.r) / d + 2;
+      else h = (c.r - c.g) / d + 4;
+      return ((h * 60) % 360 + 360) % 360;
+    };
+    const signedTurn = (a, b) => {
+      let d = b - a;
+      while (d > 180) d -= 360;
+      while (d < -180) d += 360;
+      return d;
+    };
+    const turn = signedTurn(hueDeg(coldRgb), hueDeg(hotRgb));
+    const want = CONFIG.abilityHeat?.harp?.hue ?? -22;
     check('...and warmer, not merely different',
-      hotRgb.r / Math.max(1e-6, hotRgb.g) > coldRgb.r / Math.max(1e-6, coldRgb.g) + 0.01,
-      `r/g ${(coldRgb.r / coldRgb.g).toFixed(3)} -> ${(hotRgb.r / hotRgb.g).toFixed(3)}`);
+      Math.sign(turn) === Math.sign(want) && Math.abs(turn) > Math.abs(want) * 0.25,
+      `${hueDeg(coldRgb).toFixed(1)} -> ${hueDeg(hotRgb).toFixed(1)} deg (${turn.toFixed(1)} of a wanted ${want})`);
 
     // THE ONE THAT FAILS SILENTLY. The orbit phase is integrated rather than
     // recomputed as spin x elapsed, and the difference only shows the instant
@@ -2060,6 +2096,256 @@ enemies.length = 0;
   }
 
   Math.random = realRandom;
+}
+
+// --- THE STOOP COMES APART -------------------------------------------------
+// Against the REAL seagull.fbx, because every part of this is a claim about
+// that file. A rig declared in assets.js is a list of bone NAMES, and
+// systems/animation.js resolves it with getObjectByName().filter(Boolean) — a
+// name that matches nothing is silently dropped and the chain is quietly built
+// one bone shorter, or not at all. That exact mistake cost the orca cow her
+// entire dorsal on half of all boss arrivals and nothing anywhere said a word.
+{
+  const gullModel = resolve(dirname(fileURLToPath(import.meta.url)), '../public/models/seagull.fbx');
+  if (!existsSync(gullModel)) {
+    console.log('  (seagull.fbx missing — the ragdoll cannot be checked against a model that is not there)');
+  } else {
+    // FBXLoader complains at length about 3ds Max shader parameters three.js
+    // has no use for, none of which is about the bones. Silenced around the
+    // parse only, so a real warning later still reaches the log.
+    const realWarn = console.warn;
+    console.warn = () => {};
+    const fbxBuf = readFileSync(gullModel);
+    const fbx = new FBXLoader().parse(
+      fbxBuf.buffer.slice(fbxBuf.byteOffset, fbxBuf.byteOffset + fbxBuf.byteLength), '',
+    );
+    console.warn = realWarn;
+    installModel('seagull', fbx, fbx.animations);
+
+    // SEEDED, and this block cannot be paired without it. Every check below is
+    // two runs compared frame against frame, and `spawnSeagull` rolls a bearing
+    // — so an unseeded pair gets two different `dir` values half the time, the
+    // visual's flank flip mirrors one bird against the other, and the two poses
+    // come out a wingspan apart for reasons that have nothing to do with what
+    // is being measured. It passed on the first run and would have failed on
+    // the next, which is the worst way for a test to be wrong.
+    const realGullRandom = Math.random;
+    let gullRng = 20260917;
+    const seedGull = () => { gullRng = 20260917; };
+    Math.random = () => {
+      gullRng = (gullRng * 1664525 + 1013904223) >>> 0;
+      return gullRng / 4294967296;
+    };
+
+    const bird = createVisual('seagull');
+    const chains = ASSETS.seagull.rig.springChains;
+    check('the gull model carries a skeleton at all',
+      !!bird.getObjectByName(chains[0].bones[0]), 'no bones on the clone');
+
+    // EVERY NAME, on the instance the game actually flies — not on the loader's
+    // output. A clone is where a name is resolved and is where one goes missing.
+    const missing = [];
+    for (const chain of chains) {
+      for (const name of chain.bones) if (!bird.getObjectByName(name)) missing.push(name);
+    }
+    check('every bone the rig names exists on the model', missing.length === 0,
+      missing.join(', ') || `${chains.reduce((n, c) => n + c.bones.length, 0)} bones across ${chains.length} chains`);
+
+    // ...and the two chains that end on a LEAF, which is where the bone axis
+    // bites. makeSpring falls back to `boneAxis * last.position.length()` for a
+    // final bone with no child, and at the +Y default this rig would hand the
+    // solver a tip direction square to the limb it belongs to — a chain that
+    // springs about an axis the leg does not have. It still runs. It just looks
+    // like bad tuning.
+    check('the rig declares the +X bone axis this Biped export actually uses',
+      ASSETS.seagull.rig.boneAxis === '+X', `${ASSETS.seagull.rig.boneAxis}`);
+    for (const leaf of ['SEAGULL__Queue_de_cheval_1', 'SEAGULL__L_Toe02']) {
+      const b = bird.getObjectByName(leaf);
+      const kids = b?.children.filter((o) => o.isBone).length ?? -1;
+      check(`...and ${leaf.replace('SEAGULL__', '')} is the leaf that needs it`,
+        kids === 0 && b.position.length() > 0.01,
+        `${kids} bone child(ren), own offset ${b?.position.length().toFixed(2)}`);
+    }
+
+    // Now fly one. Measured by where the BONES END UP in world space, not by
+    // their local quaternions: a chain can split the same bend between its
+    // joints more than one way, and what a player sees is where the wingtip is.
+    const tips = ['SEAGULL__L_Hand', 'SEAGULL__R_Hand', 'SEAGULL__L_Toe02', 'SEAGULL__R_Toe02', 'SEAGULL__Queue_de_cheval_1'];
+    const wp = new THREE.Vector3();
+    // In the CONTAINER's frame, so the body's dive rotation and its fall are
+    // divided out and what is left is the skeleton moving inside the bird.
+    function pose(g) {
+      // FORCED. Nothing renders in this harness, so no three.js pass updates a
+      // world matrix on its own and every frame would measure identical —
+      // silently, with no error anywhere.
+      g.container.updateMatrixWorld(true);
+      return tips.map((n) => {
+        const b = g.visual.getObjectByName(n);
+        b.getWorldPosition(wp);
+        return g.container.worldToLocal(wp.clone());
+      });
+    }
+    const apart = (a, b) => Math.max(...a.map((v, i) => v.distanceTo(b[i])));
+
+    // The bird's own length in world units, so the numbers below can be read
+    // as a share of it rather than as bare units. Measured off the model the
+    // game flies, not off the file: `fit` and the size multiplier are both in
+    // the clone and a 73-unit FBX arrives here about twelve.
+    const BIRD_LEN = new THREE.Box3().setFromObject(bird).getSize(new THREE.Vector3()).length();
+
+    // PAIRED RUNS, frame against frame. Measuring one bird against its own
+    // pose at the commit does not work and is worth saying why: the first
+    // fifth of a second of a stoop is the mixer crossfading out of the flap,
+    // and the wings travel most of their span doing it — measured, 6.4 world
+    // units, with the ragdoll switched off. A drift check would have read that
+    // as the ragdoll working and passed on a build that never called setLimp.
+    //
+    // So two identical dives, differing in nothing but `slack.enabled`, and
+    // what is measured is how far apart the two birds are at the same instant.
+    // The RNG is re-seeded before each so the bearing, the depth and the skin
+    // roll come out the same and the only difference left is the one under test.
+    function stoop(slackOn) {
+      const was = CONFIG.seagullBomb.slack.enabled;
+      CONFIG.seagullBomb.slack.enabled = slackOn;
+      seedGull();
+      resetSeagulls(scene);
+      enemies.length = 0;
+      enemies.push(crabAt(0, bounds.bottom + 2));
+      const g = spawnSeagull(scene, enemies);
+      // Dropped straight into the commit rather than flown in: this is a check
+      // about the plunge, and the approach has its own sixty runs above.
+      g.container.position.set(0, bounds.surfaceY + CONFIG.seagullBomb.cruiseAltitude, 0);
+      g.phase = 'dive';
+      const frames = [];
+      let slackAt = -1;
+      let t = 0;
+      for (let i = 0; i < 400 && seagullCount() > 0; i++) {
+        updateSeagulls(dt, scene, enemies, {});
+        if (seagullCount() === 0) break;
+        t += dt;
+        if (slackAt < 0 && g.slack) slackAt = t;
+        frames.push(pose(g));
+      }
+      CONFIG.seagullBomb.slack.enabled = was;
+      return { frames, slackAt, loose: g.loose, fall: t };
+    }
+
+    const loose = stoop(true);
+    const rigid = stoop(false);
+
+    check('a stooping gull has a skeleton to come apart', loose.loose === true);
+    check('...and both dives are the same dive but for the slack',
+      loose.frames.length === rigid.frames.length,
+      `${loose.frames.length} frames against ${rigid.frames.length}`);
+
+    const n = Math.min(loose.frames.length, rigid.frames.length);
+    let split = 0;
+    for (let i = 0; i < n; i++) split = Math.max(split, apart(loose.frames[i], rigid.frames[i]));
+    check('...and it comes apart', split > 0.5,
+      `${split.toFixed(2)} world units between the loose bird and the rigid one, over a ${loose.fall.toFixed(2)}s fall`);
+
+    // THE CONTROL, stated as its own fact rather than left implied: once the
+    // crossfade is over the stoop clip is a HELD pose and a rigid bird stops
+    // moving entirely. That is what makes the number above attributable — and
+    // it is also the reason freezing this particular clip costs no animation.
+    const settled = Math.ceil((CONFIG.animation?.states?.boost?.fade ?? 0.2) / dt) + 2;
+    let rigidStir = 0;
+    for (let i = settled + 1; i < rigid.frames.length; i++) {
+      rigidStir = Math.max(rigidStir, apart(rigid.frames[i], rigid.frames[settled]));
+    }
+    check('...which the held stoop clip on its own barely does', rigidStir < 0.25,
+      `rigid bird stirred ${rigidStir.toFixed(3)} after the crossfade, on a ${BIRD_LEN.toFixed(1)}-unit bird`);
+    // And the ratio, which is the number that actually attributes the motion.
+    // The stoop is a HELD pose but not a frozen one — measured, the clip goes
+    // on breathing about a hundredth of a body length after the crossfade — so
+    // "the rigid bird does not move" is not a fact that was ever going to hold,
+    // and a threshold tight enough to claim it would only ever have been a
+    // flake waiting for a re-cut of the range.
+    check('...by two orders of magnitude', split > rigidStir * 40,
+      `x${(split / Math.max(1e-6, rigidStir)).toFixed(0)} the clip's own residue`);
+
+    // ...and the loose one keeps moving for the whole fall rather than snapping
+    // to one folded shape and holding it, which is what an over-large impulse
+    // against this spring produces (see CONFIG.boss.ragdoll.blow for the same
+    // trap found the hard way).
+    let lateStir = 0;
+    for (let i = settled + 1; i < loose.frames.length; i++) {
+      lateStir = Math.max(lateStir, apart(loose.frames[i], loose.frames[i - 1]));
+    }
+    check('...and goes on moving, rather than cutting to one folded pose',
+      lateStir > 0.004 && lateStir < 1.5,
+      `${lateStir.toFixed(3)} units of tip travel in the busiest single frame`);
+
+    // THE TWO WINGS HAVE TO DISAGREE, and this is the check that the whole role
+    // split exists for. `impulse` with no role shoves every chain with one
+    // world vector, and a body's limbs are laid out symmetrically — so one
+    // vector bends a left wing and a right wing through the same angle, for
+    // ever, whatever the vector is. Measured before the split: the two wingtips
+    // stayed within a tenth of a percent of body length of each other for an
+    // entire fall, which reads as a bird folding up tidily rather than as one
+    // losing an argument with the air.
+    //
+    // Nothing else here would notice it coming back. Every other check above
+    // passes just as happily on a perfectly symmetrical fold.
+    const LW = tips.indexOf('SEAGULL__L_Hand');
+    const RW = tips.indexOf('SEAGULL__R_Hand');
+    const base = loose.frames[settled];
+    let disagree = 0;
+    for (let i = settled; i < loose.frames.length; i++) {
+      const f = loose.frames[i];
+      disagree = Math.max(disagree,
+        Math.abs(f[LW].distanceTo(base[LW]) - f[RW].distanceTo(base[RW])));
+    }
+    check('...with the two wings disagreeing about which way is back',
+      disagree > BIRD_LEN * 0.03,
+      `${(disagree / BIRD_LEN * 100).toFixed(1)}% of body length between the wingtips' travel`);
+
+    // NOT ON THE COMMIT. setLimp freezes whatever pose the bones hold and makes
+    // that the shape everything is measured from, and at the commit the mixer
+    // is still crossfading out of the flap — so letting go there welds the bird
+    // to a half-flapped pose nobody drew. One crossfade of delay, and this is
+    // the only thing that would ever notice it going missing.
+    const fadeLen = CONFIG.animation?.states?.boost?.fade ?? CONFIG.animation?.crossfade ?? 0.2;
+    check('...only once the tuck has finished fading in',
+      loose.slackAt >= fadeLen - dt * 1.5,
+      `let go at ${loose.slackAt.toFixed(3)}s against a ${fadeLen}s crossfade`);
+
+    // THE CHAINS SLEEP THROUGH THE APPROACH. `asleep` is what keeps a spring
+    // off an authored wingbeat, and it is one flag per chain in a table — easy
+    // to lose and impossible to see going missing, because a lagging wing on a
+    // flying bird looks like a wing.
+    check('every chain sleeps until the skeleton is let go',
+      chains.every((c) => c.asleep === true),
+      `${chains.filter((c) => !c.asleep).length} awake during the cruise`);
+
+    // Paired again, and for the same reason: a cruising gull's tips move half a
+    // body length every wingbeat because that is what the clip does. What is
+    // being asked is whether a SHOVE changes any of it — an impulse banked by a
+    // sleeping chain would be released the instant the dive wakes it, and the
+    // bird would open its stoop with a flinch it took half a second earlier.
+    function cruise(shove) {
+      seedGull();
+      resetSeagulls(scene);
+      enemies.length = 0;
+      enemies.push(crabAt(0, bounds.bottom + 2));
+      const g = spawnSeagull(scene, enemies);
+      const frames = [];
+      for (let i = 0; i < 40; i++) {
+        updateSeagulls(dt, scene, enemies, {});
+        if (shove) g.anim.impulse(DOWN_TEST, 12, 0.8);
+        frames.push(pose(g));
+      }
+      return frames;
+    }
+    const shoved = cruise(true);
+    const calm = cruise(false);
+    let flinch = 0;
+    for (let i = 0; i < calm.length; i++) flinch = Math.max(flinch, apart(shoved[i], calm[i]));
+    check('...and forty frames of shoving during the cruise change nothing',
+      flinch < 1e-6, `${flinch.toFixed(6)} units apart from an unshoved twin`);
+
+    Math.random = realGullRandom;
+  }
 }
 
 resetSeagulls(scene);

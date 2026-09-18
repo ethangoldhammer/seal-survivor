@@ -41,6 +41,34 @@ console.log('\nTHE AUDIO SPLIT');
   check('audio is counted once in the total', r.totalMB === 131 + 14, `${r.totalMB}MB`);
 }
 
+console.log('\nUSERDATA SHARED BETWEEN CLONES');
+// cloneSafe does SHALLOW copies with references left as references, so eighty
+// bodies cloned from one template share one `morphs` array. The census used to
+// charge every holder the full weight of it — and because the holder count
+// grows with bodies spawned, the lie had exactly the shape of the leak everyone
+// was hunting. The phone's trail printed `Group:3932k[clips+rig+...]` twice,
+// same bytes, same keys: one array, counted once each.
+{
+  const shared = { morphs: new Float32Array(256 * 1024) }; // 1MB, one copy
+  const node = () => ({ traverse(fn) { fn(this); }, userData: { rig: shared } });
+
+  const one = censusReport({ items: [node()] });
+  const eighty = censusReport({ items: Array.from({ length: 80 }, node) });
+  check('one holder is charged for it', one.udMB === 1, `${one.udMB}MB`);
+  check('eighty holders are charged for it once between them',
+    eighty.udMB === one.udMB, `${eighty.udMB}MB across 80 vs ${one.udMB}MB across 1`);
+
+  // ...and the thing that makes the check above meaningful: userData that is
+  // genuinely per body still scales, or the dedupe has simply gone blind.
+  const own = () => ({
+    traverse(fn) { fn(this); },
+    userData: { rig: new Float32Array(256 * 1024) },
+  });
+  const four = censusReport({ items: Array.from({ length: 4 }, own) });
+  check('userData nothing shares still costs what it costs',
+    four.udMB === 4, `${four.udMB}MB`);
+}
+
 console.log('\nTHE COUNT, AGAINST THE RENDERER\'S OWN');
 // The leak the byte census is blind to, and the reason this block exists. A
 // bone texture is about four kilobytes: a thousand of them move

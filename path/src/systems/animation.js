@@ -886,18 +886,41 @@ export function createAnimationController(instance) {
     // buckles through its middle where a live hit flicks the tail, and the two
     // are the same solver being asked for different shapes — see
     // CONFIG.boss.ragdoll.tipBias.
-    impulse(dirWorld, strength, tipBias) {
+    //
+    // `role` narrows the shove to one chain group, and exists because a force
+    // in WORLD SPACE cannot break a mirror. A body's limbs are laid out
+    // symmetrically, so one vector applied to all of them moves a left wing and
+    // a right wing through exactly the same angle, for ever, however the vector
+    // is chosen — measured on the diving gull, the two wingtips agreed to a
+    // tenth of a percent of body length for the whole fall, which reads as a
+    // fold rather than as a flail. Driving each side on its own is the only way
+    // out of that, and a role is already the unit this file groups chains by.
+    //
+    // Omitted, it shoves everything, which is what a hit reaction and a death
+    // blow both want: those ARE one force arriving at one body.
+    impulse(dirWorld, strength, tipBias, role = null) {
       const cfg = CONFIG.animation.spring;
       if (!cfg.enabled) return;
       const bias = tipBias ?? cfg.impulseTipBias;
-      for (const { solver, role } of springs) {
+      for (const { solver, role: r } of springs) {
+        if (role != null && r !== role) continue;
         // A MUTED CHAIN DOES NOT FLINCH. This is the impulse half of the same
         // rule update() applies: a limb that is mid-attack is being posed
         // deliberately, and a shove it absorbs now would still be bleeding out
         // of it when the attack lands. See muteSpring.
-        if (mutedRoles.has(role)) continue;
+        if (mutedRoles.has(r)) continue;
         solver.impulse(dirWorld, strength, bias);
       }
+    },
+
+    /**
+     * Which roles this model actually has chains for, in the order they were
+     * declared. The caller that wants to drive each limb separately (the
+     * diving gull) needs to know what there is to drive, and reading it back
+     * beats writing the same list in two files and watching them drift.
+     */
+    springRoles() {
+      return [...new Set(springs.map(({ role }) => role))];
     },
 
     /**

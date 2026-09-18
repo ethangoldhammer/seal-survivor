@@ -51,6 +51,16 @@ export function statsLabels() {
     // The word between the two final scores.
     versusLabel: uiText('statsVersus'),
 
+    // THE WINNER'S STAMP, beside the column that won. Only ever seen when
+    // `hasWinner` is set — a draw has no stamp and therefore no line, which is
+    // why this is the only row the result has left.
+    //
+    // THE ROW IS THE ONE THE RESULT ALWAYS HAD. `versusWinner` was the DOM
+    // box's line, then the champion block's, and it is this badge's now —
+    // moved twice and reminted neither time, because a new id would leave a
+    // line Ethan has already written read by nothing.
+    winnerLabel: uiText('versusWinner'),
+
     // Only ever seen when `isRecord` is set.
     recordLabel: uiText('statsRecord'),
 

@@ -128,6 +128,46 @@ const OVERSCAN = 1.45;
 /** The furthest out, in fuel-ring radii, anything drawn here can reach. */
 export const RING_OVERSCAN = OVERSCAN;
 
+// ---------------------------------------------------------------------------
+// THE WHEEL'S RAMP, ON THE CPU — the same mix() wheelColor() walks in the
+// shader above, for the two places that need the answer as a number rather
+// than as a fragment.
+//
+// ui/ui.js draws the pips as a DOM column when the meter is set to 'bar', and
+// systems/boostAura.js wears the burning pip's hue on the water around the
+// seal. Before this there were two hand-copies of the ramp and the shader, all
+// three agreeing on the day they were written; a meter, a column and an aura
+// quoting three different colours for the same pip is not a bug anybody would
+// read as one, it is three effects that happen to be near each other.
+//
+// PLAIN sRGB CHANNEL MIXING, deliberately. One destination is a CSS hex, which
+// is sRGB; the other is THREE.Color.set(), which converts an integer from sRGB
+// into the renderer's working space. Same number, and each side converts once.
+// ---------------------------------------------------------------------------
+function mixRGB(a, b, t) {
+  const k = Math.max(0, Math.min(1, t));
+  let out = 0;
+  for (const sh of [16, 8, 0]) {
+    const ca = (a >> sh) & 255;
+    const cb = (b >> sh) & 255;
+    out |= Math.round(ca + (cb - ca) * k) << sh;
+  }
+  return out >>> 0;
+}
+
+/**
+ * The 0xRRGGBB pip `i` of `n` wears. The last one is pinned to `lastPipColor`
+ * so "one mouthful from a strike" keeps its own hue wherever it is quoted.
+ */
+export function pipRGB(i, n, ring = CONFIG.strike.ring) {
+  const base = ring.color ?? 0x7ad7ff;
+  const ready = ring.readyColor ?? 0x9dffd0;
+  const last = ring.lastPipColor ?? ready;
+  if (i >= n - 1) return last >>> 0;
+  const t = n > 1 ? i / (n - 1) : 1;
+  return mixRGB(base, ready, t * 0.75);
+}
+
 const vertexShader = /* glsl */ `
   varying vec2 vUv;
   void main() {

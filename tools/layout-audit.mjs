@@ -96,6 +96,13 @@ const REPORT_FILE = FLIP ? 'flip-report.json' : 'layout-report.json';
 // four times the page's own 15s per-tile timeout, so a tile that gives up
 // normally can never trip this.
 const STALL_MS = Number(argv[argv.indexOf('--stall') + 1]) || 60_000;
+// --only <surface>[@<viewport>] — one screen, or one screen at one size, out of
+// the hundred-odd tiles. A full sweep is the right cost before shipping and the
+// wrong one between two edits to one panel, and a check nobody runs while they
+// work is a check that only ever reports at the end. It NARROWS the sweep, so a
+// run with it is not a clean bill of health for anything else — the summary
+// says so, and the gate never passes it.
+const ONLY = argv.includes('--only') ? String(argv[argv.indexOf('--only') + 1] || '') : '';
 const ELECTRON = resolve(PROJECT, 'node_modules/.bin/electron');
 const DRIVER = resolve(HERE, 'layout/drive.js');
 
@@ -224,7 +231,9 @@ const server = http.createServer(async (req, res) => {
 
 // localhost rather than 127.0.0.1: the Browser pane refuses the numeric form.
 await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
-const PAGE = `http://localhost:${PORT}/tools/layout/layout-audit.html?run=${RUN}&mode=${MODE}`;
+const PAGE = `http://localhost:${PORT}/tools/layout/layout-audit.html?run=${RUN}&mode=${MODE}`
+  + (ONLY ? `&only=${encodeURIComponent(ONLY)}` : '');
+if (ONLY) console.log(`\n  only "${ONLY}" — this is a NARROWED sweep, not a clean sheet for the rest`);
 console.log(`\n  ${PAGE}\n`);
 
 const driver = MANUAL ? null : startDriver();

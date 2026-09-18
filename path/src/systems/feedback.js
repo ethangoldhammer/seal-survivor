@@ -112,12 +112,14 @@ export function initFeedback(gridSystem) {
 /**
  * @param {string} event key in CONFIG.feedback
  * @param {object} at    { x, y, dirX, dirY, vx, vy, scale, sizeMul, speedMul,
- *                         gooSizeMul, gooSpeedMul, color, toastValue, toastLabel,
- *                         onCapture }
+ *                         gooSizeMul, gooSpeedMul, gooColor, color,
+ *                         toastValue, toastLabel, onCapture }
  *                       `scale` reaches COUNT alone; `sizeMul`/`speedMul` are
  *                       the pair that makes a burst bigger, and they reach the
  *                       spray and the goo alike. `gooSizeMul`/`gooSpeedMul`
- *                       override that pair for the `goo` burst only.
+ *                       override that pair for the `goo` burst only, and
+ *                       `gooColor` does the same for the tint — the way an
+ *                       event says its spray is water while its goo is not.
  *                       `toastValue` is the number a `toast` channel prints
  *                       beside its label — what this proc was worth, which is
  *                       the one part of the line the table cannot author.
@@ -423,8 +425,19 @@ export function feedback(event, at = {}) {
   // Always passed as the pair, because a goo mass scaled on one axis alone
   // comes out as a slab or as loose dots — see the note on fx.goo.groups.gore.
   if (def.goo) {
-    const gooAt = (at.gooSizeMul != null || at.gooSpeedMul != null)
-      ? { ...at, sizeMul: at.gooSizeMul ?? at.sizeMul, speedMul: at.gooSpeedMul ?? at.speedMul }
+    // `gooColor` is the same idea on the third axis, and it exists because
+    // `color` rides on `at` and therefore reaches BOTH bursts. An event whose
+    // spray is plain water and whose goo is somebody's colour — the fin flick
+    // throwing the ball's own goo off a splash that belongs to no team — has
+    // no way to say so otherwise, and tinting the water would make it the one
+    // touch in a match whose spray is not water.
+    const gooAt = (at.gooSizeMul != null || at.gooSpeedMul != null || at.gooColor != null)
+      ? {
+        ...at,
+        sizeMul: at.gooSizeMul ?? at.sizeMul,
+        speedMul: at.gooSpeedMul ?? at.speedMul,
+        color: at.gooColor ?? at.color,
+      }
       : at;
     // A SUCK BURST instead of a ballistic one, when the event (or this firing)
     // asks for it — the goo bursts, stalls, and is drawn back into the seal

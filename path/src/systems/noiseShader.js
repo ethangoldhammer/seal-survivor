@@ -584,12 +584,61 @@ export function applyNoiseSettings() {
 }
 
 /**
+ * IS THIS MATERIAL'S SEED STILL A UNIFORM, or only a picture of one?
+ *
+ * `__noiseInstance` is a boolean and survives anything; `__noiseSeed` is a
+ * THREE.Vector3 and does not. Material.copy() runs userData through
+ * JSON.parse(JSON.stringify(...)) — so every clone taken of an instanced
+ * material comes out CLAIMING to be an instance with its seed flattened to a
+ * plain `{ x, y, z }` and its whole uniform block flattened with it.
+ *
+ * That is not half an instance, it is none of one: the uniform block the copy
+ * was pointing at belongs to the material it was cloned FROM, so the body is
+ * wearing that one's cut of the field and has no way to be given its own.
+ *
+ * It was read as an instance anyway, and `__noiseSeed?.set(...)` THREW —
+ * "set is not a function" — out of instanceNoise, out of buildRoster and out
+ * of whatever was putting a screen up around it. The `?.` in front of it was
+ * guarding the null that never happens rather than the type that does.
+ */
+function seedIsLive(mat) {
+  return typeof mat?.userData?.__noiseSeed?.set === 'function';
+}
+
+/**
+ * THIS MATERIAL, WEARING ITS OWN CUT OF THE FIELD — the repair both halves of
+ * instanceNoise need, in one place so they cannot drift.
+ *
+ * The material handed in is assumed to be nobody else's: either a clone taken
+ * a line ago, or a flattened copy that is already alone on one body. The flag
+ * is cleared and the shader attached AGAIN rather than carried over, because
+ * the clone kept the flag and none of the shader (a copy constructor does not
+ * carry functions) and because carrying the closure by reference would hand
+ * every body the same uniform object — see the note on instanceNoise.
+ */
+function cutOwnField(mat, seed) {
+  const preset = mat.userData.__noisePreset ?? null;
+  mat.userData.__noiseAttached = false;
+  mat.userData.__noiseInstance = false;
+  mat.onBeforeCompile = undefined;
+  attachNoiseShader(mat, preset);
+  mat.userData.__noiseInstance = true;
+  const u = mat.userData.__noiseUniforms;
+  if (u?.uNoiseSeed) {
+    u.uNoiseSeed.value.set(seed.x, seed.y, seed.z);
+    mat.userData.__noiseSeed = u.uNoiseSeed.value;
+  }
+  mat.needsUpdate = true;
+  return mat;
+}
+
+/**
  * GIVE ONE BODY ITS OWN CUT OF THE MOTTLING. Two of the same animal share one
  * material — a GLB clone shares its template's — so four seals on a pitch are
  * the same seal four times, freckle for freckle.
  *
- * A CLONE PER BODY, and the two traps that come with it are the reason this is
- * a function rather than four lines at the call site:
+ * A CLONE PER BODY, and the three traps that come with it are the reason this
+ * is a function rather than four lines at the call site:
  *
  *   Material.clone() DROPS onBeforeCompile. It is a function and the copy
  *   constructor does not carry functions across, so the injected shader would
@@ -601,7 +650,10 @@ export function applyNoiseSettings() {
  *   UNIFORM OBJECT, so every clone would share one seed and the whole exercise
  *   would be a no-op that looks like it worked. So the guard is cleared and
  *   the shader is attached AGAIN, which builds the clone a uniform block of
- *   its own.
+ *   its own. That is cutOwnField.
+ *
+ *   ...and a clone of an INSTANCE keeps the instance flag and loses the
+ *   uniform it names — see seedIsLive, which is the one that crashed.
  *
  * `seed` is a vector in the model's own units; the caller decides how far
  * apart two bodies should be cut from. A seed of null leaves the body sharing
@@ -614,26 +666,23 @@ export function instanceNoise(root, seed) {
     if (!o.isMesh || !o.material || o.userData?.__isOutline) return;
     const swap = (mat) => {
       if (!mat || mat.userData?.__isOutline) return mat;
-      // Already its own: re-seed rather than cloning a clone.
+      // Already its own: re-seed rather than cloning a clone — but only when
+      // the uniform behind the flag is still a LIVE one. See cutOwnField.
       if (mat.userData.__noiseInstance) {
-        mat.userData.__noiseSeed?.set(seed.x, seed.y, seed.z);
+        if (seedIsLive(mat)) {
+          mat.userData.__noiseSeed.set(seed.x, seed.y, seed.z);
+          return mat;
+        }
+        // A flattened copy of an instance. It is already this body's own
+        // material — nothing else is wearing it — so it is repaired in place
+        // rather than cloned again.
+        cutOwnField(mat, seed);
+        made++;
         return mat;
       }
       if (!mat.userData.__noiseAttached) return mat;
       const copy = mat.clone();
-      const preset = mat.userData.__noisePreset ?? null;
-      // The clone came out of the copy constructor carrying the flag and none
-      // of the shader — see the note above. Clear it, attach afresh.
-      copy.userData.__noiseAttached = false;
-      copy.onBeforeCompile = undefined;
-      attachNoiseShader(copy, preset);
-      copy.userData.__noiseInstance = true;
-      const u = copy.userData.__noiseUniforms;
-      if (u?.uNoiseSeed) {
-        u.uNoiseSeed.value.set(seed.x, seed.y, seed.z);
-        copy.userData.__noiseSeed = u.uNoiseSeed.value;
-      }
-      copy.needsUpdate = true;
+      cutOwnField(copy, seed);
       made++;
       return copy;
     };

@@ -176,10 +176,10 @@
             <ViewModelInstanceNumber propertyValue="7"    viewModelPropertyId="3:305" id="0:4673"/>
             <ViewModelInstanceNumber propertyValue="22"   viewModelPropertyId="3:306" id="0:4674"/>
             <ViewModelInstanceNumber propertyValue="9"    viewModelPropertyId="3:307" id="0:4675"/>
-            <ViewModelInstanceNumber propertyValue="0"    viewModelPropertyId="3:308"/>
+            <ViewModelInstanceNumber propertyValue="0"    viewModelPropertyId="3:308" id="0:5460"/>
             <ViewModelInstanceNumber propertyValue="0"    viewModelPropertyId="3:309" id="0:4677"/>
-            <ViewModelInstanceColor  propertyValue="FF3FE0C8" viewModelPropertyId="3:316"/>
-            <ViewModelInstanceColor  propertyValue="A6000000" viewModelPropertyId="3:317"/>
+            <ViewModelInstanceColor  propertyValue="FF3FE0C8" viewModelPropertyId="3:316" id="0:5461"/>
+            <ViewModelInstanceColor  propertyValue="A6000000" viewModelPropertyId="3:317" id="0:5462"/>
             <ViewModelInstanceNumber propertyValue="21"   viewModelPropertyId="3:311" id="0:4678"/>
             <ViewModelInstanceNumber propertyValue="18"   viewModelPropertyId="3:312" id="0:4679"/>
             <ViewModelInstanceNumber propertyValue="17"   viewModelPropertyId="3:313" id="0:4680"/>
@@ -241,6 +241,21 @@
         <ViewModelPropertyString  name="possessionLabel" id="3:56"/>
         <ViewModelPropertyString  name="versusLabel"     id="3:48"/>
 
+        <!-- THE WINNER'S STAMP — `hasWinner` shows it, `winnerX` puts it beside
+             the side that won, `winnerLabel` is the word.
+
+             ONE STAMP AND A BOUND x, not one per side. The two are the same
+             badge at two x positions, and a second copy would be a second wave
+             animation, a second state machine layer and a second place to
+             change the wording. The match writes the column's x; the artboard
+             does not know which side is which and does not need to.
+
+             A DRAW SETS NONE OF THIS, which is now the only mark a level match
+             carries: the stamp is absent and both numbers are the same. -->
+        <ViewModelPropertyBoolean name="hasWinner"   id="3:240"/>
+        <ViewModelPropertyNumber  name="winnerX"     id="3:241"/>
+        <ViewModelPropertyString  name="winnerLabel" id="3:242"/>
+
         <!-- Optional: no badge at all unless the match set one. It had the
              badge band to itself the moment the champion line left it — see
              the note on the Record Badge node in stats-page.rml. -->
@@ -278,10 +293,12 @@
         <ViewModelPropertyString  name="colAssists" id="3:67"/>
         <ViewModelPropertyString  name="colSaves"   id="3:68"/>
 
+        <!-- One per row of the team table: goals, assists, saves. There was a
+             fourth for possession until that row became the bar's own label —
+             see the note on Left Pct in stats-page.rml. -->
         <ViewModelPropertyBoolean name="row1Hover" id="3:50"/>
         <ViewModelPropertyBoolean name="row2Hover" id="3:51"/>
         <ViewModelPropertyBoolean name="row3Hover" id="3:52"/>
-        <ViewModelPropertyBoolean name="row4Hover" id="3:53"/>
         <ViewModelPropertyBoolean name="tabTeamHover"    id="3:54"/>
         <ViewModelPropertyBoolean name="tabPlayersHover" id="3:55"/>
         <ViewModelPropertyBoolean name="p1Hover" id="3:120"/>
@@ -343,10 +360,12 @@
             <ViewModelInstanceString propertyValue="lorem"           viewModelPropertyId="3:66" name="Component" id="0:3486"/>
             <ViewModelInstanceString propertyValue="ipsum"           viewModelPropertyId="3:67" name="Component" id="0:3487"/>
             <ViewModelInstanceString propertyValue="dolor sit"           viewModelPropertyId="3:68" name="Component" id="0:3488"/>
+            <ViewModelInstanceBoolean propertyValue="false"  viewModelPropertyId="3:240" id="0:5420"/>
+            <ViewModelInstanceNumber  propertyValue="190"    viewModelPropertyId="3:241" id="0:5421"/>
+            <ViewModelInstanceString  propertyValue="lorem"  viewModelPropertyId="3:242" id="0:5422"/>
             <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:50" name="Component" id="0:3489"/>
             <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:51" name="Component" id="0:3490"/>
             <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:52" name="Component" id="0:3491"/>
-            <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:53" name="Component" id="0:3492"/>
             <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:54" name="Component" id="0:3493"/>
             <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:55" name="Component" id="0:3494"/>
             <ViewModelInstanceBoolean propertyValue="false" viewModelPropertyId="3:120" name="Component" id="0:3495"/>

@@ -307,6 +307,7 @@ const DOCS = {
     id: 'Must match an id in CONFIG.upgrades. The join key — renaming it here orphans the row.',
     name: 'Card title. Blank keeps the built-in name.',
     desc: 'Card body text. Blank keeps the built-in description. Takes {placeholders} — see the ⊕ button in the cell.',
+    levelDescs: "What the card says AT A PARTICULAR STACK, when that differs from `desc`. Written `stack:line`, several separated by `|` — `1:Opens the ring|2:One more`. A stack with no entry falls back to `desc`. NOTE THE ORDER OF PRECEDENCE: a stack named here WINS, so a card with `1:` here shows that line on the first pick and `desc` is never seen until the second. These lived in config.js until they were moved here, which is why nine cards had a `desc` nobody could see.",
     sfx: 'Sound played when this card is TAKEN, on top of the click. Blank uses the shared level-up sound.',
     maxStacks: 'How many times it can be taken. BLANK MEANS UNLIMITED.',
     enabled: 'FALSE removes it from the offer pool. Blank means enabled.',

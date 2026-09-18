@@ -41,6 +41,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../../path/src/config.js';
 import {
   makeOrganicRing, placeOrganicRing, updateOrganicRing, threatType,
+  setRingClock, electricNode, electricNodeCount,
   EDGE_KINDS, __organicRingShader,
 } from '../../path/src/systems/organicRing.js';
 import { ATTACK_IDS, parseBossPerkCsv } from '../../path/src/bossPerkTable.js';
@@ -147,18 +148,23 @@ function present(title, note, picked = false) {
 let live = null;
 
 function draw({ type = 'kinetic', radius = 3, sweepIn = 1, sweepOut = 0, charge = 1,
-                arcs = 0, thickness, color, opacity = 1, time = 0, at = [0, 0] } = {}) {
+                arcs = 0, thickness, color, opacity = 1, time = 0, at = [0, 0],
+                wobble, wobbleMax, massVar } = {}) {
   if (live) { scene.remove(live); live.material.dispose(); }
-  live = makeOrganicRing({ type, arcs, thickness, color });
+  live = makeOrganicRing({ type, arcs, thickness, color, wobble, wobbleMax, massVar });
   live.visible = true;
   scene.add(live);
   placeOrganicRing(live, at[0], at[1], radius);
-  // The clock is set outright rather than advanced, so a panel is a FRAME of a
-  // named moment and re-rendering it twice gives the same picture. The stepped
-  // dialects care: an advanced clock would put every electric panel on a
-  // different jag.
-  live.material.uniforms.uTime.value = time;
+  // CHARGE FIRST, CLOCK SECOND. The electric step phase is the rate integrated
+  // over time and the rate rides uCharge, so setting the clock against a charge
+  // the ring has not been given yet puts the panel on a different jag from the
+  // one its caption claims. dt is 0: nothing is being advanced here.
   updateOrganicRing(live, 0, { opacity, sweepIn, sweepOut, charge });
+  // Set outright rather than advanced, so a panel is a FRAME of a named moment
+  // and re-rendering it twice gives the same picture. setRingClock rather than
+  // a bare uTime write, because the held dialects run off a step counter that a
+  // raw seconds value no longer implies — see THE CLOCKS in organicRing.js.
+  setRingClock(live, time);
   gl.render(scene, camera);
   return live;
 }
@@ -293,11 +299,27 @@ section('THE PALETTE — <span>two tables that must not drift</span>', 1);
     onlyCfg.length === 0 && onlyCsv.length === 0,
     [...onlyCfg.map((k) => `+${k}`), ...onlyCsv.map((k) => `-${k}`)].join(' ') || `${cfgIds.length} types`);
 
-  // The join that makes an electric boss the colour of the player's Voltaic.
+  // THE JOIN, and the one entry that opts out of it.
+  //
+  // An entry naming only an element reads CONFIG.biolum.elements at draw time
+  // rather than copying, so a retune of the element palette cannot leave
+  // venom's ring the wrong green. `electric` names BOTH an element and a
+  // literal, which threatType resolves in favour of the literal — a deliberate
+  // split: the boss's standing field is high-voltage yellow and the player's
+  // Voltaic arcs stay cyan, because one is a hazard to swim out of and the
+  // other is a gun. Both halves are asserted, because the failure modes are
+  // opposite and each looks like the other being correct: get the precedence
+  // backwards and the field silently goes back to cyan, and cut the join
+  // altogether and every other element's ring stops tracking its palette.
   const elec = threatType('electric');
   const shock = CONFIG.biolum.elements.shock.color;
-  check('an element-backed type reads the element\'s own colour',
-    elec.color === shock, `#${new THREE.Color(elec.color).getHexString()}`);
+  check('the electric threat wears its own colour, not its element\'s',
+    elec.color === CONFIG.fx.attackTypes.electric.color && elec.color !== shock,
+    `#${new THREE.Color(elec.color).getHexString()} against Voltaic's #${new THREE.Color(shock).getHexString()}`);
+  const venom = threatType('venom');
+  check('...and a type with no literal still reads its element live',
+    venom.color === CONFIG.biolum.elements.venom.color,
+    `#${new THREE.Color(venom.color).getHexString()}`);
   check('...and carries the crackling dialect', elec.edge === EDGE_KINDS.electric);
   check('an unknown type degrades instead of throwing',
     threatType('not-a-real-type').edge === EDGE_KINDS.smooth);
@@ -507,6 +529,82 @@ section('MEASURED — <span>the things a still frame cannot tell you</span>', 1)
   check('...with no seam where the spline wraps',
     atSeam <= Math.max(typical * 1.5, 0.05),
     `${atSeam.toFixed(3)}u at the wrap against a ${typical.toFixed(3)}u 90th percentile`);
+}
+
+// --- the corners are where the CPU says they are ----------------------------
+// THE ONE CHECK THAT COULD NOT BE WRITTEN ANYWHERE ELSE.
+//
+// systems/bossPerks.js strikes the electric aura's bolts from the boss's body
+// out to a CORNER of this zigzag, and it finds that corner by calling
+// electricNode() — a transcription of the shader's electric arm into
+// JavaScript, because GLSL ES 1.00 cannot index a uniform array by a computed
+// index and so the offsets cannot be solved on the CPU and uploaded. Two copies
+// of one piece of arithmetic, kept in step by hand.
+//
+// If they drift, nothing throws and nothing looks broken: the bolts simply end
+// NEAR the ring instead of on it, and the whole point of the effect — one shape
+// rather than a ring with weather inside it — is quietly gone. Only a real GL
+// context can see it, so this is the place.
+//
+// massVar is turned OFF for this panel, and that is what makes the measurement
+// tight rather than suggestive. The band's half-width is a sample of the world
+// noise field, which the CPU cannot predict; with it off the half-width is
+// exactly uThickness and the outermost lit pixel along a ray is the corner's
+// centre radius plus that, to within the antialias width. With it on, the
+// tolerance would have to be wider than the jag being measured.
+{
+  const R = 3.4;
+  const T = 0.12;
+  // A wobble big enough to actually READ at this radius — the shipped default
+  // is a world distance tuned for a two-unit mark, which is a fraction of a
+  // percent out here. This is the same conversion the boss aura makes; see
+  // auraEdge() in systems/bossPerks.js.
+  const W = c.wobbleMax * R;
+  draw({ type: 'electric', radius: R, time: 2.5, charge: 1, thickness: T,
+    wobble: W, wobbleMax: c.wobbleMax, massVar: 0 });
+  const px = grab();
+  const n = electricNodeCount(live);
+  const errs = [];
+  let outward = 0;
+  for (let i = 0; i < n; i++) {
+    const node = electricNode(live, i);
+    if (node.outward) outward++;
+    // One ray, straight down the corner's own bearing. Screen y runs down and
+    // the world's runs up; a sign error here reads as a constant offset on
+    // every node and would look like a tuning disagreement rather than a flip.
+    const dx = Math.cos(node.angle);
+    const dy = Math.sin(node.angle);
+    const bg = backgroundLevel(px);
+    let found = 0;
+    for (let sPx = Math.floor((R * 1.5) * PX); sPx >= 1; sPx--) {
+      const x = Math.round(CX + dx * sPx);
+      const y = Math.round(CY - dy * sPx);
+      if (x < 0 || y < 0 || x >= scratch.width || y >= scratch.height) continue;
+      const k = ((y * scratch.width) + x) * 4;
+      if (px[k] + px[k + 1] + px[k + 2] > bg + 40) { found = sPx / PX; break; }
+    }
+    // The outer edge of the band whose centre electricNode claims to have
+    // solved for, plus the soft shoulder the shader draws past it.
+    errs.push(Math.abs(found - (node.radius + T * R)));
+  }
+  const worst = Math.max(...errs);
+  const mean = errs.reduce((a, b) => a + b, 0) / errs.length;
+  // A tenth of the jag's own amplitude. Loose enough for the antialias ramp and
+  // the pixel the ray lands on; far tighter than the thing being measured, so a
+  // transcription that had genuinely drifted could not hide inside it.
+  const tol = Math.max(0.06, W * 0.35);
+  check('every corner of the zigzag is where electricNode says it is',
+    worst < tol, `worst ${worst.toFixed(3)}u, mean ${mean.toFixed(3)}u, tolerance ${tol.toFixed(3)}u`);
+  // ...and the check must not be passing because every node claims the same
+  // radius. A transcription that returned a constant would sail through the
+  // measurement above on a ring whose jag was too small to see.
+  const radii = [];
+  for (let i = 0; i < n; i++) radii.push(electricNode(live, i).radius);
+  const spread = Math.max(...radii) - Math.min(...radii);
+  check('...and the corners genuinely differ from one another',
+    spread > W * 0.5, `${spread.toFixed(2)}u between the innermost and outermost corner`);
+  check('...with half of them leaning outward, which is what a bolt lands on',
+    outward === n / 2, `${outward} of ${n}`);
 }
 
 // --- the chill facets sit inside the promise --------------------------------

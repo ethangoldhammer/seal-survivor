@@ -11,7 +11,10 @@
 //   2. Is any one ability carrying the run? An ability doing 60% of the
 //      damage on one stack isn't a build, it's a bug in the numbers.
 //
-// PURE FUNCTIONS ONLY — no DOM, no CONFIG, no imports. The in-game overlay and
+// PURE FUNCTIONS ONLY — no DOM, no CONFIG. ONE import, and it is plain
+// generated JS with no dependencies of its own (sourceLabels.generated.js), so
+// the rule this line is about — that a Node tool can load this file without a
+// bundler — still holds. The in-game overlay and
 // tools/playtest-report.mjs both run this exact code, so a verdict on screen
 // and a verdict in the terminal can never drift apart. Keep it that way: the
 // moment this file imports config.js, the Node tool needs a bundler to run.
@@ -20,6 +23,8 @@
 // Every threshold the verdicts turn on, in one place, because these are
 // judgement calls rather than truths — a run that reads as "brutal" to one
 // player is "finally interesting" to another. Tune here.
+import { SOURCE_LABELS } from '../sourceLabels.generated.js';
+
 export const BALANCE = {
   // Damage you deal per second ÷ enemy hp arriving per second. Below 1.0 the
   // arena is filling faster than you can empty it; the run is now on a timer
@@ -144,14 +149,21 @@ function resolveSource(source) {
 //
 // `gun` is not here — it is a real upgrade line with a phantom baseline stack,
 // and it is labelled above.
-const ENVIRONMENT_LABELS = {
-  impact: 'Collision',
-  splash: 'Blast',
-  deathBlast: 'Chain Reaction',
-  sunPass: 'Sun Pass',
-  reentry: 'Belly Flop',
-  lightning: 'Lightning',
-};
+// THE SOURCES THAT ARE NOT AN UPGRADE — the water hurting something, rather
+// than a card the player picked.
+//
+// THE WORDS LIVE IN uiText.csv and arrive here through a generated plain-JS
+// file. They are copy, so they belong in a spreadsheet where the editor's
+// "needs your words" chip and `npm run test:copy` can see them; as constants in
+// this file they were invisible to both, which is how `pickupBlast`,
+// `bubbleJet` and `crabRicochet` reached the score screen reading as their own
+// keys. The generation step is what keeps the import rule above intact —
+// uiTextTable.js reaches the CSV through `?raw`, which needs a bundler, and one
+// of the two Node tools that load this module uses jsdom, which the vite loader
+// cannot load at all. See tools/gen-source-labels.mjs.
+//
+// `npm run test:sourcelabels` regenerates and diffs, so a stale generated file
+// is a red test rather than a label quietly lagging the spreadsheet.
 
 /**
  * A damage source as a player would name it. Falls back to the raw key, which
@@ -186,7 +198,7 @@ export function sourceFamily(source) {
 
 export function sourceLabel(source) {
   const s = resolveSource(source);
-  return SOURCE_UPGRADES[s]?.label ?? ENVIRONMENT_LABELS[s] ?? s;
+  return SOURCE_UPGRADES[s]?.label ?? SOURCE_LABELS[s] ?? s;
 }
 
 // WHICH DAMAGE TAG AN UPGRADE'S WORK IS BOOKED UNDER — the table above, read

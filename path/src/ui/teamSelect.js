@@ -45,9 +45,27 @@
 // so what you read here is what the goal card will say. Seat 0 has no dice:
 // that name is changed on the splash, where it is saved.
 //
-// COPY: every word is a row of uiText.csv. The hint, the locked slots, the
-// no-pads line and the prompt heading are lorem until Ethan writes them; the
-// device names and the buttons are [DRAFT]; Blubberball and Rematch are his.
+// A PAD CAN REACH EVERY CONTROL ON IT, which took two goes. A readied stick
+// walks the rows under the board (see settingRow) and now walks on to Back and
+// Start, which used to answer only to the pad's own B and Start buttons — a
+// different thing, and a worse one, because neither ever lit up to say it was
+// there. Every stop draws the same ring, and a stop that is switched off is
+// stepped over rather than landed on.
+//
+// ...AND IT SAYS WHICH PAD IS WHICH. Four controllers in a room were four
+// identical emoji told apart by the digit after them. The chip draws the
+// brand's own mark where there is art for it (ui/padBrand.js reads the brand
+// out of the Gamepad API's free-text id; ui/deviceIcons.js holds the art, and
+// ships empty) and the glyph where there is not.
+//
+// IT FITS ON ONE SCREEN, at four a side, on the smallest phone in the list.
+// That is a rule rather than an observation — NO_SCROLL in
+// tools/layout/layout-audit.js — because a side you have to scroll to is a side
+// the three people not holding the phone cannot watch a chip walk onto. See the
+// compact block at the bottom of STYLE for what gives way, and why the rules
+// are at the bottom.
+//
+// COPY: every word is a row of uiText.csv. Blubberball and Rematch are his.
 // ---------------------------------------------------------------------------
 
 import { CONFIG } from '../config.js';
@@ -72,6 +90,12 @@ import {
 // accessoryName there for why the name lookup is not written out again here.
 import { ACCESSORY_ICONS } from './accessoryIcons.js';
 import { accessoryName } from './accessoryDrawer.js';
+// WHICH CONTROLLER SOMEBODY IS HOLDING, and the mark for it — see padBrand.js
+// for how a brand is read out of the Gamepad API's free-text id, and
+// deviceIcons.js for why an empty icon set is the shipped state rather than a
+// bug.
+import { padBrand } from './padBrand.js';
+import { DEVICE_ICONS } from './deviceIcons.js';
 // This screen's stylesheet is filed UNDER the Text panel's role sheet — the
 // screen builds on its first open, long after typography has written its
 // rules, and appended after them its sizes would beat the panel's. The type
@@ -99,6 +123,23 @@ const BARE = '\u{1F9AD}';
 const KB = '\u2328';          // keyboard
 const PAD = '\u{1F3AE}';      // game controller
 const READY = '\u2713';       // check mark
+
+// ...AND THE MARK, WHERE THERE IS ONE. Four people in a room holding four
+// different controllers were four identical emoji on this screen, told apart
+// only by the number after them — so whose chip is whose was a thing you worked
+// out by pushing a stick and watching what moved. An Xbox pad that looks like
+// an Xbox pad answers that before anybody touches anything.
+//
+// THE GLYPH IS STILL THE FALLBACK and not a placeholder for one: deviceIcons.js
+// ships empty, every chip draws what it has always drawn, and each key that
+// lands upgrades one chip without waiting for the other four. See the note
+// there.
+//
+// A BACKGROUND IMAGE RATHER THAN AN <img>, the same bargain the hat tile makes
+// (see kitTag): the two states then differ in one property rather than in what
+// is inside the chip, so nothing about the row's layout depends on which of
+// them a device got.
+const DEVICE_ICON_PX = 18;
 
 let root = null;
 let el = null;
@@ -140,7 +181,23 @@ let keyHandler = null;
 // NOTHING IS LIT UNTIL SOMEBODY ASKS, the rule every other cursor in this game
 // follows: a ring drawn the moment a captain readies would be pointing at a
 // control a mouse player is never going to use.
-const SETTING_STOPS = 3;
+// HOW MANY STOPS THE CURSOR HAS. Five: the roster, the match kind, the number
+// that kind is played to, and the two buttons that leave or start.
+//
+// BACK AND START WERE THE HOLE. Every other control on this screen answered to
+// a pad and those two answered only to the pad's OWN Back and Start buttons —
+// which is a different thing, and a worse one: nothing on the screen ever lit
+// up to say either was there. A player who had readied could see a ring walk
+// three rows and then run out of screen with the two decisions that actually
+// end it unmarked, and the only way to find out that the pad's Start works here
+// is to press it and see. A control a cursor cannot reach is a control the
+// screen has not admitted to having.
+//
+// THE PAD'S OWN BUTTONS STILL WORK. Start starts and B goes back from anywhere,
+// readied or not, exactly as before — the stops are a second route rather than
+// a replacement, for the player who is walking the screen rather than reciting
+// it.
+const SETTING_STOPS = 5;
 let settingRow = -1;
 
 const STYLE = `
@@ -193,6 +250,14 @@ const STYLE = `
    short; the floor of zero is what makes it impossible. */
 .sv-teams-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.12); border: 2px solid transparent; font-size: 13px; font-weight: 600; white-space: nowrap; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
 .sv-teams-chip.sv-teams-ready { border-color: var(--team, #fff); }
+/* THE DEVICE'S MARK. Square and contained, so a wide controller drawing and a
+   tall keyboard one occupy the same box and a chip does not change width with
+   whatever somebody happened to plug in. flex: none because the chip already
+   shrinks below its own contents (see above) and the one thing in it that must
+   not shrink is the picture. */
+.sv-teams-mark { flex: none; display: block; width: 18px; height: 18px;
+  background: center / contain no-repeat; }
+.sv-touch .sv-teams-mark { width: 20px; height: 20px; }
 /* THE NAME, and the dice that re-casts it. The row is a fixed three-part
    layout — chip, name, dice — so a long name pushes nothing about and the
    dice is in the same place on every slot; the name itself ellipsises rather
@@ -227,15 +292,55 @@ const STYLE = `
 .sv-teams-stamp { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--team, #fff); }
 .sv-teams-pool { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-width: 0; width: clamp(84px, 20vw, 150px); min-height: 220px; }
 .sv-teams-nopads { font-size: 11px; text-align: center; line-height: 1.4; }
-/* PORTRAIT STACKS. Two columns of seal slots side by side cannot be read on a
-   phone held upright — the same conclusion the bust's button row came to (see
-   hexMenu.layout). Stacked, each side gets the full width and the pool goes
-   between them where it already is in source order. */
-@media (max-aspect-ratio: 3/4), (max-width: 520px) {
-  .sv-teams-board { grid-template-columns: minmax(0, 1fr); }
-  .sv-teams-side { min-height: 0; }
-  .sv-teams-pool { min-height: 0; width: 100%; flex-direction: row; flex-wrap: wrap; }
-}
+/* A LOCKED SLOT IS A LABEL, NOT A CONTROL, and it used to be exactly as tall
+   as one. Every other slot is 34px (52 with a thumb) because it holds a 44px
+   dice and a 44px hat tile side by side; a locked slot holds one word and
+   neither of those, so the only thing that height was doing was making a row
+   you cannot press as big as a row you can. Six of them at the shipped roster
+   of one a side — three under each captain — is 190px of dashed nothing on a
+   screen that has to fit.
+
+   IT STILL SAYS THE SAME THING. The point of drawing them at all is that four a
+   side is the shape this screen is drawn to whatever tonight's number is (see
+   the note in render), and a short dashed row makes that point as well as a
+   tall one. The .sv-touch override below has to be restated for the same
+   reason: a rule that raises EVERY slot to 52 does not know which of them
+   nobody can press. */
+.sv-teams-slot.sv-teams-locked { min-height: 20px; padding: 0 8px; }
+.sv-touch .sv-teams-slot.sv-teams-locked { min-height: 20px; }
+
+/* ---------------------------------------------------------------------------
+   COMPACT — the screen with no room to spare, which is most of the screens it
+   is played on.
+
+   IT IS ONE SCREEN OR IT IS NOTHING. A team select is a decision four people in
+   a room make at once, and three of them are not holding the phone: a side you
+   have to scroll to is a side those three cannot watch a chip walk onto, and a
+   Start button below the fold is a match nobody can tell is ready to begin.
+   Measured before this block existed, the screen was 1143px tall on an iPhone
+   SE — 531px of it, nearly half, past the bottom of a panel that quietly said
+   overflow-y: auto (no backticks in this file — see the note under the wheel)
+   and hid the fact from every check in the repo. See
+   NO_SCROLL in tools/layout/layout-audit.js, which is where it stops being
+   hideable.
+
+   WHAT THE ROOM IS SPENT ON, in order. Eight seats at four a side, each one a
+   name with a 44px dice and a 44px hat tile beside it, is 350px of thumb-sized
+   controls that cannot be made smaller without making them worse — so
+   everything that is NOT a seat gives way first. The hint goes (its line is a
+   sentence about the controls, and the controls are in your hands), the title
+   shrinks, the gaps halve, and the wheel moves to the SIDE of the slots rather
+   than under them, which is the single biggest saving on the board: 96px per
+   column of vertical room, for width that the slots were wasting anyway — look
+   at a slot on a phone and the space between the name and the dice is most of
+   the row.
+
+   TWO QUERIES, NOT ONE, because they are two different shortages. Upright, the
+   screen is narrow and the board stacks. On its side it is SHORT — 393px of
+   height is less than the control rows and one column of seats together — and
+   the board must stay in its columns while the rows under it go side by side.
+   --------------------------------------------------------------------------- */
+
 /* ONE CIRCLE, AND IT SCALES. The wheel is a single size — --wheel — and the
    dot and the ring are both derived from it, so the spacing between two dots
    and the size of a dot keep their ratio at every screen size. Written the
@@ -278,7 +383,8 @@ const STYLE = `
    pause menu draw (.sv-nav-sel in ui/ui.js), restated here because this screen
    carries its own sheet — and a ring rather than a colour, because a stepper at
    its clamp is already saying something with colour. */
-.sv-teams-roster.sv-nav-sel, .sv-teams-rules-group.sv-nav-sel, .sv-teams-mode.sv-nav-sel {
+.sv-teams-roster.sv-nav-sel, .sv-teams-rules-group.sv-nav-sel, .sv-teams-mode.sv-nav-sel,
+.sv-teams-foot .sv-btn.sv-nav-sel {
   outline: 2px solid #fff; outline-offset: 3px; border-radius: 8px; }
 .sv-teams-roster .sv-btn { min-width: 28px; padding: 2px 8px; }
 .sv-teams-roster .sv-btn:disabled { opacity: .3; }
@@ -305,6 +411,124 @@ const STYLE = `
 .sv-touch .sv-teams-slot { min-height: 52px; }
 /* The steppers keep .sv-btn's own height (44) and only want width. */
 .sv-touch .sv-teams-roster .sv-btn { min-width: 44px; }
+
+/* ---------------------------------------------------------------------------
+   THE SMALL SCREENS — and these live at the BOTTOM of this sheet on purpose.
+   Every rule below overrides one written above it at the same specificity, so
+   order is the only thing deciding which wins. Written where they read best —
+   beside the layout they change — half of them silently lost: the wheel kept
+   its desktop diameter, the slots kept their 52px floor, and the screen came
+   out 136px taller than the same rules say it should be, with nothing in the
+   stylesheet looking wrong.
+   --------------------------------------------------------------------------- */
+
+/* PORTRAIT STACKS. Two columns of seal slots side by side cannot be read on a
+   phone held upright — the same conclusion the bust's button row came to (see
+   hexMenu.layout). Stacked, each side gets the full width and the pool goes
+   between them where it already is in source order.
+
+   ...AND A STACKED SIDE PUTS ITS WHEEL BESIDE ITS SEATS, which is the single
+   biggest saving on this screen: 96px of height per column, for width the slots
+   were wasting anyway — look at a slot on a phone and the space between the
+   name and the dice is most of the row.
+
+   ONLY WHEN STACKED, and that is the whole condition. The same rule applied to
+   a side sharing the board with another one takes the wheel out of a column
+   that is already half a screen wide, and every seal's name then wraps onto
+   four lines: tried on an iPad held sideways it turned a 55px overflow into a
+   603px one. A wheel beside the seats is a trade of width for height, and only
+   a full-width column has the width to trade. */
+@media (max-aspect-ratio: 3/4), (max-width: 520px) {
+  .sv-teams-board { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .sv-teams-pool { min-height: 0; width: 100%; flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .sv-teams-side { flex-direction: row; align-items: center; gap: 8px; }
+  .sv-teams-slots { flex: 1 1 auto; min-width: 0; width: auto; }
+  .sv-teams-wheel { margin: 0; }
+  /* SIX PILLS ALL SAYING THE SAME WORD. Stacked, a side is one row of the board
+     and every slot under its captain is the computer's — the column has already
+     said so, in the captain's own chip and in the dashed border round a side
+     nobody has joined. Repeating it per seat costs 46px of the one thing a
+     narrow column has none of, and 46px is the difference between a name on one
+     line and a name on two.
+     The captain's chip stays: that one is not a repetition, it is the answer to
+     who is driving this side. And the element is hidden rather than not built,
+     so nothing about what render() writes depends on how wide the screen is. */
+  .sv-teams-slot:not(.sv-teams-captain) .sv-teams-chip { display: none; }
+}
+
+/* THE CHROME GIVES WAY FIRST, on every screen that has not got the room.
+   Eight seats at four a side, each one a name with a 44px dice and a 44px hat
+   tile beside it, is 350px of thumb-sized controls that cannot be made smaller
+   without making them worse — so everything that is NOT a seat goes first: the
+   hint, most of the title, the gaps, the panel's own padding and the wheel's
+   diameter.
+
+   THREE SHORTAGES, ONE ANSWER. Upright on a phone the screen is narrow; on its
+   side it is short; an iPad held sideways is neither and is still 55px over at
+   four a side. All three want the same thing, so they share a rule rather than
+   growing three. 780px is under an iPad on its side (768) and over a laptop
+   (800), which is the line between a screen where the full-size chrome fits and
+   one where it does not. */
+@media (max-aspect-ratio: 3/4), (max-width: 520px), (max-height: 780px) {
+  .sv-teams { gap: 5px; max-height: 100vh; }
+  /* THE PANEL'S OWN PADDING, which is .sv-menu's and is the same on every screen
+     in the game. 70px of it top and bottom is a tenth of an iPhone SE. */
+  .sv-teams.sv-menu { padding: 10px 12px; }
+  .sv-teams .sv-title { font-size: 18px; margin: 0; }
+  /* THE HINT IS THE FIRST THING TO GO. It is a sentence explaining which way to
+     push a stick, read by somebody who is holding the stick — and it is the one
+     line on this screen whose absence costs nothing you cannot find out by
+     pushing. It is still in the DOM and still read aloud: the rule below is the
+     standard screen-reader-only shape, which the layout audit knows to leave
+     alone (see srOnly in tools/layout/layout-audit.js). */
+  .sv-teams-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .sv-teams-side { min-height: 0; padding: 4px 8px; }
+  /* THE POOL IS A LINE, NOT A COLUMN. Between two stacked sides it is whoever
+     has not joined yet and, until a controller has been touched, the line
+     asking for a press — both of which are one row's worth of thing. */
+  .sv-teams-pool { padding: 0; }
+  .sv-teams-slots { gap: 4px; }
+  .sv-teams-wheel { --wheel: clamp(64px, 17vmin, 92px); }
+  /* 44 AND NOT 52. The floor here is the thumb, and the thumb's floor is the
+     dice and the hat tile inside the row — both of which are exactly 44. The
+     extra 8 was breathing room, and eight seats' worth of breathing room is
+     64px that the board has not got. */
+  .sv-touch .sv-teams-slot { min-height: 44px; }
+  .sv-teams-slot { padding: 0 6px; gap: 4px; }
+  .sv-teams-chip { padding: 4px 7px; font-size: 11px; }
+  /* A POINT OFF THE NAME, which is worth roughly three characters a line and is
+     the cheapest width on the screen. The captain's row keeps its own step up
+     over the others, so the hierarchy is the same one point lower. */
+  .sv-teams-name-text { font-size: 11px; }
+  .sv-teams-captain .sv-teams-name-text { font-size: 12px; }
+  .sv-teams-name { gap: 4px; }
+  .sv-teams-nopads { font-size: 10px; }
+  .sv-teams-roster { margin-top: 0; gap: 6px; }
+  .sv-teams-foot { margin-top: 0; gap: 8px; }
+}
+
+/* ON ITS SIDE the shortage is HEIGHT, and the three rows under the board are
+   where it is. Stacked they are 132px of an iPhone's 393; side by side they are
+   44, and there is 852px of width to put them in — which is the shape a phone
+   held sideways has spare. The board keeps its columns here: turning it upright
+   would be trading the one dimension there is room in for the one there is not.
+
+   WRAP, NOT A GRID, and not a wrapper element either. The three rows are
+   siblings of the board inside .sv-teams, and putting them in a row of their
+   own means re-parenting them — which the pad cursor, the click handlers and
+   the test all hold references into. A wrapping flex row leaves every one of
+   them exactly where it is: the title and the board take a full line each, and
+   the three short rows flow onto one line together because they fit.
+   (A grid with named areas was the first version and it made the screen WORSE —
+   613px over against 345 before it. Auto-width tracks and a board asking for
+   100% of them size each other in a circle, and what came out was a board
+   narrow enough to wrap every seal's name onto four lines.) */
+@media (max-height: 560px) and (min-aspect-ratio: 1/1) {
+  .sv-teams { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; }
+  .sv-teams .sv-title, .sv-teams-board { flex: 1 0 100%; }
+  .sv-teams-roster, .sv-teams-foot { flex: 0 0 auto; margin-top: 0; }
+}
+
 `;
 
 function cssColor(n) { return '#' + (n >>> 0).toString(16).padStart(6, '0'); }
@@ -459,6 +683,31 @@ function glyph(d) {
   return d.kind === 'keyboard' ? KB : `${PAD}${d.index + 1}`;
 }
 
+/** The icon key for a device: 'keyboard', or whichever brand its id reads as. */
+function iconKey(d) {
+  return d.kind === 'keyboard' ? 'keyboard' : padBrand(d.id);
+}
+
+/**
+ * DRESS A CHIP — the device's mark if there is one, its glyph if there is not,
+ * and the pad's number either way.
+ *
+ * THE NUMBER SURVIVES THE ICON. Two Xbox pads in one room are two identical
+ * marks, which is the same problem the emoji had one level up; the digit is
+ * what separates them and it is the half that must not be replaced.
+ */
+function dressChip(chip, d) {
+  const uri = DEVICE_ICONS[iconKey(d)];
+  if (!uri) { chip.textContent = glyph(d); return; }
+  const mark = document.createElement('i');
+  mark.className = 'sv-teams-mark';
+  mark.style.backgroundImage = `url("${uri}")`;
+  chip.textContent = '';
+  chip.appendChild(mark);
+  // The keyboard is the one device with no number: there is only ever one of it.
+  if (d.kind !== 'keyboard') chip.appendChild(document.createTextNode(String(d.index + 1)));
+}
+
 function move(d, side) {
   if (d.ready) return;
   if (side !== POOL && captain(side) && captain(side) !== d) return;
@@ -603,13 +852,35 @@ function settingStops() {
     { node: el.rosterRow, step: stepRoster },
     { node: el.mode, step: flipRulesKind },
     { node: el.rulesGroup, step: stepRules },
+    // THE TWO BUTTONS ARE PRESSED, NOT STEPPED — `press` rather than `step`, so
+    // nothing has to ask what a nudge to the left of "Start" would mean. They
+    // are side by side on one row, so left and right walk BETWEEN them (see
+    // stepSettingValue) rather than doing nothing, which is what the pair
+    // already looks like it should do.
+    { node: el.back, press: leave },
+    // ...AND START IS NOT A STOP UNTIL IT IS A BUTTON. The same rule the shared
+    // panel cursor follows (ui/panelNav.js): a disabled control the cursor can
+    // land on is a cursor that appears to have stopped working. Skipped rather
+    // than removed, so the stop a row is on never shifts under the player when
+    // the far captain readies.
+    { node: el.start, press: tryStart, off: () => !canStart() },
   ];
 }
 
-/** Walk between the settings rows. Clamped, like every other list in the game. */
+/**
+ * Walk between the stops. Clamped, like every other list in the game — and
+ * stepping OVER anything currently switched off rather than landing on it, with
+ * the clamp applied to what is left: at the bottom of the list with Start not
+ * yet pressable, down holds on Back rather than walking onto a dead button.
+ */
 function stepSettingRow(dir) {
+  const stops = settingStops();
   const was = settingRow;
-  settingRow = was < 0 ? 0 : Math.max(0, Math.min(SETTING_STOPS - 1, was + dir));
+  let at = was < 0 ? (dir > 0 ? 0 : SETTING_STOPS - 1) : was + dir;
+  while (at >= 0 && at < stops.length && stops[at].off?.()) at += dir || 1;
+  // Off either end, or the only thing that way is switched off: stay put.
+  if (at < 0 || at >= stops.length) at = was < 0 ? 0 : was;
+  settingRow = Math.max(0, Math.min(stops.length - 1, at));
   if (settingRow !== was) feedback('uiHover');
   render();
 }
@@ -622,7 +893,33 @@ function stepSettingRow(dir) {
  */
 function stepSettingValue(dir) {
   if (settingRow < 0) { stepSettingRow(1); return; }
-  settingStops()[settingRow]?.step(dir);
+  const stop = settingStops()[settingRow];
+  if (!stop) return;
+  // A BUTTON HAS NO VALUE, so left and right walk between the two of them
+  // instead — they sit side by side in the footer, and a cursor on Back that
+  // refused to move right would be the one place on this screen where the
+  // direction pointing at a control does nothing.
+  if (stop.press) { stepFootButton(dir); return; }
+  stop.step(dir);
+}
+
+/**
+ * Left and right ALONG THE FOOTER, and no further. The two buttons are one row
+ * on the screen, so a push sideways off the end of it should stop rather than
+ * climb back into the settings above — a horizontal press that moves the cursor
+ * vertically is the kind of thing a player learns not to trust.
+ */
+function stepFootButton(dir) {
+  const stops = settingStops();
+  const first = stops.findIndex((x) => x.press);
+  if (first < 0) return;
+  const was = settingRow;
+  let at = was + dir;
+  while (at >= first && at < stops.length && stops[at].off?.()) at += dir;
+  if (at < first || at >= stops.length) return;
+  settingRow = at;
+  if (settingRow !== was) feedback('uiHover');
+  render();
 }
 
 /**
@@ -709,6 +1006,15 @@ function act(d, press) {
     else stepSettingValue(press.right ? 1 : -1);
     return;
   }
+  // ...AND A PRESSES WHAT THE CURSOR IS ON, when the cursor is on something that
+  // can be pressed. Only then: with no cursor drawn yet, or with it on a row of
+  // numbers, A means what it has always meant on this screen — ready, and
+  // un-ready. B is the way back out either way, so nothing is lost by A taking
+  // on the buttons it is now pointing at.
+  if (press.a && d.ready && settingRow >= 0) {
+    const stop = settingStops()[settingRow];
+    if (stop?.press && !stop.off?.()) { stop.press(); return; }
+  }
   if (press.left) move(d, d.side === POOL ? 0 : d.side === 1 ? POOL : 0);
   else if (press.right) move(d, d.side === POOL ? 1 : d.side === 0 ? POOL : 1);
   else if (press.up && d.side !== POOL && !d.ready) stepColor(d.side, -1);
@@ -734,7 +1040,11 @@ export function updateTeamSelect(list = null) {
     seen.add(key);
     let d = devices.get(key);
     if (!d) {
-      d = { key, kind: 'pad', index: p.index, side: POOL, ready: false };
+      // THE ID IS KEPT, not read and thrown away. It is the only thing the
+      // browser says about what this controller IS (see ui/padBrand.js), and
+      // pollPads hands it over on the frame the pad arrives and every frame
+      // after — but the device outlives any one of those frames.
+      d = { key, kind: 'pad', index: p.index, id: p.id, side: POOL, ready: false };
       devices.set(key, d);
       changed = true;
       // The press that made the browser show this pad is spent on arriving.
@@ -883,7 +1193,18 @@ function render() {
   // back to the pool, unplug the controller — all three end up here, and a ring
   // left on a row nothing can move is a cursor that has silently gone.
   if (![...devices.values()].some((d) => d.ready)) settingRow = -1;
-  settingStops().forEach((stop, i) => stop.node?.classList.toggle('sv-nav-sel', i === settingRow));
+  const stops = settingStops();
+  // A STOP CAN SWITCH OFF UNDER THE CURSOR — Start stops being pressable the
+  // moment the far captain un-readies, and a ring left on a dead button is a
+  // cursor that has silently stopped working. Walked back to the nearest stop
+  // that is still live, here rather than in the handler that un-readied,
+  // because this is the one place every change to the screen passes through.
+  if (settingRow >= 0 && stops[settingRow]?.off?.()) {
+    let at = settingRow;
+    while (at > 0 && stops[at].off?.()) at -= 1;
+    settingRow = stops[at]?.off?.() ? -1 : at;
+  }
+  stops.forEach((stop, i) => stop.node?.classList.toggle('sv-nav-sel', i === settingRow));
   const wheel = palette();
   // Both sides, before anything is drawn: the colours are what the rest of this
   // render reads, and what the pitch behind the screen is about to be told.
@@ -906,8 +1227,8 @@ function render() {
     cap.className = 'sv-teams-slot sv-teams-captain';
     const chip = document.createElement('span');
     chip.className = 'sv-teams-chip' + (c?.ready ? ' sv-teams-ready' : '');
-    chip.textContent = c ? glyph(c) : uiText('teamCpu');
-    if (c) { chip.title = label(c); chip.setAttribute('aria-label', label(c)); }
+    if (c) { dressChip(chip, c); chip.title = label(c); chip.setAttribute('aria-label', label(c)); }
+    else chip.textContent = uiText('teamCpu');
     cap.appendChild(chip);
     if (c?.ready) {
       const stamp = document.createElement('span');
@@ -979,7 +1300,7 @@ function render() {
   for (const d of waiting) {
     const chip = document.createElement('span');
     chip.className = 'sv-teams-chip';
-    chip.textContent = glyph(d);
+    dressChip(chip, d);
     chip.title = label(d);
     chip.setAttribute('aria-label', label(d));
     el.pool.appendChild(chip);

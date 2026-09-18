@@ -91,6 +91,12 @@ const state = {
   seed: 0,          // the world angle it came in at
   // Where the body is and how big, for the field — setBallBody.
   bx: 0, by: 0, br: 0, speed: 0, vx: 0, vy: 0,
+  // THE SPIN, AND THE ANGLE IT HAS TURNED THROUGH. systems/ballSpin.js owns
+  // the rate and draws the strokes that say which way the ball is going; what
+  // the body's own substance needs is the ANGLE, and an angle is something
+  // only a thing with a clock can keep. This module has the clock, so it does
+  // the integrating and publishes the result.
+  spin: 0, roll: 0,
   // A LAGGED COPY of the ball's velocity. The difference between it and the
   // real one is the slosh: see the drift below.
   lagVx: 0, lagVy: 0,
@@ -131,6 +137,29 @@ const teams = { a: 0xffffff, b: 0xffffff, share: 0, seed: 0, lobes: 5, lobeSize:
 export function ballTeams() { return teams.wr > 0 ? teams : null; }
 
 /**
+ * WHERE THE BODY IS — and this is NOT the block above with fewer fields in it.
+ *
+ * `teams` is a LEDGER: it exists once somebody has touched the ball, and a
+ * consumer reading it before then would be drawing a possession nobody has. A
+ * BODY is a different fact — the ball has one from the kickoff, and anything
+ * painted in the ball's own frame (the goo pass's mottle, systems/post.js)
+ * needs that frame on every frame the ball is drawn, not on every frame after
+ * the first contact.
+ *
+ * They were the same block, and the cost was invisible: the ball's interior
+ * was flat until a seal hit it, which is a thing you can watch happen and not
+ * see, because the first contact is a few seconds into a kickoff and it also
+ * changes the colour.
+ *
+ * Shared by reference and mutated in place, for the reason `teams` is: it is
+ * read once a frame by a pass that copies it straight into uniforms.
+ */
+const body = { wx: 0, wy: 0, wr: 0, roll: 0 };
+
+/** The body's frame, live — null until a ball exists to have one. */
+export function ballBody() { return body.wr > 0 ? body : null; }
+
+/**
  * HOW MANY CONTACTS THIS BALL HAS HAD — a count, and nothing else.
  *
  * A COUNT AND NOT A TIMESTAMP, because the only question anybody asks of it is
@@ -159,6 +188,10 @@ export function resetBallLook() {
   // the gap in between, where a consumer polling ballTeams() would be handed a
   // description of a ball that is no longer on the pitch.
   teams.wr = 0;
+  body.wr = 0;
+  body.roll = 0;
+  state.roll = 0;
+  state.spin = 0;
   state.owner = -1;
   state.pulse = 0;
   state.spike = 0;
@@ -440,13 +473,16 @@ export function setBallDrive({ speed01 = 0, charge01 = 0, owner = null } = {}) {
  * ball's own module pushes this every frame; without it the field has no
  * radius and the shader falls back to the single tint it always had.
  */
-export function setBallBody({ x = 0, y = 0, r = 0, speed = 0, vx = 0, vy = 0 } = {}) {
+export function setBallBody({ x = 0, y = 0, r = 0, speed = 0, vx = 0, vy = 0, spin = 0 } = {}) {
   state.bx = x;
   state.by = y;
   state.br = r;
   state.speed = speed;
   state.vx = vx;
   state.vy = vy;
+  // The RATE. The angle it adds up to is integrated in updateBallLook, which
+  // is the half of this module that has a dt.
+  state.spin = spin;
 }
 
 /**
@@ -528,10 +564,22 @@ export function updateBallLook(dt) {
   const dl = Math.hypot(dvx, dvy);
   if (dl > sloshMax) { dvx *= sloshMax / dl; dvy *= sloshMax / dl; }
 
+  // THE ROLL. The ball's spin, integrated on the WALL clock like everything
+  // else here, and wrapped so a long match cannot walk it out to where a
+  // float has no precision left to turn the mass smoothly with.
+  state.roll = (state.roll + (state.spin ?? 0) * dt) % (Math.PI * 2);
+
   group.warp = {
     ...(group.warp ?? {}),
     amount: Math.max(0, warp),
   };
+  // The body's frame, republished every frame the ball is drawn — see the note
+  // at `body` above for why this is not the `teams` block.
+  body.wx = state.bx ?? 0;
+  body.wy = state.by ?? 0;
+  body.wr = state.br ?? 0;
+  body.roll = state.roll;
+  group.body = body;
   group.tint = state.owner >= 0 ? teamColor(state.owner) : 0xffffff;
   group.tintMix = state.mix;
   // The two-colour field. A radius of zero is the switch that leaves every
@@ -563,7 +611,7 @@ export function updateBallLook(dt) {
   return {
     warp, tint: group.tint, tintMix: state.mix, owner: state.owner,
     share: state.share, newest: state.newest, seed: state.seed,
-    driftX: dvx, driftY: dvy,
+    driftX: dvx, driftY: dvy, roll: state.roll,
   };
 }
 

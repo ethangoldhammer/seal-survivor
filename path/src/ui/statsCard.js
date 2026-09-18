@@ -70,6 +70,18 @@ export const STATS_MACHINE = 'State Machine 1';
 // and where the number lives is not their business.
 export { STATS_SEATS };
 
+/**
+ * WHERE THE WINNER'S STAMP SITS, per side — the x of each score column's badge
+ * in artboard units, which is the one piece of the artboard's geometry this
+ * file has to know. There is ONE stamp in rive/blubberball and its x is bound,
+ * so which side won is a number written from here rather than two copies of a
+ * badge gated on two booleans.
+ *
+ * Move the columns in stats-page.rml and move these with them: nothing can
+ * check the pair, and a stamp at the wrong x still fades in correctly.
+ */
+const WINNER_X = [190, 710];
+
 /** The artboard's own proportions (900 x 760 in rive/blubberball). */
 export const STATS_ASPECT = 900 / 760;
 
@@ -132,6 +144,19 @@ function paint(vmi, data, replay = null) {
   w('number', 'rightAssists', t1.assists);
   w('number', 'rightSaves', t1.saves);
   w('number', 'rightPossession', share.right);
+
+  // THE WINNER'S STAMP, beside the column that won — the only thing on the
+  // page that names a result now, and deliberately a MARK rather than a
+  // sentence. `winner` is the side's index, or anything else for a draw, which
+  // leaves the stamp off: a level match is two equal numbers and no badge.
+  const winner = data.winner;
+  const won = winner === 0 || winner === 1;
+  w('boolean', 'hasWinner', won);
+  if (won) {
+    w('number', 'winnerX', WINNER_X[winner]);
+    // The word is a uiText row like every other label and is written with them
+    // below — see statsCopy.js. Nothing about it is written here.
+  }
 
   // THE RECORD PILL, which has the badge band to itself. It used to share that
   // height with a champion line — "Champion!" over the winning side's name —
@@ -230,7 +255,7 @@ function buildReplay(data) {
  *                  seats:[{name,goals,assists,saves}, …] — DENSE, in column
  *                  order: the left side's `seatsPerSide` seals, then the
  *                  right's,
- *                  seatsPerSide, isRecord,
+ *                  seatsPerSide, isRecord, winner: 0 | 1 | -1,
  *                  labels:{…} for a harness only }
  * @returns a handle whose every method is safe to call whether or not the
  *          artboard ever loaded. `live` stays false if it did not.

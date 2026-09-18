@@ -82,13 +82,27 @@ const SCENES = {
     what: 'the team tab as a match leaves it — no record badge',
     data: { ...MATCH, ...LABELS },
   },
-  // A DRAW IS A SCENE AND NOT A STATE, now that the champion line is gone: the
-  // page says a match was level the only way it says anything about the
-  // result, which is the two numbers being the same. Worth a still precisely
-  // because nothing else on the page marks it.
+  winner: {
+    artboard: 'Stats Page',
+    what: "the winner's stamp, beside the side that won — gated on hasWinner",
+    data: { ...MATCH, ...LABELS, hasWinner: true, winnerX: 190 },
+  },
+  // THE OTHER SIDE, because the stamp is ONE node at a bound x and 710 is the
+  // only thing that puts it on the right-hand column. A still of the left one
+  // alone would prove nothing about the number that moves it.
+  winnerRight: {
+    artboard: 'Stats Page',
+    what: 'the same stamp on the right column — winnerX is what moves it',
+    data: { ...MATCH, ...LABELS, leftScore: 2, rightScore: 3,
+            hasWinner: true, winnerX: 710 },
+  },
+  // A DRAW IS A SCENE AND NOT A STATE: the page marks a level match by the
+  // stamp being ABSENT, so this still is the one that shows what that looks
+  // like — and it is worth having precisely because there is nothing to point
+  // at in it.
   draw: {
     artboard: 'Stats Page',
-    what: 'a timed match that ran out level — the scoreline is the whole of it',
+    what: 'a timed match that ran out level — no stamp, and that is the mark',
     data: { ...MATCH, ...LABELS, leftScore: 3, rightScore: 3 },
   },
   record: {

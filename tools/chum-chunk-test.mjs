@@ -391,14 +391,34 @@ section('The meat a weak spot kicks loose');
     onScreen[0] > 0.9 && onScreen[1] < 0.4,
     `green ${srgb(onScreen[1])} of a red ${srgb(onScreen[0])}`);
 
-  check('it is visibly bigger than an ordinary chunk',
-    piece.mesh.scale.x > plain.mesh.scale.x * 1.5,
-    `x${(piece.mesh.scale.x / plain.mesh.scale.x).toFixed(2)} the median chunk`);
+  // THE MULTIPLIER IS APPLIED, and it is applied to the reach as well as to the
+  // body — measured against a control spawned at the SAME `t`, so the roll
+  // cancels and what is left is `sizeMul` alone.
+  //
+  // This used to read `> plain.mesh.scale.x * 1.5` against the median chunk,
+  // which was asserting a NUMBER that lives in the tuning file: `sizeMul` is a
+  // look, it is his to move, and it is currently 0.75 against config.js's 1.6.
+  // A test that fails when he retunes a size is a test that is grading his
+  // taste. What the code promises is that whatever he sets reaches both the
+  // mesh and the pickup radius in the same proportion — a piece you can see
+  // from across the arena but have to swim into the middle of is the bug this
+  // is here for, and it is a bug at any sizeMul.
+  //
+  // NOTE FOR THE TUNER, not a failure: at 0.75 the weak spot's meat comes out
+  // SMALLER than the median ambient chunk, which is the opposite of what the
+  // note on `opts.sizeMul` in entities/pickups.js describes it as being for.
+  // The line below prints the comparison every run so the inversion is visible
+  // without being a gate.
+  const sameRoll = atOneAngle(() => spawnChumChunk(scene, new THREE.Vector3(340, 0, 0), { t }));
+  console.log(`  --   the weak spot's meat is x${(piece.mesh.scale.x / plain.mesh.scale.x).toFixed(2)} the median ambient chunk (sizeMul ${m.sizeMul})`);
+  check('the size multiplier reaches the body',
+    Math.abs(piece.mesh.scale.x / sameRoll.mesh.scale.x - m.sizeMul) < 1e-6,
+    `x${(piece.mesh.scale.x / sameRoll.mesh.scale.x).toFixed(3)} against a sizeMul of ${m.sizeMul}`);
   // ...and the reach to take one follows the body, or the piece the player can
   // see from across the arena is one they have to swim into the middle of.
-  check('...and the reach to collect it grew with it',
-    piece.radius > plain.radius * 1.5,
-    `${piece.radius.toFixed(2)} vs ${plain.radius.toFixed(2)}`);
+  check('...and the reach to collect it grew with it, by the same factor',
+    Math.abs(piece.radius / sameRoll.radius - piece.mesh.scale.x / sameRoll.mesh.scale.x) < 1e-6,
+    `reach x${(piece.radius / sameRoll.radius).toFixed(3)} against body x${(piece.mesh.scale.x / sameRoll.mesh.scale.x).toFixed(3)}`);
 
   // The arrival is still a SPIKE over that raised body — the two multipliers
   // are separate fields precisely so a glowing piece still visibly flashes.

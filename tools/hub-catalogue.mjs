@@ -124,6 +124,11 @@ const GROUP_BY_NAME = {
   bones: 'Assets', split: 'Assets', mussels: 'Assets', whale: 'Assets', humpback: 'Assets', notes: 'Assets', takes: 'Assets',
   anglerfish: 'Assets', guest: 'Assets', icons: 'Assets', 'icons:sheet': 'Assets',
   emissive: 'Audits', sockets: 'Audits', headsocket: 'Audits', 'chain:window': 'Audits',
+  // Writes path/src/sourceLabels.generated.js out of uiText.csv, so the
+  // import-free reader in systems/playtestAnalysis.js can have the words a
+  // spreadsheet owns. It writes a source file, which is an asset job — and
+  // `test:sourcelabels` regenerates and diffs, so a stale one is a red test.
+  'gen:sourcelabels': 'Assets',
   placeholder: 'Assets', webp: 'Assets', 'rig:guest': 'Assets', 'shaders:apply': 'Assets', 'accessories:apply': 'Assets', 'ball:apply': 'Assets', 'imitate:train': 'Assets', 'accessories:import': 'Assets',
   test: 'Checks',
   // The chain trace is a CHECK that prints rather than asserts: it replays the
@@ -131,6 +136,7 @@ const GROUP_BY_NAME = {
   // shows on C, so a player's screenshot and a harness run can be compared.
   'chain:trace': 'Checks',
 'audit:hitboxes': 'Audits', 'copy:review': 'Audits', 'net:glsl': 'Audits',
+  'aura:glsl': 'Audits',
   'net:look': 'Look pages',
   ktx2: 'Assets', props: 'Assets', seabed: 'Assets', 'icons:app': 'Assets',
   // Rewrites the source models in place, bringing every map down to the size
@@ -160,6 +166,9 @@ const GROUP_BY_NAME = {
   'audit:offline': 'Audits', 'steam:status': 'Audits', 'bait:shader': 'Audits',
   // Reads what the phone's last sessions ended as. A report, not an asset job.
   crash: 'Audits',
+  // The other half of that reading: iOS's own JetsamEvent reports, which say
+  // what the process WEIGHED when the kernel came for it. Also a report.
+  jetsam: 'Audits',
   fonts: 'Assets',
   // Audits that print rather than assert, like `chain:trace` above: each one
   // replays a system offline and shows the numbers, and none of them writes.
@@ -261,8 +270,15 @@ export function blurbFromFile(file) {
 
   // First sentence. `. ` followed by a capital, or the end of the paragraph —
   // which keeps "three.js" and "e.g." from cutting a description in half.
+  //
+  // A sentence in these headers often opens on a lowercase name instead: a repo
+  // path, `npm run x`, or a backticked config key. Those start sentences here,
+  // so they end the previous one — without this the blurb runs on to the next
+  // capital, which is how `sockets` was showing its own usage line and how
+  // test:jetsam's ran to 327 characters.
   const para = lines.join(' ').replace(/\s+/g, ' ');
-  const m = /^(.+?[.?!])(\s+[A-Z(]|$)/.exec(para);
+  const OPENS = /[A-Z(`]|(?:tools|path|server|design|rive|dist)\/|npm |node /;
+  const m = new RegExp(`^(.+?[.?!])(\\s+(?:${OPENS.source})|$)`).exec(para);
   return (m ? m[1] : para).trim();
 }
 
@@ -428,6 +444,8 @@ const FIXED_PAGES = [
     blurb: 'The boat models and their destruction states.' },
   { file: 'orbit-preview.html', on: 'dev', path: '/orbit-preview.html', title: 'Orbit preview',
     blurb: 'Orbiting-ability visuals against a stationary seal.' },
+  { file: 'tip-look.html', on: 'dev', path: '/tip-look.html', title: 'Upgrade tips',
+    blurb: 'Every shape an upgrade tip comes in, on one sheet — built by the real ui/upgradeTip.js under jsdom, so the names, the descs and every measured number are the game\'s. Only the run ledger is synthetic. Regenerate with `npm run look:tips`.' },
   { file: 'perf-probe.html', on: 'dev', path: '/perf-probe.html', title: 'Perf probe',
     blurb: 'Frame cost of one system at a time, isolated from a real run.' },
   { file: 'rive-test.html', on: 'dev', path: '/rive-test.html', title: 'Rive splash harness',

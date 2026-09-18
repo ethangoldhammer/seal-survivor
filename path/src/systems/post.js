@@ -225,6 +225,13 @@ const fragmentShader = /* glsl */ `
   uniform float uDropSlide;
   uniform float uDropStretch;
   uniform float uDropTaper;
+  // WHAT IS ON THE GLASS, as opposed to how much. uDropTinted is the share of
+  // the wetness that is coloured — goo off a goal rather than seawater off a
+  // breach — and rides its own decay so a clear breach over drying goo dilutes
+  // it rather than recolouring the lot.
+  uniform vec3  uDropTint;
+  uniform float uDropTinted;
+  uniform float uDropTintGlow;
 
   varying vec2 vUv;
 
@@ -407,7 +414,10 @@ const fragmentShader = /* glsl */ `
     return vec4(-vec2(n.x / aspectOf(), n.y) * uDropRefract * edge, spec * uDropSpec * edge, edge);
   }
 
-  vec3 droplets(vec2 uv) {
+  // Returns the whole vec4 and not just the refraction: .w is the drop's
+  // COVERAGE at this pixel, which is what a colour has to be weighted by. It
+  // was being thrown away here, so a tint had nothing to multiply.
+  vec4 droplets(vec2 uv) {
     vec2 p = uv * uDropDensity * vec2(aspectOf(), 1.0);
     vec2 cell = floor(p);
     vec2 f = fract(p);
@@ -418,7 +428,7 @@ const fragmentShader = /* glsl */ `
     // twice as hard and puts a dark knot on the glass.
     vec4 a = dropAt(cell, f);
     vec4 b = dropAt(cell + vec2(0.0, 1.0), f - vec2(0.0, 1.0));
-    return (b.w > a.w ? b : a).xyz;
+    return b.w > a.w ? b : a;
   }
 
 
@@ -443,10 +453,12 @@ const fragmentShader = /* glsl */ `
     // be circles painted over the picture. The specular is held back for
     // after the composite, where it can sit on top of the finished frame.
     float dropSpec = 0.0;
+    float dropCover = 0.0;
     if (uDrops > 0.0) {
-      vec3 drop = droplets(uv);
+      vec4 drop = droplets(uv);
       uv += drop.xy;
       dropSpec = drop.z;
+      dropCover = drop.w;
     }
 
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
@@ -499,7 +511,25 @@ const fragmentShader = /* glsl */ `
     // resolution (see LENS_FLARE_GLSL) and zeroes this uniform. Kept so the
     // fold can be A/B'd against the full-res original by not zeroing it.
     if (uFlare > 0.0) color += lensFlare(uv);
-    if (dropSpec > 0.0) color += vec3(dropSpec) * vec3(0.8, 0.92, 1.0);
+    // COLOURED GOO ON THE GLASS. Absorption first — a film of something
+    // coloured does not add light, it takes the rest away, so this multiplies
+    // the finished frame rather than painting over it. That alone reads as
+    // nothing on dark water, which is most of this game's frame, so a little is
+    // added back: enough for the colour to exist against black, not enough to
+    // turn a drop into a light source.
+    //
+    // BEFORE THE HIGHLIGHT, because the highlight sits ON the goo. A white spec
+    // over a red bead is a wet red bead; the same spec under a red multiply is
+    // a red bead with a dark spot in it.
+    float tint = dropCover * uDropTinted;
+    if (tint > 0.0) {
+      color *= mix(vec3(1.0), uDropTint, tint);
+      color += uDropTint * tint * uDropTintGlow;
+    }
+    // The highlight takes the goo's colour with it, part way: a bead of
+    // something coloured still catches a mostly-white highlight, and a fully
+    // tinted one reads as plastic.
+    if (dropSpec > 0.0) color += vec3(dropSpec) * mix(vec3(0.8, 0.92, 1.0), uDropTint, tint * 0.6);
 
     if (uBleed > 0.0) {
       vec3 left1 = texture2D(tDiffuse, uv - vec2(texel.x * 2.0, 0.0)).rgb;
@@ -763,9 +793,17 @@ export const gooFragmentShader = /* glsl */ `
   // dents the ball springs into the grid are lit by the same drop this paints
   // the body with. See the header there.
   ${POSSESSION_UNIFORMS_GLSL}
+  // WHERE THE BODY IS — the frame, which is NOT the same fact as whose ball it
+  // is. A ball has a body from the kickoff and an owner only once somebody has
+  // touched it, and uBallR used to carry both: a radius of zero was the switch
+  // for the two-colour path, so before the first contact there was no frame at
+  // all for anything else to be drawn in. The mottle below needs one on every
+  // frame the ball is drawn, so the two are separate now — uBallR is the
+  // GEOMETRY and uTeams is the FEATURE.
   uniform vec2 uBallAt;     // the ball's centre, in this pass's uv
-  uniform float uBallR;     // ...and its radius, in uv
+  uniform float uBallR;     // ...and its radius, in uv. 0 = no body published
   uniform float uBallAspect; // width / height, so the field is round on screen
+  uniform float uTeams;     // 0 = the single tint every other group takes
 
   // THE OUTLINE, AND ITS BOIL. A line drawn a fixed number of TEXELS inside
   // the isoline — the density's gradient converts the field into a distance,
@@ -783,6 +821,48 @@ export const gooFragmentShader = /* glsl */ `
   uniform float uBoilScale;     // noise cells across the screen
   uniform float uBoilSeed;      // stepped, not smooth — that is the boil
   uniform float uBoilEdge;      // share of the boil the silhouette takes too
+
+  // THE BOIL INSIDE — the body's own substance, broken up.
+  //
+  // Everything above this works on the EDGE: the warp folds the silhouette,
+  // the outline draws a line inside it, the boil jitters both. Past the rim
+  // band the ball was one flat colour with a single highlight lying on it, so
+  // a thing made of liquid read as a sticker of a thing made of liquid — and
+  // at the size it is drawn, the interior is most of what you are looking at.
+  //
+  // It is not a texture. The field is TURBULENCE — three octaves of value
+  // noise creased at their midline (|n - 0.5|, which is what puts a hard fold
+  // where an ordinary octave puts a smooth hump) sampled through a domain warp
+  // that folds it through itself, the same one-layer-feeding-itself
+  // construction as uWarp above and for the same reason: two stacked layers
+  // read as two things happening at once, one folding layer reads as one
+  // substance moving.
+  //
+  // IN THE BALL'S OWN FRAME, and turned by its roll. Sampled in ball-local
+  // radii rather than in uv, so the curds belong to the BODY: they ride along
+  // when it travels instead of sitting still while it crosses them, which is
+  // the single thing that separates a substance from a window onto a
+  // substance. uMottleRoll is the ball's integrated spin, so the mass turns
+  // with the ball as well.
+  //
+  // AND ITS CLOCK CAN STEP. uMottleBoil mixes the smooth clock with one
+  // quantised to uMottleHz: at 0 the field flows, at 1 it holds still and
+  // JUMPS — the animator's boil, the same trick uBoilSeed plays on the
+  // outline, one channel over and on the whole interior. Between them the mass
+  // creeps and re-seeds, which is what hand-drawn liquid does.
+  //
+  // uMottle 0 is the shader exactly as it was; only the ball group moves any
+  // of this, and it needs a body published (uBallR > 0) to have a frame.
+  uniform float uMottle;        // how deep the break-up cuts, 0 = off
+  uniform float uMottleScale;   // noise cells across the ball's diameter
+  uniform float uMottleSpeed;   // how fast the field churns
+  uniform float uMottleFeed;    // how hard the field folds through itself
+  uniform float uMottleBoil;    // share of the clock that STEPS rather than flows
+  uniform float uMottleHz;      // ...and how often it steps
+  uniform float uMottleGain;    // contrast: curds at high, clouds at low
+  uniform float uMottleRelief;  // how far it bends the normal, so the spec breaks up
+  uniform float uMottleEdge;    // density above the isoline before it fully bites
+  uniform float uMottleRoll;    // the ball's spin, integrated, radians
 
   // --- whitewater -----------------------------------------------------------
   uniform float uWhite;     // 0 = the plain surface above; 1 = aerated water
@@ -826,6 +906,32 @@ export const gooFragmentShader = /* glsl */ `
   // up into a visible lattice.
   float bubbles(vec2 p) {
     return vnoise(p) * 0.62 + vnoise(p * 3.7 + vec2(19.3, 7.1)) * 0.38;
+  }
+
+  // THE TURBULENCE the mottle is made of — see the uniform notes above.
+  //
+  // |n - 0.5| rather than n: a plain octave is a field of smooth humps and
+  // sums into cloud, while creasing each one at its midline puts a hard FOLD
+  // wherever the noise crosses over, and a stack of folds at halving
+  // amplitudes is what churning liquid looks like from outside. Classic
+  // turbulence, and the reason this does not read as fog on the ball.
+  //
+  // The domain warp comes first and uses the clock too, so the creases move
+  // THROUGH the mass rather than the whole pattern sliding across it.
+  //
+  // Three octaves, unrolled at a fixed count for the reason noiseGlsl.js gives
+  // at length: a count in a uniform is a recompile every time the tuner moves.
+  float mottleField(vec2 p, float t) {
+    vec2 q = p + vec2(vnoise(p + t), vnoise(p * 1.13 - t * 0.7)) * uMottleFeed;
+    float v = 0.0;
+    float a = 0.5;
+    float f = 1.0;
+    for (int i = 0; i < 3; i++) {
+      v += a * abs(vnoise(q * f + t * (0.6 + float(i) * 0.37)) - 0.5) * 2.0;
+      f *= 2.03;   // not exactly 2, so the octave lattices never line up
+      a *= 0.5;
+    }
+    return clamp(v / 0.875, 0.0, 1.0);   // the amplitudes sum to 0.875
   }
 
   // ---------------------------------------------------------------------
@@ -902,12 +1008,16 @@ export const gooFragmentShader = /* glsl */ `
     // tinted ball still takes the rim, the spec and the water exactly as an
     // untinted one does.
     //
-    // TWO COLOURS when the group asks for it (uBallR > 0 — see the note on
-    // the uniforms above), one when it does not. The single-colour path is
-    // every other goo group in the game and is left exactly as it was.
-    if (uBallR > 0.0) {
-      // Ball-local, in radii: the centre is 0 and the drawn edge is about 1.
-      vec2 d = (vUv - uBallAt) * vec2(uBallAspect, 1.0) / max(uBallR, 1e-5);
+    // TWO COLOURS when the group asks for it (uTeams — see the note on the
+    // uniforms above), one when it does not. The single-colour path is every
+    // other goo group in the game and is left exactly as it was.
+    //
+    // Ball-local, in radii: the centre is 0 and the drawn edge is about 1.
+    // Hoisted out of the branch because the mottle below is drawn in the same
+    // frame, and it is drawn from the kickoff rather than from the first
+    // contact. Meaningless and unread while uBallR is 0.
+    vec2 d = (vUv - uBallAt) * vec2(uBallAspect, 1.0) / max(uBallR, 1e-5);
+    if (uTeams > 0.0) {
       // THE DROP, and it is not written here — systems/possessionGlsl.js is,
       // and the backdrop lattice paints its dents with the same function. A
       // second copy of this arithmetic would agree on the day it was written
@@ -920,6 +1030,48 @@ export const gooFragmentShader = /* glsl */ `
       col = mix(col, uTint, uTintMix);
     }
 
+    // --- THE BOIL INSIDE ------------------------------------------------------
+    // The interior, broken up. See the long note at the uniforms; what happens
+    // here is three things off ONE field.
+    //
+    // The field is sampled in the ball's own frame turned by its roll, on a
+    // clock that flows or steps depending on uMottleBoil.
+    float motGx = 0.0;
+    float motGy = 0.0;
+    if (uMottle > 0.0 && uBallR > 0.0) {
+      float cr = cos(uMottleRoll);
+      float sr = sin(uMottleRoll);
+      vec2 mp = vec2(d.x * cr - d.y * sr, d.x * sr + d.y * cr) * uMottleScale;
+      float mt = mix(uTime, floor(uTime * uMottleHz) / max(uMottleHz, 1e-4), uMottleBoil)
+        * uMottleSpeed;
+      float raw = mottleField(mp, mt);
+      // Contrast about the midline: low is cloud, high is curds with clean
+      // whey between them. Symmetrical, so turning it up does not also turn
+      // the ball darker or lighter.
+      float mot = clamp((raw - 0.5) * uMottleGain + 0.5, 0.0, 1.0);
+      // IT LETS GO AT THE EDGE. The last stretch before the isoline is where
+      // the wet rim and the drawn outline live, and chewing that up costs the
+      // silhouette — the one part of the ball that has to stay readable at
+      // speed. So the break-up bites only once the goo is properly thick.
+      float bite = uMottle * smoothstep(uIso, uIso + uMottleEdge, dens);
+      // 1. The colour, in the body's OWN hue: the troughs go dark and the
+      // peaks lift. A mix toward a second colour would paint a pattern ON the
+      // ball; a gain on what is already there makes the ball itself uneven,
+      // which is the difference between a texture and a substance.
+      col *= 1.0 + (mot - 0.5) * 2.0 * bite;
+      // 2. ...and the RELIEF. Two more taps a short step away in the ball's
+      // frame give the field's slope, which goes into the fake normal below —
+      // so the specular highlight breaks over the lumps instead of lying
+      // across them as one clean sheet. The step is folded into the tuned
+      // strength rather than divided out; there is no distance here that means
+      // anything on its own.
+      if (uMottleRelief > 0.0) {
+        float e = 0.09 * uMottleScale;
+        motGx = (mottleField(mp + vec2(e, 0.0), mt) - raw) * uMottleRelief * bite;
+        motGy = (mottleField(mp + vec2(0.0, e), mt) - raw) * uMottleRelief * bite;
+      }
+    }
+
     // WHERE THIS PIXEL IS IN THE WATER. Through the inverse view-projection
     // rather than by lerping the camera's frustum edges: the cinematic camera
     // builds an ASYMMETRIC frustum when it pushes the horizon around, and the
@@ -929,7 +1081,10 @@ export const gooFragmentShader = /* glsl */ `
     vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 0.0, 1.0);
     vec2 worldPos = wp.xy / wp.w;
 
-    vec3 n = normalize(vec3(-(dr - dl) * uNormal, -(du - dd) * uNormal, 1.0));
+    // The density's gradient is the body's shape; the mottle's gradient is the
+    // lumps in it. Summed into one normal, so there is one light on one
+    // surface rather than a second highlight floating over the first.
+    vec3 n = normalize(vec3(-(dr - dl) * uNormal - motGx, -(du - dd) * uNormal - motGy, 1.0));
     vec3 l = normalize(vec3(uLight, 0.8));
     float spec = pow(max(dot(n, l), 0.0), uSpecPower) * uSpec;
 
@@ -1154,6 +1309,9 @@ export function createPost(renderer) {
     uDropSlide: { value: 1.15 },
     uDropStretch: { value: 1.7 },
     uDropTaper: { value: 0.55 },
+    uDropTint: { value: new THREE.Vector3(1, 1, 1) },
+    uDropTinted: { value: 0 },
+    uDropTintGlow: { value: 0.12 },
     uPathAmount: { value: 0 },
     uPathDir: { value: new THREE.Vector2(1, 0) },
     uPathLength: { value: 0 },
@@ -1236,6 +1394,18 @@ export function createPost(renderer) {
     uBallAt: { value: new THREE.Vector2(0.5, 0.5) },
     uBallR: { value: 0 },
     uBallAspect: { value: 1 },
+    uTeams: { value: 0 },
+    // The interior's boil — off unless a group declares `mottle`.
+    uMottle: { value: 0 },
+    uMottleScale: { value: 3 },
+    uMottleSpeed: { value: 0.5 },
+    uMottleFeed: { value: 0.9 },
+    uMottleBoil: { value: 0 },
+    uMottleHz: { value: 10 },
+    uMottleGain: { value: 1.4 },
+    uMottleRelief: { value: 0 },
+    uMottleEdge: { value: 0.3 },
+    uMottleRoll: { value: 0 },
     // The outline and its boil — off unless a group declares `outline`.
     uOutline: { value: 0 },
     uOutlineWidth: { value: 3 },
@@ -1448,6 +1618,7 @@ export function createPost(renderer) {
       u.uDefocus.value = 0;
       u.uFlare.value = 0;
       u.uDrops.value = 0;
+      u.uDropTinted.value = 0;
       u.uPathAmount.value = 0;
       u.uPathVignette.value = 0;
       return;
@@ -1474,6 +1645,14 @@ export function createPost(renderer) {
     u.uDropSlide.value = d.slide ?? 1.15;
     u.uDropStretch.value = d.stretch ?? 1.7;
     u.uDropTaper.value = d.taper ?? 0.55;
+    // The colour comes off the RIG, not off config: it is whatever last threw
+    // something at the lens (cineSplash), and config only says how hard it
+    // reads. Zeroed with the drops themselves by the branch above, so a lens
+    // cleared mid-decay does not keep a colour with nothing to colour.
+    const tintRgb = cineLens.dropTint ?? null;
+    if (tintRgb) u.uDropTint.value.set(tintRgb[0], tintRgb[1], tintRgb[2]);
+    u.uDropTinted.value = (d.enabled ?? true) ? (cineLens.tinted ?? 0) * (d.tint ?? 0.85) : 0;
+    u.uDropTintGlow.value = d.tintGlow ?? 0.12;
 
     u.uPathAmount.value = cineLens.pathAmount;
     u.uPathDir.value.set(cineLens.pathDirX, cineLens.pathDirY);
@@ -1653,12 +1832,54 @@ export function createPost(renderer) {
     u.uWarpFeed.value = Math.max(0, warp.feed ?? 1);
     u.uTint.value.set(g.tint ?? 0xffffff);
     u.uTintMix.value = Math.min(1, Math.max(0, g.tintMix ?? 0));
+    // WHERE THE BODY IS — the frame the possession field and the mottle are
+    // both drawn in, and a fact about the ball rather than about possession.
+    // `body` is published every frame the ball is DRAWN (systems/ballLook.js,
+    // off renderBall) and `teams` only once somebody has touched it; the two
+    // were one block, so before the first contact there was no frame at all
+    // and anything that wanted one was dark until a seal hit the ball.
+    //
+    // WORLD IN, UV OUT. The group hands over where the ball IS and how big it
+    // is, in world units, and the projection is done here — this is the one
+    // place that has the camera the pass is being rendered through, and the
+    // cinematic camera's asymmetric frustum makes "project it yourself and
+    // pass uv" quietly wrong from anywhere else.
+    const body = g.body?.wr > 0 ? g.body : (g.teams?.wr > 0 ? g.teams : null);
+    if (body) {
+      _teamAt.set(body.wx ?? 0, body.wy ?? 0, 0).project(sceneCamera);
+      _teamEdge.set((body.wx ?? 0) + body.wr, body.wy ?? 0, 0).project(sceneCamera);
+      u.uBallAt.value.set((_teamAt.x + 1) * 0.5, (_teamAt.y + 1) * 0.5);
+      // The radius as a uv WIDTH, and the aspect that makes the field round on
+      // screen rather than an ellipse in whatever shape the window is.
+      const rx = Math.abs(_teamEdge.x - _teamAt.x) * 0.5;
+      const size = renderer.getSize(_teamSize);
+      u.uBallAspect.value = size.y > 0 ? size.x / size.y : 1;
+      u.uBallR.value = rx * u.uBallAspect.value;
+    } else {
+      u.uBallR.value = 0;
+    }
+    // THE INTERIOR'S BOIL, and it needs a body to be drawn in — a group with a
+    // `mottle` block and no frame published gets nothing rather than a field
+    // in screen space, which would read as dirt on the lens. Absent is 0,
+    // which is the shader exactly as it was for every other group.
+    const mot = g.mottle ?? {};
+    u.uMottle.value = u.uBallR.value > 0 ? Math.max(0, mot.amount ?? 0) : 0;
+    u.uMottleScale.value = Math.max(0.01, mot.scale ?? 3);
+    u.uMottleSpeed.value = mot.speed ?? 0.5;
+    u.uMottleFeed.value = Math.max(0, mot.feed ?? 0.9);
+    u.uMottleBoil.value = Math.min(1, Math.max(0, mot.boil ?? 0));
+    u.uMottleHz.value = Math.max(0.01, mot.hz ?? 10);
+    u.uMottleGain.value = Math.max(0, mot.gain ?? 1.4);
+    u.uMottleRelief.value = Math.max(0, mot.relief ?? 0);
+    u.uMottleEdge.value = Math.max(0.0001, mot.edge ?? 0.3);
+    u.uMottleRoll.value = g.body?.roll ?? 0;
     // THE TWO-COLOUR PATH, off unless the group hands over a `teams` block —
-    // which only the ball does (systems/ballLook.js). A radius of zero is the
-    // switch, and it is checked in the shader rather than compiled out because
+    // which only the ball does (systems/ballLook.js) — and only once the ball
+    // has been touched. Checked in the shader rather than compiled out because
     // one group in a shared pass cannot have its own program.
     const tm = g.teams;
-    if (tm && tm.wr > 0) {
+    u.uTeams.value = (tm && tm.wr > 0 && u.uBallR.value > 0) ? 1 : 0;
+    if (u.uTeams.value > 0) {
       u.uTeamA.value.set(tm.a ?? 0xffffff);
       u.uTeamB.value.set(tm.b ?? 0xffffff);
       u.uShare.value = Math.min(1, Math.max(0, tm.share ?? 0));
@@ -1669,22 +1890,6 @@ export function createPost(renderer) {
       u.uSpin.value = tm.spin ?? 0.5;
       u.uBreathe.value = Math.max(0, tm.breathe ?? 0.25);
       u.uDrift.value.set(tm.driftX ?? 0, tm.driftY ?? 0);
-      // WORLD IN, UV OUT. The group hands over where the ball IS and how big
-      // it is, in world units, and the projection is done here — this is the
-      // one place that has the camera the pass is being rendered through, and
-      // the cinematic camera's asymmetric frustum makes "project it yourself
-      // and pass uv" quietly wrong from anywhere else.
-      _teamAt.set(tm.wx ?? 0, tm.wy ?? 0, 0).project(sceneCamera);
-      _teamEdge.set((tm.wx ?? 0) + tm.wr, tm.wy ?? 0, 0).project(sceneCamera);
-      u.uBallAt.value.set((_teamAt.x + 1) * 0.5, (_teamAt.y + 1) * 0.5);
-      // The radius as a uv WIDTH, and the aspect that makes the field round on
-      // screen rather than an ellipse in whatever shape the window is.
-      const rx = Math.abs(_teamEdge.x - _teamAt.x) * 0.5;
-      const size = renderer.getSize(_teamSize);
-      u.uBallAspect.value = size.y > 0 ? size.x / size.y : 1;
-      u.uBallR.value = rx * u.uBallAspect.value;
-    } else {
-      u.uBallR.value = 0;
     }
     const ol = g.outline ?? null;
     u.uOutline.value = ol ? Math.min(1, Math.max(0, ol.strength ?? 1)) : 0;
@@ -1701,6 +1906,15 @@ export function createPost(renderer) {
       u.uBoilSeed.value = hz > 0 ? Math.floor(clock * hz) : 0;
     }
     u.uLight.value.set(g.lightX ?? -0.5, g.lightY ?? 0.8);
+    // THE CLOCK, for every group rather than for the aerated ones. It was
+    // written inside the whitewater block below, which is where it was first
+    // needed — and three later features read it: the warp's drift, the
+    // possession lobes' roll and the mottle's churn. A group with no foam in
+    // it got whatever clock the last foamy group happened to leave behind, so
+    // on a frame with no whitewater anywhere on screen the ball's warp and its
+    // lobes FROZE. Nothing throws, nothing looks broken — the liquid just
+    // stops being liquid, and starts again when somebody breaches.
+    u.uTime.value = clock;
     // Additive is the OTHER liquid: alpha reads as a thick opaque body that
     // hides the water behind it, additive as a glowing slick lying in it. Both
     // are one state change, so this is a genuine choice rather than a preset.
@@ -1722,7 +1936,6 @@ export function createPost(renderer) {
       u.uBubbleScale.value = white.bubbleScale ?? 1.1;
       u.uAirRise.value = white.airRise ?? 1.4;
       u.uFoam.value.set(white.color ?? 0xffffff);
-      u.uTime.value = clock;
     }
 
     // --- the medium, so the goo sits IN the ocean and the air rather than on

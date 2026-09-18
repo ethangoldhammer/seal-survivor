@@ -55,6 +55,7 @@ import { updateChumChunkSpawner, resetChumChunkSpawner } from './systems/chumChu
 import { startScoreBoost, updateScoreBoost, resetScoreBoost, scoreMul, scoreBoostState } from './systems/scoreBoost.js';
 import { initParticles, updateParticles, resetParticles, updateParticleScale, particleCount, setParticleRelief, emit } from './entities/particles.js';
 import { setGooSuckTarget, updateGooSuck, resetGooSuck } from './systems/gooSuck.js';
+import { resetAbsorbRisers } from './systems/absorbRiser.js';
 // A big pickup comes apart and is vacuumed in, paying as each piece lands.
 // See systems/pickupAbsorb.js.
 import { absorbInPieces } from './systems/pickupAbsorb.js';
@@ -87,7 +88,7 @@ import { pullTrailMovers } from './systems/chumPull.js';
 import { fireMusselBarrage, updateMusselVolley, resetMusselVolley } from './systems/musselVolley.js';
 import { companionStrikeBonus, companionStrikeCount } from './systems/companionStrike.js';
 import { strikeEnglish } from './systems/strike.js';
-import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, spawnShrapnel, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip, chargeEnvelope, chargeEnvelopeTop } from './systems/strike.js';
+import { strikeState, tryStrike, creditOrb, pipsToFull, addCharge, updateStrike, updateCharge, updateTurbo, feedChum, resetStrike, comboSpeedMul, chargeThrustMul, chainStrike, chainXpMul, liveChain, isFeeding, strikeDirection, riderDamage, spawnShrapnel, claimDashHit, powerDamageMul, strikeBurst, strikeReach, predictDash, minFire, consumeStrikeLink, consumeChainLinks, isInvulnerable, perfectCrossed, inSweetSpot, strikeLoaded, chainWindowLeft, pipCount, pipValue, pickupBlast, onStrikeBurnPip, chargeEnvelope, chargeEnvelopeTop } from './systems/strike.js';
 import { stateForSpeed } from './systems/animation.js';
 import { emitPoint, emitPointCount } from './systems/aimRig.js';
 import { updateBubbles, resetBubbles } from './systems/bubbles.js';
@@ -97,6 +98,9 @@ import { lightningStrikes } from './systems/lightning.js';
 import { updateOxygenFx, resetOxygenFx } from './systems/oxygenFx.js';
 import { updateLowHealthFx, resetLowHealthFx } from './systems/lowHealthFx.js';
 import { playerDamageFx, updatePlayerDamageFx, resetPlayerDamageFx } from './systems/playerDamageFx.js';
+import {
+  setPlayerFlashTarget, updatePlayerFlash, resetPlayerFlash,
+} from './systems/playerFlash.js';
 import { updateProjectileTrails, clearProjectileTrails, trailCount, trailDrawCount } from './systems/projectileTrails.js';
 import { updateAirborne, resetAirborne, airRamp, airDamageMul, airFireRateMul, canAirJump, spendAirJump, slamFor } from './systems/airborne.js';
 import { fireReentrySplash, updateReentrySplash, resetReentrySplash } from './systems/reentrySplash.js';
@@ -134,6 +138,7 @@ import { initIceShatter, updateIceShatter, resetIceShatter, spawnIceShatter } fr
 import { updateStatusFx, resetStatusFx, isFrozen } from './systems/statusFx.js';
 import { tickHitShapes, initHitShapeDebug, updateHitShapeDebug } from './systems/hitShape.js';
 import { createStrikeRing, updateStrikeRing, resetStrikeRing } from './systems/strikeRing.js';
+import { createBoostAura, updateBoostAura, resetBoostAura, burstBoostAura } from './systems/boostAura.js';
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
@@ -419,6 +424,9 @@ let clubGroup = null;
 let belugaDrone = null;
 let eelCompanionMesh = null;
 let strikeRing = null;
+let boostAura = null;
+// strikeDirection's out-param, so the aura's aim costs no allocation a frame.
+const _auraAim = { x: 0, y: 0 };
 let aimIndicator = null;
 let eyeLights = null;
 let dumboOcto = null;
@@ -780,6 +788,8 @@ async function boot() {
   world.scene.add(eelCompanionMesh);
   strikeRing = createStrikeRing();
   world.scene.add(strikeRing);
+  boostAura = createBoostAura();
+  world.scene.add(boostAura);
   aimIndicator = createAimIndicator();
   world.scene.add(aimIndicator);
   // The seal's lit eyes. World space rather than parented to the eye bones,
@@ -1782,7 +1792,12 @@ function openSealSports() {
       // THE PITCH GOES UP BEHIND THE SCREEN, not the bust — see
       // enterTeamSelectPitch. Everything the team select decides is a thing you
       // can now watch happen in the water in front of you.
-      enterTeamSelectPitch();
+      //
+      // ...AND IF IT COULD NOT, THIS LIST COMES BACK. The menu is already down
+      // by the time that call returns false, so it has put the bust up again;
+      // this puts the screen the player actually pressed Blubberball on back
+      // over it, which is where they were a moment ago.
+      if (!enterTeamSelectPitch()) { openSealSports(); return; }
       showTeamSelect({
         parent: uiRoot(),
         // START LEAVES THE TEARDOWN TO THE MATCH. `keep` means "somebody else
@@ -1828,7 +1843,9 @@ function openRoomLobby() {
     onBack: () => openSealSports(),
     onHosting: () => {
       hideRoomLobby();
-      enterTeamSelectPitch();
+      // Same guard, same reason, back to the screen this one came from — see
+      // the note on enterTeamSelectPitch.
+      if (!enterTeamSelectPitch()) { openRoomLobby(); return; }
       showTeamSelect({
         parent: uiRoot(),
         // PHASE 3 SENDS THE MATCH HERE — the setup, the rules and the resolved
@@ -1921,6 +1938,25 @@ function rosterPreviewChanged() {
   if (refreshRosterPreview()) world.wallRocks.build();
 }
 
+/**
+ * ...AND IT REPORTS WHETHER THE PITCH WENT UP. The caller shows the team select
+ * only on true, and puts the screen the player came from back on false.
+ *
+ * THE MENU IS ALREADY GONE BY THE SECOND LINE of this function, which is what
+ * turns a throw anywhere below it into a DEAD SCREEN rather than a missing
+ * pitch: the sports list has been hidden by the caller, the menu has just
+ * disposed itself, and the team select is never reached — so there is nothing
+ * on screen, nothing listening for a key and no route left but a reload. That
+ * is not hypothetical, it is the bug this guard was written for: a seal
+ * material cloned during a run came back to instanceNoise claiming to be an
+ * instance with its seed flattened by Material.clone (see seedIsLive in
+ * systems/noiseShader.js), buildRoster threw on it, and the SECOND Blubberball
+ * of a session was a black screen.
+ *
+ * The cause is fixed. The guard stays, because this function is the one place
+ * in the game that takes the last screen down before building the next one,
+ * and everything it calls is a few hundred lines of world rebuild.
+ */
 function enterTeamSelectPitch() {
   mainMenu()?.dispose();
   // THE ROSTER FIRST, THEN THE WORLD. setModeWorld carves the shore, and the
@@ -1928,8 +1964,21 @@ function enterTeamSelectPitch() {
   // but the roster left over from last time would be carved a size behind and
   // only catch up on the first seat somebody moved.
   resetRoster();
-  setModeWorld(true);
-  showRosterPreview(world.scene);
+  try {
+    setModeWorld(true);
+    showRosterPreview(world.scene);
+  } catch (err) {
+    crumb('pitch:failed');
+    console.error('[main] the team select pitch could not be built — back to the menu.', err);
+    // Half a pitch is worse than none: the roster may be part built and the
+    // arena may already be a match's. Both go, and the menu comes back — each
+    // step on its own, so one that throws in turn cannot stop the one that
+    // actually puts a screen in front of the player.
+    try { hideRosterPreview(); } catch { /* it was never up */ }
+    try { setModeWorld(false); } catch { /* the arena is what it is */ }
+    showMainMenu();
+    return false;
+  }
   // THE MATCH'S OWN MUSIC, AT THE MATCH'S OWN TEMPO, from here rather than from
   // the whistle. This screen is the pitch: the menu's loop — half speed under a
   // 500Hz lid, which is what a screen that is WAITING sounds like — is the
@@ -1938,6 +1987,7 @@ function enterTeamSelectPitch() {
   // dilation on this screen at all, and startGame then leaves what is playing
   // alone rather than cutting it back to the top.
   startVersusMusic();
+  return true;
 }
 
 /**
@@ -2342,6 +2392,11 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   resetReentrySplash();
   // Before resetParticles(): the blobs hand their driven slots back first.
   resetGooSuck();
+  // ...and the vacuum that was scoring their flight. A reset drops the goo's
+  // payloads unpaid (see resetGooSuck), so the last piece never lands and the
+  // riser is never told the bunch is over — it would play out its whole
+  // scheduled settle over a menu.
+  resetAbsorbRisers();
   // ...and the versus ball's, which are driven slots too.
   resetVersus();
   resetParticles();
@@ -2449,6 +2504,7 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // bucket cache would think it had already stamped a body that has since been
   // rebuilt.
   resetStrikeRing();
+  resetBoostAura();
   resetChargeSkin();
   // Everything the last run's strikes painted. Marks hold a reference to the
   // body they're on, so a run that ended with three sharks lit up would carry
@@ -2489,6 +2545,9 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   // And the damage accumulator, or the sub-threshold nibbling the last run
   // died with would ride along and land on the first scratch of this one.
   resetPlayerDamageFx();
+  // ...and the body flash with it, for the same reason: a run that ended on the
+  // frame a bolt landed must not hand the next one a seal that opens lit.
+  resetPlayerFlash();
   // The first run of a session opens in the morning; after that the clock
   // keeps whatever time the last one ended at, unless dayNight.restartAtMorning
   // says otherwise. resetDayCycle knows which — see systems/daylight.js.
@@ -6752,6 +6811,13 @@ function currentSeagullFireRate(level) {
 // shortly after anything does.
 function fireSeagull() {
   const launched = spawnSeagull(world.scene, enemies, world.framedView());
+  // THE BIRD ANNOUNCING ITSELF, and it is the only warning there is. A run
+  // begins above the top of the shot and takes a second or more to come down
+  // into it (see the entrance block in CONFIG.seagullBomb), so for that whole
+  // stretch the cry is the only thing saying a bomb is on its way. Fired at the
+  // pile it is aimed at rather than at the bird, which is off-screen and would
+  // pan a sound to an edge nobody is looking at.
+  if (launched) feedback('seagullCry', { x: launched.target.x, y: launched.target.y });
   seagullCooldown = launched
     ? currentSeagullFireRate(player.stats.seagullLevel)
     : CONFIG.seagullBomb.retargetInterval;
@@ -7490,6 +7556,14 @@ function runFrame(now) {
   // same reason: this system is what fires the 60ms hit-stop, so a gap
   // measured in scaled time would be stretched by the freeze it caused.
   updatePlayerDamageFx(rawDt);
+  // THE BODY FLASH, on the same raw clock and for the same reason — a flash
+  // fired by a hit that also caused a hit-stop must not be frozen by the freeze
+  // it caused. Re-pointed at the seal every frame rather than at spawn: the
+  // visual root is replaced on a body swap, and a handle captured once is a
+  // handle onto a seal nobody is playing. setPlayerFlashTarget does nothing when
+  // the root has not changed.
+  setPlayerFlashTarget(player.body ?? null);
+  updatePlayerFlash(rawDt);
   // The dive owns the clock outright while it runs. The killing blow fires
   // `bigKill`, which carries a 70ms hit-stop — laid on top of a dilation
   // that's easing IN, that's a hole punched in the first tenth of the ramp:
@@ -7840,7 +7914,28 @@ function runFrame(now) {
     if (!versusActive()) updateSeagulls(dt, world.scene, enemies, {
       onEnemyDamaged: (e, dmg, x, y) => damageFrom('seagull')(e, dmg, x, y),
       onEnemyKilled: onEnemyKilledFeedback,
-      onSplash: (x, y) => feedback('breach', { x, y, scale: 0.9 }),
+      // BREAKING THE WATER. Its own event now — it used to fire `breach`, the
+      // SEAL's, so a bird arriving at thirty units a second sounded like a seal
+      // leaving the sea and threw the seal's foam. See CONFIG.feedback
+      // .seagullSplash.
+      //
+      // ...AND THE HOLE UNDER IT. Same call the seal's landing makes, for the
+      // same reason: `feedback` is the impact frame — the spray and the crown,
+      // both thrown upward — and this is the cavity punched beneath them and
+      // the column it throws back out of itself a fifth of a second later. The
+      // gull is the only other thing in the game that enters the water from the
+      // sky, and a splash that was only its top half was the half that was
+      // missing. `body` is the bird's own posed silhouette, measured in
+      // systems/seagull.js, because by then the ragdoll has been folding its
+      // wings for a second.
+      onSplash: (x, y, at = {}) => {
+        // Sized off how hard it arrived, floored so a slow run still splashes.
+        // The divisor is the stoop's own top speed, so a bird at terminal
+        // velocity is a full-strength landing and nothing faster exists.
+        const scale = Math.min(1.3, 0.35 + (at.speed ?? 0) / CONFIG.seagullBomb.diveSpeedMax);
+        feedback('seagullSplash', { x, y, scale });
+        fireReentrySplash({ x, y, vx: at.vx ?? 0, vy: Math.abs(at.vy ?? 0), scale, body: at.body });
+      },
       // The stoop committing, up in the sky. Gives the bomb a tell before it
       // arrives instead of the first sign being the explosion.
       onDive: (x, y) => feedback('seagullDive', { x, y }),
@@ -7858,6 +7953,11 @@ function runFrame(now) {
         // reads as big as it hits.
         feedback('seagullBlast', { x, y, scale: Math.min(2.2, 0.8 + radius / 10) });
       },
+      // The same bang arriving a second time, off the seabed. Queued by
+      // systems/seagull.js on the frame of the blast and handed back when the
+      // gap has passed — see CONFIG.seagullBomb.blastEcho for why an explosion
+      // underwater is two sounds and not one.
+      onBlastEcho: (x, y, scale) => feedback('seagullBlastTail', { x, y, scale }),
     });
 
     // THE BOWHEAD SWEEP. The clock is fed the live population because the whale
@@ -8121,6 +8221,18 @@ function runFrame(now) {
       // the player was just shown it would. Returns the zero vector only when
       // BOTH inputs are idle, which is the one case that shouldn't fire.
       const dir = strikeDirection(input.move, input.aim);
+      // DID THIS RELEASE LAND IN THE WINDOW — read here, BEFORE tryStrike,
+      // which spends the wind-up and throws its timing away (clearPending). The
+      // same function tryStrike judges with, on the same frame, on the same
+      // state, so the boost shell coming apart and the strike being scored
+      // cannot disagree. Read whether or not anything fires: a release too weak
+      // to launch still let go of a shell, and the water does not know about
+      // minFire.
+      //
+      // Above the velocity snapshot rather than between it and tryStrike,
+      // because those two are a PAIR — see the note on releaseVx — and nothing
+      // unrelated belongs in the gap.
+      const sweetRelease = inSweetSpot(player.stats);
       // How fast the seal was ACTUALLY travelling as the button came up. Read
       // before tryStrike, because the impulse below overwrites the velocity with
       // the dash's — and the release burst inherits this one on purpose: it is
@@ -8132,6 +8244,11 @@ function runFrame(now) {
       // ENGLISH: the swim across the aim, snapshotted onto the dash. Nothing
       // in a run reads it; the versus ball spins off it (systems/versus.js).
       const fired = (dir.x !== 0 || dir.y !== 0) && tryStrike(dir, player.stats, strikeEnglish(input.move, input.aim));
+      // THE SHELL OF CHARGED WATER COMES APART, harder if that landed in the
+      // window. The let-go is the frame the player did something; every other
+      // end to a wind-up leaves through the fade instead. See
+      // systems/boostAura.js.
+      burstBoostAura(player.mesh.position, sweetRelease);
       if (fired) {
         // The first-run "hold to charge, release to strike" tip, answered. On
         // `fired` and not on the release: a release that had no direction or no
@@ -8548,6 +8665,15 @@ function runFrame(now) {
         // be the one attack in the game that ignores the seal's only defensive
         // window.
         onPlayerHit: (dmg, dir, source, channel, iFrames) => (isInvulnerable() ? 0 : onPlayerHit(dmg, dir, source, channel, iFrames)),
+      // THE SEAL'S HITBOX, for the one ability that has to test a SHAPE against
+      // it rather than a distance: the electric aura's bolts are line segments
+      // and what shocks you is one of them touching you (see zapPlayer in
+      // systems/bossPerks.js). The same `player.stats.hitRadius` systems/
+      // combat.js measures every other contact in the game with, read fresh each
+      // frame off this per-frame literal — a reach that was allowed to disagree
+      // with combat's would be two answers to one question, which is exactly how
+      // the crab's claw came to miss for a year.
+      playerRadius: player.stats.hitRadius,
       },
     });
     // The stream, on the same hooks and for the same reason: a jet hit has to
@@ -10483,6 +10609,39 @@ function runFrame(now) {
   // CONFIG.strike.ring.air.
   updateStrikeRing(realDt, player.mesh.position, strikeState, gameState.running, player.stats,
     versusActive() ? versusPlayerAir() : null);
+  // ...AND THE WATER AROUND THE ANIMAL, while fuel is actually burning — the
+  // shell wears the hue of the pip the drain is eating and pushes outward from
+  // the body's own edge. Real time and outside the pause gate with the ring and
+  // the rim, for the reason spelled out below: this is a readout of a button
+  // being held, and a hit-stop freezing it mid-push would read as the boost
+  // having stalled. `player.bodyBox` is where it starts, so the T panel's seal
+  // size carries it without a number of its own. See systems/boostAura.js.
+  //
+  // THE LAUNCH LINE, not the cursor: strikeDirection is the same function the
+  // release fires along and the wind-up's corridor is drawn from, so the water
+  // streams at the thing the strike is about to hit rather than at wherever
+  // the mouse happens to be. Into a scratch object — the default allocates a
+  // fresh one per call, and this is every frame of every run.
+  // ...UNLESS A REPLAY IS POSING THE WORLD, in which case the shell on this
+  // seal is the RECORDED one and systems/versus.js has already put it there
+  // (poseReplay, which runs inside updateVersus a few thousand lines up). A
+  // live update here would stamp on it on the very same frame — with the
+  // frozen match's strike state, which is to say with nothing — and the
+  // striker would go back to swimming through its own shot wearing no shell.
+  // The aim indicator above is skipped for the same reason.
+  if (!replayHoldsInput()) {
+    updateBoostAura(realDt, player.mesh.position, strikeState, gameState.running, {
+      box: player.bodyBox,
+      stats: player.stats,
+      aim: strikeDirection(input.move, input.aim, _auraAim),
+      // THE BUTTON, not `strikeState.charging` — same distinction the wind-up's
+      // held voice and the sealed mouth draw a few hundred lines up, and for
+      // the same reason. `charging` goes false the frame the tank runs dry and
+      // the player holds on through "STRIKE NOW!"; the shell has to still be
+      // there at the let-go, because the let-go is what shatters it.
+      held: CONFIG.strike.enabled && input.strikeHeld && !deathState.active,
+    });
+  }
   // The seal's own rim, throbbing through a wind-up and flaring on the release.
   // Outside the pause gate alongside the ring, and on real time for the same
   // reason: the pulse is a readout of a button being held, and a hit-stop
@@ -10537,7 +10696,12 @@ function runFrame(now) {
   // replay opens on a hard camera cut. A tenth of a second of beam dissolving
   // over the first shot is exactly the artefact this is removing. Coming back
   // out it fades up from zero as usual, because that edge has no cut on it.
-  if (replayHoldsInput()) {
+  //
+  // ...NOR OVER A MATCH, unless CONFIG.aimIndicator.inVersus says so. Same
+  // reset, same reasoning one step further out: Blubberball has no gun for it
+  // to be a readout of, and the aim's job there is the flippers and the fin
+  // flick's direction. See the note on that flag.
+  if (replayHoldsInput() || (versusActive() && !CONFIG.aimIndicator.inVersus)) {
     resetAimIndicator();
   } else {
     updateAimIndicator(

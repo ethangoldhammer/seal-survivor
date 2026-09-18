@@ -642,9 +642,6 @@ section('A readied stick sets the match itself');
   tap([pad(0, { dpad: 'right' })]);
   check('...which steps whichever number the kind is played to',
     rules.goalsToWin() === goals0 + 1, `${goals0} -> ${rules.goalsToWin()}`);
-  tap([pad(0, { dpad: 'down' })]);
-  check('...and the end of the rows holds rather than wrapping', ts.teamSelectState().settingRow === 2);
-
   // THE RING IS DRAWN, or the mode is invisible and the player is guessing.
   {
     const lit = [...root.querySelectorAll('.sv-nav-sel')];
@@ -652,6 +649,39 @@ section('A readied stick sets the match itself');
       lit.length === 1 && lit[0].classList.contains('sv-teams-rules-group'),
       lit.map((n) => n.className).join(' / ') || 'nothing lit');
   }
+
+  // ...AND THE WALK DOES NOT END AT THE ROWS. Back and Start used to answer
+  // only to the pad's own B and Start buttons, which meant neither ever lit up:
+  // the ring walked three rows and ran out of screen with the two decisions
+  // that actually end the thing unmarked, and the only way to learn the pad's
+  // Start works here was to press it and find out.
+  const litOne = () => {
+    const lit = [...root.querySelectorAll('.sv-nav-sel')];
+    return lit.length === 1 ? lit[0] : null;
+  };
+  tap([pad(0, { dpad: 'down' })]);
+  check('down again walks onto Back', ts.teamSelectState().settingRow === 3);
+  check('...and Back is the thing carrying the ring', litOne()?.id === 'svTeamBack',
+    litOne()?.id || litOne()?.className || 'nothing lit');
+
+  // SIDE BY SIDE, SO SIDEWAYS IS HOW YOU GET BETWEEN THEM. The footer is one
+  // row on the screen; a cursor that answered up and down there would be moving
+  // at right angles to what the player is looking at.
+  tap([pad(0, { dpad: 'right' })]);
+  check('right walks along the footer to Start', ts.teamSelectState().settingRow === 4);
+  check('...and Start carries the ring now', litOne()?.id === 'svTeamStart',
+    litOne()?.id || litOne()?.className || 'nothing lit');
+  tap([pad(0, { dpad: 'right' })]);
+  check('...and the end of the footer holds rather than wrapping', ts.teamSelectState().settingRow === 4);
+  tap([pad(0, { dpad: 'down' })]);
+  check('...as does the end of the list', ts.teamSelectState().settingRow === 4);
+  tap([pad(0, { dpad: 'left' })]);
+  check('left walks back to Back', ts.teamSelectState().settingRow === 3);
+  tap([pad(0, { dpad: 'left' })]);
+  check('...and does not climb out of the footer into the rows above',
+    ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
+  tap([pad(0, { dpad: 'up' })]);
+  check('up is the way back to the rows', ts.teamSelectState().settingRow === 2);
 
   // UN-READYING HANDS THE STICK BACK. The colour wheel is what up and down mean
   // again, and a ring left on a row nothing can move is a cursor that has gone.
@@ -673,6 +703,94 @@ section('A readied stick sets the match itself');
 }
 
 // ---------------------------------------------------------------------------
+section('A is what presses the button the cursor is on');
+// ---------------------------------------------------------------------------
+// The other half of reaching Back and Start with a stick: having reached one,
+// there has to be something that presses it. A is that, and ONLY where the
+// cursor is on something pressable — on a row of numbers it still means what it
+// has always meant on this screen, and B is the way back out either way.
+{
+  open();
+  tap([pad(0, { dpad: 'left' })]);
+  tap([pad(0, { dpad: 'left' })]);
+  tap([pad(0, { a: true })]);
+  check('pad 1 is a ready captain on the left', dev('pad0')?.side === 0 && dev('pad0')?.ready);
+  // Down four times: the asking, then the kind, the number, and Back.
+  for (let i = 0; i < 4; i += 1) tap([pad(0, { dpad: 'down' })]);
+  check('the cursor is on Back', ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
+  const wasBacks = backs;
+  tap([pad(0, { a: true })]);
+  check('A presses it', backs === wasBacks + 1 && root.classList.contains('sv-hidden'));
+  check('...and readying was not toggled instead', true);
+}
+{
+  open();
+  tap([pad(0, { dpad: 'left' })]);
+  tap([pad(0, { dpad: 'left' })]);
+  tap([pad(0, { a: true })]);
+  for (let i = 0; i < 5; i += 1) tap([pad(0, { dpad: 'down' })]);
+  tap([pad(0, { dpad: 'right' })]);
+  check('the cursor walks on to Start', ts.teamSelectState().settingRow === 4, String(ts.teamSelectState().settingRow));
+  started = null;
+  tap([pad(0, { a: true })]);
+  check('A starts the match', !!started && root.classList.contains('sv-hidden'));
+  check('...with the side the pad actually took', started?.teams[0].members[0].pad === 0,
+    JSON.stringify(started?.teams.map((t) => t.members)));
+}
+
+// ---------------------------------------------------------------------------
+section('A stop that is switched off is stepped over, not landed on');
+// ---------------------------------------------------------------------------
+// Start is dead until every side with a person on it has readied, and a cursor
+// that can land on a dead button is a cursor that appears to have stopped
+// working — the same rule the shared panel cursor follows (ui/panelNav.js).
+{
+  open();
+  // Pad 1 readies on the left; pad 2 walks onto the right and does NOT ready,
+  // which is exactly the state where Start is refused.
+  tap([pad(0, { dpad: 'left' })]);
+  tap([pad(0, { dpad: 'left' })]);
+  tap([pad(0, { a: true })]);
+  tap([pad(0), pad(1, { dpad: 'right' })]);
+  tap([pad(0), pad(1, { dpad: 'right' })]);
+  check('one captain is ready and the other is not',
+    dev('pad0')?.ready === true && dev('pad1')?.side === 1 && dev('pad1')?.ready === false);
+  check('...so Start is refused', !ts.canStart() && root.querySelector('#svTeamStart').disabled);
+
+  // BOTH PADS IN EVERY FRAME, and that is not padding out the call. A pad left
+  // out of the list is a pad that has been UNPLUGGED (see updateTeamSelect),
+  // and unplugging the unready captain hands its side to the computer — which
+  // makes Start pressable again and quietly deletes the state this section is
+  // about. Written the short way, all four checks below passed on a screen in
+  // the wrong state.
+  const both = (p0) => tap([pad(0, p0), pad(1)]);
+  for (let i = 0; i < 4; i += 1) both({ dpad: 'down' });
+  check('the cursor reaches Back', ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
+  both({ dpad: 'down' });
+  check('...and holds there rather than walking onto a dead Start',
+    ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
+  both({ dpad: 'right' });
+  check('...and sideways will not reach it either', ts.teamSelectState().settingRow === 3);
+  check('nothing is ringed but Back',
+    [...root.querySelectorAll('.sv-nav-sel')].every((n) => n.id === 'svTeamBack'));
+
+  // The far captain readies: the stop comes back, and the cursor can walk on.
+  tap([pad(0), pad(1, { a: true })]);
+  check('the far captain readying makes Start a stop again', ts.canStart());
+  both({ dpad: 'right' });
+  check('...which the cursor now reaches', ts.teamSelectState().settingRow === 4, String(ts.teamSelectState().settingRow));
+
+  // ...AND IT GOES AWAY AGAIN UNDER THE CURSOR. A ring left on a button that
+  // has just been switched off is the same lie in reverse.
+  tap([pad(0), pad(1, { b: true })]);
+  check('the far captain un-readying takes the cursor off Start',
+    ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
+  check('...and the ring goes with it',
+    [...root.querySelectorAll('.sv-nav-sel')].every((n) => n.id !== 'svTeamStart'));
+  ts.hideTeamSelect();
+}
+
+// ---------------------------------------------------------------------------
 section('Back, B and unplugging');
 open();
 tap([pad(0, { dpad: 'right' })]);
@@ -685,8 +803,9 @@ tap([pad(0, { b: true })]);
 check('B again walks back to the pool', dev('pad0')?.side === -1);
 ts.updateTeamSelect([]);
 check('an unplugged pad leaves the screen', !dev('pad0'));
+const backsBeforeEscape = backs;
 key('Escape');
-check('Escape from the pool is Back', backs === 1 && root.classList.contains('sv-hidden'));
+check('Escape from the pool is Back', backs === backsBeforeEscape + 1 && root.classList.contains('sv-hidden'));
 check('...and nothing was started by it', flag.versusSetup.teams[0].members.length === 1); // still the last write
 ts.hideTeamSelect();
 check('a closed screen ignores the keyboard', (key('ArrowLeft'), true));

@@ -114,8 +114,6 @@ function materialTextures(m, seen) {
 // measured as what it actually is.
 // Anything above this is worth naming rather than just counting.
 const HEAVY = 64 * 1024;
-// What each node measured, so only nodes new since the last census are walked.
-const udCache = new WeakMap();
 const PTR = 8;
 // DEEP ENOUGH TO REACH A SERIALISED MESH. three's toJSON() buries the numbers
 // six levels down (object > geometries > data > attributes > position > array),
@@ -159,14 +157,56 @@ function valueBytes(v, depth, seen) {
   return n + 32;
 }
 
-// Cached per node — see the note above on why exact is affordable.
-function nodeUserDataBytes(n) {
-  let v = udCache.get(n);
-  if (v === undefined) {
-    v = userDataBytes(n.userData);
-    udCache.set(n, v);
+// ONE COPY IS ONE COPY, however many nodes point at it.
+//
+// This was the census's own biggest lie, and it got louder the day the clone
+// got cheaper. cloneSafe used to JSON round-trip userData, which really did
+// give every body its own copy of everything — so charging each node the full
+// weight of what it held was correct. cloneSafe does SHALLOW copies now, with
+// references left as references (see the note on it in assets.js), so eighty
+// bodies cloned from one template share one `morphs` array between them and
+// the census was charging all eighty for it.
+//
+// The proof is in the phone's own trail: the heavy list prints
+// `Group:3932k[clips+rig+...]` TWICE, same bytes, same keys, on two nodes —
+// one array, counted once each. `ud` read 30-56MB against a truth much nearer
+// four, and it read it as a number that GREW WITH BODIES SPAWNED, which is
+// exactly the shape of the leak everyone was hunting.
+//
+// So the pass carries a `shared` set and a top-level value is charged to the
+// first node that holds it and to no other. Cached BY VALUE rather than by
+// node: a walk is per distinct object now, which is both correct and cheaper
+// than the per-node cache it replaces — that one re-walked every value the
+// first time each of eighty nodes was seen.
+const valueCache = new WeakMap();
+
+function nodeUserDataBytes(n, shared) {
+  const ud = n.userData;
+  if (!ud || typeof ud !== 'object') return 0;
+  let total = 0;
+  for (const k of Object.keys(ud)) {
+    const v = ud[k];
+    // The key string itself is per node — it is a property of this object, not
+    // of the thing it points at — so it is charged every time.
+    total += k.length * 2 + PTR;
+    // Primitives, and the reference types valueBytes already charges a single
+    // pointer for. Neither is worth an identity check and neither can be the
+    // shared bulk this is about.
+    if (v == null || typeof v !== 'object' || isReference(v)) {
+      total += valueBytes(v, 1, new Set());
+      continue;
+    }
+    // Shared past the first holder. PTR, not zero: the pointer really is there.
+    if (shared.has(v)) { total += PTR; continue; }
+    shared.add(v);
+    let bytes = valueCache.get(v);
+    if (bytes === undefined) {
+      bytes = valueBytes(v, 1, new Set());
+      valueCache.set(v, bytes);
+    }
+    total += bytes;
   }
-  return v;
+  return total;
 }
 
 /** What a node's own userData costs, references excluded. Exported for the test. */
@@ -189,6 +229,10 @@ export function censusItems(items) {
   const geoSeen = new Set();
   const texSeen = new Set();
   const boneSeen = new Set();
+  // Per PASS, so the scene and the pool holding bodies cloned from one template
+  // charge that template's userData once between them — the same rule geometry
+  // and textures have always had here.
+  const udShared = new Set();
   let geo = 0;
   let tex = 0;
   let bones = 0;
@@ -216,7 +260,7 @@ export function censusItems(items) {
       nodes++;
       const ud = n.userData;
       if (ud && typeof ud === 'object') {
-        const b = nodeUserDataBytes(n);
+        const b = nodeUserDataBytes(n, udShared);
         userData += b;
         if (b >= HEAVY) heavy.push({ b, name: n.name || n.type, keys: Object.keys(ud).join('+') });
       }

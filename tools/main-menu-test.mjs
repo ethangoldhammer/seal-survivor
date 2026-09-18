@@ -346,6 +346,44 @@ section('Seal sports is a panel of one working game and two promises');
   ui.showSealSports({ onBall: () => {} });
   ui.hideAllMenus();
   check('hideAllMenus takes it down too', panel.classList.contains('sv-hidden'));
+  // A THUMB. The fifth hex commits on RELEASE (systems/mainMenu.js's onUp), so
+  // this panel arrives in the document while the finger is coming up — and iOS
+  // dispatches its click after touchend, off its own timeline, hit-testing
+  // wherever the finger is. The panel is centred; the hex is not far off it on
+  // a phone. Untested that is one tap that opens the list AND takes the first
+  // thing on it, and the shape of it — a pointer click with no press of its own
+  // behind it — is the only thing that tells it from a real press.
+  {
+    let ghost = 0;
+    ui.showSealSports({ onBall: () => { ghost++; } });
+    const b = panel.querySelector('[data-sport="sportBall"]');
+    const pointerClick = () => b.dispatchEvent(
+      new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    pointerClick();
+    check('a pointer click with no press behind it does not pick a sport', ghost === 0, `x${ghost}`);
+    // DISARMED BY THE PANEL'S OWN POINTERDOWN, not by a clock — so the very
+    // next deliberate press goes through however soon it lands. A guard on a
+    // timer is the one that eats a fast second tap (see press.js).
+    b.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true }));
+    pointerClick();
+    check('...and the press right after it does', ghost === 1, `x${ghost}`);
+    // detail 0 is the keyboard, a screen reader, and the pad cursor's own
+    // `.click()` — which is the whole of how a controller presses these. It has
+    // no press behind it either, and eating it would trade one input for
+    // another.
+    ui.hideSealSports();
+    ui.showSealSports({ onBall: () => { ghost++; } });
+    b.click();
+    check('...and a synthesised click is never eaten (the pad, the keyboard)', ghost === 2, `x${ghost}`);
+    ui.hideSealSports();
+    const src = readFileSync(new URL('../path/src/ui/ui.js', import.meta.url), 'utf8');
+    // Slip protection, the gesture the hive's tiles already have: press a
+    // sport, slide the thumb off, let go, and nothing happens. Read off the
+    // source because jsdom has no layout — `pressable` decides a slip from
+    // getBoundingClientRect, which is all zeros here.
+    check('the sports and Back carry slip protection',
+      /pressableWithin\(wrap, '\.sv-sport, #svSportsBack'\)/.test(src));
+  }
   // The main menu wires the ball game to a mode switch, and the switch has to
   // rebuild the arena when the flag changes — the walls are measured off it.
   const main = readFileSync(new URL('../path/src/main.js', import.meta.url), 'utf8');
@@ -395,8 +433,27 @@ section('Seal sports is a panel of one working game and two promises');
   // startGame then leaves what is playing alone, or the whistle would cut the
   // bank back to the top of Loop00 on the one frame this route is trying hard
   // not to cut anything on.
+  // READ OUT OF THE FUNCTION'S OWN BODY, not out of a character window after
+  // its name. This was `[\s\S]{0,1400}` and the function grew past it — the
+  // call was still there and still in the right place, and the check went red
+  // anyway. A window like that has to be re-guessed every time the function is
+  // edited, and the number is invisible from inside main.js, so it fails on
+  // somebody else's unrelated comment. Brace-matching the body is the same
+  // claim with nothing to keep in sync.
+  const bodyOf = (src, decl) => {
+    const at = src.indexOf(decl);
+    if (at < 0) return '';
+    let depth = 0;
+    for (let i = at + decl.length - 1; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') { depth--; if (!depth) return src.slice(at, i + 1); }
+    }
+    return '';
+  };
+  const enterPitch = bodyOf(main, 'function enterTeamSelectPitch() {');
   check('...and the match\'s music starts on the screen, at the match\'s tempo',
-    /function enterTeamSelectPitch\(\) \{[\s\S]{0,1400}startVersusMusic\(\)/.test(main));
+    !!enterPitch && /startVersusMusic\(\)/.test(enterPitch),
+    enterPitch ? `${enterPitch.length} chars of body` : 'no enterTeamSelectPitch in main.js');
   check('...which the whistle then does not restart',
     /if \(!versusMusicActive\(\)\) startVersusMusic\(\)/.test(main));
   // THE MAIN MENU'S ACCESSORY DRAWER GOES WITH THE MENU. It is mounted by

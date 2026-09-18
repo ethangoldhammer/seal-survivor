@@ -33,7 +33,7 @@ import './dom-stub.mjs';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
-import { attachNoiseShader, applyNoiseSettings } from '../path/src/systems/noiseShader.js';
+import { attachNoiseShader, applyNoiseSettings, instanceNoise } from '../path/src/systems/noiseShader.js';
 import { MOTTLE_FRAGMENT_GLSL, mottleGlsl } from '../path/src/systems/noiseGlsl.js';
 import { attachBiolumSkin, applyBiolumSkinSettings, biolumUniformsOf } from '../path/src/systems/biolumSkin.js';
 
@@ -249,6 +249,68 @@ section('the biolum layer: the same bias on the normal, optional');
   check('the lab has the row under pattern, defaulting to the base', !!row && +row[1] === base.base.upBias);
   const cfg = readFileSync(new URL('../path/src/config.js', import.meta.url), 'utf8');
   check('the tuner has the row beside tailBias', /at\('tailBias'\)[\s\S]{0,200}at\('upBias'\)/.test(cfg));
+}
+
+// ---------------------------------------------------------------------------
+// A BODY THAT HAS ALREADY BEEN GIVEN ITS OWN CUT, AND THEN CLONED.
+//
+// instanceNoise hangs the seed uniform off material.userData so a re-seed does
+// not have to walk the shader again. THREE.Material.copy() runs userData
+// through JSON.parse(JSON.stringify(...)), so every clone taken after that —
+// the damage glow's, the charge skin's, anything that wants its own injector —
+// comes out with __noiseInstance still TRUE and __noiseSeed flattened to a
+// plain { x, y, z }.
+//
+// Unguarded, the next instanceNoise on that body took the "already its own"
+// branch and called .set on a plain object. It threw out of instanceNoise, out
+// of buildRoster, and out of enterTeamSelectPitch in main.js — which by then
+// had disposed the main menu and not yet shown the team select. The whole
+// screen was gone with no key and no button left on it: the SECOND Blubberball
+// of a session was a black screen.
+//
+// Same shape as the biolumSkin check in tools/biolum-skin-test.mjs, and same
+// note: if the first line ever fails, three stopped JSON-copying material
+// userData and the guard can go.
+section('INSTANCED MOTTLING SURVIVES A MATERIAL CLONE');
+{
+  const tpl = new THREE.MeshStandardMaterial();
+  attachNoiseShader(tpl, null);
+  const root = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(), tpl);
+  root.add(mesh);
+  check('the body is given its own cut', instanceNoise(root, new THREE.Vector3(1, 2, 3)) === 1);
+
+  const first = mesh.material;
+  const liveBefore = first.userData.__noiseUniforms?.uNoiseSeed;
+  check('...and the seed userData names IS the uniform the shader reads',
+    first.userData.__noiseSeed === liveBefore?.value);
+
+  // Exactly what an effect that wants its own injector does — see the note on
+  // Material.clone() in systems/noiseShader.js.
+  const copy = first.clone();
+  copy.onBeforeCompile = first.onBeforeCompile;
+  mesh.material = copy;
+  check('a cloned material comes back claiming to be an instance',
+    copy.userData.__noiseInstance === true);
+  check('...holding a dead copy of the seed',
+    typeof copy.userData.__noiseSeed?.set !== 'function',
+    JSON.stringify(copy.userData.__noiseSeed));
+
+  let threw = null;
+  try { instanceNoise(root, new THREE.Vector3(4, 5, 6)); } catch (err) { threw = err; }
+  check('re-seeding the clone does not throw', !threw, threw ? threw.message : '');
+
+  const after = mesh.material;
+  const live = after.userData.__noiseUniforms?.uNoiseSeed?.value;
+  check('...and the clone got a uniform block of its own', !!live?.isVector3);
+  check('...which is not the template\'s', live !== liveBefore?.value);
+  check('...and the new seed landed on the block the SHADER holds',
+    !!live && live.x === 4 && live.y === 5 && live.z === 6,
+    live ? `${live.x},${live.y},${live.z}` : 'none');
+  check('...and userData names that block rather than a picture of it',
+    after.userData.__noiseSeed === live);
+  check('...and the shader is attached again, since the copy lost it',
+    typeof after.onBeforeCompile === 'function' && after.userData.__noiseAttached === true);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');

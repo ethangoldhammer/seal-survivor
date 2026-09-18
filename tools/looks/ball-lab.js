@@ -196,6 +196,22 @@ const CONFIG_SLIDERS = [
   ['fx.goo.groups.ball.warp.speed', 'drift speed', 0, 2, 0.02],
   ['fx.goo.groups.ball.warp.feed', 'feedback (0 = plain wobble)', 0, 3, 0.05],
 
+  // THE BOIL INSIDE — the interior, broken up. Everything above works on the
+  // EDGE; this is the rest of the ball, which is most of what you are looking
+  // at. The field is turbulence in the ball's OWN frame, turned by its spin,
+  // on a clock that can flow or step. Nothing in the match drives any of it:
+  // what you set here is what plays.
+  ['the boil inside', null],
+  ['fx.goo.groups.ball.mottle.amount', 'break-up (0 = flat)', 0, 1, 0.02],
+  ['fx.goo.groups.ball.mottle.scale', 'cells across the ball', 0.5, 12, 0.1],
+  ['fx.goo.groups.ball.mottle.speed', 'churn speed', 0, 3, 0.05],
+  ['fx.goo.groups.ball.mottle.feed', 'folds through itself', 0, 3, 0.05],
+  ['fx.goo.groups.ball.mottle.boil', 'steps rather than flows', 0, 1, 0.05],
+  ['fx.goo.groups.ball.mottle.hz', '...how often it steps', 1, 30, 0.5],
+  ['fx.goo.groups.ball.mottle.gain', 'contrast (curds vs cloud)', 0.2, 4, 0.05],
+  ['fx.goo.groups.ball.mottle.relief', 'lumps bend the light', 0, 8, 0.1],
+  ['fx.goo.groups.ball.mottle.edge', 'lets go at the edge', 0.02, 1.2, 0.02],
+
   // HOW THE MATCH DRIVES IT. These are the curve, not the look — turn them all
   // down and the ball sits at the resting warp above however hard it is hit.
   ['what drives the warp', null],

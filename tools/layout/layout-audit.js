@@ -219,6 +219,32 @@ const FULL_BLEED = ['.sv-comb'];
 // fine and still be missed by a thumb.
 const TAP_MIN = 44;
 
+// ---------------------------------------------------------------------------
+// SURFACES THAT MAY NOT SCROLL, and why this is a check of its own rather than
+// a rule the sweep above already had.
+//
+// scrollableAncestor() exists to STOP the off-bottom rules firing inside a box
+// that scrolls on purpose, and it is right to: a score card taller than a phone
+// held sideways is one flick away from being read, and reporting it would train
+// whoever runs this to ignore the one line that catches a real loss. But the
+// exemption is total. `overflow-y: auto` on a panel makes every single thing
+// below the fold invisible to this tool, at every viewport, forever — so a
+// screen that has quietly grown to twice the height of the phone it is played
+// on reports a clean sheet. That is not a gap in the rules; it is the rules
+// working, on a surface where scrolling is the wrong answer.
+//
+// A TEAM SELECT IS A DECISION MADE BY EVERYBODY IN THE ROOM AT ONCE. Four
+// people are looking at one screen, and three of them are not holding it: a
+// side that has to be scrolled to is a side those three cannot see their chip
+// walk onto, and a Start button below the fold is a match nobody can tell is
+// ready to begin. It is also the one screen in this game where the whole point
+// is that all of it is true at the same time.
+//
+// NAMED, NOT DETECTED, for the same reason FULL_BLEED is: "should this screen
+// scroll" is a design decision per surface, and a rule that guessed would
+// eventually excuse the one that matters.
+const NO_SCROLL = ['team select'];
+
 // Positioned per frame from a world position; see the header.
 const PER_FRAME = [
   // ...but ONLY in the placement that is positioned per frame. With
@@ -290,7 +316,7 @@ function runParent() {
   //
   // The tile is scaled off the WIDER of the two, so a rotation tile does not
   // change size on the page halfway through and make the sweep look broken.
-  const tiles = MODE === 'flip'
+  const allTiles = MODE === 'flip'
     ? FLIP_PAIRS.flatMap((pair) => SURFACES.map((surface) => ({
       surface,
       v: { name: `${pair.name} ${pair.a.w}x${pair.a.h} ↔ ${pair.b.w}x${pair.b.h}`,
@@ -299,6 +325,19 @@ function runParent() {
       box: { w: Math.max(pair.a.w, pair.b.w), h: Math.max(pair.a.h, pair.b.h) },
     })))
     : VIEWPORTS.flatMap((v) => SURFACES.map((surface) => ({ surface, v, flipTo: null, box: v })));
+
+  // `--only <surface>` / `--only <surface>@<viewport>` — the whole sweep is two
+  // minutes, which is the right cost to pay before shipping and the wrong one
+  // to pay between two edits to one screen. A substring match on either half,
+  // case-insensitively, so `--only team` and `--only team@SE` both work. No
+  // filter is the default and is what the gate runs.
+  const only = (params.get('only') || '').trim().toLowerCase();
+  const tiles = only
+    ? allTiles.filter(({ surface, v }) => {
+      const [s, vp] = only.split('@');
+      return surface.toLowerCase().includes(s) && (!vp || v.name.toLowerCase().includes(vp));
+    })
+    : allTiles;
 
   for (const tile of tiles) {
     {
@@ -521,6 +560,8 @@ function describe(f) {
   if (f.type === 'splash-over-ui') return `${f.what} — sitting on ${f.over}, ${f.by}px of overlap`;
   if (f.type === 'splash-unread') return `${f.what} — ${f.by}`;
   if (f.type === 'clipped-below') return `${f.what} — cut off at the bottom, content ${f.contentH}px in a ${f.boxH}px box`;
+  if (f.type === 'scrolls') return `${f.what} — ${f.by}px below the fold of its own ${f.boxH}px box, on a screen that may not scroll`;
+  if (f.type === 'scrolls-page') return `${f.what} is ${f.by}px taller than the viewport, on a screen that may not scroll`;
   return `${f.what} — ${f.type} by ${f.by}px`;
 }
 
@@ -631,12 +672,12 @@ async function runFrame(surface) {
       // The fit rules, over there. Not redundant with the fit sweep: this is
       // the surface as it ARRIVED at that size rather than as it was built
       // there, and the two are only the same if nothing latched.
-      for (const f of measure()) findings.push({ ...f, leg: 'over' });
+      for (const f of measure(surface)) findings.push({ ...f, leg: 'over' });
 
       await flipTo_(here.w, here.h);
       findings.push(...stuck(before, signature()));
     } else {
-      findings.push(...measure());
+      findings.push(...measure(surface));
       if (surface === 'splash') findings.push(...(await measureSplash()));
     }
     cleanup?.();
@@ -793,6 +834,19 @@ async function buildSurface(surface, ui, callout, callouts) {
     // the long name after the storage is put back. `restore` is a snapshot of
     // the whole of localStorage rather than one key, so it cannot drift out of
     // step with whatever that key is called this month.
+    // ...AND ON THE TALLEST ROSTER THE SCREEN CAN BE SET TO, which is the other
+    // half of the same argument. The shipped default is one seal a side, and at
+    // one seal a side three of every column's four slots are the short dashed
+    // placeholders — barely a third of the height the same column has at four a
+    // side, where all eight seats are a name, a dice and a hat tile. The screen
+    // is in NO_SCROLL, so the question this tile asks is "does it fit", and a
+    // tile that asked it of the SHORT arrangement would answer yes about a
+    // screen that does not.
+    //
+    // The setting is runtime state rather than storage (systems/sealRoster.js),
+    // so there is nothing to roll back: the next tile is a fresh iframe.
+    const roster = await import('../../path/src/systems/sealRoster.js');
+    roster.setRosterSize(roster.MAX_PER_SIDE);
     const { savePlayerName, MAX_NAME_LEN } = await import('../../path/src/systems/playerName.js');
     const restore = snapshotStorage();
     savePlayerName('W'.repeat(MAX_NAME_LEN));
@@ -1254,10 +1308,11 @@ const ROOTS = '.sv-ui, .sv-ui *, .sv-callout-layer, .sv-callout-layer *, .sv-ver
 // has built nothing, and is reporting on an empty screen.
 const MIN_NODES = 3;
 
-function measure() {
+function measure(surface) {
   const findings = [];
   const W = window.innerWidth;
   const H = window.innerHeight;
+  if (NO_SCROLL.includes(surface)) findings.push(...measureScroll());
   const seen = new Set();
   let measured = 0;
 
@@ -1273,6 +1328,15 @@ function measure() {
     if (r.width < 1 || r.height < 1) continue;
     const style = getComputedStyle(node);
     if (style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+    // TAKEN OFF THE SCREEN BUT LEFT IN THE PAGE — the standard way to keep a
+    // line for a screen reader after deciding a sighted player does not need
+    // it. It is a 1px box with its contents clipped out of it, which is
+    // letter-for-letter the shape of the `clipped` and `clipped-below` rules
+    // below: the team select's hint became one of these on small screens and
+    // came back as two findings at five viewports, describing the intent as the
+    // bug. Detected rather than named, because the pattern is exact and any
+    // element wearing it is making the same statement.
+    if (srOnly(node, style, r)) continue;
 
     measured++;
     const what = path(node);
@@ -1358,6 +1422,53 @@ function measure() {
 
   findings.push(...measureCalloutOverlap());
   return findings;
+}
+
+/**
+ * IS THERE ANYTHING ON THIS SCREEN YOU HAVE TO SCROLL TO SEE — for the handful
+ * of surfaces that are not allowed to have any. See NO_SCROLL.
+ *
+ * Asked of the SCROLL BOX rather than of each element, because that is where
+ * the answer is: an element below the fold looks fine by every rule in
+ * measure() and is reported by none of them, while the box it is in knows
+ * exactly how much of itself is out of sight. One finding per box, naming the
+ * overflow in pixels, so the report says how far off it is rather than just
+ * that it is.
+ *
+ * THE DOCUMENT COUNTS TOO. A panel can fit its own scroll box perfectly and
+ * still push the page past the viewport — same screen, same flick, and it would
+ * have been missed by a check that only looked at boxes declaring `auto`.
+ */
+/**
+ * Is this element hidden from sight and kept for a screen reader? The sr-only
+ * pattern: a box of about a pixel, with what is inside it clipped away.
+ *
+ * BOTH HALVES REQUIRED. A 1px box on its own is a spacer or a rule and may
+ * genuinely be broken; a clip on its own is a mask. It is the pair that says
+ * "there is text in here and it is not for looking at", and asking for both is
+ * what keeps this from becoming an excuse any small element can claim.
+ */
+function srOnly(node, style, r) {
+  const tiny = r.width <= 2 && r.height <= 2;
+  const clipped = style.clipPath !== 'none' || (style.clip && style.clip !== 'auto');
+  return tiny && clipped && node.textContent.trim().length > 0;
+}
+
+function measureScroll() {
+  const out = [];
+  const H = window.innerHeight;
+  for (const node of document.querySelectorAll(ROOTS)) {
+    const s = getComputedStyle(node);
+    if (s.overflowY !== 'auto' && s.overflowY !== 'scroll') continue;
+    if (node.clientHeight < 1) continue;
+    const by = node.scrollHeight - node.clientHeight;
+    if (by > 1) out.push({ type: 'scrolls', what: path(node), by: Math.round(by), boxH: node.clientHeight });
+  }
+  // ...and the page itself, which no element's own overflow can report.
+  const doc = document.documentElement;
+  const page = Math.round(Math.max(doc.scrollHeight, document.body.scrollHeight) - H);
+  if (page > 1) out.push({ type: 'scrolls-page', what: 'the screen', by: page, boxH: H });
+  return out;
 }
 
 // THE DICE, THE PILL AND THE START BUTTON, which are not in the DOM.

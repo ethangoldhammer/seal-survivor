@@ -113,7 +113,7 @@ export const EDGE_KINDS = {
 const FALLBACK_TYPES = {
   // Something is about to hit you with its body or with a thrown object.
   kinetic: { color: 0xffc65a, edge: 'smooth' },
-  electric: { element: 'shock', edge: 'electric' },
+  electric: { color: 0xffe24d, element: 'shock', edge: 'electric' },
   blast: { color: 0xffa64a, edge: 'roil' },
   beam: { color: 0xff6a4a, edge: 'roil' },
   // Teleport and phase: the boss refusing to be where you aimed.
@@ -160,13 +160,29 @@ function roleOn(role) {
 export function threatType(id) {
   const table = { ...FALLBACK_TYPES, ...(CONFIG.fx?.attackTypes ?? {}) };
   const def = table[id] ?? table.kinetic ?? FALLBACK_TYPES.kinetic;
-  // The element join. `?? def.color` rather than the other way round so a
-  // palette entry can still override an element colour deliberately.
+  // THE ELEMENT JOIN, and an entry is allowed to opt out of it by naming a
+  // colour outright.
+  //
+  // An entry with only `element` reads CONFIG.biolum.elements at draw time
+  // rather than copying, which is the whole reason the table is shaped this way:
+  // a later retune of the element palette cannot leave venom's ring the wrong
+  // green. An entry with only `color` is a threat the element system has no
+  // opinion about.
+  //
+  // An entry with BOTH is a deliberate split: the element stays named, so what
+  // family this harm belongs to is still written down, and the THREAT reads in
+  // its own colour. `electric` is the one that does it — a boss's standing field
+  // is high-voltage yellow and the player's Voltaic arcs are cyan, because one
+  // of them is a hazard to swim out of and the other is a gun. Put the literal
+  // back to null and the join is restored in one line.
+  //
+  // The precedence used to run the other way, which meant the comment here
+  // described a behaviour the code did not have.
   const fromElement = def.element
     ? CONFIG.biolum?.elements?.[def.element]?.color
     : null;
   return {
-    color: fromElement ?? def.color ?? 0xffffff,
+    color: def.color ?? fromElement ?? 0xffffff,
     edge: EDGE_KINDS[def.edge] ?? EDGE_KINDS.smooth,
   };
 }
@@ -231,6 +247,8 @@ const fragmentShader = /* glsl */ `
   uniform float uArcJitter;  // noise on the arc ends, so they are not cut clean
   uniform float uElecNodes;  // spline nodes around the circle
   uniform float uElecRate;   // node re-rolls per second
+  uniform float uElecStep;   // WHICH re-roll is being held — see advanceRingClock
+  uniform float uElecCharge; // and the charge as it stood when that roll began
   uniform float uFacets;     // flat chords around the circle
   uniform float uAA;         // edge softness, in local units
   uniform float uCore;       // fraction of the half-width that is at full alpha
@@ -303,8 +321,19 @@ const fragmentShader = /* glsl */ `
       // Interpolation is LINEAR on purpose. The corner at every node is the
       // jag — smoothstep here gives a wobbling circle, which is the smooth
       // dialect with extra steps.
-      float rate = uElecRate * (0.6 + 0.8 * uCharge);
-      float step = floor(uTime * rate);
+      // THE STEP IS HANDED IN, not derived from the clock. floor(uTime * rate)
+      // is the obvious form and it is wrong the moment the rate moves: it
+      // rides uCharge, uCharge breathes several times a second, and multiplying
+      // a GROWING time by a WOBBLING rate makes the step jump by tens per frame
+      // once uTime is past a few seconds. The ring then re-rolls many times per
+      // frame — the held jag stops being held, the dialect degenerates into
+      // per-frame jitter, and what is left after the eye averages it is a
+      // smooth band. Which is exactly what an electric boss's aura had always
+      // looked like. So the phase is ACCUMULATED on the CPU, where the rate can
+      // change without dragging the whole history with it, and arrives here as
+      // an integer. It is also the number systems/bossPerks.js strikes its
+      // bolts on, so the corner and the bolt that ends on it cannot disagree.
+      float step = uElecStep;
       float a = angFrac * uElecNodes;
       float i0 = floor(a);
       float t = fract(a);
@@ -328,13 +357,35 @@ const fragmentShader = /* glsl */ `
       float v0 = (0.35 + ringHash(vec2(i0, step)) * 0.65) * sgn0;
       float v1 = (0.35 + ringHash(vec2(i1, step)) * 0.65) * sgn1;
       float jag = mix(v0, v1, t);
-      // A second, faster, finer spline on top — the crackle riding the arc.
+      // A second, finer spline on top — the crackle riding the arc. Three times
+      // the nodes, and ON THE SAME CLOCK.
+      //
+      // It used to run at 2.7x the rate, which sounds like liveliness and is
+      // actually the hold coming apart: a quarter of the amplitude re-rolling
+      // between one drawn frame and the next means the shape is never held,
+      // only most of it is. That was invisible while the step itself was
+      // jumping by tens a frame; with the step genuinely holding, a crackle on
+      // its own clock is the one part of the edge still strobing — and it is
+      // the part a bolt's endpoint lands in the middle of, so it is also the
+      // difference between an endpoint welded to a corner and one a unit away
+      // from it. Decorrelated by the INDEX instead: j0 lives in a 3N space and
+      // never collides with i0's.
       float a2 = angFrac * uElecNodes * 3.0;
       float j0 = floor(a2);
       float j1 = mod(j0 + 1.0, uElecNodes * 3.0);
-      float s2 = floor(uTime * rate * 2.7);
-      float fine = mix(ringHash(vec2(j0, s2)), ringHash(vec2(j1, s2)), fract(a2)) * 2.0 - 1.0;
-      off = (jag * 0.8 + fine * 0.25) * amp * (0.45 + 0.55 * uCharge);
+      float fine = mix(ringHash(vec2(j0, step)), ringHash(vec2(j1, step)), fract(a2)) * 2.0 - 1.0;
+      // THE CHARGE IS LATCHED, not live. uCharge breathes continuously, and it
+      // scales the amplitude of a shape that is otherwise held for the whole
+      // roll — so every corner creeps in and out a little between one frame and
+      // the next while the pattern stands still. On its own that is invisible;
+      // it matters because the bolts in systems/bossPerks.js are struck ONCE
+      // per roll onto those corners, and a corner that creeps is a bolt that
+      // ends a few hundredths of a unit off the thing it is supposed to be
+      // welded to. The breath is still there and still rides the beat — it just
+      // steps with everything else in a dialect whose whole idea is held
+      // shapes. uCharge goes on driving the RATE continuously, which is a
+      // velocity and has no such problem.
+      off = (jag * 0.8 + fine * 0.25) * amp * (0.45 + 0.55 * uElecCharge);
     } else if (uEdge == 2) {
       // DRIP. The field is squashed along world Y so its lobes come out
       // elongated, and it crawls downward over time — the sag is a fluid
@@ -570,6 +621,8 @@ export function makeOrganicRing(opts = {}) {
       // like a deliberate gap and only shows up on one twelfth of the circle.
       uElecNodes: { value: Math.max(2, Math.round((opts.elecNodes ?? c.elecNodes ?? 18) / 2) * 2) },
       uElecRate: { value: opts.elecRate ?? c.elecRate ?? 13 },
+      uElecStep: { value: 0 },
+      uElecCharge: { value: 0 },
       uFacets: { value: opts.facets ?? c.facets ?? 9 },
       uAA: { value: opts.aa ?? c.aa ?? 0.014 },
       uCore: { value: opts.core ?? c.core ?? 0.22 },
@@ -612,6 +665,67 @@ export function placeOrganicRing(mesh, x, y, worldRadius, z = 0) {
   mesh.material.uniforms.uRadius.value = r;
 }
 
+// ---------------------------------------------------------------------------
+// THE CLOCKS
+//
+// A ring has two of them and only one is a time. `uTime` is seconds and drives
+// everything continuous — the field's drift, the roil's counter-motion. The
+// electric dialect instead holds one set of jags and then swaps the whole set
+// for another, and WHICH set is a counter that only ever goes up.
+//
+// That counter cannot be derived in the shader. Its rate rides uCharge, which
+// breathes a few times a second, and `floor(uTime * rate)` multiplies a growing
+// number by a wobbling one — at ten seconds in, a breath moves the product by
+// several steps per frame and by twenty a few seconds later. The jags then
+// re-roll faster than they are drawn, the hold is gone, and a dialect built out
+// of held shapes renders as per-frame noise that averages to a smooth band.
+//
+// So the phase is integrated here, one frame at a time, where a change of rate
+// only affects what happens NEXT. Everything that ticks a ring goes through one
+// of these two functions; nothing writes uTime directly any more.
+// ---------------------------------------------------------------------------
+
+function stepRateOf(u) {
+  return u.uElecRate.value * (0.6 + 0.8 * u.uCharge.value);
+}
+
+function writeSteps(mesh) {
+  const u = mesh.material.uniforms;
+  const step = Math.floor(mesh.userData.elecPhase ?? 0);
+  // The charge is sampled on the roll boundary and held until the next one —
+  // see the note in the shader. `!= step` rather than a dirty flag, because the
+  // first write has to latch too and a ring that has never rolled would
+  // otherwise draw its first jag at zero amplitude.
+  if (u.uElecStep.value !== step || mesh.userData.elecLatched !== true) {
+    u.uElecCharge.value = u.uCharge.value;
+    mesh.userData.elecLatched = true;
+  }
+  u.uElecStep.value = step;
+}
+
+/** Move a ring forward by `dt`. The in-game path. */
+export function advanceRingClock(mesh, dt) {
+  if (!mesh) return;
+  const u = mesh.material.uniforms;
+  u.uTime.value += dt;
+  mesh.userData.elecPhase = (mesh.userData.elecPhase ?? 0) + stepRateOf(u) * dt;
+  writeSteps(mesh);
+}
+
+/**
+ * Put a ring AT a moment rather than advancing it to one — for a look page that
+ * wants a named frame it can re-render and get the same picture from. The phase
+ * is taken as `t` at the CURRENT rate, which is what a ring that had run at
+ * this charge the whole time would be holding.
+ */
+export function setRingClock(mesh, t) {
+  if (!mesh) return;
+  const u = mesh.material.uniforms;
+  u.uTime.value = t;
+  mesh.userData.elecPhase = stepRateOf(u) * t;
+  writeSteps(mesh);
+}
+
 /**
  * Advance a ring's clock and set the parts that change per frame.
  *
@@ -621,7 +735,6 @@ export function placeOrganicRing(mesh, x, y, worldRadius, z = 0) {
 export function updateOrganicRing(mesh, dt, opts = {}) {
   if (!mesh) return;
   const u = mesh.material.uniforms;
-  u.uTime.value += dt;
   if (opts.opacity != null) u.uOpacity.value = opts.opacity;
   if (opts.sweepIn != null) u.uSweepIn.value = Math.min(1, Math.max(0, opts.sweepIn));
   if (opts.sweepOut != null) u.uSweepOut.value = Math.min(1, Math.max(0, opts.sweepOut));
@@ -644,6 +757,10 @@ export function updateOrganicRing(mesh, dt, opts = {}) {
   if (opts.massVar != null) u.uMassVar.value = opts.massVar;
   if (opts.arcJitter != null) u.uArcJitter.value = opts.arcJitter;
   if (opts.type != null) setRingThreat(mesh, opts.type);
+  // LAST, after uCharge has been written. The step phase integrates the rate
+  // the ring is running at NOW; advancing first would spend this frame at last
+  // frame's charge, which is a one-frame lag nobody would ever find.
+  advanceRingClock(mesh, dt);
 }
 
 /** Recolour and re-dialect a live ring — the strike mark tracking a status. */
@@ -667,6 +784,119 @@ export function disposeOrganicRing(mesh) {
   mesh.material?.dispose?.();
 }
 
+// ---------------------------------------------------------------------------
+// WHERE THE ELECTRIC DIALECT'S CORNERS ACTUALLY ARE
+//
+// The jag is computed in the fragment shader, which means nothing on the CPU
+// knows where a corner of it landed — and a bolt struck from a boss's body to
+// "somewhere on the rim" lands NEAR the zigzag rather than ON it, which reads
+// as two effects that happen to share a circle rather than as one shape.
+//
+// So this is the shader's electric arm evaluated at t = 0, which is exactly a
+// node, transcribed into JavaScript. systems/bossPerks.js strikes its aura
+// bolts at the radii this returns, so the end of a bolt and the corner it ends
+// on are the same point by construction rather than by tuning.
+//
+// THE TRANSCRIPTION IS THE RISK, and it is why the look page measures it. The
+// arithmetic below has to stay in step with the `uEdge == 1` arm above by hand;
+// there is no way to share it, because GLSL ES 1.00 forbids indexing a uniform
+// array by a non-constant expression and so the offsets cannot be computed here
+// and uploaded. `npm run looks:ring` renders a ring and checks that the paint is
+// where this function says it is, which is the only check that can see a drift.
+//
+// THE STEP IS NOT RECOMPUTED HERE, it is read off uElecStep. That is the whole
+// reason the step moved onto a uniform: the one quantity where a float32 versus
+// float64 disagreement would have mattered — a re-roll boundary landing on
+// opposite sides of the two clocks, so a whole frame of bolts ends on the
+// previous roll's corners — is now a number both sides are literally handed.
+// The hash arithmetic is left in doubles: its worst disagreement is a
+// ten-thousandth of an offset that is itself a few percent of the radius, which
+// is a fraction of a pixel.
+//
+// WHAT IT DOES NOT PREDICT is the band's WIDTH. `fat` (uMassVar) is a sample of
+// the world noise field at the fragment, so the half-width at a corner is not
+// knowable here. That is fine for the job: a bolt ends at the band's CENTRE
+// line, which is the bright part and the part the eye reads as the corner.
+// ---------------------------------------------------------------------------
+
+const TAU = Math.PI * 2;
+
+function fract(v) {
+  return v - Math.floor(v);
+}
+
+// The GLSL ringHash above, term for term. `p += dot(p, p + 34.56)` adds one
+// SCALAR to both components — writing it as two independent adds is the easy
+// way to get a function that looks right and hashes differently.
+function ringHashJs(x, y) {
+  let px = fract(x * 0.3183099 + 0.71);
+  let py = fract(y * 0.3678794 + 0.113);
+  const d = px * (px + 34.56) + py * (py + 34.56);
+  px += d;
+  py += d;
+  return fract(px * py);
+}
+
+/** How many nodes this ring's zigzag has. Always even — see makeOrganicRing. */
+export function electricNodeCount(mesh) {
+  return mesh?.material?.uniforms?.uElecNodes?.value ?? 0;
+}
+
+/**
+ * One corner of an electric ring's zigzag, in the ring's own frame.
+ *
+ * @returns {{ angle: number, radius: number, outward: boolean }}
+ *   `angle` in world radians (the quad is never rotated, so local x is world
+ *   x), `radius` the WORLD distance from the ring's centre to the band's centre
+ *   line at that corner, and `outward` whether this node's sign pushes the edge
+ *   past the true radius — the ones a bolt wants to land on, because a corner
+ *   reaching toward the boss is the one that looks struck.
+ */
+export function electricNode(mesh, index) {
+  const u = mesh?.material?.uniforms;
+  if (!u) return { angle: 0, radius: 0, outward: false };
+  const n = Math.max(2, u.uElecNodes.value);
+  const i = ((Math.round(index) % n) + n) % n;
+  // The LATCHED charge, for the same reason the shader reads it: this function
+  // has to return the corner that is actually being drawn, not the one a live
+  // charge would put there a fraction of a frame later.
+  const charge = u.uElecCharge.value;
+  const radius = Math.max(0.0001, u.uRadius.value);
+  const thickness = u.uThickness.value;
+
+  const step = u.uElecStep.value;
+
+  // The sign alternates with the index and only the magnitude is random — see
+  // the note in the shader on why a plain random offset per node is a wonky
+  // circle rather than a zigzag.
+  const sgn = i % 2 === 0 ? 1 : -1;
+  const jag = (0.35 + ringHashJs(i, step) * 0.65) * sgn;
+  // At a node the fine crackle's interpolation weight is zero, so only its
+  // first sample survives. `a2 = angFrac * uElecNodes * 3` is exactly 3i here.
+  const fine = ringHashJs(3 * i, step) * 2 - 1;
+
+  const amp = Math.min(u.uWobble.value / radius, u.uWobbleMax.value);
+  let off = (jag * 0.8 + fine * 0.25) * amp * (0.45 + 0.55 * charge);
+
+  // The same two clamps the shader applies, in the same order. `fat` is a world
+  // noise sample and is taken as 1 here; it only widens or narrows the band
+  // around the centre line this is solving for.
+  const room = Math.max(0, u.uExtent.value - 1 - thickness);
+  off = Math.min(room, Math.max(-room, off));
+  let centre = 1 - thickness + off;
+  const maxOuter = 1 + u.uWobbleMax.value;
+  if (centre + thickness > maxOuter) centre -= centre + thickness - maxOuter;
+
+  return {
+    // The shader's angFrac is fract(ang / TAU + 0.5), so node i sits at
+    // ang = (i / n - 0.5) * TAU. Getting this half-turn wrong puts every bolt
+    // on the diametrically opposite corner, which still looks like lightning.
+    angle: (i / n - 0.5) * TAU,
+    radius: centre * radius,
+    outward: sgn > 0,
+  };
+}
+
 // For the harness and the look page. Nothing in Node compiles GLSL, so the
 // realistic failure — a uniform renamed on one side of the pair and not the
 // other — is otherwise uncovered, and its symptom is a ring that is silently
@@ -677,4 +907,5 @@ export const __organicRingShader = {
   fragmentShader,
   makeOrganicRing,
   FALLBACK_TYPES,
+  ringHashJs,
 };

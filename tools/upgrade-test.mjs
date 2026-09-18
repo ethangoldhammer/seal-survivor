@@ -306,6 +306,8 @@ const fired = new Map(); // event -> [files]
 // ever travels as a variable. Weaker evidence than a call site, and treated
 // that way: it downgrades "dead entry" to silence, it never proves a wiring.
 const quotedAnywhere = new Set();
+// event -> the files whose onFeedback listeners name it. See `drawnBy`.
+const listened = new Map();
 
 // A COMPARED STRING IS NOT AN EVENT NAME. The first argument is often chosen
 // rather than written — `feedback(s.throwKind === 'slam' ? 'crabSlam' : 'crabHurl')`
@@ -332,6 +334,17 @@ for (const file of sourceFiles(SRC)) {
     for (const lit of arg.matchAll(/['"]([A-Za-z0-9_]+)['"]/g)) {
       if (!fired.has(lit[1])) fired.set(lit[1], []);
       if (!fired.get(lit[1]).includes(rel)) fired.get(lit[1]).push(rel);
+    }
+  }
+
+  // WHICH EVENT NAMES A LISTENER IN THIS FILE TESTS FOR. See `drawnBy` below:
+  // a few events carry a picture that feedback() itself cannot draw, and the
+  // only proof that one is wired is a listener somewhere naming it.
+  for (const m of text.matchAll(/\bonFeedback\s*\(/g)) {
+    const body = firstArgOf(text, m.index + m[0].length - 1);
+    for (const lit of body.matchAll(/['"]([A-Za-z0-9_]+)['"]/g)) {
+      if (!listened.has(lit[1])) listened.set(lit[1], new Set());
+      listened.get(lit[1]).add(rel);
     }
   }
 
@@ -366,7 +379,31 @@ for (const [event, def] of Object.entries(CONFIG.feedback)) {
     const v = def[c];
     return Array.isArray(v) ? v.length > 0 : v != null && v !== 0 && v !== false;
   });
-  if (!live.length) {
+  // A CARRIER IS NOT A DEAD ENTRY. A few events exist to get a picture into a
+  // Blubberball replay rather than to draw one themselves: the replay re-fires
+  // every positioned feedback() it recorded, so an effect that talks to the
+  // particle buffer directly is simply missing from the shot, and going through
+  // feedback() is what puts it in one. Those have no channel HERE because
+  // feedback() cannot draw them — the specks are laid out one at a time with a
+  // colour and a velocity each, which is emitCloud's shape, not emit()'s.
+  //
+  // So the entry says so, with `drawnBy: '<module>'`, and the claim is CHECKED:
+  // that module must actually register an onFeedback listener that names this
+  // event. Two facts have to agree, which is what stops `drawnBy` becoming the
+  // hole this rule exists to close — a bare exemption would let any entry opt
+  // out of being wired at all.
+  //
+  // NOT just "some listener mentions it", either. main.js listens for
+  // hotSpotHit to tick a tutorial flag; that is an OBSERVER, and an observer
+  // draws nothing. The entry has to name the module that does the drawing.
+  const drawnBy = typeof def.drawnBy === 'string' ? def.drawnBy : null;
+  if (drawnBy) {
+    const files = listened.get(event);
+    const match = files && [...files].some((f) => f === drawnBy || f.endsWith(`/${drawnBy}`));
+    if (!match) {
+      fail('feedback', `CONFIG.feedback.${event} says drawnBy '${drawnBy}', but no onFeedback listener there names it — ${files ? `only ${[...files].join(', ')}` : 'nothing listens for it at all'}.`);
+    }
+  } else if (!live.length) {
     fail('feedback', `CONFIG.feedback.${event} has no live channel — no particles, shake, glow, ripple, sound, haptic or toast.`);
   }
 }

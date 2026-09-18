@@ -182,6 +182,27 @@ export function sear(e, hits = 1) {
  * The colour and the peak are still the body's own material class, so a boat
  * shot with a laser goes the same white-hot it goes under a beam.
  *
+ * NOT ON A BOSS, and that is the one place this envelope was wrong rather than
+ * merely loud. A body-wide flash is the right read for a sardine — the animal
+ * IS the impact, there is nowhere smaller to put it — but a boss fills a third
+ * of the screen and already answers "you connected" exactly where the shot
+ * landed: the break ring and the shards on the skin, the wound that stays, the
+ * weak spot's own flash (systems/bossImpact.js, systems/bossHotSpots.js). Laid
+ * over those, lighting the WHOLE hide red on every bolt says the opposite of
+ * what all three are saying — it throws away the one thing the hit knew, which
+ * is where it was — and at the fin laser's cadence it is a strobe over the
+ * fight rather than a hit landing on it.
+ *
+ * `bossFlash` is a SHARE rather than a boolean so the one number that was
+ * hidden in this function is in the tuner with everything else, and so a boss
+ * can be given a trace of it back without a code change. It defaults to 0.
+ *
+ * THE SUSTAINED HALF IS UNTOUCHED. `sear` is a STATE — a beam standing on a
+ * body for four seconds, climbing at `bossClimb` — and a state has nowhere
+ * local to live: it is about the whole animal being cut, which is why it is on
+ * the whole animal. What goes is the per-arrival flash, which had somewhere
+ * better to be.
+ *
  * @param strength 0..1 — how hard this one landed. The split's shards are
  *                 worth less than the bolt that made them.
  */
@@ -189,9 +210,15 @@ export function zap(e, strength = 1) {
   if (cfg().enabled === false) return false;
   // A bolt landing on scenery is a bolt landing on a rock: nothing lights up.
   if (isScenery(e)) return false;
+  const share = e?.isBoss ? Math.max(0, cfg().bossFlash ?? 0) : 1;
+  const lit = Math.min(1, Math.max(0, strength) * share);
+  // Ahead of entryFor, so a boss that will never take this envelope does not
+  // pay for a set of cloned materials to write nothing to — and so it does not
+  // occupy one of the MAX slots a body that WOULD light up needs.
+  if (!(lit > 0)) return false;
   const s = entryFor(e);
   if (!s) return false;
-  s.flash = Math.min(1, Math.max(s.flash, strength));
+  s.flash = Math.min(1, Math.max(s.flash, lit));
   return true;
 }
 

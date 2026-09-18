@@ -1577,6 +1577,78 @@ export const ASSETS = {
     // cruise, diving the committed one. systems/seagull.js drives these
     // explicitly by name — it never goes through stateForSpeed().
     animations: { idle: 'seagullGlide', swim: 'seagullFlap', boost: 'seagullDive' },
+
+    // THE STOOP COMES APART. See CONFIG.seagullBomb.slack and systems/
+    // seagull.js — once the tuck has faded in, the mixer is stopped and these
+    // chains are all that move, dragged by the air the bird is falling through.
+    //
+    // ASLEEP FOR THE WHOLE APPROACH, exactly as the seal's ragdoll is (see
+    // FURSEAL's rig above). The glide and the flap are authored wingbeats and a
+    // spring layered over them would be lag on a pose somebody drew — the wings
+    // are control surfaces while the bird is flying with them and rope the
+    // moment it folds them. `asleep` means these neither solve nor bank an
+    // impulse until setLimp cuts them loose.
+    //
+    // A ROLE EACH, which is unusual here and is the point. Everywhere else in
+    // this file a role groups chains that want the same treatment; these five
+    // want the same SPRING but their own FORCES. A world-space shove cannot
+    // break a mirror — one vector moves a left wing and a right wing through
+    // the same angle whatever the vector is, measured at a tenth of a percent
+    // of body length apart over a whole fall — so the buffet drives each limb
+    // by role with its own phase, and that is what turns a fold into a flail.
+    // See impulse(role) in systems/animation.js.
+    //
+    // Role SCALING still does not apply, because it never does to a limp body
+    // (see setLimp) — so none of these needs a `roleLooseness` entry and
+    // CONFIG.seagullBomb.slack carries the one spring all five solve with.
+    rig: {
+      // +X, NOT THE +Y DEFAULT. This is a 3ds Max Biped export and every bone
+      // runs its length along its own local +X — measured, each child's bind
+      // offset from its parent is (n, 0, 0) to two decimals on every joint in
+      // all three chains. The hammerhead is the other rig in the project like
+      // this; makeSpring's note says what feeding the wrong one costs, and it
+      // is a chain that springs about an axis the limb does not have, which
+      // looks like bad tuning rather than like a bug.
+      //
+      // It reaches only the chains ending on a LEAF, which here is the neck
+      // (Queue_de_cheval_1) and both legs (Toe02). The wings end on the hand,
+      // which has a feather bone under it and reads its direction from that.
+      boneAxis: '+X',
+      springChains: [
+        // THE WINGS. Biped names — Clavicle/UpperArm/Forearm/Hand ARE the wing,
+        // and Thigh/Calf/HorseLink/Foot/Toe are the leg. The eight Feather
+        // bones are not a chain of their own: A hangs off the hand, B and C off
+        // the forearm and D off the upper arm, so they are carried by whichever
+        // arm bone they are parented to and cannot be strung in series.
+        //
+        // STARTING AT THE CLAVICLE, which is the one debatable joint here. It
+        // is what turns a wing that FOLDS into a wing that flails from the
+        // shoulder, and the reason the seal's chains deliberately skip its
+        // equivalent does not apply: that shoulder drags the chest skinning,
+        // and this clavicle drives 105 vertices at the wing root.
+        { role: 'gullWingL', asleep: true, bones: ['SEAGULL__L_Clavicle', 'SEAGULL__L_UpperArm', 'SEAGULL__L_Forearm', 'SEAGULL__L_Hand'] },
+        { role: 'gullWingR', asleep: true, bones: ['SEAGULL__R_Clavicle', 'SEAGULL__R_UpperArm', 'SEAGULL__R_Forearm', 'SEAGULL__R_Hand'] },
+        // THE NECK, AND THE HEAD ON THE END OF IT. `Queue_de_cheval` is the
+        // artist's French for ponytail and it is the beak and throat — measured,
+        // it drives 1,136 vertices centred forward of and below the head's own,
+        // so it is the head's forward extension rather than a second head.
+        { role: 'gullNeck',  asleep: true, bones: ['SEAGULL__Neck', 'SEAGULL__Head', 'SEAGULL__Queue_de_cheval_1'] },
+        // THE LEGS, which are the longest chains on the bird at seven bones and
+        // are where the looseness reads hardest — a stooping gull with its feet
+        // streaming behind it is most of the joke. Thigh drives only six
+        // vertices; it is here as the hip the rest swings from, not for its own
+        // skinning.
+        { role: 'gullLegL',  asleep: true, bones: ['SEAGULL__L_Thigh', 'SEAGULL__L_Calf', 'SEAGULL__L_HorseLink', 'SEAGULL__L_Foot', 'SEAGULL__L_Toe0', 'SEAGULL__L_Toe01', 'SEAGULL__L_Toe02'] },
+        { role: 'gullLegR',  asleep: true, bones: ['SEAGULL__R_Thigh', 'SEAGULL__R_Calf', 'SEAGULL__R_HorseLink', 'SEAGULL__R_Foot', 'SEAGULL__R_Toe0', 'SEAGULL__R_Toe01', 'SEAGULL__R_Toe02'] },
+        // THE TAIL IS ABSENT, and not by choice. `Tail`, `TailL` and `TailR` are
+        // three single bones hanging straight off the Pelvis with no children,
+        // and createBoneSpring needs two. The only chain that could reach them
+        // is Pelvis->Tail, which would spring the body's own root: everything
+        // else on the bird hangs off the Pelvis, so springing it would wobble
+        // the whole animal and then wobble the wings and legs again on top. The
+        // squid's `middlebone` is left out for the same reason.
+      ],
+    },
     shape: 'cone', radius: 0.3, height: 0.7, color: 0xf2f2f2, unlit: true,
   },
 

@@ -26,6 +26,7 @@ import { join, relative } from 'node:path';
 
 import { UI_TEXT, uiText, parseUiTextCsv } from '../path/src/uiTextTable.js';
 import { COPY_COLUMNS } from './draft-copy.mjs';
+import { SOURCE_TEXT_IDS } from '../path/src/sourceLabels.generated.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const SRC = join(ROOT, 'path/src');
@@ -63,6 +64,15 @@ ok(reads.size > 0, `the source asks for ${reads.size} lines by id`);
 for (const [id, where] of [...reads].sort()) {
   ok(id in UI_TEXT, `${id} has a row (asked for in ${[...new Set(where)].join(', ')})`);
 }
+
+// ...PLUS THE ROWS A GENERATOR CONSUMES. The environmental damage-source
+// labels are shown to a player through path/src/sourceLabels.generated.js
+// rather than through a `uiText('id')` call, because their reader
+// (systems/playtestAnalysis.js) is import-free on purpose and cannot reach a
+// `?raw` CSV — see tools/gen-source-labels.mjs. They are read; they are just
+// not read by the pattern scanned for above, and without this every one of
+// them would fail as an unshown line while appearing on the score screen.
+for (const id of SOURCE_TEXT_IDS) if (!reads.has(id)) reads.set(id, ['sourceLabels.generated.js']);
 
 for (const id of Object.keys(UI_TEXT)) {
   ok(reads.has(id), `${id} is read by something${reads.has(id) ? '' : ' — nothing shows this line'}`);

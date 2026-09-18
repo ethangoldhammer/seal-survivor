@@ -95,6 +95,15 @@ const RAIL_SECTIONS = [
     // these three are ONE moment at three weights, and the only useful question
     // about any of them is how it sits against the other two.
     'versusBallTap', 'versusBallHit', 'versusBallSmash', 'versusSpike',
+    // The flipper wiped across a ball in flight. Under the body contacts and
+    // not among them: it is a touch, but it is the only one that changes the
+    // ball's SPIN and not its line, so judging it against the three weights
+    // above is the wrong comparison — see CONFIG.feedback.versusFinFlick.
+    // ...and the swipe that did not reach it, which is sound only. Adjacent to
+    // the connect because the only useful question about either is how it sits
+    // against the other: the miss has to be audible enough to teach the reach
+    // and quiet enough to survive one every quarter second.
+    'versusFinFlick', 'versusFinSwipe',
     'versusBallWall', 'versusBallSkid', 'versusPost', 'versusBallBreach', 'versusBallReentry',
     'versusBlock', 'versusSave', 'versusPierce',
     'bodyCheck', 'sealBurst', 'versusRespawn',

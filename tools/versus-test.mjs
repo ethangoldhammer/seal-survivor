@@ -335,6 +335,80 @@ section('The kickoff: a count on the wall clock, everyone held, then the whistle
 }
 
 // ---------------------------------------------------------------------------
+// BOTH TANKS OVER THE COUNT. The meter used to snap full on the frame the
+// kickoff was called — which is behind the recentre and the gather, so the
+// refill happened before a numeral was on screen — and the lungs were not
+// refilled at all, so a seal that scored on its last breath kicked off still
+// gasping. See CONFIG.versus.kickoff.fill.
+section('The count fills the air and boost tanks, full exactly on the whistle');
+{
+  const maxO2 = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100);
+  strikeState.charge = 0.15;
+  p2.charge = 0.4;
+  player.oxygen = maxO2 * 0.2;
+  p2.oxygen = maxO2 * 0.55;
+  enterKickoff();
+  check('neither tank is filled on the frame the kickoff is called',
+    strikeState.charge < 0.999 && player.oxygen < maxO2 * 0.999,
+    `charge ${strikeState.charge.toFixed(3)} air ${(player.oxygen / maxO2).toFixed(3)}`);
+  // STEPPED BY HAND rather than through frame(), so the whistle's own frame can
+  // be read BETWEEN the clock and the step. Play opens on that frame — the
+  // seals start breathing again the moment it does — so a reading taken after
+  // updateVersus is a reading one frame of drain late, and "full on the
+  // whistle" would fail by exactly that much.
+  let backwards = 0; let earlyFull = 0; let lastC = strikeState.charge; let lastO = player.oxygen;
+  let midC = 0;
+  let onWhistle = null;
+  for (let i = 0; i < 600 && versusState.phase === 'kickoff'; i++) {
+    poseFromSwim(player);
+    poseFromSwim(p2);
+    const scale = updateVersusClock(dt, noPads);
+    if (versusState.phase !== 'kickoff') {
+      onWhistle = { c: strikeState.charge, o: player.oxygen, pc: p2.charge, po: p2.oxygen };
+    } else {
+      if (strikeState.charge < lastC - 1e-9 || player.oxygen < lastO - 1e-9) backwards++;
+      // Full while there is still more than a frame of count left. The last
+      // frame is allowed to read 1: the curve and the numerals divide the same
+      // phase clock and disagree by a float sliver at the very end, which is
+      // not an early arrival and is not worth a second clock to avoid.
+      if (strikeState.charge >= 1 - 1e-9 && versusState.phaseT < COUNT_LEN - dt) earlyFull++;
+      if (versusState.count === 2 && !midC) midC = strikeState.charge;
+      lastC = strikeState.charge; lastO = player.oxygen;
+    }
+    updateVersus(dt * scale, noPads);
+  }
+  check('the fill only ever climbs', backwards === 0, `${backwards} frames went down`);
+  check('...and is not full before the whistle', earlyFull === 0, `${earlyFull} frames full early`);
+  check('...so the middle of the count is genuinely mid-fill', midC > 0.15 && midC < 1 - 1e-9, `${midC.toFixed(3)} at "2"`);
+  // THE PROMISE. Exact, not "close": fillTanks lerps to an endpoint of 1 and
+  // whistle() spends the last frame on it, so a tolerance here would be hiding
+  // the one frame the phase flip used to eat.
+  check('the boost meter is exactly full on the whistle', onWhistle?.c === 1, `${onWhistle?.c}`);
+  check('...and so are the lungs', onWhistle?.o === maxO2, `${onWhistle?.o} of ${maxO2}`);
+  // P2's tanks started higher and land in the same place on the same frame:
+  // the blend is per seat and its endpoint is not.
+  check('every seat lands together, whatever it started on', onWhistle?.pc === 1 && onWhistle?.po === maxO2,
+    `p2 charge ${onWhistle?.pc} air ${onWhistle?.po}`);
+  check('...on the frame play opens, not after it', versusState.phase === 'play', versusState.phase);
+  // A seal carrying MORE than the run's max — a bubble taken on the stroke
+  // that scored — is not eased down to it over the count.
+  strikeState.charge = 0.3;
+  player.oxygen = maxO2 * 1.4;
+  enterKickoff();
+  let dipped = false;
+  for (let i = 0; i < 600 && versusState.phase === 'kickoff'; i++) { frame(); if (player.oxygen < maxO2 - 1e-9) dipped = true; }
+  check('an over-full tank is never eased DOWN to the cap', !dipped, `air ${player.oxygen}`);
+  // Off: the old snap, on the frame the kickoff is called.
+  V.kickoff.fill.enabled = false;
+  strikeState.charge = 0.1;
+  enterKickoff();
+  check('with the fill off the meter is left alone', strikeState.charge === 0.1, `${strikeState.charge}`);
+  V.kickoff.fill.enabled = true;
+  toPlay();
+  versusState.phase = 'play';
+}
+
+// ---------------------------------------------------------------------------
 section('A dash shoves the ball once, along the dash');
 {
   resetBall();
@@ -771,6 +845,56 @@ section('Player 2 IS player 1: the same body, strike, ring and pose code on a se
   // ...and the seat handed back, so the sections after this one open on the
   // setup they were written against: nobody named, which is a bot.
   versusSetup.teams[1].members.length = 0;
+}
+
+// ---------------------------------------------------------------------------
+section('A bot winds up in silence: the charge sound is the listener\'s own thumb');
+{
+  // THE PICTURE IS EVERY SEAL'S, THE SOUND IS THE PLAYER'S. A wind-up rumbles,
+  // glows and coils on any seal, bot or not — that is what a seal charging
+  // looks like. The voice is different: it is a readout of a button somebody is
+  // holding, and a roster of bots laid seven risers and seven perfect-charge
+  // stings over the one the player could act on. `sfxSkip` carries that (see
+  // systems/feedback.js): the event still fires, the voice does not.
+  const events = [];
+  const off = onFeedback((name, at) => {
+    if (name === 'strikeCharging' || name === 'strikePerfect') events.push({ name, ...at });
+  });
+  const holdSeat1 = [pad(0), pad(1, { strike: true })];
+  const windUp = () => {
+    events.length = 0;
+    p2.charge = 1; p2.pending = 0;
+    p2.strike.loaded = false; p2.strike.perfect = false;
+    versusState.regenT[1] = 10;
+    p2.pos.set(30, midWater(), 0); p2.vel.set(0, 0);
+    settle(1.4, holdSeat1);
+    settle(0.2, [pad(0), pad(1)]);
+  };
+
+  // Nobody named in seat 1 is a bot — the default this file opens on.
+  versusSetup.teams[1].members.length = 0;
+  windUp();
+  const botHeld = events.filter((e) => e.name === 'strikeCharging');
+  const botPerfect = events.filter((e) => e.name === 'strikePerfect');
+  check('a bot\'s wind-up still fires its rumble', botHeld.length > 0, `${botHeld.length} pulses`);
+  check('...and still reaches the perfect charge', botPerfect.length === 1, `${botPerfect.length}`);
+  check('...but every pulse is muted', botHeld.every((e) => e.sfxSkip === true));
+  check('...and so is the perfect-charge sting', botPerfect.every((e) => e.sfxSkip === true));
+  check('...while the rumble keeps its strength — sfxSkip is the voice, not the event',
+    botHeld.some((e) => (e.scale ?? 0) > 0.35), `top scale ${Math.max(0, ...botHeld.map((e) => e.scale ?? 0)).toFixed(2)}`);
+
+  // A PERSON on the same seat, said the way the team select says it.
+  versusSetup.teams[1].members[0] = { kind: 'human', pad: 1 };
+  windUp();
+  const humanHeld = events.filter((e) => e.name === 'strikeCharging');
+  const humanPerfect = events.filter((e) => e.name === 'strikePerfect');
+  check('a person on seat 1 hears their own wind-up', humanHeld.length > 0 && humanHeld.every((e) => !e.sfxSkip), `${humanHeld.length} pulses`);
+  check('...and their perfect charge', humanPerfect.length === 1 && humanPerfect.every((e) => !e.sfxSkip), `${humanPerfect.length}`);
+  versusSetup.teams[1].members.length = 0;
+
+  off();
+  p2.charge = 1; p2.pending = 0;
+  settle(0.2, [pad(0), pad(1)]);
 }
 
 // ---------------------------------------------------------------------------
@@ -4913,8 +5037,19 @@ section('A match shows no run HUD and no tutorial text');
   // routing this through `running: false` would leave a tenth of a second of
   // beam dissolving over the first frames of the shot.
   check('...and it is cut rather than faded out, because the replay opens on a cut',
-    /replayHoldsInput\(\)\)\s*\{\s*resetAimIndicator\(\);/.test(aimCall),
+    /\)\s*\{\s*resetAimIndicator\(\);/.test(aimCall),
     aimCall.replace(/\s+/g, ' ').slice(-120));
+  // ...NOR OVER A MATCH AT ALL, which is the same argument one step further
+  // out: the beam is a readout of where the GUN points and a match has no gun
+  // (autofire is off for the whole of one). What the aim still does here is
+  // point the flippers and decide which way a fin flick wipes the ball, and
+  // both of those are read off the animal. Its own flag rather than
+  // `aimIndicator.enabled`, because that one is a look the player tunes for a
+  // RUN and the saved snapshot has it on — see CONFIG.aimIndicator.inVersus.
+  check('no aim beam over a match either',
+    /versusActive\(\)\s*&&\s*!CONFIG\.aimIndicator\.inVersus/.test(aimCall),
+    aimCall.replace(/\s+/g, ' ').slice(-160) || 'no gate found');
+  check('...and the flag is off by default', CONFIG.aimIndicator.inVersus === false);
 
   // THE STRIP, THE CARD AND THE REPLAY — read off the source for the same
   // reason as the rules above: this harness has no DOM (tools/dom-stub.mjs
@@ -5126,6 +5261,31 @@ section('The ball carries both colours, in the proportion each team owns it');
   setBallBody({ x: 0, y: 0, r: 0, speed: 0 });
   updateBallLook(1 / 60);
   check('an unowned ball switches the two-colour field off outright', CONFIG.fx.goo.groups.ball.teams.wr === 0);
+  // ...BUT IT STILL HAS A BODY. The frame the ball's own substance is drawn in
+  // (the goo pass's mottle, systems/post.js) is a different fact from whose
+  // ball it is: a ball has one from the kickoff and an owner only once
+  // somebody has hit it. They were the same block, and the cost was a ball
+  // whose interior was flat until the first contact — which also changes its
+  // colour, so the two moved together and neither was visible on its own.
+  setBallBody({ x: 3, y: -2, r: 5, speed: 0, spin: 4 });
+  updateBallLook(1 / 60);
+  {
+    const bd = CONFIG.fx.goo.groups.ball.body;
+    check('...while still handing over WHERE it is, which is not the same question',
+      bd && bd.wr === 5 && bd.wx === 3 && bd.wy === -2 && CONFIG.fx.goo.groups.ball.teams.wr === 0,
+      bd ? `body r ${bd.wr} at ${bd.wx},${bd.wy} with no owner` : 'no body block');
+    // THE ROLL IS AN ANGLE, integrated here because this is the half of the
+    // look that has a dt. A rate handed to the shader instead would turn the
+    // mass by the same amount every frame and never get anywhere.
+    const before = bd.roll;
+    for (let i = 0; i < 30; i++) updateBallLook(1 / 60);
+    check('...and integrates the spin into an angle for the body to turn through',
+      bd.roll > before && Math.abs(bd.roll - (before + 4 * 0.5)) < 0.05,
+      `${before.toFixed(3)} -> ${bd.roll.toFixed(3)} rad on 4 rad/s for half a second`);
+    resetBallLook();
+    check('...and both go dark when the ball leaves the pitch',
+      CONFIG.fx.goo.groups.ball.body.wr === 0 && CONFIG.fx.goo.groups.ball.body.roll === 0);
+  }
   strikeState.active = false; p2.active = false;
   player.mesh.position.set(-30, midWater(), 0); player.velocity.set(0, 0);
   p2.pos.set(30, midWater(), 0); p2.vel.set(0, 0);

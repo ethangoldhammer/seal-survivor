@@ -171,6 +171,12 @@ const _flat = new THREE.OrthographicCamera(-1, 1, 1, -1, -100, 200);
 // to the MATCH camera and is written every frame by a different rule; sharing it
 // would make two cameras fight over one scratch object.
 const _fitBox = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+// The live zoom and the shot it belongs to, so a cut snaps and everything else
+// eases. Module state rather than poolState because nothing outside this file
+// has any business reading a half-arrived zoom.
+let flatZoom = 0;
+let flatShot = -1;
+let flatDt = 1 / 60;
 function fitInclude(x, y, first) {
   if (first) { _fitBox.minX = _fitBox.maxX = x; _fitBox.minY = _fitBox.maxY = y; return; }
   if (x < _fitBox.minX) _fitBox.minX = x;
@@ -223,7 +229,8 @@ export function flatLens() {
  * push-in shrinks the box's padding share below, so a shot that pushes in still
  * closes on its subject.
  */
-function poseFlat(pose, bounds, shot, pois, aspect) {
+function poseFlat(pose, bounds, shot, pois, aspect, dt = 1 / 60) {
+  flatDt = Math.min(0.1, Math.max(1e-4, dt));
   const cam = _flat;
   cam.right = bounds.frameWidth / 2;
   cam.left = -cam.right;
@@ -232,38 +239,59 @@ function poseFlat(pose, bounds, shot, pois, aspect) {
   const frameH = cam.top - cam.bottom;
   const frameW = cam.right - cam.left;
 
-  // The box of everything this shot promises to show. Weightless targets are
-  // not promised and do not widen the frame — same rule framingScore keeps.
+  // THE BOX OF WHAT THIS SHOT PROMISES. Weight 0.3 and up, which is exactly the
+  // line the perspective rule and tools/versus-test.mjs both draw: a light
+  // target is a preference, not a promise, and including it here would stop a
+  // face shot from ever closing in — a push-in that also has to hold the goal
+  // is not a push-in. Falls back to every target when a shot has no heavy one.
   let first = true;
-  for (const [name, w] of Object.entries(shot?.targets ?? {})) {
-    const p = pois?.[name];
-    if (!p || !(w > 0)) continue;
-    fitInclude(p.x, p.y, first);
-    first = false;
+  for (const pass of [0.3, 0]) {
+    for (const [name, w] of Object.entries(shot?.targets ?? {})) {
+      const p = pois?.[name];
+      if (!p || !(w > pass)) continue;
+      fitInclude(p.x, p.y, first);
+      first = false;
+    }
+    if (!first) break;
   }
 
-  let zoom;
-  if (first) {
-    // Nothing to fit — a shot with no live targets. Fall back to the pose's own
-    // framing rather than to a typed number, so it is still THIS shot's size.
-    const dist = Math.max(0.01, pose.pos.distanceTo(pose.at));
-    zoom = frameH / Math.max(1e-4, 2 * dist * Math.tan((pose.fov * Math.PI) / 360));
-  } else {
-    const c = cfg();
-    // Air round the box, in WORLD units, and part of what the fit holds — never
-    // spent to keep a subject in, exactly as the match camera's own pad is not.
-    const pad = Math.max(0, c.flatPad ?? 6);
+  const c = cfg();
+  // WHAT THE SHOT ASKED FOR. `distance` and `fov` already say how tight it is
+  // meant to be, and the director has already eased the fov through the shot's
+  // push — so this is the authored framing WITH the push-in applied, and it is
+  // where the drama comes from. The pool runs from goalWide at 1.07 out to
+  // scorerFace closing on 17.5: wide on the play, hard in on the face.
+  const dist = Math.max(0.01, pose.pos.distanceTo(pose.at));
+  const wantZoom = frameH / Math.max(1e-4, 2 * dist * Math.tan((pose.fov * Math.PI) / 360));
+
+  // ...AND THE MOST IT MAY HAVE WITHOUT DROPPING A SUBJECT. `flatPad` is a
+  // safety margin round the box now, not the framing — the framing is the line
+  // above. Small, because its whole job is to stop a subject touching the edge.
+  let zoom = wantZoom;
+  if (!first) {
+    const pad = Math.max(0, c.flatPad ?? 2);
     const needW = Math.max(1e-4, (_fitBox.maxX - _fitBox.minX) + pad * 2);
     const needH = Math.max(1e-4, (_fitBox.maxY - _fitBox.minY) + pad * 2);
-    // Whichever axis is tighter wins, so the box is inside the frame on both.
-    zoom = Math.min(frameW / needW, frameH / needH);
-    // ...and the shot's own push still reads. `fovPush` is 0 at the start of a
-    // shot and 1 when the push has run out, so this closes the remaining air
-    // rather than adding zoom of its own — a push-in that fought the fit would
-    // put the subject back outside it.
-    const close = c.flatPush ?? 0.25;  // from the cams block, beside `projection`
-    zoom *= 1 + close * clamp01(poolState.fovPush);
+    // THE TIGHTER OF THE TWO, which is what makes both guarantees hold at once:
+    // never tighter than the fit (a promised target would leave), never wider
+    // than the shot asked for (every shot would look the same).
+    zoom = Math.min(wantZoom, Math.min(frameW / needW, frameH / needH));
   }
+
+  // THE CRASH. The zoom is re-derived every frame and would otherwise arrive
+  // the instant it is computed — a cut from goalWide to scorerFace is 1.1 to
+  // 17.5, and taken in one frame that is not a zoom, it is a different shot.
+  // Eased on its own clock, fast, and SNAPPED on a cut: a cut is meant to be a
+  // cut, and smearing one into the next angle is the exact smear `snap` exists
+  // to prevent for the position.
+  if (flatShot !== poolState.shot || !(flatZoom > 0)) flatZoom = zoom;
+  else {
+    const ease = Math.max(1e-3, c.flatZoomEase ?? 0.18);
+    flatZoom += (zoom - flatZoom) * (1 - Math.exp(-flatDt / ease));
+  }
+  flatShot = poolState.shot;
+  zoom = flatZoom;
+
   cam.zoom = Math.max(0.05, zoom);
 
   // CENTRED ON THE BOX, NOT ON THE LOOK-AT, and the difference is the whole
@@ -352,6 +380,10 @@ export function resetPool(aspect = 16 / 9) {
   // restarts with the perspective one would otherwise draw its first frame
   // through last replay's camera.
   st.rendered = null;
+  // ...and the flat lens's own zoom, or a new replay opens by easing out of
+  // whatever the last one ended crashed in on.
+  flatZoom = 0;
+  flatShot = -1;
 }
 
 export function stopPool() {
@@ -737,7 +769,7 @@ export function updatePool(ctx) {
   // that cares which one is fitted. See poseFlat.
   let cam;
   if (flatLens()) {
-    cam = poseFlat(st.cur, bounds, shot, pois, aspect);
+    cam = poseFlat(st.cur, bounds, shot, pois, aspect, dt);
   } else {
     cam = st.camera;
     cam.position.copy(st.cur.pos);
