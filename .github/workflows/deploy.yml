@@ -21,6 +21,10 @@ name: Deploy
 on:
   push:
     branches: [SealSurvivor-Main]
+  # Runs the tests on every pull request too, without deploying. This is the
+  # point of the split below: a PR's result is visible BEFORE the merge, so
+  # merging is no longer the thing that finds out.
+  pull_request:
   # Lets you re-deploy the current commit from the Actions tab without having
   # to push an empty commit to do it.
   workflow_dispatch:
@@ -28,12 +32,45 @@ on:
 # A second push while one deploy is in flight cancels the first. Without this
 # two runs race to publish and the deployment that lands last is whichever
 # finished last, not whichever commit is newer.
+#
+# KEYED ON THE REF, not a single fixed name. Once pull_request joined the
+# triggers a fixed group meant every PR shared one slot with main and with
+# each other, so opening a second PR would cancel the first one's test run
+# and leave it showing a red X that had nothing to do with its code. Per-ref,
+# main's deploys still serialise against each other — which is the race this
+# was written for — and each PR only ever cancels its own earlier run.
 concurrency:
-  group: pages-deploy
+  group: pages-deploy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # THE GATE. Until this existed, a push to SealSurvivor-Main went straight to
+  # the build and out to Cloudflare without running a single test — so the CI
+  # path was LOOSER than the local one, where tools/ship.mjs runs all of them
+  # first. A merge shipped whatever it happened to contain.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # `ci:test`, not `npm test`: it drops the five tests that need a Mac
+      # (Electron windows, screencapture, Xcode) and reports every failure
+      # instead of stopping at the first, which an && chain of 301 cannot do.
+      # The list is derived from the same chain `npm test` runs, so a new
+      # test:* script gates this the moment it is added.
+      - run: npm run ci:test
+
   deploy:
+    # No deploy unless the gate is green, and never from a pull request.
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

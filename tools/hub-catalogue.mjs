@@ -103,6 +103,15 @@ const GROUP_BY_NAME = {
   'accessories:icons': 'Assets', pick: 'Servers',
   'acc:render': 'Assets', 'feel:apply': 'Assets', 'rig:manowar': 'Assets',
   build: 'Publish', deploy: 'Publish', 'deploy:preview': 'Publish', ship: 'Publish',
+  // The CI gate. It runs checks, but it is deliberately OUTSIDE the `test:`
+  // prefix (ship.mjs gates on every test:* script and would run all 296 of
+  // these a second time), so the prefix rule cannot place it and it is named
+  // here instead.
+  'ci:test': 'Checks',
+  // Sets up the git merge driver .gitattributes depends on. Not a check and
+  // not a build — it configures this clone, which is the closest thing to
+  // authoring the repo itself.
+  mergedriver: 'Authoring', prepare: 'Authoring',
   perf: 'Audits', tex: 'Audits', glow: 'Audits', layout: 'Audits', 'sfx:atlas': 'Audits',
   notex: 'Audits',
   // The same audit as `layout`, run against the flipped viewport — it reports
@@ -211,6 +220,8 @@ const BLURBS = {
   hub: 'This page. The index of every tool in the repo, on a port that never moves.',
   film: 'The game in the desktop shell, window locked so every clip is exactly 1920x1080, recording with sound from BlackHole. Quit the game to end the take; the clip is scaled and the folder opens.',
   test: 'Every check in the repo, chained. The first failure hides the rest — see npm-test-is-and-chained.',
+  mergedriver: 'Registers the git merge driver that keeps main\'s imported-tuning.json through a merge. .gitattributes does nothing without it. Runs itself on npm install; safe to re-run.',
+  prepare: 'npm\'s own install hook. Runs mergedriver so a fresh clone gets the tuning merge rule without anyone remembering to.',
   'playtest:sync': 'Pulls remote runs and rebuilds the playtest atlas from them in one step.',
   ios: 'Builds, syncs the Capacitor iOS project, and opens it in Xcode.',
   // The four desktop scripts run vite/electron/electron-builder directly, so
