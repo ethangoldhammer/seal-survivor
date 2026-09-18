@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# path/src/imported-tuning.json — MAIN'S COPY ALWAYS WINS A MERGE.
+#
+# The file is 453KB across 186 sections and it is the shipped look of the game,
+# not scratch: config.js imports it on line 1 and saved tuning beats config.js
+# in the merge, so whatever is in here IS what players see.
+#
+# It is also machine-written. The ` tuner POSTs to /__tuning and rewrites the
+# whole snapshot while the game runs, so any branch left open for a few days
+# carries a stale copy of it forward without anyone editing a thing. Merging
+# that branch replays week-old sliders over current work — the game visibly
+# changes and the diff is 10,000 lines of noise nobody reads. Four of the
+# worktrees harvested on 2026-09-18 were carrying exactly that.
+#
+# `ours` is right rather than a real 3-way merge because tuning is authored in
+# ONE place (the main tree, with the game running) and nowhere else. A branch
+# has no tuning worth keeping; it only has an older photograph of main's.
+#
+# THIS LINE DOES NOTHING ON ITS OWN. There is no built-in `ours` merge driver —
+# with the attribute set and no driver defined, git falls straight through to a
+# normal 3-way merge and conflicts, which is indistinguishable from never
+# having written this file. The driver has to exist in git config:
+#
+#     git config merge.ours.driver true
+#
+# `npm run mergedriver` does that, `npm install` runs it via `prepare`, and
+# `npm run test:mergeguard` fails if it is missing — because a protection that
+# silently is not there is worse than none.
+path/src/imported-tuning.json merge=ours
+
+# The same applies to the backup snapshots the tuner leaves beside it.
+path/src/imported-tuning.backup-*.json merge=ours
