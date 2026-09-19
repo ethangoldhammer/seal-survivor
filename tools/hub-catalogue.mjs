@@ -461,7 +461,9 @@ const FIXED_PAGES = [
     blurb: 'Frame cost of one system at a time, isolated from a real run.' },
   { file: 'rive-test.html', on: 'dev', path: '/rive-test.html', title: 'Rive splash harness',
     blurb: 'Drives seal_survivor.riv outside the game — artboards, state machines, data binding.' },
-  { file: 'hive-stacks.html', on: 'dev', path: '/hive-stacks.html', title: 'Hex hive',
+  // Generated (3.2MB) and gitignored, so it is absent on a fresh clone until
+  // this script writes it. Naming the script is what tells hub-test that.
+  { file: 'hive-stacks.html', on: 'dev', path: '/hive-stacks.html', title: 'Hex hive', script: 'look:stacks',
     blurb: 'Hive tile layouts and styles, side by side — the stacked-sibling arrangement the upgrade hive uses.' },
 
   { file: 'tools/csv-editor.html', on: 'own', server: 'csv', script: 'csv', port: 5177, path: '/', title: 'CSV editor',

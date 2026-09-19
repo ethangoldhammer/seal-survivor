@@ -30,7 +30,7 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { commands, pages, GROUP_ORDER, ROOT, blurbFromFile, targetFile } from './hub-catalogue.mjs';
 import { MAX_MESSAGE, PROD_BRANCH, SHIP_SCRIPT, checkMessage, shipArgs } from './hub-ship.mjs';
@@ -169,10 +169,29 @@ check('--yes skips the prompt and nothing else',
 
 console.log('\nPAGES — every card links to something that is really there');
 
-const badPageFile = PAGES.filter((p) => !existsSync(join(ROOT, p.file)));
-check('every page file exists',
+// TRACKED PAGES MUST EXIST; GENERATED ONES NEED NOT.
+//
+// "is it in git" rather than "does it have a script": the 67 pages under
+// tools/looks are committed SOURCE that also have a looks:* build script, so
+// exempting everything with a script would stop checking the ones that rot.
+// A carded page git does not track is written by a tool and is legitimately
+// missing until you run it — which is every fresh clone, and therefore CI.
+// hive-stacks.html (3.2MB, gitignored) failed this on every clone ever made;
+// it only looked fine because the check had never run anywhere but a machine
+// that had already generated it.
+const tracked = new Set(
+  execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 })
+    .split('\n').filter(Boolean),
+);
+const badPageFile = PAGES.filter((p) => tracked.has(p.file) && !existsSync(join(ROOT, p.file)));
+check('every tracked page file exists',
   !badPageFile.length,
   badPageFile.map((p) => p.file).join(', '));
+
+const generated = PAGES.filter((p) => !tracked.has(p.file));
+if (generated.length) {
+  console.log(`        (${generated.length} generated page(s), absent until built: ${generated.map((p) => p.file.split('/').pop()).join(', ')})`);
+}
 
 const badPageScript = PAGES.filter((p) => p.script && !pkg.scripts[p.script]);
 const orphans = PAGES.filter((p) => p.orphan);
@@ -239,9 +258,12 @@ check('every page has a title and a description', !untitled.length,
 
 // The root pages are the ones that rot: a preview page gets deleted and its
 // card becomes a link to a 404 the dev server answers with the game.
-const rootPages = PAGES.filter((p) => p.on === 'dev').map((p) => p.file);
-const onDisk = readFileSync(join(ROOT, 'package.json')) && rootPages.every((f) => existsSync(join(ROOT, f)));
-check('every root page card matches a file in the repo root', onDisk);
+// Tracked ones only, for the reason given at 'every tracked page file exists'
+// above: a generated page is absent on a fresh clone by design.
+const rootPages = PAGES.filter((p) => p.on === 'dev').map((p) => p.file).filter((f) => tracked.has(f));
+const missingRoot = rootPages.filter((f) => !existsSync(join(ROOT, f)));
+check('every tracked root page card matches a file in the repo root',
+  !missingRoot.length, missingRoot.join(', '));
 
 console.log('\nTHE PAGE ITSELF');
 

@@ -45,9 +45,21 @@ const DESKTOP_ONLY = {
   'test:capture':   'drives Electron + screencapture for the 1920x1080 take',
   'test:record':    'drives Electron + screencapture for the take file',
   'test:splashhit': 'drives a real Electron window to hit-test the title card',
+
+  // Added after the first CI run failed on it. Its guard is `which swift`,
+  // and ubuntu-latest SHIPS Swift — so the guard passes and the compile then
+  // dies on `import Vision`, a macOS framework. Detecting the binary is not
+  // detecting the platform, which is the whole reason this was mis-classified.
+  'test:qr': 'needs Apple Vision via swift; ubuntu has swift but not Vision',
+
+  // Compares the built .riv against its .rml sources BY MTIME (see the note
+  // in the test itself). Git does not record mtimes, so on a fresh clone
+  // every file carries its checkout time and the comparison measures checkout
+  // order. It cannot mean anything in CI, whatever the repo's real state.
+  'test:rivecopy': 'mtime comparison; a fresh clone has no meaningful mtimes',
 };
-// test:qr and test:sfxtrim stay IN: both already detect their missing macOS
-// binary and skip that section out loud rather than failing.
+// test:sfxtrim stays IN: it detects its missing macOS binary and exits early
+// rather than failing.
 
 const TIMEOUT_MS = 300000;
 const CONCURRENCY = Math.max(2, Math.min(6, cpus().length - 1));
@@ -110,8 +122,21 @@ console.log(`\n\n${results.length - failed.length}/${results.length} passed\n`);
 
 for (const f of failed) {
   console.log(`${'='.repeat(70)}\nFAIL  ${f.name}${f.why ? `  (${f.why})` : ''}`);
-  // The tail is where these harnesses print their verdict.
-  console.log(f.output.trimEnd().split('\n').slice(-25).join('\n'));
+  const lines = f.output.trimEnd().split('\n');
+  // THE FAILING LINES FIRST, then context. A plain tail was the first
+  // version and it was useless on the first real run: hub prints twenty
+  // passing assertions after its two failures, so the tail showed a wall of
+  // `ok` under the word FAIL and the actual cause had scrolled off. These
+  // harnesses print their verdict wherever it happens, not at the end.
+  const hits = lines
+    .map((l, i) => [l, i])
+    .filter(([l]) => /\bFAIL\b|\bError\b|error:|Traceback|not ok/.test(l));
+  if (hits.length) {
+    console.log(`  ${hits.length} failing line(s):`);
+    for (const [l] of hits.slice(0, 20)) console.log(`  ${l.trim()}`);
+    console.log('  --- last 20 lines of output ---');
+  }
+  console.log(lines.slice(-20).join('\n'));
 }
 
 if (failed.length) {

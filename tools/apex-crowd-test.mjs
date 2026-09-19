@@ -108,7 +108,22 @@ console.log('');
 
 let failures = 0;
 const check = (ok, msg) => { console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${msg}`); if (!ok) failures += 1; };
-check(on.minGap > off.minGap * 2, `pack spreads out (closest pair ${off.minGap.toFixed(1)} -> ${on.minGap.toFixed(1)})`);
+// NOT `on.minGap > off.minGap * 2`. That compared against the OFF run's
+// closest pair, and the OFF run is a pile-up: six hunters converging on one
+// point, several of them nearly coincident. The closest pair of a heap like
+// that is decided in the last ulp, so the same seed gave 1.5 on arm64 and 3.4
+// on x86_64 — the assertion passed on a Mac and failed in CI, with nothing
+// random anywhere in it. The ON run is bit-identical on both, because holding
+// the pack apart is what removes the degeneracy.
+//
+// So: measure spread with the statistic that is stable in BOTH runs (mean
+// pairwise distance — 3.4 -> 7.7 on either architecture), and hold the
+// closest pair to the separation the system promises rather than to a
+// chaotic control.
+check(on.meanDist > off.meanDist * 2,
+  `pack spreads out (mean distance ${off.meanDist.toFixed(1)} -> ${on.meanDist.toFixed(1)})`);
+check(on.minGap >= CFG.avoidGap,
+  `and nothing closer than avoidGap ${CFG.avoidGap} (closest pair ${on.minGap.toFixed(1)})`);
 check(on.overlaps === 0, `no overlapping bodies (was ${off.overlaps} pairs)`);
 check(on.headingSpread > 0.5, `hunters face different ways (${off.headingSpread.toFixed(2)} -> ${on.headingSpread.toFixed(2)})`);
 check(on.inside4 <= CFG.feedingSlots + 1, `only the committed press in (${off.inside4} -> ${on.inside4} within 4 units)`);
