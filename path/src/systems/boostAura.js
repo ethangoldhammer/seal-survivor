@@ -94,6 +94,22 @@ export const AURA_FRAGMENT_GLSL = /* glsl */ `
   // aimed down. Accumulated on the CPU so the ramp can be a rate rather than a
   // curve the shader would have to be told the age of. See the header.
   uniform vec2  uFlow;
+  // --- THE DASH CORRIDOR ---------------------------------------------------
+  // The line the strike is aimed down, and how hard the shell is pushed into
+  // the cone around it. At uBias 0 every line below falls out and this is the
+  // symmetrical shell it was before; at 1 the mass is in the lane and the band
+  // reaches uStretch times further along it than across it.
+  uniform vec2  uAim;
+  uniform float uBias;
+  uniform float uCone;      // cosine of the cone's half-angle
+  uniform float uConeSoft;  // ...and how soft its edge is, in cosine
+  uniform float uStretch;   // how much further the band reaches down the lane
+  // ...and the same number the CPU grew the QUAD by, handed over rather than
+  // recomputed here. The two have to be identical: the quad is scaled to the
+  // longest the band gets, and a shader that worked it out again from uStretch
+  // and uBias would be one rounding or one edit away from a band that either
+  // stops short of its own quad or runs off the end of it.
+  uniform float uLanePush;
   varying vec2 vUv;
 
 ${WISP_GLSL}
@@ -105,6 +121,37 @@ ${WISP_GLSL}
     // shell does not, so this is most of the sprite's area on a cheap branch
     // rather than on the whole body of the shader below it.
     if (r > 1.0 || uLife <= 0.0) { gl_FragColor = vec4(0.0); return; }
+
+    // ---- THE LANE ----------------------------------------------------------
+    // WHERE THIS FRAGMENT IS RELATIVE TO THE LINE THE DASH WILL TAKE. The seal
+    // is about to leave down that line, and a shell that says nothing about it
+    // is a decoration on an animal that is aiming. So the water is pushed into
+    // the cone: denser inside it, and reaching further along it.
+    //
+    // al is the cosine between this fragment and the aim, which is the same
+    // quantity the lens corridor's own mask is built from (uPathDir in
+    // systems/post.js) — one line, two surfaces, so the glow on the water and
+    // the lane drawn over the frame cannot point in two directions.
+    //
+    // The zero-radius fragment has no direction; it is inside the animal and
+    // masked out below either way, but normalize() of it is a NaN that would
+    // spread through the whole expression, so it is guarded here rather than
+    // relied on.
+    float al = r > 1e-5 ? dot(p / r, uAim) : 1.0;
+    // 1 inside the cone, 0 outside, soft across uConeSoft.
+    float cone = smoothstep(uCone - uConeSoft, uCone + uConeSoft, al);
+    // HOW MUCH OF THE SHELL IS IN THE LANE. Mixed rather than switched, so
+    // bias is a dial from the symmetrical shell to a shell entirely in the
+    // cone, and every value between is a shape somebody could want.
+    float lane = mix(1.0, cone, uBias);
+    // ...AND HOW MUCH FURTHER IT REACHES DOWN IT. The quad is already scaled to
+    // the LONGEST extent (the CPU grows outer by the same stretch), so this
+    // is a fragment reading a SHORTER band off to the sides rather than a
+    // longer one ahead — which is the version that cannot clip at the quad's
+    // own edge. Normalised by (1 + uStretch) for that reason: straight down the
+    // lane the band is exactly the quad, and everywhere else it is less.
+    float lobe = uBias * cone * max(0.0, al);
+    float local = (1.0 + uStretch * lobe) / max(1e-4, uLanePush);
 
     // WHERE THIS FRAGMENT IS IN THE WATER, not on the quad. See the header:
     // this is the line that makes a growing shell churn.
@@ -132,7 +179,7 @@ ${WISP_GLSL}
     // ACROSS THE SHELL'S OWN WIDTH, 0 at the animal's edge and 1 at the reach
     // it has pushed out to so far. Everything below is in this coordinate, so
     // the profile does not change shape as the shell grows — only its size.
-    float span = max(1e-3, 1.0 - uInner);
+    float span = max(1e-3, (1.0 - uInner) * local);
     float x = (r - uInner) / span;
 
     // THE LEADING EDGE IS TORN BY THE FIELD rather than being a clean circle.
@@ -147,7 +194,7 @@ ${WISP_GLSL}
     // so it is thickest where it is being pushed from.
     float body = pow(max(0.0, 1.0 - x), uFalloff);
 
-    float a = skin * edge * body * mix(1.0, f, uDepth) * uLife;
+    float a = skin * edge * body * mix(1.0, f, uDepth) * uLife * lane;
     // Overdriven past 1 on purpose, like every other additive quad the seal
     // wears: the bright pass is a HalfFloat target, so the excess blooms
     // outward instead of clipping to white in place.
@@ -176,6 +223,12 @@ function auraUniforms() {
     uTime: { value: 0 },
     uLife: { value: 0 },
     uFlow: { value: new THREE.Vector2(0, 0) },
+    uAim: { value: new THREE.Vector2(1, 0) },
+    uBias: { value: 0 },
+    uCone: { value: 0 },
+    uConeSoft: { value: 0.5 },
+    uStretch: { value: 0 },
+    uLanePush: { value: 1 },
   };
 }
 
@@ -247,20 +300,53 @@ export function flowSpeed(held, a = cfg()) {
   return Math.min(a.flowMax ?? 10, (a.flow ?? 2) + (a.flowRamp ?? 6) * Math.max(0, held));
 }
 
-const _hsl = { h: 0, s: 0, l: 0 };
+/**
+ * HOW FAR UP THE SHELL HAS COME, 0..1, `held` seconds into a burn.
+ *
+ * A wind-up should not open at full volume. It starts dim and washed out and
+ * arrives — so the first instant of a hold is visibly the START of something
+ * rather than a state switching on, and a player can read how long they have
+ * been holding off the colour alone, the way they can already read it off the
+ * radius and the flow.
+ *
+ * A TIME TO FULL rather than a rate with a ceiling, which is what `push` and
+ * `flow` use. Those two are speeds — units per second of something that keeps
+ * going — and a ceiling is the honest shape for a speed. This is a 0..1 that
+ * has somewhere to arrive, and "how long until it is all the way up" is the
+ * question anybody tuning it will actually be asking.
+ */
+export function auraLift(held, a = cfg()) {
+  const t = Math.max(0.001, a.liftTime ?? 0.5);
+  return Math.max(0, Math.min(1, Math.max(0, held) / t));
+}
+
+const _white = new THREE.Color(1, 1, 1);
+// A last-resort heading for a replayed frame whose aim lerped to nothing —
+// only reachable from a record written before there was an aim in it.
+const _replayAim = new THREE.Vector2(1, 0);
 
 /**
  * The pip's colour with its VALUE lifted to the top and its hue and saturation
  * untouched — see the header on why this is peak-channel and not luminance.
  * Writes into `out` and returns it.
  */
-export function auraColor(out, i, pips) {
+export function auraColor(out, i, pips, lift = 1, a = cfg()) {
   out.set(pipRGB(i, pips));
-  out.getHSL(_hsl);
   // A pip that is genuinely grey stays grey: dividing by its peak would only
   // scale it, and there is no hue in it to protect.
   const peak = Math.max(out.r, out.g, out.b);
   if (peak > 1e-4) out.multiplyScalar(1 / peak);
+  // ...AND THE SATURATION COMES UP WITH THE HOLD. Pulled toward the pip's own
+  // WHITE rather than toward its grey: this is a light, and a light losing its
+  // colour goes pale, not muddy. Peak-normalised above, so white here is (1,1,1)
+  // and the mix is exactly a saturation slider on a value that is already 1.
+  //
+  // THE HUE IS NEVER TOUCHED, at any lift. It is the one thing this layer is
+  // for — which pip is burning — and a wind-up that started on the wrong hue
+  // and arrived at the right one would be lying for the first half of itself.
+  const k = Math.max(0, Math.min(1, lift));
+  const sat = (a.satMin ?? 0.35) + (1 - (a.satMin ?? 0.35)) * k;
+  out.lerp(_white, 1 - sat);
   return out;
 }
 
@@ -431,13 +517,21 @@ onFeedback((name, at) => {
 // pacing, so the re-derived shell would be a different shell that happened to
 // start in the same place.
 //
-// EIGHT NUMBERS. The radius pair, the fade, the flow offset and the colour —
+// ELEVEN NUMBERS: the radius pair, the fade, the flow offset, the colour, the
+// LANE this wind-up was aimed down and how far up its lift had come —
 // everything the shader is handed that is not a tuning knob. The knobs are
 // deliberately NOT recorded: a replay of a shot thrown before somebody dragged
 // `grain` should be drawn with the grain that is set now, because the look is
 // not what happened, the moment is.
-export const AURA_REC = 8;
-const A_LIFE = 0, A_INNER = 1, A_OUTER = 2, A_FLOWX = 3, A_FLOWY = 4, A_R = 5, A_G = 6, A_B = 7;
+//
+// The aim is here for the same reason the colour is: it is a FACT about that
+// wind-up. A replay is posed from recorded transforms, so the live inputs that
+// produced the heading are long gone, and a lane re-derived from whatever the
+// sticks are doing now would put the cone somewhere the shot never pointed.
+// The lift likewise — it is the age of the hold, not a setting.
+export const AURA_REC = 11;
+const A_LIFE = 0, A_INNER = 1, A_OUTER = 2, A_FLOWX = 3, A_FLOWY = 4, A_R = 5, A_G = 6, A_B = 7,
+  A_AIMX = 8, A_AIMY = 9, A_LIFT = 10;
 
 function makeAura() {
   let mesh = null;
@@ -446,6 +540,12 @@ function makeAura() {
   // rather than on the button, so a hold begun on a part-full bar starts its
   // shell at the animal like every other one.
   let held = 0;
+  // SECONDS OF ACTUAL BURN, which is not `held`. `held` keeps counting through
+  // the fade so the radius carries on outward — water that was pushed is not
+  // un-pushed. The LIFT must not: it is how far up the wind-up got, and a shell
+  // dying in the water going on saturating as it dies is the one channel that
+  // would still be describing a hold that has ended.
+  let liftT = 0;
   let life = 0;
   let churn = 0;
   let wasDraining = false;
@@ -479,6 +579,7 @@ function makeAura() {
 
   function resetBoostAura() {
     held = 0;
+    liftT = 0;
     life = 0;
     churn = 0;
     wasDraining = false;
@@ -544,7 +645,7 @@ function makeAura() {
     // living for a frame on a bar that emptied on this one.
     const draining = !!st?.charging && pip >= 0;
 
-    if (draining && !wasDraining) { held = 0; churn = 0; }
+    if (draining && !wasDraining) { held = 0; liftT = 0; churn = 0; }
     wasDraining = draining;
 
     // THE LINE, LATCHED. strikeDirection returns the zero vector only when BOTH
@@ -573,7 +674,7 @@ function makeAura() {
     // out of an empty tank, which is the layer claiming fuel the run does not
     // have. The seal opening a run dark is the same rule one step earlier.
     if (draining || (button && life > 0)) {
-      if (draining) held += rawDt;
+      if (draining) { held += rawDt; liftT += rawDt; }
       life = Math.min(1, life + rawDt / Math.max(1e-3, a.rise ?? 0.06));
     } else {
       // THE SHELL KEEPS GOING when the hold ends rather than snapping back.
@@ -611,7 +712,18 @@ function makeAura() {
 
     const inner = bodyReach(box, stats?.hitRadius ?? CONFIG.player.hitRadius)
       + (a.gap ?? 0.12);
-    const outer = inner + Math.min(a.reach ?? 2.6, (a.push ?? 3.2) * held);
+    // THE BAND'S OWN LENGTH, before the lane stretches it.
+    const grow = Math.min(a.reach ?? 2.6, (a.push ?? 3.2) * held);
+    // ...AND THE QUAD COVERS THE LONGEST IT GETS, which is straight down the
+    // lane. Growing the quad rather than capping the stretch, for the reason
+    // the ring's OVERSCAN exists: anything past the quad is not drawn short, it
+    // is CLIPPED TO THE CORNERS, and a lane reaching past r = 1 would come out
+    // as two smears where the square overhangs the circle. The shader reads a
+    // shorter band off to the sides to compensate — see `local` there.
+    const bias = Math.max(0, Math.min(1, a.bias ?? 0.6));
+    const stretch = Math.max(0, a.stretch ?? 1.1);
+    const lanePush = 1 + stretch * bias;
+    const outer = inner + grow * lanePush;
 
     mesh.position.x = pos.x;
     mesh.position.y = pos.y;
@@ -625,8 +737,17 @@ function makeAura() {
     // HELD THROUGH THE FADE. The pip index goes to -1 the moment the tank is
     // empty, and re-colouring the dying shell white on that frame would be a
     // change of hue nobody asked for on the frame the player let go.
-    if (pip >= 0) auraColor(u.uColor.value, pip, pips);
-    u.uStrength.value = a.strength ?? 1.9;
+    // HOW FAR UP THE HOLD HAS BROUGHT IT — the saturation and the brightness
+    // both ride this, so the shell opens pale and dim and arrives. See
+    // auraLift. Held through the fade with the colour, for the same reason:
+    // the let-go is not the moment to start washing it out.
+    const lift = auraLift(liftT, a);
+    if (pip >= 0) auraColor(u.uColor.value, pip, pips, lift, a);
+    // ...AND THE BRIGHTNESS WITH IT. A multiplier on the tuned strength rather
+    // than a second brightness knob, so the slider still means "how bright is a
+    // shell at full" and this only says how far from full this one is.
+    u.uStrength.value = (a.strength ?? 1.9)
+      * ((a.brightMin ?? 0.3) + (1 - (a.brightMin ?? 0.3)) * lift);
     u.uFalloff.value = a.falloff ?? 1.6;
     u.uSoft.value = a.soft ?? 0.18;
     u.uWobble.value = a.wobble ?? 0.55;
@@ -637,6 +758,15 @@ function makeAura() {
     u.uContrast.value = a.contrast ?? 1.7;
     u.uTime.value = churn;
     u.uFlow.value.copy(flowAt);
+    // THE LANE. The same heading the field flows down and the same one the lens
+    // paints its corridor along — the shell leans into the cone the dash is
+    // about to take rather than sitting round the animal like a collar.
+    u.uAim.value.copy(flowDir);
+    u.uBias.value = bias;
+    u.uCone.value = Math.cos(Math.max(0.05, Math.min(Math.PI, a.coneAngle ?? 0.9)));
+    u.uConeSoft.value = Math.max(0.01, a.coneSoft ?? 0.45);
+    u.uStretch.value = stretch;
+    u.uLanePush.value = lanePush;
     u.uLife.value = life;
   }
 
@@ -734,6 +864,9 @@ function makeAura() {
     out[o + A_R] = u.uColor.value.r;
     out[o + A_G] = u.uColor.value.g;
     out[o + A_B] = u.uColor.value.b;
+    out[o + A_AIMX] = u.uAim.value.x;
+    out[o + A_AIMY] = u.uAim.value.y;
+    out[o + A_LIFT] = auraLift(liftT, cfg());
     return out;
   }
 
@@ -774,12 +907,21 @@ function makeAura() {
     uni.uFlow.value.set(mix(A_FLOWX), mix(A_FLOWY));
     uni.uColor.value.setRGB(mix(A_R), mix(A_G), mix(A_B));
     uni.uLife.value = near[o + A_LIFE];
+    // THE LANE IT WAS AIMED DOWN, renormalised after the lerp: two headings a
+    // frame apart are two points ON the unit circle and the line between them
+    // is INSIDE it, so a blended aim is short — which the cone reads as a
+    // narrower cone rather than as a turn, and it pinches every frame between
+    // two recorded ones.
+    const ax = mix(A_AIMX);
+    const ay = mix(A_AIMY);
+    const al = Math.hypot(ax, ay);
+    if (al > 1e-5) uni.uAim.value.set(ax / al, ay / al);
+    else uni.uAim.value.copy(_replayAim);
     // THE KNOBS ARE READ LIVE, not restored — see the note on AURA_REC. The
     // field's own clock is not recorded either: the grain boils on a replay at
     // the replay's pace, which is the same call the water and the animation
     // make and the alternative is a frozen pattern sitting on a moving shot.
     const cf = cfg();
-    uni.uStrength.value = cf.strength ?? 1.9;
     uni.uFalloff.value = cf.falloff ?? 1.6;
     uni.uSoft.value = cf.soft ?? 0.18;
     uni.uWobble.value = cf.wobble ?? 0.55;
@@ -788,6 +930,21 @@ function makeAura() {
     uni.uChurn.value = cf.churn ?? 1.7;
     uni.uDepth.value = cf.depth ?? 0.8;
     uni.uContrast.value = cf.contrast ?? 1.7;
+    // The lane's SHAPE is a knob and is read live; the direction above is the
+    // record's. Same split as everything else here.
+    const bias = Math.max(0, Math.min(1, cf.bias ?? 0.6));
+    const stretch = Math.max(0, cf.stretch ?? 1.1);
+    uni.uBias.value = bias;
+    uni.uCone.value = Math.cos(Math.max(0.05, Math.min(Math.PI, cf.coneAngle ?? 0.9)));
+    uni.uConeSoft.value = Math.max(0.01, cf.coneSoft ?? 0.45);
+    uni.uStretch.value = stretch;
+    uni.uLanePush.value = 1 + stretch * bias;
+    // ...AND THE LIFT IS THE RECORD'S, multiplied onto the live strength. How
+    // far up the hold had come is a fact about that wind-up; how bright a shell
+    // at full is, is a slider.
+    const lift = Math.max(0, Math.min(1, mix(A_LIFT)));
+    uni.uStrength.value = (cf.strength ?? 1.9)
+      * ((cf.brightMin ?? 0.3) + (1 - (cf.brightMin ?? 0.3)) * lift);
     uni.uTime.value = churn;
     return true;
   }

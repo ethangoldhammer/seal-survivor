@@ -33,7 +33,11 @@
 //
 // 3. AND THE DEPTH LADDER. Layers exist to sit at different distances; four
 //    decks at the same drift are one deck with four times the overdraw. The
-//    ladder is asserted to be strictly increasing from the sky to the sea.
+//    ladder is asserted to be strictly increasing from the sky to the sea, and
+//    it is now MEASURED off the running rig rather than read off the config
+//    column — including the axis the ladder deliberately does not apply to.
+//    See the last section for why a deck is world-locked in y while the sun,
+//    which took the same treatment for years, no longer is.
 //
 //   node --import ./tools/vite-loader.mjs tools/night-sky-test.mjs
 // ---------------------------------------------------------------------------
@@ -44,6 +48,8 @@ import { updateBounds, bounds } from '../path/src/arena.js';
 import {
   STAR_THRESHOLD, STAR_RADIUS, STAR_FIELD_GLSL, starHash21, starsIn,
 } from '../path/src/systems/starField.js';
+import * as THREE from 'three';
+import { createClouds } from '../path/src/systems/clouds.js';
 
 updateBounds(16 / 9);
 
@@ -186,6 +192,78 @@ section('PARALLAX — the sky has rungs, not two ends');
     console.log(`    ${String(name).padEnd(12)} ${(pan * d).toFixed(1).padStart(6)} units  ` +
       `(${((pan * d / bounds.frameWidth) * 100).toFixed(0)}% of the frame)`);
   }
+}
+
+// ===========================================================================
+section('THE LADDER, MEASURED — and the axis it does not apply to');
+// ===========================================================================
+{
+  // The config read above says what the rungs SHOULD be. This drives the real
+  // decks and asks where they actually went, which is the only version of the
+  // question that can catch an axis the code forgot to apply the number to.
+  const scene = new THREE.Scene();
+  const clouds = createClouds(scene);
+  const defs = CONFIG.weather.clouds.layers ?? [];
+
+  // Full cover, so no deck is switched off before it can be measured — a layer
+  // whose `cover` rounds to zero is skipped entirely and would leave a stale
+  // position behind for this to read as a drift of nothing.
+  const storm = CONFIG.weather.enabled;
+  const base = CONFIG.weather.clouds.base;
+  CONFIG.weather.enabled = true;
+  CONFIG.weather.clouds.base = 1;
+
+  const posAt = (camX) => {
+    clouds.update(1 / 60, camX);
+    return clouds.layers.map((l) => ({ x: l.mesh.position.x, y: l.mesh.position.y }));
+  };
+
+  const D = 40;
+  const home = posAt(0);
+  const panned = posAt(D);
+
+  for (let i = 0; i < defs.length; i++) {
+    const want = (defs[i].drift ?? 0) * D;
+    // On screen, which is the unit the drift is stated in: how far the deck
+    // slid relative to the camera that moved D.
+    const moved = home[i].x - (panned[i].x - D);
+    check(`${defs[i].name}: drifts ${defs[i].drift} across the frame when the camera pans`,
+      Math.abs(moved - want) < 1e-4, `moved ${moved.toFixed(3)}, want ${want.toFixed(3)}`);
+  }
+
+  const rungs = defs.map((_, i) => (home[i].x - (panned[i].x - D)) / D);
+  check('the measured ladder climbs',
+    rungs.every((d, i) => i === 0 || d > rungs[i - 1]),
+    rungs.map((d) => d.toFixed(2)).join(' -> '));
+
+  // ---------------------------------------------------------------------
+  // AND NOT IN Y, WHICH IS NOW THE INTERESTING HALF OF THIS FILE.
+  //
+  // The sun and moon drift on BOTH axes (see tools/celestial-test.mjs): a body
+  // at effectively infinite distance holds its angle in the sky whatever the
+  // camera does, and in an orthographic frame holding an angle means holding a
+  // place on the screen. Rise twenty-eight units on a breach and it stays put
+  // while everything with a real height falls away underneath — which is the
+  // whole read of a breach.
+  //
+  // A cloud deck is one of the things that falls away, and that is why it does
+  // NOT take the same treatment. It has an actual altitude: `y` and `height`
+  // are fractions of the air band measured up from the water line, which is
+  // the coordinate system a cloud genuinely lives in. Drifting it vertically
+  // would mean a deck that rises as the seal jumps toward it, and the nearest
+  // deck — the one at drift 0.52, the one you can track by eye — would rise
+  // the fastest of the four. Clouds do not do that.
+  //
+  // So the asymmetry is the point rather than an oversight, and it is pinned
+  // here because the obvious "tidy-up" is to make the two layers match.
+  const risen = clouds.layers.map((l) => l.mesh.position.y);
+  clouds.update(1 / 60, 0);
+  check('a deck keeps its altitude above the water, whatever the camera does',
+    risen.every((y, i) => Math.abs(y - home[i].y) < 1e-9),
+    'a deck that drifted in y would be a cloud that climbs when the seal jumps at it');
+
+  CONFIG.weather.enabled = storm;
+  CONFIG.weather.clouds.base = base;
 }
 
 console.log(`\n${failures === 0 ? 'OK' : `${failures} FAILURE(S)`}\n`);

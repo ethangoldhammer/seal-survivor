@@ -474,20 +474,30 @@ export function createWorld(container) {
     // read here: updateSurface advances it before it calls this, so this is the
     // curve being drawn on this frame rather than the previous one's.
     //
-    // The FRAME goes with it — the sun and moon are fitted into the shot, and
-    // the shot is an asymmetric frustum at a zoom that moves (viewCentre is 15
-    // units below the camera at the default framing, so "the camera's y" is not
-    // the middle of what you can see). Built from the same banked anchor as the
-    // drift above, so both are measured against the framing rather than against
-    // the shake.
-    celestials.update(camAnchor.x, waveT, framedView(), dt);
-    // No parallax on this one, and that is not an oversight. The sky plane's
-    // own star field is painted from vWorldPos on a mesh that never moves, so
-    // it is welded to the world; the constellations are drawn between those
-    // exact stars, and a layer that drifted against them at even a fifteenth
-    // of the camera's speed would visibly walk off its own field. It gets the
-    // camera only so a finger on the glass can be resolved into the sky.
-    constellations.update(dt, { camera });
+    // The shot itself does not go with it: there is no frame fit any more, so
+    // nothing here needs to know where the edges of the frustum are.
+    celestials.update(camAnchor.x, waveT, dt);
+    // THE STAR FIELD DRIFTS WITH THEM, which it did not used to.
+    //
+    // The field is hashed off vWorldPos in systems/sky.js, on a plane that
+    // never moves — so it sat at drift 1, as near as the sea, while the moon
+    // crossing it sat at 0.04. Swimming the ocean walked the moon ninety units
+    // through its own stars. The sky had two answers to how far away it was.
+    //
+    // uCenter is the plane's world offset and the field's sample origin, so
+    // sliding its X is the whole fix: the geometry does not move (nothing can
+    // run off the edge of it) and the PATTERN slides at exactly the rate the
+    // bodies do. Y is left alone, because the gradient ramps off
+    // (vWorldPos.y - uSurfaceY) and the water line it is measured from does
+    // not move — see the drift note in systems/celestial.js for why that is
+    // the whole reason the vertical axis takes no drift either.
+    const skyKeep = 1 - Math.max(0, Math.min(1,
+      CONFIG.dayNight?.orbit?.drift ?? CONFIG.dayNight?.orbit?.parallax ?? 1));
+    if (skyMesh) skyMesh.material.uniforms.uCenter.value.x = -camAnchor.x * skyKeep;
+    // ...and the constellations with it, because they are strung between those
+    // exact stars. It gets the camera as well, so a finger on the glass can be
+    // resolved into the sky.
+    constellations.update(dt, { camera, camX: camAnchor.x });
     // The cloud decks parallax off the same banked anchor the sun and moon do
     // — each layer at its own rate, which is the whole reason there are
     // several of them. See CONFIG.weather.clouds.layers.

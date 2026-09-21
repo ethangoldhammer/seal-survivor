@@ -26,7 +26,7 @@ import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 import {
   createBoostAuraInstance, updateBoostAura, drainingPip, bodyReach, auraColor, flowSpeed,
-  AURA_UNIFORM_NAMES, AURA_REC,
+  AURA_UNIFORM_NAMES, AURA_REC, auraLift,
 } from '../path/src/systems/boostAura.js';
 import { initParticles, resetParticles } from '../path/src/entities/particles.js';
 import { feedback, onFeedback } from '../path/src/systems/feedback.js';
@@ -51,6 +51,12 @@ const BURN = windUpTime(null);
 // measured is what the system DOES with a box, not what the seal's box is.
 const BOX = new THREE.Box3(new THREE.Vector3(-0.9, -1.8, -1.7), new THREE.Vector3(0.9, 1.8, 1.7));
 const INNER = bodyReach(BOX) + (A.gap ?? 0.12);
+// THE QUAD COVERS THE LONGEST THE BAND GETS, which is straight down the dash
+// lane — so `outer` is the band's own length times this. Every check below that
+// is about the BAND divides it out; the ones about the quad do not.
+const LANE_PUSH = 1 + Math.max(0, A.stretch ?? 1.1) * Math.max(0, Math.min(1, A.bias ?? 0.6));
+/** The band's own outward push, in world units, off the quad's radius. */
+const bandOf = (outer) => (outer - INNER) / LANE_PUSH;
 const POS = new THREE.Vector3(12, -4, 0);
 const DEF_TURB = CONFIG.emitters.boostAuraBurst.turbulence;
 
@@ -131,8 +137,16 @@ console.log('\nIT PUSHES OUTWARD OVER TIME');
   check('the reach grows every frame of a burn, right up to its cap', rising,
     `${seen[0].toFixed(3)} -> ${seen[seen.length - 1].toFixed(3)} over ${(n * dt).toFixed(2)}s`);
   check(`  ...at the tuned ${A.push} units per second`,
-    near(seen[seen.length - 1] - INNER, (A.push ?? 3.2) * n * dt, 1e-6),
-    `${(seen[seen.length - 1] - INNER).toFixed(4)} in ${(n * dt).toFixed(3)}s`);
+    near(bandOf(seen[seen.length - 1]), (A.push ?? 3.2) * n * dt, 1e-6),
+    `${bandOf(seen[seen.length - 1]).toFixed(4)} in ${(n * dt).toFixed(3)}s`);
+  // ...AND THE QUAD IS BIGGER THAN THE BAND, by exactly the lane's stretch.
+  // Anything past the quad is not drawn short, it is clipped to the corners —
+  // the trap the ring's OVERSCAN exists for — so a lane that outgrew its own
+  // quad would come out as two smears where the square overhangs the circle.
+  check('  ...with the quad grown to cover the lane, not the band',
+    near(seen[seen.length - 1] - INNER, bandOf(seen[seen.length - 1]) * LANE_PUSH, 1e-9)
+      && LANE_PUSH > 1,
+    `x${LANE_PUSH.toFixed(2)}`);
 
   // PER SECOND, NOT PER FRAME. The whole failure this catches is a shell that
   // grows at half speed on a 30fps phone and twice it on a 120Hz screen. Run
@@ -149,7 +163,7 @@ console.log('\nIT PUSHES OUTWARD OVER TIME');
     near(slow.u.uOuter.value, fast.u.uOuter.value, 1e-6),
     `${slow.u.uOuter.value.toFixed(5)} vs ${fast.u.uOuter.value.toFixed(5)}`);
   check('  ...and neither of them had simply hit the cap',
-    slow.u.uOuter.value - INNER < (A.reach ?? 2.6) - 1e-6);
+    bandOf(slow.u.uOuter.value) < (A.reach ?? 2.6) - 1e-6);
 }
 
 console.log('\n...AND STOPS AT ITS REACH');
@@ -157,8 +171,8 @@ console.log('\n...AND STOPS AT ITS REACH');
   const r = rig();
   hold(r, 10, 1 / 60, true);
   check('it never gets further out than the tuned reach',
-    near(r.u.uOuter.value - INNER, A.reach ?? 2.6, 1e-9),
-    `${(r.u.uOuter.value - INNER).toFixed(4)}`);
+    near(bandOf(r.u.uOuter.value), A.reach ?? 2.6, 1e-9),
+    `${bandOf(r.u.uOuter.value).toFixed(4)}`);
   // The cap has to land INSIDE a full wind-up or "out of fuel" is never drawn
   // as a shell that has stopped growing — it would still be climbing when the
   // tank ran dry. See the note on `reach` in CONFIG.boostAura.
@@ -171,24 +185,35 @@ console.log('\nIT WEARS THE PIP THAT IS BURNING');
 {
   const r = rig();
   const want = new THREE.Color();
+  const hslA = { h: 0, s: 0, l: 0 };
+  const hslB = { h: 0, s: 0, l: 0 };
   const worn = [];
   let wrong = 0;
-  // A whole bar, sampled every frame, so every pip boundary is crossed.
+  // THE HUE, not the whole colour. Saturation and brightness now ride the
+  // hold's own lift, so the exact rgb changes every frame of a wind-up by
+  // design — comparing it would be a test of auraLift wearing a pip's name.
+  // The hue is what this layer is FOR, and it is the one channel the lift is
+  // forbidden to touch.
   const dt = 1 / 240;
   for (let i = 0; i < Math.ceil(BURN / dt); i++) {
     frame(r, true, dt);
     const pip = drainingPip(r.st.charge, PIPS);
     if (pip < 0) break;
-    auraColor(want, pip, PIPS);
-    if (!r.u.uColor.value.equals(want)) wrong++;
-    const hex = r.u.uColor.value.getHexString();
-    if (worn[worn.length - 1] !== hex) worn.push(hex);
+    auraColor(want, pip, PIPS, 1);
+    want.getHSL(hslA);
+    r.u.uColor.value.getHSL(hslB);
+    if (Math.abs(hslA.h - hslB.h) > 1e-3) wrong++;
+    const h = hslB.h.toFixed(4);
+    if (worn[worn.length - 1] !== h) worn.push(h);
   }
-  check('every frame of a drain wears the pip the drain is eating', wrong === 0, `${wrong} frame(s) off`);
-  check(`  ...so a ${PIPS}-pip bar walks ${PIPS} colours on the way down`,
+  check('every frame of a drain wears the hue of the pip the drain is eating',
+    wrong === 0, `${wrong} frame(s) off`);
+  check(`  ...so a ${PIPS}-pip bar walks ${PIPS} hues on the way down`,
     worn.length === PIPS, worn.join(' '));
+  auraColor(want, 0, PIPS, 1).getHSL(hslA);
   check('  ...ending on the FIRST pip, which is the one that empties last',
-    worn[worn.length - 1] === auraColor(want, 0, PIPS).getHexString());
+    Math.abs(Number(worn[worn.length - 1]) - hslA.h) < 1e-3,
+    `${worn[worn.length - 1]} vs ${hslA.h.toFixed(4)}`);
 
   // EQUALLY BRIGHT, whatever the hue. Normalising on luminance would hand the
   // cold end of the wheel a boost and wash the warm end out; peak-channel
@@ -196,10 +221,8 @@ console.log('\nIT WEARS THE PIP THAT IS BURNING');
   let dim = 0;
   const hueOff = [];
   const pipCol = new THREE.Color();
-  const hslA = { h: 0, s: 0, l: 0 };
-  const hslB = { h: 0, s: 0, l: 0 };
   for (let i = 0; i < PIPS; i++) {
-    auraColor(want, i, PIPS);
+    auraColor(want, i, PIPS, 1);
     if (!near(Math.max(want.r, want.g, want.b), 1, 1e-6)) dim++;
     pipCol.set(pipRGB(i, PIPS));
     pipCol.getHSL(hslA);
@@ -324,6 +347,126 @@ console.log('\nAN UNAIMED WIND-UP');
   check('  ...but it is still drawn', blind.a.mesh.visible === true);
 }
 
+console.log('\nIT LEANS INTO THE LANE THE DASH WILL TAKE');
+{
+  const r = rig();
+  hold(r, 0.3, 1 / 120, true, EAST);
+  const u = r.u;
+  check('the shell is handed the line the strike is aimed down',
+    near(u.uAim.value.x, 1, 1e-9) && near(u.uAim.value.y, 0, 1e-9));
+  check('  ...as a UNIT vector, or the cone reads the length as a narrower cone',
+    near(Math.hypot(u.uAim.value.x, u.uAim.value.y), 1, 1e-9));
+  check('  ...and it turns when the aim does', (() => {
+    hold(r, 0.1, 1 / 120, true, { x: 0, y: -1 });
+    return near(u.uAim.value.y, -1, 1e-9);
+  })());
+
+  // THE QUAD AND THE BAND HAVE TO AGREE. uLanePush is the CPU's number handed
+  // over rather than recomputed in GLSL: the quad is scaled to the longest the
+  // band gets, and the shader divides by this to read a shorter band off to the
+  // sides. If the two ever disagreed the lane would stop short of its own quad
+  // or run off the end of it, and the second one clips to the corners.
+  check('the quad\'s growth and the shader\'s normaliser are the same number',
+    near(u.uLanePush.value, LANE_PUSH, 1e-9), `${u.uLanePush.value.toFixed(4)} vs ${LANE_PUSH.toFixed(4)}`);
+  check('  ...and the cone is handed over as a COSINE, which is what it compares in',
+    near(u.uCone.value, Math.cos(A.coneAngle ?? 0.9), 1e-9));
+
+  // BIAS 0 IS THE OLD SHELL, EXACTLY. The dial has to have a setting that is
+  // the symmetrical collar, or there is no way back from a lane that reads
+  // wrong in a fight.
+  const keepB = CONFIG.boostAura.bias;
+  CONFIG.boostAura.bias = 0;
+  const flat = rig();
+  hold(flat, 0.3, 1 / 120, true, EAST);
+  check('bias 0 is the symmetrical shell again — the quad stops growing for a lane',
+    near(flat.u.uLanePush.value, 1, 1e-9)
+      && near(flat.u.uOuter.value - INNER, Math.min(A.reach, A.push * 0.3), 1e-6),
+    `push ${flat.u.uLanePush.value.toFixed(3)}`);
+  CONFIG.boostAura.bias = keepB;
+
+  // ...and a wider stretch grows the quad, because the lane has to fit in it.
+  // HELD FOR THE SAME TIME AS ITS CONTROL — `r` above has had two holds by now,
+  // and comparing a 0.3s shell against a 0.4s one measures the clock, not the
+  // lane. The control is built here for that reason rather than reused.
+  const keepS = CONFIG.boostAura.stretch;
+  const SPAN = 0.3;
+  const base = rig();
+  hold(base, SPAN, 1 / 120, true, EAST);
+  CONFIG.boostAura.stretch = (A.stretch ?? 1.1) * 2;
+  const long = rig();
+  hold(long, SPAN, 1 / 120, true, EAST);
+  check('a longer lane grows the quad to hold it',
+    long.u.uOuter.value > base.u.uOuter.value * 1.1,
+    `${base.u.uOuter.value.toFixed(2)} → ${long.u.uOuter.value.toFixed(2)}`);
+  check('  ...without moving the band\'s own reach',
+    near((long.u.uOuter.value - INNER) / long.u.uLanePush.value,
+      (base.u.uOuter.value - INNER) / base.u.uLanePush.value, 1e-6));
+  CONFIG.boostAura.stretch = keepS;
+}
+
+console.log('\nIT COMES UP TO STRENGTH OVER THE HOLD');
+{
+  const A2 = CONFIG.boostAura;
+  check('a hold opens at the tuned floor, not at full', near(auraLift(0), 0, 1e-9));
+  check('  ...and reaches full after the tuned time', near(auraLift(A2.liftTime ?? 0.5), 1, 1e-9));
+  check('  ...and never past it', near(auraLift(99), 1, 1e-9));
+  check('  ...arriving inside a wind-up, or it is a ramp nobody sees the end of',
+    (A2.liftTime ?? 0.5) < BURN, `${A2.liftTime}s of ${BURN.toFixed(2)}s`);
+
+  // BRIGHTNESS climbs.
+  const r = rig();
+  const seen = [];
+  let at = 0;
+  for (const t of [0.02, 0.12, 0.3, 0.6]) { hold(r, t - at, 1 / 240); at = t; seen.push(r.u.uStrength.value); }
+  let rising = true;
+  for (let i = 1; i < seen.length; i++) if (seen[i] <= seen[i - 1] + 1e-9) rising = false;
+  check('the shell brightens as the hold runs', rising, seen.map((v) => v.toFixed(2)).join(' → '));
+  check('  ...opening at the tuned floor of the tuned strength',
+    seen[0] < (A2.strength ?? 1.9) * ((A2.brightMin ?? 0.3) + 0.2),
+    `${seen[0].toFixed(2)} of ${(A2.strength ?? 1.9).toFixed(2)}`);
+  check('  ...and arriving at exactly the tuned strength',
+    near(seen[seen.length - 1], A2.strength ?? 1.9, 1e-9),
+    `${seen[seen.length - 1].toFixed(3)}`);
+
+  // SATURATION climbs with it, and the HUE does not move at all — which is the
+  // whole constraint: the hue says which pip is burning, and a wind-up that
+  // opened on the wrong one would be lying for its own first half.
+  const c = new THREE.Color();
+  const hsl = { h: 0, s: 0, l: 0 };
+  const sats = [];
+  const hues = [];
+  // CHROMA, NOT HSL SATURATION. Every colour this layer produces is normalised
+  // on its PEAK channel, and HSL saturation of a colour whose max channel is 1
+  // is exactly 1 whatever the other two are doing — so the metric reads a flat
+  // 1.000 across a wash that is plainly happening. Same trap as trying to
+  // equalise bloom in HSL. max - min is what "pale" actually means here.
+  const chroma = (col) => Math.max(col.r, col.g, col.b) - Math.min(col.r, col.g, col.b);
+  for (const k of [0, 0.25, 0.6, 1]) {
+    auraColor(c, 2, PIPS, k);
+    c.getHSL(hsl);
+    sats.push(chroma(c));
+    hues.push(hsl.h);
+  }
+  let satUp = true;
+  for (let i = 1; i < sats.length; i++) if (sats[i] <= sats[i - 1]) satUp = false;
+  check('the colour gains chroma as the hold runs', satUp, sats.map((v) => v.toFixed(3)).join(' → '));
+  check('  ...and the HUE never moves, at any lift',
+    hues.every((h) => Math.abs(h - hues[0]) < 1e-6), hues.map((v) => v.toFixed(4)).join(' '));
+  check('  ...opening pale rather than at the pip\'s own saturation',
+    sats[0] < sats[sats.length - 1] * 0.75, `${sats[0].toFixed(3)} vs ${sats[sats.length - 1].toFixed(3)}`);
+
+  // ...AND IT FREEZES WHEN THE BURN DOES, not when the shell does. Checked on
+  // the wire rather than through auraLift, because the bug this catches is the
+  // update feeding it `held` — which keeps counting through a fade so the
+  // RADIUS carries on outward — instead of the burn's own clock.
+  const f = rig();
+  hold(f, 0.06, 1 / 240);
+  const mid = f.u.uStrength.value;
+  hold(f, 0.06, 1 / 240, false);
+  check('the lift freezes at the let-go while the radius carries on',
+    near(f.u.uStrength.value, mid, 1e-9), `${mid.toFixed(3)} → ${f.u.uStrength.value.toFixed(3)}`);
+}
+
 console.log('\nTHE LET-GO');
 {
   const r = rig();
@@ -355,6 +498,9 @@ console.log('\nTHE LET-GO');
   check('  ...having kept EXPANDING through the fade, not snapped back',
     radii.length > 1 && radii[radii.length - 2] > wide,
     `${wide.toFixed(3)} -> ${radii[radii.length - 2].toFixed(3)}`);
+  // THE LIFT FREEZES WHEN THE BURN DOES. `held` keeps counting through a fade
+  // so the radius carries on outward; a shell that went on saturating as it
+  // died would be the one channel still describing a hold that had ended.
   check('  ...and never changed colour on the way out',
     r.u.uColor.value.equals(litColor), r.u.uColor.value.getHexString());
   check('  ...and kept FLOWING through the fade, like the radius',

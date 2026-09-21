@@ -45,12 +45,11 @@
 // so what you read here is what the goal card will say. Seat 0 has no dice:
 // that name is changed on the splash, where it is saved.
 //
-// A PAD CAN REACH EVERY CONTROL ON IT, which took two goes. A readied stick
-// walks the rows under the board (see settingRow) and now walks on to Back and
-// Start, which used to answer only to the pad's own B and Start buttons — a
-// different thing, and a worse one, because neither ever lit up to say it was
-// there. Every stop draws the same ring, and a stop that is switched off is
-// stepped over rather than landed on.
+// A PAD CAN REACH EVERY CONTROL ON IT, AND THE SCREEN SAYS WHICH BUTTON — which
+// took three goes. Every setting under the board has a button of its own now
+// and a mark of that button beside it; the ring that used to walk between them
+// is gone, and so is the version before that where the rows answered to nothing
+// at all. See THE MATCH IS BOUND TO BUTTONS below.
 //
 // ...AND IT SAYS WHICH PAD IS WHICH. Four controllers in a room were four
 // identical emoji told apart by the digit after them. The chip draws the
@@ -95,6 +94,10 @@ import { accessoryName } from './accessoryDrawer.js';
 // deviceIcons.js for why an empty icon set is the shipped state rather than a
 // bug.
 import { padBrand } from './padBrand.js';
+// WHAT TO PRESS — the marks that name a pad's buttons on the controls they
+// drive. Art rather than copy, and brand-neutral by construction; see the
+// header there.
+import { glyphFor } from './padGlyphs.js';
 import { DEVICE_ICONS } from './deviceIcons.js';
 // This screen's stylesheet is filed UNDER the Text panel's role sheet — the
 // screen builds on its first open, long after typography has written its
@@ -103,6 +106,27 @@ import { DEVICE_ICONS } from './deviceIcons.js';
 import { installStyleBelowRoles } from './typography.js';
 
 const POOL = -1;
+
+// ---------------------------------------------------------------------------
+// THE OTHER MACHINE'S CHIP
+//
+// A DEVICE LIKE ANY OTHER, which is the whole reason the room's separate
+// ready-up screen could go away. This screen already knows how to hold several
+// people who each walk onto a side, take a colour and ready up independently —
+// the lobby was reimplementing a worse version of exactly that, one room-code
+// screen later. So the remote player is registered here as a device that
+// pollPads never produces and the wire drives instead.
+//
+// ITS KEY IS NOT A PAD INDEX, deliberately: pad keys are `pad0`, `pad1`… off
+// the browser's own list, and a remote player who happened to be holding
+// controller 0 would collide with the local controller 0 and the two would
+// fight over one chip.
+const REMOTE_KEY = 'remote';
+
+// How this end talks to the other one while the screen is up. Null offline, in
+// which case every line below it is dead and this screen is exactly the screen
+// it was before any of it existed.
+let wire = null;
 // The dice face on the re-roll button. A glyph, not a word — see nameTag.
 const DICE = '\u{1F3B2}';
 // ...and what an EMPTY accessory tile shows. A bare head, not a cross: nothing
@@ -159,46 +183,56 @@ const padPrev = new Map();
 const picks = [null, null];
 let keyHandler = null;
 
-// WHICH MATCH SETTING A PAD IS ON, or -1 for "nobody has asked".
+// ---------------------------------------------------------------------------
+// THE MATCH IS BOUND TO BUTTONS, AND EVERY BUTTON IS DRAWN ON ITS CONTROL
 //
-// THE ROWS UNDER THE BOARD ARE THE MATCH, and until now they were the one part
-// of this screen a controller could not touch: how many seals a side, first to N
+// THE ROWS UNDER THE BOARD ARE THE MATCH — how many seals a side, first to N
 // goals or N minutes, and which of those two it is. They were built as pointer
-// controls and nothing ever gave them a second route — which on the one screen
-// in this game most likely to be played from a sofa is the wrong half to leave
-// out. A pad could choose a side, a colour and press Start, and could not change
-// a single thing about the match it was starting.
+// controls, on the one screen in this game most likely to be played from a
+// sofa, and for a long time a pad could choose a side, a colour and press Start
+// without being able to change a single thing about the match it was starting.
 //
-// A READIED DEVICE'S STICK IS WHAT DRIVES THEM, and that is not a mode hidden in
-// a corner: it is the only state on this screen where the directions have
-// nothing else to mean. Unreadied, left and right walk between the sides and up
-// and down turn the colour wheel; readied, move() and stepColor both refuse
-// outright — they always have — so all four were dead buttons. Readying is also
-// already what you must do before Start, so the sequence a player performs
-// anyway (pick a side, pick a colour, lock in) ends with their stick on the
-// match itself.
+// A CURSOR WAS THE FIRST ANSWER AND IT WAS THE WRONG ONE. Up and down walked a
+// ring through five stops and left and right changed whatever the ring was on.
+// Everything was reachable and nothing was legible: with the ring undrawn until
+// the first push, a player looking at the screen could not tell that the rows
+// answered to anything, and once it was drawn they still had to learn that this
+// row's left meant a number while that row's left meant a different row. It
+// failed the test that matters here, which is not "can this be reached" but
+// "can four people on a couch see what to press".
 //
-// NOTHING IS LIT UNTIL SOMEBODY ASKS, the rule every other cursor in this game
-// follows: a ring drawn the moment a captain readies would be pointing at a
-// control a mouse player is never going to use.
-// HOW MANY STOPS THE CURSOR HAS. Five: the roster, the match kind, the number
-// that kind is played to, and the two buttons that leave or start.
+// SO EVERY SETTING HAS ITS OWN BUTTON, and there is no cursor to lose:
 //
-// BACK AND START WERE THE HOLE. Every other control on this screen answered to
-// a pad and those two answered only to the pad's OWN Back and Start buttons —
-// which is a different thing, and a worse one: nothing on the screen ever lit
-// up to say either was there. A player who had readied could see a ring walk
-// three rows and then run out of screen with the two decisions that actually
-// end it unmarked, and the only way to find out that the pad's Start works here
-// is to press it and see. A control a cursor cannot reach is a control the
-// screen has not admitted to having.
+//   left / right   the number the match is played to — goals, or the clock
+//   up / down      how many seals a side
+//   L / R          which of those two kinds of match it is
+//   B              back, one rung at a time: readied, then a side, then out
+//   Start          start it
 //
-// THE PAD'S OWN BUTTONS STILL WORK. Start starts and B goes back from anywhere,
-// readied or not, exactly as before — the stops are a second route rather than
-// a replacement, for the player who is walking the screen rather than reciting
-// it.
-const SETTING_STOPS = 5;
-let settingRow = -1;
+// ...AND THE MARK FOR EACH ONE SITS ON THE CONTROL IT DRIVES (ui/padGlyphs.js),
+// which is the half that was actually missing. A binding nobody can see is a
+// binding nobody has, and the screen was asking players to find three of them
+// by pushing things and watching.
+//
+// A READIED DEVICE'S STICK IS WHAT DRIVES THE SETTINGS, and that is not a mode
+// hidden in a corner: it is the only state on this screen where the directions
+// have nothing else to mean. Unreadied, left and right walk between the sides
+// and up and down turn the colour wheel; readied, move() and stepColor both
+// refuse outright — they always have — so all four were dead buttons. Readying
+// is also already what you must do before Start, so the sequence a player
+// performs anyway ends with their stick on the match itself. The cues follow
+// that exactly: a mark appears when its binding goes live and not before, so
+// the screen never shows a button that would do nothing.
+//
+// THE SHOULDERS ARE THE EXCEPTION AND ARE LIVE THROUGHOUT. Nothing else on this
+// screen uses them in any state, so there is no press for them to steal and no
+// moment where reaching for one is wrong.
+//
+// THE COLOUR WHEEL IS THE RIGHT STICK, POINTED. Up and down still step it a
+// swatch at a time, but a ring of colours wants to be aimed at rather than
+// walked round, and the stick's heading names a swatch directly — see aimColor.
+// The mark goes in the middle of the wheel, which is where the stick's own
+// centre is and where the gesture starts.
 
 const STYLE = `
 /* RESPONSIVE, AND THE OLD min-width IS WHY IT WAS NOT.
@@ -379,13 +413,60 @@ const STYLE = `
    own. Inline-flex and not a block: it is a run of controls inside a row that
    wraps, and it has to wrap with it. */
 .sv-teams-rules-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-/* WHERE A PAD IS, on the two settings rows. The same ring the score card and the
-   pause menu draw (.sv-nav-sel in ui/ui.js), restated here because this screen
-   carries its own sheet — and a ring rather than a colour, because a stepper at
-   its clamp is already saying something with colour. */
-.sv-teams-roster.sv-nav-sel, .sv-teams-rules-group.sv-nav-sel, .sv-teams-mode.sv-nav-sel,
-.sv-teams-foot .sv-btn.sv-nav-sel {
-  outline: 2px solid #fff; outline-offset: 3px; border-radius: 8px; }
+/* WHAT TO PRESS. A cue is a small square of SVG (ui/padGlyphs.js) standing
+   beside the control it drives — a label on its subject, the way the coach
+   lines are, rather than a legend at the foot of the screen that every control
+   shares and none of them points at.
+
+   SIZED IN em, NOT PX. The rows around it are 12px type and the footer's
+   buttons are 14px; a mark that stayed one pixel size would be right on one of
+   them and wrong on the other, and would go on being wrong as the Text panel
+   moves either. 1.5em is a shade taller than the line it stands on, which is
+   what a button needs to be legible beside type — a mark the height of a cap is
+   a smudge at couch distance, and this whole change exists because of couch
+   distance. It does NOT make the row taller: the steppers beside it are already
+   20px of button.
+
+   AN EXPLICIT COLOUR, NOT currentColor, which the first version used and which
+   is a trap here. These stand on the panel, never inside a button, so there is
+   no second background to adapt to — and inheriting means a screen whose text
+   colour has not been set yet draws every mark in black on navy. Which is what
+   it did.
+
+   AN EMPTY CUE TAKES NO ROOM, and the version that let it keep its box cost 36px
+   of height on an iPhone SE and 50px on a phone held sideways. These rows WRAP,
+   so six reserved boxes are six chances to push a row onto a second line — and
+   the screen they were reserved on is the commonest one there is, a phone with
+   no controller anywhere near it, where not one of them would ever be filled.
+   Held open, they were furniture paid for by the people least able to afford
+   the height. Collapsed, a screen with no pad on it is laid out exactly as it
+   was before any of this existed, which is the right default for a mark that
+   only means something to somebody holding a controller.
+
+   The wrap point does move when a pad connects. That is a thing the player has
+   just done, on a screen that is telling them what it does — not a row quietly
+   rearranging itself. */
+.sv-teams-cue { flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5em; height: 1.5em; color: #eaf3ff; opacity: .85; }
+.sv-teams-cue:empty { display: none; }
+.sv-teams-cue svg { display: block; }
+/* ON THE MODE BUTTON the two shoulders flank it, so which one goes which way is
+   the shape of the row rather than something to be read off a label. */
+.sv-teams-rules-kind { display: inline-flex; align-items: center; gap: 5px; }
+/* ...AND ON A FOOTER BUTTON the mark stands to its left, outside it. The button
+   keeps its own box: render() writes it with textContent and npm run layout
+   measures it as the tap target, and a mark inside it would be wiped by the
+   first and would inflate the second. The slot is the pair. */
+.sv-teams-foot-slot { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* IN THE MIDDLE OF THE WHEEL, because that is where the stick's own centre is
+   and where the push starts from. Absolutely positioned, so it takes no part in
+   the ring's geometry and cannot move a swatch; pointer-events off, so it is
+   never the thing a click lands on instead of the colour under it. */
+.sv-teams-stick { position: absolute; left: 50%; top: 50%; width: calc(var(--wheel) * .32);
+  height: calc(var(--wheel) * .32); margin: calc(var(--wheel) * -.16) 0 0 calc(var(--wheel) * -.16);
+  display: flex; align-items: center; justify-content: center;
+  color: #eaf3ff; opacity: .5; pointer-events: none; }
+.sv-teams-stick svg { display: block; }
 .sv-teams-roster .sv-btn { min-width: 28px; padding: 2px 8px; }
 .sv-teams-roster .sv-btn:disabled { opacity: .3; }
 .sv-teams-roster-n { min-width: 1.5ch; text-align: center; font-variant-numeric: tabular-nums; }
@@ -591,19 +672,36 @@ function build(parent) {
         <button class="sv-btn sv-teams-roster-less" type="button">&minus;</button>
         <span class="sv-teams-roster-n"></span>
         <button class="sv-btn sv-teams-roster-more" type="button">+</button>
+        <span class="sv-teams-cue sv-teams-cue-roster"></span>
       </div>
       <div class="sv-teams-roster sv-teams-rules">
-        <button class="sv-btn sv-teams-mode" type="button"></button>
+        <span class="sv-teams-rules-kind">
+          <span class="sv-teams-cue sv-teams-cue-lb"></span>
+          <button class="sv-btn sv-teams-mode" type="button"></button>
+          <span class="sv-teams-cue sv-teams-cue-rb"></span>
+        </span>
         <span class="sv-teams-rules-group">
           <span class="sv-teams-rules-label"></span>
           <button class="sv-btn sv-teams-rules-less" type="button">&minus;</button>
           <span class="sv-teams-rules-n"></span>
           <button class="sv-btn sv-teams-rules-more" type="button">+</button>
+          <span class="sv-teams-cue sv-teams-cue-rules"></span>
         </span>
       </div>
+      <!-- THE CUE IS THE BUTTON'S SIBLING, NOT ITS CHILD. render() writes each
+           of these buttons with textContent, which would take a mark inside it
+           away every frame; and npm run layout measures the BUTTON as the tap
+           target, which a mark growing it from the inside would quietly
+           inflate past a size it does not really have. -->
       <div class="sv-teams-foot">
-        <button class="sv-btn" id="svTeamBack" type="button"></button>
-        <button class="sv-btn" id="svTeamStart" type="button"></button>
+        <span class="sv-teams-foot-slot">
+          <span class="sv-teams-cue sv-teams-cue-back"></span>
+          <button class="sv-btn" id="svTeamBack" type="button"></button>
+        </span>
+        <span class="sv-teams-foot-slot">
+          <span class="sv-teams-cue sv-teams-cue-start"></span>
+          <button class="sv-btn" id="svTeamStart" type="button"></button>
+        </span>
       </div>
     </div>`;
   parent.appendChild(root);
@@ -619,10 +717,19 @@ function build(parent) {
     rosterLess: root.querySelector('.sv-teams-roster-less'),
     rosterMore: root.querySelector('.sv-teams-roster-more'),
     mode: root.querySelector('.sv-teams-mode'),
-    // The two rows a PAD walks, and the one span inside the second that a
-    // cursor can be drawn around — see SETTING_STOPS.
     rosterRow: root.querySelector('.sv-teams-roster'),
     rulesGroup: root.querySelector('.sv-teams-rules-group'),
+    // WHAT TO PRESS, one per binding. Held rather than re-queried because
+    // render() runs on every frame anything moves and these never leave the
+    // document — unlike el.wheels, which render() rebuilds.
+    cues: {
+      roster: root.querySelector('.sv-teams-cue-roster'),
+      rules: root.querySelector('.sv-teams-cue-rules'),
+      lb: root.querySelector('.sv-teams-cue-lb'),
+      rb: root.querySelector('.sv-teams-cue-rb'),
+      back: root.querySelector('.sv-teams-cue-back'),
+      start: root.querySelector('.sv-teams-cue-start'),
+    },
     rulesLabel: root.querySelector('.sv-teams-rules-label'),
     rulesN: root.querySelector('.sv-teams-rules-n'),
     rulesLess: root.querySelector('.sv-teams-rules-less'),
@@ -711,7 +818,13 @@ function dressChip(chip, d) {
 function move(d, side) {
   if (d.ready) return;
   if (side !== POOL && captain(side) && captain(side) !== d) return;
-  if (side === 1 && d.kind === 'keyboard') return;
+  // THE KEYBOARD IS PLAYER 1'S — normally. input.js reads it and input.js
+  // drives seat 0, so a keyboard walked onto the right would be a chip that
+  // could never move its seal. ONLINE IT IS THE OPPOSITE: the guest's keyboard
+  // is not driving a local seat at all, it is being encoded and sent, and the
+  // seat it arrives at on the host IS the right-hand one. So the rule holds
+  // for every local match and is lifted for exactly the case it was wrong for.
+  if (side === 1 && d.kind === 'keyboard' && !wire) return;
   if (d.side === side) return;
   d.side = side;
   feedback('uiHover');
@@ -835,91 +948,61 @@ function flipRulesKind() {
 }
 
 /**
- * THE THREE STOPS A PAD WALKS on the rows under the board, and the element each
- * one draws its ring around.
+ * IS ANY PAD DRIVING THE SETTINGS — which is the same question as "should the
+ * cues be drawn", because the marks and the bindings go live together.
  *
- * Three and not two: the kind button is a decision of its own — first to five
- * goals and five minutes are different matches — and folding it into the number
- * beside it would make the one control on those rows a pad could not reach the
- * one that decides what the number MEANS.
+ * Readied and a PAD: a readied keyboard drives nothing on these rows (onKey has
+ * no shoulders and no right stick, and the keyboard's own arrows are the sides
+ * and the wheel), so a controller mark on its account would be naming a button
+ * that is not in the room.
+ */
+function padDriving() {
+  for (const d of devices.values()) if (d.kind === 'pad' && d.ready) return true;
+  return false;
+}
+
+/** ...and is there a pad here AT ALL, readied or not — B and Start are its. */
+function padPresent() {
+  for (const d of devices.values()) if (d.kind === 'pad') return true;
+  return false;
+}
+
+/**
+ * WHICH SWATCH THE RIGHT STICK IS POINTING AT, or null inside the deadzone.
  *
- * Rebuilt on demand rather than held, for the reason el.wheels is: render()
- * rewrites the board every frame something changes, and a handle taken once
- * would eventually point at an element that has left the document.
+ * THE HEADING IS THE PICK, and that is the whole difference between this and
+ * stepColor: a ring of colours is a thing you point at. Pushing the stick to
+ * the upper-left takes the swatch in the upper-left, and letting go leaves it
+ * there — so a colour four steps round the wheel is one motion rather than four
+ * presses, and you never have to know which way the walk was going to go.
+ *
+ * MEASURED WITH THE WHEEL'S OWN GEOMETRY, not with a copy of it. swatchAt is
+ * where the dot is drawn; this inverts the same function rather than restating
+ * its angle, so a wheel re-laid out for a different count cannot leave the
+ * stick pointing at the gaps between the dots it used to have.
+ *
+ * A TAKEN COLOUR IS NOT SKIPPED, it is simply never the nearest: the other
+ * side's swatch stays on the ring where the eye can see it, and the stick
+ * pointed straight at it lands on the open swatch beside it rather than
+ * silently jumping somewhere else. setColor refuses it either way.
  */
-function settingStops() {
-  return [
-    { node: el.rosterRow, step: stepRoster },
-    { node: el.mode, step: flipRulesKind },
-    { node: el.rulesGroup, step: stepRules },
-    // THE TWO BUTTONS ARE PRESSED, NOT STEPPED — `press` rather than `step`, so
-    // nothing has to ask what a nudge to the left of "Start" would mean. They
-    // are side by side on one row, so left and right walk BETWEEN them (see
-    // stepSettingValue) rather than doing nothing, which is what the pair
-    // already looks like it should do.
-    { node: el.back, press: leave },
-    // ...AND START IS NOT A STOP UNTIL IT IS A BUTTON. The same rule the shared
-    // panel cursor follows (ui/panelNav.js): a disabled control the cursor can
-    // land on is a cursor that appears to have stopped working. Skipped rather
-    // than removed, so the stop a row is on never shifts under the player when
-    // the far captain readies.
-    { node: el.start, press: tryStart, off: () => !canStart() },
-  ];
-}
-
-/**
- * Walk between the stops. Clamped, like every other list in the game — and
- * stepping OVER anything currently switched off rather than landing on it, with
- * the clamp applied to what is left: at the bottom of the list with Start not
- * yet pressable, down holds on Back rather than walking onto a dead button.
- */
-function stepSettingRow(dir) {
-  const stops = settingStops();
-  const was = settingRow;
-  let at = was < 0 ? (dir > 0 ? 0 : SETTING_STOPS - 1) : was + dir;
-  while (at >= 0 && at < stops.length && stops[at].off?.()) at += dir || 1;
-  // Off either end, or the only thing that way is switched off: stay put.
-  if (at < 0 || at >= stops.length) at = was < 0 ? 0 : was;
-  settingRow = Math.max(0, Math.min(stops.length - 1, at));
-  if (settingRow !== was) feedback('uiHover');
-  render();
-}
-
-/**
- * Change whatever the cursor is on — and with nothing selected yet, SELECT
- * rather than change. The first thing a readied stick says is the asking; a push
- * that silently altered the roster before anything was drawn would be a setting
- * changing with no indication of which one.
- */
-function stepSettingValue(dir) {
-  if (settingRow < 0) { stepSettingRow(1); return; }
-  const stop = settingStops()[settingRow];
-  if (!stop) return;
-  // A BUTTON HAS NO VALUE, so left and right walk between the two of them
-  // instead — they sit side by side in the footer, and a cursor on Back that
-  // refused to move right would be the one place on this screen where the
-  // direction pointing at a control does nothing.
-  if (stop.press) { stepFootButton(dir); return; }
-  stop.step(dir);
-}
-
-/**
- * Left and right ALONG THE FOOTER, and no further. The two buttons are one row
- * on the screen, so a push sideways off the end of it should stop rather than
- * climb back into the settings above — a horizontal press that moves the cursor
- * vertically is the kind of thing a player learns not to trust.
- */
-function stepFootButton(dir) {
-  const stops = settingStops();
-  const first = stops.findIndex((x) => x.press);
-  if (first < 0) return;
-  const was = settingRow;
-  let at = was + dir;
-  while (at >= first && at < stops.length && stops[at].off?.()) at += dir;
-  if (at < first || at >= stops.length) return;
-  settingRow = at;
-  if (settingRow !== was) feedback('uiHover');
-  render();
+function aimColor(side, aim) {
+  if (!aim?.on) return null;
+  const wheel = palette();
+  const open = openTo(side);
+  if (!open.length) return null;
+  // Screen space: y grows downward and so does the stick's y, so the angle is
+  // read the same way swatchAt writes it and no sign has to be flipped.
+  const want = Math.atan2(aim.y, aim.x);
+  let best = null;
+  let closest = Infinity;
+  for (const i of open) {
+    const { angle } = swatchAt(i, wheel.length);
+    // The short way round, so 350 degrees and 10 degrees are 20 apart.
+    let d = Math.abs(((want - angle + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI);
+    if (d < closest) { closest = d; best = i; }
+  }
+  return best;
 }
 
 /**
@@ -954,6 +1037,87 @@ function setColor(side, i) {
   render();
 }
 
+// ---------------------------------------------------------------------------
+// THE TWO ENDS OF ONE TEAM SELECT
+// ---------------------------------------------------------------------------
+
+/** The last seat state this end sent, so an unchanged frame sends nothing. */
+let sentSeat = '';
+
+/** Which device on this screen is the person at THIS keyboard. */
+function localChip() {
+  // Whichever local device is on a side, else the keyboard — the same order
+  // the screen itself treats them in. Never the remote chip.
+  for (const d of devices.values()) if (d.key !== REMOTE_KEY && d.side !== POOL) return d;
+  return devices.get(KEYBOARD) ?? null;
+}
+
+/**
+ * SEND THIS END'S CHIP, if it moved.
+ *
+ * SIDE, READY AND COLOUR IN ONE MESSAGE, because they are one fact: "where I
+ * am and what I am wearing". Split into three they would arrive in three
+ * orders and the screen would briefly show a chip readied on a side it had not
+ * reached yet.
+ *
+ * The colour is sent as the side's CURRENT SHOWING — colorOf, which is the
+ * pick or wherever the light has walked to — and not as `picks`, because a
+ * side that has not chosen still has a colour on screen and the other end must
+ * see the same one. The chase is beat-locked to the same music on both
+ * machines, but only approximately, and approximately is not good enough for
+ * the thing that names the team.
+ */
+function pushSeat() {
+  const me = localChip();
+  if (!me) return;
+  const side = me.side;
+  const msg = { t: 'seat', side, ready: !!me.ready, color: side === POOL ? null : colorOf(side) };
+  const sig = `${msg.side}:${msg.ready ? 1 : 0}:${msg.color}`;
+  if (sig === sentSeat) return;
+  sentSeat = sig;
+  wire?.send?.(msg);
+}
+
+/**
+ * THE OTHER END'S CHIP ARRIVED.
+ *
+ * WRITTEN STRAIGHT IN rather than passed through move() and toggleReady(),
+ * and that is the one place this deliberately sidesteps the screen's own
+ * rules. Those functions REFUSE things — a side that is taken, a chip that is
+ * already readied — which is right for a press from a hand that can try again,
+ * and wrong for a fact about another machine that has already happened. A
+ * refused remote move is two screens that disagree forever, with no event
+ * coming to repair them.
+ *
+ * The rules still hold where they matter, because the other end applied them
+ * to its own press before sending: it could not have taken a side its copy of
+ * this screen showed as occupied.
+ */
+export function applyRemoteSeat(msg) {
+  if (!wire || !msg) return false;
+  let d = devices.get(REMOTE_KEY);
+  if (!d) {
+    d = { key: REMOTE_KEY, kind: 'remote', index: 0, id: '', side: POOL, ready: false };
+    devices.set(REMOTE_KEY, d);
+  }
+  d.side = typeof msg.side === 'number' ? msg.side : POOL;
+  d.ready = !!msg.ready;
+  // Their colour is their side's colour, on both screens.
+  if (d.side !== POOL && typeof msg.color === 'number') {
+    picks[d.side] = msg.color;
+    chase[d.side] = null;
+  }
+  render();
+  return true;
+}
+
+/** Drop the other end's chip — they left, or the match is over. */
+export function clearRemoteSeat() {
+  devices.delete(REMOTE_KEY);
+  sentSeat = '';
+  render();
+}
+
 /** Both sides have a captain who is ready, or are empty (the CPU's), and at least one is a person. */
 export function canStart() {
   const c = [captain(0), captain(1)];
@@ -970,6 +1134,11 @@ function leave() {
 
 function tryStart() {
   if (!open || !canStart()) return;
+  // ONE MACHINE STARTS THE MATCH. Both ends have a Start that lights up at the
+  // same moment, and two people pressing it within a frame of each other would
+  // send two match payloads and build two matches. The host's is the one that
+  // counts, for the same reason the host's simulation is.
+  if (wire && !wire.isHost) return;
   writeSetup();
   hideTeamSelect();
   feedback('uiClick');
@@ -996,24 +1165,44 @@ export function writeSetup() {
 
 // --- input ----------------------------------------------------------------
 
-function act(d, press) {
-  // A READIED DEVICE'S STICK IS THE MATCH'S — see settingRow. Every one of these
-  // four directions is refused by move() and stepColor() while `ready` is set,
-  // so nothing is being taken away from anything: they were dead.
-  if (d.ready && (press.left || press.right || press.up || press.down)) {
-    if (press.up) stepSettingRow(-1);
-    else if (press.down) stepSettingRow(1);
-    else stepSettingValue(press.right ? 1 : -1);
-    return;
+function act(d, press, aim = null) {
+  // THE RIGHT STICK PICKS THE COLOUR, and it is handled before the presses
+  // because it is not one: it is a heading held rather than a button struck, so
+  // it has no edge to fall through the chain below and nothing further down
+  // competes with it.
+  //
+  // ONLY WHEN THE SWATCH CHANGES. This runs at 60 Hz with a thumb resting on
+  // the stick; acting every frame would be sixty picks a second, sixty
+  // feedback('uiClick')s and sixty renders for one gesture. The pick IS the
+  // state, so comparing against it is enough and nothing has to be remembered
+  // per device.
+  if (aim && d.side !== POOL && !d.ready) {
+    const want = aimColor(d.side, aim);
+    if (want != null && want !== picks[d.side]) setColor(d.side, want);
   }
-  // ...AND A PRESSES WHAT THE CURSOR IS ON, when the cursor is on something that
-  // can be pressed. Only then: with no cursor drawn yet, or with it on a row of
-  // numbers, A means what it has always meant on this screen — ready, and
-  // un-ready. B is the way back out either way, so nothing is lost by A taking
-  // on the buttons it is now pointing at.
-  if (press.a && d.ready && settingRow >= 0) {
-    const stop = settingStops()[settingRow];
-    if (stop?.press && !stop.off?.()) { stop.press(); return; }
+  // WHICH KIND OF MATCH, FROM ANYWHERE. The shoulders are the one pair of
+  // buttons this screen does not otherwise use, in any state, so there is no
+  // press to steal and nothing to be in the middle of — and a player reaching
+  // for one before they have readied is not wrong, they are just early.
+  //
+  // BOTH SHOULDERS FLIP IT, which is not the same as one doing nothing. There
+  // are two kinds of match and a toggle is a toggle whichever side you push;
+  // binding L to "goals" and R to "timed" would be two buttons where the screen
+  // draws one, and would leave one of them dead half the time.
+  if (press.lb || press.rb) { flipRulesKind(); return; }
+  // A READIED DEVICE'S STICK IS THE MATCH'S. Every one of these four directions
+  // is refused by move() and stepColor() while `ready` is set, so nothing is
+  // being taken away from anything: they were dead.
+  //
+  // THE AXES ARE THE TWO SETTINGS, straight across, with no cursor in between —
+  // left and right are the number the match is played to, up and down are how
+  // many seals a side. See the header for why the ring that used to sit between
+  // the stick and these went away.
+  if (d.ready && (press.left || press.right || press.up || press.down)) {
+    if (press.up) stepRoster(1);
+    else if (press.down) stepRoster(-1);
+    else stepRules(press.right ? 1 : -1);
+    return;
   }
   if (press.left) move(d, d.side === POOL ? 0 : d.side === 1 ? POOL : 0);
   else if (press.right) move(d, d.side === POOL ? 1 : d.side === 0 ? POOL : 1);
@@ -1050,13 +1239,21 @@ export function updateTeamSelect(list = null) {
       // The press that made the browser show this pad is spent on arriving.
       continue;
     }
-    act(d, p.press);
+    act(d, p.press, p.aim);
   }
+  // THE REMOTE CHIP IS NOT A LOCAL DEVICE AND MUST SURVIVE THE PRUNE. Every
+  // key the browser did not just report is dropped as a controller that has
+  // been unplugged, and the other player is neither reported nor unplugged.
+  if (wire) seen.add(REMOTE_KEY);
   for (const [key, d] of devices) {
     if (!seen.has(key)) { devices.delete(key); changed = true; }
     void d;
   }
   if (changed) render();
+  // ...and anything a local press just changed goes down the wire. Compared
+  // against the last thing sent rather than sent every frame: this screen
+  // polls at 60 Hz and a chip that has not moved is not news.
+  if (wire) pushSeat();
 }
 
 function onKey(e) {
@@ -1162,6 +1359,23 @@ function changed() {
 }
 
 
+/**
+ * Put a mark in a cue slot, or empty it. `name` false is "this binding is not
+ * live" — the slot is left in the document with nothing in it rather than
+ * removed, because these rows wrap and a slot that came and went would move a
+ * wrap point under the player.
+ *
+ * innerHTML on a constant from our own module: the marks are authored in
+ * ui/padGlyphs.js and nothing a player types ever reaches this.
+ */
+function cue(node, name) {
+  if (!node) return;
+  const svg = name ? glyphFor(name) : '';
+  // Compared before writing. render() runs on every frame anything on this
+  // screen moves and re-parsing six SVGs each time is work for no change.
+  if (node.innerHTML !== svg) node.innerHTML = svg;
+}
+
 /** Seconds as a clock — the same shape the strip shows during the match. */
 function clockText(s) {
   const whole = Math.max(0, Math.round(s));
@@ -1186,25 +1400,28 @@ function render() {
   el.rulesN.textContent = timed ? clockText(matchSeconds()) : String(goalsToWin());
   el.rulesLess.disabled = timed ? matchSeconds() <= MIN_SECONDS : goalsToWin() <= MIN_GOALS;
   el.rulesMore.disabled = timed ? matchSeconds() >= MAX_SECONDS : goalsToWin() >= MAX_GOALS;
-  // WHERE THE PAD IS ON THESE TWO ROWS — and nowhere at all unless somebody is
-  // readied, because a readied device is the only thing that can be driving
-  // them (see settingRow). Dropping it here rather than in toggleReady means the
-  // one place that has to remember is the one place that draws: un-ready, walk
-  // back to the pool, unplug the controller — all three end up here, and a ring
-  // left on a row nothing can move is a cursor that has silently gone.
-  if (![...devices.values()].some((d) => d.ready)) settingRow = -1;
-  const stops = settingStops();
-  // A STOP CAN SWITCH OFF UNDER THE CURSOR — Start stops being pressable the
-  // moment the far captain un-readies, and a ring left on a dead button is a
-  // cursor that has silently stopped working. Walked back to the nearest stop
-  // that is still live, here rather than in the handler that un-readied,
-  // because this is the one place every change to the screen passes through.
-  if (settingRow >= 0 && stops[settingRow]?.off?.()) {
-    let at = settingRow;
-    while (at > 0 && stops[at].off?.()) at -= 1;
-    settingRow = stops[at]?.off?.() ? -1 : at;
-  }
-  stops.forEach((stop, i) => stop.node?.classList.toggle('sv-nav-sel', i === settingRow));
+  // WHAT TO PRESS — every mark, every frame, and each one only while the button
+  // it names would actually do something.
+  //
+  // DRAWN HERE RATHER THAN WHERE THE STATE CHANGES, for the reason the cursor
+  // that came before it was: readying up, walking back to the pool, unplugging
+  // the controller and the far captain un-readying are four different handlers
+  // and all four end here. A mark left behind by any one of them is the screen
+  // naming a button that has stopped working.
+  //
+  // THE TWO AXES NEED A READIED PAD, because that is the only state in which
+  // the d-pad is theirs. The SHOULDERS, B and Start answer a pad in any state
+  // (see act), so those marks appear as soon as there is one in the room.
+  // Start's goes when Start does — a disabled button wearing a prompt is worse
+  // than a disabled button.
+  const driving = padDriving();
+  const present = padPresent();
+  cue(el.cues.roster, driving && 'dpadY');
+  cue(el.cues.rules, driving && 'dpadX');
+  cue(el.cues.lb, present && 'bumperL');
+  cue(el.cues.rb, present && 'bumperR');
+  cue(el.cues.back, present && 'faceB');
+  cue(el.cues.start, present && canStart() && 'menu');
   const wheel = palette();
   // Both sides, before anything is drawn: the colours are what the rest of this
   // render reads, and what the pitch behind the screen is about to be told.
@@ -1290,6 +1507,17 @@ function render() {
       sw.addEventListener('click', (e) => { e.stopPropagation(); setColor(side, i); });
       w.appendChild(sw);
     });
+    // ...AND THE STICK THAT TURNS IT, in the middle, on a side a PAD is holding
+    // and has not readied — which is exactly the state aimColor answers in.
+    // Not on the other side's wheel and not on a side the keyboard is on: a
+    // mark in the middle of a wheel nobody's stick can reach is the screen
+    // pointing at a control that is not there.
+    if (c?.kind === 'pad' && !c.ready) {
+      const stick = document.createElement('span');
+      stick.className = 'sv-teams-stick';
+      stick.innerHTML = glyphFor('stickR');
+      w.appendChild(stick);
+    }
     node.appendChild(w);
     el.wheels.push(w);
   }
@@ -1393,12 +1621,30 @@ export function pulseTo(g) {
  * Open the screen over `parent` (the UI root). `onStart(setup)` fires with
  * versusSetup written; `onBack()` when the player leaves without starting.
  */
-export function showTeamSelect({ parent = document.body, onStart, onBack, onChange } = {}) {
+export function showTeamSelect({ parent = document.body, onStart, onBack, onChange, online = null } = {}) {
   if (!root) build(parent);
   callbacks = { onStart, onBack, onChange };
+  // `online` is { isHost, send } or null. Held before devices are seeded,
+  // because the seeding below reads it: an online guest opens with its chip
+  // already on the right rather than in the pool, which is the one thing about
+  // where a chip STARTS that the two ends cannot negotiate between themselves.
+  wire = online;
+  sentSeat = '';
   devices.clear();
   padPrev.clear();
-  devices.set(KEYBOARD, { key: KEYBOARD, kind: 'keyboard', index: -1, side: POOL, ready: false });
+  devices.set(KEYBOARD, {
+    key: KEYBOARD, kind: 'keyboard', index: -1, ready: false,
+    // ONLINE OPENS WITH BOTH CAPTAINS ALREADY SEATED — host left, guest right.
+    // Not a shortcut: GUEST_SEAT is load-bearing well past this screen (it is
+    // what session.js's remoteSeat compares against, what matchStart's
+    // memberFor fills in, and which seal netInput's packets end up driving),
+    // so a guest that walked onto the left would be a guest whose input arrived
+    // at the other side's seal. Sides are therefore fixed for an online match
+    // and only the COLOUR and the ready are negotiated. Swapping ends is a
+    // real feature and a bigger one: it means GUEST_SEAT stops being a
+    // constant, in four files.
+    side: online ? (online.isHost ? 0 : 1) : POOL,
+  });
   // NOBODY IS ON A COLOUR. The screen used to open with both sides already
   // matched to the shipped green and red by hue, which made the wheel a thing
   // you could ignore — and made the commonest match in the game the one nobody
@@ -1407,10 +1653,6 @@ export function showTeamSelect({ parent = document.body, onStart, onBack, onChan
   picks[1] = null;
   chase[0] = null;
   chase[1] = null;
-  // ...and nothing is on the settings rows either. A screen that reopened with a
-  // ring already drawn would be pointing at a row on behalf of a device that has
-  // not readied yet — see settingRow.
-  settingRow = -1;
   open = true;
   root.classList.remove('sv-hidden');
   if (!keyHandler) {
@@ -1433,5 +1675,12 @@ export function teamSelectOpen() { return open; }
 
 /** For tests: the chips as the screen sees them. */
 export function teamSelectState() {
-  return { picks: [...picks], devices: [...devices.values()].map((d) => ({ ...d })), settingRow };
+  return {
+    picks: [...picks],
+    devices: [...devices.values()].map((d) => ({ ...d })),
+    // WHICH MARKS ARE ON THE SCREEN, by the name of the glyph in each slot —
+    // the one thing about the cues a headless test can assert, and the thing
+    // that matters: a binding is only a binding if the screen admits to it.
+    cues: Object.fromEntries(Object.entries(el?.cues ?? {}).map(([k, n]) => [k, !!n?.firstChild])),
+  };
 }

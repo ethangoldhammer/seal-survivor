@@ -6,7 +6,7 @@ import { makeOutlineMaterial, ensureOutlineNormal } from '../assets.js';
 import { attachDissolve, dissolveUniforms, roundedNormalBox } from './dissolve.js';
 import { spawnXpOrb, spawnStrikeOrb, spawnBubbleOrb, spawnRapidFireOrb } from '../entities/pickups.js';
 import { retireMaterial } from './programPin.js';
-import { versusDrops } from './versusFlag.js';
+import { versusDrops, oxygenLive } from './versusFlag.js';
 
 // What's left of a hull that lost. A destroyed boat used to be removed from
 // the scene on the frame it died, so the biggest target in the game vanished
@@ -446,7 +446,12 @@ function rollDrop(scene, x, y) {
   const options = [
     ['rapidFire', table.rapidFire ?? 1, CONFIG.rapidFirePickup?.enabled !== false && !versusDrops('rapidFire')],
     ['strike', table.strike ?? 1.4, CONFIG.strike?.enabled !== false],
-    ['bubble', table.bubble ?? 1.2, CONFIG.oxygen?.enabled !== false],
+    // ...and no air out of a crate in a match either: oxygenLive() is false
+    // there (CONFIG.versus.oxygen), and the arena's own spawner has already
+    // stopped (keepBubbles in systems/versus.js). Dropping out of the table
+    // rather than rolling and discarding, like the rows around it, so the
+    // crate is still carrying something.
+    ['bubble', table.bubble ?? 1.2, oxygenLive()],
     ['chum', table.chum ?? 3, true],
   ].filter(([, weight, live]) => live && weight > 0);
   if (!options.length) return null;

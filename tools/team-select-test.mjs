@@ -59,16 +59,22 @@ const { setUnlockGate } = await import('../path/src/systems/unlocks.js');
 
 // A fake pad in navigator.getGamepads() shape. `press` names buttons held
 // this frame; `x`/`y` the left stick.
-function pad(index, { a = false, b = false, start = false, x = 0, y = 0, dpad = null } = {}) {
+function pad(index, { a = false, b = false, start = false, lb = false, rb = false,
+  x = 0, y = 0, dpad = null, rx = 0, ry = 0 } = {}) {
   const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
   if (a) buttons[0] = { pressed: true, value: 1 };
   if (b) buttons[1] = { pressed: true, value: 1 };
   if (start) buttons[9] = { pressed: true, value: 1 };
+  // The shoulders — 4 and 5 in the standard mapping, LB/RB, L1/R1, L/R.
+  if (lb) buttons[4] = { pressed: true, value: 1 };
+  if (rb) buttons[5] = { pressed: true, value: 1 };
   if (dpad === 'left') buttons[14] = { pressed: true, value: 1 };
   if (dpad === 'right') buttons[15] = { pressed: true, value: 1 };
   if (dpad === 'up') buttons[12] = { pressed: true, value: 1 };
   if (dpad === 'down') buttons[13] = { pressed: true, value: 1 };
-  return { index, connected: true, id: `pad ${index}`, mapping: 'standard', axes: [x, y, 0, 0], buttons };
+  // axes 2 and 3 are the RIGHT stick, which the colour wheel reads as a heading
+  // rather than as four more directions (see ui/padPoll.js).
+  return { index, connected: true, id: `pad ${index}`, mapping: 'standard', axes: [x, y, rx, ry], buttons };
 }
 // A press is a frame down and a frame up, so the next one is a fresh edge.
 function tap(list) { ts.updateTeamSelect(list); ts.updateTeamSelect(list.map((p) => pad(p.index))); }
@@ -588,17 +594,19 @@ section('Nothing in a slot can outgrow the slot');
 }
 
 // ---------------------------------------------------------------------------
-section('A readied stick sets the match itself');
+section('A readied stick is the match, one button per setting');
 // ---------------------------------------------------------------------------
-// THE ROWS UNDER THE BOARD WERE POINTER-ONLY. A pad could pick a side, pick a
-// colour and press Start, and could not change one thing about the match it was
-// starting — how many seals a side, first to N goals or N minutes, or which of
-// those two. On the screen in this game most likely to be played from a sofa.
+// THE ROWS UNDER THE BOARD WERE POINTER-ONLY, then they were a cursor, and now
+// each of them is a button of its own:
 //
-// The directions a READIED device pushes are what drives them, and nothing was
-// taken away to do it: move() and stepColor() both refuse outright while `ready`
-// is set, so all four were dead buttons. The checks below prove both halves —
-// that the rows move, and that an UNreadied stick still does what it always did.
+//   left / right   the number the match is played to
+//   up / down      how many seals a side
+//   L / R          which of the two kinds of match it is
+//
+// Nothing was taken away to do it: move() and stepColor() both refuse outright
+// while `ready` is set, so all four directions were dead buttons. The checks
+// below prove both halves — that the settings move, and that an UNreadied stick
+// still does what it always did.
 {
   open();
   const roster0 = roster.rosterPerSide();
@@ -611,89 +619,58 @@ section('A readied stick sets the match itself');
   tap([pad(0, { dpad: 'right' })]);
   tap([pad(0, { a: true })]);
   check('pad 1 is a ready captain', dev('pad0')?.side === 1 && dev('pad0')?.ready);
-  check('...and nothing on the settings rows is lit yet', ts.teamSelectState().settingRow === -1,
-    String(ts.teamSelectState().settingRow));
 
-  // THE FIRST PUSH IS THE ASKING, not a change. A stick that silently moved the
-  // roster before anything was drawn would be a setting changing with no
-  // indication of which one.
+  // THE FIRST PUSH IS THE CHANGE. The version before this one spent it on
+  // selecting a row instead, which meant the first thing a readied stick did
+  // was nothing a player could see.
   tap([pad(0, { dpad: 'right' })]);
-  check('the first push selects rather than steps', ts.teamSelectState().settingRow === 0
-    && roster.rosterPerSide() === roster0, `row ${ts.teamSelectState().settingRow}, roster ${roster.rosterPerSide()}`);
-  tap([pad(0, { dpad: 'right' })]);
-  check('...and the next one grows the roster', roster.rosterPerSide() === roster0 + 1, String(roster.rosterPerSide()));
-  tap([pad(0, { dpad: 'left' })]);
-  check('...and left shrinks it again', roster.rosterPerSide() === roster0, String(roster.rosterPerSide()));
-
-  // THREE STOPS AND NOT TWO. The kind button is a decision of its own — first to
-  // five goals and five minutes are different matches — so folding it into the
-  // number beside it would leave the one control a pad could not reach as the
-  // one that decides what the number MEANS.
-  tap([pad(0, { dpad: 'down' })]);
-  check('down walks to the match kind', ts.teamSelectState().settingRow === 1);
-  const timed0 = rules.isTimed();
-  tap([pad(0, { dpad: 'right' })]);
-  check('...which the stick flips', rules.isTimed() === !timed0, String(rules.isTimed()));
-  tap([pad(0, { dpad: 'left' })]);
-  check('...and flips back', rules.isTimed() === timed0);
-
-  tap([pad(0, { dpad: 'down' })]);
-  check('down again walks to the number', ts.teamSelectState().settingRow === 2);
-  tap([pad(0, { dpad: 'right' })]);
-  check('...which steps whichever number the kind is played to',
+  check('right steps the number the match is played to straight away',
     rules.goalsToWin() === goals0 + 1, `${goals0} -> ${rules.goalsToWin()}`);
-  // THE RING IS DRAWN, or the mode is invisible and the player is guessing.
-  {
-    const lit = [...root.querySelectorAll('.sv-nav-sel')];
-    check('the row the stick is on carries a cursor',
-      lit.length === 1 && lit[0].classList.contains('sv-teams-rules-group'),
-      lit.map((n) => n.className).join(' / ') || 'nothing lit');
-  }
-
-  // ...AND THE WALK DOES NOT END AT THE ROWS. Back and Start used to answer
-  // only to the pad's own B and Start buttons, which meant neither ever lit up:
-  // the ring walked three rows and ran out of screen with the two decisions
-  // that actually end the thing unmarked, and the only way to learn the pad's
-  // Start works here was to press it and find out.
-  const litOne = () => {
-    const lit = [...root.querySelectorAll('.sv-nav-sel')];
-    return lit.length === 1 ? lit[0] : null;
-  };
-  tap([pad(0, { dpad: 'down' })]);
-  check('down again walks onto Back', ts.teamSelectState().settingRow === 3);
-  check('...and Back is the thing carrying the ring', litOne()?.id === 'svTeamBack',
-    litOne()?.id || litOne()?.className || 'nothing lit');
-
-  // SIDE BY SIDE, SO SIDEWAYS IS HOW YOU GET BETWEEN THEM. The footer is one
-  // row on the screen; a cursor that answered up and down there would be moving
-  // at right angles to what the player is looking at.
-  tap([pad(0, { dpad: 'right' })]);
-  check('right walks along the footer to Start', ts.teamSelectState().settingRow === 4);
-  check('...and Start carries the ring now', litOne()?.id === 'svTeamStart',
-    litOne()?.id || litOne()?.className || 'nothing lit');
-  tap([pad(0, { dpad: 'right' })]);
-  check('...and the end of the footer holds rather than wrapping', ts.teamSelectState().settingRow === 4);
-  tap([pad(0, { dpad: 'down' })]);
-  check('...as does the end of the list', ts.teamSelectState().settingRow === 4);
   tap([pad(0, { dpad: 'left' })]);
-  check('left walks back to Back', ts.teamSelectState().settingRow === 3);
   tap([pad(0, { dpad: 'left' })]);
-  check('...and does not climb out of the footer into the rows above',
-    ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
+  check('...and left brings it back down', rules.goalsToWin() === goals0 - 1, String(rules.goalsToWin()));
+  tap([pad(0, { dpad: 'right' })]);
+
+  // THE OTHER AXIS IS THE OTHER SETTING, and up is more of it — the roster row
+  // is a number and the stick is pointing at the end of it that grows.
   tap([pad(0, { dpad: 'up' })]);
-  check('up is the way back to the rows', ts.teamSelectState().settingRow === 2);
+  check('up grows the roster', roster.rosterPerSide() === roster0 + 1, String(roster.rosterPerSide()));
+  tap([pad(0, { dpad: 'down' })]);
+  check('...and down shrinks it again', roster.rosterPerSide() === roster0, String(roster.rosterPerSide()));
+  check('...and neither of them moved the other number',
+    rules.goalsToWin() === goals0, String(rules.goalsToWin()));
 
-  // UN-READYING HANDS THE STICK BACK. The colour wheel is what up and down mean
-  // again, and a ring left on a row nothing can move is a cursor that has gone.
+  // THE SHOULDERS ARE THE KIND. Both of them, because there are two kinds and a
+  // toggle is a toggle whichever side you push — one shoulder bound to each
+  // would be a dead button half the time.
+  const timed0 = rules.isTimed();
+  tap([pad(0, { rb: true })]);
+  check('R flips first-to against the clock', rules.isTimed() === !timed0, String(rules.isTimed()));
+  tap([pad(0, { lb: true })]);
+  check('...and L flips it back', rules.isTimed() === timed0, String(rules.isTimed()));
+
+  // ...AND THEY DO NOT NEED A READIED CHIP. Nothing else on this screen uses
+  // the shoulders in any state, so a player reaching for one before they have
+  // locked in is early rather than wrong.
   tap([pad(0, { b: true })]);
   check('B un-readies', !dev('pad0')?.ready);
-  check('...and the settings cursor goes with it', ts.teamSelectState().settingRow === -1);
-  check('...leaving nothing lit', root.querySelectorAll('.sv-nav-sel').length === 0);
+  tap([pad(0, { rb: true })]);
+  check('...and R still flips the kind with nobody readied', rules.isTimed() === !timed0);
+  tap([pad(0, { lb: true })]);
+
+  // UN-READYING HANDS THE STICK BACK to the sides and the wheel.
   {
     const before = ts.teamSelectState().picks[1];
     tap([pad(0, { dpad: 'down' })]);
-    check('...and down turns the colour wheel again, not the roster',
+    check('down turns the colour wheel again, not the roster',
       ts.teamSelectState().picks[1] !== before && roster.rosterPerSide() === roster0);
+  }
+  {
+    const goals = rules.goalsToWin();
+    tap([pad(0, { dpad: 'left' })]);
+    check('...and left walks off the side rather than stepping the number',
+      dev('pad0')?.side === -1 && rules.goalsToWin() === goals,
+      `side ${dev('pad0')?.side}, ${rules.goalsToWin()}`);
   }
   // Put the match back the way this file found it — the sections below read
   // these same numbers.
@@ -703,90 +680,159 @@ section('A readied stick sets the match itself');
 }
 
 // ---------------------------------------------------------------------------
-section('A is what presses the button the cursor is on');
+section('The right stick points at a colour rather than stepping to it');
 // ---------------------------------------------------------------------------
-// The other half of reaching Back and Start with a stick: having reached one,
-// there has to be something that presses it. A is that, and ONLY where the
-// cursor is on something pressable — on a row of numbers it still means what it
-// has always meant on this screen, and B is the way back out either way.
+// A RING OF COLOURS IS A THING YOU POINT AT. Up and down still walk it a swatch
+// at a time, but the heading names a swatch directly, so a colour four steps
+// round the wheel is one motion instead of four presses — and the player never
+// has to work out which way the walk was going to go.
+//
+// The angles come from swatchAt, which is the function that DRAWS the ring:
+// swatch 0 sits at -PI/2, which is straight up, and the rest run clockwise from
+// there. Asserted against the same geometry rather than against hand-counted
+// indices, so a wheel re-laid out for a different count cannot leave this
+// passing about the gaps between dots.
 {
+  const N = CONFIG.versus.wheel.length;
+  // Where the stick has to point to be aiming at swatch `i`.
+  const heading = (i) => {
+    const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+    return { rx: Math.cos(angle), ry: Math.sin(angle) };
+  };
   open();
-  tap([pad(0, { dpad: 'left' })]);
-  tap([pad(0, { dpad: 'left' })]);
-  tap([pad(0, { a: true })]);
-  check('pad 1 is a ready captain on the left', dev('pad0')?.side === 0 && dev('pad0')?.ready);
-  // Down four times: the asking, then the kind, the number, and Back.
-  for (let i = 0; i < 4; i += 1) tap([pad(0, { dpad: 'down' })]);
-  check('the cursor is on Back', ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
-  const wasBacks = backs;
-  tap([pad(0, { a: true })]);
-  check('A presses it', backs === wasBacks + 1 && root.classList.contains('sv-hidden'));
-  check('...and readying was not toggled instead', true);
-}
-{
-  open();
-  tap([pad(0, { dpad: 'left' })]);
-  tap([pad(0, { dpad: 'left' })]);
-  tap([pad(0, { a: true })]);
-  for (let i = 0; i < 5; i += 1) tap([pad(0, { dpad: 'down' })]);
   tap([pad(0, { dpad: 'right' })]);
-  check('the cursor walks on to Start', ts.teamSelectState().settingRow === 4, String(ts.teamSelectState().settingRow));
-  started = null;
-  tap([pad(0, { a: true })]);
-  check('A starts the match', !!started && root.classList.contains('sv-hidden'));
-  check('...with the side the pad actually took', started?.teams[0].members[0].pad === 0,
-    JSON.stringify(started?.teams.map((t) => t.members)));
+  tap([pad(0, { dpad: 'right' })]);
+  check('pad 1 is on the right and has not readied', dev('pad0')?.side === 1 && !dev('pad0')?.ready);
+
+  // STRAIGHT UP IS THE TOP SWATCH — the one place on the ring where "what the
+  // screen shows" and "what the number says" can be checked against each other
+  // by eye.
+  tap([pad(0, heading(0))]);
+  check('the stick pushed up takes the swatch at the top', ts.teamSelectState().picks[1] === 0,
+    String(ts.teamSelectState().picks[1]));
+  const quarter = Math.round(N / 4);
+  tap([pad(0, heading(quarter))]);
+  check('...and a quarter turn round takes the swatch a quarter round',
+    ts.teamSelectState().picks[1] === quarter, String(ts.teamSelectState().picks[1]));
+  // A JUMP, NOT A WALK. Three quarters round is one motion from where it was.
+  const three = Math.round((N * 3) / 4);
+  tap([pad(0, heading(three))]);
+  check('...and the far side of the ring is one push away, not a walk round it',
+    ts.teamSelectState().picks[1] === three, String(ts.teamSelectState().picks[1]));
+
+  // A HELD STICK IS ONE PICK. This is polled at 60 Hz and a thumb rests; acting
+  // every frame would be sixty picks a second for one gesture. Two frames of
+  // the SAME heading without the release `tap` puts between them.
+  {
+    const held = [pad(0, heading(three))];
+    ts.updateTeamSelect(held);
+    ts.updateTeamSelect(held);
+    check('...and holding it there is still that one pick',
+      ts.teamSelectState().picks[1] === three, String(ts.teamSelectState().picks[1]));
+  }
+
+  // INSIDE THE DEADZONE IT IS NOT POINTING AT ANYTHING. A stick barely off
+  // centre is a thumb resting on it, not a colour being chosen.
+  tap([pad(0, { rx: 0.2, ry: -0.2 })]);
+  check('a stick inside the deadzone picks nothing',
+    ts.teamSelectState().picks[1] === three, String(ts.teamSelectState().picks[1]));
+
+  // THE OTHER SIDE'S COLOUR IS NEVER TAKEN. openTo already refuses it and the
+  // aim is measured over what is left, so the stick pointed at a taken swatch
+  // lands on the open one beside it rather than doing nothing.
+  {
+    const taken = ts.teamSelectState().picks[1];
+    tap([pad(0), pad(1, { dpad: 'left' })]);
+    tap([pad(0), pad(1, { dpad: 'left' })]);
+    check('pad 2 is on the left', dev('pad1')?.side === 0);
+    tap([pad(0), pad(1, heading(taken))]);
+    const got = ts.teamSelectState().picks[0];
+    check('...and its stick pointed at the far side\'s colour lands beside it, not on it',
+      got !== taken && got !== null, `${got} vs taken ${taken}`);
+  }
+
+  // READIED, THE STICK IS DONE. Locking in is the point at which the colour
+  // stops being a question.
+  {
+    tap([pad(0, { a: true }), pad(1)]);
+    const locked = ts.teamSelectState().picks[1];
+    tap([pad(0, heading((locked + 2) % N)), pad(1)]);
+    check('a readied chip\'s stick no longer moves its colour',
+      ts.teamSelectState().picks[1] === locked, String(ts.teamSelectState().picks[1]));
+  }
+  ts.hideTeamSelect();
 }
 
 // ---------------------------------------------------------------------------
-section('A stop that is switched off is stepped over, not landed on');
+section('The screen says which button, and only while that button works');
 // ---------------------------------------------------------------------------
-// Start is dead until every side with a person on it has readied, and a cursor
-// that can land on a dead button is a cursor that appears to have stopped
-// working — the same rule the shared panel cursor follows (ui/panelNav.js).
+// A BINDING NOBODY CAN SEE IS A BINDING NOBODY HAS. Every setting under the
+// board answers to a pad and to nothing else, and for as long as the screen
+// said so nowhere the only way to find one was to push things and watch. The
+// marks (ui/padGlyphs.js) are the fix, and the rule they follow is that a mark
+// appears WHEN ITS BINDING GOES LIVE and not a frame before — a prompt for a
+// button that would do nothing is worse than no prompt at all.
 {
   open();
-  // Pad 1 readies on the left; pad 2 walks onto the right and does NOT ready,
-  // which is exactly the state where Start is refused.
-  tap([pad(0, { dpad: 'left' })]);
-  tap([pad(0, { dpad: 'left' })]);
+  const cues = () => ts.teamSelectState().cues;
+  // THE KEYBOARD IS NOT A CONTROLLER. A pad mark drawn on its account would be
+  // naming a button that is not in the room.
+  check('a keyboard-only screen draws no pad marks',
+    Object.values(cues()).every((on) => !on), JSON.stringify(cues()));
+  // A pad arrives, unreadied, in the pool.
+  tap([pad(0, { dpad: 'right' })]);
+  check('a pad has arrived', !!dev('pad0'));
+  check('...so the marks for the buttons that work in any state are drawn',
+    cues().lb && cues().rb && cues().back, JSON.stringify(cues()));
+  check('...and the two the d-pad only drives once readied are not',
+    !cues().roster && !cues().rules, JSON.stringify(cues()));
+  check('...nor is Start, which is refused until both sides are settled',
+    !cues().start && root.querySelector('#svTeamStart').disabled, JSON.stringify(cues()));
+
+  // ONTO A SIDE AND READIED: the d-pad becomes the two settings, and both marks
+  // arrive together with the bindings.
+  tap([pad(0, { dpad: 'right' })]);
   tap([pad(0, { a: true })]);
-  tap([pad(0), pad(1, { dpad: 'right' })]);
-  tap([pad(0), pad(1, { dpad: 'right' })]);
-  check('one captain is ready and the other is not',
-    dev('pad0')?.ready === true && dev('pad1')?.side === 1 && dev('pad1')?.ready === false);
-  check('...so Start is refused', !ts.canStart() && root.querySelector('#svTeamStart').disabled);
+  check('a readied pad is driving the settings', dev('pad0')?.ready);
+  check('...so both axis marks are drawn', cues().roster && cues().rules, JSON.stringify(cues()));
+  check('...and Start, which is now pressable', cues().start && ts.canStart(), JSON.stringify(cues()));
 
-  // BOTH PADS IN EVERY FRAME, and that is not padding out the call. A pad left
-  // out of the list is a pad that has been UNPLUGGED (see updateTeamSelect),
-  // and unplugging the unready captain hands its side to the computer — which
-  // makes Start pressable again and quietly deletes the state this section is
-  // about. Written the short way, all four checks below passed on a screen in
-  // the wrong state.
-  const both = (p0) => tap([pad(0, p0), pad(1)]);
-  for (let i = 0; i < 4; i += 1) both({ dpad: 'down' });
-  check('the cursor reaches Back', ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
-  both({ dpad: 'down' });
-  check('...and holds there rather than walking onto a dead Start',
-    ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
-  both({ dpad: 'right' });
-  check('...and sideways will not reach it either', ts.teamSelectState().settingRow === 3);
-  check('nothing is ringed but Back',
-    [...root.querySelectorAll('.sv-nav-sel')].every((n) => n.id === 'svTeamBack'));
+  // ...AND THEY GO WHEN THE BINDING DOES. Un-readying hands the d-pad back to
+  // the sides and the wheel, and a mark left behind is the screen naming a
+  // button that has stopped working.
+  tap([pad(0, { b: true })]);
+  check('un-readying takes the axis marks away',
+    !cues().roster && !cues().rules, JSON.stringify(cues()));
+  check('...and leaves the ones that still work', cues().lb && cues().rb && cues().back,
+    JSON.stringify(cues()));
+  ts.hideTeamSelect();
+}
 
-  // The far captain readies: the stop comes back, and the cursor can walk on.
-  tap([pad(0), pad(1, { a: true })]);
-  check('the far captain readying makes Start a stop again', ts.canStart());
-  both({ dpad: 'right' });
-  check('...which the cursor now reaches', ts.teamSelectState().settingRow === 4, String(ts.teamSelectState().settingRow));
-
-  // ...AND IT GOES AWAY AGAIN UNDER THE CURSOR. A ring left on a button that
-  // has just been switched off is the same lie in reverse.
-  tap([pad(0), pad(1, { b: true })]);
-  check('the far captain un-readying takes the cursor off Start',
-    ts.teamSelectState().settingRow === 3, String(ts.teamSelectState().settingRow));
-  check('...and the ring goes with it',
-    [...root.querySelectorAll('.sv-nav-sel')].every((n) => n.id !== 'svTeamStart'));
+// ---------------------------------------------------------------------------
+section('The wheel wears the stick that turns it');
+// ---------------------------------------------------------------------------
+// The mark goes in the MIDDLE of the wheel, which is where the stick's own
+// centre is and where the push starts from — and only on a wheel that stick can
+// actually reach: a side a pad is holding and has not readied, which is exactly
+// the state aimColor answers in.
+{
+  open();
+  const sticks = () => [...root.querySelectorAll('.sv-teams-side')]
+    .map((n) => !!n.querySelector('.sv-teams-stick'));
+  check('a wheel nobody is holding wears nothing', sticks().every((on) => !on), JSON.stringify(sticks()));
+  tap([pad(0, { dpad: 'right' })]);
+  tap([pad(0, { dpad: 'right' })]);
+  check('the side the pad took wears the stick', sticks()[1], JSON.stringify(sticks()));
+  check('...and the side nobody took does not', !sticks()[0], JSON.stringify(sticks()));
+  tap([pad(0, { a: true })]);
+  check('readying takes it away, because the stick is done', !sticks()[1], JSON.stringify(sticks()));
+  tap([pad(0, { b: true })]);
+  check('...and un-readying brings it back', sticks()[1], JSON.stringify(sticks()));
+  // THE KEYBOARD'S SIDE NEVER WEARS IT. onKey has no right stick, so the mark
+  // there would be pointing at a control that is not in that player's hands.
+  key('ArrowLeft');
+  check('the keyboard is on the left', dev('keyboard')?.side === 0, String(dev('keyboard')?.side));
+  check('...and its wheel wears no stick', !sticks()[0], JSON.stringify(sticks()));
   ts.hideTeamSelect();
 }
 
@@ -811,6 +857,70 @@ ts.hideTeamSelect();
 check('a closed screen ignores the keyboard', (key('ArrowLeft'), true));
 flag.resetVersusSetup();
 check('resetVersusSetup empties both sides', flag.versusSetup.teams.every((t) => t.members.length === 0 && t.color === null) && flag.captainPad(0) === undefined);
+
+// ---------------------------------------------------------------------------
+// ONE SCREEN, TWO MACHINES — the room's ready-up, merged into here.
+//
+// The room lobby used to hold its own Host/Join/Ready/Start, which was a worse
+// copy of what this screen already did for any number of people. Now the other
+// player is a chip on this one and the room screen is the five letters and
+// nothing else.
+console.log('\nthe other machine\u2019s chip');
+{
+  ts.hideTeamSelect();
+  const sent = [];
+  // A GUEST opens here: its own chip is already on the right, which is the one
+  // thing the two ends cannot negotiate (GUEST_SEAT is what decides which seal
+  // this player's input arrives at, four files away).
+  ts.showTeamSelect({
+    parent: document.body,
+    onStart: () => {},
+    onBack: () => {},
+    online: { isHost: false, send: (m) => sent.push(m) },
+  });
+  check('a guest opens with its own chip already on the right', dev('keyboard')?.side === 1,
+    String(dev('keyboard')?.side));
+
+  // ...and the keyboard is ALLOWED to WALK BACK there, which it never is
+  // offline: input.js is player 1's, so a local keyboard on the right could
+  // not move its seal — but a guest's keyboard is not driving a local seat at
+  // all, it is encoded and sent, and the seat it lands on IS the right-hand
+  // one. Left to the pool and right again, which offline would be a one-way
+  // trip that strands the chip in the middle.
+  key('ArrowLeft');
+  check('a guest may step off its side into the pool', dev('keyboard')?.side === -1,
+    String(dev('keyboard')?.side));
+  key('ArrowRight');
+  check('...and a guest\u2019s KEYBOARD may walk back onto the right, which offline it may not',
+    dev('keyboard')?.side === 1, String(dev('keyboard')?.side));
+
+  // THE LOCAL CHIP GOES DOWN THE WIRE, once per change and not once per frame.
+  sent.length = 0;
+  key('Enter');
+  ts.updateTeamSelect([]);
+  check('readying up is announced to the other machine',
+    sent.some((m) => m.t === 'seat' && m.side === 1 && m.ready === true), JSON.stringify(sent));
+  const after = sent.length;
+  ts.updateTeamSelect([]);
+  ts.updateTeamSelect([]);
+  check('...and an unchanged chip says nothing on later frames', sent.length === after,
+    `${sent.length} vs ${after}`);
+
+  // THE REMOTE CHIP IS A DEVICE LIKE ANY OTHER, and it must survive the prune
+  // that drops unplugged controllers — it is neither reported by the browser
+  // nor unplugged.
+  ts.applyRemoteSeat({ t: 'seat', side: 0, ready: true, color: 3 });
+  check('the other player appears as a chip', dev('remote')?.side === 0 && dev('remote')?.ready === true);
+  check('...wearing the colour they picked', ts.teamSelectState().picks[0] === 3,
+    String(ts.teamSelectState().picks[0]));
+  ts.updateTeamSelect([]);
+  check('...and is not pruned as an unplugged pad', !!dev('remote'));
+
+  check('both ready is a startable match', ts.canStart() === true);
+  ts.clearRemoteSeat();
+  check('clearing it takes the chip away', !dev('remote'));
+  ts.hideTeamSelect();
+}
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all passed'}`);
 process.exit(failures ? 1 : 0);

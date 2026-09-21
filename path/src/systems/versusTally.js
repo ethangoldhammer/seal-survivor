@@ -96,8 +96,21 @@ const valid = (seat) => Number.isInteger(seat) && seat >= 0 && seat < SEATS;
 export function noteTallyGoal(credit) {
   if (!credit || credit.ownGoal) return;
   if (valid(credit.who)) tally.goals[credit.who] += 1;
-  // -1 is "nobody assisted", which a one-a-side match can never have.
-  if (valid(credit.assist) && credit.assist !== credit.who) tally.assists[credit.assist] += 1;
+  // EVERY SEAL THAT HAD A HAND IN IT, not only the pass before the shot — see
+  // creditGoal. `assists` is already de-duplicated and already excludes the
+  // scorer; both are re-checked here rather than assumed, because this is the
+  // ledger and a double-booked assist is a number nobody can explain.
+  //
+  // `assist` is the card's single line and the first entry of the list, so
+  // reading it as well would book that seal twice. The list is the truth here;
+  // the card's line is a view of it. An empty list is a one-a-side match,
+  // which can never have one.
+  const seen = new Set();
+  for (const who of credit.assists ?? []) {
+    if (!valid(who) || who === credit.who || seen.has(who)) continue;
+    seen.add(who);
+    tally.assists[who] += 1;
+  }
 }
 
 /** A shot cleared off the mouth of a seat's own goal. */

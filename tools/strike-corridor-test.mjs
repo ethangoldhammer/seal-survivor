@@ -80,10 +80,41 @@ const check = (name, cond, detail = '') => {
   console.log(`  ${cond ? 'ok  ' : 'FAIL'} ${name}${detail ? `  (${detail})` : ''}`);
   if (!cond) failures++;
 };
+// THE CORRIDOR IS OFF IN THE SHIPPED BUILD — systems/strikePath.js draws the
+// same forecast as a line out of each seal's head instead, one per seal, where
+// a lens has one frame and could only ever light the seal it was framing.
+//
+// ASSERTED FIRST, THEN TURNED ON FOR THIS FILE. The mechanism is still here
+// and still tuned, so these checks still guard real code; what changed is the
+// default, and a harness that silently flipped it would be a harness that
+// could not tell "switched off" from "broken". So the default is a check of
+// its own, and everything after it runs with the lane deliberately lit.
+const shippedLensLane = CONFIG.cinecam.lens.path.lensLane;
+CONFIG.cinecam.lens.path.lensLane = true;
+
 const DEG = 180 / Math.PI;
 const wrapDeg = (d) => ((d + 180) % 360 + 360) % 360 - 180;
 const headingOf = () => Math.atan2(cineLens.pathDirY, cineLens.pathDirX) * DEG;
 const DT = 1 / 60;
+
+// ---------------------------------------------------------------------------
+section('THE SHIPPED DEFAULT — the lens corridor is off');
+// ---------------------------------------------------------------------------
+check('the corridor is off in the shipped config', shippedLensLane === false,
+  String(shippedLensLane));
+// `lensLane` AND NOT `enabled`, which is the only reason the change took
+// effect at all: imported-tuning.json holds `path.enabled: true`, and a saved
+// value outranks a config default — so re-defaulting the old key would have
+// changed nothing, on Ethan's machine only, in a way that looks exactly like
+// the code not working.
+//
+// The rename does one better than making the old key inert: config.js no
+// longer DECLARES `enabled`, and the tuning loader drops saved values that
+// config has stopped declaring (it says so at boot). So the stale `true` is
+// not merely outvoted, it is gone.
+check('...and the old key it was renamed from is gone, not merely outvoted',
+  !('enabled' in CONFIG.cinecam.lens.path) && 'lensLane' in CONFIG.cinecam.lens.path,
+  Object.keys(CONFIG.cinecam.lens.path).join(', '));
 
 // ---------------------------------------------------------------------------
 section('FORECAST — the cone ends where the dash would, stick and all');

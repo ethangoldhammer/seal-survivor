@@ -177,6 +177,15 @@
     </div>
   </section>
 
+  <section id="s-sealitaire">
+    <h2>Sealitaire</h2>
+    <p class="lede">Klondike on the ocean — the live viewer window and the tuning save loop, which is
+      what <code>npm run sealitaire</code> starts. One at a time: the viewer rewrites
+      <code>tuning.luau</code> when you press SAVE, so a second one would overwrite the first one's
+      work. Opening one while another is up prints why and starts nothing.</p>
+    <div id="sealitaire"></div>
+  </section>
+
   <section id="s-servers">
     <h2>Servers</h2>
     <p class="lede">What is listening right now. The game's port moves every time it restarts,
@@ -320,6 +329,103 @@ function drawSkip() {
   // Enter in the message field must not ship. It is the most natural key to
   // press in a text field and the most expensive one to have bound.
   $('#shipmsg').onkeydown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
+}
+
+// --- sealitaire ------------------------------------------------------------
+// Its own section rather than a row in the Servers list, because it is neither
+// a server (no port, nothing on the socket table to find it by) nor a script
+// you scroll to — it is the second game in this repo and it gets a door.
+//
+// IT SEES ONE IT DID NOT START. A viewer has no port, so the socket survey
+// behind the Servers section cannot find it — `ST.sealitaire.pid` comes from
+// sealitaire-tune.mjs's own check instead, which means the Dock app's viewer
+// and a terminal's both show up here. Without that this card said "not open"
+// with the table open on screen beside it, and the button was an offer it
+// could not keep.
+//
+// The button still never guards. It starts the script and lets the tool
+// refuse, because the tool refuses for EVERY caller and this page is not a
+// special one; the reason lands in the output drawer.
+function drawSealitaire() {
+  const box = $('#sealitaire');
+  box.textContent = '';
+
+  const live = ST.runs.find((r) => r.name === 'sealitaire' && r.status === 'running');
+  const pid = ST.sealitaire?.pid ?? 0;
+
+  const row = el('div', 'row');
+  row.append(el('span', 'dot ' + (pid ? 'keep' : 'down')));
+  row.append(el('span', 'name', 'the table'));
+  row.append(el('span', 'blurb', !pid ? 'not open'
+    : live ? 'open — started from this page'
+    : 'open — started somewhere else (the Dock button, or a terminal)'));
+
+  const acts = el('div', 'acts');
+  if (pid && !live) {
+    // Nothing to stop and no output to show: this page did not start it, so it
+    // has neither the pid's run nor its log. Say that rather than offering a
+    // button that would start a second one.
+    acts.append(el('span', 'chip running', 'pid ' + pid));
+  } else if (live) {
+    const seeit = el('button', 'btn', 'output');
+    seeit.onclick = () => watch(live.id);
+    const stop = el('button', 'btn danger', 'close');
+    stop.onclick = async () => { await api('/api/stop-run', { id: live.id }); poll(); };
+    acts.append(seeit, stop);
+  } else {
+    const go = el('button', 'btn go', 'open the table');
+    go.onclick = () => run('sealitaire');
+    acts.append(go);
+  }
+  acts.append(copyBtn('npm run sealitaire'));
+  row.append(acts);
+  box.append(row);
+
+  // The Dock button. Generated rather than committed, so the row says how to
+  // make one rather than pretending it is already there.
+  const dock = el('div', 'row');
+  dock.append(el('span', 'dot down'));
+  dock.append(el('span', 'name', 'Dock button'));
+  dock.append(el('span', 'blurb',
+    'Sealitaire.app in ~/Applications — the same table, no terminal. Re-generate it after moving the repo or changing node.'));
+  const dacts = el('div', 'acts');
+  const mk = el('button', 'btn', 'generate');
+  mk.onclick = () => run('sealitaire:app');
+  dacts.append(mk, copyBtn('npm run sealitaire:app'));
+  dock.append(dacts);
+  box.append(dock);
+
+  // The Rive editor round trip. The .rml is the source of truth and the
+  // editor is where Ethan nudges it, so these are the two directions and they
+  // live here rather than three drawers apart under Audits and Publish: pull
+  // asks the open editor for its copy and diffs it (nothing written), apply
+  // writes the attribute changes back, push replaces the editor's copy with
+  // ours. Push last, and only after a pull, because it overwrites whatever
+  // was nudged in the editor and not yet pulled — the blurb says so, and the
+  // order of the buttons says so.
+  const ed = el('div', 'row');
+  const pulling = ST.runs.find((r) => /^sealitaire:(pull|push)/.test(r.name) && r.status === 'running');
+  ed.append(el('span', 'dot ' + (pulling ? 'keep' : 'down')));
+  ed.append(el('span', 'name', 'the Rive editor'));
+  ed.append(el('span', 'blurb', pulling ? `${pulling.name} running`
+    : 'Pull diffs the editor\'s open copy against the .rml (report only); apply writes the changed attributes back; push replaces the editor\'s copy with ours. Pull before you push.'));
+  const eacts = el('div', 'acts');
+  if (pulling) {
+    const seeit = el('button', 'btn', 'output');
+    seeit.onclick = () => watch(pulling.id);
+    eacts.append(seeit);
+  } else {
+    const pull = el('button', 'btn go', 'pull');
+    pull.onclick = () => run('sealitaire:pull');
+    const apply = el('button', 'btn', 'pull & apply');
+    apply.onclick = () => run('sealitaire:pull:apply');
+    const push = el('button', 'btn', 'push');
+    push.onclick = () => run('sealitaire:push');
+    eacts.append(pull, apply, push);
+  }
+  eacts.append(copyBtn('npm run sealitaire:pull'));
+  ed.append(eacts);
+  box.append(ed);
 }
 
 // --- servers ---------------------------------------------------------------
@@ -601,6 +707,7 @@ async function poll() {
   ST = await api('/api/state');
   $('#hubport').textContent = ST.port;
   drawShip();
+  drawSealitaire();
   drawServers();
   drawPages();
   drawCommands();
@@ -626,7 +733,7 @@ $('#runsel').onchange = (e) => watch(Number(e.target.value));
 $('#dstop').onclick = async () => { await api('/api/stop-run', { id: watching }); pumpLog(); poll(); };
 
 // Jump links, built from the sections that exist.
-for (const [id, label] of [['s-ship', 'ship'], ['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
+for (const [id, label] of [['s-ship', 'ship'], ['s-sealitaire', 'sealitaire'], ['s-servers', 'servers'], ['s-pages', 'pages'], ['s-commands', 'commands']]) {
   const b = el('button', null, label);
   b.onclick = () => document.getElementById(id).scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('#tabs').append(b);

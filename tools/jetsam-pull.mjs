@@ -156,9 +156,38 @@ export function describeJetsam(r, { top = 8 } = {}) {
   return `${head}\n${rows.join('\n')}\n    ${c.dim}page ${page}B${free}${wired}${c.off}`;
 }
 
+/**
+ * HOW STALE THE FOLDER IS. Pure, and exported for the test.
+ *
+ * THIS TOOL DOES NOT TALK TO THE PHONE. It reads a folder that Xcode fills,
+ * and Xcode fills it only while its Devices and Simulators pane is open. So
+ * `1 of 1 report(s)` over a folder last written an hour ago is not the
+ * statement it looks like: the kill you are asking about may simply not have
+ * been collected. That absence is the tool's most consequential output — it is
+ * what says "not a memory kill" — and it must never be read off a stale folder.
+ *
+ * `syncedAt` is the newest mtime of ANY file in the synced directories, not
+ * just the JetsamEvent ones: a folder full of fresh SiriSearchFeedback and no
+ * fresh jetsam is a real answer, and a folder with nothing fresh at all is no
+ * answer. Returns null when nothing is known.
+ */
+export function syncLine(syncedAt, now = Date.now(), newestKill = null) {
+  if (!syncedAt) return null;
+  const mins = Math.round((now - syncedAt) / 60000);
+  const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)}h ago`;
+  const when = new Date(syncedAt).toLocaleTimeString();
+  let line = `last synced ${when} (${ago})`;
+  // The one comparison that matters, when the caller can make it.
+  if (newestKill && newestKill > syncedAt) {
+    line += ` — NEWER THAN THIS SYNC: the ${new Date(newestKill).toLocaleTimeString()} kill`
+      + ' has not been collected. Its absence here means nothing.';
+  }
+  return line;
+}
+
 function candidates() {
   const from = arg('from');
-  if (from) return [from];
+  if (from) return [{ dir: from, synced: true }];
   const home = homedir();
   const out = [];
   // TWO SYNC ROOTS, and which one a Mac uses is a matter of its Xcode version:
@@ -176,23 +205,26 @@ function candidates() {
     for (const e of readdirSync(synced, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
       const dev = join(synced, e.name);
-      out.push(dev);
+      out.push({ dir: dev, synced: true });
       // Xcode files everything that is not an app crash one level down.
       const other = join(dev, 'Other Logs');
-      if (existsSync(other)) out.push(other);
+      if (existsSync(other)) out.push({ dir: other, synced: true });
     }
   }
-  // Where a report shared off the phone lands.
+  // Where a report shared off the phone lands. NOT a sync directory: its mtime
+  // moves every time anything is downloaded and says nothing about the phone.
   for (const d of ['Downloads', 'Desktop']) {
     const p = join(home, d);
-    if (existsSync(p)) out.push(p);
+    if (existsSync(p)) out.push({ dir: p, synced: false });
   }
   return out;
 }
 
+let syncedAt = 0;
+
 function findFiles() {
   const hits = [];
-  for (const dir of candidates()) {
+  for (const { dir, synced } of candidates()) {
     let entries;
     try {
       entries = readdirSync(dir);
@@ -200,11 +232,25 @@ function findFiles() {
       continue;
     }
     for (const name of entries) {
-      if (!/^JetsamEvent/i.test(name)) continue;
       const full = join(dir, name);
+      let at;
       try {
-        hits.push({ full, name, at: statSync(full).mtimeMs });
-      } catch { /* vanished between listing and stat */ }
+        at = statSync(full).mtimeMs;
+      } catch {
+        continue; // vanished between listing and stat
+      }
+      // EVERY REPORT, not just the jetsam ones — see syncLine. The freshest
+      // .ips in the folder is the evidence that the sync reached a given
+      // moment at all, and a folder of fresh SiriSearchFeedback with no fresh
+      // jetsam is a real answer.
+      //
+      // `.ips` ONLY, and only in a directory Xcode actually fills. `.DS_Store`
+      // sits in that folder and Finder touches it merely for being looked at —
+      // it read 37 minutes NEWER than the last real sync on the first run of
+      // this code, which is a Finder artifact certifying that the phone had
+      // been asked. That is the precise lie this whole function exists to stop.
+      if (synced && at > syncedAt && /\.ips$/i.test(name)) syncedAt = at;
+      if (/^JetsamEvent/i.test(name)) hits.push({ full, name, at });
     }
   }
   return hits.sort((a, b) => a.at - b.at);
@@ -221,6 +267,8 @@ function main() {
     console.log(`  ${c.bold}2.${c.off} On the phone: Settings -> Privacy & Security -> Analytics &`);
     console.log('     Improvements -> Analytics Data -> JetsamEvent-* -> share it over,');
     console.log(`     then ${c.bold}npm run jetsam -- --from ~/Downloads${c.off}\n`);
+    const fresh = syncLine(syncedAt);
+    if (fresh) console.log(`${c.yellow}${fresh}${c.off}\n`);
     console.log(`${c.dim}A kill with no report means the process was not killed for memory —${c.off}`);
     console.log(`${c.dim}check \`npm run crash\` for an 'error' verdict instead.${c.off}\n`);
     return;
@@ -251,7 +299,15 @@ function main() {
     console.log(`  ${describeJetsam(report)}\n`);
   }
   console.log(`${c.dim}'>' marks this game's two processes. The web view has its own limit and`);
-  console.log(`is the one that dies; the app being far under ITS ceiling is expected.${c.off}\n`);
+  console.log(`is the one that dies; the app being far under ITS ceiling is expected.${c.off}`);
+  // THE DATE ON THE EVIDENCE, last so it is the line still on screen. This
+  // tool reads a folder; Xcode fills it. Reading "no report for that kill"
+  // off a folder that was last written before the kill is the one mistake
+  // here that sends somebody down a week of the wrong hunt.
+  const fresh = syncLine(syncedAt);
+  if (fresh) console.log(`\n${c.yellow}${fresh}${c.off}`);
+  console.log(`${c.dim}Xcode -> Window -> Devices and Simulators -> View Device Logs syncs;`);
+  console.log(`this command only reads what that pane already brought over.${c.off}\n`);
 }
 
 if (process.argv[1] && process.argv[1].endsWith('jetsam-pull.mjs')) main();

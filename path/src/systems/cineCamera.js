@@ -1073,7 +1073,11 @@ export function updateCineCamera(dt, ctx) {
   // `p.path` rides the state blend, so this fades in and out on exactly the
   // same curve as the pull-in rather than needing a timer of its own.
   const pathCfg = lensCfg.path ?? {};
-  const amount = (pathCfg.enabled ?? true) ? p.path : 0;
+  // `lensLane` and not `enabled`, and DEFAULT OFF — see the note in config.js
+  // on why the key had to be renamed rather than re-defaulted. The corridor is
+  // replaced by systems/strikePath.js, which draws the same forecast as a line
+  // per seal instead of darkening the frame around one of them.
+  const amount = (pathCfg.lensLane ?? false) ? p.path : 0;
   cineLens.pathAmount = amount;
   if (amount > 0.001) {
     // Where the strike will actually LAND — the chord to the end of the dash

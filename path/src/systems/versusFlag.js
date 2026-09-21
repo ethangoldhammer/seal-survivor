@@ -62,6 +62,38 @@ export function versusDrops(what) {
 }
 
 // ---------------------------------------------------------------------------
+// IS THE BREATH BEING SIMULATED RIGHT NOW — the one question every oxygen call
+// site asks, in an ordinary run and in a match alike.
+//
+// Two flags fold into it. CONFIG.oxygen.enabled is the whole mechanic's own
+// switch (a tuner bool, and off means off everywhere). CONFIG.versus.oxygen
+// .enabled is Blubberball's, and it is OFF: a ball game with a drowning clock
+// is two games, and the trip to the surface was pulling every seal out of the
+// match on a timer nobody chose. The lungs are stubbed there, not deleted —
+// every system below still exists and the flag is the only thing holding them
+// shut, so the day the mode wants a breath back it is one `true`.
+//
+// A GATE, NOT A CONFIG OVERRIDE, for the reason at the top of this file: the
+// tuner snapshots whole CONFIG sections, so a match that wrote
+// `CONFIG.oxygen.enabled = false` would bake the run's lungs shut in
+// imported-tuning.json.
+//
+// WHAT "OFF" MEANS at the call sites: the bar does not drain or refill, an
+// empty tank cannot burst a seal or drain its health, a bubble pays its boost
+// pips and no air, the kickoff fill leaves the tank alone, the bot has no air
+// clock, and nothing draws a reading — not the HUD's gauge, not the band on
+// any seal's ring, not the strain over the screen. The value on each seal
+// stays where startRun left it (full), so everything that merely READS the
+// tank — Iron Lung, the breath speed curve, the online snapshot's oxygen01 —
+// keeps working on a number that simply never moves.
+// ---------------------------------------------------------------------------
+export function oxygenLive() {
+  if (CONFIG.oxygen?.enabled === false) return false;
+  if (versusFlag.enabled) return CONFIG.versus?.oxygen?.enabled === true;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // THE MATCH SETUP — who is on which side, and in what colour. Written by the
 // team select (ui/teamSelect.js) and read at the match's edges: input.js for
 // which pad is player 1's, p2Pad in systems/versus.js for player 2's, the bot

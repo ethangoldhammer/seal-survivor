@@ -1,0 +1,480 @@
+<!-- THE NAME OF THIS FILE HAS TO SORT AFTER scene.rml. Not a preference:
+     the CLI scans *.rml alphabetically and compiles them "as one document",
+     and on the WEB runtime a markup file sorted before the one holding the
+     ScriptedLayout kills every Luau script in the build — `ScriptAsset
+     doesn't have a generator function table`, background fill drawn and
+     nothing else. It only bites with a WGSL shader in the file, so the CLI
+     viewer never shows it and neither does --verify. This was `cards.rml`
+     and that is exactly why the web build was dead. rive.yaml has no
+     ordering key, so the filename is the only lever; tools/rml-order-test.mjs
+     guards it. -->
+<Rive version="1" kind="fragment">
+    <!-- =========================================================================
+         CARDS — one artboard per rank, built from shared components.
+
+           Corner   the rank glyph and the suit under it. Top-left only.
+           Plate    the face. Last child, so it draws underneath. Its Face's
+                    opacity is the Card view model's `plate`: 1 on a card, 0
+                    on the ink-only instance a tank card draws into the ink
+                    atlas (table.luau), so the rank prints OVER the creatures.
+                    It is DEEP WATER, not cream, and it carries no edge of its
+                    own: every card's face is a window onto a tank, so all the
+                    plate ever is is what shows through the seam around that
+                    window, and in cream that seam read as a hard white line
+                    drawn round every card. The card's edge is the RIM
+                    (crt.wgsl), a shaded bevel with a material on it.
+           Card A … Card K
+                    the layouts: ONE corner and the plate. There is no turned
+                    bottom-right copy — a card here is never read upside down,
+                    and the second corner only crowded the tank. NOTHING ELSE is
+                    drawn on a face — no pips. The number IS the tank: a 7
+                    holds seven bodies (tanks.csv), an ace one apex predator,
+                    the court one creature from the roster, a species per suit.
+           [FPO] Pip
+                    generated suit marks (a fish, a bubble, a shell drawn from
+                    primitives; the starfish is real art). Placed on no card.
+                    Ethan's rule: a generated symbol never ships and is always
+                    flagged FPO — keep the tag on it, and put it on nothing.
+
+         table.luau instances Card <rank> per card with that card's view model
+         (rank text, ink colour, which suit is 1). Hierarchy order: FIRST child
+         draws on TOP. Ids here are 2:*; scene.rml owns 0:*, tuner.rml 1:*.
+         ========================================================================= -->
+    <Artboard isComponent="true" defaultStateMachineId="2:11" viewModelId="0:320" viewModelInstanceId="0:330"
+              originX="0.5" originY="0.5" x="1700" y="400" width="48" height="48" styleId="2:100" name="[FPO] Pip" id="2:10">
+        <LayoutComponentStyle name="Style" id="2:100"/>
+        <Node name="Fish" id="2:101">
+            <DataBindContext sourcePathIds="0:320-0:323" propertyKey="18" id="2:102"/>
+            <Shape x="-6" y="-2" name="Eye" id="2:103">
+                <Ellipse width="4" height="4" originX="0.5" originY="0.5" name="P" id="2:104"/>
+                <Fill name="F" id="2:105"><SolidColor colorValue="FFF7F1E6" name="C" id="2:106"/></Fill>
+            </Shape>
+            <Shape name="Body" id="2:107">
+                <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="2:108"/>
+                <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="2:109"/>
+                <Fill name="F" id="2:110"><SolidColor colorValue="FFD0392B" name="C" id="2:111"/></Fill>
+            </Shape>
+        </Node>
+        <Node name="Star" id="2:112">
+            <DataBindContext sourcePathIds="0:320-0:324" propertyKey="18" id="2:113"/>
+            <Image assetId="0:408" scaleX="0.2" scaleY="0.2" name="Body" id="2:114"/>
+        </Node>
+        <Node name="Bubble" id="2:115">
+            <DataBindContext sourcePathIds="0:320-0:325" propertyKey="18" id="2:116"/>
+            <Shape x="-5" y="-6" name="Shine" id="2:117">
+                <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="2:118"/>
+                <Fill name="F" id="2:119"><SolidColor colorValue="FFF7F1E6" name="C" id="2:120"/></Fill>
+            </Shape>
+            <Shape name="Body" id="2:121">
+                <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="2:122"/>
+                <Ellipse x="13" y="-12" width="8" height="8" originX="0.5" originY="0.5" name="P2" id="2:123"/>
+                <Fill name="F" id="2:124"><SolidColor colorValue="FF1E2A44" name="C" id="2:125"/></Fill>
+            </Shape>
+        </Node>
+        <Node name="Shell" id="2:126">
+            <DataBindContext sourcePathIds="0:320-0:326" propertyKey="18" id="2:127"/>
+            <Shape name="Body" id="2:128">
+                <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="2:129"/>
+                <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="2:130"/>
+                <Fill name="F" id="2:131"><SolidColor colorValue="FF1E2A44" name="C" id="2:132"/></Fill>
+            </Shape>
+        </Node>
+        <StateMachine name="State Machine 1" id="2:11">
+            <StateMachineLayer name="Layer 1" id="2:133"><AnyState x="300" y="0" id="2:134"/><ExitState x="400" y="0" id="2:135"/><EntryState x="0" y="0" id="2:136"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <Artboard isComponent="true" defaultStateMachineId="2:21" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1800" y="400" width="30" height="60" styleId="2:137" name="Corner" id="2:20">
+        <LayoutComponentStyle name="Style" id="2:137"/>
+        <!-- The rank, and the light behind it. Every glow is a feathered
+             stroke on its own copy of the glyph, so the editor owns colour,
+             thickness and feather; the game only switches which copy shows
+             (`red` / `black`, 0 or 1) and pulses `pulse` on the music's beat. -->
+        <!-- Ethan's pivot (from the editor): the rank layers sit under one node
+             so a timeline can pop or turn the glyph about its centre. Timeline 1
+             is that pop; Timeline 2 is a rotation stub. Neither is wired to the
+             state machine yet. -->
+        <Node x="6" y="7.5" name="Rank_ROOT" scaleX="0.400000006" scaleY="0.400000006" id="2:1180">
+            <Text x="-14.379043" y="-23.983398" sizingValue="autoWidth" name="Rank" id="2:138">
+                <TextStylePaint fontSize="41" letterSpacing="-0.03" fontAssetId="0:1108" familyName="Brygada 1918" styleName="Regular" name="S" id="2:22">
+                    <!-- Ethan's drop shadow, from the editor. Feather inside a Fill
+                         draws nothing in the CLI renderer (rive docs drawing), so this
+                         shows in the editor only until Rive fixes it. Its strength and
+                         offset are bound to the Card view model's shadowSoft/X/Y, the
+                         same three the suit shadows below read, so one edit to the
+                         default instance moves all of them at once. -->
+                    <Fill fillRule="2" name="Fill 1" id="2:1170">
+                        <SolidColor colorValue="D6000000" name="Component" id="2:1171"/>
+                        <Feather strength="8" offsetX="1" offsetY="1" name="Shadow" id="2:1172">
+                            <DataBindContext sourcePathIds="0:320-0:344" propertyKey="749" id="2:1444"/><DataBindContext sourcePathIds="0:320-0:345" propertyKey="750" id="2:1445"/><DataBindContext sourcePathIds="0:320-0:346" propertyKey="751" id="2:1446"/>
+                        </Feather>
+                    </Fill>
+                    <Fill name="Fill" id="2:139">
+                        <SolidColor colorValue="FFD0392B" name="C" id="2:140">
+                            <DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="2:141"/>
+                        </SolidColor>
+                    </Fill>
+                    <TextStyleAxis tag="2003265652" axisValue="400" name="Style Axis" id="2:1173"/>
+                </TextStylePaint>
+                <TextValueRun styleId="2:22" text="A" name="Run" id="2:142">
+                    <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="2:143"/>
+                </TextValueRun>
+            </Text>
+            <Text x="-14.379043" y="-23.983398" sizingValue="autoWidth" name="Pulse" id="2:1140">
+                <DataBindContext sourcePathIds="0:320-0:340" propertyKey="18" id="2:1141"/>
+                <TextStylePaint fontSize="41" letterSpacing="-0.03" fontAssetId="0:1108" familyName="Brygada 1918" styleName="Regular" name="S" id="2:1142">
+                    <Stroke thickness="4" name="Glow" id="2:1143"><SolidColor colorValue="FFFFFFFF" name="C" id="2:1144"/><Feather strength="14" name="F" id="2:1145"/></Stroke>
+                </TextStylePaint>
+                <TextValueRun styleId="2:1142" text="A" name="Run" id="2:1146">
+                    <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="2:1147"/>
+                </TextValueRun>
+            </Text>
+            <Text x="-14.379043" y="-23.983398" sizingValue="autoWidth" name="Glow White" id="2:1150">
+                <DataBindContext sourcePathIds="0:320-0:329" propertyKey="18" id="2:1151"/>
+                <TextStylePaint fontSize="41" letterSpacing="-0.03" fontAssetId="0:1108" familyName="Brygada 1918" styleName="Regular" name="S" id="2:1152">
+                    <Stroke thickness="3" name="Glow" id="2:1153"><SolidColor colorValue="FFF2F8FF" name="C" id="2:1154"/><Feather strength="9" name="F" id="2:1155"/></Stroke>
+                </TextStylePaint>
+                <TextValueRun styleId="2:1152" text="A" name="Run" id="2:1156">
+                    <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="2:1157"/>
+                </TextValueRun>
+            </Text>
+            <Text x="-14.379043" y="-23.983398" sizingValue="autoWidth" name="Glow Red" id="2:1160">
+                <DataBindContext sourcePathIds="0:320-0:328" propertyKey="18" id="2:1161"/>
+                <TextStylePaint fontSize="41" letterSpacing="-0.03" fontAssetId="0:1108" familyName="Brygada 1918" styleName="Regular" name="S" id="2:1162">
+                    <Stroke thickness="3" name="Glow" id="2:1163"><SolidColor colorValue="FFFF2E1F" name="C" id="2:1164"/><Feather strength="9" name="F" id="2:1165"/></Stroke>
+                </TextStylePaint>
+                <TextValueRun styleId="2:1162" text="A" name="Run" id="2:1166">
+                    <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="2:1167"/>
+                </TextValueRun>
+            </Text>
+        </Node>
+        <!-- The suit, under the rank. One node per suit bound to the same
+             `fish`/`star`/`bubble`/`shell` flags table.luau already sets per
+             card, so exactly one is opaque; the fill follows `ink` like the
+             rank does, which is what makes the mark red or black without the
+             table knowing there is a mark at all. Imported from Ethan's SVG by
+             tools/sealitaire-svg.mjs — the vertices are the source now, and
+             re-running the importer would only reproduce them. Each shape's
+             first fill is its drop shadow, the rank's construct (a black fill
+             with a Feather) bound to the same shadowSoft/X/Y numbers, so the
+             corner's shadows are one setting. -->
+        <Node x="7.5" y="24.5" name="Suit_ROOT" scaleX="0.800000012" scaleY="0.800000012" id="2:1401">
+            <Node name="Fish" id="2:1403">
+                <DataBindContext sourcePathIds="0:320-0:323" propertyKey="18" id="2:1404"/>
+                <Shape name="Heart" id="2:1310">
+                    <PointsPath isClosed="true" name="P" pathFlags="2" id="2:1311">
+                        <CubicDetachedVertex x="0" y="7.0483" inRotation="0" inDistance="0" outRotation="0" outDistance="0" name="V0" id="2:1312"/>
+                        <CubicDetachedVertex x="6.7556" y="-0.6213" inRotation="2.1786" inDistance="1.1134" outRotation="-0.9485" outDistance="2.2497" name="V1" id="2:1313"/>
+                        <CubicDetachedVertex x="5.7621" y="-6.3039" inRotation="0.6078" inDistance="2.2268" outRotation="-2.5193" outDistance="2.2497" name="V2" id="2:1314"/>
+                        <CubicDetachedVertex x="0.0795" y="-5.3104" inRotation="-0.963" inDistance="2.2268" outRotation="2.3562" outDistance="0.0562" name="V3" id="2:1315"/>
+                        <CubicDetachedVertex x="0" y="-5.1912" inRotation="-0.7854" inDistance="0.0562" outRotation="-2.3562" outDistance="0.0562" name="V4" id="2:1316"/>
+                        <CubicDetachedVertex x="-0.0795" y="-5.3104" inRotation="0.7854" inDistance="0.0562" outRotation="-2.1931" outDistance="2.2497" name="V5" id="2:1317"/>
+                        <CubicDetachedVertex x="-5.7621" y="-6.3039" inRotation="-0.6223" inDistance="2.2497" outRotation="2.5193" outDistance="2.2497" name="V6" id="2:1318"/>
+                        <CubicDetachedVertex x="-6.7556" y="-0.6213" inRotation="-2.1931" inDistance="2.2497" outRotation="0.963" outDistance="1.1134" name="V7" id="2:1319"/>
+                    </PointsPath>
+                    <Fill name="Shadow" id="2:1420"><SolidColor colorValue="D6000000" name="C" id="2:1421"/><Feather strength="8" offsetX="1" offsetY="1" name="F" id="2:1422"><DataBindContext sourcePathIds="0:320-0:344" propertyKey="749" id="2:1423"/><DataBindContext sourcePathIds="0:320-0:345" propertyKey="750" id="2:1424"/><DataBindContext sourcePathIds="0:320-0:346" propertyKey="751" id="2:1425"/></Feather></Fill>
+                    <Fill name="F" id="2:1320"><SolidColor colorValue="FFD0392B" name="C" id="2:1321"><DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="2:1402"/></SolidColor></Fill>
+                </Shape>
+            </Node>
+            <Node name="Star" id="2:1406">
+                <DataBindContext sourcePathIds="0:320-0:324" propertyKey="18" id="2:1407"/>
+                <Shape name="Diamond" id="2:1335">
+                    <PointsPath isClosed="true" name="P" pathFlags="2" id="2:1336">
+                        <CubicDetachedVertex x="0" y="-7.451" inRotation="0.8452" inDistance="3.2935" outRotation="2.3054" outDistance="3.32" name="V0" id="2:1337"/>
+                        <CubicDetachedVertex x="-6.6364" y="0.0199" inRotation="-0.712" inDistance="3.8319" outRotation="0.7041" outDistance="3.806" name="V1" id="2:1338"/>
+                        <CubicDetachedVertex x="0" y="7.451" inRotation="-2.3054" inDistance="3.32" outRotation="-0.8362" outDistance="3.32" name="V2" id="2:1339"/>
+                        <CubicDetachedVertex x="6.6364" y="0.0199" inRotation="2.4375" inDistance="3.806" outRotation="-2.4363" outDistance="3.862" name="V3" id="2:1340"/>
+                    </PointsPath>
+                    <Fill name="Shadow" id="2:1426"><SolidColor colorValue="D6000000" name="C" id="2:1427"/><Feather strength="8" offsetX="1" offsetY="1" name="F" id="2:1428"><DataBindContext sourcePathIds="0:320-0:344" propertyKey="749" id="2:1429"/><DataBindContext sourcePathIds="0:320-0:345" propertyKey="750" id="2:1430"/><DataBindContext sourcePathIds="0:320-0:346" propertyKey="751" id="2:1431"/></Feather></Fill>
+                    <Fill name="F" id="2:1341"><SolidColor colorValue="FFD0392B" name="C" id="2:1342"><DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="2:1405"/></SolidColor></Fill>
+                </Shape>
+            </Node>
+            <Node name="Bubble" id="2:1409">
+                <DataBindContext sourcePathIds="0:320-0:325" propertyKey="18" id="2:1410"/>
+                <Shape name="Spade" id="2:1322">
+                    <PointsPath isClosed="true" name="P" pathFlags="2" id="2:1323">
+                        <CubicDetachedVertex x="0" y="-7.451" inRotation="0" inDistance="0" outRotation="0" outDistance="0" name="V0" id="2:1324"/>
+                        <CubicDetachedVertex x="-6.3979" y="-1.7286" inRotation="-0.963" inDistance="1.1134" outRotation="2.1846" outDistance="2.1389" name="V1" id="2:1325"/>
+                        <CubicDetachedVertex x="-5.4442" y="3.6361" inRotation="-2.5432" inDistance="2.1163" outRotation="0.6107" outDistance="1.9403" name="V2" id="2:1326"/>
+                        <CubicDetachedVertex x="-0.3974" y="3.0798" inRotation="2.2974" inDistance="1.9141" outRotation="1.6248" outDistance="1.4725" name="V3" id="2:1327"/>
+                        <CubicDetachedVertex x="-1.0332" y="7.451" inRotation="-1.3068" inDistance="1.5231" outRotation="0" outDistance="0.6756" name="V4" id="2:1328"/>
+                        <CubicDetachedVertex x="1.0332" y="7.451" inRotation="3.1416" inDistance="0.6756" outRotation="-1.8348" outDistance="1.5231" name="V5" id="2:1329"/>
+                        <CubicDetachedVertex x="0.3974" y="3.0798" inRotation="1.4899" inDistance="1.4752" outRotation="0.8148" outDistance="1.9116" name="V6" id="2:1330"/>
+                        <CubicDetachedVertex x="5.4442" y="3.6361" inRotation="2.5309" inDistance="1.9403" outRotation="-0.6138" outDistance="2.1389" name="V7" id="2:1331"/>
+                        <CubicDetachedVertex x="6.3979" y="-1.7286" inRotation="0.957" inDistance="2.1389" outRotation="-2.1487" outDistance="1.0912" name="V8" id="2:1332"/>
+                    </PointsPath>
+                    <Fill name="Shadow" id="2:1432"><SolidColor colorValue="D6000000" name="C" id="2:1433"/><Feather strength="8" offsetX="1" offsetY="1" name="F" id="2:1434"><DataBindContext sourcePathIds="0:320-0:344" propertyKey="749" id="2:1435"/><DataBindContext sourcePathIds="0:320-0:345" propertyKey="750" id="2:1436"/><DataBindContext sourcePathIds="0:320-0:346" propertyKey="751" id="2:1437"/></Feather></Fill>
+                    <Fill name="F" id="2:1333"><SolidColor colorValue="FFD0392B" name="C" id="2:1334"><DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="2:1408"/></SolidColor></Fill>
+                </Shape>
+            </Node>
+            <Node name="Shell" id="2:1412">
+                <DataBindContext sourcePathIds="0:320-0:326" propertyKey="18" id="2:1413"/>
+                <Shape name="Club" id="2:1343">
+                    <PointsPath isClosed="true" name="P" pathFlags="2" id="2:1344">
+                        <CubicDetachedVertex x="3.3182" y="-2.0465" inRotation="0" inDistance="1.9472" outRotation="3.1416" outDistance="0.1192" name="V0" id="2:1345"/>
+                        <CubicDetachedVertex x="3.0003" y="-2.0465" inRotation="0" inDistance="0.1192" outRotation="-0.9995" outDistance="0.6614" name="V1" id="2:1346"/>
+                        <CubicDetachedVertex x="3.5566" y="-3.954" inRotation="1.5708" inDistance="0.7153" outRotation="-1.5708" outDistance="1.9472" name="V2" id="2:1347"/>
+                        <CubicDetachedVertex x="0.0199" y="-7.4908" inRotation="0" inDistance="1.9472" outRotation="3.1416" outDistance="1.9472" name="V3" id="2:1348"/>
+                        <CubicDetachedVertex x="-3.5169" y="-3.954" inRotation="-1.5708" inDistance="1.9472" outRotation="1.5708" outDistance="0.7153" name="V4" id="2:1349"/>
+                        <CubicDetachedVertex x="-2.9605" y="-2.0465" inRotation="-2.1421" inDistance="0.6614" outRotation="3.1416" outDistance="0.1192" name="V5" id="2:1350"/>
+                        <CubicDetachedVertex x="-3.2785" y="-2.0465" inRotation="0" inDistance="0.1192" outRotation="3.1416" outDistance="1.9472" name="V6" id="2:1351"/>
+                        <CubicDetachedVertex x="-6.8152" y="1.4902" inRotation="-1.5708" inDistance="1.9472" outRotation="1.5708" outDistance="1.9472" name="V7" id="2:1352"/>
+                        <CubicDetachedVertex x="-3.2785" y="5.027" inRotation="3.1416" inDistance="1.9472" outRotation="0" outDistance="1.2319" name="V8" id="2:1353"/>
+                        <CubicDetachedVertex x="-0.3378" y="3.4771" inRotation="2.1786" inDistance="1.1134" outRotation="1.6296" outDistance="1.3535" name="V9" id="2:1354"/>
+                        <CubicDetachedVertex x="-0.9339" y="7.4908" inRotation="-1.2766" inDistance="1.3703" outRotation="0" outDistance="0.6358" name="V10" id="2:1355"/>
+                        <CubicDetachedVertex x="0.9339" y="7.4908" inRotation="3.1416" inDistance="0.5961" outRotation="-1.837" outDistance="1.3593" name="V11" id="2:1356"/>
+                        <CubicDetachedVertex x="0.3378" y="3.4771" inRotation="1.4828" inDistance="1.3564" outRotation="0.9828" outDistance="1.1462" name="V12" id="2:1357"/>
+                        <CubicDetachedVertex x="3.2785" y="5.027" inRotation="3.1416" inDistance="1.2319" outRotation="0" outDistance="1.9472" name="V13" id="2:1358"/>
+                        <CubicDetachedVertex x="6.8152" y="1.4902" inRotation="1.5708" inDistance="1.9472" outRotation="-1.5708" outDistance="1.9472" name="V14" id="2:1359"/>
+                    </PointsPath>
+                    <Fill name="Shadow" id="2:1438"><SolidColor colorValue="D6000000" name="C" id="2:1439"/><Feather strength="8" offsetX="1" offsetY="1" name="F" id="2:1440"><DataBindContext sourcePathIds="0:320-0:344" propertyKey="749" id="2:1441"/><DataBindContext sourcePathIds="0:320-0:345" propertyKey="750" id="2:1442"/><DataBindContext sourcePathIds="0:320-0:346" propertyKey="751" id="2:1443"/></Feather></Fill>
+                    <Fill name="F" id="2:1360"><SolidColor colorValue="FFD0392B" name="C" id="2:1361"><DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="2:1411"/></SolidColor></Fill>
+                </Shape>
+            </Node>
+        </Node>
+        <LinearAnimation name="Timeline 2" id="2:1181">
+            <KeyedObject objectId="2:1180" id="2:1182">
+                <KeyedProperty propertyKey="15" id="2:1183">
+                    <KeyFrameDouble interpolationType="1" id="2:1184"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+        <LinearAnimation speed="5" name="Timeline 1" id="2:1185">
+            <KeyedObject objectId="2:1180" id="2:1186">
+                <KeyedProperty propertyKey="16" id="2:1187">
+                    <KeyFrameDouble value="1" interpolationType="1" id="2:1188"/>
+                    <KeyFrameDouble value="1.12" interpolationType="1" frame="8" id="2:1189"/>
+                    <KeyFrameDouble value="1" interpolationType="1" frame="16" id="2:1190"/>
+                </KeyedProperty>
+                <KeyedProperty propertyKey="17" id="2:1191">
+                    <KeyFrameDouble value="1" interpolationType="1" id="2:1192"/>
+                    <KeyFrameDouble value="1.12" interpolationType="1" frame="8" id="2:1193"/>
+                    <KeyFrameDouble value="1" interpolationType="1" frame="16" id="2:1194"/>
+                </KeyedProperty>
+                <KeyedProperty propertyKey="15" id="2:1195">
+                    <KeyFrameDouble interpolationType="1" id="2:1196"/>
+                    <KeyFrameDouble interpolationType="1" frame="16" id="2:1197"/>
+                </KeyedProperty>
+                <KeyedProperty propertyKey="13" id="2:1198">
+                    <KeyFrameDouble value="14.379043" interpolationType="1" id="2:1199"/>
+                    <KeyFrameDouble value="14.379043" interpolationType="1" frame="16" id="2:1200"/>
+                </KeyedProperty>
+                <KeyedProperty propertyKey="14" id="2:1201">
+                    <KeyFrameDouble value="23.983398" interpolationType="1" id="2:1202"/>
+                    <KeyFrameDouble value="23.983398" interpolationType="1" frame="16" id="2:1203"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+        <StateMachine name="State Machine 1" id="2:21">
+            <StateMachineLayer name="Layer 1" id="2:145"><AnyState x="300" y="0" id="2:146"/><ExitState x="400" y="0" id="2:147"/><EntryState x="0" y="0" id="2:148"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <Artboard isComponent="true" defaultStateMachineId="2:31" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1900" y="400" width="120" height="168" styleId="2:149" name="Plate" id="2:30">
+        <LayoutComponentStyle name="Style" id="2:149"/>
+        <!-- The fallback edge: the CRT's rim replaces this wherever there is
+             a GPU canvas, and this is what a headless or no-GPU run draws. It
+             follows `plate`, so it is hidden on the ink-only instance — the
+             ink atlas holds the RANK and nothing else, and the glow the CRT
+             feathers out of it would otherwise trace the card's outline. -->
+        <!-- The border is INK: not bound to `plate`, so it prints over the
+             tank and is designed here (strokes, feathers, gradients), while
+             the CRT's rim (tuner: cardRim / cardRimWidth / cardRimMode) is the
+             shader's own bevel on the outline. Set cardRim to 0 for markup only. -->
+        <Shape x="60" y="84" name="Inner Border" id="2:150">
+            <Rectangle width="114" height="162" originX="0.5" originY="0.5" cornerRadiusTL="8" name="P" id="2:151"/>
+            <Stroke thickness="1.5" name="Edge" id="2:152"><SolidColor colorValue="FF070714" name="C" id="2:153"/></Stroke>
+        </Shape>
+        <!-- Ethan's trim, from the editor: a 7px stroke ON the outline, clipped
+             to the Face, so what shows is the 3.5px band just inside the edge.
+             This grey is the no-GPU fallback. With a GPU canvas the CRT's rim
+             is drawn over exactly this band (same signed distance, tuner:
+             cardRimWidth 3.5) in the `chrome` material — brushed metal that
+             mirrors the water, so it catches the scene's glints and hues. It
+             follows `plate` like the Face, so a tank card's ink instance has
+             no trim: the shader draws that card's rim over the tank itself. -->
+        <Shape x="60" y="84" name="trim" id="2:1450">
+            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="2:1451"/>
+            <Stroke thickness="7" name="Stroke 1" id="2:1452"><SolidColor colorValue="FF6E6E6E" name="C" id="2:1453"/></Stroke>
+            <ClippingShape sourceId="2:154" name="Face" id="2:1454"/>
+            <DataBindContext sourcePathIds="0:320-0:327" propertyKey="18" id="2:1455"/>
+        </Shape>
+        <Shape x="60" y="84" name="Face" id="2:154">
+            <!-- `plate` is 1 on a card, 0 on the ink-only instance the table draws
+                 into the ink atlas for a tank card (crt.wgsl lays it over the tank). -->
+            <DataBindContext sourcePathIds="0:320-0:327" propertyKey="18" id="2:1130"/>
+            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="2:155"/>
+            <Fill name="Fill" id="2:156">
+                <LinearGradient startX="-60" startY="-84" endX="60" endY="84" name="G" id="2:157">
+                    <GradientStop colorValue="FFFFFFFF" position="0" id="2:158"/>
+                    <GradientStop colorValue="FFF4F7FA" position="1" id="2:159"/>
+                </LinearGradient>
+            </Fill>
+        </Shape>
+        <StateMachine name="State Machine 1" id="2:31">
+            <StateMachineLayer name="Layer 1" id="2:160"><AnyState x="300" y="0" id="2:161"/><ExitState x="400" y="0" id="2:162"/><EntryState x="0" y="0" id="2:163"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- A -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1001" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1700" y="620" width="120" height="168" styleId="2:165" name="Card A" id="2:1000">
+        <LayoutComponentStyle name="Style" id="2:165"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:166"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:168"/>
+        <StateMachine name="State Machine 1" id="2:1001">
+            <StateMachineLayer name="Layer 1" id="2:169"><AnyState x="300" y="0" id="2:170"/><ExitState x="400" y="0" id="2:171"/><EntryState x="0" y="0" id="2:172"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 2 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1011" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1840" y="620" width="120" height="168" styleId="2:175" name="Card 2" id="2:1010">
+        <LayoutComponentStyle name="Style" id="2:175"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:176"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:178"/>
+        <StateMachine name="State Machine 1" id="2:1011">
+            <StateMachineLayer name="Layer 1" id="2:179"><AnyState x="300" y="0" id="2:180"/><ExitState x="400" y="0" id="2:181"/><EntryState x="0" y="0" id="2:182"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 3 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1021" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1980" y="620" width="120" height="168" styleId="2:186" name="Card 3" id="2:1020">
+        <LayoutComponentStyle name="Style" id="2:186"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:187"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:189"/>
+        <StateMachine name="State Machine 1" id="2:1021">
+            <StateMachineLayer name="Layer 1" id="2:190"><AnyState x="300" y="0" id="2:191"/><ExitState x="400" y="0" id="2:192"/><EntryState x="0" y="0" id="2:193"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 4 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1031" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2120" y="620" width="120" height="168" styleId="2:198" name="Card 4" id="2:1030">
+        <LayoutComponentStyle name="Style" id="2:198"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:199"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:201"/>
+        <StateMachine name="State Machine 1" id="2:1031">
+            <StateMachineLayer name="Layer 1" id="2:202"><AnyState x="300" y="0" id="2:203"/><ExitState x="400" y="0" id="2:204"/><EntryState x="0" y="0" id="2:205"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 5 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1041" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2260" y="620" width="120" height="168" styleId="2:211" name="Card 5" id="2:1040">
+        <LayoutComponentStyle name="Style" id="2:211"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:212"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:214"/>
+        <StateMachine name="State Machine 1" id="2:1041">
+            <StateMachineLayer name="Layer 1" id="2:215"><AnyState x="300" y="0" id="2:216"/><ExitState x="400" y="0" id="2:217"/><EntryState x="0" y="0" id="2:218"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 6 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1051" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2400" y="620" width="120" height="168" styleId="2:225" name="Card 6" id="2:1050">
+        <LayoutComponentStyle name="Style" id="2:225"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:226"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:228"/>
+        <StateMachine name="State Machine 1" id="2:1051">
+            <StateMachineLayer name="Layer 1" id="2:229"><AnyState x="300" y="0" id="2:230"/><ExitState x="400" y="0" id="2:231"/><EntryState x="0" y="0" id="2:232"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 7 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1061" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2540" y="620" width="120" height="168" styleId="2:240" name="Card 7" id="2:1060">
+        <LayoutComponentStyle name="Style" id="2:240"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:241"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:243"/>
+        <StateMachine name="State Machine 1" id="2:1061">
+            <StateMachineLayer name="Layer 1" id="2:244"><AnyState x="300" y="0" id="2:245"/><ExitState x="400" y="0" id="2:246"/><EntryState x="0" y="0" id="2:247"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 8 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1071" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1700" y="810" width="120" height="168" styleId="2:256" name="Card 8" id="2:1070">
+        <LayoutComponentStyle name="Style" id="2:256"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:257"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:259"/>
+        <StateMachine name="State Machine 1" id="2:1071">
+            <StateMachineLayer name="Layer 1" id="2:260"><AnyState x="300" y="0" id="2:261"/><ExitState x="400" y="0" id="2:262"/><EntryState x="0" y="0" id="2:263"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 9 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1081" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1840" y="810" width="120" height="168" styleId="2:273" name="Card 9" id="2:1080">
+        <LayoutComponentStyle name="Style" id="2:273"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:274"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:276"/>
+        <StateMachine name="State Machine 1" id="2:1081">
+            <StateMachineLayer name="Layer 1" id="2:277"><AnyState x="300" y="0" id="2:278"/><ExitState x="400" y="0" id="2:279"/><EntryState x="0" y="0" id="2:280"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- 10 -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1091" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1980" y="810" width="120" height="168" styleId="2:291" name="Card 10" id="2:1090">
+        <LayoutComponentStyle name="Style" id="2:291"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:292"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:294"/>
+        <StateMachine name="State Machine 1" id="2:1091">
+            <StateMachineLayer name="Layer 1" id="2:295"><AnyState x="300" y="0" id="2:296"/><ExitState x="400" y="0" id="2:297"/><EntryState x="0" y="0" id="2:298"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- J -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1101" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2120" y="810" width="120" height="168" styleId="2:300" name="Card J" id="2:1100">
+        <LayoutComponentStyle name="Style" id="2:300"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:301"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:303"/>
+        <StateMachine name="State Machine 1" id="2:1101">
+            <StateMachineLayer name="Layer 1" id="2:304"><AnyState x="300" y="0" id="2:305"/><ExitState x="400" y="0" id="2:306"/><EntryState x="0" y="0" id="2:307"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- Q -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1111" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2260" y="810" width="120" height="168" styleId="2:309" name="Card Q" id="2:1110">
+        <LayoutComponentStyle name="Style" id="2:309"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:310"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:312"/>
+        <StateMachine name="State Machine 1" id="2:1111">
+            <StateMachineLayer name="Layer 1" id="2:313"><AnyState x="300" y="0" id="2:314"/><ExitState x="400" y="0" id="2:315"/><EntryState x="0" y="0" id="2:316"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <!-- K -->
+    <Artboard isComponent="true" defaultStateMachineId="2:1121" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="2400" y="810" width="120" height="168" styleId="2:318" name="Card K" id="2:1120">
+        <LayoutComponentStyle name="Style" id="2:318"/>
+        <NestedArtboard artboardId="2:20" x="9" y="6" name="Corner TL" id="2:319"/>
+        <NestedArtboard artboardId="2:30" name="Plate" id="2:321"/>
+        <StateMachine name="State Machine 1" id="2:1121">
+            <StateMachineLayer name="Layer 1" id="2:322"><AnyState x="300" y="0" id="2:323"/><ExitState x="400" y="0" id="2:324"/><EntryState x="0" y="0" id="2:325"/></StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <ComponentAsset artboardId="2:10" name="[FPO] Pip" id="2:326"/>
+    <ComponentAsset artboardId="2:20" name="Corner" id="2:327"/>
+    <ComponentAsset artboardId="2:30" name="Plate" id="2:328"/>
+    <ComponentAsset artboardId="2:1000" name="Card A" id="2:329"/>
+    <ComponentAsset artboardId="2:1010" name="Card 2" id="2:330"/>
+    <ComponentAsset artboardId="2:1020" name="Card 3" id="2:331"/>
+    <ComponentAsset artboardId="2:1030" name="Card 4" id="2:332"/>
+    <ComponentAsset artboardId="2:1040" name="Card 5" id="2:333"/>
+    <ComponentAsset artboardId="2:1050" name="Card 6" id="2:334"/>
+    <ComponentAsset artboardId="2:1060" name="Card 7" id="2:335"/>
+    <ComponentAsset artboardId="2:1070" name="Card 8" id="2:336"/>
+    <ComponentAsset artboardId="2:1080" name="Card 9" id="2:337"/>
+    <ComponentAsset artboardId="2:1090" name="Card 10" id="2:338"/>
+    <ComponentAsset artboardId="2:1100" name="Card J" id="2:339"/>
+    <ComponentAsset artboardId="2:1110" name="Card Q" id="2:340"/>
+    <ComponentAsset artboardId="2:1120" name="Card K" id="2:341"/>
+</Rive>

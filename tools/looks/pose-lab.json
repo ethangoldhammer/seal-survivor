@@ -169,5 +169,109 @@
     "minGap": 0.25,
     "lean": 0.5
   },
-  "savedAt": "2026-09-16T15:53:21.804Z"
+  "sealFlip": {
+    "enabled": true,
+    "windup": 0.2,
+    "spin": 0.51,
+    "recover": 0.68,
+    "gatherFeel": {
+      "windIn": 22,
+      "windOut": 6
+    },
+    "turns": 1,
+    "gather": 0.12,
+    "mirrorWithFacing": true,
+    "cooldown": 0.95,
+    "weight": 1,
+    "slapAt": 0.42,
+    "slapSpan": 0.18,
+    "reach": 2.8,
+    "inner": 0.8,
+    "thick": 1.75,
+    "tangentMix": 0.72,
+    "knockGain": 4,
+    "weakSpotMul": 3.2,
+    "knockGainRoot": 0.55,
+    "tailImpulse": 35,
+    "tail": {
+      "enabled": true,
+      "lag": 3.75,
+      "stiffness": 3.3,
+      "damping": 0.45,
+      "tipLooseness": 1.05
+    },
+    "commit": {
+      "enabled": true,
+      "spinFast": 0.8,
+      "spinSlow": 1.45,
+      "hitSlow": 0.6,
+      "hitFast": 1.15
+    },
+    "forward": {
+      "enabled": true,
+      "push": 29,
+      "ceilMul": 1.6,
+      "ceilSeconds": 0.45,
+      "driftSpeed": 3
+    },
+    "back": {
+      "enabled": true,
+      "life": 0.55,
+      "emitFrom": 0.08,
+      "emitTo": 0.62,
+      "step": 1.1,
+      "maxNodes": 48,
+      "thick": 2.2,
+      "hold": 0.35,
+      "ballBounce": 0.45,
+      "ballSpin": 0.6,
+      "skin": 0.01,
+      "maxWalls": 2,
+      "emitter": "gooWall",
+      "blobScale": 1,
+      "blobSize": 1,
+      "blobSpeed": 1
+    },
+    "duringStrike": {
+      "enabled": true,
+      "steer": 0.35,
+      "knockMul": 1.6,
+      "carry": 0.45,
+      "ballCarry": 0.5
+    },
+    "ik": {
+      "iterations": 4,
+      "smoothing": 45,
+      "maxBend": 1.6,
+      "softness": 0.8,
+      "maxFold": 1.9,
+      "maxTwist": 0.7,
+      "tolerance": 0.01
+    },
+    "pose": {
+      "tuckUp": 0,
+      "tuckFore": 0.09,
+      "tuck": 0.02,
+      "headUp": -0.3,
+      "headFore": 0.45,
+      "headWeight": 0.7
+    },
+    "slapWindow": 0.24,
+    "bubbles": {
+      "enabled": true,
+      "emitter": "breathBubbles",
+      "from": "mouth",
+      "rate": 18.5,
+      "scale": 1,
+      "bursts": [
+        {
+          "at": 1,
+          "count": 2,
+          "from": "mouth",
+          "scale": 1
+        }
+      ]
+    }
+  },
+  "savedAt": "2026-09-20T03:09:02.026Z"
 }

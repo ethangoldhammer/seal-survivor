@@ -1,4 +1,7 @@
 import { CONFIG } from '../config.js';
+// Off in a Blubberball match as well as when the mechanic itself is off —
+// there is no breath to lose there. See systems/versusFlag.js.
+import { oxygenLive } from './versusFlag.js';
 import { feedback } from './feedback.js';
 import { setBandpass } from './music.js';
 
@@ -65,7 +68,7 @@ export function updateOxygenFx(dt, player, active) {
   // start screaming at a bar that's still a third full.
   const max = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max);
   const frac = Math.max(0, Math.min(1, player.oxygen / max));
-  const on = active && CONFIG.oxygen.enabled && fx.enabled !== false;
+  const on = active && oxygenLive() && fx.enabled !== false;
 
   // --- strain ---------------------------------------------------------------
   const threshold = Math.max(0.001, fx.threshold ?? 0.125);

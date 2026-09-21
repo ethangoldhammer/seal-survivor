@@ -29,7 +29,7 @@ import { resolve } from 'node:path';
 const ROOT = resolve(import.meta.dirname, '..');
 const tuning = JSON.parse(readFileSync(resolve(ROOT, 'path/src/imported-tuning.json'), 'utf8'));
 
-const { CONFIG, withoutAdaptiveEnabled, withoutTableOwnedKeys } = await import(resolve(ROOT, 'path/src/config.js'));
+const { CONFIG, withoutAdaptiveEnabled, withoutTableOwnedKeys, withoutGoalHold } = await import(resolve(ROOT, 'path/src/config.js'));
 
 let failures = 0;
 const section = (n) => console.log(`\n${n}`);
@@ -51,6 +51,7 @@ const CODE_OWNED = [
   'versus.replay.cams.shots',
   'versus.camera.reach',
   'versus.camera.mode',
+  'versus.goal.hold',
   'whale.roster',
   'whale.asset',
   'feedback.*.emit',
@@ -82,7 +83,14 @@ const dirty = {
   gravesite: { stones: ['a', 'b'], scale: 1 },
   pickups: { sinkSpeed: 1.2, magnet: 3 },
   music: { bossSrc: ['x.mp3'], versusSrc: ['y.mp3'], bpm: 170 },
-  versus: { camera: { reach: 12, mode: 'A', zoomMin: 1 }, replay: { cams: { shots: [1, 2], hold: 2 } } },
+  versus: {
+    camera: { reach: 12, mode: 'A', zoomMin: 1 },
+    replay: { cams: { shots: [1, 2], hold: 2 } },
+    // The beat between the ball crossing and the goal counting — the rule that
+    // decides when a point exists and what a keeper still has time to undo.
+    // No slider reaches it, so every value a snapshot could carry is an echo.
+    goal: { hold: 9, line: 8 },
+  },
   feedback: { clamDrop: { emit: 'pop', toast: 'words', sfx: 'clam' } },
   emitters: { muzzle: { colors: ['#fff'], rate: 4 } },
   // The sweep's roster is an array nothing can edit, and `asset` is the single
@@ -105,7 +113,7 @@ section('and everything beside it survives');
 for (const [path, want] of [
   ['render.pixelRatio', 3], ['render.adaptive.floor', 0.4], ['audio.master', 0.8],
   ['gravesite.scale', 1], ['pickups.magnet', 3], ['music.bpm', 170],
-  ['versus.camera.zoomMin', 1], ['versus.replay.cams.hold', 2],
+  ['versus.camera.zoomMin', 1], ['versus.replay.cams.hold', 2], ['versus.goal.line', 8],
   ['feedback.clamDrop.sfx', 'clam'], ['emitters.muzzle.rate', 4],
   ['whale.body', 'roster'], ['whale.bank', 7],
 ]) {
@@ -137,6 +145,18 @@ check('keeps the rest of render', out.pixelRatio === 3);
 // turn the controller off in the running game as a side effect of saving.
 check('does not mutate its input', live.adaptive.enabled === true);
 check('passes through a render with no adaptive block', withoutAdaptiveEnabled({ pixelRatio: 3 }).pixelRatio === 3);
+
+section('withoutGoalHold');
+
+const liveGoal = { hold: 0.35, line: 8, tunnel: 16 };
+const strippedGoal = withoutGoalHold(liveGoal);
+check('drops hold', !('hold' in strippedGoal));
+check('keeps every other key', strippedGoal.line === 8 && strippedGoal.tunnel === 16);
+// It runs against the LIVE CONFIG on the save path, like withoutAdaptiveEnabled.
+check('does not mutate its input', liveGoal.hold === 0.35);
+check('passes through a goal block that has none', withoutGoalHold({ line: 8 }).line === 8);
+check('...and the live value is config.js\'s own', typeof CONFIG.versus.goal.hold === 'number' && CONFIG.versus.goal.hold > 0,
+  `hold = ${CONFIG.versus.goal.hold}`);
 
 section('and the decision it protects');
 

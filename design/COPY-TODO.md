@@ -19,6 +19,12 @@ the handful that still has nowhere else to live.
 | `upgrades.csv` biolumShock / biolumVenom / biolumChill / biolumInfection `.name` | The four element cards, which used to be one card ("Glow Up!!") that rolled which element it was offering. Now you pick the element by picking the card, and taking one locks the other three out of the run. The element LABELS are already yours — Voltaic, Venom, Chill, Infected, in `CONFIG.biolum.elements` — and each card's desc is that element's own desc, so this is four card names and nothing else. They sit next to each other in a hand of three, so they want to read as one family with four members. `perLevelName` is on, so the stack number is appended: whatever you write becomes "<name> 2" at two stacks. |
 | `deathCauses.js` jellyfish `.label` and `.threat` | Two lines for the new jellyfish, staged as lorem. `label` is the cause as a noun phrase **with its article and lowercase** — it sits mid-sentence beside "a shark", "the small fry", "running out of air" — and it is what the `{cause}` chip becomes in a returning hello. `threat` heads a row on the score screen's Threats tab and is a plural noun in title case, beside "Sharks", "Pufferfish", "Rays". What separates this death from every other one: the jellyfish never swims at you, so swimming into it is entirely the player's own doing. |
 | `upgrades.csv` projectileLife.weaponName | The gun's rename while André 3000 is held, in place of "Fin Pebbles". The card no longer pierces anything — it makes every projectile stay in the water longer — so "Piercing Pebbles" is now false and is staged as `[DRAFT] Piercing Pebbles`. Same shape as the others in that column ("Rapid Pebbles", "Swift Pebbles"): one adjective plus "Pebbles". |
+| `design/components/credits.html` `.sv-title` | The credits screen's heading, staged as lorem. Two or three words at 22px, read once on a screen nobody is in a hurry on. It names a list of eighty-one people who made art this game is built out of — so it is the one heading in the game that is about them and not about the seal. |
+| `design/components/credits.html` `.sv-sub` | One line under that heading, ~120 characters, wrapping to two on a phone. It has to say what the list is and why it exists — these are licence terms being honoured, not a thank-you note — without reading like a legal notice. |
+| `design/components/credits.html` first `.sv-cr-head` + `.sv-cr-note` | The heading over the 81-row model roster and its one-line explanation. The heading is 2-4 words at 9.5px uppercase, tracked wide. The note is ~110 characters and its job is to tell the reader what they are looking at before they scroll sixty rows of it: every one of these is a Creative Commons work whose licence asks to be credited by name. |
+| `design/components/credits.html` second `.sv-cr-head` + `.sv-cr-note` | Same shapes, over the short section: Kenney's icons, the Google fonts, three.js/Rive/Capacitor. What separates it from the section above is that none of these ask to be credited — they are listed anyway. One line. |
+| `design/components/credits.html` `.sv-cr-foot` | The closing line under the scroller, ~100 characters, always visible. The place to say that the music and sound are yours, since nothing else on the screen says so and the whole rest of it is other people's names. |
+| `design/components/credits.html` `#svCreditsBack` | The button out. Staged as `[DRAFT] Back` because lorem in a button makes the button untestable. One word, matching whatever the pause menu's equivalents read as. |
 
 ## Moved into `path/src/uiText.csv`
 
@@ -440,3 +446,13 @@ The register is the question. The rest of the coach is instructional ("Eat chum
 to fill your boost meter"), and this is the one tip about a thing with no
 gameplay in it at all — the seal is standing at the marker of a previous run's
 death. It can be as plain or as quiet as you want; it just cannot be long.
+
+## Sealitaire HUD labels (rive/sealitaire/scene.rml)
+
+(The status line that sat bottom-left, with its two lorem placeholders for a
+deal and a win, was removed on 2026-09-20; the wordmark and the move counter
+sit there now.)
+
+The HUD labels in scene.rml, staged as `[DRAFT] MOVES`, `[DRAFT] SCORE`,
+`[DRAFT] TIME` (small caps, ~6 characters each) and the `[DRAFT] NEW DEAL`
+button (~10 characters).

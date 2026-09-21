@@ -72,6 +72,7 @@ const WRITES = new Set([
   'rig:guest', 'sfx:atlas', 'playtest:pull', 'playtest:atlas', 'playtest:sync',
   'upgrades:icons', 'ktx2', 'props', 'seabed', 'icons:app', 'spline:kit', 'shrink',
   'ios', 'ios:run', 'ios:sync',
+  'sealitaire:pull:apply',
 ]);
 
 // Long-running: the process does not exit on its own, and that is correct.
@@ -124,6 +125,9 @@ const GROUP_BY_NAME = {
   // Reports by default and only rewrites files with --write, so it reads as
   // an audit until you ask it not to.
   'sfx:trim': 'Audits',
+  // Same terms: builds CREDITS.md out of what the shipped asset files actually
+  // say, and prints it unless you pass --write.
+  credits: 'Audits',
   // Writes the sample assignments for one recording session into the tuning
   // file — an asset job, not a check.
   'sfx:assign': 'Assets',
@@ -201,6 +205,44 @@ const GROUP_BY_NAME = {
   // reports; only --apply writes. The `sfx:trim` shape — an audit until you
   // ask it not to be.
   'rive:pull': 'Audits',
+  // SEALITAIRE, the second Rive CLI project — Klondike on the ocean. Same
+  // shape as the blubberball block above, drawer for drawer: the watcher is a
+  // window you leave open, the bakers are asset jobs, verify/test are checks,
+  // `sealitaire:pull` reports until you pass it --apply, and
+  // `sealitaire:push` is the one that puts the file in front of somebody else.
+  sealitaire: 'Servers',
+  // Writes the Dock button into ~/Applications, the way `film:setup` does.
+  'sealitaire:app': 'Servers',
+  'sealitaire:build': 'Assets', 'sealitaire:shot': 'Assets',
+  'sealitaire:card': 'Assets', 'sealitaire:mesh': 'Assets',
+  'sealitaire:fish': 'Assets', 'sealitaire:music': 'Assets', 'sealitaire:loops': 'Assets',
+  'sealitaire:clips': 'Assets', 'sealitaire:fbx': 'Assets',
+  'sealitaire:pool': 'Assets', 'sealitaire:sheet': 'Assets',
+  'sealitaire:tuner': 'Assets', 'sealitaire:rev': 'Assets',
+  // The three BAKES that make the card sounds: the bank itself, the processed
+  // takes printed into it (Rive's AudioSound has no filter to do it live), and
+  // the SVG->PointsPath conversion. All dry until `--write`, but what they
+  // produce is the asset, so they sit with the other bakers rather than with
+  // the reports.
+  'sealitaire:sfx': 'Assets', 'sealitaire:sfx:fx': 'Assets', 'sealitaire:svg': 'Assets',
+  // Plays the bank one file at a time with the name on screen, so a keeper can
+  // be written down against the event it is for. It changes nothing and the
+  // output is a decision — the same reading as `wheel`.
+  'sealitaire:audition': 'Authoring',
+  // Exports the .riv and copies it into public/, which is the file the site
+  // serves — so it is `sealitaire:push`'s sibling and not a bake. Grouped like
+  // `rive:push`: in the Publish drawer, where a deploy is a decision.
+  'sealitaire:ship': 'Publish',
+  // ...and the same export served locally on its own port, which is a server
+  // in every way that matters here — see `desktop` above.
+  'sealitaire:web': 'Servers',
+  'sealitaire:verify': 'Checks', 'sealitaire:test': 'Checks', 'test:sealitairetune': 'Checks',
+  'sealitaire:pull': 'Audits',
+  // The same diff with --apply on the line, because the workbench runs a
+  // script by NAME and cannot add a flag. It writes the .rml, so it is in
+  // WRITES; it sits beside the report it is the second half of.
+  'sealitaire:pull:apply': 'Audits',
+  'sealitaire:push': 'Publish',
   // The itch.io build and the upload of it. `itch:push` reaches butler, so it
   // sits with the other things that leave this machine.
   itch: 'Publish', 'itch:push': 'Publish',
@@ -241,7 +283,25 @@ const BLURBS = {
   'rive:watch': 'The same build, left running: every save in the .rml rebuilds the .riv.',
   'rive:rev': 'Builds, and writes a .rev beside it — the editor\'s format, which rive:pull diffs back.',
   'rive:try': 'Renders one frame of the project 60 frames in, to build/try.png. Lorem, not the real copy — see rive:preview.',
-  'rive:push': 'Sends the local project up to the Rive editor. Other people see what this uploads.',
+  'sealitaire:ship': 'Exports the Sealitaire .riv and copies it over public/sealitaire.riv — the file the site serves. No tool file, so the words are here.',
+  'rive:push': 'Sends the local project up to the Rive editor. Checks the CLI is signed in first; if not, the first line says to run `rive login` in a terminal.',
+  // THE SEALITAIRE CLI SCRIPTS, for the same reason: these six run
+  // $HOME/.rive/bin/rive directly and have no tool file to read a sentence off.
+  'sealitaire:build': 'Builds rive/sealitaire once into build/sealitaire.riv. No window, no watcher.',
+  'sealitaire:verify': 'Compiles without writing, then reads the inspect JSON and fails on any problem it reports.',
+  'sealitaire:test': 'Runs tests.luau headless: the klondike rules, the bait ball\'s walls, the music\'s onsets.',
+  'sealitaire:shot': 'Renders one frame 90 frames in, to build/shot.png.',
+  'sealitaire:pool': 'The LAB bake of fish.mesh: tanks.csv\'s models plus every row of pool.csv, so the tuner\'s card rows can step a card through the whole roster live. sealitaire:fish is the lean ship bake.',
+  'sealitaire:sheet': 'The contact sheet: every species in fish.mesh rendered on the table, the same deal each, to build/sheet/index.html. Bake the pool first.',
+  'test:sealitairetune': 'The TANKS-SAVE write-back: one tanks.csv row changes and no other byte of the file does.',
+  'test:sealitairefish': 'The tank pack on disk: v2 header, joints inside their palettes, weights that sum to one, and every clip really moves its creature without changing its size.',
+  'sealitaire:clips': 'Every animation clip in every model tanks.csv and pool.csv name, with its length — what a row\'s `clip` cell can pick from.',
+  'sealitaire:loops': 'Where the loops are in one long bounce: the bar grid, every 4-bar block\'s level, which blocks are the same take, and the section boundaries. Needs --bpm; --write seeds musicLoops.csv.',
+  'sealitaire:fbx': 'An .fbx in public/models to a .glb beside it (mesh, rig, clips; UVs flipped to glTF\'s frame), so the tank pack can bake it: `-- seagull beluga`.',
+  'sealitaire:rev': 'Builds, and writes build/sealitaire.rev beside it — the editor\'s format, which sealitaire:pull diffs back. Needs `rive login`.',
+  'sealitaire:pull': 'Asks the open Rive editor for its copy of the file and reports what changed there against the .rml — attributes only; added or removed elements are listed for a hand. Needs the editor app open on this project\'s file. Writes nothing.',
+  'sealitaire:pull:apply': 'The same diff, and then writes each changed attribute back into the tag it came from and re-verifies. Pull first and read the report; this is the second click.',
+  'sealitaire:push': 'Sends rive/sealitaire up to the Rive editor, replacing what is open there. Pull first or the editor\'s unpulled nudges are gone. Checks the CLI is signed in first; if not, the first line says to run `rive login` in a terminal.',
   // Its banner's first sentence is the whole premise of the file (three
   // clauses about what makes a team name different), which reads as a
   // paragraph in a drawer. Same claim, one line.

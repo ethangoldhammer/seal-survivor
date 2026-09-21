@@ -22,6 +22,20 @@ import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
 
+// ---------------------------------------------------------------------------
+// THE LUNGS ARE STUBBED IN A MATCH — CONFIG.versus.oxygen.enabled is false in
+// the shipped config, and oxygenLive() in systems/versusFlag.js is what every
+// oxygen call site asks. The mechanic is kept whole behind that flag rather
+// than removed, so the sections that measure it (the kickoff fill, the burst,
+// the ring's air band) switch it on for their own length and put it back.
+//
+// Written as a pair of calls rather than a wrapper so the restore is visible
+// at the bottom of each block, next to the `enableVersus(false)` it sits with.
+// ---------------------------------------------------------------------------
+const lungs = (on) => { CONFIG.versus.oxygen = { ...(CONFIG.versus.oxygen ?? {}), enabled: !!on }; };
+const LUNGS_SHIPPED = CONFIG.versus.oxygen?.enabled === true;
+
+
 // THE REPLAY CAMERA THIS FILE IS ABOUT.
 //
 // A goal replay now ships filmed with the FLAT orthographic lens
@@ -342,6 +356,7 @@ section('The kickoff: a count on the wall clock, everyone held, then the whistle
 // gasping. See CONFIG.versus.kickoff.fill.
 section('The count fills the air and boost tanks, full exactly on the whistle');
 {
+  lungs(true);
   const maxO2 = Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen?.max ?? 100);
   strikeState.charge = 0.15;
   p2.charge = 0.4;
@@ -406,6 +421,7 @@ section('The count fills the air and boost tanks, full exactly on the whistle');
   V.kickoff.fill.enabled = true;
   toPlay();
   versusState.phase = 'play';
+  lungs(LUNGS_SHIPPED);
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,18 +1321,256 @@ section('The goal card: a name and the clock, no number');
   only(touch(9, 3, 0, -8), touch(10, 1, -8, -40));
   c = creditGoal(1, 12);
   check('the pass before the shot is the assist', c.who === 1 && c.assist === 3, JSON.stringify(c));
-  // ...and the biggest claim wins even when a teammate touched it last: a
-  // team-mate's fin on a shot already going in is a deflection, not a goal
-  // and not an assist either (an assist is a touch BEFORE the shot).
+  // THE REDIRECT. Seal 1 strikes it at the mouth and team-mate 3 gets the last
+  // touch on it — a deflection that barely moves the ball. The goal is 3's and
+  // the shot behind it is 1's assist. It used to go the other way round: the
+  // hardest touch took the goal, so the seal that got the decisive touch was
+  // credited with nothing at all and the one who struck it from range got both
+  // the goal and the moment.
   only(touch(10, 1, 0, -46), touch(11.5, 3, -46, -47));
   c = creditGoal(1, 12);
-  check('the hardest touch takes the goal, not the last one', c.who === 1 && c.assist === -1, JSON.stringify(c));
+  check('the last touch of the scoring side takes the goal, not the hardest', c.who === 3, JSON.stringify(c));
+  check('...and the shot behind it is the assist', c.assist === 1 && c.assists.join(',') === '1', JSON.stringify(c.assists));
+
+  // GENEROUS, AND MORE THAN ONE. Three seals carry it up the pitch and the
+  // fourth touch finishes it: every one of them advanced the ball, so every
+  // one of them is on it.
+  setMatchRoster(4);
+  only(touch(8, 7, 0, -6), touch(9, 5, -6, -14), touch(10, 3, -14, -26), touch(11, 1, -26, -44));
+  c = creditGoal(1, 12);
+  check('every team-mate that advanced it is an assist', c.who === 1 && c.assists.join(',') === '3,5,7', JSON.stringify(c.assists));
+  check('...newest first, so the card shows the pass before the shot', c.assist === 3, String(c.assist));
+  check('...and the scorer is never one of them', !c.assists.includes(c.who));
+  // ...capped, so a scramble in front of the mouth is not eight names.
+  check('the list is capped at assistMax', (V.card.assistMax ?? 3) === 3 && c.assists.length <= (V.card.assistMax ?? 3), `${c.assists.length} of ${V.card.assistMax}`);
+
+  // A touch that sent the ball the WRONG WAY is not a contribution, however
+  // recent it is — otherwise a team-mate who nearly cleared it into their own
+  // half is credited with the goal somebody else rescued.
+  only(touch(9, 3, -30, 18), touch(11, 1, 18, -44));
+  c = creditGoal(1, 12);
+  check('a touch that sent it backwards is not an assist', c.who === 1 && c.assists.length === 0, JSON.stringify(c.assists));
+  // ...and one seal dribbling is one contribution, not six. The ledger reads
+  // the list, so a repeated name would be a repeated assist.
+  only(touch(8, 3, 0, -6), touch(9, 5, -6, -12), touch(10, 3, -12, -20), touch(11, 1, -20, -40));
+  c = creditGoal(1, 12);
+  check('a seal that touched it twice is on the list once', c.assists.filter((w) => w === 3).length === 1, JSON.stringify(c.assists));
+  // An opponent's touch never earns the scoring side an assist.
+  only(touch(9, 0, 0, -20), touch(11, 1, -20, -44));
+  c = creditGoal(1, 12);
+  check('the other side is never on the assist list', c.assists.length === 0, JSON.stringify(c.assists));
   setMatchRoster(1);
 
   versusState.touches.length = 0; versusState.touches.push(...savedTouches);
   check('the card\'s lines are copy rows, staged for Ethan', uiText('versusAssist') !== 'versusAssist' && uiText('versusOwnGoal') !== 'versusOwnGoal' && /\{name\}/.test(uiText('versusAssist')));
   const lg = versusState.lastGoal;
   check('the last goal carries its credit', !!lg?.credit && typeof lg.credit.time === 'string' && typeof lg.credit.name === 'string', lg ? JSON.stringify(lg.credit) : 'no goal yet');
+}
+
+// ---------------------------------------------------------------------------
+section('The goal line is not the goal: the hold, and a ball scooped off it');
+{
+  const gy = mouthY();
+  const line = goalLineX(-1);
+  const savedScores = versusState.scores.slice();
+  const HOLD = V.goal.hold;
+
+  // Everybody out of the way, up against the far wall — a seal drifting near
+  // the mouth would touch the ball and turn every check below into the
+  // clearance test instead of the hold test.
+  const park = () => {
+    for (const seal of matchSeals()) {
+      sealPos(seal).set(bounds.right - 24, gy + 26, 0);
+      seal.velocity.set(0, 0);
+    }
+  };
+  // The whole ball behind the left line, barely moving. `over` is how far past
+  // the line its near edge starts, measured off the SOLVED silhouette — the
+  // drawn edge is the hitbox and a rest-radius guess sits the ball short of a
+  // line it is supposed to have crossed.
+  const placePast = (vx = -1, over = 1) => {
+    versusState.phase = 'play';
+    versusState.phaseT = 0;
+    resetBall();
+    ball.y = gy;
+    ball.vx = vx; ball.vy = 0;
+    ball.spin = 0;
+    solveBallSurface();
+    ball.x = line - ballHitRadiusAt(0) - over;
+    ball.live = true;
+    park();
+  };
+
+  placePast();
+  const t0 = versusState.clock;
+  let frames = 0;
+  let liveAtHalf = false;
+  while (versusState.phase === 'play' && frames < 240) {
+    frame(); frames++;
+    if (versusState.clock - t0 < HOLD * 0.5) liveAtHalf = ball.live;
+  }
+  const waited = versusState.clock - t0;
+  check('a ball wholly behind the line is NOT a goal on that frame', waited > dt * 1.5, `called after ${waited.toFixed(3)}s`);
+  check('...it is still live and still playable half way through the hold', liveAtHalf);
+  check('...and it is a goal once the hold is up', versusState.phase === 'scored' && waited >= HOLD - dt && waited <= HOLD + dt * 3,
+    `${waited.toFixed(3)}s vs hold ${HOLD}`);
+
+  // A BALL THAT RATTLES OUT OF THE BACK OF THE NET HAS STILL SCORED. The hold
+  // is a window for a SEAL, not a second chance for the geometry: driven in at
+  // seventy the ball is off the back wall and most of the way out again before
+  // it is up, and that is a goal in any reading of the game.
+  versusState.scores[0] = savedScores[0]; versusState.scores[1] = savedScores[1];
+  placePast(-70, 0.5);
+  const fast0 = versusState.clock;
+  frames = 0;
+  let cameBackOut = false;
+  while (versusState.phase === 'play' && frames < 240) {
+    frame(); frames++;
+    if (ball.x - ballHitRadiusAt(Math.PI) > line) cameBackOut = true;
+  }
+  check('...a ball driven in hard bounces back out of the net before the hold is up', cameBackOut);
+  check('...and it is a goal anyway, with nobody there to claim it',
+    versusState.phase === 'scored', `${versusState.phase} after ${(versusState.clock - fast0).toFixed(3)}s`);
+  check('...called the moment it left, not at the end of a hold nobody was contesting',
+    versusState.clock - fast0 < HOLD, `${(versusState.clock - fast0).toFixed(3)}s vs hold ${HOLD}`);
+  check('...credited at the crossing, not wherever the ball rolled to',
+    versusState.lastGoal && versusState.lastGoal.x + ballRestRadius() <= line + 1e-6,
+    `x ${versusState.lastGoal?.x.toFixed(2)}, near side ${(versusState.lastGoal?.x + ballRestRadius()).toFixed(2)} vs line ${line.toFixed(2)}`);
+
+  // THE SCOOP. The ball is behind the line with the goal pending against the
+  // clock, and the seal that owns this mouth gets in there and drives it back
+  // out. Team 0 defends the left, so this is seat 0's.
+  versusState.scores[0] = savedScores[0]; versusState.scores[1] = savedScores[1];
+  const savesBefore = tallySnapshot().seats[0].saves;
+  const clearsBefore = firedCount('versusGoalLineClear');
+  const goalsBefore = versusState.goals;
+  placePast(-1);
+  settle(HOLD * 0.4);
+  const pending = { ...versusState.goalPending };
+  // Driven out along +x, from behind the ball — the keeper is deeper in the
+  // corridor than the thing it is clearing, which is the whole move.
+  strikeBallFrom({ x: ball.x - ballReach(Math.PI) - 1, y: gy }, { x: 1, y: 0 }, 55, 1, 0, 0);
+  // ...until the whole ball is back out in front of the line, which is what a
+  // clearance has to achieve — its LEADING edge on the water side of it.
+  frames = 0;
+  while (versusState.phase === 'play' && ball.x - ballHitRadiusAt(Math.PI) < line && frames < 240) { frame(); frames++; }
+  frame();
+  check('the goal was pending before the keeper got there', pending.side === -1 && pending.held < HOLD, JSON.stringify(pending));
+  check('a ball scooped back out over the line is no goal at all',
+    versusState.phase === 'play' && versusState.goals === goalsBefore, `${versusState.phase}, goals ${versusState.goals}`);
+  check('...it is booked to the keeper as a save', versusState.lastClear?.who === 0 && versusState.lastClear?.side === -1, JSON.stringify(versusState.lastClear));
+  check('...on the ledger too', tallySnapshot().seats[0].saves === savesBefore + 1, `${tallySnapshot().seats[0].saves} vs ${savesBefore}`);
+  check('...and the applause is its own event, over the save', firedCount('versusGoalLineClear') === clearsBefore + 1 && !!CONFIG.feedback.versusGoalLineClear?.sfx,
+    `${firedCount('versusGoalLineClear')} vs ${clearsBefore}`);
+  check('...which is a voice of its own and not the save\'s',
+    CONFIG.feedback.versusGoalLineClear.sfx !== CONFIG.feedback.versusSave.sfx && !!CONFIG.sfx[CONFIG.feedback.versusGoalLineClear.sfx],
+    CONFIG.feedback.versusGoalLineClear.sfx);
+  // ...and the pending goal is gone with it, so the next ball starts clean.
+  check('...and nothing is left pending', versusState.goalPending.side === 0, JSON.stringify(versusState.goalPending));
+
+  // ...AND A BALL TAKEN OFF THE LINE BEFORE THE WHOLE OF IT WAS OVER gets the
+  // same applause. It is the same save a frame earlier, and a rule that only
+  // celebrated the ball fished out of the net would be silent on the better
+  // one of the two.
+  versusState.scores[0] = savedScores[0]; versusState.scores[1] = savedScores[1];
+  const earlySaves = tallySnapshot().seats[0].saves;
+  const earlyClears = firedCount('versusGoalLineClear');
+  versusState.phase = 'play'; versusState.phaseT = 0;
+  resetBall();
+  ball.y = gy; ball.vx = -4; ball.vy = 0; ball.spin = 0;
+  solveBallSurface();
+  // Leading edge inside the line, near side still in front of it: over the
+  // line and not yet across it.
+  ball.x = line + ballHitRadiusAt(Math.PI) - 0.5;
+  ball.live = true;
+  park();
+  settle(4 * dt);
+  const watching = { ...versusState.goalPending };
+  const overNotAcross = watching.side === -1 && watching.crossedAt < 0;
+  strikeBallFrom({ x: ball.x - ballReach(Math.PI) - 1, y: gy }, { x: 1, y: 0 }, 55, 1, 0, 0);
+  frames = 0;
+  while (versusState.phase === 'play' && ball.x - ballHitRadiusAt(Math.PI) < line && frames < 240) { frame(); frames++; }
+  frame();
+  check('a ball over the line but not across it is watched, not scored', overNotAcross, JSON.stringify(watching));
+  check('...and taking it off the line there is a clearance too',
+    versusState.phase === 'play' && firedCount('versusGoalLineClear') === earlyClears + 1
+      && tallySnapshot().seats[0].saves === earlySaves + 1,
+    `${versusState.phase}, clears ${firedCount('versusGoalLineClear') - earlyClears}, saves ${tallySnapshot().seats[0].saves - earlySaves}`);
+
+  // THE HOLD IS config.js's, whatever is on disk. It decides when a goal
+  // counts and has no slider, so a snapshot's echo of it must not be able to
+  // win — see withoutGoalHold.
+  check('the hold is a number config.js owns', typeof HOLD === 'number' && HOLD > 0, String(HOLD));
+
+  versusState.scores[0] = savedScores[0]; versusState.scores[1] = savedScores[1];
+  versusState.phase = 'play'; versusState.phaseT = 0;
+  resetBall();
+  park();
+}
+
+// ---------------------------------------------------------------------------
+section('A save is a ball that had the momentum to arrive, not one over a speed');
+{
+  const gy = mouthY();
+  const line = goalLineX(-1);
+  const R = V.reel.save;
+  // The distance the ball can still travel on what it is carrying — the water
+  // takes a fixed fraction of its speed every frame, so v/k with
+  // k = -60 ln(drag). See ballCoast in systems/versus.js.
+  const k = -Math.log(V.ball.drag) * 60;
+  const coast = (v) => Math.abs(v) / k;
+
+  const park = () => {
+    for (const seal of matchSeals()) {
+      sealPos(seal).set(bounds.right - 24, gy + 26, 0);
+      seal.velocity.set(0, 0);
+    }
+  };
+  // A ball rolling at the left mouth from `away` units short of the line, and
+  // then the keeper getting a body to it.
+  const shotFrom = (away, vx) => {
+    versusState.phase = 'play';
+    versusState.phaseT = 0;
+    resetBall();
+    ball.y = gy; ball.vy = 0; ball.spin = 0;
+    ball.vx = vx;
+    solveBallSurface();
+    ball.x = line + away;
+    ball.live = true;
+    park();
+    versusState.lastSave = null;
+    settle(3 * dt);
+    strikeBallFrom({ x: ball.x - ballReach(Math.PI) - 1, y: gy }, { x: 1, y: 0 }, 50, 1, 0, 0);
+    settle(3 * dt);
+    return versusState.lastSave;
+  };
+
+  // A TROT AT THE LINE. Eight units a second is well under the 20 the old flat
+  // threshold asked for, and from four units out this ball was going in.
+  const slow = 8;
+  check('a ball too slow for the old threshold still has the distance in it', slow < 20 && coast(slow) > 4,
+    `${slow} u/s coasts ${coast(slow).toFixed(1)} units`);
+  let save = shotFrom(4, -slow);
+  check('...so stopping it on the line is a save', save?.who === 0 && save?.side === -1, JSON.stringify(save));
+
+  // THE SAME SPEED, FROM TOO FAR OUT. Inside the danger zone and pointed at
+  // the mouth, and it was never going to arrive — so getting to it is not a
+  // save, it is tidying up.
+  const far = Math.min((R.zone ?? 34) - 2, coast(slow) + 6);
+  check('...and from further out than it can coast, it was never arriving', far < (R.zone ?? 34) && far > coast(slow),
+    `${far.toFixed(1)} units vs ${coast(slow).toFixed(1)} of coast`);
+  save = shotFrom(far, -slow);
+  check('...so clearing it there is not a save', !save, JSON.stringify(save));
+
+  // ...and a real shot from the same distance is, because it can get there.
+  const hard = 40;
+  check('a struck ball from the same spot can reach the line', coast(hard) > far, `${coast(hard).toFixed(1)} vs ${far.toFixed(1)}`);
+  save = shotFrom(far, -hard);
+  check('...so that one is a save', save?.who === 0, JSON.stringify(save));
+
+  versusState.phase = 'play'; versusState.phaseT = 0;
+  resetBall();
+  park();
 }
 
 // ---------------------------------------------------------------------------
@@ -1567,14 +1821,23 @@ section('The meter comes back on its own, and out of the air');
     versusState.phase = 'play';
   }
 
-  // Bubbles: the match keeps its own headcount.
+  // Bubbles: the match keeps its own headcount — WHILE IT BREATHES. With the
+  // lungs stubbed the floor stops entirely (keepBubbles), so the headcount is
+  // measured with the flag on and the emptiness is measured with it off.
   while (bubbleOrbs.length) { scene.remove(bubbleOrbs[0].mesh); bubbleOrbs.shift(); }
+  versusState.bubbleT = 0;
+  settle(V.bubbles.every * V.bubbles.maxAlive + 1, idle);
+  check('the stubbed match puts no air in the water at all', bubbleOrbs.length === 0, `${bubbleOrbs.length} bubbles`);
+  lungs(true);
   versusState.bubbleT = 0;
   settle(0.2, idle);
   check(`the water is refilled to minAlive at once`, bubbleOrbs.length >= V.bubbles.minAlive, `${bubbleOrbs.length} bubbles`);
   settle(V.bubbles.every * V.bubbles.maxAlive + 1, idle);
   check('...and climbs to maxAlive, no further', bubbleOrbs.length === V.bubbles.maxAlive, `${bubbleOrbs.length}`);
-  // And a bubble pays the bar: player 2 by touching it.
+  lungs(LUNGS_SHIPPED);
+  // And a bubble pays the bar: player 2 by touching it. STILL, with the lungs
+  // shut — the orb's meter half is not the air half, and a hand-placed one is
+  // how a bubble reaches a stubbed match at all.
   p2.charge = 0.2;
   p2.pos.set(20, midWater(), 0);
   p2.vel.set(0, 0);
@@ -2020,6 +2283,7 @@ section('The outline boils harder the harder the ball is hit');
 // ---------------------------------------------------------------------------
 section('Out of air: a seal bursts and is back in its goal a second later');
 {
+  lungs(true);
   const idle = [pad(0), pad(1)];
   const r = V.respawn;
   const bursts = [];
@@ -2067,6 +2331,7 @@ section('Out of air: a seal bursts and is back in its goal a second later');
   player.mesh.position.set(-30, midWater(), 0);
   p2.pos.set(30, midWater(), 0);
   p2.oxygen = CONFIG.oxygen.max;
+  lungs(LUNGS_SHIPPED);
 }
 
 // ---------------------------------------------------------------------------
@@ -2906,7 +3171,11 @@ section('The instant replay: the shot, the flight, the explosion — and a hold 
   while (versusState.phase === 'play' && frames < 400) { frame(); frames++; }
   check('the ball goes in', versusState.phase === 'scored' && versusState.scores[0] === scoresBefore + 1, `phase ${versusState.phase} after ${frames} frames`);
   check('a replay is pending, and the jet is held back for it', versusState.replayPending === true && goalJetState.fired === jetsBefore, `pending ${versusState.replayPending}, jets ${goalJetState.fired - jetsBefore}`);
-  const goalX = ball.x;
+  // WHERE THE BALL CROSSED, not where it is now. A goal is called a hold after
+  // the crossing (CONFIG.versus.goal.hold) and a shot driven in hard is off
+  // the back of the net and most of the way out again by then — the replay's
+  // last frame is the crossing, so that is what it has to be measured against.
+  const goalX = versusState.lastGoal.x;
   // A camera to cut: the live framing settles first, so the replay's first
   // frame is measurably a CUT and not the tail of a blend.
   const claims = [];
@@ -5055,7 +5324,8 @@ section('A match shows no run HUD and no tutorial text');
   // reason as the rules above: this harness has no DOM (tools/dom-stub.mjs
   // gives three.js's loaders a document with no `body`, so mountUi no-ops),
   // and every one of these three is a silent revert if it goes back.
-  const goalFn = src.slice(src.indexOf('function goal(side) {'), src.indexOf('\n// ---', src.indexOf('function goal(side) {')));
+  const goalAt = src.indexOf('function goal(side, at =');
+  const goalFn = src.slice(goalAt, src.indexOf('\n// ---', goalAt));
   check('the score goes up on the frame the goal registers, not at the end of the shutter',
     /st\.scores\[scorer\] \+= 1;[\s\S]{0,900}?popScore\(scorer\)/.test(goalFn),
     goalFn.includes('popScore(scorer)') ? 'popScore is in goal()' : 'goal() never paints the strip');
@@ -5425,6 +5695,53 @@ section('A roster, not a pair: teammates and opponents under the same rules');
     if (sealContact(i, at, { x: 14, y: 0 }, false, null, 0, 0, 0)) touched++;
   }
   check('every seat can play the ball, through the one contact path', touched === 4, `${touched} of 4`);
+
+  // THE PERFORMANCE STANDS ON THE SEAL THAT SCORED, not on its captain. Both
+  // the victory pose and the hero light used to take the scoring SIDE — the
+  // same number as the seat for the two captains and wrong for everybody else
+  // — so four a side, the seal that put the ball in swam on while its captain
+  // somersaulted under a spotlight at the other end of the pitch.
+  {
+    const savedCel = CONFIG.celebrate.enabled;
+    CONFIG.celebrate.enabled = true;
+    resetCelebration();
+    resetBossLight();
+    // Seat 3 finishes: team 1 scores in the LEFT mouth, so a shot is -x.
+    versusState.touches.length = 0;
+    versusState.touches.push(
+      { t: versusState.clock - 1, who: 1, kind: 'strike', x: 0, y: 0, vx0: 0, vy0: 0, vx1: -20, vy1: 0 },
+      { t: versusState.clock - 0.2, who: 3, kind: 'strike', x: 0, y: 0, vx0: -20, vy0: 0, vx1: -46, vy1: 0 },
+    );
+    versusState.lastTouch = versusState.touches[1];
+    sealPos(sealAt(3)).set(bounds.left + 20, midWater() + 12, 0);
+    versusState.scores[0] = 0; versusState.scores[1] = 0;
+    versusState.phase = 'play'; versusState.phaseT = 0;
+    resetBall();
+    ball.x = bounds.left + 12; ball.y = midWater(); ball.vx = -30;
+    let n = 0;
+    while (versusState.phase === 'play' && n < 240) { frame(); n++; }
+    const credit = versusState.lastGoal?.credit;
+    check('the seal that got the last touch is the scorer, not its captain', credit?.who === 3, JSON.stringify(credit?.who));
+    check('...and the captain that set it up has the assist', credit?.assists?.join(',') === '1', JSON.stringify(credit?.assists));
+    check('...the celebration is THAT seal\'s', celebrationState.only === sealAt(3).celebrateTag && !!celebrationState.only,
+      `${celebrationState.only} (seat 3 is ${sealAt(3).celebrateTag})`);
+    // The light is ticked by main.js, not by updateVersus — and handed player
+    // 1's body, which is exactly the thing the follow getter has to override.
+    const shape = bossLightShape();
+    for (let i = 0; i < 400 && bossLightState.t >= 0 && bossLightState.t < shape.delay + shape.rise + 0.02; i++) {
+      updateBossLight(dt, player.mesh?.position, player.body);
+    }
+    check('...and the hero light stands on it too',
+      Math.abs(bossLightState.atX - sealPos(sealAt(3)).x) < V.goal.spotlight.wander + 6
+        && Math.abs(bossLightState.atX - sealPos(sealAt(1)).x) > V.goal.spotlight.wander + 6,
+      `light at ${bossLightState.atX.toFixed(1)}, seat 3 at ${sealPos(sealAt(3)).x.toFixed(1)}, seat 1 at ${sealPos(sealAt(1)).x.toFixed(1)}`);
+    resetCelebration();
+    resetBossLight();
+    CONFIG.celebrate.enabled = savedCel;
+    versusState.scores[0] = 0; versusState.scores[1] = 0;
+    versusState.touches.length = 0;
+    toPlay();
+  }
 
   // EVERY SEAT WEARS WHAT THE TEAM SELECT DRESSED IT IN — nothing put a hat on
   // any seal but the player's until this, so a roster the player had just spent
@@ -6210,6 +6527,7 @@ section('Reset hands everything back');
 // one.
 section('The circle HUD is drawn on people, not on bots');
 {
+  lungs(true);
   enableVersus(true);
   updateBounds(16 / 9);
   const airOf = (seat) => sealAt(seat)?.ring?.mesh?.material?.uniforms?.uAirGlow?.value;
@@ -6273,6 +6591,7 @@ section('The circle HUD is drawn on people, not on bots');
   resetVersus();
   check('...and withdrawn when it is not', versusPlayerAir() === null);
   versusSetup.teams[1].members[0] = null;
+  lungs(LUNGS_SHIPPED);
   enableVersus(false);
 }
 

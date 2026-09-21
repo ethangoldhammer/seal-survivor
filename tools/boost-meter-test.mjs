@@ -856,8 +856,11 @@ check('  ...but is stamped as no strike at all', strikeState.sweetStrike === fal
 const offBeatBurst = strikeBurst(stats());
 check('  ...so the burst is nothing, damage AND radius',
   offBeatBurst.damage === 0 && offBeatBurst.radius === 0);
-check('  ...and the riders it would have fed get nothing either',
-  riderDamage(999, stats()) === 0);
+// THE RIDERS STILL PAY — the charge completed, and that is their gate (the
+// chain's, not the bite's; see riderDamage). A full-bank late release is the
+// dash most players throw, and Bone Shrapnel was dead on it.
+check('  ...but the riders it feeds still pay, because the charge completed',
+  riderDamage(0, stats()) > 0, riderDamage(0, stats()).toFixed(1));
 // THE POINT OF THE WHOLE SPLIT: the movement is untouched. A mistimed strike
 // is a full-power dash, which is what keeps repositioning free.
 check('  ...while the dash is exactly as long as the one that bit',
@@ -883,6 +886,7 @@ fuelled();
 check('a release let go of early still fires', strike({ early: true }) === true);
 check('  ...and opens NO window, so eating counts for nothing',
   strikeState.chainTimer === 0);
+check('  ...and feeds the riders nothing either', riderDamage(999, stats()) === 0);
 // ...not even at the end of the dash, which is the other place a window opens.
 let d = 0;
 while (strikeState.active && d < 600) { tick(1 / 60); d++; }

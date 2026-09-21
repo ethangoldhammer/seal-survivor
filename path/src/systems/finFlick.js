@@ -131,7 +131,7 @@ export function openFinFlick(gx, gy, rig = null) {
  * caller comparing it frame to frame would fire on the frame a window CLOSED
  * as readily as on the one it opened.
  */
-export function updateFinFlick(dt, input, rig = null, scene = null) {
+export function updateFinFlick(dt, input, rig = null, scene = null, opts = null) {
   const f = cfg();
   const s = finFlickState;
   if (f.enabled === false) {
@@ -145,6 +145,13 @@ export function updateFinFlick(dt, input, rig = null, scene = null) {
     if (s.live === 0) s.spent = false;
   }
   let opened = false;
+  // MUTED, NOT SKIPPED. `opts.muted` is the caller saying the hand is busy
+  // with another gesture — today that is systems/sealFlip.js, because a circle
+  // is made of swipes and every frame of one passes the test below. The
+  // clocks above have already ticked, so a window that was live when the mute
+  // began closes on time instead of hanging open behind it; only the OPENING
+  // is refused.
+  if (opts?.muted) { drawDebug(rig, scene); return false; }
   if (s.live <= 0 && s.cool <= 0 && input?.aimMoved) {
     opened = openFinFlick(input.aimGesture?.x ?? 0, input.aimGesture?.y ?? 0, rig);
   }

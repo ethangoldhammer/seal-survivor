@@ -3,16 +3,20 @@
     <!-- =========================================================================
          SEALITAIRE — Klondike, played on the ocean, native to Rive.
 
-         Three artboards:
-           Sealitaire   the screen. The HUD is markup (text is markup-only);
-                        everything that moves is table.luau, a ScriptedLayout
-                        filling the artboard. It draws the vortex (GPU canvas),
-                        the cards (the two card artboards below, instanced 52
-                        times), the seal (a skinned mesh in a second GPU
-                        canvas) and the CRT pass over all of it.
-           Card Face    one card, data-bound: rank + ink colour + which suit
-                        pip is showing. The script instances it per card.
-           Card Back    the back. No data, so no state machine needed.
+         The artboards:
+           Sealitaire   the screen: one ScriptedLayout (table.luau) filling the
+                        artboard. It draws the vortex (GPU canvas), the cards
+                        (the two card artboards below, instanced 52 times), the
+                        seal (a skinned mesh in a second GPU canvas), the HUD,
+                        and the CRT pass that composites all of it.
+           Title HUD    the chrome: Title, Stats, Status and Deal, one small
+           Stats        artboard per corner of the screen, bound to the Table
+           Status       view model. Text is markup-only, so the words live
+           Deal         here and the script places each block from layout.luau.
+           (cards.rml)  Card A … Card K, one artboard per rank, built from the
+                        Pip / Corner / Plate components. The script instances
+                        the rank's artboard per card with a Card view model.
+           Card Back    the back. No data; a state machine so it advances.
 
          Copy rule: every player-facing label here is a [DRAFT] shape or lorem.
          Card ranks (A 2 .. K) are symbols, not prose.
@@ -28,90 +32,30 @@
         </Fill>
         <LayoutComponentStyle name="Artboard Style" id="0:3"/>
 
-        <!-- HUD. Hand-placed text over the table; the script leaves the top
-             strip clear. Labels are staged as [DRAFT] shapes. -->
-        <Text x="40" y="22" sizingValue="autoWidth" name="Title" id="0:20">
-            <TextStylePaint fontSize="40" letterSpacing="-0.02" fontAssetId="0:400" name="S" id="0:21">
-                <Fill name="Fill" id="0:22"><SolidColor colorValue="FFF6F1E7" name="C" id="0:23"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:21" text="Sealitaire" name="Run" id="0:24"/>
-        </Text>
-
-        <Text x="42" y="80" sizingValue="autoWidth" name="Moves Label" id="0:25">
-            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:26">
-                <Fill name="Fill" id="0:27"><SolidColor colorValue="FF7FB6E8" name="C" id="0:28"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:26" text="[DRAFT] MOVES" name="Run" id="0:29"/>
-        </Text>
-        <Text x="40" y="96" sizingValue="autoWidth" name="Moves" id="0:30">
-            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:31">
-                <Fill name="Fill" id="0:32"><SolidColor colorValue="FFF6F1E7" name="C" id="0:33"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:31" text="0" name="Run" id="0:34">
-                <DataBindContext sourcePathIds="0:300-0:301" propertyKey="268" id="0:35"/>
-            </TextValueRun>
-        </Text>
-
-        <Text x="172" y="80" sizingValue="autoWidth" name="Score Label" id="0:36">
-            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:37">
-                <Fill name="Fill" id="0:38"><SolidColor colorValue="FF7FB6E8" name="C" id="0:39"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:37" text="[DRAFT] SCORE" name="Run" id="0:40"/>
-        </Text>
-        <Text x="170" y="96" sizingValue="autoWidth" name="Score" id="0:41">
-            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:42">
-                <Fill name="Fill" id="0:43"><SolidColor colorValue="FFF6F1E7" name="C" id="0:44"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:42" text="0" name="Run" id="0:45">
-                <DataBindContext sourcePathIds="0:300-0:302" propertyKey="268" id="0:46"/>
-            </TextValueRun>
-        </Text>
-
-        <Text x="302" y="80" sizingValue="autoWidth" name="Clock Label" id="0:47">
-            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:48">
-                <Fill name="Fill" id="0:49"><SolidColor colorValue="FF7FB6E8" name="C" id="0:50"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:48" text="[DRAFT] TIME" name="Run" id="0:51"/>
-        </Text>
-        <Text x="300" y="96" sizingValue="autoWidth" name="Clock" id="0:52">
-            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:53">
-                <Fill name="Fill" id="0:54"><SolidColor colorValue="FFF6F1E7" name="C" id="0:55"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:53" text="0:00" name="Run" id="0:56">
-                <DataBindContext sourcePathIds="0:300-0:303" propertyKey="268" id="0:57"/>
-            </TextValueRun>
-        </Text>
-
-        <!-- Status line, bottom-left: what just happened, written by the script. -->
-        <Text x="40" y="956" sizingValue="autoWidth" name="Status" id="0:58">
-            <TextStylePaint fontSize="18" fontAssetId="0:400" name="S" id="0:59">
-                <Fill name="Fill" id="0:60"><SolidColor colorValue="FFB9D4EE" name="C" id="0:61"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:59" text="Lorem ipsum dolor sit amet" name="Run" id="0:62">
-                <DataBindContext sourcePathIds="0:300-0:304" propertyKey="268" id="0:63"/>
-            </TextValueRun>
-        </Text>
-
-        <!-- New deal. The script owns the hit test (BUTTON in table.luau
-             matches this rectangle); the markup only draws it. -->
-        <Text x="1480" y="52" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Deal Label" id="0:64">
-            <TextStylePaint fontSize="16" letterSpacing="0.06" fontAssetId="0:400" name="S" id="0:65">
-                <Fill name="Fill" id="0:66"><SolidColor colorValue="FF07182B" name="C" id="0:67"/></Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:65" text="[DRAFT] NEW DEAL" name="Run" id="0:68"/>
-        </Text>
-        <Shape x="1480" y="52" name="Deal Button" id="0:69">
-            <Rectangle width="160" height="44" originX="0.5" originY="0.5" cornerRadiusTL="22" name="Path" id="0:70"/>
-            <Fill name="Fill" id="0:71"><SolidColor colorValue="FFF5B02E" name="C" id="0:72"/></Fill>
-        </Shape>
-
         <!-- The table: one script, the whole artboard. Fill-sized so `resize`
              receives the artboard and pointer positions are artboard units. -->
         <LayoutComponent width="1600" height="1000" styleId="0:11" name="Root" id="0:10">
             <LayoutComponentStyle layoutWidthScaleType="fill" layoutHeightScaleType="fill" name="Root Style" id="0:11"/>
             <ScriptedLayout scriptAssetId="0:401" name="Table" id="0:12">
-                <ScriptInputArtboard artboardId="0:100" name="face" id="0:13"/>
+                <ScriptInputArtboard artboardId="2:1000" name="faceA" id="0:600"/>
+                <ScriptInputArtboard artboardId="2:1010" name="face2" id="0:601"/>
+                <ScriptInputArtboard artboardId="2:1020" name="face3" id="0:602"/>
+                <ScriptInputArtboard artboardId="2:1030" name="face4" id="0:603"/>
+                <ScriptInputArtboard artboardId="2:1040" name="face5" id="0:604"/>
+                <ScriptInputArtboard artboardId="2:1050" name="face6" id="0:605"/>
+                <ScriptInputArtboard artboardId="2:1060" name="face7" id="0:606"/>
+                <ScriptInputArtboard artboardId="2:1070" name="face8" id="0:607"/>
+                <ScriptInputArtboard artboardId="2:1080" name="face9" id="0:608"/>
+                <ScriptInputArtboard artboardId="2:1090" name="face10" id="0:609"/>
+                <ScriptInputArtboard artboardId="2:1100" name="faceJ" id="0:610"/>
+                <ScriptInputArtboard artboardId="2:1110" name="faceQ" id="0:611"/>
+                <ScriptInputArtboard artboardId="2:1120" name="faceK" id="0:612"/>
                 <ScriptInputArtboard artboardId="0:200" name="back" id="0:14"/>
+                <ScriptInputArtboard artboardId="0:500" name="hudTitle" id="0:17"/>
+                <ScriptInputArtboard artboardId="0:520" name="hudStats" id="0:620"/>
+                <ScriptInputArtboard artboardId="0:560" name="hudDeal" id="0:622"/>
+                <ScriptInputArtboard artboardId="1:7000" name="tunerRow" id="0:18"/>
+                <ScriptInputArtboard artboardId="1:7100" name="tunerHead" id="0:19"/>
                 <FocusData id="0:15"/>
             </ScriptedLayout>
         </LayoutComponent>
@@ -127,214 +71,211 @@
 
 
     <!-- =========================================================================
-         CARD FACE — 120 x 168. Instanced by the script with its own Card view
-         model per card, so the rank, ink colour and pip come from data.
+         CARD BACK — navy, with bubbles rising. No data.
          ========================================================================= -->
-    <Artboard isComponent="true" defaultStateMachineId="0:102" viewModelId="0:320" viewModelInstanceId="0:330"
-              x="1700" y="0" width="120" height="168" styleId="0:101" name="Card Face" id="0:100">
-        <LayoutComponentStyle name="Style" id="0:101"/>
-
-        <!-- Rank, top-left and bottom-right (turned). Ink colour is bound. -->
-        <Text x="9" y="6" sizingValue="autoWidth" name="Rank TL" id="0:110">
-            <TextStylePaint fontSize="24" letterSpacing="-0.03" fontAssetId="0:400" name="S" id="0:111">
-                <Fill name="Fill" id="0:112">
-                    <SolidColor colorValue="FFD0392B" name="C" id="0:113">
-                        <DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="0:114"/>
-                    </SolidColor>
-                </Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:111" text="A" name="Run" id="0:115">
-                <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="0:116"/>
-            </TextValueRun>
-        </Text>
-        <Text x="111" y="162" rotation="3.1415927" sizingValue="autoWidth" name="Rank BR" id="0:117">
-            <TextStylePaint fontSize="24" letterSpacing="-0.03" fontAssetId="0:400" name="S" id="0:118">
-                <Fill name="Fill" id="0:119">
-                    <SolidColor colorValue="FFD0392B" name="C" id="0:120">
-                        <DataBindContext sourcePathIds="0:320-0:322" propertyKey="37" id="0:121"/>
-                    </SolidColor>
-                </Fill>
-            </TextStylePaint>
-            <TextValueRun styleId="0:118" text="A" name="Run" id="0:122">
-                <DataBindContext sourcePathIds="0:320-0:321" propertyKey="268" id="0:123"/>
-            </TextValueRun>
-        </Text>
-
-        <!-- Suit pips. One group per suit, opacity bound 0/1; each group holds
-             the big centre pip and the two small corner pips. Pip colours are
-             fixed per suit: fish and star red, bubble and shell navy. -->
-        <Node name="Fish" id="0:130">
-            <DataBindContext sourcePathIds="0:320-0:323" propertyKey="18" id="0:131"/>
-            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:132">
-                <Shape x="-6" y="-2" name="Eye" id="0:133">
-                    <Ellipse width="4" height="4" originX="0.5" originY="0.5" name="P" id="0:134"/>
-                    <Fill name="F" id="0:135"><SolidColor colorValue="FFF7F1E6" name="C" id="0:136"/></Fill>
-                </Shape>
-                <Shape name="Body" id="0:137">
-                    <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="0:138"/>
-                    <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="0:139"/>
-                    <Fill name="F" id="0:140"><SolidColor colorValue="FFD0392B" name="C" id="0:141"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:142">
-                <Shape name="Body" id="0:143">
-                    <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="0:144"/>
-                    <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="0:145"/>
-                    <Fill name="F" id="0:146"><SolidColor colorValue="FFD0392B" name="C" id="0:147"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:148">
-                <Shape name="Body" id="0:149">
-                    <Ellipse x="-3" width="28" height="16" originX="0.5" originY="0.5" name="P1" id="0:150"/>
-                    <Triangle x="13" y="0" rotation="-1.5707964" width="12" height="16" originX="0.5" originY="0.5" name="Tail" id="0:151"/>
-                    <Fill name="F" id="0:152"><SolidColor colorValue="FFD0392B" name="C" id="0:153"/></Fill>
-                </Shape>
-            </Node>
-        </Node>
-
-        <Node name="Star" id="0:154">
-            <DataBindContext sourcePathIds="0:320-0:324" propertyKey="18" id="0:155"/>
-            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:156">
-                <Shape name="Body" id="0:157">
-                    <Star width="30" height="30" points="5" innerRadius="0.5" cornerRadius="1.5" originX="0.5" originY="0.5" name="P" id="0:158"/>
-                    <Fill name="F" id="0:159"><SolidColor colorValue="FFE2542E" name="C" id="0:160"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:161">
-                <Shape name="Body" id="0:162">
-                    <Star width="30" height="30" points="5" innerRadius="0.5" cornerRadius="1.5" originX="0.5" originY="0.5" name="P" id="0:163"/>
-                    <Fill name="F" id="0:164"><SolidColor colorValue="FFE2542E" name="C" id="0:165"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:166">
-                <Shape name="Body" id="0:167">
-                    <Star width="30" height="30" points="5" innerRadius="0.5" cornerRadius="1.5" originX="0.5" originY="0.5" name="P" id="0:168"/>
-                    <Fill name="F" id="0:169"><SolidColor colorValue="FFE2542E" name="C" id="0:170"/></Fill>
-                </Shape>
-            </Node>
-        </Node>
-
-        <Node name="Bubble" id="0:171">
-            <DataBindContext sourcePathIds="0:320-0:325" propertyKey="18" id="0:172"/>
-            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:173">
-                <Shape x="-5" y="-6" name="Shine" id="0:174">
-                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:175"/>
-                    <Fill name="F" id="0:176"><SolidColor colorValue="FFF7F1E6" name="C" id="0:177"/></Fill>
-                </Shape>
-                <Shape name="Body" id="0:178">
-                    <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="0:179"/>
-                    <Ellipse x="13" y="-12" width="8" height="8" originX="0.5" originY="0.5" name="P2" id="0:180"/>
-                    <Fill name="F" id="0:181"><SolidColor colorValue="FF1E2A44" name="C" id="0:182"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:183">
-                <Shape x="-5" y="-6" name="Shine" id="0:184">
-                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:185"/>
-                    <Fill name="F" id="0:186"><SolidColor colorValue="FFF7F1E6" name="C" id="0:187"/></Fill>
-                </Shape>
-                <Shape name="Body" id="0:188">
-                    <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="0:189"/>
-                    <Fill name="F" id="0:190"><SolidColor colorValue="FF1E2A44" name="C" id="0:191"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:192">
-                <Shape x="-5" y="-6" name="Shine" id="0:193">
-                    <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:194"/>
-                    <Fill name="F" id="0:195"><SolidColor colorValue="FFF7F1E6" name="C" id="0:196"/></Fill>
-                </Shape>
-                <Shape name="Body" id="0:197">
-                    <Ellipse width="26" height="26" originX="0.5" originY="0.5" name="P" id="0:198"/>
-                    <Fill name="F" id="0:199"><SolidColor colorValue="FF1E2A44" name="C" id="0:1100"/></Fill>
-                </Shape>
-            </Node>
-        </Node>
-
-        <Node name="Shell" id="0:1101">
-            <DataBindContext sourcePathIds="0:320-0:326" propertyKey="18" id="0:1102"/>
-            <Node x="60" y="86" scaleX="1.6" scaleY="1.6" name="Big" id="0:1103">
-                <Shape name="Body" id="0:1104">
-                    <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="0:1105"/>
-                    <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="0:1106"/>
-                    <Fill name="F" id="0:1107"><SolidColor colorValue="FF1E2A44" name="C" id="0:1108"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="20" y="44" scaleX="0.6" scaleY="0.6" name="Small TL" id="0:1109">
-                <Shape name="Body" id="0:1110">
-                    <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="0:1111"/>
-                    <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="0:1112"/>
-                    <Fill name="F" id="0:1113"><SolidColor colorValue="FF1E2A44" name="C" id="0:1114"/></Fill>
-                </Shape>
-            </Node>
-            <Node x="100" y="124" rotation="3.1415927" scaleX="0.6" scaleY="0.6" name="Small BR" id="0:1115">
-                <Shape name="Body" id="0:1116">
-                    <Star y="-2" width="30" height="26" points="8" innerRadius="0.78" cornerRadius="1" originX="0.5" originY="0.5" name="P" id="0:1117"/>
-                    <Triangle y="13" rotation="3.1415927" width="12" height="9" originX="0.5" originY="0.5" name="Hinge" id="0:1118"/>
-                    <Fill name="F" id="0:1119"><SolidColor colorValue="FF1E2A44" name="C" id="0:1120"/></Fill>
-                </Shape>
-            </Node>
-        </Node>
-
-        <!-- The plate: cream face with a faint inner border. -->
-        <Shape x="60" y="84" name="Inner Border" id="0:1121">
-            <Rectangle width="108" height="156" originX="0.5" originY="0.5" cornerRadiusTL="7" name="P" id="0:1122"/>
-            <Stroke thickness="1.5" name="Edge" id="0:1123"><SolidColor colorValue="26000000" name="C" id="0:1124"/></Stroke>
+    <Artboard isComponent="true" defaultStateMachineId="0:240" viewModelId="0:320" viewModelInstanceId="0:330"
+              x="1900" y="0" width="120" height="168" styleId="0:201" name="Card Back" id="0:200">
+        <LayoutComponentStyle name="Style" id="0:201"/>
+        <!-- Ethan's hexagon stub (from the editor), hidden: two white strokes,
+             their trim bound to the Card view model's numTrimOffset. -->
+        <Shape x="60" y="84" rotation="-0.54105204" name="Polygon" hidden="true" id="0:1123">
+            <Polygon points="6" width="89" height="89" originX="0.5" originY="0.5" name="Path" id="0:1124"/>
+            <Fill fillRule="2" isVisible="false" name="Fill 1" id="0:1125"><SolidColor colorValue="A8747474" name="Component" id="0:1126"/></Fill>
+            <Stroke thickness="3" name="Stroke 1" id="0:1127">
+                <SolidColor colorValue="FFFFFFFF" name="Component" id="0:1128"/>
+                <Feather strength="5" name="Component" id="0:1129"/>
+                <TrimPath end="0.21" modeValue="1" name="Component" id="0:1130"><DataBindContext sourcePathIds="0:320-0:342" propertyKey="116" id="0:1131"/></TrimPath>
+            </Stroke>
+            <Stroke name="Stroke 2" id="0:1132">
+                <SolidColor colorValue="FFFFFFFF" name="Component" id="0:1133"/>
+                <TrimPath end="0.21" offset="1.04" modeValue="1" name="Component" id="0:1134"><DataBindContext sourcePathIds="0:320-0:342" propertyKey="116" id="0:1135"/></TrimPath>
+            </Stroke>
         </Shape>
-        <Shape x="60" y="84" name="Plate" id="0:1125">
-            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="0:1126"/>
-            <Fill name="Fill" id="0:1127">
-                <LinearGradient startX="-60" startY="-84" endX="60" endY="84" name="G" id="0:1128">
-                    <GradientStop colorValue="FFFFFBF3" position="0" id="0:1129"/>
-                    <GradientStop colorValue="FFF1E8D6" position="1" id="0:1130"/>
+        <Image assetId="0:1110" x="60" y="84" scaleX="0.05" scaleY="0.05" name="OpenOcean2" id="0:1120"/>
+        <StateMachine name="State Machine 1" id="0:240">
+            <StateMachineLayer name="Layer 1" id="0:241">
+                <AnyState x="300" y="0" id="0:242"/>
+                <ExitState x="400" y="0" id="0:243"/>
+                <EntryState x="0" y="0" id="0:244"/>
+            </StateMachineLayer>
+        </StateMachine>
+        <Shape x="38" y="118" name="Bubble 1" hidden="true" id="0:210">
+            <Ellipse width="30" height="30" originX="0.5" originY="0.5" name="P" id="0:211"/>
+            <Stroke thickness="2" name="S" id="0:212"><SolidColor colorValue="FF7FB6E8" name="C" id="0:213"/></Stroke>
+        </Shape>
+        <Shape x="76" y="80" name="Bubble 2" hidden="true" id="0:214">
+            <Ellipse width="20" height="20" originX="0.5" originY="0.5" name="P" id="0:215"/>
+            <Stroke thickness="2" name="S" id="0:216"><SolidColor colorValue="FF7FB6E8" name="C" id="0:217"/></Stroke>
+        </Shape>
+        <Shape x="52" y="46" name="Bubble 3" hidden="true" id="0:218">
+            <Ellipse width="12" height="12" originX="0.5" originY="0.5" name="P" id="0:219"/>
+            <Stroke thickness="2" name="S" id="0:220"><SolidColor colorValue="FF7FB6E8" name="C" id="0:221"/></Stroke>
+        </Shape>
+        <Shape x="86" y="30" name="Bubble 4" hidden="true" id="0:222">
+            <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:223"/>
+            <Fill name="F" id="0:224"><SolidColor colorValue="FF7FB6E8" name="C" id="0:225"/></Fill>
+        </Shape>
+        <Shape x="60" y="84" name="Inner Border" hidden="true" id="0:226">
+            <Rectangle width="104" height="152" originX="0.5" originY="0.5" cornerRadiusTL="7" name="P" id="0:227"/>
+            <Stroke thickness="0.5" name="S" id="0:228"><SolidColor colorValue="FF7FB6E8" name="C" id="0:229"/></Stroke>
+        </Shape>
+        <Shape x="60" y="84" name="Plate" locked="true" id="0:230">
+            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="0:231"/>
+            <Fill name="Fill" id="0:232">
+                <LinearGradient startX="0" startY="66.612" endX="0" endY="-78.859" name="G" id="0:233">
+                    <GradientStop colorValue="FF032744" position="0" id="0:234"/>
+                    <GradientStop colorValue="FF0966B9" position="1" id="0:235"/>
                 </LinearGradient>
             </Fill>
+            <Stroke name="Stroke 1" id="0:1121"><SolidColor colorValue="FFB6B6B6" name="C" id="0:1122"/></Stroke>
         </Shape>
+        <LinearAnimation name="Timeline 1" id="0:1136"/>
+    </Artboard>
 
-        <StateMachine name="State Machine 1" id="0:102">
-            <StateMachineLayer name="Layer 1" id="0:103">
-                <AnyState x="300" y="0" id="0:104"/>
-                <ExitState x="400" y="0" id="0:105"/>
-                <EntryState x="0" y="0" id="0:106"/>
+
+    <!-- =========================================================================
+         THE CHROME — four small artboards, one per corner of the screen, each
+         instanced and placed by table.luau from `layout.luau`'s anchors.
+
+         It used to be ONE artboard the size of the table, with every label
+         hand-placed in 1600x1000 space and drawn at (0,0). That is exactly as
+         responsive as a printed page: on a phone the deal button sat 1480px
+         to the right of a 390px screen, and the status line 956px down an
+         844px one — both simply gone. Text is markup-only, so the fix cannot
+         be "let the script place the words"; it is to cut the page into the
+         pieces that each belong to an edge, and let the script place THOSE.
+
+         So the split is by ANCHOR, not by tidiness: title and stats to the
+         top left, the deal button to the top right, the status line to the
+         bottom left. Each one's content starts at its own (0,0) and the
+         script translates and scales it as a block, which is why every
+         position inside these artboards is relative and none of them mentions
+         the size of the screen.
+
+         All four carry the Table view model so the script can instance them
+         the same way; two of them have nothing bound and lose nothing by it.
+         Labels are staged as [DRAFT] shapes.
+         ========================================================================= -->
+    <Artboard isComponent="true" defaultStateMachineId="0:504" viewModelId="0:300" viewModelInstanceId="0:310"
+              x="0" y="1100" width="260" height="56" styleId="0:501" name="Title" id="0:500">
+        <LayoutComponentStyle name="Style" id="0:501"/>
+        <Text x="0" y="0" sizingValue="autoWidth" name="Title" id="0:20">
+            <TextStylePaint fontSize="40" letterSpacing="-0.02" fontAssetId="0:1109" familyName="Abril Fatface" styleName="Regular" name="S" id="0:21">
+                <Stroke thickness="3" name="Glow" id="0:1084"><SolidColor colorValue="FFF6F1E7" name="C" id="0:1085"/><Feather strength="12" name="F" id="0:1086"/></Stroke><Fill name="Fill" id="0:22"><SolidColor colorValue="FFF6F1E7" name="C" id="0:23"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:21" text="Sealitaire" name="Run" id="0:24"/>
+            <!-- Ethan's shimmer: a dim band swept across the title by Timeline 1. -->
+            <TextModifierGroup modifyOpacity="true" invertOpacity="true" opacity="0.15" name="Modifier Group 1" id="0:1111">
+                <TextModifierRange modifyFrom="0.53" modifyTo="0.88" modeValue="5" falloffFrom="0.68" falloffTo="0.75" offset="-0.97" name="Range 1" id="0:1112"/>
+            </TextModifierGroup>
+        </Text>
+        <LinearAnimation fps="24" duration="24" speed="0.3" loopValue="1" workStart="0" workEnd="1" quantize="true" name="Timeline 1" id="0:1113">
+            <KeyedObject objectId="0:1112" id="0:1114">
+                <KeyedProperty propertyKey="319" id="0:1115">
+                    <KeyFrameDouble value="-0.97" interpolationType="1" id="0:1116"/>
+                    <KeyFrameDouble value="0.59" interpolationType="1" frame="24" id="0:1117"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+        <StateMachine name="State Machine 1" id="0:504">
+            <StateMachineLayer name="Layer 1" id="0:505">
+                <AnyState x="300" y="0" id="0:506"/>
+                <ExitState x="400" y="0" id="0:507"/>
+                <EntryState x="-41" y="6" id="0:508">
+                    <StateTransition stateToId="0:1118" id="0:1119"/>
+                </EntryState>
+                <AnimationState animationId="0:1113" x="97" y="13" id="0:1118"/>
             </StateMachineLayer>
         </StateMachine>
     </Artboard>
 
-    <!-- =========================================================================
-         CARD BACK — navy, with bubbles rising. No data.
-         ========================================================================= -->
-    <Artboard isComponent="true" x="1900" y="0" width="120" height="168" styleId="0:201" name="Card Back" id="0:200">
-        <LayoutComponentStyle name="Style" id="0:201"/>
-        <Shape x="38" y="118" name="Bubble 1" id="0:210">
-            <Ellipse width="30" height="30" originX="0.5" originY="0.5" name="P" id="0:211"/>
-            <Stroke thickness="2" name="S" id="0:212"><SolidColor colorValue="FF7FB6E8" name="C" id="0:213"/></Stroke>
-        </Shape>
-        <Shape x="76" y="80" name="Bubble 2" id="0:214">
-            <Ellipse width="20" height="20" originX="0.5" originY="0.5" name="P" id="0:215"/>
-            <Stroke thickness="2" name="S" id="0:216"><SolidColor colorValue="FF7FB6E8" name="C" id="0:217"/></Stroke>
-        </Shape>
-        <Shape x="52" y="46" name="Bubble 3" id="0:218">
-            <Ellipse width="12" height="12" originX="0.5" originY="0.5" name="P" id="0:219"/>
-            <Stroke thickness="2" name="S" id="0:220"><SolidColor colorValue="FF7FB6E8" name="C" id="0:221"/></Stroke>
-        </Shape>
-        <Shape x="86" y="30" name="Bubble 4" id="0:222">
-            <Ellipse width="7" height="7" originX="0.5" originY="0.5" name="P" id="0:223"/>
-            <Fill name="F" id="0:224"><SolidColor colorValue="FF7FB6E8" name="C" id="0:225"/></Fill>
-        </Shape>
-        <Shape x="60" y="84" name="Inner Border" id="0:226">
-            <Rectangle width="104" height="152" originX="0.5" originY="0.5" cornerRadiusTL="7" name="P" id="0:227"/>
-            <Stroke thickness="2" name="S" id="0:228"><SolidColor colorValue="FF7FB6E8" name="C" id="0:229"/></Stroke>
-        </Shape>
-        <Shape x="60" y="84" name="Plate" id="0:230">
-            <Rectangle width="120" height="168" originX="0.5" originY="0.5" cornerRadiusTL="10" name="P" id="0:231"/>
-            <Fill name="Fill" id="0:232">
-                <LinearGradient startX="-60" startY="-84" endX="60" endY="84" name="G" id="0:233">
-                    <GradientStop colorValue="FF1F4E8C" position="0" id="0:234"/>
-                    <GradientStop colorValue="FF122D57" position="1" id="0:235"/>
-                </LinearGradient>
-            </Fill>
-        </Shape>
+    <!-- The three readouts, as one block: they are a row and they move as a
+         row. Columns 130 apart, label over value. -->
+    <Artboard isComponent="true" defaultStateMachineId="0:522" viewModelId="0:300" viewModelInstanceId="0:310"
+              x="300" y="1100" width="380" height="56" styleId="0:521" name="Stats" id="0:520">
+        <LayoutComponentStyle name="Style" id="0:521"/>
+        <Text x="2" y="0" sizingValue="autoWidth" name="Moves Label" id="0:25">
+            <TextStylePaint fontSize="17" letterSpacing="0.12" fontAssetId="0:1109" familyName="Abril Fatface" styleName="Regular" name="S" id="0:26">
+                <Stroke thickness="1.5" name="Glow" id="0:1087"><SolidColor colorValue="FF7FB6E8" name="C" id="0:1088"/><Feather strength="5" name="F" id="0:1089"/></Stroke><Fill name="Fill" id="0:27"><SolidColor colorValue="FF7FB6E8" name="C" id="0:28"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:26" text="MOVES" name="Run" id="0:29"/>
+        </Text>
+        <Text x="0" y="16" sizingValue="autoWidth" name="Moves" id="0:30">
+            <TextStylePaint fontSize="30" fontAssetId="0:1109" familyName="Abril Fatface" styleName="Regular" name="S" id="0:31">
+                <Stroke thickness="2" name="Glow" id="0:1090"><SolidColor colorValue="FFF6F1E7" name="C" id="0:1091"/><Feather strength="7" name="F" id="0:1092"/></Stroke><Fill name="Fill" id="0:32"><SolidColor colorValue="FFF6F1E7" name="C" id="0:33"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:31" text="0" name="Run" id="0:34">
+                <DataBindContext sourcePathIds="0:300-0:301" propertyKey="268" id="0:35"/>
+            </TextValueRun>
+        </Text>
+
+        <Text x="132" y="0" sizingValue="autoWidth" name="Score Label" hidden="true" id="0:36">
+            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:37">
+                <Stroke thickness="1.5" name="Glow" id="0:1093"><SolidColor colorValue="FF7FB6E8" name="C" id="0:1094"/><Feather strength="5" name="F" id="0:1095"/></Stroke><Fill name="Fill" id="0:38"><SolidColor colorValue="FF7FB6E8" name="C" id="0:39"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:37" text="[DRAFT] SCORE" name="Run" id="0:40"/>
+        </Text>
+        <Text x="130" y="16" sizingValue="autoWidth" name="Score" hidden="true" id="0:41">
+            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:42">
+                <Stroke thickness="2" name="Glow" id="0:1096"><SolidColor colorValue="FFF6F1E7" name="C" id="0:1097"/><Feather strength="7" name="F" id="0:1098"/></Stroke><Fill name="Fill" id="0:43"><SolidColor colorValue="FFF6F1E7" name="C" id="0:44"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:42" text="0" name="Run" id="0:45">
+                <DataBindContext sourcePathIds="0:300-0:302" propertyKey="268" id="0:46"/>
+            </TextValueRun>
+        </Text>
+
+        <Text x="262" y="0" sizingValue="autoWidth" name="Clock Label" hidden="true" id="0:47">
+            <TextStylePaint fontSize="13" letterSpacing="0.12" fontAssetId="0:400" name="S" id="0:48">
+                <Stroke thickness="1.5" name="Glow" id="0:1099"><SolidColor colorValue="FF7FB6E8" name="C" id="0:1100"/><Feather strength="5" name="F" id="0:1101"/></Stroke><Fill name="Fill" id="0:49"><SolidColor colorValue="FF7FB6E8" name="C" id="0:50"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:48" text="[DRAFT] TIME" name="Run" id="0:51"/>
+        </Text>
+        <Text x="260" y="16" sizingValue="autoWidth" name="Clock" hidden="true" id="0:52">
+            <TextStylePaint fontSize="30" fontAssetId="0:400" name="S" id="0:53">
+                <Stroke thickness="2" name="Glow" id="0:1102"><SolidColor colorValue="FFF6F1E7" name="C" id="0:1103"/><Feather strength="7" name="F" id="0:1104"/></Stroke><Fill name="Fill" id="0:54"><SolidColor colorValue="FFF6F1E7" name="C" id="0:55"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:53" text="0:00" name="Run" id="0:56">
+                <DataBindContext sourcePathIds="0:300-0:303" propertyKey="268" id="0:57"/>
+            </TextValueRun>
+        </Text>
+        <StateMachine name="State Machine 1" id="0:522">
+            <StateMachineLayer name="Layer 1" id="0:523">
+                <AnyState x="300" y="0" id="0:524"/>
+                <ExitState x="400" y="0" id="0:525"/>
+                <EntryState x="0" y="0" id="0:526"/>
+            </StateMachineLayer>
+        </StateMachine>
     </Artboard>
 
-    <ComponentAsset artboardId="0:100" name="Card Face" id="0:290"/>
+    <!-- New deal. The script owns the hit test (`button` in layout.luau is
+         this artboard's rectangle, placed and scaled the same way); the
+         markup only draws it. -->
+    <Artboard isComponent="true" defaultStateMachineId="0:562" viewModelId="0:300" viewModelInstanceId="0:310"
+              x="1360" y="1100" width="160" height="44" styleId="0:561" name="Deal" id="0:560">
+        <LayoutComponentStyle name="Style" id="0:561"/>
+        <Text x="80" y="22" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Deal Label" id="0:64">
+            <TextStylePaint fontSize="16" letterSpacing="0.06" fontAssetId="0:400" name="S" id="0:65">
+                <Fill name="Fill" id="0:66"><SolidColor colorValue="FF07182B" name="C" id="0:67"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:65" text="Re-Deal" name="Run" id="0:68"/>
+        </Text>
+        <Shape x="80" y="22" name="Deal Button" id="0:69">
+            <Rectangle width="160" height="44" originX="0.5" originY="0.5" cornerRadiusTL="22" name="Path" id="0:70"/>
+            <Fill name="Fill" id="0:71"><SolidColor colorValue="FFF5B02E" name="C" id="0:72"/></Fill>
+        </Shape>
+        <StateMachine name="State Machine 1" id="0:562">
+            <StateMachineLayer name="Layer 1" id="0:563">
+                <AnyState x="300" y="0" id="0:564"/>
+                <ExitState x="400" y="0" id="0:565"/>
+                <EntryState x="0" y="0" id="0:566"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <ComponentAsset artboardId="0:500" name="Title" id="0:509"/>
+    <ComponentAsset artboardId="0:520" name="Stats" id="0:529"/>
+    <ComponentAsset artboardId="0:560" name="Deal" id="0:569"/>
+
     <ComponentAsset artboardId="0:200" name="Card Back" id="0:291"/>
 
 
@@ -348,12 +289,14 @@
         <ViewModelPropertyString name="moves" id="0:301"/>
         <ViewModelPropertyString name="score" id="0:302"/>
         <ViewModelPropertyString name="clock" id="0:303"/>
-        <ViewModelPropertyString name="status" id="0:304"/>
+        <!-- The lab: `rive ... --data=lab=<species>` puts one species on every
+             card for tools/sealitaire-sheet.mjs. Blank in play. -->
+        <ViewModelPropertyString name="lab" id="0:305"/>
         <ViewModelInstance exports="true" name="Instance" id="0:310">
             <ViewModelInstanceString propertyValue="0" viewModelPropertyId="0:301" id="0:311"/>
             <ViewModelInstanceString propertyValue="0" viewModelPropertyId="0:302" id="0:312"/>
             <ViewModelInstanceString propertyValue="0:00" viewModelPropertyId="0:303" id="0:313"/>
-            <ViewModelInstanceString propertyValue="Lorem ipsum dolor sit amet" viewModelPropertyId="0:304" id="0:314"/>
+            <ViewModelInstanceString propertyValue="" viewModelPropertyId="0:305" id="0:315"/>
         </ViewModelInstance>
     </ViewModel>
 
@@ -365,6 +308,20 @@
         <ViewModelPropertyNumber name="star" id="0:324"/>
         <ViewModelPropertyNumber name="bubble" id="0:325"/>
         <ViewModelPropertyNumber name="shell" id="0:326"/>
+        <ViewModelPropertyNumber name="plate" id="0:327"/>
+        <ViewModelPropertyNumber name="red" id="0:328"/>
+        <ViewModelPropertyNumber name="black" id="0:329"/>
+        <ViewModelPropertyNumber name="pulse" id="0:340"/>
+        <ViewModelPropertyNumber name="numTrimOffset" id="0:342"/>
+        <!-- The corner's drop shadow, one setting for the rank and all four
+             suits: `shadowSoft` is the Feather strength, `shadowX`/`shadowY`
+             its offset (world space, so the rank at 0.4 and the suit at 0.8
+             cast the same shadow). Edit the default instance and every card
+             in the editor follows. Editor-only for now — a Feather inside a
+             Fill renders nothing at runtime (rive docs drawing). -->
+        <ViewModelPropertyNumber name="shadowSoft" id="0:344"/>
+        <ViewModelPropertyNumber name="shadowX" id="0:345"/>
+        <ViewModelPropertyNumber name="shadowY" id="0:346"/>
         <ViewModelInstance exports="true" name="Instance" id="0:330">
             <ViewModelInstanceString propertyValue="A" viewModelPropertyId="0:321" id="0:331"/>
             <ViewModelInstanceColor propertyValue="FFD0392B" viewModelPropertyId="0:322" id="0:332"/>
@@ -372,6 +329,14 @@
             <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:324" id="0:334"/>
             <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:325" id="0:335"/>
             <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:326" id="0:336"/>
+            <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:327" id="0:337"/>
+            <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:328" id="0:338"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:329" id="0:339"/>
+            <ViewModelInstanceNumber propertyValue="0" viewModelPropertyId="0:340" id="0:341"/>
+            <ViewModelInstanceNumber propertyValue="0.2" viewModelPropertyId="0:342" id="0:343"/>
+            <ViewModelInstanceNumber propertyValue="8" viewModelPropertyId="0:344" id="0:347"/>
+            <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:345" id="0:348"/>
+            <ViewModelInstanceNumber propertyValue="1" viewModelPropertyId="0:346" id="0:349"/>
         </ViewModelInstance>
     </ViewModel>
 
@@ -382,7 +347,353 @@
          the directory and the script fetches them by name.
          ========================================================================= -->
     <FontAsset file="fonts/Inter.ttf" name="Inter" id="0:400"/>
+    <!-- Ethan's picks from the editor (2026-09-19): the title and readouts in
+         Abril Fatface, the ranks in Brygada 1918, and a photo behind the back. -->
+    <FontAsset file="fonts/Brygada 1918.ttf" name="Brygada 1918" id="0:1108"/>
+    <FontAsset file="fonts/Abril Fatface.ttf" name="Abril Fatface" id="0:1109"/>
+    <BlobAsset file="seal.mesh" name="seal" id="0:404"/>
+    <BlobAsset file="fish.mesh" name="fish" id="0:420"/>
+    <BlobAsset file="tanks.csv" name="tanks" id="0:613"/>
+    <BlobAsset file="sfxEvents.csv" name="sfxEvents" id="0:616"/>
+    <!-- The bank INDEX, so J/K/L can walk the sounds that are actually in the
+         file. Ids used to be generated from a position (hg-cards-%03d), which
+         could not name the processed takes from sfxFx.csv and so could not
+         reach them. tools/sealitaire-sfx.mjs writes both this row's file and
+         the block below, so they cannot drift. -->
+    <BlobAsset file="sfx.csv" name="sfxBank" id="0:617"/>
+    <BlobAsset file="music.bin" name="music" id="0:614"/>
+    <AudioAsset file="music.mp3" name="music" id="0:615"/>
+    <!-- MUSIC WASH: generated by tools/sealitaire-music.mjs from musicLoops.csv; do not hand-edit -->
+    <AudioAsset file="music/wash-deal.flac" name="wash-deal" id="0:2400"/>
+    <AudioAsset file="music/wash-drift.flac" name="wash-drift" id="0:2401"/>
+    <AudioAsset file="music/wash-loud.flac" name="wash-loud" id="0:2402"/>
+    <!-- /MUSIC WASH -->
+    <ImageAsset file="images/starfish.webp" name="starfish" id="0:408"/>
+    <ImageAsset file="images/OpenOcean2.webp" name="OpenOcean2" id="0:1110"/>
+    <!-- SFX BANK: generated by tools/sealitaire-sfx.mjs; do not hand-edit -->
+    <AudioAsset file="sfx/hg-cards-001.flac" name="hg-cards-001" id="0:2000"/>
+    <AudioAsset file="sfx/hg-cards-002.flac" name="hg-cards-002" id="0:2001"/>
+    <AudioAsset file="sfx/hg-cards-003.flac" name="hg-cards-003" id="0:2002"/>
+    <AudioAsset file="sfx/hg-cards-004.flac" name="hg-cards-004" id="0:2003"/>
+    <AudioAsset file="sfx/hg-cards-005.flac" name="hg-cards-005" id="0:2004"/>
+    <AudioAsset file="sfx/hg-cards-006.flac" name="hg-cards-006" id="0:2005"/>
+    <AudioAsset file="sfx/hg-cards-007.flac" name="hg-cards-007" id="0:2006"/>
+    <AudioAsset file="sfx/hg-cards-008.flac" name="hg-cards-008" id="0:2007"/>
+    <AudioAsset file="sfx/hg-cards-009.flac" name="hg-cards-009" id="0:2008"/>
+    <AudioAsset file="sfx/hg-cards-010.flac" name="hg-cards-010" id="0:2009"/>
+    <AudioAsset file="sfx/hg-cards-011.flac" name="hg-cards-011" id="0:2010"/>
+    <AudioAsset file="sfx/hg-cards-012.flac" name="hg-cards-012" id="0:2011"/>
+    <AudioAsset file="sfx/hg-cards-013.flac" name="hg-cards-013" id="0:2012"/>
+    <AudioAsset file="sfx/hg-cards-014.flac" name="hg-cards-014" id="0:2013"/>
+    <AudioAsset file="sfx/hg-cards-015.flac" name="hg-cards-015" id="0:2014"/>
+    <AudioAsset file="sfx/hg-cards-016.flac" name="hg-cards-016" id="0:2015"/>
+    <AudioAsset file="sfx/hg-cards-017.flac" name="hg-cards-017" id="0:2016"/>
+    <AudioAsset file="sfx/hg-cards-018.flac" name="hg-cards-018" id="0:2017"/>
+    <AudioAsset file="sfx/hg-cards-019.flac" name="hg-cards-019" id="0:2018"/>
+    <AudioAsset file="sfx/hg-cards-020.flac" name="hg-cards-020" id="0:2019"/>
+    <AudioAsset file="sfx/hg-cards-021.flac" name="hg-cards-021" id="0:2020"/>
+    <AudioAsset file="sfx/hg-cards-022.flac" name="hg-cards-022" id="0:2021"/>
+    <AudioAsset file="sfx/hg-cards-023.flac" name="hg-cards-023" id="0:2022"/>
+    <AudioAsset file="sfx/hg-cards-024.flac" name="hg-cards-024" id="0:2023"/>
+    <AudioAsset file="sfx/hg-cards-025.flac" name="hg-cards-025" id="0:2024"/>
+    <AudioAsset file="sfx/hg-cards-026.flac" name="hg-cards-026" id="0:2025"/>
+    <AudioAsset file="sfx/hg-cards-027.flac" name="hg-cards-027" id="0:2026"/>
+    <AudioAsset file="sfx/hg-cards-028.flac" name="hg-cards-028" id="0:2027"/>
+    <AudioAsset file="sfx/hg-cards-029.flac" name="hg-cards-029" id="0:2028"/>
+    <AudioAsset file="sfx/hg-cards-030.flac" name="hg-cards-030" id="0:2029"/>
+    <AudioAsset file="sfx/hg-cards-031.flac" name="hg-cards-031" id="0:2030"/>
+    <AudioAsset file="sfx/hg-cards-032.flac" name="hg-cards-032" id="0:2031"/>
+    <AudioAsset file="sfx/hg-cards-033.flac" name="hg-cards-033" id="0:2032"/>
+    <AudioAsset file="sfx/hg-cards-034.flac" name="hg-cards-034" id="0:2033"/>
+    <AudioAsset file="sfx/hg-cards-035.flac" name="hg-cards-035" id="0:2034"/>
+    <AudioAsset file="sfx/hg-cards-036.flac" name="hg-cards-036" id="0:2035"/>
+    <AudioAsset file="sfx/hg-cards-037.flac" name="hg-cards-037" id="0:2036"/>
+    <AudioAsset file="sfx/hg-cards-038.flac" name="hg-cards-038" id="0:2037"/>
+    <AudioAsset file="sfx/hg-cards-039.flac" name="hg-cards-039" id="0:2038"/>
+    <AudioAsset file="sfx/hg-cards-040.flac" name="hg-cards-040" id="0:2039"/>
+    <AudioAsset file="sfx/hg-cards-041.flac" name="hg-cards-041" id="0:2040"/>
+    <AudioAsset file="sfx/hg-cards-042.flac" name="hg-cards-042" id="0:2041"/>
+    <AudioAsset file="sfx/hg-cards-043.flac" name="hg-cards-043" id="0:2042"/>
+    <AudioAsset file="sfx/hg-cards-044.flac" name="hg-cards-044" id="0:2043"/>
+    <AudioAsset file="sfx/hg-cards-045.flac" name="hg-cards-045" id="0:2044"/>
+    <AudioAsset file="sfx/hg-cards-046.flac" name="hg-cards-046" id="0:2045"/>
+    <AudioAsset file="sfx/hg-cards-047.flac" name="hg-cards-047" id="0:2046"/>
+    <AudioAsset file="sfx/hg-cards-048.flac" name="hg-cards-048" id="0:2047"/>
+    <AudioAsset file="sfx/hg-cards-049.flac" name="hg-cards-049" id="0:2048"/>
+    <AudioAsset file="sfx/hg-cards-050.flac" name="hg-cards-050" id="0:2049"/>
+    <AudioAsset file="sfx/hg-cards-051.flac" name="hg-cards-051" id="0:2050"/>
+    <AudioAsset file="sfx/hg-cards-052.flac" name="hg-cards-052" id="0:2051"/>
+    <AudioAsset file="sfx/hg-cards-053.flac" name="hg-cards-053" id="0:2052"/>
+    <AudioAsset file="sfx/hg-cards-054.flac" name="hg-cards-054" id="0:2053"/>
+    <AudioAsset file="sfx/hg-cards-055.flac" name="hg-cards-055" id="0:2054"/>
+    <AudioAsset file="sfx/hg-cards-056.flac" name="hg-cards-056" id="0:2055"/>
+    <AudioAsset file="sfx/hg-cards-057.flac" name="hg-cards-057" id="0:2056"/>
+    <AudioAsset file="sfx/hg-cards-058.flac" name="hg-cards-058" id="0:2057"/>
+    <AudioAsset file="sfx/hg-cards-059.flac" name="hg-cards-059" id="0:2058"/>
+    <AudioAsset file="sfx/hg-cards-060.flac" name="hg-cards-060" id="0:2059"/>
+    <AudioAsset file="sfx/hg-cards-061.flac" name="hg-cards-061" id="0:2060"/>
+    <AudioAsset file="sfx/hg-cards-062.flac" name="hg-cards-062" id="0:2061"/>
+    <AudioAsset file="sfx/hg-cards-063.flac" name="hg-cards-063" id="0:2062"/>
+    <AudioAsset file="sfx/hg-cards-064.flac" name="hg-cards-064" id="0:2063"/>
+    <AudioAsset file="sfx/hg-cards-065.flac" name="hg-cards-065" id="0:2064"/>
+    <AudioAsset file="sfx/hg-cards-066.flac" name="hg-cards-066" id="0:2065"/>
+    <AudioAsset file="sfx/hg-cards-067.flac" name="hg-cards-067" id="0:2066"/>
+    <AudioAsset file="sfx/hg-cards-068.flac" name="hg-cards-068" id="0:2067"/>
+    <AudioAsset file="sfx/hg-cards-069.flac" name="hg-cards-069" id="0:2068"/>
+    <AudioAsset file="sfx/hg-cards-070.flac" name="hg-cards-070" id="0:2069"/>
+    <AudioAsset file="sfx/hg-cards-071.flac" name="hg-cards-071" id="0:2070"/>
+    <AudioAsset file="sfx/hg-cards-072.flac" name="hg-cards-072" id="0:2071"/>
+    <AudioAsset file="sfx/hg-cards-digi-073.flac" name="hg-cards-digi-073" id="0:2072"/>
+    <AudioAsset file="sfx/hg-cards-digi-074.flac" name="hg-cards-digi-074" id="0:2073"/>
+    <AudioAsset file="sfx/hg-cards-digi-075.flac" name="hg-cards-digi-075" id="0:2074"/>
+    <AudioAsset file="sfx/hg-cards-digi-076.flac" name="hg-cards-digi-076" id="0:2075"/>
+    <AudioAsset file="sfx/hg-cards-digi-077.flac" name="hg-cards-digi-077" id="0:2076"/>
+    <AudioAsset file="sfx/hg-cards-digi-078.flac" name="hg-cards-digi-078" id="0:2077"/>
+    <AudioAsset file="sfx/hg-cards-digi-079.flac" name="hg-cards-digi-079" id="0:2078"/>
+    <AudioAsset file="sfx/hg-cards-digi-080.flac" name="hg-cards-digi-080" id="0:2079"/>
+    <AudioAsset file="sfx/hg-cards-digi-081.flac" name="hg-cards-digi-081" id="0:2080"/>
+    <AudioAsset file="sfx/hg-cards-digi-082.flac" name="hg-cards-digi-082" id="0:2081"/>
+    <AudioAsset file="sfx/hg-cards-digi-083.flac" name="hg-cards-digi-083" id="0:2082"/>
+    <AudioAsset file="sfx/hg-cards-digi-084.flac" name="hg-cards-digi-084" id="0:2083"/>
+    <AudioAsset file="sfx/eg-flickplop-01.flac" name="eg-flickplop-01" id="0:2084"/>
+    <AudioAsset file="sfx/eg-flickplop-02.flac" name="eg-flickplop-02" id="0:2085"/>
+    <AudioAsset file="sfx/eg-flickplop-03.flac" name="eg-flickplop-03" id="0:2086"/>
+    <AudioAsset file="sfx/eg-flickplop-04.flac" name="eg-flickplop-04" id="0:2087"/>
+    <AudioAsset file="sfx/eg-flickplop-05.flac" name="eg-flickplop-05" id="0:2088"/>
+    <AudioAsset file="sfx/eg-flickplop-06.flac" name="eg-flickplop-06" id="0:2089"/>
+    <AudioAsset file="sfx/eg-flickplop-07.flac" name="eg-flickplop-07" id="0:2090"/>
+    <AudioAsset file="sfx/eg-flickplop-08.flac" name="eg-flickplop-08" id="0:2091"/>
+    <AudioAsset file="sfx/eg-flickplop-09.flac" name="eg-flickplop-09" id="0:2092"/>
+    <AudioAsset file="sfx/eg-flickplop-10.flac" name="eg-flickplop-10" id="0:2093"/>
+    <AudioAsset file="sfx/eg-flickplop-11.flac" name="eg-flickplop-11" id="0:2094"/>
+    <AudioAsset file="sfx/eg-flickplop-12.flac" name="eg-flickplop-12" id="0:2095"/>
+    <AudioAsset file="sfx/eg-flickplop-13.flac" name="eg-flickplop-13" id="0:2096"/>
+    <AudioAsset file="sfx/eg-flickplop-14.flac" name="eg-flickplop-14" id="0:2097"/>
+    <AudioAsset file="sfx/eg-flickplop-15.flac" name="eg-flickplop-15" id="0:2098"/>
+    <AudioAsset file="sfx/eg-flickplop-16.flac" name="eg-flickplop-16" id="0:2099"/>
+    <AudioAsset file="sfx/hg-ui-blip-mack.flac" name="hg-ui-blip-mack" id="0:2100"/>
+    <AudioAsset file="sfx/hg-ui-blip-menu-spat.flac" name="hg-ui-blip-menu-spat" id="0:2101"/>
+    <AudioAsset file="sfx/hg-ui-blip-noah.flac" name="hg-ui-blip-noah" id="0:2102"/>
+    <AudioAsset file="sfx/seal-breach-01.flac" name="seal-breach-01" id="0:2103"/>
+    <AudioAsset file="sfx/seal-56.flac" name="seal-56" id="0:2104"/>
+    <AudioAsset file="sfx/seal-boost-01.flac" name="seal-boost-01" id="0:2105"/>
+    <AudioAsset file="sfx/seal-boost-02.flac" name="seal-boost-02" id="0:2106"/>
+    <AudioAsset file="sfx/seal-boost-03.flac" name="seal-boost-03" id="0:2107"/>
+    <AudioAsset file="sfx/seal-boost-04.flac" name="seal-boost-04" id="0:2108"/>
+    <AudioAsset file="sfx/seal-wa-01.flac" name="seal-wa-01" id="0:2109"/>
+    <AudioAsset file="sfx/seal-wa-02.flac" name="seal-wa-02" id="0:2110"/>
+    <AudioAsset file="sfx/seal-07.flac" name="seal-07" id="0:2111"/>
+    <AudioAsset file="sfx/seal-13.flac" name="seal-13" id="0:2112"/>
+    <AudioAsset file="sfx/seal-call-02.flac" name="seal-call-02" id="0:2113"/>
+    <AudioAsset file="sfx/eliarf-boost-01.flac" name="eliarf-boost-01" id="0:2114"/>
+    <AudioAsset file="sfx/fluteseal-01.flac" name="fluteseal-01" id="0:2115"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a.flac" name="hg-ui-blip-oil-a" id="0:2116"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl.flac" name="hg-ui-blip-owl" id="0:2117"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky.flac" name="hg-ui-blip-arky" id="0:2118"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue.flac" name="hg-ui-blip-blue" id="0:2119"/>
+    <AudioAsset file="sfx/hg-ui-blip-borky.flac" name="hg-ui-blip-borky" id="0:2120"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove.flac" name="hg-ui-blip-dove" id="0:2121"/>
+    <AudioAsset file="sfx/hg-ui-blip-dub.flac" name="hg-ui-blip-dub" id="0:2122"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy.flac" name="hg-ui-blip-froggy" id="0:2123"/>
+    <AudioAsset file="sfx/hg-ui-blip-larp.flac" name="hg-ui-blip-larp" id="0:2124"/>
+    <AudioAsset file="sfx/hg-ui-blip-milli.flac" name="hg-ui-blip-milli" id="0:2125"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy.flac" name="hg-ui-blip-snappy" id="0:2126"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody.flac" name="hg-ui-blip-woody" id="0:2127"/>
+    <!-- END SFX BANK -->
+    <!-- SFX FX: generated by tools/sealitaire-sfx-fx.mjs from sfxFx.csv; do not hand-edit -->
+    <AudioAsset file="sfx/eliarf-boost-01-distant.flac" name="eliarf-boost-01-distant" id="0:1400"/>
+    <AudioAsset file="sfx/seal-07-distant.flac" name="seal-07-distant" id="0:1401"/>
+    <AudioAsset file="sfx/seal-13-distant.flac" name="seal-13-distant" id="0:1402"/>
+    <AudioAsset file="sfx/seal-56-distant.flac" name="seal-56-distant" id="0:1403"/>
+    <AudioAsset file="sfx/seal-boost-01-distant.flac" name="seal-boost-01-distant" id="0:1404"/>
+    <AudioAsset file="sfx/seal-boost-02-distant.flac" name="seal-boost-02-distant" id="0:1405"/>
+    <AudioAsset file="sfx/seal-boost-03-distant.flac" name="seal-boost-03-distant" id="0:1406"/>
+    <AudioAsset file="sfx/seal-boost-04-distant.flac" name="seal-boost-04-distant" id="0:1407"/>
+    <AudioAsset file="sfx/seal-breach-01-distant.flac" name="seal-breach-01-distant" id="0:1408"/>
+    <AudioAsset file="sfx/seal-call-02-distant.flac" name="seal-call-02-distant" id="0:1409"/>
+    <AudioAsset file="sfx/seal-wa-01-distant.flac" name="seal-wa-01-distant" id="0:1410"/>
+    <AudioAsset file="sfx/seal-wa-02-distant.flac" name="seal-wa-02-distant" id="0:1411"/>
+    <!-- /SFX FX -->
+    <!-- SFX KNOCK: generated by tools/sealitaire-sfx-fx.mjs knock; do not hand-edit -->
+    <AudioAsset file="sfx/eg-flickplop-01-p-1.flac" name="eg-flickplop-01-p-1" id="0:1600"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p-2.flac" name="eg-flickplop-01-p-2" id="0:1601"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p0.flac" name="eg-flickplop-01-p0" id="0:1602"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p1.flac" name="eg-flickplop-01-p1" id="0:1603"/>
+    <AudioAsset file="sfx/eg-flickplop-01-p2.flac" name="eg-flickplop-01-p2" id="0:1604"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p-1.flac" name="eg-flickplop-02-p-1" id="0:1605"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p-2.flac" name="eg-flickplop-02-p-2" id="0:1606"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p0.flac" name="eg-flickplop-02-p0" id="0:1607"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p1.flac" name="eg-flickplop-02-p1" id="0:1608"/>
+    <AudioAsset file="sfx/eg-flickplop-02-p2.flac" name="eg-flickplop-02-p2" id="0:1609"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p-1.flac" name="eg-flickplop-03-p-1" id="0:1610"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p-2.flac" name="eg-flickplop-03-p-2" id="0:1611"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p0.flac" name="eg-flickplop-03-p0" id="0:1612"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p1.flac" name="eg-flickplop-03-p1" id="0:1613"/>
+    <AudioAsset file="sfx/eg-flickplop-03-p2.flac" name="eg-flickplop-03-p2" id="0:1614"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p-1.flac" name="eg-flickplop-04-p-1" id="0:1615"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p-2.flac" name="eg-flickplop-04-p-2" id="0:1616"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p0.flac" name="eg-flickplop-04-p0" id="0:1617"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p1.flac" name="eg-flickplop-04-p1" id="0:1618"/>
+    <AudioAsset file="sfx/eg-flickplop-04-p2.flac" name="eg-flickplop-04-p2" id="0:1619"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p-1.flac" name="eg-flickplop-05-p-1" id="0:1620"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p-2.flac" name="eg-flickplop-05-p-2" id="0:1621"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p0.flac" name="eg-flickplop-05-p0" id="0:1622"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p1.flac" name="eg-flickplop-05-p1" id="0:1623"/>
+    <AudioAsset file="sfx/eg-flickplop-05-p2.flac" name="eg-flickplop-05-p2" id="0:1624"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p-1.flac" name="eg-flickplop-06-p-1" id="0:1625"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p-2.flac" name="eg-flickplop-06-p-2" id="0:1626"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p0.flac" name="eg-flickplop-06-p0" id="0:1627"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p1.flac" name="eg-flickplop-06-p1" id="0:1628"/>
+    <AudioAsset file="sfx/eg-flickplop-06-p2.flac" name="eg-flickplop-06-p2" id="0:1629"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p-1.flac" name="eg-flickplop-07-p-1" id="0:1630"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p-2.flac" name="eg-flickplop-07-p-2" id="0:1631"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p0.flac" name="eg-flickplop-07-p0" id="0:1632"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p1.flac" name="eg-flickplop-07-p1" id="0:1633"/>
+    <AudioAsset file="sfx/eg-flickplop-07-p2.flac" name="eg-flickplop-07-p2" id="0:1634"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p-1.flac" name="eg-flickplop-08-p-1" id="0:1635"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p-2.flac" name="eg-flickplop-08-p-2" id="0:1636"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p0.flac" name="eg-flickplop-08-p0" id="0:1637"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p1.flac" name="eg-flickplop-08-p1" id="0:1638"/>
+    <AudioAsset file="sfx/eg-flickplop-08-p2.flac" name="eg-flickplop-08-p2" id="0:1639"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p-1.flac" name="eg-flickplop-09-p-1" id="0:1640"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p-2.flac" name="eg-flickplop-09-p-2" id="0:1641"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p0.flac" name="eg-flickplop-09-p0" id="0:1642"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p1.flac" name="eg-flickplop-09-p1" id="0:1643"/>
+    <AudioAsset file="sfx/eg-flickplop-09-p2.flac" name="eg-flickplop-09-p2" id="0:1644"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p-1.flac" name="eg-flickplop-10-p-1" id="0:1645"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p-2.flac" name="eg-flickplop-10-p-2" id="0:1646"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p0.flac" name="eg-flickplop-10-p0" id="0:1647"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p1.flac" name="eg-flickplop-10-p1" id="0:1648"/>
+    <AudioAsset file="sfx/eg-flickplop-10-p2.flac" name="eg-flickplop-10-p2" id="0:1649"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p-1.flac" name="eg-flickplop-11-p-1" id="0:1650"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p-2.flac" name="eg-flickplop-11-p-2" id="0:1651"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p0.flac" name="eg-flickplop-11-p0" id="0:1652"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p1.flac" name="eg-flickplop-11-p1" id="0:1653"/>
+    <AudioAsset file="sfx/eg-flickplop-11-p2.flac" name="eg-flickplop-11-p2" id="0:1654"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p-1.flac" name="eg-flickplop-12-p-1" id="0:1655"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p-2.flac" name="eg-flickplop-12-p-2" id="0:1656"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p0.flac" name="eg-flickplop-12-p0" id="0:1657"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p1.flac" name="eg-flickplop-12-p1" id="0:1658"/>
+    <AudioAsset file="sfx/eg-flickplop-12-p2.flac" name="eg-flickplop-12-p2" id="0:1659"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p-1.flac" name="eg-flickplop-13-p-1" id="0:1660"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p-2.flac" name="eg-flickplop-13-p-2" id="0:1661"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p0.flac" name="eg-flickplop-13-p0" id="0:1662"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p1.flac" name="eg-flickplop-13-p1" id="0:1663"/>
+    <AudioAsset file="sfx/eg-flickplop-13-p2.flac" name="eg-flickplop-13-p2" id="0:1664"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p-1.flac" name="eg-flickplop-14-p-1" id="0:1665"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p-2.flac" name="eg-flickplop-14-p-2" id="0:1666"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p0.flac" name="eg-flickplop-14-p0" id="0:1667"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p1.flac" name="eg-flickplop-14-p1" id="0:1668"/>
+    <AudioAsset file="sfx/eg-flickplop-14-p2.flac" name="eg-flickplop-14-p2" id="0:1669"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p-1.flac" name="eg-flickplop-15-p-1" id="0:1670"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p-2.flac" name="eg-flickplop-15-p-2" id="0:1671"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p0.flac" name="eg-flickplop-15-p0" id="0:1672"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p1.flac" name="eg-flickplop-15-p1" id="0:1673"/>
+    <AudioAsset file="sfx/eg-flickplop-15-p2.flac" name="eg-flickplop-15-p2" id="0:1674"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p-1.flac" name="eg-flickplop-16-p-1" id="0:1675"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p-2.flac" name="eg-flickplop-16-p-2" id="0:1676"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p0.flac" name="eg-flickplop-16-p0" id="0:1677"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p1.flac" name="eg-flickplop-16-p1" id="0:1678"/>
+    <AudioAsset file="sfx/eg-flickplop-16-p2.flac" name="eg-flickplop-16-p2" id="0:1679"/>
+    <AudioAsset file="sfx/knockbus-p-1-c0.flac" name="knockbus-p-1-c0" id="0:1680"/>
+    <AudioAsset file="sfx/knockbus-p-1-c1.flac" name="knockbus-p-1-c1" id="0:1681"/>
+    <AudioAsset file="sfx/knockbus-p-1-c2.flac" name="knockbus-p-1-c2" id="0:1682"/>
+    <AudioAsset file="sfx/knockbus-p-1-c3.flac" name="knockbus-p-1-c3" id="0:1683"/>
+    <AudioAsset file="sfx/knockbus-p-2-c0.flac" name="knockbus-p-2-c0" id="0:1684"/>
+    <AudioAsset file="sfx/knockbus-p-2-c1.flac" name="knockbus-p-2-c1" id="0:1685"/>
+    <AudioAsset file="sfx/knockbus-p-2-c2.flac" name="knockbus-p-2-c2" id="0:1686"/>
+    <AudioAsset file="sfx/knockbus-p-2-c3.flac" name="knockbus-p-2-c3" id="0:1687"/>
+    <AudioAsset file="sfx/knockbus-p0-c0.flac" name="knockbus-p0-c0" id="0:1688"/>
+    <AudioAsset file="sfx/knockbus-p0-c1.flac" name="knockbus-p0-c1" id="0:1689"/>
+    <AudioAsset file="sfx/knockbus-p0-c2.flac" name="knockbus-p0-c2" id="0:1690"/>
+    <AudioAsset file="sfx/knockbus-p0-c3.flac" name="knockbus-p0-c3" id="0:1691"/>
+    <AudioAsset file="sfx/knockbus-p1-c0.flac" name="knockbus-p1-c0" id="0:1692"/>
+    <AudioAsset file="sfx/knockbus-p1-c1.flac" name="knockbus-p1-c1" id="0:1693"/>
+    <AudioAsset file="sfx/knockbus-p1-c2.flac" name="knockbus-p1-c2" id="0:1694"/>
+    <AudioAsset file="sfx/knockbus-p1-c3.flac" name="knockbus-p1-c3" id="0:1695"/>
+    <AudioAsset file="sfx/knockbus-p2-c0.flac" name="knockbus-p2-c0" id="0:1696"/>
+    <AudioAsset file="sfx/knockbus-p2-c1.flac" name="knockbus-p2-c1" id="0:1697"/>
+    <AudioAsset file="sfx/knockbus-p2-c2.flac" name="knockbus-p2-c2" id="0:1698"/>
+    <AudioAsset file="sfx/knockbus-p2-c3.flac" name="knockbus-p2-c3" id="0:1699"/>
+    <!-- /SFX KNOCK -->
+    <!-- SFX HOVER: generated by tools/sealitaire-sfx-fx.mjs hover; do not hand-edit -->
+    <AudioAsset file="sfx/hg-ui-blip-arky-h-1.flac" name="hg-ui-blip-arky-h-1" id="0:1800"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h-2.flac" name="hg-ui-blip-arky-h-2" id="0:1801"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h0.flac" name="hg-ui-blip-arky-h0" id="0:1802"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h1.flac" name="hg-ui-blip-arky-h1" id="0:1803"/>
+    <AudioAsset file="sfx/hg-ui-blip-arky-h2.flac" name="hg-ui-blip-arky-h2" id="0:1804"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h-1.flac" name="hg-ui-blip-blue-h-1" id="0:1805"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h-2.flac" name="hg-ui-blip-blue-h-2" id="0:1806"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h0.flac" name="hg-ui-blip-blue-h0" id="0:1807"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h1.flac" name="hg-ui-blip-blue-h1" id="0:1808"/>
+    <AudioAsset file="sfx/hg-ui-blip-blue-h2.flac" name="hg-ui-blip-blue-h2" id="0:1809"/>
+    <AudioAsset file="sfx/hg-ui-blip-borky-h-1.flac" name="hg-ui-blip-borky-h-1" id="0:1810"/>
+    <AudioAsset file="sfx/hg-ui-blip-borky-h-2.flac" name="hg-ui-blip-borky-h-2" id="0:1811"/>
+    <AudioAsset file="sfx/hg-ui-blip-borky-h0.flac" name="hg-ui-blip-borky-h0" id="0:1812"/>
+    <AudioAsset file="sfx/hg-ui-blip-borky-h1.flac" name="hg-ui-blip-borky-h1" id="0:1813"/>
+    <AudioAsset file="sfx/hg-ui-blip-borky-h2.flac" name="hg-ui-blip-borky-h2" id="0:1814"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h-1.flac" name="hg-ui-blip-dove-h-1" id="0:1815"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h-2.flac" name="hg-ui-blip-dove-h-2" id="0:1816"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h0.flac" name="hg-ui-blip-dove-h0" id="0:1817"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h1.flac" name="hg-ui-blip-dove-h1" id="0:1818"/>
+    <AudioAsset file="sfx/hg-ui-blip-dove-h2.flac" name="hg-ui-blip-dove-h2" id="0:1819"/>
+    <AudioAsset file="sfx/hg-ui-blip-dub-h-1.flac" name="hg-ui-blip-dub-h-1" id="0:1820"/>
+    <AudioAsset file="sfx/hg-ui-blip-dub-h-2.flac" name="hg-ui-blip-dub-h-2" id="0:1821"/>
+    <AudioAsset file="sfx/hg-ui-blip-dub-h0.flac" name="hg-ui-blip-dub-h0" id="0:1822"/>
+    <AudioAsset file="sfx/hg-ui-blip-dub-h1.flac" name="hg-ui-blip-dub-h1" id="0:1823"/>
+    <AudioAsset file="sfx/hg-ui-blip-dub-h2.flac" name="hg-ui-blip-dub-h2" id="0:1824"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h-1.flac" name="hg-ui-blip-froggy-h-1" id="0:1825"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h-2.flac" name="hg-ui-blip-froggy-h-2" id="0:1826"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h0.flac" name="hg-ui-blip-froggy-h0" id="0:1827"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h1.flac" name="hg-ui-blip-froggy-h1" id="0:1828"/>
+    <AudioAsset file="sfx/hg-ui-blip-froggy-h2.flac" name="hg-ui-blip-froggy-h2" id="0:1829"/>
+    <AudioAsset file="sfx/hg-ui-blip-larp-h-1.flac" name="hg-ui-blip-larp-h-1" id="0:1830"/>
+    <AudioAsset file="sfx/hg-ui-blip-larp-h-2.flac" name="hg-ui-blip-larp-h-2" id="0:1831"/>
+    <AudioAsset file="sfx/hg-ui-blip-larp-h0.flac" name="hg-ui-blip-larp-h0" id="0:1832"/>
+    <AudioAsset file="sfx/hg-ui-blip-larp-h1.flac" name="hg-ui-blip-larp-h1" id="0:1833"/>
+    <AudioAsset file="sfx/hg-ui-blip-larp-h2.flac" name="hg-ui-blip-larp-h2" id="0:1834"/>
+    <AudioAsset file="sfx/hg-ui-blip-milli-h-1.flac" name="hg-ui-blip-milli-h-1" id="0:1835"/>
+    <AudioAsset file="sfx/hg-ui-blip-milli-h-2.flac" name="hg-ui-blip-milli-h-2" id="0:1836"/>
+    <AudioAsset file="sfx/hg-ui-blip-milli-h0.flac" name="hg-ui-blip-milli-h0" id="0:1837"/>
+    <AudioAsset file="sfx/hg-ui-blip-milli-h1.flac" name="hg-ui-blip-milli-h1" id="0:1838"/>
+    <AudioAsset file="sfx/hg-ui-blip-milli-h2.flac" name="hg-ui-blip-milli-h2" id="0:1839"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h-1.flac" name="hg-ui-blip-oil-a-h-1" id="0:1840"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h-2.flac" name="hg-ui-blip-oil-a-h-2" id="0:1841"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h0.flac" name="hg-ui-blip-oil-a-h0" id="0:1842"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h1.flac" name="hg-ui-blip-oil-a-h1" id="0:1843"/>
+    <AudioAsset file="sfx/hg-ui-blip-oil-a-h2.flac" name="hg-ui-blip-oil-a-h2" id="0:1844"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h-1.flac" name="hg-ui-blip-owl-h-1" id="0:1845"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h-2.flac" name="hg-ui-blip-owl-h-2" id="0:1846"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h0.flac" name="hg-ui-blip-owl-h0" id="0:1847"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h1.flac" name="hg-ui-blip-owl-h1" id="0:1848"/>
+    <AudioAsset file="sfx/hg-ui-blip-owl-h2.flac" name="hg-ui-blip-owl-h2" id="0:1849"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h-1.flac" name="hg-ui-blip-snappy-h-1" id="0:1850"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h-2.flac" name="hg-ui-blip-snappy-h-2" id="0:1851"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h0.flac" name="hg-ui-blip-snappy-h0" id="0:1852"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h1.flac" name="hg-ui-blip-snappy-h1" id="0:1853"/>
+    <AudioAsset file="sfx/hg-ui-blip-snappy-h2.flac" name="hg-ui-blip-snappy-h2" id="0:1854"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h-1.flac" name="hg-ui-blip-woody-h-1" id="0:1855"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h-2.flac" name="hg-ui-blip-woody-h-2" id="0:1856"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h0.flac" name="hg-ui-blip-woody-h0" id="0:1857"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h1.flac" name="hg-ui-blip-woody-h1" id="0:1858"/>
+    <AudioAsset file="sfx/hg-ui-blip-woody-h2.flac" name="hg-ui-blip-woody-h2" id="0:1859"/>
+    <!-- /SFX HOVER -->
+
     <ScriptAsset file="klondike.luau" isModule="true" name="klondike" id="0:402"/>
+    <ScriptAsset file="layout.luau" isModule="true" name="layout" id="0:623"/>
+    <ScriptAsset file="pad.luau" isModule="true" name="pad" id="0:624"/>
+    <ScriptAsset file="react.luau" isModule="true" name="react" id="0:625"/>
+    <ScriptAsset file="knock.luau" isModule="true" name="knock" id="0:626"/>
+    <ScriptAsset file="hover.luau" isModule="true" name="hover" id="0:627"/>
+    <ScriptAsset file="bonespring.luau" isModule="true" name="bonespring" id="0:628"/>
+    <ScriptAsset file="bubbles.luau" isModule="true" name="bubbles" id="0:629"/>
+    <ScriptAsset file="tankrig.luau" isModule="true" name="tankrig" id="0:630"/>
+    <ScriptAsset file="tuning.luau" isModule="true" name="tuning" id="0:405"/>
+    <ScriptAsset file="motion.luau" isModule="true" name="motion" id="0:406"/>
+    <ScriptAsset file="puppet.luau" isModule="true" name="puppet" id="0:407"/>
+    <ScriptAsset file="baitball.luau" isModule="true" name="baitball" id="0:421"/>
+    <ScriptAsset file="puddle.luau" isModule="true" name="puddle" id="0:409"/>
+    <ScriptAsset file="music.luau" isModule="true" name="music" id="0:422"/>
     <ScriptAsset file="table.luau" name="table" id="0:401"/>
     <ScriptAsset file="tests.luau" name="tests" id="0:403"/>
 </Rive>

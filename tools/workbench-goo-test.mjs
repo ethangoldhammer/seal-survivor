@@ -101,7 +101,16 @@ setWorkbenchVisible(true);
 
 const click = (el) => el?.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
 const rail = () => [...document.querySelectorAll('.sv-wb-ev')];
-const rowNamed = (text) => rail().find((r) => r.textContent.includes(text));
+// AN EXACT NAME WINS OVER A SUBSTRING. The rail is searched in order, so a
+// plain `includes` hands back whichever row happens to be listed first — and
+// the moment an event was added whose name STARTS with another event's, that
+// was the wrong row: `versusGoalLineClear` sits with the saves, above the
+// goal, and every lookup of `versusGoal` landed on it. The failure reads as
+// "this event has no burst card", which sends you to the panel rather than to
+// this line. Partial matches still work, for the rows looked up by their
+// English ("The goo").
+const rowNamed = (text) => rail().find((r) => r.textContent.trim() === text)
+  ?? rail().find((r) => r.textContent.includes(text));
 const cards = () => [...document.querySelectorAll('.sv-wb-card h3')].map((h) => h.textContent);
 const pills = () => [...document.querySelectorAll('.sv-wb-card .sv-wb-pill')];
 const pillNamed = (t) => pills().find((p) => p.textContent === t);

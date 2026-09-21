@@ -17,12 +17,14 @@
 //   reason the field was renamed). So the assertion here is on the ARITHMETIC:
 //   a camera move of D must slide the body D * drift across the frame.
 //
-//   THE FRAME FIT only engages at zooms and depths the game reaches for a
-//   fraction of a second at a time. Its failure mode is a sun cropped in a
-//   cinematic push-in, which is precisely the moment nobody is holding a
-//   camera. And its BOUND — that a body may never be lowered while the water
-//   line is still in shot — is invisible when it works and reads as a staged
-//   sunset when it doesn't.
+//   THE VERTICAL AXIS TAKES NO DRIFT, and the test for it is here because the
+//   obvious tidy-up is to make the two axes match. That was done on 2026-09-18
+//   and reverted three days later off the pictures in
+//   tools/looks/sky-parallax.js: at the top of a breach the sunrise sun sat
+//   twenty units above its own orange band, a full disc in the night-blue
+//   zenith. A body's height is the HOUR, and the hour is written against a
+//   water line that does not move — so the body cannot move either. Asserted
+//   as an identity with the orbit at every camera height.
 //
 //   THE TRIGGER ZONE is a state machine over a distance, and every one of its
 //   three rules (entry not presence, hysteresis, cooldown) fails as "the sound
@@ -58,20 +60,6 @@ updateBounds(16 / 9);
 const scene = new THREE.Scene();
 const rig = createCelestials(scene);
 
-// The frame the fit is given, as world.js builds it: the frustum's own centre
-// (which sits well below the camera — the water line is a fifth of the way down
-// the screen, not halfway) and its half extents at a zoom.
-function view(camX, camY, zoom = 1) {
-  const cx = 0;
-  const cy = (bounds.frameTop + bounds.bottom) / 2;
-  return {
-    x: camX + cx,
-    y: camY + cy,
-    halfW: bounds.frameWidth / (2 * zoom),
-    halfH: (bounds.frameTop - bounds.bottom) / (2 * zoom),
-  };
-}
-
 // Park the clock so every case below is measured at a known hour rather than
 // at whatever the machine's wall clock made of `startFromSystemClock`.
 function atHour(h) {
@@ -80,10 +68,20 @@ function atHour(h) {
   updateDayCycle(0);
 }
 
-// One frame of the rig, at an hour, a camera and a zoom.
-function frame(hour, camX = 0, camY = 0, zoom = 1, dt = 0) {
+// One frame of the rig, at an hour and a camera. There is no zoom argument any
+// more and there is nothing for one to do: the rig is handed the BANKED ANCHOR
+// and nothing else, so what the frustum is doing cannot reach it. That is half
+// the point of the change this covers — the sky is placed by the camera, never
+// fitted to the shot's edges.
+//
+// `camY` is accepted and deliberately DROPPED on the floor. It is the argument
+// a reader expects the rig to take, and the fact that passing it changes
+// nothing is the assertion below — so it is spelled out here rather than left
+// as a signature that quietly has no second parameter.
+function frame(hour, camX = 0, camY = 0, dt = 0) {
   atHour(hour);
-  rig.update(camX, 0, view(camX, camY, zoom), dt);
+  rig.update(camX, 0, dt);
+  void camY;
 }
 
 // ===========================================================================
@@ -100,22 +98,100 @@ section('DRIFT — the sky barely moves');
   // The arithmetic, measured rather than assumed: pan the camera and watch the
   // body's offset FROM THE CAMERA change by exactly D * drift.
   //
-  // Noon, so the sun is at the top of its arc and nowhere near either the frame
-  // fit or the horizon cull — this has to measure the drift alone.
+  // Noon, so the sun is at the top of its arc and nowhere near the horizon cull
+  // — this has to measure the drift alone.
   frame(12, 0, 0);
-  const at0 = celestialFrame.sun.x - 0;
+  const x0 = celestialFrame.sun.x - 0;
+  const y0 = celestialFrame.sun.y - 0;
   const pan = 30;
   frame(12, pan, 0);
-  const at1 = celestialFrame.sun.x - pan;
+  const x1 = celestialFrame.sun.x - pan;
   check('a camera move of D slides the body D * drift across the frame',
-    near(at0 - at1, pan * drift, 1e-4),
-    `panned ${pan}, body moved ${(at0 - at1).toFixed(3)} on screen (want ${(pan * drift).toFixed(3)})`);
+    near(x0 - x1, pan * drift, 1e-4),
+    `panned ${pan}, body moved ${(x0 - x1).toFixed(3)} on screen (want ${(pan * drift).toFixed(3)})`);
 
   // The control. Without this the test above passes just as happily against a
   // sky welded to the screen, which is the other way to get "barely moves" and
   // the wrong one — a sun that never moves at all is a decal.
-  check('...and it is not simply screen-welded', Math.abs(at0 - at1) > 0,
+  check('...and it is not simply screen-welded', Math.abs(x0 - x1) > 0,
     'a body pinned to the frame would read 0 here');
+
+  // THE VERTICAL AXIS TAKES NONE OF IT. A camera rise of D must move the body
+  // by exactly nothing on the WORLD axis — it stays on its orbit — which on
+  // screen means it travels the full D, the same as the water line it is
+  // measured against. That is the opposite of the horizontal rule and it is
+  // correct: see the section below.
+  frame(12, 0, 30);
+  check('a camera rise leaves the body exactly on its orbit',
+    near(celestialFrame.sun.y, dayState.sun.y, 1e-9),
+    `drawn ${celestialFrame.sun.y.toFixed(3)} vs orbit ${dayState.sun.y.toFixed(3)}`);
+  frame(12, 0, -30);
+  check('...and so does a dive',
+    near(celestialFrame.sun.y, dayState.sun.y, 1e-9),
+    `drawn ${celestialFrame.sun.y.toFixed(3)} vs orbit ${dayState.sun.y.toFixed(3)}`);
+}
+
+// ===========================================================================
+section('PINNED TO THE WATER — the sky is one piece');
+// ===========================================================================
+{
+  // WHY THE TWO AXES DISAGREE ON PURPOSE, which is the single thing about this
+  // file worth reading before changing it.
+  //
+  // Height above the water line is what says what hour it is, and it does not
+  // say it alone: systems/sky.js ramps its whole gradient over
+  // (vWorldPos.y - uSurfaceY) / airH on a plane that never moves, and the
+  // horizon glow sits on the same line. Those are the sunset. A body that
+  // drifted vertically would climb out of them — measured at the top of a
+  // breach, twenty units of clear night-blue between a sunrise sun and the
+  // orange band it was supposed to be lighting.
+  //
+  // So the assertion is an IDENTITY, at every height the camera can reach, and
+  // its whole value is that it fails the moment somebody makes the axes match.
+  const heights = [26, 12, 0, -6, -11];
+  let worst = 0;
+  for (const camY of heights) {
+    frame(12, 0, camY);
+    worst = Math.max(worst, Math.abs(celestialFrame.sun.y - dayState.sun.y));
+  }
+  check('the body sits on its orbit at every camera height',
+    worst < 1e-9, `worst drift ${worst.toExponential(1)} units over ${heights.join(', ')}`);
+
+  // ...and it keeps its distance from the water line, which is the same fact
+  // stated in the unit the sky gradient is written in. A body 5 units above
+  // the sea at noon has to be 5 units above it from the seabed and from the
+  // top of a breach, or the hour changes with the camera.
+  frame(12, 0, 0);
+  const gap = celestialFrame.sun.y - horizonY();
+  frame(12, 0, 26);
+  check('...so its height above the water is the hour, not the camera',
+    near(celestialFrame.sun.y - horizonY(), gap, 1e-9),
+    `${gap.toFixed(2)} units of sky under it either way`);
+
+  // THE CLOCK IS NOT INVOLVED, and this is the control on the reasoning above
+  // rather than on the code: dayState is solved off the orbit alone, so even a
+  // rig that DID drift could not have re-coloured the hour. It is asserted so
+  // that "the clock is safe" can never be offered as the argument for drifting
+  // the body — it is true, and it is not the reason.
+  frame(12, 0, 0);
+  const at0 = { y: dayState.sun.y, el: dayState.sun.elevation, phase: dayState.phase };
+  frame(12, 0, -30);
+  check('no camera move can reach the clock',
+    near(dayState.sun.y, at0.y, 1e-9)
+    && near(dayState.sun.elevation, at0.el, 1e-9)
+    && dayState.phase === at0.phase,
+    `elevation ${dayState.sun.elevation.toFixed(4)}, phase '${dayState.phase}' either way`);
+
+  // THE HORIZONTAL AXIS IS NOT ALONE ON ITS NUMBER any more. The star field in
+  // systems/sky.js is hashed off vWorldPos and used to sit welded to the
+  // world, so the moon crossed ninety units of its own stars over one swim of
+  // the ocean. world.js now offsets that field's sample origin and
+  // systems/constellations.js translates its group, both off this same
+  // `drift`. Covered as geometry in tools/constellation-test.mjs; asserted
+  // here as the thing that would break it — a second number.
+  check('one drift for the whole backdrop',
+    CONFIG.dayNight.orbit.driftY === undefined,
+    'a separate vertical drift field is what the reverted change added');
 }
 
 // ===========================================================================
@@ -150,56 +226,6 @@ section('SIZE — big on screen, and still in the sky');
   const legacyY = airH * CONFIG.dayNight.orbit.radiusY;
   check('the old arc rule would have cropped it', legacyY + sun / 2 > bounds.frameTop,
     `would have topped out at ${(legacyY + sun / 2).toFixed(2)}`);
-}
-
-// ===========================================================================
-section('THE FRAME FIT — a body stays in the shot');
-// ===========================================================================
-{
-  const orbit = CONFIG.dayNight.orbit;
-  const pad = (bodySize(CONFIG.dayNight.sun) * 0.5) * orbit.framePad;
-
-  // Zoomed in hard, at the hour the sun is furthest out along the arc. This is
-  // the cinematic push-in that used to crop it.
-  frame(7, 0, 0, 1.8);
-  const v = view(0, 0, 1.8);
-  check('a zoomed frame keeps the sun inside it',
-    celestialFrame.sun.x <= v.x + v.halfW - pad + 1e-6
-    && celestialFrame.sun.x >= v.x - v.halfW + pad - 1e-6,
-    `sun x ${celestialFrame.sun.x.toFixed(2)} in [${(v.x - v.halfW + pad).toFixed(2)}, ${(v.x + v.halfW - pad).toFixed(2)}]`);
-
-  // THE BOUND, and the reason the fit is allowed to touch Y at all. With the
-  // camera at the surface the water line is in shot, so a body must sit exactly
-  // where the orbit put it — the fit may not lower it by so much as a unit,
-  // however far off the top of the frame that leaves it.
-  frame(12, 0, 0);
-  check('with the horizon in shot, the fit does not move the sun vertically',
-    near(celestialFrame.sun.y, dayState.sun.y, 1e-6),
-    `drawn ${celestialFrame.sun.y.toFixed(3)} vs orbit ${dayState.sun.y.toFixed(3)}`);
-
-  // Dive, and the water line leaves the top of the frame. Now the sky may come
-  // down with the camera — but only as far as the horizon's own head start, so
-  // the water line is never dragged back into view to be compared against.
-  const deep = -14;
-  frame(12, 0, deep);
-  const v2 = view(0, deep);
-  const slack = horizonY() - (v2.y + v2.halfH);
-  check('...and the water line really has left the shot', slack > 0,
-    `horizon sits ${slack.toFixed(1)} units above the top of the frame`);
-  check('deep down, the fit lowers the sun',
-    celestialFrame.sun.y < dayState.sun.y,
-    `drawn ${celestialFrame.sun.y.toFixed(2)} vs orbit ${dayState.sun.y.toFixed(2)}`);
-  check('...by no more than the horizon is off-frame',
-    celestialFrame.sun.y >= dayState.sun.y - slack - 1e-6,
-    `moved ${(dayState.sun.y - celestialFrame.sun.y).toFixed(2)}, bound ${slack.toFixed(2)}`);
-
-  // The switch, which is what makes the whole thing arguable in the tuner.
-  orbit.keepInFrame = 0;
-  frame(12, 0, deep);
-  check('keepInFrame 0 puts it back on the orbit exactly',
-    near(celestialFrame.sun.y, dayState.sun.y, 1e-6) && near(celestialFrame.sun.x, dayState.sun.x + 0 * 1, 1e-3),
-    `drawn (${celestialFrame.sun.x.toFixed(2)}, ${celestialFrame.sun.y.toFixed(2)})`);
-  orbit.keepInFrame = 1;
 }
 
 // ===========================================================================

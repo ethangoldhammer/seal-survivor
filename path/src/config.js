@@ -1315,7 +1315,21 @@ export const CONFIG = {
         // zoom — so retuning the dash retunes the readout, and there is no
         // length to go stale.
         path: {
-          enabled: true,
+          // THE LENS CORRIDOR IS OFF. strike.predict draws the forecast as a
+          // line out of each seal's head instead — one per seal, where this
+          // could only ever draw the one the frame was built around, and
+          // adding a line rather than darkening everything that is not the
+          // answer. Everything below is kept and still tuned, so turning this
+          // back on restores exactly the cone that was there.
+          //
+          // `lensLane` AND NOT `enabled`, and the rename is the entire reason
+          // this works. imported-tuning.json holds `enabled: true` and a saved
+          // value outranks a config default — so re-defaulting the old key
+          // would have changed nothing at all, on Ethan's machine only, in a
+          // way that looks exactly like the code not working. Same move as
+          // aimRig.js's muzzleNudge/muzzleOffset, for the same reason. The
+          // stale `enabled` in the tuning is now inert and harmless.
+          lensLane: false,
           width: 0.1,        // half-width at the seal
           widthFar: 0.01,    // half-width at the far end — the taper, nearly a point
           feather: 0.18,     // falloff outside the edge
@@ -1519,18 +1533,44 @@ export const CONFIG = {
         centerY: 0, // world units above the water line; 0 = rise/set on it
         riseHour: 6, // sun crosses the horizon going up; it sets 12h later
 
-        // DRIFT — how far a body slides across the FRAME per unit of camera
-        // motion. 1 pins the bodies to the world (they pass exactly like a rock
-        // on the seabed), 0 welds them to the screen. 0.04 is the sky of
+        // DRIFT — how far the sky slides across the FRAME per unit of camera
+        // motion, SIDEWAYS. 1 pins it to the world (it passes exactly like a
+        // rock on the seabed), 0 welds it to the screen. 0.04 is the sky of
         // something genuinely far away: swimming the whole width of the ocean
         // moves the sun under two units on a ninety-unit frame — present, but
         // never enough to read as an object hanging a few metres back.
         //
-        // Done as an explicit x offset, NOT by moving it back in z. The camera
+        // THE WHOLE BACKDROP RIDES IT, not just the two discs. The star field
+        // in systems/sky.js is hashed off vWorldPos on a plane that never
+        // moves, so it used to sit at 1 — as near as the sea — while the moon
+        // crossing it sat here at 0.04, and one swim of the ocean walked the
+        // moon ninety units through its own stars. world.js slides that
+        // field's sample origin by this number and systems/constellations.js
+        // translates its group to match, so the sky has one answer to how far
+        // away it is.
+        //
+        // Done as an explicit offset, NOT by moving it back in z. The camera
         // is orthographic — there is no perspective divide, so depth alone buys
         // exactly nothing. `depth` below is still worth setting (it's the sort
         // order against the sky plane at -6 and the cloud overlay at -5.2) but
         // it does not, on its own, move anything.
+        //
+        // AND NOTHING IN Y — read this before making the axes match, because
+        // that was done on 2026-09-18 and reverted three days later off the
+        // pictures in tools/looks/sky-parallax.js.
+        //
+        // The reason is not the clock; dayState is solved off the orbit alone
+        // and no camera move could re-colour the hour. The reason is that
+        // height above the water line is what SAYS the hour, and it does not
+        // say it alone: systems/sky.js ramps its gradient over
+        // (vWorldPos.y - uSurfaceY) and the horizon glow sits on the same
+        // line, and that line does not move. A body drifting vertically
+        // climbs out of them — at the top of a breach the sunrise sun sat
+        // twenty units above its own orange band, a full disc in the
+        // night-blue zenith. See the drift note in systems/celestial.js.
+        //
+        // The cloud decks keep their own numbers in x (they are nearer, which
+        // is the whole ladder) and take none in y, for the same reason.
         //
         // IT REPLACED `parallax`, which meant the identical thing and sat at
         // 0.15. Renaming it is the only way a new default can actually arrive:
@@ -1540,26 +1580,6 @@ export const CONFIG = {
         // to the old key if this one is missing.
         drift: 0.04,
         depth: -5.8,
-
-        // --- keeping a body in the shot ----------------------------------------
-        // The orbit is measured off the FRAME (see place() in daylight.js), so
-        // at the default radii a body cannot leave it. These are what hold that
-        // true anyway once the shot stops being the default one: the cinematic
-        // rig and the punch both zoom in, which crops the frame around a sun
-        // that has no idea it happened.
-        //
-        // 0 switches the fit off; 1 fits as hard as it honestly can. It is not
-        // a promise the sun is always on screen and cannot be — dive deep
-        // enough and the whole sky is out of frame, water line included. See
-        // fitToFrame in systems/celestial.js for the bound, which is the
-        // horizon: a body may only be lowered while the water line has already
-        // left the top of the shot, because that is the only time nobody can
-        // tell it moved.
-        keepInFrame: 1,
-        // How much clearance the fit keeps, in DISC RADII. 1 is the disc's edge
-        // exactly on the frame's; above it keeps a margin of the halo in shot
-        // as well, which is what stops a "fitted" sun from still looking cut.
-        framePad: 1.25,
     },
 
       // Both bodies take the same shape of definition, so anything written
@@ -5048,6 +5068,37 @@ export const CONFIG = {
 
       dashSpeed: 46, // world units/sec during the dash
       dashDuration: 0.22, // at full charge this is multiplied by reachMulMax
+
+      // WHERE THIS DASH WOULD GO — the line drawn out of a seal's head while
+      // it winds up (systems/strikePath.js).
+      //
+      // ONE PER SEAL, which is the reason it exists. The lens corridor it
+      // replaced said the same thing by darkening everything that was not the
+      // answer, and a lens has one frame: in a four-a-side match three players
+      // could be winding up at once and it had no way to draw any of them but
+      // the one it was framing. It also took the match away to show you your
+      // own wind-up, which is a poor trade when the frame is holding two
+      // captains and a ball.
+      //
+      // The corridor's geometry is still under cinecam.lens.path and still
+      // tuned; `cinecam.lens.path.enabled` is what switches between them.
+      predict: {
+        enabled: true,
+        // Half-widths and lengths here are WORLD units, so the line is the
+        // same weight on the water at every zoom the match camera reaches —
+        // see the note in strikePath.js on why this is not a THREE.Line.
+        width: 0.5,
+        // 0..1 of the near-end alpha the far end gives up, and of the width
+        // the far end gives up. The end of a forecast is the most integration
+        // steps away from anything the player has actually done, and a line of
+        // even weight claims the landing point is as certain as the launch.
+        fade: 0.65,
+        taper: 0.7,
+        alpha: 0.9,
+        // Used only where there is no team to take a colour from — in a match
+        // the line is the side's own kit.
+        color: 0x8fd8ff,
+      },
 
       // THE STRIKE IS NOT A WEAPON UNTIL YOU MAKE IT ONE.
       //
@@ -12089,6 +12140,23 @@ export const CONFIG = {
         // being tenacious in the build where the harpoon shipped" is a bug
         // nobody would go looking for.
         sources: ['ram', 'rupture', 'club'],
+        // ...AND THE ONES THAT MOVE IT A LITTLE. A fraction per source, for
+        // hits that are genuinely the seal's own body but are not the seal
+        // ARRIVING — they lean on a boss rather than shoving it off its line.
+        //
+        //   flipSlap  the tail, on a somersault (systems/sealFlip.js). It
+        //             failed the list's test in both directions: refused
+        //             outright, the one move whose whole purpose is buying
+        //             space did nothing at the moment space is worth most;
+        //             put on the list, a free gesture with no cooldown was
+        //             worth as much against a boss as a full-charge ram.
+        //
+        // At 0.3 a slap across the flank moves a boss about as far as a shot
+        // moves a shark — visible, and not a reposition. A slap that lands on
+        // a LIT WEAK SPOT is worth CONFIG.sealFlip.weakSpotMul times that,
+        // which brings it back up to roughly what an ordinary body takes: the
+        // aimed version of the move works on a boss, the sloppy one nudges it.
+        partial: { flipSlap: 0.3 },
         // AND WHILE IT IS COMMITTED IT TAKES NOTHING AT ALL. A lunge that has
         // left the wind-up, or any perk driving the body, ignores the shove
         // and the flinch outright however the two numbers above are set.
@@ -18539,6 +18607,66 @@ export const CONFIG = {
         gravity: [0, -0.7], inherit: 0.6, glow: 0.8, goo: 'ball',
         turbulence: 0.4,
       },
+      // THE BACKFLIP'S WALL — one of these off the fluke every `step` world
+      // units as the tail sweeps (systems/gooWall.js).
+      //
+      // SLOW AND STILL, which is the opposite of every other goo burst here.
+      // A mass rendered through the metaball pass fuses where lobes overlap
+      // and renders as NOTHING where they are spread thin, so a wall needs its
+      // lobes to stay where the tail put them and touch their neighbours —
+      // hence the low speed, the heavy drag and the size. `gravity` is near
+      // zero for the same reason: a bar that sags is a bar with a hole in the
+      // top of it half a second later, which is most of its life.
+      //
+      // A SMALL COUNT, because there are twenty of these bursts in one wall
+      // rather than six. The density that makes the mass continuous comes from
+      // the SPACING between bursts (CONFIG.sealFlip.back.step) and the group's
+      // low isoline, not from piling particles into each one.
+      //
+      // `inherit` IS BOUNDED BY THE WALL'S OWN THICKNESS, and this is the one
+      // number here that can break the feature rather than just look wrong.
+      // Each lobe keeps this share of the tail's velocity, and the fluke is
+      // the fastest thing on the animal: MEASURED at 139 u/s at the peak of a
+      // fully committed flip — half again the 89 that a whole turn over the
+      // spin's length suggests, because the spin is eased and the tip's top
+      // speed is well above its average.
+      //
+      // `inherit` AND `drag` MOVE TOGETHER. Under drag `d` a lobe thrown at
+      // `v` coasts v/d before it stops, and THAT distance is what has to stay
+      // inside the barrier the same blobs are drawing: 0.25 x 139 / 12 = 2.9
+      // units against a wall 2.2 thick with lobes 2.2 across. Raising the
+      // inherit alone walks the mass off its own hitbox — the goo is over
+      // there and the fish stops here, which reads as the collision being
+      // broken rather than the look being loud. Raising the drag with it buys
+      // a harder throw that still lands: more whip, same wall.
+      //
+      // `npm run test:sealflip` checks that product against the tail speed it
+      // measures rather than against these numbers, and the ball lab prints it
+      // live beside the bound (`npm run looks:ball`, D).
+      //
+      // The turbulence is what stops the row of lobes reading as a machined
+      // bar: a noise field that grows with each lobe's age, so the wall starts
+      // clean off the tail and goes ragged as it dissolves.
+      // A TON OF BUBBLES OFF THE FLUKE, on the frame a tail slap lands.
+      //
+      // WHAT THE WATER DOES, and it is the one channel that says how hard the
+      // tail was travelling — a flipper's wipe makes a wisp and a fluke
+      // arriving at a hundred-odd units a second drags a column of air down
+      // with it. Big count, because "a ton" is the brief and because bubbles
+      // are cheap: a small sprite with a long life and nothing to sort.
+      //
+      // RISING AND SLOW, unlike the goo: `gravity` is strongly POSITIVE (this
+      // is air in water, so up is where it goes), the drag is low so they keep
+      // climbing, and the lives are long enough that the column is still there
+      // when the flip has finished. `inherit` is high — they are torn off a
+      // moving tail and leave along it before they start to rise, which is the
+      // difference between a burst and a wake.
+      tailBubbles: { count: 46, speed: [1.2, 6], size: [0.05, 0.2], life: [0.9, 2.2],
+                     colors: [0x9fdcff, 0xdff4ff, 0xffffff], cone: 1.1, drag: 1.4,
+                     gravity: [0, 4.2], inherit: 0.45, glow: 3.4, surfacePop: 'bubbleBurst' },
+      gooWall: { count: 7, speed: [0.4, 1.6], size: [0.52, 0.86], life: [0.5, 0.7],
+                 colors: [0xa8f0d8, 0xd8fff0], cone: 0, drag: 12, gravity: [0, -0.1],
+                 inherit: 0.25, glow: 1.1, goo: 'gooWall', turbulence: 0.95 },
       // THE SPIKE'S SMEAR — a streak, not a spray, and the difference between
       // the two is entirely `cone` and `speed`.
       //
@@ -20881,6 +21009,80 @@ export const CONFIG = {
       // CONFIG.clap.minGap, which refuses the PRESS rather than muting a clap
       // that visibly happened.
       clap:      { emit: 'clap',         shake: 0,    hitstop: 0,     glow: 0.12, ripple: { strength: 0.8, radius: 5 },   sfx: 'clap',     haptic: [{ duration: 22, magnitude: 0.7 }] },
+      // THE FLIP, and it is TWO events on purpose — the move and the hit.
+      //
+      // `sealFlip` fires on the circle, at the animal, before anything has
+      // happened: it is the game saying it read the gesture, which on a move
+      // with a wind-up in it is the difference between anticipation and lag.
+      // No shake and no hitstop, because nothing has been hit yet.
+      //
+      // `sealFlipSlap` fires at the FLUKE when the window opens, and it is the
+      // one that lands. It carries the shake and a frame of hitstop whether or
+      // not a body was in the arc, which is deliberate: a slap that felt like
+      // a hit only when it connected would teach the player that a miss was an
+      // input that didn't register. See systems/sealFlip.js.
+      //
+      // THE SOUNDS AND THE WATER ARE BORROWED. `versusFinSwipe` is
+      // Blubberball's whoosh, `splash` is the water's own, and `finFlickWipe`
+      // is the wipe a flipper throws; none of the three was made for this move
+      // and all three are here so it is not silent and invisible while it is
+      // being tuned. The Feel workbench (F) is where they get reassigned.
+      sealFlip:  { emit: null,           shake: 0,    hitstop: 0,     glow: 0.1,  ripple: { strength: 0.6, radius: 4 },   sfx: 'versusFinSwipe', haptic: [{ duration: 18, magnitude: 0.45 }] },
+      // THE SWING. Fires when the window opens, whether or not the tail
+      // reaches anything, and carries NO hitstop and only the shake of water
+      // being moved — because at that moment nothing has been hit.
+      //
+      // It has to exist separately from the impact below for the reason
+      // versusFinSwipe exists separately from versusFinFlick: a gesture you
+      // only ever hear when it LANDS is a gesture you cannot practise, because
+      // a miss and an input that never registered are the same silence.
+      sealFlipSlap: { emit: 'finFlickWipe', shake: 0.12, hitstop: 0, glow: 0.3, ripple: { strength: 1.5, radius: 7 },   sfx: 'splash',   haptic: [{ duration: 42, magnitude: 0.85 }], sfxMinGap: 0.1 },
+      // ...AND THE IMPACT FRAME, once, on the frame the tail actually
+      // connects with something.
+      //
+      // THE STOP IS THE POINT. 0.07s is four frames of the world held still
+      // on the contact — the same order as a boss's weak spot bursting and a
+      // good deal more than an ordinary shot, because the whole read of this
+      // move is that a heavy thing arrived. Under about 0.05 it reads as a
+      // dropped frame rather than as a hit; much over 0.1 and a flip in a
+      // crowd stutters the fight.
+      //
+      // IT IS DELIBERATELY LOUDER THAN WHAT IT DOES. The slap deals no damage
+      // at all (see flipSlapHit in main.js) — everything the player gets back
+      // for landing one is in this row, and the shake, the stop and the burst
+      // are the whole reward for having aimed a gesture that costs nothing.
+      //
+      // `scale` at the call site rides the number of bodies caught, so a flip
+      // through a school is a bigger frame than a flip that clipped one fish.
+      // THE BUBBLES OFF THE FLUKE, on the frame the tail lands — its own event
+      // and its own PLACE. `sealFlipImpact` below goes off at the midpoint of
+      // the bodies that were hit, because that is what the player is looking
+      // at; this one is at the end of the tail, because that is where the
+      // water was torn open. Two halves of one contact, and firing both from
+      // the same point would put the whole thing in the wrong place for one of
+      // them.
+      //
+      // SOUND OFF. The impact's own row carries the voice — the bubbles are
+      // the picture of it, and a second sound on the same frame is a flam.
+      sealFlipTailBubbles: { emit: 'tailBubbles', goo: null, shake: 0, hitstop: 0, glow: 0.25, ripple: { strength: 0.9, radius: 5 }, sfx: null, haptic: null },
+      sealFlipImpact: { emit: 'ballSplash', goo: null, shake: 0.55, hitstop: 0.07, glow: 0.7, ripple: { strength: 2.2, radius: 9 }, sfx: 'versusBallHit', haptic: [{ duration: 60, magnitude: 1 }], sfxMinGap: 0.08 },
+      // THE FORWARD FLIP'S LAUNCH — the seal throwing itself down the line it
+      // is swimming. A rocket, so it is a WAKE and not an impact: no hitstop
+      // (nothing has been hit), a small shake, and the spray goes out behind.
+      // `scale` at the call site rides the follow-through, so a half-drawn
+      // circle is visibly a smaller push than a whipped one.
+      sealFlipRocket: { emit: 'wakeBubbles', goo: null, shake: 0.14, hitstop: 0, glow: 0.35, ripple: { strength: 1.2, radius: 6 }, sfx: 'versusFinSwipe', haptic: [{ duration: 30, magnitude: 0.6 }], sfxMinGap: 0.1 },
+      // ...AND THE BACKFLIP'S WALL, on the frame it lands. The goo itself is
+      // painted by systems/gooWall.js (several bursts along the bar, because
+      // one burst in the middle of a wall is a blob in a wall-shaped hole), so
+      // this row is the sound, the ripple and the shudder of a mass of
+      // something hitting the water — `emit` is null on purpose or there would
+      // be a seventh burst at the middle with no wall under it.
+      sealFlipWall: { emit: null, goo: null, shake: 0.2, hitstop: 0, glow: 0.4, ripple: { strength: 1.8, radius: 8 }, sfx: 'splash', haptic: [{ duration: 34, magnitude: 0.7 }], sfxMinGap: 0.1 },
+      // Something stopping dead in it. Small and per-body — a school arriving
+      // together is several of these, and `sfxMinGap` is what keeps that from
+      // being one loud noise.
+      sealFlipWallHit: { emit: 'playerHit', goo: null, shake: 0.06, hitstop: 0, glow: 0.3, ripple: { strength: 0.7, radius: 4 }, sfx: 'hotSpotHit', haptic: [{ duration: 14, magnitude: 0.3 }], sfxMinGap: 0.06 },
       // ...and the other half of that pair. `breach` fires on BOTH crossings
       // and always did, which meant the seal leaving the water and the seal
       // arriving back through it were literally the same event — the loudest
@@ -21526,6 +21728,35 @@ export const CONFIG = {
       // sound of trying.
       versusFinSwipe: { emit: null, goo: null, shake: 0, hitstop: 0, glow: 0, sfx: 'versusFinSwipe',
                      haptic: [{ duration: 10, magnitude: 0.18 }], sfxMinGap: 0.1 },
+      // THE TAIL THROUGH THE BALL — the flip's contact, and the biggest of the
+      // three things a seal can do to a ball without charging anything.
+      //
+      // Its own event rather than a scaled versusFinFlick, because the two
+      // will want different sounds the moment either is recorded, and a name
+      // built at the call site is a name the event audit cannot see.
+      //
+      // `ballSplash` and `ballGoo`, which are the ball's OWN substances (the
+      // same pair versusBallHit throws), rather than the flipper's wipe: this
+      // is the body of the ball coming off its edge, and it is fired through
+      // ballImpactFx so the colour, the contact point on the DRAWN edge and
+      // the size ramp are the ones every other touch uses. The call site sends
+      // it in at the top of that ramp with `scale` pushed past it — see
+      // CONFIG.versus.ball.flipSlap.fxScale, which is the "a ton of goo" knob.
+      //
+      // IT HAS THE STOP AND THE SHAKE WHERE THE FLICK HAS NEITHER, which is
+      // the difference between the two said in the feedback rather than only
+      // in the physics: a wipe is a suggestion to a ball and a slap is an
+      // arrival. Four frames, the same frame the Survivor side holds.
+      versusFlipSlap: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.45, hitstop: 0.07, glow: 0.8, ripple: { strength: 2.4, radius: 9 }, sfx: 'versusBallHit',
+                     haptic: [{ duration: 60, magnitude: 1 }], sfxMinGap: 0.08 },
+      // THE BALL INTO A BACKFLIP'S WALL — a block, not a bounce. Quiet and
+      // soft where versusBallWall (the rock) is hard: the ball is arriving in
+      // a bar of goo and dying there, and a loud report would read as a
+      // backboard the striker could use. No hitstop for the same reason —
+      // freezing the frame says "that landed", and what happened here is that
+      // something DIDN'T.
+      versusFlipWall: { emit: 'ballSplash', goo: 'ballGoo', shake: 0.1, hitstop: 0, glow: 0.35, ripple: { strength: 1.1, radius: 6 }, sfx: 'versusBallTap',
+                     haptic: [{ duration: 20, magnitude: 0.35 }], sfxMinGap: 0.08 },
       // A PIERCE: the ball won. It goes THROUGH the seal — the bodies overlap
       // for the few frames of the pass — and the seal is knocked back along
       // the ball's line. Water displacing rather than anything landing, so it
@@ -21571,6 +21802,24 @@ export const CONFIG = {
       // `scale` is the shot's peak speed against `reel.save.speedRef`.
       versusSave:  { emit: null, shake: 0.12, hitstop: 0, glow: 0.5, ripple: { strength: 2.2, radius: 11 }, sfx: 'versusSave',
                      haptic: [{ duration: 40, magnitude: 0.7 }], sfxMinGap: 0.2 },
+      // THE BALL SCOOPED OFF THE LINE — the third of the save family and the
+      // top of it. The whole ball was behind the line with the goal already
+      // pending against the clock (CONFIG.versus.goal.hold), and a keeper got
+      // in there and shoved it back out into the water.
+      //
+      // IT IS APPLAUSE, and it is the only sound in a match that is about how
+      // HARD a thing was rather than what happened. Everything else in this
+      // block is an impact or a result; this is the crowd, so it is long, it
+      // has no picture of its own (the save's spray is already going) and it
+      // is thrown at the MOUTH rather than at the seal — a crowd is not in the
+      // water beside the animal.
+      //
+      // Over versusSave rather than instead of it: a clearance IS a save and
+      // books one, and this is the layer that says it was the best kind. Same
+      // arrangement as versusGoal + versusGoalCheer.
+      versusGoalLineClear: { emit: null, shake: 0.1, hitstop: 0, glow: 0.45, ripple: { strength: 2.4, radius: 13 },
+                     sfx: 'versusOvation', haptic: [{ duration: 50, magnitude: 0.6 }, { duration: 180, magnitude: 0.3, delay: 70 }],
+                     sfxMinGap: 0.5 },
       // THE BALL OFF A WALL, the floor or the ceiling — the same splash out of
       // the contact point along the wall's normal, on a duller voice: water
       // against rock, not seal against ball.
@@ -22660,6 +22909,41 @@ export const CONFIG = {
             spec: 0,
             normal: 2,
           },
+          // THE BACKFLIP'S WALL — systems/gooWall.js, laid off the tail a blob
+          // at a time. Its own group because it is the one mass in the game
+          // whose whole job is to be CONTINUOUS: every other goo here is a
+          // burst that may tear into strands, and this one is a barrier, so a
+          // gap in it is a hole a shark swims through while the picture says
+          // it should not.
+          //
+          // A LOW ISOLINE IS THE COHESION. The surface is drawn where the
+          // summed lobes cross `iso`, so a low one means neighbours bleed into
+          // each other well before they properly overlap and a row of blobs
+          // closes into a bar. (The falloff is cubic — see the long note in
+          // `aura` — so the part of a lobe clearing a HIGH isoline is much
+          // smaller than the lobe, which is what turns a wall into beads.)
+          // It is paired with `step` in CONFIG.sealFlip.back: the isoline
+          // decides how far apart two lobes may be and still fuse, and `step`
+          // is how far apart they are actually put.
+          //
+          // ALPHA AND NOT ADDITIVE, unlike foam. Foam is aerated water and
+          // adds light to what is behind it; this is a mass you cannot get
+          // through, and a barrier you can see the enemy through reads as a
+          // decal. The rim and the specular are what give it a skin — the
+          // thing that says "solid" in one frame.
+          gooWall: {
+            radius: 4.2,
+            iso: 0.26,
+            soft: 0.3,
+            opacity: 0.94,
+            additive: false,
+            rim: 0.42,
+            rimWidth: 0.8,
+            spec: 1.2,
+            specPower: 16,
+            normal: 2.4,
+          },
+
           foam: {
             // 3.4, AND EVERY GOO THROW IN THE FAMILY CAME DOWN BY 3.4/4.4 WITH
             // IT. This was 3.0 here and 4.4 in the saved snapshot — the tuned
@@ -25333,6 +25617,484 @@ export const CONFIG = {
     },
 
     // ---------------------------------------------------------------------------
+    // THE FLIP — a circle drawn with the aim hand, answered with a somersault
+    // and a tail slap. systems/sealFlip.js owns the move; input.js owns the
+    // gesture (CONFIG.touch.circleFlick, further down this file).
+    //
+    // UNLIKE THE CLAP, THIS ONE HAS GAMEPLAY IN IT. The clap's block is
+    // deliberately all feel; the two numbers here that decide what a fight is
+    // worth — `knockGain` and `reach` — are the whole reason the move exists,
+    // so they live beside the shape they belong to rather than in a table of
+    // their own. Everything else below is timing and posture.
+    //
+    // Designed in the pose lab: `npm run looks:poselab`, pick "flip move", and
+    // W writes tools/looks/pose-lab.json for a human to move back into here.
+    // ---------------------------------------------------------------------------
+    sealFlip: {
+      enabled: true,
+
+      // THE THREE PARTS OF ONE TURN, in wall seconds — see the header of
+      // systems/sealFlip.js for why the clock is wall time and not the water's.
+      //
+      // `windup` is anticipation, and it is the only part the player can feel
+      // as latency. The clap refuses to have any at all because it is played
+      // to a beat; a somersault with none reads weightless, so this one gathers
+      // for five frames and the sound does not wait for it.
+      windup: 0.09,
+      // The turn itself. Long enough to read as a whole revolution at the size
+      // the seal is drawn — under about a third of a second it is a blur with
+      // a tail in it rather than a flip.
+      spin: 0.46,
+      // The tuck letting go. The rotation is already home by now (see `turns`),
+      // so this is posture and nothing else.
+      recover: 0.2,
+
+      // HOW THE COIL FOLLOWS THE HAND. The wind-up is the player's first
+      // semicircle now (noteFlipGather in systems/sealFlip.js), and the body
+      // eases toward it rather than tracking it exactly: the accumulator in
+      // input.js drops to zero the instant a hand pauses, and a seal that
+      // followed that literally would flick out of its crouch on any stutter
+      // in the mouse.
+      //
+      // IN FAST AND OUT SLOW, because they are different events. Winding is
+      // the player doing something and it should answer immediately; unwinding
+      // is them stopping, and it should read as the body relaxing rather than
+      // as the input being dropped.
+      gatherFeel: { windIn: 22, windOut: 6 },
+
+      // WHOLE TURNS, and it wants to stay whole. The spin eases to
+      // `turns * 2PI`, which at a whole number IS the identity — that is what
+      // lets the move end with no unwind and no blend-out on the rotation. A
+      // half turn here leaves the seal upside down and the next thing to write
+      // the body quaternion snaps it back.
+      turns: 1,
+      // How far BACKWARDS the body gathers first, in turns. Small and negative
+      // in effect: the crouch before a jump, not a second flip.
+      gather: 0.045,
+      // Is the circle read as the player SAW it or as the animal's own frame.
+      //
+      // The mirror that keeps a left-swimming seal belly-down also reverses
+      // what a local-Z turn looks like on screen. With this on, the sign is
+      // flipped for a mirrored animal so the seal turns the way the finger
+      // went round, whichever way it happens to be swimming — the gesture is
+      // on the glass, so the answer to it should be too. Off, a backflip is a
+      // backflip in the animal's own frame and a left-swimming seal turns the
+      // other way on screen from the same circle.
+      mirrorWithFacing: true,
+      // The floor on the gap between two flips, MEASURED FROM THE START of one.
+      // Never shorter than the move itself (systems/sealFlip.js clamps it), so
+      // the pause a player actually feels is this MINUS the 0.75s the flip
+      // takes — at 0.95 that is a fifth of a second of swimming between two
+      // flips. Anything at or under the duration is no pause at all, which is
+      // worth knowing before dragging this slider down: 0.55 reads as a
+      // cooldown and is one only in the sense that the move is its own.
+      //
+      // A real cooldown rather than the clap's throttle, because this move has
+      // a hitbox in it.
+      //
+      // MEASURED AGAINST THE SLOWEST FLIP, which is the one a half-drawn
+      // circle produces: `spin` x commit.spinSlow, so 0.09 + 0.67 + 0.2 =
+      // 0.96s. At 0.95 that lazy flip had NO pause after it at all (the clamp
+      // in triggerFlip took the cooldown up to the duration and the two
+      // cancelled), while a sharp one had a quarter second — the slower move
+      // was silently the more spammable one.
+      cooldown: 1.15,
+      // How completely the tuck replaces the aim pose. Below 1 the flippers
+      // keep some of where they were pointing mid-somersault, which reads as a
+      // seal that did not commit.
+      weight: 1,
+
+      // ---- the slap -------------------------------------------------------
+      // WHERE IN THE TURN THE TAIL CONNECTS, as a fraction of the REVOLUTION
+      // (0..1) — not of the clock.
+      //
+      // That distinction is the whole control model: the hand drives the
+      // rotation (see `u` in systems/sealFlip.js), so a player who whips the
+      // circle round brings the tail to this point sooner because the tail has
+      // physically got there sooner. Keyed to the clock instead, a fast hand
+      // would swing the fluke past the target and the hit would land behind it.
+      //
+      // 0.42 is a little before halfway: the fluke is coming through the
+      // bottom of the turn, travelling fastest, and pointing back the way the
+      // seal came. That is the frame the hit belongs on.
+      slapAt: 0.42,
+      // HOW WIDE THAT SLICE IS, also in turns rather than in seconds.
+      //
+      // It was seconds, and that stopped making sense the moment the hand
+      // started driving the rotation: a player whipping the circle round in
+      // half the time swept the tail through twice as much arc inside the same
+      // window, and one who dawdled got a window that opened and closed while
+      // the tail barely moved. A span of the TURN is the same slice of arc
+      // however fast it is taken.
+      //
+      // 0.18 of a revolution is about 65 degrees of sweep — generous enough
+      // that a stuttering frame cannot fall through it, tight enough that the
+      // hit belongs to one part of the arc.
+      slapSpan: 0.18,
+      // HOW FAR THE TAIL REACHES, in world units, measured from the body's
+      // centre. The seal is about 6 across, so this is a body-length of water
+      // behind it. The test is a SEGMENT from `inner` to here — a circle would
+      // hit things standing in front of the animal, and being on the other
+      // side of a flipping seal has to be safe or there is nothing to dodge.
+      reach: 5.2,
+      inner: 0.8,
+      // How thick that line is. Added to whatever radius the caller is testing,
+      // so a shark meets the tail at its own hitbox rather than at a point.
+      thick: 1.6,
+      // WHICH WAY IT THROWS: 1 is purely the way the fluke is travelling (the
+      // tangent of the turn), 0 is purely straight out from the body. All
+      // tangent threw bodies across the seal's own path, which reads as a
+      // current rather than a hit; all radial is a blast with no handedness at
+      // all, and the two flips became the same move.
+      tangentMix: 0.72,
+
+      // ---- the extra knockback --------------------------------------------
+      // WHAT A SLAP IS WORTH, as a multiplier on an ordinary shove. This is
+      // the number the move is for. applyKnockback's own curve still carries
+      // it — a big animal still resists, a boss still resists on its own
+      // exponent — so this raises the whole family rather than flattening it.
+      knockGain: 2.2,
+      // A SLAP ACROSS A LIT WEAK SPOT IS WORTH THIS MUCH MORE, and it is the
+      // only aiming this move asks for.
+      //
+      // A flip is a gesture with no cooldown worth the name and no charge, so
+      // it cannot be allowed to hit a boss as hard as a ram — CONFIG.boss
+      // .tenacity.partial.flipSlap holds it to 0.3 of an ordinary shove for
+      // exactly that reason. This is the way back up: 0.3 x 3.2 is very
+      // slightly under 1, so a tail slap that lands on a spot moves a boss
+      // about as far as the same slap moves an ordinary animal, and a slap
+      // that lands anywhere else nudges it.
+      //
+      // That is the whole skill shape of the move against a boss, and it is
+      // deliberately the cheap version of the strike's: a perfect charge into
+      // a lit spot STAGGERS (CONFIG.strike.weakSpot.stagger) and is the
+      // hardest thing in the game; this only has to be swung at the right part
+      // of the animal while you are already next to it.
+      //
+      // IT PAYS IN KNOCKBACK AND NOT IN DAMAGE, like the rest of the move —
+      // see the note on flipSlapHit in main.js. A gesture this cheap that also
+      // crit for damage would be the opening of every build in the game.
+      weakSpotMul: 3.2,
+      // ...and how much of that a body caught at the BASE of the tail gets.
+      // The fluke is moving several times faster than the root and carries the
+      // water with it, so the tip throws hardest; at 0.55 the base still
+      // throws harder than a shot does, which keeps the move from having a
+      // dead zone the player cannot see.
+      knockGainRoot: 0.55,
+      // How hard the tail spring is shoved at the top of the window. Nothing
+      // about the hit depends on this — it is the whip itself
+      // (systems/boneSpring.js), and the same units CONFIG.tail's other
+      // impulses use.
+      tailImpulse: 18,
+      // ...AND WHAT THE TAIL SPRING DOES DIFFERENTLY while the flip runs, as
+      // multipliers over CONFIG.tail (systems/boneSpring.js).
+      //
+      // CONFIG.tail describes a tail on an animal that is SWIMMING — stiff
+      // enough to hold its shape against the water, because most of what a
+      // tail does is push, and damped hard enough (a ratio of 0.64) that it
+      // settles onto the pose rather than wobbling around it. A somersault
+      // wants the opposite of both.
+      //
+      // "LOOSER" IS NOT "SNAPPIER", and this block shipped backwards once.
+      // It was one number that divided the stiffness and took the damping down
+      // by the square root to hold that 0.64 — which is the right way to make
+      // a chain HANG, and hanging is exactly wrong here. The tail got slower
+      // to return and no more willing to overshoot, so it trailed the
+      // somersault around and arrived late. Limp.
+      //
+      // A WHIP IS THREE AXES AND THEY MUST MOVE SEPARATELY:
+      //
+      //   `lag`        how far the chain may trail its target (maxLag). The
+      //                LOAD — the tail falling behind as the turn starts is
+      //                what there is to whip.
+      //   `stiffness`  how hard it comes back. UP, not down: the return IS
+      //                the snap, and a soft spring cannot snap however far it
+      //                has been pulled.
+      //   `damping`    how much it resists. DOWN, and this is the one that
+      //                does the work — it is what lets the tip overshoot the
+      //                pose and come back, which is the difference between a
+      //                tail arriving and a tail CRACKING.
+      //
+      // At these numbers the damping ratio goes 0.64 -> 0.22: a couple of
+      // visible swings inside the length of one flip. Under about 0.15 it
+      // rings on past the recover and reads as a rubber tail; over about 0.4
+      // the overshoot disappears and it is back to arriving.
+      //
+      // `tipLooseness` softens the far end on top of that (capped at 0.95 —
+      // 1 is a chain with no spring in it at all), which is what makes the
+      // crack happen at the fluke rather than along the whole tail.
+      //
+      // Eased in over the wind-up and out over the recover on the tuck's own
+      // envelope: a spring whose constants jump is a chain that twitches.
+      tail: {
+        enabled: true,
+        lag: 2.2,
+        stiffness: 1.6,
+        damping: 0.45,
+        tipLooseness: 1.25,
+      },
+
+      // ---- the follow-through ---------------------------------------------
+      // THE GESTURE HAS A SWING AND A FOLLOW-THROUGH. The flip ENGAGES at a
+      // half circle (CONFIG.touch.circleFlick.engageTurn — early, because
+      // waiting for three quarters made every flip feel buffered), and the
+      // rest of the loop is read live while the body is still gathering.
+      //
+      // What the hand finishes with is what the somersault comes out as: half
+      // a loop and stop is a lazy roll with a weak tail; whip the whole circle
+      // round and it snaps. Locked at the launch, so the wind-up is exactly
+      // the window the player has to finish the gesture in — which is the
+      // clearest reason that wind-up exists.
+      commit: {
+        enabled: true,
+        // HOW LONG THE SPIN TAKES, as a multiple of the authored `spin`, at
+        // each end of the follow-through. Under 1 is FASTER — the same whole
+        // turn taken in less time, which is what sharpness is here.
+        //
+        // The clock is shortened rather than the ease steepened: the angle has
+        // to arrive at a whole number of turns or the move needs an unwind,
+        // and a curve reshaped mid-flight moves the animal without time
+        // passing.
+        spinFast: 0.8,
+        spinSlow: 1.45,
+        // ...AND WHAT THE TAIL IS WORTH at each end, as a multiplier on the
+        // whole knockback lever. A faster tail hits harder; one gesture, one
+        // number, two things it buys.
+        hitSlow: 0.6,
+        hitFast: 1.15,
+        // HOW FAST THE HAND MAY PUSH THE TURN, in turns per second.
+        //
+        // The follow-through is a POSITION — how far round the loop the hand
+        // is — and the somersault is a body, so without a ceiling the two are
+        // the same thing and a hand already most of the way round when the
+        // move commits snaps the seal through most of a turn in one frame.
+        //
+        // Not merely ugly: the frame's turn IS the fluke's velocity, so one
+        // snapped frame reports a tail moving at several hundred units a
+        // second, throws the wall's goo clean off its own hitbox and sizes a
+        // slap off a speed the animal never had.
+        //
+        // 4 is above anything a hand does — a circle drawn in a third of a
+        // second is three turns a second — so it never bites on a real
+        // gesture and turns the pathological case into a fast sweep.
+        handRate: 4,
+      },
+
+      // ---- the two flips do different jobs --------------------------------
+      // THE DIRECTION OF THE CIRCLE PICKS THE MOVE, and past the somersault
+      // and the tail slap (which both flips have) they diverge completely.
+      // One is for getting INTO something, the other for getting OUT.
+      //
+      // FORWARD FLIP (a clockwise circle): the seal throws itself down the
+      // line it is already swimming. A commitment, and the way you arrive
+      // somewhere carrying speed.
+      forward: {
+        enabled: true,
+        // WORLD UNITS/SEC ADDED, along the direction of travel. Through
+        // flingSeal (entities/player.js) — real velocity with the speed clamp
+        // lifted, which is the only call in this game that may put a seal
+        // above its own top speed. A plain velocity add would be confiscated
+        // by that clamp on the frame it landed.
+        //
+        // Sized against the seal's own swim (34 u/s at base) rather than
+        // against the dash: this is a flourish that buys a body-length of
+        // distance and a harder contact, not a second strike. A dash is 46
+        // and is bought with a charge.
+        push: 26,
+        // ...AND IT HITS THINGS HARDER FOR FREE. Nothing below is about the
+        // ball: sealContact reads `player.velocity` and the fling is IN it, so
+        // a forward flip into the ball is a faster seal arriving. That is the
+        // whole mechanic, and it is why this is a fling rather than a shove.
+        //
+        // How far the speed ceiling is lifted while the flip flies, and for
+        // how long it walks back down. The seal is going to be over its own
+        // top speed for a moment; `mul` is what stops the clamp taking it back
+        // and `seconds` is what keeps the landing from being a stumble.
+        ceilMul: 1.6,
+        ceilSeconds: 0.45,
+        // WHICH WAY IS "FORWARD". Travel when the seal is actually moving,
+        // its facing when it is not — a flip from a standstill should go
+        // where the animal is pointing rather than nowhere. Under this speed
+        // (u/s) the heading is used instead of the velocity.
+        driftSpeed: 3,
+      },
+
+      // BACKFLIP (a counter-clockwise circle): the body rolls backwards and
+      // leaves a bar of goo across the water in front of it. See
+      // systems/gooWall.js — the physics, the hold and why it is not a
+      // collider are all there.
+      back: {
+        enabled: true,
+        // HOW LONG IT LASTS, in seconds. Short on purpose: this is a wall to
+        // retreat behind, not terrain. Half a second is about the time it
+        // takes a shark to cover the distance the wall bought.
+        life: 0.55,
+        // WHERE IN THE TURN THE TAIL LAYS IT, as a phase of the spin — 0 at
+        // the launch, 1 at the end.
+        //
+        // NOT THE WHOLE CIRCLE. The fluke sweeps all the way round the animal,
+        // and goo laid along every degree of that is a RING with the seal
+        // inside it — a bubble to stand in rather than a wall to retreat
+        // behind, and one that stops the player leaving as surely as it stops
+        // anything arriving. This span cuts one arc out of the turn: it opens
+        // just after the tail starts moving (before that the fluke is still
+        // under the body, and the first blobs land on the animal) and closes
+        // around two thirds through, which is the tail coming back down.
+        emitFrom: 0.08,
+        emitTo: 0.62,
+        // HOW FAR THE TAIL TRAVELS BETWEEN BLOBS, in world units — and this is
+        // the cohesion number.
+        //
+        // A goo mass is a metaball field: lobes sum, and the surface is drawn
+        // where the sum crosses the group's isoline. Space them under a lobe's
+        // DRAWN radius (the emitter's `size` times the group's `radius`) and
+        // consecutive blobs overlap, the field never dips below the isoline
+        // between them, and the row reads as one wall. Space them over it and
+        // it is beads on a string.
+        //
+        // At 1.1 against this emitter's lobes the overlap is comfortable.
+        // Raise it and the wall gets cheaper and stringier; lower it and the
+        // blobs pile up into a thick rope that costs more particles for a mass
+        // that is no longer.
+        step: 1.1,
+        // A ceiling on the nodes one wall may hold. The span above puts down
+        // about twenty; this is the guard for a tuner run with `step` at its
+        // floor and the spin at its longest.
+        maxNodes: 48,
+        // How deep the slab is. Added to the body's own radius, so a yacht is
+        // stopped further out than a sardine.
+        //
+        // IT IS ALSO THE BOUND ON HOW HARD THE GOO MAY BE THROWN. The lobes
+        // coast `inherit x tailSpeed / drag` from the nodes they were laid at
+        // (see CONFIG.emitters.gooWall), and past about this plus a lobe's own
+        // radius the mass no longer covers the barrier it is drawing. Thicker
+        // wall, wilder goo — the ball lab prints the pair live.
+        thick: 2.2,
+        // HOW LONG WHAT IT STOPS IS STOPPED. Through holdEnemy, so a boss
+        // takes a daze instead and scenery is skipped — see
+        // systems/control.js. Deliberately brief: the wall buys the distance
+        // the body would have covered, and then the body carries on. Longer
+        // and a half-second gesture is a crowd-control ability.
+        hold: 0.35,
+        // HOW MUCH SPEED THE BALL KEEPS coming off it, and how much spin the
+        // goo scrubs off. It is a soft wall: a ball should die against it
+        // rather than ping off, which is the difference between a block and a
+        // backboard.
+        ballBounce: 0.45,
+        ballSpin: 0.6,
+        // How far clear of the slab a body is put when it is stopped. Pushed
+        // out by exactly the overlap it lands ON the boundary, which still
+        // counts as inside, so it leans there re-qualifying every frame.
+        skin: 0.01,
+        // At most this many in the water at once — a guard for a tuner run
+        // with the cooldown at zero, not a mechanic.
+        maxWalls: 2,
+        // HOW MUCH OF THE TAIL'S MOTION THE GOO CARRIES is the emitter's
+        // `inherit` (CONFIG.emitters.gooWall), not a number here — the lobes
+        // are what move, and the bound on it is the wall's own `thick` above.
+        // See the note there.
+        //
+        // THE GOO ITSELF — one burst per node, thrown off the fluke where the
+        // fluke is. `blobScale` is the particle COUNT per burst;
+        // `blobSize`/`blobSpeed` shape the mass and want to move TOGETHER (see
+        // the note on CONFIG.versus.ball.flipSlap.gooSize), though `blobSpeed`
+        // is deliberately tiny here: a blob that flies out of the line is a
+        // blob that has left the wall.
+        emitter: 'gooWall',
+        blobScale: 1,
+        blobSize: 1,
+        blobSpeed: 1,
+      },
+
+      // ---- flipping out of a dash -----------------------------------------
+      // A FLIP THROWN MID-STRIKE, which is the move at its most useful and the
+      // reason it is a gesture rather than a button — see the long note in
+      // systems/sealFlip.js.
+      //
+      // The two do not fight for the hand: while a flip is turning, the dash
+      // stops reading the aim device (a circle IS a hand moving in every
+      // direction, and read as steering it corkscrewed the seal) and its
+      // heading is turned by a share of the somersault instead.
+      duringStrike: {
+        enabled: true,
+        // HOW MUCH OF THE ROLL THE DASH'S LINE TAKES. A share of the angle the
+        // body actually turned this frame, so the arc is exactly as fast as
+        // the animal is spinning and the two read as one move.
+        //
+        // At 0.35 a whole flip bends a dash about 126 degrees — a hard, very
+        // legible hook that is still short of a U-turn. At 1 the dash would
+        // follow the somersault exactly and come out facing the way it went
+        // in, which is a circle rather than an arc and gives the player
+        // nothing to aim. 0 leaves the dash straight and keeps the rest of
+        // this block, which is the honest way to try the move without it.
+        steer: 0.35,
+        // WHAT A SLAP OFF A DASH IS WORTH. `knockMul` is the extra throw for
+        // having arrived with the tail rather than swung it standing still;
+        // `carry` is how much of the DASH'S OWN direction the body leaves
+        // along, blended against the swing's tangent.
+        //
+        // Both ride what the dash was bought with, so a one-pip flick does not
+        // hit like a full commitment — the same rule the ram's own damage
+        // follows (powerDamageMul in systems/strike.js).
+        knockMul: 1.6,
+        carry: 0.45,
+        // ...and what it does to a BALL: the dash's speed added to the slap's
+        // impulse and to its slip, as a fraction. This is the whole of "the
+        // velocity and the spin the player can put on the ball" — a slap
+        // thrown out of a fast dash shoots harder AND bends more, because the
+        // fluke crossing the ball's face is travelling at the tail's speed
+        // plus the animal's.
+        ballCarry: 0.5,
+      },
+
+      // The IK the tuck solves through — the clap's numbers, which are the aim
+      // rig's with the stops opened up. Pulling the flippers IN needs the same
+      // freedom bringing them together does.
+      ik: {
+        iterations: 4,
+        smoothing: 45,
+        maxBend: 1.6,
+        softness: 0.8,
+        maxFold: 1.9,
+        maxTwist: 0.7,
+        tolerance: 0.01,
+      },
+
+      // THE TUCK. Every number is a fraction of that limb's OWN reach (see
+      // systems/poseRig.js), never a world offset — the two flippers do not
+      // have the same reach and a literal would be wrong on one of them.
+      pose: {
+        // In against the body and slightly back. `tuck` is the lateral term:
+        // low is tight to the flanks, which is the whole shape of anything
+        // that means to rotate fast.
+        // MEASURED, NOT GUESSED — and the first two attempts both measured
+        // backwards. These three have to move the flipper tips BACK toward
+        // the tail and IN toward the flanks, which is what a tuck is, and
+        // neither direction is obvious from the numbers:
+        //
+        //   0.06 / -0.22 / 0.3   reads as a tuck, and put the tips 0.23
+        //                        further OUT than a swimming seal's.
+        //   0    / -0.5  / 0.2   pulled them back 0.57 and splayed them 0.58
+        //                        wider, because pulling a limb back pivots it
+        //                        outward around a shoulder that is already
+        //                        most of the way out to the flank.
+        //
+        // `tuck` is measured from the body's MIDLINE (poseRig.target) while
+        // `tuckFore` is measured from the limb's own root, which is the whole
+        // reason those two interact the way they do. At 0.02 / -0.65 the tips
+        // come back 0.57 AND in 0.42. `npm run test:sealflip` asserts both
+        // directions on the real rig now, so this cannot quietly invert again.
+        tuckUp: 0,
+        tuckFore: -0.65,
+        tuck: 0.02,
+        // The head goes DOWN and forward — chin to chest, leading the turn.
+        headUp: -0.3,
+        headFore: 0.45,
+        headWeight: 0.7,
+      },
+    },
+
+    // ---------------------------------------------------------------------------
     // THE COIL — what the seal does on "STRIKE NOW!". systems/strikePose.js.
     //
     // The wind-up's own moment, read on the animal instead of only at the edge
@@ -27614,6 +28376,20 @@ export const CONFIG = {
       // count is three even beats and the whistle is the same note lifted.
       versusGoal:      { src: null, type: 'boom',  freq: [160, 36],   decay: 0.55, gain: 0.5,  noise: 0.7,  filter: 800,  pitchVary: 0.06, filterVary: 0.15 },
       versusGoalCheer: { src: null, type: 'blip',  wave: 'square',   freq: [440, 880],  decay: 0.5,  gain: 0.18, pitchVary: 0.04 },
+      // THE OVATION — the ball scooped off the line. The longest voice in the
+      // match by a distance and the only one with no impact in it at all: a
+      // broad band of noise opening bright and dying dark, which is the shape
+      // a room full of clapping has. Above the goal cheer's gain on purpose —
+      // it is a rarer moment than a goal and it should land like one.
+      //
+      // SYNTHESISED, LIKE EVERY OTHER VOICE IN THIS BLOCK, and more obviously
+      // a stand-in than most: a wash is the shape of applause and not the
+      // sound of it. Drop a recording on it in the Sound tab and it becomes
+      // one — the synth is the fallback from that moment on, never a layer
+      // under it (a sampled voice returns before the synth path; see playSfx).
+      // The one clap already in public/sfx is deliberately NOT wired here: one
+      // pair of hands is a worse lie than a wash, because it sounds finished.
+      versusOvation:   { src: null, type: 'noise', decay: 1.5, gain: 0.3, noise: 0.9, filter: 3000, pitchVary: 0.05, filterVary: 0.18 },
       versusPost:      { src: null, type: 'boom',  freq: [900, 260],  decay: 0.11, gain: 0.3,  noise: 0.5,  filter: 2600, pitchVary: 0.1,  filterVary: 0.2 },
       // The ball taking a hit: a wet slap, its gain riding the hit's strength
       // through the event's scale. Off a wall it is the same slap, lower and
@@ -28291,6 +29067,71 @@ export const CONFIG = {
       // re-aim a dash that is flying past the cursor.
       aimFlick: { window: 0.08, px: 24 },
 
+      // THE CIRCLE — the same motion, read as a SIGNED TURN instead of as a
+      // direction. Draw a quick loop with the aim hand and the seal flips:
+      // counter-clockwise is a backflip, clockwise a forward flip. See
+      // readCircle in input.js and systems/sealFlip.js.
+      //
+      // IT SHARES THE FLICK'S OWN SAMPLES and adds no binding, no deadzone and
+      // no second list — the deltas are already being collected for the dash
+      // flick above, and a circle is simply what they add up to when the hand
+      // keeps turning.
+      circleFlick: {
+        enabled: true,
+        // How long the loop may take. Much longer than the flick's window,
+        // because a circle IS a longer gesture — but finite, or a hand slowly
+        // orbiting a cursor over five seconds would eventually add up to one.
+        window: 0.55,
+        // WHERE THE MOVE STARTS, in radians of accumulated turn — and it is
+        // deliberately EARLY.
+        //
+        // This was three quarters of a turn, and it made every flip feel
+        // buffered: the hand was already round the far side of the loop by the
+        // time the seal reacted, and the move read as laggy however short the
+        // wind-up was. A half turn is the earliest point at which a loop
+        // cannot be anything else — an arc into a direction change is under
+        // half by definition, and `backlash` plus the `px` gate below catch
+        // the rest — so the flip engages there and the hand carries on.
+        //
+        // THE REST OF THE CIRCLE IS NOT WASTED. From here to `fullTurn` is the
+        // FOLLOW-THROUGH: input.circleCommit reports it live, 0 at the engage
+        // and 1 at the full loop, and the flip spends it on how sharp the
+        // somersault is and how hard the tail lands (CONFIG.sealFlip.commit).
+        // Half a loop and stop is a lazy flip; whip the whole circle round and
+        // it snaps. The gesture has a swing and a follow-through, and both of
+        // them are legible on the animal.
+        engageTurn: Math.PI,
+        fullTurn: Math.PI * 2,
+        // ...and how far the hand actually travelled while doing it, in CSS
+        // pixels. The turn alone is not enough: a two-pixel tremor can spin
+        // through a full circle without the hand going anywhere, and every
+        // one of those would be a somersault nobody asked for.
+        px: 150,
+        // Deltas smaller than this are dropped before any angle is measured,
+        // for the same reason — the direction of a sub-pixel move is noise,
+        // and noise summed is a turn.
+        minStep: 1.2,
+        // HOW MUCH OF THE DISTANCE GATE THE WIND-UP ASKS FOR, as a share of
+        // `px` above. The seal coils while the first semicircle is being drawn
+        // (input.circleLoad), and it must not coil for a hand resting on a
+        // mouse — but holding the wind-up to the FULL distance would mean the
+        // animal only started reacting once the gesture was nearly over, which
+        // is the lag this whole arrangement exists to remove. A third of the
+        // way is enough to be sure a hand is drawing something.
+        loadPath: 0.35,
+        // A REVERSAL RESETS IT. A hand that turns one way and then the other
+        // is not drawing a circle, it is scrubbing — without this, a shake
+        // adds |turn| both ways and reads as whichever direction it finished
+        // on. Radians of counter-turn tolerated before the sum is dropped.
+        backlash: 1.1,
+        // The floor on the gap between two circles read off the same hand.
+        // A player who keeps circling gets a flip every cooldown rather than
+        // one per frame; the move's own cooldown is longer still
+        // (CONFIG.sealFlip.cooldown), so this only stops the detector itself
+        // from firing into a flip that is already running.
+        cooldown: 0.35,
+      },
+
       // STRIKE — a charge-and-release with no shoulder button to live on. Both
       // routes below are live at once and OR together, exactly like LB/RB/LT/RT
       // do on a pad, so either can wind the same single meter.
@@ -28784,6 +29625,64 @@ export const CONFIG = {
       // Both edges, in shell widths. Soft enough that the inner one is not a
       // ring stuck to the silhouette.
       soft: 0.18,
+
+      // ---- the lane the dash is about to take ------------------------------
+      // THE SHELL LEANS INTO THE CONE THE STRIKE IS AIMED DOWN rather than
+      // sitting round the animal like a collar. The seal is about to LEAVE down
+      // that line, and water that says nothing about it is a decoration on an
+      // animal that is aiming.
+      //
+      // It is the SAME heading the lens paints its corridor along
+      // (cinecam.lens.path, drawn while charging) — strikeDirection, between
+      // the swim and the cursor. One line, two surfaces: the glow on the water
+      // and the lane over the frame cannot point in two directions.
+      //
+      // The GEOMETRY here is the shell's own, not the lens's. That one is a
+      // screen-space cone in aspect-corrected uv reaching all the way to where
+      // the dash lands; this is a few world units of water round the animal,
+      // and borrowing a uv half-width for it would be a number that means
+      // nothing at this scale.
+      //
+      // `bias` 0 is exactly the symmetrical shell this was before any of it,
+      // which is the setting to reach for if the lane ever reads as the aura
+      // being broken rather than aimed.
+      bias: 0.6,
+      // The cone's half-angle in radians, and how soft its edge is (in cosine,
+      // which is what the shader compares in). 0.9 is about 52 degrees either
+      // side — wide enough to be a corridor the seal fills rather than a
+      // searchlight, narrow enough that the back half of the shell clearly
+      // gives way to it.
+      coneAngle: 0.9,
+      coneSoft: 0.45,
+      // HOW MUCH FURTHER THE BAND REACHES DOWN THE LANE than across it, as a
+      // multiple. This is the half that makes it read as filling a CORRIDOR
+      // rather than as a bright patch on one side: at 1.1 the water ahead
+      // reaches better than twice as far as the water behind.
+      //
+      // The quad grows with it (see the note in systems/boostAura.js), so this
+      // costs rasterised area and nothing else — but it does mean `reach` is
+      // the band's own length, not the furthest thing on screen.
+      stretch: 1.1,
+
+      // ---- coming up to strength -------------------------------------------
+      // A WIND-UP DOES NOT OPEN AT FULL VOLUME. The shell starts pale and dim
+      // and arrives over `liftTime` seconds of burn, so the first instant of a
+      // hold is visibly the START of something rather than a state switching
+      // on — and how long a seal has been holding is readable off the colour,
+      // as it already is off the radius and the flow.
+      //
+      // THE HUE IS NEVER PART OF THIS. It is the one thing this layer is for —
+      // which pip is burning — and a wind-up that opened on the wrong hue and
+      // arrived at the right one would be lying for its own first half. Only
+      // the saturation and the brightness move.
+      //
+      // Frozen when the burn stops, not when the shell does: the radius carries
+      // on outward through a fade because water that was pushed is not
+      // un-pushed, but a shell going on saturating as it dies would be the one
+      // channel still describing a hold that has ended.
+      satMin: 0.35,
+      brightMin: 0.3,
+      liftTime: 0.5,
 
       // ---- the flow, down the line of the strike ---------------------------
       // THE FIELD SLIDES THE WAY THE SHOT IS AIMED, and faster the longer the
@@ -40672,7 +41571,13 @@ export const CONFIG = {
       maxStacks: 6,
     },
     { id: 'overboost', family: 'gun', name: 'Overboost', desc: '+30% recoil boost', apply: (s) => { s.recoil *= 1.3; } },
-    { id: 'maxSpeed', family: 'utility', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; } },
+    // THRUST AS WELL AS THE CEILING, or the card does nothing. The water's drag
+    // is linear (player.friction, 0.98 a frame) so the cruise is a straight
+    // function of thrust — about 15.8 u/s against a 34 u/s clamp the seal
+    // never reaches (see chargeThrustPerPip). Raising only the clamp raised a
+    // ceiling nobody was touching; +20% thrust is +20% cruise, and the clamp
+    // goes up with it so turbo and the dash keep their headroom.
+    { id: 'maxSpeed', family: 'utility', name: 'Redline', desc: '+20% max speed', apply: (s) => { s.maxSpeed *= 1.2; s.thrust *= 1.2; } },
     // `multishotLevel` counts the STACKS; `multishot` is stacks plus whatever
     // levelling handed out (applyLevelGrowth). The per-stack damage and size
     // curve reads the former — see multishotLevelStats — or a run that never
@@ -42752,6 +43657,34 @@ export const CONFIG = {
   // ---------------------------------------------------------------------------
   versus: {
     // ============================================================================
+    // THE LUNGS, AND THEY ARE SHUT — a stub, kept whole and switched off.
+    //
+    // A match ran on the survivor run's breath: the bar drained underwater at
+    // CONFIG.oxygen.depleteRate, an empty tank burst the seal into its own
+    // goal, and every seal on the pitch — bots included — spent a chunk of
+    // every match climbing out of the game to fill it. That is a second sport
+    // played over the top of the first one, on a clock nobody on the pitch
+    // chose, and it decided possession more often than any shot did.
+    //
+    // OFF, NOT REMOVED. Everything the mechanic is made of is still here and
+    // still tested — the drain, the burst, the kickoff fill, the bubble's air
+    // half, the bot's air clock, the ring's air band, the HUD gauge and the
+    // strain over the screen — and every one of them asks oxygenLive() in
+    // systems/versusFlag.js, which is the only thing holding them shut. Turn
+    // this `true` and the whole mechanic comes back in one flag, with the
+    // numbers below still describing what it would do.
+    //
+    // THE BUBBLES STAY IN THE WATER. They are two things in a match — a breath
+    // and two pips of boost (versusBubblePips) — and only the breath is off.
+    // See `bubbles` further down for the headcount, which is unchanged.
+    //
+    // NOT `CONFIG.oxygen.enabled`: that one is the whole GAME's switch, and
+    // the mode never writes CONFIG (the tuner would snapshot it and ship the
+    // run's lungs shut). See the note at the top of systems/versusFlag.js.
+    // ============================================================================
+    oxygen: { enabled: false },
+
+    // ============================================================================
     // THE TEAMS, and the one place their colour is decided.
     //
     // A team's colour is its identity across the whole mode — the goal it
@@ -43335,6 +44268,76 @@ export const CONFIG = {
         // match; this is here because `reach` and `sweep` cannot be tuned by
         // watching swipes miss. See the debug block in systems/finFlick.js.
         debug: false,
+      },
+      // THE TAIL, which is the other half of the same hand — a circle instead of
+      // a swipe. systems/sealFlip.js owns the move, the state machine and the
+      // arc; CONFIG.sealFlip owns its shape and its knockback. Everything here
+      // is what a slap does to THIS game's ball and to the seals around it.
+      //
+      // IT IS A HIT, NOT A WIPE. The flick above bends a ball already going
+      // somewhere and drives nothing down the normal; this arrives. So it has
+      // `push` where the flick has `squirt`, and the number is an order bigger.
+      flipSlap: {
+        enabled: true,
+        // How close the ball's DRAWN edge must come to the tail's line. Wider
+        // than the flick's because the thing swinging is the whole back half
+        // of the animal rather than a fin tip.
+        reach: 2.2,
+        // STRAIGHT DOWN THE SWING, in world units/sec added to the ball. Under
+        // a full-power strike on purpose: the slap is free and comes with a
+        // dodge attached, and a gesture that outshot the charge would retire
+        // the charge.
+        push: 34,
+        // The sideways part, through the same rolling-contact rule the strike
+        // and the flick use — `slip` is how much of the swing counts as slip
+        // at the surface, `grip` the ceiling on what friction can take from it.
+        slip: 120,
+        grip: 20,
+        // ...and what it does to another SEAL caught in the arc, in world
+        // units/sec before flipKnockGain's lever. This is the number that
+        // decides whether the move clears a scramble in front of the mouth,
+        // which is what it is in this game for.
+        sealPush: 26,
+
+        // ---- THE DENT AND THE MESS ------------------------------------
+        // HOW DEEP A HOLE IT PUTS IN THE BALL, as a multiple of the strike's
+        // own `soft.dentDepth` — so retuning how squashy the ball is moves
+        // this with it instead of leaving the slap as the one contact with a
+        // hand-typed depth. Over 1 because the tail is the largest thing that
+        // touches this ball: a slap should be visibly the deepest dent in the
+        // game, and impactDent narrows it with speed on top of this.
+        dentMul: 1.15,
+        // HOW MUCH OF ITSELF THE BALL THROWS. `fxScale` multiplies the PARTICLE
+        // COUNT of both bursts (the water and the goo), and it is deliberately
+        // past the top of ballImpactFx's own ramp — at 1 a slap threw exactly
+        // what a firm dribble does, which is not what the back half of an
+        // animal arriving looks like. The other four shape rather than count:
+        // `fxSize`/`fxSpeed` the spray, `gooSize`/`gooSpeed` the ball's own
+        // mass coming off its edge, which is the slower and heavier of the two.
+        //
+        // These are the "a ton of bubbles and goo" knobs. Raising fxScale is
+        // free-ish (the pools are fixed and drop the overflow); raising
+        // gooSize is not, because goo is a metaball field and a big splat
+        // spread thin renders as nothing at all — see the note on
+        // CONFIG.fx.goo.groups and [[goo scale is size and speed together]].
+        // Judged in the ball lab (`npm run looks:ball`, S) rather than typed:
+        // at 2.6 a slap threw 203 particles against a full strike's 142, which
+        // is 1.4x and does not read as a different KIND of hit. At 4.5 it is
+        // about double the strike and the burst is the first thing your eye
+        // goes to, which is what this contact is.
+        fxScale: 4.5,
+        fxSize: 1.5,
+        fxSpeed: 1.8,
+        // THE SAME FACTOR ON BOTH, and that is a rule rather than a
+        // coincidence: goo is a metaball field, so a mass is made bigger by
+        // scaling size AND speed together — neighbours then separate by the
+        // same amount relative to their own radius and the shape is preserved.
+        // Size alone fuses everything into one flat featureless disc; speed
+        // alone pulls the splats past each other and the mass comes apart into
+        // loose dots. These shipped at 1.7 / 1.5 and the mismatch was visible
+        // as exactly that half-dissolved edge.
+        gooSize: 1.7,
+        gooSpeed: 1.7,
       },
       // SPIN STROKES — the read. A spinning ball shows its spin as curved
       // strokes wrapped around its rim, riding round with the turn and TRIMMED
@@ -44226,6 +45229,28 @@ export const CONFIG = {
       // it is still in play. It used to be the edge of the screen, which was
       // whatever the shore's one boulder happened to cover.
       line: 8,            // never nearer the back wall than the ball's own width (goalLineDepth)
+      // HOW LONG A GOAL WAITS BEFORE IT COUNTS, in match seconds from the
+      // frame the WHOLE ball is behind the line. Until it is up the ball is
+      // still live and still playable, and a keeper who gets to it and shoves
+      // it back out over the line has cleared it rather than conceded it (see
+      // settleGoalLine and versusGoalLineClear). A ball that reaches the rock
+      // at the tunnel's back ends the wait early — it has nowhere left to be
+      // pushed, so there is nothing left to contest.
+      //
+      // A TIME AND NOT A SECOND LINE FURTHER IN, which is the thing to know
+      // before reaching for a distance here. "The goal counts once the ball is
+      // off the screen" is the rule this wants to be and the geometry cannot
+      // serve it: the tunnel is 16 deep, the drawn ball is over 10 across and
+      // the frame may follow a keeper to within half a unit of the back wall,
+      // so there is no x past the line that the ball's trailing edge can reach
+      // and the camera cannot. See tunnelBackX in systems/versusGoal.js.
+      //
+      // OWNED BY config.js — stripped from tuning snapshots. It is a rule of
+      // the game and not a look, and it has no slider; left in, the first
+      // blanket save would stamp whatever it was that day over every later
+      // change to it, which is the failure `render.adaptive.enabled` shipped
+      // with for months (see withoutTableOwnedKeys).
+      hold: 0.35,
       // A SEAL MAY SWIM THE WHOLE CORRIDOR, to the rock at the tunnel's back
       // (versusGoal.keeperReachDepth) — there is no number for it here. There
       // was: `keeperReach` held a seal 7 past the wall, an invisible stop a
@@ -45098,18 +46123,36 @@ export const CONFIG = {
         weight: 3, spread: 1,
         lead: 1.1,        // recorded seconds before the touch that scored
       },
-      // A SAVE: the ball on target and travelling, and a seal of the
-      // defending side gets to it. `zone` is how close to its own goal the
-      // ball has to be for the danger to count at all, `speed` how fast it
-      // has to be going, and `aim` how much of the mouth's own half-height
-      // the projected crossing may miss by and still be called on target
-      // (over 1: a shot that would have clipped a post counts).
+      // A SAVE: the ball on target and still carrying enough to ARRIVE, and a
+      // seal of the defending side gets to it. `zone` is how close to its own
+      // goal the ball has to be for the danger to count at all, and `aim` how
+      // much of the mouth's own half-height the projected crossing may miss by
+      // and still be called on target (over 1: a shot that would have clipped
+      // a post counts).
+      //
+      // `reach` REPLACED A FLAT SPEED. It was `speed`, 20 u/s, asked wherever
+      // the ball happened to be — so a ball rolling at 18 two units off the
+      // line was going in and stopping it was not a save, while a ball
+      // crossing half the pitch at 22 was never going to arrive and stopping
+      // it was. What decides it is the distance the ball can still travel
+      // against the water's drag (ballCoast in systems/versus.js) against the
+      // distance it has left: `reach` is the share of that it must have, so 1
+      // is "exactly enough to get there" and 1.2 asks for a fifth in hand.
+      // `speed` is still in every saved snapshot and nothing reads it, exactly
+      // as `goal.keeperReach` is.
+      //
+      // `crawl` is not a shot threshold — it is the floor under the division
+      // that projects where the ball would cross, and a ball drifting at a
+      // thousandth of a unit a second projects a crossing on the moon.
       save: {
         enabled: true,
         weight: 1.6, spread: 1.2,
         lead: 1.2, tail: 1.3,
-        zone: 34, speed: 20, aim: 1.15,
+        zone: 34, aim: 1.15,
+        reach: 1,
+        crawl: 0.5,
         grace: 0.35,      // the touch may land this long before the danger was seen
+        clearGrace: 0.6,  // ...and this long before a ball was scooped back off the line
         speedRef: 52,     // the shot's speed that scores a save at full strength
         cut: true,        // a hard cut into the `save` beat rather than a blend
       },
@@ -45148,9 +46191,23 @@ export const CONFIG = {
     // THE GOAL CARD — who it names, and when it says the goal went in the
     // wrong end. See creditGoal in systems/versus.js.
     //
-    // The scorer is the seal that put the most GOALWARD SPEED on the ball
-    // inside `creditWindow` seconds, not the last seal to touch it: a shot
-    // that clips a defender on the way in belongs to whoever struck it.
+    // THE SCORER IS THE LAST SEAL OF THE SCORING SIDE to touch the ball inside
+    // `creditWindow` seconds. It was the one that put the most GOALWARD SPEED
+    // on it, which took the goal off the seal who redirected a team-mate's
+    // shot in and handed it back to the seal who struck it from forty units
+    // out. The gain is still measured — it decides the assists and it ranks
+    // the clip — it just no longer decides whose goal it is.
+    //
+    // THE ASSISTS ARE GENEROUS AND THERE MAY BE SEVERAL. Every earlier touch
+    // inside `assistWindow` by a different seal of the scoring side that moved
+    // the ball goalward by more than `assistGain` u/s is one, newest first, up
+    // to `assistMax` of them. A goal that came up the pitch through three
+    // seals was made by three seals. `assistGain` at 0 is "anything that
+    // advanced it at all"; a touch that sent the ball the wrong way is never
+    // an assist, however recent, or the word stops meaning anything.
+    //
+    // The card has room for ONE name and shows the most recent; the ledger
+    // books all of them (systems/versusTally.js).
     //
     // `ownGoal` is the only place the other side may be named, and it is a
     // direction rather than a team. The ball must not already have been on
@@ -45161,6 +46218,8 @@ export const CONFIG = {
     card: {
       assistWindow: 6,
       creditWindow: 6,
+      assistGain: 0,
+      assistMax: 3,
       ownGoal: { wasLeaving: 2, minSpeed: 6 },
     },
     // THE STATS PAGE — ui/statsCard.js, drawn by rive/blubberball.
@@ -45205,6 +46264,14 @@ export const CONFIG = {
     // bubble is worth `pips` pips of the meter — two, against the run's
     // quarter of a bar (strike.orbPipRefill.bubble), so air is a real second
     // source and not a top-up.
+    //
+    // NONE OF IT RUNS TODAY. The lungs are stubbed (`oxygen` at the top of this
+    // section) and keepBubbles stops with them, so the floor puts no air in
+    // the water and a boat crate cannot drop one either. Half the orb was
+    // never about air — `pips` and `reach` still work, and a bubble that
+    // reaches a match some other way is still swallowed for the meter — but
+    // with no source there is nothing to swallow. These numbers describe the
+    // match the flag brings back, and they come back with it.
     bubbles: { minAlive: 4, maxAlive: 7, every: 2.5, pips: 2, reach: 3 },
     // THE BODY CHECK — a dash into the other seal shoves it. The shove is a
     // speed, lerped on the striker's banked power the way the ball's is, and
@@ -47188,8 +48255,6 @@ export const TUNER_SCHEMA = [
       // Turn `keep in frame` to 0 to see what the fit is actually doing: the
       // bodies go back to sitting wherever the orbit put them, cropped edges
       // and all.
-      { path: 'dayNight.orbit.keepInFrame', min: 0, max: 1, step: 0.05, label: 'keep sun/moon in frame' },
-      { path: 'dayNight.orbit.framePad', min: 0.5, max: 3, step: 0.05, label: 'frame clearance (x disc radius)' },
       // A fraction of the VISIBLE SKY, not world units — and the arc drops as
       // it rises so the disc stays in frame (see dayNight.sun.frameSize). The
       // old `size` path is gone: it is in every saved snapshot at 5.2, which is
@@ -49905,6 +50970,15 @@ export const TUNER_SCHEMA = [
       { path: 'boostAura.strength', min: 0, max: 6, step: 0.05, label: 'boost aura: brightness' },
       { path: 'boostAura.falloff', min: 0.2, max: 5, step: 0.05, label: 'boost aura: how fast it thins outward' },
       { path: 'boostAura.soft', min: 0.02, max: 0.6, step: 0.01, label: 'boost aura: edge softness' },
+      // --- the lane the dash is aimed down ---
+      { path: 'boostAura.bias', min: 0, max: 1, step: 0.02, label: 'boost aura: how far into the dash cone (0 = a collar)' },
+      { path: 'boostAura.coneAngle', min: 0.1, max: 3.1, step: 0.05, label: 'boost aura: cone half-angle (rad)' },
+      { path: 'boostAura.coneSoft', min: 0.01, max: 1, step: 0.01, label: 'boost aura: cone edge softness' },
+      { path: 'boostAura.stretch', min: 0, max: 4, step: 0.05, label: 'boost aura: how much further it reaches down the lane' },
+      // --- coming up to strength over the hold ---
+      { path: 'boostAura.satMin', min: 0, max: 1, step: 0.02, label: 'boost aura: saturation at the start of a hold' },
+      { path: 'boostAura.brightMin', min: 0, max: 1, step: 0.02, label: 'boost aura: brightness at the start of a hold' },
+      { path: 'boostAura.liftTime', min: 0.05, max: 2, step: 0.05, label: 'boost aura: ...seconds of burn to reach full' },
       { path: 'boostAura.grain', min: 0.05, max: 3, step: 0.05, label: 'boost aura: noise features per unit' },
       { path: 'boostAura.warp', min: 0, max: 5, step: 0.05, label: 'boost aura: turbulence (domain warp)' },
       { path: 'boostAura.churn', min: 0, max: 8, step: 0.1, label: 'boost aura: how fast it boils' },
@@ -53739,6 +54813,14 @@ export function withoutTableOwnedKeys(snapshot) {
     const { reach, mode, ...camera } = rest.versus.camera;
     rest.versus = { ...rest.versus, camera };
   }
+  // THE GOAL'S HOLD, for the same reason and a sharper one. It is the rule
+  // that decides when a goal counts — how long the ball sits behind the line
+  // before it is a point and stops being something a keeper may fish back out
+  // — and there is no slider anywhere that reaches it. Every value a snapshot
+  // could carry for it is an echo of whatever config.js held on the day of
+  // some blanket save, and left in that echo would win: the number in source
+  // would say 0.35 while the game played a window nobody chose.
+  if (rest.versus?.goal) rest.versus = { ...rest.versus, goal: withoutGoalHold(rest.versus.goal) };
   // THE REPLAY'S SHOT POOL, and the same story as gravesite.stones below.
   // `versus.replay.cams.shots` is an ARRAY of camera angles and deepMerge
   // REPLACES arrays rather than merging them, so a snapshot carrying its own
@@ -54040,6 +55122,19 @@ function withoutCodeOwnedCamera(versus) {
   return { ...versus, camera };
 }
 
+// Drop `hold` from a copy of CONFIG.versus.goal. Returns a new object; the
+// input may be the live CONFIG and must not be mutated.
+//
+// Out the way it comes in, like the camera's reach above: stripping only on
+// load would leave every save writing the echo back, and the file would be
+// wrong again the moment anybody moved a slider anywhere in the tuner.
+// Exported for tools/tuning-owned-test.mjs.
+export function withoutGoalHold(goal) {
+  if (!goal || typeof goal !== 'object' || !('hold' in goal)) return goal;
+  const { hold, ...rest } = goal;
+  return rest;
+}
+
 // Overwrite `target` with `source` in place, preserving the identity of every
 // nested plain object rather than swapping it for a clone.
 //
@@ -54141,6 +55236,12 @@ function tuningSnapshot() {
   // wrong again the moment anyone tuned anything — and a pool in the file is
   // the whole pool (deepMerge replaces arrays), which makes config.js dead text.
   snapshot.versus = withoutCodeOwnedCamera(withoutReplayShots(CONFIG.versus));
+  // ...and the beat between the ball crossing the line and the goal counting,
+  // for the sharpest version of the same reason. It is the rule that decides
+  // when a point exists and how long a keeper still has to fish the ball back
+  // out, no slider anywhere reaches it, and a saved echo of it would outrank
+  // every later change to the number in source.
+  snapshot.versus = { ...snapshot.versus, goal: withoutGoalHold(snapshot.versus.goal) };
   // ...and the two banks of filenames go out the way they come in, for the
   // same reason: stripping only on load would leave every save writing the
   // echo back, and the file would be wrong again the moment anyone tuned

@@ -408,7 +408,26 @@ export function applyKnockback(e, dirX, dirY, power = 1, opts = null) {
       // from anything, at any weight. The run crosses where you were.
       if (ten.committed !== false && (e.perkDrive || isCommittedRun(e))) return 0;
       if (!owned) {
-        const mul = Math.max(0, ten.shove ?? 0);
+        // A THIRD TIER, BETWEEN THE LIST AND THE FLOOR. `sources` is "this
+        // moves three tonnes of animal exactly as it moves a shark" and
+        // `shove` is "everything else, which is nothing"; `partial` is the
+        // handful of things in between — a hit that is genuinely the seal's
+        // own body but is not the seal ARRIVING, and so leans on a boss
+        // without shoving it off its line.
+        //
+        // The tail slap (systems/sealFlip.js) is the first of them and the
+        // reason this exists. It failed the list's own test in both
+        // directions: refusing it outright made the one move whose whole
+        // purpose is buying space useless at the exact moment space is worth
+        // most, and putting it on the list made a free gesture with no
+        // cooldown worth as much against a boss as a full-charge ram.
+        //
+        // A number per source rather than one shared fraction, because the
+        // question this answers is always about ONE hit — and because a
+        // shared one would be a second `shove` that the next thing added here
+        // would immediately want to differ from.
+        const part = ten.partial?.[src];
+        const mul = Math.max(0, typeof part === 'number' ? part : (ten.shove ?? 0));
         if (!(mul > 0)) return 0;
         gain *= mul;
       }

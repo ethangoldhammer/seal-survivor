@@ -69,6 +69,35 @@ export const input = {
   // seal is moving fast. A stick is already a direction and comes through
   // as itself. The one thing that reads this is holdAim in systems/strike.js.
   aimGesture: new THREE.Vector2(0, 0),
+  // ...AND WHETHER IT WENT ROUND. +1 for a counter-clockwise loop, -1 for a
+  // clockwise one, 0 for neither — edge-triggered, true for exactly one frame
+  // per circle, because what reads it starts a move (systems/sealFlip.js) and
+  // a level would start one every frame the hand kept turning.
+  //
+  // Read off the SAME samples `aimGesture` is (readCircle), so the circle
+  // costs no new binding and no new deadzone: the hand that steers a dash is
+  // the hand that flips the seal, and which it did is a question about the
+  // shape of the motion rather than about which control it was made on.
+  circleFlick: 0,
+  // How far round the hand is at the moment, in signed radians — a level, not
+  // an edge, and purely a readout. The coach and the lab draw it; nothing in
+  // the game is gated on it.
+  circleTurn: 0,
+  // THE FOLLOW-THROUGH, 0..1 — how far past the half circle that started a
+  // flip the hand has carried on. A level, read every frame while the move is
+  // still gathering, and what makes the back half of the gesture worth
+  // drawing: it sets how sharp the somersault is and how hard the tail lands.
+  // See readCircleCommit, and noteFlipCommit in systems/sealFlip.js.
+  circleCommit: 0,
+  // ...AND THE HALF BEFORE THAT, 0..1 — how far into the first semicircle the
+  // hand is. The WIND-UP, and it is the player's rather than the game's: the
+  // seal coils under the hand as the circle is drawn, so by the time the move
+  // engages at the halfway point the body is already loaded. See
+  // readCircleLoad and noteFlipGather in systems/sealFlip.js.
+  circleLoad: 0,
+  // Which way that wind-up is going, +1/-1, or 0 for a hand that is not
+  // drawing one. The coil leans into it before the flip has a direction.
+  circleDir: 0,
   // The clap button — edge-triggered, true for exactly one frame per press.
   // Edge and nothing else: there is no held state to keep, because the gesture
   // it starts re-enters itself rather than being sustained (see
@@ -434,8 +463,18 @@ export function feedMouse(clientX, clientY) {
 //
 // One list for both devices: only one of them is the aim at a time (the
 // priority chain in updateInput), and a delta from the other is a stray.
+// ...AND THE CIRCLE READS THE SAME LIST. readCircle() below sums the SIGNED
+// TURN between consecutive deltas instead of their vector sum, which is the
+// whole difference between "the hand went that way" and "the hand went round".
+// One list, two questions, no second binding — see CONFIG.touch.circleFlick.
+//
+// THE CAP AND THE PRUNE BOTH BELONG TO THE LONGER WINDOW. They were sized for
+// the flick's 0.08s (64 samples, and anything older dropped on read), and a
+// circle is seven times that: pruning on the short window threw away five
+// sixths of every loop before it could be measured, and the cap would have
+// clipped the rest on a mouse reporting at 125Hz.
 const flick = []; // { dx, dy, t } — CSS px, y up, ms
-const FLICK_CAP = 64;
+const FLICK_CAP = 256;
 let mousePxX = NaN, mousePxY = NaN;
 function feedFlick(dx, dy) {
   if (!(dx || dy)) return;
@@ -446,17 +485,266 @@ function feedMouseFlick(clientX, clientY) {
   if (Number.isFinite(mousePxX)) feedFlick(clientX - mousePxX, -(clientY - mousePxY));
   mousePxX = clientX; mousePxY = clientY;
 }
+/** How far back either reader may look, in ms. See the note on FLICK_CAP. */
+function flickHistoryMs() {
+  const f = CONFIG.touch?.aimFlick ?? {};
+  const c = CONFIG.touch?.circleFlick ?? {};
+  return Math.max((f.window ?? 0.08), (c.enabled === false ? 0 : (c.window ?? 0.55))) * 1000;
+}
+
 /** The gesture inside the window, as a unit vector in `out`. False (and zero) if there is none. */
 function readFlick(out) {
   const f = CONFIG.touch?.aimFlick ?? {};
-  const cutoff = performance.now() - (f.window ?? 0.08) * 1000;
-  while (flick.length && flick[0].t < cutoff) flick.shift();
+  const now = performance.now();
+  // Pruned on the LONGER of the two windows, then summed over this reader's
+  // own — the circle needs the history this used to throw away.
+  const keep = now - flickHistoryMs();
+  while (flick.length && flick[0].t < keep) flick.shift();
+  const cutoff = now - (f.window ?? 0.08) * 1000;
   let sx = 0, sy = 0;
-  for (const d of flick) { sx += d.dx; sy += d.dy; }
+  for (const d of flick) { if (d.t >= cutoff) { sx += d.dx; sy += d.dy; } }
   const len = Math.hypot(sx, sy);
   if (len < (f.px ?? 24)) { out.set(0, 0); return false; }
   out.set(sx / len, sy / len);
   return true;
+}
+
+// --- the circle ------------------------------------------------------------
+//
+// A QUICK LOOP DRAWN WITH THE AIM HAND, answered with a somersault
+// (systems/sealFlip.js). It is the flick's own samples read as a signed turn:
+// walk the deltas in order, take the angle between each pair, and add them up
+// keeping the sign. A straight swipe sums to nothing however long it is; a
+// loop sums to a turn.
+//
+// FOUR GATES, AND EACH ONE IS A FALSE POSITIVE THIS COST BEFORE IT EXISTED:
+//
+//   turn      three quarters of a revolution. Nobody closes a loop with a
+//             mouse, and the last quarter is the part the player has already
+//             moved on from.
+//   px        how far the hand actually went. A two-pixel tremor turns through
+//             a full circle without going anywhere, and every one of those was
+//             a flip nobody asked for.
+//   minStep   sub-pixel deltas are dropped before any angle is measured, for
+//             the same reason: the direction of a half-pixel move is noise,
+//             and noise summed is a turn.
+//   backlash  a reversal drops the sum. A hand that goes one way and then the
+//             other is scrubbing, not circling — without this a shake
+//             accumulated both ways and fired whichever way it finished.
+//
+// THE STICK CIRCLES TOO, by rolling the right stick round its gate rather than
+// by any of the above: a pad has no pointer and no pixels, so it feeds the
+// same accumulator with the heading it is holding and skips the `px` gate. The
+// gate itself is the tremor filter there — a stick at rest is inside the
+// deadzone and never reaches this.
+const circle = {
+  turn: 0,      // signed radians accumulated
+  path: 0,      // CSS px travelled while accumulating
+  last: NaN,    // the previous sample's direction, radians
+  at: 0,        // ms of the oldest sample still counted
+  stick: false, // fed by a pushed stick, which has no pixels to measure
+  // HAS THIS LOOP ALREADY STARTED A FLIP. The gesture does not end when it
+  // fires — see the note on the half-circle below — so the accumulator keeps
+  // running and this is what stops it firing a second one.
+  engaged: 0,   // 0, or the direction it fired in
+  // The newest sample already folded in, as a timestamp. A sample counted
+  // twice is a circle counted twice, and the window is several frames long.
+  seen: 0,
+  // When another circle may be read, as a timestamp rather than a countdown:
+  // this is polled from a frame loop with no dt in its signature, and every
+  // other clock in this file is wall time already.
+  until: 0,
+};
+
+function resetCircle() {
+  circle.turn = 0;
+  circle.path = 0;
+  circle.last = NaN;
+  circle.at = 0;
+  circle.stick = false;
+  circle.engaged = 0;
+}
+
+/**
+ * One sample into the accumulator. `ang` is the direction this sample went in
+ * (radians), `step` how far the hand moved to make it (CSS px; 0 from a stick,
+ * which has no pixels).
+ */
+function feedCircle(ang, step, now, fromStick = false) {
+  const c = CONFIG.touch?.circleFlick ?? {};
+  // The loop has to be QUICK. A hand slowly orbiting a cursor for five seconds
+  // adds up to a circle and is not one, so the window is measured from the
+  // oldest sample still counted and the sum starts again when it lapses.
+  if (!Number.isNaN(circle.last) && now - circle.at > (c.window ?? 0.55) * 1000) resetCircle();
+  if (Number.isNaN(circle.last)) { circle.at = now; circle.last = ang; return; }
+  let d = ang - circle.last;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  circle.last = ang;
+  // A REVERSAL DROPS IT — but only a real one. Every hand wobbles a few tenths
+  // of a radian inside a loop it is drawing, and a zero-tolerance version
+  // reset the sum halfway round every single circle.
+  if (circle.turn !== 0 && Math.sign(d) !== Math.sign(circle.turn) && Math.abs(d) > (c.backlash ?? 1.1)) {
+    resetCircle();
+    circle.at = now;
+    circle.last = ang;
+    return;
+  }
+  circle.turn += d;
+  circle.path += step;
+  circle.stick = circle.stick || fromStick;
+}
+
+/**
+ * A SAMPLE OF AIM MOTION, from outside. The same list the mouse and the aim
+ * thumb feed (feedFlick), exported so tools/seal-flip-test.mjs can draw a
+ * circle with no glass and no cursor — the detector is the thing under test
+ * there, and a harness that reimplemented the accumulation would be testing
+ * its own copy of it.
+ *
+ * `dx`/`dy` are CSS pixels with y UP, which is the convention the list is in.
+ */
+export function feedAimMotion(dx, dy) {
+  feedFlick(dx, dy);
+}
+
+/**
+ * HAS A CIRCLE JUST BEEN DRAWN. Returns +1 counter-clockwise, -1 clockwise, 0
+ * for neither — an EDGE, true for exactly one frame, because the thing reading
+ * it starts a move and a level would start one every frame the hand kept
+ * going.
+ *
+ * `padAim` is the right stick this frame ({ x, y }) or null. A pushed stick
+ * feeds its heading; anything else reads the pointer deltas.
+ */
+export function readCircle(padAim = null) {
+  const c = CONFIG.touch?.circleFlick ?? {};
+  if (c.enabled === false) return 0;
+  const now = performance.now();
+
+  if (padAim) {
+    feedCircle(Math.atan2(padAim.y, padAim.x), 0, now, true);
+  } else {
+    // PRUNED HERE TOO, not only in readFlick. That reader is skipped entirely
+    // while a pad is aiming, so on a controller the list would otherwise fill
+    // to its cap with samples from the last time anybody touched the mouse and
+    // sit there — which is not wrong (every sample carries its own timestamp
+    // and the window below throws them out as it walks) but it is 256 stale
+    // entries walked every frame, forever.
+    const keep = now - flickHistoryMs();
+    while (flick.length && flick[0].t < keep) flick.shift();
+    // Every delta since the last read, in order. `seen` is where we got to, so
+    // a sample is never counted twice — summing the whole window every frame
+    // would multiply one loop by however many frames it stayed in the window.
+    const min = c.minStep ?? 1.2;
+    for (const d of flick) {
+      if (d.t <= circle.seen) continue;
+      circle.seen = d.t;
+      const len = Math.hypot(d.dx, d.dy);
+      if (len < min) continue;
+      feedCircle(Math.atan2(d.dy, d.dx), len, d.t);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // IT FIRES AT THE HALF CIRCLE, AND THE REST OF THE LOOP IS THE FOLLOW
+  // THROUGH.
+  // ---------------------------------------------------------------------
+  // Waiting for three quarters of a turn is a gesture that arrives late — the
+  // player's hand is already round the far side by the time the seal reacts,
+  // and every flip felt like it had been buffered. A half turn is the earliest
+  // point at which a loop cannot be anything else (an arc into a direction
+  // change is under half, which is what `backlash` and the `px` gate already
+  // catch), so that is where the move starts.
+  //
+  // WHAT THE REST OF THE CIRCLE BUYS. The accumulator does NOT stop here: it
+  // keeps summing, and `circleCommit` below reports how far past the engage
+  // the hand has got, 0 at the half turn and 1 at the full one. The flip reads
+  // it while it is still gathering and spends it on how SHARP the somersault
+  // is and how hard the tail lands (systems/sealFlip.js). A player who flicks
+  // half a loop and stops gets a lazy flip; one who whips the whole circle
+  // round gets the fast one.
+  //
+  // So the gesture has an engage and a follow-through, like a golf swing, and
+  // the move is legible in both halves: it STARTS when you commit and it is
+  // SHAPED by what you do after committing.
+  // A LOOP THAT HAS ALREADY FIRED IS SPENT once its throttle has run out. The
+  // accumulator deliberately keeps running after the engage (that is what the
+  // follow-through is), so something has to declare the gesture over — and the
+  // throttle is exactly that window: the flip has long since locked in what it
+  // read, and a hand still circling after it is starting the NEXT flip, not
+  // continuing this one.
+  //
+  // Without this the engage latched forever: one circle, and no further flip
+  // until the hand stopped moving for the whole window.
+  if (circle.engaged && now >= circle.until) resetCircle();
+
+  if (now >= circle.until && !circle.engaged) {
+    const engage = c.engageTurn ?? Math.PI;
+    const enough = Math.abs(circle.turn) >= engage;
+    const far = circle.stick || circle.path >= (c.px ?? 150);
+    if (enough && far) {
+      circle.engaged = circle.turn > 0 ? 1 : -1;
+      // The throttle is armed HERE, on the engage, so a hand that keeps
+      // circling cannot start a second flip inside the first one's
+      // follow-through.
+      circle.until = now + (c.cooldown ?? 0.35) * 1000;
+      return circle.engaged;
+    }
+  }
+  return 0;
+}
+
+/**
+ * HOW FAR PAST THE ENGAGE THE HAND HAS GOT, 0..1 — the follow-through.
+ *
+ * 0 at the half circle that started the flip, 1 once the loop is complete.
+ * Live: it climbs while the hand keeps going, and the move reads it while it
+ * is still gathering (noteFlipCommit in systems/sealFlip.js). Zero when
+ * nothing is engaged, which is the honest answer rather than a stale one.
+ *
+ * A REVERSAL OR A PAUSE DROPS IT TO WHATEVER WAS ALREADY EARNED, because the
+ * accumulator resets and this goes to 0 — but the flip has already locked in
+ * what it read (see flipCommit), so stopping halfway costs the follow-through
+ * and not the flip.
+ */
+function readCircleCommit() {
+  const c = CONFIG.touch?.circleFlick ?? {};
+  if (!circle.engaged) return 0;
+  const engage = c.engageTurn ?? Math.PI;
+  const full = Math.max(engage + 0.1, c.fullTurn ?? Math.PI * 2);
+  const past = Math.abs(circle.turn) - engage;
+  return Math.max(0, Math.min(1, past / (full - engage)));
+}
+
+/**
+ * HOW FAR INTO THE FIRST HALF OF THE LOOP THE HAND IS, 0..1 — the WIND-UP, and
+ * the half of the gesture that used to be invisible.
+ *
+ * The flip engages at the half circle, and everything before that used to be
+ * the player drawing into a game that showed them nothing: the seal did not
+ * move until the threshold was crossed, and then it ran a canned gather of its
+ * own. Two wind-ups, one of them the player's and ignored.
+ *
+ * This is that first half, reported live so the animal can coil UNDER THE HAND
+ * — the gather is the semicircle, and by the time the move commits the body is
+ * already loaded because the player loaded it.
+ *
+ * ZERO ONCE ENGAGED, because from there the follow-through takes over
+ * (readCircleCommit above): the same hand keeps going and the meaning of what
+ * it is doing changes at the halfway point. And zero when the accumulator has
+ * dropped it — a hand that pauses or doubles back has stopped winding, and the
+ * body unwinds with it.
+ */
+function readCircleLoad() {
+  const c = CONFIG.touch?.circleFlick ?? {};
+  if (c.enabled === false || circle.engaged) return 0;
+  const engage = Math.max(0.1, c.engageTurn ?? Math.PI);
+  // The DISTANCE gate as well as the turn, so a tremor does not coil the seal
+  // — the same pair the engage itself is held to, or the animal would wind up
+  // for every hand resting on a mouse and only refuse at the last moment.
+  if (!circle.stick && circle.path < (c.px ?? 150) * (c.loadPath ?? 0.35)) return 0;
+  return Math.max(0, Math.min(1, Math.abs(circle.turn) / engage));
 }
 
 export function initInput(canvas) {
@@ -845,6 +1133,20 @@ export function clearPendingInput() {
   flick.length = 0;
   mousePxX = mousePxY = NaN;
   clapRequested = false;
+  // ...AND THE HALF-DRAWN CIRCLE. The accumulator survives across frames by
+  // design (a loop is half a second of hand motion), so without this a gesture
+  // that was part way round when a run ended would still be part way round
+  // when the next one started, and the first flick of the new run would
+  // complete somebody else's circle. Clearing `flick` above is not enough:
+  // the turn is already summed.
+  resetCircle();
+  circle.until = 0;
+  circle.seen = 0;
+  input.circleFlick = 0;
+  input.circleTurn = 0;
+  input.circleCommit = 0;
+  input.circleLoad = 0;
+  input.circleDir = 0;
   // Adopt whatever is physically down RIGHT NOW as the baseline rather than
   // zeroing it. Clearing to false would make a trigger the player happens to be
   // holding as the run begins read as a brand-new press on the next frame, which
@@ -1535,6 +1837,9 @@ export function updateInput(camera, playerPos) {
   input.aimLive = false;
   input.aimMoved = false;
   input.aimGesture.set(0, 0);
+  // The circle is an edge like `strike`, so it is cleared here and raised at
+  // most once below.
+  input.circleFlick = 0;
 
   if (pad) {
     const rx = pad.axes[2] ?? 0;
@@ -1597,6 +1902,31 @@ export function updateInput(camera, playerPos) {
       // and it is the direction it moved in, not where it ended up.
       input.aimMoved = readFlick(input.aimGesture);
     }
+  }
+
+  // --- the circle (edge: true for exactly one frame per loop drawn) ---
+  //
+  // AFTER the whole aim priority chain, and fed from whichever device won it:
+  // a pad rolls its right stick round the gate, everything else draws with the
+  // pointer samples readFlick has already collected. Reading both at once
+  // would let a wiggled mouse flip a seal being played on a controller.
+  //
+  // Read every frame rather than only while the game is running, because the
+  // accumulator has to SEE the samples it is meant to reject — a reader that
+  // skipped frames would come back to a window full of unconsumed deltas and
+  // sum a hand's last half-second into a circle it never drew.
+  {
+    const padAim = (pad && Math.hypot(pad.axes[2] ?? 0, pad.axes[3] ?? 0) > stickDeadzone())
+      ? { x: pad.axes[2] ?? 0, y: -(pad.axes[3] ?? 0) }
+      : null;
+    input.circleFlick = readCircle(padAim);
+    input.circleTurn = circle.turn;
+    input.circleCommit = readCircleCommit();
+    input.circleLoad = readCircleLoad();
+    // WHICH WAY THE HAND IS WINDING, for the coil to lean into before the move
+    // has committed to a direction of its own. Zero when nothing is being
+    // drawn, so a seal with no gesture under it has no lean.
+    input.circleDir = circle.engaged || circle.turn === 0 ? 0 : (circle.turn > 0 ? 1 : -1);
   }
 
   // --- firing ---

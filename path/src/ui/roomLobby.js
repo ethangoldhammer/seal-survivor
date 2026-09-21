@@ -32,6 +32,7 @@
 // ---------------------------------------------------------------------------
 
 import { uiText } from '../uiTextTable.js';
+import { playerName, DEFAULT_PLAYER_NAME } from '../systems/playerName.js';
 import { feedback } from '../systems/feedback.js';
 import { pollPads } from './padPoll.js';
 import { installStyleBelowRoles } from './typography.js';
@@ -120,7 +121,12 @@ let notice = '';
 // spends on the colour wheel — and a screen that said nothing for a minute is
 // the one a player closes.
 let waiting = false;
-let callbacks = { onBack: null, onHosting: null, onGuestStart: null };
+let callbacks = { onBack: null, onHosting: null, onGuestStart: null, onHostPicking: null, onBothHere: null };
+
+/** Two members, both with a live socket. The moment this screen is done. */
+function roomFull() {
+  return roomState.members.length >= 2 && roomState.members.every((m) => m.present);
+}
 const padPrev = new Map();
 
 function build(parent) {
@@ -298,6 +304,9 @@ function startMatch() {
   feedback('uiClick');
   // Sent BEFORE the route is handed over: once onHosting fires this screen is
   // hidden, and a message posted after that is one nobody is left to send it.
+  // No `setup` on this one — the team select has not written one yet. main.js
+  // sends a second preview WITH the setup as soon as the screen is up, and
+  // again on every change, which is what the guest actually stands on a pitch.
   send({ t: 'lobbyPreview', picking: true });
   // PHASE 3 WIRES THIS UP. The host resolves the cast, the rules and the setup
   // and sends them, and both machines enter the same match. Today it hands
@@ -317,13 +326,29 @@ function back() {
 /**
  * What this player is called in the other person's lobby.
  *
- * Deliberately NOT systems/playerName.js's name: that is the name on the seal,
- * it is cast into the match by rosterCast, and sending it twice would let the
- * lobby and the pitch disagree about it. Phase 3 sends the whole cast in one
- * message; until then a member is identified by role and this is empty.
+ * systems/playerName.js's name, and the argument against that is worth
+ * recording because it was the original decision here: that name is the one on
+ * the seal, rosterCast puts it there, and sending it over the wire a second
+ * time lets the lobby and the pitch disagree about what somebody is called.
+ * True — but the cost of NOT sending it is worse than that disagreement, and
+ * it took two devices in one room to see it.
+ *
+ * AN EMPTY NAME MAKES A WORKING ROOM LOOK BROKEN. The seat row draws
+ * `member.name || ''`, so a member who has genuinely arrived renders as a
+ * blank strip: no name, a ready tick they have not earned yet, and nothing at
+ * all to distinguish it from the empty seat above it. The one question this
+ * screen exists to answer — is the other person here — became unanswerable,
+ * and the reasonable conclusion from looking at it was that the room had
+ * failed. A placeholder identity that is WRONG is still a thousand times more
+ * legible than one that is absent.
+ *
+ * The disagreement it opens is real and it is bounded: this is the lobby's
+ * name for a member, the cast still owns the name on the seal, and when the
+ * match start carries the cast the seat rows will re-render from that. Two
+ * names for one person, for the length of a lobby, is the honest price.
  */
 function playerLabel() {
-  return '';
+  return playerName();
 }
 
 // --- what is true right now -----------------------------------------------
@@ -358,10 +383,14 @@ function seatRow(member, empty) {
 
   const name = document.createElement('span');
   name.className = 'sv-room-seat-name';
-  // A member with no name is not nameless on screen — Phase 3 sends the cast
-  // and this becomes the seal's name. Until then the empty seat's line does
-  // the talking and a present member shows nothing rather than a placeholder.
-  name.textContent = empty ? uiText('roomSeatEmpty') : (member.name || '');
+  // A PRESENT MEMBER IS NEVER A BLANK STRIP. The name comes from playerLabel()
+  // on the other machine, so in practice it is always there — but `|| ''` used
+  // to be the whole story here, and a member with no name rendered as an empty
+  // row indistinguishable from the open seat above it. The fallback is
+  // DEFAULT_PLAYER_NAME and not the empty-seat line: an unnamed player already
+  // IS called that everywhere else in the game, whereas labelling an occupied
+  // seat "open" would be a new and untrue word for a person who is right there.
+  name.textContent = empty ? uiText('roomSeatEmpty') : (member.name || DEFAULT_PLAYER_NAME);
   row.appendChild(name);
 
   if (!empty && member.role === roomState.role) {
@@ -407,12 +436,16 @@ function render() {
     el.rtt.textContent = roomState.rtt ? `${roomState.rtt} ms` : '';
   }
 
+  // NO READY BUTTON. This screen is the code and nothing else now — you cannot
+  // usefully ready up before you have seen what you are readying for, and the
+  // team select is where that is decided. Hidden rather than deleted so the
+  // element, its styling and its harness stay put while the merge settles.
   const me = mine();
-  el.ready.hidden = screen !== ROOM || waiting;
+  el.ready.hidden = true;
   el.ready.textContent = me?.ready ? uiText('roomUnready') : uiText('roomReady');
   // THE GUEST NEVER SEES START — the host picks the teams for both, so a
   // second Start would be a button that could not do anything.
-  el.start.hidden = screen !== ROOM || roomState.role !== 'host';
+  el.start.hidden = true;
   el.start.disabled = !canStart();
 }
 
@@ -484,9 +517,9 @@ function signature() {
  * (see roomsAvailable in ui.js), and a screen that refused to open would be a
  * second place for that rule to live and drift.
  */
-export function showRoomLobby({ parent = document.body, onBack, onHosting, onGuestStart } = {}) {
+export function showRoomLobby({ parent = document.body, onBack, onHosting, onGuestStart, onHostPicking, onBothHere } = {}) {
   if (!root) build(parent);
-  callbacks = { onBack, onHosting, onGuestStart };
+  callbacks = { onBack, onHosting, onGuestStart, onHostPicking, onBothHere };
   screen = PICK;
   busy = false;
   waiting = false;
@@ -512,6 +545,13 @@ function onMessage(msg, binary) {
       // rather than on a timer, because the thing it described has ended.
       if (roomState.members.length >= 2 && roomState.members.every((m) => m.present)) notice = '';
       render();
+      // A FULL ROOM IS THE END OF THIS SCREEN'S JOB. Everything that used to
+      // happen next — walking onto a side, taking a colour, readying up — the
+      // team select already did, better, for any number of people; this screen
+      // was reimplementing a worse copy of it one room-code later. So a room
+      // with two present members hands straight over, on BOTH ends at once,
+      // and there is one ready-up in the game again instead of two.
+      if (roomFull()) callbacks.onBothHere?.();
       break;
     case 'error':
       fail(msg.code);
@@ -524,6 +564,12 @@ function onMessage(msg, binary) {
       break;
     case 'lobbyPreview':
       waiting = !!msg.picking;
+      // THE HOST'S PICKS, LIVE. A preview that carries a setup is the host's
+      // team select as it stands this second — the roster it has grown to, the
+      // two colours, the cast. The guest stands the same seals on the same
+      // pitch and watches them change, instead of reading one line of text for
+      // however long somebody spends on the colour wheel.
+      if (msg.setup) callbacks.onHostPicking?.(msg.setup);
       render();
       break;
     case 'start':

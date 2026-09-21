@@ -3,9 +3,11 @@
 // npm run ball:apply [--dry] [file.json]
 //
 // The ball lab's numbers (tools/looks/ball-lab.json, written by the page's
-// save) into config.js — CONFIG.versus.ball.* and the goo surface at
-// CONFIG.fx.goo.groups.ball.* — and OUT of imported-tuning.json, where a
-// saved copy would otherwise shadow the new literal forever. The same code as
+// save) into config.js, and out of imported-tuning.json. It writes
+// CONFIG.versus.ball.*, the goo surface at CONFIG.fx.goo.groups.*, and the
+// backflip wall's own two blocks (CONFIG.emitters.gooWall, CONFIG.sealFlip.back)
+// — then clears the saved copy, which would otherwise shadow the new literal
+// forever. The same code as
 // the level-up feel's apply (tools/apply-level-up-feel.mjs), told which roots
 // the ball's paths live under; see that file for why the snapshot has to be
 // cleared and why it refuses while the game's dev server is up.
@@ -23,7 +25,12 @@ import { applyFeel } from './apply-level-up-feel.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT = resolve(HERE, '..');
 export const DEFAULT_SRC = join(PROJECT, 'tools/looks/ball-lab.json');
-export const BALL_ROOTS = ['versus', 'fx'];
+// ...AND THE BACKFLIP'S WALL, which is tuned on the same page (D) and lives
+// under two more roots: `emitters.gooWall` is the goo's own throw (inherit,
+// turbulence, drag) and `sealFlip.back` is the barrier it draws. Without them
+// those rows would be sliders that silently do not save, which is the exact
+// trap the note beside the lattice rows in ball-lab.js warns about.
+export const BALL_ROOTS = ['versus', 'fx', 'emitters', 'sealFlip'];
 
 /** Everything the lab saved except the colour, as apply paths. */
 export function ballPreset(doc) {

@@ -37,7 +37,7 @@ import {
 } from '../path/src/systems/versus.js';
 import { reelState, resetReel, requestClip, harvestClips, buildPlaylist, nextClip } from '../path/src/systems/versusReel.js';
 import { poolState } from '../path/src/systems/replayCams.js';
-import { goalLineX, mouthY, rockX } from '../path/src/systems/versusGoal.js';
+import { goalLineX, goalLineDepth, mouthY, rockX } from '../path/src/systems/versusGoal.js';
 import { teamOfSeat } from '../path/src/systems/sealRoster.js';
 
 const scene = new THREE.Scene();
@@ -204,20 +204,39 @@ section('A save is the ball on target and a defender getting to it');
   check('a shot that would have missed the mouth is not a save',
     ![...reelState.pending, ...reelState.clips].some((c) => c.kind === 'save'));
 
-  // (d) a ball crawling goalward is not a shot.
-  resetReel();
-  toPlay();
-  parkSeals();
-  resetBall();
-  ball.x = rockX(-1) + (R.zone ?? 34) * 0.5;
-  ball.y = mouthY();
-  ball.vx = -((R.speed ?? 20) - 6);
-  settle(0.12);
-  versusState.lastTouch = { t: versusState.clock, who: 0, kind: 'strike', x: ball.x, y: ball.y };
-  ball.vx = 34;
-  settle(0.1);
-  check('a ball drifting goalward under `speed` is not a save',
-    ![...reelState.pending, ...reelState.clips].some((c) => c.kind === 'save'));
+  // (d) A BALL THAT WAS NEVER GOING TO ARRIVE is not a shot — and "never going
+  // to arrive" is measured, not typed. The water takes a fixed fraction of the
+  // ball's speed every frame, so what it has left is a DISTANCE (v/k, with
+  // k = -60 ln(drag)); this one is pointed at the mouth from further out than
+  // it can coast. It used to be a flat 20 u/s wherever the ball was, which
+  // called a trickle two units off the line a non-event and a cross-pitch
+  // roller a shot.
+  const k = -Math.log(CONFIG.versus.ball.drag) * 60;
+  const coast = (v) => Math.abs(v) / k;
+  const shotFromHere = (vx) => {
+    resetReel();
+    toPlay();
+    parkSeals();
+    resetBall();
+    ball.x = rockX(-1) + (R.zone ?? 34) * 0.9;
+    ball.y = mouthY();
+    ball.vx = vx;
+    settle(0.12);
+    versusState.lastTouch = { t: versusState.clock, who: 0, kind: 'strike', x: ball.x, y: ball.y };
+    ball.vx = 34;
+    settle(0.1);
+    return [...reelState.pending, ...reelState.clips].some((c) => c.kind === 'save');
+  };
+  const away = (R.zone ?? 34) * 0.9 - goalLineDepth();
+  const weak = away / coast(1) * 0.7;   // the speed whose whole coast is 70% of the way there
+  check('a ball with less coast in it than the distance left is not a save', !shotFromHere(-weak),
+    `${weak.toFixed(1)} u/s coasts ${coast(weak).toFixed(1)} of ${away.toFixed(1)} units`);
+  // ...and the same ball, given enough to get there, is one — even well under
+  // the 20 u/s the old rule asked for.
+  const enough = away / coast(1) * 1.6;
+  check('...and one that can still reach the line is, however slow', shotFromHere(-enough),
+    `${enough.toFixed(1)} u/s coasts ${coast(enough).toFixed(1)} of ${away.toFixed(1)} units`);
+  check('...which is slower than the flat threshold this replaced', enough < 20, `${enough.toFixed(1)} u/s vs 20`);
 }
 
 // ---------------------------------------------------------------------------

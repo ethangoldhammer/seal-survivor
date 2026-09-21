@@ -631,7 +631,13 @@ export function feedback(event, at = {}) {
   // actually levelled. `toastUpgrade` on the payload is that override, and it
   // resolves through the same lookup, so the line still reads whatever
   // upgrades.csv currently calls the card.
-  if (def.toast && !replay && toastSink) {
+  // ...AND `toast: false` ON THE PAYLOAD WITHHOLDS IT, for the one case the
+  // def cannot see: an event that usually pays out and this time did not. A
+  // receipt is a promise that something arrived, so a bubble popped in a
+  // Blubberball match — where the lungs are stubbed and the orb pays only the
+  // meter — must not print "Oxygen up!" over a tank that did not move. Only an
+  // explicit `false`: an absent key is the ordinary case and still prints.
+  if (def.toast && at.toast !== false && !replay && toastSink) {
     const id = at.toastUpgrade ?? def.toast;
     const card = CONFIG.upgrades?.find((u) => u.id === id);
     toastSink({

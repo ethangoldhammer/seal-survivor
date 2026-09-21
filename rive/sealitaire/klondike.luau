@@ -131,7 +131,7 @@ function M.canStackOnFoundation(moving: Card, dest: Pile): boolean
     if top == nil then
         return moving.rank == 1
     end
-    return top.suit == moving.suit and top.rank == moving.rank + 1
+    return top.suit == moving.suit and moving.rank == top.rank + 1
 end
 
 -- The run a pointer can pick up: from `index` to the end of a tableau column,
@@ -256,6 +256,16 @@ function M.draw(game: Game): string
     return 'recycled'
 end
 
+-- Cards on the foundations, 0-52. How far through the deal you are, in the
+-- one number that only ever goes up within a game.
+function M.founded(game: Game): number
+    local n = 0
+    for _, f in ipairs(game.foundations) do
+        n += #f.cards
+    end
+    return n
+end
+
 function M.isWon(game: Game): boolean
     for _, f in ipairs(game.foundations) do
         if #f.cards ~= 13 then
@@ -263,6 +273,83 @@ function M.isWon(game: Game): boolean
         end
     end
     return true
+end
+
+export type Play = {
+    from: Pile,
+    index: number,          -- where in `from` the run starts
+    to: Pile,
+    card: Card,             -- from.cards[index]: the card you would pick up
+    toFoundation: boolean,
+    reveals: boolean,       -- taking this run turns a face-down card over
+}
+
+-- Every move that ADVANCES the deal, right now.
+--
+-- Not every move `M.move` would accept, and the difference is deliberate:
+--
+--   * A FOUNDATION is never a source. Pulling an ace back down is legal and
+--     `M.move` does it (it even scores it, -10), but it undoes progress, so
+--     it is never something to point at.
+--   * Only the FIRST empty tableau column is offered a king, and a card that
+--     can go up gets only the foundation `M.foundationFor` picks. Three empty
+--     columns are three spellings of one play; the fins would point at all of
+--     them and the player would read three chances where there is one.
+--   * A lone king already at the bottom of its own column is not offered an
+--     empty column. Legal, and a perfect loop: it can shuffle between empty
+--     columns forever without the deal moving an inch.
+--
+-- The stock is not here either, for a different reason: drawing is always
+-- available and needs no pointing at. `M.draw` is the whole of it.
+function M.plays(game: Game): { Play }
+    local out: { Play } = {}
+
+    -- The destinations, resolved once. `emptyCol` is the single empty column a
+    -- king may be offered; nil when every column has cards.
+    local emptyCol: Pile? = nil
+    for _, t in ipairs(game.tableau) do
+        if #t.cards == 0 then
+            emptyCol = t
+            break
+        end
+    end
+
+    local function consider(from: Pile, index: number)
+        local run = M.runFrom(from, index)
+        if run == nil then
+            return
+        end
+        local head = run[1]
+        local reveals = from.kind == 'tableau' and index > 1 and not from.cards[index - 1].faceUp
+        if #run == 1 then
+            local f = M.foundationFor(game, head)
+            if f ~= nil then
+                table.insert(out, { from = from, index = index, to = f, card = head, toFoundation = true, reveals = reveals })
+            end
+        end
+        for _, t in ipairs(game.tableau) do
+            if t ~= from and #t.cards > 0 and M.canStackOnTableau(head, t) then
+                table.insert(out, { from = from, index = index, to = t, card = head, toFoundation = false, reveals = reveals })
+            end
+        end
+        -- The empty column, once, and never to park a king that is already
+        -- alone in one.
+        if emptyCol ~= nil and emptyCol ~= from and head.rank == 13 and not (from.kind == 'tableau' and index == 1) then
+            table.insert(out, { from = from, index = index, to = emptyCol, card = head, toFoundation = false, reveals = reveals })
+        end
+    end
+
+    if #game.waste.cards > 0 then
+        consider(game.waste, #game.waste.cards)
+    end
+    for _, t in ipairs(game.tableau) do
+        for k = 1, #t.cards do
+            if t.cards[k].faceUp then
+                consider(t, k)
+            end
+        end
+    end
+    return out
 end
 
 -- Every pile, in one list, for callers that iterate.

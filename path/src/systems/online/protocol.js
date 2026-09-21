@@ -75,7 +75,11 @@ export function normalizeCode(raw) {
   return s;
 }
 
-export const PROTOCOL_VERSION = 1;
+// 2: the meter block's fourth byte stopped being padding and became `charge`,
+// the stocked boost meter. The block is the same SIZE, which is exactly why
+// the version had to move — two builds either side of this change exchange
+// snapshots that decode without error and read a full boost bar as empty.
+export const PROTOCOL_VERSION = 2;
 
 export const MSG_INPUT = 0x10;
 export const MSG_SNAPSHOT = 0x20;
@@ -322,7 +326,14 @@ export function encodeSnapshot(s) {
     v.setUint8(o, clamp255((m.pending ?? 0) * 255)); o += 1;
     v.setUint8(o, clamp255((m.oxygen01 ?? 1) * 255)); o += 1;
     v.setUint8(o, m.charging ? METER_CHARGING : 0); o += 1;
-    v.setUint8(o, 0); o += 1;
+    // THE STOCKED METER, in what used to be the block's pad byte.
+    //
+    // `pending` above is NOT this and the difference is the whole of a bug:
+    // pending is how far the CURRENT wind-up has got, which is zero except in
+    // the moment somebody is holding the button, while `charge` is the fuel in
+    // the tank — the bar that is on screen the whole match. A guest sent only
+    // pending had a boost meter that sat empty and twitched.
+    v.setUint8(o, clamp255((m.charge ?? 1) * 255)); o += 1;
   }
 
   const mt = s.match;
@@ -393,6 +404,7 @@ export function decodeSnapshot(buf) {
       pending: v.getUint8(o) / 255,
       oxygen01: v.getUint8(o + 1) / 255,
       charging: (v.getUint8(o + 2) & METER_CHARGING) !== 0,
+      charge: v.getUint8(o + 3) / 255,
     });
     o += METER_BYTES;
   }

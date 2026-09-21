@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Sealitaire on the web?</title>
+<style>
+  html, body { margin: 0; background: #07182b; color: #cfe3f5; font: 13px/1.5 ui-monospace, monospace; }
+  #say { position: fixed; top: 0; left: 0; padding: 8px 12px; z-index: 2; pointer-events: none; }
+  #say p { margin: 0 0 2px; }
+  #say .bad { color: #ff9a76; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+<div id="say"></div>
+<canvas id="c" width="1600" height="1000"></canvas>
+<script type="module" src="./sealitaire-web.js"></script>

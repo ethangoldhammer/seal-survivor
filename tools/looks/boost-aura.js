@@ -178,6 +178,10 @@ function burn(seconds, held = true, dt = DT, aim = EAST) {
 // that belongs to something else. It goes back on for the brightness section,
 // where the whole question is the two of them together.
 let showRing = false;
+/** The band's own outward push, off the quad's radius — the quad is scaled to
+ *  the LONGEST the band gets, which is straight down the dash lane. */
+const bandOf = (outer) => (outer - INNER) / Math.max(1e-6, U.uLanePush.value);
+
 function draw(cam = camera) {
   ring.visible = showRing;
   updateParticleScale(cam, gl);
@@ -404,7 +408,7 @@ section('The push <span>— the same burn by the clock instead of by the bar, at
     const p = profile();
     reached.push({ t, p, outer: U.uOuter.value });
     present(`${t.toFixed(2)}s of burn`,
-      `shell ${p.inner.toFixed(2)}u → ${p.outer.toFixed(2)}u · asked for ${INNER.toFixed(2)} → ${U.uOuter.value.toFixed(2)}`,
+      `shell ${p.inner.toFixed(2)}u → ${p.outer.toFixed(2)}u · band ${bandOf(U.uOuter.value).toFixed(2)}u, quad to ${U.uOuter.value.toFixed(2)}u`,
       t === times[2]);
   }
 
@@ -427,16 +431,22 @@ section('The push <span>— the same burn by the clock instead of by the bar, at
   check('every panel inside the cap reaches further than the one before it', grew,
     reached.map((r) => r.p.outer.toFixed(2)).join(' → '));
   check('  ...and the one past it is holding, not still climbing',
-    Math.abs(reached[reached.length - 1].outer - INNER - (CONFIG.boostAura.reach ?? 2.6)) < 1e-6,
-    `${(reached[reached.length - 1].outer - INNER).toFixed(3)}u of a ${CONFIG.boostAura.reach}u reach`);
+    Math.abs(bandOf(reached[reached.length - 1].outer) - (CONFIG.boostAura.reach ?? 2.6)) < 1e-6,
+    `${bandOf(reached[reached.length - 1].outer).toFixed(3)}u of a ${CONFIG.boostAura.reach}u reach`);
 
   // THE PIXELS AGREE WITH THE UNIFORM. A shell whose drawn edge lags its stated
   // reach by a third would still grow monotonically and still pass every check
   // above; this is the one that says the radius on screen is the radius the
   // system thinks it has pushed to.
+  // LOOSER THAN IT WAS, and the reason is the lane rather than a regression.
+  // The band is stretched down the aim, so its (1 - x)^falloff profile is
+  // spread over a longer distance and the tail is dimmer PER UNIT — the 20%-of-
+  // peak contour the profile measures therefore crosses earlier in absolute
+  // terms than it did on the symmetrical shell. What is being asserted is that
+  // the drawn shell is most of the stated one, not that it fills it to the rim.
   const late = reached[reached.length - 2];
-  check('what is drawn reaches about as far as the system says it does',
-    late.p.outer > late.outer * 0.7 && late.p.outer <= late.outer * 1.05,
+  check('what is drawn reaches most of the way to what the system says',
+    late.p.outer > late.outer * 0.55 && late.p.outer <= late.outer * 1.05,
     `drawn ${late.p.outer.toFixed(2)}u against ${late.outer.toFixed(2)}u`);
 
   // ...AND IT IS TORN. A clean circle is the failure mode that would make this
@@ -516,6 +526,74 @@ section('...and it accelerates <span>— how far the field has travelled at each
   check('  ...and a full wind-up ends meaningfully faster than it began',
     flowSpeed(BURN) >= flowSpeed(0) * 1.3,
     `${flowSpeed(0).toFixed(1)} → ${flowSpeed(BURN).toFixed(1)}u/s`);
+}
+
+// --- THE LANE ---------------------------------------------------------------
+section('The lane <span>— `bias`, four fifths of the way into a hold, aimed EAST in every panel. The shell leans into the cone the dash is about to take instead of sitting round the animal like a collar: denser inside the cone, and reaching further along it. At 0 it is the symmetrical shell this started as, which is the setting to go back to if the lane ever reads as broken rather than aimed.</span>', 4);
+{
+  const keep = CONFIG.boostAura.bias;
+  for (const b of [0, 0.35, CONFIG.boostAura.bias, 1]) {
+    CONFIG.boostAura.bias = b;
+    rewind();
+    burn(BURN * 0.8, true, DT, EAST);
+    draw();
+    present(`bias ${b}`,
+      `quad x${U.uLanePush.value.toFixed(2)} the band`, b === keep);
+  }
+  CONFIG.boostAura.bias = keep;
+}
+
+section('...and how far down it reaches <span>— `stretch`, the multiple the band travels along the lane against across it. This is the half that makes it read as filling a CORRIDOR rather than as a bright patch on one side. The quad grows with it, so the cost is rasterised area and `reach` stays the BAND\'s own length.</span>', 4);
+{
+  const keep = CONFIG.boostAura.stretch;
+  for (const st of [0, 0.5, CONFIG.boostAura.stretch, 2.4]) {
+    CONFIG.boostAura.stretch = st;
+    rewind();
+    burn(BURN * 0.8, true, DT, EAST);
+    draw();
+    const p = profile();
+    present(`stretch ${st}`, `drawn out to ${p.outer.toFixed(2)}u`, st === keep);
+  }
+  CONFIG.boostAura.stretch = keep;
+}
+
+// --- COMING UP TO STRENGTH --------------------------------------------------
+section('Coming up to strength <span>— the same wind-up at five points, with the radius and the lane held OFF so the only thing moving is the colour. A hold opens pale and dim and arrives over `liftTime` seconds of burn, so the first instant of one is visibly the start of something rather than a state switching on. The HUE never moves: that is which pip is burning, and a wind-up that opened on the wrong one would be lying for its own first half.</span>', 5);
+{
+  // EVERY PANEL IS THE SAME SHELL AT THE SAME SIZE, so the only thing moving is
+  // the colour — a shell that is also growing and leaning answers three
+  // questions at once, which is a contact sheet nobody can read.
+  //
+  // Pinned by burning the SAME length of time in each and retuning `liftTime`
+  // instead, NOT by zeroing `push`. That was the first version and it produced
+  // five black panels: no push is no band, the shell has zero width, and
+  // nothing is drawn — while the check below went on passing, because uStrength
+  // is written whether or not there is any shell for it to brighten.
+  const keep = { bias: CONFIG.boostAura.bias, liftTime: CONFIG.boostAura.liftTime };
+  CONFIG.boostAura.bias = 0;
+  const SPAN = 0.12;
+  let lit = 0;
+  for (const f of [0.04, 0.25, 0.5, 0.75, 1]) {
+    CONFIG.boostAura.liftTime = SPAN / f;
+    rewind();
+    burn(SPAN, true, 1 / 240, EAST);
+    draw();
+    const c = U.uColor.value;
+    const chroma = Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
+    if (profile().rays > 0) lit++;
+    present(`${Math.round(f * 100)}% up`,
+      `strength ${U.uStrength.value.toFixed(2)} \u00b7 chroma ${chroma.toFixed(2)} \u00b7 <b style="color:#${c.getHexString()}">#${c.getHexString()}</b>`,
+      f === 1);
+  }
+  // THE PANELS HAVE SOMETHING IN THEM. The check below is about a uniform and
+  // would pass over five black frames; this is the one that says there was a
+  // shell for it to be describing.
+  check('every panel of the lift has a shell in it', lit === 5, `${lit} of 5 lit`);
+  check('the lift arrives at exactly the tuned strength',
+    Math.abs(U.uStrength.value - (CONFIG.boostAura.strength ?? 1.9)) < 1e-6,
+    `${U.uStrength.value.toFixed(3)}`);
+  CONFIG.boostAura.bias = keep.bias;
+  CONFIG.boostAura.liftTime = keep.liftTime;
 }
 
 // --- WHAT MAKES IT TURBULENT ------------------------------------------------

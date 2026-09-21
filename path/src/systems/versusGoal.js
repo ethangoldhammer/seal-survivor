@@ -20,12 +20,18 @@
 // one, and a ball clipping the post leaves at an angle instead of straight
 // back.
 //
-// THE LINE. A goal is called when the ball's near side is `goal.line` units
-// past the drawn face — INSIDE the tunnel and ON SCREEN, because in a match
-// the camera may reach `camera.reach` past the wall (cameraReach below,
-// spent by clampFocus in world.js), which is wider than the line. So the
-// ball is seen to cross it, a ball rattling short of it is still in play,
-// and a keeper standing in front of it can shove it back out.
+// THE LINE. The ball crosses when its near side is `goal.line` units past the
+// drawn face — INSIDE the tunnel and ON SCREEN, because in a match the camera
+// may reach `camera.reach` past the wall (cameraReach below, spent by
+// clampFocus in world.js), which is wider than the line. So the ball is seen
+// to cross it, a ball rattling short of it is still in play, and a keeper
+// standing in front of it can shove it back out.
+//
+// CROSSING IT IS NOT THE GOAL, though: the ball goes on being live and
+// playable from the moment its leading edge enters until `goal.hold` after the
+// rest of it follows, and a keeper who gets in there and drives it back out in
+// that window has cleared it. settleGoalLine in versus.js owns that; this file
+// owns the rectangle it is measured against.
 // It used to be the edge of the screen, which was wherever the shore's one
 // boulder of cover happened to stop.
 // ---------------------------------------------------------------------------
@@ -101,8 +107,10 @@ export function goalLineDepth() {
 }
 
 /**
- * THE LINE, as an x: a goal on `side` is called when the ball's near edge is
- * past it. See THE LINE above — the caller adds the ball's own radius.
+ * THE LINE, as an x. The ball's LEADING edge past it opens the goal (the ball
+ * is in the mouth and a keeper may still go and get it); its near edge past it
+ * is the crossing itself. See settleGoalLine in systems/versus.js — the caller
+ * adds whichever of the ball's own radii it is asking about.
  */
 export function goalLineX(side) {
   return rockX(side) + side * goalLineDepth();

@@ -1,0 +1,98 @@
+<Rive version="1" kind="fragment">
+    <!-- =========================================================================
+         THE TUNER'S PARTS. Two small component artboards the script instances
+         and lays out itself (table.luau, "The tuner panel"): one TunerRow per
+         line of tuning.luau, one TunerHead per category (and two more for
+         SAVE / RESET). Nothing here knows how many rows there are, so a new
+         tunable is one line in tuning.luau and nothing to regenerate.
+         Labels are keys and tooling words, not a player's copy.
+         ========================================================================= -->
+
+    <Artboard isComponent="true" defaultStateMachineId="1:9000" viewModelId="1:8000" viewModelInstanceId="1:8001"
+              x="1700" y="1100" width="380" height="16" styleId="1:1" name="TunerRow" id="1:7000">
+        <LayoutComponentStyle name="Style" id="1:1"/>
+        <Text x="16" y="1" sizingValue="autoWidth" name="Label" id="1:10">
+            <TextStylePaint fontSize="12" fontAssetId="0:400" name="S" id="1:11">
+                <Fill name="F" id="1:12"><SolidColor colorValue="FFB9D4EE" name="C" id="1:13"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:11" text="key" name="Run" id="1:14">
+                <DataBindContext sourcePathIds="1:8000-1:8002" propertyKey="268" id="1:15"/>
+            </TextValueRun>
+        </Text>
+        <Text x="160" y="1" sizingValue="autoWidth" originX="1" name="Value" id="1:20">
+            <TextStylePaint fontSize="12" fontAssetId="0:400" name="S" id="1:21">
+                <Fill name="F" id="1:22"><SolidColor colorValue="FFF6F1E7" name="C" id="1:23"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:21" text="0" name="Run" id="1:24">
+                <DataBindContext sourcePathIds="1:8000-1:8003" propertyKey="268" id="1:25"/>
+            </TextValueRun>
+        </Text>
+        <Shape x="172" y="8" name="Knob" id="1:30">
+            <DataBindContext sourcePathIds="1:8000-1:8004" propertyKey="13" id="1:31"/>
+            <Ellipse width="12" height="12" originX="0.5" originY="0.5" name="P" id="1:32"/>
+            <Fill name="F" id="1:33"><SolidColor colorValue="FFF5B02E" name="C" id="1:34"/></Fill>
+        </Shape>
+        <Shape x="266" y="8" name="Track" id="1:40">
+            <Rectangle width="188" height="3" originX="0.5" originY="0.5" cornerRadiusTL="1.5" name="P" id="1:41"/>
+            <Fill name="F" id="1:42"><SolidColor colorValue="66B9D4EE" name="C" id="1:43"/></Fill>
+        </Shape>
+        <StateMachine name="State Machine 1" id="1:9000">
+            <StateMachineLayer name="Layer 1" id="1:9001">
+                <AnyState x="300" y="0" id="1:9002"/><ExitState x="400" y="0" id="1:9003"/><EntryState x="0" y="0" id="1:9004"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <Artboard isComponent="true" defaultStateMachineId="1:9100" viewModelId="1:8100" viewModelInstanceId="1:8101"
+              x="1700" y="1150" width="380" height="20" styleId="1:101" name="TunerHead" id="1:7100">
+        <LayoutComponentStyle name="Style" id="1:101"/>
+        <Text x="10" y="2" sizingValue="autoWidth" name="Mark" id="1:110">
+            <TextStylePaint fontSize="13" fontAssetId="0:400" name="S" id="1:111">
+                <Fill name="F" id="1:112"><SolidColor colorValue="FFF5B02E" name="C" id="1:113"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:111" text="-" name="Run" id="1:114">
+                <DataBindContext sourcePathIds="1:8100-1:8103" propertyKey="268" id="1:115"/>
+            </TextValueRun>
+        </Text>
+        <Text x="26" y="2" sizingValue="autoWidth" name="Name" id="1:120">
+            <TextStylePaint fontSize="13" letterSpacing="0.1" fontAssetId="0:400" name="S" id="1:121">
+                <Fill name="F" id="1:122"><SolidColor colorValue="FFF5B02E" name="C" id="1:123"/></Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="1:121" text="cat" name="Run" id="1:124">
+                <DataBindContext sourcePathIds="1:8100-1:8102" propertyKey="268" id="1:125"/>
+            </TextValueRun>
+        </Text>
+        <Shape x="190" y="19" name="Rule" id="1:130">
+            <Rectangle width="360" height="1" originX="0.5" originY="0.5" name="P" id="1:131"/>
+            <Fill name="F" id="1:132"><SolidColor colorValue="44F5B02E" name="C" id="1:133"/></Fill>
+        </Shape>
+        <StateMachine name="State Machine 1" id="1:9100">
+            <StateMachineLayer name="Layer 1" id="1:9101">
+                <AnyState x="300" y="0" id="1:9102"/><ExitState x="400" y="0" id="1:9103"/><EntryState x="0" y="0" id="1:9104"/>
+            </StateMachineLayer>
+        </StateMachine>
+    </Artboard>
+
+    <ComponentAsset artboardId="1:7000" name="TunerRow" id="1:7001"/>
+    <ComponentAsset artboardId="1:7100" name="TunerHead" id="1:7101"/>
+
+    <ViewModel defaultInstanceId="1:8001" name="TunerRow" id="1:8000">
+        <ViewModelPropertyString name="l" id="1:8002"/>
+        <ViewModelPropertyString name="v" id="1:8003"/>
+        <ViewModelPropertyNumber name="k" id="1:8004"/>
+        <ViewModelInstance exports="true" name="Instance" id="1:8001">
+            <ViewModelInstanceString propertyValue="key" viewModelPropertyId="1:8002" id="1:8005"/>
+            <ViewModelInstanceString propertyValue="0" viewModelPropertyId="1:8003" id="1:8006"/>
+            <ViewModelInstanceNumber propertyValue="172" viewModelPropertyId="1:8004" id="1:8007"/>
+        </ViewModelInstance>
+    </ViewModel>
+
+    <ViewModel defaultInstanceId="1:8101" name="TunerHead" id="1:8100">
+        <ViewModelPropertyString name="title" id="1:8102"/>
+        <ViewModelPropertyString name="mark" id="1:8103"/>
+        <ViewModelInstance exports="true" name="Instance" id="1:8101">
+            <ViewModelInstanceString propertyValue="cat" viewModelPropertyId="1:8102" id="1:8104"/>
+            <ViewModelInstanceString propertyValue="-" viewModelPropertyId="1:8103" id="1:8105"/>
+        </ViewModelInstance>
+    </ViewModel>
+</Rive>

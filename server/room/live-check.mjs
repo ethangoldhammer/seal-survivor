@@ -10,13 +10,26 @@
 //   npx wrangler dev            # in this directory
 //   node server/room/live-check.mjs
 //
+// AGAINST THE DEPLOYED WORKER, pass its origin — the same checks, run over TLS
+// against the real edge. Worth doing once after every deploy: local Durable
+// Objects are miniflare's, and the rejoin grace window here is the one thing
+// that depends on storage actually persisting across a hibernation the local
+// runtime may never perform.
+//
+//   node server/room/live-check.mjs https://seal-survivor-room.<sub>.workers.dev
+//
 // What it covers is exactly what room-relay.js's harness cannot: the routing,
 // the WebSocket upgrade, the hibernation handlers, and whether a seat
 // reservation really survives in Durable Object storage. Node 22's built-in
 // WebSocket, so there is nothing to install.
 // ---------------------------------------------------------------------------
-const BASE = 'http://127.0.0.1:8787';
-const WS = 'ws://127.0.0.1:8787';
+// The origin under test. `wrangler dev` by default, so the bare command in the
+// header keeps working; an argument replaces it, and the ws scheme is derived
+// rather than given, because a wss origin typed as ws is a connection that
+// fails with an error about the handshake and nothing about the scheme.
+const ORIGIN = (process.argv[2] || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+const BASE = ORIGIN;
+const WS = ORIGIN.replace(/^http/, 'ws');
 
 let failures = 0;
 const check = (label, cond, detail = '') => {
@@ -43,7 +56,7 @@ function connect(code, role, { name = '', build = 'testbuild' } = {}) {
   return { ws, got, bin, opened };
 }
 
-console.log('\nthe live worker, under wrangler dev\n');
+console.log(`\nthe live worker, at ${ORIGIN}\n`);
 
 // 1. a code
 const res = await fetch(`${BASE}/new`, { method: 'POST' });

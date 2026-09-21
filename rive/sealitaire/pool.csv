@@ -1,0 +1,54 @@
+model,flip,clip,notes
+anglerfish,,,"THE POOL: every creature a card may be given from the tuner's card rows, over and above what tanks.csv already uses. `npm run sealitaire:pool` bakes tanks.csv's models AND these into fish.mesh so the model row can step through all of them live; `npm run sealitaire:fish` (no pool) bakes only what tanks.csv uses, which is the ship bake. `model` is a public/models/*.glb name; `flip` turns one the baker guessed backwards, and must agree with tanks.csv if the model is in both"
+barracuda,,,
+brownfish,,,
+clownfish,,,
+combjelly,,,
+crabpincer,,,
+crownjelly,,,
+cutesquid,,,
+dancingcrab,,,
+dolphin,,,
+fish,,,
+fish2,,,
+fish3,,,"candidate: a third static small fish"
+flowerhatjelly,,,
+furseal,,,
+giantsquid,,,
+guppy,,ArmatureAction.001,"candidate: Sketchfab guppy, 44 joints and a 4s clip — the first pool body that can actually swim on a card"
+greatwhite,,,
+hammerhead,,,
+humpback,,,
+jellyfish,,,
+lizardfish,,,
+manowar,,,
+megalodon,,,
+mightymeg,,,
+moonjelly,,,
+mosasaurus,,,
+myllokunmingia,,,
+octopus_rig,,,
+orca,,,
+orca_calf,,,
+orca_female,,,
+orca_male,,,
+puffer,,,
+sailfish,,,
+sardine,,,
+sealhelper,,,
+seaturtle,,,
+shark,,,
+shrimp,,,
+spottedjelly,,,
+squid,,,
+stingray,,,
+surgeonfish,,,
+tang,,,
+trawler,,,"bossBoat's hull. Unrigged, so it bakes as one identity bone and reacts through the vertex dent alone"
+tunafish,,,
+whale,,,
+yacht,1,,"bossYacht's hull, unrigged like the trawler. FLIPPED: the baker calls the fatter end the head, and on this hull that is the transom — assets.js measured the bow as the +Z end off the side view, so left alone the yacht sails stern-first"
+seagull,,,"from seagull.fbx via npm run sealitaire:fbx -- seagull; one 24.8s clip, Take 001"
+beluga,,,"from beluga.fbx (74 rigid parts + 2 skins); one 11.2s clip"
+morayeel,,,"from morayeel.fbx; its clip had morph-target tracks, dropped"
+trout,,,"from trout.fbx"

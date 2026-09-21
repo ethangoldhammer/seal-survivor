@@ -51,20 +51,42 @@ import { ease } from '../ease.js';
 // the tuner mutates CONFIG in place.
 let limpTailCfg = null;
 let limpTailStamp = '';
-function tailCfgFor(cfg, limp) {
+function tailCfgFor(cfg, limp, mods = null) {
+  // TWO THINGS CHANGE THIS SPRING, AND THEY ARE NOT THE SAME KIND OF CHANGE.
+  //
+  //   THE FLOP is one number that makes the chain HANG: it divides the
+  //   stiffness and follows the damping down by the square root, holding the
+  //   damping ratio constant, which is the rule this file and
+  //   systems/boneSpring.js both keep everywhere else.
+  //
+  //   THE FLIP is four numbers that make it WHIP, and one of them deliberately
+  //   breaks that rule — see flipTailSpring in systems/sealFlip.js. More lag
+  //   to load it, MORE stiffness to bring it back, and LESS damping so the tip
+  //   overshoots. A ratio held constant is a tail that arrives; a ratio broken
+  //   downward is a tail that cracks.
+  //
+  // Handed down per seal rather than read here, because this rig belongs to
+  // every seal in the water and only one of them is flipping.
   const loose = limp ? (CONFIG.death?.flop?.tailLooseness ?? 1) : 1;
-  if (!(loose > 0) || loose === 1) return cfg;
-  const stamp = `${cfg.stiffness}|${cfg.damping}|${cfg.maxLag}|${cfg.tipLooseness}|${loose}`;
+  const hasMods = !!mods && (mods.lag !== 1 || mods.stiffness !== 1
+    || mods.damping !== 1 || mods.tipLooseness !== 1);
+  if ((!(loose > 0) || loose === 1) && !hasMods) return cfg;
+  const m = hasMods ? mods : null;
+  const stamp = `${cfg.stiffness}|${cfg.damping}|${cfg.maxLag}|${cfg.tipLooseness}|${loose}`
+    + (m ? `|${m.lag.toFixed(3)}|${m.stiffness.toFixed(3)}|${m.damping.toFixed(3)}|${m.tipLooseness.toFixed(3)}` : '');
   if (limpTailStamp !== stamp) {
     limpTailStamp = stamp;
     limpTailCfg = {
       ...cfg,
-      stiffness: cfg.stiffness / loose,
-      damping: cfg.damping / Math.sqrt(loose),
-      maxLag: cfg.maxLag * loose,
+      // The flop's divisor and the flip's multiplier, in that order. They
+      // compose rather than override: a seal that died mid-somersault is a
+      // rare frame and it should not have to pick one.
+      stiffness: (cfg.stiffness / loose) * (m ? m.stiffness : 1),
+      damping: (cfg.damping / Math.sqrt(loose)) * (m ? m.damping : 1),
+      maxLag: cfg.maxLag * loose * (m ? m.lag : 1),
       // Toward 1 rather than past it: the tip may hang almost freely, but a
       // looseness of 1 is a chain with no spring left in it at all.
-      tipLooseness: Math.min(0.95, cfg.tipLooseness * loose),
+      tipLooseness: Math.min(0.95, cfg.tipLooseness * loose * (m ? m.tipLooseness : 1)),
     };
   }
   return limpTailCfg;
@@ -300,6 +322,14 @@ export function createAimRig(instance) {
      */
     update(dt, aim, {
       engaged = false, suppressed = false, charge = 0, limp = false, faceOut = 0, finGate = null, finAims = null,
+      // WHAT THIS SEAL'S TAIL SPRING DOES DIFFERENTLY THIS FRAME, as
+      // multipliers over CONFIG.tail — { lag, stiffness, damping,
+      // tipLooseness } — or null for an animal that is simply swimming. Raised
+      // while it is flipping, where a tail tuned to swim with arrives on the
+      // pose instead of cracking through it. See flipTailSpring in
+      // systems/sealFlip.js, and tailCfgFor above for how it composes with the
+      // death flop.
+      tailMods = null,
     } = {}) {
       const finCfg = CONFIG.fins;
       const headCfg = CONFIG.head;
@@ -575,7 +605,7 @@ export function createAimRig(instance) {
           if (lift > 0) tailSpring.impulse(_up.set(0, 1, 0), lift, tailCfg.impulseTipBias ?? 1);
         }
 
-        tailSpring.update(dt, tailCfgFor(tailCfg, limp), tailWeight);
+        tailSpring.update(dt, tailCfgFor(tailCfg, limp, tailMods), tailWeight);
         tail.bones[0].updateWorldMatrix(false, true);
         tipWorld(tail, tail.point, 1);
       }

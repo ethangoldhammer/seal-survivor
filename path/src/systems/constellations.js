@@ -70,13 +70,28 @@ const WARP_GLSL = /* glsl */ `
   uniform vec2 uRippleParams[MAX_RIPPLES]; // x = strength, y = radius
   uniform vec4 uTouch[MAX_TOUCH];          // xy = world pos, z = radius, w = level
   uniform vec4 uTouchWarp;                 // x = push, y = swirl, z = wave, w = spin
+  uniform float uDriftX;                   // group x offset, so a vertex can be
+                                           // read back as a world position
   uniform float uDecay;
   uniform float uFreq;
   uniform float uWavelength;
   uniform float uSquash;
 
-  vec2 skyWarp(vec2 p) {
+  vec2 skyWarp(vec2 local) {
     vec2 disp = vec2(0.0);
+
+    // THE FIELD IS DRAWN IN A DRIFTING GROUP, so a vertex's own position is no
+    // longer where it is in the world. Ripples are thrown at world points and
+    // a finger is unprojected to one, and both OUTLIVE the camera move that
+    // happens next — a ripple burns for a couple of seconds and a thumb can be
+    // held down — so converting them on the way in would leave them pinned to
+    // a drift that had moved on. The vertex is converted instead, every frame,
+    // which is the only end of this that is free. See the drift note in
+    // update() below.
+    //
+    // The DISPLACEMENT needs no conversion either way: a translation cannot
+    // change a difference of two points, and every term below is one.
+    vec2 p = vec2(local.x + uDriftX, local.y);
 
     for (int i = 0; i < MAX_RIPPLES; i++) {
       // The one line that is not the grid's. A ripple is thrown where the
@@ -700,6 +715,7 @@ export function createConstellations(scene) {
     uRippleParams: { value: rippleParams },
     uTouch: { value: touch },
     uTouchWarp: { value: new THREE.Vector4(0, 0, 1, 0) },
+    uDriftX: { value: 0 },
     uDecay: { value: 2.6 },
     uFreq: { value: 9 },
     uWavelength: { value: 1.4 },
@@ -894,7 +910,9 @@ export function createConstellations(scene) {
   /**
    * @param rawDt real seconds. Raw, like every other beat-synced effect: the
    *   sky has no business stopping because the game froze for 60ms on a hit.
-   * @param view  { camera } — handed in rather than imported, as the grid's is.
+   * @param view  { camera, camX } — handed in rather than imported, as the
+   *   grid's is. `camX` is the BANKED framing, the same anchor the sun and
+   *   moon drift against; see the note by uDriftX below.
    */
   function update(rawDt, view = {}) {
     clock += rawDt;
@@ -986,6 +1004,33 @@ export function createConstellations(scene) {
     u.uSurfaceY.value = bounds.surfaceY;
     u.uWaveAmp.value = sea.amp;
     u.uChop.value = sea.chop;
+
+    // THE SAME DRIFT THE SUN AND MOON RIDE, and the reason this system stopped
+    // being welded to the world.
+    //
+    // These lines are strung between the stars systems/sky.js paints, and that
+    // field is hashed off vWorldPos on a plane that never moves — so the whole
+    // night sky sat at drift 1, as near as the sea, while the moon crossing it
+    // sat at 0.04. Swimming the ocean walked the moon ninety units through its
+    // own star field. Nothing about that reads as a number and it is invisible
+    // in a screenshot; it reads as the sky being slightly untrustworthy.
+    //
+    // So sky.js offsets the field's SAMPLE by the same amount (uCenter.x in
+    // world.js) and this group is translated to match, which keeps the lines
+    // on the stars they were strung between. Both are the plain counter-offset
+    // the celestial layer uses: at cam * (1 - drift) a camera move of D slides
+    // the sky D * drift through the frame.
+    //
+    // COVERAGE GETS EASIER, not harder, which is worth saying because the
+    // instinct is to widen `margin` for this. The frame needs the field over
+    // [camX * drift - halfW, camX * drift + halfW] in sample space — at 0.04
+    // and a fifty-unit pan that is two units of travel, against the hundred
+    // the field already spans.
+    const orbit = CONFIG.dayNight?.orbit;
+    const keep = 1 - Math.max(0, Math.min(1, orbit?.drift ?? orbit?.parallax ?? 1));
+    const driftX = (view.camX ?? 0) * keep;
+    group.position.x = driftX;
+    uniforms.uDriftX.value = driftX;
 
     updateTouch(rawDt, view);
   }

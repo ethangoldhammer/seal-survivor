@@ -3,3 +3,10 @@ main: Sealitaire
 logs:
   file: build/rive.log
   problems: build/problems.log
+# The editor binding, the same shape rive/blubberball carries. `rive push`
+# writes fileId in here on the FIRST push — the project is named up front so
+# that push lands in the same Rive project the other one does instead of
+# opening a picker.
+push:
+  fileId: 2595953
+  projectId: 316606

@@ -1,0 +1,46 @@
+source,notes
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HG_Cards,the Splice card pack Ethan auditioned and cast from; 84 takes
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_01.mp3,"the tank knock — a body hitting the glass. Ethan's own flick-plops from the game bank; 16 takes so a school rattling does not stutter one sample. tankWall casts all of them and a card can name a heavier event in tanks.csv `knock`"
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_02.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_03.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_04.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_05.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_06.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_07.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_08.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_09.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_10.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_11.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_12.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_13.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_14.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_15.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EG_FlickPlop_16.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Mack.mp3,"the deck fan's hover blip — a UI pack, not the card pack. Ethan's pick; 0.47s"
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Menu_Spat.mp3,"a card landing on the foundation — Ethan's pick, replacing hg-cards-071 which ran 3.5s"
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Noah.mp3,"a card SENT to the foundation with a double-click, as against dragged there — Ethan's pick"
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Breach_01.mp3,"the seal's celebration set, pulled from Seal Survivor: these are the voices CONFIG.sfx.breach / .strike / .sealPeek are tuned to there (path/src/imported-tuning.json), so the animal sounds like itself across both games. Cast on the react variants in sfxEvents.csv"
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_56.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Boost_01.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Boost_02.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Boost_03.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Boost_04.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Wa_01.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Wa_02.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_07.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_13.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/Seal_Call_02.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/EliArf_Boost_01.mp3,
+/Users/ethangoldhammer/Projects/seal-survivor/public/sfx/fluteseal_01.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Oil a.mp3,"the CARD HOVER blips — a spread of the HGUI pack's Blip family, 12 of 83. Played at a pitch rung chosen by how deep the hovered stack is (bigger stack, lower blip), so the ladder is baked by `npm run sealitaire:sfx:fx hover`. Ethan picked the family from Oil a and Owl."
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Owl.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Arky.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Blue.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Borky.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Dove.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Dub.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Froggy.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Larp.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Milli.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Snappy.mp3,
+/Users/ethangoldhammer/Documents/_!_Clients/SPLICE/HGUI_Pack_01/HG_UI_Blip_Woody.mp3,

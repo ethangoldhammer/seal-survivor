@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
+// The one question every oxygen call site asks — the mechanic's own switch
+// AND Blubberball's, which is off. See oxygenLive in systems/versusFlag.js.
+import { oxygenLive } from '../systems/versusFlag.js';
 import { baseStats, applyLevelGrowth, applyBossGrowth, applyDamageScaling, applyIronLung, applyLaserReach, stashBreathSpeed, applyBreathSpeed } from '../stats.js';
 import { rollLoadout, laserReachMul, DEFAULT_LOADOUT } from '../loadout.js';
 import { applyWithRarity, baseRarity, rarityRank } from '../systems/rarity.js';
@@ -10,7 +13,9 @@ import { feedback } from '../systems/feedback.js';
 import { createAnimationController, stateForSpeed } from '../systems/animation.js';
 import { createAimRig } from '../systems/aimRig.js';
 import { createCelebrationDriver, resetCelebration, celebrationSpin, celebrationFacing } from '../systems/celebrate.js';
+import { flipSpin } from '../systems/sealFlip.js';
 import { createClapDriver, resetClap } from '../systems/clap.js';
+import { createFlipDriver, resetSealFlip } from '../systems/sealFlip.js';
 import { createStrikePoseDriver, resetStrikePose } from '../systems/strikePose.js';
 import { createBreathDriver } from '../systems/breathe.js';
 import { createJawDriver } from '../systems/jaw.js';
@@ -552,6 +557,7 @@ export function initPlayer(scene) {
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
   player.clap = createClapDriver(body);
+  player.flip = createFlipDriver(body, null);
   player.coil = createStrikePoseDriver(body);
   player.breathe = createBreathDriver(body);
   player.jaw = createSealJaw(body);
@@ -580,7 +586,8 @@ export function createSealState() {
   return {
     mesh: null, body: null, aimRig: null, celebrate: null, clap: null, breathe: null, jaw: null,
     bodyBox: null, bodyProbe: null,
-    celebrateTag: null,     // the tag its celebration driver was made with (celebrationSpin)
+    celebrateTag: null,     // the tag its celebration driver was made with (celebrationSpin, flipSpin)
+    tailSpring: null,       // CONFIG.tail multipliers while this seal flips (flipTailSpring)
     velocity: new THREE.Vector2(0, 0),
     knockX: 0, knockY: 0,
     hp: 100, invuln: 0,
@@ -1085,6 +1092,7 @@ export function rebuildShipBody() {
   player.aimRig = createAimRig(body);
   player.celebrate = createCelebrationDriver(body);
   player.clap = createClapDriver(body);
+  player.flip = createFlipDriver(body, null);
   player.coil = createStrikePoseDriver(body);
   player.breathe = createBreathDriver(body);
   // Bones are per-instance, as above — the old driver holds a bone that just
@@ -1548,6 +1556,13 @@ export function resetPlayer() {
   // press. See systems/clap.js.
   resetClap();
   player.clap?.reset();
+  // ...and the flip, both halves, for the same two reasons the clap has: the
+  // shared clock carries the cooldown, so a run started moments after a flip
+  // would refuse its first circle, and this body's smoothed IK pose would
+  // otherwise blend the last run's tuck into the first frames of this one.
+  // See systems/sealFlip.js.
+  resetSealFlip();
+  player.flip?.reset();
   // ...and the coil, both halves, for the same two reasons: the shared clock
   // is what the "STRIKE NOW!" accent is counted on, and this body's smoothed
   // IK pose would otherwise blend the last run's wind-up into the first frames
@@ -2018,7 +2033,7 @@ export function updatePlayer(dt, input, seal = player, st = strikeState) {
     seal.anim?.trigger('bark');
   }
 
-  if (CONFIG.oxygen.enabled) {
+  if (oxygenLive()) {
     if (seal.aboveSurface) {
       seal.oxygen = Math.min(s.maxOxygen, seal.oxygen + s.oxygenRefillRate * dt);
     } else {
@@ -2435,7 +2450,18 @@ export function poseBody(...args) {
   }
   _rollQ.setFromAxisAngle(_yAxis, seal.mirrorAngle + seal.rollAngle + rattle + joltRoll);
   _craneQ.setFromAxisAngle(_xAxis, seal.craneAngle + shudder);
-  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin(seal.celebrateTag ?? null) + joltSpin);
+  // THE SOMERSAULTS, BOTH OF THEM, on the one axis — the victory lap's and the
+  // flip move's (systems/sealFlip.js), summed rather than switched between.
+  // They cannot overlap in practice (triggerFlip refuses while a celebration
+  // is up, and updateSealFlip stands down if one starts mid-turn), so the sum
+  // is only ever one of them; adding is what keeps that a fact about those two
+  // files rather than a priority rule written a third time here.
+  //
+  // Asked for, not pushed, exactly like the lap's — see the note above. The
+  // flip is a pure function of its own wall clock, so a frame where this
+  // function does not run cannot accumulate a turn into the animal.
+  _spinQ.setFromAxisAngle(_zAxis, celebrationSpin(seal.celebrateTag ?? null)
+    + flipSpin(seal.celebrateTag ?? null) + joltSpin);
   seal.body.quaternion.copy(_craneQ).multiply(_rollQ).multiply(_spinQ);
 }
 
@@ -2518,5 +2544,10 @@ export function updateAimRig(dt, aim, engaged, charge = 0, limp = false, faceOut
     // through their own releaseOnOneShot toggles, so either can opt out of
     // handing control back to an authored performance.
     suppressed: !limp && (seal.anim?.isPlayingOneShot() ?? false),
+    // WHAT THE TAIL SPRING DOES DIFFERENTLY THIS FRAME — the whip a
+    // somersault wants, as multipliers over CONFIG.tail. Written onto the seal
+    // by main.js from flipTailSpring(), and arriving that way for the same
+    // reason `charge` does: entities/ does not import from systems/.
+    tailMods: seal.tailSpring ?? null,
   });
 }

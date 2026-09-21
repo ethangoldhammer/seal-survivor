@@ -1,6 +1,7 @@
 id,group,kind,label,plural,unlock,template,review,unit,lower,bare,percentOfOne,notes
 maxHp,the seal,flat,max HP,,,,,,,,,
 maxSpeed,the seal,percent,max speed,,,,,,,,,
+thrust,the seal,percent,swim speed,,,,,,,,,"Speedy Seal now scales this alongside maxSpeed (the cap was unreachable, so the card did nothing). Only renders if the card desc uses {effect}; today it says Speed up! so nobody sees this yet. Two or three words, the seal's ordinary cruising speed, read on a level-up card as e.g. +20% <label>."
 pickupRadius,the seal,percent,pickup radius,,,,,,,,,
 chumGulpRadius,the seal,percent,gulp size,,,,,,,,,
 regenPerSec,the seal,flat,HP/sec,,,,,,,,,

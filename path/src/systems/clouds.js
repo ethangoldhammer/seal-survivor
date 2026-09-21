@@ -210,10 +210,27 @@ export function createClouds(scene) {
       // is sampled from the uvs), which is what makes that the layer's apparent
       // speed rather than the pattern's.
       const drift = Math.max(0, Math.min(1, def.drift ?? 0));
-      // ...and nothing in Y, for the reason the sun takes none: the horizon
-      // this is measured against does not move, so a vertical offset slides
-      // the whole deck up and down past a fixed water line every time the seal
-      // dives. See the note in systems/celestial.js.
+      // ...AND NOTHING IN Y, which the sun takes none of either, and for two
+      // reasons that both hold rather than one.
+      //
+      // The shared one: everything in this sky is measured UP FROM THE WATER
+      // LINE, which does not move. `y` and `height` are fractions of the air
+      // band above it, exactly as the gradient in systems/sky.js ramps over
+      // (vWorldPos.y - uSurfaceY). Offset the deck in y and it slides past a
+      // fixed sea every time the seal dives.
+      //
+      // The one that is this file's own: a deck has a REAL ALTITUDE, where a
+      // body's height is the hour and not a height at all. So a deck stays
+      // where it is and the seal climbs toward it, which is what falling
+      // away underneath you is made of. Drift it and the nearest deck — the
+      // one at 0.52, the one you can track by eye — would RISE fastest of the
+      // four as the seal jumps at it, and it would need a wave cut of its own
+      // besides: these draw at z -5.2, in FRONT of the opaque water fill, so
+      // a deck below the water line paints cloud across the ocean.
+      //
+      // Pinned in tools/night-sky-test.mjs, because the obvious tidy-up is to
+      // make every layer match on both axes. It was tried on 2026-09-18 and
+      // reverted; tools/looks/sky-parallax.js is where the pictures are.
       const centre = bounds.surfaceY + (def.y ?? 0.5) * airH;
       // The deck's whole thickness, fades included: the quad IS the band, and
       // the alpha ramps to zero at both of its edges (see uFeather in the

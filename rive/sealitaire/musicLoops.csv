@@ -1,0 +1,6 @@
+id,startBar,bars,role,gate,gateN,washSeconds,notes
+open,0,4,intro,open,0,0,"the four quiet bars the bounce opens on (-44dB). Played once at the start of a deal, then it hands to the main bed"
+deal,4,24,bed,open,0,8,"THE MAIN BED — 24 bars from bar 4. Loops until ten cards are on the foundations"
+drift,28,40,bed,foundations,10,8,"DEVELOPMENT — the 40-bar middle, 8dB down on `deal`. Takes over at ten cards"
+loud,68,16,bed,foundations,26,8,"THE LOUDEST — the 16-bar loop the bounce states twice. Takes over at twenty-six cards, half the deck"
+tail,100,4,win,open,0,0,"the four-bar tail. Starts on the win, at the next bar, under the wash of whatever was playing, and holds until the next deal"

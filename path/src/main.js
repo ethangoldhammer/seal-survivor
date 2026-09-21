@@ -22,7 +22,7 @@ import {
   setSealTapTarget,
 } from './input.js';
 import { worldToScreen } from './ui/project.js';
-import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, rebuildShipBody, snarePlayer, sealBite, grantRerolls, startingRerolls, setJoltWallDt, setJoltPaused } from './entities/player.js';
+import { player, initPlayer, resetPlayer, updatePlayer, updateAimRig, recomputeStats, addUpgrade, levelableUpgrades, applyRecoil, applyPlayerKnockback, flingSeal, rebuildShipBody, snarePlayer, sealBite, grantRerolls, startingRerolls, setJoltWallDt, setJoltPaused } from './entities/player.js';
 import { projectileCount, orbiterCount, maneaterReadout } from './stats.js';
 import { xpAllowance, spillStep } from './xpSpill.js';
 import { aoe, targeting, abilityDamage } from './systems/scaling.js';
@@ -59,7 +59,7 @@ import { resetAbsorbRisers } from './systems/absorbRiser.js';
 // A big pickup comes apart and is vacuumed in, paying as each piece lands.
 // See systems/pickupAbsorb.js.
 import { absorbInPieces } from './systems/pickupAbsorb.js';
-import { versusDrops } from './systems/versusFlag.js';
+import { versusDrops, oxygenLive } from './systems/versusFlag.js';
 import { replayRenderCamera, replayHoldsInput, replaySpeed, enableVersus, versusActive, startVersus, resetVersus, updateVersus, updateVersusClock, renderVersus, updateVersusCamera, versusBubblePips, versusHooks, versusOutOfAir, versusSeals, versusMixDepth, matchBodies, versusPlayerAir, updateNameTags } from './systems/versus.js';
 import { resolveCombat } from './systems/combat.js';
 import { resolvePredation } from './systems/predation.js';
@@ -142,7 +142,7 @@ import { createBoostAura, updateBoostAura, resetBoostAura, burstBoostAura } from
 import { updateChargeSkin, chargeCrossed, resetChargeSkin, invalidateChargeSkin } from './systems/chargeSkin.js';
 import { initMarks, updateMarks, resetMarks, markTarget } from './systems/marks.js';
 import { createAimIndicator, updateAimIndicator, resetAimIndicator } from './systems/aimIndicator.js';
-import { play as playMusic, startVersusMusic, versusMusicActive, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
+import { play as playMusic, stop as stopMusic, startVersusMusic, versusMusicActive, duckForUpgrade, sweepOpen, applyMusicSettings, applyPlayerMusicSettings, setLevel as setMusicLevel, preloadDefaultTracks, updateDepth as updateMusicDepth, startMusicAtRest, releaseMusicIntoRun, musicAtRest, snapToBarGrid, musicBankBytes } from './systems/music.js';
 import { shotDue, resetShotGrid, tickInterval, finSplit, dealTick } from './systems/shotGrid.js';
 import { startAmbient, stopAmbient, preloadAmbient, ambientBankBytes } from './systems/ambient.js';
 import { splashBedBytes } from './systems/splashBed.js';
@@ -201,6 +201,14 @@ import { mountUnlockToasts, showUnlockToast, clearUnlockToasts } from './ui/unlo
 import { updateBossEyes, resetBossEyes } from './systems/bossEyes.js';
 import { updateCelebration, playCelebration } from './systems/celebrate.js';
 import { triggerClap, updateClap } from './systems/clap.js';
+import {
+  triggerFlip, updateSealFlip, flipState, flipBlocked,
+  flipSlapSegment, flipSlapDistance, claimFlipHit, noteFlipConnect, flipKnockGain,
+  flipWeakSpot, flipDashBoost, flipLaunch, noteFlipCommit, flipCommit,
+  flipTailPoint, flipTailLaying, flipTailSpent, flipTailSpring, noteFlipGather,
+} from './systems/sealFlip.js';
+// THE BACKFLIP'S HALF OF THE MOVE — the wall it leaves in the water.
+import { spawnGooWall, extendGooWall, sealGooWall, updateGooWalls, resetGooWalls, gooWalls } from './systems/gooWall.js';
 import { updateStrikePose } from './systems/strikePose.js';
 import { captureBossShot, resetBossShot, bossShot, bossShotBytes } from './systems/bossShot.js';
 import { cineEvent, cineBreach, resetCineCamera } from './systems/cineCamera.js';
@@ -251,9 +259,12 @@ import { updatePanelNav, panelNavOpen } from './ui/panelNav.js';
 import { uiText } from './uiTextTable.js';
 // The goal lights' live refresh, for the F panel (systems/wallRocks.js).
 import { refreshGoalGlow } from './systems/wallRocks.js';
-import { showTeamSelect, hideTeamSelect, updateTeamSelect } from './ui/teamSelect.js';
+import { showTeamSelect, hideTeamSelect, updateTeamSelect, writeSetup, applyRemoteSeat, clearRemoteSeat } from './ui/teamSelect.js';
 import { showRoomLobby, hideRoomLobby, updateRoomLobby } from './ui/roomLobby.js';
-import { roomsAvailable } from './systems/online/room.js';
+import { roomsAvailable, send, onRoomMessage } from './systems/online/room.js';
+import { captureMatch, applyMatch, claimRemoteSeat } from './systems/online/matchStart.js';
+import { beginStarting, beginPlaying, netIsGuest, onlineActive } from './systems/online/session.js';
+import { netTick, startNetPump } from './systems/online/netTick.js';
 import { showRosterPreview, refreshRosterPreview, hideRosterPreview, updateRosterPreview, rosterPreviewOn } from './systems/versus.js';
 import { publishBallGrid } from './systems/ballGrid.js';
 import { resetRoster } from './systems/sealRoster.js';
@@ -271,6 +282,9 @@ import { initTextPanel, refreshTextSpecimen } from './ui/textPanel.js';
 // The Text panel's screen picker, extended with the match's surfaces — see the
 // DEV_UI block in init.
 import { registerPreviewScreen } from './ui/ui.js';
+// The Klondike table behind the Club seal panel — a second Rive renderer on
+// its own canvas, lazily imported so a run that never opens it pays nothing.
+import { showSealitaire, hideSealitaire } from './ui/sealitaireTable.js';
 import { ensureVersusStyle, applyGlassStyle, previewVersusUi, hideVersusPreview, PREVIEW_MATCH_SCREENS } from './systems/versus.js';
 import { initGamepadDebug, updateGamepadDebug } from './ui/gamepadDebug.js';
 import { initSfxDebug, updateSfxDebug } from './ui/sfxDebug.js';
@@ -1785,6 +1799,29 @@ function showMainMenu() {
 
 /** The Seal sports list, with Blubberball wired to its team select and the
  *  team select's Back wired back to the list. */
+// PARK THE GAME WHILE SEALITAIRE OWNS THE SCREEN, and pick it back up.
+//
+// setAnimationLoop(null) rather than a flag inside runFrame: the frame is the
+// whole game, and half of one running is a worse idea than none of it. three
+// drops its rAF, so nothing is scheduled at all.
+//
+// SAFE TO RESUME AFTER ANY GAP — runFrame clamps its delta to 50ms, so ten
+// minutes at the card table comes back as one ordinary frame rather than as a
+// ten-minute physics step.
+//
+// The music goes back where the menu starts it: startMusicAtRest() is what
+// main() calls on the way in, so this returns to the half-speed hold the bust
+// was already under rather than to a run's track.
+function suspendForTable() {
+  world.renderer.setAnimationLoop(null);
+  stopMusic();
+}
+
+function resumeFromTable() {
+  world.renderer.setAnimationLoop(animate);
+  startMusicAtRest();
+}
+
 function openSealSports() {
   showSealSports({
     onBall: () => {
@@ -1813,6 +1850,36 @@ function openSealSports() {
         onChange: () => rosterPreviewChanged(),
       });
     },
+    // SEALITAIRE IS NOT A RUN. Blubberball goes through enterMode and the
+    // whole machinery of starting a match; this puts a second renderer on top
+    // of the menu and takes it away again, and the menu is never torn down —
+    // so Back lands exactly where it left, with the bust still up behind.
+    onSealitaire: () => {
+      hideSealSports();
+      // THE GAME STOPS WHILE THE TABLE IS UP. Sealitaire is a second renderer
+      // with its own GL context, its own shader passes and its own music, and
+      // none of that shares a frame with ours: left running, the menu keeps
+      // drawing a scene nobody can see, on the same GPU the table needs, with
+      // two tracks playing over each other.
+      //
+      // Suspended on the press rather than after the download, because the
+      // canvas covers the screen from its first frame — there is nothing back
+      // there worth animating for.
+      suspendForTable();
+      showSealitaire({
+        parent: uiRoot(),
+        onExit: () => { resumeFromTable(); openSealSports(); },
+      }).catch((err) => {
+        // A build with no public/sealitaire.riv should never have offered the
+        // row at all (ui.js only enables it when the file answers), so this is
+        // a fetch that died mid-flight. Put the list back rather than leave a
+        // dead canvas up.
+        console.warn('sealitaire failed to open', err);
+        hideSealitaire();
+        resumeFromTable();
+        openSealSports();
+      });
+    },
     // THE SAME MATCH, WITH SOMEBODY FAR AWAY. The room screen comes first,
     // because who is present is what decides what the seats can be — and the
     // pitch stays down behind it, unlike the team select: there is nothing to
@@ -1838,29 +1905,189 @@ function openRoomLobby() {
   // unusable screen is worth locking twice, and the list to fall back to is
   // still up.
   if (!roomsAvailable()) { openSealSports(); return; }
+  routeLobbyWire();
   showRoomLobby({
     parent: uiRoot(),
     onBack: () => openSealSports(),
-    onHosting: () => {
-      hideRoomLobby();
-      // Same guard, same reason, back to the screen this one came from — see
-      // the note on enterTeamSelectPitch.
-      if (!enterTeamSelectPitch()) { openRoomLobby(); return; }
-      showTeamSelect({
-        parent: uiRoot(),
-        // PHASE 3 SENDS THE MATCH HERE — the setup, the rules and the resolved
-        // cast, so the guest builds the same match rather than rolling its own.
-        // Until it does, this is an ordinary local match with a room open
-        // beside it, which is exactly what the milestone is for.
-        onStart: () => { hideRosterPreview({ keep: true }); enterMode(true); },
-        onBack: () => { leaveTeamSelectPitch(); openRoomLobby(); },
-        onChange: () => rosterPreviewChanged(),
-      });
-    },
-    // The host has started. Phase 3 applies the payload it carries; today it
-    // is the signal and nothing more.
-    onGuestStart: () => {},
+    // BOTH ENDS TAKE THIS DOOR, host and guest alike — the room screen is the
+    // five letters and nothing else now, and the moment two people are behind
+    // them there is one screen left to agree on.
+    onBothHere: () => openSharedTeamSelect(),
+    onGuestStart: (match) => enterGuestMatch(match),
   });
+}
+
+/**
+ * ONE TEAM SELECT, ON TWO MACHINES.
+ *
+ * The room's own ready-up is gone: this screen already held several people who
+ * each walk onto a side, take a colour and ready independently, and the lobby
+ * was reimplementing a worse copy of that one room-code later. The other
+ * player is a chip on it (ui/teamSelect.js, REMOTE_KEY), their side and colour
+ * and ready arrive as `seat` messages, and Start lights up on both ends when
+ * both chips are ready — though only the host's press does anything, because
+ * two presses a frame apart would build two matches.
+ *
+ * THE HOST STILL AUTHORS THE MATCH ITSELF. What is negotiated here is the two
+ * captains' colours and their readiness; the roster size, the rules and the
+ * cast are the host's, and they cross in one payload at Start exactly as
+ * before (startOnlineMatch). That keeps one machine unambiguously deciding
+ * what the match IS, which is the thing that made the first version of this
+ * tractable and is still true.
+ */
+function openSharedTeamSelect() {
+  hideRoomLobby();
+  if (!enterTeamSelectPitch()) { openRoomLobby(); return; }
+  showTeamSelect({
+    parent: uiRoot(),
+    online: { isHost: !netIsGuest(), send },
+    onStart: () => { hideRosterPreview({ keep: true }); startOnlineMatch(); },
+    onBack: () => { clearRemoteSeat(); leaveTeamSelectPitch(); openRoomLobby(); },
+    // THE HOST'S EDITS STILL STREAM, because the things only the host can
+    // change — the roster size and the rules — have to reach the guest's pitch
+    // somehow, and they are not a chip. A guest's own edits go as `seat`
+    // messages from inside the screen; this is the rest.
+    onChange: () => { rosterPreviewChanged(); if (!netIsGuest()) sendLobbyPreview(); },
+  });
+  if (!netIsGuest()) sendLobbyPreview();
+}
+
+/**
+ * THE HOST'S TEAM SELECT, AS IT STANDS, to whoever is waiting on it.
+ *
+ * THE WHOLE STATE EVERY TIME, not a diff. These are a few hundred bytes on a
+ * button press — the team select's onChange is a seat moved or a colour
+ * stepped, not something that happens several times a second — and a diff
+ * would need the two ends to agree about a base they can drift from. The one
+ * message that can be dropped without consequence is the one that carries
+ * everything, because the next one repairs it.
+ *
+ * writeSetup() FIRST, because versusSetup is not written until Start: the
+ * screen keeps its answer in its own device map until then, and captureMatch
+ * reads versusSetup. It is the same function Start calls and it rebuilds the
+ * setup from scratch, so calling it mid-edit costs nothing and leaves exactly
+ * what a Start at this instant would have left.
+ *
+ * ...and claimRemoteSeat after it, for the reason startOnlineMatch does the
+ * same: writeSetup puts a LOCAL device on the right-hand side, and the guest
+ * must never be shown its own seal as one of the host's controllers.
+ */
+function sendLobbyPreview() {
+  if (!onlineActive()) return;
+  writeSetup();
+  claimRemoteSeat();
+  send({ t: 'lobbyPreview', picking: true, setup: captureMatch() });
+}
+
+/**
+ * THE GUEST'S VIEW OF THE HOST PICKING — the same pitch, the same seals.
+ *
+ * NOT THE TEAM SELECT'S UI, and that is the honest line. The host is deciding
+ * for both players, so a second copy of that screen would be a screen full of
+ * controls that do nothing. What the team select is actually FOR is visible on
+ * the pitch itself — who is in the water, on which side, in what colour and
+ * wearing what — so the guest gets the pitch and the roster standing on it,
+ * with the room panel still up over it saying whose turn it is to decide.
+ *
+ * REBUILT OR REFRESHED, not rebuilt every time: refreshRosterPreview returns
+ * true only when the ROSTER SIZE moved, which is the one change that needs the
+ * shore re-carved (the goal mouths grow with the seals a side, and the rock is
+ * cut at build). A colour step is a material write and must not cost a merge.
+ */
+function showGuestPitch(setup) {
+  // THE HOST'S EDITS ONLY. A host that applied its own broadcast would undo
+  // whatever it changed a moment later, and worse, would overwrite the colour
+  // the guest just picked with the copy it sent before hearing about it.
+  if (netIsGuest() === false) return;
+  if (!applyMatch(setup)) return;
+  if (!rosterPreviewOn()) {
+    mainMenu()?.dispose();
+    try {
+      setModeWorld(true);
+      showRosterPreview(world.scene);
+    } catch (err) {
+      console.error('[main] the guest could not build the pitch — waiting in the room instead.', err);
+      try { hideRosterPreview(); } catch { /* it was never up */ }
+      return;
+    }
+    startVersusMusic();
+    return;
+  }
+  rosterPreviewChanged();
+}
+
+/**
+ * THE HOST HAS PICKED, AND BOTH MACHINES GO AT ONCE.
+ *
+ * THE SEAT IS CLAIMED BEFORE THE MATCH IS CAPTURED, and the order is the whole
+ * correctness of this function. The team select is a screen about LOCAL
+ * devices — it walks a chip per controller in this room onto a side — so
+ * whatever it left on the right is a controller at the host's own keyboard.
+ * In an online match that side is the other person's. claimRemoteSeat rewrites
+ * it to the REMOTE sentinel first, so the payload the guest receives already
+ * describes the arrangement both ends are about to run, rather than one the
+ * host would then quietly diverge from.
+ *
+ * SENT BEFORE enterMode, because enterMode builds a world and starts a game
+ * and neither of those is instant: the guest has its own arena to carve off
+ * the same roster, and every millisecond it spends waiting for the message is
+ * a millisecond it is behind. The wire is the slow part; give it the head
+ * start.
+ */
+/**
+ * The control frames this screen pair lives on, routed once for the session.
+ *
+ * ON THE ROOM'S OWN LISTENER rather than inside either screen, because the two
+ * messages outlive the screen that reads them: a `setup` can arrive in the gap
+ * between the lobby closing and the team select opening, and a listener that
+ * was mounted by the screen would miss exactly the first one — which is the
+ * one carrying the roster the guest's pitch is built from.
+ */
+function routeLobbyWire() {
+  if (lobbyWireOff) return;
+  lobbyWireOff = onRoomMessage((msg, binary) => {
+    if (binary || !msg) return;
+    if (msg.t === 'seat') applyRemoteSeat(msg);
+    else if (msg.t === 'lobbyPreview' && msg.setup) showGuestPitch(msg.setup);
+  });
+}
+let lobbyWireOff = null;
+
+function startOnlineMatch() {
+  startNetPump();
+  claimRemoteSeat();
+  send({ t: 'start', match: captureMatch() });
+  beginStarting();
+  enterMode(true);
+  beginPlaying();
+}
+
+/**
+ * THE GUEST'S SIDE OF THE SAME MOMENT — the host's match, built here.
+ *
+ * NO TEAM SELECT AND NO ROSTER PREVIEW: the host picked for both, so there is
+ * nothing on that screen this player could still decide, and the pitch it
+ * stands the roster on is about to be rebuilt by enterMode anyway. What the
+ * guest needs from enterTeamSelectPitch is only the two things this does by
+ * hand — the menu's claim on the camera and the body dropped, and the match's
+ * own music started — and NOT its resetRoster(), which would throw away the
+ * roster size applyMatch has just been told to use.
+ *
+ * A PAYLOAD THIS BUILD CANNOT READ LEAVES THE PLAYER IN THE LOBBY rather than
+ * in half a match. applyMatch returns false for a version it does not know,
+ * and the screen stays up with the room still live — which is a guest looking
+ * at a lobby wondering what happened, and that is strictly better than a guest
+ * dropped onto an empty pitch with no way back.
+ */
+function enterGuestMatch(match) {
+  if (!applyMatch(match)) return;
+  startNetPump();
+  hideRoomLobby();
+  mainMenu()?.dispose();
+  beginStarting();
+  startVersusMusic();
+  enterMode(true);
+  beginPlaying();
 }
 
 /**
@@ -2322,6 +2549,12 @@ function resetArena({ resume = null, forMenu = false } = {}) {
   hideAllMenus();
   resetLungeTells();
   resetEnemies(world.scene);
+  // ...and any wall still standing from the last run. It is half a second of
+  // life, so this only ever matters on a restart from a paused frame — but a
+  // wall that survived into a new run would be stopping fish nobody threw it
+  // at.
+  resetGooWalls();
+  layingWall = null;
   // After resetEnemies, which is what actually clears the last run's boss out
   // of the water: this only drops the reference to it and rolls the level the
   // next one arrives at.
@@ -5688,6 +5921,311 @@ function knockOutward(bx, by, radius, knock) {
 }
 
 /**
+ * THE FRAME THE BODY THROWS ITSELF — and the one moment the two flips are
+ * different moves.
+ *
+ * A FORWARD FLIP IS A ROCKET. It goes through flingSeal, which is the only
+ * call in this game that may put a seal above its own top speed: real velocity
+ * with the clamp lifted for a moment, so the water's drag, the arena's walls
+ * and gravity all act on it afterwards and it reads as a body thrown rather
+ * than a position written. Everything downstream comes free — a flip into the
+ * ball hits harder because sealContact reads `player.velocity` and the fling
+ * is IN it, and a flip into a shark hits harder for the same reason the
+ * strike's contact does.
+ *
+ * A BACKFLIP LEAVES A WALL. The body rolls backwards and a bar of goo lands
+ * across the water in front of it (systems/gooWall.js). One move is for
+ * getting into something and the other for getting out, and the player picks
+ * with the direction they drew.
+ *
+ * @param dir +1 backflip, -1 forward flip — flipState.dir, as flipLaunch
+ *   reports it.
+ */
+function flipLaunched(dir) {
+  const c = CONFIG.sealFlip ?? {};
+  if (dir < 0) {
+    const f = c.forward ?? {};
+    if (f.enabled === false) return;
+    // WHICH WAY IS FORWARD. The way the seal is actually MOVING when it is
+    // moving, and the way it is pointing when it is not — a flip from a
+    // standstill should go where the animal is aimed rather than nowhere, and
+    // a drifting seal's velocity is a direction nobody chose.
+    const v = player.velocity;
+    const sp = Math.hypot(v?.x ?? 0, v?.y ?? 0);
+    let dx;
+    let dy;
+    if (sp > (f.driftSpeed ?? 3)) { dx = v.x / sp; dy = v.y / sp; }
+    else {
+      const h = player.mesh.rotation.z + Math.PI / 2;
+      dx = Math.cos(h);
+      dy = Math.sin(h);
+    }
+    // THE FOLLOW-THROUGH IS IN IT TOO. The same hand that sharpens the
+    // somersault throws the body harder, so a half-drawn circle is a lazy
+    // hop and a whipped one is the rocket. Through the same curve the tail's
+    // own gain uses, so the two halves of the move cannot disagree about what
+    // the gesture was worth.
+    const k = c.commit ?? {};
+    const drive = k.enabled === false ? 1
+      : (k.hitSlow ?? 0.6) + ((k.hitFast ?? 1.15) - (k.hitSlow ?? 0.6)) * flipCommit();
+    flingSeal(player, dx, dy, (f.push ?? 26) * drive, f.ceilMul ?? 1.6, f.ceilSeconds ?? 0.45);
+    feedback('sealFlipRocket', {
+      x: player.mesh.position.x, y: player.mesh.position.y,
+      dirX: dx, dirY: dy, scale: 0.7 + 0.6 * flipCommit(),
+    });
+    return;
+  }
+  // THE WALL IS OPENED, NOT PLACED. It has no goo in it yet: the mass comes
+  // off the FLUKE over the next third of a second as the somersault swings it
+  // (layGooWall below), so the barrier is the arc the tail actually cut rather
+  // than a bar at an offset. See the header of systems/gooWall.js.
+  layingWall = spawnGooWall(player.mesh.position.x, player.mesh.position.y,
+    player.mesh.rotation.z + Math.PI / 2);
+}
+
+// The wall the tail is currently painting, or null. Held here rather than on
+// the flip state because a wall outlives the flip that threw it — it is still
+// stopping things a quarter second after the animal has finished rolling.
+let layingWall = null;
+
+/**
+ * ONE FRAME OF THE TAIL PAINTING ITS WALL.
+ *
+ * Called every frame of a backflip, after updateSealFlip has turned the body:
+ * the fluke's position is a function of the flip's angle, so asking before the
+ * turn would lay the whole wall one frame behind the animal.
+ *
+ * THE SAME POINT THE HITBOX USES. flipTailPoint is what flipSlapSegment
+ * measures its own fluke from, so the goo the player sees and the barrier it
+ * becomes are one curve by construction — and it works in Node, where there is
+ * no bone to read ([[a harness measures the stand-in, not the model]]).
+ */
+function layGooWall(rawDt) {
+  if (!layingWall) return;
+  if (flipTailSpent()) {
+    // THE TAIL HAS SWUNG PAST. Sealed rather than dropped: the wall goes on
+    // standing, and stopping things, for the rest of its life.
+    //
+    // SPENT, NOT merely "not laying" — the span opens a fraction after the
+    // launch (the fluke is still under the body before that), so a seal on
+    // "not laying" closes the wall on the frame it was opened and the move
+    // silently does nothing. See flipTailSpent.
+    sealGooWall(layingWall);
+    layingWall = null;
+    return;
+  }
+  if (!flipTailLaying()) return;
+  const t = flipTailPoint(player.mesh.position.x, player.mesh.position.y,
+    player.mesh.rotation.z + Math.PI / 2, rawDt);
+  // ...AND THE MOTION IT LEAVES WITH: the fluke's swing PLUS the animal's own
+  // travel. Both, because both are true — goo thrown off a tail on a seal that
+  // is also moving carries the sum, and a wall laid by a swimming seal should
+  // trail the way the seal was going. The emitter's `inherit` is what decides
+  // how much of it survives into a lobe.
+  extendGooWall(layingWall, t.x, t.y,
+    t.vx + (player.velocity?.x ?? 0), t.vy + (player.velocity?.y ?? 0));
+}
+
+/**
+ * THE TAIL SLAP — every body the fluke reaches this frame, thrown.
+ *
+ * Run once per frame while the window is open (systems/sealFlip.js decides
+ * when that is), never outside it: there is no tail hitbox the rest of the
+ * time, so the reach cannot leak into ordinary swimming the way a permanent
+ * melee radius would.
+ *
+ * THE TEST IS A LINE, NOT A RADIUS. `flipSlapDistance` measures to the tail's
+ * own segment, so a creature in FRONT of a flipping seal is not hit — being on
+ * the other side has to be safe or there is nothing to read and nothing to
+ * dodge. See the note on the hitbox in systems/sealFlip.js.
+ *
+ * ONE BODY, ONE HIT, PER FLIP — claimFlipHit. The window is open for about a
+ * tenth of a second and this runs every frame inside it; without the ledger a
+ * shark sitting in the arc would be thrown six times and the knockback would
+ * read as a magnet rather than as a hit.
+ *
+ * KNOCKBACK AND NOT DAMAGE, deliberately. The move costs nothing, has no
+ * cooldown worth the name and can be thrown every second and a half; a version
+ * that also dealt damage would be a free weapon that happens to look like a
+ * flourish, and every build in the game would open with it. What it buys is
+ * SPACE — which is the thing a seal surrounded actually needs, and the thing
+ * the strike already charges for.
+ *
+ * @param opened true on the frame the window opened, which is the frame the
+ *   water and the sound belong on.
+ */
+function flipSlapHit(opened = false) {
+  const x = player.mesh.position.x;
+  const y = player.mesh.position.y;
+  // The heading the hitbox is measured from is the one the seal is DRAWN at,
+  // which is mesh.rotation.z plus the quarter turn createVisual leaves the art
+  // nose-up by — the same two terms poseBody writes and the aim reads.
+  const heading = player.mesh.rotation.z + Math.PI / 2;
+  const seg = flipSlapSegment(x, y, heading);
+  if (!seg) return;
+
+  if (opened) {
+    // ON THE FLUKE, not on the animal: this is the water the tail throws, and
+    // it belongs at the end of the tail. Its own event so the slap is legible
+    // in the audit rather than passing as a strike
+    // ([[boss voices are per material]] — a name built inline breaks it).
+    feedback('sealFlipSlap', {
+      x: seg.bx, y: seg.by, dirX: seg.dirX, dirY: seg.dirY, scale: 1,
+    });
+  }
+
+  const c = CONFIG.sealFlip ?? {};
+  const thick = Math.max(0, c.thick ?? 1.6);
+  const reach = Math.max(0.1, c.reach ?? 5.2);
+  // A SLAP THROWN OUT OF A DASH CARRIES THE DASH. `gain` is the extra throw
+  // for having arrived with the tail rather than swung it standing still, and
+  // `carry` is how much of the dash's own line the bodies leave along — so the
+  // player picks the arc with the circle and the launch direction with the
+  // strike, and what they hit goes along the sum. Both ride what the dash was
+  // bought with (see flipDashBoost).
+  const dash = flipDashBoost(strikeState.active, strikeState.power ?? 1);
+  let throwX = seg.dirX;
+  let throwY = seg.dirY;
+  if (dash.carry > 0) {
+    throwX += (strikeState.dashDir?.x ?? 0) * dash.carry;
+    throwY += (strikeState.dashDir?.y ?? 0) * dash.carry;
+    const len = Math.hypot(throwX, throwY) || 1;
+    throwX /= len;
+    throwY /= len;
+  }
+  let count = 0;
+  // Where the bodies it caught actually were, summed — the impact frame goes
+  // off at their midpoint rather than at the tip of the tail. See the note on
+  // the event below.
+  let hitX = 0;
+  let hitY = 0;
+  let weakHit = false;
+  for (const e of enemies) {
+    if (!e?.mesh) continue;
+    const ex = e.mesh.position.x;
+    const ey = e.mesh.position.y;
+    // The creature's own hitbox against the tail's line, not a point against a
+    // point — a minnow and a yacht do not meet a tail at the same distance.
+    const d = flipSlapDistance(x, y, heading, ex, ey);
+    if (d > thick + (e.radius ?? 0)) continue;
+    if (!claimFlipHit(e)) continue;
+    // HOW FAR OUT ALONG THE TAIL it was caught, 0 at the body and 1 at the
+    // fluke — the lever arm, which is the whole reason the tip throws hardest.
+    const along = Math.min(1, Math.hypot(ex - x, ey - y) / reach);
+    // ...AND WHETHER IT CROSSED A LIT WEAK SPOT, which is the only aiming this
+    // move asks for. `flipWeakSpot` runs the same segment test the body just
+    // went through, against the spot's own centre and radius, so there is no
+    // second opinion about where the tail is. Empty for everything in the
+    // water that is not a boss wearing one (systems/bossHotSpots.js).
+    const weak = flipWeakSpot(x, y, heading, litSpots(e));
+    // `source` NAMES ITSELF, which is what decides what a boss does about it.
+    // The tenacity list (CONFIG.boss.tenacity.sources) is `ram`, `rupture` and
+    // `club` — the seal ARRIVING, a spot going off inside, and a swung club —
+    // and a tail slap is deliberately none of those: it is free, it has no
+    // charge and its cooldown is barely longer than itself, so on that list it
+    // would be worth as much against a boss as a full-power ram.
+    //
+    // It goes through `tenacity.partial` instead, which holds it to 0.3 of an
+    // ordinary shove. A slap across the flank leans on a boss; a slap that
+    // lands on a lit spot is `weakSpotMul` times that, which brings it back up
+    // to roughly what an ordinary body takes. That is the whole skill shape of
+    // this move against a boss, and it is the cheap cousin of the strike's:
+    // a perfect charge into a spot STAGGERS one, which is still the only thing
+    // in the game that may.
+    applyKnockback(e, throwX, throwY, 1, {
+      gain: flipKnockGain(along, !!weak) * dash.gain,
+      source: 'flipSlap',
+    });
+    if (weak) {
+      // THE SAME EVENT A SHOT INTO A SPOT FIRES, at the spot rather than at
+      // the body — a crit the player cannot see is a crit they cannot learn to
+      // aim, and the weak spot already has a vocabulary for "that landed
+      // there". Deliberately NOT hotSpotDamage: the slap takes nothing off the
+      // pool (see the note above on why this move deals no damage at all), and
+      // a rupture it had not paid for would be the gesture doing the strike's
+      // job for free.
+      feedback('hotSpotHit', { x: weak.x, y: weak.y, scale: 1.2 });
+      weakHit = true;
+    }
+    // The body FLINCHES as well as moving — the same skeleton shove every
+    // other hit in this game uses (systems/boneSpring.js), so a slapped shark
+    // buckles rather than sliding away rigid.
+    if (e.anim?.impulse) {
+      _flipImp.set(throwX, throwY, 0);
+      e.anim.impulse(_flipImp, (c.tailImpulse ?? 18) * 0.35 * hitReactionMul(e));
+    }
+    hitX += ex;
+    hitY += ey;
+    count++;
+  }
+  if (count) {
+    noteFlipConnect({ x: seg.bx, y: seg.by, dirX: seg.dirX, dirY: seg.dirY, count, weak: weakHit });
+    // THE IMPACT FRAME. Once, on the frame the tail actually reaches
+    // something, and NOT on the swing — the swing already fired above and
+    // carries no stop, because at that moment nothing has been hit. This is
+    // the whole reward for landing a move that deals no damage: four frames of
+    // the world held still, a hard shake, and a burst out of the contact.
+    //
+    // AT THE MIDPOINT OF WHAT IT CAUGHT, not at the fluke. The swing's event
+    // belongs at the end of the tail because that is where the water is being
+    // thrown; the impact belongs where the bodies are, which is what the
+    // player is looking at and often half a tail-length short of the tip.
+    //
+    // `scale` rides the number caught and whether a weak spot was among them,
+    // so a flip through a school is a bigger frame than one that clipped a
+    // single fish — the same "an event is as big as what it did" rule the
+    // ball's own impacts follow (ballImpactFx in systems/versus.js).
+    feedback('sealFlipImpact', {
+      x: hitX / count, y: hitY / count,
+      dirX: throwX, dirY: throwY,
+      scale: Math.min(2.2, (weakHit ? 1.4 : 1) * (0.8 + 0.35 * count)),
+      sizeMul: weakHit ? 1.25 : 1,
+      speedMul: 1.15,
+    });
+    // ...AND THE WATER THE TAIL TORE OPEN, at the FLUKE rather than at the
+    // bodies. A fluke arriving at a hundred-odd units a second drags a column
+    // of air down with it, and that column is the one channel that says how
+    // hard the thing was travelling — the impact above says WHAT it hit.
+    //
+    // Thrown along the swing so the bubbles leave with the tail before they
+    // start to rise, and scaled by the follow-through: the same whipped circle
+    // that sharpens the somersault tears more water.
+    feedback('sealFlipTailBubbles', {
+      x: seg.bx, y: seg.by,
+      dirX: seg.dirX, dirY: seg.dirY,
+      // The fluke's own motion, so `inherit` on the emitter has something real
+      // to work with — bubbles that leave straight up out of a swinging tail
+      // read as a leak rather than as a wake.
+      vx: seg.dirX * (c.tailImpulse ?? 18), vy: seg.dirY * (c.tailImpulse ?? 18),
+      scale: 0.7 + 0.8 * flipCommit(),
+      speedMul: 0.9 + 0.5 * flipCommit(),
+    });
+  }
+}
+const _flipImp = new THREE.Vector3();
+// Held, and rebuilt per creature the slap actually reaches — which is a
+// handful a frame at most, and zero on every frame no window is open.
+const _flipSpots = [];
+/**
+ * The lit weak spots on one creature, in the `{ x, y, r }` shape
+ * systems/sealFlip.js takes. Empty for everything that is not a boss wearing
+ * one, which is the whole roster except one animal at a time.
+ *
+ * Here rather than in sealFlip.js because that file has no business knowing
+ * there are bosses — it answers "where is the tail", and this is main.js
+ * spending the answer, exactly as the versus side spends it on a ball.
+ */
+function litSpots(e) {
+  _flipSpots.length = 0;
+  if (!e?.isBoss) return _flipSpots;
+  for (const s of liveHotSpots(e)) {
+    const p = hotSpotPoint(s);
+    if (p) _flipSpots.push({ x: p.x, y: p.y, r: p.r, spot: s });
+  }
+  return _flipSpots;
+}
+
+/**
  * A PICKUP TAKEN BY A DASH GOES OFF. Called from every orb handler with the
  * kind it was, AFTER the pickup has paid what it pays — the blast is on top of
  * the reward, never instead of it. Nothing happens unless a dash is in flight
@@ -7726,10 +8264,26 @@ function runFrame(now) {
     // requirement: updatePlayer reads it on the line below.
     player.chargeThrustMul = chargeThrustMul(player.stats);
 
-    updatePlayer(dt, input);
+    // A GUEST DOES NOT STEP SEAT 0 EITHER, and this is the last place that rule
+    // was not being kept. `player` is seat 0 — which on a guest is the HOST's
+    // seal, posed from the wire a few lines below — so every frame this ran it
+    // simulated somebody else's animal out of local input and local velocity,
+    // wrote a trail and a wake for it, and had all of it overwritten by the
+    // pose. Wasted work on the machine least able to afford it.
+    //
+    // AND IT DOUBLE-DROVE THE MIXER. updateVersus's guest pass advances
+    // `anim` for every seat (see poseGuestFrame), so leaving this in advanced
+    // seat 0's twice a frame — a seal swimming at double rate, out of a clip
+    // chosen from a velocity that means nothing here.
+    if (!netIsGuest()) updatePlayer(dt, input);
     // The second seal and the ball, right behind the first seal's move so the
     // contact test sees both bodies where they are this frame.
     if (versusActive()) updateVersus(dt, null, input);
+    // ...AND ONTO THE WIRE, immediately after the match has been stepped or
+    // posed, so the host's snapshot describes the frame it is actually looking
+    // at rather than the one before it. `rawDt` and not `dt`: the send rate
+    // must not dilate with the goal shutter (see netTick). A no-op offline.
+    netTick(rawDt, input);
     // WHOLE SECONDS OUT OF THE WATER, accumulated across every run. Read off
     // `aboveSurface` immediately after the seal has moved, and inside the run
     // gate on purpose — that flag is not updated once the run is over, so
@@ -7844,8 +8398,8 @@ function runFrame(now) {
     // the surface-breach check it already tracks.
     // Out of air in a versus match: the seal bursts and comes back in its own
     // goal a second later (systems/versus.js), instead of the run's drain.
-    if (versusActive() && CONFIG.oxygen.enabled && player.oxygen <= 0) versusOutOfAir(0);
-    if (CONFIG.oxygen.enabled && player.oxygen <= 0 && !versusActive()) {
+    if (versusActive() && oxygenLive() && player.oxygen <= 0) versusOutOfAir(0);
+    if (oxygenLive() && player.oxygen <= 0 && !versusActive()) {
       player.hp -= CONFIG.oxygen.drainDamagePerSec * dt;
       // Filed as a threat like any creature — a run lost to the surface being
       // too far away is a different balance problem from one lost to sharks,
@@ -8763,6 +9317,15 @@ function runFrame(now) {
       feedback('bite', { x, y, vx: e.vx, vy: e.vy });
       onPlayerBite(e);
     });
+    // THE BACKFLIP'S WALL, right after the bodies have moved and before
+    // anything else reads them — a creature is stopped where this frame put
+    // it, not where the last one did, and the push out of the slab has to
+    // land before the crowd pass measures who is standing where.
+    //
+    // On the WATER'S dt, unlike the gesture that threw it: the wall is part of
+    // the fight and a hit-stop should hold it exactly as it holds everything
+    // else drawn beside it.
+    updateGooWalls(dt, enemies);
     // WHAT THE CROWD DID TO ITSELF, immediately after the pass that found it
     // and before anything else reads `enemies`. A punted crab is a thrown
     // object and this is what it cost whatever it landed on — queued inside
@@ -9721,7 +10284,13 @@ function runFrame(now) {
         // it just topped up rather than the emergency it answered.
         const maxO2 = Math.max(1, player.stats.maxOxygen);
         const need = 1 - Math.max(0, Math.min(1, player.oxygen / maxO2));
-        player.oxygen = Math.min(maxO2, player.oxygen + CONFIG.oxygen.bubbleRefillAmount);
+        // THE PIPS ARE PAID EITHER WAY, the air only while the lungs are being
+        // simulated — an orb in a Blubberball match is a fuel pickup and
+        // nothing else (oxygenLive, systems/versusFlag.js). `need` above is
+        // read before this line in both cases, so the pop is still pitched off
+        // the tank; with the breath off that tank is always full and every pop
+        // is the thin little tick, which is the honest reading of it.
+        if (oxygenLive()) player.oxygen = Math.min(maxO2, player.oxygen + CONFIG.oxygen.bubbleRefillAmount);
         // The lifetime tally, for the gate that waits on it. Booked here and
         // not on the beluga's breath: those bubbles belong to the card this
         // stat unlocks, and a gate a thing opens for itself is not a gate.
@@ -9734,6 +10303,11 @@ function runFrame(now) {
           scale: 0.8 + 0.6 * need,
           color: assetBaseColor('bubbleOrb'),
           sfxOpts: { pitch: 1.25 - 0.45 * need },
+          // NO RECEIPT FOR AIR THAT DID NOT ARRIVE — a Blubberball match,
+          // where the tank above was left alone. There is no bubble source in
+          // a match to reach this (keepBubbles and rollDrop both stop), so it
+          // is the silent lie it would be if one ever did.
+          toast: oxygenLive() ? undefined : false,
         });
         announceUnlocks(recordBubblePopped());
         sealBite('orb');
@@ -10094,7 +10668,7 @@ function runFrame(now) {
   const calloutCfg = CONFIG.callouts ?? {};
   const o2Frac = player.oxygen / Math.max(1, player.stats?.maxOxygen ?? CONFIG.oxygen.max);
   const hpFrac = player.hp / Math.max(1, player.stats.maxHp);
-  const oxygenLow = !!CONFIG.oxygen.enabled && o2Frac < (calloutCfg.oxygenLow ?? 0.25);
+  const oxygenLow = oxygenLive() && o2Frac < (calloutCfg.oxygenLow ?? 0.25);
   // The charge meter, read once, for the DENIED press below. Its sibling —
   // "STRIKE NOW!" — reads strikeLoaded() instead and no longer re-derives the
   // same reading here; see the note by it.
@@ -10577,10 +11151,72 @@ function runFrame(now) {
   // On rawDt, like the clap and the lap: a hit-stop landing on the frame the
   // bar tops out would stretch the snap into the freeze and there would be no
   // accent left. See the header in systems/strikePose.js.
-  updateStrikePose(rawDt, strikeMoment && gameState.running && !deathState.active);
+  // ...AND IT STANDS DOWN FOR A FLIP, the same way the clap does for the
+  // victory lap. The coil is a HELD pose with no clock on it, so left running
+  // under a somersault the two would fight for the flippers every frame and
+  // the tuck would arrive half-solved. The flip is the shorter and the louder
+  // of the two, and it is also the only one with a hitbox in it.
+  updateStrikePose(rawDt, strikeMoment && gameState.running && !deathState.active && !flipState.active);
   player.coil?.update(rawDt);
   updateClap(rawDt);
   player.clap?.update(rawDt);
+
+  // THE FLIP — a circle drawn with the aim hand (systems/sealFlip.js). In the
+  // same place as the clap and for the same three reasons: after the mixer and
+  // the aim rig, which write an absolute pose every frame; before the victory
+  // lap, which is allowed to overrule it; and on rawDt, because a hit-stop
+  // must not stretch a gesture the player is in the middle of — least of all
+  // one that can cause the hit-stop itself.
+  //
+  // THE PRESS IS GATED, THE MOVE IS NOT. A circle that lands as a level-up
+  // card comes up does not start a flip; one already turning finishes rather
+  // than freezing upside down behind the card.
+  if (input.circleFlick && gameState.running && !gameState.paused && !deathState.active && !flipBlocked()) {
+    triggerFlip(
+      input.circleFlick,
+      { x: player.mesh.position.x, y: player.mesh.position.y },
+      // The mirror, read off the body the same way poseBody writes it — see
+      // triggerFlip on why the facing is folded in once, here, rather than by
+      // the pose and the hitbox separately.
+      Math.cos(player.mesh.rotation.z + Math.PI / 2) < 0,
+    );
+  }
+  // The tail's impulse goes through the aim rig, which owns the spring
+  // (systems/boneSpring.js) — the whip is the solver's, not a curve.
+  // THE WHOLE GESTURE DRIVES THE WHOLE MOVE, and this is both halves of it.
+  //
+  //   BEFORE the engage, the hand is WINDING: the seal coils under it as the
+  //   first semicircle is drawn (noteFlipGather), so the wind-up is the
+  //   player's rather than a canned tenth of a second bolted on after they
+  //   finished. By the time the move commits the body is already loaded.
+  //   AFTER it, the same hand is DRIVING: the follow-through pushes the
+  //   somersault round (noteFlipCommit, read every frame and never locked), so
+  //   the turn goes as fast as the circle being made.
+  //
+  // Gated on the run, not on the flip, because the winding half happens when
+  // there is no flip yet — that is the point of it.
+  if (gameState.running && !gameState.paused && !deathState.active) {
+    noteFlipGather(input.circleLoad, input.circleDir, rawDt);
+  }
+  if (flipState.active) noteFlipCommit(input.circleCommit);
+  const slapOpened = updateSealFlip(rawDt, player.aimRig);
+  // WHAT THE TAIL SPRING DOES DIFFERENTLY THIS FRAME, onto the seal for
+  // updateAimRig to pass down — the same route `chargePose` takes, and for the
+  // same reason (entities/ does not import from systems/). On the seal rather
+  // than global so an escort's tail does not start whipping because the player
+  // drew a circle.
+  player.tailSpring = flipTailSpring();
+  // ...AND THE FRAME THE BODY THROWS ITSELF, which is where the two directions
+  // stop being the same move.
+  const launch = flipLaunch();
+  if (launch) flipLaunched(launch);
+  // ...and the tail keeps painting for as long as it is sweeping through the
+  // span the wall is laid across. On rawDt, like the gesture itself: the goo's
+  // inherited velocity is derived from it, and a hit-stop frame would hand it
+  // a tail moving at a quarter speed.
+  layGooWall(rawDt);
+  if (flipState.slapLive) flipSlapHit(slapOpened);
+  player.flip?.update(rawDt);
 
   updateCelebration(rawDt);
   player.celebrate?.update(rawDt);

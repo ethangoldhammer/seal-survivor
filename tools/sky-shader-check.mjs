@@ -100,8 +100,15 @@ const PREFIX_FRAG = `precision highp float;
 // place it must not be.
 const PROGRAMS = [
   ['stars', starMat, ['uCycle', 'uBloom', 'uSize', 'uNight', 'uHaze']],
-  ['links', linkMat, ['uRipples[0]', 'uTouch[0]', 'uCycle', 'uTravel', 'uBend', 'uBendMax', 'uChain', 'uWarpGain', 'uNight']],
-  ['sky gradient', skyMat, ['uStars', 'uStarDensity', 'uZenith', 'uHorizon']],
+  // uDriftX is what converts a vertex back into a world position, so the
+  // ripples and the fingers — which are stored in world coordinates — land on
+  // the star they were aimed at. Optimised out, the sky bends `driftX` units
+  // away from every blast, by more the further the camera has panned.
+  ['links', linkMat, ['uRipples[0]', 'uTouch[0]', 'uCycle', 'uTravel', 'uBend', 'uBendMax', 'uChain', 'uWarpGain', 'uNight', 'uDriftX']],
+  // uCenter is the star field's sample origin AND the gradient's world anchor;
+  // world.js slides its x every frame so the field drifts with the sun. Gone,
+  // the whole night sky snaps back to being welded to the ocean.
+  ['sky gradient', skyMat, ['uStars', 'uStarDensity', 'uZenith', 'uHorizon', 'uCenter']],
   // uWaveAmp and uFade are the load-bearing pair: if either is optimised out
   // the halo has stopped meeting the wave and the flat cut is back.
   ['sun halo', haloMat, ['uColor', 'uStrength', 'uFade', 'uSurfaceY', 'uWaveT', 'uWaveAmp', 'uChop']],

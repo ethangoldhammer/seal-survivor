@@ -18,6 +18,27 @@
 import './dom-stub.mjs';
 import * as THREE from 'three';
 import { CONFIG } from '../path/src/config.js';
+
+// ---------------------------------------------------------------------------
+// THE LUNGS ARE STUBBED IN A MATCH — CONFIG.versus.oxygen.enabled is false in
+// the shipped config, so oxygenLive() is false in a match, airClock() returns
+// null, and the bot has no trip to make and no bubble detour to take. The rule
+// is kept whole behind that flag rather than removed, and this whole file is
+// what keeps it honest, so the flag goes on here and stays on.
+//
+// FOR THE FILE, NOT PER SECTION, and that was a real attempt: switching it on
+// only around the three sections that measure air left every OTHER section
+// playing its matches with the lungs shut, which is a different three minutes
+// of weather arriving at the last one. The air match reseeds (see airMatch),
+// but a fresh seed does not undo the state a match carries into it — the seals
+// come in on whatever tanks the sections above left them, and the bot then
+// spent the measured match never needing a breath. One rule in force for the
+// length of the file is what the control at the bottom compares against.
+//
+// It is never put back, because the process ends here.
+// ---------------------------------------------------------------------------
+CONFIG.versus.oxygen = { ...(CONFIG.versus.oxygen ?? {}), enabled: true };
+
 import { enableVersus } from '../path/src/systems/versusFlag.js';
 import { bounds, updateBounds, midWater } from '../path/src/arena.js';
 import { player, initPlayer, resetPlayer } from '../path/src/entities/player.js';

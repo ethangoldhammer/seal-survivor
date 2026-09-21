@@ -51,6 +51,11 @@ import {
 import {
   createClapDriver, triggerClap, updateClap, resetClap, clapState, clapDuration,
 } from '../../path/src/systems/clap.js';
+import {
+  createFlipDriver, triggerFlip, updateSealFlip, resetSealFlip, flipState, flipSpin, flipCommit,
+  flipTailSpring,
+  flipDuration, flipAngleAt, flipTuckAt, flipPhaseAt, flipSlapWindow, flipKnockGain,
+} from '../../path/src/systems/sealFlip.js';
 import { updatePoseBubbles, resetPoseBubbles } from '../../path/src/systems/poseBubbles.js';
 import {
   initParticles, updateParticles, updateParticleScale,
@@ -111,17 +116,41 @@ const EMITTERS = ['breathBubbles', 'wakeBubbles'];
 // two buttons reading "clap" is a picker where half the sliders do nothing and
 // nothing says why.
 const CLAP_BUTTON = 'clap button';
-const SOURCES = [...CELEBRATION_VARIANTS, CLAP_BUTTON];
+// ...AND THE FLIP MOVE, which is a third kind of thing again: not a
+// performance (systems/celebrate.js) and not a gesture with no consequences
+// (systems/clap.js), but a MOVE — a four-state machine with a hitbox inside
+// it. It is listed under its own name for the same reason the clap button is:
+// there is already a celebration variant called `flip` and two buttons reading
+// "flip" would be a picker where half the sliders do nothing.
+//
+// It is the one source on this page whose numbers decide what a fight is
+// worth, so the readout carries the knockback as well as the pose.
+const FLIP_MOVE = 'flip move';
+const SOURCES = [...CELEBRATION_VARIANTS, CLAP_BUTTON, FLIP_MOVE];
 let variant = q.get('pose') && SOURCES.includes(q.get('pose')) ? q.get('pose') : 'salute';
 const isClap = () => variant === CLAP_BUTTON;
+const isFlip = () => variant === FLIP_MOVE;
+// Which way the somersault goes on this page. The game takes it from the
+// circle the hand drew; here it is a button, because a lab that could only
+// show you one of the two moves would be a lab for half the feature.
+let flipDir = 1;
+// ...AND HOW FAR ROUND THE HAND HAS CARRIED ON. The game reads this off the
+// mouse every frame (input.circleCommit) and it is what DRIVES the rotation;
+// here it is a slider fed to the flip the same way, so the page shows the move
+// a player makes rather than the fallback clock underneath it.
+let labCommit = 1;
 
 // The pose's config block — CONFIG.clap.pose for the button, and the variant's
 // own entry under CONFIG.celebrate.poses for everything else.
 function poseCfg() {
-  return isClap() ? (CONFIG.clap.pose ??= {}) : (CONFIG.celebrate.poses[variant] ??= {});
+  if (isClap()) return (CONFIG.clap.pose ??= {});
+  if (isFlip()) return (CONFIG.sealFlip.pose ??= {});
+  return (CONFIG.celebrate.poses[variant] ??= {});
 }
 function bubbleCfg() {
-  return bubblesOf(isClap() ? CONFIG.clap : poseCfg());
+  if (isClap()) return bubblesOf(CONFIG.clap);
+  if (isFlip()) return bubblesOf(CONFIG.sealFlip);
+  return bubblesOf(poseCfg());
 }
 
 /** The bubbles block for one source, created with the lab's defaults if absent. */
@@ -148,12 +177,16 @@ function bubblesOf(owner) {
 function setEveryBubbleScale(v) {
   for (const name of CELEBRATION_VARIANTS) bubblesOf(CONFIG.celebrate.poses[name] ??= {}).scale = v;
   bubblesOf(CONFIG.clap).scale = v;
+  bubblesOf(CONFIG.sealFlip).scale = v;
 }
 
 const DEFAULTS = JSON.parse(JSON.stringify({
   celebrate: { poses: CONFIG.celebrate.poses },
   clap: { pose: CONFIG.clap.pose, bubbles: CONFIG.clap.bubbles },
   salute: CONFIG.salute,
+  // THE WHOLE BLOCK, not just its `pose` — the flip's timings, its arc and its
+  // knockback are all tuned here, so all of them have to be restorable.
+  sealFlip: CONFIG.sealFlip,
 }));
 
 // --- preset -----------------------------------------------------------------
@@ -165,6 +198,7 @@ try {
   if (saved.clap?.pose) Object.assign(CONFIG.clap.pose, saved.clap.pose);
   if (saved.clap?.bubbles) CONFIG.clap.bubbles = saved.clap.bubbles;
   if (saved.salute) Object.assign(CONFIG.salute, saved.salute);
+  if (saved.sealFlip) Object.assign(CONFIG.sealFlip, saved.sealFlip);
   presetNote = 'preset loaded from tools/looks/pose-lab.json';
 } catch { /* no server or nothing saved — the normal first run */ }
 
@@ -173,6 +207,7 @@ function preset() {
     celebrate: { poses: CONFIG.celebrate.poses },
     clap: { pose: CONFIG.clap.pose, bubbles: CONFIG.clap.bubbles },
     salute: CONFIG.salute,
+    sealFlip: CONFIG.sealFlip,
     savedAt: new Date().toISOString(),
   };
 }
@@ -230,7 +265,33 @@ function buildVariants() {
 function buildTiming() {
   const box = document.getElementById('timing');
   box.innerHTML = '';
-  box.appendChild(el('h2', null, isClap() ? 'stroke (systems/clap.js)' : 'clock'));
+  box.appendChild(el('h2', null,
+    isClap() ? 'stroke (systems/clap.js)' : (isFlip() ? 'the turn (systems/sealFlip.js)' : 'clock')));
+  if (isFlip()) {
+    const f = CONFIG.sealFlip;
+    // THE STATE MACHINE, IN ORDER — the three parts of the clock, then the
+    // turn they carry. Laid out in the order the move happens rather than
+    // alphabetically, because the question being asked here is always "what
+    // does the NEXT part of this feel like".
+    for (const [key, range] of [
+      ['windup', [0, 0.4, 0.005]], ['spin', [0.1, 1.5, 0.01]], ['recover', [0.02, 1, 0.01]],
+      ['turns', [0.5, 3, 0.5]], ['gather', [0, 0.25, 0.005]],
+      ['cooldown', [0, 3, 0.05]], ['weight', [0, 1, 0.02]],
+    ]) {
+      slider(box, key, () => f[key], (v) => { f[key] = v; }, range);
+    }
+    // ...and the slap, which is a window INSIDE the spin — `slapAt` is a phase
+    // of it, so retuning `spin` above keeps the contact on the same part of
+    // the arc rather than sliding it round.
+    box.appendChild(el('h2', null, 'the slap — window'));
+    // BOTH ARE FRACTIONS OF THE TURN, not of the clock — the hand drives the
+    // rotation, so the tail reaches a given part of the arc when it physically
+    // gets there rather than when a timer says so.
+    for (const [key, range] of [['slapAt', [0, 1, 0.01]], ['slapSpan', [0.02, 0.6, 0.01]]]) {
+      slider(box, key, () => f[key], (v) => { f[key] = v; }, range);
+    }
+    return;
+  }
   if (isClap()) {
     for (const [key, range] of [['attack', [0.01, 0.3, 0.005]], ['hold', [0, 0.3, 0.005]], ['release', [0.02, 1, 0.01]], ['weight', [0, 1, 0.02]]]) {
       slider(box, key, () => CONFIG.clap[key], (v) => { CONFIG.clap[key] = v; }, range);
@@ -262,10 +323,131 @@ function buildShape() {
   for (const key of keys) {
     slider(box, key, () => p[key], (v) => { p[key] = v; }, RANGES[key] ?? DEFAULT_RANGE);
   }
+  if (isFlip()) {
+    const f = CONFIG.sealFlip;
+    // THE ARC — where the tail reaches and how thick its line is. Drawn in the
+    // side view while the window is open (the amber segment), because these
+    // three numbers are the hitbox and a hitbox judged from a slider is a
+    // hitbox nobody has actually looked at.
+    box.appendChild(el('h2', null, 'the slap — arc'));
+    for (const [key, range] of [
+      ['reach', [1, 12, 0.1]], ['inner', [0, 3, 0.05]], ['thick', [0.2, 5, 0.05]],
+      ['tangentMix', [0, 1, 0.02]], ['tailImpulse', [0, 60, 0.5]],
+    ]) {
+      slider(box, key, () => f[key], (v) => { f[key] = v; }, range);
+    }
+    // THE WHIP — what the tail spring does differently for the length of the
+    // move, over CONFIG.tail. Three axes, and they are not interchangeable:
+    // `lag` is the LOAD (how far it may trail), `stiffness` is the RETURN
+    // (up, not down — a soft spring cannot snap), and `damping` is the SNAP
+    // (down, so the tip overshoots the pose and comes back).
+    //
+    // The readout under the seal turns the pair into the damping ratio, which
+    // is the number that actually decides whether this cracks or arrives:
+    // 0.64 is the swimming tail, about 0.22 is a whip, under 0.15 is rubber.
+    box.appendChild(el('h2', null, 'the tail — the whip'));
+    const tw = (f.tail ??= {});
+    for (const [key, range] of [
+      ['lag', [0.5, 5, 0.05]], ['stiffness', [0.3, 4, 0.05]],
+      ['damping', [0.1, 2, 0.05]], ['tipLooseness', [0.5, 2, 0.05]],
+    ]) {
+      slider(box, key, () => tw[key], (v) => { tw[key] = v; }, range);
+    }
+    // ...AND WHAT IT IS WORTH. The only numbers on this page that change what
+    // a fight is worth — see the note on FLIP_MOVE. `knockGain` multiplies an
+    // ordinary shove; `knockGainRoot` is the share of it a body caught at the
+    // BASE of the tail gets, which is the lever the fluke has over the root.
+    // The readout under the seal turns both into world units/sec so they can
+    // be judged against something rather than against each other.
+    // THE FOLLOW-THROUGH — the back half of the circle, which is read while
+    // the body is still gathering and locked at the launch. `spinFast`/
+    // `spinSlow` are the same whole turn taken in less or more time, which is
+    // what "sharper" means here; the hit pair is what the tail is worth at
+    // each end. The readout does the arithmetic.
+    box.appendChild(el('h2', null, 'the follow-through'));
+    const k = (f.commit ??= {});
+    for (const [key, range] of [
+      ['spinFast', [0.4, 1.2, 0.05]], ['spinSlow', [0.8, 2.5, 0.05]],
+      ['hitSlow', [0.2, 1.2, 0.05]], ['hitFast', [0.6, 2, 0.05]],
+    ]) {
+      slider(box, key, () => k[key], (v) => { k[key] = v; }, range);
+    }
+    // ...and the SCRUB is what auditions it: hold the flip at a phase and drag
+    // this, and the panel above plus the readout below re-time around it.
+    // THE HAND, AS A SLIDER. In the game this is how far past the half circle
+    // the mouse has carried on, read live and DRIVING the turn; here it is a
+    // number you set, fed to the flip every frame the same way. At 0 the move
+    // runs on its fallback clock alone, which is what a player who let go
+    // after the engage gets; at 1 the hand is round the whole loop and the
+    // somersault is already there.
+    slider(box, 'the hand (follow-through)', () => labCommit,
+      (v) => { labCommit = v; }, [0, 1, 0.05]);
+
+    // THE TWO JOBS. A forward flip throws the seal down the line it is
+    // swimming; a backflip leaves a bar of goo across the water in front of
+    // it. Neither is visible on this page — one is momentum and the other is
+    // a wall in the fight — but both are tuned with the same hand as the
+    // animation, so the numbers live here rather than a screen away.
+    box.appendChild(el('h2', null, 'forward flip — the rocket'));
+    const fwd = (f.forward ??= {});
+    for (const [key, range] of [
+      ['push', [0, 80, 1]], ['ceilMul', [1, 3, 0.05]], ['ceilSeconds', [0, 1.5, 0.05]],
+    ]) {
+      slider(box, key, () => fwd[key], (v) => { fwd[key] = v; }, range);
+    }
+
+    box.appendChild(el('h2', null, 'backflip — the wall'));
+    const back = (f.back ??= {});
+    for (const [key, range] of [
+      ['life', [0.1, 2, 0.05]], ['thick', [0.2, 5, 0.1]], ['hold', [0, 1.5, 0.05]],
+      // WHERE IN THE TURN THE TAIL LAYS IT, as a phase of the spin. Not the
+      // whole circle: goo along every degree of the sweep is a RING with the
+      // seal inside it. This is the arc it cuts out of that.
+      ['emitFrom', [0, 1, 0.02]], ['emitTo', [0, 1, 0.02]],
+      // THE COHESION NUMBER. How far the fluke travels between blobs, in world
+      // units — under a lobe's drawn radius and consecutive blobs overlap into
+      // one wall; over it and they are beads on a string. Judged on the ball
+      // lab (`npm run looks:ball`, D), which is the only place the real goo
+      // pass draws it.
+      ['step', [0.3, 4, 0.1]],
+      ['ballBounce', [0, 1, 0.05]], ['ballSpin', [0, 1, 0.05]],
+    ]) {
+      slider(box, key, () => back[key], (v) => { back[key] = v; }, range);
+    }
+
+    // ...AND OUT OF A DASH. The move's other half: a flip thrown mid-strike
+    // bends the line the seal is flying and throws what it hits along the sum
+    // of the swing and the dash. `steer` is the share of the somersault the
+    // dash's heading takes — the readout below turns it into the arc in
+    // degrees, which is the only form of this number anybody can picture.
+    box.appendChild(el('h2', null, 'out of a dash'));
+    const d = (f.duringStrike ??= {});
+    for (const [key, range] of [
+      ['steer', [0, 1, 0.01]], ['knockMul', [1, 4, 0.05]],
+      ['carry', [0, 1, 0.02]], ['ballCarry', [0, 1.5, 0.05]],
+    ]) {
+      slider(box, key, () => d[key], (v) => { d[key] = v; }, range);
+    }
+
+    box.appendChild(el('h2', null, 'the slap — knockback'));
+    for (const [key, range] of [
+      ['knockGain', [0.5, 6, 0.05]], ['knockGainRoot', [0, 1, 0.02]],
+      // THE ONLY AIMING THE MOVE ASKS FOR. A boss takes 0.3 of a slap
+      // (CONFIG.boss.tenacity.partial.flipSlap, which lives in behaviour.csv
+      // with the rest of the tenacity block), and this is the way back up: at
+      // 3.2 a slap that lands on a lit weak spot moves a boss about as far as
+      // the same slap moves anything else. The readout under the seal does
+      // that arithmetic live, which is the only way to judge this number —
+      // on its own it is a multiplier compared with itself.
+      ['weakSpotMul', [1, 6, 0.1]],
+    ]) {
+      slider(box, key, () => f[key], (v) => { f[key] = v; }, range);
+    }
+  }
   // The solver's stops, shared by every celebration pose — the first place to
   // look when a target is reached for and not arrived at.
   box.appendChild(el('h2', null, 'ik (shared)'));
-  const ik = isClap() ? CONFIG.clap.ik : CONFIG.celebrate.ik;
+  const ik = isClap() ? CONFIG.clap.ik : (isFlip() ? CONFIG.sealFlip.ik : CONFIG.celebrate.ik);
   for (const [key, range] of [['maxFold', [0.5, 3.1, 0.01]], ['maxBend', [0.2, 3.1, 0.01]], ['maxTwist', [0, 2, 0.01]], ['smoothing', [4, 80, 1]], ['iterations', [1, 12, 1]], ['softness', [0, 1, 0.01]]]) {
     slider(box, key, () => ik[key], (v) => { ik[key] = v; }, range);
   }
@@ -411,6 +593,7 @@ const anim = createAnimationController(body);
 const rig = createAimRig(body);
 const celebrate = createCelebrationDriver(body);
 const clap = createClapDriver(body);
+const flip = createFlipDriver(body);
 // A second pose rig, for DRAWING what the pose asked for. It never poses
 // anything — createPoseRig only reads bones until capture/restore are called,
 // and this one never calls them.
@@ -436,6 +619,31 @@ function ball(color, r = 0.07) {
   return m;
 }
 const handBalls = [ball(0x7ee081), ball(0x7ee081)];
+// THE SLAP'S HITBOX, drawn. A thick amber line from `inner` to `reach` along
+// the tail, and a ball at the fluke — the segment flipSlapDistance actually
+// measures against, in the same world units the game tests in.
+//
+// A LINE AND NOT A CONE, because the hitbox is a line: what `thick` buys is
+// drawn as the ball's radius at the tip rather than as a swept capsule, which
+// would need a mesh rebuilt on every slider drag to say the same thing.
+// Visible only while the window is open, which is also how it behaves in the
+// game — there is no tail hitbox the rest of the time.
+const arcGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const arc = new THREE.Line(arcGeom, new THREE.LineBasicMaterial({ color: 0xffb057, depthTest: false }));
+arc.renderOrder = 11;
+arc.visible = false;
+scene.add(arc);
+// A WIREFRAME, and that is not decoration: `thick` is a world radius and at
+// 1.6 a solid ball of it fills the front view and hides the animal the lab is
+// for. Drawn as a cage, it is the same honest size and you can see the seal
+// inside it.
+const arcTip = new THREE.Mesh(
+  new THREE.SphereGeometry(0.2, 16, 10),
+  new THREE.MeshBasicMaterial({ color: 0xffb057, wireframe: true, transparent: true, opacity: 0.45, depthTest: false }),
+);
+arcTip.renderOrder = 11;
+arcTip.visible = false;
+scene.add(arcTip);
 const targetBalls = [ball(0xff6f8f, 0.05), ball(0xff6f8f, 0.05)];
 const headBall = ball(0xffc861, 0.045);
 const chestBall = ball(0x7ad7ff, 0.06);
@@ -461,6 +669,15 @@ let loopClock = 0;
 
 function fire() {
   if (scrub) return;
+  if (isFlip()) {
+    // THROUGH triggerFlip, not by writing the state — the refusals are part of
+    // the move (a flip already turning, the cooldown, a celebration holding the
+    // animal) and a lab that bypassed them would be tuning a move the game
+    // does not have. `facingLeft` is false here: this seal swims +X.
+    resetSealFlip();
+    triggerFlip(flipDir, { x: 0, y: 0 }, false, null);
+    return;
+  }
   if (isClap()) {
     const m = rig.muzzles;
     triggerClap({ x: (m[0].x + m[1].x) / 2, y: (m[0].y + m[1].y) / 2 });
@@ -481,9 +698,11 @@ function fire() {
 function stop() {
   resetCelebration();
   resetClap();
+  resetSealFlip();
   resetPoseBubbles();
   celebrate?.reset();
   clap?.reset?.();
+  flip?.reset?.();
 }
 
 // HOLDING A POSE AT A PHASE. For a celebration that means pinning the clock
@@ -492,6 +711,32 @@ function stop() {
 // that one number, so pinning it holds all three in step. The duration is kept
 // well ahead of the clock so nothing expires underneath the hold.
 function pin(t) {
+  if (isFlip()) {
+    // THE WHOLE MOVE, not just the pose: `t` is a phase of the entire clock
+    // (wind-up through recover), and every shape the flip has is a pure
+    // function of that one number — the turn, the tuck, the window, the arc.
+    // So pinning the clock holds all four in step, and scrubbing walks the
+    // state machine rather than sampling a pose at four points.
+    // `t` IS THE TURN NOW, not the clock. The angle hangs off the turn's own
+    // progress (which the hand drives in a match), so scrubbing this walks the
+    // somersault round exactly as a player's circle would — which is the thing
+    // worth auditioning. The clock is set alongside it so the tuck's recover
+    // and the phase name stay honest.
+    flipState.active = true;
+    flipState.dir = flipDir;
+    flipState.only = null;
+    flipState.launched = true;
+    flipState.u = Math.min(1, t);
+    flipState.clockU = Math.min(1, t);
+    flipState.commit = labCommit;
+    flipState.clock = flipDuration() * Math.min(0.999, t);
+    flipState.landedAt = flipState.clock;
+    flipState.phase = flipPhaseAt(flipState.clock);
+    flipState.angle = flipAngleAt(flipState.u, flipDir);
+    const w = flipSlapWindow();
+    flipState.slapLive = flipState.u >= w.open && flipState.u < w.close;
+    return;
+  }
   if (isClap()) {
     clapState.active = true;
     clapState.t = t;
@@ -526,20 +771,36 @@ function faceBody() {
   }
   holder.rotation.z = heading - Math.PI / 2;
   body.rotation.y = Math.cos(heading) < 0 ? Math.PI : 0;
-  // The somersault, folded in the way entities/player.js folds it — about the
-  // body's own lateral axis, which is also the camera axis.
-  body.rotation.z = celebrationSpin(null);
+  // The somersaults, folded in the way entities/player.js folds them — about
+  // the body's own lateral axis, which is also the camera axis. Both of them,
+  // summed, exactly as the run does it: the victory lap's and the flip move's.
+  body.rotation.z = celebrationSpin(null) + flipSpin(null);
 }
 
 function step(dt) {
   anim?.update(dt, swimming ? 'swim' : 'idle', false);
   holder.updateMatrixWorld(true);
-  rig?.update(dt, aim, { engaged: true });
+  // ...AND HOW LOOSE THE TAIL IS, which is the whole reason the `tailLoose`
+  // slider does anything on this page: the run hands this down through
+  // updateAimRig, and a lab that left it out would be auditioning a number
+  // with no effect.
+  rig?.update(dt, aim, { engaged: true, tailMods: flipTailSpring() });
   if (scrub) pin(scrubT);
-  else { updateCelebration(dt); updateClap(dt); }
+  else {
+    updateCelebration(dt);
+    updateClap(dt);
+    // THE HAND, AS THIS PAGE CAN OFFER ONE. There is no mouse gesture here, so
+    // the auditioned follow-through stands in for it — fed every frame the way
+    // main.js feeds input.circleCommit, because it is what drives the turn
+    // now. A lab that only triggered the flip would be watching the FALLBACK
+    // clock and calling it the move.
+    if (flipState.active) noteFlipCommit(labCommit);
+    updateSealFlip(dt, rig);
+  }
   faceBody();
   holder.updateMatrixWorld(true);
   clap?.update(dt);
+  flip?.update(dt);
   celebrate?.update(dt);
   holder.updateMatrixWorld(true);
   updatePoseBubbles(dt, rig, { aboveSurface: false, velocity });
@@ -643,11 +904,37 @@ function readout() {
     }
   });
 
+  // THE ARC, in the world the seal is actually in: the holder carries the
+  // heading (-PI/2 for a seal swimming +X, exactly as the run writes it), so
+  // the segment is built from the same two terms main.js hands
+  // flipSlapSegment — the heading and the flip's own angle.
+  if (isFlip() && flipState.slapLive) {
+    const f = CONFIG.sealFlip;
+    const heading = holder.rotation.z + Math.PI / 2;
+    const a = heading + flipState.angle + Math.PI;
+    const ux = Math.cos(a);
+    const uy = Math.sin(a);
+    const pos = arcGeom.attributes.position;
+    pos.setXYZ(0, ux * (f.inner ?? 0.8), uy * (f.inner ?? 0.8), 0);
+    pos.setXYZ(1, ux * (f.reach ?? 5.2), uy * (f.reach ?? 5.2), 0);
+    pos.needsUpdate = true;
+    arcGeom.computeBoundingSphere();
+    arcTip.position.set(ux * (f.reach ?? 5.2), uy * (f.reach ?? 5.2), 0);
+    arcTip.scale.setScalar(Math.max(0.05, (f.thick ?? 1.6)) / 0.2);
+    arc.visible = true;
+    arcTip.visible = true;
+  } else {
+    arc.visible = false;
+    arcTip.visible = false;
+  }
+
   const gap = m[0].distanceTo(m[1]);
   const toHead = probe.head ? Math.min(m[0].distanceTo(_head), m[1].distanceTo(_head)) : NaN;
   const phase = isClap()
     ? clapState.t
-    : (celebrationState.active ? Math.min(1, celebrationState.clock / Math.max(0.01, celebrationState.peakAt)) : 0);
+    : (isFlip()
+      ? (flipState.active ? Math.min(1, flipState.clock / flipDuration()) : 0)
+      : (celebrationState.active ? Math.min(1, celebrationState.clock / Math.max(0.01, celebrationState.peakAt)) : 0));
   const face = celebrationFacing(null);
   valsEl.textContent =
     `${variant}  phase ${phase.toFixed(2)}  ${scrub ? 'HELD' : (celebrationState.active || clapState.active ? 'playing' : 'idle')}\n`
@@ -655,8 +942,80 @@ function readout() {
     + `L  up ${lF.up.toFixed(2)} fore ${lF.fore.toFixed(2)} lat ${lF.lat.toFixed(2)}\n`
     + `R  up ${rF.up.toFixed(2)} fore ${rF.fore.toFixed(2)} lat ${rF.lat.toFixed(2)}\n`
     + `facing ${face ? `${(Math.atan2(face.y, face.x) * 180 / Math.PI).toFixed(0)}deg  w ${face.weight.toFixed(2)}` : '— (swim)'}\n`
-    + (isClap() ? `stroke ${clapDuration().toFixed(2)}s  presses ${clapState.presses}` : `duration ${celebrationState.duration.toFixed(2)}s`);
+    + (isClap()
+      ? `stroke ${clapDuration().toFixed(2)}s  presses ${clapState.presses}`
+      : (isFlip() ? flipLine() : `duration ${celebrationState.duration.toFixed(2)}s`));
   noteEl.textContent = presetNote + (dirty ? '  ·  unsaved changes (W)' : '');
+}
+
+/**
+ * THE STATE MACHINE, SAID OUT LOUD — the four states with the live one marked,
+ * the turn so far, and what the slap is worth at each end of the tail.
+ *
+ * The knockback is shown in WORLD UNITS/SEC rather than as the multiplier it
+ * is authored as, because a multiplier can only be judged against the other
+ * multiplier next to it. These are the numbers a shark actually leaves at,
+ * through the same curve applyKnockback puts every shove through (its
+ * `speed` x the gain), so they can be judged against how far away the thing
+ * you are trying to get away from is.
+ */
+function flipLine() {
+  const f = CONFIG.sealFlip;
+  const k = CONFIG.strike?.knockback ?? {};
+  const base = (k.speed ?? 26) * ((k.powerMin ?? 0.45) + ((k.powerMax ?? 1.3) - (k.powerMin ?? 0.45)));
+  const states = ['windup', 'spin', 'recover'];
+  const bar = states.map((n) => (flipState.phase === n ? `[${n.toUpperCase()}]` : ` ${n} `)).join('');
+  const w = flipSlapWindow();
+  const turn = (flipState.angle * 180 / Math.PI).toFixed(0);
+  // WHAT A BOSS TAKES, through its own rule rather than through a second copy
+  // of it: `partial.flipSlap` is the fraction of an ordinary shove a tail slap
+  // reaches a boss with (CONFIG.boss.tenacity), and the weak spot is the way
+  // back up. Shown beside the ordinary figures because "less on a boss, more
+  // on a weak spot" is a relationship between four numbers and unreadable one
+  // slider at a time.
+  const partial = CONFIG.boss?.tenacity?.partial?.flipSlap ?? 0;
+  return `${bar}${flipState.slapLive ? '  <SLAP>' : ''}\n`
+    + `dir ${flipDir > 0 ? 'CCW / backflip' : 'CW / forward flip'}   turned ${turn}deg of `
+    + `${((f.turns ?? 1) * 360).toFixed(0)}   move ${flipDuration().toFixed(2)}s\n`
+    // IN TURNS, NOT SECONDS — the hand drives the rotation, so the tail
+    // reaches this part of the arc when it physically gets there.
+    + `slap from ${(w.open * 100).toFixed(0)}% to ${(w.close * 100).toFixed(0)}% of the turn   `
+    + `reach ${(f.reach ?? 5.2).toFixed(1)} thick ${(f.thick ?? 1.6).toFixed(1)}\n`
+    + `knock at fluke ${(base * flipKnockGain(1)).toFixed(0)}/s   at base `
+    + `${(base * flipKnockGain(0)).toFixed(0)}/s   (a shot is ${base.toFixed(0)}/s)\n`
+    + `boss: flank ${(base * flipKnockGain(1) * partial).toFixed(0)}/s   `
+    + `weak spot ${(base * flipKnockGain(1, true) * partial).toFixed(0)}/s   `
+    + `(${(partial * 100).toFixed(0)}% of a slap, behaviour.csv)\n`
+    // THE ARC A DASH GETS, in degrees rather than as the share it is authored
+    // as: `steer` x a whole turn is the only form of that number anybody can
+    // picture, and it is what the player is actually learning to aim.
+    + `out of a dash: bends the line ${(360 * (f.turns ?? 1) * (f.duringStrike?.steer ?? 0)).toFixed(0)}deg   `
+    + `throws x${(f.duringStrike?.knockMul ?? 1).toFixed(2)} at full power\n`
+    // THE FOLLOW-THROUGH, AS THE PLAYER FEELS IT: the two flips the same hand
+    // can produce out of the same circle, half-drawn against whipped. The
+    // spin times are the whole move, which is the number that decides whether
+    // the difference is legible at all.
+    // THE DAMPING RATIO, which is the one number that says whether the tail
+    // cracks or arrives — and it is two sliders apart, so nobody could hold it
+    // in their head while dragging one of them.
+    + `tail: damping ratio ${(CONFIG.tail.damping / (2 * Math.sqrt(CONFIG.tail.stiffness))).toFixed(2)} swimming `
+    + `-> ${((CONFIG.tail.damping * (f.tail?.damping ?? 1))
+      / (2 * Math.sqrt(CONFIG.tail.stiffness * (f.tail?.stiffness ?? 1)))).toFixed(2)} flipping   `
+    + `${(() => {
+      const z = (CONFIG.tail.damping * (f.tail?.damping ?? 1))
+        / (2 * Math.sqrt(CONFIG.tail.stiffness * (f.tail?.stiffness ?? 1)));
+      return z > 0.45 ? '(ARRIVES)' : z < 0.15 ? '(RUBBER)' : '(cracks)';
+    })()}\n`
+    // WHO IS TURNING THE SEAL — the hand or the clock under it. The whole
+    // control model in one line: `u` is the max of the two, so whichever is
+    // named here is the one the player is feeling.
+    + `turn ${(flipState.u * 100).toFixed(0)}%  `
+    + `${flipCommit() >= flipState.clockU ? 'DRIVEN by the hand' : 'on the fallback clock'}`
+    + `   coil ${(flipState.gather * 100).toFixed(0)}%\n`
+    + `follow-through ${(flipCommit() * 100).toFixed(0)}%: `
+    + `spin ${((f.spin ?? 0.46) * (f.commit?.spinSlow ?? 1)).toFixed(2)}s lazy `
+    + `-> ${((f.spin ?? 0.46) * (f.commit?.spinFast ?? 1)).toFixed(2)}s whipped   `
+    + `tail x${(f.commit?.hitSlow ?? 1).toFixed(2)} -> x${(f.commit?.hitFast ?? 1).toFixed(2)}`;
 }
 
 // --- render -----------------------------------------------------------------
@@ -684,6 +1043,15 @@ b('bSwim').addEventListener('click', () => { swimming = !swimming; b('bSwim').cl
 b('bSwim').classList.add('on');
 b('bGrave').addEventListener('click', () => { showGrave = !showGrave; b('bGrave').classList.toggle('on', showGrave); });
 b('bGrave').classList.add('on');
+// THE DIRECTION, and it re-fires rather than only setting a flag: the reason
+// to press it is to see the other flip, and a button that silently changed
+// what the NEXT press would do is a button you have to press twice.
+b('bDir').addEventListener('click', () => {
+  flipDir = -flipDir;
+  b('bDir').textContent = flipDir > 0 ? 'CCW' : 'CW';
+  b('bDir').classList.toggle('on', flipDir < 0);
+  if (isFlip()) { stop(); if (!scrub) fire(); }
+});
 b('bScrub').addEventListener('click', () => {
   scrub = !scrub;
   b('bScrub').classList.toggle('on', scrub);
@@ -695,6 +1063,7 @@ b('bReset').addEventListener('click', () => {
   CONFIG.clap.pose = JSON.parse(JSON.stringify(DEFAULTS.clap.pose));
   CONFIG.clap.bubbles = JSON.parse(JSON.stringify(DEFAULTS.clap.bubbles));
   Object.assign(CONFIG.salute, JSON.parse(JSON.stringify(DEFAULTS.salute)));
+  Object.assign(CONFIG.sealFlip, JSON.parse(JSON.stringify(DEFAULTS.sealFlip)));
   buildPanel();
   presetNote = 'config.js defaults (as loaded, tuning included)';
   dirty = true;
@@ -744,6 +1113,11 @@ window.__hold = (t) => {
 window.__step = (n = 60) => { for (let i = 0; i < n; i++) step(DT); readout(); render(); };
 window.__state = () => ({
   variant,
+  flip: isFlip() ? {
+    phase: flipState.phase, clock: flipState.clock, dir: flipState.dir,
+    angle: flipState.angle, slapLive: flipState.slapLive,
+    window: flipSlapWindow(), duration: flipDuration(),
+  } : null,
   phase: isClap() ? clapState.t : celebrationState.clock / Math.max(0.01, celebrationState.peakAt),
   gap: rig.muzzles[0].distanceTo(rig.muzzles[1]),
   toHead: probe.head ? Math.min(rig.muzzles[0].distanceTo(_head), rig.muzzles[1].distanceTo(_head)) : null,
@@ -756,7 +1130,7 @@ let last = performance.now();
 function tick(now) {
   const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
   last = now;
-  if (loop && !scrub && !celebrationState.active && !clapState.active) {
+  if (loop && !scrub && !celebrationState.active && !clapState.active && !flipState.active) {
     loopClock += dt;
     if (loopClock >= 0.4) { loopClock = 0; fire(); }
   }

@@ -10,6 +10,9 @@ import { hitCreature } from './hitShape.js';
 import { hotSpotDamage, hotSpotUnder } from './bossHotSpots.js';
 import { noteChain, tickChainTrace } from './chainTrace.js';
 import { versusActive } from './versusFlag.js';
+// The flip's steering — a somersault thrown mid-dash bends the line it is
+// flying. See flipSteerDelta and the note in holdAim.
+import { flipSteerDelta } from './sealFlip.js';
 
 // Where the dash last connected on a body. Shared and consumed immediately —
 // see the note on combat.js's own `contact`.
@@ -409,13 +412,20 @@ export function strikeBoneGain(stats) {
  *               per-run rider scale has somewhere obvious to land)
  */
 export function riderDamage(dealt, stats = null) {
-  // A RIDER RIDES A STRIKE THAT BIT. The max() below is measured against the
-  // NOMINAL strike rather than against what the dash dealt, so without this a
-  // release outside the sweet spot — which deals nothing at all — would still
-  // hand Bone Shrapnel and Glow Up! a full-size number to scale off, and the
-  // two cards would quietly be doing the damage the mistimed strike was
-  // denied. See the sweet spot note on strikeState.
-  if (!strikeState.sweetStrike) return 0;
+  // A RIDER RIDES A STRIKE THAT WAS ARMED — a completed charge or an on-beat
+  // release, the same gate the food chain opens on (`armingStrike`, see
+  // tryStrike). It used to ride `sweetStrike` alone: the ~36ms window that
+  // gates the ram's own bite. That made Bone Shrapnel and Glow Up!'s strike
+  // half pay out on roughly one dash in ten — the playtest ledger read the
+  // shrapnel at 0.00-0.08x return, dead last — and the card said "dash to
+  // unleash" while nine dashes unleashed nothing, with no tell of which was
+  // which. The PERFECT flash is the tell the chain uses, and it is the one the
+  // riders use now. The ram's bite stays on the beat (weapons.csv
+  // strike.charge.sweetFraction); an unfinished wind-up still feeds nothing.
+  //
+  // `sweetStrike` is kept in the test because every harness that arms a dash
+  // by hand stamps that one, and in the live game sweet implies arming.
+  if (!(strikeState.armingStrike || strikeState.sweetStrike)) return 0;
   const nominal = (CONFIG.strike.damage ?? 0) * powerDamageMul() * chainDamageMul(stats);
   return Math.max(dealt, nominal);
 }
@@ -542,6 +552,30 @@ export function strikeReach(stats = null) {
  * Returns the held aim, for the caller to hand dashSteer.
  */
 export function holdAim(s, input) {
+  // A FLIP HAS THE WHEEL WHILE IT IS TURNING, and the hand is ignored.
+  //
+  // Both read the same motion and ask different questions of it: the dash
+  // wants "which way did the hand flick" and the circle is a hand flicking
+  // every way at once, so a flip drawn mid-dash used to drag the held aim
+  // round the loop and the line came apart. Now the heading is turned by a
+  // share of the SOMERSAULT (flipSteerDelta — the angle the body actually
+  // rolled this frame), which is why the two read as one move: the seal is
+  // not being steered round a corner, it is rolling and going where it rolls.
+  //
+  // Nothing about the gesture is lost by skipping it. The circle has already
+  // been spent — it started this flip — and reading it again as a direction
+  // would be spending one input twice.
+  const bend = flipSteerDelta();
+  if (bend !== 0) {
+    const c = Math.cos(bend);
+    const sn = Math.sin(bend);
+    const ax = s.aim.x;
+    const ay = s.aim.y;
+    s.aim.x = ax * c - ay * sn;
+    s.aim.y = ax * sn + ay * c;
+    s.aimSteer = true;
+    return s.aim;
+  }
   if (input?.aimMoved) {
     const g = input.aimGesture;
     let ax = g?.x ?? 0, ay = g?.y ?? 0;
@@ -778,7 +812,9 @@ const forecastStep = { heading: 0, speed: 0, breakOut: false };
  * @param power  0..1, the banked charge (strikeState.pending in a wind-up)
  * @param stats  player.stats
  * @param combo  player.comboSpeedMul
- * @param out    reused target: { dir: { x, y }, reach, x, y }
+ * @param out    reused target: { dir: { x, y }, reach, x, y }. Give it a
+ *               `path` array and the flight is recorded into it as flat
+ *               x,y pairs relative to the seal — see the note below.
  */
 export function predictDash(move, aim, power, stats, combo = 1, out = { dir: { x: 0, y: 0 }, reach: 0, x: 0, y: 0 }) {
   const launch = strikeDirection(move, aim, out.dir);
@@ -798,6 +834,28 @@ export function predictDash(move, aim, power, stats, combo = 1, out = { dir: { x
   const held = mx * mx + my * my > 0.001;
   const ceiling = Math.max(maxSpeed, dashSpeed) * combo;
 
+  // THE PATH ITSELF, when a caller wants to DRAW it rather than aim a cone
+  // along it. Opt-in via `out.path`, because the corridor never needed it and
+  // filling an array every frame for a caller that only reads two numbers is
+  // work for nothing.
+  //
+  // IT IS A STRAIGHT LINE TODAY, and that is worth writing down because the
+  // note above says the real path bends. Both are true, of different things.
+  // The REAL dash bends because the seal carries the velocity it already had
+  // into it; this forecast starts from the impulse alone, and dashSteer is
+  // handed `launch` as its steer target — the same heading the flight starts
+  // on — so there is never anything to turn toward. Every sample lands on the
+  // launch line.
+  //
+  // So why collect them. The SPACING, which is not even: the seal decelerates
+  // the whole way, so anything drawn along this line sits where the seal will
+  // actually BE at that moment rather than at an even fraction of the
+  // distance. And on the day the forecast gains a real curve — a launch that
+  // keeps momentum, a steer toward the live aim — everything drawing from it
+  // follows with no change.
+  const path = out.path;
+  if (path) { path.length = 0; path.push(0, 0); }
+
   // The impulse.
   let vx = launch.x * dashSpeed * combo;
   let vy = launch.y * dashSpeed * combo;
@@ -814,7 +872,7 @@ export function predictDash(move, aim, power, stats, combo = 1, out = { dir: { x
         // seeds it there), so that is what the forecast steers toward — the
         // live pointer would flip as the forecast flew past it.
         dashSteer(Math.atan2(vy, vx), v, mx, my, launch.x, launch.y, combo, dt, stats, 1 - left / duration, t, forecastStep);
-        if (forecastStep.breakOut) break;
+        if (forecastStep.breakOut) break;   // the path ends here too — see `path`
         vx = Math.cos(forecastStep.heading) * forecastStep.speed;
         vy = Math.sin(forecastStep.heading) * forecastStep.speed;
       }
@@ -825,6 +883,7 @@ export function predictDash(move, aim, power, stats, combo = 1, out = { dir: { x
     vx *= drag; vy *= drag;
     x += vx * dt;
     y += vy * dt;
+    if (path) path.push(x, y);
   }
   out.x = x;
   out.y = y;
@@ -2737,11 +2796,14 @@ export function updateStrike(dt, scene, playerPos, stats, enemiesList, hooks, s 
       // Up! do nothing on a seal that hadn't also bought the strike line. Both
       // riders (this and the shrapnel main.js spawns) answer to
       // CONFIG.strike.damage, which is what that field is now for.
-      // riderDamage() returns 0 off the beat, so the status would land carrying
-      // nothing — skipped outright rather than applied empty, or a mistimed
-      // dash through a school would still paint six creatures with a burn that
-      // ticks for zero.
-      if (sweet) applyElementalHit(scene, e, riderDamage(dmg, stats), enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
+      // riderDamage() returns 0 for a dash that was never armed (an unfinished
+      // wind-up), so the status would land carrying nothing — skipped outright
+      // rather than applied empty, or a flick through a school would still
+      // paint six creatures with a burn that ticks for zero. Gated on the
+      // rider's own answer rather than on `sweet`: the riders arm on a
+      // completed charge too, see riderDamage.
+      const ride = riderDamage(dmg, stats);
+      if (ride > 0) applyElementalHit(scene, e, ride, enemiesList, hooks, CONFIG.biolum?.strikeFraction ?? 0.5);
 
       if (e.hp <= 0) {
         hooks.onEnemyKilled?.(e);

@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sealitaireTable mount</title>
+<style>
+  html,body{margin:0;background:#07182b;height:100%;font:13px ui-monospace,monospace;color:#cfe3f5}
+  /* The same rules ui.js injects, copied so this harness exercises the real
+     module without dragging the whole game in. If these drift, the harness
+     lies — they are asserted by tools/sealitaire-mount-test.mjs. */
+  /* THE HOST THE BUG LIVED IN. ui.js's root is pointer-events:none with its
+     children opting in, and mounting into document.body instead is exactly
+     why the first pass of this harness passed while the game was dead. */
+  .sv-ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .sv-btn { pointer-events: all; }
+  .sv-sealitaire { position: fixed; inset: 0; z-index: 60; background: #07182b; pointer-events: auto; }
+  .sv-sealitaire-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .sv-sealitaire-back { position: absolute; left: 12px; top: 12px; z-index: 2; }
+  .sv-sealitaire-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+</style>
+<div class="sv-ui" id="uiroot"></div>
+<div id="say" style="position:fixed;z-index:99;left:8px;bottom:8px"></div>
+<script type="module" src="./sealitaire-mount.js"></script>

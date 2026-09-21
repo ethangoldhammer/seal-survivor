@@ -44,10 +44,17 @@ import {
   initParticles, updateParticles, updateParticleScale, particleCount, setParticleRelief,
 } from '../../path/src/entities/particles.js';
 import {
-  ball, initBallAlone, stepBallAlone, strikeBallFrom, renderBall, resetBall, rimRadius, rimAngle, driveOutline,
+  ball, initBallAlone, stepBallAlone, strikeBallFrom, flipSlapBall, renderBall, resetBall, rimRadius, rimAngle, driveOutline,
   ballContactReach, ballHitRadiusAt,
 } from '../../path/src/systems/versus.js';
 import { ballSpinState } from '../../path/src/systems/ballSpin.js';
+import {
+  flipState, triggerFlip, updateSealFlip, resetSealFlip, flipSlapWindow,
+  flipTailPoint, flipTailLaying, flipTailSpent, noteFlipCommit,
+} from '../../path/src/systems/sealFlip.js';
+import {
+  spawnGooWall, extendGooWall, sealGooWall, updateGooWalls, resetGooWalls, gooWalls,
+} from '../../path/src/systems/gooWall.js';
 
 const q = new URLSearchParams(location.search);
 const stage = document.getElementById('stage');
@@ -425,6 +432,62 @@ const CONFIG_SLIDERS = [
   // silently does not save. It is drawn at whatever the game has it at, which
   // is the honest thing to tune a dent against anyway.
 
+  // ---- THE BACKFLIP'S WALL (D) ------------------------------------------
+  // Goo laid off the fluke as the somersault swings it (systems/gooWall.js).
+  // It is on THIS page and not the pose lab because the only question that
+  // matters about it is whether the blobs fuse into one barrier, and that is a
+  // metaball field through the real goo pass — a thing you look at.
+  //
+  // All four blocks save: tools/apply-ball-lab.mjs writes `emitters` and
+  // `sealFlip` alongside `versus` and `fx` for exactly these rows.
+  ['the wall — the throw', null],
+  // HOW MUCH OF THE TAIL'S SPEED EACH LOBE KEEPS, and the drag that brings it
+  // back to rest. THE TWO MOVE TOGETHER: a lobe coasts inherit x tailSpeed /
+  // drag, and that distance has to stay inside the barrier the same blobs are
+  // drawing (the readout under the ball prints it against the bound). Inherit
+  // alone walks the goo off its own hitbox; inherit with drag is a harder
+  // throw that still lands.
+  ['emitters.gooWall.inherit', 'inherits the tail x', 0, 1, 0.01],
+  ['emitters.gooWall.drag', 'drag (settles it)', 1, 30, 0.5],
+  // The wobble. A noise field that grows with each lobe's AGE, so the wall
+  // comes off the tail clean and goes ragged as it dissolves — which is what
+  // stops twenty identical lobes in a row reading as extruded.
+  ['emitters.gooWall.turbulence', 'turbulence', 0, 3, 0.05],
+  ['emitters.gooWall.count', 'lobes per blob', 1, 24, 1],
+  ['emitters.gooWall.glow', 'glow', 0, 3, 0.05],
+  ['sealFlip.back.blobSize', 'lobe size x', 0.3, 3, 0.05],
+  ['sealFlip.back.blobSpeed', 'lobe throw x', 0, 3, 0.05],
+  ['sealFlip.back.blobScale', 'lobe count x', 0.2, 4, 0.1],
+
+  ['the wall — the barrier', null],
+  // `step` is the COHESION number: how far the fluke travels between blobs.
+  // Under a lobe's drawn radius (size x the group's radius, below) the blobs
+  // overlap and the row closes into one wall; over it, beads on a string.
+  ['sealFlip.back.step', 'blob every x units (cohesion)', 0.3, 4, 0.05],
+  ['sealFlip.back.thick', 'wall thickness (hitbox)', 0.2, 6, 0.1],
+  ['sealFlip.back.life', 'wall lives s', 0.1, 2, 0.05],
+  ['sealFlip.back.hold', 'stops things for s', 0, 1.5, 0.05],
+  // Where in the turn the tail lays it, as a phase of the spin. Not the whole
+  // circle: goo along every degree is a RING with the seal inside it.
+  ['sealFlip.back.emitFrom', 'laying starts at (phase)', 0, 1, 0.02],
+  ['sealFlip.back.emitTo', 'laying ends at (phase)', 0, 1, 0.02],
+  ['sealFlip.back.ballBounce', 'ball keeps x off it', 0, 1, 0.02],
+  ['sealFlip.back.ballSpin', 'ball keeps x of its spin', 0, 1, 0.02],
+
+  ['the wall — the surface (goo group)', null],
+  // The other half of the cohesion. The surface is drawn where summed lobes
+  // cross `iso`, so a LOW one means neighbours bleed together well before they
+  // properly overlap. `radius` multiplies the emitter's size into the drawn
+  // lobe, so it and `step` are the pair that decide whether this is a wall.
+  ['fx.goo.groups.gooWall.radius', 'splat radius', 1, 10, 0.1],
+  ['fx.goo.groups.gooWall.iso', 'iso (low = fuses)', 0.05, 1.2, 0.01],
+  ['fx.goo.groups.gooWall.soft', 'edge softness', 0.01, 0.8, 0.01],
+  ['fx.goo.groups.gooWall.opacity', 'opacity', 0, 1, 0.02],
+  ['fx.goo.groups.gooWall.rim', 'rim (− = outline)', -1.5, 2, 0.05],
+  ['fx.goo.groups.gooWall.rimWidth', 'rim width', 0.02, 0.8, 0.01],
+  ['fx.goo.groups.gooWall.spec', 'specular', 0, 2, 0.05],
+  ['fx.goo.groups.gooWall.normal', 'normal strength', 0, 12, 0.1],
+
   ['the pitch', null],
   ['versus.widthScale', 'pitch width x frame', 1, 3, 0.05],
 ];
@@ -776,6 +839,126 @@ function strikeAt(at, dir, power, english = lab.english) {
   ballEvent('bounce', { force: power, team: labOwner });
 }
 
+// ---------------------------------------------------------------------------
+// THE TAIL SLAP — the flip's contact (systems/sealFlip.js, flipSlapBall in
+// systems/versus.js), which is the deepest dent and the biggest mess anything
+// in this game makes of this ball.
+//
+// THE SHIPPING PATH, not an impression of it: a real flip is triggered and its
+// clock stepped by the frame loop below, so the window opens where the move
+// says it does and the slap lands on the arc the move actually swings. The
+// only thing invented here is WHERE THE SEAL IS — flipSlapBall takes that as
+// an argument for this page's sake, because the lab has a ball and a pointer
+// and no animal at all.
+//
+// The seal is placed on the side the pointer is on, at the distance the tail
+// would put it: the slap's own geometry then decides whether it connects,
+// exactly as it does in a match.
+let slapFrom = null;
+function tailSlap(at = null, dir = +1) {
+  resetSealFlip();
+  const a = at
+    ? Math.atan2(at.y - ball.y, at.x - ball.x)
+    : Math.random() * Math.PI * 2;
+  const R = ballContactReach(0) + (CONFIG.sealFlip?.reach ?? 5.2) * 0.55;
+  // The seal, placed so its TAIL is on the ball rather than its nose. The
+  // fluke is at heading + the turn + a half turn (flipSlapSegment), so the
+  // heading that points the tail down the line to the ball is that backwards
+  // — worked out after the clock jump below, once the turn is known.
+  slapFrom = { x: ball.x + Math.cos(a) * R, y: ball.y + Math.sin(a) * R, heading: a + Math.PI };
+  triggerFlip(dir, {}, false, null);
+  // ...AND STRAIGHT TO THE CONTACT. The wind-up and the spin are the POSE
+  // LAB's question (`npm run looks:poselab`, "flip move"); this page's is what
+  // the tail does to the ball when it arrives, and the third of a second in
+  // between is a third of a second of a buoyant ball floating out of the arc.
+  // The first version of this did not skip it and the slap missed every time,
+  // which looked exactly like a broken hitbox.
+  //
+  // The clock is jumped, not faked: updateSealFlip is a pure function of it,
+  // so the window opens where the move says it does and everything downstream
+  // — the angle, the arc, the direction the goo leaves in — is the real one.
+  updateSealFlip(Math.max(0, flipSlapWindow().open) + 1e-3, null);
+  // THE TAIL HAS TO POINT AT THE BALL, and it is two half-turns away from the
+  // heading: flipSlapSegment swings the fluke along `heading + angle + PI`,
+  // and `a` here runs from the BALL out to the seal. So the heading that lays
+  // the tail down the line to the ball is `a - angle`, which lands the fluke
+  // on `a + PI` — back the way it came. Getting this sign wrong points the
+  // tail into empty water and the slap misses every time while the seal marker
+  // sits exactly where you expect it.
+  slapFrom.heading = a - flipState.angle;
+  sealMark.position.set(slapFrom.x, slapFrom.y, sealMark.position.z);
+  sealMark.scale.setScalar(CONFIG.versus.ball.body?.thickness ?? 0.69);
+  markFade = 1;
+  window.__slaps = (window.__slaps ?? 0) + 1;
+}
+
+// ---------------------------------------------------------------------------
+// THE BACKFLIP'S WALL — the OTHER thing a flip does, and the one this page is
+// actually the right place to judge.
+//
+// The wall is goo laid off the fluke a blob at a time as the somersault swings
+// it (systems/gooWall.js), and whether those blobs FUSE into one barrier or
+// sit there as beads on a string is a question about a metaball field that no
+// test can answer and no amount of reading the numbers will settle. It has to
+// be looked at, through the real goo pass, at the size it is played at — which
+// is this page.
+//
+// The seal is where the pointer put it, exactly as for a slap, and the wall is
+// painted by the same loop main.js runs.
+let wallSeal = null;
+// The fastest the fluke went while painting the last wall — what the goo was
+// actually thrown with, which is the number the coast is computed from. Held
+// rather than derived from the config, because the tail's peak speed depends
+// on the spin's length and the easing and is the one term of the three nobody
+// can read off a slider.
+let wallTipSpeed = 0;
+function tailWall(at = null) {
+  resetSealFlip();
+  resetGooWalls();
+  const a = at
+    ? Math.atan2(at.y - ball.y, at.x - ball.x)
+    : Math.random() * Math.PI * 2;
+  const R = ballContactReach(0) + (CONFIG.sealFlip?.reach ?? 5.2) * 0.55;
+  wallSeal = {
+    x: ball.x + Math.cos(a) * R,
+    y: ball.y + Math.sin(a) * R,
+    heading: a + Math.PI,
+    wall: null,
+  };
+  // A BACKFLIP (+1) and a full follow-through, because a half-drawn one lays a
+  // shorter wall and the question here is what a whole one looks like.
+  triggerFlip(1, {}, false, null);
+  noteFlipCommit(1);
+  wallTipSpeed = 0;
+  sealMark.position.set(wallSeal.x, wallSeal.y, sealMark.position.z);
+  sealMark.scale.setScalar(CONFIG.versus.ball.body?.thickness ?? 0.69);
+  markFade = 1;
+  window.__walls = (window.__walls ?? 0) + 1;
+}
+
+/** One frame of the tail painting, the same loop main.js runs. */
+function stepTailWall() {
+  if (!wallSeal) return;
+  if (!flipState.active && wallSeal.wall) { sealGooWall(wallSeal.wall); wallSeal = null; return; }
+  // The wall is opened at the LAUNCH, not at the trigger — there is nothing in
+  // the water during the gather.
+  if (!wallSeal.wall) {
+    if (!flipState.launched) return;
+    wallSeal.wall = spawnGooWall(wallSeal.x, wallSeal.y, wallSeal.heading);
+  }
+  // SPENT, not "not laying" — the span opens a fraction after the launch, so
+  // sealing on "not laying" closes the wall before a blob is in it.
+  if (flipTailSpent()) { sealGooWall(wallSeal.wall); wallSeal = null; return; }
+  if (!flipTailLaying()) return;
+  // The fluke's position AND its motion — the goo leaves along the swing, and
+  // this page is where you find out whether that reads as thrown or as
+  // sprayed. The lab's seal does not swim, so there is no body velocity to
+  // add; in a match main.js sums the two.
+  const t = flipTailPoint(wallSeal.x, wallSeal.y, wallSeal.heading, DT);
+  wallTipSpeed = Math.max(wallTipSpeed, t.speed);
+  extendGooWall(wallSeal.wall, t.x, t.y, t.vx, t.vy);
+}
+
 // A strike from a random point on the ball, in toward it with a random glance.
 function randomStrike() {
   const a = Math.random() * Math.PI * 2;
@@ -801,6 +984,33 @@ function readout() {
     `speed ${Math.hypot(ball.vx, ball.vy).toFixed(1)}   spin ${ball.spin.toFixed(2)} rad/s ${ball.spin > 0.01 ? '↺' : ball.spin < -0.01 ? '↻' : ''}   deform ${(worst / ball.r * 100).toFixed(0)}%`,
     `at ${ball.x.toFixed(1)}, ${ball.y.toFixed(1)}   ${ball.y > 0 ? 'AIR' : 'water'}   colour ${hex(CONFIG.versus.ball.look.color)}   strokes ${ss.streaks.length}${ss.streaks.length ? ` arc ${(ss.streaks[0].arc).toFixed(2)} rad` : ''}`,
   ];
+  // THE WALL, WHILE ONE IS UP — and the one line that has to be there is the
+  // COAST against its bound.
+  //
+  // The lobes keep `inherit` of the fluke's speed and coast that over the
+  // drag; the wall they are drawing is `thick` deep with lobes of their own
+  // radius. Past thick + a lobe's radius the mass stops covering the barrier
+  // and the goo is visibly somewhere the fish is not stopping, which reads as
+  // the collision being broken rather than the throw being loud. It is three
+  // numbers on two panels, so nobody could hold it in their head while
+  // dragging one of them — hence the arithmetic, live, where the drag is.
+  if (gooWalls.length || wallSeal) {
+    const w = gooWalls[gooWalls.length - 1];
+    const em = CONFIG.emitters.gooWall;
+    const B = CONFIG.sealFlip.back;
+    const lobe = (em.size?.[0] ?? 0.5) * (CONFIG.fx.goo.groups.gooWall?.radius ?? 4);
+    const swing = wallTipSpeed;
+    const coast = ((em.inherit ?? 0) * swing) / Math.max(0.01, em.drag ?? 1);
+    const bound = (B.thick ?? 1.6) + lobe * 0.5;
+    lines.push(
+      `wall ${w ? `${w.nodes.length} blobs, ${w.life.toFixed(2)}s left` : 'laying…'}`
+      + `   gap ${(B.step ?? 1).toFixed(2)} vs lobe ${lobe.toFixed(2)} across `
+      + `${lobe > (B.step ?? 1) ? '(fuses)' : '(BEADS)'}`,
+      `goo coasts ${coast.toFixed(2)} off the tail at ${swing.toFixed(0)} u/s `
+      + `— bound ${bound.toFixed(2)} (thick + half a lobe) `
+      + `${coast <= bound ? 'OK' : 'DRIFTS OFF THE HITBOX'}`,
+    );
+  }
   // POSSESSION, as the ledger and the field actually hold it — the two colours
   // and how much of the body each has. Without it the only way to tell a share
   // of 0.2 from a share of 1.0 is to look at the ball, which is the thing being
@@ -850,6 +1060,8 @@ let auto = false;
 let frozen = false;
 let autoClock = 0;
 b('bStrike').addEventListener('click', randomStrike);
+b('bSlap').addEventListener('click', () => tailSlap());
+b('bWall').addEventListener('click', () => tailWall());
 b('bThrow').addEventListener('click', throwBall);
 b('bAuto').addEventListener('click', () => { auto = !auto; b('bAuto').classList.toggle('on', auto); });
 b('bFreeze').addEventListener('click', () => { frozen = !frozen; b('bFreeze').classList.toggle('on', frozen); });
@@ -872,6 +1084,8 @@ window.addEventListener('keydown', (e) => {
   if (e.target?.tagName === 'INPUT') return;
   if (e.code === 'Space') { e.preventDefault(); randomStrike(); }
   if (e.key === 't' || e.key === 'T') throwBall();
+  if (e.key === 's' || e.key === 'S') tailSlap();
+  if (e.key === 'd' || e.key === 'D') tailWall();
   if (e.key === 'a' || e.key === 'A') b('bAuto').click();
   if (e.key === 'f' || e.key === 'F') b('bFreeze').click();
   if (e.key === 'r' || e.key === 'R') { resetBall(); clearBallTrail(scene); resetBallSpit(); resetBallGrid(); }
@@ -936,6 +1150,18 @@ function step(dt) {
     const every = 1 / Math.max(0.05, lab.autoHz);
     if (autoClock >= every) { autoClock -= every; randomStrike(); }
   }
+  // THE FLIP'S OWN CLOCK, on wall seconds like the match runs it, and the
+  // contact resolved while its window is open. Before stepBallAlone for the
+  // same reason the match resolves contacts before it steps the ball: the
+  // impulse belongs on the frame the tail was there.
+  updateSealFlip(dt, null);
+  if (flipState.slapLive && slapFrom) flipSlapBall(0, slapFrom);
+  if (!flipState.active) slapFrom = null;
+  // ...and the backflip's wall, painted and then ageing. The ball bounces off
+  // it inside versus.js's own frame, which this page does not run — so what is
+  // on show here is the MASS: whether the blobs fuse into a barrier.
+  stepTailWall();
+  updateGooWalls(dt, null);
   stepBallAlone(dt);
   // THE TRAIL, exactly as updateVersusClock drives it: the shipping module, the
   // shipping wall clock, the ball's own drawn edge. It is the only place the
@@ -1010,6 +1236,8 @@ window.__spit = () => ({ ...ballSpitStats(), alive: particleCount() });
 window.__relief = (v = 1) => setParticleRelief(v);
 window.__trace = (on = true) => { trace = on; clearTrace(); };
 window.__spinState = ballSpinState;
+window.__wall = () => tailWall();
+window.__walls2 = () => gooWalls.map((w) => ({ nodes: w.nodes.length, life: +w.life.toFixed(3) }));
 // The lattice and the chain, for a harness driving this page from outside —
 // tools/looks/serve.mjs shoots frames off it and there is no other way to ask
 // whether a dent was actually published.

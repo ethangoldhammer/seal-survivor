@@ -20,7 +20,12 @@ import { uiText } from '../uiTextTable.js';
 // Whether this build has a room server at all — the online row is not drawn
 // without one. A leaf: it reads an inlined env var and touches no socket.
 import { roomsAvailable } from '../systems/online/room.js';
+import { sealitaireAvailable } from './sealitaireTable.js';
 import { isTextEntry } from './typing.js';
+// Whether there is a breath to draw at all — off in a Blubberball match, where
+// the lungs are stubbed (CONFIG.versus.oxygen). A leaf, imported for one
+// question; see systems/versusFlag.js.
+import { oxygenLive } from '../systems/versusFlag.js';
 import { availableUpgrades, levelableUpgrades, player, rerollsLeft, spendReroll, rerollEnabled, rerollsEverEarned } from '../entities/player.js';
 import { feedMouse, menuInput, resetMenuInput } from '../input.js';
 // The splash and the score card's turn are pure motion with no way to opt out
@@ -1103,6 +1108,13 @@ const STYLES = `
     height: min(calc(var(--sv-track) * var(--sv-hp-grow, 1)), var(--sv-track-max)); }
   .sv-playerbars-corner #svO2Wrap {
     height: min(calc(var(--sv-track) * var(--sv-o2-grow, 1)), var(--sv-track-max)); }
+  /* NO BREATH, NO GAUGE — a Blubberball match, where the lungs are stubbed
+     (CONFIG.versus.oxygen). display:none and not opacity: the column is a
+     flex stack and a bar left in it at zero alpha would hold the gap it used
+     to fill, so health and fuel would sit apart with nothing between them.
+     The track is still built, still measured and still written every frame;
+     this is the only thing deciding whether it is seen. */
+  .sv-playerbars-noair #svO2Wrap { display: none; }
   /* AND THE FUEL GROWS TOO, on its own quantity: the number of PIPS, not a
      maximum. A link cuts the bar into more segments (Coiled Spring, and every
      chain link after the first), and against a fixed-length column that shows
@@ -1550,6 +1562,27 @@ const STYLES = `
   .sv-sports-list { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 22px; min-width: 220px; }
   .sv-sport { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 22px; }
   .sv-sport-soon { font-size: 11px; font-weight: 500; opacity: 0.7; letter-spacing: 0.04em; }
+  /* SEALITAIRE'S CANVAS — a second renderer over the whole viewport, above
+     the menu's own layers because it replaces the screen rather than sitting
+     on it. Its own z-index rather than .sv-center's: the bust and the water
+     keep running underneath and must not show through, so the canvas is
+     opaque and covers edge to edge. The artboard is fill-sized, so the canvas
+     IS the layout — no letterboxing, no aspect to preserve. */
+  /* POINTER-EVENTS: AUTO, and this is not boilerplate. .sv-ui is
+     pointer-events:none with its children opting in one at a time, so a
+     canvas dropped in there is invisible to the mouse: the table draws, the
+     cards animate, the Back button works (.sv-btn opts in) and not one card
+     can be picked up. It reads as the table being broken rather than as a
+     CSS rule three thousand lines away. */
+  .sv-sealitaire { position: fixed; inset: 0; z-index: 60; background: #07182b; pointer-events: auto; }
+  .sv-sealitaire-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  /* It is focusable so the table can hear the keyboard; the ring is the
+     browser's idea of a form control, not ours. */
+  .sv-sealitaire-canvas:focus, .sv-sealitaire-canvas:focus-visible { outline: none; }
+  /* Clear of the notch and of the Re-Deal button the .riv draws at the top
+     right of its own artboard. */
+  .sv-sealitaire-back { position: absolute; left: max(12px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top)); }
+  .sv-sealitaire-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; letter-spacing: 0.08em; opacity: 0.75; }
   .sv-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   /* The pad's cursor on the score card. Same look as the focus ring, but as a
      class for the same reason the cards' selection is one: :focus-visible is
@@ -3670,6 +3703,7 @@ export function hideLeaderboard() {
 let sportsPanel = null;
 let sportsBall = null;
 let sportsBallOnline = null;
+let sportsSealitaire = null;
 // THE PANEL OPENS UNDER A FINGER THAT IS ALREADY LIFTING — see the guard in
 // buildSealSportsPanel. True from the moment it is shown until the panel has
 // seen a pointerdown of its own.
@@ -3726,7 +3760,23 @@ function buildSealSportsPanel() {
     sportsBallOnline = bindMenuSounds(sport('sportBallOnline', uiText('sportBallOnline')));
   }
   sport('sportFinball', uiText('sportFinball'), { soon: true });
-  sport('sportSealitaire', uiText('sportSealitaire'), { soon: true });
+  // SEALITAIRE IS A SECOND PROGRAM, not a mode — rive/sealitaire, its own
+  // renderer on its own canvas (ui/sealitaireTable.js). It only exists in a
+  // build that has run `npm run sealitaire:ship`, so the row is BORN a stub
+  // and upgrades itself if the file answers. Same reasoning as the online
+  // Blubberball row waiting on roomsAvailable(): a button that opens a black
+  // screen is worse than a list that never offered it.
+  //
+  // Asked here rather than at startup because the check is a HEAD request for
+  // a 19 MB asset, and the overwhelming majority of runs never open this
+  // panel. The panel is reached by a press, so the answer is back long before
+  // anyone reads down the list.
+  sportsSealitaire = bindMenuSounds(sport('sportSealitaire', uiText('sportSealitaire'), { soon: true }));
+  sealitaireAvailable().then((there) => {
+    if (!there || !sportsSealitaire) return;
+    sportsSealitaire.disabled = false;
+    sportsSealitaire.querySelector('.sv-sport-soon')?.remove();
+  });
 
   root.appendChild(wrap);
   bindMenuSounds(back).addEventListener('click', hideSealSports);
@@ -3784,10 +3834,13 @@ function buildSealSportsPanel() {
  * panel itself on the way into the run (closeMainMenu in main.js hides every
  * panel the menu opened), so this does not.
  */
-export function showSealSports({ onBall, onBallOnline } = {}) {
+export function showSealSports({ onBall, onBallOnline, onSealitaire } = {}) {
   if (!root) return;
   if (!sportsPanel) sportsPanel = buildSealSportsPanel();
   sportsBall.onclick = typeof onBall === 'function' ? () => onBall() : null;
+  if (sportsSealitaire) {
+    sportsSealitaire.onclick = typeof onSealitaire === 'function' ? () => onSealitaire() : null;
+  }
   if (sportsBallOnline) {
     sportsBallOnline.onclick = typeof onBallOnline === 'function' ? () => onBallOnline() : null;
   }
@@ -7362,8 +7415,15 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
   // has to go amber with it). Two elements rather than one :has() selector:
   // the class is already being written here, and a parent-matching selector
   // would put the same fact somewhere a harness cannot read it back.
-  el.svO2Bar.classList.toggle('sv-o2-low', o2Frac < 0.25);
-  el.svO2Wrap?.classList.toggle('sv-o2-low', o2Frac < 0.25);
+  // ...AND WHETHER THE AIR IS DRAWN AT ALL. One class on the stack rather than
+  // a hidden flag per element, so the gauge's absence is a fact about the
+  // column and a harness can read it back off the DOM. Written every frame
+  // like the placement below: a match starts and ends without this file being
+  // told, and a mode switch must not depend on anybody remembering to call.
+  const air = oxygenLive();
+  el.svPlayerBars?.classList.toggle('sv-playerbars-noair', !air);
+  el.svO2Bar.classList.toggle('sv-o2-low', air && o2Frac < 0.25);
+  el.svO2Wrap?.classList.toggle('sv-o2-low', air && o2Frac < 0.25);
 
   // Clamped rather than trusted: a tab that was in the background for a minute
   // comes back with one enormous frame, and an unclamped exponential over it
@@ -7405,7 +7465,10 @@ export function updateHUD(gameState, player, strikeState = null, rapidFireTimer 
     // fade back rather than permanently tagging the seal. Read off the
     // DISPLAYED values, not the true ones: a bar that is still visibly
     // draining must not fade out from under the drain it is showing.
-    const idle = pbar.hp > 0.999 && pbar.hpGhost > 0.999 && pbar.o2 > 0.995;
+    // ...and with no air gauge up, the air is not part of "there's nothing to
+    // watch": a stubbed tank sits at full forever, so leaving it in the test
+    // would be a term that can only ever say "idle".
+    const idle = pbar.hp > 0.999 && pbar.hpGhost > 0.999 && (!air || pbar.o2 > 0.995);
     el.svPlayerBars.style.opacity = idle ? '0.3' : '1';
   }
 

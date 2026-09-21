@@ -1,0 +1,807 @@
+<!-- @dsCard group="Screens" name="Credits" subtitle="Attribution roll — one row per work, grid on desktop, stacked on a phone" viewport="900x720" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seal Survivor — Credits</title>
+<link rel="stylesheet" href="../styles.css" />
+
+<style>
+/* Preview scaffolding only — none of this ships. The game draws this UI over a
+   live WebGL ocean, so the stage fakes that backdrop; the panel is translucent
+   and its contrast only reads correctly against something. */
+html, body { margin: 0; height: 100%; }
+.stage { position: relative; width: 100%; min-height: 100vh; overflow: hidden;
+  background: radial-gradient(125% 95% at 50% 0%, #1d4b6b 0%, #0d2a42 45%, #061523 100%); }
+.stage .sv-ui { position: absolute; }
+</style>
+
+<style>
+/* --- THE CREDITS ROLL — this block IS meant to ship -----------------------
+   Everything below belongs in the STYLES literal in ui.js when this screen is
+   built. It is kept in its own <style> so it can be lifted out whole, away
+   from the scaffolding above, which must not travel. See design/readme.md.
+
+   WHAT MAKES THIS SCREEN DIFFERENT FROM EVERY OTHER PANEL. It is the only one
+   whose length is set by a data file rather than by the design: 81 works
+   today, and it grows every time a model is added. So nothing here may depend
+   on a row count, and the panel's height is a viewport fraction rather than a
+   number of rows.
+
+   FOUR COLUMNS IS A DESKTOP IDEA. work / author / licence / what it became is
+   a table, and a table at 375px is either a horizontal scroll or four columns
+   of one word each. The row is therefore a GRID that restates itself as a
+   stack under 700px — the same breakpoint the rest of the UI turns at — and
+   the reading order is chosen so the stack still makes sense top to bottom:
+   the work, then who made it, then the terms, then where it ended up.
+
+   THE AUTHOR IS THE THING BEING CREDITED, which is why the name is the one
+   full-strength element in the row. The work's title is what they made, the
+   licence is the reason the line is here at all, and the file list is
+   provenance for anyone checking — three levels of emphasis, not four equal
+   cells. */
+
+/* The panel. Wider than .sv-menu's own max because a credit line is a name
+   and a title on one row, and 90vw of a laptop is the whole point. */
+.sv-credits { max-width: min(860px, 92vw); text-align: left; }
+
+/* THE SCROLLER, not the page. The panel stays put and the roll moves inside
+   it, so the heading and the close button never leave — on a phone a page
+   that scrolls the whole panel away leaves no way back without a gesture.
+   Height in vh so the panel is the same shape whatever the roster does. */
+.sv-cr-scroll { max-height: min(56vh, 520px); overflow-y: auto;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  margin: 14px -6px 0; padding: 0 6px; }
+
+/* Section headings ride along, the way the leaderboard's column names do, so
+   the fortieth CC-BY row is still reading under the heading that explains why
+   it is on the screen. Opaque against the panel's own colour: rows scroll
+   UNDER it and anything translucent shows them through. */
+.sv-cr-head { position: sticky; top: 0; z-index: 1;
+  padding: 10px 8px 8px; font-size: 9.5px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: rgba(232,236,243,0.35);
+  background: var(--sv-cr-head-bg, #0d1018); }
+.sv-cr-head:first-child { padding-top: 2px; }
+/* The note under a heading — what the section is, in one line. Not sticky:
+   it is read once, and a second sticky line would eat a third of a phone. */
+.sv-cr-note { padding: 0 8px 8px; font-size: 11px; line-height: 1.5;
+  color: rgba(232,236,243,0.45); }
+
+/* ONE GRID FOR THE ROW AND NOTHING ELSE SHARING IT. Unlike .sv-lb-row there
+   is no header to stay in step with — the columns are named by the shape of
+   the content, not by a caption — so the track list can be content-driven.
+   minmax(0, …) on both flexible tracks: without the 0 floor a long model
+   title refuses to shrink and pushes the licence chip off the panel. */
+.sv-cr-row { display: grid; align-items: baseline; gap: 4px 12px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto;
+  grid-template-areas: "work author licence" "files files licence";
+  padding: 9px 8px; border-radius: 6px; font-size: 12.5px; }
+.sv-credits .sv-cr-rows .sv-cr-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+
+.sv-cr-work { grid-area: work; color: rgba(232,236,243,0.82); min-width: 0; }
+.sv-cr-work a { color: inherit; text-decoration: none;
+  border-bottom: 1px solid rgba(255,255,255,0.18); }
+.sv-cr-work a:hover, .sv-cr-work a:focus-visible { color: #fff; border-bottom-color: rgba(255,255,255,0.5); }
+
+/* The one full-strength element in the row. */
+.sv-cr-author { grid-area: author; font-weight: 600; color: #e8ecf3; min-width: 0; }
+.sv-cr-author a { color: inherit; text-decoration: none; }
+.sv-cr-author a:hover, .sv-cr-author a:focus-visible { text-decoration: underline; }
+
+/* The files the work became. Provenance for anyone checking, and furniture for
+   everyone else, so it is the quietest thing in the row and it wraps freely
+   rather than forcing the grid wider. */
+.sv-cr-files { grid-area: files; font-size: 10.5px; line-height: 1.5;
+  color: rgba(232,236,243,0.34); word-break: break-word; }
+
+/* A CHIP, BECAUSE THE LICENCE IS A CATEGORY AND NOT A SENTENCE. It repeats
+   down the whole section — a full-width text column of "CC-BY-4.0" eighty
+   times reads as noise, and a chip reads as a tag you can skip. Fixed to the
+   right edge and spanning both rows so it stays put while the left side grows
+   to two lines. `white-space: nowrap` because "CC-BY-NC-SA-4.0" broken across
+   a hyphen is a different licence. */
+.sv-cr-licence { grid-area: licence; justify-self: end; align-self: center;
+  white-space: nowrap; font-size: 9.5px; letter-spacing: 0.04em;
+  padding: 3px 7px; border-radius: 999px;
+  color: rgba(232,236,243,0.6);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1); }
+/* Anything that is not a plain permissive grant gets a warmer chip. Not red —
+   nothing here is an error, and a credits screen is not a warning screen — but
+   the roster carries non-commercial and share-alike terms and they should not
+   look identical to the rest at a glance. */
+.sv-cr-licence.sv-cr-restricted { color: #ffd9a8;
+  background: rgba(255,170,64,0.1); border-color: rgba(255,170,64,0.28); }
+
+/* A section that is one line rather than a roster — fonts, icons, engine. Same
+   grid, no file list, so it sits flush with the rows above it. */
+.sv-cr-row.sv-cr-oneline { grid-template-areas: "work author licence"; }
+
+/* The footer line, under the scroller rather than inside it, so it is not
+   something you have to reach the end of the roll to find. */
+.sv-cr-foot { margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  font-size: 11px; line-height: 1.6; color: rgba(232,236,243,0.45); }
+
+/* --- THE PHONE ----------------------------------------------------------
+   700px is where the rest of this UI turns, so this turns there too rather
+   than at a width chosen for this screen alone.
+
+   THREE LINES, NOT FOUR. A full stack — work, author, licence, files, each on
+   its own line — is about 150px a row, and eighty-one of those is a twelve
+   thousand pixel scroll on a phone. So the row keeps TWO columns here and only
+   the title and the file list span them: the chip rides on the author's line,
+   which is where it belongs anyway (it is that person's terms), and the row
+   loses a quarter of its height for nothing.
+
+   Work first and author second reads as a list of things with makers, which is
+   what the eye wants when the two are stacked — the reverse reads as a list of
+   people, and half of these are studios. */
+@media (max-width: 700px) {
+  .sv-credits { max-width: 94vw; }
+  .sv-cr-scroll { max-height: 62vh; }
+  .sv-cr-row, .sv-cr-row.sv-cr-oneline {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "work work" "author licence" "files files";
+    gap: 2px 8px; padding: 9px 8px; font-size: 12.5px; }
+  /* Baseline alignment puts a 9.5px chip's text on the author's baseline and
+     leaves its pill hanging low. Centre is what makes the two look like one
+     line rather than two things that happen to be adjacent. */
+  .sv-cr-row { align-items: center; }
+  .sv-cr-work { align-self: baseline; }
+  /* Rows are taller stacked, so the stripe is doing more work than it was;
+     a hairline between them stops two entries reading as one. */
+  .sv-cr-rows .sv-cr-row + .sv-cr-row { border-top: 1px solid rgba(255,255,255,0.05); }
+}
+
+/* Landscape phone. The panel is already scrolling internally, so the only
+   thing that needs to give is the share of the screen it takes. */
+@media (max-height: 560px) {
+  .sv-cr-scroll { max-height: 48vh; }
+  .sv-cr-note { display: none; }
+}
+</style>
+</head>
+
+<body>
+<div class="stage">
+  <div class="sv-ui">
+    <div class="sv-center" id="svCreditsMenu">
+      <!-- .sv-menu for the panel's own look; .sv-credits widens it and turns
+           the text left, because a roster is a list and not a title card. -->
+      <div class="sv-menu sv-credits">
+
+        <!-- LABELS ARE LOREM ON PURPOSE. Per CLAUDE.md nothing a player reads
+             is written here — every one of these is staged so the shape is
+             testable and the gate can see it. When this screen is built for
+             real they become rows in path/src/uiText.csv, not constants in
+             ui.js; the briefs are in design/COPY-TODO.md. -->
+        <div class="sv-title">Lorem ipsum</div>
+        <div class="sv-sub" style="margin-bottom:0;">
+          Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod.
+        </div>
+
+        <div class="sv-cr-scroll">
+
+          <div class="sv-cr-head">Lorem ipsum dolor</div>
+          <div class="sv-cr-note">
+            Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
+            tempor incididunt ut labore.
+          </div>
+
+          <!-- ROWS BEGIN cc — everything between this marker and ROWS END is
+               written by `npm run credits -- --html`. Six real rows are left
+               here so the layout reads in the design pane with nothing run;
+               the generator replaces the block wholesale. -->
+          <div class="sv-cr-rows">
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/lizardfishv3-5786feb347e147d0ae6316ac38b655c7">LizardfishV3</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/aloxr">aloxr</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">lizardfish.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/deal-with-it-sunglasses-cd4d5594a09d422b9c588dd9941476d9">Deal With It Sunglasses</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/bitgem">BitGem</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">sunglasses.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/simple-bomb-49ab3dbdfa6347dfb6e2b633c9c7f1c2">Simple Bomb</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Blender3D">Blender3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">voicemailbomb.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/dancing-crab-uca-mjoebergi-280863886fee409ab3c8168f07caa89f">Dancing Crab - Uca Mjoebergi</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/ostapblendercg">Bohdan Lvov</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">dancingcrab.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/squid-410650f804a04f37820dfde80647ca41">squid</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/carlin.chu">carlin.chu</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">cutesquid.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/great-white-shark-bf81b64f0121443da38112f706b7356f">Great White Shark</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/charliegodofsharks">charliegodofsharks</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">greatwhite.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/mighty-megalodon-86c24ed3771a4a78be3dd8ce99b6a899">Mighty Megalodon</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/charliegodofsharks">charliegodofsharks</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">mightymeg.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/crosby-zebrawood-92312f41d07f4b56890e170f62d27399">Crosby Zebrawood</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/csavenables">Christian Venables</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">roundglasses.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fishes-aa31604aa3d446b59775dd9e5a08a9ce">Fishes</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/VivernaNeva">Costr (Viverna)</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">fishes.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/crab-claw-attack-dcf0e226564b4ec3b18dd5a93e6e8110">Crab Claw Attack</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/cubemelongames">cubemelongames</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">crabclaw.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/mosasaurus-4a1feecff6c7468b8c07ba0ad439e0e0">Mosasaurus</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/D.art">DailyArt</a></div>
+              <div class="sv-cr-licence sv-cr-restricted">CC-BY-NC-4.0</div>
+              <div class="sv-cr-files">mosasaurus.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/money-rolls-c147f885c34443f5b897fc03e03ca1d6">Money Rolls</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/dansi">dansi</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">moneyroll1.glb, moneyroll2.glb, moneyroll3.glb, moneyroll4.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/cowboy-hat2-7375dd1c18cb4e9287f5cba55a02e50e">Cowboy Hat2</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/denj666">denj666</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">stetsonhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/octopus-rig-48f40cb3dfd5473fbb200cf1dcd7b944">Octopus rig</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/138983">Dirk.z</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">octopus_rig.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/sardine-d7a2d0bd2a524d35b01e0d898b026479">Sardine</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/dlp14c">Drake</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">sardine.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/giant-squid-creature-b8b1738f406749aa8ffd53f7ac84132c">Giant Squid Creature</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/ethanchew">Ethan</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">giantsquid.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/shrimp-low-poly-652650059ff949b39bbed3bfc34d5e87">Shrimp [Low Poly]</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/vpvlolhyk">Fecalis</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">shrimp.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/harp-from-poly-by-google-b153be64485a421d802cdb8f3b77d97b">Harp from Poly by Google</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/ie-niels">IronEqual</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">harp.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/ballroom-character-1f2e5b7506d745ec9f0b22b3bc1d8779">Ballroom Character</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/jamiemcfarlane">Jamie McFarlane</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">ballroomguest.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/pflow-practice-music-spread-4877a06236ae4b76baa48b2735bbdaad">PFlow Practice - Music Spread</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Javier_Da_Rosa">Javier Da Rosa</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">musicnote.glb, musicnotes.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/club-348dbf860cac4ce1a550135213d37334">Club</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Kanpai">Kanpai</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">club.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/grave-stone-collection-216711532d5a4078b9c0d5020af01eb1">Grave Stone Collection</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Kigha">Kigha</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">graves/headstone.glb, graves/plaque.glb, graves/tomb.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/sea-bed-f5fb961244f64696bc0dbe8fabc0872c">Sea Bed</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Kigha">Kigha</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">seabed/bladegrass.glb, seabed/broadleaf.glb, seabed/broadleaf_b.glb, seabed/broadleaf_c.glb, seabed/broadleaf_d.glb, seabed/bubble.glb, seabed/clamshell.glb, seabed/cloudcard.glb, seabed/conchshell.glb, seabed/coral.glb, seabed/coral_b.glb, seabed/fanweed.glb, seabed/fern.glb, seabed/kelp.glb, seabed/kelp_b.glb, seabed/kelp_c.glb, seabed/reed.glb, seabed/ribbonweed.glb, seabed/ribbonweed_b.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/wooden-barrel-799902960b1344209ee781b34814dc4f">Wooden Barrel</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Kigha">Kigha</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">barrel.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/aviator-sunglasses-00d1cb5aa82745228a3b764c97f867de">Aviator sunglasses</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Kimppo">Kimppo</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">aviatorglasses.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/hard-hat-5a67c92ce3174c37946076512356b0c7">Hard Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/kristiyan">Kristiyan Marinov</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">hardhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/captains-hat-d9dab73466824b45b622ffd72d0586c4">Captain's Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/KurtShoemaker">Kurtophecles</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">hat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/steampunk-hat-b4ed18118f2249b2bb28af78b7fb7a1d">Steampunk Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Lana3D">Lana</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">bowlerhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/blue-powder-tang-e5ce0c518ecf4631931d824b24b75e89">blue powder tang</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/majorgalah">Major</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">tang.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fishing-boat-649c006b72e748bf84e7cda011faaff2">Fishing Boat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/masterjack20">masterjack20</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">fishingboat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/sailfish-5c7b14e21fba4eefad77c84edccfc9d2">Sailfish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Mehrus">Mateus Schwaab</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">sailfish.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/gangster-hats-ef901c307a5c4ed89cd7ef900d3c7f4c">Gangster hats</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/MichalCavrnoch">Michal Cavrnoch</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">fedorahat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/gawr-gura-shark-hat-d55c74e5e65d4004895535d0139dc979">Gawr Gura shark hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Mr_Lime_2">Mr.Lime</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">sharkhood.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/hat-aea2cbc8684c45cf885af4eb3b26ea9c">Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/avanar">Murat Can ÜNAL</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">cowboyhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/comb-jellyfish-baf5d972e1874f9db95fe6bb415c2e37">Comb Jellyfish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/n-">n-</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">combjelly.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/crown-jellyfish-rhizostomeae-8dead434ed4e4211a76585dd2280744d">Crown Jellyfish (Rhizostomeae)</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/n-">n-</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">crownjelly.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/flower-hat-jellyfish-limnomedusae-412cb3ad7b51430aa479b5bbae372fdc">Flower Hat Jellyfish (Limnomedusae)</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/n-">n-</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">flowerhatjelly.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/simple-moon-jellyfish-baked-animation-3d911c511f2744ec9bfb99d46d2d6e14">Simple Moon Jellyfish (Baked Animation)</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/n-">n-</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">moonjelly.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/simple-spotted-jellyfish-baked-animation-d5006697ad3c4bc1ac814110cde19af2">Simple Spotted Jellyfish (Baked Animation)</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/n-">n-</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">spottedjelly.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/humpback-whale-animated-marine-mammals-219ed629c9394d869bbf19d443188423">Humpback Whale - animated - marine mammals</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/nolanfa">nolanfa</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">humpback.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/myllokunmingia-fengjiaoa-223d32f8b1754fe0b1f928dec7caddec">Myllokunmingia fengjiaoa</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/morethanadodo">Oxford University Museum of Natural History</a></div>
+              <div class="sv-cr-licence sv-cr-restricted">CC-BY-NC-4.0</div>
+              <div class="sv-cr-files">myllokunmingia.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/clown-hat-0f5ef2e6205c4b438c593a979a3ccdae">Clown Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/PatelDev">PatelDev</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">jesterhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/wizards-hat-68a9fb2dbd8442a5bacf9c0141320308">Wizard's hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Byakko">Paulina</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">wizardhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/stylized-oyster-738c0d4bbe754752817ef02626f95812">Stylized Oyster</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/PedroPerim">Pedro Perim</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">oyster.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/ushanka-trapper-hat-1046cd56a67d4b79902e47aa0daf3ccb">Ushanka - Trapper Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/vileguypete">PeteDeee</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">ushankahat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/coral-fish-ea8d002da75a4dd09658b962722279c5">coral fish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/polyplant3d">polyplant3d</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">fish.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/bobble-hat-71e1832d6c96488f97a7a8975b4cb8c1">Bobble Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/povchik">povchik</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">bobblehat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/hat-256a65dfa24846c7b62fc6f2819d78fe">Hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/povchik">povchik</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">clochehat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/pirate-hat-84b496f5860340eca3cc1d63985aa524">Pirate hat</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/ReversedG">ReversedG</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">tricornhat.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fish-5a2b7976ef5c44658de22e98bf381277">Fish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/rkuhlf">rkuhlf</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">brownfish.glb, clownfish.glb, surgeonfish.glb, tunafish.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/megalodon-dc2b75f091964c26b05544f6a990e7ac">Megalodon</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/SealifeFan3">Sealife Fan 3</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">megalodon.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/yacht-0dd451f295d049cea20c17d3ffa87ee3">Yacht</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/sergeif">Sergei</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">yacht.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/portuguese-man-o-war-cbd8c3e52f274ceeaae0872a70be5433">Portuguese man o' war</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Shapelab">Shapelab</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">manowar.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/jaws-unleashed-53fc3d66353c404e9dc2109c9dc161ef">Jaws Unleashed</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/sharksly">sharksly</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">shark.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fish-9c591c2535f44bed88e32c82d83b61c5">Fish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/snot_nose">snot_nose</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">puffer.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/lara-sunglasses-3a3ffc63c5874046bf2a452be9993dd0">Lara Sunglasses</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/suparioamateur">SupaRioAmateur</a></div>
+              <div class="sv-cr-licence sv-cr-restricted">CC-BY-NC-SA-4.0</div>
+              <div class="sv-cr-files">wireglasses.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/barracuda-2bbb47ba1c6e4676b97be12570984274">BARRACUDA</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/voltairevillela">VoltVeigh</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">barracuda.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/dolphin-animated-low-poly-027def7f13f54f4db7f8aeb6f86f3137">Dolphin - Animated Low Poly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/WildPoly3D">WildPoly3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">dolphin.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/furseal-animated-low-poly-c667fd35da0f4922a0f9321b9d250543">Furseal - Animated Low Poly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/WildPoly3D">WildPoly3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">furseal.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/orca-animated-low-poly-1033151e98dd4152a9c10cc91ff90586">Orca - Animated Low Poly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/WildPoly3D">WildPoly3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">orca.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/seal-animated-low-poly-38b4c159b1b649cd9e65839b14d7de41">Seal - Animated Low Poly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/WildPoly3D">WildPoly3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">sealhelper.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/seaturtle-animated-low-poly-14e7719da5d54841b43b2ab76240345c">SeaTurtle - Animated Low Poly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/WildPoly3D">WildPoly3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">seaturtle.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/stingray-animated-low-poly-e3847b39eb9943b48df614e74e95a71f">Stingray - Animated Low Poly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/WildPoly3D">WildPoly3D</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">stingray.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fishing-boat-low-polly-8db6d2ea49054f5a9325502557ca3e5e">Fishing boat low polly</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/elliottebbs">wireframe</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">trawler.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/jellyfish-d06a5a553fe641ab92f720527b2278f3">jellyfish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/yanix">yanix</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">jellyfish.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/bone-f84a0805c2dc448fae864ee67f4c5836">Bone</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/lixyco">Zab</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">bone.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/short-hair-cut-in-layers-with-bones-60f13e9fa15941409654483c51add79e">Short Hair Cut In Layers (With Bones)</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/zHairezt">zHairezt</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">shorthair.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/side-swept-bob-haircut-f3c0f129fcce45e99991959ac2b9c8ce">Side Swept Bob Haircut</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/zHairezt">zHairezt</a></div>
+              <div class="sv-cr-licence">CC-BY-4.0</div>
+              <div class="sv-cr-files">bobhair.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/businessman-character-ankit-rigged-99d48204e75d4c63b432f37b73bddc9f">Businessman Character [Ankit] Rigged</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/ankitanimationstudio">ankitanimationstudio</a></div>
+              <div class="sv-cr-licence" title="SKETCHFAB Standard">Sketchfab Standard</div>
+              <div class="sv-cr-files">businessguest.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fish-74e57a9de7a24975b02d236ea3be614f">Fish</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/assetfactory">assetfactory</a></div>
+              <div class="sv-cr-licence" title="SKETCHFAB Standard">Sketchfab Standard</div>
+              <div class="sv-cr-files">fish2.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/lowpoly-fish-pack-812a52c7f7cc4e10b69c5c5f9e4269f2">Lowpoly fish pack</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/assetfactory">assetfactory</a></div>
+              <div class="sv-cr-licence" title="SKETCHFAB Standard">Sketchfab Standard</div>
+              <div class="sv-cr-files">fishpack.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/fisherman-79c8c6391e1d4a6c9b0a2a4b165017b2">Fisherman</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/charliecatling">charliecatling</a></div>
+              <div class="sv-cr-licence" title="SKETCHFAB Standard">Sketchfab Standard</div>
+              <div class="sv-cr-files">fisherman.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/game-ready-grass-1825750648ff48dc8b583b4a49b61699">Game ready grass</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/charliecatling">charliecatling</a></div>
+              <div class="sv-cr-licence" title="SKETCHFAB Standard">Sketchfab Standard</div>
+              <div class="sv-cr-files">grass.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/atlantic-footballfish-e53351e2d9264411a7319eba2e347d6c">Atlantic Footballfish ♀</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/Nestaeric">Nestaeric</a></div>
+              <div class="sv-cr-licence" title="Sketchfab Store (royalty-free, paid)">Sketchfab Store</div>
+              <div class="sv-cr-files">anglerfish.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work">Orca Killer Whale Family</div>
+              <div class="sv-cr-author"><a href="https://www.turbosquid.com/3d-models/091027423">TurboSquid product 091027423</a></div>
+              <div class="sv-cr-licence" title="TurboSquid Royalty-Free (no attribution required)">TurboSquid RF</div>
+              <div class="sv-cr-files">orca_calf.glb, orca_female.glb, orca_male.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work">Seagull, wings folded</div>
+              <div class="sv-cr-author"><a href="https://www.turbosquid.com/3d-models/091431295">TurboSquid product 091431295</a></div>
+              <div class="sv-cr-licence" title="TurboSquid Royalty-Free (no attribution required)">TurboSquid RF</div>
+              <div class="sv-cr-files">seagull.fbx</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work">Bowhead Whale</div>
+              <div class="sv-cr-author"><a href="https://www.turbosquid.com/3d-models/091431916">TurboSquid product 091431916</a></div>
+              <div class="sv-cr-licence" title="TurboSquid Royalty-Free (no attribution required)">TurboSquid RF</div>
+              <div class="sv-cr-files">whale.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work">Hammerhead Shark</div>
+              <div class="sv-cr-author"><a href="https://www.turbosquid.com/3d-models/091433327">TurboSquid product 091433327</a></div>
+              <div class="sv-cr-licence" title="TurboSquid Royalty-Free (no attribution required)">TurboSquid RF</div>
+              <div class="sv-cr-files">hammerhead.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work">Sea Animals 01 (Squid_01)</div>
+              <div class="sv-cr-author"><a href="https://www.turbosquid.com/3d-models/096421758">TurboSquid product 096421758</a></div>
+              <div class="sv-cr-licence" title="TurboSquid Royalty-Free (no attribution required)">TurboSquid RF</div>
+              <div class="sv-cr-files">squid.glb</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work">Gymnothorax javanicus (moray eel)</div>
+              <div class="sv-cr-author"><a href="https://www.turbosquid.com/3d-models/096438851">TurboSquid product 096438851</a></div>
+              <div class="sv-cr-licence" title="TurboSquid Royalty-Free (no attribution required)">TurboSquid RF</div>
+              <div class="sv-cr-files">morayeel.fbx</div>
+            </div>
+
+            <div class="sv-cr-row">
+              <div class="sv-cr-work"><a href="https://sketchfab.com/3d-models/animated-crab-rigged-free-ca331da937b04b0f94b9245d5f2ac778">Animated Crab rigged FREE</a></div>
+              <div class="sv-cr-author"><a href="https://sketchfab.com/twilightfox">TwilightFox</a></div>
+              <div class="sv-cr-licence" title="SKETCHFAB Standard">Sketchfab Standard</div>
+              <div class="sv-cr-files">crabpincer.glb</div>
+            </div>
+
+          </div>
+          <!-- ROWS END cc -->
+
+          <div class="sv-cr-head">Lorem ipsum consectetur</div>
+          <div class="sv-cr-note">Lorem ipsum dolor sit amet, consectetur adipiscing elit.</div>
+
+          <!-- ROWS BEGIN other -->
+          <div class="sv-cr-rows">
+            <div class="sv-cr-row sv-cr-oneline">
+              <div class="sv-cr-work">Input prompt icons</div>
+              <div class="sv-cr-author"><a href="https://www.kenney.nl">Kenney</a></div>
+              <div class="sv-cr-licence">CC0 1.0</div>
+            </div>
+            <div class="sv-cr-row sv-cr-oneline">
+              <div class="sv-cr-work">Typefaces</div>
+              <div class="sv-cr-author"><a href="https://fonts.google.com">Google Fonts</a></div>
+              <div class="sv-cr-licence">OFL 1.1</div>
+            </div>
+            <div class="sv-cr-row sv-cr-oneline">
+              <div class="sv-cr-work">three.js, Rive, Capacitor</div>
+              <div class="sv-cr-author">—</div>
+              <div class="sv-cr-licence">MIT</div>
+            </div>
+          </div>
+          <!-- ROWS END other -->
+
+        </div>
+
+        <div class="sv-cr-foot">
+          Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod tempor.
+        </div>
+
+        <div style="margin-top:14px;">
+          <button class="sv-btn sv-btn-ghost" id="svCreditsBack">[DRAFT] Back</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

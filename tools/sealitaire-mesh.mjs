@@ -12,6 +12,21 @@
 //   vertices vertexCount x 12 f32:  px py pz  nx ny nz  r g b  j0j1j2j3(packed u8x4 as f32 bits? no — see below)
 //   indices  indexCount x u32
 //   bones    boneCount x (u32 parent, 16 f32 local bind matrix, 16 f32 inverse bind)
+//   clips    u32 clipCount, then per clip: u32 nameLen, name bytes, u32 frameCount,
+//            f32 fps, then frameCount x boneCount x 10 f32 (pos xyz, quat xyzw,
+//            scale xyz) — every bone's LOCAL transform, sampled at `fps`,
+//            static bones repeated so the reader never has to special-case.
+//            The three the game's controller plays: water_idle, swim, sliding
+//            (idle / swim / boost in ASSETS.ship.animations).
+//
+//   node tools/sealitaire-mesh.mjs                       the defaults above
+//   node tools/sealitaire-mesh.mjs --list                every clip in the file, and exit
+//   node tools/sealitaire-mesh.mjs --idle=bark --swim=run --boost=roll
+//            any of the three ROLES filled from another clip, by the tail of
+//            its name (case-insensitive). puppet.luau plays the roles, so this
+//            is the whole of picking a different animation for the table's
+//            seal: rebake, rebuild. A name that matches nothing is an error,
+//            not a silent fallback.
 //
 // Vertex layout (stride 48 bytes):
 //   0  float32x3 position     (model space, the mesh node's own transform baked in)
@@ -176,6 +191,88 @@ if (col) {
   }
 }
 
+// --- clips -------------------------------------------------------------------
+// The GLB stores per-node channels with their own keyframe times; sample every
+// bone at a fixed rate so the script can index frames directly. Bones the
+// clip does not touch hold their bind-pose local TRS.
+const ARGV = process.argv.slice(2);
+const flag = (n, d) => { const a = ARGV.find((x) => x.startsWith(`--${n}=`)); return a ? a.slice(n.length + 3) : d; };
+// The three the controller plays by speed, then the REACTIONS a card play
+// can answer with (react.luau plays one from its own clock): the file's own
+// bark, roll and ball, as they are.
+const CLIPS = { idle: flag('idle', 'water_idle'), swim: flag('swim', 'swim'), boost: flag('boost', 'sliding'), bark: 'bark', roll: 'roll', ball: 'ball' };
+if (ARGV.includes('--list')) {
+  for (const a of gltf.animations || []) {
+    let max = 0;
+    for (const smp of a.samplers) { const acc = gltf.accessors[smp.input]; if (acc.max) max = Math.max(max, acc.max[0]); }
+    const short = a.name.split('|').pop();
+    console.log(`${short.padEnd(14)} ${max.toFixed(2)}s   (${a.name})`);
+  }
+  process.exit(0);
+}
+const FPS = 30;
+function nodeTRS(nd) {
+  return { t: nd.translation || [0, 0, 0], r: nd.rotation || [0, 0, 0, 1], s: nd.scale || [1, 1, 1] };
+}
+function sampleChannel(times, values, n, t) {
+  // Linear (nlerp for quats) between the bracketing keys.
+  let k = 0;
+  while (k < times.length - 1 && times[k + 1] < t) k++;
+  const k2 = Math.min(k + 1, times.length - 1);
+  const span = times[k2] - times[k];
+  const u = span > 1e-9 ? Math.max(0, Math.min(1, (t - times[k]) / span)) : 0;
+  const a = values.subarray(k * n, k * n + n);
+  const b = values.subarray(k2 * n, k2 * n + n);
+  const out = new Array(n);
+  let dotp = 0;
+  if (n === 4) for (let c = 0; c < 4; c++) dotp += a[c] * b[c];
+  const sign = n === 4 && dotp < 0 ? -1 : 1;
+  for (let c = 0; c < n; c++) out[c] = a[c] + (b[c] * sign - a[c]) * u;
+  if (n === 4) {
+    const len = Math.hypot(out[0], out[1], out[2], out[3]) || 1;
+    for (let c = 0; c < 4; c++) out[c] /= len;
+  }
+  return out;
+}
+const clips = [];
+for (const [role, suffix] of Object.entries(CLIPS)) {
+  const want = suffix.toLowerCase();
+  const anim = (gltf.animations || []).find((a) => a.name.toLowerCase().endsWith('|' + want) || a.name.toLowerCase() === want);
+  if (!anim) {
+    console.error(`no clip named "${suffix}" for ${role}; the file has: ${(gltf.animations || []).map((a) => a.name.split('|').pop()).join(', ')}`);
+    process.exit(1);
+  }
+  // channels by joint slot
+  const perBone = new Map();
+  let duration = 0;
+  for (const ch of anim.channels) {
+    const slot = jointSlot.get(ch.target.node);
+    if (slot === undefined) continue;
+    const smp = anim.samplers[ch.sampler];
+    const times = accessor(smp.input).data;
+    const vals = accessor(smp.output);
+    duration = Math.max(duration, times[times.length - 1]);
+    if (!perBone.has(slot)) perBone.set(slot, {});
+    perBone.get(slot)[ch.target.path] = { times, values: vals.data, n: vals.n };
+  }
+  const frameCount = Math.max(1, Math.round(duration * FPS));
+  const frames = [];
+  for (let f = 0; f < frameCount; f++) {
+    const t = f / FPS;
+    const row = [];
+    for (let b = 0; b < joints.length; b++) {
+      const base = nodeTRS(nodes[joints[b]]);
+      const ch = perBone.get(b) || {};
+      const tr = ch.translation ? sampleChannel(ch.translation.times, ch.translation.values, 3, t) : base.t;
+      const ro = ch.rotation ? sampleChannel(ch.rotation.times, ch.rotation.values, 4, t) : base.r;
+      const sc = ch.scale ? sampleChannel(ch.scale.times, ch.scale.values, 3, t) : base.s;
+      row.push(...tr, ...ro, ...sc);
+    }
+    frames.push(row);
+  }
+  clips.push({ role, frameCount, frames, duration });
+}
+
 // --- write -------------------------------------------------------------------
 const STRIDE = 48;
 const vcount = pos.count, icount = idx.count, bcount = bones.length;
@@ -183,7 +280,9 @@ const headerBytes = 16;
 const vertBytes = vcount * STRIDE;
 const idxBytes = icount * 4;
 const boneBytes = bcount * (4 + 64 + 64);
-const out = Buffer.alloc(headerBytes + vertBytes + idxBytes + boneBytes);
+let clipBytes = 4;
+for (const c of clips) clipBytes += 4 + c.role.length + 4 + 4 + c.frameCount * bcount * 10 * 4;
+const out = Buffer.alloc(headerBytes + vertBytes + idxBytes + boneBytes + clipBytes);
 out.write('SEAL', 0, 'latin1');
 out.writeUInt32LE(vcount, 4); out.writeUInt32LE(icount, 8); out.writeUInt32LE(bcount, 12);
 let o = headerBytes;
@@ -207,7 +306,16 @@ for (const b of bones) {
   for (let k = 0; k < 16; k++) { out.writeFloatLE(b.local[k], o); o += 4; }
   for (let k = 0; k < 16; k++) { out.writeFloatLE(b.ibm[k], o); o += 4; }
 }
+out.writeUInt32LE(clips.length, o); o += 4;
+for (const c of clips) {
+  out.writeUInt32LE(c.role.length, o); o += 4;
+  out.write(c.role, o, 'latin1'); o += c.role.length;
+  out.writeUInt32LE(c.frameCount, o); o += 4;
+  out.writeFloatLE(FPS, o); o += 4;
+  for (const row of c.frames) for (const v of row) { out.writeFloatLE(v, o); o += 4; }
+}
 writeFileSync(OUT, out);
+console.log('clips: ' + clips.map((c) => `${c.role} ${c.frameCount}f/${c.duration.toFixed(2)}s`).join(', '));
 
 console.log(`wrote ${OUT} (${out.length} bytes): ${vcount} verts, ${icount / 3} tris, ${bcount} bones, colours ${col ? (flat ? 'flat -> fur ramp' : 'from COLOR_0') : 'none -> fur ramp'}`);
 console.log(`bind-pose bounds min ${mn.map((v) => v.toFixed(3))} max ${mx.map((v) => v.toFixed(3))}`);

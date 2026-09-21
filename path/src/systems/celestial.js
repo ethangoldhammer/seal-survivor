@@ -46,19 +46,24 @@ import { dayState, horizonY, bodySize } from './daylight.js';
 // underneath once the body has gone down — because both reach zero at the water
 // and the fill covers everything below it.
 //
-// WHERE THEY ARE DRAWN is not quite where daylight.js puts them. Two things sit
-// between the orbit and the frame — the drift (a near-zero parallax, so the sky
-// reads as infinitely far away) and the frame fit (so a body is never half off
-// the edge of the shot) — and both are resolved here, in the layer that draws
-// them, rather than in the clock. `celestialFrame` below publishes the answer,
-// because the trigger zones have to sit where the player SEES the sun, not
-// where the ellipse says it is.
+// WHERE THEY ARE DRAWN is not quite where daylight.js puts them. One thing sits
+// between the orbit and the frame — the DRIFT, a near-zero sideways parallax,
+// so the sky reads as something a long way off rather than as scenery on a
+// track — and it is resolved here, in the layer that draws them, rather than
+// in the clock. It is horizontal only, and the note by it in update() is the
+// one to read before that looks like an oversight.
+//
+// There is no frame fit any more: a body may go off the edge of the shot,
+// because a sky that shuffles itself back into frame is a sky nailed to the
+// camera. `celestialFrame` below publishes the answer, because the trigger
+// zones have to sit where the player SEES the sun, not where the ellipse says
+// it is.
 
 const Z = -5.5; // in front of the sky plane (-6), behind everything else
 
 // ---------------------------------------------------------------------------
-// WHERE THE BODIES ACTUALLY ARE, in world units, after the drift and the frame
-// fit — and how big they are on the day the tuner last touched them.
+// WHERE THE BODIES ACTUALLY ARE, in world units, after the drift — and how big
+// they are on the day the tuner last touched them.
 //
 // Published as module state rather than returned from update() for the same
 // reason dayState is: the readers are systems/celestialPass.js and whatever it
@@ -351,9 +356,6 @@ function makeHaloMaterial() {
   });
 }
 
-// Scratch for fitToFrame — see the note there.
-const _fit = { x: 0, y: 0 };
-
 export function createCelestials(scene) {
   const group = new THREE.Group();
   group.position.z = Z;
@@ -490,53 +492,7 @@ export function createCelestials(scene) {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // THE FRAME FIT. Where a body ends up once the shot has had its say.
-  //
-  // `at` is the world point the orbit and the drift put it at; the return is
-  // where it is drawn. Both axes are guarantees rather than looks — nothing
-  // here moves a body that is already comfortably inside the frame.
-  //
-  // X is a plain clamp. The frame is the camera's, at whatever zoom it ended up
-  // at, so a push-in that would have cropped the sun brings it in instead.
-  //
-  // Y IS THE HARD ONE, and it is capped by the horizon rather than by taste.
-  // Height above the water line is what encodes the time of day (see the note
-  // in update below), so sliding a body down the frame is a lie: it stages a
-  // sunset the clock never ordered. But it is only a lie SOMEONE CAN SEE while
-  // the water line is in the shot — dive far enough and the horizon has left
-  // the top of the frame, and with nothing left to measure the sun against, the
-  // sky may as well come down with the camera. So the shift is bounded by
-  // exactly how far the water line already sits above the frame: at the surface
-  // that is zero and nothing moves at all, and however deep you go the horizon
-  // is never dragged back into view to be compared against.
-  //
-  // That bound is also why this cannot promise a body is always in shot. Deep
-  // enough and the whole sky is out of frame, horizon included, and a sun
-  // pinned to the top edge of an underwater shot would be the same lie in a
-  // louder voice.
-  //
-  // Writes into `_fit`, which is scratch shared by both bodies: this runs twice
-  // a frame for the whole life of a run, and the two object literals it used to
-  // build are two allocations a frame that never needed to exist. Same reason
-  // daylight.js keeps its colours module-level.
-  function fitToFrame(x, y, pad, view, keep) {
-    const at = _fit;
-    at.x = x;
-    at.y = y;
-    if (!view || !(keep > 0)) return at;
-
-    const limitX = Math.max(0, view.halfW - pad);
-    at.x = Math.min(view.x + limitX, Math.max(view.x - limitX, at.x));
-
-    const visibleTop = view.y + view.halfH;
-    const slack = Math.max(0, horizonY() - visibleTop);
-    const need = Math.max(0, (at.y + pad) - visibleTop);
-    at.y -= Math.min(need, slack) * keep;
-    return at;
-  }
-
-  function updateBody(body, which, state, cfg, waveT, view, dt) {
+  function updateBody(body, which, state, cfg, waveT, dt) {
     loadArt(body, cfg);
 
     // Bigger and brighter the moment the disc straddles the water line. The
@@ -556,27 +512,25 @@ export function createCelestials(scene) {
     // another is a sun that fits the frame everywhere except where it is drawn.
     const size = bodySize(cfg);
     const radius = size * 0.5;
-    // How much clearance the fit keeps, in disc radii: 1 is the disc exactly
-    // touching the edge, above it leaves a margin of the halo showing too.
-    const at = fitToFrame(
-      state.x + group.position.x, state.y,
-      radius * (orbit.framePad ?? 1.25),
-      view,
-      Math.max(0, Math.min(1, orbit.keepInFrame ?? 1)),
-    );
 
-    // Back into the layer's own space — the group carries the drift, so the
-    // child holds whatever is left of the world position after it.
-    body.root.position.set(at.x - group.position.x, at.y, 0);
+    // THE BODY SITS ON ITS ORBIT, and nothing here moves it off one. The group
+    // carries the whole camera relationship (see the drift note in update
+    // below), so the child is the raw ellipse and the world position is the sum
+    // — which is the only arrangement in which the sun and its halo, drawn by
+    // two quads under the same transform, can't end up a pixel apart.
+    body.root.position.set(state.x, state.y, 0);
+    const atX = state.x + group.position.x;
+    const atY = state.y + group.position.y;
+
     // A cull, not a look: below this the whole halo is under the water line and
-    // the fill covers every pixel of it. `at.y` IS the world height the body is
-    // drawn at, so this and the trigger zone published below are reading one
-    // number and cannot disagree about whether the sun is up.
-    body.root.visible = at.y > horizonY() - size * (cfg.halo ?? 2) * 0.5;
+    // the fill covers every pixel of it. This is the WORLD height the body is
+    // drawn at — group offset included — so it asks the same question the water
+    // fill answers per pixel: is there any of this left above the sea?
+    body.root.visible = atY > horizonY() - size * (cfg.halo ?? 2) * 0.5;
 
     const zone = celestialFrame[which];
-    zone.x = at.x;
-    zone.y = at.y;
+    zone.x = atX;
+    zone.y = atY;
     zone.radius = radius;
     // Inside the sphere, which is the whole point of it: the seal has to be
     // properly in the light for it to count, not clipping the rim.
@@ -588,7 +542,7 @@ export function createCelestials(scene) {
     // under the fill, there is nothing on screen there, and the seal swims
     // through that patch of sea constantly. So the zone is armed by the body
     // being UP, the same test dayState.above makes.
-    zone.visible = at.y > horizonY();
+    zone.visible = atY > horizonY();
 
     if (!body.root.visible) return;
 
@@ -648,23 +602,17 @@ export function createCelestials(scene) {
    *   framing, and parallaxing against it would counter-shake the sky, so the
    *   sun would visibly buzz through every explosion.
    *
-   *   Horizontal only. The vertical axis takes no drift, by design — see
-   *   below; `view` carries the camera's height, but only so the frame fit can
-   *   tell where the edges of the shot are.
+   *   Horizontal only. The vertical axis takes no drift — see the note in the
+   *   body, which is the one thing to read before adding a camY here.
    *
    * @param waveT the surface clock, so the halos dissolve into the same swell
    *   the fill clips to and the drawn line traces. Solved against a different
    *   wave, the glow slides along the water instead of meeting it.
    *
-   * @param view the frame in world units — { x, y, halfW, halfH } about the
-   *   frustum's own centre, at the zoom the camera ended up at. Optional: with
-   *   no view the frame fit is skipped entirely, which is what lets a headless
-   *   harness drive the rig without inventing a camera.
-   *
    * @param dt real seconds, for the pass flare's envelope. Real rather than
    *   gameplay time on purpose — a hit-stop should not hold a flicker still.
    */
-  function update(camX = 0, waveT = 0, view = null, dt = 0) {
+  function update(camX = 0, waveT = 0, dt = 0) {
     const cfg = CONFIG.dayNight;
     group.visible = !!cfg?.enabled;
     if (!group.visible) {
@@ -673,38 +621,43 @@ export function createCelestials(scene) {
       return;
     }
 
-    // DRIFT, done as a plain counter-offset because an ORTHOGRAPHIC camera
-    // gets no parallax for free — there is no perspective divide, so a sun at
-    // z=-40 and a sun at z=-5 pan at exactly the same rate. Sitting the layer
-    // at camPos * (1 - drift) means a camera move of D slides the body D *
-    // drift across the FRAME: at 0.04 a full-width crossing of the ocean moves
-    // the sun under two units on a ninety-unit frame, which is the point —
-    // something genuinely far away does not slide behind the foreground, it
-    // hangs there. Turn it up toward 1 and the sky sits in the world like a
-    // rock on the seabed.
+    // DRIFT — how far the sky slides across the FRAME per unit of camera
+    // motion, and it is X ONLY. Done as a plain counter-offset rather than by
+    // moving the layer back in z: the camera is orthographic, there is no
+    // perspective divide, and a sun at z=-40 pans at exactly the same rate as
+    // one at z=-5. Sitting the layer at camX * (1 - drift) means a camera move
+    // of D slides the body D * drift across the frame: at 0.04 a full-width
+    // crossing of the ocean moves the sun under two units on a ninety-unit
+    // frame, which is the point — something genuinely far away does not slide
+    // behind the foreground, it hangs there.
     //
-    // X ONLY. The vertical axis gets no drift at all, and that is not a
-    // simplification — a vertical offset is actively wrong here, because the
-    // horizon this sky is measured against does not move. The water line is a
-    // WORLD-space curve and the halo's fade is solved against it per pixel, so
-    // offsetting the layer in Y slides the sun up and down past a fixed
-    // horizon: dive twenty units and a low sun visibly sets, surface again
-    // and it rises. Height above the horizon is what encodes the time of day,
-    // and it must be a function of the orbit and nothing else.
+    // THE VERTICAL AXIS TAKES NONE OF IT, and this is the line to read before
+    // changing anything here, because "the two axes should match" is the
+    // obvious tidy-up and it was tried on 2026-09-18 and reverted three days
+    // later off the pictures in tools/looks/sky-parallax.js.
     //
-    // So the sky is locked to the world vertically. Swimming up and down does
-    // not move the sun and moon in the sky; it moves YOU under them, which is
-    // what pans them across the frame. The one exception is the frame fit in
-    // fitToFrame above, which may lower a body only while the water line is
-    // already off the top of the shot — see the note there for why that is the
-    // one case where nobody can tell.
+    // The reason is not the clock. dayState is solved off the orbit alone, so
+    // a drifting body could never re-colour the hour. The reason is that
+    // EVERYTHING ELSE IN THE SKY IS MEASURED OFF THE WATER LINE, which does
+    // not move: systems/sky.js ramps its gradient over (vWorldPos.y -
+    // uSurfaceY) / airH on a plane that never moves, and the horizon glow sits
+    // on the same line. Those are what say what hour it is. Drift the body in
+    // y and it climbs out of its own dawn — at the top of a breach the sunrise
+    // sun sat twenty units above the orange band, a full disc in the
+    // night-blue zenith with clear sky between it and the colour that was
+    // supposed to be coming off it. The sky stops being one piece.
+    //
+    // So a body's height is not an altitude, it is the hour, and the hour is
+    // written against the sea. Swimming up and down does not move the sun and
+    // moon in the sky; it moves YOU under them, which is what pans them
+    // through the frame.
     //
     // Independent of zoom, and deliberately so: zoom scales the whole frustum
     // about the camera, and both the offset and everything it is measured
     // against scale with it, so the ratio survives a push-in untouched.
     //
-    // `drift` REPLACED `parallax`, which is still in every saved tuning
-    // snapshot at its old 0.15. A field already in imported-tuning.json cannot
+    // `drift` REPLACED `parallax`, which is still in some saved tuning
+    // snapshots at its old 0.15. A field already in imported-tuning.json cannot
     // be re-defaulted from here — the snapshot wins the merge — so the only way
     // to actually deliver a quieter sky was a name the snapshot has never heard
     // of. The old value is read as the fallback so nothing breaks; it is simply
@@ -713,8 +666,8 @@ export function createCelestials(scene) {
     const keep = 1 - Math.max(0, Math.min(1, orbit.drift ?? orbit.parallax ?? 1));
     group.position.set(camX * keep, 0, orbit.depth ?? Z);
 
-    updateBody(bodies.sun, 'sun', dayState.sun, cfg.sun, waveT, view, dt);
-    updateBody(bodies.moon, 'moon', dayState.moon, cfg.moon, waveT, view, dt);
+    updateBody(bodies.sun, 'sun', dayState.sun, cfg.sun, waveT, dt);
+    updateBody(bodies.moon, 'moon', dayState.moon, cfg.moon, waveT, dt);
   }
 
   return { update, group };

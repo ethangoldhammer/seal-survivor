@@ -45,6 +45,13 @@ const NAME_MEMORY = newNameMemory();
 // Team index → name. Empty until a match casts them.
 const names = ['', ''];
 
+// Whether these two names were handed to us by another machine rather than
+// rolled here. See applyTeamNames — and castTeamNames, which is the one writer
+// this has to stop, and stops itself rather than being stopped at its call
+// site in startVersus. One writer, one guard: a gate in versus.js would be a
+// gate the next caller of castTeamNames is added past.
+let adopted = false;
+
 /**
  * NAME BOTH SIDES. Called from startVersus with the colours the match is
  * playing in — the captain's pick, or CONFIG's default when nobody picked.
@@ -57,6 +64,11 @@ const names = ['', ''];
  * @returns the two names
  */
 export function castTeamNames(colors = []) {
+  // ALREADY CAST, BY SOMEBODY ELSE. A guest's names arrived with the match
+  // start; startVersus calls this unconditionally on both ends, and without
+  // this line the guest would roll two fresh names over them a moment before
+  // kickoff — so the first screen to disagree would be the goal card.
+  if (adopted) return teamNames();
   for (let t = 0; t < names.length; t += 1) {
     names[t] = rollTeamName(PARTS, {
       // So the two sides of one match are not both 'the Blobz' -- and so the
@@ -87,10 +99,33 @@ export function teamNames() {
   return names.slice();
 }
 
+/**
+ * TAKE THE TWO NAMES FROM THE MATCH START instead of rolling them.
+ *
+ * rollTeamName is random — it draws against NAME_MEMORY so that one match's
+ * two sides differ and the next match does not reuse what this one spent — so
+ * two machines calling castTeamNames on the same colours and the same seats
+ * get DIFFERENT answers. Every screen that names a side would then disagree
+ * across the wire: the goal card, the tally, the win banner.
+ *
+ * Sent rather than seeded. A shared seed would make the draw reproducible, but
+ * only for as long as both ends have identical name memory and identical
+ * roster contents going in — which is a claim about the whole history of both
+ * sessions, and it fails silently and late, on the one screen that appears
+ * after somebody scores. Two strings on the wire cannot drift.
+ */
+export function applyTeamNames(cast = []) {
+  names[0] = typeof cast[0] === 'string' ? cast[0] : '';
+  names[1] = typeof cast[1] === 'string' ? cast[1] : '';
+  adopted = true;
+  return teamNames();
+}
+
 /** Forget them — a test that wants a clean cast, or a match that never ran. */
 export function resetTeamNames() {
   names[0] = '';
   names[1] = '';
+  adopted = false;
 }
 
 /** The parsed table, for the harness and the labs. */

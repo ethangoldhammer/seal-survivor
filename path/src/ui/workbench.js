@@ -104,8 +104,18 @@ const RAIL_SECTIONS = [
     // against the other: the miss has to be audible enough to teach the reach
     // and quiet enough to survive one every quarter second.
     'versusFinFlick', 'versusFinSwipe',
-    'versusBallWall', 'versusBallSkid', 'versusPost', 'versusBallBreach', 'versusBallReentry',
-    'versusBlock', 'versusSave', 'versusPierce',
+    // ...and the BACKFLIP'S slap, third in the same family and the loud end of
+    // it. Beside the flick because config.js defines it against the flick —
+    // "a wipe is a suggestion to a ball and a slap is an arrival" — so it is
+    // the stop and the shake that separate them, and those are only judgeable
+    // side by side. See CONFIG.feedback.versusFlipSlap.
+    'versusFlipSlap',
+    // The rock, then the BACKFLIP'S wall, which is the rock's opposite: the
+    // ball arrives in a bar of goo and dies there rather than coming off. Same
+    // reason for the adjacency — the whole design of the soft one is "quieter
+    // than that", and it cannot be tuned against a row on another screen.
+    'versusBallWall', 'versusFlipWall', 'versusBallSkid', 'versusPost', 'versusBallBreach', 'versusBallReentry',
+    'versusBlock', 'versusSave', 'versusGoalLineClear', 'versusPierce',
     'bodyCheck', 'sealBurst', 'versusRespawn',
     'versusGoal', 'versusGoalCheer',
     'versusWin', 'versusLose',

@@ -3,12 +3,12 @@ rapidFire,Supa Dupa Seal,Shoot faster.,,,8,TRUE,1,Beach_001,,Rapid Pebbles,Pew P
 heavyRounds,André the Giant,Hit harder.,,,,TRUE,1,Beach_002,,Giant Pebbles,Bigger Lasers
 flippersUp,Flippers Up!,Upgrade a fin blaster.,,,6,TRUE,1,SeaLion,,,
 overboost,None,,,,,FALSE,1,Beach_003,,,
-maxSpeed,Speedy Seal,Speed up!,,,,TRUE,1,OpeanOcean_001,,,
-multishot,Pocket Full of Stones,More shots per fin.,,,99,TRUE,1,Beach_003,,Cloned Pebbles,More Lasers
+maxSpeed,Speedy Seal,Speed up!,,,3,TRUE,1,OpeanOcean_001,,,
+multishot,Pocket Full of Stones,More shots per fin.,,,8,TRUE,1,Beach_003,,Cloned Pebbles,More Lasers
 projectileLife,André 3000,Shoot longer.,,,4,TRUE,1,OpeanOcean_003,,Piercing Pebbles,Piercing Beams
 vitality,Healthy Pup!,Health up.,,,,TRUE,1,Beach_001,,,
 magnet,C.H.U.M.,Carnivorous Hangry Underwater Mammals,,,,TRUE,1,MoorishIdol,,,
-regen,Seal all Wounds,Health regen.,,,,TRUE,1,Beach_003,,,
+regen,Seal all Wounds,Health regen.,,,5,TRUE,1,Beach_003,,,
 velocity,Seal the Deal,Shots travel quicker.,,,,TRUE,1,OpeanOcean_003,,Swift Pebbles,Quick Lasers
 homingMissile,Homing Mussels,Heat-seeking mussel launcher.,,,15,TRUE,1,DeepSea_002,,,
 seaGarlic,Sea Garlic,It's like garlic to a vampire. For for fish.,,,9,TRUE,1,Reef_003,,,

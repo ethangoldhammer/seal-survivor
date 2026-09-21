@@ -629,6 +629,68 @@ section('GEOMETRY');
   check('dispose empties the group', sky.group.children.length === 0);
 }
 
+// ===========================================================================
+section('DRIFT — the field moves with the moon it holds');
+// ===========================================================================
+{
+  // These lines are strung between the stars systems/sky.js paints, and that
+  // field is hashed off vWorldPos on a plane that never moves. For a long time
+  // that meant the whole night sky sat at drift 1 — as near as the sea — while
+  // the moon crossing it sat at CONFIG.dayNight.orbit.drift, 0.04. Swimming
+  // the width of the ocean walked the moon ninety units through its own stars.
+  //
+  // world.js now slides the field's sample origin (uCenter.x) and this group
+  // is translated to match, both off the bodies' own `drift`. The two halves
+  // live in different files and only agree by both reading that number, which
+  // is exactly the kind of agreement that rots — so the group's translation is
+  // asserted against the arithmetic the celestial layer uses rather than
+  // against a copy of it.
+  const wasEnabledHere = CONFIG.dayNight.enabled;
+  CONFIG.dayNight.enabled = true;
+  CONFIG.dayNight.paused = true;
+  CONFIG.dayNight.scrubHour = 23; // night, or the group never turns on
+  const sky = createConstellations(new THREE.Scene());
+  sky.update(1 / 60, {});
+
+  const drift = CONFIG.dayNight.orbit.drift;
+  const keep = 1 - drift;
+  const D = 40;
+
+  sky.update(1 / 60, { camX: 0 });
+  const home = sky.group.position.x;
+  sky.update(1 / 60, { camX: D });
+  const panned = sky.group.position.x;
+
+  check('the group rides the bodies\' drift',
+    Math.abs((panned - home) - D * keep) < 1e-9,
+    `moved ${(panned - home).toFixed(3)} world units for a ${D}-unit pan (want ${(D * keep).toFixed(3)})`);
+  // The same number said the way it is actually seen: how far the field slides
+  // THROUGH THE FRAME, which has to be the 0.04 the sun does and not the 1.0
+  // it used to be.
+  check('...so it slides across the frame at exactly the sun\'s rate',
+    Math.abs(((home - (panned - D)) / D) - drift) < 1e-9,
+    `${((home - (panned - D)) / D).toFixed(4)} per unit vs the sun's ${drift}`);
+  // The negative control, which is the bug this replaced: welded to the world
+  // the group never moves at all and the frame slides past it at full speed.
+  check('...and it is not still welded to the world',
+    Math.abs(panned - home) > 0,
+    'a world-locked field reads 0 here and walks the moon across its own stars');
+
+  // THE WARP HAS TO FOLLOW. Ripples are thrown at world points and a finger is
+  // unprojected to one, but a vertex's own position is now local to a group
+  // that has moved — so the shader is handed the offset to convert with. A
+  // uniform that stayed at 0 would put every blast and every thumb `driftX`
+  // units off the thing that caused it, growing with the pan, and the sky
+  // would simply bend in the wrong place.
+  const u = sky.group.children.find((c) => c.material?.uniforms?.uDriftX)
+    ?.material.uniforms.uDriftX;
+  check('the warp is told where the group went', u != null && u.value === panned,
+    u ? `uDriftX ${u.value.toFixed(3)} vs group ${panned.toFixed(3)}` : 'no uDriftX uniform found');
+
+  sky.dispose();
+  CONFIG.dayNight.enabled = wasEnabledHere;
+}
+
 CONFIG.dayNight.paused = wasPaused;
 CONFIG.dayNight.scrubHour = wasHour;
 CONFIG.dayNight.enabled = wasEnabled;

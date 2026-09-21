@@ -60,7 +60,7 @@
 // ---------------------------------------------------------------------------
 
 import { CONFIG } from '../config.js';
-import { captainIsCpu } from './versusFlag.js';
+import { captainIsCpu, oxygenLive } from './versusFlag.js';
 import { seatIsCpu, teamOfSeat } from './sealRoster.js';
 import { bounds, midWater, arenaHoles } from '../arena.js';
 import { mouthY, mouthHalfHeight } from './versusGoal.js';
@@ -536,7 +536,12 @@ function cruiseSpeed(stats) {
  * breathes at NaN.
  */
 function airClock(me) {
-  if (CONFIG.oxygen?.enabled === false) return null;
+  // ...and null while Blubberball's lungs are stubbed (CONFIG.versus.oxygen),
+  // which is what takes the surface trip AND the bubble detour off the bot in
+  // one place: both hang off this clock, and a bot that cannot drown has no
+  // reason to leave the match for either. It keeps taking bubbles it swims
+  // through — that is eatBubbles' business, not this one.
+  if (!oxygenLive()) return null;
   const a = cfg().air ?? {};
   if (a.enabled === false) return null;
   const o2 = me?.oxygen;

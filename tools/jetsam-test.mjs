@@ -19,7 +19,7 @@
 //   them reports "no reports found" on a directory full of them, which reads
 //   as "the phone never ran out of memory".
 // ---------------------------------------------------------------------------
-import { parseReport, describeJetsam as colourful } from './jetsam-pull.mjs';
+import { parseReport, describeJetsam as colourful, syncLine } from './jetsam-pull.mjs';
 
 // The colour codes are for a terminal, not for a matcher: `> 1800MB` arrives as
 // `\x1b[31m> 1800MB`, so an anchored assertion about the marker silently tests
@@ -89,6 +89,20 @@ console.log('\nTHE COALITION IS THE APP');
     + ' billed separately and are scattered through five hundred rows');
   check('...and a daemon in another coalition is not in the sum',
     !/2200MB \(peak 2300MB\)/.test(line), line);
+}
+
+console.log('\nAN ABSENCE IS ONLY EVIDENCE IF THE SYNC REACHED IT');
+{
+  const t = (h, m) => new Date(2026, 8, 18, h, m).getTime();
+  check('a sync older than the kill says so outright',
+    /has not been collected/.test(syncLine(t(0, 34), t(2, 0), t(1, 21))),
+    'this tool reads a folder Xcode fills; "no report for that kill" off a folder'
+    + ' last written BEFORE the kill is the misread that costs a week');
+  check('...and a sync that covers the kill does not', 
+    !/has not been collected/.test(syncLine(t(1, 30), t(2, 0), t(1, 21))),
+    syncLine(t(1, 30), t(2, 0), t(1, 21)));
+  check('nothing synced is not a time', syncLine(0) === null);
+  check('minutes below the hour read as minutes', /19 min ago/.test(syncLine(t(1, 41), t(2, 0))));
 }
 
 console.log('\nTHE REPORT WORTH READING IS THE ONE WHERE WE ARE NOT BIGGEST');

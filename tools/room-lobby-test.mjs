@@ -96,7 +96,7 @@ const tap = (list) => { lobby.updateRoomLobby(list); lobby.updateRoomLobby(list.
 
 /** Open the screen fresh, with the callbacks counted. */
 function fresh() {
-  const calls = { back: 0, hosting: 0, guestStart: 0 };
+  const calls = { back: 0, hosting: 0, guestStart: 0, bothHere: 0 };
   room.leaveRoom();
   session.endSession();
   sockets.length = 0;
@@ -105,6 +105,7 @@ function fresh() {
     onBack: () => { calls.back += 1; },
     onHosting: () => { calls.hosting += 1; },
     onGuestStart: () => { calls.guestStart += 1; },
+    onBothHere: () => { calls.bothHere += 1; },
   });
   return calls;
 }
@@ -175,8 +176,23 @@ section('hosting');
   check('there are always two seat rows', seats.length === 2, String(seats.length));
   check('the second one reads as empty', seats[1].classList.contains('sv-room-empty'));
   check('...and says so in Ethan’s words', seats[1].textContent.includes(uiText('roomSeatEmpty')));
+  // A PRESENT MEMBER IS NEVER A BLANK STRIP. This is the shape of a real bug:
+  // playerLabel() returned '' for both members, so an occupied seat rendered
+  // with no text at all and was indistinguishable from the open one below it —
+  // two identical blank rows, on the one screen whose entire job is to answer
+  // whether the other person has arrived. Both people concluded, reasonably,
+  // that the room had failed. The row is allowed to be wrong about the name;
+  // it is not allowed to be empty.
+  check('an occupied seat is not blank', seats[0].textContent.trim().length > 0, JSON.stringify(seats[0].textContent));
+  check('...and does not read as the open seat', !seats[0].textContent.includes(uiText('roomSeatEmpty')));
   check('the host cannot start alone', st().canStart === false);
-  check('Start is shown to the host, disabled', q('.sv-room-start').hidden === false && q('.sv-room-start').disabled === true);
+  // NEITHER BUTTON IS ON THIS SCREEN ANY MORE. Readying up and starting both
+  // moved to the team select, which already did them for any number of people
+  // — this screen was reimplementing a worse copy one room-code later. What is
+  // left here is the code and the two seats, and nothing you can press to
+  // commit to a match you have not been shown yet.
+  check('no Start on the room screen', q('.sv-room-start').hidden === true);
+  check('no Ready either', q('.sv-room-ready').hidden === true);
   check('onHosting has not fired', calls.hosting === 0);
 }
 
@@ -204,11 +220,16 @@ function fullRoom({ you = 'host', hostReady = true, guestReady = true, guestPres
   check('both seats are drawn', document.querySelectorAll('.sv-room-seat').length === 2);
   check('neither is empty', document.querySelectorAll('.sv-room-seat.sv-room-empty').length === 0);
   check('a ready member is marked ready', document.querySelectorAll('.sv-room-seat-ready').length === 2);
-  check('the host may start', st().canStart === true);
-  check('Start is enabled', q('.sv-room-start').disabled === false);
-
-  q('.sv-room-start').click();
-  check('Start hands back to the route', calls.hosting === 1);
+  // The names that came down the wire are the names on screen — the check that
+  // would have caught the blank-strip bug at the other end, where the name is
+  // present rather than missing.
+  const named = [...document.querySelectorAll('.sv-room-seat-name')].map((n) => n.textContent);
+  check('each seat shows the name the room sent', named.includes('Ethan') && named.includes('Pal'), named.join(' / '));
+  check('the room still knows both are ready', st().canStart === true);
+  // A FULL ROOM LEAVES THIS SCREEN BY ITSELF, on both ends at once, with
+  // nobody pressing anything — that is the handover the merge is built on.
+  check('a full room hands over to the team select', calls.bothHere >= 1,
+    String(calls.bothHere));
 }
 
 {
@@ -279,15 +300,14 @@ section('what the server says');
 }
 
 {
-  // The other half: the host announces it on the way out, while there is still
-  // a screen to send from.
-  const { ready } = fullRoom();
+  // THE HANDOVER IS SYMMETRIC. It fires off the `room` message on whichever
+  // end sees the second member arrive — so a GUEST leaves this screen by the
+  // same route the host does, with nobody pressing anything. That symmetry is
+  // the merge: there is one screen left that both people are on at once.
+  const { calls, ready } = fullRoom({ you: 'guest' });
   await ready();
-  const before = live().sent.length;
-  q('.sv-room-start').click();
-  const sent = live().sent.slice(before).map((m) => JSON.parse(m));
-  check('the host announces the pick before handing over',
-    sent.some((m) => m.t === 'lobbyPreview' && m.picking === true), JSON.stringify(sent));
+  check('a guest is handed over by a full room too, not by a button',
+    calls.bothHere >= 1, String(calls.bothHere));
 }
 
 {

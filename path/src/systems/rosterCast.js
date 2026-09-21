@@ -87,7 +87,14 @@ function freshName(taken) {
  */
 export function syncRosterCast() {
   const n = rosterSize();
-  names[0] = playerName();
+  // SEAT 0 IS NOT ALWAYS THIS MACHINE'S PLAYER. On a guest it is the HOST's
+  // seal, and the host's name arrived with the match — overwriting it with the
+  // local player's name would put the person at THIS keyboard on the other
+  // side's shirt, on the goal card, in the team name built out of it. Every
+  // other line here is untouched: the guest's roster is still filled and
+  // de-duplicated the same way, it just does not re-localise a seat it was
+  // handed. See applyRosterCast.
+  if (!adopted) names[0] = playerName();
   const taken = new Set([names[0]]);
   for (let i = 1; i < n; i += 1) {
     if (names[i] && !taken.has(names[i])) { taken.add(names[i]); continue; }
@@ -123,6 +130,50 @@ export function rosterNames() {
 export function resetRosterCast() {
   names.length = 0;
   kit.length = 0;
+  adopted = false;
+}
+
+// ---------------------------------------------------------------------------
+// A CAST THAT CAME FROM SOMEBODY ELSE'S MACHINE
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether this cast was handed to us rather than rolled here.
+ *
+ * A FLAG AND NOT A ROLE CHECK, deliberately. The alternative was for
+ * syncRosterCast to ask online/session.js whether it is a guest, which would
+ * make this leaf import the session and give the name table an opinion about
+ * networking. What actually matters to this module is narrower and is the
+ * truth on either end: these names did not come from here, so do not roll or
+ * re-localise them. A replay, a spectator or a restored match would want
+ * exactly the same thing and none of them are a guest.
+ */
+let adopted = false;
+
+/**
+ * Take the whole cast from the match start — names and kit, seat-indexed.
+ *
+ * Both are copied rather than held: the payload is a decoded JSON object that
+ * the caller is free to drop, and a cast aliased to it would be rewritten by
+ * the next message that reused the buffer.
+ *
+ * SEAT 0 INCLUDED, which is the entire point — see syncRosterCast, and
+ * seatAccessory, which reads kit[0] instead of the local player's own slot
+ * once a cast has been adopted. Both of those seat-0 rules exist because the
+ * seat means "me" on a host and "the other captain" on a guest.
+ */
+export function applyRosterCast({ names: cast = [], kit: worn = [] } = {}) {
+  names.length = 0;
+  for (const n of cast) names.push(typeof n === 'string' ? n : '');
+  kit.length = 0;
+  for (const k of worn) kit.push(typeof k === 'string' ? k : '');
+  adopted = true;
+  return rosterNames();
+}
+
+/** Whether the cast currently loaded came from another machine. */
+export function rosterCastAdopted() {
+  return adopted;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +193,16 @@ export function resetRosterCast() {
  * should turn up bare rather than wearing it anyway.
  */
 export function seatAccessory(i) {
+  // AN ADOPTED SEAT 0 WEARS WHAT IT ARRIVED IN. Off a guest's match start that
+  // seat is the host's seal, and wornAccessory() is the slot belonging to the
+  // person at THIS keyboard — reading it here would dress the other side's
+  // captain out of your own drawer. Checked before the seat-0 branch and not
+  // inside it, because the branch exists to answer "this is me" and on a guest
+  // seat 0 is not.
+  if (!(i > 0) && adopted) {
+    const key = kit[0] ?? '';
+    return key && accessoryUnlocked(key) ? key : '';
+  }
   if (!(i > 0)) return wornAccessory();
   const key = kit[i] ?? '';
   return key && accessoryUnlocked(key) ? key : '';
